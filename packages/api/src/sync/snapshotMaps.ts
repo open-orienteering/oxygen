@@ -15,6 +15,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
+import { mapDocument } from "@oxygen/shared";
 import { Prisma, type PrismaClient } from "../generated/prisma/client.js";
 import { getBlob, getBlobSize, type BlobTable } from "../map-store/blob-store.js";
 import { SOURCE_SLICE_BYTES, sliceRanges } from "../map-store/source-routes.js";
@@ -72,6 +73,14 @@ export interface SnapshotMapDocument {
   sourceHash: string;
   header: unknown;
   report: unknown;
+  /** The version patch the document was baked with (docs/map-patches.md §5); absent = none, and from an older peer. */
+  patch?: unknown;
+}
+
+/** The `map_documents.patch` column of a snapshot document: only a non-empty, parseable version patch (§5). */
+export function snapshotDocumentPatch(patch: unknown): { patch?: Prisma.InputJsonArray } {
+  const layers = mapDocument.parseVersionPatch(patch);
+  return layers.length ? { patch: layers as unknown as Prisma.InputJsonArray } : {};
 }
 
 export interface SnapshotDecision {
@@ -253,7 +262,7 @@ export async function exportSnapshotMaps(db: Db, eventId: bigint, opts: { decisi
   const { files, skipped } = partitionMapFiles(rows as unknown as Array<Record<string, unknown>>);
   const pinned = rows.filter((r) => r.sourceHash !== null);
   const documentHashes = [...new Set(pinned.flatMap((r) => (r.documentHash ? [r.documentHash] : [])))];
-  const documents = await db.mapDocument.findMany({
+  const documentRows = await db.mapDocument.findMany({
     where: { hash: { in: documentHashes } },
     select: {
       hash: true,
@@ -264,9 +273,12 @@ export async function exportSnapshotMaps(db: Db, eventId: bigint, opts: { decisi
       sourceHash: true,
       header: true,
       report: true,
+      patch: true,
     },
     orderBy: { hash: "asc" },
   });
+  // A document without corrections carries no `patch` key: the snapshot of an unpatched event is as before G12a.
+  const documents: SnapshotMapDocument[] = documentRows.map(({ patch, ...d }) => (patch === null ? d : { ...d, patch }));
   const hashes = pinnedHashes(pinned, documents);
   const sources = await db.mapSource.findMany({
     where: { fileHash: { in: hashes.sources } },
@@ -402,6 +414,7 @@ export async function insertSnapshotBlobs(tx: Prisma.TransactionClient, maps: Sn
         sourceHash: d.sourceHash,
         header: d.header as Prisma.InputJsonValue,
         report: d.report as Prisma.InputJsonValue,
+        ...snapshotDocumentPatch(d.patch),
       })),
       skipDuplicates: true,
     });

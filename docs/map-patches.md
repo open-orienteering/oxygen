@@ -385,6 +385,8 @@ column with a default, G11).
 | `mapPatch.applyChange` | `{ documentHash } ∧ patchChangeSchema` (`put`, `remove`, `putSymbols`, `removeUnresolved`) | `courses.edit` | `{ version, patch }` |
 | `mapPatch.attachUnresolved` | `{ documentHash, key, sourceIndex }` (§4.3) | `courses.edit` | `{ version, patch }` |
 | `mapPatch.setEnabled` | `{ enabled: boolean }` | `courses.edit` | `{ version, patch }` |
+| `mapPatch.promote` | `{ label }` (1–200 characters, trimmed) | `courses.edit`, signed in (§5) | `{ version, patch, clubMapVersion, job }` |
+| `mapPatch.promoteStatus` | — | `courses.view` (not the kiosk key: the job's error text is the editor's) | the newest promote job `{ id, state, stage, progress, error }` or null (§5) |
 
 Writes are not lease-guarded and not journaled: the patch is cloud-owned
 non-critical data (08 §4.8). Each write is one transaction:
@@ -408,7 +410,9 @@ non-critical data (08 §4.8). Each write is one transaction:
    re-resolution, which does take the lock, re-keys right after; nothing
    is lost.)
    A stored row that does not parse (written by a newer image) is not
-   overwritten: `INTERNAL_SERVER_ERROR` `PATCH_UNREADABLE`.
+   overwritten: `INTERNAL_SERVER_ERROR` `PATCH_UNREADABLE`. While the
+   event's promote job is queued or running (§5), every write is
+   refused `PRECONDITION_FAILED` `PATCH_PROMOTING`, read under the lock.
 4. `applyChange`: `mergePatch(row, change)` (§1.5). `setEnabled`: the new value.
    `attachUnresolved`: the change `attachUnresolved` (§4.3) builds on the
    pinned document, merged; refused `BAD_REQUEST` `PATCH_ATTACH_REFUSED`
@@ -729,8 +733,7 @@ nothing.
 
 Row G12's planner asked; the user took every recommendation. These
 widen answer 2 (the source kept, the patch re-applied at the store
-stage; deviates from 08 §4.7 "Promote"). G12 writes the rest of the
-section.
+stage; deviates from 08 §4.7 "Promote"). §5.1–5.6 below are row G12a's.
 
 1. **The patch travels with every document built from it.** Besides
    `club_map_versions.patch`, the import job carries a patch snapshot
@@ -778,6 +781,198 @@ from the patched document; `symbol`-reason unresolved entries stay
 drop-only; promote does not touch `map_gps_tracks.converted_op`; filter
 regions' symbol indices are not re-keyed (Pending, as at any re-match).
 
+The API half is built (row G12a, the rest of this section); the editor's
+*Save corrections to the club map*, the Club maps card and the end-to-end
+smoke are row G12b (`course-editor.md` §13 "Promote"). Implementation:
+`packages/shared/src/map-document/patch-bake.ts` (the layer and the bake),
+`packages/api/src/map-store/promote.ts` (the procedure),
+`map-store/patches.ts` (`PATCH_PROMOTING`, `completePromote`,
+`abandonPromote`), `map-store/jobs.ts` (the job's patch, dedup, pins).
+
+### 5.1 The version patch
+
+`club_map_versions.patch`, `map_import_jobs.patch` and
+`map_documents.patch` hold one value, a **version patch**: a JSON list of
+**layers**, oldest first (`versionPatchSchema`). Migration
+`20261116120000_map_version_patches` (additive): the first two `JSONB NOT
+NULL DEFAULT '[]'` with a `jsonb_typeof = 'array'` check, the document's
+`JSONB NULL` — null for a document built without corrections, never
+`[]` (a check). Every comparison takes null and `[]` as equal
+(`sameVersionPatch`, key order ignored); `parseVersionPatch` reads a
+stored value with each layer's ops in op-id order (JSONB reorders keys)
+and takes an unparseable one as none.
+
+A layer (`versionPatchLayerSchema`) is one promote's ops, self-contained
+(answer 2):
+
+```
+{ unitsPerMm,                         the coordinates' native unit
+  ops: { <event op id>: op },          hide / modify / resymbol / add, as §1.2
+  symbols: [<library entry id>, …] }   the patch symbols the ops use, sorted
+```
+
+An op is the event's op with every `{ doc: <index> }` symbol reference
+replaced by `{ doc: <SymbolAnchor> }` (§4.1) — the index is only
+meaningful in the document it was keyed onto — and `{ patch: <key> }`
+kept, the key being the library entry id the symbol was materialised
+from (§1.3). Targets stay `sourceIndex`; coordinates stay in
+`unitsPerMm`. The keys are the event's op ids, so completion removes
+exactly the promoted ones from the event's patch.
+
+`versionLayerOfPatch(doc, patch)` builds it from the event's patch and
+its pinned document: the patch applied as if enabled (`applyPatch`), the
+ops without an issue (§2.3) taken, the rest reported as `skipped`;
+unresolved entries are not ops and are never taken. Null when nothing
+applies.
+
+### 5.2 The bake
+
+`bakeVersionPatch(input, layers)` is the import's store-stage step
+between match and encode (`map-import.md` §1): the matched
+`MapDocumentInput` with the layers applied, before the encoder computes
+bounds, Hilbert order and the hash. No layers returns the input object
+itself, so an unpatched import is byte-identical to before. Per layer, in
+order, its ops in op-id order against the objects the earlier layers
+left:
+
+- **hide** marks the object; marked objects are dropped at the layer's
+  end (hidden objects are not in the promoted document, §5 defaults), so
+  a hide and a modify of one object in a layer both apply;
+- **modify** replaces the coordinates (rescaled by `input.unitsPerMm /
+  layer.unitsPerMm`, rounded) and, when given, the angle;
+- **resymbol** sets the symbol; **add** appends an object with
+  `sourceIndex = BAKED_SOURCE_INDEX_BASE + n` (`0x80000000 + n`): `n`
+  counts the add ops of every layer, in layer order then op-id order, a
+  skipped add included, so a number is never reused or shifted (answer 3;
+  `map-document-format.md` §2.4);
+- a `{ doc }` anchor resolves by the same-source rule (§4.2): the table
+  entry with the anchor's source position and kind; an anchor without a
+  source position (a baked patch symbol of an earlier layer) by code,
+  name and kind among entries without one; else the first of the same
+  code and kind;
+- a layer's patch symbols are materialised again for the input's header
+  (`materialiseSymbol`, as re-resolution does: factor and stack may
+  differ after a library release) and appended to the symbol table once
+  per key across layers. A baked patch symbol has `origin: "source"`, no
+  `match` and no `sourceIndex`, so it draws from its own `render` exactly
+  as the event's patch drew it (§1.3); in a matched document such an entry
+  is no review row and has no decision fingerprint
+  (`import/decisions.ts`, `map-symbols.md` §8.5).
+
+The checks are §2.3's (target, symbol, kind, geometry, a full table); an
+op that fails is skipped and returned as an issue (`{ layer, opId, code
+}`), the rest still apply. The import turns issues into a
+`PATCH_ISSUE` warning with one `warningDetails` entry each and records
+`report.corrections` `{ layers, ops, issues }`; the job succeeds (§5
+defaults). Neither is part of the document bytes, which are a function of
+the source, the importer, the library release, the decisions and the
+layers (`map-import.md` §6).
+
+The effective document the event drew and the baked document draw the
+same (`patch-bake.test.ts`: per object, `documentRenderInput` over
+`applyPatch(doc, patch)` and over the decoded bake are equal, keyed by
+`sourceIndex` and add rank), with the hidden objects absent instead of
+flagged.
+
+### 5.3 The procedure
+
+`mapPatch.promote { label }` (`courses.edit`; with auth on, a signed-in
+user, else `UNAUTHORIZED` — answer 9; cloud-owned like every `mapPatch.`
+mutation, so a box forwards it, §3.4):
+
+1. The pin decoded outside the lock (none, or unreadable:
+   `PATCH_NO_DOCUMENT`).
+2. In one transaction, the patch row locked as any write (§3.2 steps
+   1–3, so `PATCH_PROMOTING`, `PATCH_STALE` and a dormant row's
+   re-resolution apply), then:
+   - *Apply corrections* off → `PATCH_NOTHING_TO_PROMOTE` (answer 5);
+   - the event's `map_files` row pinning that document must name a club
+     version (`club_map_version_id`) of the same source whose patch is
+     the document's → else `PATCH_NOT_CLUB_MAP` (promote is for a
+     club-pinned map; slice G split);
+   - that version must be the series' latest → else `PATCH_NOT_LATEST`;
+   - `versionLayerOfPatch` null → `PATCH_NOTHING_TO_PROMOTE`;
+   - the new `club_map_versions` row: `seq` = latest + 1, the label,
+     the source, `uploaded_by` = the promoter, `patch` = the base
+     version's layers plus the new one, `document_hash` = the base's
+     document until the job moves it (§6.4 of `map-storage.md`). A
+     concurrent promote onto the same `seq` fails the unique constraint:
+     `CONFLICT` `PATCH_NOT_LATEST`;
+   - the job: `map_import_jobs` with both `event_id` and `club_map_id`,
+     the version's source, the decision snapshot for its kind and the new
+     `patch` — a *promote job*. While it is `queued` or `running` the
+     event's writes are refused `PATCH_PROMOTING` (answer 4).
+3. The job is kicked and held like an upload's (30 s); the answer is the
+   delivered patch, `clubMapVersion { id, clubMapId, seq, label }` and
+   `job { id, state, stage, progress, error }`. `mapPatch.promoteStatus`
+   answers the event's newest promote job for a client that did not
+   start it (G12b: Map mode read-only while it runs).
+
+Refusals are `PRECONDITION_FAILED` message prefixes (§3.2) unless named.
+
+### 5.4 Completion and failure
+
+The job runs the ordinary import (`map-storage.md` §6.1) with its patch.
+`applyJobResult` (§6.4 there) first moves the version — found by series,
+source and patch — onto the baked document, then `completePromote`, in
+one transaction under the patch row lock: if the event's rows of the
+source still name the base version, the last layer's op ids are removed
+from the event's patch (a new version when that changes it) — except
+those the bake skipped on the fresh import (the document report's
+`corrections.issues` of that layer: the event's document and the fresh
+import may disagree, e.g. a patch symbol no longer materialisable), which
+stay as any op that did not apply (answer 5) — and the rows are pinned to
+the baked document and to the new version. Then the pin's
+quick-access columns, the controls' positions and the re-resolution of
+what is left (§4.4: ops that did not apply and unresolved entries
+re-keyed onto the new document by `sourceIndex`; an op whose object the
+bake dropped becomes unresolved). If the event's map moved meanwhile, the
+version stands and the event is left as it is (logged). The other events
+on the base version are untouched (§5 defaults).
+
+The steps after the pin are logged, never thrown, so a job cannot fail
+once its event is on the version. A job that fails deletes its pending
+version (`abandonPromote`: the series' version of that source and patch,
+only while no `map_files` row names it — a re-claimed run that failed
+after an earlier run's completion keeps it) and the event's patch, which
+promote does not touch before completion, stays whole. The client sees
+the job `failed` with its error. Promote and `clubMap.removeVersion` lock
+the `club_maps` row, so a delete and a promote of one series never
+interleave.
+
+### 5.5 Every re-import keeps the corrections
+
+The patch travels with the document (answer 1):
+
+| Re-import | Patch it bakes |
+|---|---|
+| re-match (`map-storage.md` §6.9) | a club item: its version's; an event item: the document it replaces; an `unpinned` row: its club version's |
+| `mapImport.decide` (§6.8 there) | the reviewed document's |
+| `mapImport.finalise` | — (pins a stored document); the target must be of the document's patch, else `source-mismatch` |
+| `course.useClubMap` | the latest version's (so its dedup finds the version's document) |
+| a restored per-event dump | the dump carries `map_documents.patch` (`map-storage.md` §7.3); a re-match of the restored event takes it from the pinned document |
+
+Dedup (`currentDocumentFor`) and the club pin compare the patch; a
+version is its file *and* its patch. The re-match pass has no "patch"
+staleness reason: a version is re-imported only for the technical and
+decision reasons of §6.9 (decision log, G12a).
+
+### 5.6 Delete of the latest promoted version
+
+`clubMap.removeVersion { id, versionId }` (answer 7): the version's
+`uploaded_by` or an instance admin (`AUTH_MODE=off` allows); only the
+series' latest (`VERSION_NOT_LATEST`), only a promoted one
+(`VERSION_NOT_PROMOTED`: version 1 goes with the series, `clubMap.remove`),
+not while its promote job runs (`PATCH_PROMOTING`). Events on it keep
+their document; their `club_map_version_id` is set null by the foreign key,
+so they can no longer promote until they take a version from the library
+again. The document is left to the GC (`map-storage.md` §8), which counts
+it while any pin, version or job references it.
+
+`clubMap.list` shows a version's `layers` and `corrections` (ops over
+every layer); `clubMap.download` stays the original source file (answer
+8).
+
 ## Pending in this chapter
 
 - **An offline copy of the patch** (G4, decided overnight for review).
@@ -803,15 +998,23 @@ regions' symbol indices are not re-keyed (Pending, as at any re-match).
   undo entry, without centring the view on the entry's old place, and
   outside Map mode's one-write-at-a-time interlock — wiring them through
   `modes/MapMode.tsx` (and a `putUnresolved` for the undo of a drop) is
-  for the next row that holds that file (G12). `course-editor.md` §13.
+  row G12b's. `course-editor.md` §13.
 - **Attach of a `symbol` entry** (§4.3; user 2026-11-15, G9 question 1):
   drop-only. Attaching needs a symbol argument on
   `mapPatch.attachUnresolved` (`attachUnresolved(…, symbol)`), for G12b
   with the rest of *Attach*. Meanwhile a `resymbol`'s is redone by hand
   (*Change symbol*, `course-editor.md` §13) and the entry dropped; an
   unresolved `add` keeps its geometry only in the entry.
-- **§5 Promote** (row G12): the patch applied at the import's store
-  stage for a club version.
+- **Promote in the editor** (row G12b, §5): *Save corrections to the
+  club map* in Map mode (confirm with the label prefilled, progress and
+  read-only from `promoteStatus`, the refusals' texts, undo entries
+  dropped — answer 6), the Club maps card (version, label, corrections,
+  the original-file note, delete of the latest promoted version) and the
+  E2E smoke (08 §7).
+- **A no-op layer** (G12a, §5.5): a layer whose ops change nothing the
+  encoder sees bakes the base's bytes; the content-addressed row keeps
+  the patch it was first stored with, so dedup misses for that version
+  and each re-import runs the worker again (correct, slower).
 
 ## Tests
 
@@ -827,6 +1030,10 @@ regions' symbol indices are not re-keyed (Pending, as at any re-match).
 | Unit (api) | `packages/api/src/__tests__/backup.test.ts` | `map_patches` directly after `map_files`; the blob sections' filters include the patch's document and its source |
 | Integration (api) | `packages/api/src/__tests__/integration/map-patches.test.ts` | no patch before a write; `applyChange` creates the row keyed to the pin and merges put / remove (an absent id a no-op) / putSymbols with sorted keys; twice = once and an empty change keep the version; six concurrent first writers on different ids → one row with all six ops; two writers on one id → one of the two states whole; refusals (duplicate id `BAD_REQUEST`, put + remove of one id, `PATCH_DOCUMENT_MISMATCH`, `PATCH_NO_DOCUMENT` for `applyChange` and `setEnabled`); `setEnabled` creates an empty row, advances only on a change, a disabled patch delivered as it is; a dormant row (pin moved to a document that cannot be read) not delivered, `patchVersion` `"0"`, writes `PATCH_STALE`, row untouched, delivered again when the pin returns; **re-resolution (G11)**: a new edition (`test.xmap` over `test.ocd`, through `applyEventMap` and the job's pin) flags a hide — the patch delivered on the new pin with a new version and `patchVersion`, no ops, the entry with its origin and anchor — and the pin back on the first edition resolves it to the same op id; a write (`setEnabled`) wakes a row made dormant by hand and lands on the re-keyed row; `attachUnresolved` refused for a missing object (`PATCH_ATTACH_REFUSED: no-object`) and another document (`PATCH_DOCUMENT_MISMATCH`), puts the hide on the chosen object, a second attach of the gone entry changes nothing; `applyChange { removeUnresolved }` drops the last (the column `{}`); an unreadable row: no patch delivered, writes `PATCH_UNREADABLE`, row untouched; the table (defaults, one row per event, `RESTRICT` on the document, cascade with the event, an array in `ops` refused); access (kiosk key and viewer read, cannot write or attach; stranger `FORBIDDEN`; course setter writes); the route 200 with `ETag` / `Cache-Control`, 304, a stale ETag 200, header and `?k=` kiosk key, viewer 200, anonymous and wrong key 401, stranger 403, unknown event 404; `mapMetadata.patchVersion` equals the route's version |
 | Integration (api) | `packages/api/src/__tests__/integration/map-rematch.test.ts` (G11 part) | §4.4: a re-match of a stale copy of the document keeps a hide (the same op id on the new pin, a new version, nothing unresolved); a dry run leaves the row; a row left dormant is a `patch` item of the dry run's plan, re-keyed by the sweep, and a next run finds nothing |
+| Unit (shared) | `packages/shared/src/map-document/__tests__/patch-bake.test.ts` | §5.1–5.2 (G12a, on `test.xmap`): `versionLayerOfPatch` takes the ops that apply (a gone target skipped), `{ doc }` as anchors, the patch symbol keys, `unitsPerMm`; disabled taken as enabled, blind to record order; null for an empty and an issue-only patch; keys must be op ids; **the bake** draws what the event drew (per object, `documentRenderInput` of the decoded bake equals `applyPatch`'s, the hidden object absent, adds from `0x80000000`, one table entry for the patch symbol without `match` / `sourceIndex`, no review row or fingerprint for it); deterministic and blind to record order; no layers = the input itself and today's bytes; input untouched; two layers (a later layer modifies and hides earlier adds, a third add found by its baked symbol's anchor, numbers kept when an earlier add is skipped); each issue code reported, the rest applied; coordinates rescaled between units; `parseVersionPatch` / `sameVersionPatch` (null ≡ `[]`, key order, record order restored) |
+| Unit (api) | `packages/api/src/__tests__/club-map-library.test.ts`, `snapshot-maps.test.ts`, `venueForwarder.test.ts` (G12a part) | a version's `layers` / `corrections` (none for an upload); `canRemoveClubMapVersion`; `snapshotDocumentPatch`; `mapPatch.promote` cloud-owned and forwarded, `promoteStatus` served locally |
+| Integration (api) | `packages/api/src/__tests__/integration/map-promote.test.ts` | §5 (G12a): the three columns' defaults and checks; refusals (`PATCH_NOTHING_TO_PROMOTE` empty, issue-only, disabled; `PATCH_NOT_CLUB_MAP` for an uploaded map; `UNAUTHORIZED` signed out; viewer `FORBIDDEN`; a blank label); `PATCH_PROMOTING` for `applyChange`, `setEnabled`, `attachUnresolved` and `promote` while a promote job runs, `promoteStatus` reporting it; a failed promote job deletes its version and leaves the patch; **08 §7**: a hide and an added path promoted — version 2 (label, promoter, one layer keyed by the event's op ids, anchors), its document baked (hidden object gone, the path at `0x80000000`, `patch` recorded, `report.corrections`), the event pinned to it, `ops` empty with a new version and `patchVersion`, the op that did not apply and an unresolved entry kept, the other event on version 1 untouched, download = the original bytes, `list` `layers` / `corrections`; `PATCH_NOT_LATEST` from version 1; dedup per patch; `decide` on the promoted document keeps it, `finalise` per version and `source-mismatch` across patches; `useClubMap` takes version 2's document; **a re-match** of version 2 and its event (stale importer) re-imports with the corrections, version 1 untouched, a second plan empty; **a second promote** stacks a layer (the path modified at the same number, another object hidden); **the GC** keeps the promoted documents; **the per-event dump** carries the document with `patch` and `restore-map-blobs.sql` restores it; **delete**: stranger `FORBIDDEN`, not the latest, unknown, the promoter deletes version 3 (the event keeps its document, `club_map_version_id` null, promote then `PATCH_NOT_CLUB_MAP`), an admin version 2, version 1 `VERSION_NOT_PROMOTED`; **completion's edges** (§5.4, `completePromote` / `abandonPromote` called directly): an op the bake skipped stays in the event's patch, a version the event pins survives a failed job, a second completion after the event moved changes nothing |
+| Integration (api) | `packages/api/src/__tests__/integration/backup.test.ts` (G12a part) | a `map_documents` section written before the `patch` column still loads |
 | E2E | `e2e/map-patch-resolve.spec.ts` | `course-editor.md` §13 "Unresolved": two hides on `itest`'s `test.ocd`, the map replaced by `test.xmap` through the upload route; Map mode lists both under *Not carried over* (`data-key`, `data-op`, `data-reason`), the ops count 0, attach disabled without a selection; *Drop* one (one `applyChange`, gone after a reload); a document object selected on the fitted map, *Attach* the other (the `hide:<n>` row, the object hidden, the block gone); reseeded before and after |
 | Integration (api) | `packages/api/src/__tests__/integration/lease.test.ts` | checkout carries the patch row verbatim (id, document, `enabled`, ops, token above 2^53 exact), `maps.patches` counted (0 from an exporter without the map part); the box's `mapPatch.get` and route (kiosk key) serve it with `ETag` = the token |
 | Integration (api) | `packages/api/src/__tests__/integration/backup.test.ts` | the dump's `map_patches` section directly after `map_files` with the event's row; restored into another event with `event_id` rewritten, token and ops exact |

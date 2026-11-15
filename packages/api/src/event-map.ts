@@ -10,6 +10,7 @@
  */
 
 import { createHash } from "node:crypto";
+import type { mapDocument } from "@oxygen/shared";
 import type { PrismaClient, Prisma } from "./generated/prisma/client.js";
 import { prisma } from "./db.js";
 import { rebuildCourseLengths } from "./course-geometry.js";
@@ -101,6 +102,8 @@ export async function applyEventMap(
     startedBy?: string | null;
     /** How long to wait for the import job before returning (default 30 s; 0 = don't wait). */
     importHoldMs?: number;
+    /** A promoted club version's patch, baked by the import (docs/map-patches.md §5); default none. */
+    patch?: mapDocument.VersionPatch;
   } = {},
 ): Promise<{
   fileName: string;
@@ -146,7 +149,7 @@ export async function applyEventMap(
   // The import job produces the document and pins it on this row with
   // the quick-access columns (§6.4); control lat/lng follow the pin
   // (`applyJobResult`). Until then the event has no frame.
-  const job = await startImportJob(prisma(), { sourceHash: fileHash, eventId, startedBy: opts.startedBy ?? null, holdMs: opts.importHoldMs })
+  const job = await startImportJob(prisma(), { sourceHash: fileHash, eventId, startedBy: opts.startedBy ?? null, holdMs: opts.importHoldMs, patch: opts.patch ?? [] })
     .catch((err: unknown) => {
       console.error(`[map-import] event ${eventId}: could not start the import of ${fileName}:`, err);
       return null;

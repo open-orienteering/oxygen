@@ -71,6 +71,9 @@ describe("shouldForwardToCloud", () => {
   it("forwards the map patch's writes and serves its reads locally (map-patches.md §3.4)", () => {
     expect(isCloudOwnedMutation("mapPatch.applyChange")).toBe(true);
     expect(isCloudOwnedMutation("mapPatch.setEnabled")).toBe(true);
+    expect(isCloudOwnedMutation("mapPatch.promote")).toBe(true);
+    expect(shouldForwardToCloud("POST", "/trpc/mapPatch.promote")).toBe(true);
+    expect(shouldForwardToCloud("GET", "/trpc/mapPatch.promoteStatus")).toBe(false);
     expect(shouldForwardToCloud("POST", "/trpc/mapPatch.applyChange")).toBe(true);
     expect(shouldForwardToCloud("GET", "/trpc/mapPatch.get")).toBe(false);
   });

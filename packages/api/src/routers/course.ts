@@ -20,6 +20,7 @@ import {
   pruneDescriptionInstructions,
   course as courseShared,
   encodeHlc,
+  mapDocument,
   mapGeo,
 } from "@oxygen/shared";
 
@@ -1596,7 +1597,7 @@ export const courseRouter = router({
           versions: {
             orderBy: { seq: "desc" },
             take: 1,
-            select: { id: true, label: true, sourceHash: true, uploadedBy: true },
+            select: { id: true, label: true, sourceHash: true, uploadedBy: true, patch: true },
           },
         },
       });
@@ -1622,6 +1623,8 @@ export const courseRouter = router({
           startedBy: ctx.user?.id ?? null,
           rotationCorrection: series.rotationCorrection,
           fileHash: version.sourceHash,
+          // A promoted version's corrections (docs/map-patches.md §5): the import bakes them, dedup finds its document.
+          patch: mapDocument.parseVersionPatch(version.patch),
         },
       );
       await ctx.db.mapFile.updateMany({

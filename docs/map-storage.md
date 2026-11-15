@@ -40,24 +40,24 @@ on `map_files` and `club_map_versions` for the GC and the source route),
 pipeline's storage, `20261107120000_vector_map_pipeline_drops` (E5,
 v0.6.1; `docs/migrations/2026-vector-map-pipeline.md`), and
 `20261113120000_map_patches` (row G3), `20261114120000_map_gps_tracks`
-(row G24), `20261114130000_map_heightfields` (row H4) and `20261115120000_map_dem_jobs` (row H10). All in schema `oxygen`.
+(row G24), `20261114130000_map_heightfields` (row H4), `20261115120000_map_dem_jobs` (row H10), `20261115130000_map_patches_unresolved` (row G11) and `20261116120000_map_version_patches` (row G12a: the three `patch` columns, `docs/map-patches.md` §5.1). All in schema `oxygen`.
 
 | Table | Key | Columns | Notes |
 |---|---|---|---|
 | `map_sources` | `file_hash CHAR(64)` | `kind` (`ocad`/`omap`), `bytes BYTEA`, `size_bytes`, `file_name`, `uploaded_by → users SET NULL`, `created_at` | the uploaded file; `bytes` is `STORAGE EXTERNAL` |
-| `map_documents` | `hash CHAR(64)` | `bytes BYTEA`, `size_bytes`, `format_version`, `importer_version`, `library_version`, `source_hash → map_sources RESTRICT`, `header JSONB`, `report JSONB`, `created_at`, `last_referenced_at` | the encoded document; `header` is the summary (§3), `report` the import report |
+| `map_documents` | `hash CHAR(64)` | `bytes BYTEA`, `size_bytes`, `format_version`, `importer_version`, `library_version`, `source_hash → map_sources RESTRICT`, `header JSONB`, `report JSONB`, `created_at`, `last_referenced_at`, `patch JSONB NULL` | the encoded document; `header` is the summary (§3), `report` the import report; `patch` the version patch it was baked with (`docs/map-patches.md` §5; null = none, never `[]`) |
 | `map_previews` | `(document_hash, kind, key)` | `png BYTEA`, `created_at` | `document_hash → map_documents CASCADE`; thumbnails and symbol swatches, pure cache (§4.5) |
 | `map_heightfields` | `(document_hash, source, version)` | `bytes BYTEA` (`STORAGE EXTERNAL`), `size_bytes`, `header JSONB`, `report JSONB` — null together for a document without contours — `created_at` | `document_hash → map_documents CASCADE`; the terrain a document's contours imply and its report, and the DEM's two fields (`ground.<provider>`, `contours.<provider>`), pure cache (§4.7) |
 | `map_dem_jobs` | `(document_hash, provider, version)` | `state`, `reason`, `error`, `attempts`, `next_attempt_at`, `claimed_by`, `heartbeat_at`, `created_at`, `updated_at` | `document_hash → map_documents CASCADE`; the DEM job's state (§4.7 "The DEM") |
 | `club_maps` | `id UUID` | `name`, `colour_profile`, `colour_overrides JSONB`, `north_lines_below`, `rotation_correction`, `created_by`, timestamps | a club's map as a series (06 §8) |
-| `club_map_versions` | `id UUID` | `club_map_id → club_maps CASCADE`, `seq`, `label`, `source_hash RESTRICT`, `document_hash RESTRICT`, `uploaded_by`, `uploaded_at`; `UNIQUE(club_map_id, seq)` | one edition; `uploadedAt` ordering, `seq` for display |
+| `club_map_versions` | `id UUID` | `club_map_id → club_maps CASCADE`, `seq`, `label`, `source_hash RESTRICT`, `document_hash RESTRICT`, `uploaded_by`, `uploaded_at`, `patch JSONB NOT NULL DEFAULT '[]'`; `UNIQUE(club_map_id, seq)` | one version: an uploaded edition (`patch` `[]`), or a promoted one — the same source with an ordered list of correction layers (`docs/map-patches.md` §5); `uploadedAt` ordering, `seq` for display |
 | `map_files` (+) | — | `source_hash RESTRICT`, `document_hash RESTRICT`, `club_map_version_id → club_map_versions SET NULL` | the event's pins. `document_hash` is null until the import pins (or when it failed); `source_hash` is set on every live event's row (the E5 migration's guard) and null only on a soft-deleted event's row that never had a source — a file name without bytes. Since E5 the row holds no bytes (`file_data`, `file_hash`, `render_key` and the colour-stack columns are dropped) |
 | `map_uploads` | `id UUID` | `event_id → events CASCADE` (nullable), `file_name`, `kind`, `declared_bytes`, `chunk_bytes`, `uploaded_by SET NULL`, `created_at`, `finalised_hash → map_sources SET NULL` | one chunked upload in flight (§5); `kind` is set from the first chunk |
 | `map_upload_chunks` | `(upload_id, n)` | `bytes BYTEA` | `upload_id → map_uploads CASCADE`; `STORAGE EXTERNAL`; deleted at finalise |
 | `club_symbol_decisions` | `(fingerprint, library_version)` | `canonical_id` (NULL = keep as source), `decided_by → users SET NULL`, `decided_at` | a reviewed symbol outcome reused across documents (`docs/map-symbols.md` §8.5); written only by `mapImport.decide` (§6.8), read when a job is inserted (§6.1); no event or series column — the instance is one club's |
 | `map_patches` | `id UUID` | `event_id → events CASCADE` (`UNIQUE`), `document_hash → map_documents RESTRICT`, `enabled`, `ops JSONB`, `symbols JSONB`, `version BIGINT`, timestamps | an event's corrections to its pinned document (`docs/map-patches.md` §3.1); a GC reference (§8.1) |
 | `map_gps_tracks` | `id UUID` | `event_id → events CASCADE`, `name`, `source_name`, `points JSONB`, `point_count`, `recorded_at`, `trim_start` / `trim_end`, `derived_from UUID[]`, `single_pass JSONB`, `converted_op`, `created_by → users SET NULL`, `created_at`, `version BIGINT` | an event's GPS tracks in WGS 84 (`docs/map-gps-tracks.md` §1.1); no blob reference |
-| `map_import_jobs` | `id UUID` | `event_id CASCADE` / `club_map_id CASCADE` (the target, either nullable), `source_hash → map_sources CASCADE`, `decisions JSONB` (the decision snapshot, §6.1), `state`, `stage`, `progress REAL`, `claimed_by`, `heartbeat_at`, `document_hash → map_documents SET NULL`, `error`, `started_by → users SET NULL`, timestamps | one import run (§6); indexed on `(state, heartbeat_at)` for the claim query and on each target; `started_by` is the user whose request started it (null for the re-match and the retired backfill), read by §4.2 |
+| `map_import_jobs` | `id UUID` | `event_id CASCADE` / `club_map_id CASCADE` (the target, either nullable), `source_hash → map_sources CASCADE`, `decisions JSONB` (the decision snapshot, §6.1), `patch JSONB NOT NULL DEFAULT '[]'` (the version patch snapshot, §6.1), `state`, `stage`, `progress REAL`, `claimed_by`, `heartbeat_at`, `document_hash → map_documents SET NULL`, `error`, `started_by → users SET NULL`, timestamps | one import run (§6); indexed on `(state, heartbeat_at)` for the claim query and on each target; `started_by` is the user whose request started it (null for the re-match and the retired backfill), read by §4.2 |
 
 The legacy library table `club_map_files` (linked to its series by
 `club_map_id`), the tile cache `map_tiles` and the rendered-map cache
@@ -82,7 +82,7 @@ importAndStoreMap(db, fileBytes, fileName, kind /* "ocad" | "omap" */, { uploade
 importAndStoreOcad(db, fileBytes, fileName, opts)         // = importAndStoreMap(…, "ocad", opts)
 
 storeImportedDocument(db, { source: { bytes, fileHash, kind, fileName, uploadedBy? },
-                            document: { bytes, hash, libraryVersion? }, report })
+                            document: { bytes, hash, libraryVersion?, patch? }, report })
   → { sourceHash, documentHash, deduplicated }
 ```
 
@@ -110,7 +110,12 @@ storeImportedDocument(db, { source: { bytes, fileHash, kind, fileName, uploadedB
   `omap-4` `warningDetails` (one `{code, message, symbolIdx?}` per warning
   emission, at most 500, only when there are any — the per-symbol detail
   behind the header's one-message-per-code `warnings`, `docs/map-import.md`
-  §3.6).
+  §3.6); since G12a `corrections` (`{ layers, ops, issues }`, only for an
+  import that baked a version patch, `docs/map-patches.md` §5.2).
+- `map_documents.patch` is the job's version patch when it has layers,
+  else NULL. The row is content-addressed: a bake that reproduces another
+  document's bytes stores nothing and the existing row keeps its patch
+  (`docs/map-patches.md`, Pending "A no-op layer").
 - `library_version` is `"<library>@<SYMBOL_LIBRARY_VERSION>"`
   (`ISOM2017-2@2026.10.3`), the library the matcher chose for the
   document. Rows imported before the matcher carry `"none"`
@@ -855,12 +860,13 @@ instance loses nothing. `packages/api/src/map-store/jobs.ts`.
 ### 6.1 Lifecycle
 
 ```
-startImportJob(db, {sourceHash, eventId? | clubMapId?, startedBy?, holdMs?})
+startImportJob(db, {sourceHash, eventId? | clubMapId?, startedBy?, patch?, holdMs?})
   │
   ├─ decisions = club_symbol_decisions for the source's kind (docs/map-symbols.md §8.5)   → the row's `decisions`
+  ├─ patch = the version patch to bake (docs/map-patches.md §5; default [])                → the row's `patch`
   │
   ├─ a map_documents row exists for (sourceHash, importer ∈ {ocad-12, omap-6}, library *@<current SYMBOL_LIBRARY_VERSION>)
-  │   that follows `decisions` (newest first)
+  │   with the same patch (null ≡ []) that follows `decisions` (newest first)
   │     → touchDocument, insert state=done with that document_hash, applyJobResult, thumbnail (§4.5), return;
   │       the height field (§4.7) is started, not awaited                                   (06 §8 dedup, no import worker)
   │
@@ -869,7 +875,7 @@ startImportJob(db, {sourceHash, eventId? | clubMapId?, startedBy?, holdMs?})
 kickImportJobs: one loop per instance
   claim (atomic updateMany: queued, or running with heartbeat older than 60 s)
   → running, claimed_by = INSTANCE_ID, stage parse
-  → worker thread: parse → normalise → match → encode (stage + progress written at each boundary,
+  → worker thread: parse → normalise → match → bake the patch → encode (stage + progress written at each boundary,
   → store: storeImportedDocument (§3)                 heartbeat every 10 s while it runs)
   → applyJobResult: pins (§6.4)
   → derive: thumbnail row (§4.5), then the height-field row (§4.7); a failure of either is logged, never fails the job;
@@ -891,6 +897,12 @@ camelCase like `header` / `report`). The worker imports with exactly that
 list, so a re-claimed job produces the same document even if somebody
 decided in between; a decision made after the insert applies to the next
 job. A malformed value imports without decisions rather than failing.
+The **patch snapshot** is the same kind of input: the version patch the
+store stage bakes (`docs/map-patches.md` §5.2), set by the caller from the
+version or the document being replaced (§5.5 there) and stored in
+`patch`, so a re-claimed job bakes the same layers; the stored document
+records it in `map_documents.patch`, and dedup reuses only a document of
+the same patch.
 The dedup short-cut uses the same list: a stored document is reused only
 if `documentFollowsDecisions` holds for it — re-importing it now would
 apply exactly the decisions it records — so a decision or a `reset`
@@ -942,6 +954,8 @@ import and fails the job.
 ### 6.3 Worker
 
 `import-worker.ts` runs `importMapToDocument` for the source's `kind`
+with the job's decisions and patch (the bake runs inside the `encode`
+stage, `docs/map-patches.md` §5.2)
 (with `onStage` posting `parse` / `normalise` / `match` / `encode`) and
 `buildImportReport`, and posts the
 document bytes, hashes and report back. It is launched with
@@ -987,14 +1001,20 @@ Idempotent; also run for dedup hits:
   follow their objects, what cannot follow is kept as unresolved. A
   failure there is logged and leaves the patch dormant; it never fails
   the pin.
-- `clubMapId` set and no `club_map_versions` row for `(clubMapId,
-  source_hash)` → insert one with `seq = max + 1`, label and uploader
-  copied from the source row. `clubMap.addFromSource` then
+- A club version is its source **and** its patch (`docs/map-patches.md`
+  §5 answer 1): the club half finds the series' versions of the job's
+  source whose `patch` equals the job's (null ≡ `[]`, key order ignored),
+  not one per `(clubMapId, source_hash)`.
+- `clubMapId` set, no such version and the job's patch empty → insert one with `seq = max + 1`, label and uploader
+  copied from the source row. With a non-empty patch nothing is created
+  (promote creates its version, `docs/map-patches.md` §5.3) and a warning
+  is logged. `clubMap.addFromSource` then
   overwrites label and uploader with the request's name and user when the
   job finished within the hold, since the source row keeps the first
   uploader's values.
 - `clubMapId` set and that version exists → its `document_hash` follows
-  the job's document (an in-place update; `seq`, label and uploader stay).
+  the job's document (an in-place update; `seq`, label and uploader stay;
+  every matching version, though a series has one per patch).
   An edition is the uploaded *file*; its document is that file's latest
   import — a reviewed one (`finalise`, §6.8) or a re-matched one (§6.9).
   Events that used the edition keep the document they pinned
@@ -1002,6 +1022,15 @@ Idempotent; also run for dedup hits:
   document stays an explicit "update to latest". Readers of a version
   must not cache its `document_hash` as if it were immutable; the hash
   itself is.
+- Both set with a non-empty patch — a **promote job**
+  (`docs/map-patches.md` §5.3) → the club half above (the promoted
+  version moves onto the baked document), then the event half is
+  `completePromote` instead of the plain event pin: under the patch row
+  lock, only while the event's rows of the source still name the base
+  version, the promoted ops removed from the event's patch and the rows
+  pinned to the document and the new version; then the quick-access
+  columns, the controls and re-resolution as above (§5.4 there). A failed
+  promote job deletes its version (`abandonPromote`).
 - Neither set (a `decide` job, §6.8) → nothing is pinned.
 - `touchDocument(hash)`.
 
@@ -1023,7 +1052,8 @@ clubMap.list → [{
   id,                      club_maps.id
   name, colorProfile, colorOverrides, northLinesBelow, rotationCorrection,   the series
   createdBy, createdAt,    club_maps.created_by / created_at
-  version: {id, seq, label, sourceHash, documentHash, uploadedAt, uploadedBy} | null,   latest seq
+  version: {id, seq, label, sourceHash, documentHash, uploadedAt, uploadedBy,
+            layers, corrections} | null,   latest seq; layers / corrections: its promoted correction layers and ops (0 for an upload)
   versionCount,
   importJob: {id, state, error} | null,   newest job of the series, only while version is null
   fileName,                version label, else map_sources.file_name of the version (or the job's source)
@@ -1055,8 +1085,9 @@ card's thumbnail follows the latest import and nothing here caches it.
 | `rename {id, name}` | `club_maps.name` |
 | `setRotation {id, degrees}` | `rotation_correction`; returns `{success, rotationCorrection}` (the list derives extent and north from it, §4.6) |
 | `remove {id}` | deletes the series: versions cascade, `map_files.club_map_version_id` of events that pinned one is set `NULL`, jobs cascade |
-| `download {id}` | the latest version's `map_sources` bytes, named by the version label (else `map_sources.file_name`) |
-| `course.useClubMap {clubMapId}` | the series' rotation correction and the latest version's source (by hash, no bytes copied); then `map_files.club_map_version_id` = that version on the event's rows with its `source_hash` |
+| `removeVersion {id, versionId}` | deletes the latest version when it is a promoted one (`docs/map-patches.md` §5.6): its `uploaded_by` or an admin; `VERSION_NOT_LATEST`, `VERSION_NOT_PROMOTED`, `PATCH_PROMOTING` while its promote job runs; events on it keep their document with `club_map_version_id` set `NULL` |
+| `download {id}` | the latest version's `map_sources` bytes, named by the version label (else `map_sources.file_name`) — the original file also for a promoted version (`docs/map-patches.md` §5 answer 8) |
+| `course.useClubMap {clubMapId}` | the series' rotation correction and the latest version's source (by hash, no bytes copied) **and its patch** (the import bakes it; dedup finds the version's document); then `map_files.club_map_version_id` = that version on the event's rows with its `source_hash` |
 
 The base64 `clubMap.upload` went in E5 (the web uploads chunked, §5.2),
 and with `club_map_files` its write-through to every mutation above.
@@ -1081,8 +1112,10 @@ and with `club_map_files` its write-through to every mutation above.
   `club_map_versions` foreign key and logs the job as failed. Nothing is
   left behind; the document, if stored, waits for the GC.
 - `NOT_FOUND` for an unknown id; `BAD_REQUEST` (Zod) for a malformed one.
-- One version per series in slice A: there is no "new edition" upload
-  yet, so `version` is version 1 and `versionCount` is 1 (06 §6).
+- Versions after the first come from promote (`docs/map-patches.md` §5):
+  the same source with correction layers, `seq` 2, 3, …. There is still
+  no "new edition" upload, so every version of a series shares version
+  1's source (06 §6).
 
 ### 6.6 Status API and housekeeping
 
@@ -1139,10 +1172,14 @@ runs *after* it, on any stored document:
 ```
 mapImport.review   { documentHash }               rows + stack + report + terrain (docs/map-import.md §2.2; terrain §4.7)
 mapImport.decide   { documentHash, decisions }    club_symbol_decisions writes (packages/api/src/map-store/decisions.ts)
-                                                  → startImportJob { sourceHash, startedBy } — no target
+                                                  → startImportJob { sourceHash, startedBy, patch } — no target;
+                                                    patch = the reviewed document's (docs/map-patches.md §5.5)
                                                   → the reviewed document, stored, unpinned
 mapImport.finalise { documentHash, target }       applyJobResult with that document: event rows of the source,
-                                                  or the club map's version of the source (§6.4, in place)
+                                                  or the club map's version of the source (§6.4, in place) —
+                                                  of the document's patch: a row (its pinned document's patch, or
+                                                  unpinned its club version's) or version of another patch is
+                                                  `source-mismatch`
 mapImport.exportCrt / importCrt                   the decisions as a Mapper CRT and back; the import resolves
                                                   to decide's list and runs decideOnDocument (map-symbols §8.6)
 ```
@@ -1197,6 +1234,11 @@ event pins too (03 §6.5: a re-match keeps reviewed
 rows and re-proposes the rest — the job applies the club decisions,
 across releases, `docs/map-symbols.md` §8.5).
 
+Each item re-imports with its patch (`docs/map-patches.md` §5.5): a club
+item with its version's, an event item with that of the document it replaces,
+an `unpinned` row with its club version's — so a promoted version and the
+events on it keep their corrections. There is no staleness reason for the
+patch itself (a version is its source and patch; decision log, G12a).
 Each document is judged once per run whatever pins it; event pins are
 one item per (event, source). Items run one at a time, club editions
 first; a failure is reported and the pin left as it was, never an abort.
@@ -1367,7 +1409,7 @@ by id (below).
 |---|---|---|
 | `files` | every `map_files` row of the event with `source_hash IS NOT NULL` | all but `id`, `event_id` |
 | `sources` | the distinct `map_sources` rows those rows pin, plus the `source_hash` of every pinned document | `file_hash`, `kind`, `size_bytes`, `file_name` |
-| `documents` | the distinct `map_documents` rows pinned by `document_hash` | `hash`, `size_bytes`, `format_version`, `importer_version`, `library_version`, `source_hash`, `header`, `report` |
+| `documents` | the distinct `map_documents` rows pinned by `document_hash` | `hash`, `size_bytes`, `format_version`, `importer_version`, `library_version`, `source_hash`, `header`, `report`, and `patch` only for a document baked with a version patch (`docs/map-patches.md` §5; an older peer's rows have none and store NULL) |
 | `decisions` | the whole `club_symbol_decisions` table (`docs/map-symbols.md` §8.5) | `fingerprint`, `library_version`, `canonical_id`, `decided_at` |
 
 The part carries no bytes. The venue fetches each blob it does not
@@ -1612,7 +1654,8 @@ more `\copy` sections, before `map_files` (the blobs in FK order):
 | `map_documents` | `hash` in the event's `map_files.document_hash` |
 | `club_symbol_decisions` | all (club-level; a restored event's re-match, §6.9, reads them) |
 
-All columns, `bytes` as Postgres `\x` hex in the CSV. `map_previews`
+All columns, `bytes` as Postgres `\x` hex in the CSV; `map_documents`
+since G12a with `patch` last (`docs/map-patches.md` §5). `map_previews`
 and `map_heightfields` are omitted (caches; §4.5, §4.7). The `map_files` section holds no bytes since E5 —
 only the pins; the blob sections carry the file.
 
@@ -1627,6 +1670,12 @@ to a document the event no longer pins) restores too. Its GPS tracks
 after `map_patches`, restored by `packages/api/scripts/restore-map-gps-tracks.sql
 -v event_id=<id>`: `event_id` rewritten, `created_by` kept only when that
 user exists, `ON CONFLICT (id) DO NOTHING`.
+
+`restore-map-blobs.sql` reads the `map_documents` section's header row
+(`head -n 1`) and, for a dump written before G12a, loads it without the
+`patch` column, which the restored rows then have NULL: `\copy` matches
+columns by position and does not interpolate variables, so the temp
+table takes the section's shape.
 
 **Restore is idempotent on hash.** `packages/api/scripts/restore-map-blobs.sql`
 loads both sections through temp tables with
@@ -1826,12 +1875,19 @@ and `map_files.north_detection`, which nothing writes or reads since E5
 document without contours (no field grid to resample onto); a DEM
 backfill for documents stored before a provider was enabled (their job is
 queued by the first request for a DEM source, which the descriptor's
-`pending` invites, or by a re-import). Each lands with its own section here and its own tests.
+`pending` invites, or by a re-import); the Club maps card for promoted
+versions (version, label, corrections, the original-file note, delete of
+the latest promoted version — row G12b; the API is §6.5 `removeVersion`
+and `list`'s `layers` / `corrections`); a venue box's copy of a promoted
+version (the snapshot carries `map_documents.patch` for the event's
+documents, not `club_map_versions`, as for any version). Each lands with its own section here and its own tests.
 
 ## 10. Tests
 
 | Level | File | Covers |
 |---|---|---|
+| Integration (api) | `packages/api/src/__tests__/integration/map-promote.test.ts` | G12a (`docs/map-patches.md` §5): the three `patch` columns; a promote job's pins (§6.4: the version onto the baked document, the event onto the version); dedup per patch (§6.1); `decide` / `finalise` per patch (§6.8); `useClubMap` on a promoted series and `removeVersion` (§6.5); the re-match of a promoted version and its event (§6.9); the GC keeps promoted documents (§8.1); the per-event dump with `map_documents.patch` restored (§7.3) — the full list in `docs/map-patches.md` "Tests" |
+| Unit (api) | `packages/api/src/__tests__/snapshot-maps.test.ts` (G12a part) | `snapshotDocumentPatch`: a promoted document's patch written on the box, none for null / `[]` / garbage (§7.2) |
 | Unit (api) | `packages/api/src/__tests__/map-document-route.test.ts` | `parseRangeHeader` (forms, clamping, suffix, multi → ignored, unsatisfiable), `negotiateEncoding` (q-values, wildcard, refusal), `authoriseDocumentAccess` matrix over stub queries (including the own-job clause), `documentHeaderSummary` |
 | Unit (api) | `packages/api/src/__tests__/map-source-route.test.ts` | `sliceRanges` (empty, exact multiple, remainder, bad size), `contentDisposition` (ASCII fallback, RFC 5987 escapes), `authoriseSourceAccess` matrix: auth off, event manager vs `courses.view`, club-library copy admin-only, kiosk key never, club uploader / admin / stranger / anonymous |
 | Unit (api) | `packages/api/src/__tests__/map-storage-gc.test.ts` | `gcCutoff`, `parseGraceDays` (default, override, rejects), `isGcDue` (never ran, 23 h / 24 h, in progress < 1 h, crashed > 1 h), `isForeignKeyViolation` (the Prisma 7 / adapter-pg `23001` shape, `23503`, unrelated errors) |

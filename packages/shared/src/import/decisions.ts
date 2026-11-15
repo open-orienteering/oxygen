@@ -33,6 +33,7 @@ export function documentClassOf(colours: readonly Pick<DocumentColour, "name" | 
 /** A stored header or an encoder input: `origin` may be defaulted, `render` parsed or not. */
 interface SymbolLike {
   code: string;
+  sourceIndex?: number;
   origin?: DocumentSymbol["origin"];
   render: unknown;
   match?: Pick<SymbolMatch, "method" | "canonicalId">;
@@ -42,14 +43,23 @@ interface HeaderLike {
   source: { kind: string };
   colours: readonly Pick<DocumentColour, "name" | "cmyk">[];
   symbols: readonly SymbolLike[];
+  library?: { id: string } | null;
 }
 
-const isSource = (s: { origin?: DocumentSymbol["origin"] }) => (s.origin ?? "source") === "source";
+/**
+ * A symbol of the source's table. In a matched document (`library` set)
+ * every source symbol carries a match; a promoted patch symbol (map-patches
+ * §5, row G12a) is `source` by origin but has neither a match nor a source
+ * position — the matcher never saw it, so it is no review row and no
+ * decision.
+ */
+const isSource = (s: { origin?: DocumentSymbol["origin"]; sourceIndex?: number; match?: unknown }, header: { library?: unknown }) =>
+  (s.origin ?? "source") === "source" && !(header.library && s.match === undefined && s.sourceIndex === undefined);
 
 /** Fingerprint per header symbol; `null` for non-source symbols and symbols without a render. */
 export function documentSymbolFingerprints(header: HeaderLike): (string | null)[] {
   const classOf = documentClassOf(header.colours);
-  return header.symbols.map((s) => (isSource(s) && s.render ? decisionFingerprint(header.source.kind, s.code, symbolIrHash(parseRenderSymbol(s.render), classOf)) : null));
+  return header.symbols.map((s) => (isSource(s, header) && s.render ? decisionFingerprint(header.source.kind, s.code, symbolIrHash(parseRenderSymbol(s.render), classOf)) : null));
 }
 
 /** The library a document's decisions are made against: its own, the scale's for a pre-matcher document (or a header naming an overlay, which is never a document's library — docs/map-symbols.md §12). */
@@ -127,7 +137,7 @@ export function documentFollowsDecisions(header: HeaderLike & { library?: { id: 
   if (!libraryId || !isDocumentLibraryId(libraryId)) return true;
   const classOf = documentClassOf(header.colours);
   for (const s of header.symbols) {
-    if (!isSource(s) || !s.render) continue;
+    if (!isSource(s, header) || !s.render) continue;
     const d = decisionFor(decisions, libraryId, s.code, symbolIrHash(parseRenderSymbol(s.render), classOf));
     const expected = d && (d.canonicalId === null || isDocumentEntryId(libraryId, d.canonicalId)) ? d.canonicalId : undefined;
     const actual = s.match?.method === "explicit" ? s.match.canonicalId : undefined;
@@ -197,7 +207,7 @@ export function reviewRows(header: ReviewHeaderLike, objectsPerSymbol: readonly 
   const canonById = new Map([...ctx.canon, ...ctx.overlay].map((c) => [c.entry.id, c]));
   const rows: ReviewRow[] = [];
   header.symbols.forEach((s, symbolIdx) => {
-    if (!isSource(s)) return;
+    if (!isSource(s, header)) return;
     const render: RenderSymbol | null = s.render ? parseRenderSymbol(s.render) : null;
     const objects = objectsPerSymbol[symbolIdx] ?? 0;
     const flags: ReviewFlag[] = [];

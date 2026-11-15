@@ -287,6 +287,14 @@ which is what makes the hash stable across machines (§6).
   document, never written into it: `docs/map-patches.md`. The effective
   document keeps every `objectIndex` of the pinned one and appends added
   objects after them, so these references survive a patch.
+- A **promoted club version** (`docs/map-patches.md` §5, row G12a) is the
+  one document whose corrections are written into it: the import bakes
+  its version patch before encoding. Its hidden objects are absent, and
+  each added object has `sourceIndex = 0x80000000 + n` (`n` numbered over
+  the version's layers in order, never reused), above every source
+  object's index; its patch symbols are table entries with `origin:
+  "source"` and neither `match` nor `sourceIndex`. No format change: the
+  fields and their widths are as above.
 
 ## 7. JSON projection
 

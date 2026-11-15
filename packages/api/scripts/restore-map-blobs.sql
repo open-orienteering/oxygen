@@ -23,7 +23,21 @@ CREATE TEMP TABLE restore_map_sources (LIKE oxygen.map_sources) ON COMMIT DROP;
 \copy restore_map_sources FROM 'map_sources.csv' WITH (FORMAT csv, HEADER true)
 
 CREATE TEMP TABLE restore_map_documents (LIKE oxygen.map_documents) ON COMMIT DROP;
+-- A dump written before G12a (docs/map-patches.md §5) has no `patch` column
+-- in this section: \copy matches columns by position, so the temp table
+-- loses the column for the load and gets it back, empty, after. (\copy does
+-- not interpolate variables, hence the two shapes of the table.)
+\set map_documents_header `head -n 1 map_documents.csv`
+SELECT (',' || :'map_documents_header' || ',') LIKE '%,patch,%' AS map_documents_have_patch \gset
+\if :map_documents_have_patch
+\else
+ALTER TABLE restore_map_documents DROP COLUMN patch;
+\endif
 \copy restore_map_documents FROM 'map_documents.csv' WITH (FORMAT csv, HEADER true)
+\if :map_documents_have_patch
+\else
+ALTER TABLE restore_map_documents ADD COLUMN patch JSONB;
+\endif
 
 -- The hash is the row's identity: refuse bytes that do not match it.
 DO $$
@@ -47,9 +61,9 @@ FROM restore_map_sources r
 ON CONFLICT (file_hash) DO NOTHING;
 
 INSERT INTO oxygen.map_documents (hash, bytes, size_bytes, format_version, importer_version, library_version,
-                                  source_hash, header, report, created_at, last_referenced_at)
+                                  source_hash, header, report, patch, created_at, last_referenced_at)
 SELECT r.hash, r.bytes, r.size_bytes, r.format_version, r.importer_version, r.library_version,
-       r.source_hash, r.header, r.report, now(), now()
+       r.source_hash, r.header, r.report, r.patch, now(), now()
 FROM restore_map_documents r
 ON CONFLICT (hash) DO NOTHING;
 
