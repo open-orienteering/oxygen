@@ -333,8 +333,8 @@ export interface MapViewerEditorProps {
    */
   mapObjects?: VectorMapObjects | null;
   /**
-   * Map mode's `H` (docs/course-editor.md §13): no course layer is requested and the UI layer lists no course
-   * sites, so the map shows without the overprint.
+   * Map mode's `H` (docs/course-editor.md §13): no course layer is requested, the UI layer lists no course
+   * sites and the description sheet is not drawn, so the map shows without the overprint.
    */
   hideCourse?: boolean;
 }
@@ -2378,7 +2378,7 @@ export function MapViewer({
   // ─── Description sheet (outside rotation) ──────────────
 
   const descriptionSheet = useMemo(() => {
-    if (!showDescriptions || containerSize.w === 0 || containerSize.h === 0) return null;
+    if (!showDescriptions || editorHideCourse || containerSize.w === 0 || containerSize.h === 0) return null;
     const activeCourses = courses.filter(
       // The sheet is the selected course's, not All variations' branches (docs/course-editor.md §12).
       (c) => (c.highlight || c.name === highlightCourseName) && !c.tint,
@@ -2397,7 +2397,7 @@ export function MapViewer({
       allControlsTitle,
       { eventName, mapScale: mapScale ?? null },
     );
-  }, [showDescriptions, descriptionsAllControls, allControlsTitle, symbolScale, containerSize, courses, highlightCourseName, controls, eventName, mapScale]);
+  }, [showDescriptions, editorHideCourse, descriptionsAllControls, allControlsTitle, symbolScale, containerSize, courses, highlightCourseName, controls, eventName, mapScale]);
 
   // ─── Scale bar ─────────────────────────────────────────
 

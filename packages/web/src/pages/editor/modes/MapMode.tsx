@@ -92,7 +92,8 @@ export function useMapMode(a: MapModeArgs): MapMode {
   /** The move being dragged, or committed and waiting until the viewer draws `waitFor`. */
   const [draft, setDraft] = useState<{ ops: mapDocument.PatchOp[]; waitFor: string | null } | null>(null);
   const [drawn, setDrawn] = useState<string | null>(null);
-  const [toggleBusy, setToggleBusy] = useState(false);
+  /** *Apply corrections* while its write is in flight: the box shows the value asked for. */
+  const [toggling, setToggling] = useState<boolean | null>(null);
   const gesture = useRef<MapGestureRef["current"]>(null);
   const clickSeq = useRef(0);
 
@@ -172,7 +173,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
   }, [enabled, canEdit, hash, commit]);
   const setCorrectionsOn = useCallback((on: boolean) => {
     if (!canEdit) return;
-    setToggleBusy(true);
+    setToggling(on);
     // An event setting, not an undo entry (§13, as auto cuts).
     void run(async () => {
       try {
@@ -180,7 +181,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
       } catch (e) {
         throw new Error(patchErrorText(e, t), { cause: e });
       } finally {
-        setToggleBusy(false);
+        setToggling(null);
       }
     });
   }, [canEdit, run, writes, deliver, t]);
@@ -279,7 +280,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
         <MapObjectSection info={info} hidden={selectedHidden} documentHash={mapDoc.hash} nameId={nameId} canWrite={canWrite} onHide={hide} onRestore={restore} />
       </InspectorSection>
       <InspectorSection title={t("corrections")} testId="editor-corrections">
-        <CorrectionsList rows={rows} selected={selected} enabled={correctionsOn} canWrite={canEdit} busy={toggleBusy}
+        <CorrectionsList rows={rows} selected={selected} enabled={toggling ?? correctionsOn} canWrite={canEdit} busy={toggling !== null}
           onLocate={(r) => locate(r.ref)} onRevert={revert} onEnabled={setCorrectionsOn} />
       </InspectorSection>
     </>
