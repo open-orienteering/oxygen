@@ -5,3 +5,4 @@ export * from "./projection.js";
 export * from "./render-bridge.js";
 export * from "./patch.js";
 export * from "./materialise.js";
+export * from "./patch-resolve.js";

@@ -15,25 +15,33 @@
  *
  * A document is judged once per run whatever pins it. Every item is
  * keyed by content hash, so a re-run finds only what is still stale.
+ *
+ * Each item's pin re-keys the event's map patch (`applyJobResult`); the
+ * pass ends with a sweep that re-keys every live event's patch still
+ * keyed to another document than its pin (docs/map-patches.md §4.4).
  */
 
 import { symbolLibrary } from "@oxygen/shared";
 import type { Prisma, PrismaClient } from "../generated/prisma/client.js";
 import { IMPORTER_VERSIONS } from "../import/ocad.js";
 import { loadClubDecisions, storedDocumentFollowsDecisions } from "./decisions.js";
+import { eventDocumentHash } from "./event-document.js";
 import { awaitImportJob, startImportJob, type ImportJobRow } from "./jobs.js";
+import { reresolveEventPatch } from "./patches.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
-export type RematchReason = "importer" | "library" | "decisions" | "unpinned";
+/** `patch`: an event's map patch keyed to another document than its pin (the sweep, docs/map-patches.md §4.4). */
+export type RematchReason = "importer" | "library" | "decisions" | "unpinned" | "patch";
 
 export interface RematchItem {
-  kind: "club" | "event";
-  /** `club_map_versions.id`, or the event id for an event's pins of one source. */
+  kind: "club" | "event" | "patch";
+  /** `club_map_versions.id`, or the event id for an event's pins of one source or its patch. */
   id: string;
   name: string;
+  /** The pin's source; empty for a `patch` item. */
   sourceHash: string;
-  /** The stale document; null for an `unpinned` row. */
+  /** The stale document (a `patch` item: the one the patch is keyed onto); null for an `unpinned` row. */
   documentHash: string | null;
   reason: RematchReason;
 }
@@ -132,6 +140,27 @@ export async function planRematch(db: Db, opts: Pick<RematchOptions, "eventId" |
   return opts.limit ? items.slice(0, opts.limit) : items;
 }
 
+/** The sweep's items (§4.4): live events whose patch row is keyed to another document than their pin. */
+export async function planPatchSweep(db: Db, opts: Pick<RematchOptions, "eventId"> = {}): Promise<RematchItem[]> {
+  const rows = await db.mapPatch.findMany({
+    where: { event: { removed: false }, ...(opts.eventId ? { eventId: opts.eventId } : {}) },
+    orderBy: { eventId: "asc" },
+    select: { eventId: true, documentHash: true, event: { select: { name: true, nameId: true } } },
+  });
+  const items: RematchItem[] = [];
+  for (const r of rows) {
+    const pin = await eventDocumentHash(db, r.eventId);
+    if (pin && pin !== r.documentHash) items.push({ kind: "patch", id: String(r.eventId), name: r.event.name || r.event.nameId, sourceHash: "", documentHash: r.documentHash, reason: "patch" });
+  }
+  return items;
+}
+
+async function sweepItem(db: Db, item: RematchItem): Promise<Omit<RematchItemResult, keyof RematchItem>> {
+  const r = await reresolveEventPatch(db, BigInt(item.id));
+  if (r.outcome === "failed") return { outcome: "failed", jobId: null, newDocumentHash: null, error: r.error ?? "re-resolution failed" };
+  return { outcome: "done", jobId: null, newDocumentHash: r.to ?? (await eventDocumentHash(db, BigInt(item.id))), error: null };
+}
+
 async function rematchItem(db: Db, item: RematchItem, timeoutMs?: number): Promise<Omit<RematchItemResult, keyof RematchItem>> {
   const target = item.kind === "club"
     ? { clubMapId: (await db.clubMapVersion.findUniqueOrThrow({ where: { id: item.id }, select: { clubMapId: true } })).clubMapId }
@@ -143,16 +172,27 @@ async function rematchItem(db: Db, item: RematchItem, timeoutMs?: number): Promi
   return { outcome: "failed", jobId: job?.id ?? null, newDocumentHash: null, error };
 }
 
-/** One pass, one map at a time; a failed item is reported, never an abort. */
+/**
+ * One pass, one map at a time; a failed item is reported, never an abort.
+ * The patch sweep is planned after the pins ran (their pins re-key most
+ * patches); a dry run lists the patches dormant now.
+ */
 export async function runRematch(db: Db, opts: RematchOptions = {}): Promise<RematchRun & { failures: RematchItemResult[] }> {
-  const items = await planRematch(db, opts);
+  const pins = await planRematch(db, opts);
+  const items = opts.dryRun ? [...pins, ...(await planPatchSweep(db, opts))] : pins;
   const run: RematchRun & { failures: RematchItemResult[] } = { dryRun: !!opts.dryRun, total: items.length, processed: 0, done: 0, failed: 0, startedAt: new Date(), finishedAt: null, failures: [] };
   opts.onPlan?.(items);
   if (!run.dryRun) {
-    for (const item of items) {
+    const work = async function* () {
+      yield* items;
+      const sweep = await planPatchSweep(db, opts);
+      run.total += sweep.length;
+      yield* sweep;
+    };
+    for await (const item of work()) {
       let r: Omit<RematchItemResult, keyof RematchItem>;
       try {
-        r = await rematchItem(db, item, opts.itemTimeoutMs);
+        r = item.kind === "patch" ? await sweepItem(db, item) : await rematchItem(db, item, opts.itemTimeoutMs);
       } catch (err: unknown) {
         r = { outcome: "failed", jobId: null, newDocumentHash: null, error: (err instanceof Error ? err.message : String(err)).slice(0, 2000) };
       }

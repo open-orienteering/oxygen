@@ -21,6 +21,7 @@ import { deriveDocumentHeightfield } from "./heightfield.js";
 import { enqueueDocumentDem } from "./dem-jobs.js";
 import { INSTANCE_ID } from "./instance.js";
 import { writePinnedMapFileColumns } from "./event-document.js";
+import { reresolveAfterPin } from "./patches.js";
 import { synchronizePositionedControlCoordinates } from "../event-crs.js";
 import type { ImportWorkerData, ImportWorkerMessage } from "./import-worker.js";
 
@@ -278,6 +279,8 @@ export async function applyJobResult(db: Db, job: Pick<ImportJobRow, "eventId" |
     await writePinnedMapFileColumns(db, job.eventId, job.sourceHash, job.documentHash);
     // Positioned controls' lat/lng from the pinned frame (§6.4).
     await synchronizePositionedControlCoordinates(db, job.eventId);
+    // The event's map patch follows the pin (docs/map-patches.md §4.4); a failure leaves it dormant, never fails the pin.
+    await reresolveAfterPin(db, job.eventId);
   }
   if (job.clubMapId !== null) {
     const existing = await db.clubMapVersion.findFirst({ where: { clubMapId: job.clubMapId, sourceHash: job.sourceHash }, select: { id: true, documentHash: true } });

@@ -64,6 +64,7 @@ interface MapPatch {
   enabled: boolean;                         // default true
   ops: Record<string, PatchOp>;             // key = patchOpId(op)
   symbols: Record<string, PatchSymbol>;     // key = the full library entry id it was materialised from
+  unresolved?: Record<string, UnresolvedOp>; // ops that lost their object when the pin moved (§4.1, row G11)
 }
 ```
 
@@ -144,12 +145,14 @@ interface PatchChange {
   put?: PatchOp[];                          // set these states (replace by id)
   remove?: string[];                        // drop these op ids (absent ids are no-ops)
   putSymbols?: Record<string, PatchSymbol>; // add or replace these symbols by key
+  removeUnresolved?: string[];              // drop these unresolved entries (§4.3; absent keys are no-ops)
 }
 ```
 
 `patchChangeSchema` rejects a change that puts one id twice or both puts
 and removes it. The result is a new patch (the input is not mutated) with
-`ops` and `symbols` keys in sorted order, so two merges reaching the same
+`ops`, `symbols` and `unresolved` keys in sorted order (an empty
+`unresolved` omitted), so two merges reaching the same
 state also serialise to the same JSON. Merging the same change twice
 equals merging it once; changes to different ids commute. Two changes to
 the same id are last-writer-wins: the merge is per state, not per field.
@@ -251,8 +254,9 @@ other ops still apply. Each issue is `{ opId, code }` with a stable code:
 Issues are in op-id order. The editor's *Corrections* list
 (`course-editor.md` §13, row G6) shows them as `data-issue` on each row,
 computed with the patch taken as enabled so a switched-off patch still
-reports them; re-resolution (row G11) adds its own `unresolved` state to
-ops that lost their target after the pin moved.
+reports them. An op that lost its object after the pin moved is not an
+issue: re-resolution moves it out of `ops` into `unresolved` (§4.1),
+which *Corrections* lists apart.
 
 ### 2.4 Consumers
 
@@ -339,15 +343,19 @@ CREATE TABLE oxygen.map_patches (
   enabled        BOOLEAN NOT NULL DEFAULT true,          -- §1.4
   ops            JSONB NOT NULL DEFAULT '{}',            -- record keyed by op id (§1.2)
   symbols        JSONB NOT NULL DEFAULT '{}',            -- record keyed by library entry id (§1.3)
+  unresolved     JSONB NOT NULL DEFAULT '{}',            -- record keyed by origin + op id (§4.1, G11)
   version        BIGINT NOT NULL DEFAULT 0,              -- the token
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),     -- trigger
-  CHECK (jsonb_typeof(ops) = 'object'), CHECK (jsonb_typeof(symbols) = 'object')
+  CHECK (jsonb_typeof(ops) = 'object'), CHECK (jsonb_typeof(symbols) = 'object'),
+  CHECK (jsonb_typeof(unresolved) = 'object')
 );
 CREATE INDEX ON oxygen.map_patches (document_hash);
 ```
 
-Migration `20261113120000_map_patches` (additive: a new table).
+Migration `20261113120000_map_patches` (additive: a new table);
+`20261115130000_map_patches_unresolved` adds `unresolved` (additive: a
+column with a default, G11).
 
 - **One row per event** (`UNIQUE (event_id)`). 08 §4.7 had
   `UNIQUE (event_id, document_hash)`; with keyed states and re-resolution
@@ -371,7 +379,8 @@ Migration `20261113120000_map_patches` (additive: a new table).
 | Procedure | Input | Permission | Result |
 |---|---|---|---|
 | `mapPatch.get` | — | `courses.view` or the kiosk key | `{ version, patch }` (§3.3) |
-| `mapPatch.applyChange` | `{ documentHash } ∧ patchChangeSchema` (`put`, `remove`, `putSymbols`) | `courses.edit` | `{ version, patch }` |
+| `mapPatch.applyChange` | `{ documentHash } ∧ patchChangeSchema` (`put`, `remove`, `putSymbols`, `removeUnresolved`) | `courses.edit` | `{ version, patch }` |
+| `mapPatch.attachUnresolved` | `{ documentHash, key, sourceIndex }` (§4.3) | `courses.edit` | `{ version, patch }` |
 | `mapPatch.setEnabled` | `{ enabled: boolean }` | `courses.edit` | `{ version, patch }` |
 
 Writes are not lease-guarded and not journaled: the patch is cloud-owned
@@ -386,16 +395,23 @@ non-critical data (08 §4.8). Each write is one transaction:
    NOTHING`, keyed to the pin), then lock it (`SELECT … FOR UPDATE`).
    Two first writers both end on the one row.
 3. A row keyed to another document than the pin is **dormant** (below):
-   `PRECONDITION_FAILED` `PATCH_STALE`. The pin is read again under the
-   lock, so a pin that moved since step 1 refuses the write the same
-   way. (A pin that moves after that read and before the commit is not
-   excluded: the pin's writers do not take the patch lock. The write
-   then lands on a row that is dormant from the next read on; nothing
-   is lost. Re-resolution, row G11, re-keys under the lock.)
+   it is re-resolved onto the pin first (§4.4), and the write proceeds
+   on the re-keyed row; when it cannot be (a document missing or not
+   decodable), `PRECONDITION_FAILED` `PATCH_STALE`. The pin is read
+   again under the lock, so a pin that moved since step 1 is treated the
+   same way. (A pin that moves after that read and before the commit is
+   not excluded: the pin's writers do not take the patch lock before
+   their own writes. The write then lands on a row that the pin's
+   re-resolution, which does take the lock, re-keys right after; nothing
+   is lost.)
    A stored row that does not parse (written by a newer image) is not
    overwritten: `INTERNAL_SERVER_ERROR` `PATCH_UNREADABLE`.
 4. `applyChange`: `mergePatch(row, change)` (§1.5). `setEnabled`: the new value.
-   The stored `ops` + `symbols` JSON is capped at 4 MiB
+   `attachUnresolved`: the change `attachUnresolved` (§4.3) builds on the
+   pinned document, merged; refused `BAD_REQUEST` `PATCH_ATTACH_REFUSED`
+   with the reason, a no-op when the entry is gone (attaching twice
+   equals once).
+   The stored `ops` + `symbols` + `unresolved` JSON is capped at 4 MiB
    (`MAP_PATCH_MAX_BYTES`, `PAYLOAD_TOO_LARGE` `PATCH_TOO_LARGE`): a patch is kilobytes,
    and it travels inside the one JSON checkout snapshot.
 5. A write that changes nothing (the same change again, the toggle at
@@ -417,13 +433,12 @@ pin.
 The errors carry their code as the message prefix (`PATCH_STALE: …`), as
 the course-object refusals do.
 
-**A dormant patch** (user 2026-11-13, G3 question): until re-resolution
-lands (§4, row G11), a re-import, re-match, `finalise` or new upload that
-moves the event's pin leaves the row keyed to the old document. Such a
-row is kept (with its document, by `RESTRICT` and the GC reference), not
-delivered (§3.3: `patch: null`, version `"0"`) and not writable
-(`PATCH_STALE`). Nothing is lost; Map mode cannot edit that event until
-G11 re-keys the row onto the new pin, which replaces the refusal. The
+**A dormant patch** (user 2026-11-13, G3 question; G11): a row keyed to
+another document than the pin — between a pin move and its
+re-resolution (§4.4), or when re-resolution failed — is kept (with its
+document, by `RESTRICT` and the GC reference) and not delivered (§3.3:
+`patch: null`, version `"0"`). A write re-resolves it (step 3) and is
+refused `PATCH_STALE` only when that cannot run. Nothing is lost. The
 alternatives — re-key to the new pin with empty ops (discards the
 corrections), or a row per document (`UNIQUE (event_id, document_hash)`,
 contradicts answer 1) — were declined.
@@ -485,8 +500,8 @@ GET /api/maps/:nameId/patch     → 200 application/json { version, patch }
 ### 3.4 Venue
 
 The patch travels in the checkout snapshot's `maps` part
-(`map-storage.md` §7.2) as `maps.patch`: the row with its token as a
-decimal string, carried only when its document is among the snapshot's
+(`map-storage.md` §7.2) as `maps.patch`: the row (`unresolved` included,
+G11) with its token as a decimal string, carried only when its document is among the snapshot's
 documents, and inserted on the box after the documents (the `RESTRICT`
 FK). It is not in `SNAPSHOT_TABLES`: those rows are inserted before the
 `maps` part, and their BigInt columns cross the HTTP snapshot as JSON
@@ -517,6 +532,195 @@ A `map_patches` row is a reference to its document
 document only a patch points at, and touches its `last_referenced_at`.
 `RESTRICT` is the belt.
 
+## 4. Re-resolution
+
+Row G11. When the event's pin moves — an upload of another file or of a
+new edition (*Replace map*, *From club library*, which is also "update to
+the latest version": `course.useClubMap` takes the series' latest
+edition), a review's `finalise`, a re-match (`map-storage.md` §6.4, §6.9)
+— the patch is **re-keyed onto the new document**: its ops follow their
+objects, and what cannot follow is kept as **unresolved**, drawn nowhere,
+and listed in *Corrections* to attach or drop (`course-editor.md` §13;
+08 §4.7, 02 §7, 06 §6). Implementation:
+`packages/shared/src/map-document/patch-resolve.ts` (`resolvePatch`,
+`attachUnresolved`), `packages/api/src/map-store/patches.ts`
+(`reresolveEventPatch`, `reresolveAfterPin`, `attachUnresolvedPatchOp`:
+when it runs), `map-store/rematch.ts` (the sweep).
+
+### 4.1 Unresolved entries
+
+An op that lost its object or its symbol leaves `ops` and goes to the
+patch's **`unresolved`** record (user 2026-11-15, G11 question 1). It is
+not a flag on the op in `ops`: an op id is a `sourceIndex` of the
+document the patch is keyed onto, so a flagged `hide:17` of the old
+document would collide with, and be applied as, a hide of the new
+document's object 17.
+
+```ts
+interface SymbolAnchor {           // a document symbol, as another document can find it
+  code: string;                    // the source code ("206.0")
+  name: string;
+  kind: DocumentSymbol["kind"];
+  canonicalId: string | null;      // the applied match's library entry, else null
+  sourceIndex?: number;            // its position in the source symbol table
+}
+
+interface TargetAnchor {           // the object the op was keyed onto, in its origin document
+  type: number;                    // OBJECT_TYPE
+  symbol: SymbolAnchor;
+  centreMm: [x: number, y: number];  // its bounding box's centre, paper mm (the document's own geometry)
+  sizeMm: [w: number, h: number];    // its bounding box's size, paper mm
+}
+
+interface UnresolvedOp {
+  op: PatchOp;                     // as it was keyed onto its origin document
+  from: string;                    // the origin document's hash (64 hex)
+  fromSource: string;              // the origin's source file hash (header.source.hash)
+  unitsPerMm: number;              // the origin's unit: the op's coordinates are in it
+  reason: "target" | "symbol";
+  target?: TargetAnchor;           // hide / modify / resymbol
+  symbol?: SymbolAnchor;           // the op's { doc } symbol (resymbol / add)
+}
+
+interface MapPatch {
+  // … §1.2
+  unresolved?: Record<string, UnresolvedOp>;   // key = `${from.slice(0, 16)}:${patchOpId(op)}`
+}
+```
+
+- **The key** is the origin's first 16 hex digits and the op id, so two
+  documents' `hide:17` are two entries. A key that is not its entry's is
+  a schema error, as for `ops` (§1.2).
+- **Absent equals empty**, and the canonical form (`mergePatch`, §1.5)
+  omits an empty record, so a patch that never had one serialises as it
+  did before G11. An older client's parse strips the field.
+- **The anchors are taken from the origin document when the op is
+  re-keyed**, so an entry never needs its origin again: that document may
+  be collected (`map-storage.md` §8). `target` is the object's own
+  geometry, not a `modify`'s; `symbol` is set for a `{ doc }` reference.
+- **`reason`**: `target` — no object of the new document is the op's
+  (§4.2); `symbol` — its object was found but its `{ doc }` symbol has no
+  counterpart, or its patch symbol is no longer materialisable (an `add`
+  is always `symbol`: it has no target).
+- **Drawn nowhere**: `applyPatch` reads `ops` alone. Its result and its
+  issues are the same with and without `unresolved` (§2), so every
+  consumer — screen, print, kiosk, cuts, checks — is unchanged.
+- The stored `ops` + `symbols` + `unresolved` JSON is under the 4 MiB cap
+  (§3.2 step 4). Anchors make an entry larger than its op; a re-key that
+  would pass the cap is not written (the row stays dormant, `PATCH_STALE`
+  on a write, §4.4).
+
+### 4.2 `resolvePatch`
+
+`resolvePatch(from, to, patch, { toHash, toleranceMm = 0.5 })` →
+`{ patch, resolved, unresolved }`: the patch re-keyed from `from` (the
+decoded document whose hash is `patch.documentHash`) onto `to` (hash
+`toHash`). Pure, deterministic (the result depends on the patch's
+content, not on its records' insertion order), never throws on patch
+content, never mutates its inputs. `toHash === patch.documentHash`
+returns the patch itself.
+
+Every op of `ops` is resolved in op-id order, then every entry of
+`unresolved` in key order (§4.3):
+
+1. **Target** (hide, modify, resymbol):
+   - **Same source** (`from.header.source.hash === to.header.source.hash`:
+     a re-import, a re-match, a review): the object of `to` with the op's
+     `sourceIndex`, exactly; none → `target`.
+   - **Another edition**: the object of `to` of the same `type` and the
+     same symbol (below) whose bounding box's centre is within
+     `toleranceMm` of the anchor's (Euclidean, paper mm) and whose width
+     and height each differ by at most `toleranceMm`; the nearest centre
+     wins, a tie the lowest `sourceIndex`. None → `target`. The tolerance
+     is slice G's split decision ("the nearest object of the same symbol
+     fingerprint within 0.5 mm on paper"); a point's box is its
+     coordinate.
+   - The op's id becomes the found object's: `hide:<its sourceIndex>`.
+     When two ops reach the same id, the first in this order keeps it and
+     the other is unresolved with `target`.
+2. **Symbol** (resymbol, add):
+   - `{ doc: i }` on the same source: the symbol of `to` with the same
+     `sourceIndex` and kind; a symbol without one (`graphic`, `missing`)
+     by `code` and kind. Another edition: the first symbol of `to`, in
+     table order, that is the same symbol. None → `symbol`.
+   - `{ patch: key }`: kept while the patch symbol is (below); else
+     `symbol`.
+   - **The same symbol** is the same `kind` and, when both carry an
+     applied match (`isAppliedMatch`), the same `canonicalId`; otherwise
+     the same source `code`. OCAD's synthesised `graphic` symbols (one per
+     type, colour and width, all coded `graphic`, no `sourceIndex`) are
+     therefore one symbol to this rule: a `{ doc }` reference to one
+     re-keys to the first of its kind (Pending). (The import's geometry fingerprint,
+     `import/fingerprint.ts`, scores similarity for the matcher; it is not
+     an identity.)
+3. **Coordinates** (modify, add) are rescaled by `to.unitsPerMm /
+   unitsPerMm` and rounded (an OCAD edition is 100 units/mm, a Mapper one
+   1000; both are paper coordinates, x right, y up, from the source's
+   paper origin, `map-document-format.md` §5, so editions of one map
+   share them, as 06 §6 says of course geometry). The flags byte is kept.
+4. **Patch symbols** are materialised again for `to`
+   (`materialiseSymbol(to, key)`, `map-symbols.md` §11.1): the factor and
+   the colour stack may differ. One that is no longer materialisable is
+   dropped from `symbols` and its ops become unresolved with `symbol`.
+
+`resolved` and `unresolved` count the ops and entries that ended in each
+place. `enabled` is kept.
+
+### 4.3 Retry and attach
+
+- **Every re-resolution retries the unresolved entries**, from their
+  anchors: on a document of the entry's `fromSource` by `sourceIndex`,
+  on any other by position and symbol. An entry that resolves leaves
+  `unresolved` for `ops` (unless its op id is taken, then it stays); one
+  that does not is kept exactly as it was (same key, same anchors). So a
+  pin that returns to the first edition gets its corrections back. When
+  a live op and a pending entry fail onto the same key (the pin left the
+  entry's origin again), the live op's entry is kept: it is the later
+  state.
+- **Attach** (*Corrections*' fix, user 2026-11-15, G11 question 2):
+  `attachUnresolved(patch, key, doc, sourceIndex)` re-targets an entry's
+  op onto the document object the user selected — a `hide`, `modify` or
+  `resymbol` with `reason: "target"` — and returns the change that puts
+  it (replacing an op of that id) and removes the entry, with the patch
+  symbol it needs materialised. A `modify` keeps its coordinates
+  (rescaled), so the corrected shape stays where it was drawn. Refused
+  (null, with why): no such entry; an `add` or a `symbol` entry (drop
+  only, until change symbol, G9); no object with that `sourceIndex`; a
+  `modify` or `resymbol` onto an object of another `type`; a symbol that
+  cannot be resolved on `doc`.
+- **Drop** is `applyChange { removeUnresolved: [key] }` (§1.5).
+
+### 4.4 When it runs (server)
+
+`reresolveEventPatch(db, eventId)`: under the patch row's lock, when the
+row is keyed to another document than the event's pin, both documents
+are decoded (`decodedDocument`), `resolvePatch` runs, and the row is
+written with the new `document_hash` and a new version — always, also
+for a row without ops, so `course.mapMetadata.patchVersion` changes and
+every client refetches (§3.3). In the caller's transaction when it has
+one, else in its own. No row, no pin, or the row already on the pin →
+nothing.
+
+- **After every pin**: `applyJobResult` with an event target runs it
+  after the pin's writes (`map-storage.md` §6.4) — an import or a
+  dedup hit, `finalise`, the re-match pass. A failure (a document missing
+  or not decodable) never fails the job or the pin: it is logged and the
+  row stays dormant. Replacing the map first unpins the event
+  (`applyEventMap`, the new row has no document until its job pins it);
+  the row is keyed to the old document meanwhile and remembers it, so the
+  job's pin re-keys it.
+- **On a write to a dormant row** (§3.2 step 3): the write re-resolves
+  first and then proceeds; `PATCH_STALE` is left only for a row that
+  cannot be re-resolved (a document missing or not decodable).
+- **The re-match pass** (`map-storage.md` §6.9) ends with a sweep that
+  re-keys every live event's dormant row (`--event`: that event's;
+  `--dry-run` lists them and writes nothing): the safety net for a row
+  a failed hook left behind.
+- **Reads never re-resolve**: `mapPatch.get`, the route and the server
+  consumers deliver a dormant row as nothing (§3.3), as before.
+- On a venue box the hook runs as on the cloud; the box's copy follows
+  the cloud's row on the next refresh (§3.4).
+
 ## Pending in this chapter
 
 - **An offline copy of the patch** (G4, decided overnight for review).
@@ -528,10 +732,21 @@ document only a patch points at, and touches its `last_referenced_at`.
   `map-rendering.md` §8): a
   filter region cannot select an object drawn with a patch symbol by
   symbol until the region props carry a stable symbol key.
-- **§4 Re-resolution** (row G11): re-keying a patch when the event's pin
-  moves (same source by `sourceIndex`; a new edition by position and
-  symbol within 0.5 mm), the `unresolved` flag, symbol references
-  `{ doc }` re-keyed with it; it wakes a dormant row (§3.2).
+- **Graphic symbols at re-resolution** (G11, §4.2): OCAD's synthesised
+  `graphic` symbols are indistinguishable to the same-symbol rule, so a
+  `{ doc }` reference to one re-keys to the first graphic symbol of its
+  kind, and another edition's graphic object of that kind within 0.5 mm
+  is a target. Telling them apart needs their render (colour, width) in
+  the anchor.
+- **The `unresolved` column through checkout and dump** is covered by the
+  unit `snapshotPatchOf` test and the dump's `SELECT *`; `lease.test.ts`
+  and `backup.test.ts` do not assert it.
+- **Attach and drop in the editor's undo stack** (G11, user 2026-11-15,
+  question 3): *Corrections*' *Attach* and *Drop* are writes without an
+  undo entry, without centring the view on the entry's old place, and
+  outside Map mode's one-write-at-a-time interlock — wiring them through
+  `modes/MapMode.tsx` (and a `putUnresolved` for the undo of a drop) is
+  for the next row that holds that file (G12). `course-editor.md` §13.
 - **§5 Promote** (row G12): the patch applied at the import's store
   stage for a club version.
 
@@ -541,11 +756,15 @@ document only a patch points at, and touches its `last_referenced_at`.
 |---|---|---|
 | Unit (shared) | `packages/shared/src/map-document/__tests__/patch.test.ts` | schema: each op parses, a key that is not the op's id, a bad UUID, a non-integer or out-of-range coordinate, a text `add`, a patch symbol's `match` dropped, defaults; `patchChangeSchema` refusals; `mergePatch`: put replaces by id, remove, an absent remove, twice = once, two changes in either order deep-equal and the same JSON, input not mutated; `applyPatch`: identity (null, disabled, empty) returns the same document, hide flags the object found by `sourceIndex` (a fixture whose Hilbert order differs from source order), modify (coordinates, flags, bbox, `coordStart` of it and its neighbours, angle, type and text kept), resymbol to `{ doc }` and `{ patch }`, hide + modify + resymbol on one object, add (indices `≥ N` in op-id order, `ADDED_SOURCE_INDEX`, the combined table in key order), every base object unchanged, any insertion order of `ops` and `symbols` gives a deep-equal result, applying twice from the same input equals once, the input untouched, each issue code reported and the other ops still applied (a prototype-name patch key is `symbol-missing`), a rectangle's kind check, ops on an already-effective document throw while identity still returns it |
 | Unit (shared) | `packages/shared/src/map-document/__tests__/render-bridge.test.ts` | over an effective document: a hidden object missing from `objects` and `docIdx` with `stats.patchHidden`, a modified one symbolised at its new place, an added one with a patch symbol symbolised and its `docIdx ≥ baseCount`, `only` with an added index, a patch symbol drawn from its own `render` (not rescaled by `documentFactor`), a disabled patch deep-equal to the unpatched document |
-| Unit (api) | `packages/api/src/__tests__/map-patches.test.ts` | `patchOfRow` (sorted keys; an unparseable row → null with a warning), `deliveredPatch` (the pin's row with an exact decimal version above 2^53; disabled delivered as it is; no row / no pin / dormant → `{ "0", null }`), `samePatchContent` key-order blind, `assertPatchSize` (`PAYLOAD_TOO_LARGE` past 4 MiB), `patchEtag` |
-| Unit (api) | `packages/api/src/__tests__/snapshot-maps.test.ts` | `snapshotPatchOf`: the row with an exact decimal token; nothing without a row or for a dormant one |
+| Unit (shared) | `packages/shared/src/map-document/__tests__/patch.test.ts` (G11 part) | §4.1: `unresolved` entries parse keyed by origin and op id, absent stays absent, a wrong key and an unknown reason refused; `mergePatch` `removeUnresolved` (absent keys no-ops, twice = once, sorted, an empty record omitted and the JSON as before G11); `applyPatch` draws the same document and issues with and without them |
+| Unit (shared) | `packages/shared/src/map-document/__tests__/patch-resolve.test.ts` | §4.2–4.3, `resolvePatch`: identity on its own hash; **the same source** — objects reordered, one dropped, the symbol table reversed: every op kept by `sourceIndex`, `{ doc }` re-keyed by the symbol's source position, `enabled` kept, the re-keyed patch hides and resymbols the same objects; a gone `sourceIndex` unresolved with its anchors (and the result parses); **another edition** (Mapper, 1000 units/mm): within 0.5 mm onto the nearest object of the same type and symbol, coordinates ×10, outside the tolerance and another symbol at the place unresolved, a tie to the lowest `sourceIndex`, two ops onto one object (the second unresolved), a box of another size not matched; **nothing found** — every op unresolved, an add whose symbol is gone `symbol`, the document drawn unchanged; a retry kept exactly on a third document and resolved on the way back (by position, and by `sourceIndex` on its own source); patch symbols materialised again, dropped with their add unresolved `symbol` on a stack without the palette; deterministic in record order, inputs untouched; the anchors and the same-symbol rule; `attachUnresolved`: a hide onto the chosen object, a modify's shape kept (rescaled) and refused onto another type, a missing entry / object, an add drop-only |
+| Unit (api) | `packages/api/src/__tests__/map-patches.test.ts` | `patchOfRow` (sorted keys; the `unresolved` column sorted, empty omitted, a wrong key unparseable; an unparseable row → null with a warning), `deliveredPatch` (the pin's row with an exact decimal version above 2^53; disabled delivered as it is; no row / no pin / dormant → `{ "0", null }`), `samePatchContent` key-order blind, `assertPatchSize` (`PAYLOAD_TOO_LARGE` past 4 MiB, the unresolved entries counted), `patchEtag` |
+| Unit (api) | `packages/api/src/__tests__/snapshot-maps.test.ts` | `snapshotPatchOf`: the row (its unresolved entries too) with an exact decimal token; nothing without a row or for a dormant one |
 | Unit (api) | `packages/api/src/__tests__/venueForwarder.test.ts` | `mapPatch.applyChange` / `setEnabled` cloud-owned and forwarded, `mapPatch.get` served locally |
 | Unit (api) | `packages/api/src/__tests__/backup.test.ts` | `map_patches` directly after `map_files`; the blob sections' filters include the patch's document and its source |
-| Integration (api) | `packages/api/src/__tests__/integration/map-patches.test.ts` | no patch before a write; `applyChange` creates the row keyed to the pin and merges put / remove (an absent id a no-op) / putSymbols with sorted keys; twice = once and an empty change keep the version; six concurrent first writers on different ids → one row with all six ops; two writers on one id → one of the two states whole; refusals (duplicate id `BAD_REQUEST`, put + remove of one id, `PATCH_DOCUMENT_MISMATCH`, `PATCH_NO_DOCUMENT` for `applyChange` and `setEnabled`); `setEnabled` creates an empty row, advances only on a change, a disabled patch delivered as it is; a dormant row (pin moved) not delivered, `patchVersion` `"0"`, writes `PATCH_STALE`, row untouched, delivered again when the pin returns; an unreadable row: no patch delivered, writes `PATCH_UNREADABLE`, row untouched; the table (defaults, one row per event, `RESTRICT` on the document, cascade with the event, an array in `ops` refused); access (kiosk key and viewer read, cannot write; stranger `FORBIDDEN`; course setter writes); the route 200 with `ETag` / `Cache-Control`, 304, a stale ETag 200, header and `?k=` kiosk key, viewer 200, anonymous and wrong key 401, stranger 403, unknown event 404; `mapMetadata.patchVersion` equals the route's version |
+| Integration (api) | `packages/api/src/__tests__/integration/map-patches.test.ts` | no patch before a write; `applyChange` creates the row keyed to the pin and merges put / remove (an absent id a no-op) / putSymbols with sorted keys; twice = once and an empty change keep the version; six concurrent first writers on different ids → one row with all six ops; two writers on one id → one of the two states whole; refusals (duplicate id `BAD_REQUEST`, put + remove of one id, `PATCH_DOCUMENT_MISMATCH`, `PATCH_NO_DOCUMENT` for `applyChange` and `setEnabled`); `setEnabled` creates an empty row, advances only on a change, a disabled patch delivered as it is; a dormant row (pin moved to a document that cannot be read) not delivered, `patchVersion` `"0"`, writes `PATCH_STALE`, row untouched, delivered again when the pin returns; **re-resolution (G11)**: a new edition (`test.xmap` over `test.ocd`, through `applyEventMap` and the job's pin) flags a hide — the patch delivered on the new pin with a new version and `patchVersion`, no ops, the entry with its origin and anchor — and the pin back on the first edition resolves it to the same op id; a write (`setEnabled`) wakes a row made dormant by hand and lands on the re-keyed row; `attachUnresolved` refused for a missing object (`PATCH_ATTACH_REFUSED: no-object`) and another document (`PATCH_DOCUMENT_MISMATCH`), puts the hide on the chosen object, a second attach of the gone entry changes nothing; `applyChange { removeUnresolved }` drops the last (the column `{}`); an unreadable row: no patch delivered, writes `PATCH_UNREADABLE`, row untouched; the table (defaults, one row per event, `RESTRICT` on the document, cascade with the event, an array in `ops` refused); access (kiosk key and viewer read, cannot write or attach; stranger `FORBIDDEN`; course setter writes); the route 200 with `ETag` / `Cache-Control`, 304, a stale ETag 200, header and `?k=` kiosk key, viewer 200, anonymous and wrong key 401, stranger 403, unknown event 404; `mapMetadata.patchVersion` equals the route's version |
+| Integration (api) | `packages/api/src/__tests__/integration/map-rematch.test.ts` (G11 part) | §4.4: a re-match of a stale copy of the document keeps a hide (the same op id on the new pin, a new version, nothing unresolved); a dry run leaves the row; a row left dormant is a `patch` item of the dry run's plan, re-keyed by the sweep, and a next run finds nothing |
+| E2E | `e2e/map-patch-resolve.spec.ts` | `course-editor.md` §13 "Unresolved": two hides on `itest`'s `test.ocd`, the map replaced by `test.xmap` through the upload route; Map mode lists both under *Not carried over* (`data-key`, `data-op`, `data-reason`), the ops count 0, attach disabled without a selection; *Drop* one (one `applyChange`, gone after a reload); a document object selected on the fitted map, *Attach* the other (the `hide:<n>` row, the object hidden, the block gone); reseeded before and after |
 | Integration (api) | `packages/api/src/__tests__/integration/lease.test.ts` | checkout carries the patch row verbatim (id, document, `enabled`, ops, token above 2^53 exact), `maps.patches` counted (0 from an exporter without the map part); the box's `mapPatch.get` and route (kiosk key) serve it with `ETag` = the token |
 | Integration (api) | `packages/api/src/__tests__/integration/backup.test.ts` | the dump's `map_patches` section directly after `map_files` with the event's row; restored into another event with `event_id` rewritten, token and ops exact |
 | Integration (api) | `packages/api/src/__tests__/integration/map-storage-gc.test.ts` | a document only a patch references is kept (dry run too) and touched; `RESTRICT` refuses its delete; collected once the patch is gone and a fresh grace passed |

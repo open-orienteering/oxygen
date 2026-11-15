@@ -129,3 +129,48 @@ describe("planRematch / runRematch", () => {
     }
   }, 60_000);
 });
+
+describe("the event's map patch follows the re-match (docs/map-patches.md §4.4, G11)", () => {
+  it("a re-match keeps a hide on the re-imported document; a dry run leaves the row; the sweep wakes a row left dormant", async () => {
+    const ev = await createTestEvent("map_rematch_patch");
+    // A stale copy of the current document: its bytes under another hash, stored as a pre-matcher import (the blob read does not check the hash).
+    const bytes = (await getBlob(ctx.db, "map_documents", currentDoc))!;
+    const stale = randomBytes(32).toString("hex");
+    const target = mapDocument.decodeMapDocument(bytes).attrs.sourceIndex[0];
+    const op = { op: "hide", sourceIndex: target };
+    const patchRow = () => ctx.db.mapPatch.findUniqueOrThrow({ where: { eventId: ev.eventId } });
+    try {
+      await ctx.db.mapDocument.create({
+        data: { hash: stale, bytes, sizeBytes: bytes.byteLength, formatVersion: 1, importerVersion: "ocad-3", libraryVersion: "none", sourceHash, header: {}, report: {} },
+      });
+      await ctx.db.mapFile.create({ data: { eventId: ev.eventId, fileName: "test.ocd", sourceHash, documentHash: stale } });
+      await ctx.db.mapPatch.create({ data: { eventId: ev.eventId, documentHash: stale, ops: { [`hide:${target}`]: op }, version: 7n } });
+
+      const dry = await runRematch(ctx.db, { eventId: ev.eventId, dryRun: true });
+      expect(dry).toMatchObject({ total: 1, processed: 0 });
+      expect((await patchRow()).documentHash).toBe(stale);
+
+      const run = await runRematch(ctx.db, { eventId: ev.eventId, itemTimeoutMs: 60_000 });
+      expect(run.failures).toEqual([]);
+      // The source imported now (with the club decisions an earlier case wrote, so not necessarily `currentDoc`).
+      const pin = (await ctx.db.mapFile.findFirstOrThrow({ where: { eventId: ev.eventId } })).documentHash!;
+      expect(pin).not.toBe(stale);
+      const rekeyed = await patchRow();
+      expect(rekeyed).toMatchObject({ documentHash: pin, ops: { [`hide:${target}`]: op }, unresolved: {} });
+      expect(rekeyed.version).not.toBe(7n);
+
+      // Left dormant (a hook that failed): the sweep re-keys it.
+      await ctx.db.mapPatch.update({ where: { eventId: ev.eventId }, data: { documentHash: stale } });
+      let planned: unknown[] = [];
+      await runRematch(ctx.db, { eventId: ev.eventId, dryRun: true, onPlan: (items) => { planned = items; } });
+      expect(planned).toEqual([expect.objectContaining({ kind: "patch", id: String(ev.eventId), documentHash: stale, reason: "patch" })]);
+      const swept = await runRematch(ctx.db, { eventId: ev.eventId });
+      expect(swept).toMatchObject({ total: 1, done: 1, failed: 0 });
+      expect(await patchRow()).toMatchObject({ documentHash: pin, ops: { [`hide:${target}`]: op } });
+      expect((await runRematch(ctx.db, { eventId: ev.eventId })).total).toBe(0);
+    } finally {
+      await ev.cleanup();
+      await ctx.db.mapDocument.deleteMany({ where: { hash: stale } });
+    }
+  }, 120_000);
+});

@@ -1991,6 +1991,33 @@ object, `{ added: id }` for one the patch adds.
   computed with the patch taken as enabled, so a switched-off patch still
   reports them). A row click selects its object and centres the view on
   it; *Revert* (`editor-correction-revert`) removes the op.
+- **Unresolved** (row G11; `map-patches.md` §4): when the pin moved and
+  some corrections could not follow their objects, a block under the
+  list (`editor-corrections-unresolved`, `data-count`; absent when there
+  are none) lists the patch's `unresolved` entries in key order
+  (`editor-correction-unresolved`, `data-key`, `data-op`, `data-reason`
+  `target` | `symbol`): the op, the symbol it was on (the target's,
+  else the op's symbol, else the patch symbol key) and the reason
+  (*object not found* / *symbol not found*). They are drawn nowhere and
+  not stepped by Tab. `editor-corrections-count` stays the count of ops.
+  - *Attach* (`editor-correction-attach`) puts the entry's op onto the
+    document object selected on the map (`mapPatch.attachUnresolved`,
+    `map-patches.md` §4.3; user 2026-11-15, G11 question 2). Enabled for
+    a `target` entry of a hide, modify or resymbol with a document object
+    (`source:<n>`) selected, `courses.edit` and *Apply corrections* on (as
+    hide); a `symbol` entry is drop-only until change symbol (G9).
+  - *Drop* (`editor-correction-drop`) removes the entry
+    (`applyChange { removeUnresolved }`); with `courses.edit`, also while
+    the corrections are off (as *Revert*).
+  - A refused write shows `editor-corrections-unresolved-error` with the
+    server's reason; the patch is reloaded.
+  - **Not yet** (user 2026-11-15, G11 question 3; Pending in
+    `map-patches.md`): *Attach* and *Drop* are not undo entries, a row
+    does not centre the view on the entry's old place, and they do not
+    wait for Map mode's write in flight. The block reads the session's
+    patch itself (`useMapPatch`) and delivers its replies as Map mode's
+    writes do (`setMapPatch`, `mapMetadata.patchVersion`), so
+    `modes/MapMode.tsx` is unchanged.
 - **Apply corrections** (`editor-corrections-apply`, a checkbox) is
   `mapPatch.setEnabled` (`map-patches.md` §1.4): off, every consumer —
   screen, print, the venue — draws the pinned document; the list keeps its
@@ -2224,6 +2251,7 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | unit (web) | `lib/editor/__tests__/{url,state,field,write-client}.test.ts` | §13 "Entering it": `mode=map` round-trips and is always written; entering Map mode keeps the course and drops the tool, phantom and selections; `mode=map` on a phone opens Field; `applyPatchChange` / `setPatchEnabled` send the hash and no token, return the reply, propagate a refusal, refuse without a `mapPatch` client |
 | integration | `packages/api/src/__tests__/integration/course-presence.test.ts` "takes Map mode" | §13 "Presence": a heartbeat with `mode: "map"` lists as `map` |
 | E2E | `e2e/map-mode.spec.ts` (`chromium`) | §13, on the seed's `itest` with `test.ocd` pinned, every op removed before, after and in `finally`. "the fourth mode": entered from Course mode after the map loaded → `data-mode="map"`, `mode=map` in the URL, the rail `V` alone (no `editor-tool-K`), *Map object* empty; `K` and a click on a control select no control (none selected back in Course mode); `H` → `editor-hide-overprint` pressed, no `editor-site`, no `course-site`, no description sheet; again → back; `F` after a zoom fits (≤ 2× the fitted zoom). "select, hide, undo, move…": at `?mode=map` with `H`, zoomed to ≥ 16 px/mm, a lone black line found on the canvas and checked with `mapObjectsAt` (the only point or line within 0.5 mm); a click → `editor-map-object` `data-ref="source:<n>"`, the symbol named, `data-selected-objects="1"`; Tab then Shift+Tab back; Delete → one `applyChange`, `data-hidden`, the `hide:<n>` row, the line gone, `mapPatch.get` holds exactly that op; Ctrl+Z → no rows, the line back; Ctrl+Shift+Z → hidden; *Restore* → back (4 writes); a drag 0.8 mm across → one `modify`, the canvas's `data-patch-version` = the reply's, ink at the new place and none at the old; *Apply corrections* off → `editor-map-disabled`, the row kept, the line at its old place, *Hide* disabled; on → moved again, no `applyChange` for the toggle; Escape deselects; a reload keeps `data-mode="map"`, the `modify:<n>` row and the drawn version; the row's locate selects the object, *Revert* empties the list and the stored ops |
+| E2E | `e2e/map-patch-resolve.spec.ts` (`chromium`) | §13 "Unresolved" (G11): on the seed's `itest`, two hides through the API, then the map replaced by `e2e/test.xmap` (upload route, `course.applyUploadedMap`); at `?mode=map` `editor-corrections-unresolved` `data-count="2"` with two `editor-correction-unresolved` rows (`data-key` the patch's keys, `data-op="hide"`, `data-reason="target"`), `editor-corrections-count` 0, `editor-correction-attach` disabled with nothing selected; *Drop* → one `mapPatch.applyChange`, one row left, still one after a reload; `H`, `F`, a click selecting a `source:<n>` object, *Attach* → one `mapPatch.attachUnresolved`, the block gone, the `hide:<n>` row, `data-hidden="true"`, `mapPatch.get` holds exactly that op; reseeded before and after |
 | unit (web) | `pages/editor/__tests__/map-tracks-model.test.ts` | §13 "GPS tracks" (`docs/map-gps-tracks.md` §5.1): the disabled reason (venue, permission, georeference, in that order; an unknown role is no venue); an import plan — one track per segment in file order, names cut to 200 and file names to 255, points verbatim, `not-gpx` / `malformed` / `no-points` per file with the rest kept, skipped points / segments / waypoints, a track over 200 000 points refused by name, calls of ≤ 200 tracks and ≤ 500 000 points in order; the trimmed projection (length in ground metres, outside count, box) and `not-projectable` as the row's error; rows in list order with state, override, label, visible points; the colour stable and from the palette; locate's 5 % padding and 10 mm minimum; overrides parsed defensively and pruned; a deleted track's re-import (an average with its passes and ranges); the `TRACK_*` code |
 | unit (web) | `pages/editor/__tests__/map-tracks-decimate.test.ts` | §13 "GPS tracks": the tolerance — half a pixel at the finer end of the octave, the default with no zoom; every point within it, ends kept, a straight line to two points, deterministic; over the 50 000-point budget the tolerance doubles until the tracks fit (and half of it would not); one 2 px path per line with its colour, `editor-gps-track` and `data-track-id` |
 | unit (web) | `pages/editor/__tests__/map-bindings.test.ts` (`withTrackLayer`) | the tracks below the tool's own shapes; `exclusive`, `hoverPoint` and the press's answer kept; the zoom reported from hover (not a leave), press and click, each chained; a tool without a press handler gets none |
@@ -2277,9 +2305,10 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
   first to append at the top level.
 
 - **Map mode beyond G6** (§13): nodes (G7), drawing and change symbol
-  (G9), join / split / reverse / holes (G10), unresolved ops and waking a
-  dormant patch (G11 — until then a `PATCH_STALE` refusal is the editor's
-  error line), promote (G12). Multi-select (Shift-click, lasso) and the
+  (G9), join / split / reverse / holes (G10), promote (G12); *Attach* and
+  *Drop* of an unresolved correction as undo entries with a locate (G11
+  left them outside `MapMode.tsx`; a `PATCH_STALE` refusal, now only for a
+  patch that cannot be re-resolved, is the editor's error line). Multi-select (Shift-click, lasso) and the
   right-click menu of 08 §5.3's Map column are not built; a single
   selection only. Map mode has no touch gestures (desktop only, 08 §5.5)
   and no phone entry.

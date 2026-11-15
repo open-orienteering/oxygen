@@ -1331,6 +1331,8 @@ model MapPatch {
   ops          Json     @default("{}")
   /// Record keyed by the library entry id a symbol was materialised from (§1.3).
   symbols      Json     @default("{}")
+  /// Ops that lost their object when the pin moved, keyed `<origin hash, 16 hex>:<op id>` (§4.1, row G11).
+  unresolved   Json     @default("{}")
   /// Token (docs/course-layer.md §7): an HLC minted on every write that changes the row.
   version      BigInt   @default(0)
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)

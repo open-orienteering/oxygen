@@ -21,9 +21,13 @@ const HASH_B = "b".repeat(64);
 
 const hide = (i: number): mapDocument.PatchOp => ({ op: "hide", sourceIndex: i });
 
-function row(over: Partial<{ documentHash: string; enabled: boolean; ops: unknown; symbols: unknown; version: bigint }> = {}) {
-  return { documentHash: HASH_A, enabled: true, ops: {}, symbols: {}, version: 17n, ...over };
+function row(over: Partial<{ documentHash: string; enabled: boolean; ops: unknown; symbols: unknown; unresolved: unknown; version: bigint }> = {}) {
+  return { documentHash: HASH_A, enabled: true, ops: {}, symbols: {}, unresolved: {}, version: 17n, ...over };
 }
+
+/** An unresolved entry of `hide:i` from document B (docs/map-patches.md §4.1). */
+const lost = (i: number): mapDocument.UnresolvedOp => ({ op: hide(i), from: HASH_B, fromSource: "c".repeat(64), unitsPerMm: 100, reason: "target" });
+const lostKey = (i: number) => `${"b".repeat(16)}:hide:${i}`;
 
 describe("patchOfRow", () => {
   it("parses a stored row and sorts its record keys", () => {
@@ -32,6 +36,15 @@ describe("patchOfRow", () => {
     expect(Object.keys(p!.ops)).toEqual(["hide:10", "hide:9"]);
     expect(p!.documentHash).toBe(HASH_A);
     expect(p!.enabled).toBe(true);
+  });
+
+  it("reads the unresolved column (G11): sorted, an empty record omitted, a wrong key unparseable", () => {
+    const p = patchOfRow(row({ unresolved: { [lostKey(9)]: lost(9), [lostKey(10)]: lost(10) } }));
+    expect(Object.keys(p!.unresolved!)).toEqual([lostKey(10), lostKey(9)]);
+    expect("unresolved" in patchOfRow(row())!).toBe(false);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(patchOfRow(row({ unresolved: { [lostKey(1)]: lost(2) } }))).toBeNull();
+    warn.mockRestore();
   });
 
   it("reads an unparseable row as no patch, with a warning", () => {
@@ -99,6 +112,13 @@ describe("assertPatchSize", () => {
     const n = Math.ceil(MAP_PATCH_MAX_BYTES / 30) + 10;
     for (let i = 0; i < n; i++) ops[`hide:${i}`] = hide(i);
     expect(() => assertPatchSize({ ...small, ops })).toThrow(expect.objectContaining({ code: "PAYLOAD_TOO_LARGE" }));
+  });
+
+  it("counts the unresolved entries too (G11)", () => {
+    const unresolved: Record<string, mapDocument.UnresolvedOp> = {};
+    const n = Math.ceil(MAP_PATCH_MAX_BYTES / 150) + 10;
+    for (let i = 0; i < n; i++) unresolved[lostKey(i)] = lost(i);
+    expect(() => assertPatchSize({ documentHash: HASH_A, enabled: true, ops: {}, symbols: {}, unresolved })).toThrow(expect.objectContaining({ code: "PAYLOAD_TOO_LARGE" }));
   });
 });
 

@@ -971,7 +971,12 @@ Idempotent; also run for dedup hits:
   `lat` / `lng` from the pinned frame
   (`synchronizePositionedControlCoordinates`, `event-crs.ts`): the upload
   no longer converts them before the pin exists, so an import that
-  outlives the upload's hold still ends with correct positions.
+  outlives the upload's hold still ends with correct positions. Last,
+  the event's map patch is re-keyed onto the pinned document
+  (`reresolveEventPatch`, `docs/map-patches.md` §4.4; row G11): its ops
+  follow their objects, what cannot follow is kept as unresolved. A
+  failure there is logged and leaves the patch dormant; it never fails
+  the pin.
 - `clubMapId` set and no `club_map_versions` row for `(clubMapId,
   source_hash)` → insert one with `seq = max + 1`, label and uploader
   copied from the source row. `clubMap.addFromSource` then
@@ -1191,9 +1196,15 @@ event's pins and skips club editions; `--dry-run` lists the items with
 their reason and writes nothing. Exit 1 if any item failed, 2 on bad
 arguments.
 
-Once slice C's course layers reference `(document_hash, object_index)`
-(08), moving an event pin must carry them; the pass does not yet know
-about them because nothing references them yet.
+Moving an event pin carries its map patch: every item's pin re-keys it
+(§6.4), and the pass ends with a **patch sweep** that re-keys every
+live event's patch still keyed to another document than its pin
+(`docs/map-patches.md` §4.4; `--event` restricts it to that event;
+`--dry-run` lists them as `patch` items and writes nothing; a failure is
+reported like an item's). Sweep items count in the run's `total`,
+`done` and `failed` like the pins'.
+Filter regions' document symbol indices (`filter_region` course
+objects, `course-layer.md` §8.3) are not re-keyed yet (§9).
 
 
 ## 7. Offline and backups
@@ -1774,7 +1785,9 @@ mentions is pending (§9).
 
 ## 9. Pending in this chapter
 
-A Maintenance card for the re-match pass (§6.9 is CLI-only); a Settings →
+A Maintenance card for the re-match pass (§6.9 is CLI-only); re-keying
+filter regions' document symbol indices when an event's pin moves (§6.9;
+the map patch is re-keyed since G11); a Settings →
 Maintenance card for the GC (§8.4: status of the last run, dry run, run
 now); of the service-worker routes, `map-documents` and `map-fonts`
 (and `print-worker`, `course-print.md` §8.6) are exercised only by the
@@ -1824,7 +1837,7 @@ queued by the first request for a DEM source, which the descriptor's
 | Unit (api) | `packages/api/src/__tests__/map-crt.test.ts` | `crtFileName` (Mapper's `SOURCE-TARGET.crt`), the 1 MiB limit, `planCrtImport` on the `e2e/test.ocd` header (a decision, an unchanged variant line, a reported target; the full table round trip records nothing), decide's 5 000 cap |
 | Integration (api) | `packages/api/src/__tests__/integration/map-crt.test.ts` | `exportCrt` header only before any decision, the four auto matches on `includeMatches` (three until A12 added the framed 603 text to the fixture), a decision with its `# fp` from both documents of the source, predicate (stranger 403, anonymous 401, kiosk key reads, 404, bad hash); `importCrt` of the export after a `reset` writes the same row and yields the same document as `decide` (unpinned), `# keep` recorded and exported, dry run writes nothing, unappliable lines reported with no row and no job, the full-table round trip records nothing; stranger / anonymous / kiosk refused, 404, over 1 MiB 400 |
 | Unit (api) | `packages/api/src/__tests__/map-rematch-cli.test.ts` | `staleReason` matrix, CLI flags (parsing, either spelling, bad values), plan / item / summary lines |
-| Integration (api) | `packages/api/src/__tests__/integration/map-rematch.test.ts` | an `ocad-3` / `none` row pinned by an event and a club version is planned (both, `--event` scope), dry run writes nothing, a run moves both pins to the current document, second run empty; a decision change re-matches the club edition only; a live event's sourced row without a document is planned `unpinned` and imported, a soft-deleted event's is not (E5) |
+| Integration (api) | `packages/api/src/__tests__/integration/map-rematch.test.ts` | an `ocad-3` / `none` row pinned by an event and a club version is planned (both, `--event` scope), dry run writes nothing, a run moves both pins to the current document, second run empty; a decision change re-matches the club edition only; a live event's sourced row without a document is planned `unpinned` and imported, a soft-deleted event's is not (E5); the event's map patch follows the re-match (a hide kept on the new pin) and the sweep re-keys a row left dormant (`patch` items; `docs/map-patches.md` §4.4, G11) |
 | Integration (api) | `packages/api/src/__tests__/integration/showcase-fixture.test.ts` | the Demo Competition fixture loaded as `load-showcase.sh` loads it (source row from the committed `.omap`, `showcase.sql`, re-match): the `unpinned` row is imported and pinned with its quick-access columns, `course.mapMetadata` answers, positioned controls get `lat` / `lng` inside the pin's bounds, courses read their controls with the stored lengths, a second load gives the same pin (`docs/demo.md`) |
 | Unit (api) | `packages/api/src/__tests__/club-map-library.test.ts` | `projectClubMapRow` (series settings, version label → source name fallback, header scale → legacy scale, legacy raster metadata, version-less row with its job and the job's source and no preview URL, nulls, job dropped once a version exists), `canRemoveClubMap` / `canDownloadClubMapVersion` matrices, `latestVersionOrRefuse` → `PRECONDITION_FAILED`; `review` counts from the import report's `matching.symbols`, null without a matched document |
 | Integration (api) | `packages/api/src/__tests__/integration/club-maps.test.ts` | chunked upload keyed by the series UUID, list carries version / hashes / thumbnail URL / source facts, staleness from the version's report, rename, download by version source; a version-less series lists no north and no preview URL; an unimportable upload (OCAD magic, garbage after) listed with a failed job and no preview URL, its bytes kept as the source, `download` / `useClubMap` `PRECONDITION_FAILED`; unknown id `NOT_FOUND`, malformed `BAD_REQUEST`; remove stranger `FORBIDDEN`, creator ok, versions cascade; `setRotation` on the series → event copy (columns from the pin, `length_source` stays `derived`); an event upload keeps ScalePar (columns equal to the oracle); an unpinned row answers with no document and no north; `course.downloadMap` returns the source's bytes; download stranger `FORBIDDEN`; club-library copy and backup gates; the listed `review` equals the version document's report counts |
