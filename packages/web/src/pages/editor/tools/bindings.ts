@@ -645,3 +645,80 @@ export function gapBinding(o: GapOptions): EditorToolBinding {
     onContextMenu: () => o.onExit(),
   };
 }
+
+// ─── Map mode's `V` (docs/course-editor.md §13) ─────────────────────────
+
+/** The CSS px a click reaches a map object within (the eyedropper's, §5). */
+export const MAP_HIT_PX = 6;
+/** Movement past this many CSS px turns a press on the selected object into a move. */
+export const MAP_DRAG_PX = 3;
+
+/** A press on the selected map object, paper mm; `moved` once it went past `MAP_DRAG_PX`. */
+export interface MapGesture { press: Pt; mmPerPx: number; moved: boolean }
+export interface MapGestureRef { current: MapGesture | null }
+
+export interface MapSelectContext {
+  /** The viewer's hit-test over the effective document (`mapObjects.onHitTest`); null before the layer loaded. */
+  hit: ((pt: Pt, toleranceMm: number) => Promise<readonly { ref: import("../../../map-gl/worker").MapObjectRef | null }[]>) | null;
+  /** The selected object can be moved now (selected, not hidden, writable, corrections on). */
+  canMove: boolean;
+  /** Whether a press at `pt` is on the selected object's drawn shape. */
+  pressOn: (pt: Pt, toleranceMm: number) => boolean;
+  gesture: MapGestureRef;
+  /** Bumped per click: an answer to an older click is dropped. */
+  clickSeq: { current: number };
+  /** The click's topmost object (null: empty map) and every object under it, topmost first (Tab's stack). */
+  onSelect: (ref: import("../../../map-gl/worker").MapObjectRef | null, stack: import("../../../map-gl/worker").MapObjectRef[]) => void;
+  /** The pointer moved the selection by this much from the press (the draft). */
+  onDrag: (dxMm: number, dyMm: number) => void;
+  /** The move ended here: one write. */
+  onDrop: (dxMm: number, dyMm: number) => void;
+  /** The move was cancelled (Escape, the pointer left) or never started: drop the draft, write nothing. */
+  onCancel: () => void;
+  redraw?: Redraw;
+}
+
+/**
+ * Map mode's select-and-move (§13; 08 §5.3, the Map column): exclusive, so a click is the tool's and a drag pans;
+ * a click asks the hit-test and selects the topmost object; a press on the selected object (its drawn shape) takes
+ * the gesture and moves it, one write on release. A release without movement is a click.
+ */
+export function mapSelectBinding(c: MapSelectContext): EditorToolBinding {
+  const click = (pt: Pt, mmPerPx: number) => {
+    const n = ++c.clickSeq.current;
+    if (!c.hit) return;
+    void c.hit(pt, MAP_HIT_PX * mmPerPx).then((hits) => {
+      if (n !== c.clickSeq.current) return;
+      const stack = hits.flatMap((h) => (h.ref ? [h.ref] : []));
+      c.onSelect(stack[0] ?? null, stack);
+    }, () => undefined);
+  };
+  return {
+    exclusive: true,
+    onClick: (p) => click(p.pt, p.mmPerPx),
+    onPointerDown: (p) => {
+      if (!c.canMove || p.touch || !c.pressOn(p.pt, MAP_HIT_PX * p.mmPerPx)) return false;
+      c.gesture.current = { press: p.pt, mmPerPx: p.mmPerPx, moved: false };
+      return true;
+    },
+    onPointerDrag: (pt) => {
+      const g = c.gesture.current;
+      if (!g) return;
+      if (!g.moved && Math.hypot(pt.x - g.press.x, pt.y - g.press.y) <= MAP_DRAG_PX * g.mmPerPx) return;
+      g.moved = true;
+      c.onDrag(pt.x - g.press.x, pt.y - g.press.y);
+      c.redraw?.();
+    },
+    onPointerUp: (pt) => {
+      const g = c.gesture.current;
+      c.gesture.current = null;
+      if (!g) return;
+      if (pt && g.moved) c.onDrop(pt.x - g.press.x, pt.y - g.press.y);
+      else {
+        c.onCancel();
+        if (pt) click(pt, g.mmPerPx);
+      }
+      c.redraw?.();
+    },
+  };
+}
