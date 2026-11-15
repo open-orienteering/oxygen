@@ -1,13 +1,14 @@
 /**
  * The viewer's 3D mode controls (docs/map-rendering.md §5.4 "3D mode"): the
- * 2D / 3D toggle with the exaggeration control, the fallback notice, and the
- * pointer surface that takes the map's gestures while 3D is drawn. The
+ * 2D / 3D toggle with the exaggeration control and the surface choice (H11),
+ * the fallback notice, the DEM provider's attribution, and the pointer
+ * surface that takes the map's gestures while 3D is drawn. The
  * state lives in `MapViewer`; the rules in `lib/map-3d.ts`.
  */
 
 import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { EXAGGERATION, GESTURE_IDLE, reduceGesture3d, type Gesture3dEvent, type Gesture3dState, type Scene3d, type Terrain3dReason, type View3d } from "../lib/map-3d";
+import { EXAGGERATION, GESTURE_IDLE, reduceGesture3d, type DemProviderLike, type Gesture3dEvent, type Gesture3dState, type Scene3d, type Surface3d, type Terrain3dReason, type View3d } from "../lib/map-3d";
 import { TERRAIN_3D_MIN_DECIDED } from "../lib/map-review";
 
 export type Map3dToggleState = "off" | "loading" | "on" | "unavailable";
@@ -18,13 +19,24 @@ function useReasonText(): (reason: Terrain3dReason, percent?: number) => string 
   return (reason, percent) => t(`map3dReason.${reason}`, { percent: percent ?? 0, min: Math.round(TERRAIN_3D_MIN_DECIDED * 100) });
 }
 
-export function Map3dToggle({ state, reason, exaggeration, onToggle, onExaggeration }: {
+/** The surface choice's input (§5.4 "3D mode" "Surface"): shown where both surfaces exist. */
+export interface Map3dSurfaceChoiceProps {
+  /** The surface asked for (the drawn one once its mesh is up). */
+  value: Surface3d;
+  /** The map's terrain below the gate (decision 6): disabled, with its percent. */
+  mapUnavailable: { reason: Terrain3dReason; percent?: number } | null;
+  ground: DemProviderLike;
+  onChange: (s: Surface3d) => void;
+}
+
+export function Map3dToggle({ state, reason, exaggeration, onToggle, onExaggeration, surface = null }: {
   state: Map3dToggleState;
   /** An unavailable toggle's reason (its title). */
   reason: { reason: Terrain3dReason; percent?: number } | null;
   exaggeration: number;
   onToggle: () => void;
   onExaggeration: (e: number) => void;
+  surface?: Map3dSurfaceChoiceProps | null;
 }) {
   const { t } = useTranslation("dashboard");
   const reasonText = useReasonText();
@@ -53,6 +65,7 @@ export function Map3dToggle({ state, reason, exaggeration, onToggle, onExaggerat
           <span className="w-7 tabular-nums">{exaggeration}×</span>
         </label>
       )}
+      {on && surface && <Map3dSurfaceChoice {...surface} />}
       <button
         type="button"
         data-testid="map-3d-toggle"
@@ -68,6 +81,54 @@ export function Map3dToggle({ state, reason, exaggeration, onToggle, onExaggerat
       >
         3D
       </button>
+    </div>
+  );
+}
+
+/** "The map's terrain" or "ground" (`map-3d-source-map`, `map-3d-source-ground`), above the exaggeration control. */
+function Map3dSurfaceChoice({ value, mapUnavailable, ground, onChange }: Map3dSurfaceChoiceProps) {
+  const { t } = useTranslation("dashboard");
+  const reasonText = useReasonText();
+  const resolution = ground.resolutionM;
+  const groundLabel = ground.grade === "coarse" ? t("map3dSurfaceGroundCoarse", { resolution }) : t("map3dSurfaceGround");
+  const mapTitle = mapUnavailable ? reasonText(mapUnavailable.reason, mapUnavailable.percent) : t("map3dSurfaceMapTitle");
+  const button = (s: Surface3d, label: string, title: string, disabled: boolean) => (
+    <button
+      type="button"
+      data-testid={`map-3d-source-${s}`}
+      aria-pressed={value === s}
+      aria-disabled={disabled || undefined}
+      title={title}
+      onClick={() => {
+        if (!disabled && value !== s) onChange(s);
+      }}
+      className={`px-2 py-1 ${value === s ? "bg-blue-500 text-white" : disabled ? "text-slate-300" : "text-slate-600 hover:bg-slate-50"}`}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div
+      role="group"
+      aria-label={t("map3dSurface")}
+      data-testid="map-3d-surface-choice"
+      className="absolute right-10 bottom-9 flex overflow-hidden whitespace-nowrap rounded bg-white text-xs shadow"
+    >
+      {button("map", t("map3dSurfaceMap"), mapTitle, !!mapUnavailable)}
+      {button("ground", groundLabel, t("map3dSurfaceGroundTitle", { resolution }), false)}
+    </div>
+  );
+}
+
+/** The provider's notice while a DEM-based field is drawn (answer 16; `map-dem-attribution`). */
+export function Map3dAttribution({ attribution, licence }: { attribution: string; licence: string }) {
+  const { t } = useTranslation("dashboard");
+  return (
+    <div
+      data-testid="map-dem-attribution"
+      className="pointer-events-none absolute bottom-0 left-0 z-20 max-w-[60%] rounded-tr bg-white/80 px-1.5 py-px text-[10px] leading-tight text-slate-700"
+    >
+      {t("map3dAttribution", { attribution, licence, interpolation: { escapeValue: false } })}
     </div>
   );
 }
