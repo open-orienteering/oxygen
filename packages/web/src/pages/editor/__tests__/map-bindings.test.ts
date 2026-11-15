@@ -107,14 +107,22 @@ describe("Map mode's keys (§13)", () => {
     expect(mapKeyAction({ key: "Delete", ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, repeat: true })).toBeNull();
   });
 
+  it("P, L, A arm the drawing tools; Enter finishes a drawing (§13 \"Drawing\")", () => {
+    expect(k("p")).toEqual({ kind: "tool", tool: "P" });
+    expect(k("L")).toEqual({ kind: "tool", tool: "L" });
+    expect(k("a")).toEqual({ kind: "tool", tool: "A" });
+    expect(k("Enter")).toEqual({ kind: "finish" });
+    expect(k("Enter", { ctrlKey: true })).toBeNull();
+  });
+
   it("Course mode's tool keys and modified keys are not Map mode's (course edits locked)", () => {
-    for (const key of ["S", "K", "M", "X", "C", "A", "T", "G", "L", "1"]) expect(k(key)).toBeNull();
+    for (const key of ["S", "K", "M", "X", "C", "T", "G", "1"]) expect(k(key)).toBeNull();
     expect(k("z", { ctrlKey: true })).toBeNull();
     expect(k("f", { metaKey: true })).toBeNull();
   });
 
-  it("the rail is V and N (§13 \"Nodes\")", () => {
-    expect(MAP_RAIL).toEqual(["V", "N"]);
+  it("the rail is V, N, P, L, A (§13 \"Nodes\", \"Drawing\")", () => {
+    expect(MAP_RAIL).toEqual(["V", "N", "P", "L", "A"]);
   });
 });
 

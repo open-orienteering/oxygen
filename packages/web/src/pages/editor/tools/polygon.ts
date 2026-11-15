@@ -17,11 +17,14 @@ import { constrain45, smoothHandles, symmetricHandles, vertexRule, type Vertex }
 
 type Pt = { x: number; y: number };
 
-/** The course editor's drawn kinds, and Layout mode's `P` polygon (`layout_path`, a closed page path, docs/course-layout.md §3). */
-export type AreaKind = "oob_area" | "oob_line" | "whiteout" | "filter_region" | "marked_route" | "layout_path";
+/**
+ * The course editor's drawn kinds, Layout mode's `P` polygon (`layout_path`, a closed page path,
+ * docs/course-layout.md §3), and Map mode's `L` / `A` (`map_line`, `map_area`; docs/course-editor.md §13 "Drawing").
+ */
+export type AreaKind = "oob_area" | "oob_line" | "whiteout" | "filter_region" | "marked_route" | "layout_path" | "map_line" | "map_area";
 
 /** Closed kinds need three vertices, line kinds two. */
-export const isClosedKind = (k: AreaKind): boolean => k !== "oob_line" && k !== "marked_route";
+export const isClosedKind = (k: AreaKind): boolean => k !== "oob_line" && k !== "marked_route" && k !== "map_line";
 export const minVertices = (k: AreaKind): number => (isClosedKind(k) ? 3 : 2);
 
 /**
