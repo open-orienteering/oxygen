@@ -19,12 +19,14 @@ import type { DocumentHitTest } from "../../../components/VectorMapLayer";
 import { loadMapPatch, setMapPatch, type LoadedMapDocument, type MapPatchDelivery } from "../../../lib/map-document-cache";
 import type { EditorWrites, PatchWriteResult } from "../../../lib/editor/write-client";
 import { boundsMm } from "../../../lib/vector-map";
-import { mapSelectBinding, type MapGestureRef } from "../tools/bindings";
+import { mapSelectBinding, withTrackLayer, type MapGestureRef } from "../tools/bindings";
 import { MAP_RAIL } from "../tools/rail";
 import { InspectorSection } from "../Inspector";
 import { mapKeyAction } from "./map/keys";
 import { MapObjectSection } from "./map/ObjectSection";
 import { CorrectionsList } from "./map/Corrections";
+import { useMapTracks } from "./map/tracks/useMapTracks";
+import { TracksPanel } from "./map/tracks/TracksPanel";
 import {
   centreOf, changes, correctedRefs, drawnCovers, correctionRows, hideChange, hitsObject, inverseChange, isHidden, mapModelFor, moveOp, objectInfo,
   restoreChange, sameRef, stepRef, type CorrectionRow, type MapObjectRef,
@@ -120,6 +122,9 @@ export function useMapMode(a: MapModeArgs): MapMode {
   const onHitTest = useCallback((h: DocumentHitTest | null) => setHit(() => h), []);
   const onPatchDrawn = useCallback((v: string) => setDrawn(v), []);
   const centreOn = useCallback((pt: Pt) => setViewRequest((v) => ({ key: (v?.key ?? 0) + 1, centre: pt })), []);
+  // GPS tracks (§13 "GPS tracks", G25): the reference layer over every Map-mode tool and the inspector's section.
+  const fitTo = useCallback((bounds: { minX: number; minY: number; maxX: number; maxY: number }) => setViewRequest((v) => ({ key: (v?.key ?? 0) + 1, bounds })), []);
+  const tracks = useMapTracks({ enabled, nameId, mapDoc, canEdit, writes, run, record, onLocate: fitTo });
 
   // ─── Writes ──
   const deliver = useCallback((res: PatchWriteResult) => {
@@ -241,11 +246,11 @@ export function useMapMode(a: MapModeArgs): MapMode {
   const selectedList = useMemo(() => (selected ? [selected] : []), [selected]);
   const draftInput = useMemo(() => (draft ? { ops: draft.ops } : null), [draft]);
   const editor = useMemo<MapViewerEditorProps>(() => ({
-    tool: binding,
+    tool: withTrackLayer(binding, tracks.layer),
     viewRequest,
     hideCourse,
     mapObjects: { selected: selectedList, draft: draftInput, onHitTest, onPatchDrawn },
-  }), [binding, viewRequest, hideCourse, selectedList, draftInput, onHitTest, onPatchDrawn]);
+  }), [binding, tracks.layer, viewRequest, hideCourse, selectedList, draftInput, onHitTest, onPatchDrawn]);
 
   // ─── Keys ──
   const fit = useCallback(() => {
@@ -294,6 +299,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
         <CorrectionsList rows={rows} selected={selected} enabled={toggling ?? correctionsOn} canWrite={canEdit} busy={toggling !== null}
           onLocate={(r) => locate(r.ref)} onRevert={revert} onEnabled={setCorrectionsOn} />
       </InspectorSection>
+      {tracks.panel && <InspectorSection title={t("gpsTracks")} testId="editor-tracks"><TracksPanel panel={tracks.panel} /></InspectorSection>}
     </>
   );
 

@@ -722,3 +722,41 @@ export function mapSelectBinding(c: MapSelectContext): EditorToolBinding {
     },
   };
 }
+
+export interface TrackLayer {
+  /** The visible GPS tracks (docs/map-gps-tracks.md §5.1), UI-layer paths in paper mm. */
+  shapes: readonly ToolShape[];
+  /** The zoom a pointer event reported (paper mm per CSS px): the layer's decimation follows it. */
+  onScale: (mmPerPx: number) => void;
+}
+
+/**
+ * Map mode's GPS-track reference layer on a Map-mode tool (docs/course-editor.md §13 "GPS tracks"): the tracks are
+ * drawn below the tool's own shapes and never take a pointer; hover, press and click report the zoom on their way to
+ * the tool, whose answers are kept. Every Map-mode binding is wrapped with it (G25; G7, G9, G27 add tools).
+ */
+export function withTrackLayer(b: EditorToolBinding, layer: TrackLayer): EditorToolBinding {
+  const out: EditorToolBinding = {
+    ...b,
+    shapes: layer.shapes.length > 0 ? [...layer.shapes, ...(b.shapes ?? [])] : b.shapes,
+    onHover: (p) => {
+      if (p) layer.onScale(p.mmPerPx);
+      b.onHover?.(p);
+    },
+  };
+  if (b.onClick) {
+    const onClick = b.onClick;
+    out.onClick = (p) => {
+      layer.onScale(p.mmPerPx);
+      onClick(p);
+    };
+  }
+  if (b.onPointerDown) {
+    const onPointerDown = b.onPointerDown;
+    out.onPointerDown = (p) => {
+      layer.onScale(p.mmPerPx);
+      return onPointerDown(p);
+    };
+  }
+  return out;
+}

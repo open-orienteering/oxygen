@@ -1,7 +1,7 @@
 # GPS tracks
 
 Status: **draft** — chapter of the vector map pipeline specification,
-started by sub-slice G22; §4 by G23; §1 by G24. GPS tracks are new scope for slice G (user,
+started by sub-slice G22; §4 by G23; §1 by G24; §5.1 by G25. GPS tracks are new scope for slice G (user,
 2026-11-13, `docs/research/vector-map-pipeline/SLICES.md` "Slice G",
 rows G20–G28): the research decides none of it beyond 04 §7
 ("Georeferenced inputs" become paper-space overlays) and 06 §3.2 (a
@@ -529,7 +529,98 @@ the main thread or caps the input.
 
 ## 5. Reference layer and editing
 
-Pending (G25, G27).
+The mapper's tracks in the editor's Map mode (`course-editor.md` §13
+"GPS tracks"): imported from GPX, listed, and drawn over the map as a
+reference to draw from. §5.1 is row G25; editing them (§5.2) is G27's.
+
+### 5.1 Import and the reference layer
+
+Written by row G25 (`packages/web/src/pages/editor/modes/map/tracks/`;
+decision row in `decisions/slice-g.md`).
+
+- **Where it is off.** The panel shows the reason and makes no
+  `mapTrack` request: on a venue node (`lease.status.nodeRole` is
+  `venue`, a lease held or not — a box holds no tracks, §1.3, user
+  2026-11-14), without `courses.edit` (every `mapTrack` procedure needs
+  it, §1.2), and on a map without a georeference
+  (`isGeoreferenced(paperFrameOf(header, rotationCorrection))` false,
+  §3.2), in that order. Until `lease.status` answers the panel offers
+  nothing (no import, no list); a failed `lease.status` is taken as not
+  a venue (a box's reads answer empty anyway, §1.3). Without a pinned
+  document Map mode's own `editor-map-none` stands and the panel is
+  absent.
+- **Import.** One or many `.gpx` files, by the file picker or a drop on
+  the panel. Each is parsed on the device with `parseGpx` (§2); a file
+  that does not parse (`malformed`, `not-gpx`, `no-points`) is reported
+  by name and code and the others still import. One track per segment in
+  file order (§2.1); `name` is the GPX name cut to 200 characters (null
+  when there is none) and `sourceName` the file name cut to 255 (§1.2
+  "Inputs"). A track over 200 000 points is refused on the device, by
+  name, and the rest go. The tracks go in calls of at most 200 tracks
+  and 500 000 points each, in file order (§1.2 "Caps"); ids are minted
+  by the server. A refused call (`TRACK_LIMIT` and the other `TRACK_*`
+  codes, translated; a refusal without one, such as a lost connection, is
+  `failed`) stops the import there: the calls before it stay imported.
+  The refusal is reported under the call's first file (a call may span
+  files). The result line counts the tracks imported and the points,
+  segments and waypoints the files had that were not imported (§2.2).
+- **The list** is `mapTrack.list`'s order. A row shows the track's
+  colour, its name (else the file name), the date it was recorded
+  (`recordedAt` as a local date; a dash when untimed), its length in
+  ground metres and its point count — both of the trimmed range
+  (§3.5) —, a mark with the count when points lie outside the map, and a
+  mark when it is converted (`convertedOp`, G26). Length is the sum of the
+  projected trimmed track's segment lengths × `metresPerMm` (§1.1, §3.1).
+  Points are fetched per track with `mapTrack.get`, one request at a
+  time, after the list (a capped track is megabytes); a row shows that it
+  is loading until then. Points never change under one id (§1.2), so
+  they are kept for the session. A `get` that fails makes the row's
+  error `load-failed`; it is tried again when the list is next fetched
+  (after any write of the panel, or a reload).
+- **Projection.** `projectTrack(paperFrameOf(header, rotationCorrection),
+  trimTrack(track, trim), header.bounds)` on the pinned document, again
+  when the document or the correction changes (§3.2 "Projected on every
+  use"). A `not-projectable` track is listed with that error and not
+  drawn.
+- **The layer.** Each visible, projected track is one polyline over the
+  map, 2 CSS px, solid, in its colour, on the editor's UI layer (the
+  Map-mode binding's `shapes`, 04 §7 "UI layers"): screen only — never
+  requested for print, never in a delivery to a viewer or the kiosk
+  (reads are `courses.edit` too, §1.2). Outside points are drawn like the
+  others (§3.2).
+- **Decimation to the pixel.** The drawn line is `simplifyTrack` (§3.4)
+  of the projected track at a tolerance of half a CSS pixel at the zoom
+  last reported, rounded down to its octave
+  (`0.5 × 2^⌊log₂ mmPerPx⌋` mm), so it is recomputed only when the zoom
+  crosses a power of two; the ends are kept. Before any zoom is known the
+  tolerance is 0.01 mm. The visible tracks share a budget of 50 000
+  drawn points: over it the tolerance doubles until they fit. The zoom
+  comes from the viewer's pointer events (hover, press, click:
+  `ToolPointer.mmPerPx`) — the viewer reports no view change to the page
+  (user 2026-11-15, G25 question 1) —, so a zoom with the pointer still
+  keeps the old decimation until the pointer moves (§8).
+- **Show / hide and colour are the device's** (user 2026-11-15, G25
+  question 2): a track is shown unless hidden on this device
+  (`localStorage` `oxygen:gps-tracks:<nameId>`, ids no longer listed
+  dropped); the colour is one of eight, chosen by a hash of the id, so it
+  is stable everywhere and not editable. Neither is stored on the row;
+  G26 / G27 hide converted tracks and an average's passes by default
+  from `convertedOp` / `derivedFrom`, with the same per-device override.
+- **Locate.** A click on a row fits the view to the track's trimmed
+  bounding box, padded by 5 % with a 10 mm minimum side.
+- **Rename and delete** are `mapTrack.update { id, name }` and
+  `mapTrack.remove { ids }`. Import, rename and delete are undo entries
+  on the editor's stack (`course-editor.md` §3): an import's undo
+  removes the ids it answered and its redo imports them again under
+  those ids; a delete's undo imports the track again under its id with
+  its points, name, file name, `derivedFrom` and `singlePass` (§1.2
+  names this use), then restores its trim and `convertedOp` when set —
+  it comes back at the end of the list (a new `created_at`). Show /
+  hide and locate are not undo entries.
+
+### 5.2 Editing
+
+Pending (G27): trim, split, average in Map mode.
 
 ## 6. Conversion into map objects
 
@@ -549,16 +640,26 @@ Pending (G26, G28).
 | `api/src/__tests__/backup.test.ts` | `map_gps_tracks` directly after `map_patches`, filtered by event |
 | `api/src/__tests__/integration/map-gps-tracks.test.ts` | The CHECKs; cascade with the event; `created_by` SET NULL; import / list / get round trip (deep-equal points, null columns, input order, list without points), an average with `derivedFrom` + `singlePass`, refusals writing nothing, a retried import by id, an id of another event, scoping; caps (200 000 points, 500 000 a call, 200 tracks with concurrent imports, split at the cap); update (trim set and restored, non-destructive, unchanged keeps the version, every bad trim, `single_pass` untouched); split (shared point, trims, ranges, the row replaced, order, a repeat with ids, split-split-remove); remove twice; markConverted (set, clear, unknown id writes nothing); a course setter does all, a viewer, a kiosk key and a stranger nothing; not in the checkout snapshot; no journal entry |
 | `api/src/__tests__/integration/backup.test.ts` | The dump's `map_gps_tracks` section holds the event's tracks; `restore-map-gps-tracks.sql` restores them exactly (points, trim, ranges, token above 2^53) into another event, a missing importer NULL, an existing one kept, twice is once |
-
-No E2E test yet: tracks have no UI until G25 (AGENTS.md §4, "New tRPC
-procedure": E2E only if user-facing).
+| `web/src/pages/editor/__tests__/map-tracks-model.test.ts` | §5.1: where it is off; the import plan (segments in file order, names cut, per-file parse errors, skip counts, the 200 000-point refusal, calls within 200 tracks / 500 000 points); the trimmed projection, length, outside count, `not-projectable`; rows; colour; locate's bounds; per-device overrides; a deleted track's re-import |
+| `web/src/pages/editor/__tests__/map-tracks-decimate.test.ts` | §5.1 "Decimation to the pixel": the octave tolerance, the tolerance bound and ends, determinism, the 50 000-point budget, the layer's paths |
+| `e2e/map-gps-tracks.spec.ts` | §5.1 end to end on `e2e/test.ocd`: import by the picker (a non-GPX file reported), the rows, the paths at the fixture's paper mm, locate, hide kept across a reload, rename, delete and its undo, a reload keeping the tracks (`course-editor.md` §13 "Tests" has the detail) |
 
 ## 8. Pending in this chapter
 
-- Tracks on a venue box: a box holds none during a lease (§1.3); G25
-  disables the panel there.
-- §5 the reference layer in Map mode and trim / split / average there
-  (G25, G27).
+- §5.2 trim / split / average in Map mode (G27).
+- The layer's zoom (§5.1): from pointer events only, so a zoom with the
+  pointer still keeps the old decimation until it moves, and no culling to
+  the view; a viewer `onView` prop would make both exact (user
+  2026-11-15: pointer events now, the prop when `MapViewer.tsx` is free).
+- Tracks loaded on entering Map mode: every listed track's points are
+  fetched (one at a time) for its length and drawing, hidden ones too; at
+  the caps (200 tracks of 200 000 points) that is the whole event's
+  tracks in the tab's memory.
+- The layer's cost per viewer render: the viewer's `line` shape
+  (`MapViewer.tsx` `toolShapeNode`) rebuilds its path and its
+  `data-points` string on every render, so up to the 50 000-point budget
+  is re-serialised per pan frame. Culling to the view (the `onView` prop
+  above) or a cached path in the viewer would bound it; unmeasured.
 - §6 conversion into `add` ops and snapping ends onto the track network
   (G26, G28).
 - Bézier fitting of a converted line (later; polylines for now).

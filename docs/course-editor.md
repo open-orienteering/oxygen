@@ -2005,6 +2005,60 @@ object, `{ added: id }` for one the patch adds.
 **Presence** (§11): Map mode reports `mode: "map"`, labelled as the mode
 switch's *Map* (user 2026-11-15, G6 question 2).
 
+### GPS tracks
+
+The mapper's GPS tracks of the event (`docs/map-gps-tracks.md` §5.1, row
+G25; stored by G24, `mapTrack`): a reference layer to draw the map from.
+Conversion into map objects is G26's, trim / split / average G27's.
+
+- **Panel** (`modes/map/tracks/TracksPanel.tsx`, the hook
+  `useMapTracks.ts`, the pure list state `model.ts` and `decimate.ts`):
+  the inspector section *GPS tracks* (`editor-tracks`) after
+  *Corrections*. Off with the reason (`editor-tracks-disabled`,
+  `data-reason` `venue` | `no-permission` | `not-georeferenced`, in that
+  order) and no `mapTrack` request on a venue node, without
+  `courses.edit`, or on a map without a georeference; with tracks off,
+  the rest of Map mode is unchanged.
+- **Import** (`editor-tracks-import`, the hidden
+  `<input type="file" multiple accept=".gpx,application/gpx+xml">`
+  `editor-tracks-file`; a
+  drop of files on the section's body `editor-tracks-drop`, which shows
+  `data-drag-over` meanwhile):
+  parsed on the device and sent as `docs/map-gps-tracks.md` §5.1 says.
+  While it runs the button is disabled (`data-busy`); afterwards
+  `editor-tracks-import-result` (`data-imported`, the count) and one
+  `editor-tracks-import-error` per refused file or track (`data-file`,
+  `data-code`: a `GpxParseError` code, `too-many-points`, the server's
+  `TRACK_*` code, or `failed` for a refusal without one; a refused call is
+  reported under its first file). Until the node's role is known the
+  section shows only `editor-tracks-loading`.
+- **Rows** (`editor-track-row`, `data-track-id`, `data-state` `loading`
+  | `ready` | `error`, `data-visible`, `data-points`, `data-length-m`,
+  `data-outside`, `data-converted`): the swatch (`editor-track-swatch`,
+  `data-colour`), the name (`editor-track-name`; a click locates), the
+  date (`editor-track-date`), length and points (`editor-track-stats`),
+  *outside the map* (`editor-track-outside`, with the count) and
+  *converted* (`editor-track-converted`) when they apply, and the
+  buttons show / hide (`editor-track-visible`, `aria-pressed` while
+  shown), rename (`editor-track-rename`: the name becomes the input
+  `editor-track-name-input`; Enter or leaving it writes, Escape drops)
+  and delete (`editor-track-delete`, no confirmation — it is an undo
+  entry). `editor-tracks-none` when the event has none.
+- **The layer.** Every visible, ready track is a UI-layer path over the
+  map (`editor-gps-track`, `data-track-id`, `data-points` the drawn
+  paper-mm vertices), drawn through the Map-mode binding's `shapes`
+  (`tools/bindings.ts` `withTrackLayer`, which every Map-mode tool wraps
+  its binding with) below the tool's own shapes; never a hit target —
+  clicks still select map objects. Decimated to the pixel as §5.1 there
+  says; the zoom is the last pointer event's `mmPerPx` (the wrapper reads
+  it from hover, press and click). The viewer draws the description sheet
+  above the UI layer, so the sheet covers a track under it until `H`
+  hides the overprint.
+- **Undo** (§3, one stack across modes): import, rename and delete are
+  one entry each (`docs/map-gps-tracks.md` §5.1 "Rename and delete");
+  show / hide and locate are none. A failed undo or redo drops the entry
+  and shows the error, as Map mode's patch writes do.
+
 ## API
 
 The course and control mutations the editors write through (08 §6;
@@ -2170,6 +2224,11 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | unit (web) | `lib/editor/__tests__/{url,state,field,write-client}.test.ts` | §13 "Entering it": `mode=map` round-trips and is always written; entering Map mode keeps the course and drops the tool, phantom and selections; `mode=map` on a phone opens Field; `applyPatchChange` / `setPatchEnabled` send the hash and no token, return the reply, propagate a refusal, refuse without a `mapPatch` client |
 | integration | `packages/api/src/__tests__/integration/course-presence.test.ts` "takes Map mode" | §13 "Presence": a heartbeat with `mode: "map"` lists as `map` |
 | E2E | `e2e/map-mode.spec.ts` (`chromium`) | §13, on the seed's `itest` with `test.ocd` pinned, every op removed before, after and in `finally`. "the fourth mode": entered from Course mode after the map loaded → `data-mode="map"`, `mode=map` in the URL, the rail `V` alone (no `editor-tool-K`), *Map object* empty; `K` and a click on a control select no control (none selected back in Course mode); `H` → `editor-hide-overprint` pressed, no `editor-site`, no `course-site`, no description sheet; again → back; `F` after a zoom fits (≤ 2× the fitted zoom). "select, hide, undo, move…": at `?mode=map` with `H`, zoomed to ≥ 16 px/mm, a lone black line found on the canvas and checked with `mapObjectsAt` (the only point or line within 0.5 mm); a click → `editor-map-object` `data-ref="source:<n>"`, the symbol named, `data-selected-objects="1"`; Tab then Shift+Tab back; Delete → one `applyChange`, `data-hidden`, the `hide:<n>` row, the line gone, `mapPatch.get` holds exactly that op; Ctrl+Z → no rows, the line back; Ctrl+Shift+Z → hidden; *Restore* → back (4 writes); a drag 0.8 mm across → one `modify`, the canvas's `data-patch-version` = the reply's, ink at the new place and none at the old; *Apply corrections* off → `editor-map-disabled`, the row kept, the line at its old place, *Hide* disabled; on → moved again, no `applyChange` for the toggle; Escape deselects; a reload keeps `data-mode="map"`, the `modify:<n>` row and the drawn version; the row's locate selects the object, *Revert* empties the list and the stored ops |
+| unit (web) | `pages/editor/__tests__/map-tracks-model.test.ts` | §13 "GPS tracks" (`docs/map-gps-tracks.md` §5.1): the disabled reason (venue, permission, georeference, in that order; an unknown role is no venue); an import plan — one track per segment in file order, names cut to 200 and file names to 255, points verbatim, `not-gpx` / `malformed` / `no-points` per file with the rest kept, skipped points / segments / waypoints, a track over 200 000 points refused by name, calls of ≤ 200 tracks and ≤ 500 000 points in order; the trimmed projection (length in ground metres, outside count, box) and `not-projectable` as the row's error; rows in list order with state, override, label, visible points; the colour stable and from the palette; locate's 5 % padding and 10 mm minimum; overrides parsed defensively and pruned; a deleted track's re-import (an average with its passes and ranges); the `TRACK_*` code |
+| unit (web) | `pages/editor/__tests__/map-tracks-decimate.test.ts` | §13 "GPS tracks": the tolerance — half a pixel at the finer end of the octave, the default with no zoom; every point within it, ends kept, a straight line to two points, deterministic; over the 50 000-point budget the tolerance doubles until the tracks fit (and half of it would not); one 2 px path per line with its colour, `editor-gps-track` and `data-track-id` |
+| unit (web) | `pages/editor/__tests__/map-bindings.test.ts` (`withTrackLayer`) | the tracks below the tool's own shapes; `exclusive`, `hoverPoint` and the press's answer kept; the zoom reported from hover (not a leave), press and click, each chained; a tool without a press handler gets none |
+| unit (web) | `lib/editor/__tests__/write-client.test.ts` (track writes) | `importTracks`, `updateTrack`, `removeTracks`, `markTracksConverted` pass their input through and return the reply; a `TRACK_*` refusal propagates; without a `mapTrack` client they refuse |
+| E2E | `e2e/map-gps-tracks.spec.ts` (`chromium`) | §13 "GPS tracks", on the seed's `itest` with `test.ocd` pinned, every track removed before and in `finally`. The fixture `e2e/fixtures/gps-tracks.gpx` (synthetic, from `test.ocd`'s frame by `packages/api/scripts/generate-test-gpx.ts`, which also writes the expected paper mm `gps-tracks.json`) and a KML named `.gpx` through `editor-tracks-file` → one `mapTrack.import`, `data-imported="2"`, one error `not-gpx` for the KML; two rows in file order, `ready`, points, length within 0.2 m, outside 0 / 2 with the mark on the second, a date on the timed one and a dash on the other; two paths, the stroke the swatch's colour, the L's ends and corner among the drawn vertices within 0.01 mm, the outside track's far end (past the map) drawn; a row click → the view centred on the track's box within 0.5 mm and the path's page box on the projected ends and corner within 3 px; the second track trimmed to 3 points and marked converted through the API, shown after the reload (3 points, the *converted* mark); hide → no path, kept after a reload, show → back; rename → `mapTrack.update`, the name, Ctrl+Z and Ctrl+Shift+Z each one `update`; delete → `mapTrack.remove`, the list without it; Ctrl+Z → re-imported under its id with its trim and converted mark, drawn; a drop of a GPX on `editor-tracks-drop` (`data-drag-over` while over it) → one import, a third row; a reload keeps the three rows, the name and the paths, and `mapTrack.list` holds exactly them. "off on a venue node": `lease.status` answered as `venue` → `editor-tracks-disabled` `data-reason="venue"`, no import button or file input, *Corrections* still there, and no `mapTrack.` request |
 | E2E | `e2e/editor-url.spec.ts` (`chromium`) | §1 "URL" (F31): from the Courses page, a pick → `?course=`; Class view → `view=class&class=`, Course view drops them; Layout → `mode=layout&sheet=<the course's sheet>`; a reload restores the course, Layout and the sheet, then Class view; Field + All controls → `mode=field&view=all`; `history.length` unchanged by every change and one Back lands on `/courses`; `mode=bogus&view=nope` → Course mode, Course view, only `course=` left; a class not the course's → Course view, `view` / `class` gone; `mode=layout&sheet=99999` → Layout, the sheet gone; a deleted course → no course, `course` gone; `mode=layout&template=<seq>` → template scope, kept over a reload, and *New extra template* there opens the new template and writes `template=<new>` (it stays open: the review's create-then-open case); the Courses page's pencil lands on its course (`course=` only), the Controls page's on its control with `control=` gone; on a Pixel 7 viewport no `mode` → Field and `mode=field`, Course → `mode=course` kept over a reload, `mode=layout&sheet=1` → Field and `mode=field` |
 | E2E | `e2e/editor-space.spec.ts` (`chromium`) | §2 "The editor fills the window" (F28): at 1840 × 1090 `editor-page` is at least the viewport less 64 px wide, its bottom within 16 px of the viewport's and not below it, the page has no vertical scroll (`scrollHeight` ≤ `innerHeight`), the header's inner row (`shell-header-inner`) is as wide; on `/courses` `shell-container` and `shell-header-inner` stay ≤ 1280 px |
 | unit (web) | `lib/__tests__/course-overlay-ids.test.ts` | §6.1 (P5): the overlay ids of a start-only course (the regression) and a finish-only one; a full course with explicit ends; the explicit ends win over the nearest; the legacy fallback to the start nearest the first control and the finish nearest the last; no controls and no explicit end → the event default (lowest id); a stale id or one of the wrong role treated as none; none under `firstAsStart` / `lastAsFinish`; no start or finish in the event; an end already at the head or tail not repeated; an unpositioned first control keeps the explicit start, else the default |
@@ -2224,6 +2283,15 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
   right-click menu of 08 §5.3's Map column are not built; a single
   selection only. Map mode has no touch gestures (desktop only, 08 §5.5)
   and no phone entry.
+- **GPS tracks beyond G25** (§13 "GPS tracks"): convert into map objects
+  (G26), trim / split / average (G27), snapping ends (G28). The layer's
+  decimation follows the zoom only when the pointer reports it (hover,
+  press, click), so a wheel or button zoom with the pointer still keeps the
+  old octave until it moves, and the layer is not culled to the view: the
+  viewer reports no view change to the page (user 2026-11-15, G25
+  question 1; a viewer `onView` prop is the follow-up once `MapViewer.tsx`
+  is free). Tracks are not hit targets, so a track is selected only from
+  its row.
 - **Map mode's second decode** (§13): the model decodes the pinned
   document on the main thread once per hash, beside the snap and pick
   indices' own decode and the worker's; a shared main-thread copy is a
