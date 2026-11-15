@@ -62,6 +62,11 @@ export interface VectorMapObjects {
   draft?: EditInput["draft"];
   /** The hit-test once the layer has loaded; `null` when it goes. */
   onHitTest?: ((hit: DocumentHitTest | null) => void) | null;
+  /**
+   * The patch version the canvas now shows (`data-patch-version`), each time it changes: Map mode keeps a committed
+   * draft until the patch that carries it is drawn (§5.5 "Committing is the host's"; docs/course-editor.md §13).
+   */
+  onPatchDrawn?: ((version: string) => void) | null;
 }
 
 export type VectorLayerStatus = "loading" | "drawn" | "complete" | "error" | "webgl";
@@ -115,6 +120,11 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
   patchRef.current = { patch, version: patchVersion };
   /** The patch version the canvas shows (`data-patch-version`): set once the engine drew it. */
   const [drawnPatch, setDrawnPatch] = useState<string | null>(null);
+  const onPatchDrawnRef = useRef(mapObjects?.onPatchDrawn);
+  onPatchDrawnRef.current = mapObjects?.onPatchDrawn;
+  useEffect(() => {
+    if (drawnPatch !== null) onPatchDrawnRef.current?.(drawnPatch);
+  }, [drawnPatch]);
   const onCourseRef = useRef(onCourse);
   onCourseRef.current = onCourse;
   const onCourseSupportRef = useRef(onCourseSupport);

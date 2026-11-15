@@ -17,7 +17,7 @@
 import { useTranslation } from "react-i18next";
 import { EditorHelp } from "../../components/EditorHelp";
 import { ToolbarButton } from "../../components/ToolbarButton";
-import { IconEyeOff, IconLoupe, IconModeCourse, IconModeField, IconModeLayout, IconRedo, IconScissors, IconUndo } from "../../components/map-icons";
+import { IconEyeOff, IconLoupe, IconModeCourse, IconModeField, IconModeLayout, IconModeMap, IconRedo, IconScissors, IconUndo } from "../../components/map-icons";
 import { TOP_BAR_TIER1_HIDE, TOP_BAR_TIER2_HIDE, TOP_BAR_TIER2_SHOW } from "../../components/top-bar-collapse";
 import type { ReactNode } from "react";
 import type { EditorMode, EditorView } from "../../lib/editor/state";
@@ -55,6 +55,9 @@ export interface TopBarProps {
   onRedo: () => void;
   hideOthers: boolean;
   onToggleHideOthers: () => void;
+  /** Map mode's `H` (docs/course-editor.md §13): the course overprint hidden; its button takes hide-others' place there. */
+  hideOverprint?: boolean;
+  onToggleHideOverprint?: () => void;
   cutsEnabled: boolean;
   cutsBusy: boolean;
   onToggleCuts: () => void;
@@ -71,10 +74,11 @@ export interface TopBarProps {
   map: MapInfoInput;
 }
 
-const MODES: { mode: EditorMode; key: "modeCourse" | "modeLayout" | "modeField"; icon: ReactNode; slice?: string }[] = [
+const MODES: { mode: EditorMode; key: "modeCourse" | "modeLayout" | "modeField" | "modeMap"; icon: ReactNode; slice?: string }[] = [
   { mode: "course", key: "modeCourse", icon: <IconModeCourse /> },
   { mode: "layout", key: "modeLayout", icon: <IconModeLayout /> },
   { mode: "field", key: "modeField", icon: <IconModeField /> },
+  { mode: "map", key: "modeMap", icon: <IconModeMap /> },
 ];
 
 export function TopBar(p: TopBarProps) {
@@ -158,15 +162,27 @@ export function TopBar(p: TopBarProps) {
       <span className="w-px h-4 bg-slate-200 shrink-0" />
       <ToolbarButton testId="editor-undo" iconOnly icon={<IconUndo />} label={tc("editor.undo")} disabled={!p.canUndo} onClick={p.onUndo} />
       <ToolbarButton testId="editor-redo" iconOnly icon={<IconRedo />} label={tc("editor.redo")} disabled={!p.canRedo} onClick={p.onRedo} />
-      <ToolbarButton
-        testId="editor-hide-others"
-        icon={<IconEyeOff />}
-        label={tc("editor.hideOtherControls")}
-        labelClassName={TOP_BAR_TIER1_HIDE}
-        disabled={p.selectedCourseId === null}
-        active={p.hideOthers}
-        onClick={p.onToggleHideOthers}
-      />
+      {p.mode === "map" ? (
+        <ToolbarButton
+          testId="editor-hide-overprint"
+          icon={<IconEyeOff />}
+          label={t("hideOverprint")}
+          title={t("hideOverprintTitle")}
+          labelClassName={TOP_BAR_TIER1_HIDE}
+          active={!!p.hideOverprint}
+          onClick={() => p.onToggleHideOverprint?.()}
+        />
+      ) : (
+        <ToolbarButton
+          testId="editor-hide-others"
+          icon={<IconEyeOff />}
+          label={tc("editor.hideOtherControls")}
+          labelClassName={TOP_BAR_TIER1_HIDE}
+          disabled={p.selectedCourseId === null}
+          active={p.hideOthers}
+          onClick={p.onToggleHideOthers}
+        />
+      )}
       <ToolbarButton
         testId="editor-toggle-cuts"
         icon={<IconScissors />}

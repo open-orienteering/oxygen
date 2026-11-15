@@ -332,6 +332,11 @@ export interface MapViewerEditorProps {
    * the layer has loaded, `null` when it goes. The viewer's own gestures do not use it.
    */
   mapObjects?: VectorMapObjects | null;
+  /**
+   * Map mode's `H` (docs/course-editor.md §13): no course layer is requested and the UI layer lists no course
+   * sites, so the map shows without the overprint.
+   */
+  hideCourse?: boolean;
 }
 
 /** What a tool gets for a pointer event. */
@@ -881,8 +886,9 @@ export function MapViewer({
   const editorDraftFast = editor?.draftFast ?? false;
   const editorProvisional = editor?.provisional ?? null;
   const editorLayout = editor?.layout ?? null;
+  const editorHideCourse = editor?.hideCourse ?? false;
   const courseRequest = useMemo(() => {
-    if (!glCourse) return null;
+    if (!glCourse || editorHideCourse) return null;
     const positions = new Map<string, Pt>();
     for (const c of controls) {
       const mm = controlMm(c);
@@ -918,7 +924,7 @@ export function MapViewer({
       setterMarks: editorLayout ? !highlightCourseName && courses.every((c) => !c.highlight) : editorSetterMarks,
     });
     return editorDraftFast ? { ...request, fastFilter: true } : request;
-  }, [glCourse, controls, controlMm, editorOn, editorFade, editorSetterMarks, editorCourseIds, editorDraftFast, editorProvisional, editorLayout, pendingMoves, editorDragPos, showDescriptions,
+  }, [glCourse, editorHideCourse, controls, controlMm, editorOn, editorFade, editorSetterMarks, editorCourseIds, editorDraftFast, editorProvisional, editorLayout, pendingMoves, editorDragPos, showDescriptions,
       courses, highlightCourseName, drawnObjects, editorLabelDragPos, pendingLabelMoves, autoCuts]);
   /** A dragged control's leg lengths (§6.1), from the positions the request draws. */
   const dragLegLabels = useMemo(() => {
@@ -2951,7 +2957,7 @@ export function MapViewer({
         </>
       )}
       {/* The GL course layer's numbers and legs as DOM, for tests: what the canvas draws. */}
-      {glCourse && courseInfo?.derivation && (
+      {glCourse && !editorHideCourse && courseInfo?.derivation && (
         <ul data-testid="course-layer" hidden>
           {courseInfo.derivation.sites.map((ds) => (
             <li key={`s-${ds.id}`} data-testid="course-site" data-site-id={ds.id} data-role={ds.role} data-x={ds.x} data-y={ds.y}
@@ -2972,7 +2978,7 @@ export function MapViewer({
       )}
 
       {/* Shared hit-testing has no DOM targets: every editor site as DOM, for tests (docs/course-editor.md §5). */}
-      {editor && (
+      {editor && !editorHideCourse && (
         <ul data-testid="editor-sites" hidden>
           {controls.filter((c) => c.visible !== false && (c.x !== 0 || c.y !== 0)).map((c) => {
             const pend = pendingMoves.get(c.id);
