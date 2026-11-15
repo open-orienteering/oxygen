@@ -15,7 +15,7 @@
 
 import type { mapGeo } from "@oxygen/shared";
 import type { HeightFieldProvider } from "@oxygen/shared/src/terrain/field/types.js";
-import { DemFetchError, hostOf, type RangeFetch } from "./dem-cog.js";
+import { DemFetchError, hostOf, overCapError, type RangeFetch } from "./dem-cog.js";
 import { effectiveDemConfig, NO_SAVED_DEM_SETTINGS, type DemConfig } from "./dem-settings.js";
 
 export type DemProviderName = "lantmateriet" | "glo30";
@@ -152,10 +152,10 @@ export function lantmaterietProvider(opts: { fetch: RangeFetch; credential: stri
         const link = body.links?.find((l) => l.rel === "next" && typeof l.href === "string" && (l.method === undefined || l.method === "GET"));
         next = link ? new URL(link.href as string, next).toString() : null;
       }
-      if (next) throw new DemFetchError("over-cap", `the STAC search has more than ${LANTMATERIET.maxPages} pages of tiles`);
+      if (next) throw overCapError("stac-pages", `the STAC search has more than ${LANTMATERIET.maxPages} pages of tiles`);
       const unique = dedupe(tiles);
       if (unique.length === 0) return "no-coverage";
-      if (unique.length > DEM_MAX_TILES) throw new DemFetchError("over-cap", `the extent needs ${unique.length} tiles, over the cap of ${DEM_MAX_TILES}`);
+      if (unique.length > DEM_MAX_TILES) throw overCapError("tiles", `the extent needs ${unique.length} tiles, over the cap of ${DEM_MAX_TILES}`);
       return unique;
     },
   };
@@ -184,7 +184,7 @@ export function glo30Provider(opts: { fetch: RangeFetch; base?: string }): DemPr
           const name = glo30TileName(lat, ((lng + 180) % 360 + 360) % 360 - 180);
           tiles.push({ url: `${base}/${name}/${name}.tif` });
         }
-      if (tiles.length > DEM_MAX_TILES) throw new DemFetchError("over-cap", `the extent needs ${tiles.length} tiles, over the cap of ${DEM_MAX_TILES}`);
+      if (tiles.length > DEM_MAX_TILES) throw overCapError("tiles", `the extent needs ${tiles.length} tiles, over the cap of ${DEM_MAX_TILES}`);
       return tiles;
     },
   };
