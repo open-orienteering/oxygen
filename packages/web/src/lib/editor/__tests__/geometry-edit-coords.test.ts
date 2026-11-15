@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { render } from "@oxygen/shared";
+import fixture from "./fixtures/test-ocd-paths.json";
 import {
   coordsOfRings, deleteVertex, dragGrip, insertVertex, retractHandles, ringsOfCoords, smoothHandles, toggleSmooth, type DocCoord,
 } from "../geometry-edit";
@@ -145,5 +146,24 @@ describe("document coordinates ↔ path vertices (docs/course-editor.md §13 \"N
     expect(ringsOfCoords([[0, 0, F.bezierFirst], [0, 100, F.bezierSecond], [100, 0]], U, false)).toBeNull();
     expect(ringsOfCoords([[0, 0], [0, 100, F.bezierFirst], [100, 100, F.bezierSecond]], U, false)).toBeNull();
     expect(ringsOfCoords([], U, false)).toBeNull();
+  });
+
+  it("a repeated close whose closing curve's second control sits on the anchor keeps that control's bits", () => {
+    const coords: DocCoord[] = [[0, 0], [1000, 0], [1000, 1000], [500, 1500, F.bezierFirst], [0, 0, F.bezierSecond | F.noLeft], [0, 0]];
+    expect(coordsOfRings(ringsOfCoords(coords, U, true)!, U)).toEqual(coords);
+  });
+
+  it("a hole flag on the object's very first point is not editable (it would be lost on write)", () => {
+    expect(ringsOfCoords([[0, 0, F.hole], [1000, 0], [1000, 1000]], U, true)).toBeNull();
+  });
+
+  it("every line and area of e2e/test.ocd comes back coordinate for coordinate (the fixture, dumped from its import)", () => {
+    expect(fixture.objects.length).toBeGreaterThan(0);
+    for (const o of fixture.objects) {
+      const coords = o.coords as DocCoord[];
+      const rings = ringsOfCoords(coords, fixture.unitsPerMm, o.type === 3);
+      expect(rings).not.toBeNull();
+      expect(coordsOfRings(rings!, fixture.unitsPerMm)).toEqual(coords);
+    }
   });
 });

@@ -157,16 +157,17 @@ describe("Map mode's N (docs/course-editor.md §13 \"Nodes\")", () => {
   });
 
   it("a node drag past 3 px drafts its ring and writes once on release, the node focused; the placed point returned", () => {
-    const c = context();
+    const c = context({ onPress: vi.fn() });
     const b = mapNodesBinding(c);
     expect(b.onPointerDown!(ptr(10.2, 0))).toBe(true);
+    expect(c.onPress).toHaveBeenCalledTimes(1); // the page notes the patch the press was made on
     expect(b.onPointerDrag!({ x: 10.3, y: 0.1 })).toBeUndefined(); // within 3 px
     expect(c.onDraft).not.toHaveBeenCalled();
     expect(b.onPointerDrag!({ x: 11.2, y: 1 })).toEqual({ x: 11, y: 1 });
     expect(c.onDraft).toHaveBeenLastCalledWith(0, [{ x: 0, y: 0 }, { x: 11, y: 1 }, { x: 20, y: 0 }]);
     b.onPointerUp!({ x: 12.2, y: 1 });
     expect(c.onCommit).toHaveBeenCalledTimes(1);
-    expect(c.onCommit).toHaveBeenCalledWith(0, [{ x: 0, y: 0 }, { x: 12, y: 1 }, { x: 20, y: 0 }], 1);
+    expect(c.onCommit).toHaveBeenCalledWith(0, [{ x: 0, y: 0 }, { x: 12, y: 1 }, { x: 20, y: 0 }], 1, true);
     expect(c.gesture.current).toBeNull();
   });
 
@@ -176,7 +177,7 @@ describe("Map mode's N (docs/course-editor.md §13 \"Nodes\")", () => {
     b.onPointerDown!(ptr(60, 60));
     expect(b.onPointerDrag!({ x: 61.2, y: 60.9 })).toEqual({ x: 61, y: 61 });
     b.onPointerUp!({ x: 61.2, y: 60.9 });
-    expect(c.onCommit).toHaveBeenCalledWith(1, [{ x: 50, y: 50 }, { x: 60, y: 50 }, { x: 61, y: 61, hIn: { x: 0, y: -2 }, hOut: { x: 0, y: 2 } }], 2);
+    expect(c.onCommit).toHaveBeenCalledWith(1, [{ x: 50, y: 50 }, { x: 60, y: 50 }, { x: 61, y: 61, hIn: { x: 0, y: -2 }, hOut: { x: 0, y: 2 } }], 2, true);
   });
 
   it("a grip drag moves the handle by the pointer's offset, its mirror kept, Alt live breaks it; never snapped", () => {
@@ -188,7 +189,7 @@ describe("Map mode's N (docs/course-editor.md §13 \"Nodes\")", () => {
     b.onPointerDrag!({ x: 61, y: 62.3 }, { shift: false, alt: true });
     expect(c.onDraft).toHaveBeenLastCalledWith(1, [HOLE.vertices[0], HOLE.vertices[1], { x: 60, y: 60, hIn: { x: 0, y: -2 }, hOut: { x: 1, y: 2 } }]);
     b.onPointerUp!({ x: 61, y: 62.3 });
-    expect(c.onCommit).toHaveBeenCalledWith(1, expect.any(Array), 2);
+    expect(c.onCommit).toHaveBeenCalledWith(1, expect.any(Array), 2, true);
   });
 
   it("a node press comes before a grip, over every ring; a press elsewhere, on touch or while a write is in flight is not taken", () => {
@@ -211,7 +212,7 @@ describe("Map mode's N (docs/course-editor.md §13 \"Nodes\")", () => {
     expect(c.onCommit).not.toHaveBeenCalled();
     b.onPointerDown!(ptr(10, 0, { alt: true }));
     b.onPointerUp!({ x: 10, y: 0 });
-    expect(c.onCommit).toHaveBeenCalledWith(0, [{ x: 0, y: 0 }, { x: 10, y: 0, hIn: { x: -20 / 6, y: -0 }, hOut: { x: 20 / 6, y: 0 } }, { x: 20, y: 0 }], 1);
+    expect(c.onCommit).toHaveBeenCalledWith(0, [{ x: 0, y: 0 }, { x: 10, y: 0, hIn: { x: -20 / 6, y: -0 }, hOut: { x: 20 / 6, y: 0 } }, { x: 20, y: 0 }], 1, true);
     b.onPointerDown!(ptr(20, 0, { alt: true })); // an open end corner has no smooth form
     b.onPointerUp!({ x: 20, y: 0 });
     expect(c.onCommit).toHaveBeenCalledTimes(1);
@@ -250,9 +251,9 @@ describe("Map mode's N (docs/course-editor.md §13 \"Nodes\")", () => {
     b.onDoubleClick!(ptr(5, 0.2));
     expect(c.onCommit).toHaveBeenLastCalledWith(0, [
       { x: 0, y: 0 }, { x: 5, y: 0, hIn: { x: -10 / 6, y: -0 }, hOut: { x: 10 / 6, y: 0 } }, { x: 10, y: 0 }, { x: 20, y: 0 },
-    ], 1);
+    ], 1, false);
     b.onDoubleClick!(ptr(55, 50, { alt: true }));
-    expect(c.onCommit).toHaveBeenLastCalledWith(1, [{ x: 50, y: 50 }, { x: 55, y: 50 }, ...HOLE.vertices.slice(1)], 1);
+    expect(c.onCommit).toHaveBeenLastCalledWith(1, [{ x: 50, y: 50 }, { x: 55, y: 50 }, ...HOLE.vertices.slice(1)], 1, false);
     b.onDoubleClick!(ptr(10, 0));
     b.onDoubleClick!(ptr(30, 30));
     expect(c.onCommit).toHaveBeenCalledTimes(2);
@@ -265,5 +266,21 @@ describe("Map mode's N (docs/course-editor.md §13 \"Nodes\")", () => {
     const b = withTrackLayer(mapNodesBinding(context()), { shapes: [track], onScale: vi.fn() });
     expect(b.shapes![0]).toBe(track);
     expect(byTest(b.shapes, "editor-map-node")).toHaveLength(6);
+  });
+
+  it("at the node cap a double-click inserts nothing (the object would lose its nodes)", () => {
+    const c = context({ maxNodes: 6 });
+    mapNodesBinding(c).onDoubleClick!(ptr(5, 0.2));
+    expect(c.onCommit).not.toHaveBeenCalled();
+    mapNodesBinding(context({ maxNodes: 7, onCommit: c.onCommit })).onDoubleClick!(ptr(5, 0.2));
+    expect(c.onCommit).toHaveBeenCalledTimes(1);
+  });
+
+  it("a click that selects (even the same object, off its edge) drops the focus", async () => {
+    const c = context({ hit: vi.fn(async () => [{ ref: { source: 4 } as MapObjectRef }]) });
+    mapNodesBinding(c).onClick!(ptr(30, 30));
+    await flush();
+    expect(c.onFocus).toHaveBeenCalledWith(null);
+    expect(c.onSelect).toHaveBeenCalledWith({ source: 4 }, [{ source: 4 }]);
   });
 });

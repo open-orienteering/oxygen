@@ -28,7 +28,7 @@ import { InspectorSection } from "../Inspector";
 import { mapKeyAction } from "./map/keys";
 import { MapObjectSection } from "./map/ObjectSection";
 import { CorrectionsList } from "./map/Corrections";
-import { nodeSnapIndex, nodesOf, nodesOp, ringRule, withRing, type NodePath } from "./map/nodes";
+import { MAP_NODES_MAX, nodeSnapIndex, nodesOf, nodesOp, ringRule, withRing, type NodePath } from "./map/nodes";
 import { useMapTracks } from "./map/tracks/useMapTracks";
 import { TracksPanel } from "./map/tracks/TracksPanel";
 import {
@@ -106,6 +106,8 @@ export function useMapMode(a: MapModeArgs): MapMode {
   const [focusState, setFocusState] = useState<{ owner: string; focus: MapNodeFocus } | null>(null);
   const [snapping, setSnapping] = useState(false);
   const nodeGesture = useRef<MapNodesGestureRef["current"]>(null);
+  /** The patch a node press was made on: a release that finds another one is dropped (§13 "Nodes", "Writes"). */
+  const pressPatch = useRef<mapDocument.MapPatch | null>(null);
   const snapCache = useRef<{ model: MapModel; key: string; index: SnapIndex | null } | null>(null);
   const clickSeq = useRef(0);
   /** A gesture's write is in flight: the next gesture waits (its `before` would be stale, §13 "Ops"). */
@@ -204,6 +206,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
   }, [canWrite, selected, commit]);
   const revert = useCallback((row: CorrectionRow) => {
     if (!enabled || !canEdit || !hash) return;
+    setFocusState(null); // its index may name another node after the revert (§13 "Nodes", "Focus")
     commit({ remove: [row.opId] });
   }, [enabled, canEdit, hash, commit]);
   const setCorrectionsOn = useCallback((on: boolean) => {
@@ -267,9 +270,15 @@ export function useMapMode(a: MapModeArgs): MapMode {
     setDraft({ ops: [op], waitFor: null });
     commit({ put: [op] }, true);
   }, [ringOp, commit, setFocus]);
+  /** A press's release (a drag, an Alt-click): dropped when the patch changed since the press or a write is in flight. */
+  const releaseNodes = useCallback((ring: number, vertices: Vertex[], index: number | null) => {
+    if (pressPatch.current !== patchRef.current || writingRef.current) { setDraft((d) => (d?.waitFor != null ? d : null)); return; }
+    commitNodes(ring, vertices, index);
+  }, [commitNodes]);
   const deleteNode = useCallback(() => {
     const ring = focus ? nodePath?.rings[focus.ring] : undefined;
-    if (!focus || !ring || writingRef.current) return;
+    // Ignored while a node or grip is held: the release would write over it.
+    if (!focus || !ring || writingRef.current || nodeGesture.current) return;
     // Down to the ring's minimum; at it nothing happens (§13 "Nodes", as §7).
     const next = deleteVertex(ring.vertices, focus.index, ringRule(ring).min);
     if (next) commitNodes(focus.ring, next, null);
@@ -293,6 +302,8 @@ export function useMapMode(a: MapModeArgs): MapMode {
     onSelect: select,
     rings: nodePath?.rings ?? null,
     canPress: !writing,
+    maxNodes: MAP_NODES_MAX,
+    onPress: () => { pressPatch.current = patchRef.current; },
     focus,
     gesture: nodeGesture,
     snap: snapNode,
@@ -300,10 +311,11 @@ export function useMapMode(a: MapModeArgs): MapMode {
       const op = ringOp(ring, vertices);
       setDraft(op ? { ops: [op], waitFor: null } : null);
     },
-    onCommit: commitNodes,
+    // A press's release goes through the stale check; a double-click's insert has no press of its own.
+    onCommit: (ring, vertices, index, pressed) => (pressed ? releaseNodes(ring, vertices, index) : commitNodes(ring, vertices, index)),
     onCancel: () => setDraft((d) => (d?.waitFor != null ? d : null)),
     onFocus: setFocus,
-  })), [tool, hit, select, nodePath, writing, focus, snapNode, ringOp, commitNodes, setFocus]);
+  })), [tool, hit, select, nodePath, writing, focus, snapNode, ringOp, commitNodes, releaseNodes, setFocus]);
   const selectBinding = useMemo(() => mapSelectBinding({
     hit,
     canMove,

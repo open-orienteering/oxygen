@@ -297,6 +297,8 @@ export function ringsOfCoords(coords: readonly DocCoord[], unitsPerMm: number, a
       k += 2;
       continue;
     }
+    // A hole flag on the very first point would be lost on writing (only later rings are flagged): not editable.
+    if (!cur && f & HOLE) return null;
     if (!cur || f & HOLE) rings.push((cur = { vertices: [], ends: [] }));
     const v: Vertex = { x: x / u, y: y / u };
     if (f & ~HOLE) v.flags = f & ~HOLE;
@@ -307,11 +309,11 @@ export function ringsOfCoords(coords: readonly DocCoord[], unitsPerMm: number, a
     const n = vertices.length, first = vertices[0], last = vertices[n - 1];
     if (n >= 4 && last.x === first.x && last.y === first.y && !last.hOut) {
       const kept = vertices.slice(0, -1);
-      if (last.hIn) {
-        // The closing segment's in-handle (and its control's bits) belong to the first vertex.
+      if (last.hIn || ((last.flags ?? 0) & IN_MASK)) {
+        // The closing segment's in-handle and its control's bits (a control on its anchor too) belong to the first vertex.
         const f = ((first.flags ?? 0) & ~IN_MASK) | ((last.flags ?? 0) & IN_MASK);
-        kept[0] = { ...first, hIn: last.hIn, ...(f ? { flags: f } : {}) };
-        if (!f) delete kept[0].flags;
+        const { flags: _drop, hIn: _hIn, ...rest } = first;
+        kept[0] = { ...rest, ...(last.hIn ? { hIn: last.hIn } : {}), ...(f ? { flags: f } : {}) };
       }
       return { vertices: kept, closed: true, repeatsFirst: true, endFlags: ends[n - 1] };
     }

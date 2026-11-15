@@ -743,14 +743,21 @@ export interface MapNodesContext {
   rings: readonly MapNodeRing[] | null;
   /** Presses and inserts are taken (no write in flight). */
   canPress: boolean;
+  /** No insert at this many nodes over the rings (`MAP_NODES_MAX`: one more and the object has no handles). */
+  maxNodes?: number;
+  /** A press on a node or grip was taken (the page notes the patch it was made on). */
+  onPress?: () => void;
   focus: MapNodeFocus | null;
   gesture: MapNodesGestureRef;
   /** Node snapping (§13 "Snapping"): the point a dragged node lands on; null when snapping is off. */
   snap: ((pt: Pt) => Pt) | null;
   /** Ring `ring` as a drag makes it now (the draft). */
   onDraft: (ring: number, vertices: Vertex[]) => void;
-  /** A gesture's result: one write; `focus` the node focused after it (null: none). */
-  onCommit: (ring: number, vertices: Vertex[], focus: number | null) => void;
+  /**
+   * A gesture's result: one write; `focus` the node focused after it (null: none); `pressed` when it is a press's
+   * release (a drag, an Alt-click: made on the patch at `onPress`), not a double-click's insert.
+   */
+  onCommit: (ring: number, vertices: Vertex[], focus: number | null, pressed: boolean) => void;
   /** A drag was cancelled (Escape, the pointer left): drop the draft, write nothing. */
   onCancel: () => void;
   onFocus: (focus: MapNodeFocus | null) => void;
@@ -783,6 +790,8 @@ export function mapNodesBinding(c: MapNodesContext): EditorToolBinding {
     void c.hit(pt, MAP_HIT_PX * mmPerPx).then((hits) => {
       if (n !== c.clickSeq.current) return;
       const stack = hits.flatMap((h) => (h.ref ? [h.ref] : []));
+      // Any click that selects drops the focus, the same object again included (§13 "Nodes", "Focus").
+      c.onFocus(null);
       c.onSelect(stack[0] ?? null, stack);
     }, () => undefined);
   };
@@ -806,6 +815,7 @@ export function mapNodesBinding(c: MapNodesContext): EditorToolBinding {
         const vertex = ring.vertices.findIndex((v) => near(v, p.pt, reach));
         if (vertex < 0) continue;
         c.gesture.current = { ring: r, mmPerPx: p.mmPerPx, moved: false, drag: { kind: "object", from: p.pt, to: p.pt, moved: false, vertex, base: ring.vertices, alt: !!p.alt } };
+        c.onPress?.();
         return true;
       }
       for (const [r, ring] of rings.entries()) {
@@ -813,6 +823,7 @@ export function mapNodesBinding(c: MapNodesContext): EditorToolBinding {
           const grip = gripsOf(v).find((q) => near(q.at, p.pt, reach));
           if (!grip) continue;
           c.gesture.current = { ring: r, mmPerPx: p.mmPerPx, moved: false, drag: { kind: "grip", index, which: grip.which, from: p.pt, to: p.pt, moved: false, base: ring.vertices, alt: !!p.alt, shift: p.shift } };
+          c.onPress?.();
           return true;
         }
       }
@@ -841,12 +852,13 @@ export function mapNodesBinding(c: MapNodesContext): EditorToolBinding {
       if (!pt) return void (g.moved && c.onCancel());
       // Within the drag threshold it is a click: focus the node (Alt toggles it), a grip does nothing.
       const r = releaseGeometry(d, g.moved ? snapped(g, pt) : d.from, ringRule(rings[g.ring]));
-      if (r?.kind === "commit") c.onCommit(g.ring, r.geometry, index);
+      if (r?.kind === "commit") c.onCommit(g.ring, r.geometry, index, true);
       else if (r?.kind === "cancel") c.onCancel();
       else if (r?.kind === "focus") c.onFocus(r.index === null ? null : { ring: g.ring, index: r.index });
     },
     onDoubleClick: (p) => {
       if (!c.canPress || rings.length === 0) return;
+      if (c.maxNodes !== undefined && rings.reduce((n, ring) => n + ring.vertices.length, 0) >= c.maxNodes) return;
       // The ring whose edge is nearest; on a node nothing (its press already focused it).
       const reach = HANDLE_PX * p.mmPerPx;
       let best: { r: number; dist: number } | null = null;
@@ -857,7 +869,7 @@ export function mapNodesBinding(c: MapNodesContext): EditorToolBinding {
       const at = best as { r: number; dist: number } | null;
       if (!at) return;
       const inserted = insertAtEdge(rings[at.r].vertices, ringRule(rings[at.r]), p.pt, reach, !!p.alt);
-      if (inserted) c.onCommit(at.r, inserted.geometry, inserted.index);
+      if (inserted) c.onCommit(at.r, inserted.geometry, inserted.index, false);
     },
   };
 }
