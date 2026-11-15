@@ -15,7 +15,11 @@ import {
   projector3d,
   reduceGesture3d,
   targetZOf,
+  defaultSurface,
+  fieldAttribution,
+  surfaceOfSource,
   terrain3dOffer,
+  terrain3dSurfaces,
   userBearingOf,
   zoomAt3d,
   type Gesture3dEvent,
@@ -51,6 +55,77 @@ describe("terrain3dOffer (map-rendering.md §5.4 \"3D mode\", answer 7)", () => 
     const d = { state: "ready" as const, url, decided: 0.95 };
     expect(terrain3dOffer(d, { editor: true, allow3d: true })).toEqual({ kind: "hidden", reason: null });
     expect(terrain3dOffer(d, { editor: false, allow3d: false })).toEqual({ kind: "hidden", reason: null });
+  });
+});
+
+describe("terrain3dSurfaces — choosing the surface (§5.4 \"3D mode\" decisions 4–6, H11)", () => {
+  const url = "/api/map-documents/abc/height.bin?v=1";
+  const groundUrl = `${url}&source=ground.lantmateriet-2m`;
+  const anchoredUrl = `${url}&source=contours.lantmateriet-2m`;
+  const provider = { id: "lantmateriet-2m", resolutionM: 2, grade: "anchor" as const, licence: "CC BY 4.0", attribution: "© Lantmäteriet", verticalDatum: "RH 2000" };
+  const dem = (over: Record<string, unknown> = {}) => ({ state: "ready" as const, reason: null, provider, ground: { url: groundUrl }, anchored: { url: anchoredUrl, decided: 0.9 }, ...over });
+  const host = { editor: false, allow3d: true };
+
+  it("has no ground without a ready DEM, and is H7's offer then", () => {
+    for (const state of ["pending", "unavailable", "failed", "disabled"] as const) {
+      const t = { state: "ready" as const, url, decided: 0.85, dem: dem({ state, anchored: null, ground: state === "pending" ? { url: groundUrl } : null }) };
+      const s = terrain3dSurfaces(t);
+      expect(s.ground).toBeNull();
+      expect(s.map).toEqual({ kind: "available", url, pending: false, anchored: false });
+      expect(terrain3dOffer(t, host)).toEqual({ kind: "available", url, pending: false });
+    }
+    expect(terrain3dSurfaces({ state: "ready", url, decided: 0.85 }).ground).toBeNull();
+    expect(terrain3dSurfaces({ state: "ready", url, decided: 0.85, dem: null }).ground).toBeNull();
+  });
+
+  it("offers ground when the DEM is ready", () => {
+    const s = terrain3dSurfaces({ state: "ready", url, decided: 0.85, dem: dem() });
+    expect(s.ground).toEqual({ url: groundUrl, provider });
+  });
+
+  it("draws the anchored field as the map's terrain when it passes the gate (decision 4)", () => {
+    expect(terrain3dSurfaces({ state: "ready", url, decided: 0.6, dem: dem() }).map).toEqual({ kind: "available", url: anchoredUrl, pending: false, anchored: true });
+    // the anchored field below the gate: the plain one, when it passes
+    expect(terrain3dSurfaces({ state: "ready", url, decided: 0.85, dem: dem({ anchored: { url: anchoredUrl, decided: 0.79 } }) }).map).toEqual({ kind: "available", url, pending: false, anchored: false });
+    // no decided share recorded for the anchored field: the plain one
+    expect(terrain3dSurfaces({ state: "ready", url, decided: 0.85, dem: dem({ anchored: { url: anchoredUrl, decided: null } }) }).map).toEqual({ kind: "available", url, pending: false, anchored: false });
+    // both below: the plain field's percent
+    expect(terrain3dSurfaces({ state: "ready", url, decided: 0.5, dem: dem({ anchored: { url: anchoredUrl, decided: 0.7 } }) }).map).toEqual({ kind: "unavailable", reason: "low-confidence", percent: 50 });
+  });
+
+  it("opens 3D on ground below the contour gate (decision 6)", () => {
+    const t = { state: "ready" as const, url, decided: 0.5, dem: dem({ anchored: { url: anchoredUrl, decided: 0.6 } }) };
+    expect(terrain3dSurfaces(t).map).toMatchObject({ kind: "unavailable", reason: "low-confidence" });
+    expect(terrain3dOffer(t, host)).toEqual({ kind: "available", url: groundUrl, pending: false });
+    // without ground the gate holds (H7)
+    expect(terrain3dOffer({ state: "ready", url, decided: 0.5 }, host)).toEqual({ kind: "unavailable", reason: "low-confidence", percent: 50 });
+    // never on a host without 3D
+    expect(terrain3dOffer(t, { editor: false, allow3d: false })).toEqual({ kind: "hidden", reason: null });
+  });
+
+  it("keeps the plain field pending as H7 did", () => {
+    expect(terrain3dSurfaces({ state: "pending", url, decided: null, dem: dem({ state: "disabled", ground: null, anchored: null, provider: null }) }).map).toEqual({ kind: "available", url, pending: true, anchored: false });
+    expect(terrain3dSurfaces({ state: "none", url: null, decided: null }).map).toEqual({ kind: "none" });
+    expect(terrain3dSurfaces({ state: "over-cap", url: null, decided: null }).map).toEqual({ kind: "unavailable", reason: "over-cap" });
+  });
+
+  it("defaults to ground when tracks are shown (decision 5)", () => {
+    const both = terrain3dSurfaces({ state: "ready", url, decided: 0.85, dem: dem() });
+    expect(defaultSurface(both, false)).toBe("map");
+    expect(defaultSurface(both, true)).toBe("ground");
+    const mapOnly = terrain3dSurfaces({ state: "ready", url, decided: 0.85 });
+    expect(defaultSurface(mapOnly, true)).toBe("map");
+    const groundOnly = terrain3dSurfaces({ state: "ready", url, decided: 0.3, dem: dem({ anchored: null }) });
+    expect(defaultSurface(groundOnly, false)).toBe("ground");
+  });
+
+  it("names the drawn surface and its attribution from the field's header (answer 16)", () => {
+    expect(surfaceOfSource("contours")).toBe("map");
+    expect(surfaceOfSource("contours.lantmateriet-2m")).toBe("map");
+    expect(surfaceOfSource("ground.glo30-30m")).toBe("ground");
+    expect(fieldAttribution({ source: "contours" })).toBeNull();
+    expect(fieldAttribution({ source: "contours.lantmateriet-2m", provider })).toEqual({ attribution: "© Lantmäteriet", licence: "CC BY 4.0" });
+    expect(fieldAttribution({ source: "ground.lantmateriet-2m", provider })).toEqual({ attribution: "© Lantmäteriet", licence: "CC BY 4.0" });
   });
 });
 

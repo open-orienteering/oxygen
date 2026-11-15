@@ -36,14 +36,33 @@ const clampZoom = (pxPerUm: number): number => Math.min(MAX_PX_PER_UM, Math.max(
 
 // ─── The offer ─────────────────────────────────────────────────────────────
 
-/** Why 3D is not drawn: the offer's, or a fallback's. */
-export type Terrain3dReason = "no-contours" | "over-cap" | "low-confidence" | "unavailable" | "webgl";
+/** Why 3D is not drawn: the offer's, or a fallback's; `ground-unavailable`: the DEM's surface could not be had (3D stays on the map's terrain). */
+export type Terrain3dReason = "no-contours" | "over-cap" | "low-confidence" | "unavailable" | "webgl" | "ground-unavailable";
+
+/** A DEM provider as the descriptor and a DEM field's header carry it (docs/map-terrain.md §7.1). */
+export interface DemProviderLike {
+  id: string;
+  resolutionM: number;
+  grade: "anchor" | "coarse";
+  licence: string;
+  attribution: string;
+}
+
+/** `course.mapMetadata.terrain.dem` (docs/map-storage.md §4.7 "Descriptor"; H10). */
+export interface DemDescriptorLike {
+  state: "ready" | "pending" | "unavailable" | "failed" | "disabled";
+  provider: DemProviderLike | null;
+  ground: { url: string } | null;
+  anchored: { url: string; decided: number | null } | null;
+}
 
 /** `course.mapMetadata.terrain`, the part the gate reads (docs/map-storage.md §4.7 "Descriptor"). */
 export interface TerrainDescriptorLike {
   state: "ready" | "none" | "over-cap" | "pending";
   url: string | null;
   decided: number | null;
+  /** Absent in a descriptor cached before H10. */
+  dem?: DemDescriptorLike | null;
 }
 
 export type Terrain3dOffer =
@@ -51,21 +70,69 @@ export type Terrain3dOffer =
   | { kind: "hidden"; reason: Terrain3dReason | null }
   /** A toggle that says why it cannot. */
   | { kind: "unavailable"; reason: Terrain3dReason; percent?: number }
-  /** A toggle; `pending`: the field is derived on the first fetch and the gate applied after. */
+  /** A toggle; `url` the field 3D opens on without a choice; `pending`: the field is derived on the first fetch and the gate applied after. */
   | { kind: "available"; url: string; pending: boolean };
 
 /** Floored, as the review's line: 79.6 % does not read as the 80 % the gate needs. */
 export const decidedPercent = (decided: number): number => Math.floor(decided * 100);
 
-export function terrain3dOffer(terrain: TerrainDescriptorLike | null | undefined, host: { editor: boolean; allow3d: boolean }): Terrain3dOffer {
-  if (host.editor || !host.allow3d) return { kind: "hidden", reason: null };
-  if (!terrain || terrain.state === "none") return { kind: "hidden", reason: "no-contours" };
+/** The two surfaces (§5.4 "3D mode" "Surface", H11): the map's terrain and the DEM's ground. */
+export type Surface3d = "map" | "ground";
+
+/** The map's terrain: a contour field — the DEM-anchored one where it passes the gate (decision 4). */
+export type MapSurface3d =
+  | { kind: "none" }
+  | { kind: "unavailable"; reason: Terrain3dReason; percent?: number }
+  | { kind: "available"; url: string; pending: boolean; anchored: boolean };
+
+export interface Terrain3dSurfaces {
+  map: MapSurface3d;
+  /** The DEM resampled to the field grid, where its job is done. */
+  ground: { url: string; provider: DemProviderLike } | null;
+}
+
+export function terrain3dSurfaces(terrain: TerrainDescriptorLike | null | undefined): Terrain3dSurfaces {
+  const dem = terrain?.dem;
+  const ready = dem?.state === "ready" && !!dem.provider;
+  const ground = ready && dem.ground ? { url: dem.ground.url, provider: dem.provider as DemProviderLike } : null;
+  return { map: mapSurface(terrain, ready ? dem.anchored : null), ground };
+}
+
+function mapSurface(terrain: TerrainDescriptorLike | null | undefined, anchored: DemDescriptorLike["anchored"]): MapSurface3d {
+  if (!terrain || terrain.state === "none") return { kind: "none" };
   if (terrain.state === "over-cap") return { kind: "unavailable", reason: "over-cap" };
-  if (!terrain.url) return { kind: "hidden", reason: "no-contours" };
-  if (terrain.state === "pending") return { kind: "available", url: terrain.url, pending: true };
+  if (!terrain.url) return { kind: "none" };
+  if (terrain.state === "pending") return { kind: "available", url: terrain.url, pending: true, anchored: false };
+  // The gate (answer 7) is read on the field drawn: the anchored one first (decision 4).
+  if (anchored && anchored.decided !== null && anchored.decided >= TERRAIN_3D_MIN_DECIDED) return { kind: "available", url: anchored.url, pending: false, anchored: true };
   const decided = terrain.decided ?? 0;
   if (decided < TERRAIN_3D_MIN_DECIDED) return { kind: "unavailable", reason: "low-confidence", percent: decidedPercent(decided) };
-  return { kind: "available", url: terrain.url, pending: false };
+  return { kind: "available", url: terrain.url, pending: false, anchored: false };
+}
+
+export function terrain3dOffer(terrain: TerrainDescriptorLike | null | undefined, host: { editor: boolean; allow3d: boolean }): Terrain3dOffer {
+  if (host.editor || !host.allow3d) return { kind: "hidden", reason: null };
+  const { map, ground } = terrain3dSurfaces(terrain);
+  if (map.kind === "available") return { kind: "available", url: map.url, pending: map.pending };
+  // A ready ground opens 3D on its own below the contour gate (decision 6).
+  if (ground) return { kind: "available", url: ground.url, pending: false };
+  if (map.kind === "unavailable") return { kind: "unavailable", reason: map.reason, percent: map.percent };
+  return { kind: "hidden", reason: "no-contours" };
+}
+
+/** The surface 3D opens on without a choice: ground with tracks shown, or when it is the only one (decisions 5, 6). */
+export function defaultSurface(s: Terrain3dSurfaces, tracksShown: boolean): Surface3d {
+  if (!s.ground) return "map";
+  return tracksShown || s.map.kind !== "available" ? "ground" : "map";
+}
+
+/** Which surface a field's `source` is: `ground.<provider>`, or a contour field (plain or anchored). */
+export const surfaceOfSource = (source: string): Surface3d => (source.startsWith("ground.") ? "ground" : "map");
+
+/** The notice a drawn field must carry: a DEM-based field's provider attribution and licence (answer 16), from its header. */
+export function fieldAttribution(header: { source: string; provider?: Pick<DemProviderLike, "attribution" | "licence"> }): { attribution: string; licence: string } | null {
+  if (header.source === "contours" || !header.provider) return null;
+  return { attribution: header.provider.attribution, licence: header.provider.licence };
 }
 
 // ─── View, scene and camera ───────────────────────────────────────────────
