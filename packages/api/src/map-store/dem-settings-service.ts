@@ -14,7 +14,8 @@ import { TERRAIN_VERSION } from "@oxygen/shared/src/terrain/field/types.js";
 import type { Prisma, PrismaClient } from "../generated/prisma/client.js";
 import { workerBootstrap } from "../worker-bootstrap.js";
 import { getBlob } from "./blob-store.js";
-import { enqueueDocumentDem, getDemJob, kickDemJobs, requeueAuthFailures } from "./dem-jobs.js";
+import type { DemCap } from "./dem-cog.js";
+import { demOverCapOf, enqueueDocumentDem, getDemJob, kickDemJobs, requeueAuthFailures } from "./dem-jobs.js";
 import type { LiveCheckReport } from "./dem-live-check.js";
 import type { LiveCheckWorkerData, LiveCheckWorkerMessage } from "./dem-live-check-worker.js";
 import { refreshDemProviders } from "./dem-registry.js";
@@ -142,6 +143,10 @@ export interface DemMapRow {
   state: DemState;
   reason: string | null;
   providerId: string | null;
+  /** Ground cell of the level read, metres, on a ready map: the provider's, or the next coarser overview's (§7.0c answer 12). */
+  readAtM: number | null;
+  /** On an `over-cap` ending: the cap it hit (§7.0c answer 12); null when not recorded. */
+  overCap: DemCap | null;
   job: { state: string; attempts: number; nextAttemptAt: string | null; error: string | null; updatedAt: string } | null;
   /** Whether a retry would queue something. */
   retryable: boolean;
@@ -193,6 +198,8 @@ export async function listDemMaps(db: Db, store: DemSettingsStore, env: NodeJS.P
       state: d.state,
       reason: d.reason,
       providerId: d.provider?.id ?? null,
+      readAtM: d.state === "ready" ? d.provider?.resolutionM ?? null : null,
+      overCap: d.state === "unavailable" && d.reason === "over-cap" ? demOverCapOf(job?.error) : null,
       job: job ? { state: job.state, attempts: job.attempts, nextAttemptAt: job.nextAttemptAt?.toISOString() ?? null, error: job.error ? maskSecret(job.error, secrets) : null, updatedAt: job.updatedAt.toISOString() } : null,
       retryable: d.state === "failed" || (d.state === "pending" && !job),
       liveCheck: await liveCheckEligibility(db, m.documentHash, header),

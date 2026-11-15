@@ -246,6 +246,38 @@ describe("the club maps' DEM states and the queued retry (map-terrain.md §7.0b 
   });
 });
 
+describe("over the window cap in the state list (map-terrain.md §7.0c answer 12)", () => {
+  afterEach(() => configureDemEngine({ derive: async (d) => deriveDemFields(d) }));
+
+  it("shows the level read on a ready map and the cap an over-cap ending hit; the retry still refuses it", async () => {
+    await asAdmin().demSettings.setAccount({ user: USER, password: PASSWORD });
+    await asAdmin().demSettings.save({ providers: { lantmateriet: true, glo30: false } });
+    const under = await clubMapOf(HILL, "read-2m", sweref99(LM_ORIGIN.e, LM_ORIGIN.n));
+    await asAdmin().demSettings.retry({ clubMapId: under.id });
+    expect((await settle(under.hash))[0]).toMatchObject({ state: "done" });
+
+    // 2 m over the cap, 4 m under: read at 4 m
+    configureDemEngine({ derive: async (d) => deriveDemFields(d), maxMosaicCells: 60_000 });
+    const coarse = await clubMapOf(HILL, "read-4m", sweref99(LM_ORIGIN.e, LM_ORIGIN.n));
+    await asAdmin().demSettings.retry({ clubMapId: coarse.id });
+    expect((await settle(coarse.hash))[0]).toMatchObject({ state: "done" });
+
+    // over at both: over-cap, naming the window cells
+    configureDemEngine({ derive: async (d) => deriveDemFields(d), maxMosaicCells: 10_000 });
+    const over = await clubMapOf(HILL, "over-both", sweref99(LM_ORIGIN.e, LM_ORIGIN.n));
+    await asAdmin().demSettings.retry({ clubMapId: over.id });
+    expect((await settle(over.hash))[0]).toMatchObject({ state: "unavailable", reason: "over-cap" });
+
+    const rows = await asAdmin().demSettings.maps();
+    expect(rows.find((r) => r.clubMapId === under.id)).toMatchObject({ state: "ready", providerId: LM, readAtM: 2, overCap: null });
+    expect(rows.find((r) => r.clubMapId === coarse.id)).toMatchObject({ state: "ready", providerId: LM, readAtM: 4, overCap: null });
+    const row = rows.find((r) => r.clubMapId === over.id)!;
+    expect(row).toMatchObject({ state: "unavailable", reason: "over-cap", readAtM: null, overCap: "window-cells", retryable: false, job: { error: expect.stringMatching(/^window-cells: /) } });
+    expectNoSecret(rows);
+    await expect(asAdmin().demSettings.retry({ clubMapId: over.id })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+});
+
 describe("Test connection (map-terrain.md §7.0b 9, §7.6, §7.8)", () => {
   it("refuses without an account, before any request", async () => {
     const { id } = await clubMapOf(HILL, "no-account", sweref99(LM_ORIGIN.e, LM_ORIGIN.n));
