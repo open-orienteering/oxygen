@@ -110,12 +110,21 @@ export function enqueueInto(entries: readonly ControlWrite[], w: FieldWrite, com
   if (w.kind === "move") {
     if (!existing) return { add: { ...fresh, kind: "move", input: w.input, from: w.from, baseVersion: w.baseVersion } };
     const e = existing as ControlMoveEntry;
+    const reset = { status: "pending" as const, theirs: undefined, serverVersion: undefined, error: undefined, rev: e.rev + 1 };
+    const at = { id: w.input.id, xpos: w.input.xpos, ypos: w.input.ypos };
+    if (e.from === undefined && e.status !== "conflict") {
+      // A plain write (an undo restoring a description, §3 "other control write") stays one: the newest position,
+      // the newest description restore, never classed as a move on replay.
+      const description = w.from === undefined ? w.input.description : e.input.description;
+      return { put: { ...e, ...reset, input: { ...at, ...(description !== undefined ? { description } : {}) } } };
+    }
+    // A move stays a pure move (the field-move rule): the position only, the description auto-filled as online.
     const inConflict = e.status === "conflict";
     // Moved on from a conflict: the setter keeps theirs as the start, on the server's token (Keep mine, moved on).
     const from = inConflict ? e.theirs ?? e.from : e.from;
     const baseVersion = inConflict ? e.serverVersion ?? e.baseVersion : e.baseVersion;
     if (!e.sending && samePt(ptOf(w.input), from)) return { delete: e.seq! };
-    return { put: { ...e, input: w.input, from, baseVersion, status: "pending", theirs: undefined, serverVersion: undefined, error: undefined, rev: e.rev + 1 } };
+    return { put: { ...e, ...reset, input: { ...at, autoDescribe: true }, from, baseVersion } };
   }
   if (!existing) return { add: { ...fresh, kind: "check", checked: w.checked } };
   const e = existing as ControlCheckEntry;
@@ -310,6 +319,10 @@ export function drain(
     const result: DrainResult = { sent: 0, conflicts: 0, failed: 0, stopped: false };
     /** The next entry to send has a key at or after this one. */
     let cursor = 0;
+    // Nothing is in flight while this drain holds the lock: a flag left by a tab closed mid-send goes.
+    await store.atomic(async (tx) => {
+      for (const e of await tx.list(competitionId)) if (e.sending) await tx.put({ ...e, sending: false });
+    });
     for (;;) {
       // Pick the next pending entry and mark it in flight, in one step.
       const sent = await store.atomic(async (tx) => {
@@ -344,7 +357,10 @@ export function drain(
         if ("ok" in outcome) {
           if (cur.rev === sent.rev) { await tx.delete(cur.seq!); return false; }
           // Merged into while in flight: the newer value goes next, a move from where this one put it, on its token.
-          if (cur.kind === "move" && sent.kind === "move") {
+          if (cur.kind === "move" && sent.kind === "move" && cur.from === undefined) {
+            // A plain write stays plain (no `from`): only its token moves on.
+            await tx.put({ ...cur, sending: false, baseVersion: outcome.ok.version });
+          } else if (cur.kind === "move" && sent.kind === "move") {
             const from = ptOf(sent.input);
             if (samePt(ptOf(cur.input), from)) { await tx.delete(cur.seq!); return false; }
             await tx.put({ ...cur, sending: false, from, baseVersion: outcome.ok.version });

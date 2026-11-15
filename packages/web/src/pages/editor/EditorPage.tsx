@@ -694,8 +694,9 @@ export function EditorPage() {
     setLastMovedId(id);
     void (async () => {
       const from = prev ? { x: prev.mapX, y: prev.mapY } : undefined;
-      if (fieldMode) {
-        // Field mode (§9 "Offline", D9c): through the outbox, which sends at once when it can.
+      // Field mode (§9 "Offline", D9c), or a control whose move already waits in the outbox (any mode: the newer
+      // position merges into its entry instead of racing it): through the outbox, which sends at once when it can.
+      if (fieldMode || outbox.entries.some((e) => e.kind === "move" && e.controlId === id)) {
         const redo = () => outbox.write({ kind: "move", input: { id, xpos: pt.x, ypos: pt.y, autoDescribe: true }, from });
         if ((await run(redo, { controlId: id, mine: pt })) === undefined || !prev) return;
         recordField(() => outbox.write({ kind: "move", input: { id, xpos: prev.mapX, ypos: prev.mapY, description: prev.description ?? null } }), redo);

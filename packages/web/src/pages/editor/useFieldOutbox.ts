@@ -158,5 +158,5 @@ export function useFieldOutbox({ competitionId, writes, online, onSettled }: {
     [after, entries],
   );
 
-  return { entries, counts, write, resolve, retryFailed, discardFailed };
+  return useMemo(() => ({ entries, counts, write, resolve, retryFailed, discardFailed }), [entries, counts, write, resolve, retryFailed, discardFailed]);
 }

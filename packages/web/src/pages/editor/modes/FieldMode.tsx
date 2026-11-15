@@ -215,7 +215,6 @@ export function NudgePad({ pt, mapScale, onNudge, disabled }: { pt: Pt; mapScale
   );
 }
 
-/** Offline: Field mode views only — no outbox covers its writes (§9 "Offline"). */
 /**
  * Offline, or with Field mode's writes waiting in the device's outbox (§9 "Offline", D9c): moves and check-offs
  * are kept and sent on reconnect; the count of those waiting, and the refused ones with Retry / Discard.

@@ -74,6 +74,26 @@ describe("enqueueInto: one move and one check entry per control (D9c, docs/cours
     expect(enqueueInto([e], move(31, [10, 20], [11, 20]), EV, 2)).toEqual({ delete: 1 });
   });
 
+  it("an undo with a description merged into a move keeps it a pure move: position only, auto-described", () => {
+    const e: ControlWrite = { ...enqueueInto([], move(31, [12, 20], [10, 20], "5"), EV, 1).add!, seq: 1 };
+    const undo = { kind: "move" as const, input: { id: 31, xpos: 11, ypos: 20, description: { d: "stale" } } };
+    expect(enqueueInto([e], undo, EV, 2).put).toEqual(expect.objectContaining({
+      input: { id: 31, xpos: 11, ypos: 20, autoDescribe: true }, from: { x: 10, y: 20 }, baseVersion: "5",
+    }));
+  });
+
+  it("a move merged into a plain write (an undo restoring a description) keeps it plain: the newest position, its description", () => {
+    const undo = { kind: "move" as const, input: { id: 31, xpos: 10, ypos: 20, description: null }, baseVersion: "6" };
+    const e: ControlWrite = { ...enqueueInto([], undo, EV, 1).add!, seq: 1 };
+    const put = enqueueInto([e], move(31, [11, 20], [10, 20]), EV, 2).put as ControlMoveEntry;
+    expect(put.input).toEqual({ id: 31, xpos: 11, ypos: 20, description: null });
+    expect(put.from).toBeUndefined();
+    expect(put.baseVersion).toBe("6");
+    // A second undo's description wins.
+    const again = enqueueInto([put], { kind: "move", input: { id: 31, xpos: 10, ypos: 20, description: { d: "x" } } }, EV, 3).put as ControlMoveEntry;
+    expect(again.input).toEqual({ id: 31, xpos: 10, ypos: 20, description: { d: "x" } });
+  });
+
   it("a check toggled back drops out; the same value again changes nothing", () => {
     const e: ControlWrite = { ...enqueueInto([], check(31, true), EV, 1).add!, seq: 1 };
     expect(enqueueInto([e], check(31, false), EV, 2)).toEqual({ delete: 1 });
@@ -223,6 +243,26 @@ describe("drain: in order, under G1's rules (docs/course-editor.md §3, §9)", (
     f.fail(new EditorConflict({ kind: "refresh", differing: ["description"] }, "control", 31));
     await drain(store, f.writes, EV);
     expect((await listOf(store))[0]).toMatchObject({ status: "failed", error: CHANGED_ELSEWHERE });
+  });
+
+  it("replay classes a plain write as one (no `from`): `EditorWrites` decides it by its fields, never by the move rule", async () => {
+    const store = memoryControlWriteStore();
+    await enqueue(store, EV, { kind: "move", input: { id: 31, xpos: 10, ypos: 20, description: null }, baseVersion: "6" });
+    await enqueue(store, EV, move(31, [11, 20], [10, 20]));
+    const f = fakeWrites();
+    await drain(store, f.writes, EV);
+    expect(f.calls[0].args).toEqual([{ id: 31, xpos: 11, ypos: 20, description: null }, undefined, { baseVersion: "6" }]);
+  });
+
+  it("a flag left in flight by a closed tab is cleared when a drain starts", async () => {
+    const store = memoryControlWriteStore();
+    await enqueue(store, EV, check(31, true));
+    const [e] = await listOf(store);
+    await store.atomic((tx) => tx.put({ ...e, sending: true }));
+    const f = fakeWrites();
+    f.fail(networkError());
+    await drain(store, f.writes, EV);
+    expect((await listOf(store))[0].sending).toBe(false);
   });
 
   it("a network failure stops the drain and keeps that entry and the rest pending", async () => {

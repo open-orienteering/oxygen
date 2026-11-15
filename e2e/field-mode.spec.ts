@@ -450,15 +450,21 @@ test.describe("Field mode on a phone (docs/course-editor.md §9, §10)", () => {
       await page.getByTestId("editor-overflow-menu").getByTestId("editor-undo").click();
       await expect(toggle).toHaveAttribute("aria-pressed", String(was));
       await expect(notice).toHaveAttribute("data-pending", "1");
+      // Checked off again: a new entry, after the move's.
+      await toggle.click();
+      await expect(toggle).toHaveAttribute("aria-pressed", String(!was));
+      await expect(notice).toHaveAttribute("data-pending", "2");
       expect(sent).toEqual([]);
 
       await context.setOffline(false);
       await expect(notice).toHaveCount(0, { timeout: 20000 });
       await expect(page.getByTestId("editor-save-state")).toHaveAttribute("data-state", "saved", { timeout: 15000 });
-      expect(sent).toEqual(["control.update"]);
+      // In enqueue order, one write each; the check-off still shown.
+      expect(sent).toEqual(["control.update", "control.check"]);
+      await expect(toggle).toHaveAttribute("aria-pressed", String(!was));
       const stored = await storedControl(Number(c.id));
       expect(stored.y).toBeCloseTo(c.mm.y + 0.2, 3);
-      expect(stored.checked).toBe(restore.checked);
+      expect(stored.checked).toBe(!restore.checked);
       await page.reload();
       await editorReady(page);
       expect((await site(page, c.code)).mm.y).toBeCloseTo(c.mm.y + 0.2, 3);
@@ -524,6 +530,46 @@ test.describe("Field mode on a phone (docs/course-editor.md §9, §10)", () => {
       expect(stored.y).toBeCloseTo(c.mm.y + 0.1, 3);
     } finally {
       await context.setOffline(false);
+      await writeBack(Number(c.id), restore);
+    }
+  });
+
+  test("a queued write the server refuses is kept as failed, says Not saved, and goes out on Retry", async ({ page, context }) => {
+    await openEditor(page);
+    const c = await visibleControl(page);
+    const restore = await storedControl(Number(c.id));
+    // The server's refusal, as tRPC answers a batch (a leased event's "checked out to venue").
+    const refuse = (route: Route) => (route.request().method() === "POST" && procedures(route.request().url()).includes("control.update")
+      ? route.fulfill({
+        status: 403,
+        contentType: "application/json",
+        body: JSON.stringify([{ error: { message: "Event is checked out to venue", code: -32003, data: { code: "FORBIDDEN", httpStatus: 403, path: "control.update" } } }]),
+      })
+      : route.continue());
+    try {
+      await context.setOffline(true);
+      await touchTap(page, c.at);
+      await expect(page.getByTestId("editor-sheet-selection")).toContainText(c.code);
+      await page.getByTestId("editor-sheet-handle").click();
+      await page.getByTestId("editor-nudge-up-mm").click();
+      const notice = page.getByTestId("editor-field-offline");
+      await expect(notice).toHaveAttribute("data-pending", "1");
+      await page.route("**/trpc/**", refuse);
+      await context.setOffline(false);
+      await expect(notice).toHaveAttribute("data-failed", "1", { timeout: 20000 });
+      await expect(notice).toHaveAttribute("data-pending", "0");
+      await expect(page.getByTestId("editor-field-queue-failed")).toContainText("checked out to venue");
+      await expect(page.getByTestId("editor-save-state")).toHaveAttribute("data-state", "error");
+      // Still shown where the setter put it; the server unchanged.
+      expect((await site(page, c.code)).mm.y).toBeCloseTo(c.mm.y + 0.1, 3);
+      expect((await storedControl(Number(c.id))).y).toBeCloseTo(restore.y, 3);
+      await page.unroute("**/trpc/**", refuse);
+      await page.getByTestId("editor-field-queue-retry").click();
+      await expect(notice).toHaveCount(0, { timeout: 20000 });
+      expect((await storedControl(Number(c.id))).y).toBeCloseTo(c.mm.y + 0.1, 3);
+    } finally {
+      await context.setOffline(false);
+      await page.unroute("**/trpc/**", refuse).catch(() => undefined);
       await writeBack(Number(c.id), restore);
     }
   });
