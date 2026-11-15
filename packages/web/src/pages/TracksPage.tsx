@@ -208,6 +208,9 @@ export function TracksPage() {
                 return (
                   <Fragment key={route.id}>
                     <tr
+                      data-testid="track-row"
+                      data-route-id={route.id}
+                      aria-expanded={isExpanded}
                       className={`hover:bg-slate-50 cursor-pointer transition-colors ${isExpanded ? "bg-slate-50" : ""}`}
                       onClick={() =>
                         setExpandedId(isExpanded ? null : route.id)

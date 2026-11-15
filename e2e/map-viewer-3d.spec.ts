@@ -22,6 +22,7 @@ import { reseed } from "./helpers/reseed";
 import { uploadEventMap, waitForStableMapPanel } from "./helpers/map-upload";
 import { API_BASE } from "./helpers/api-base";
 import { E2E_HEADERS, trpc } from "./helpers/print-pdf";
+import { insertGpsRoute } from "./helpers/gps-route";
 
 const DEMO = "docs/screenshots/fixtures/puit-de-laven-demo.omap";
 
@@ -312,5 +313,87 @@ test.describe("the viewer's 3D mode", () => {
     await expect(viewer).toHaveAttribute("data-view-mode", "2d");
     await expect(canvas).toHaveAttribute("data-mode", "2d");
     await expect(toggle).toHaveAttribute("data-state", "off");
+  });
+  test("a GPS track on the Tracks page is drawn on the terrain (H8)", async ({ page }) => {
+    test.setTimeout(240_000);
+    // The demo map (a re-import when the earlier test pinned it already: the same document).
+    const hash = await importDemoMap();
+    // The wide screen's map pane: the Tracks page drives it through MapSlot (no inline map).
+    await page.setViewportSize({ width: 2400, height: 1200 });
+    await page.goto("/itest/tracks");
+    const pane = page.getByTestId("map-pane");
+    await expect(pane).toHaveAttribute("data-visible", "true", { timeout: 15_000 });
+    const viewer = pane.getByTestId("map-viewer");
+    const canvas = viewer.getByTestId("map-vector-layer");
+    await expect(canvas).toHaveAttribute("data-ready", "true", { timeout: 60_000 });
+    await expect(canvas).toHaveAttribute("data-document-hash", hash);
+    // A zig-zag of ten fixes through the map's centre (≈ 200 m across), then the page again to list it.
+    const lat = Number(await viewer.getAttribute("data-center-lat")), lng = Number(await viewer.getAttribute("data-center-lng"));
+    const fixes = Array.from({ length: 10 }, (_, i) => ({ lat: lat - 0.0009 + i * 0.0002, lng: lng + (i % 2 ? 0.0006 : -0.0006) }));
+    const routeId = await insertGpsRoute("itest", fixes);
+    await page.reload();
+    await expect(canvas).toHaveAttribute("data-ready", "true", { timeout: 60_000 });
+    const row = page.locator(`[data-testid="track-row"][data-route-id="${routeId}"]`);
+
+    /**
+     * Route-red (#e6194b at 0.8 over the map): red well above green, and blue not below green — the
+     * map's brown contours and orange fields have blue well below green.
+     */
+    const isRoute = (png: PNG, i: number) => png.data[i] > 150 && png.data[i] - png.data[i + 1] > 100 && png.data[i + 2] >= png.data[i + 1] - 5;
+    const routePixels = (png: PNG) => {
+      let n = 0;
+      for (let i = 0; i < png.data.length; i += 4) if (isRoute(png, i)) n++;
+      return n;
+    };
+
+    await test.step("2D: the SVG path", async () => {
+      await row.click();
+      await expect(viewer.getByTestId("gps-route")).toHaveCount(1);
+      await expect(viewer.getByTestId("gps-route-3d")).toHaveCount(0);
+      await expect(canvas).not.toHaveAttribute("data-terrain-lines", /.*/);
+    });
+
+    await test.step("3D: drawn by the GL frame on the terrain, no SVG path", async () => {
+      await viewer.getByTestId("map-3d-toggle").click();
+      await settled3d(viewer, canvas);
+      await expect(canvas).toHaveAttribute("data-terrain-lines", "1");
+      await expect(viewer.getByTestId("gps-route")).toHaveCount(0);
+      const mirror = viewer.getByTestId("gps-route-3d");
+      await expect(mirror).toHaveCount(1);
+      const png = await canvasPixels(canvas);
+      // At the route's projected points (the mirror, CSS px = canvas px at DPR 1) the canvas is
+      // route-red, on or just above the point: the line is raised by its half width (§5.6 "Lines").
+      const pts = (await mirror.getAttribute("data-points"))!.split(" ").map((p) => p.split(",").map(Number));
+      expect(pts.length).toBeGreaterThanOrEqual(10);
+      const onLine = pts.filter(([x, y]) => {
+        for (let dy = -10; dy <= 2; dy++)
+          for (let dx = -2; dx <= 2; dx++) {
+            const px = Math.round(x) + dx, py = Math.round(y) + dy;
+            if (px < 0 || py < 0 || px >= png.width || py >= png.height) continue;
+            if (isRoute(png, (py * png.width + px) * 4)) return true;
+          }
+        return false;
+      });
+      expect(onLine.length / pts.length).toBeGreaterThan(0.7);
+      const withRoute = routePixels(png);
+      expect(withRoute).toBeGreaterThan(300);
+
+      // Collapsing the row takes the route away: the same 3D view without it has (almost) no route-red.
+      await row.click();
+      await expect(canvas).toHaveAttribute("data-terrain-lines", "0");
+      await expect(canvas).toHaveAttribute("data-terrain-ready", "true", { timeout: 60_000 });
+      expect(routePixels(await canvasPixels(canvas))).toBeLessThan(withRoute / 10);
+      await row.click();
+      await expect(canvas).toHaveAttribute("data-terrain-lines", "1");
+      if (process.env.MAP_3D_SHOT === "1") await viewer.screenshot({ path: "docs/screenshots/map-3d-track.png" });
+    });
+
+    await test.step("back to 2D: the SVG path again", async () => {
+      await viewer.getByTestId("map-3d-toggle").click();
+      await expect(viewer).toHaveAttribute("data-view-mode", "2d");
+      await expect(viewer.getByTestId("gps-route")).toHaveCount(1);
+      await expect(viewer.getByTestId("gps-route-3d")).toHaveCount(0);
+      await expect(canvas).not.toHaveAttribute("data-terrain-lines", /.*/);
+    });
   });
 });
