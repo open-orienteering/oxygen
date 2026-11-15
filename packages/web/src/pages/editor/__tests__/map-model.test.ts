@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { mapDocument } from "@oxygen/shared";
 import {
-  centreOf, changes, correctedRefs, correctionRows, hideChange, hitsObject, inverseChange, isHidden, mapModelOf, moveOp, objectInfo, refKey,
+  centreOf, changes, correctedRefs, drawnCovers, correctionRows, hideChange, hitsObject, inverseChange, isHidden, mapModelOf, moveOp, objectInfo, refKey,
   restoreChange, stepRef,
 } from "../modes/map/model";
 
@@ -130,5 +130,18 @@ describe("Map mode's model (docs/course-editor.md §13)", () => {
     expect(stepRef(refs, { source: 3 }, -1)).toEqual({ source: 7 });
     expect(stepRef(refs, { source: 99 }, 1)).toEqual({ source: 3 });
     expect(stepRef([], null, 1)).toBeNull();
+  });
+
+  it("Tab skips a row whose object is not in the document", () => {
+    const p = patchOf([{ op: "hide", sourceIndex: 42 }, { op: "hide", sourceIndex: 7 }]);
+    expect(correctedRefs(correctionRows(mapModelOf(HASH, pinned(), p), p, "en"))).toEqual([{ source: 7 }]);
+  });
+
+  it("a committed draft is covered once its version or a later one is drawn", () => {
+    expect(drawnCovers(null, "5")).toBe(false);
+    expect(drawnCovers("4", "5")).toBe(false);
+    expect(drawnCovers("5", "5")).toBe(true);
+    expect(drawnCovers("117619361030209536", "117619360975880192")).toBe(true);
+    expect(drawnCovers("x", "x")).toBe(true);
   });
 });

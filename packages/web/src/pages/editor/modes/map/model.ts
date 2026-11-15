@@ -238,11 +238,15 @@ export function correctionRows(model: MapModel | null, patch: mapDocument.MapPat
   });
 }
 
-/** The corrected objects in *Corrections* order, each once: what Tab steps through without a click stack (§13). */
+/**
+ * The corrected objects in *Corrections* order, each once: what Tab steps through without a click stack (§13). A row
+ * whose object is not in the document (`target-missing`) is skipped: it cannot be selected.
+ */
 export function correctedRefs(rows: readonly CorrectionRow[]): MapObjectRef[] {
   const seen = new Set<string>();
   const out: MapObjectRef[] = [];
   for (const r of rows) {
+    if (r.label === null) continue;
     const k = refKey(r.ref);
     if (!seen.has(k)) { seen.add(k); out.push(r.ref); }
   }
@@ -255,4 +259,18 @@ export function stepRef(list: readonly MapObjectRef[], current: MapObjectRef | n
   const at = current ? list.findIndex((r) => sameRef(r, current)) : -1;
   if (at < 0) return dir > 0 ? list[0] : list[list.length - 1];
   return list[(at + dir + list.length) % list.length];
+}
+
+/**
+ * Whether the canvas, showing patch version `drawn`, shows the write that answered `waitFor` (§13 "Committing"):
+ * versions are the row's increasing token, so a later version drawn first (a quick next write, another editor's)
+ * covers it too.
+ */
+export function drawnCovers(drawn: string | null, waitFor: string): boolean {
+  if (drawn === null) return false;
+  try {
+    return BigInt(drawn) >= BigInt(waitFor);
+  } catch {
+    return drawn === waitFor;
+  }
 }

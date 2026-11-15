@@ -11,14 +11,15 @@ export type MapKeyAction =
   | { kind: "hide" }
   | { kind: "escape" };
 
-export interface KeyLike { key: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean }
+export interface KeyLike { key: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean; repeat?: boolean }
 
 /** The action a key press is in Map mode, or null (not Map mode's). */
 export function mapKeyAction(e: KeyLike): MapKeyAction | null {
   const mod = e.ctrlKey || e.metaKey;
   if (e.key === "Escape") return { kind: "escape" };
   if (e.key === "Tab" && !mod && !e.altKey) return { kind: "step", dir: e.shiftKey ? -1 : 1 };
-  if ((e.key === "Delete" || e.key === "Backspace") && !mod && !e.altKey) return { kind: "hide" };
+  // A held Delete hides once: its auto-repeat is not another gesture.
+  if ((e.key === "Delete" || e.key === "Backspace") && !mod && !e.altKey) return e.repeat ? null : { kind: "hide" };
   if (mod || e.altKey || e.key.length !== 1) return null;
   switch (e.key.toUpperCase()) {
     case "V": return { kind: "select-tool" };

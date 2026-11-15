@@ -26,7 +26,7 @@ import { mapKeyAction } from "./map/keys";
 import { MapObjectSection } from "./map/ObjectSection";
 import { CorrectionsList } from "./map/Corrections";
 import {
-  centreOf, changes, correctedRefs, correctionRows, hideChange, hitsObject, inverseChange, isHidden, mapModelFor, moveOp, objectInfo,
+  centreOf, changes, correctedRefs, drawnCovers, correctionRows, hideChange, hitsObject, inverseChange, isHidden, mapModelFor, moveOp, objectInfo,
   restoreChange, sameRef, stepRef, type CorrectionRow, type MapObjectRef,
 } from "./map/model";
 
@@ -96,6 +96,9 @@ export function useMapMode(a: MapModeArgs): MapMode {
   const [toggling, setToggling] = useState<boolean | null>(null);
   const gesture = useRef<MapGestureRef["current"]>(null);
   const clickSeq = useRef(0);
+  /** A gesture's write is in flight: the next gesture waits (its `before` would be stale, §13 "Ops"). */
+  const [writing, setWriting] = useState(false);
+  const writingRef = useRef(false);
 
   // Leaving the mode or another document drops it all; the overprint comes back (H is Map mode's own).
   useEffect(() => {
@@ -107,7 +110,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
   }, [enabled, hash]);
   // A committed draft goes once the canvas shows the patch that carries it.
   useEffect(() => {
-    if (draft?.waitFor != null && drawn === draft.waitFor) setDraft(null);
+    if (draft?.waitFor != null && drawnCovers(drawn, draft.waitFor)) setDraft(null);
   }, [draft, drawn]);
   // A selected added object whose add went (hidden, reverted, undone) is no longer there.
   useEffect(() => {
@@ -141,21 +144,29 @@ export function useMapMode(a: MapModeArgs): MapMode {
     const before = patchRef.current;
     const documentHash = hash;
     const inverse = inverseChange(before, change);
+    if (writingRef.current) return;
     if (!documentHash || !inverse || !changes(before, change)) {
       setDraft(null);
       return;
     }
+    writingRef.current = true;
+    setWriting(true);
     void run(async () => {
-      const res = await send(documentHash, change);
-      if (keepDraft) setDraft((d) => (d ? { ...d, waitFor: res.version } : d));
-      record(
-        async () => { setDraft(null); await send(documentHash, inverse); },
-        async () => { setDraft(null); await send(documentHash, change); },
-      );
+      try {
+        const res = await send(documentHash, change);
+        if (keepDraft) setDraft((d) => (d ? { ...d, waitFor: res.version } : d));
+        record(
+          async () => { setDraft(null); await send(documentHash, inverse); },
+          async () => { setDraft(null); await send(documentHash, change); },
+        );
+      } finally {
+        writingRef.current = false;
+        setWriting(false);
+      }
     });
   }, [hash, run, send, record]);
 
-  const canWrite = enabled && canEdit && !!model && correctionsOn;
+  const canWrite = enabled && canEdit && !!model && correctionsOn && !writing;
   const selectedHidden = !!selected && isHidden(current, selected);
   const canMove = canWrite && !!selected && !selectedHidden && model?.indexOf(selected) != null;
 
@@ -202,7 +213,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
       setSelected(stepRef(stack, selected, dir));
       return;
     }
-    const next = stepRef(correctedRefs(rows), selected, dir);
+    const next = stepRef(correctedRefs(rows), selected, dir); // rows whose object is in the document
     if (next) locate(next);
   }, [stack, selected, rows, locate]);
 

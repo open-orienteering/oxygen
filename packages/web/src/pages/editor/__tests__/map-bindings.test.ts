@@ -102,6 +102,10 @@ describe("Map mode's keys (§13)", () => {
     expect(k("Escape")).toEqual({ kind: "escape" });
   });
 
+  it("a held Delete hides once: its auto-repeat is no gesture", () => {
+    expect(mapKeyAction({ key: "Delete", ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, repeat: true })).toBeNull();
+  });
+
   it("Course mode's tool keys and modified keys are not Map mode's (course edits locked)", () => {
     for (const key of ["S", "K", "M", "X", "C", "A", "T", "G", "L", "1"]) expect(k(key)).toBeNull();
     expect(k("z", { ctrlKey: true })).toBeNull();
