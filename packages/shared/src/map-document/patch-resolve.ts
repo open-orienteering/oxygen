@@ -258,8 +258,11 @@ export function resolvePatch(from: MapDocument, to: MapDocument, patch: MapPatch
       return;
     }
     // An entry that fails again is kept exactly as it was (§4.3); a new one gets its reason (a taken id is `target`).
+    // On a key both hold (the pin left the entry's origin again), the op that was live wins: it is the later state.
     const entry: UnresolvedOp = keep ?? { ...d, reason: r.ok ? "target" : r.reason };
-    unresolved.set(unresolvedKey(entry.from, entry.op), entry);
+    const key = unresolvedKey(entry.from, entry.op);
+    if (keep && unresolved.has(key)) return;
+    unresolved.set(key, entry);
   };
 
   for (const id of Object.keys(patch.ops).sort()) place(detach(from, patch.documentHash, patch.ops[id], (s) => fromSource.get(s)));

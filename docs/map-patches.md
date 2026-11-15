@@ -606,7 +606,9 @@ interface MapPatch {
   issues are the same with and without `unresolved` (§2), so every
   consumer — screen, print, kiosk, cuts, checks — is unchanged.
 - The stored `ops` + `symbols` + `unresolved` JSON is under the 4 MiB cap
-  (§3.2 step 4).
+  (§3.2 step 4). Anchors make an entry larger than its op; a re-key that
+  would pass the cap is not written (the row stays dormant, `PATCH_STALE`
+  on a write, §4.4).
 
 ### 4.2 `resolvePatch`
 
@@ -645,7 +647,10 @@ Every op of `ops` is resolved in op-id order, then every entry of
      `symbol`.
    - **The same symbol** is the same `kind` and, when both carry an
      applied match (`isAppliedMatch`), the same `canonicalId`; otherwise
-     the same source `code`. (The import's geometry fingerprint,
+     the same source `code`. OCAD's synthesised `graphic` symbols (one per
+     type, colour and width, all coded `graphic`, no `sourceIndex`) are
+     therefore one symbol to this rule: a `{ doc }` reference to one
+     re-keys to the first of its kind (Pending). (The import's geometry fingerprint,
      `import/fingerprint.ts`, scores similarity for the matcher; it is not
      an identity.)
 3. **Coordinates** (modify, add) are rescaled by `to.unitsPerMm /
@@ -668,7 +673,10 @@ place. `enabled` is kept.
   on any other by position and symbol. An entry that resolves leaves
   `unresolved` for `ops` (unless its op id is taken, then it stays); one
   that does not is kept exactly as it was (same key, same anchors). So a
-  pin that returns to the first edition gets its corrections back.
+  pin that returns to the first edition gets its corrections back. When
+  a live op and a pending entry fail onto the same key (the pin left the
+  entry's origin again), the live op's entry is kept: it is the later
+  state.
 - **Attach** (*Corrections*' fix, user 2026-11-15, G11 question 2):
   `attachUnresolved(patch, key, doc, sourceIndex)` re-targets an entry's
   op onto the document object the user selected — a `hide`, `modify` or
@@ -724,6 +732,15 @@ nothing.
   `map-rendering.md` §8): a
   filter region cannot select an object drawn with a patch symbol by
   symbol until the region props carry a stable symbol key.
+- **Graphic symbols at re-resolution** (G11, §4.2): OCAD's synthesised
+  `graphic` symbols are indistinguishable to the same-symbol rule, so a
+  `{ doc }` reference to one re-keys to the first graphic symbol of its
+  kind, and another edition's graphic object of that kind within 0.5 mm
+  is a target. Telling them apart needs their render (colour, width) in
+  the anchor.
+- **The `unresolved` column through checkout and dump** is covered by the
+  unit `snapshotPatchOf` test and the dump's `SELECT *`; `lease.test.ts`
+  and `backup.test.ts` do not assert it.
 - **Attach and drop in the editor's undo stack** (G11, user 2026-11-15,
   question 3): *Corrections*' *Attach* and *Drop* are writes without an
   undo entry, without centring the view on the entry's old place, and

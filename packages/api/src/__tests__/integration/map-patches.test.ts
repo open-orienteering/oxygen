@@ -30,6 +30,7 @@ import { makeCaller } from "../helpers/caller.js";
 import { grantSystemGroup } from "../../permissions.js";
 import { applyEventMap } from "../../event-map.js";
 import { decodedDocument } from "../../map-store/event-document.js";
+import { runRematch } from "../../map-store/rematch.js";
 import { MAP_PATCH_CACHE_CONTROL, registerMapDocumentRoutes, resetDocumentAccessCache } from "../../map-store/routes.js";
 import { isForeignKeyViolation } from "../../map-store/gc.js";
 import type { AuthUser } from "../../auth.js";
@@ -273,6 +274,27 @@ describe("re-resolution when the pin moves (§4, G11)", () => {
     expect(back.patch!.documentHash).toBe(documentHash);
     expect(back.patch!.ops).toEqual({ [`hide:${target}`]: hide(target) });
     expect(back.patch!.unresolved).toBeUndefined();
+    await resetPatch();
+  }, 120_000);
+
+  it("a re-key that cannot run never fails the pin: the job pins, the row stays dormant, the sweep reports it", async () => {
+    await resetPatch();
+    // Keyed onto a document that does not decode: re-resolution cannot run.
+    await ctx.db.mapPatch.create({ data: { eventId: ctx.eventId, documentHash: OTHER_HASH, ops: { "hide:4": hide(4) }, version: 3n } });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const applied = await applyEventMap(ctx.db, ctx.eventId, "test.ocd", ocdBytes(), {});
+      expect(applied.documentHash).toBe(documentHash);
+      expect(applied.importJob?.state).toBe("done");
+      expect((await ctx.db.mapFile.findFirstOrThrow({ where: { eventId: ctx.eventId } })).scale).toBeGreaterThan(0);
+      expect(await ctx.db.mapPatch.findUniqueOrThrow({ where: { eventId: ctx.eventId } })).toMatchObject({ documentHash: OTHER_HASH, version: 3n });
+      expect(await caller.mapPatch.get()).toEqual({ version: "0", patch: null });
+      const run = await runRematch(ctx.db, { eventId: ctx.eventId });
+      expect(run).toMatchObject({ total: 1, done: 0, failed: 1 });
+      expect(run.failures[0]).toMatchObject({ kind: "patch", documentHash: OTHER_HASH });
+    } finally {
+      warn.mockRestore();
+    }
     await resetPatch();
   }, 120_000);
 

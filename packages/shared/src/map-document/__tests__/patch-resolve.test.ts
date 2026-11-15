@@ -215,6 +215,17 @@ describe("resolvePatch: retry, symbols, determinism", () => {
     expect(Object.values(r.patch.unresolved!).map((e) => e.reason)).toEqual(["symbol"]);
   });
 
+  it("keeps the live op when it and a pending entry of the same origin fail onto one key", () => {
+    const live: PatchOp = { op: "modify", sourceIndex: 103, coords: [[2100, 2000]] };
+    const older: PatchOp = { op: "modify", sourceIndex: 103, coords: [[1900, 2000]] };
+    const key = unresolvedKey(HASH_A, live);
+    const pending = { op: older, from: HASH_A, fromSource: SOURCE_A, unitsPerMm: 100, reason: "target" as const };
+    const p = patchOn(HASH_A, [live], { unresolved: { [key]: pending } });
+    const r = resolvePatch(A, C, p, { toHash: HASH_C });
+    expect(Object.keys(r.patch.unresolved!)).toEqual([key]);
+    expect(r.patch.unresolved![key].op).toEqual(live);
+  });
+
   it("is deterministic and leaves its inputs untouched", () => {
     const ops: PatchOp[] = [{ op: "hide", sourceIndex: 104 }, { op: "hide", sourceIndex: 100 }, { op: "hide", sourceIndex: 103 }];
     const p1 = mapPatchSchema.parse({ documentHash: HASH_A, ops: Object.fromEntries(ops.map((o) => [patchOpId(o), o])) });

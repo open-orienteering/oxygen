@@ -303,10 +303,17 @@ export async function reresolveEventPatch(db: Db, eventId: bigint): Promise<Rere
     const patch = patchOfRow(row);
     if (!patch) return { outcome: "failed", from: row.documentHash, to: pin, error: "the stored patch does not parse" };
     const r = mapDocument.resolvePatch(from, to, patch, { toHash: pin });
-    assertPatchSize(r.patch);
+    // Anchors make an unresolved entry larger than its op: a re-key past the cap leaves the row dormant (PATCH_STALE), never throws.
+    try {
+      assertPatchSize(r.patch);
+    } catch (err) {
+      return { outcome: "failed", from: row.documentHash, to: pin, error: err instanceof Error ? err.message : String(err) };
+    }
     await tx.mapPatch.update({ where: { eventId }, data: rowData(r.patch, nextPatchVersion()) });
     return { outcome: "rekeyed", from: row.documentHash, to: pin, resolved: r.resolved, unresolved: r.unresolved };
   };
+  // Every pin today runs on a client (its own transaction here). In a caller's transaction a database error would
+  // abort that transaction too, whatever `reresolveAfterPin` catches.
   return isClient(db) ? db.$transaction(rekey, REKEY_TX) : rekey(db);
 }
 

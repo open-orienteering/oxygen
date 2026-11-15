@@ -1201,7 +1201,8 @@ Moving an event pin carries its map patch: every item's pin re-keys it
 live event's patch still keyed to another document than its pin
 (`docs/map-patches.md` §4.4; `--event` restricts it to that event;
 `--dry-run` lists them as `patch` items and writes nothing; a failure is
-reported like an item's). The run's `patches` counts the rows re-keyed.
+reported like an item's). Sweep items count in the run's `total`,
+`done` and `failed` like the pins'.
 Filter regions' document symbol indices (`filter_region` course
 objects, `course-layer.md` §8.3) are not re-keyed yet (§9).
 
