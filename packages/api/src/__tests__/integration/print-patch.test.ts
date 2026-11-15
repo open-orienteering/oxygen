@@ -18,7 +18,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { course, defaultMapAppearance, mapDocument } from "@oxygen/shared";
+import { course, defaultMapAppearance, mapDocument, symbolLibrary } from "@oxygen/shared";
 import {
   type ComposedPage,
   type PrintJob,
@@ -242,5 +242,91 @@ describe("maps.pdf composes the effective document (G14)", () => {
       },
     });
     expect(Buffer.from(out.bytes).equals(await pdf())).toBe(true);
+  }, 120_000);
+});
+
+/**
+ * Map mode's drawing in print (G9; docs/course-editor.md §13 "Drawing", "Symbol picker"; user 2026-11-15, G9
+ * question 2: the page-raster check of the row is this test's, as course objects' is `course-print.test.ts`'s). Each
+ * op the editor writes — a path with a document line symbol, a point with a library symbol materialised on first use
+ * (`putSymbols`), a resymbol — changes the printed page inside the object's box only.
+ */
+describe("Map mode's drawing in print (G9)", () => {
+  const PATH_ID = "0190a000-0000-7000-8000-0000000000b1";
+  const POINT_ID = "0190a000-0000-7000-8000-0000000000b2";
+  let before: Buffer;
+  /** A spot of the frame (page mm offsets from its centre) in native units and on the page. */
+  const spot = (dxMm: number, dyMm: number): { native: [number, number]; pageMm: [number, number] } => {
+    const f = page.frameUm;
+    const cx = f.x / 1000 + f.width / 2000 + dxMm, cy = f.y / 1000 + f.height / 2000 + dyMm;
+    const [mx, my] = mapPointToPage(inverseMapLayerTransform(page.mapLayer.transform), cx * 1000, cy * 1000);
+    const native: [number, number] = [Math.round((mx / 1000) * doc.header.unitsPerMm), Math.round((my / 1000) * doc.header.unitsPerMm)];
+    return { native, pageMm: toPageMm(...native) };
+  };
+  /** The library point entry used: materialisable on this document and not the target's own symbol. */
+  let entryId: string;
+
+  beforeAll(async () => {
+    const { patch } = await applyPatchChange(ctx.db, ctx.eventId, hash, {});
+    const ops = Object.keys(patch?.ops ?? {});
+    if (ops.length) await applyPatchChange(ctx.db, ctx.eventId, hash, { remove: ops });
+    const lib = doc.header.library?.id;
+    expect(lib, "the fixture is matched to a library").toBeTruthy();
+    const targetCode = doc.header.symbols[target.symbolIdx].code;
+    const candidates = [`${lib}:204`, ...symbolLibrary.getSymbolLibrary(lib as symbolLibrary.SymbolLibraryId).entries.filter((e) => e.render.type === "point" && !e.code.startsWith("7")).map((e) => e.id)];
+    entryId = candidates.find((id) => {
+      const e = symbolLibrary.getLibraryEntry(id);
+      return !!e && Math.floor(Number.parseFloat(e.code)) !== Math.floor(Number.parseFloat(targetCode)) && mapDocument.materialiseSymbol(doc, id).ok;
+    })!;
+    expect(entryId, "a materialisable library point").toBeDefined();
+    before = await pdf();
+  }, 120_000);
+
+  it("a path with a document line symbol is drawn inside its box", async () => {
+    const lineSymbol = doc.header.symbols.findIndex((s) => s.kind === "line" && !s.hidden && (s.render || mapDocument.isAppliedMatch(s.match)));
+    expect(lineSymbol).toBeGreaterThanOrEqual(0);
+    const at = spot(-30, 30);
+    const u = doc.header.unitsPerMm;
+    // A 3 mm (map) zig-zag: well inside the 8 mm box at any print scale up to 1:7500 on a 1:15000 map.
+    const coords: mapDocument.PatchCoord[] = [[at.native[0] - 1.5 * u, at.native[1]], [at.native[0], at.native[1] + u], [at.native[0] + 1.5 * u, at.native[1]]];
+    await applyPatchChange(ctx.db, ctx.eventId, hash, { put: [{ op: "add", id: PATH_ID, type: mapDocument.OBJECT_TYPE.line, symbol: { doc: lineSymbol }, coords }] });
+    const after = await pdf();
+    expect(after.equals(before)).toBe(false);
+    if (pdftocairo) {
+      const diff = await diffPixels(before, after);
+      expect(diff.length).toBeGreaterThan(0);
+      expect(diff.filter((p) => !inBox(p, at.pageMm))).toEqual([]);
+    }
+    before = after;
+  }, 120_000);
+
+  it("a point with a library symbol materialised on first use (putSymbols) is drawn inside its box", async () => {
+    const m = mapDocument.materialiseSymbol(doc, entryId);
+    if (!m.ok) throw new Error("expected materialisable");
+    const at = spot(30, 30);
+    const res = await applyPatchChange(ctx.db, ctx.eventId, hash, {
+      put: [{ op: "add", id: POINT_ID, type: mapDocument.OBJECT_TYPE.point, symbol: { patch: m.key }, coords: [at.native] }],
+      putSymbols: { [m.key]: m.symbol },
+    });
+    expect(JSON.stringify(res.patch?.symbols[m.key])).toBe(JSON.stringify(m.symbol));
+    const after = await pdf();
+    expect(after.equals(before)).toBe(false);
+    if (pdftocairo) {
+      const diff = await diffPixels(before, after);
+      expect(diff.length).toBeGreaterThan(0);
+      expect(diff.filter((p) => !inBox(p, at.pageMm))).toEqual([]);
+    }
+    before = after;
+  }, 120_000);
+
+  it("a resymbolled document point is redrawn inside its box", async () => {
+    await applyPatchChange(ctx.db, ctx.eventId, hash, { put: [{ op: "resymbol", sourceIndex: target.sourceIndex, symbol: { patch: entryId } }] });
+    const after = await pdf();
+    expect(after.equals(before)).toBe(false);
+    if (pdftocairo) {
+      const diff = await diffPixels(before, after);
+      expect(diff.length).toBeGreaterThan(0);
+      expect(diff.filter((p) => !inBox(p, target.pageMm))).toEqual([]);
+    }
   }, 120_000);
 });
