@@ -74,6 +74,8 @@ export interface TerrainDrawStats extends SelectionStats {
   matrix: Float32Array;
   /** The camera's eye, model µm (the lines' depth bias, §5.6 "Lines"). */
   eye: readonly [number, number, number];
+  /** Its focal length, device px. */
+  focalPx: number;
 }
 
 const VS = `#version 300 es
@@ -328,7 +330,7 @@ export class TerrainRenderer {
     gl.disable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LESS);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    return { ...sel.stats, draws, matrix, eye: cam.eye };
+    return { ...sel.stats, draws, matrix, eye: cam.eye, focalPx: cam.focalPx };
   }
 
   dispose(): void {

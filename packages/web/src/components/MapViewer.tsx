@@ -92,6 +92,7 @@ import { courseLayerRequest, PROVISIONAL_SITE_ID, sheetCrossings, sheetExchanges
 import { dragLegShapes } from "../lib/editor/leg-length";
 import { outlinePoints, vertexRule } from "../lib/editor/geometry-edit";
 import type { CourseInfo } from "../map-gl/engine";
+import type { TerrainLine } from "../map-gl/terrain/lines";
 import { editorHitAt, HIT_TOLERANCE_PX, uiLegsOf, type EditorTarget } from "../lib/editor/hit";
 import { showSelectionRing } from "../lib/editor/state";
 import { escapeCancels } from "../lib/editor/mouse-drag";
@@ -99,6 +100,18 @@ import { COARSE_HIT_TOLERANCE_PX, HANDLE_LIFT_PX, IDLE as SITE_TOUCH_IDLE, LONG_
 
 /** Persisted compass state: "1"/absent = rotation locked (north up). */
 const ROTATION_LOCK_STORAGE_KEY = "oxygen.map.rotationLock";
+
+/** A GPS track's stroke, in 2D (SVG) and on the terrain (§5.4 "3D mode" "Tracks on the terrain"). */
+const GPS_ROUTE_WIDTH_PX = 4.5;
+const GPS_ROUTE_OPACITY = 0.8;
+
+/** `#rrggbb` / `#rgb` → 0…1 RGB (the app-wide single-track red otherwise). */
+function routeRgb(hex: string): [number, number, number] {
+  const m = /^#?([0-9a-f]{6}|[0-9a-f]{3})$/i.exec(hex.trim());
+  if (!m) return [0xe6 / 255, 0x19 / 255, 0x4b / 255];
+  const h = m[1].length === 3 ? m[1].replace(/./g, (c) => c + c) : m[1];
+  return [parseInt(h.slice(0, 2), 16) / 255, parseInt(h.slice(2, 4), 16) / 255, parseInt(h.slice(4, 6), 16) / 255];
+}
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -2232,6 +2245,17 @@ export function MapViewer({
     );
   }, [gpsRoutes, paperFrame]);
 
+  // In 3D the GL frame draws the tracks on the terrain (§5.4 "3D mode" "Tracks on the terrain", H8):
+  // the same paper mm, the 2D path's colour, opacity and width.
+  const gpsRouteLines3d = useMemo((): TerrainLine[] | null => {
+    if (!in3d || !gpsRoutes || !gpsRoutesMm) return null;
+    return gpsRoutes.flatMap((r, i) =>
+      r.points.length >= 2 && (gpsRoutesMm[i]?.length ?? 0) >= 2
+        ? [{ points: gpsRoutesMm[i], colour: routeRgb(r.color), opacity: GPS_ROUTE_OPACITY, widthPx: GPS_ROUTE_WIDTH_PX }]
+        : [],
+    );
+  }, [in3d, gpsRoutes, gpsRoutesMm]);
+
   const overlayContent = useMemo(() => {
     if (!viewport || containerSize.w === 0 || containerSize.h === 0) return null;
 
@@ -2306,8 +2330,19 @@ export function MapViewer({
         const route = gpsRoutes[ri];
         if (route.points.length < 2) continue;
         // Tracks reach the paper view through mapGeo once per route (gpsRoutesMm), not per frame.
-        // In 3D a point behind the eye breaks the line (H8 draws tracks on the terrain).
         const screenPts = (gpsRoutesMm?.[ri] ?? []).map((p) => mmPx(p.x, p.y));
+        if (proj3d) {
+          // 3D: the GL frame draws it on the terrain (gpsRouteLines3d); a hidden mirror for tests.
+          upperElements.push(
+            <g
+              key={`gps-${ri}`}
+              data-testid="gps-route-3d"
+              data-points={screenPts.filter((p): p is NonNullable<typeof p> => !!p).map((p) => `${p.px.toFixed(1)},${p.py.toFixed(1)}`).join(" ")}
+              visibility="hidden"
+            />,
+          );
+          continue;
+        }
         const d = screenPts
           .map((p, i) => (p ? `${i === 0 || !screenPts[i - 1] ? "M" : "L"}${p.px.toFixed(1)},${p.py.toFixed(1)}` : ""))
           .filter(Boolean)
@@ -2315,13 +2350,14 @@ export function MapViewer({
         upperElements.push(
           <path
             key={`gps-${ri}`}
+            data-testid="gps-route"
             d={d}
             stroke={route.color}
-            strokeWidth={4.5}
+            strokeWidth={GPS_ROUTE_WIDTH_PX}
             fill="none"
             strokeLinejoin="round"
             strokeLinecap="round"
-            opacity={0.8}
+            opacity={GPS_ROUTE_OPACITY}
           />,
         );
       }
@@ -3030,6 +3066,7 @@ export function MapViewer({
           onTerrain={onTerrainLayer}
           onTerrainError={onTerrainLayerError}
           onMaxTextureSize={setMaxTextureSize}
+          terrainLines={gpsRouteLines3d}
         />
       )}
       {/* 3D: the map's gestures go to the camera (§5.4 "3D mode" "Gestures") */}

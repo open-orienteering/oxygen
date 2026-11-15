@@ -5,7 +5,7 @@ import { buildTerrainMesh, meshBox } from "../mesh";
 import { surfaceHeight } from "../pick";
 import { CONE, coneCentreMm, coneField } from "../synthetic";
 import { transform } from "../mat4";
-import { LINE_DEPTH_BIAS, LINE_LIFT_UM, MAX_LINE_SEGMENTS, liftPolyline, lineInstances, lineVertex, type TerrainLine } from "../lines";
+import { LINE_DEPTH_BIAS, LINE_LIFT_UM, LINE_RISE_CAP, MAX_LINE_SEGMENTS, liftPolyline, lineInstances, lineVertex, type TerrainLine } from "../lines";
 
 const field = coneField();
 const ORIGIN = { x: 20_000, y: 30_000 };
@@ -137,46 +137,75 @@ describe("lineInstances", () => {
 });
 
 describe("lineVertex (the vertex shader's lift and depth bias, in TypeScript)", () => {
+  const W = 800, H = 600, HALF = 3;
   const cam = (pitchDeg: number, bearingDeg = 0): TerrainCamera => {
     const [x, y] = model(centre.x, centre.y);
-    const c: TerrainCamera = { target: { x, y, z: 0 }, distanceUm: 0, bearingDeg, pitchDeg, widthPx: 800, heightPx: 600 };
-    c.distanceUm = distanceForPxPerUm(c, 600 / (CONE.height * cellUm));
+    const c: TerrainCamera = { target: { x, y, z: 0 }, distanceUm: 0, bearingDeg, pitchDeg, widthPx: W, heightPx: H };
+    c.distanceUm = distanceForPxPerUm(c, H / (CONE.height * cellUm));
     return c;
   };
+  const frameOf = (pitch: number, bearing: number, e: number) => {
+    const f = cameraFrame(cam(pitch, bearing), meshBox(mesh, e));
+    return { f, lf: { matrix: f.matrix, eye: f.eye, zUnit: mesh.unitUm * e, widthPx: W, heightPx: H, focalPx: f.focalPx, halfPx: HALF } };
+  };
+  const ground = (dx: number, dy: number, zUnit: number) => {
+    const [x, y] = model(centre.x + dx, centre.y + dy);
+    const h = surfaceHeight(mesh, x, y)! - mesh.zMin;
+    return { p: [x, y, h] as [number, number, number], g: [x, y, h * zUnit] as [number, number, number] };
+  };
+  const depth = (m: ArrayLike<number>, p: readonly number[]) => {
+    const [, , z, w] = transform(m, p[0], p[1], p[2]);
+    return z / w;
+  };
 
-  it("lifts by LINE_LIFT_UM whatever the exaggeration, and keeps the point's screen position while moving it towards the eye", () => {
-    for (const [pitch, bearing, e] of [[0, 0, 1], [60, 30, 2], [70, 200, 5]] as const) {
-      const f = cameraFrame(cam(pitch, bearing), meshBox(mesh, e));
-      const zUnit = mesh.unitUm * e;
+  it("tilted, lifts the line half its width (+ ½ px) above its ground point on screen and in front of it", () => {
+    for (const [pitch, bearing, e] of [[45, 0, 1], [60, 30, 2], [70, 200, 5]] as const) {
+      const { f, lf } = frameOf(pitch, bearing, e);
       for (const [dx, dy] of [[0, 0], [-6, 3], [5, -7]]) {
-        const [x, y] = model(centre.x + dx, centre.y + dy);
-        const h = surfaceHeight(mesh, x, y)! - mesh.zMin;
-        const lifted: [number, number, number] = [x, y, h * zUnit + LINE_LIFT_UM];
-        const v = lineVertex([x, y, h], zUnit, f.eye);
-        const a = projectToScreen(f.matrix, 800, 600, ...lifted)!, b = projectToScreen(f.matrix, 800, 600, ...v)!;
-        expect(Math.hypot(a[0] - b[0], a[1] - b[1])).toBeLessThan(1e-3);
-        const dist = (p: readonly number[]) => Math.hypot(p[0] - f.eye[0], p[1] - f.eye[1], p[2] - f.eye[2]);
-        expect(dist(v)).toBeCloseTo(dist(lifted) * (1 - LINE_DEPTH_BIAS), 0);
-        // clip depth smaller: in front of the surface point's depth
-        const [, , za, wa] = transform(f.matrix, ...lifted), [, , zb, wb] = transform(f.matrix, ...v);
-        expect(zb / wb).toBeLessThan(za / wa);
+        const { p, g } = ground(dx, dy, lf.zUnit);
+        const v = lineVertex(p, lf);
+        const a = projectToScreen(f.matrix, W, H, ...g)!, b = projectToScreen(f.matrix, W, H, ...v)!;
+        // the constant lift adds a little on top of the half width
+        const rise = a[1] - b[1];
+        expect(rise).toBeGreaterThan(HALF + 0.5 - 0.05);
+        // plus the constant lift: LINE_LIFT_UM at this zoom's px per µm (perspective: a little more near the eye)
+        expect(rise).toBeLessThan(HALF + 0.5 + LINE_LIFT_UM * (H / (CONE.height * cellUm)) * 1.3);
+        expect(Math.abs(a[0] - b[0])).toBeLessThan(rise * 0.2 + 0.05);
+        expect(depth(f.matrix, v)).toBeLessThan(depth(f.matrix, g));
       }
     }
   });
 
-  it("at pitch 0 a lifted vertex projects where its paper point does in 2D (< 0.5 px)", () => {
-    const c = cam(0);
-    const f = cameraFrame(c, meshBox(mesh, 2));
-    for (const [dx, dy] of [[0, 0], [-6, 3], [5, -7]]) {
-      const [x, y] = model(centre.x + dx, centre.y + dy);
-      const h = surfaceHeight(mesh, x, y)! - mesh.zMin;
-      const p = projectToScreen(f.matrix, 800, 600, ...lineVertex([x, y, h], mesh.unitUm * 2, f.eye))!;
-      // the 2D view: y down, centred on the target, pxPerUm as fitted at the target's plane (z 0)
-      const k = 600 / (CONE.height * cellUm);
-      const q = [400 + (x - c.target.x) * k, 300 - (y - c.target.y) * k];
-      // a raised point at pitch 0 moves out from the centre by its height over the distance
-      const scale = c.distanceUm / (c.distanceUm - (h * mesh.unitUm * 2 + LINE_LIFT_UM));
-      expect(Math.hypot(p[0] - (400 + (q[0] - 400) * scale), p[1] - (300 + (q[1] - 300) * scale))).toBeLessThan(0.5);
+  it("moves the vertex LINE_DEPTH_BIAS of its distance towards the eye without moving it on screen", () => {
+    const { f, lf } = frameOf(60, 30, 2);
+    const { p } = ground(-6, 3, lf.zUnit);
+    const v = lineVertex(p, lf);
+    // undo the bias: the point it was moved from, on the same ray
+    const k = 1 / (1 - LINE_DEPTH_BIAS);
+    const u = [0, 1, 2].map((i) => f.eye[i] + (v[i] - f.eye[i]) * k);
+    expect(u[2] - p[2] * lf.zUnit).toBeGreaterThanOrEqual(LINE_LIFT_UM);
+    const a = projectToScreen(f.matrix, W, H, u[0], u[1], u[2])!, b = projectToScreen(f.matrix, W, H, ...v)!;
+    expect(Math.hypot(a[0] - b[0], a[1] - b[1])).toBeLessThan(1e-3);
+    const dist = (q: readonly number[]) => Math.hypot(q[0] - f.eye[0], q[1] - f.eye[1], q[2] - f.eye[2]);
+    expect(dist(v) / dist(u)).toBeCloseTo(1 - LINE_DEPTH_BIAS, 9);
+  });
+
+  it("looking straight down: on its ground point under the eye (< 0.5 px, the rise capped), at most the half width off it elsewhere", () => {
+    for (const e of [1, 2, 5]) {
+      const { f, lf } = frameOf(0, 0, e);
+      for (const [dx, dy] of [[0, 0], [-6, 3], [5, -7], [9, 9]]) {
+        const { p, g } = ground(dx, dy, lf.zUnit);
+        const v = lineVertex(p, lf);
+        const a = projectToScreen(f.matrix, W, H, ...g)!, b = projectToScreen(f.matrix, W, H, ...v)!;
+        // a vertical rise moves a point away from the screen's centre in proportion to its offset: none under the eye
+        const off = Math.hypot(a[0] - b[0], a[1] - b[1]);
+        if (dx === 0 && dy === 0) expect(off).toBeLessThan(0.5);
+        else expect(off).toBeLessThan(HALF + 0.5 + LINE_LIFT_UM * (H / (CONE.height * cellUm)) * 1.3);
+        const [, , , w] = transform(f.matrix, ...g);
+        // the bias undone: the rise is at most the cap's
+        const lifted = f.eye[2] + (v[2] - f.eye[2]) / (1 - LINE_DEPTH_BIAS);
+        expect(lifted - g[2]).toBeLessThanOrEqual(LINE_LIFT_UM + ((HALF + 0.5) * w * LINE_RISE_CAP) / f.focalPx + 1e-3);
+      }
     }
   });
 });

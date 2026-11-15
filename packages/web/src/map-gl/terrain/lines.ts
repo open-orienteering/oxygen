@@ -7,8 +7,9 @@
  *   cell, each vertex at the drawn surface's height in int16 units above
  *   `zMin` (the exaggeration is the shader's, as the mesh's).
  * - `lineInstances` (pure): one `(p0, p1)` instance per segment.
- * - `TerrainLines`: screen-space capsules, lifted `LINE_LIFT_UM` and moved
- *   `LINE_DEPTH_BIAS` of their distance towards the eye, depth test
+ * - `TerrainLines`: screen-space capsules, lifted `LINE_LIFT_UM` plus their
+ *   half width on screen (`lineVertex`) and moved `LINE_DEPTH_BIAS` of
+ *   their distance towards the eye, depth test
  *   `LEQUAL` without depth writes, each line's opacity applied once
  *   through the stencil.
  */
@@ -22,6 +23,11 @@ import { surfaceHeight } from "./pick.js";
 export const LINE_LIFT_UM = 200;
 /** Share of its distance a line vertex moves towards the eye: coarse levels of detail lie above level 0. */
 export const LINE_DEPTH_BIAS = 0.003;
+/**
+ * The screen rise's cap, in line widths of the distance's px-equivalents: looking straight down a
+ * vertical rise does not move the line on screen, and the rise is then this much towards the eye.
+ */
+export const LINE_RISE_CAP = 4;
 /** Segments one set of lines may have; over it, the densifying step doubles. */
 export const MAX_LINE_SEGMENTS = 200_000;
 
@@ -113,14 +119,52 @@ export function lineInstances(lines: readonly TerrainLine[], mesh: TerrainMesh, 
   }
 }
 
+/** The vertex shader's frame (and `lineVertex`'s). */
+export interface LineVertexFrame {
+  /** Model → clip. */
+  matrix: ArrayLike<number>;
+  /** Model µm. */
+  eye: Vec3;
+  /** Model µm per height unit: `unitUm · exaggeration`. */
+  zUnit: number;
+  /** Device px. */
+  widthPx: number;
+  heightPx: number;
+  focalPx: number;
+  /** Half the line's width, device px. */
+  halfPx: number;
+}
+
+/** Model µm of the vertical step the screen-space rise is measured over. */
+const RISE_PROBE_UM = 100;
+
 /**
- * The vertex shader's position in TypeScript (for tests): `(x, y, h)` in model µm and height units →
- * lifted `LINE_LIFT_UM` above `h · zUnit`, then moved `LINE_DEPTH_BIAS` of the way to the eye.
+ * The vertex shader's position in TypeScript (the tests' twin of `VS`): `(x, y, h)` in model µm and
+ * height units → the ground point raised `LINE_LIFT_UM` plus as much as lifts it `halfPx + ½` on
+ * screen (at most `LINE_RISE_CAP` × that width in the distance's px-equivalents, where a vertical rise
+ * barely moves on screen: looking straight down), then moved `LINE_DEPTH_BIAS` of the way to the eye.
  */
-export function lineVertex(p: readonly [number, number, number], zUnit: number, eye: Vec3): [number, number, number] {
-  const m = [p[0], p[1], p[2] * zUnit + LINE_LIFT_UM];
+export function lineVertex(p: readonly [number, number, number], f: LineVertexFrame): [number, number, number] {
+  const g: [number, number, number] = [p[0], p[1], p[2] * f.zUnit];
+  let lift = LINE_LIFT_UM;
+  const a = transform4(f.matrix, g[0], g[1], g[2]), b = transform4(f.matrix, g[0], g[1], g[2] + RISE_PROBE_UM);
+  if (a[3] > 0 && b[3] > 0) {
+    const rise = Math.hypot((b[0] / b[3] - a[0] / a[3]) * 0.5 * f.widthPx, (b[1] / b[3] - a[1] / a[3]) * 0.5 * f.heightPx) / RISE_PROBE_UM;
+    const flat = f.focalPx / a[3];
+    lift += (f.halfPx + 0.5) / Math.max(rise, flat / LINE_RISE_CAP);
+  }
   const k = 1 - LINE_DEPTH_BIAS;
-  return [eye[0] + (m[0] - eye[0]) * k, eye[1] + (m[1] - eye[1]) * k, eye[2] + (m[2] - eye[2]) * k];
+  return [f.eye[0] + (g[0] - f.eye[0]) * k, f.eye[1] + (g[1] - f.eye[1]) * k, f.eye[2] + (g[2] + lift - f.eye[2]) * k];
+}
+
+/** Column-major 4 × 4 times (x, y, z, 1). */
+function transform4(m: ArrayLike<number>, x: number, y: number, z: number): [number, number, number, number] {
+  return [
+    m[0] * x + m[4] * y + m[8] * z + m[12],
+    m[1] * x + m[5] * y + m[9] * z + m[13],
+    m[2] * x + m[6] * y + m[10] * z + m[14],
+    m[3] * x + m[7] * y + m[11] * z + m[15],
+  ];
 }
 
 const VS = `#version 300 es
@@ -132,12 +176,20 @@ uniform mat4 u_view;
 uniform vec3 u_eye;
 uniform float u_zUnit;
 uniform float u_halfPx;
+uniform float u_focalPx;
 uniform vec2 u_viewport;
 flat out vec2 v_a;
 flat out vec2 v_b;
+// lineVertex in lines.ts
 vec4 clipOf(vec3 p) {
-  vec3 m = vec3(p.xy, p.z * u_zUnit + ${LINE_LIFT_UM.toFixed(1)});
-  m = u_eye + (m - u_eye) * ${(1 - LINE_DEPTH_BIAS).toFixed(6)};
+  vec3 g = vec3(p.xy, p.z * u_zUnit);
+  vec4 a = u_view * vec4(g, 1.0), b = u_view * vec4(g + vec3(0.0, 0.0, ${RISE_PROBE_UM.toFixed(1)}), 1.0);
+  float lift = ${LINE_LIFT_UM.toFixed(1)};
+  if (a.w > 0.0 && b.w > 0.0) {
+    float rise = length((b.xy / b.w - a.xy / a.w) * 0.5 * u_viewport) / ${RISE_PROBE_UM.toFixed(1)};
+    lift += (u_halfPx + 0.5) / max(rise, u_focalPx / a.w / ${LINE_RISE_CAP.toFixed(1)});
+  }
+  vec3 m = u_eye + (g + vec3(0.0, 0.0, lift) - u_eye) * ${(1 - LINE_DEPTH_BIAS).toFixed(6)};
   return u_view * vec4(m, 1.0);
 }
 void main() {
@@ -180,19 +232,23 @@ void main() {
   o_colour = vec4(u_colour.rgb, u_colour.a * cov);
 }`;
 
-const UNIFORMS = ["u_view", "u_eye", "u_zUnit", "u_halfPx", "u_viewport", "u_colour", "u_pass"] as const;
+const UNIFORMS = ["u_view", "u_eye", "u_zUnit", "u_halfPx", "u_focalPx", "u_viewport", "u_colour", "u_pass"] as const;
 
 export interface TerrainLinesFrame {
   /** The mesh draw's model → clip matrix. */
   matrix: Float32Array;
   /** Its eye, model µm. */
   eye: Vec3;
+  /** Its focal length, device px. */
+  focalPx: number;
   exaggeration: number;
   /** Device px per CSS px. */
   pxRatio: number;
 }
 
 export interface LineDrawStats {
+  /** Lines with at least one segment drawn. */
+  lines: number;
   draws: number;
   segments: number;
 }
@@ -255,7 +311,7 @@ export class TerrainLines {
    */
   draw(lines: readonly TerrainLine[], mesh: TerrainMesh, frame: TerrainLinesFrame, target: RenderTarget): LineDrawStats {
     const gl = this.gl;
-    if (lines.length === 0) return { draws: 0, segments: 0 };
+    if (lines.length === 0) return { lines: 0, draws: 0, segments: 0 };
     if (!this.built || this.built.lines !== lines || this.built.mesh !== mesh) {
       const inst = lineInstances(lines, mesh);
       gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
@@ -264,7 +320,7 @@ export class TerrainLines {
       this.built = { lines, mesh, inst };
     }
     const { inst } = this.built;
-    if (inst.segments === 0) return { draws: 0, segments: 0 };
+    if (inst.segments === 0) return { lines: 0, draws: 0, segments: 0 };
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
     gl.viewport(0, 0, target.width, target.height);
@@ -286,6 +342,7 @@ export class TerrainLines {
     gl.uniformMatrix4fv(u.u_view, false, frame.matrix);
     gl.uniform3f(u.u_eye, frame.eye[0], frame.eye[1], frame.eye[2]);
     gl.uniform1f(u.u_zUnit, mesh.unitUm * frame.exaggeration);
+    gl.uniform1f(u.u_focalPx, frame.focalPx);
     gl.uniform2f(u.u_viewport, target.width, target.height);
     gl.bindVertexArray(this.vao);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
@@ -322,7 +379,7 @@ export class TerrainLines {
     gl.disable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LESS);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    return { draws, segments: inst.segments };
+    return { lines: draws / 2, draws, segments: inst.segments };
   }
 
   dispose(): void {

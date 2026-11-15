@@ -48,6 +48,7 @@ import { budgetBytes, documentColours, documentProxyColours, type MapBudget } fr
 import type { HeightField } from "@oxygen/shared/src/terrain/field/read.js";
 import type { TerrainCamera } from "../map-gl/terrain/camera";
 import type { TerrainMesh } from "../map-gl/terrain/mesh";
+import type { TerrainLine } from "../map-gl/terrain/lines";
 
 /** The editor's loupe: the magnified point in paper µm, the circle's centre and diameter in container CSS px. */
 export interface VectorLoupe {
@@ -124,9 +125,11 @@ interface Props {
   onTerrainError?: (err: Error) => void;
   /** The renderer's texture limit, once it exists. */
   onMaxTextureSize?: (size: number) => void;
+  /** Lines 3D frames draw on the terrain (§5.4 "3D mode" "Tracks on the terrain", H8); ignored in 2D. */
+  terrainLines?: readonly TerrainLine[] | null;
 }
 
-export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, course = null, onCourse, onCourseSupport, loupe = null, patch = null, patchVersion = "0", mapObjects = null, heightField = null, terrain = null, onTerrain, onTerrainError, onMaxTextureSize }: Props) {
+export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, course = null, onCourse, onCourseSupport, loupe = null, patch = null, patchVersion = "0", mapObjects = null, heightField = null, terrain = null, onTerrain, onTerrainError, onMaxTextureSize, terrainLines = null }: Props) {
   const { t } = useTranslation("dashboard");
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<MapGlEngine | null>(null);
@@ -147,6 +150,10 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
   // 3D (§5.4 "3D mode"): the frame drawn last, and whether its drape is complete and settled.
   const terrainRef = useRef(terrain);
   terrainRef.current = terrain;
+  const linesRef = useRef(terrainLines);
+  linesRef.current = terrainLines;
+  /** Lines the last 3D frame drew (`data-terrain-lines`). */
+  const [drawnLines, setDrawnLines] = useState(0);
   const onTerrainRef = useRef(onTerrain);
   onTerrainRef.current = onTerrain;
   const onTerrainErrorRef = useRef(onTerrainError);
@@ -235,7 +242,9 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
         // A 3D frame: the camera's canvas size, the drape re-rendered when it has settled (§5.6 "Settling").
         if (canvas.width !== tf.camera.widthPx) canvas.width = tf.camera.widthPx;
         if (canvas.height !== tf.camera.heightPx) canvas.height = tf.camera.heightPx;
-        engine.renderTerrain(tf, opts);
+        const lines = linesRef.current;
+        const st = engine.renderTerrain(lines?.length ? { ...tf, lines, pxRatio: tf.camera.widthPx / (canvas.clientWidth || tf.camera.widthPx) } : tf, opts);
+        setDrawnLines(st.mesh?.lines?.lines ?? 0);
         setMode("3d");
         trackTerrainReady(engine, tf);
         return;
@@ -389,6 +398,11 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
     };
   }, [heightField, loadedAttempt, requestDraw]);
 
+  // New lines are one redraw (and one upload); 2D draws none.
+  useEffect(() => {
+    if (terrainRef.current) requestDraw();
+  }, [terrainLines, requestDraw]);
+
   // A camera or exaggeration change is one redraw.
   useEffect(() => {
     if (terrain) requestDraw();
@@ -454,6 +468,7 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
         data-ready={status === "complete" ? "true" : "false"}
         data-mode={mode}
         data-terrain-ready={mode === "3d" && terrainReady ? "true" : undefined}
+        data-terrain-lines={mode === "3d" ? drawnLines : undefined}
         style={{ position: "absolute", left: 0, top: 0, width, height, zIndex, pointerEvents: "none" }}
       />
       {(status === "error" || status === "webgl") && (

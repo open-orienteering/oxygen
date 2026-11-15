@@ -12,6 +12,7 @@ import { documentBytes, request } from "../../map-gl/fixtures/course-document";
 import { docField } from "../../map-gl/terrain/synthetic";
 import { distanceForPxPerUm, projectToScreen, screenRay, type TerrainCamera } from "../../map-gl/terrain/camera";
 import { pickTerrain, surfaceZ, type TerrainHit } from "../../map-gl/terrain/pick";
+import type { TerrainLine } from "../../map-gl/terrain/lines";
 import { loadMapFonts, loadTextAtlas } from "../../lib/map-fonts";
 import { documentColours } from "../../lib/vector-map";
 
@@ -41,6 +42,8 @@ export interface DocTerrainApi {
   compare2d: () => { maxDiff: number; over: number; pixels: number };
   /** RGB 0–255 of the course's colour (the stack's purple). */
   courseRgb: [number, number, number];
+  /** RGB 0–255 of the `line=` lines' colour. */
+  lineRgb: [number, number, number];
 }
 
 /** The sheet the fixture's field covers, paper mm. */
@@ -69,6 +72,17 @@ export async function startDocTerrain(canvas: HTMLCanvasElement, params: URLSear
   });
   engine.setCourse(request());
   await courseIn;
+  // `line=x,y;x,y|x,y;…` (paper mm): lines on the terrain (§5.6 "Lines", H8), opaque, 8 px, `lineColour`.
+  const lineRgb = hexToRgb(`#${(params.get("lineColour") ?? "e6194b").replace("#", "")}`);
+  const lines: TerrainLine[] | undefined = params.get("line")?.split("|").map((l) => ({
+    points: l.split(";").map((p) => {
+      const [x, y] = p.split(",").map(Number);
+      return { x, y };
+    }),
+    colour: lineRgb,
+    opacity: 1,
+    widthPx: 8,
+  }));
   const field = docField(params.get("field") === "flat" ? "flat" : "cone");
   const mesh = (await engine.setTerrain(field))!;
   const origin = { x: summary.originX, y: summary.originY };
@@ -115,6 +129,7 @@ export async function startDocTerrain(canvas: HTMLCanvasElement, params: URLSear
       return { maxDiff, over, pixels: w * h };
     },
     courseRgb: [0, 0, 0],
+    lineRgb: lineRgb.map((v) => Math.round(v * 255)) as [number, number, number],
   };
   const purple = engine.colours.findIndex((c) => c.id === "iof2024:purple-upper");
   if (purple >= 0) api.courseRgb = colour(purple).map((v) => Math.round(v * 255)) as [number, number, number];
@@ -123,7 +138,7 @@ export async function startDocTerrain(canvas: HTMLCanvasElement, params: URLSear
   let pending: { raf: number; timer: ReturnType<typeof setTimeout> } | null = null;
   function draw() {
     colour = documentColours(engine.colours);
-    api.frame = engine.renderTerrain({ camera: camera(), exaggeration: e, level }, opts());
+    api.frame = engine.renderTerrain({ camera: camera(), exaggeration: e, level, lines }, opts());
   }
   const flush = () => {
     if (!pending) return;
@@ -156,5 +171,6 @@ export function describeDocFrame(f: TerrainFrameStats | null, st: EngineStats): 
   const t = st.terrain;
   if (!f?.mesh || !t) return "nothing drawn";
   const layers = t.layers.map((l) => `${l.role} ${l.widthPx}×${l.heightPx} @${(l.ratio * 100).toFixed(0)} %`).join(", ");
-  return `${f.mesh.chunks} chunks, ${f.mesh.triangles} triangles, ${f.mesh.draws} draws; drape ${layers} (${t.drapeRenders} renders, last ${t.lastDrapeMs.toFixed(1)} ms, ${t.lastDrapeDraws} draws); field ${(t.fieldBytes / 1048576).toFixed(1)} MB, drape ${(t.drapeBytes / 1048576).toFixed(1)} MB`;
+  const lines = f.mesh.lines ? `, ${f.mesh.lines.lines} lines (${f.mesh.lines.segments} segments, ${f.mesh.lines.draws} draws)` : "";
+  return `${f.mesh.chunks} chunks, ${f.mesh.triangles} triangles, ${f.mesh.draws} draws${lines}; drape ${layers} (${t.drapeRenders} renders, last ${t.lastDrapeMs.toFixed(1)} ms, ${t.lastDrapeDraws} draws); field ${(t.fieldBytes / 1048576).toFixed(1)} MB, drape ${(t.drapeBytes / 1048576).toFixed(1)} MB`;
 }

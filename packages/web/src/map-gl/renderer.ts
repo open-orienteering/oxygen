@@ -746,7 +746,7 @@ export class MapGlRenderer {
     let lineStats: LineDrawStats | undefined;
     if (stats && mesh && lines && lines.lines.length > 0) {
       this.terrainLinesProgram ??= new TerrainLines(gl);
-      lineStats = this.terrainLinesProgram.draw(lines.lines, mesh, { matrix: stats.matrix, eye: stats.eye, exaggeration: frame.exaggeration, pxRatio: lines.pxRatio }, t);
+      lineStats = this.terrainLinesProgram.draw(lines.lines, mesh, { matrix: stats.matrix, eye: stats.eye, focalPx: stats.focalPx, exaggeration: frame.exaggeration, pxRatio: lines.pxRatio }, t);
     }
     if (q && this.timer) {
       gl.endQuery(this.timer.ext.TIME_ELAPSED_EXT);

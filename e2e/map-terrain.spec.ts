@@ -283,3 +283,71 @@ test.describe("the map as the drape (map-rendering.md §5.6, H6)", () => {
     expect(t.drapeBytes).toBeLessThanOrEqual((2 * 1024 * 1024) / 3);
   });
 });
+
+test.describe("lines on the terrain (map-rendering.md §5.6 \"Lines\", H8)", () => {
+  type LineApi = DocApi & {
+    frame: { mesh: { draws: number; lines?: { lines: number; draws: number; segments: number } } | null } | null;
+    pick: (px: number, py: number) => { x: number; y: number } | null;
+    lineRgb: [number, number, number];
+  };
+  const api = (page: Page) => page.evaluate(() => {
+    const a = (window as unknown as { __mapTerrainDoc: LineApi }).__mapTerrainDoc;
+    return { mesh: a.frame?.mesh ?? null, lineRgb: a.lineRgb };
+  });
+  const pickAt = (page: Page, p: [number, number]) => page.evaluate(([x, y]) => (window as unknown as { __mapTerrainDoc: LineApi }).__mapTerrainDoc.pick(x, y), p);
+  /**
+   * Line-coloured pixels in a window 5 px wide from 2 px below the ground point (x, y) to 14 px above
+   * it: a line is drawn raised by its half width and the lift (§5.6 "Lines"), its lower edge on the ground.
+   */
+  const lineIn = (png: PNG, [x, y]: [number, number], rgb: number[]) => {
+    let n = 0;
+    for (let dy = -14; dy <= 2; dy++)
+      for (let dx = -2; dx <= 2; dx++) {
+        const i = ((Math.round(y) + dy) * png.width + Math.round(x) + dx) * 4;
+        if (Math.max(Math.abs(png.data[i] - rgb[0]), Math.abs(png.data[i + 1] - rgb[1]), Math.abs(png.data[i + 2] - rgb[2])) <= 12) n++;
+      }
+    return n;
+  };
+  // Two lines across the doc cone (apex (35, 25), radius 22 mm, 45 m at 1:15 000): one 8 mm south of
+  // the apex (the flank facing a camera that looks north), one 8 mm north (the far flank).
+  const C = DOC.cone;
+  const NEAR = { x: C.x, y: C.y - 8 }, FAR = { x: C.x, y: C.y + 8 };
+  const line = (y: number) => `${C.x - 6},${y};${C.x},${y};${C.x + 6},${y}`;
+  const query = (pitch: number, e: number) => `doc=course&field=cone&pitch=${pitch}&bearing=0&e=${e}&line=${encodeURIComponent(`${line(NEAR.y)}|${line(FAR.y)}`)}`;
+
+  test("drawn on the surface and hidden behind the cone, as the exaggeration makes it", async ({ page }) => {
+    // From above both lines are seen.
+    await open(page, query(0, 5));
+    let png = await pixels(page);
+    const { lineRgb } = await api(page);
+    expect(lineIn(png, (await docProject(page, NEAR.x, NEAR.y))!, lineRgb)).toBeGreaterThan(15);
+    expect(lineIn(png, (await docProject(page, FAR.x, FAR.y))!, lineRgb)).toBeGreaterThan(15);
+    let { mesh } = await api(page);
+    expect(mesh!.draws).toBeLessThanOrEqual(7);
+    expect(mesh!.lines).toMatchObject({ lines: 2, draws: 4 });
+    expect(mesh!.lines!.segments).toBeGreaterThan(2 * 12 / 0.2 - 4);
+
+    // Low over the ground (20° above the horizon) at 5×, the far flank (34°) is behind the apex: the
+    // near line is drawn on its flank, the far one is hidden — the pixel where it would be shows the
+    // cone in front of it, as the pick confirms.
+    await open(page, query(70, 5));
+    png = await pixels(page);
+    const near = (await docProject(page, NEAR.x, NEAR.y))!, far = (await docProject(page, FAR.x, FAR.y))!;
+    // the two windows do not overlap: the far point projects well above the near line
+    expect(near[1] - far[1]).toBeGreaterThan(20);
+    expect(lineIn(png, near, lineRgb)).toBeGreaterThan(15);
+    expect(lineIn(png, far, lineRgb)).toBe(0);
+    const hit = (await pickAt(page, far))!;
+    expect(hit.y).toBeLessThan(FAR.y - 2);
+    ({ mesh } = await api(page));
+    expect(mesh!.draws).toBeLessThanOrEqual(7);
+    expect(mesh!.lines).toMatchObject({ lines: 2, draws: 4 });
+
+    // At 1× the far flank (8°) faces the camera again: the same line is drawn there (heights in units,
+    // the exaggeration applied to the lines as to the mesh).
+    await open(page, query(70, 1));
+    png = await pixels(page);
+    expect(lineIn(png, (await docProject(page, FAR.x, FAR.y))!, lineRgb)).toBeGreaterThan(15);
+    expect(lineIn(png, (await docProject(page, NEAR.x, NEAR.y))!, lineRgb)).toBeGreaterThan(15);
+  });
+});
