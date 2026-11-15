@@ -20,6 +20,7 @@ import { ATLAS_WIDTH, INSTANCE_FLOATS, type MeshAtlas } from "./mesh-atlas.js";
 import { viewMatrix, type RenderTarget } from "./view.js";
 import { DRAPE_TILE, drapeTiles } from "./terrain/footprint.js";
 import { TerrainRenderer, type TerrainDrawStats, type TerrainFrame } from "./terrain/program.js";
+import { TerrainLines, type LineDrawStats, type TerrainLine } from "./terrain/lines.js";
 import { buildTextGlyphs, GLYPH_TABLE_TEXELS, GLYPH_TABLE_WIDTH, type TextAtlasPage } from "./text-atlas.js";
 import {
   FILL_VERTEX_BYTES, HATCH_VERTEX_BYTES, STROKE_VERTEX_BYTES,
@@ -469,6 +470,12 @@ function classVertices(cls: number): number {
   return Math.ceil(2 ** cls / 3) * 3;
 }
 
+/** The lines a 3D frame draws over the mesh (§5.6 "Lines"): CSS widths × `pxRatio`. */
+export interface TerrainLinesPass {
+  lines: readonly TerrainLine[];
+  pxRatio: number;
+}
+
 export class MapGlRenderer {
   readonly gl: WebGL2RenderingContext;
   private readonly programs: Record<"fan" | "fanInst" | "cover" | "stroke" | "strokeInst" | "blit", Program>;
@@ -482,6 +489,7 @@ export class MapGlRenderer {
   /** The drape layers' textures, by layer slot (§5.6 "Rendering the drape"). */
   private drapes: (DrapeTexture | undefined)[] = [];
   private terrainRenderer?: TerrainRenderer;
+  private terrainLinesProgram?: TerrainLines;
   private quad?: WebGLBuffer;
 
   constructor(canvas: HTMLCanvasElement | OffscreenCanvas, attrs: WebGLContextAttributes = {}) {
@@ -585,6 +593,8 @@ export class MapGlRenderer {
     this.releaseDrapes();
     this.terrainRenderer?.dispose();
     this.terrainRenderer = undefined;
+    this.terrainLinesProgram?.dispose();
+    this.terrainLinesProgram = undefined;
     this.deleteBuffers();
     if (this.quad) this.gl.deleteBuffer(this.quad);
     this.quad = undefined;
@@ -720,8 +730,11 @@ export class MapGlRenderer {
     return s ? s.w * s.h * (4 * 8 + 4) : 0;
   }
 
-  /** Draws the terrain (§5.6 "Drawing") into `target` (default the canvas), under the GPU timer when there is one. */
-  drawTerrain(frame: TerrainFrame, target?: RenderTarget): (TerrainDrawStats & FrameStats) | null {
+  /**
+   * Draws the terrain (§5.6 "Drawing") into `target` (default the canvas), then `lines` over it
+   * (§5.6 "Lines", H8), under the GPU timer when there is one.
+   */
+  drawTerrain(frame: TerrainFrame, target?: RenderTarget, lines?: TerrainLinesPass): (TerrainDrawStats & FrameStats & { lines?: LineDrawStats }) | null {
     const gl = this.gl;
     const t0 = performance.now();
     this.resolveTimers();
@@ -729,13 +742,20 @@ export class MapGlRenderer {
     if (q && this.timer) gl.beginQuery(this.timer.ext.TIME_ELAPSED_EXT, q);
     const t = target ?? { framebuffer: null, width: gl.drawingBufferWidth, height: gl.drawingBufferHeight };
     const stats = this.terrain.draw(frame, t);
+    const mesh = this.terrain.mesh;
+    let lineStats: LineDrawStats | undefined;
+    if (stats && mesh && lines && lines.lines.length > 0) {
+      this.terrainLinesProgram ??= new TerrainLines(gl);
+      lineStats = this.terrainLinesProgram.draw(lines.lines, mesh, { matrix: stats.matrix, eye: stats.eye, exaggeration: frame.exaggeration, pxRatio: lines.pxRatio }, t);
+    }
     if (q && this.timer) {
       gl.endQuery(this.timer.ext.TIME_ELAPSED_EXT);
       this.timer.pending.push({ q, frame: this.frameCounter });
     }
     this.frameCounter++;
     if (!stats) return null;
-    const out: TerrainDrawStats & FrameStats = { ...stats, drawCalls: stats.draws, cpuMs: performance.now() - t0 };
+    const out: TerrainDrawStats & FrameStats & { lines?: LineDrawStats } = { ...stats, drawCalls: stats.draws, cpuMs: performance.now() - t0 };
+    if (lineStats) out.lines = lineStats;
     if (this.lastGpuMs !== undefined) out.gpuMs = this.lastGpuMs;
     return out;
   }
