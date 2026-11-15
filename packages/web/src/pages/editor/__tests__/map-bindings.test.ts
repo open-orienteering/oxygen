@@ -91,8 +91,9 @@ describe("Map mode's keys (§13)", () => {
   const k = (key: string, mods: Partial<{ ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean }> = {}) =>
     mapKeyAction({ key, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...mods });
 
-  it("V, H, F, Tab, Shift+Tab, Delete, Backspace, Escape", () => {
-    expect(k("v")).toEqual({ kind: "select-tool" });
+  it("V, N, H, F, Tab, Shift+Tab, Delete, Backspace, Escape", () => {
+    expect(k("v")).toEqual({ kind: "tool", tool: "V" });
+    expect(k("n")).toEqual({ kind: "tool", tool: "N" });
     expect(k("H")).toEqual({ kind: "toggle-overprint" });
     expect(k("f")).toEqual({ kind: "fit" });
     expect(k("Tab")).toEqual({ kind: "step", dir: 1 });
@@ -112,8 +113,8 @@ describe("Map mode's keys (§13)", () => {
     expect(k("f", { metaKey: true })).toBeNull();
   });
 
-  it("the rail is V alone", () => {
-    expect(MAP_RAIL).toEqual(["V"]);
+  it("the rail is V and N (§13 \"Nodes\")", () => {
+    expect(MAP_RAIL).toEqual(["V", "N"]);
   });
 });
 

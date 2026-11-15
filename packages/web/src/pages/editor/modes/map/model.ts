@@ -119,6 +119,14 @@ export function moveOp(model: MapModel, patch: mapDocument.MapPatch | null, ref:
   const i = model.indexOf(ref);
   if (i === null) return null;
   const coords = coordsOf(model, i).map((c): mapDocument.PatchCoord => (c.length === 3 ? [c[0] + dx, c[1] + dy, c[2]] : [c[0] + dx, c[1] + dy]));
+  return coordsOp(patch, ref, coords);
+}
+
+/**
+ * The op that gives the object `coords` (a move, a node gesture): a document object's `modify` (an existing one's
+ * angle kept), an added object's `add` rewritten. Null when an added object has no add in `patch`.
+ */
+export function coordsOp(patch: mapDocument.MapPatch | null, ref: MapObjectRef, coords: mapDocument.PatchCoord[]): PatchOp | null {
   if ("added" in ref) {
     const add = patch?.ops[`add:${ref.added}`];
     return add?.op === "add" ? { ...add, coords } : null;
