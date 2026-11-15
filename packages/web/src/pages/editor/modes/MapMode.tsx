@@ -1,6 +1,7 @@
 /**
  * Map mode (docs/course-editor.md §13; 08 §5.2–§5.3, the Map column; row G6): the event's map corrections — the
- * patch over the pinned document (docs/map-patches.md) — with select, hide and move. Shaped like `useLayoutMode`:
+ * patch over the pinned document (docs/map-patches.md) — with select, hide and move, and the nodes tool `N` (§13
+ * "Nodes", G7). Shaped like `useLayoutMode`:
  * the page asks it for the viewer's editor props, the rail, the inspector and its keys, and keeps the undo stack.
  *
  * Course edits are locked here: the editor props carry no control, label, leg or map-click callbacks and the
@@ -19,17 +20,20 @@ import type { DocumentHitTest } from "../../../components/VectorMapLayer";
 import { loadMapPatch, setMapPatch, type LoadedMapDocument, type MapPatchDelivery } from "../../../lib/map-document-cache";
 import type { EditorWrites, PatchWriteResult } from "../../../lib/editor/write-client";
 import { boundsMm } from "../../../lib/vector-map";
-import { mapSelectBinding, withTrackLayer, type MapGestureRef } from "../tools/bindings";
-import { MAP_RAIL } from "../tools/rail";
+import { mapNodesBinding, mapSelectBinding, withTrackLayer, type MapGestureRef, type MapNodeFocus, type MapNodesGestureRef } from "../tools/bindings";
+import { MAP_RAIL, type MapRailTool } from "../tools/rail";
+import { deleteVertex, type Vertex } from "../../../lib/editor/geometry-edit";
+import type { SnapIndex } from "../../../lib/editor/snap";
 import { InspectorSection } from "../Inspector";
 import { mapKeyAction } from "./map/keys";
 import { MapObjectSection } from "./map/ObjectSection";
 import { CorrectionsList } from "./map/Corrections";
+import { MAP_NODES_MAX, nodeSnapIndex, nodesOf, nodesOp, ringRule, withRing, type NodePath } from "./map/nodes";
 import { useMapTracks } from "./map/tracks/useMapTracks";
 import { TracksPanel } from "./map/tracks/TracksPanel";
 import {
   centreOf, changes, correctedRefs, drawnCovers, correctionRows, hideChange, hitsObject, inverseChange, isHidden, mapModelFor, moveOp, objectInfo,
-  restoreChange, sameRef, stepRef, type CorrectionRow, type MapObjectRef,
+  refKey, refOfOp, restoreChange, sameRef, stepRef, type CorrectionRow, type MapModel, type MapObjectRef,
 } from "./map/model";
 
 type Pt = { x: number; y: number };
@@ -97,6 +101,14 @@ export function useMapMode(a: MapModeArgs): MapMode {
   /** *Apply corrections* while its write is in flight: the box shows the value asked for. */
   const [toggling, setToggling] = useState<boolean | null>(null);
   const gesture = useRef<MapGestureRef["current"]>(null);
+  /** The armed tool: `V` select, `N` nodes (§13 "Nodes"); the focused node and Map mode's own snapping toggle. */
+  const [tool, setTool] = useState<MapRailTool>("V");
+  const [focusState, setFocusState] = useState<{ owner: string; focus: MapNodeFocus } | null>(null);
+  const [snapping, setSnapping] = useState(false);
+  const nodeGesture = useRef<MapNodesGestureRef["current"]>(null);
+  /** The patch a node press was made on: a release that finds another one is dropped (§13 "Nodes", "Writes"). */
+  const pressPatch = useRef<mapDocument.MapPatch | null>(null);
+  const snapCache = useRef<{ model: MapModel; key: string; index: SnapIndex | null } | null>(null);
   const clickSeq = useRef(0);
   /** A gesture's write is in flight: the next gesture waits (its `before` would be stale, §13 "Ops"). */
   const [writing, setWriting] = useState(false);
@@ -108,8 +120,16 @@ export function useMapMode(a: MapModeArgs): MapMode {
     setStack([]);
     setDraft(null);
     setHideCourse(false);
+    setTool("V");
+    setFocusState(null);
+    setSnapping(false);
     gesture.current = null;
+    nodeGesture.current = null;
   }, [enabled, hash]);
+  // The focused node belongs to the selection and the tool it was set in: another one drops it (§13 "Nodes", "Focus").
+  const focusOwner = `${selected ? refKey(selected) : ""}|${tool}`;
+  const focus = focusState?.owner === focusOwner ? focusState.focus : null;
+  const setFocus = useCallback((f: MapNodeFocus | null) => setFocusState(f ? { owner: focusOwner, focus: f } : null), [focusOwner]);
   // A committed draft goes once the canvas shows the patch that carries it.
   useEffect(() => {
     if (draft?.waitFor != null && drawnCovers(drawn, draft.waitFor)) setDraft(null);
@@ -160,9 +180,10 @@ export function useMapMode(a: MapModeArgs): MapMode {
       try {
         const res = await send(documentHash, change);
         if (keepDraft) setDraft((d) => (d ? { ...d, waitFor: res.version } : d));
+        // Undo / redo drop the focused node: its index may name another node then (§13 "Nodes").
         record(
-          async () => { setDraft(null); await send(documentHash, inverse); },
-          async () => { setDraft(null); await send(documentHash, change); },
+          async () => { setDraft(null); setFocusState(null); await send(documentHash, inverse); },
+          async () => { setDraft(null); setFocusState(null); await send(documentHash, change); },
         );
       } finally {
         writingRef.current = false;
@@ -185,6 +206,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
   }, [canWrite, selected, commit]);
   const revert = useCallback((row: CorrectionRow) => {
     if (!enabled || !canEdit || !hash) return;
+    setFocusState(null); // its index may name another node after the revert (§13 "Nodes", "Focus")
     commit({ remove: [row.opId] });
   }, [enabled, canEdit, hash, commit]);
   const setCorrectionsOn = useCallback((on: boolean) => {
@@ -222,14 +244,85 @@ export function useMapMode(a: MapModeArgs): MapMode {
     if (next) locate(next);
   }, [stack, selected, rows, locate]);
 
+  // ─── Nodes (§13 "Nodes"): the selected line's or area's rings, from the draft while there is one ──
+  const draftCoords = useMemo(() => {
+    const op = selected ? draft?.ops.find((o) => sameRef(refOfOp(o), selected)) : undefined;
+    return op && op.op !== "hide" && op.op !== "resymbol" ? op.coords : null;
+  }, [draft, selected]);
+  const nodes = useMemo(
+    () => (tool === "N" && selected && model ? nodesOf(model, selected, { canEdit, correctionsOn, coords: draftCoords }) : null),
+    [tool, selected, model, canEdit, correctionsOn, draftCoords],
+  );
+  const nodePath: NodePath | null = nodes && "path" in nodes ? nodes.path : null;
+  const pathRef = useRef(nodePath);
+  pathRef.current = nodePath;
+  /** The op of ring `ring` as `vertices` (null: nothing changes). */
+  const ringOp = useCallback((ring: number, vertices: Vertex[]) => {
+    const path = pathRef.current;
+    return model && path ? nodesOp(model, patchRef.current, withRing(path, ring, vertices)) : null;
+  }, [model]);
+  /** A node gesture's write (§13 "Ops"): its draft kept until drawn, the node `index` focused after. */
+  const commitNodes = useCallback((ring: number, vertices: Vertex[], index: number | null) => {
+    if (writingRef.current) return;
+    const op = ringOp(ring, vertices);
+    setFocus(index === null ? null : { ring, index });
+    if (!op) { setDraft((d) => (d?.waitFor != null ? d : null)); return; }
+    setDraft({ ops: [op], waitFor: null });
+    commit({ put: [op] }, true);
+  }, [ringOp, commit, setFocus]);
+  /** A press's release (a drag, an Alt-click): dropped when the patch changed since the press or a write is in flight. */
+  const releaseNodes = useCallback((ring: number, vertices: Vertex[], index: number | null) => {
+    if (pressPatch.current !== patchRef.current || writingRef.current) { setDraft((d) => (d?.waitFor != null ? d : null)); return; }
+    commitNodes(ring, vertices, index);
+  }, [commitNodes]);
+  const deleteNode = useCallback(() => {
+    const ring = focus ? nodePath?.rings[focus.ring] : undefined;
+    // Ignored while a node or grip is held: the release would write over it.
+    if (!focus || !ring || writingRef.current || nodeGesture.current) return;
+    // Down to the ring's minimum; at it nothing happens (§13 "Nodes", as §7).
+    const next = deleteVertex(ring.vertices, focus.index, ringRule(ring).min);
+    if (next) commitNodes(focus.ring, next, null);
+  }, [focus, nodePath, commitNodes]);
+  /** Node snapping (§13 "Snapping"): the effective document without the edited object, built on first use. */
+  const snapNode = useMemo(() => {
+    if (!snapping || !model || !selected) return null;
+    const key = refKey(selected);
+    return (pt: Pt): Pt => {
+      let c = snapCache.current;
+      if (!c || c.model !== model || c.key !== key) snapCache.current = c = { model, key, index: nodeSnapIndex(model, selected) };
+      return c.index?.nearest(pt) ?? pt;
+    };
+  }, [snapping, model, selected]);
+
   // ─── The binding ──
-  const binding = useMemo(() => mapSelectBinding({
+  const select = useCallback((ref: MapObjectRef | null, refs: MapObjectRef[]) => { setSelected(ref); setStack(refs); }, []);
+  const nodesBinding = useMemo(() => (tool !== "N" ? null : mapNodesBinding({
+    hit,
+    clickSeq,
+    onSelect: select,
+    rings: nodePath?.rings ?? null,
+    canPress: !writing,
+    maxNodes: MAP_NODES_MAX,
+    onPress: () => { pressPatch.current = patchRef.current; },
+    focus,
+    gesture: nodeGesture,
+    snap: snapNode,
+    onDraft: (ring, vertices) => {
+      const op = ringOp(ring, vertices);
+      setDraft(op ? { ops: [op], waitFor: null } : null);
+    },
+    // A press's release goes through the stale check; a double-click's insert has no press of its own.
+    onCommit: (ring, vertices, index, pressed) => (pressed ? releaseNodes(ring, vertices, index) : commitNodes(ring, vertices, index)),
+    onCancel: () => setDraft((d) => (d?.waitFor != null ? d : null)),
+    onFocus: setFocus,
+  })), [tool, hit, select, nodePath, writing, focus, snapNode, ringOp, commitNodes, releaseNodes, setFocus]);
+  const selectBinding = useMemo(() => mapSelectBinding({
     hit,
     canMove,
     pressOn: (pt, tol) => !!model && !!selected && hitsObject(model, selected, pt, tol),
     gesture,
     clickSeq,
-    onSelect: (ref, refs) => { setSelected(ref); setStack(refs); },
+    onSelect: select,
     onDrag: (dx, dy) => {
       const op = model && selected ? moveOp(model, patchRef.current, selected, dx, dy) : null;
       setDraft(op ? { ops: [op], waitFor: null } : null);
@@ -241,7 +334,8 @@ export function useMapMode(a: MapModeArgs): MapMode {
       commit({ put: [op] }, true);
     },
     onCancel: () => setDraft((d) => (d?.waitFor != null ? d : null)),
-  }), [hit, canMove, model, selected, commit]);
+  }), [hit, canMove, model, selected, commit, select]);
+  const binding = nodesBinding ?? selectBinding;
 
   const selectedList = useMemo(() => (selected ? [selected] : []), [selected]);
   const draftInput = useMemo(() => (draft ? { ops: draft.ops } : null), [draft]);
@@ -261,29 +355,45 @@ export function useMapMode(a: MapModeArgs): MapMode {
     const action = mapKeyAction(e);
     if (!action) return false;
     switch (action.kind) {
-      case "select-tool": return true;
+      case "tool": setTool(action.tool); return true;
       case "toggle-overprint": toggleHideCourse(); return true;
       case "fit": fit(); return true;
       case "step": e.preventDefault(); step(action.dir); return true;
-      case "hide": e.preventDefault(); hide(); return true;
+      case "hide":
+        e.preventDefault();
+        // In N a focused node is deleted instead (§13 "Nodes").
+        if (tool === "N" && focus) deleteNode();
+        else hide();
+        return true;
       case "escape":
-        // The viewer cancels a drag in flight first (§3); then the selection; with nothing left, the page leaves fullscreen.
+        // The viewer cancels a drag in flight first (§3); then the focused node, N back to V, the selection; with
+        // nothing left, the page leaves fullscreen.
+        if (focus) { setFocus(null); return true; }
+        if (tool === "N") { setTool("V"); return true; }
         if (!selected) return false;
         setSelected(null);
         setStack([]);
         return true;
     }
-  }, [toggleHideCourse, fit, step, hide, selected]);
+  }, [toggleHideCourse, fit, step, hide, selected, tool, focus, deleteNode, setFocus]);
 
   // ─── Rail and inspector ──
   const rail = (
     <div data-testid="editor-tool-rail" className="pointer-events-auto relative flex flex-col gap-1 bg-white/95 backdrop-blur-sm border border-slate-200 rounded-lg shadow-sm p-1 self-start">
-      {MAP_RAIL.map((key) => (
-        <button key={key} type="button" data-testid={`editor-tool-${key}`} aria-pressed title={t("toolSelect")} aria-label={t("toolSelect")}
-          className="w-8 h-8 rounded-md text-xs font-semibold flex items-center justify-center bg-purple-100 text-purple-700 cursor-pointer">
-          {key}
-        </button>
-      ))}
+      {MAP_RAIL.map((key) => {
+        const label = key === "N" ? t("toolNodes") : t("toolSelect");
+        return (
+          <button key={key} type="button" data-testid={`editor-tool-${key}`} aria-pressed={tool === key} title={label} aria-label={label} onClick={() => setTool(key)}
+            className={`w-8 h-8 rounded-md text-xs font-semibold flex items-center justify-center cursor-pointer ${tool === key ? "bg-purple-100 text-purple-700" : "text-slate-600 hover:bg-slate-100"}`}>
+            {key}
+          </button>
+        );
+      })}
+      <div className="h-px bg-slate-200 my-0.5" />
+      <button type="button" data-testid="editor-snapping" aria-pressed={snapping} title={t("mapSnapping")} aria-label={t("mapSnapping")} onClick={() => setSnapping((v) => !v)}
+        className={`w-8 h-8 rounded-md flex items-center justify-center cursor-pointer ${snapping ? "bg-purple-100 text-purple-700" : "text-slate-500 hover:bg-slate-100"}`}>
+        <svg viewBox="0 0 16 16" className="w-4 h-4" aria-hidden><path d="M4 2v6a4 4 0 0 0 8 0V2M4 5h3M9 5h3" fill="none" stroke="currentColor" strokeWidth="1.6" /></svg>
+      </button>
     </div>
   );
   const inspector = !mapDoc ? (
@@ -294,6 +404,9 @@ export function useMapMode(a: MapModeArgs): MapMode {
       {canEdit && !correctionsOn && <p data-testid="editor-map-disabled" className="px-2.5 py-1.5 text-[11px] text-amber-700 bg-amber-50">{t("mapDisabled")}</p>}
       <InspectorSection title={t("mapObject")} testId="editor-inspector-map-object">
         <MapObjectSection info={info} hidden={selectedHidden} documentHash={mapDoc.hash} nameId={nameId} canWrite={canWrite} onHide={hide} onRestore={restore} />
+        {nodes && ("path" in nodes
+          ? <p data-testid="editor-map-nodes-hint" className="px-2.5 py-1.5 text-[11px] text-slate-500">{t("mapNodesHint")}</p>
+          : <p data-testid="editor-map-nodes-none" data-reason={nodes.reason} className="px-2.5 py-1.5 text-[11px] text-slate-500">{t(`mapNodesNone_${nodes.reason}`)}</p>)}
       </InspectorSection>
       <InspectorSection title={t("corrections")} testId="editor-corrections">
         <CorrectionsList rows={rows} selected={selected} enabled={toggling ?? correctionsOn} canWrite={canEdit} busy={toggling !== null}

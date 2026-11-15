@@ -13,7 +13,8 @@ import { circleGapAt, circleGapFromDrag, compassDeg, legFraction, legGapAt, legG
 import { dragBendGrip, legPolyline, moveBend, polylineDistance, polylineSlice, toggleBendSmooth, type Bend } from "../../../lib/editor/bends";
 import { legLengthShape } from "../../../lib/editor/leg-length";
 import { isClosedKind, pointInPolygon, smoothed, step, type PolygonState } from "./polygon";
-import { outlinePoints, vertexRule, type Vertex } from "../../../lib/editor/geometry-edit";
+import { nearestEdge, outlinePoints, vertexRule, type Vertex } from "../../../lib/editor/geometry-edit";
+import { ringRule } from "../modes/map/nodes";
 import {
   dragGeometry, geometryHandles, geometryShapes, gripsOf, insertAtEdge, pressGeometry, releaseGeometry, type GeometryDrag,
 } from "../../../lib/editor/geometry-gestures";
@@ -719,6 +720,156 @@ export function mapSelectBinding(c: MapSelectContext): EditorToolBinding {
         if (pt) click(pt, g.mmPerPx);
       }
       c.redraw?.();
+    },
+  };
+}
+
+// ─── Map mode's `N`: nodes (docs/course-editor.md §13 "Nodes", G7) ──────────
+
+/** A ring of the selected object's nodes, paper mm (`geometry-edit.ts` `PathRing`'s vertices and closure). */
+export interface MapNodeRing { vertices: readonly Vertex[]; closed: boolean }
+/** A focused node: ring `ring`, vertex `index`. */
+export interface MapNodeFocus { ring: number; index: number }
+/** A press on a node or grip of ring `ring`; `moved` once it went past `MAP_DRAG_PX` (`drag.moved` is the geometry's). */
+export interface MapNodesGesture { ring: number; drag: GeometryDrag; mmPerPx: number; moved: boolean }
+export interface MapNodesGestureRef { current: MapNodesGesture | null }
+
+export interface MapNodesContext {
+  /** As `V`'s: the viewer's hit-test, the click sequence and the selection callback (a click off the path selects). */
+  hit: MapSelectContext["hit"];
+  clickSeq: MapSelectContext["clickSeq"];
+  onSelect: MapSelectContext["onSelect"];
+  /** The selected object's rings as drawn now (the draft's while there is one); null: no nodes (§13 "Nodes"). */
+  rings: readonly MapNodeRing[] | null;
+  /** Presses and inserts are taken (no write in flight). */
+  canPress: boolean;
+  /** No insert at this many nodes over the rings (`MAP_NODES_MAX`: one more and the object has no handles). */
+  maxNodes?: number;
+  /** A press on a node or grip was taken (the page notes the patch it was made on). */
+  onPress?: () => void;
+  focus: MapNodeFocus | null;
+  gesture: MapNodesGestureRef;
+  /** Node snapping (§13 "Snapping"): the point a dragged node lands on; null when snapping is off. */
+  snap: ((pt: Pt) => Pt) | null;
+  /** Ring `ring` as a drag makes it now (the draft). */
+  onDraft: (ring: number, vertices: Vertex[]) => void;
+  /**
+   * A gesture's result: one write; `focus` the node focused after it (null: none); `pressed` when it is a press's
+   * release (a drag, an Alt-click: made on the patch at `onPress`), not a double-click's insert.
+   */
+  onCommit: (ring: number, vertices: Vertex[], focus: number | null, pressed: boolean) => void;
+  /** A drag was cancelled (Escape, the pointer left): drop the draft, write nothing. */
+  onCancel: () => void;
+  onFocus: (focus: MapNodeFocus | null) => void;
+  redraw?: Redraw;
+}
+
+const NODE_IDS = { outline: "editor-map-node-outline", handle: "editor-map-node", grip: "editor-map-node-grip" };
+
+/**
+ * Map mode's nodes tool (§13 "Nodes"; 08 §5.3, the Map column): exclusive; the selected line's or area's nodes and
+ * grips over every ring, the §7 "Editing geometry" gestures on them (`geometry-gestures.ts`, F18's smooth by default,
+ * Alt sharp), node drags snapped. A press off a node or grip is not taken (the map pans); a click within reach of the
+ * edge keeps the selection and drops the focus, elsewhere it selects as `V`. Each gesture is one `onCommit`.
+ */
+export function mapNodesBinding(c: MapNodesContext): EditorToolBinding {
+  const rings = c.rings ?? [];
+  const shapes: ToolShape[] = [];
+  rings.forEach((ring, r) => {
+    const focused = c.focus?.ring === r ? c.focus.index : null;
+    for (const s of geometryHandles(ring.vertices, focused, NODE_IDS)) {
+      const data = s.kind === "handle" || s.kind === "grip" ? s.data : undefined;
+      shapes.push({ ...s, data: { ...data, ring: String(r), ...(s.kind === "handle" ? { focused: String(focused === Number(data?.index)) } : {}) } } as ToolShape);
+    }
+  });
+  const onEdge = (pt: Pt, reach: number) => rings.some((ring) => ring.vertices.length > 1 && (nearestEdge(ring.vertices, ring.closed, pt)?.dist ?? Infinity) <= reach);
+  const click = (pt: Pt, mmPerPx: number) => {
+    const n = ++c.clickSeq.current;
+    if (onEdge(pt, HANDLE_PX * mmPerPx)) return c.onFocus(null);
+    if (!c.hit) return;
+    void c.hit(pt, MAP_HIT_PX * mmPerPx).then((hits) => {
+      if (n !== c.clickSeq.current) return;
+      const stack = hits.flatMap((h) => (h.ref ? [h.ref] : []));
+      // Any click that selects drops the focus, the same object again included (§13 "Nodes", "Focus").
+      c.onFocus(null);
+      c.onSelect(stack[0] ?? null, stack);
+    }, () => undefined);
+  };
+  /** A node drag's end: the pointer, or where it snaps the node to (its handles follow). */
+  const snapped = (g: MapNodesGesture, pt: Pt): Pt => {
+    const d = g.drag;
+    if (!c.snap || d.kind !== "object" || d.vertex === null) return pt;
+    const v = d.base[d.vertex];
+    const at = c.snap({ x: v.x + pt.x - d.from.x, y: v.y + pt.y - d.from.y });
+    return { x: d.from.x + at.x - v.x, y: d.from.y + at.y - v.y };
+  };
+  return {
+    exclusive: true,
+    shapes,
+    onClick: (p) => click(p.pt, p.mmPerPx),
+    onPointerDown: (p) => {
+      if (!c.canPress || p.touch || rings.length === 0) return false;
+      const reach = HANDLE_PX * p.mmPerPx;
+      // A node, then a grip, over every ring (the outline, then the holes).
+      for (const [r, ring] of rings.entries()) {
+        const vertex = ring.vertices.findIndex((v) => near(v, p.pt, reach));
+        if (vertex < 0) continue;
+        c.gesture.current = { ring: r, mmPerPx: p.mmPerPx, moved: false, drag: { kind: "object", from: p.pt, to: p.pt, moved: false, vertex, base: ring.vertices, alt: !!p.alt } };
+        c.onPress?.();
+        return true;
+      }
+      for (const [r, ring] of rings.entries()) {
+        for (const [index, v] of ring.vertices.entries()) {
+          const grip = gripsOf(v).find((q) => near(q.at, p.pt, reach));
+          if (!grip) continue;
+          c.gesture.current = { ring: r, mmPerPx: p.mmPerPx, moved: false, drag: { kind: "grip", index, which: grip.which, from: p.pt, to: p.pt, moved: false, base: ring.vertices, alt: !!p.alt, shift: p.shift } };
+          c.onPress?.();
+          return true;
+        }
+      }
+      return false;
+    },
+    onPointerDrag: (pt, mods) => {
+      const g = c.gesture.current;
+      if (!g) return;
+      if (!g.moved && near(g.drag.from, pt, MAP_DRAG_PX * g.mmPerPx)) return;
+      g.moved = true;
+      const geometry = dragGeometry(g.drag, snapped(g, pt), mods);
+      if (!geometry) return;
+      c.onDraft(g.ring, geometry);
+      c.redraw?.();
+      const d = g.drag;
+      if (d.kind === "grip") return gripPoint(geometry[d.index], d.which);
+      if (d.vertex !== null) return { x: geometry[d.vertex].x, y: geometry[d.vertex].y };
+    },
+    onPointerUp: (pt) => {
+      const g = c.gesture.current;
+      c.gesture.current = null;
+      if (!g) return;
+      c.redraw?.();
+      const d = g.drag;
+      const index = d.kind === "grip" ? d.index : d.vertex;
+      if (!pt) return void (g.moved && c.onCancel());
+      // Within the drag threshold it is a click: focus the node (Alt toggles it), a grip does nothing.
+      const r = releaseGeometry(d, g.moved ? snapped(g, pt) : d.from, ringRule(rings[g.ring]));
+      if (r?.kind === "commit") c.onCommit(g.ring, r.geometry, index, true);
+      else if (r?.kind === "cancel") c.onCancel();
+      else if (r?.kind === "focus") c.onFocus(r.index === null ? null : { ring: g.ring, index: r.index });
+    },
+    onDoubleClick: (p) => {
+      if (!c.canPress || rings.length === 0) return;
+      if (c.maxNodes !== undefined && rings.reduce((n, ring) => n + ring.vertices.length, 0) >= c.maxNodes) return;
+      // The ring whose edge is nearest; on a node nothing (its press already focused it).
+      const reach = HANDLE_PX * p.mmPerPx;
+      let best: { r: number; dist: number } | null = null;
+      rings.forEach((ring, r) => {
+        const e = ring.vertices.length > 1 ? nearestEdge(ring.vertices, ring.closed, p.pt) : null;
+        if (e && (!best || e.dist < best.dist)) best = { r, dist: e.dist };
+      });
+      const at = best as { r: number; dist: number } | null;
+      if (!at) return;
+      const inserted = insertAtEdge(rings[at.r].vertices, ringRule(rings[at.r]), p.pt, reach, !!p.alt);
+      if (inserted) c.onCommit(at.r, inserted.geometry, inserted.index, false);
     },
   };
 }

@@ -4,8 +4,10 @@ import type { EditorTool } from "../../../lib/editor/state";
 
 export type RailTool = "V" | "S" | "K" | "M" | "X" | "C" | "A" | "T" | "G";
 
-/** Map mode's rail (docs/course-editor.md §13): `V` alone in G6; nodes (G7) and drawing (G9) add theirs. */
-export const MAP_RAIL: readonly RailTool[] = ["V"];
+/** Map mode's tools (docs/course-editor.md §13): `V` select (G6), `N` nodes (G7); drawing (G9) adds its own. */
+export type MapRailTool = "V" | "N";
+/** Map mode's rail, in order. */
+export const MAP_RAIL: readonly MapRailTool[] = ["V", "N"];
 export type AreaChoice = "oob_area" | "oob_line" | "whiteout" | "filter_region" | "toner_saver" | "marked_route";
 export const AREA_CHOICES: AreaChoice[] = ["oob_area", "oob_line", "whiteout", "filter_region", "toner_saver", "marked_route"];
 
