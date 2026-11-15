@@ -103,7 +103,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
   const gesture = useRef<MapGestureRef["current"]>(null);
   /** The armed tool: `V` select, `N` nodes (§13 "Nodes"); the focused node and Map mode's own snapping toggle. */
   const [tool, setTool] = useState<MapRailTool>("V");
-  const [focus, setFocus] = useState<MapNodeFocus | null>(null);
+  const [focusState, setFocusState] = useState<{ owner: string; focus: MapNodeFocus } | null>(null);
   const [snapping, setSnapping] = useState(false);
   const nodeGesture = useRef<MapNodesGestureRef["current"]>(null);
   const snapCache = useRef<{ model: MapModel; key: string; index: SnapIndex | null } | null>(null);
@@ -119,14 +119,15 @@ export function useMapMode(a: MapModeArgs): MapMode {
     setDraft(null);
     setHideCourse(false);
     setTool("V");
-    setFocus(null);
+    setFocusState(null);
     setSnapping(false);
     gesture.current = null;
     nodeGesture.current = null;
   }, [enabled, hash]);
-  // The focused node is the selection's and the tool's (§13 "Nodes", "Focus").
-  const selectedKey = selected ? refKey(selected) : null;
-  useEffect(() => setFocus(null), [selectedKey, tool]);
+  // The focused node belongs to the selection and the tool it was set in: another one drops it (§13 "Nodes", "Focus").
+  const focusOwner = `${selected ? refKey(selected) : ""}|${tool}`;
+  const focus = focusState?.owner === focusOwner ? focusState.focus : null;
+  const setFocus = useCallback((f: MapNodeFocus | null) => setFocusState(f ? { owner: focusOwner, focus: f } : null), [focusOwner]);
   // A committed draft goes once the canvas shows the patch that carries it.
   useEffect(() => {
     if (draft?.waitFor != null && drawnCovers(drawn, draft.waitFor)) setDraft(null);
@@ -179,8 +180,8 @@ export function useMapMode(a: MapModeArgs): MapMode {
         if (keepDraft) setDraft((d) => (d ? { ...d, waitFor: res.version } : d));
         // Undo / redo drop the focused node: its index may name another node then (§13 "Nodes").
         record(
-          async () => { setDraft(null); setFocus(null); await send(documentHash, inverse); },
-          async () => { setDraft(null); setFocus(null); await send(documentHash, change); },
+          async () => { setDraft(null); setFocusState(null); await send(documentHash, inverse); },
+          async () => { setDraft(null); setFocusState(null); await send(documentHash, change); },
         );
       } finally {
         writingRef.current = false;
@@ -265,7 +266,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
     if (!op) { setDraft((d) => (d?.waitFor != null ? d : null)); return; }
     setDraft({ ops: [op], waitFor: null });
     commit({ put: [op] }, true);
-  }, [ringOp, commit]);
+  }, [ringOp, commit, setFocus]);
   const deleteNode = useCallback(() => {
     const ring = focus ? nodePath?.rings[focus.ring] : undefined;
     if (!focus || !ring || writingRef.current) return;
@@ -302,7 +303,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
     onCommit: commitNodes,
     onCancel: () => setDraft((d) => (d?.waitFor != null ? d : null)),
     onFocus: setFocus,
-  })), [tool, hit, select, nodePath, writing, focus, snapNode, ringOp, commitNodes]);
+  })), [tool, hit, select, nodePath, writing, focus, snapNode, ringOp, commitNodes, setFocus]);
   const selectBinding = useMemo(() => mapSelectBinding({
     hit,
     canMove,
@@ -362,7 +363,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
         setStack([]);
         return true;
     }
-  }, [toggleHideCourse, fit, step, hide, selected, tool, focus, deleteNode]);
+  }, [toggleHideCourse, fit, step, hide, selected, tool, focus, deleteNode, setFocus]);
 
   // ─── Rail and inspector ──
   const rail = (
