@@ -336,4 +336,30 @@ describe("Map mode's drawing in print (G9)", () => {
       expect(diff.filter((p) => !inBox(p, target.pageMm))).toEqual([]);
     }
   }, 120_000);
+
+  // G26 (docs/map-gps-tracks.md §6; the row's "in the PDF's page raster", G9 question 2's precedent): a GPS track
+  // converted into a line is an `add` of type 2 with a ski-O library symbol materialised on first use.
+  it("a converted GPS track — a line with the ski-O track symbol materialised on first use — is drawn inside its box", async () => {
+    const m = mapDocument.materialiseSymbol(doc, "ISSkiOM2019:801.1");
+    expect(m.ok, "every imported map carries the Ski-O green (map-symbols §12)").toBe(true);
+    if (!m.ok) return;
+    const start = await pdf();
+    const at = spot(0, -40);
+    const u = doc.header.unitsPerMm;
+    // An L of 3 mm legs, as the conversion writes it: corner nodes in whole document units.
+    const coords: mapDocument.PatchCoord[] = [
+      [Math.round(at.native[0] - 1.5 * u), Math.round(at.native[1] + 1.5 * u)],
+      [Math.round(at.native[0] - 1.5 * u), Math.round(at.native[1] - 1.5 * u)],
+      [Math.round(at.native[0] + 1.5 * u), Math.round(at.native[1] - 1.5 * u)],
+    ];
+    await applyPatchChange(ctx.db, ctx.eventId, hash, {
+      put: [{ op: "add", id: "0190a000-0000-7000-8000-0000000000b3", type: mapDocument.OBJECT_TYPE.line, symbol: { patch: m.key }, coords }],
+      putSymbols: { [m.key]: m.symbol },
+    });
+    const after = await pdf();
+    expect(after.equals(start)).toBe(false);
+    const diff = await diffPixels(start, after);
+    expect(diff.length).toBeGreaterThan(0);
+    expect(diff.filter((p) => !inBox(p, at.pageMm))).toEqual([]);
+  }, 120_000);
 });
