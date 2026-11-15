@@ -11,8 +11,9 @@ import { API_BASE } from "./helpers/api-base";
  * leaves it: the map's job ends `failed: http`, the test ends in an error.
  *
  * Leaves the settings as it found them: the account cleared, providers and
- * resolution reset, the live-check record and the sealing key deleted, and
- * the club map it uploaded removed, so later specs see DEM fetch off.
+ * resolution reset, the live-check record, the sealing key and the DEM jobs
+ * deleted, and the club map it uploaded removed, so later specs see DEM
+ * fetch off and the next run starts clean.
  */
 
 /** Obviously fake test values. */
@@ -34,11 +35,14 @@ const E2E_DATABASE_URL = process.env.E2E_DATABASE_URL ?? `postgresql://oxygen:ox
 async function resetSettings(): Promise<void> {
   await trpc("demSettings.clearAccount");
   await trpc("demSettings.save", { providers: null, resolutionM: null });
-  // the rows the tab has no control for: the last connection test and the sealing key
+  // the rows the tab has no control for: the last connection test and the sealing key; and the
+  // DEM jobs, which only this spec makes on the E2E stack — the uploaded map's document is
+  // content-addressed and outlives the club map, so a job would carry over to the next run
   const db = new Client({ connectionString: E2E_DATABASE_URL });
   await db.connect();
   try {
     await db.query("DELETE FROM oxygen.settings WHERE key LIKE 'map\\_dem.%'");
+    await db.query("DELETE FROM oxygen.map_dem_jobs");
   } finally {
     await db.end();
   }
