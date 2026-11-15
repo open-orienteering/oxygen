@@ -5,7 +5,7 @@
  * of drawing, *Change symbol* and *Rotation*. No React here: G26's track conversion reuses `symbolPut` and `addChange`.
  */
 
-import { mapDocument, symbolLibrary, type render } from "@oxygen/shared";
+import { mapDocument, symbolLibrary } from "@oxygen/shared";
 import { coordsIn, coordsOf, opIdOf, type MapModel, type MapObjectRef } from "./model";
 
 type PatchOp = mapDocument.PatchOp;
@@ -56,8 +56,11 @@ export function kindOfType(type: number): "point" | "line" | "area" | null {
   }
 }
 
+/** What the orientation rule reads of a render (a library entry's or a document symbol's). */
+type RenderLike = { type: string; orientation?: string; glyph?: { rotatable: boolean } };
+
 /** What draws a symbol: an applied match's library entry, else its own render (the render bridge's rule). */
-export function symbolRender(s: mapDocument.DocumentSymbol | undefined): render.RenderSymbol | null {
+export function symbolRender(s: mapDocument.DocumentSymbol | undefined): RenderLike | null {
   if (!s) return null;
   const match = mapDocument.isAppliedMatch(s.match) ? s.match : null;
   const entry = match ? symbolLibrary.getLibraryEntry(match.canonicalId) : undefined;
@@ -66,13 +69,30 @@ export function symbolRender(s: mapDocument.DocumentSymbol | undefined): render.
 
 /** Whether an object's angle turns the symbol (`render/symbolise.ts`): a point, orientation `object`, a rotatable glyph. */
 export function isOrientable(s: mapDocument.DocumentSymbol | undefined): boolean {
-  const r = symbolRender(s);
-  return r?.type === "point" && r.orientation === "object" && r.glyph.rotatable;
+  return isOrientableRender(symbolRender(s));
+}
+
+const isOrientableRender = (r: RenderLike | null | undefined): boolean =>
+  r?.type === "point" && r.orientation === "object" && !!r.glyph?.rotatable;
+
+/** Whether the symbol `ref` names turns: a document symbol's drawing, a patch symbol's render, else its library entry's. */
+export function isOrientableRef(pinned: Pick<mapDocument.MapDocument, "header">, patch: mapDocument.MapPatch | null, ref: PatchSymbolRef): boolean {
+  if ("doc" in ref) return isOrientable(pinned.header.symbols[ref.doc]);
+  const own = patch && Object.hasOwn(patch.symbols, ref.patch) ? patch.symbols[ref.patch].render : undefined;
+  return isOrientableRender(own ?? symbolLibrary.getLibraryEntry(ref.patch)?.render);
 }
 
 /** The angle a press-drag of (`dx`, `dy`) paper mm sets (§13 "Drawing"): counter-clockwise from +x, 0.1°, 0–3599. */
 export function angleOfDrag(dx: number, dy: number): number {
   const a = Math.round((Math.atan2(dy, dx) * 1800) / Math.PI);
+  return ((a % 3600) + 3600) % 3600;
+}
+
+/** Degrees typed in *Rotation* (a comma allowed) → 0.1°, normalised to 0–3599; null when it is not a number. */
+export function tenthsOf(text: string): number | null {
+  const v = Number(text.trim().replace(",", "."));
+  if (!text.trim() || !Number.isFinite(v)) return null;
+  const a = Math.round(v * 10);
   return ((a % 3600) + 3600) % 3600;
 }
 
@@ -85,8 +105,9 @@ export function addOp(id: string, type: 1 | 2 | 3, symbol: PatchSymbolRef, coord
 export const addChange = (put: Extract<SymbolPut, { ok: true }>, op: PatchOp): PatchChange => withSymbols(put, { put: [op] });
 
 /** A lowercase UUIDv7 (`map-patches.md` §2.2 orders added objects by id, so by creation time). */
-export function newAddId(now = Date.now(), random: (n: Uint8Array) => Uint8Array = (n) => crypto.getRandomValues(n)): string {
-  const b = random(new Uint8Array(16));
+export function newAddId(now = Date.now(), random: (b: Uint8Array<ArrayBuffer>) => void = (b) => { crypto.getRandomValues(b); }): string {
+  const b = new Uint8Array(new ArrayBuffer(16));
+  random(b);
   let t = now;
   for (let i = 5; i >= 0; i--) { b[i] = t % 256; t = Math.floor(t / 256); }
   b[6] = 0x70 | (b[6] & 0x0f);

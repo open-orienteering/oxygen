@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { mapDocument, render } from "@oxygen/shared";
 import { inverseChange, mapModelOf, objectInfo } from "../modes/map/model";
 import {
-  addChange, addOp, angleChange, angleOfDrag, isOrientable, kindOfType, newAddId, refOfSymbolKey, resymbolChange, symbolKey, symbolPut,
+  addChange, addOp, angleChange, angleOfDrag, isOrientable, isOrientableRef, kindOfType, newAddId, refOfSymbolKey, resymbolChange, symbolKey, symbolPut, tenthsOf,
 } from "../modes/map/symbols";
 import { HASH, patchOf, pinnedDoc } from "./map-fixture";
 
@@ -108,11 +108,26 @@ describe("the add op (§13 \"Drawing\")", () => {
 describe("change symbol and rotation (§13 \"Ops\")", () => {
   const pinned = pinnedDoc();
 
-  it("orientable: a point render with orientation object and a rotatable glyph", () => {
+  it("orientable: a point render with orientation object and a rotatable glyph; a library or patch key by its render", () => {
     const m = mapModelOf(HASH, pinned, null);
     expect(isOrientable(m.doc.header.symbols[3])).toBe(true);
     expect(isOrientable(m.doc.header.symbols[2])).toBe(false);
     expect(isOrientable(m.doc.header.symbols[1])).toBe(false);
+    expect(isOrientableRef(pinned, null, { doc: 3 })).toBe(true);
+    expect(isOrientableRef(pinned, null, { patch: KNOLL })).toBe(true);
+    expect(isOrientableRef(pinned, null, { patch: BOULDER })).toBe(false);
+    const put = symbolPut(pinned, null, { patch: KNOLL });
+    if (!put.ok) throw new Error("expected ok");
+    expect(isOrientableRef(pinned, patchOf([], put.putSymbols), { patch: KNOLL })).toBe(true);
+  });
+
+  it("the rotation field's degrees: comma or point, normalised, 0.1° steps; not a number is null", () => {
+    expect(tenthsOf("45")).toBe(450);
+    expect(tenthsOf(" 12,34 ")).toBe(123);
+    expect(tenthsOf("-90")).toBe(2700);
+    expect(tenthsOf("360")).toBe(0);
+    expect(tenthsOf("")).toBeNull();
+    expect(tenthsOf("abc")).toBeNull();
   });
 
   it("a document object is resymbolled; back to its own symbol drops the resymbol; the same symbol writes nothing", () => {
