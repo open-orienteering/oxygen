@@ -250,14 +250,18 @@ test.describe("the map as the drape (map-rendering.md §5.6, H6)", () => {
   test("the drape follows the camera once it has settled, not while it moves", async ({ page }) => {
     await open(page, `doc=course&field=cone&pitch=0&e=1&zoom=4&x=10&y=10`);
     const before = (await terrainStats(page)).drapeRenders;
-    // to control 32, outside the drape rendered round the start
+    // to control 32, outside the drape rendered round the start; the frame read in the same task, so
+    // the settle timer (DRAPE_SETTLE_MS, 150 ms) cannot re-render the drape before it is read — a
+    // second round trip took longer than that on a busy CI runner
     const moved = await page.evaluate(({ x, y }) => {
       const api = (window as unknown as { __mapTerrainDoc: DocApi }).__mapTerrainDoc;
       api.setCamera({ xMm: x, yMm: y });
-      return api.engineStats().terrain!.drapeRenders;
+      const url = (document.querySelector('[data-testid="map-terrain-canvas"]') as HTMLCanvasElement).toDataURL("image/png");
+      return { renders: api.engineStats().terrain!.drapeRenders, url };
     }, DOC.control32);
-    expect(moved).toBe(before);
-    expect(purpleIn(await pixels(page))).toBe(0); // the old drape does not reach: shaded background only
+    expect(moved.renders).toBe(before);
+    // the old drape does not reach: shaded background only
+    expect(purpleIn(PNG.sync.read(Buffer.from(moved.url.split(",")[1], "base64")))).toBe(0);
     await expect.poll(async () => (await terrainStats(page)).drapeRenders, { timeout: 5_000 }).toBeGreaterThan(before);
     await expect.poll(async () => purpleIn(await pixels(page)), { timeout: 5_000 }).toBeGreaterThan(200);
   });
