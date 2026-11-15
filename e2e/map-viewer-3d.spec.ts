@@ -615,6 +615,8 @@ test.describe("the viewer's 3D mode", () => {
     await expect(canvas).toHaveAttribute("data-terrain-lines", "1");
     await expect(viewer).toHaveAttribute("data-view-mode", "3d");
     // The next runner: the previous track stays until the next is in, so the choice and 3D hold.
+    const mirror = viewer.getByTestId("gps-route-3d");
+    const firstPoints = await mirror.getAttribute("data-points");
     const modes = await watchViewMode(viewer);
     const surfaces: string[] = [];
     await viewer.evaluate((el) => {
@@ -631,5 +633,8 @@ test.describe("the viewer's 3D mode", () => {
     expect(await modes()).not.toContain("2d");
     await expect(viewer).toHaveAttribute("data-surface-source", ANCHORED);
     expect(asked.map((a) => a.source)).toEqual([GROUND, ANCHORED]);
+    // The second runner's track replaced the first (the mirror's projected points moved with it).
+    await expect(mirror).toHaveCount(1);
+    await expect(mirror).not.toHaveAttribute("data-points", firstPoints!);
   });
 });
