@@ -1925,6 +1925,178 @@ paper mm) holding its `course-label` (`data-text`, `data-x/y`), and one
 not in the accessibility tree; an accessible map description is slice
 D's editor work). With an editor, `data-editor-hit="shared"`.
 
+#### 3D mode (H7)
+
+The viewer's 2D / 3D switch: the same canvas, engine and context draw the
+document draped over its height field (§5.6) under a perspective camera.
+Research 10 §5 step 3, §8; slice H answers 6 and 7.
+
+**Decided with the user (H7, 2026-11-15)**
+
+1. **Exaggeration**: default **2×**, a control from 1× to 5× in steps of
+   0.5 (`EXAGGERATION`), remembered per browser
+   (`oxygen.map.exaggeration`). The H-gate's club member may move the
+   default. §5.6 decision 2 left it here.
+2. **The sheet beyond the field** (§5.6 decision 4): the viewer pads the
+   field with **no-data cells out to the document's bounds** (`boundsMm`
+   of the header) before it reaches the engine. §5.6 "No-data" draws them
+   at the nearest data cell's height with flat normals, so the title,
+   legend and margins are drawn in 3D in their printed colours and the
+   field's edge has no wall. A truly flat apron (decision 4's word) would
+   leave a step wherever the edge is not at the apron's height.
+3. **The field's share of the budget** (§5.6 decision 5 counts it, sets no
+   limit): the viewer **coarsens** the padded field by the smallest whole
+   factor `f` for which `W · H · 5 ≤ budget / 3` and both sides ≤
+   `min(4096, MAX_TEXTURE_SIZE)` — a cell of the result is the mean of the
+   data cells of its `f × f` block, no-data when more than half of the
+   block is no-data, confident when most of its data cells are. A club
+   map's 150 MB never coarsens a corpus field; an event map's 30 MB takes
+   a sprint's 0.2 mm cells to 0.4 mm. The drape keeps its own third
+   (decision 5), so field + drape stay within two thirds.
+
+**Where it is offered** (answer 6): every `MapPanel` mount except the
+editor (`editor` set) and the kiosk (`MapPanel allow3d={false}` from
+`KioskPage`) — the viewer, the shell's map pane, the readout and runner
+previews, the dashboard and the Tracks page. A viewer with
+`hideControls` has no buttons, so no toggle either.
+
+**The offer** (`terrain3dOffer(terrain, host)`, `lib/map-3d.ts`) reads
+`course.mapMetadata.terrain` (`docs/map-storage.md` §4.7 "Descriptor"),
+the `contours` field — the DEM's (`terrain.dem`) is H11's choice:
+
+| Descriptor | Toggle (`map-3d-toggle`) | Reason (`data-terrain-reason`) |
+|---|---|---|
+| null, `none` | not shown | `no-contours` |
+| `over-cap` | shown, unavailable | `over-cap` |
+| `ready`, `decided` < `TERRAIN_3D_MIN_DECIDED` (0.8) | shown, unavailable | `low-confidence` (the floored percent, as the review's line) |
+| `pending` | shown | — (the click fetches, which derives; the descriptor is read again and the gate applied) |
+| `ready`, `decided` ≥ 0.8 | shown | — |
+
+An unavailable toggle is `aria-disabled`; a click shows the reason
+(`map-3d-notice`) and stays in 2D. A `pending` document is not derived
+until someone asks for 3D (a derive is up to ~20 s of server time).
+
+**Fallback.** Whatever refuses or loses 3D leaves the 2D view drawn and
+names the reason in `map-3d-notice` for a few seconds:
+
+| Reason | When |
+|---|---|
+| `low-confidence` | after a `pending` fetch, the re-read descriptor is below the gate |
+| `no-contours`, `over-cap` | a `pending` descriptor's fetch answered 404 with that `reason` (the derive found no contours, or the cap); the descriptor is read again and hides or disables the toggle |
+| `unavailable` | the field cannot be had: offline and not stored, 401 / 403, another 404, 503, unreadable bytes |
+| `webgl` | `engine.setTerrain` rejects (a field over the texture limit, a lost context) |
+| `unavailable` | after a `pending` fetch, the descriptor read again is still `pending` or the read fails |
+
+**Field** (`hooks/useHeightField.ts`): `loadHeightField(url, opts)` fetches
+the descriptor's `url` as given (`/api/map-documents/:hash/height.bin?v=`,
+`?source=` for H11) through `venueAwareFetch` with the document's headers
+(`x-event-id`, `x-kiosk-key`), decodes it with `decodeHeightField` from
+the field's client entry, and keeps it like the document (§5.4 "Host"):
+one request per URL shared by concurrent callers, two decoded fields in
+memory, a copy in Cache Storage `map-heightfields` under the full URL
+(app-written; the service worker has no route for it) that serves it
+offline, failures not cached. `useHeightField(url, eventId)` asks only
+while `url` is non-null — the viewer sets it on the first switch to 3D —
+and returns `{ state: idle | loading | ready | error (kind), retry }`.
+`viewerField(field, boundsMm, budgetBytes, maxTextureSize)`
+(`lib/map-3d-field.ts`) pads and coarsens it (answers 2 and 3), on the
+main thread, once per field, budget and texture limit (kept for a
+re-entry).
+
+**State.** The 2D state stays the state: `PaperViewport` (centre, zoom)
+and `userBearing`, plus `pitchDeg`. Zoom buttons, fit, GPS follow, the
+compass and the `data-centre-*` attributes work on it unchanged in 3D.
+The view is `View3d { centreX, centreY, pxPerUm, bearingDeg, pitchDeg }`
+with `bearingDeg` the GL view's `rotationDeg` (−the inner frame's angle).
+
+- **Entering** 3D (the toggle, once the field's mesh is up) sets pitch
+  **45°**; pitch is clamped to [0, **70**] (`PITCH`: H6 measured at 60°;
+  beyond 70° the footprint reaches the whole map, §8 "Club-full tilted
+  close up"). No animation.
+- **Leaving** keeps centre and zoom; the bearing is kept when the rotation
+  lock is off and reset to north up when it is on (the lock's promise in
+  2D). The engine gets `setTerrain(null)`: 2D pays no field bytes, and a
+  re-entry prepares the field again in the worker (the decoded field
+  stays in memory).
+- The mode is not remembered; the exaggeration is.
+
+**Camera** (`camera3d(view, scene)`): the target is the view centre (model
+µm, the arenas' origin removed) at **`targetZ`, the mesh box's mid-height
+at the drawn exaggeration** — constant while the field and exaggeration
+are, so pans, zooms and orbits are exact on the target's plane and the
+camera does not bob over the ground; `distanceUm =
+distanceForPxPerUm(pxPerUm · dpr)`; `bearingDeg`; `pitchDeg`; the canvas's
+device size. At pitch 0 this is the 2D view (the §5.6 hand-over), so
+entering and leaving 3D at pitch 0 changes no pixel (§5.6 "Drape layers").
+
+**Drawing** (`VectorMapLayer`): props `heightField` (the fitted field,
+`null` in 2D) and `terrain` (`{ camera, exaggeration }`, `null` in 2D),
+`onTerrain` (`{ mesh, field }` once the mesh is up — the model origin is
+`mesh.originUm` — and `null` when it goes: the field dropped, or the
+engine remounted) and `onTerrainError`. After the load (and after a remount) the
+layer calls `engine.setTerrain(heightField)`; a superseded rejection is
+ignored. A frame with `terrain` and a mesh is `engine.renderTerrain(terrain,
+opts)` with the colours and `background` paper white; every other frame
+is the 2D `setView` + `render` (+ loupe), which re-selects the 2D view
+by itself. Every camera change and every `onChange` (settle timer,
+arrivals, §5.6 "Settling") is one redraw. The renderer is made with `{
+depth: true }` (the mesh's depth test). The canvas carries `data-mode`
+(`2d` / `3d`, the frame last drawn) and `data-terrain-ready="true"` once
+the camera has been still for 250 ms, `whenComplete()` has resolved and a
+3D frame followed; a 2D frame forgets it, so a re-entry waits again.
+
+**Gestures** (`lib/map-3d.ts`, pure, `reduceGesture3d(state, event,
+scene)`): the 3D view takes the pointer, touch and wheel events on the
+viewer in the capture phase, before they reach the UI layer or the 2D
+handlers, wherever they start — on the canvas or on a ring of the UI
+layer — except on the viewer's own controls (buttons, inputs, labels).
+A gesture's moves are followed on the window, without pointer capture,
+so a click on a ring still reaches the ring. `map-3d-surface`, a layer
+over the canvas under the UI layer, carries the cursor and the
+`touch-action`. The 2D handlers are not involved.
+
+| Input | 3D |
+|---|---|
+| left drag, one finger | pan: the grabbed ground point (the pick, else the target's plane) stays under the pointer (ray ∩ the horizontal plane at its height) |
+| wheel | zoom by ±0.15 log₂ about the ground point under the cursor (same rule), within the 2D zoom limits |
+| right drag, ctrl / ⌘ + left drag | orbit: 180° of bearing per container width, 90° of pitch per container height (drag up tilts towards the horizon) |
+| two fingers | classified in their first 8 px and held: **tilt** when both move vertically the same way (each ≥ 8 px, the fingers' distance and angle steady) — pitch by the midpoint's vertical motion; otherwise **pinch** — zoom about the midpoint and pan with it, plus **twist** of the bearing once the angle passes 8°, whatever the 2D rotation lock (orbiting is what the mode is for) |
+| compass | bearing to north up (as in 2D); pitch kept |
+
+One finger follows 2D's rule: on a coarse pointer outside fullscreen it
+scrolls the page (`touch-action: pan-y`) and the map takes two fingers.
+A gesture breaks GPS follow as in 2D. Measuring and the editor's
+gestures are 2D-only: the measure button is hidden in 3D and entering 3D
+ends a measurement.
+
+**UI layer** (the SVG over the canvas): in 3D the overlay frame is
+unrotated and container-sized, and every paper point reaches it through
+the camera (`projector3d`: the surface height at the point — `surfaceZ`,
+`targetZ` off the mesh — then the camera matrix, CSS px; null behind the
+eye) instead of `mmToInner`; screen points go back through `screenRay` +
+`pickTerrain`. WGS 84 inputs still reach paper mm through `mapGeo` only.
+
+- Rings that circle a draped symbol (status, completion, click targets)
+  take the anchor's ground affine (the projection's 2 × 2 Jacobian there,
+  over the centre's scale) as an SVG transform, so they lie on the ground
+  around the drawn circle; at pitch 0 the affine is a rotation, which
+  leaves a circle as it is.
+- Markers and labels stay upright and unscaled at their projected anchor:
+  punch badges, leg pills, the GPS dot and its accuracy ring (radius at
+  the anchor's scale).
+- GPS tracks are SVG polylines through the projector, not lifted and not
+  depth-tested, until H8 draws them on the terrain.
+- The course is in the drape (§5.4 "Overlay"): no SVG course symbol in 3D
+  either. Control numbers are part of it, foreshortened with the ground.
+- No occlusion test: a marker behind a hill is drawn over it (§8).
+- The scale bar is hidden at pitch > 0 (the scale varies over the screen).
+
+**Attributes.** `map-viewer` adds `data-view-mode` (`2d` / `3d`),
+`data-pitch`, `data-exaggeration` (3D only) and `data-terrain-reason`
+(the last fallback's reason until 3D is asked for again, else the
+offer's). `data-rotation` stays the GL
+view's angle in both modes.
+
 #### Call sites
 
 Every 09 §1 call site reaches the base layer through `MapPanel` →
@@ -1954,6 +2126,10 @@ mounts it only with a pinned document.
 | `lib/__tests__/course-layer-request.test.ts` | sites from visible positioned controls with kinds; highlighted courses as items (by flag or name, one or several, none → `null`); all-controls when a drawn site is on no course; sequence numbers only for one ordered course with the sheet or editor; single-course label offsets, pending ones winning; positions as given; faded controls left out; an imported course's preclipped legs → pieces, its cuts → circle gaps, extras; generated legs: bent path kept, automatic gaps and cuts not read, a leg count that does not match ignored |
 | `e2e/map-control-circles.spec.ts`, `e2e/map-multicourse.spec.ts` | code labels of the selected course (the GL layer's `course-label` mirror), sequence numbers for one course with descriptions, codes for several; pills and the sheet SVG text; `data-course-layer="gl"` |
 | `e2e/map-viewer-gestures.spec.ts`, `mobile-layout.spec.ts`, `course-editor*.spec.ts`, `wide-screen-map-pane.spec.ts`, `webserial.spec.ts`, `kiosk*.spec.ts` | the paper view's gestures, measure, event switching (vector layer ready) and the readout map, once in `chromium` (E3: no per-pipeline projects) |
+| `lib/__tests__/map-3d.test.ts` (H7) | the offer table (hidden, unavailable with the floored percent, pending, available; editor and kiosk hidden); exaggeration clamp; the camera at pitch 0 = `viewMatrix` on the target's plane (50 random views, DPRs, bearings); `targetZ` mid-height; the projector at pitch 0 on flat ground = `mmToInner` + the CSS rotation < 0.5 px (200 random views); tilted over a cone, project → unproject within a cell; the ground affine a rotation at pitch 0, foreshortened by cos(pitch) along the view tilted; null behind the eye; pan and wheel zoom keep the ground point under the pointer < 0.5 px (flat and tilted); zoom limits; orbit rates and pitch clamp; two-finger classification (tilt, pinch by distance, angle, midpoint, null in the slop); the reducer: one-finger pan and the page-scrolling finger, orbit drag, wheel, pinch ×2, twist from its activation without a jump, tilt, two → one finger; bearing ↔ user bearing |
+| `lib/__tests__/map-3d-field.test.ts` (H7) | padding by whole no-data cells on the grid to the bounds, `sampleHeight` unchanged inside, no copy when covered; coarsening means, the more-than-half no-data rule, confidence by majority, the corner kept; the smallest factor; a club budget pads only, an event map's coarsens by 2, a 1024-texel device |
+| `hooks/__tests__/useHeightField.test.ts` (H7) | the descriptor's URL with `x-event-id` / `x-kiosk-key`, decoded; one request shared, the field kept; the Cache Storage copy serves offline and replaces the document's other versions of the same source; 403 / 404 with `reason` / 503 / 500 / unreadable / offline classified, failures not kept |
+| `e2e/map-viewer-3d.spec.ts` (H7) | the seed map (no contours): no toggle, `data-terrain-reason="no-contours"`; the demo map imported and pinned: one `height.bin?v=` request with `x-event-id`, `data-view-mode="3d"`, canvas `data-mode="3d"` and `data-terrain-ready`, pitch 45, exaggeration 2, the frame differs from 2D and carries the map's ink, measure hidden; a right-drag raises the pitch and turns the bearing, the compass resets it; a right-drag and a wheel that start on a control's ring of the UI layer orbit and zoom the 3D view (not the 2D handlers); exaggeration 5 changes the frame; two CDP touches moving up raise the pitch; back to 2D the frame equals the 2D one (< 0.5 % of pixels), re-entry asks for neither field nor document; a followed GPS fix on the screen's vertical centre line; the descriptor rewritten below the gate (79.6 %): the toggle `unavailable`, `aria-disabled`, its title the reason, a click shows `low-confidence` and stays 2D; the descriptor first `pending`: the switch fetches, the descriptor is read again and 3D is drawn; an aborted field: `map-3d-notice` `unavailable`, 2D drawn. `MAP_3D_SHOT=1` writes `docs/screenshots/map-3d.png` |
 
 ### 5.5 Editor
 
@@ -2207,8 +2383,8 @@ and `worker.ts` (the field's CPU preparation).
    cannot). The light is fixed in paper space, not the camera's, so
    relief reads the same from every bearing.
 2. **Vertical exaggeration is a draw parameter with no default here.**
-   The dev page and the E2E pass it explicitly; the viewer's default and
-   range are H7's (§5.4 "3D mode").
+   The dev page and the E2E pass it explicitly; the viewer's default (2×)
+   and range (1–5×) are §5.4 "3D mode" decision 1 (H7).
 
 #### Decided with the user (H6, 2026-11-14)
 
@@ -2237,8 +2413,9 @@ and `worker.ts` (the field's CPU preparation).
 4. **The drape is clipped to the mesh.** The height field covers the
    contours' bounding box + 2 mm (`map-terrain.md` §2.4, §5), so sheet
    parts outside it — a title, a legend, a margin beyond the field — are
-   not drawn in 3D. Whether the mesh gets a flat apron to the document's
-   bounds is H7's call, on real maps (§8).
+   not drawn in 3D by the engine. The viewer pads the field with no-data
+   cells to the document's bounds before it gets there (H7, §5.4 "3D
+   mode" decision 2), so the sheet is drawn at the edge's heights.
 5. **The cap is inside the residency budget.** The height and normal
    textures and the drape layers count against the existing budget
    (30 MB event maps, 150 MB club maps; `budgetBytes()`); the drape
@@ -3431,9 +3608,10 @@ what became of it:
 | `e2e/__golden__/map-gl/`, `e2e/map-gl-golden.spec.ts` | committed goldens and the browser comparison |
 | `e2e/map-gl-doc.spec.ts` | whole-document pipeline on `e2e/test.ocd`: arena path, worker, eviction, arena = per-pass path |
 | `scripts/measure-gl.mjs` | corpus measurements through `/dev/map-gl-doc` (§5.2 Measurements; `--terrain`: §5.6 "Measurements (H6)") |
-| `packages/web/src/components/VectorMapLayer.tsx` | the vector base layer in `MapViewer` (§5.4): canvas, engine and worker lifecycle, status; the course layer request and its replies; the editor's loupe; Map mode's document objects (`mapObjects`, G5) |
+| `packages/web/src/components/VectorMapLayer.tsx` | the vector base layer in `MapViewer` (§5.4): canvas, engine and worker lifecycle, status; the course layer request and its replies; the editor's loupe; Map mode's document objects (`mapObjects`, G5); the 3D frame (`heightField`, `terrain`, H7) |
 | `packages/web/src/lib/course-layer-request.ts` | the viewer's course-layer input (§5.4 "Overlay", `course-layer.md` §5) |
-| `packages/web/src/components/MapViewer.tsx` | the host: viewport state, gestures, the SVG UI layer, editor hit-testing |
+| `packages/web/src/components/MapViewer.tsx` | the host: viewport state, gestures, the SVG UI layer, editor hit-testing; the 3D mode's state and the projected UI layer (H7) |
+| `packages/web/src/components/Map3d.tsx`, `lib/map-3d.ts`, `lib/map-3d-field.ts`, `hooks/useHeightField.ts` | the 3D mode (§5.4 "3D mode", H7): toggle, exaggeration, notice and pointer surface; offer, camera, projector and gesture reducer; the field padded and coarsened; the field's loader |
 | `packages/web/src/lib/map-viewport.ts` | the paper viewport model (§5.4 "Viewport"), `glView` |
 | `packages/web/src/lib/vector-map.ts` | paper frame, bounds, colours, proxy colours, budget from a document header |
 | `packages/web/src/lib/map-document-cache.ts`, `map-fonts.ts` | document, font and text atlas loading for the viewer (`docs/map-storage.md` §7.1) |
@@ -3567,10 +3745,6 @@ The shared module is exported as a namespace: `import { render } from
   Drawing the vectors through the perspective matrix would still need a
   per-vertex screen density for the screen-only rules instead of the one
   `pxPerUm`; nothing plans it.
-- **§5.6 the sheet outside the field** (H6, decision 4): the mesh spans
-  the height field (the contours' bounding box + 2 mm), so a title,
-  legend or margin beyond it is not drawn in 3D. A flat apron to the
-  document's bounds is H7's call on real maps.
 - **§5.6 a drape re-render is one hitch** (H6): every layer is rendered
   in the frame the camera settles in (tiles, mips) — "Measurements (H6)"
   has its time per map. Spreading the tiles over frames, or keeping the
@@ -3591,9 +3765,25 @@ The shared module is exported as a namespace: `import { render } from
   off the main thread now, but still 0.2–0.6 s of worker time on a
   corpus map ("Measurements (H6)"), during which the worker prepares no
   cells.
-- **§5.6 in the viewer** (H7): `useHeightField`, the 2D / 3D switch, the
-  gestures, the exaggeration control and its default; GPS lines on the
-  terrain (H8).
+- **§5.4 3D mode — GPS tracks and replay on the terrain** (H8): until
+  then `gpsRoutes` are SVG polylines through the projector, not lifted and
+  not depth-tested.
+- **§5.4 3D mode — the surface choice** (H11): the viewer draws the
+  `contours` field; the DEM's ground surface and its attribution are H11's.
+- **§5.4 3D mode — UI markers behind the terrain**: no occlusion test; a
+  ring or the GPS dot behind a hill is drawn over it. A depth read-back
+  or a CPU line-of-sight per marker (`pickTerrain` from the eye) would
+  hide it.
+- **§5.4 3D mode — camera animation**: entering and leaving 3D, and the
+  compass's north-up, jump; a short tween of pitch and bearing is not
+  built.
+- **§5.4 3D mode — the field's fitting on the main thread**: padding and
+  coarsening a field (`viewerField`) runs in the page, once per field; a
+  club field near the 60 M-cell cap is tens of millions of cells and may
+  be a hitch of its own on entering 3D. Not measured on the corpus;
+  moving it to the map worker beside `prepareTerrain` is the remedy.
+- **§5.4 3D mode — measuring in 3D**: the measure tool is 2D-only (hidden
+  in 3D); plan distances through `unproject` would serve it.
 - **§5.6 level-of-detail popping.** A chunk changes level in one frame
   (no geomorphing), and coarse levels point-sample the heights at their
   vertices rather than filtering them; with the normal map carrying the

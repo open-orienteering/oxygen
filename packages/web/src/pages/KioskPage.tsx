@@ -898,6 +898,7 @@ function ReadoutScreen({
               height="calc(100vh - 110px)"
               fitToControls
               hideToolbar
+              allow3d={false}
               punchStatusByCode={courseMapInfo.punchStatusByCode}
               focusControlCodes={courseMapInfo.focusControlCodes}
             />
