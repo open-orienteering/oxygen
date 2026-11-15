@@ -1405,9 +1405,7 @@ heights). Storage, the job and the route are `docs/map-storage.md` §4.7.
 ### 7.0b Decided with the user (2026-11-15): the settings tab
 
 These amend answer 4 (opt-in by environment) and SLICES answer 5 (the
-credential from the instance's secret store). H12 implements them; until
-it lands, §7.1 and `docs/deploy-gcp-cloud-run.md` "Height data" describe
-what runs.
+credential from the instance's secret store). H12 implements them (§7.8).
 
 5. **The DEM is configured in Settings → Height data**
    (`/settings?tab=terrain`), an admin tab of its own beside *Eventor*,
@@ -1441,6 +1439,14 @@ what runs.
    club map the admin picks (under the 1 m window cap), as the admin's
    explicit action; it prints the same aggregates, and its result and time
    are stored and shown. The CLI script stays.
+10. **The sealing key lives in the database** (H12's question,
+    2026-11-15). The password is sealed with a key kept in
+    `oxygen_settings` beside it, so the deploy gains no secret: it keeps
+    the password out of plaintext reads, screens, logs and exports, not
+    away from someone holding the whole database (§7.8 "Sealing").
+11. **Admin-only is `adminProcedure`** (H12's question, 2026-11-15): on an
+    instance with auth off every caller may set or clear the account and
+    start *Test connection*, as with the Eventor keys; nobody can read it.
 
 ### 7.1 Providers
 
@@ -1450,11 +1456,11 @@ whose job does not end `no-coverage` serves the document
 
 | | Lantmäteriet (anchor grade) | Copernicus GLO-30 (coarse) |
 |---|---|---|
-| Id | `lantmateriet-2m` (`-1m` with `MAP_DEM_LANTMATERIET_RESOLUTION_M=1`) | `glo30-30m` |
+| Id | `lantmateriet-2m` (`-1m` at the 1 m resolution: Settings → Height data, or `MAP_DEM_LANTMATERIET_RESOLUTION_M=1`) | `glo30-30m` |
 | Locate | STAC `https://api.lantmateriet.se/stac-hojd/v1/search?collections=dtm-cog&bbox=w,s,e,n` (WGS 84), `next` links followed (10 pages at most); per item the asset whose type is a cloud-optimised GeoTIFF, else the `data` role's GeoTIFF | computed: one tile per 1° cell, `copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_<N|S>dd_00_<E|W>ddd_00_DEM/….tif` by its south-west corner |
 | Tiles | 10 km COGs, SWEREF 99 TM (EPSG:3006), 1 m with overviews 2, 4, … m, PixelIsArea, nodata −9999 | 1° COGs, WGS 84, 1″ × 1–2″ (PixelIsPoint), no nodata; a missing tile (sea) is no data, not a failure |
 | Read at | the 2 m overview (answer 17; §7.6) | full resolution |
-| Auth | Basic, the instance's one Geotorget account (answer 5): `MAP_DEM_LANTMATERIET_AUTH` = `user:password` from the instance's secret store (`docs/deploy-gcp-cloud-run.md` "Height data") | none |
+| Auth | Basic, the instance's one Geotorget account (answer 5): saved in Settings → Height data, sealed (§7.8), else `MAP_DEM_LANTMATERIET_AUTH` = `user:password` from the instance's secret store (`docs/deploy-gcp-cloud-run.md` "Height data") | none |
 | Vertical datum | RH 2000 | EGM2008 (no conversion: sub-metre here, and the coarse model's offsets are per component anyway) |
 | Licence | **CC BY 4.0** | the Copernicus DEM licence (free, with attribution) |
 | Attribution | **© Lantmäteriet** | © DLR e.V. 2010–2014 and © Airbus Defence and Space GmbH 2014–2018, provided under COPERNICUS by the European Union and ESA |
@@ -1469,10 +1475,13 @@ mode draws a DEM-based field — ground, or the anchored contour field —
 it shows the drawn field's `provider.attribution` and `licence` on the
 map (`docs/map-rendering.md` §5.4 "3D mode" "Surface (H11)").
 
-**Fetching is opt-in** (§7.0 answer 4). `MAP_DEM_PROVIDERS` is a comma
-list of `lantmateriet`, `glo30`; empty or unset is none, so tests, the E2E
-stack and a venue box reach no external host. Lantmäteriet named without
-a credential of the form `user:password` stays off with a warning.
+**Fetching is opt-in** (§7.0 answer 4, §7.0b 6). The providers are
+switched on in Settings → Height data (§7.8); unsaved, `MAP_DEM_PROVIDERS`
+is the deploy's default, a comma list of `lantmateriet`, `glo30`. Nothing
+saved and the variable empty or unset is none, so tests, the E2E stack
+(which also sets `MAP_DEM_OFFLINE`, §7.8) and a venue box reach no
+external host. Lantmäteriet on without a credential of the form
+`user:password` stays off with a warning.
 
 **The credential's reach.** It is sent as `Authorization: Basic` only
 over https to `lantmateriet.se` and its subdomains. Redirects are
@@ -1575,18 +1584,23 @@ request re-fetches.
 Answer 17 adopts the 2 m overview "once it has confirmed the anchor
 spread holds at 2 m and that the download service serves HTTP range
 requests". That is a check against the live service with a real
-credential, which no session makes: `pnpm --filter @oxygen/api
-dem:live-check -- --map <club map>` (`packages/api/scripts/dem-live-check.ts`,
-logic in `map-store/dem-live-check.ts`, tested against the fixture),
-run by the operator with their own `MAP_DEM_LANTMATERIET_AUTH`, on a
-map under the 1 m window cap (club-2026's size, not club-full's, §7.7). It
+credential, which no session makes. The operator runs it either from
+Settings → Height data, *Test connection* on a club map they pick, with
+the saved (or the environment's) account (§7.0b 9, §7.8), or from the
+CLI with their own `MAP_DEM_LANTMATERIET_AUTH`: `pnpm --filter
+@oxygen/api dem:live-check -- --map <club map>`
+(`packages/api/scripts/dem-live-check.ts`). The logic is
+`map-store/dem-live-check.ts`, tested against the fixture. Either way on
+a map under the 1 m window cap (club-2026's size, not club-full's, §7.7). It
 locates the map's tiles, sends one `Range` request through any
 redirect, reads the tile profile, and runs `anchorLevels` at 1 m and
-2 m. It prints aggregates only and writes nothing. **Pass**: 206 with
+2 m. It prints aggregates only; the CLI writes nothing, the tab stores
+the same aggregates and verdict with its time (§7.8). **Pass**: 206 with
 `Content-Range`; the credential reached Lantmäteriet's hosts only; the
 profile reads and has a 2 m level; at 2 m the accepted share of covered
 length is within 2 points of 1 m's and the half-IQR median ≤ 0.3 I. On
-a fail the instance sets `MAP_DEM_LANTMATERIET_RESOLUTION_M=1` (75 MB
+a fail the instance switches to 1 m (the tab's resolution, or
+`MAP_DEM_LANTMATERIET_RESOLUTION_M=1`; 75 MB
 for club-2026 instead of 22 MB) and the result is recorded here. **Not
 run yet** (2026-11-14): the 2 m default ships on T2's evidence and this
 check is pending; H10 is done without it (the coordinator's brief).
@@ -1632,6 +1646,118 @@ machine shared with other sessions:
   the worker (transferred). One derive of either kind runs at a time per
   instance (`docs/map-storage.md` §4.7), so on the 4 GiB Cloud Run
   instance the DEM derive's ~1.0 GB does not stack with the contours'.
+
+### 7.8 Settings → Height data (H12)
+
+§7.0b's tab. Store `packages/api/src/map-store/dem-settings.ts`, router
+`packages/api/src/routers/demSettings.ts` (`demSettings.*`), panel
+`packages/web/src/components/HeightDataPanel.tsx`.
+
+**Keys.** Rows of `oxygen_settings` (no migration; `map_storage_gc.*` is
+the precedent):
+
+| Key | Value | Absent |
+|---|---|---|
+| `map_dem.providers` | comma list of `lantmateriet`, `glo30`; `""` is explicitly none | `MAP_DEM_PROVIDERS` |
+| `map_dem.lantmateriet_resolution_m` | `1` or `2` | `MAP_DEM_LANTMATERIET_RESOLUTION_M`, else 2 |
+| `map_dem.lantmateriet_account` | JSON `{ user, secret, savedAt, savedBy }`, `secret` the sealed password | `MAP_DEM_LANTMATERIET_AUTH` |
+| `map_dem.secret_key` | the sealing key: 32 random bytes, base64 | created on the first save of an account |
+| `map_dem.live_check` | JSON: the last *Test connection* (below) | never run from the tab |
+
+**Precedence** (§7.0b 6). Each of the three values — the provider pair,
+the resolution, the account — is the saved row when there is one, else
+the environment, independently; the tab shows each one's origin
+(`saved`, `environment`, `default`) and a reset to the deploy's default
+(deleting the row). With neither, no provider is on. Lantmäteriet on
+without a usable account stays off with a warning, as in §7.1, and the
+tab says so. A saved account that cannot be opened (the key row lost)
+leaves Lantmäteriet off with a warning asking for the account again; it
+never falls back to the environment's, because the saved value wins.
+
+**Sealing** (§7.0b 7; decided with the user 2026-11-15, answer 10).
+AES-256-GCM from `node:crypto`: a random 12-byte IV per seal, the setting
+key as additional data, stored `v1:<iv>:<tag>:<ciphertext>` (base64).
+The key is `map_dem.secret_key` in the same table, created once with an
+insert that loses a race quietly (every instance reads back the one
+row); clearing the account keeps it. **What this protects:** the
+password never appears in plaintext in a read of the row, a screen of
+the table, a log or a settings export; it does **not** protect against
+someone holding the whole database, who has the key beside it. The
+deploy gains no secret. The user name is stored and shown in the clear
+(it is not the secret).
+
+**What leaves the server.** `demSettings.get` returns the providers with
+their origin, the resolution with its origin, the account as `{ saved,
+user, savedAt, savedBy, origin }` or null, the warnings, and the last
+live check. No procedure returns, logs or stores the password, its
+sealed form or the `user:password` string; failures pass through
+§7.1's masking (`demErrorText`).
+
+**Who.** Every `demSettings` procedure is `adminProcedure`, the queries
+too. On an instance with auth off that admits every caller, as it does
+for the Eventor keys (answer 11); the password stays unreadable either
+way.
+
+**Reading the configuration at runtime.** The registry
+(`dem-registry.ts`) no longer is set once at startup: an installed source
+reads the rows over the environment (`refreshDemProviders`) before each
+engine kick, on the 60 s tick (which now always runs, so a provider
+turned on in the tab works without a restart) and after every save, and
+rebuilds the providers only when the effective configuration's
+fingerprint changed. The descriptor reads the registry as it stands, so
+another instance follows a save within one tick. Tests without a source
+set providers directly, as before.
+
+**Saving an account** checks its form only (a user name without `:` or
+whitespace, a non-empty password; no request is made), seals and saves
+it, refreshes, then queues every `lantmateriet-*` job that ended
+`failed: auth` — waiting or final, whether Lantmäteriet is on or not —
+from its first attempt, and kicks the engine (§7.0b 7). The startup
+requeue stays for the environment's credential.
+
+**Changing a provider or the resolution** queues nothing: a map fetches
+at its next view (H10's lazy path) or through the list's retry. The
+resolution is in the provider id, so after a change from 2 m to 1 m a
+map's `lantmateriet-2m` rows are no longer served; they stay until the
+GC's version pass (pending below).
+
+**The state list.** One row per club map, its newest version's document
+(`club_map_versions` by `seq`): the name, the descriptor's DEM state and
+reason (`demDescriptor`, with the series' `rotation_correction`), the
+serving job's attempts, next attempt and masked error, and whether *Test
+connection* may run on it. **Retry** queues the map: a `failed` job of
+the serving provider (waiting or final) goes back to `queued` from its
+first attempt; a map with no job is enqueued; an `unavailable` ending is
+not retried (the document is immutable, so the result would repeat).
+
+**Test connection** (§7.0b 9) runs `runLiveCheck` (§7.6) with the
+effective credential — saved or environment, never one typed and not
+saved — on a club map the admin picks, also while Lantmäteriet is
+switched off. It refuses, before any request, without a credential, and
+on a map without a georeference (`documentDemExtent` null), over H4's
+cap, or whose extent at 1 m exceeds §7.2's 64 M window cells. It writes
+`map_dem.live_check = { state: "running", startedAt, clubMapId, mapName,
+by }`, returns at once, and runs in a worker thread
+(`dem-live-check-worker.ts`) on the derive queue — it builds the contour
+graph and holds up to ~250 MB at 1 m. It then writes `{ state: "done",
+finishedAt, report }` (§7.6's aggregates and verdict: no heights, no
+secret) or `{ state: "error", finishedAt, error }` (masked). A `running`
+entry older than 15 minutes reads as `error` (its instance went away).
+The panel polls `get` while one runs. It never changes the resolution:
+on a fail the tab advises 1 m.
+
+**Offline stacks.** `MAP_DEM_OFFLINE=1` makes the base fetch refuse
+every DEM request (`DemFetchError("http")`) before a socket opens. The
+E2E stack sets it, so the tab can be driven with a provider on and no
+network; a job there ends `failed: http`.
+
+**The panel.** The explanation of §7.0b 8 above the controls (en, sv;
+the attribution and licence strings of §7.1); the two provider switches
+with origin and reset; the account card — a password field never
+prefilled (`autoComplete="new-password"`), "saved" with the user name
+and when, change and clear; the resolution (2 m / 1 m) with origin and
+reset; *Test connection* with a map picker, the verdict's five checks,
+the aggregates and the time; the state list with a retry per row.
 
 ## Tests
 
@@ -1688,9 +1814,9 @@ machine shared with other sessions:
   the band weighting leaves a slight kink at each contour (visible as
   faint terraces in flat ground); a TIN with medial-axis points (10 §2.2)
   is the alternative if that matters. No row.
-- §7.0b (H12): the *Height data* settings tab, the encrypted account,
-  settings over the environment, *Test connection*. Until it lands the
-  account comes from the environment only.
+- §7.8: a change of resolution or provider queues no existing map (they
+  re-fetch lazily at their next view), and the other resolution's rows
+  are not collected until a `TERRAIN_VERSION` bump. No row.
 - §7.6: the live check against Lantmäteriet's service (range requests
   through the redirect, the STAC assets' profile) is pending the
   operator's run with their own credential; the 2 m default ships on
