@@ -13,7 +13,7 @@
 
 import { mapGeo } from "@oxygen/shared";
 import { RASTER_RULES } from "@oxygen/shared/src/terrain/graph/raster.js";
-import { chooseLevel, DemFetchError, readCogInfo, readCogWindow, sampleWindow, type CogWindow } from "./dem-cog.js";
+import { chooseLevel, coarserLevel, cogWindowCells, DemFetchError, overCapError, readCogInfo, readCogWindow, sampleWindow, type CogInfo, type CogWindow } from "./dem-cog.js";
 import type { DemProvider } from "./dem-providers.js";
 
 export const DEM_RULES = {
@@ -121,19 +121,30 @@ export interface DemMosaic {
   /** Tiles located, and those that held part of the extent. */
   tiles: number;
   tilesRead: number;
+  /** Ground cell of the level read, metres: the provider's, or the next coarser overview's when its own was over the cap (§7.0c answer 12). */
+  resolutionM: number;
+  /** Whether the next coarser overview was read. */
+  stepped: boolean;
 }
+
+const mCells = (n: number) => `${(n / 1e6).toFixed(1)} M`;
+const metres = (m: number) => `${Number(m.toPrecision(3))} m`;
 
 /**
  * §7.2: the provider's tiles over the extent, each read at the provider's
- * level as a window of the extent's box in the tile's CRS. `no-coverage`
- * when the provider has no tile there, or none holds any of it. Throws
- * `DemFetchError`.
+ * level as a window of the extent's box in the tile's CRS. The windows
+ * are sized from the tiles' headers first: over the cap at that level,
+ * every tile is read at its next coarser overview instead (§7.0c answer
+ * 12; one step, the same tiles; `coarser: false` turns it off, the live
+ * check's 1 m / 2 m comparison). `no-coverage` when the provider has no
+ * tile there, or none holds any of it. Throws `DemFetchError`.
  */
-export async function fetchDemMosaic(provider: DemProvider, frame: mapGeo.PaperFrame, extent: DemExtent, opts: { maxCells?: number } = {}): Promise<DemMosaic | "no-coverage"> {
+export async function fetchDemMosaic(provider: DemProvider, frame: mapGeo.PaperFrame, extent: DemExtent, opts: { maxCells?: number; coarser?: boolean } = {}): Promise<DemMosaic | "no-coverage"> {
   const tiles = await provider.locate(extent.wgs84);
   if (tiles === "no-coverage") return tiles;
-  let budget = opts.maxCells ?? DEM_RULES.maxMosaicCells;
-  const windows: CogWindow[] = [];
+  const cap = opts.maxCells ?? DEM_RULES.maxMosaicCells;
+  // the headers and boxes of every tile first: the level is decided for the whole mosaic
+  const plan: { src: { fetch: DemProvider["fetch"]; url: string }; info: CogInfo; box: PaperBox; level: number }[] = [];
   for (const tile of tiles) {
     const src = { fetch: provider.fetch, url: tile.url };
     let info;
@@ -145,15 +156,46 @@ export async function fetchDemMosaic(provider: DemProvider, frame: mapGeo.PaperF
     }
     const box = boxInCrs(frame, extent.paper, info.epsg);
     if (!box) throw new DemFetchError("format", `the document does not project into the tile's EPSG:${info.epsg}`);
-    const level = chooseLevel(info, provider.targetCell);
-    const L = info.levels[level];
-    // one pixel more on each side, so the bilinear sampler has its neighbours at the edge
-    const w = await readCogWindow(src, info, { level, minX: box.minX - L.cellX, minY: box.minY - L.cellY, maxX: box.maxX + L.cellX, maxY: box.maxY + L.cellY, maxCells: budget });
+    plan.push({ src, info, box, level: chooseLevel(info, provider.targetCell) });
+  }
+  // one pixel more on each side, so the bilinear sampler has its neighbours at the edge
+  const request = (p: (typeof plan)[number], level: number) => {
+    const L = p.info.levels[level];
+    return { level, minX: p.box.minX - L.cellX, minY: p.box.minY - L.cellY, maxX: p.box.maxX + L.cellX, maxY: p.box.maxY + L.cellY };
+  };
+  const cellsOf = (levels: number[]) => plan.map((p, i) => cogWindowCells(p.info, request(p, levels[i])));
+  const sum = (cells: number[]) => cells.reduce((n, c) => n + c, 0);
+  const chosen = plan.map((p) => p.level);
+  const cellOf = (i: number, level: number) => plan[i].info.levels[level].cellX;
+  const ownM = provider.info.resolutionM;
+  let levels = chosen, ratio = 1;
+  const atChosen = cellsOf(chosen);
+  if (sum(atChosen) > cap) {
+    const over = (detail: string) => overCapError("window-cells", `the window needs ${mCells(sum(atChosen))} cells at ${metres(ownM)}, over the cap of ${mCells(cap)}${detail}`);
+    if (opts.coarser === false) throw over("");
+    // only the tiles that hold part of the extent are read, so only they need a coarser overview
+    const holding = plan.map((_, i) => i).filter((i) => atChosen[i] > 0);
+    const next = plan.map((p, i) => (atChosen[i] > 0 ? coarserLevel(p.info, chosen[i]) : chosen[i]));
+    if (holding.some((i) => next[i] === null)) throw over("; the tiles have no coarser overview");
+    const steps = holding.map((i) => cellOf(i, next[i] as number) / cellOf(i, chosen[i]));
+    // one resolution for the whole mosaic: tiles whose next overviews differ are not mixed
+    if (steps.some((r) => Math.abs(r - steps[0]) > 1e-6 * steps[0])) throw over("; the tiles' coarser overviews differ");
+    const atNext = sum(cellsOf(next as number[]));
+    if (atNext > cap) throw overCapError("window-cells", `the window needs ${mCells(sum(atChosen))} cells at ${metres(ownM)} and ${mCells(atNext)} at ${metres(ownM * steps[0])}, over the cap of ${mCells(cap)}`);
+    levels = next as number[];
+    ratio = steps[0];
+  }
+  let budget = cap;
+  const windows: CogWindow[] = [];
+  for (let i = 0; i < plan.length; i++) {
+    const w = await readCogWindow(plan[i].src, plan[i].info, { ...request(plan[i], levels[i]), maxCells: budget });
     if (!w) continue;
     budget -= w.width * w.height;
     windows.push(w);
   }
-  return windows.length === 0 ? "no-coverage" : { windows, tiles: tiles.length, tilesRead: windows.length };
+  if (windows.length === 0) return "no-coverage";
+  // in the provider's unit (metres) from the ratio of the cells, so a geographic CRS reads right too
+  return { windows, tiles: tiles.length, tilesRead: windows.length, resolutionM: ownM * ratio, stepped: ratio !== 1 };
 }
 
 // ---- in the worker: the paper grid ---------------------------------------------

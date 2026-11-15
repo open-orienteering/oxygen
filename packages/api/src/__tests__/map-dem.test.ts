@@ -144,6 +144,91 @@ describe("fetchDemMosaic (§7.2)", () => {
 
   it("refuses a mosaic over its cell budget", async () => {
     const server = fakeRangeServer({ ...files, [stacUrl(extent.wgs84)]: stacFor(Object.keys(files).map(asset)) });
-    await expect(fetchDemMosaic(lantmaterietProvider({ fetch: server.fetch, credential: "u:p" }), FRAME, extent, { maxCells: 1000 })).rejects.toMatchObject({ reason: "over-cap" });
+    await expect(fetchDemMosaic(lantmaterietProvider({ fetch: server.fetch, credential: "u:p" }), FRAME, extent, { maxCells: 1000 })).rejects.toMatchObject({ reason: "over-cap", cap: "window-cells" });
+  });
+
+  describe("over the window cap at its level: the next coarser overview (§7.0c answer 12)", () => {
+    // the same two tiles with 2 m and 4 m overviews
+    const tile4 = (x0: number, x1: number) => buildSyntheticCog({ surface: sweref, epsg: 3006, width: x1 - x0, height: even(b.maxY - b.minY, true) + 40, cellX: 1, cellY: 1, originX: x0, originY: Math.ceil(b.maxY) + 20, tile: 128, overviews: 2, nodata: -9999 });
+    const files4 = { "https://dl.lantmateriet.se/w.tif": tile4(even(b.minX - 20, false), split), "https://dl.lantmateriet.se/e.tif": tile4(split, even(b.maxX + 20, true)) };
+    const serve = () => fakeRangeServer({ ...files4, [stacUrl(extent.wgs84)]: stacFor(Object.keys(files4).map(asset)) });
+    const cellsAt = async (resolutionM: number) => {
+      const m = await fetchDemMosaic(lantmaterietProvider({ fetch: serve().fetch, credential: "u:p", resolutionM }), FRAME, extent);
+      if (m === "no-coverage") throw new Error("no coverage");
+      return m.windows.reduce((n, w) => n + w.width * w.height, 0);
+    };
+
+    it("reads 4 m when 2 m is over and 4 m fits: the same tiles, no request beyond the 4 m windows", async () => {
+      const at2 = await cellsAt(2), at4Budget = Math.floor(at2 / 2);
+      const server = serve();
+      const m = await fetchDemMosaic(lantmaterietProvider({ fetch: server.fetch, credential: "u:p" }), FRAME, extent, { maxCells: at4Budget });
+      if (m === "no-coverage") throw new Error("no coverage");
+      expect(m).toMatchObject({ tiles: 2, tilesRead: 2, resolutionM: 4, stepped: true });
+      expect(m.windows.every((w) => w.cellX === 4)).toBe(true);
+      expect(m.windows.reduce((n, w) => n + w.width * w.height, 0)).toBeLessThanOrEqual(at4Budget);
+      const tifs = server.requests.filter((r) => r.url.endsWith(".tif"));
+      expect(new Set(tifs.map((r) => r.url))).toEqual(new Set(Object.keys(files4)));
+      expect(tifs.every((r) => r.range !== null)).toBe(true);
+      const s = paperGridSampler(paperGrid(FRAME, extent.paper, m.windows, 4));
+      for (let x = -30; x <= 30; x += 3) expect(s(x, 2)).toBeCloseTo(sweref(...projected(x, 2)), 1);
+    });
+
+    it("reads its own level, not stepped, when it fits", async () => {
+      const m = await fetchDemMosaic(lantmaterietProvider({ fetch: serve().fetch, credential: "u:p" }), FRAME, extent);
+      expect(m).toMatchObject({ resolutionM: 2, stepped: false });
+    });
+
+    it("steps one level only: 2 m and 4 m both over is over-cap, naming the window cells", async () => {
+      const at2 = await cellsAt(2);
+      const server = serve();
+      const err = await fetchDemMosaic(lantmaterietProvider({ fetch: server.fetch, credential: "u:p" }), FRAME, extent, { maxCells: Math.floor(at2 / 8) }).catch((e: unknown) => e);
+      expect(err).toMatchObject({ reason: "over-cap", cap: "window-cells", message: expect.stringMatching(/2 m.*4 m/) });
+      // the headers only: no window was read
+      const tifs = server.requests.filter((r) => r.url.endsWith(".tif"));
+      expect(tifs.length).toBe(2);
+    });
+
+    it("reads 2 m from the 1 m setting when 1 m is over", async () => {
+      const at1 = await cellsAt(1);
+      const m = await fetchDemMosaic(lantmaterietProvider({ fetch: serve().fetch, credential: "u:p", resolutionM: 1 }), FRAME, extent, { maxCells: Math.floor(at1 / 2) });
+      if (m === "no-coverage") throw new Error("no coverage");
+      expect(m).toMatchObject({ resolutionM: 2, stepped: true });
+      expect(m.windows.every((w) => w.cellX === 2)).toBe(true);
+    });
+
+    it("does not step with the step off (the live check): over-cap at its own level", async () => {
+      const at2 = await cellsAt(2);
+      const server = serve();
+      await expect(fetchDemMosaic(lantmaterietProvider({ fetch: server.fetch, credential: "u:p" }), FRAME, extent, { maxCells: Math.floor(at2 / 2), coarser: false })).rejects.toMatchObject({ reason: "over-cap", cap: "window-cells" });
+      expect(server.requests.filter((r) => r.url.endsWith(".tif"))).toHaveLength(2); // the headers only
+    });
+
+    it("steps past a located tile that holds none of the extent, whatever its pyramid", async () => {
+      // a tile 5 km east with only a 2 m overview: located, read for its header, no cells, no coarser level
+      const far = buildSyntheticCog({ surface: sweref, epsg: 3006, width: 256, height: 256, cellX: 1, cellY: 1, originX: 680_000, originY: 6_581_000, tile: 128, overviews: 1, nodata: -9999 });
+      const withFar = { ...files4, "https://dl.lantmateriet.se/far.tif": far };
+      const at2 = await cellsAt(2);
+      const server = fakeRangeServer({ ...withFar, [stacUrl(extent.wgs84)]: stacFor(Object.keys(withFar).map(asset)) });
+      const m = await fetchDemMosaic(lantmaterietProvider({ fetch: server.fetch, credential: "u:p" }), FRAME, extent, { maxCells: Math.floor(at2 / 2) });
+      if (m === "no-coverage") throw new Error("no coverage");
+      expect(m).toMatchObject({ tiles: 3, tilesRead: 2, resolutionM: 4, stepped: true });
+    });
+
+    it("refuses tiles whose coarser overviews differ, rather than a mosaic of two resolutions", async () => {
+      // the east tile with only a 2 m overview beside the west one's 4 m: west steps to 4 m, east cannot
+      const mixed = { "https://dl.lantmateriet.se/w.tif": files4["https://dl.lantmateriet.se/w.tif"], "https://dl.lantmateriet.se/e.tif": files["https://dl.lantmateriet.se/e.tif"] };
+      const at2 = await cellsAt(2);
+      const server = fakeRangeServer({ ...mixed, [stacUrl(extent.wgs84)]: stacFor(Object.keys(mixed).map(asset)) });
+      await expect(fetchDemMosaic(lantmaterietProvider({ fetch: server.fetch, credential: "u:p" }), FRAME, extent, { maxCells: Math.floor(at2 / 2) })).rejects.toMatchObject({ reason: "over-cap", cap: "window-cells" });
+    });
+
+    it("is over-cap when the tile has no coarser overview", async () => {
+      const server = fakeRangeServer({ ...files, [stacUrl(extent.wgs84)]: stacFor(Object.keys(files).map(asset)) });
+      // `files` carry a 2 m overview and nothing coarser
+      const at2 = await fetchDemMosaic(lantmaterietProvider({ fetch: server.fetch, credential: "u:p" }), FRAME, extent);
+      if (at2 === "no-coverage") throw new Error("no coverage");
+      const cells = at2.windows.reduce((n, w) => n + w.width * w.height, 0);
+      await expect(fetchDemMosaic(lantmaterietProvider({ fetch: server.fetch, credential: "u:p" }), FRAME, extent, { maxCells: cells - 1 })).rejects.toMatchObject({ reason: "over-cap", cap: "window-cells" });
+    });
   });
 });

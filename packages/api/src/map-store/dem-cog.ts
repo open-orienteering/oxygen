@@ -21,16 +21,31 @@ export type RangeFetch = (url: string, init: { headers: Record<string, string>; 
 
 export type DemFailure = "auth" | "http" | "format" | "timeout" | "over-cap";
 
-/** A failed DEM read; `reason` is the job's failure reason (docs/map-storage.md §4.7). Never carries a credential. */
+/**
+ * Which cap an `over-cap` ending hit (map-terrain §7.0c answer 12): §7.2's
+ * 16 tiles or 64 M window cells, §7.1's 10 STAC pages, or H4's height
+ * field cap on the document itself (`field`).
+ */
+export const DEM_CAPS = ["tiles", "window-cells", "stac-pages", "field"] as const;
+export type DemCap = (typeof DEM_CAPS)[number];
+
+/** A failed DEM read; `reason` is the job's failure reason (docs/map-storage.md §4.7), `cap` the cap an `over-cap` hit. Never carries a credential. */
 export class DemFetchError extends Error {
   readonly reason: DemFailure;
   readonly status?: number;
-  constructor(reason: DemFailure, message: string, status?: number) {
+  readonly cap?: DemCap;
+  constructor(reason: DemFailure, message: string, status?: number, cap?: DemCap) {
     super(message);
     this.name = "DemFetchError";
     this.reason = reason;
     if (status !== undefined) this.status = status;
+    if (cap !== undefined) this.cap = cap;
   }
+}
+
+/** An `over-cap` failure naming its cap. */
+export function overCapError(cap: DemCap, message: string): DemFetchError {
+  return new DemFetchError("over-cap", message, undefined, cap);
 }
 
 export const COG_RULES = {
@@ -258,6 +273,36 @@ export function chooseLevel(info: CogInfo, targetCell: number): number {
   return best;
 }
 
+/**
+ * The next coarser level than `level` — the overview with the smallest
+ * pixel that is still larger (4 m after 2 m, 2 m after 1 m); null past the
+ * coarsest (map-terrain §7.0c answer 12).
+ */
+export function coarserLevel(info: CogInfo, level: number): number | null {
+  const at = info.levels[level];
+  if (!at) return null;
+  let best: number | null = null;
+  info.levels.forEach((l, i) => {
+    if (l.cellX > at.cellX * (1 + 1e-9) && (best === null || l.cellX < info.levels[best].cellX)) best = i;
+  });
+  return best;
+}
+
+/** The window of `level` over the box, in pixels; null when the box misses the raster. */
+function windowSpan(info: CogInfo, req: Omit<WindowRequest, "maxCells">): { c0: number; c1: number; r0: number; r1: number } | null {
+  const L = info.levels[req.level];
+  if (!L) throw new RangeError(`no level ${req.level}`);
+  const c0 = Math.max(0, Math.floor((req.minX - info.originX) / L.cellX)), c1 = Math.min(L.width, Math.ceil((req.maxX - info.originX) / L.cellX));
+  const r0 = Math.max(0, Math.floor((info.originY - req.maxY) / L.cellY)), r1 = Math.min(L.height, Math.ceil((info.originY - req.minY) / L.cellY));
+  return c1 <= c0 || r1 <= r0 ? null : { c0, c1, r0, r1 };
+}
+
+/** The cells `readCogWindow` would read for the box at `level` (0 when it misses the raster), without a request. */
+export function cogWindowCells(info: CogInfo, req: Omit<WindowRequest, "maxCells">): number {
+  const s = windowSpan(info, req);
+  return s ? (s.c1 - s.c0) * (s.r1 - s.r0) : 0;
+}
+
 /** Undo the floating-point predictor on one tile in place: per row, byte-wise accumulation, then big-endian byte planes → float32. */
 function decodeTile(raw: Uint8Array, tw: number, th: number, predictor: 1 | 3): Float32Array {
   const out = new Float32Array(tw * th);
@@ -297,12 +342,11 @@ export interface WindowRequest {
  */
 export async function readCogWindow(src: CogSource, info: CogInfo, req: WindowRequest): Promise<CogWindow | null> {
   const L = info.levels[req.level];
-  if (!L) throw new RangeError(`no level ${req.level}`);
-  const c0 = Math.max(0, Math.floor((req.minX - info.originX) / L.cellX)), c1 = Math.min(L.width, Math.ceil((req.maxX - info.originX) / L.cellX));
-  const r0 = Math.max(0, Math.floor((info.originY - req.maxY) / L.cellY)), r1 = Math.min(L.height, Math.ceil((info.originY - req.minY) / L.cellY));
-  if (c1 <= c0 || r1 <= r0) return null;
+  const span = windowSpan(info, req);
+  if (!span) return null;
+  const { c0, c1, r0, r1 } = span;
   const W = c1 - c0, H = r1 - r0;
-  if (W * H > req.maxCells) throw new DemFetchError("over-cap", `a ${W} × ${H} window is over the cap of ${req.maxCells} cells`);
+  if (W * H > req.maxCells) throw overCapError("window-cells", `a ${W} × ${H} window is over the cap of ${req.maxCells} cells`);
   const data = new Float32Array(W * H).fill(NaN);
   const across = Math.ceil(L.width / L.tileWidth);
   const tx0 = Math.floor(c0 / L.tileWidth), tx1 = Math.floor((c1 - 1) / L.tileWidth), ty0 = Math.floor(r0 / L.tileHeight), ty1 = Math.floor((r1 - 1) / L.tileHeight);

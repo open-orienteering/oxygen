@@ -108,7 +108,8 @@ export async function runLiveCheck(input: LiveCheckInput): Promise<LiveCheckRepo
     try {
       const measure = async (resolutionM: number): Promise<LiveSpread> => {
         const p = at(resolutionM);
-        const m = await fetchDemMosaic(p, frame, extent);
+        // §7.6 compares 1 m with 2 m: never the next coarser overview (§7.0c answer 12 is the job's)
+        const m = await fetchDemMosaic(p, frame, extent, { coarser: false });
         if (m === "no-coverage") throw new Error("no coverage");
         const sample = paperGridSampler(paperGrid(frame, extent.paper, m.windows, resolutionM));
         const a = anchorLevels(graph, sample, { intervalM, source: p.info.id, grade: "anchor", demCellM: resolutionM });

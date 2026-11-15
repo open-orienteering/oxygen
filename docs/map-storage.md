@@ -663,12 +663,15 @@ fetching opt-in.
 
 | `source` | Content |
 |---|---|
-| `ground.<provider>` | the DEM resampled onto the `contours` field's grid (map-terrain §7.4); `report` = `{ dem: { provider, tiles, tilesRead, dataShare, fetchedAt } }` |
+| `ground.<provider>` | the DEM resampled onto the `contours` field's grid (map-terrain §7.4); `report` = `{ dem: { provider, tiles, tilesRead, dataShare, fetchedAt } }`; the level read is the header's `provider.resolutionM` |
 | `contours.<provider>` | the contour field re-derived with the DEM's per-chain heights (map-terrain §4.9, §7.5), `datum: "absolute"`; `report` = the `TerrainReport` at the top level (so `share.decided` reads as for `contours`) plus `anchor` (the `AnchorReport`, map-terrain §6.9) and `heights` (§6.8's report) |
 
-`<provider>` is the provider and the resolution read: `lantmateriet-2m`
+`<provider>` is the provider and the resolution chosen: `lantmateriet-2m`
 (or `lantmateriet-1m`, `MAP_DEM_LANTMATERIET_RESOLUTION_M=1`) and
-`glo30-30m`. Research 10 §4's key `(document hash, provider, resolution)`
+`glo30-30m`. A map whose window at that resolution is over the 64 M cell
+cap is read one overview coarser under the same `source` (map-terrain
+§7.0c answer 12: 4 m in a `lantmateriet-2m` row, 2 m in a `-1m` one); the
+header's `provider.resolutionM` is the level read. Research 10 §4's key `(document hash, provider, resolution)`
 is this `source` with `version = TERRAIN_VERSION` in H4's key. Both rows
 carry the provider's licence, attribution and vertical datum in the
 header's `provider` block (map-terrain §5.1), so they travel with the
@@ -684,7 +687,7 @@ row per `(document_hash, provider, version)`; `packages/api/src/map-store/dem-jo
 | `queued` | — | waiting for the engine |
 | `running` | — | claimed by `claimed_by`, heartbeat every 10 s; re-claimed after 60 s of silence |
 | `done` | — | both rows written |
-| `unavailable` | `no-georeference` (no CRS proj4 knows, no paper origin, no usable bounds), `no-coverage` (the provider has no tile there, or no contour chain is covered), `no-contours`, `over-cap` (H4's cap, or more than 16 tiles or 64 M window cells), `misaligned` (an anchor-grade DEM accepts under half of the contour length it covers, map-terrain §7.0 answer 2) | final; nothing written |
+| `unavailable` | `no-georeference` (no CRS proj4 knows, no paper origin, no usable bounds), `no-coverage` (the provider has no tile there, or no contour chain is covered), `no-contours`, `over-cap` (H4's cap, or more than 16 tiles, or more than 10 STAC pages, or more than 64 M window cells at the chosen level and at the next coarser overview, map-terrain §7.0c answer 12; `error` names the cap: `field: …`, `tiles: …`, `stac-pages: …`, `window-cells: …`), `misaligned` (an anchor-grade DEM accepts under half of the contour length it covers, map-terrain §7.0 answer 2) | final; nothing written; `error` null except on `over-cap` |
 | `failed` | `auth` (401 / 403), `http` (another status, no range support, a refused redirect), `format` (a TIFF the reader does not read), `timeout` (30 s per request, 240 s per derive, 10 min per job), `derive` (anything else) | retried from `next_attempt_at`: 1 min, 10 min, 1 h, 6 h after attempts 1–4 (`auth` never under 1 h); after the fifth attempt `next_attempt_at` is null and it is final |
 
 **Recovery.** A job that failed for good is queued again from its first
@@ -694,7 +697,12 @@ Jobs that failed on `auth` — waiting or final — are queued again when an
 account is saved in Settings → Height data (map-terrain §7.8, every
 `lantmateriet-*` job, no restart needed) and when the engine starts
 (`requeueAuthFailures`), where a fixed environment secret first reaches
-an instance through a new revision or restart. A `running` job that goes stale
+an instance through a new revision or restart. Jobs that ended
+`unavailable: over-cap` with a null `error` — before H13, which stores the
+cap on every such ending — are queued again from their first attempt when
+the engine starts (`requeueOverCap`, map-terrain §7.0c answer 12), so the
+coarser overview gets its one try; one that ends over the cap again
+stores its cap and is not taken a second time. A `running` job that goes stale
 on its last attempt (it took its instance down each time, never reaching
 its own failure path) is not re-claimed but marked `failed: derive`,
 final. The heartbeat runs from the claim, so a job waiting behind another
@@ -743,7 +751,7 @@ tables only, never waits:
 | `disabled` | no provider enabled on this instance | null | null |
 | `unavailable`, `reason: "rotation-corrected"` | the event's pin has a `rotation_correction ≠ 0` (`course.mapMetadata.terrain` only, map-terrain §7.0 answer 2; the import review describes the document, whatever any pin's correction) | null | null |
 | `pending` | the first enabled provider not ended `no-coverage` has no job yet, or it is queued or running | its `HeightFieldProvider` | the routes; `anchored.decided` null — fetching one queues the job |
-| `ready` | that job is `done` | its `HeightFieldProvider` (licence, attribution) | the routes; `anchored.decided` = the anchored row's `share.decided` |
+| `ready` | that job is `done` | the anchored row's `HeightFieldProvider` (licence, attribution; `resolutionM` the level read, map-terrain §7.0c answer 12), the registry's if the row's block is missing or another id | the routes; `anchored.decided` = the anchored row's `share.decided` |
 | `failed` / `unavailable` | that job ended so | its `HeightFieldProvider` | null; `reason` |
 | `unavailable`, `reason: "no-coverage"` | every enabled provider ended `no-coverage` | null | null |
 
@@ -1856,8 +1864,8 @@ queued by the first request for a DEM source, which the descriptor's
 | Integration (api) | `packages/api/src/__tests__/integration/map-heightfields.test.ts` | §4.7: importing the CC0 demo `.omap` writes the field equal to the in-process derive (bytes, header, report) and the job ends `done`; `test.ocd` gets a row without bytes; the dedup short-cut re-derives a deleted row; a failed derive and an over-cap document write nothing; route 400 (hash, `v`) / 401 / 403 before existence, 200 with headers, br / gzip round trip, 304, kiosk key and `?event=`, the uploader's own job, a club version, auth off, not a reference; lazy derive on a miss writes once and two concurrent requests derive once; 404 `no-contours` / `version` / `over-cap`, unknown document; 503 for a failed derive, remembered, nothing stored; `course.mapMetadata.terrain` ready / none / pending (never derives), `mapImport.review.terrain` with report and field size, over-cap; the GC sweeps a superseded version, keeps current and newer, dry run counts; the null-together CHECK; the row cascades with its document |
 | Unit (api) | `packages/api/src/__tests__/backup.test.ts` (H4, H10) | `map_heightfields` and `map_dem_jobs` not in the dump |
 | Unit (api) | `packages/api/src/__tests__/snapshot-maps.test.ts` (H10) | the blob export refuses `map_dem_jobs` like `map_heightfields` |
-| Unit (api) | `packages/api/src/__tests__/map-dem-jobs.test.ts` | §4.7 "The DEM": the back-off (1 min, 10 min, 1 h, 6 h, final after five; `auth` ≥ 1 h), what is claimable, the stored error capped and without a Basic credential; `?source=` parsing, the provider of a source, the URL with and without it |
-| Integration (api) | `packages/api/src/__tests__/integration/map-dem.test.ts` | §4.7 "The DEM", against the recorded DEM fixture (no network): stage 10 queues the job, which fetches by range with the credential on Lantmäteriet only and writes both rows on the `contours` grid, heights against the analytic cone, licence and attribution in the headers, the reports; the descriptor's `dem` ready / pending / failed / unavailable / disabled / rotation-corrected, the review's ready / pending / unavailable; the route 200 / 304 / ETag per source, `contours` unchanged, 400 / 401 / 403 / 404 `source` / `version` in order; Lantmäteriet's no-coverage falls to GLO-30, GLO-30 alone without Lantmäteriet; unavailable `no-georeference` / `no-contours` / `misaligned` / `over-cap` write nothing and answer 404 with the reason; a refused credential fails `auth` with a retry ≥ 1 h and no secret stored, 503 with `Retry-After`; requeued at startup after the secret is fixed; a transient failure retried when due, final after the fifth attempt (404), not revived by a request, revived by an import; a route miss queues the job (503 pending, then 200); a done job whose rows went re-queued by the route; a stale running job re-claimed, and failed for good at its last attempt; the table's CHECKs; the GC's version pass over every source and the jobs; the cascade |
+| Unit (api) | `packages/api/src/__tests__/map-dem-jobs.test.ts` | §4.7 "The DEM": the back-off (1 min, 10 min, 1 h, 6 h, final after five; `auth` ≥ 1 h), what is claimable, the stored error capped and without a Basic credential; an over-cap ending's cap stored and read back (`demOverCapText` / `demOverCapOf`), other text none; `?source=` parsing, the provider of a source, the URL with and without it |
+| Integration (api) | `packages/api/src/__tests__/integration/map-dem.test.ts` | §4.7 "The DEM", against the recorded DEM fixture (no network): stage 10 queues the job, which fetches by range with the credential on Lantmäteriet only and writes both rows on the `contours` grid, heights against the analytic cone, licence and attribution in the headers, the reports; the descriptor's `dem` ready / pending / failed / unavailable / disabled / rotation-corrected, the review's ready / pending / unavailable; the route 200 / 304 / ETag per source, `contours` unchanged, 400 / 401 / 403 / 404 `source` / `version` in order; Lantmäteriet's no-coverage falls to GLO-30, GLO-30 alone without Lantmäteriet; unavailable `no-georeference` / `no-contours` / `misaligned` / `over-cap` write nothing and answer 404 with the reason; a refused credential fails `auth` with a retry ≥ 1 h and no secret stored, 503 with `Retry-After`; requeued at startup after the secret is fixed; a transient failure retried when due, final after the fifth attempt (404), not revived by a request, revived by an import; a route miss queues the job (503 pending, then 200); a done job whose rows went re-queued by the route; a stale running job re-claimed, and failed for good at its last attempt; the table's CHECKs; the GC's version pass over every source and the jobs; the cascade; map-terrain §7.0c answer 12: H4's cap named `field`, an over-cap ending from before H13 (error null) queued once by `requeueOverCap` and done at 4 m under the 2 m id (both headers `resolutionM: 4`, the descriptor's provider too), a second pass queuing nothing, over at 4 m too ending `window-cells` and not queued again, the descriptor's registry fallback (no provider block, another id), a map under the cap read at 2 m |
 | Unit (web) | `packages/web/src/lib/__tests__/map-review.test.ts` (H4) | `terrainLine`: the decided share floored against the 80 % gate, the other states |
 | E2E | `e2e/map-documents.spec.ts` (H4, H10) | the demo `.omap` through the chunked route → `mapMetadata.terrain` ready with decided > 80 % → `height.bin` 200 (`OXHF`, headers), 304, anonymous 401, another version 404; with no DEM provider enabled `terrain.dem` is `disabled`, a DEM source 404 `source`, a malformed one 400, `source=contours` the same field |
 | E2E | `e2e/map-review.spec.ts` (H4) | the event map's review shows the terrain line "no contours" for `test.ocd` |

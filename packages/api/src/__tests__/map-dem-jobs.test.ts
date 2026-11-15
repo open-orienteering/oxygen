@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { DEM_JOB_RULES, demErrorText, demRetryAt, isDemClaimable } from "../map-store/dem-jobs.js";
+import { DEM_JOB_RULES, demErrorText, demOverCapOf, demOverCapText, demRetryAt, isDemClaimable } from "../map-store/dem-jobs.js";
+import { DEM_CAPS } from "../map-store/dem-cog.js";
 import { demSourceProvider, heightfieldUrl, parseHeightfieldSource } from "../map-store/heightfield.js";
 
 const NOW = new Date("2026-11-15T12:00:00Z");
@@ -30,6 +31,17 @@ describe("DEM job retries (map-storage.md §4.7)", () => {
   it("stores a capped message without a Basic credential", () => {
     expect(demErrorText(new Error("sent Basic Y2x1Yjpub3QtcmVhbA== and got 401"))).toBe("sent Basic … and got 401");
     expect(demErrorText("x".repeat(5000))).toHaveLength(2000);
+  });
+
+  it("stores which cap an over-cap ending hit, and reads it back (map-terrain §7.0c answer 12)", () => {
+    for (const cap of DEM_CAPS) {
+      const text = demOverCapText(cap, "the window needs 89.2 M cells at 2 m and 22.3 M at 4 m");
+      expect(text.startsWith(`${cap}: `)).toBe(true);
+      expect(demOverCapOf(text)).toBe(cap);
+    }
+    expect(demOverCapText("tiles", `sent Basic Y2x1Yjpub3QtcmVhbA== ${"x".repeat(5000)}`)).toHaveLength(2000);
+    expect(demOverCapText("tiles", "sent Basic Y2x1Yjpub3QtcmVhbA==")).not.toContain("Y2x1Yjpub3QtcmVhbA");
+    for (const other of [null, "", "the window is large", "window-cells", "cells: no"]) expect(demOverCapOf(other)).toBeNull();
   });
 });
 

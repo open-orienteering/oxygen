@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chooseLevel, DemFetchError, readCogInfo, readCogWindow, sampleWindow, type CogSource } from "../map-store/dem-cog.js";
+import { chooseLevel, coarserLevel, cogWindowCells, DemFetchError, readCogInfo, readCogWindow, sampleWindow, type CogSource } from "../map-store/dem-cog.js";
 import { buildSyntheticCog, fakeRangeServer, type SyntheticCogOptions } from "./helpers/synthetic-cog.js";
 
 const URL_ = "https://tiles.example.test/a.tif";
@@ -37,6 +37,13 @@ describe("readCogInfo (map-terrain.md §7.2)", () => {
     expect(chooseLevel(info, 3)).toBe(1);
     expect(chooseLevel(info, 4)).toBe(2);
     expect(chooseLevel(info, 0.5)).toBe(0);
+  });
+
+  it("steps to the next coarser overview, and has none past the coarsest (§7.0c answer 12)", async () => {
+    const info = await readCogInfo(source(buildSyntheticCog(base)).src);
+    expect(coarserLevel(info, 0)).toBe(1); // 1 m → 2 m
+    expect(coarserLevel(info, 1)).toBe(2); // 2 m → 4 m
+    expect(coarserLevel(info, 2)).toBeNull();
   });
 
   it("fails as format on what it does not read", async () => {
@@ -100,6 +107,18 @@ describe("readCogWindow (map-terrain.md §7.2)", () => {
     const info = await readCogInfo(src);
     expect(await readCogWindow(src, info, { level: 0, minX: 640_000, minY: 6_560_000, maxX: 640_100, maxY: 6_560_100, maxCells: 1e6 })).toBeNull();
     await expect(readCogWindow(src, info, { level: 0, minX: 650_000, minY: 6_570_000, maxX: 650_200, maxY: 6_570_160, maxCells: 1000 })).rejects.toMatchObject({ reason: "over-cap" });
+  });
+
+  it("sizes a window without reading it, as readCogWindow cuts it; over-cap names the window-cells cap", async () => {
+    const { src, server } = source(buildSyntheticCog(base));
+    const info = await readCogInfo(src);
+    const before = server.requests.length;
+    const box = { minX: 650_000, minY: 6_570_000, maxX: 650_200, maxY: 6_570_160 };
+    expect(cogWindowCells(info, { level: 0, ...box })).toBe(200 * 160);
+    expect(cogWindowCells(info, { level: 1, ...box })).toBe(100 * 80);
+    expect(cogWindowCells(info, { level: 1, minX: 640_000, minY: 6_560_000, maxX: 640_100, maxY: 6_560_100 })).toBe(0);
+    expect(server.requests.length).toBe(before);
+    await expect(readCogWindow(src, info, { level: 0, ...box, maxCells: 1000 })).rejects.toMatchObject({ reason: "over-cap", cap: "window-cells" });
   });
 
   it("fails as format on a cut-short tile", async () => {
