@@ -883,8 +883,9 @@ interface HeightFieldHeader {
   provider?: HeightFieldProvider; // a DEM-based field's (§7.1); absent on `contours`
 }
 interface HeightFieldProvider {
-  id: string;               // provider and resolution: "lantmateriet-2m", "glo30-30m"
-  resolutionM: number; grade: "anchor" | "coarse";
+  id: string;               // provider and resolution chosen: "lantmateriet-2m", "glo30-30m"
+  resolutionM: number;      // the level read: the id's, or one overview coarser over the window cap (§7.0c answer 12)
+  grade: "anchor" | "coarse";
   licence: string;          // "CC BY 4.0"
   attribution: string;      // "© Lantmäteriet" — shown with the surface (answer 16)
   verticalDatum: string;    // "RH 2000", "EGM2008"
@@ -1453,7 +1454,9 @@ credential from the instance's secret store). H12 implements them (§7.8).
 Found on 8080 after H12: a 1:15 000 club map whose objects span about
 20 × 17 km (its print window is A3, about 6.3 × 4.5 km) needs about 89 M
 window cells at 2 m, over §7.2's 64 M cap, and ended `unavailable:
-over-cap` with no DEM. H13 implements this answer.
+over-cap` with no DEM. H13 implemented this answer (2026-11-15); the
+mechanism is in §7.2 "Level" and "Caps", §7.4, §7.8 and
+`docs/map-storage.md` §4.7.
 
 12. **A map over the cap at its level reads the next coarser overview.**
     When the window at the level `chooseLevel` picks (2 m for
@@ -1482,7 +1485,7 @@ whose job does not end `no-coverage` serves the document
 | Id | `lantmateriet-2m` (`-1m` at the 1 m resolution: Settings → Height data, or `MAP_DEM_LANTMATERIET_RESOLUTION_M=1`) | `glo30-30m` |
 | Locate | STAC `https://api.lantmateriet.se/stac-hojd/v1/search?collections=dtm-cog&bbox=w,s,e,n` (WGS 84), `next` links followed (10 pages at most); per item the asset whose type is a cloud-optimised GeoTIFF, else the `data` role's GeoTIFF | computed: one tile per 1° cell, `copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_<N|S>dd_00_<E|W>ddd_00_DEM/….tif` by its south-west corner |
 | Tiles | 10 km COGs, SWEREF 99 TM (EPSG:3006), 1 m with overviews 2, 4, … m, PixelIsArea, nodata −9999 | 1° COGs, WGS 84, 1″ × 1–2″ (PixelIsPoint), no nodata; a missing tile (sea) is no data, not a failure |
-| Read at | the 2 m overview (answer 17; §7.6) | full resolution |
+| Read at | the 2 m overview (answer 17; §7.6); the 4 m overview for a map whose 2 m window is over §7.2's cap (2 m at the 1 m setting, §7.0c answer 12) | full resolution (its overviews by the same rule; no real map reaches the cap) |
 | Auth | Basic, the instance's one Geotorget account (answer 5): saved in Settings → Height data, sealed (§7.8), else `MAP_DEM_LANTMATERIET_AUTH` = `user:password` from the instance's secret store (`docs/deploy-gcp-cloud-run.md` "Height data") | none |
 | Vertical datum | RH 2000 | EGM2008 (no conversion: sub-metre here, and the coarse model's offsets are per component anyway) |
 | Licence | **CC BY 4.0** | the Copernicus DEM licence (free, with attribution) |
@@ -1530,7 +1533,20 @@ fixture; no test opens a socket).
   overview's pixel is the full resolution's times `full width / its
   width` (GDAL's convention). `GDAL_NODATA` and NaN read as no data.
 - **Level.** The coarsest whose pixel is at most the provider's target
-  (`chooseLevel`): 2 m for `lantmateriet-2m`.
+  (`chooseLevel`): 2 m for `lantmateriet-2m`. **Over the window cap at
+  that level, the next coarser overview** (§7.0c answer 12;
+  `fetchDemMosaic`): every tile's header is read and its window sized
+  (`cogWindowCells`, the same cut `readCogWindow` makes) before any tile
+  bytes; when the windows together are over 64 M cells, every tile is
+  read one level coarser instead (`coarserLevel`: the overview with the
+  smallest pixel still larger — 4 m after 2 m, 2 m after 1 m), so the
+  mosaic stays one resolution and nothing is fetched twice. One step: over
+  the cap there too, or a tile without a coarser overview, is `over-cap`
+  and no window is read. The level read, in the provider's metres
+  (`resolutionM × read cell / chosen cell`, right in degrees too), is the
+  mosaic's `resolutionM`. The step applies to any provider; GLO-30 would
+  need a map about 200 km across to reach it. §7.6's check turns it off
+  (`coarser: false`): it compares 1 m with 2 m.
 - **Bytes.** The header in 64 KiB blocks (at most 4 MiB, else "not a
   COG"); the window's tiles in runs of adjacent byte ranges, one request
   per run (up to 16 MiB); every request carries `Range` and must answer
@@ -1538,7 +1554,10 @@ fixture; no test opens a socket).
   ~400 MB tile is never pulled whole. 30 s per request. Inflate runs in
   libuv's pool.
 - **Caps.** 16 tiles per document; 64 M window cells (256 MB of float32)
-  over all tiles: either is `over-cap`.
+  over all tiles, at the chosen level and at the next coarser one; §7.1's
+  10 STAC pages: each is `over-cap`. The cap hit travels with the failure
+  (`DemFetchError.cap`: `tiles`, `window-cells`, `stac-pages`; H4's cap
+  on the document itself is `field`) into the job's error (§7.8).
 
 ### 7.3 The extent and the paper sampler
 
@@ -1580,6 +1599,12 @@ club-full's 6 m cell does not alias a 2 m model. No-data where more than
 half the samples are; not masked to the mapped area. `zScaleM` is
 `intervalM / 64` as for the contours (no renderer change), `zOffsetM`
 the whole interval at or below the lowest value, `datum: "absolute"`.
+The `provider` block's `resolutionM` is the level read (§7.2; 4 m for a
+`lantmateriet-2m` map over the cap), its `id` the provider's — the
+source stays `ground.lantmateriet-2m` (§7.0c answer 12): the job key and
+the pending descriptor's URLs exist before the level is known. The paper
+grid, the box mean's n and the anchor's stencil (`demCellM`) all follow
+the level read.
 The confidence plane is all set for an anchor-grade model and all clear
 for a coarse one (answer 13: a 30 m surface model). Source
 `ground.<provider>`.
@@ -1614,7 +1639,9 @@ CLI with their own `MAP_DEM_LANTMATERIET_AUTH`: `pnpm --filter
 @oxygen/api dem:live-check -- --map <club map>`
 (`packages/api/scripts/dem-live-check.ts`). The logic is
 `map-store/dem-live-check.ts`, tested against the fixture. Either way on
-a map under the 1 m window cap (club-2026's size, not club-full's, §7.7). It
+a map under the 1 m window cap (club-2026's size, not club-full's, §7.7),
+and at the two levels it compares only, never the next coarser overview
+(§7.2). It
 locates the map's tiles, sends one `Range` request through any
 redirect, reads the tile profile, and runs `anchorLevels` at 1 m and
 2 m. It prints aggregates only; the CLI writes nothing, the tab stores
@@ -1759,10 +1786,23 @@ GC's version pass (pending below).
 (`club_map_versions` by `seq`): the name, the descriptor's DEM state and
 reason (`demDescriptor`, with the series' `rotation_correction`), the
 serving job's attempts, next attempt and masked error, and whether *Test
-connection* may run on it. **Retry** queues the map: a `failed` job of
-the serving provider (waiting or final) goes back to `queued` from its
-first attempt; a map with no job is enqueued; an `unavailable` ending is
-not retried (the document is immutable, so the result would repeat).
+connection* may run on it; on a ready map the level read (`readAtM`,
+the descriptor's provider block, which is the row's: "read at 2 m", or
+"read at 4 m, one level coarser: the map is too large for 2 m"), and on
+an `over-cap` ending the cap it hit (`overCap`, §7.0c answer 12). The job
+stores an `over-cap` ending's error as `<cap>: <message>` (`tiles`,
+`window-cells`, `stac-pages`, `field`; `demOverCapText`), and the list
+reads the cap back (`demOverCapOf`) so the tab names it in the viewer's
+language below "the map is too large". **Retry** queues the map: a
+`failed` job of the serving provider (waiting or final) goes back to
+`queued` from its first attempt; a map with no job is enqueued; an
+`unavailable` ending is not retried (the document is immutable, so the
+result would repeat). **The one re-queue** (§7.0c answer 12): at engine
+start `requeueOverCap` queues, from their first attempt, the
+`unavailable: over-cap` jobs without an error — those ended before H13,
+since every ending since stores its cap — so each is taken once, with no
+marker and no migration, and an instance of the older image that ends one
+again (error null) leaves it for the next start.
 
 **Test connection** (§7.0b 9) runs `runLiveCheck` (§7.6) with the
 effective credential — saved or environment, never one typed and not
@@ -1836,15 +1876,15 @@ the aggregates and the time; the state list with a retry per row.
 | `.local/h9/anchor.mts`, `side.mts`, `heights.mts` (not committed) | T2's corpus aggregates and side reproduced, the §6.0 answer 3 target, §3.0's index target per index phase, anchored heights after the solve (§6.10) |
 | `terrain/field/__tests__/anchored.test.ts` | `geodesicNearest` carries the nearest seed's value at `geodesicDistance`'s distances, refuses mismatched values; the anchored cone at absolute heights, `datum` absolute, the offset a whole interval below; the relative field shifted on a regular ladder; a chain off its ladder bends the surface there only; a chain without a height seeds nothing; confidence from `chainConfident`; determinism and round trip, no chain heights in the bytes; mismatched heights refused; `anchoredOffsetM`; the header's DEM sources and provider block accepted and rejected; the ground field on a given grid, the box mean over a fine model, coarse unconfident, no-data only where the DEM has none (§4.9, §5.1, §7.4) |
 | `terrain/__tests__/derive-anchored.test.ts` | `deriveAnchoredTerrain` on the hill with an analytic cone: absolute heights, provider, the relative field's grid, `acceptedOfCovered` high aligned and under ½ off-centre, coarse grade, null without contours, determinism (§5.5, §7.5) |
-| `packages/api/src/__tests__/map-dem-cog.test.ts` | §7.2 against the synthetic COG: georeference and pyramid, PixelIsPoint and a geographic CRS without nodata, `chooseLevel`, BigTIFF / big-endian / garbage as `format`, a server ignoring `Range` and 401 / 403 / 503, a 2 m window by range in one run per tile row, every level with and without DEFLATE and predictor, nodata, a box beside the raster, `over-cap`, a cut-short tile |
-| `packages/api/src/__tests__/map-dem-providers.test.ts` | §7.1: the STAC search (box, Basic auth, `next` links, the COG asset, duplicates), no-coverage, 401 / 403 / 429 / 502 / not JSON without the secret in the message, 1 m; the asset choice; the credential's hosts, redirects kept / dropped / refused; GLO-30 tile names in every quadrant, the 1° tiles, no credential, the tile cap; `demProvidersFromEnv` opt-in, order, the credential's form, warnings without the secret |
-| `packages/api/src/__tests__/map-dem.test.ts` | §7.3: the extent's padding and WGS 84 box, null without CRS / origin / known code / bounds; the projection with and without proj4, a rotated box; the paper grid exact through rotation and scale factor, within 0.6 mm of height (0.06 m of position) through a WGS 84 window, two windows, the cell budget; `fetchDemMosaic` over two tiles at 2 m with Range and auth on every tile request, no-coverage, GLO-30's missing tile skipped and Lantmäteriet's failing, the mosaic cap |
+| `packages/api/src/__tests__/map-dem-cog.test.ts` | §7.2 against the synthetic COG: georeference and pyramid, PixelIsPoint and a geographic CRS without nodata, `chooseLevel`, BigTIFF / big-endian / garbage as `format`, a server ignoring `Range` and 401 / 403 / 503, a 2 m window by range in one run per tile row, every level with and without DEFLATE and predictor, nodata, a box beside the raster, `over-cap` naming `window-cells`, a cut-short tile; `coarserLevel` (1 m → 2 m → 4 m, none past the coarsest) and `cogWindowCells` without a request (§7.0c answer 12) |
+| `packages/api/src/__tests__/map-dem-providers.test.ts` | §7.1: the STAC search (box, Basic auth, `next` links, the COG asset, duplicates), no-coverage, 401 / 403 / 429 / 502 / not JSON without the secret in the message, 1 m; the asset choice; the credential's hosts, redirects kept / dropped / refused; GLO-30 tile names in every quadrant, the 1° tiles, no credential, the tile cap; the caps named (`stac-pages`, `tiles`); `demProvidersFromEnv` opt-in, order, the credential's form, warnings without the secret |
+| `packages/api/src/__tests__/map-dem.test.ts` | §7.3: the extent's padding and WGS 84 box, null without CRS / origin / known code / bounds; the projection with and without proj4, a rotated box; the paper grid exact through rotation and scale factor, within 0.6 mm of height (0.06 m of position) through a WGS 84 window, two windows, the cell budget; `fetchDemMosaic` over two tiles at 2 m with Range and auth on every tile request, no-coverage, GLO-30's missing tile skipped and Lantmäteriet's failing, the mosaic cap; §7.0c answer 12: 2 m over and 4 m fitting reads 4 m from the same tiles (`resolutionM` 4, `stepped`), its own level when it fits, both over is `over-cap` naming both levels after the headers only, 1 m → 2 m, a tile without a coarser overview |
 | `packages/api/src/__tests__/map-dem-worker.test.ts` | §7.4–7.5 on the recorded fixture: both fields on the `contours` grid with the provider block, heights against the cone, the reports; the worker thread gives the same bytes; `misaligned`, `no-contours`; GLO-30 coarse and unconfident |
-| `packages/api/src/__tests__/map-dem-live-check.test.ts` | §7.6 against the recorded fixture: the pass, a server without range support, the spread rule both ways, the credential's reach; no secret in the report |
+| `packages/api/src/__tests__/map-dem-live-check.test.ts` | §7.6 against the recorded fixture: the pass, a server without range support, the spread rule both ways, the credential's reach; no secret in the report; both measurements with the step off |
 | `packages/api/src/__tests__/secret-box.test.ts` | §7.8 "Sealing": round trip, a fresh IV per seal, neither the plaintext nor its base64 in the sealed value; a wrong key, another row, a flipped byte, a malformed value and a short key refused, without the secret in the error |
 | `packages/api/src/__tests__/map-dem-settings.test.ts` | §7.8: off with nothing saved and nothing in the environment; the environment alone; each saved value winning on its own, a saved empty list over a named one; Lantmäteriet without a usable account off with a warning that carries no secret; an unopenable saved account never falling back to the environment's; the store sealing the row with one key, refusing a malformed account, clear and reset keeping the key; the status for every combination without the password, the sealed value or the key; `maskSecret`; the registry rebuilt only on a changed fingerprint, kept without a source and on a failed read, `maxAgeMs`; `MAP_DEM_OFFLINE` refusing before the base fetch; the live check's worker thread through the offline fetch |
-| `packages/api/src/__tests__/integration/map-dem-settings.test.ts` | §7.8 through the router on the recorded fixture: off by default; the account saved and read back without the password, the row sealed; providers and resolution saved over the environment and reset to it; clear back to the environment's account; a malformed account refused without echo; every procedure FORBIDDEN to a member; the club maps' states; a `failed: auth` map queued by a saved account and completing with it; retry from the first attempt, an unavailable map refused, retry with no provider refused; Test connection refused without an account and before any request, run against the fixture (the pass, stored, shown, no secret; a second run refused while one runs), a thrown check stored masked, a map without a georeference and one over the 1 m cap refused |
-| `e2e/settings-height-data.spec.ts` | §7.8 in the browser with `MAP_DEM_OFFLINE`: the tab beside Eventor, the explanation and the Geotorget link (en and sv); off by default; the account saved, shown as saved with the user name, never sent back or prefilled after a reload; GLO-30 on, the map not fetched, Fetch now ending `failed: http` with a retry; Test connection's stored error; clear and reset back to off; Lantmäteriet on without an account says so; the resolution saved and reset |
+| `packages/api/src/__tests__/integration/map-dem-settings.test.ts` | §7.8 through the router on the recorded fixture: off by default; the account saved and read back without the password, the row sealed; providers and resolution saved over the environment and reset to it; clear back to the environment's account; a malformed account refused without echo; every procedure FORBIDDEN to a member; the club maps' states; a `failed: auth` map queued by a saved account and completing with it; retry from the first attempt, an unavailable map refused, retry with no provider refused; Test connection refused without an account and before any request, run against the fixture (the pass, stored, shown, no secret; a second run refused while one runs), a thrown check stored masked, a map without a georeference and one over the 1 m cap refused; §7.0c answer 12: the state list's level read (2 m, and 4 m over the lowered cap) and the cap an over-cap ending hit (`window-cells`), its retry still refused |
+| `e2e/settings-height-data.spec.ts` | §7.8 in the browser with `MAP_DEM_OFFLINE`: the tab beside Eventor, the explanation and the Geotorget link (en and sv); off by default; the account saved, shown as saved with the user name, never sent back or prefilled after a reload; GLO-30 on, the map not fetched, Fetch now ending `failed: http` with a retry; Test connection's stored error; clear and reset back to off; Lantmäteriet on without an account says so; the resolution saved and reset; §7.0c answer 12 on seeded rows: "read at 4 m, one level coarser" and the window-cells cap named, en and sv |
 | `packages/api/src/__tests__/helpers/{synthetic-cog.ts,dem-fixture.ts}` | the recorded fixture: a COG writer (classic TIFF, DEFLATE, predictor 3, overviews) from analytic surfaces, a fake range server; a Lantmäteriet tile with a cone under the test hill, a GLO-30 piece, a fake STAC with switchable failures — no real DEM bytes, no socket |
 | `.local/h10/dem-mem.mts` (not committed) | §7.7: the job's path on the corpus with T2's tiles — window, bytes, requests, time, added peak, accepted share at 2 m and 1 m |
 
@@ -1859,10 +1899,10 @@ the aggregates and the time; the state list with a retry per row.
   the band weighting leaves a slight kink at each contour (visible as
   faint terraces in flat ground); a TIN with medial-axis points (10 §2.2)
   is the alternative if that matters. No row.
-- §7.0c (H13): the coarser-overview step for a map over the window cap,
-  the level read shown in the tab, the one-time re-queue of
-  `unavailable: over-cap` maps, and which cap an `over-cap` ending hit.
-  Today such a map has no DEM and the job's error is empty.
+- §7.0c: the map that prompted answer 12 (about 22 M window cells at
+  4 m) is larger than any in §7.7's table; its derive time against the
+  worker's 240 s and its added peak at 4 m are unmeasured until the
+  re-queue runs on 8080. No row.
 - §7.8: a change of resolution or provider queues no existing map (they
   re-fetch lazily at their next view), and the other resolution's rows
   are not collected until a `TERRAIN_VERSION` bump. No row.

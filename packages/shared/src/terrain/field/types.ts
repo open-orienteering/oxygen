@@ -23,9 +23,9 @@ export const DEM_FIELD_SOURCE_RE = /^(ground|contours)\.[a-z0-9][a-z0-9-]{0,47}$
 
 /** Where a DEM-based field's heights come from (§7.1); travels with the bytes, as CC BY asks (answer 16). */
 export const heightFieldProviderSchema = z.object({
-  /** Provider and resolution, e.g. `lantmateriet-2m`. */
+  /** Provider and the resolution chosen, e.g. `lantmateriet-2m`. */
   id: z.string().min(1).max(48),
-  /** Ground cell of the model read, metres. */
+  /** Ground cell of the model read, metres: the id's, or the next coarser overview's for a map over the window cap (map-terrain §7.0c answer 12). */
   resolutionM: z.number().positive(),
   /** §6.0 answer 1. */
   grade: z.enum(["anchor", "coarse"]),

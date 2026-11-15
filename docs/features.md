@@ -364,7 +364,15 @@ the tab shows only the user name and when it was saved — and is sent only
 to Lantmäteriet), sets the resolution, and runs **Test connection** on a
 club map, which checks the account and Lantmäteriet's download service
 and shows the result. Below, every club map's height-data state, with
-**Retry** for a map whose fetch failed. Saving an account queues every
+**Retry** for a map whose fetch failed, and for a ready map the level the
+height model was read at ("read at 2 m"). A map too large for the chosen
+resolution (over 64 million height cells, e.g. a 1:15 000 map spanning
+20 × 17 km at 2 m) is read one level coarser instead — "read at 4 m, one
+level coarser" — from the same download; only a map too large at that
+level too stays without height data, and the tab says which limit it hit
+(too many tiles, too many height cells, too many search pages, or the
+map's own height-field limit). Maps that had ended "too large" before
+this are tried once more when the server starts. Saving an account queues every
 map that failed on the old one, with no restart. A value saved here wins
 over the deploy's `MAP_DEM_*` variables; with nothing saved and nothing
 deployed, no height data is fetched (see [map-terrain.md](map-terrain.md)
