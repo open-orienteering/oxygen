@@ -8,11 +8,13 @@ import { describe, expect, it } from "vitest";
 import { gpsTrack, mapDocument } from "@oxygen/shared";
 import {
   DEFAULT_CONVERT, SMOOTH_DEFAULT_M, SMOOTH_MAX_M, TOL_DEFAULT_MM, TOL_MAX_MM, TOL_MIN_MM, clampSettings, conversionChange, convertLine, convertOp,
-  convertPalette, lineOp, lineVertices, mintAddIds, nodeCount, parseStoredConvert, planConversion, rememberedOf, resolveRemembered,
+  convertPalette, lineOp, lineVertices, mintAddIds, nodeCount, nodeSummary, parseStoredConvert, planConversion, rememberedOf, resolveRemembered,
 } from "../modes/map/tracks/convert";
 import { drawOp } from "../modes/map/draw";
 import { newAddId, symbolPut } from "../modes/map/symbols";
 import { HASH, patchOf, pinnedDoc } from "./map-fixture";
+
+const OTHER = "cd".repeat(32);
 
 /** The E2E fixture's "E2E inside" (e2e/fixtures/gps-tracks.json): an L, 1:7500. */
 const L_MM: [number, number][] = [[-15, 10], [-15, 0], [-15, -10.001], [0, -9.999], [15, -10.001]];
@@ -133,6 +135,12 @@ describe("a conversion: ops, marks, the change", () => {
     expect(conversionChange(again, plan.ops).putSymbols).toBeUndefined();
   });
 
+  it("the node count: total, largest, and the warning only above 2000 nodes on one track (§6 answer 2)", () => {
+    expect(nodeSummary([], 2000)).toEqual({ total: 0, largest: 0, over: false });
+    expect(nodeSummary([{ count: 2000 }, { count: 1500 }], 2000)).toEqual({ total: 3500, largest: 2000, over: false });
+    expect(nodeSummary([{ count: 3 }, { count: 2001 }], 2000)).toEqual({ total: 2004, largest: 2001, over: true });
+  });
+
   it("add ids ascend in the tracks' order", () => {
     const m = mintAddIds(["a", "b", "c"], (now) => newAddId(now), 1_768_642_200_000);
     const v = [...m.values()];
@@ -154,8 +162,9 @@ describe("controls and per-device memory (§6 answer 3)", () => {
     expect(clampSettings({ windowM: 99, toleranceMm: 9 })).toEqual({ windowM: 30, toleranceMm: 0.5 });
     expect(clampSettings({ windowM: 12.4, toleranceMm: 0.234 })).toEqual({ windowM: 12, toleranceMm: 0.23 });
     expect(clampSettings({ windowM: Number.NaN })).toEqual(DEFAULT_CONVERT);
-    expect(parseStoredConvert(JSON.stringify({ windowM: 0, toleranceMm: 0.3, symbol: { entry: "ISSkiOM2019:801.1" } })))
-      .toEqual({ windowM: 0, toleranceMm: 0.3, symbol: { entry: "ISSkiOM2019:801.1" } });
+    const symbol = { key: "patch:ISSkiOM2019:801.1", documentHash: HASH, entry: "ISSkiOM2019:801.1" };
+    expect(parseStoredConvert(JSON.stringify({ windowM: 0, toleranceMm: 0.3, symbol }))).toEqual({ windowM: 0, toleranceMm: 0.3, symbol });
+    expect(parseStoredConvert(JSON.stringify({ symbol: { key: "doc:2", documentHash: HASH } })).symbol).toEqual({ key: "doc:2", documentHash: HASH, entry: null });
     expect(parseStoredConvert(JSON.stringify({ windowM: "x", symbol: { key: 3 } }))).toEqual({ ...DEFAULT_CONVERT, symbol: null });
   });
 
@@ -168,22 +177,34 @@ describe("controls and per-device memory (§6 answer 3)", () => {
 
   it("a library entry is remembered by its id and found on any map, also as a matched document symbol", () => {
     const lib = item({});
-    expect(rememberedOf(lib, HASH)).toEqual({ entry: "ISSkiOM2019:801.1" });
+    const s = rememberedOf(lib, HASH);
+    expect(s).toEqual({ key: "patch:ISSkiOM2019:801.1", documentHash: HASH, entry: "ISSkiOM2019:801.1" });
     const other = [group("ISSkiOM2019", "ISSkiOM2019", [["801", [item({ source: "document", ref: { doc: 4 } })]]])];
-    expect(resolveRemembered(other, { entry: "ISSkiOM2019:801.1" }, "cd".repeat(32))?.ref).toEqual({ doc: 4 });
+    expect(resolveRemembered(other, s, OTHER)?.ref).toEqual({ doc: 4 });
     // Disabled (the map lacks the colour) or absent: nothing is chosen.
-    expect(resolveRemembered([group("ISSkiOM2019", "ISSkiOM2019", [["801", [item({ enabled: false })]]])], { entry: "ISSkiOM2019:801.1" }, HASH)).toBeNull();
-    expect(resolveRemembered([], { entry: "ISSkiOM2019:801.1" }, HASH)).toBeNull();
+    expect(resolveRemembered([group("ISSkiOM2019", "ISSkiOM2019", [["801", [item({ enabled: false })]]])], s, OTHER)).toBeNull();
+    expect(resolveRemembered([], s, OTHER)).toBeNull();
+  });
+
+  it("on its own document the very item picked comes back, not a sibling matched to the same entry", () => {
+    const busy = item({ source: "document", ref: { doc: 1 }, objects: 40 });
+    const picked = item({ source: "document", ref: { doc: 5 }, objects: 2 });
+    const groups = [group("ISSkiOM2019", "ISSkiOM2019", [["801", [busy, picked]]])];
+    const s = rememberedOf(picked, HASH);
+    expect(resolveRemembered(groups, s, HASH)).toBe(picked);
+    // Elsewhere the entry's first item.
+    expect(resolveRemembered(groups, s, OTHER)).toBe(busy);
   });
 
   it("an unmatched document symbol is remembered only on its own document; a point or area is never resolved", () => {
     const own = item({ source: "document", ref: { doc: 2 }, canonicalId: null, code: "899" });
-    expect(rememberedOf(own, HASH)).toEqual({ key: "doc:2", documentHash: HASH });
+    const s = rememberedOf(own, HASH);
+    expect(s).toEqual({ key: "doc:2", documentHash: HASH, entry: null });
     const groups = [group("other", null, [["899", [own]]])];
-    expect(resolveRemembered(groups, { key: "doc:2", documentHash: HASH }, HASH)).toBe(own);
-    expect(resolveRemembered(groups, { key: "doc:2", documentHash: HASH }, "cd".repeat(32))).toBeNull();
+    expect(resolveRemembered(groups, s, HASH)).toBe(own);
+    expect(resolveRemembered(groups, s, OTHER)).toBeNull();
     const area = item({ kind: "area", source: "document", ref: { doc: 2 }, canonicalId: null });
-    expect(resolveRemembered([group("other", null, [["899", [area]]])], { key: "doc:2", documentHash: HASH }, HASH)).toBeNull();
+    expect(resolveRemembered([group("other", null, [["899", [area]]])], s, HASH)).toBeNull();
     expect(resolveRemembered(groups, null, HASH)).toBeNull();
   });
 

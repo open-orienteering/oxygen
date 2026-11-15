@@ -223,8 +223,9 @@ export function useMapMode(a: MapModeArgs): MapMode {
   /**
    * A gesture's write and its undo entry (§13 "Ops"); `keepDraft`: a move, whose draft stays until drawn. `follow`: a
    * write of another store that belongs to the same entry (G26's track marks), after the patch on do, undo and redo
-   * alike; the entry is recorded once the patch is written, so a failed follow-up is reported and the entry kept.
-   * False when refused (a write in flight, nothing to change).
+   * alike. The follow-up runs in its own `run`, so a refused one is reported without failing the patch's step: the
+   * entry is kept (on undo and redo too). On do the entry is recorded once the follow-up has settled, so it cannot be
+   * undone while its follow-up is in flight. False when refused (a write in flight, nothing to change).
    */
   const commit = useCallback((change: mapDocument.PatchChange, keepDraft = false, follow?: { after: () => Promise<unknown>; undo: () => Promise<unknown> }): boolean => {
     const before = patchRef.current;
@@ -241,12 +242,12 @@ export function useMapMode(a: MapModeArgs): MapMode {
       try {
         const res = await send(documentHash, change);
         if (keepDraft) setDraft((d) => (d ? { ...d, waitFor: res.version } : d));
+        if (follow) await run(follow.after);
         // Undo / redo drop the focused node: its index may name another node then (§13 "Nodes").
         record(
-          async () => { setDraft(null); setFocusState(null); await send(documentHash, inverse); await follow?.undo(); },
-          async () => { setDraft(null); setFocusState(null); await send(documentHash, change); await follow?.after(); },
+          async () => { setDraft(null); setFocusState(null); await send(documentHash, inverse); if (follow) await run(follow.undo); },
+          async () => { setDraft(null); setFocusState(null); await send(documentHash, change); if (follow) await run(follow.after); },
         );
-        await follow?.after();
       } finally {
         writingRef.current = false;
         setWriting(false);
@@ -466,6 +467,11 @@ export function useMapMode(a: MapModeArgs): MapMode {
     if (isMapDrawTool(next)) { setSelected(null); setStack([]); pendingSelect.current = null; }
     setTool(next);
   }, [canDraw, setChanging]);
+  /** `armTool` that also drops a drawing in progress from the draft (its op had an id; a waiting write's stays). */
+  const armDropping = useCallback((next: MapRailTool) => {
+    if (drawId.current) keepWaiting();
+    armTool(next);
+  }, [armTool, keepWaiting]);
   /** The picker's pick: the tool's symbol, or *Change symbol*'s write (one op, one undo entry; §13 "Ops"). */
   const pick = useCallback((item: mapDocument.PaletteItem) => {
     if (!item.enabled) return;
@@ -498,9 +504,9 @@ export function useMapMode(a: MapModeArgs): MapMode {
   }, [convertOpen, canDraw, convertRows.length]);
   const openConvert = useCallback(() => {
     if (!canDraw || convertRows.length === 0) return;
-    armTool("V");
+    armDropping("V"); // a drawing in progress is dropped, its draft with it
     setConvertOpen(true);
-  }, [canDraw, convertRows.length, armTool]);
+  }, [canDraw, convertRows.length, armDropping]);
   const closeConvert = useCallback(() => {
     setConvertOpen(false);
     keepWaiting();

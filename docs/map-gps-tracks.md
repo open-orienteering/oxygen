@@ -664,6 +664,13 @@ Decided before planning (the planner's questions and defaults, the user
 5. **Several tracks in one conversion** (G28) are snapped in list order,
    each seeing the document plus the lines already made in that batch.
 
+Decided overnight on the user's standing instruction (2026-11-13), for
+review, each the G26 planner's conservative recommendation: Q1 the page
+raster in integration (§6.5), Q2 *Show converted* (§6.3), Q3 two writes
+(§6.2), Q4 the symbol across maps (§6.4), and Q5 what else works while the
+panel is open (`course-editor.md` §13 "GPS tracks: convert": `V` armed, no
+move drag, closed by arming another tool).
+
 ### 6.1 The line
 
 Per selected track (`ready`: its points loaded and projected, §5.1):
@@ -686,10 +693,10 @@ Per selected track (`ready`: its points loaded and projected, §5.1):
 - **Determinism**: the same track, settings, frame and id give the same
   op; across engines up to the projection's last bit at a rounding tie
   (§3 intro).
-- **Ids**: one lowercase UUIDv7 per track, minted when it joins the open
-  panel, ascending in list order (consecutive milliseconds;
-  `map-patches.md` §2.2 orders added objects by id), shared by the preview
-  and the write; closing the panel drops them.
+- **Ids**: one lowercase UUIDv7 per track, ascending in list order
+  (consecutive milliseconds; `map-patches.md` §2.2 orders added objects by
+  id), shared by the preview and the write: minted on opening, and all
+  again when a track joins the open panel; closing the panel drops them.
 - **The symbol**: one line symbol for every track of a conversion, from
   the picker; a library entry is materialised on first use and put in the
   same change (`symbolPut`, `map-patches.md` §1.3).
@@ -701,9 +708,11 @@ Per selected track (`ready`: its points loaded and projected, §5.1):
   opId: "add:<id>" }] }` (§1.2). One undo entry on the editor's stack.
 - **Two writes, not one transaction** (decided overnight on the user's
   standing instruction (2026-11-13), for review; G26 planner's Q3): the
-  patch first, then the marks, on do, undo and redo alike. The entry is
-  recorded once the patch is written; a refused mark is shown and the
-  entry kept (the line is there; the track is merely not marked). Marks go
+  patch first, then the marks, on do, undo and redo alike. The marks are
+  a step of their own: a refused mark is shown and the entry kept, on undo
+  and redo too (the line is there, or gone; the track's mark is merely
+  stale). On do the entry is recorded once the marks have settled, so it
+  cannot be undone while they are in flight. Marks go
   only to tracks still listed (one deleted meanwhile is skipped, not a
   failed undo). A combined procedure would be an API change outside the
   row; the worst case is a stale mark, which the eye or *Show converted*
@@ -731,12 +740,14 @@ Remembered on the device, not per event (`localStorage`
 `oxygen:gps-track-convert`): smoothing in whole metres, simplification to
 0.01 mm, both clamped to answer 3's ranges, and the symbol. **The symbol
 across maps** (decided overnight on the user's standing instruction
-(2026-11-13), for review; G26 planner's Q4): a library entry is
-remembered by its id and chosen on any map whose palette offers that
-entry, enabled — as a library item, a patch symbol, or a document symbol
-matched to it; an unmatched document symbol is remembered by its key with
-the document's hash and chosen on that document only. Anything else
-leaves nothing chosen, so a wrong symbol is never preselected.
+(2026-11-13), for review; G26 planner's Q4): the picked item is
+remembered by its key with the document's hash, and by its library entry
+when it has one. On that document the item itself is chosen again (not a
+sibling document symbol matched to the same entry); on any other map the
+first enabled item offering the entry — a library item, a patch symbol,
+or a document symbol matched to it. An unmatched document symbol is
+chosen on its own document only. Anything else leaves nothing chosen, so
+another document's own symbol is never preselected.
 
 ### 6.5 In print
 
@@ -773,9 +784,9 @@ smoothing changes every 4 m (1–3 m resample only; 10 m smooths as 8 m).
 | `api/src/__tests__/integration/backup.test.ts` | The dump's `map_gps_tracks` section holds the event's tracks; `restore-map-gps-tracks.sql` restores them exactly (points, trim, ranges, token above 2^53) into another event, a missing importer NULL, an existing one kept, twice is once |
 | `web/src/pages/editor/__tests__/map-tracks-model.test.ts` | §5.1: where it is off; the import plan (segments in file order, names cut, per-file parse errors, skip counts, the 200 000-point refusal, calls within 200 tracks / 500 000 points); the trimmed projection, length, outside count, `not-projectable`; rows; colour; locate's bounds; per-device overrides; a deleted track's re-import |
 | `web/src/pages/editor/__tests__/map-tracks-decimate.test.ts` | §5.1 "Decimation to the pixel": the octave tolerance, the tolerance bound and ends, determinism, the 50 000-point budget, the layer's paths |
-| `web/src/pages/editor/__tests__/map-tracks-convert.test.ts` | §6: the fixture L → one `add` at 100 and 1000 units per mm, equal to `drawOp`'s; ends pinned under smoothing; fewer nodes with smoothing and a larger tolerance; determinism and no mutation; rounded duplicates and a one-coordinate track; outside points; a conversion's ops, marks, previous marks, node counts and skipped tracks; `putSymbols` on first use only, applying without an issue; ascending ids; the controls' defaults and ranges; the remembered symbol (§6.4); the picker's order |
+| `web/src/pages/editor/__tests__/map-tracks-convert.test.ts` | §6: the fixture L → one `add` at 100 and 1000 units per mm, equal to `drawOp`'s; ends pinned under smoothing; fewer nodes with smoothing and a larger tolerance; determinism and no mutation; rounded duplicates and a one-coordinate track; outside points; a conversion's ops, marks, previous marks, node counts and skipped tracks; `putSymbols` on first use only, applying without an issue; ascending ids; the controls' defaults and ranges; the node count's warning above 2000; the remembered symbol (§6.4); the picker's order |
 | `api/src/__tests__/integration/print-patch.test.ts` | §6 in print (G26, the row's page raster): a line `add` with `ISSkiOM2019:801.1` materialised on first use changes the rasterised `maps.pdf` page only inside its box |
-| `e2e/map-gps-tracks.spec.ts` | §5.1 end to end on `e2e/test.ocd`: import by the picker (a non-GPX file reported), the rows, the paths at the fixture's paper mm, locate, hide kept across a reload, a converted track hidden by default and *Show converted*, rename, delete and its undo, a reload keeping the tracks; §6: the fixture track converted with 801.1 — the preview, the op, the mark, the canvas, `maps.pdf`'s strokes, undo, redo, a second conversion moving the mark, the settings and symbol across a reload (`course-editor.md` §13 "Tests" has the detail) |
+| `e2e/map-gps-tracks.spec.ts` | §5.1 end to end on `e2e/test.ocd`: import by the picker (a non-GPX file reported), the rows, the paths at the fixture's paper mm, locate, hide kept across a reload, a converted track hidden by default and *Show converted*, rename, delete and its undo, a reload keeping the tracks; §6: the fixture track converted with 801.1 — the preview, the op, the mark, the canvas, `maps.pdf`'s strokes, undo, redo, a second conversion moving the mark, the settings and symbol across a reload, a refused mark keeping the undo entry (`course-editor.md` §13 "Tests" has the detail) |
 
 ## 8. Pending in this chapter
 

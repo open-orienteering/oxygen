@@ -156,10 +156,10 @@ export function mintAddIds(trackIds: readonly string[], mint: (now: number) => s
 export const convertStoreKey = "oxygen:gps-track-convert";
 
 /**
- * The remembered symbol: a library entry by its id (any map offers it under that entry, as a library, patch or matched
- * document item), else an unmatched document symbol by its key on the document it was chosen on only.
+ * The remembered symbol: the item's key (`doc:<i>` / `patch:<key>`) on the document it was chosen on, and its library
+ * entry when it has one (the item's `canonicalId`) for any other map.
  */
-export type RememberedSymbol = { entry: string } | { key: string; documentHash: string } | null;
+export type RememberedSymbol = { key: string; documentHash: string; entry: string | null } | null;
 
 export interface StoredConvert extends ConvertSettings {
   symbol: RememberedSymbol;
@@ -177,30 +177,43 @@ export function parseStoredConvert(raw: string | null): StoredConvert {
   const o = v as Record<string, unknown>;
   const s = clampSettings({ windowM: o.windowM as number, toleranceMm: o.toleranceMm as number });
   const sym = o.symbol as Record<string, unknown> | null | undefined;
-  let symbol: RememberedSymbol = null;
-  if (sym && typeof sym === "object") {
-    if (typeof sym.entry === "string" && sym.entry) symbol = { entry: sym.entry };
-    else if (typeof sym.key === "string" && typeof sym.documentHash === "string") symbol = { key: sym.key, documentHash: sym.documentHash };
-  }
+  const symbol: RememberedSymbol = sym && typeof sym === "object" && typeof sym.key === "string" && typeof sym.documentHash === "string"
+    ? { key: sym.key, documentHash: sym.documentHash, entry: typeof sym.entry === "string" && sym.entry ? sym.entry : null }
+    : null;
   return { ...s, symbol };
 }
 
 /** What to remember of a picked item. */
 export function rememberedOf(item: PaletteItem, documentHash: string): RememberedSymbol {
-  if (item.canonicalId) return { entry: item.canonicalId };
-  return { key: "doc" in item.ref ? `doc:${item.ref.doc}` : `patch:${item.ref.patch}`, documentHash };
+  return { key: "doc" in item.ref ? `doc:${item.ref.doc}` : `patch:${item.ref.patch}`, documentHash, entry: item.canonicalId };
 }
 
 const lineItems = (groups: readonly PaletteGroup[]): PaletteItem[] =>
   groups.flatMap((g) => g.headings.flatMap((h) => h.entries.filter((e) => e.kind === "line")));
 
-/** The remembered symbol's enabled line item on this document's palette, else null (nothing is preselected wrongly). */
+/**
+ * The remembered symbol's enabled line item on this document's palette: on its own document the item it was (by
+ * key), elsewhere the first item offering its library entry; else null — a symbol of another document's own table is
+ * never taken for this one's.
+ */
 export function resolveRemembered(groups: readonly PaletteGroup[], s: RememberedSymbol, documentHash: string): PaletteItem | null {
   if (!s) return null;
-  if ("entry" in s) return lineItems(groups).find((e) => e.enabled && e.canonicalId === s.entry) ?? null;
-  if (s.documentHash !== documentHash) return null;
-  const item = findItem(groups, s.key);
-  return item && item.enabled && item.kind === "line" ? item : null;
+  const usable = (item: PaletteItem | null | undefined) => (item && item.enabled && item.kind === "line" ? item : null);
+  if (s.documentHash === documentHash) {
+    const own = usable(findItem(groups, s.key));
+    if (own) return own;
+  }
+  return s.entry ? usable(lineItems(groups).find((e) => e.enabled && e.canonicalId === s.entry)) : null;
+}
+
+/** The panel's node count: the total, the largest track's, and whether one is over `max` (§6 answer 2). */
+export function nodeSummary(nodes: readonly { count: number }[], max: number): { total: number; largest: number; over: boolean } {
+  let total = 0, largest = 0;
+  for (const n of nodes) {
+    total += n.count;
+    if (n.count > largest) largest = n.count;
+  }
+  return { total, largest, over: largest > max };
 }
 
 // ─── The picker's order ──

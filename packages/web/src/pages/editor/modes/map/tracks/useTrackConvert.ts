@@ -13,7 +13,7 @@ import { newAddId, symbolPut, type SymbolPut } from "../symbols";
 import { MAP_NODES_MAX } from "../nodes";
 import type { TrackRow } from "./model";
 import {
-  clampSettings, conversionChange, convertPalette, convertStoreKey, mintAddIds, nodeCount, parseStoredConvert, planConversion, rememberedOf, resolveRemembered,
+  clampSettings, conversionChange, convertPalette, convertStoreKey, mintAddIds, nodeCount, nodeSummary, parseStoredConvert, planConversion, rememberedOf, resolveRemembered,
   smoothedLine, type ConvertSettings, type Conversion, type StoredConvert,
 } from "./convert";
 
@@ -120,9 +120,9 @@ export function useTrackConvert(a: TrackConvertArgs): TrackConvert {
     });
   }, [documentHash]);
 
-  // ─── Add ids: one per track, minted when it joins the conversion, shared by the preview and the write ──
-  // (A track without one yet is left out of the plan until the next render.) Closing drops them: the next opening
-  // makes new lines (§6 answer 1: *Convert* again makes a new line).
+  // ─── Add ids: one per track, ascending in list order, shared by the preview and the write ──
+  // A track joining the open panel mints them all again, so the order holds (a track without one yet is left out of
+  // the plan until the next render). Closing drops them: the next opening makes new lines (§6 answer 1).
   const [addIds, setAddIds] = useState<ReadonlyMap<string, string>>(() => new Map());
   useEffect(() => {
     if (!open) {
@@ -130,8 +130,8 @@ export function useTrackConvert(a: TrackConvertArgs): TrackConvert {
       return;
     }
     setAddIds((m) => {
-      const missing = rows.map((r) => r.meta.id).filter((id) => !m.has(id));
-      return missing.length > 0 ? new Map([...m, ...mintAddIds(missing, (now) => newAddId(now))]) : m;
+      const ids = rows.map((r) => r.meta.id);
+      return ids.some((id) => !m.has(id)) ? mintAddIds(ids, (now) => newAddId(now)) : m;
     });
   }, [open, rows]);
 
@@ -165,8 +165,7 @@ export function useTrackConvert(a: TrackConvertArgs): TrackConvert {
     () => (result ? { ops: result.plan.ops as mapDocument.PatchOp[], ...(result.change.putSymbols ? { symbols: result.change.putSymbols } : {}) } : null),
     [result],
   );
-  const totalNodes = counts.nodes.reduce((s, n) => s + n.count, 0);
-  const maxNodes = counts.nodes.reduce((m, n) => Math.max(m, n.count), 0);
+  const summary = nodeSummary(counts.nodes, MAP_NODES_MAX);
 
   return {
     palette,
@@ -177,9 +176,9 @@ export function useTrackConvert(a: TrackConvertArgs): TrackConvert {
     settings,
     onSettings,
     nodes: counts.nodes,
-    totalNodes,
-    maxNodes,
-    over: maxNodes > MAP_NODES_MAX,
+    totalNodes: summary.total,
+    maxNodes: summary.largest,
+    over: summary.over,
     skipped: counts.skipped,
     preview,
     result,

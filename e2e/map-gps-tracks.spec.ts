@@ -435,6 +435,34 @@ test.describe("GPS tracks in Map mode (docs/course-editor.md §13)", () => {
       await page.keyboard.press("Escape");
       await expect(panel).toHaveCount(0);
       expect(writes.length).toBe(count);
+
+      // Arming a drawing tool closes the panel (the panel keeps V; §13 "GPS tracks: convert", Q5).
+      await convertButton.click();
+      await expect(panel).toBeVisible();
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      await page.keyboard.press("l");
+      await expect(panel).toHaveCount(0);
+      await expect(page.getByTestId("editor-tool-L")).toHaveAttribute("aria-pressed", "true");
+      await page.keyboard.press("Escape");
+      await expect(page.getByTestId("editor-tool-V")).toHaveAttribute("aria-pressed", "true");
+
+      // A refused mark (§6.2): the line is written, the refusal shown, the track's mark unchanged — and the entry is
+      // kept: Ctrl+Z still removes the line (and writes the mark from before).
+      await page.route(/\/trpc\/[^?]*mapTrack\.markConverted/, (route) => route.abort());
+      await convertButton.click();
+      const refusedWrite = waitForTrpc(page, "mapPatch.applyChange");
+      await page.getByTestId("editor-tracks-convert-apply").click();
+      await refusedWrite;
+      await expect(page.getByTestId("editor-error")).toBeVisible();
+      await expect(page.getByTestId("editor-correction-row")).toHaveCount(2);
+      expect(await listed()).toBe(opId);
+      await page.unroute(/\/trpc\/[^?]*mapTrack\.markConverted/);
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      unmarked = waitForTrpc(page, "mapTrack.markConverted");
+      await page.keyboard.press("Control+z");
+      await unmarked;
+      await expect(page.getByTestId("editor-correction-row")).toHaveCount(1);
+      expect(await listed()).toBe(opId);
     } finally {
       await sheet.drop().catch(() => undefined);
       await dropEventPatch(EDITOR_EVENT).catch(() => undefined);
