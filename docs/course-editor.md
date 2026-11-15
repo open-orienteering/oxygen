@@ -2040,7 +2040,7 @@ object, `{ added: id }` for one the patch adds.
     `map-patches.md` §4.3; user 2026-11-15, G11 question 2). Enabled for
     a `target` entry of a hide, modify or resymbol with a document object
     (`source:<n>`) selected, `courses.edit` and *Apply corrections* on (as
-    hide); a `symbol` entry is drop-only until G12 (user 2026-11-15, G9
+    hide); a `symbol` entry is drop-only until G12b (user 2026-11-15, G9
     question 1: attaching it needs a symbol argument on
     `mapPatch.attachUnresolved`; meanwhile a resymbol's is redone with
     *Change symbol* on the object and the entry dropped).
@@ -2288,6 +2288,45 @@ filter region's list (P3) does.
   symbol drops its `resymbol`; the effective symbol again writes
   nothing. *Change symbol* closes on another selection, on arming a tool,
   and on Escape (in the search field too).
+
+### Line and area operations (G10): decided with the user (2026-11-15)
+
+Row G10's planner asked; the user took every recommendation. 08 §4.7
+names the operations only ("join/split/reverse lines, holes"); this is
+the normative behaviour. G10 writes the rest of the section.
+
+1. **Join names the second line by a pick.** Select a line, press
+   *Join*, click the other line: the nearest pair of ends is joined;
+   Escape cancels. A click on the selected line itself closes it into a
+   loop (its two ends joined). 08 §5.3's multi-select is still not built,
+   and join does not use it.
+2. **Ends that do not meet.** Within 0.5 mm on paper (`SNAP_MM`) the two
+   ends become one node at the surviving line's end; farther apart both
+   end nodes are kept and a straight segment joins them, at any distance.
+3. **The selected line survives a join**, with its identity, symbol and
+   direction; the picked line is hidden (a document object) or removed
+   (an added one), its nodes reversed where needed. Two lines of
+   different symbols may be joined; the result has the survivor's symbol.
+4. **A split keeps the part from the line's start to the node** as the
+   object (with its existing correction); the rest becomes a new added
+   line with the same effective symbol; the first part stays selected.
+   A split is at an existing node; a closed line opens there as one
+   object; an end node does nothing.
+5. **Holes.** *Cut hole* on a selected area, then draw the ring with
+   G9's area-drawing gesture: one `modify`. *Remove hole*: in `N`, focus a
+   node of the hole and press it.
+6. **A hole is accepted as drawn**, as OCAD does: areas fill even-odd
+   (`map-rendering.md` §3.1), so a ring outside the outline is drawn
+   filled and one crossing it inverts the overlap. No containment check.
+7. **Buttons, no keys.** *Reverse*, *Split at node*, *Join*, *Cut hole*
+   and *Remove hole* are buttons in the inspector's *Map object* section,
+   shown when they apply and disabled with a reason; *Join* and *Cut
+   hole* are one-shot armed states that Escape drops first. No rail tools
+   or letter keys in G10.
+8. **A join's two corrections revert separately** (the `modify` and the
+   `hide` / `remove`), as every op does; undo reverts both at once.
+   Reverting only the hide draws the old line under the joined one
+   (Pending).
 
 ### GPS tracks
 
@@ -2571,7 +2610,7 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
   promote (G12); *Attach* and *Drop* of an unresolved correction as undo
   entries with a locate (G11 left them outside `MapMode.tsx`; a
   `PATCH_STALE` refusal, now only for a patch that cannot be re-resolved,
-  is the editor's error line), and *Attach* of a `symbol` entry (G12, user
+  is the editor's error line), and *Attach* of a `symbol` entry (G12b, user
   2026-11-15, G9 question 1). Multi-select (Shift-click, lasso) and the
   right-click menu of 08 §5.3's Map column are not built; a single
   selection only. Map mode has no touch gestures (desktop only, 08 §5.5)

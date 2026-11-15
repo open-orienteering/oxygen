@@ -620,11 +620,40 @@ decision row in `decisions/slice-g.md`).
 
 ### 5.2 Editing
 
-Pending (G27): trim, split, average in Map mode.
+Pending (G27): trim, split, average in Map mode, with these decided:
+
+- **Converting an average marks its sources** (G27 planner's Q3, the
+  user 2026-11-15): converting an average also marks its still-listed
+  source passes converted with the same op id; undoing the conversion
+  clears them all.
+- **A split's undo** removes the two parts and imports the original
+  again under its id, then restores its trim and `convertedOp`; it comes
+  back at the end of the list (the wart G25 accepted for delete's undo).
 
 ## 6. Conversion into map objects
 
-Pending (G26, G28).
+Pending (G26, G28), with these decided (the planner's questions and
+defaults, the user 2026-11-15, every recommendation):
+
+1. **"Converted" is sticky** (G26): a converted track stays converted —
+   hidden unless *Show converted* — until the conversion is undone, even
+   when its line is later hidden or reverted in Map mode or baked by a
+   promote (G12). *Convert* stays available on a converted track; it
+   makes a new line and the mark moves to the newest op.
+2. **The 2000-node cap** (G26): the convert panel shows the resulting
+   node count live and warns above `MAP_NODES_MAX` (2000, G7) that the
+   line will not be node-editable; still one `add` op per track.
+3. **Controls** (G26): smoothing window in ground metres 0–30, default
+   10 (0 = off); simplification 0.02–0.5 mm, default 0.1 (§3.3–3.4).
+   Both and the symbol are remembered per device. No default symbol the
+   first time.
+4. **Track symbols for the end snap** (G28): an end snaps onto ISSkiOM
+   track-group lines (801.1–804.2, 805, 807, 813.1 / 813.2; a document
+   symbol matched to one, or a patch symbol `ISSkiOM2019:…`) and onto
+   document line symbols whose source code is 8xx without a match (a
+   club's own ski symbols). Not roads or paths (ISOM 501–508).
+5. **Several tracks in one conversion** (G28) are snapped in list order,
+   each seeing the document plus the lines already made in that batch.
 
 ## 7. Tests
 
