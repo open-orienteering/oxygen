@@ -103,7 +103,7 @@ export function seededRandom(seed: number): () => number {
  * to 0 over the outer eighth so the field's border lies on z = 0 (the
  * dev page's crack check counts background inside the border's outline).
  */
-export function noiseField(width = 300, height = 200, seed = 7, amplitudeM = 40): HeightField {
+export function noiseField(width = 300, height = 200, seed = 7, amplitudeM = 40, opts: SyntheticOptions = {}): HeightField {
   const rand = seededRandom(seed);
   const octaves = [24, 9, 4].map((cells) => {
     const gw = Math.ceil(width / cells) + 2, gh = Math.ceil(height / cells) + 2;
@@ -121,6 +121,39 @@ export function noiseField(width = 300, height = 200, seed = 7, amplitudeM = 40)
     width,
     height,
     (cx, cy) => amplitudeM * (0.6 * value(octaves[0], cx, cy) + 0.3 * value(octaves[1], cx, cy) + 0.1 * value(octaves[2], cx, cy)) * taper(cx, width) * taper(cy, height),
-    { cellMm: 0.2, groundMPerMm: 15 },
+    { cellMm: 0.2, groundMPerMm: 15, ...opts },
+  );
+}
+
+/**
+ * The bench's field over a document (`/dev/map-gl-doc?terrain=1`, §5.6 "Measurements (H6)"): seeded
+ * noise over `boundsMm` at 0.2 mm cells, coarser where that would pass `maxSide` cells per side
+ * (the §4.0 cap). Frame time does not depend on real heights.
+ */
+export function noiseFieldOver(boundsMm: { minX: number; minY: number; maxX: number; maxY: number }, maxSide = 4096, groundMPerMm = 15): HeightField {
+  const w = boundsMm.maxX - boundsMm.minX, h = boundsMm.maxY - boundsMm.minY;
+  const cellMm = Math.max(0.2, w / maxSide, h / maxSide);
+  return noiseField(Math.max(2, Math.ceil(w / cellMm)), Math.max(2, Math.ceil(h / cellMm)), 7, 40, { cellMm, x0: boundsMm.minX, y0: boundsMm.minY, groundMPerMm });
+}
+
+/**
+ * The field under the dev page's draped course (`doc=course`, §5.6 "Dev page"): 500 × 400 cells
+ * of 0.2 mm from paper (−10, −10) mm — the course document's 80 × 60 mm sheet and a 10 mm rim, so
+ * the whole sheet is on the mesh — at 1 : 15 000, flat or with a cone of `DOC_CONE.heightM` at
+ * `DOC_CONE` (radius in mm), no no-data.
+ */
+export const DOC_CONE = { x: 35, y: 25, radiusMm: 22, heightM: 45, groundMPerMm: 15 } as const;
+
+export function docField(kind: "cone" | "flat"): HeightField {
+  const c = DOC_CONE;
+  return fieldFromGrid(
+    500,
+    400,
+    (cx, cy) => {
+      if (kind === "flat") return 0;
+      const r = Math.hypot(-10 + (cx + 0.5) * 0.2 - c.x, -10 + (cy + 0.5) * 0.2 - c.y);
+      return Math.max(0, c.heightM * (1 - r / c.radiusMm));
+    },
+    { cellMm: 0.2, x0: -10, y0: -10, groundMPerMm: c.groundMPerMm },
   );
 }

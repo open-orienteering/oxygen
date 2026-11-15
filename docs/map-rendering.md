@@ -987,8 +987,9 @@ growth factor).
 | `patch` | a generation number, the patch (or `null`) and the cells whose detail the engine holds | `patched`: the generation, the patch state (hidden ids, issues), the touched buckets' fresh parts, the detail cells, the bytes, the mesh atlas when it grew — "Object identity and the patch" below |
 | `course` | a generation number and the course layer's input without the document (`CourseLayerRequest`: structure, sites, objects, appearance, view options, filter regions, `fastFilter`), or `null` | `course`: the generation, the dynamic bucket's part (or `null`), the stack to draw with, the derivation and symbol sizes, warnings, the mesh atlas when it grew, and the filter over the static buckets (or `null`) — "Dynamic bucket" and "Filter regions" below |
 | `hit` (G5) | an id, a paper point (µm) and a tolerance | `hit`: the id and the effective document's objects under the point, topmost first (`DocumentHit`s) — §5.5 "Document objects" |
+| `terrain` (H6) | a generation number, a height field's header and its int16 grid | `terrain`: the generation, the mesh's prepared part (filled heights, height range, chunk ranges) and the normals, transferred — §5.6 "Worker"; needs no loaded document |
 | `edit` (G5) | a generation number and the edit input (selected refs, a draft of patch ops), or `null` | `edit`: the generation, the edit part (`EDIT_BUCKET`, or `null`), the static copies to hide, the selected refs' indices and the count drawn highlighted, the draft's issues, the mesh atlas when it grew — §5.5 "Document objects"; a `patched` reply carries the same state as `edit` while an input is held |
-| — | | `error` on a failed load; on a `course` request whose derivation throws, with that request's generation (F20b); on a `patch` request that throws, with `patch` = its generation; on a `hit` with `hit` = its id; on an `edit` with `edit` = its generation |
+| — | | `error` on a failed load; on a `course` request whose derivation throws, with that request's generation (F20b); on a `patch` request that throws, with `patch` = its generation; on a `hit` with `hit` = its id; on an `edit` with `edit` = its generation; on a `terrain` request with `terrain` = its generation |
 
 Every typed array goes back as a transferable. The worker decodes,
 bridges (`documentRenderInput`), symbolises, builds the atlas, assigns
@@ -2176,9 +2177,11 @@ popover beside it; same entries and ids.
 The 3D drawing side of research topic 10 §5 step 2 (H5): a height field
 (`docs/map-terrain.md` §5) drawn as a mesh under a perspective camera,
 textured and lit. H6 makes the map the texture and runs this on the
-renderer's context; H7 puts it in the viewer. Everything lives in
-`packages/web/src/map-gl/terrain/`; nothing here edits `renderer.ts`,
-`engine.ts` or `worker.ts`.
+renderer's context; H7 puts it in the viewer. The terrain side lives in
+`packages/web/src/map-gl/terrain/`; H6 joins it to the arena path through
+`renderer.ts` (the drape target, the terrain program on the renderer's
+context), `engine.ts` (the 3D frame: footprint, cells, settling, budget)
+and `worker.ts` (the field's CPU preparation).
 
 #### Decided with the user (2026-11-14)
 
@@ -2196,6 +2199,44 @@ renderer's context; H7 puts it in the viewer. Everything lives in
 2. **Vertical exaggeration is a draw parameter with no default here.**
    The dev page and the E2E pass it explicitly; the viewer's default and
    range are H7's (§5.4 "3D mode").
+
+#### Decided with the user (H6, 2026-11-14)
+
+3. **Two drape layers, near and far, split by need.** One orthographic
+   texture has one texel density, and a tilted camera needs several times
+   more at the near edge of the screen than at the far edge (≈ 3.4× at
+   pitch 60). `TerrainFrame` takes `drapes[]` (1–2), the first whose uv
+   is inside wins. Rendering the map through the perspective matrix every
+   frame was rejected: it needs a per-vertex screen density (§8
+   "perspective cameras") and contradicts "re-rendered when the camera
+   settles".
+   - *As first decided*: the far layer at the density the cap allows, a
+     near layer only where the cap left the far one below 0.7 of the need.
+   - **Amended after the bench (user, 2026-11-14)**: on Club-full at 1×
+     paper tilted 60° the camera sees the whole map to the horizon, and a
+     far layer at the nearest point's density (the cap allowed 96 %)
+     rendered all of its detail — 200 ms per re-render, 166 MB resident
+     against 150 MB. Now, **whenever the footprint's depth range is wide**
+     (far / near depth > `DRAPE_SPLIT_RATIO` = 2), the near layer covers
+     the ground up to a depth D at the nearest point's density and the far
+     layer covers the whole footprint at `focalPx / D` — what the ground
+     beyond D needs — with D chosen to minimise the texels; both are then
+     scaled down together if over the cap. Pitch 0 (depth range 1) stays
+     one layer, the 2D view. Distant ground falls below the zoom gate as
+     it would in 2D at that density.
+4. **The drape is clipped to the mesh.** The height field covers the
+   contours' bounding box + 2 mm (`map-terrain.md` §2.4, §5), so sheet
+   parts outside it — a title, a legend, a margin beyond the field — are
+   not drawn in 3D. Whether the mesh gets a flat apron to the document's
+   bounds is H7's call, on real maps (§8).
+5. **The cap is inside the residency budget.** The height and normal
+   textures and the drape layers count against the existing budget
+   (30 MB event maps, 150 MB club maps; `budgetBytes()`); the drape
+   layers together may take at most a third of it (10 / 50 MB, mip chain
+   included) and at most 4096 texels per side. On a phone at an event
+   map that is ≈ 1.9 M drape texels against a 2.6 M-pixel canvas (0.85×
+   linear at pitch 0). Revisited only if the measurements or the H-gate
+   show it.
 
 #### Input
 
@@ -2317,14 +2358,17 @@ costs no upload.
 ```ts
 class TerrainRenderer {
   constructor(gl: WebGL2RenderingContext);        // the caller's context
-  setField(field: HeightField, originUm: { x; y }): TerrainMesh;
+  setField(field: HeightField, originUm: { x; y }, prepared?: PreparedField): TerrainMesh;
+  setOrigin(originUm: { x; y }): TerrainMesh;      // the same field in a new document's model space, no upload
+  clearField(): void;
   get mesh(): TerrainMesh | null;
+  get bytes(): number;                             // fieldTextureBytes(W, H) = W · H · 5
   draw(frame: TerrainFrame, target: RenderTarget): TerrainDrawStats | null;
   dispose(): void;
 }
 interface TerrainFrame {
   camera: TerrainCamera; exaggeration: number;
-  texture: WebGLTexture; drapeMatrix: Float32Array;   // the drape and the model → clip matrix it was rendered with
+  drapes: { texture: WebGLTexture; matrix: Float32Array }[];   // 1–2 (MAX_DRAPES), priority order
   background: [r, g, b]; lodPx?: number; level?: number;
 }
 ```
@@ -2334,27 +2378,226 @@ interface TerrainFrame {
   is"; 4096 per side is the phone texture limit §4.0 answer 3 sized the
   grid to) and the normals as `RGB8_SNORM`, linear. A field over
   `MAX_TEXTURE_SIZE` throws.
+- `setField` without `prepared` does the CPU work itself (the dev page's
+  synthetic mode); the engine passes the worker's (§5.6 "Worker").
 - `draw` clears `target` (colour to `background`, depth to 1), draws with
-  depth test `LEQUAL`, and samples the drape at `uv = (drapeMatrix · (x,
-  y, 0, 1)).xy / w · ½ + ½`. Outside [0, 1] the `background` colour
-  stands in for the drape and is **shaded like it** — it is ground the
-  texture does not cover (H6's footprint texture ends before the field
-  does), and an unlit patch would read as a hole. The colour is
+  depth test `LEQUAL`, and samples each drape at `uv = (matrix · (x, y,
+  0, 1)).xy / w · ½ + ½`; the **first drape whose uv lies in [0, 1]** is
+  drawn (H6: the near layer, then the far one — decision 3). Both
+  samplers are read outside the branch so the mip level's derivatives
+  stay defined; an absent second drape binds the first and is never
+  chosen. Outside every drape the `background` colour stands in and is
+  **shaded like it** — it is ground no texture covers (the footprint ends
+  before the field does, and the camera moved before the drape followed,
+  "Settling"), and an unlit patch would read as a hole. The colour is
   `min(1, colour · shade)`, opaque.
 - It sets what it draws with — blend, face culling, scissor and stencil
   off, every colour channel written — since the arena path leaves blend
   on after a 2D frame.
-- **The seam for H6**: the drape is any texture plus the matrix it was
-  drawn with, so the map rendered into a framebuffer texture with the 2D
-  `viewMatrix` over the camera's footprint drops in for the dev page's
-  checker unchanged. The renderer takes a context, not a canvas, and
-  leaves it as the arena path expects: depth test off and
+- **The seam**: a drape is any texture plus the matrix it was drawn
+  with, so the map rendered into framebuffer textures with the 2D
+  `viewMatrix` over the camera's footprint (below) and the dev page's
+  checker go through the same path. The renderer takes a context, not a
+  canvas, and leaves it as the arena path expects: depth test off and
   `depthFunc(LESS)`, no program, vertex array, framebuffer or texture of
   its own bound, `TEXTURE0` active, unpack alignment 4. The viewport,
   clear colour, clear depth and `depthMask(true)` stay as drawn; the
-  arena path sets its own each frame. It imports only `RenderTarget` from
-  `view.ts`; nothing in `renderer.ts`, `engine.ts` or `worker.ts` knows of
-  it yet.
+  arena path sets its own each frame. `MapGlRenderer` owns one
+  (`renderer.terrain`, made on first use) on its own context.
+
+#### Footprint (`footprint.ts`, H6)
+
+The research's step 1 (10 §5) renders the map "to a texture … at the
+view's resolution"; under a perspective camera the screen has no single
+resolution on the ground, so the drape is **orthographic textures over
+the camera's ground footprint**, rendered with the unchanged arena path
+and `viewMatrix` (10 §6 points 1–2: one matrix, an explicit target).
+
+`groundFootprint(cam, box)` is the plan region whose surface the camera
+can see: the four side planes of the frustum (through the eye; with
+`tanY = tan(fovY / 2)`, `tanX = tanY · width / height`, inside where
+`|p·right| ≤ tanX · depth`, `|p·up| ≤ tanY · depth`) clip each face of
+`box` — the mesh's box at the drawn exaggeration (`meshBox`) — and the
+xy convex hull of what is left (plus the eye, where it lies inside the
+box) is the footprint, counter-clockwise, model µm; empty when the
+frustum misses the box. Clipping the **box** rather than the z = 0 plane:
+
+- a hilltop seen beyond the flat-ground trapezoid is covered (the drape
+  is a vertical projection: a surface point takes the texel of its
+  plan position, whatever its height);
+- the box bounds the footprint at the horizon, so a camera looking over
+  the field has a finite footprint without a far plane.
+
+Tested: the screen rectangle at pitch 0, the analytic trapezoid when
+tilted, every on-screen surface point of random cameras inside the
+polygon and inside a layer, the box clip, empty when looking away.
+
+#### Drape layers (H6, decision 3)
+
+`drapeLayers(cam, box, originUm, limits)` → one or two `DrapeLayer {
+role: "near" | "far", view: ViewRect, needPxPerUm }`, priority order:
+
+- **Rectangle**: the footprint's bounding box in the camera's bearing
+  frame (`u` along screen-right at pitch 0, `v` along screen-up — the
+  frame `viewMatrix` turns by `rotationDeg`), grown by `DRAPE_MARGIN` =
+  5 % of its extent per side (small moves stay covered and bilinear
+  filtering has its neighbours at the edge), clipped to the box's extent
+  in that frame. The view's `rotationDeg` is the camera's `bearingDeg`.
+- **Density**: what the screen needs at the footprint's nearest point:
+  `need = focalPx / depth`, depth along the view direction of the
+  footprint's vertices placed at the target's z (`depth` is linear, so
+  its minimum is at a vertex). At pitch 0 every point is at the same
+  depth and `need = focalPx / distanceUm` — the 2D `pxPerUm`
+  (`distanceForPxPerUm`'s inverse).
+- **Cap** (decision 5): the density is lowered until the layer's sides
+  are at most `limits.maxSide` and its texels at most `limits.maxPixels`.
+  The rectangle's edges are snapped outward to the screen's pixel grid
+  at pitch 0 (`u = u_t + (k − width / 2) / ρ` about the target, k
+  whole), so at pitch 0 the texel centres fall on the pixel centres —
+  also where the field's edge clips the layer off the screen's centre
+  (review finding; H7 hands over on maps whose sheet passes the field).
+  A size loop under the texel allowance is bounded: snapping keeps at
+  least a texel a side.
+- **The 2D ↔ 3D hand-over**: at pitch 0 with the budget's room the one
+  layer *is* the 2D view, grown by the margin and snapped to its pixel
+  grid (centre within a texel, same `pxPerUm` and rotation), so the 3D frame over flat ground equals the 2D frame —
+  exactly on a GPU (max 1 level, north up), to the MSAA resolve's
+  rounding in SwiftShader (E2E). Turned, the texel grid is turned
+  against the pixels and the frame is a bilinear resample of the 2D one
+  (< 1 % of pixels, all on edges, differ by more than 2 levels).
+- **Split by need** (decision 3 as amended): with `dMin`, `dMax` the
+  footprint's smallest and largest depth, a footprint with `dMax / dMin
+  ≤ DRAPE_SPLIT_RATIO` = 2 (pitch 0, a slight tilt) is one layer at
+  `need`. A wider one is two: for split depths D in 12 geometric steps
+  between `dMin` and `dMax`, the near layer is the rectangle of the
+  footprint clipped to `depth ≤ D` (the depth is linear: one half-plane)
+  at `need`, the far layer the whole rectangle at `focalPx / D` — enough
+  for every point beyond D — and the D with the fewest texels is taken
+  (when it beats one layer). Over the cap both densities are scaled by
+  the same factor and each layer gets its share of the texels. Every
+  on-screen ground point is then drawn at least at the density it needs,
+  times that factor (tested on a grid of points); `needPxPerUm` is the
+  near layer's `need` and the far layer's `focalPx / D`, and a layer's
+  `ratio` in the stats is its density over that.
+
+`drapeTiles(view, tile)` partitions a layer's texels into views of at
+most `tile` per side: each is the layer's density and rotation, centred
+on its rectangle, so its pixels are the layer's pixels shifted by a
+whole number (tested: the partition, and every texel where the layer's
+matrix puts it).
+
+#### Rendering the drape (`renderer.ts`, H6)
+
+`renderer.renderDrape(slot, view, opts)` renders the visible set with
+`renderDocument` into drape slot `slot`'s texture, `view.widthPx ×
+view.heightPx` texels (made, or remade at a new size, as `RGBA8` with a
+full mip chain via `texStorage2D`; `LINEAR_MIPMAP_LINEAR`, anisotropy up
+to 8 with `EXT_texture_filter_anisotropic`):
+
+- tile by tile (`drapeTiles`, `DRAPE_TILE` = 1024): each tile is drawn
+  into one square target of `min(DRAPE_TILE, the layer's longer side)`
+  (remade when that changes) with 4× MSAA colour and
+  `DEPTH24_STENCIL8` (the loupe's recipe: pattern clips need the
+  stencil), resolved into that target's own texture with a blit of the
+  same rectangle (a multisampled blit cannot move pixels), then blitted
+  into its rectangle of the drape. A 4096² MSAA target would hold
+  ~512 MB; the tile target holds 36 MB (`drapeScratchBytes`);
+- then `generateMipmap`: far ground is minified several times at a tilt,
+  and a line map shimmers without mips.
+
+The screen-only rules (hairline floor, glyph and text skips, hatch tint)
+read the layer's `pxPerUm` — the drape is drawn as the 2D map at its
+density. `drape(slot)` is the texture, `releaseDrapes(from)` frees slots
+from `from` on (the tile target with the last), `drapeBytes` is the
+budget's count (`drapeTextureBytes`: 4 bytes per texel over the chain,
+≈ 4/3). `drawTerrain(frame, target)` draws the mesh under the GPU timer.
+
+#### Settling (`engine.ts`, H6)
+
+The drape is re-rendered **when the camera settles, or when what it
+shows changes** — never per camera frame:
+
+- `renderTerrain` keys the camera (target, distance, bearing, pitch,
+  field of view, size, exaggeration). A change restarts a
+  `DRAPE_SETTLE_MS` = 150 ms timer that calls `onChange` (the host draws
+  a frame: the camera has settled).
+- While the camera moves, the frame is the mesh alone over the drape
+  last rendered; ground it does not reach is the shaded background
+  (§5.6 "Drawing").
+- Once the camera has been still for 150 ms, the layers are re-selected
+  for the footprint; if any view differs, the drawn cells are the
+  layers' (below) and the drape is stale. The first 3D frame after a
+  field, a load or a 2D frame selects at once; a camera that sees none
+  of the mesh selects no layer once, not every frame.
+- Whatever makes the 2D visible set dirty — a course or edit reply, a
+  patch, `setHidden`, a filter — rebuilds it and makes the drape stale
+  at once, over the layers it has: a course drag does not wait for the
+  camera. `invalidateDrape()` is the host's (other colours, say).
+- **Detail arrivals** alone, while more of the layers' detail is still
+  pending, re-render the drape at most every `DRAPE_ARRIVAL_MS` = 500 ms,
+  or `DRAPE_ARRIVAL_FACTOR` = 4 × the last re-render's JS time where that
+  is longer (a club map's drape takes 100–300 ms); a held frame still
+  draws the mesh, and a timer calls `onChange` when the hold ends. The
+  arrival that completes the layers' detail re-renders at once.
+- A stale drape is rendered at the start of the frame, every layer, then
+  the mesh: **one frame = map-to-texture + mesh**.
+
+#### Budget (H6, decision 5)
+
+- The field's textures (`W · H · 5` bytes: R16I and RGB8_SNORM) and the
+  drape layers' (`drapeBytes`, mips included) join the engine's fixed
+  bytes, so the LRU evicts detail around them as it does around the
+  course part.
+- `drapeLimits()`: `maxSide = min(DRAPE_MAX_SIDE = 4096,
+  MAX_TEXTURE_SIZE)`, `maxPixels = budget · DRAPE_BUDGET_SHARE (⅓) /
+  DRAPE_TEXEL_BYTES (16 / 3)` — 1.97 M texels at an event map's 30 MB,
+  9.8 M at a club map's 150 MB.
+- Not counted: the tile target (as the canvas's own MSAA buffers and the
+  loupe's target are not) — reported in the stats.
+- A drape re-render is not a frame for 04 §9's "≤ 300 draws": its draws
+  and time are reported apart ("Measurements (H6)"); mesh frames are held
+  to the frame budget.
+
+#### Engine API (H6)
+
+```ts
+engine.setTerrain(field: HeightField | null): Promise<TerrainMesh | null>;
+engine.terrainMesh / engine.terrainField;           // for H7's pick and camera bounds
+engine.renderTerrain(frame: { camera; exaggeration; lodPx?; level? }, opts: DocumentRenderOptions, target?): TerrainFrameStats;
+engine.invalidateDrape(): void;
+engine.drapeLimits(): { maxSide; maxPixels };
+engine.stats().terrain  // fieldBytes, drapeBytes, scratchBytes, layers (role, size, pxPerUm, ratio = density / need),
+                        // drapeRenders, lastDrapeMs / Draws / Tiles, the worker's prepareMs, uploadMs
+```
+
+- `setTerrain` posts the field to the worker (a copy of the grid; the
+  engine keeps the field for the pick, and `terrainField` turns to it
+  only with its mesh, so the pair always matches), uploads the reply in the
+  document's model space (the arenas' origin; a later `load` moves the
+  mesh with `setOrigin`) and resolves with the mesh; a later call
+  rejects one in flight; `null` drops the textures and the drape and
+  returns the drawn set to the 2D view.
+- **Cells for the drape**: `setView`'s selection takes several views
+  (`selectViews`): the drawn cells are the union of each layer's cells
+  with the draw margin, a layer's detail is drawn and requested only
+  above the zoom gate *at its own density* (with the draw margin as the
+  prefetch), and the LRU protects the detail drawn. A 2D view is the
+  one-view case, unchanged. `render` after a 3D frame re-selects the 2D
+  view; `renderTerrain` after a 2D frame re-selects the layers.
+- `whenComplete()` resolves once every layer's ungated detail is
+  resident; the next 3D frame then renders the complete drape.
+
+#### Worker (H6)
+
+`setField`'s CPU work moved to the map worker (§8's choice between the
+worker and GPU normals: `RGB8_SNORM` is not colour-renderable in WebGL2,
+and the chunk ranges are needed on the CPU anyway): the request
+`terrain { generation, header, z }` answers `terrain { generation,
+terrain: PreparedTerrain, normals, ms }` — `prepareTerrain(field)` (the
+no-data fill, the height range, the chunks' ranges: `buildTerrainMesh`
+without the origin) and `heightNormals(field, 1)`, both arrays
+transferred. It needs no loaded document. The main thread keeps the
+assembly (`assembleTerrainMesh`) and the two uploads (`uploadMs`).
 
 #### Dev page
 
@@ -2372,6 +2615,24 @@ field at `zoom` 1. The canvas (`data-testid="map-terrain-canvas"`,
 yMm)` (canvas px of the surface point) and `pick(px, py)` / `lastPick`.
 `bench=1` draws 60 frames, each synced by a one-pixel read, and reports
 the p50 / p95.
+
+`?doc=course[&field=cone|flat&x=&y=&budget=<MB>&worker=1]` (H6,
+`pages/dev/terrainDoc.ts`) loads the course fixture document
+(`map-gl/fixtures/course-document.ts`: an aligned ISOM stack, a black
+line, a top-row line, the four-control course the dynamic-bucket tests
+use) into a real `MapGlEngine` with its course layer, sets a field over
+the 80 × 60 mm sheet and a 10 mm rim (`docField`: flat, or a 45 m cone
+of 22 mm radius at (35, 25) mm), and draws `renderTerrain` frames — the
+map and the course in the drape, then the mesh — redrawing on the
+engine's `onChange` (an animation frame, or a 50 ms timer where frames
+do not run). The camera looks at (`x`, `y`) mm, `zoom` 1 fitting the
+sheet. `window.__mapTerrainDoc` publishes the last frame, the engine's
+stats, `project`, `pick`, `setCamera(…)` and `compare2d()` (the same view
+drawn by `engine.render` and compared pixel by pixel).
+
+`/dev/map-gl-doc?…&terrain=1[&pitch=60&e=2]` (H6): its "Bench" runs the
+3D scenarios on a loaded map instead of the 2D ones — "Measurements
+(H6)".
 
 #### Measurements (H5)
 
@@ -2393,6 +2654,67 @@ Headless Chromium draws in software (SwiftShader), 64–200 ms a frame
 here; GPU frame times are H6's, on the bench harness with the map
 texture.
 
+#### Measurements (H6)
+
+`scripts/measure-gl.mjs --terrain --modes=source` on the corpus through
+`/dev/map-gl-doc?terrain=1` (2026-11-14): headed Chromium on the laptop's
+iGPU (Intel ADL GT2, Mesa); desktop 1280 × 800 at DPR 1, and the phone
+profile 412 × 915 at DPR 2.625 with the main thread CPU-throttled 4×
+(the worker is not throttled; the GPU is the laptop's — a real phone is
+the H-gate's). The field is seeded noise over the map's bounds at 0.2 mm
+(the 4096-cell cap coarsens Club-full's to 0.23 mm), exaggeration 2,
+pitch 60. Each scenario is 240 frames orbiting 360°, holding still past
+`DRAPE_SETTLE_MS` every 60 frames: **orbit** at the fit view, **close**
+at 1× paper over the densest cell. Mesh frames and drape re-renders are
+reported apart (a re-render's wall time is synced by a one-pixel read).
+Club budget (150 MB; the drape's third is 50 MB).
+
+The field (once per map): the worker's preparation (fill + normals) and
+the main thread's upload.
+
+| Map | Field | Textures | Worker fill + normals | Upload, desktop / phone |
+|---|---|---|---|---|
+| Sprint | 2127 × 1946 | 19.7 MB | 57 + 224 ms | 21 / 43 ms |
+| Crop-B | 756 × 703 | 2.5 MB | 12 + 26 ms | 5 / 8 ms |
+| Club-2026 | 1642 × 2196 | 17.2 MB | 48 + 192 ms | 8 / 16 ms |
+| Club-full | 4096 × 2153 | 42.1 MB | 95 + 451 ms | 23 / 92 ms |
+
+Mesh frames (p50 / p95 ms) and drape re-renders:
+
+| Map, scenario | Mesh CPU desktop / phone | Mesh GPU desktop / phone | Draws | Re-renders | Re-render wall p50 / max, desktop / phone | Layers (desktop / phone) | Drape MB d / p | Resident max MB d / p |
+|---|---|---|---|---|---|---|---|---|
+| Sprint orbit | 0.8/1.5 · 1.0/1.9 | 1.9/2.5 · 2.8/3.7 | 2 | 4 | 40/56 · 44/78 | far / far | 5.8 / 7.0 | 33 / 34 |
+| Sprint close | 0.9/1.6 · 1.5/2.2 | 2.3/3.4 · 4.0/8.1 | 3 | 3 | 66/77 · 75/78 | near + far / near + far | 14.5 / 48.1 | 47 / 77 |
+| Crop-B orbit | 0.5/0.9 · 0.8/1.3 | 1.9/2.2 · 2.5/3.4 | 2 | 4 | 17/22 · 19/31 | far / far | 5.6 / 7.1 | 15 / 16 |
+| Crop-B close | 0.4/0.6 · 0.6/1.0 | 1.0/1.2 · 4.1/5.3 | 2 | 3 | 11/14 · 23/25 | far / far | 2.6 / 16.4 | 15 / 26 |
+| Club-2026 orbit | 0.6/0.9 · 1.2/1.9 | 1.4/3.0 · 2.6/4.5 | 2 | 4 | 43/43 · 57/66 | far / far | 3.1 / 10.0 | 56 / 64 |
+| Club-2026 close | 0.8/1.4 · 1.4/2.1 | 2.2/3.7 · 2.9/6.3 | 3 | 3 | 75/131 · 93/105 | near + far / near + far | 11.7 / 37.5 | 65 / 94 |
+| Club-full orbit | 1.2/1.8 · 1.6/2.5 | 1.9/3.8 · 1.4/2.8 | 2 | 4 | 107/158 · 69/108 | near + far / far | 8.1 / 4.1 | 125 / 121 |
+| Club-full close | 1.5/2.4 · 2.4/3.3 | 3.1/4.9 · 2.9/6.6 | 3 | 62 / 63 | 193/225 · 299/336 | near + far @100 % / @86 % | 31.4 / 50.0 | **156 / 155** |
+
+- **Mesh frames are inside 04 §9** everywhere: CPU ≤ 3.3 ms p95, GPU
+  ≤ 8.1 ms p95 (the phone profile's Sprint close-up, 437 k triangles at
+  2.6 M pixels), ≤ 3 draws, and frame p95 ≤ 17.4 ms — 60 fps — on every
+  run but Club-full's close-up.
+- **A drape re-render is a hitch** of 11–131 ms on desktop and 19–105 ms
+  on the phone profile for the event maps and Club-2026 (6–12 tiles,
+  50–840 draws), once per settle. It is not a frame for the ≤ 300 draws
+  rule ("Budget").
+- **Club-full's close-up streams the whole map**: tilted at 1× paper the
+  camera sees the map to the horizon; split by need, the far layer is at
+  0.3–0.5× paper, above the zoom gate, so the whole map's detail is
+  requested. While it streams, arrivals re-render the drape
+  (`DRAPE_ARRIVAL_MS`, 62–63 times in the run, 193–336 ms each), the frame
+  p95 is 259 ms (desktop) / 488 ms (phone), and residency peaks at
+  155–156 MB against 150 (the field's 42 MB and the drape's 31–50 MB are
+  fixed bytes; drawn detail is protected; the engine reports over budget).
+  Before the split (decision 3 as first decided) it was 120 re-renders,
+  280 ms p95 and 166 MB, with one 3874 × 2536 layer. §8 has the remedy.
+- The phone profile's close-ups take more texels (2.6 M canvas pixels):
+  Club-full's is capped at 86 % of its need.
+- The tile target is 36 MB (19 MB for Crop-B's single 692-texel tile
+  side), not in the budget.
+
 #### Tests
 
 | Test | Covers |
@@ -2402,7 +2724,11 @@ texture.
 | `map-gl/terrain/__tests__/mesh.test.ts` | chunk geometry: 65² + 256 vertices, every quad covered exactly once at every level, counter-clockwise, index counts, 4 · 64 / 2^l skirt quads; `meshHeights` fills from the nearest data cell without changing the field, all no-data flat at 0; vertex placement in origin-relative µm and `zUnitUm`; a partial edge chunk clamped; `chunkLevel` (0 at the eye, monotone, capped, quad edge ≤ lodPx); culling and a straddling chunk kept, the same levels at another bearing, mixed levels when tilted; skirts close every crack between any two levels on a noise field; the 4096² budget (≤ 600 000 triangles, the numbers above as a snapshot) |
 | `map-gl/terrain/__tests__/pick.test.ts` | the analytic cone met within half a cell at pitch 0, 60 (exaggeration 1, 3) and grazing; surface point → project → `screenRay` → pick within half a cell; `heightM` = `sampleHeight` within one unit at two exaggerations; `data` false on the margin; misses |
 | `map-gl/terrain/__tests__/shade.test.ts` | flat = 1; sin θ + cos θ facing the light, cos θ − sin θ away, cos θ across; the clamps; exaggeration in the shader = `heightNormals(field, e)`; the colour product; the GLSL's constants |
-| `e2e/map-terrain.spec.ts` | on the dev page in headless Chromium: the lit cone top-down with a grey drape — facing flank, far flank and flat ground at §5.6's analytic values ± 10 levels, ≤ 7 draws; the checker at pitch 60 — two adjacent squares on flat ground in their own colours, the apex projected above its foot; a south-flank point at pitch 60 at its slope's shade for e = 2 and e = 1 (the mesh lifted by the R16I heights and the exaggeration applied in the shader — a flat mesh or an ignored e would show another value); with `drape=half`, the background colour beyond the drape, flat at full strength and on the far flank shaded; no background pixel inside the noise field's projected outline at mixed levels, and auto LOD within 2 % of level 0; a click picks the point under the cursor within 0.2 mm |
+| `map-gl/terrain/__tests__/footprint.test.ts` (H6) | footprint → view: the screen rectangle at pitch 0, the analytic trapezoid tilted, every on-screen surface point of 40 random cameras inside the footprint and a layer, the box clip, empty when looking away; the pitch-0 layer is the 2D view grown by the margin (same pixel offsets, screen parity) at any bearing; limits never exceeded over 60 random cameras; split by need on a wide depth range — each layer at its need when the cap allows, the far one at the split depth's, fewer texels than one layer, the near one inside the far one and over the ground beyond the screen's bottom edge, every on-screen ground point at least at its need; both scaled together under the cap; one layer on a narrow depth range and at pitch 0 when capped; a tiny texel allowance terminates; at pitch 0 the texels lie on the pixels even where the screen crosses the field's edge; tiles partition the layer and draw every texel where its matrix puts it |
+| `map-gl/__tests__/worker-terrain.test.ts` (H6) | the `terrain` request's prepared mesh and normals equal `buildTerrainMesh` and `heightNormals` on a cone and a noise field, without a document; the two arrays transferred; an error names its generation |
+| `map-gl/__tests__/engine.test.ts` "terrain" (H6) | the field prepared in the worker and uploaded at the document's origin; drape before mesh, the layer's matrix = `viewMatrix` of its view, the hand-over view at pitch 0; mesh only while the camera moves, the settle timer's `onChange`, one re-render after it and none for the same camera; a content change and `invalidateDrape` re-render at once over the same layers; the layers' cells requested and drawn, detail arrivals re-render, gated per layer; the field and drape in `residentBytes`, the drape ≤ ⅓ of a small budget; `setTerrain(null)` drops both; a 2D render after a 3D frame draws the 2D view's cells; a superseded `setTerrain` rejects; arrivals held to `DRAPE_ARRIVAL_MS` and the last at once; a near layer above the gate and a far one below (detail drawn and requested for the near one's cells only, `whenComplete` on them); a load moves the mesh to the new origin and re-selects; a worker failure rejects and keeps the field and mesh; `dispose` rejects a request in flight; a camera that sees no mesh renders no drape |
+| `e2e/map-terrain.spec.ts` | on the dev page in headless Chromium: the lit cone top-down with a grey drape — facing flank, far flank and flat ground at §5.6's analytic values ± 10 levels, ≤ 7 draws; the checker at pitch 60 — two adjacent squares on flat ground in their own colours, the apex projected above its foot; a south-flank point at pitch 60 at its slope's shade for e = 2 and e = 1 (the mesh lifted by the R16I heights and the exaggeration applied in the shader — a flat mesh or an ignored e would show another value); with `drape=half`, the background colour beyond the drape, flat at full strength and on the far flank shaded; no background pixel inside the noise field's projected outline at mixed levels, and auto LOD within 2 % of level 0; a click picks the point under the cursor within 0.2 mm. H6 (`doc=course`): at pitch 0 over flat ground the 3D frame equals `engine.render`'s 2D frame (north up: max 10 levels, < 0.5 % over 2 — SwiftShader's MSAA resolve; turned 25°: < 1 % over 2); tilted 60° over the cone, the leg 31–32 purple on the flank, the map's black line, paper white on the south flank at §5.6's shade for its slope, ≤ 7 draws; moved to control 32 the old drape does not reach (no purple) and no re-render happens until the camera settles, then the course is there; close and tilted, a near layer and a coarser far one (> 1.5×), each at its need, the course from the near one, texels within a third of the budget, and a 2 MB budget's third respected |
+| `e2e/map-gl-doc.spec.ts` "terrain=1" (H6) | the 3D bench on `e2e/test.ocd` at the event budget: the field prepared in the worker, 240 frames per scenario, drape re-renders only at the start and after the pauses, ≤ 7 mesh draws, drape ≤ 10 MB |
 
 ### 5.3 PDF (shared/print)
 
@@ -3083,17 +3409,18 @@ what became of it:
 | `packages/web/src/map-gl/buckets.ts` | cells, large bucket, per-part preparation and range table, visible set, clip groups, zoom gate, LRU |
 | `packages/web/src/map-gl/arena.ts` | vertex arenas: free list, growth by copy |
 | `packages/web/src/map-gl/worker.ts`, `worker-entry.ts` | the worker's message handler and its binding |
-| `packages/web/src/map-gl/engine.ts` | main-thread controller: worker transport, residency, visible-set rebuilds, the one course request in flight (F20), the document hit-test and the edit part (G5) |
+| `packages/web/src/map-gl/engine.ts` | main-thread controller: worker transport, residency, visible-set rebuilds, the one course request in flight (F20), the document hit-test and the edit part (G5), the 3D frame (H6: `setTerrain`, `renderTerrain`, settling, the drape's budget) |
 | `packages/shared/src/render/hit-test.ts` | `hitTest`, `hitTestStreams` on the symbolised shape (§5.5) |
 | `packages/web/src/map-gl/view.ts` | the arena path's model → clip matrix, `RenderTarget`, `loupeView` |
-| `packages/web/src/map-gl/renderer.ts` | WebGL2 backend, GPU stage (arena programs and draw loop; per-pass path, stencil, supersampling; the loupe's inset target and circle composite; GPU timer) |
+| `packages/web/src/map-gl/renderer.ts` | WebGL2 backend, GPU stage (arena programs and draw loop; per-pass path, stencil, supersampling; the loupe's inset target and circle composite; the drape's tiled render target and textures and the terrain program on its context, H6; GPU timer) |
 | `packages/web/src/pages/dev/MapGlFixturePage.tsx` | dev-only golden page `/dev/map-gl` |
 | `packages/web/src/pages/dev/MapGlDocPage.tsx` | dev-only whole-document page `/dev/map-gl-doc` (load report, bench) |
-| `packages/web/src/map-gl/terrain/` | the terrain (§5.6): `camera.ts` + `mat4.ts` (perspective orbit camera, rays), `mesh.ts` (chunked grid, levels, skirts, culling, no-data fill), `pick.ts`, `shade.ts`, `program.ts` (`TerrainRenderer`), `synthetic.ts` (dev and test fields) |
-| `packages/web/src/pages/dev/MapTerrainPage.tsx`, `e2e/map-terrain.spec.ts` | dev-only terrain page `/dev/map-terrain` and its browser test |
+| `packages/web/src/map-gl/terrain/` | the terrain (§5.6): `camera.ts` + `mat4.ts` (perspective orbit camera, rays), `mesh.ts` (chunked grid, levels, skirts, culling, no-data fill; `prepareTerrain` for the worker), `pick.ts`, `shade.ts`, `program.ts` (`TerrainRenderer`, one or two drapes), `footprint.ts` (H6: footprint, drape layers, tiles), `synthetic.ts` (dev, bench and test fields) |
+| `packages/web/src/map-gl/fixtures/course-document.ts` | the small aligned ISOM document and course request the dynamic-bucket tests and the terrain dev page share |
+| `packages/web/src/pages/dev/MapTerrainPage.tsx`, `pages/dev/terrainDoc.ts`, `e2e/map-terrain.spec.ts` | dev-only terrain page `/dev/map-terrain` (synthetic fields; `doc=course`: the course fixture draped through the engine) and its browser test |
 | `e2e/__golden__/map-gl/`, `e2e/map-gl-golden.spec.ts` | committed goldens and the browser comparison |
 | `e2e/map-gl-doc.spec.ts` | whole-document pipeline on `e2e/test.ocd`: arena path, worker, eviction, arena = per-pass path |
-| `scripts/measure-gl.mjs` | corpus measurements through `/dev/map-gl-doc` (§5.2 Measurements) |
+| `scripts/measure-gl.mjs` | corpus measurements through `/dev/map-gl-doc` (§5.2 Measurements; `--terrain`: §5.6 "Measurements (H6)") |
 | `packages/web/src/components/VectorMapLayer.tsx` | the vector base layer in `MapViewer` (§5.4): canvas, engine and worker lifecycle, status; the course layer request and its replies; the editor's loupe; Map mode's document objects (`mapObjects`, G5) |
 | `packages/web/src/lib/course-layer-request.ts` | the viewer's course-layer input (§5.4 "Overlay", `course-layer.md` §5) |
 | `packages/web/src/components/MapViewer.tsx` | the host: viewport state, gestures, the SVG UI layer, editor hit-testing |
@@ -3220,21 +3547,36 @@ The shared module is exported as a namespace: `import { render } from
   the arena = per-pass pixel comparison relies on both paths using MSAA
   alone; the B-gate's parity check against tiles (§6.4) is where it is
   judged.
-- **§5.2 perspective cameras** (terrain draping, research topic 10):
-  the projection is already one matrix and the target any framebuffer;
-  still needed are cell selection from the camera's footprint instead of
-  the `View` rectangle, and a per-vertex screen density for the
-  screen-only rules instead of the one `pxPerUm`.
-- **§5.6 the map as the drape** (H6): the dev page drapes a checker. The
-  map rendered into a framebuffer texture over the camera's ground
-  footprint, the footprint → view, re-rendering when the camera settles,
-  and the frame time and memory on the bench harness (desktop and the
-  phone profile, against 04 §9) are H6's. So is where `setField`'s work
-  runs: on a 4096² field the no-data fill and chunk ranges take 0.26 s and
-  `heightNormals` 1.9 s on the main thread — the worker, or normals from
-  the height texture on the GPU. The height and normal textures of a
-  4 M-cell field take 20 MB of GPU memory, not yet counted against the
-  residency budget.
+- **§5.2 perspective cameras — the vectors themselves** (research topic
+  10 §5's alternative): H6 drapes orthographic textures (§5.6 "Drape
+  layers"), so cell selection already follows the camera's footprint.
+  Drawing the vectors through the perspective matrix would still need a
+  per-vertex screen density for the screen-only rules instead of the one
+  `pxPerUm`; nothing plans it.
+- **§5.6 the sheet outside the field** (H6, decision 4): the mesh spans
+  the height field (the contours' bounding box + 2 mm), so a title,
+  legend or margin beyond it is not drawn in 3D. A flat apron to the
+  document's bounds is H7's call on real maps.
+- **§5.6 a drape re-render is one hitch** (H6): every layer is rendered
+  in the frame the camera settles in (tiles, mips) — "Measurements (H6)"
+  has its time per map. Spreading the tiles over frames, or keeping the
+  old drape until the new one is complete, is the remedy if the H-gate's
+  phone shows the hitch.
+- **§5.6 Club-full tilted close up** (H6, "Measurements (H6)"): the far
+  layer sees the whole map above the zoom gate, so its detail streams for
+  seconds while arrivals re-render the drape (frame p95 259 / 488 ms,
+  desktop / phone profile) and residency passes the club budget by
+  ~6 MB. Remedies, none built: a drape-only zoom gate higher than 2D's
+  for the far layer, rendering a re-render's tiles over several frames,
+  or keeping the far layer's detail out of the protected set.
+- **§5.6 the tile target is outside the budget** (H6): 36 MB while a drape
+  exists (4× MSAA colour + depth/stencil at 1024², and its resolve
+  texture), freed with the last drape; like the canvas's own MSAA
+  buffers and the loupe's target it is not counted.
+- **§5.6 `heightNormals` in the worker** (H6): the field's preparation is
+  off the main thread now, but still 0.2–0.6 s of worker time on a
+  corpus map ("Measurements (H6)"), during which the worker prepares no
+  cells.
 - **§5.6 in the viewer** (H7): `useHeightField`, the 2D / 3D switch, the
   gestures, the exaggeration control and its default; GPS lines on the
   terrain (H8).

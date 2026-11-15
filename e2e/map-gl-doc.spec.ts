@@ -68,6 +68,11 @@ interface DocWindow {
       warnings: Record<string, number>;
     };
     bench?: Scenario & { paper1x?: Scenario };
+    terrainBench?: {
+      field: { width: number; height: number; fieldBytes: number; prepareMs?: { fill: number; normals: number } };
+      orbit: TerrainScenario;
+      close: TerrainScenario;
+    };
     compare?: { fraction: number; differing: number; total: number; target: "canvas" | "fbo" };
     error?: string;
     pick?: {
@@ -77,6 +82,18 @@ interface DocWindow {
     };
   };
   __mapGlDocLines?: () => { sourceIndex: number; code: string; x: number; y: number }[];
+}
+
+interface TerrainScenario {
+  frames: number;
+  seconds: number;
+  meshCpuMs: { p50: number; p95: number };
+  maxMeshDraws: number;
+  drapeRenders: number;
+  drapeWallMs?: { p50: number; max: number };
+  layers: { role: string; widthPx: number; heightPx: number; ratio: number }[];
+  drapeBytes: number;
+  maxResidentBytes: number;
 }
 
 const notBlank = async (page: import("@playwright/test").Page) => {
@@ -150,6 +167,37 @@ test.describe("WebGL2 map backend — whole document", () => {
       await expect(page.getByTestId("map-gl-doc-bench-result")).toContainText("fps");
     });
   }
+
+  test("terrain=1: the 3D bench drapes the document over a field, re-rendering only when the camera settles (§5.6, H6)", async ({ page }, testInfo) => {
+    test.setTimeout(180_000); // 480 software-rendered 3D frames
+    // the event budget: the drape may take a third of it
+    await page.goto("/dev/map-gl-doc?mode=envelope&terrain=1&budget=30");
+    await page.getByTestId("map-gl-doc-file").setInputFiles("e2e/test.ocd");
+    const canvas = page.getByTestId("map-gl-doc-canvas");
+    await expect(canvas).toHaveAttribute("data-ready", "true", { timeout: 30_000 });
+    await page.getByTestId("map-gl-doc-bench").click();
+    await expect(canvas).toHaveAttribute("data-bench", "done", { timeout: 120_000 });
+    const t = await page.evaluate(() => (window as unknown as DocWindow).__mapGlDoc?.terrainBench);
+    expect(t).toBeDefined();
+    if (!t) return;
+    testInfo.annotations.push({ type: "map-gl-doc-terrain-bench", description: JSON.stringify(t) });
+    expect(t.field.fieldBytes).toBe(t.field.width * t.field.height * 5);
+    expect(t.field.prepareMs).toBeDefined(); // prepared in the worker
+    for (const sc of [t.orbit, t.close]) {
+      expect(sc.frames).toBe(240);
+      // the first frame and once after each of the three pauses, plus detail arrivals at most every
+      // DRAPE_ARRIVAL_MS (500 ms) while they stream: never once per frame as the camera turns
+      expect(sc.drapeRenders).toBeGreaterThanOrEqual(1);
+      expect(sc.drapeRenders).toBeLessThanOrEqual(4 + Math.ceil((sc.seconds * 1000) / 500));
+      expect(sc.drapeRenders).toBeLessThan(sc.frames / 4);
+      expect(sc.maxMeshDraws).toBeGreaterThan(0);
+      expect(sc.maxMeshDraws).toBeLessThanOrEqual(7);
+      expect(sc.layers.length).toBeGreaterThan(0);
+      expect(sc.drapeBytes).toBeLessThanOrEqual((30 * 1024 * 1024) / 3);
+      expect(sc.maxResidentBytes).toBeGreaterThan(sc.drapeBytes);
+    }
+    await expect(page.getByTestId("map-gl-doc-terrain-bench-result")).toContainText("bench 3D orbit");
+  });
 
   test("the worker and the inline handler agree; a tiny budget evicts and still draws", async ({ page }, testInfo) => {
     const run = async (query: string, bench: boolean) => {

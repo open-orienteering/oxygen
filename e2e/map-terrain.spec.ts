@@ -6,6 +6,10 @@
  * camera (`window.__mapTerrain.project`). The expected values are
  * analytic — §5.6's shading on the dev cone — not a golden image: no
  * reference raster exists for 3D.
+ *
+ * The last block (H6, §5.6 "Drape layers" … "Settling") drapes the course fixture document — a map
+ * line and a four-control course — through a real `MapGlEngine` (`?doc=course`): the map and the
+ * course are rendered into the drape layers over the camera's footprint, then the mesh.
  */
 
 import { test, expect, type Page } from "@playwright/test";
@@ -167,5 +171,115 @@ test.describe("terrain dev page (map-rendering.md §5.6)", () => {
     const hit = await page.evaluate(() => (window as unknown as { __mapTerrain: Api }).__mapTerrain.lastPick);
     expect(hit!.data).toBe(true);
     expect(Math.hypot(hit!.x - target.x, hit!.y - target.y)).toBeLessThan(0.2);
+  });
+});
+
+/** The course fixture (`map-gl/fixtures/course-document.ts`) and its field (`synthetic.ts` `docField`): paper mm. */
+const DOC = { cone: { x: 35, y: 25, radiusMm: 22, heightM: 45, groundMPerMm: 15 }, blackLine: { x: 25, y: 5 }, leg3132: { x: 50, y: 25 }, control32: { x: 60, y: 40 } };
+
+type DocApi = {
+  frame: { mesh: { draws: number; matrix: Float32Array } | null } | null;
+  engineStats: () => { terrain?: { drapeRenders: number; drapeBytes: number; fieldBytes: number; layers: { role: string; widthPx: number; heightPx: number; pxPerUm: number; ratio: number }[] } };
+  project: (x: number, y: number) => [number, number] | null;
+  setCamera: (c: { xMm?: number; yMm?: number; pitch?: number; bearing?: number; zoom?: number }) => void;
+  compare2d: () => { maxDiff: number; over: number; pixels: number };
+  courseRgb: [number, number, number];
+};
+const docProject = (page: Page, x: number, y: number) => page.evaluate(([px, py]) => (window as unknown as { __mapTerrainDoc: DocApi }).__mapTerrainDoc.project(px, py), [x, y] as const);
+const terrainStats = (page: Page) => page.evaluate(() => (window as unknown as { __mapTerrainDoc: DocApi }).__mapTerrainDoc.engineStats().terrain!);
+/** The course's purple, shaded or not: blue and red well above green. */
+const isPurple = (r: number, g: number, b: number) => b > g + 60 && r > g + 40;
+
+/** Purple pixels in a (2k+1)² window round (x, y), or over the whole canvas. */
+function purpleIn(png: PNG, at?: [number, number], k = 4): number {
+  let n = 0;
+  const [x0, x1, y0, y1] = at ? [Math.round(at[0]) - k, Math.round(at[0]) + k, Math.round(at[1]) - k, Math.round(at[1]) + k] : [0, png.width - 1, 0, png.height - 1];
+  for (let y = Math.max(0, y0); y <= Math.min(png.height - 1, y1); y++)
+    for (let x = Math.max(0, x0); x <= Math.min(png.width - 1, x1); x++) {
+      const i = (y * png.width + x) * 4;
+      if (isPurple(png.data[i], png.data[i + 1], png.data[i + 2])) n++;
+    }
+  return n;
+}
+
+test.describe("the map as the drape (map-rendering.md §5.6, H6)", () => {
+  test("at pitch 0 over flat ground the 3D frame is the 2D frame (the hand-over)", async ({ page }) => {
+    const compare = () => page.evaluate(() => (window as unknown as { __mapTerrainDoc: DocApi }).__mapTerrainDoc.compare2d());
+    await open(page, "doc=course&field=flat&pitch=0&bearing=0&e=1");
+    let c = await compare();
+    expect(c.pixels).toBe(800 * 600);
+    // North up, the drape's texels lie on the pixels: the same picture. On a GPU it is exact (max 1
+    // level); SwiftShader resolves the canvas's and a framebuffer's 4× MSAA a little differently, so
+    // antialiased edge pixels may differ by a few levels — half a texel off would cost 100+ on every edge.
+    expect(c.maxDiff).toBeLessThanOrEqual(10);
+    expect(c.over / c.pixels).toBeLessThan(0.005);
+    const t = await terrainStats(page);
+    expect(t.layers).toHaveLength(1);
+    expect(t.layers[0].ratio).toBeCloseTo(1, 6);
+    // turned, the texel grid is turned against the pixels: a bilinear resample, edges only
+    await open(page, "doc=course&field=flat&pitch=0&bearing=25&e=1");
+    c = await compare();
+    expect(c.over / c.pixels).toBeLessThan(0.01);
+  });
+
+  test("tilted over a cone: the course and the map draped, the paper shaded by the slope", async ({ page }) => {
+    await open(page, "doc=course&field=cone&pitch=60&bearing=0&e=2&zoom=1.2");
+    const png = await pixels(page);
+    // the leg from 31 to 32 runs over the cone's east flank
+    expect(purpleIn(png, (await docProject(page, DOC.leg3132.x, DOC.leg3132.y))!)).toBeGreaterThan(0);
+    // the map's black line on flat ground
+    const [bx, by] = (await docProject(page, DOC.blackLine.x, DOC.blackLine.y))!;
+    let darkest = 255;
+    for (let dy = -2; dy <= 2; dy++)
+      for (let dx = -2; dx <= 2; dx++) {
+        const i = ((Math.round(by) + dy) * png.width + Math.round(bx) + dx) * 4;
+        darkest = Math.min(darkest, Math.max(png.data[i], png.data[i + 1], png.data[i + 2]));
+      }
+    expect(darkest).toBeLessThan(60);
+    // paper white 10 mm south of the apex: a slope of 45 m in 22 mm at 1:15 000, × 2, facing south
+    const g = (DOC.cone.heightM / (DOC.cone.radiusMm * DOC.cone.groundMPerMm)) * 2;
+    expectGrey(probe(png, ...(await docProject(page, DOC.cone.x, DOC.cone.y - 10))!), 255 * southShade(g));
+    const t = await terrainStats(page);
+    expect(t.drapeRenders).toBeGreaterThan(0);
+    expect(t.fieldBytes).toBe(500 * 400 * 5);
+    const draws = await page.evaluate(() => (window as unknown as { __mapTerrainDoc: DocApi }).__mapTerrainDoc.frame!.mesh!.draws);
+    expect(draws).toBeGreaterThan(0);
+    expect(draws).toBeLessThanOrEqual(7);
+  });
+
+  test("the drape follows the camera once it has settled, not while it moves", async ({ page }) => {
+    await open(page, `doc=course&field=cone&pitch=0&e=1&zoom=4&x=10&y=10`);
+    const before = (await terrainStats(page)).drapeRenders;
+    // to control 32, outside the drape rendered round the start
+    const moved = await page.evaluate(({ x, y }) => {
+      const api = (window as unknown as { __mapTerrainDoc: DocApi }).__mapTerrainDoc;
+      api.setCamera({ xMm: x, yMm: y });
+      return api.engineStats().terrain!.drapeRenders;
+    }, DOC.control32);
+    expect(moved).toBe(before);
+    expect(purpleIn(await pixels(page))).toBe(0); // the old drape does not reach: shaded background only
+    await expect.poll(async () => (await terrainStats(page)).drapeRenders, { timeout: 5_000 }).toBeGreaterThan(before);
+    await expect.poll(async () => purpleIn(await pixels(page)), { timeout: 5_000 }).toBeGreaterThan(200);
+  });
+
+  test("split by need: a near layer over the near ground, a coarser far one, and the budget's third never exceeded", async ({ page }) => {
+    // close to the cone and tilted: the screen's bottom edge needs far more texels than its top
+    const query = "doc=course&field=cone&pitch=60&bearing=0&e=2&zoom=6&x=46&y=19";
+    await open(page, query);
+    let t = await terrainStats(page);
+    expect(t.layers.map((l) => l.role)).toEqual(["near", "far"]);
+    expect(t.layers[0].pxPerUm).toBeGreaterThan(t.layers[1].pxPerUm * 1.5);
+    // the club budget's third is room enough here: each at what its ground needs
+    for (const l of t.layers) expect(l.ratio).toBeCloseTo(1, 6);
+    const texels = (layers: { widthPx: number; heightPx: number }[]) => layers.reduce((n, l) => n + l.widthPx * l.heightPx, 0);
+    expect(texels(t.layers)).toBeLessThanOrEqual((150 * 1024 * 1024) / 3 / (16 / 3));
+    // the leg from 31 to 32 at the camera's target, drawn from the near layer
+    expect(purpleIn(await pixels(page), (await docProject(page, 46, 19))!)).toBeGreaterThan(20);
+    // a 2 MB budget: the drape shrinks to its third and is still drawn
+    await open(page, `${query}&budget=2`);
+    t = await terrainStats(page);
+    expect(t.layers.length).toBeGreaterThan(0);
+    expect(texels(t.layers)).toBeLessThanOrEqual((2 * 1024 * 1024) / 3 / (16 / 3));
+    expect(t.drapeBytes).toBeLessThanOrEqual((2 * 1024 * 1024) / 3);
   });
 });

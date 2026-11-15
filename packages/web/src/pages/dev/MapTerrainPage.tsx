@@ -7,6 +7,11 @@
  * py)` and the last click's pick. Not routed in production builds.
  *
  * `?field=cone|slope|noise&n=<W>x<H>&texture=checker|grey|white&drape=half&pitch=&bearing=&e=&lod=auto|0…6&zoom=&w=&h=&bg=<hex>&bench=1`
+ *
+ * `?doc=course[&field=cone|flat&x=&y=&budget=<MB>&worker=1]` (H6): the course fixture document in a real
+ * `MapGlEngine`, draped — the map and its course rendered into the drape layers over the camera's
+ * footprint (`terrainDoc.ts`); `window.__mapTerrainDoc` publishes the frame, the engine's stats,
+ * `project`, `pick`, `setCamera` and `compare2d`.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -17,6 +22,7 @@ import { distanceForPxPerUm, projectToScreen, screenRay, type TerrainCamera } fr
 import { pickTerrain, surfaceZ, type TerrainHit } from "../../map-gl/terrain/pick";
 import { TerrainRenderer, type TerrainDrawStats } from "../../map-gl/terrain/program";
 import { CHECKER, coneField, noiseField, slopeField } from "../../map-gl/terrain/synthetic";
+import { describeDocFrame, startDocTerrain, type DocTerrainApi } from "./terrainDoc";
 
 const GREY = [0x80, 0x80, 0x80], WHITE = [0xff, 0xff, 0xff];
 
@@ -31,6 +37,7 @@ interface TerrainPageApi {
 declare global {
   interface Window {
     __mapTerrain?: TerrainPageApi;
+    __mapTerrainDoc?: DocTerrainApi;
   }
 }
 
@@ -74,9 +81,43 @@ export function MapTerrainPage() {
   const [pick, setPick] = useState<TerrainHit | null>(null);
   const key = params.toString();
 
+  const docMode = params.get("doc") === "course";
+
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas || !docMode) return;
+    let cancelled = false;
+    let dispose: (() => void) | undefined;
+    const w = num(params.get("w"), 800), h = num(params.get("h"), 600);
+    canvas.width = w;
+    canvas.height = h;
+    canvas.style.width = `${w}px`;
+    canvas.style.height = `${h}px`;
+    startDocTerrain(canvas, params, w, h)
+      .then((r) => {
+        if (cancelled) return r.dispose();
+        dispose = r.dispose;
+        window.__mapTerrainDoc = r.api;
+        setMessage(describeDocFrame(r.api.frame, r.api.engineStats()));
+        setStatus("ready");
+      })
+      .catch((err: unknown) => {
+        console.error(err);
+        setMessage(err instanceof Error ? err.message : String(err));
+        setStatus("error");
+      });
+    return () => {
+      cancelled = true;
+      dispose?.();
+      delete window.__mapTerrainDoc;
+    };
+    // the page reloads its document when its query changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || docMode) return;
     let renderer: TerrainRenderer | undefined;
     let texture: WebGLTexture | null = null;
     let gl: WebGL2RenderingContext | null = null;
@@ -123,7 +164,7 @@ export function MapTerrainPage() {
         heightPx: h,
       };
       camera.distanceUm = distanceForPxPerUm(camera, Math.min(w / wUm, h / hUm) * 0.9 * num(params.get("zoom"), 1));
-      const frame = { camera, exaggeration: e, texture: texture!, drapeMatrix, background: hexRgb(params.get("bg") ?? "ffffff"), level };
+      const frame = { camera, exaggeration: e, drapes: [{ texture: texture!, matrix: drapeMatrix }], background: hexRgb(params.get("bg") ?? "ffffff"), level };
       const target = { framebuffer: null, width: w, height: h };
       let stats: TerrainPageApi["stats"] = renderer.draw(frame, target);
       if (params.get("bench") === "1") {
@@ -165,9 +206,14 @@ export function MapTerrainPage() {
   }, [key]);
 
   const onClick = (ev: React.MouseEvent<HTMLCanvasElement>) => {
+    const rect = ev.currentTarget.getBoundingClientRect();
+    const doc = window.__mapTerrainDoc;
+    if (doc) {
+      setPick(doc.pick(ev.clientX - rect.left, ev.clientY - rect.top));
+      return;
+    }
     const api = window.__mapTerrain;
     if (!api) return;
-    const rect = ev.currentTarget.getBoundingClientRect();
     const hit = api.pick(ev.clientX - rect.left, ev.clientY - rect.top);
     api.lastPick = hit;
     setPick(hit);

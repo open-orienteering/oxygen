@@ -11,6 +11,9 @@
  *   hitDocument(…) → the document's objects under a paper point (§5.5 "Document objects")
  *   setEdit(input) → the edit part: the selection highlighted, a draft drawn, its static copies hidden
  *   render(opts)   → rebuild the visible set if the drawn set changed; draw
+ *   setTerrain(f)  → a height field for 3D (§5.6): prepared in the worker, uploaded here
+ *   renderTerrain(frame, opts) → the 3D frame: the map rendered into the drape layers over the
+ *                    camera's footprint when the camera settles or the content changes, then the mesh
  *
  * B4's `VectorMapLayer` drives the same two calls from its viewport.
  */
@@ -21,11 +24,17 @@ import {
 } from "./buckets.js";
 import type { mapDocument, render as R } from "@oxygen/shared";
 import type { DocumentRenderOptions, FrameStats, InsetBox, MapGlRenderer, TextAtlasImage } from "./renderer.js";
-import type { RenderTarget } from "./view.js";
+import { viewMatrix, type RenderTarget } from "./view.js";
+import type { HeightField } from "@oxygen/shared/src/terrain/field/read.js";
+import { DRAPE_MAX_SIDE, DRAPE_TEXEL_BYTES, drapeLayers, type DrapeLayer } from "./terrain/footprint.js";
+import { meshBox, type TerrainMesh } from "./terrain/mesh.js";
+import { fieldTextureBytes, type TerrainDrawStats } from "./terrain/program.js";
+import type { TerrainCamera } from "./terrain/camera.js";
+import type { DrapeRenderStats } from "./renderer.js";
 import {
   createMapGlWorker, messageChannelScheduler,
   HIGHLIGHT_COLOUR,
-  type CourseLayerRequest, type CourseReply, type DocumentHit, type EditInput, type EditState, type FilterReply, type LoadRequest, type LoadSummary, type PatchedReply, type PatchState, type WorkerReply, type WorkerRequest,
+  type CourseLayerRequest, type CourseReply, type DocumentHit, type EditInput, type EditState, type FilterReply, type LoadRequest, type LoadSummary, type PatchedReply, type PatchState, type TerrainReply, type WorkerReply, type WorkerRequest,
 } from "./worker.js";
 
 /** Message transport to the worker: a real Web Worker, or the same handler inline. */
@@ -100,6 +109,47 @@ export interface EngineStats {
   lastBuildMs: number;
   /** Worker preparation time per detail part, ms, in arrival order. */
   prepareMs: number[];
+  /** With a height field (§5.6 "Engine API"). */
+  terrain?: TerrainStats;
+}
+
+/** The 3D side of `stats()` (§5.6 "Measurements (H6)"). */
+export interface TerrainStats {
+  /** Height and normal textures. */
+  fieldBytes: number;
+  /** The drape layers' textures with their mip chains. */
+  drapeBytes: number;
+  /** The tile target (not in the budget, as the canvas's own buffers are not). */
+  scratchBytes: number;
+  /** The drape layers drawn, priority order; `ratio` = texel density / the layer's need (`DrapeLayer.needPxPerUm`: the nearest point's for the near or only layer, the split depth's for the far one). */
+  layers: { role: DrapeLayer["role"]; widthPx: number; heightPx: number; pxPerUm: number; ratio: number }[];
+  drapeRenders: number;
+  /** The last drape re-render: visible-set rebuild + tiles + mip chains, ms; its draws and tiles. */
+  lastDrapeMs: number;
+  lastDrapeDraws: number;
+  lastDrapeTiles: number;
+  /** The worker's preparation of the field, ms. */
+  prepareMs?: { fill: number; normals: number };
+  /** `setField` on this thread (the mesh's assembly and the two texture uploads), ms. */
+  uploadMs?: number;
+}
+
+/** What `renderTerrain` takes: the camera and how the mesh is drawn (the drape is the engine's). */
+export interface EngineTerrainFrame {
+  camera: TerrainCamera;
+  /** Vertical exaggeration; no default (§5.6 decision 2). */
+  exaggeration: number;
+  lodPx?: number;
+  level?: number;
+}
+
+export interface TerrainFrameStats {
+  /** The mesh draw (null: no field, or no document). */
+  mesh: (TerrainDrawStats & FrameStats) | null;
+  /** Set when this frame re-rendered the drape. */
+  drape?: DrapeRenderStats & { layers: number };
+  /** JS time of the whole frame, ms. */
+  cpuMs: number;
 }
 
 /**
@@ -108,6 +158,25 @@ export interface EngineStats {
  * a rebuild is linear in the indices in view, tens of ms for a whole club map.
  */
 export const ARRIVAL_REBUILD_MS = 150;
+
+/**
+ * The camera has settled when it has not changed for this long (§5.6 "Settling"): the drape is then
+ * re-rendered over the new footprint. A timer calls `onChange` so the host draws that frame.
+ */
+export const DRAPE_SETTLE_MS = 150;
+
+/**
+ * While detail streams in, arrivals alone re-render the drape at most every `DRAPE_ARRIVAL_MS`, or
+ * `DRAPE_ARRIVAL_FACTOR` × the last re-render's JS time where that is longer; the last arrival always
+ * does (§5.6 "Settling"). A club map's drape takes 100–250 ms to render on a laptop.
+ */
+export const DRAPE_ARRIVAL_MS = 500;
+export const DRAPE_ARRIVAL_FACTOR = 4;
+
+/** The drape layers' share of the residency budget (§5.6 decision 5). */
+export const DRAPE_BUDGET_SHARE = 1 / 3;
+
+const viewKey = (v: ViewRect) => `${v.centreX},${v.centreY},${v.pxPerUm},${v.widthPx},${v.heightPx},${v.rotationDeg ?? 0}`;
 
 interface PatchWaiter {
   resolve: (s: PatchState) => void;
@@ -143,8 +212,31 @@ export class MapGlEngine {
   private pending = new Set<number>();
   private lastRequest = "";
   private drawn: number[] = [];
+  /** Of the drawn cells, those whose detail is drawn (none when every view is gated). */
+  private detailDrawn = new Set<number>();
   private drawnKey = "";
   private gated = false;
+  /** Which frame the drawn set was selected for: the 2D view, or the drape layers. */
+  private selection: "2d" | "3d" = "2d";
+  /** The height field drawn (§5.6), the pair of `mesh`: kept for H7's pick. */
+  private field: HeightField | null = null;
+  /** The field of the `setTerrain` in flight: becomes `field` with its mesh, so the two always match. */
+  private pendingField: HeightField | null = null;
+  private mesh: TerrainMesh | null = null;
+  private terrainGeneration = 0;
+  private terrainWaiter: { generation: number; resolve: (m: TerrainMesh | null) => void; reject: (e: Error) => void } | undefined;
+  private terrainPrepareMs: TerrainStats["prepareMs"];
+  private terrainUploadMs: number | undefined;
+  /** The drape layers last rendered (priority order) and the views they were selected for. */
+  private drapeLayersDrawn: DrapeLayer[] = [];
+  private drapeKey = "";
+  private drapeStale = true;
+  private cameraKey = "";
+  private lastMoveAt = -Infinity;
+  private settleTimer: ReturnType<typeof setTimeout> | undefined;
+  private drapeSt = { renders: 0, lastMs: 0, lastDraws: 0, lastTiles: 0 };
+  private lastDrapeAt = -Infinity;
+  private arrivalTimer: ReturnType<typeof setTimeout> | undefined;
   private dirty = true;
   /** Dirty only because detail arrived (may wait for ARRIVAL_REBUILD_MS). */
   private arrivalOnly = false;
@@ -450,11 +542,16 @@ export class MapGlEngine {
   private updateFixedBytes(): void {
     const s = this.summary;
     if (!s) return;
-    this.fixedBytes = s.bytes.base + s.bytes.large + this.atlasBytes + this.renderer.textAtlasBytes + (this.course?.part.gpuBytes ?? 0) + (this.page?.part.gpuBytes ?? 0) + (this.edit?.part.gpuBytes ?? 0);
+    this.fixedBytes = s.bytes.base + s.bytes.large + this.atlasBytes + this.renderer.textAtlasBytes + (this.course?.part.gpuBytes ?? 0) + (this.page?.part.gpuBytes ?? 0) + (this.edit?.part.gpuBytes ?? 0) +
+      this.fieldBytes() + (this.mesh ? this.renderer.drapeBytes : 0);
     this.lru.fixedBytes = this.fixedBytes;
   }
 
   private receive(m: WorkerReply): void {
+    if (m.type === "terrain" || (m.type === "error" && m.terrain !== undefined)) {
+      this.acceptTerrain(m);
+      return;
+    }
     if (m.type === "hit" || (m.type === "error" && m.hit !== undefined)) {
       const id = m.type === "hit" ? m.id : m.hit!;
       const w = this.hits.get(id);
@@ -555,6 +652,11 @@ export class MapGlEngine {
       this.drawnKey = "";
       this.loadWaiter?.resolve(s);
       this.loadWaiter = undefined;
+      if (this.mesh) {
+        // The mesh's model space is the arenas': a new document may bring a new origin.
+        this.mesh = this.renderer.terrain.setOrigin({ x: s.originX, y: s.originY });
+        this.drapeKey = "";
+      }
       if (this.view) this.setView(this.view);
       return;
     }
@@ -570,7 +672,7 @@ export class MapGlEngine {
     this.st.prepareMs.push(part.ms);
     this.detail.set(id, this.renderer.uploadPart(DETAIL(id), part));
     this.lru.add(id, part.gpuBytes);
-    const drawn = !this.gated && this.drawn.includes(id);
+    const drawn = this.detailDrawn.has(id);
     if (drawn && !this.dirty) {
       this.dirty = true;
       this.arrivalOnly = true;
@@ -583,14 +685,33 @@ export class MapGlEngine {
   /** Updates the drawn set for a view; requests what is missing, evicts what does not fit. */
   setView(view: ViewRect): void {
     this.view = view;
+    this.selection = "2d";
+    this.selectViews([view], this.opts.prefetchMarginCells);
+  }
+
+  /**
+   * The drawn set for one or more views (the 2D view, or the drape layers, §5.6 "Engine API"): the
+   * cells each meets, with its detail where that view is above the zoom gate, requested with
+   * `prefetch` cells of margin.
+   */
+  private selectViews(views: readonly ViewRect[], prefetch: number): void {
     const s = this.summary;
     if (!s) return;
-    this.gated = this.opts.gate && !aboveZoomGate(view.pxPerUm);
-    this.drawn = visibleCells(view, s.grid, DRAW_MARGIN_CELLS);
-    if (!this.gated) {
+    const drawn: number[] = [], detail = new Set<number>(), wanted: number[] = [];
+    const seen = new Set<number>(), seenWanted = new Set<number>();
+    for (const view of views) {
+      const cells = visibleCells(view, s.grid, DRAW_MARGIN_CELLS);
+      for (const id of cells) if (!seen.has(id)) { seen.add(id); drawn.push(id); }
+      if (this.opts.gate && !aboveZoomGate(view.pxPerUm)) continue;
+      for (const id of cells) detail.add(id);
       // The request is keyed by the view's wanted cells, resident or not: the same view never re-sends,
       // even after the budget evicted part of what it asked for.
-      const wanted = visibleCells(view, s.grid, this.opts.prefetchMarginCells).filter((id) => this.detailCells.has(id));
+      for (const id of visibleCells(view, s.grid, prefetch)) if (this.detailCells.has(id) && !seenWanted.has(id)) { seenWanted.add(id); wanted.push(id); }
+    }
+    this.drawn = drawn;
+    this.detailDrawn = detail;
+    this.gated = detail.size === 0;
+    if (!this.gated) {
       const key = wanted.join(",");
       if (key !== this.lastRequest) {
         this.lastRequest = key;
@@ -600,14 +721,15 @@ export class MapGlEngine {
         for (const id of [...this.pending]) if (!want.includes(id)) this.pending.delete(id);
         this.transport.post({ type: "prepare", ids: want }, []);
       }
-      this.lru.touch(this.drawn);
+      this.lru.touch([...detail]);
     } else if (this.lastRequest !== "") {
       this.lastRequest = "";
       this.pending.clear();
       this.transport.post({ type: "prepare", ids: [] }, []);
     }
-    // Arrivals and evictions mark the set dirty themselves; this key is the view's part.
-    const key = `${this.gated ? "g" : ""}${[...this.drawn].sort((a, b) => a - b).join(",")}`;
+    // Arrivals and evictions mark the set dirty themselves; this key is the views' part.
+    const sorted = (ids: Iterable<number>) => [...ids].sort((a, b) => a - b).join(",");
+    const key = `${this.gated ? "g" : ""}${sorted(drawn)}${detail.size && detail.size !== drawn.length ? `|${sorted(detail)}` : ""}`;
     if (key !== this.drawnKey) {
       this.drawnKey = key;
       this.dirty = true;
@@ -625,7 +747,7 @@ export class MapGlEngine {
   }
 
   private evict(): void {
-    const protect = new Set(this.gated ? [] : this.drawn);
+    const protect = this.detailDrawn;
     const { evict, over } = this.lru.evictions(protect);
     for (const id of evict) {
       this.renderer.releasePart(DETAIL(id));
@@ -648,8 +770,8 @@ export class MapGlEngine {
 
   private isComplete(): boolean {
     if (!this.summary) return false;
-    if (this.gated) return true;
-    return this.drawn.every((id) => !this.detailCells.has(id) || this.detail.has(id));
+    for (const id of this.detailDrawn) if (this.detailCells.has(id) && !this.detail.has(id)) return false;
+    return true;
   }
 
   private checkComplete(): void {
@@ -664,6 +786,16 @@ export class MapGlEngine {
     const view = this.view;
     if (!view || !this.summary) return { drawCalls: 0, cpuMs: 0 };
     const t0 = performance.now();
+    // After a 3D frame the drawn set is the drape's: back to the view's.
+    if (this.selection !== "2d") this.setView(view);
+    this.rebuild(t0);
+    const stats = this.renderer.renderDocument(view, this.withHighlight(opts), target);
+    stats.cpuMs = performance.now() - t0;
+    return stats;
+  }
+
+  /** Rebuilds the visible set if the drawn set changed (arrivals coalesced); true when it did. */
+  private rebuild(t0: number): boolean {
     // Arrivals are coalesced while more drawn detail is pending; the last one always rebuilds.
     const hold = this.dirty && this.arrivalOnly && !this.isComplete() && t0 - this.lastRebuildAt < ARRIVAL_REBUILD_MS;
     if (hold && !this.holdTimer) {
@@ -672,39 +804,209 @@ export class MapGlEngine {
         this.onChange?.();
       }, ARRIVAL_REBUILD_MS - (t0 - this.lastRebuildAt));
     }
-    if (this.dirty && !hold) {
-      const parts: ResidentPart[] = [];
-      for (const id of [...this.drawn].sort((a, b) => a - b)) {
-        const b = this.base.get(id);
-        if (b) parts.push(b);
-        if (!this.gated) {
-          const d = this.detail.get(id);
-          if (d) parts.push(d);
-        }
+    if (!this.dirty || hold) return false;
+    const parts: ResidentPart[] = [];
+    for (const id of [...this.drawn].sort((a, b) => a - b)) {
+      const b = this.base.get(id);
+      if (b) parts.push(b);
+      if (this.detailDrawn.has(id)) {
+        const d = this.detail.get(id);
+        if (d) parts.push(d);
       }
-      if (this.large) parts.push(this.large);
-      // Last: within a colour the course draws over the map's own objects of that colour.
-      if (this.course) parts.push(this.course);
-      // The edit part: a draft in colour order over the course; the highlight's reserved colour sorts last.
-      if (this.edit) parts.push(this.edit);
-      // The page's colours sort after every map colour: the page layer draws over the map, as in the PDF.
-      if (this.page) parts.push(this.page);
-      const f = this.filter;
-      const extra = [...(f?.hidden ?? []), ...this.patchHidden, ...this.editHidden];
-      const hidden = extra.length ? new Set([...this.hidden, ...extra]) : this.hidden;
-      const vs = buildVisibleSet(parts, hidden, f?.visible);
-      this.st.lastBuildMs = performance.now() - t0;
-      this.renderer.setVisibleSet(vs);
-      this.lru.fixedBytes = this.fixedBytes + this.renderer.documentBytes.visibleSet;
-      this.dirty = false;
-      this.arrivalOnly = false;
-      this.lastRebuildAt = performance.now();
-      this.st.rebuilds++;
-      this.st.lastRebuildMs = performance.now() - t0;
     }
-    const stats = this.renderer.renderDocument(view, this.withHighlight(opts), target);
-    stats.cpuMs = performance.now() - t0;
-    return stats;
+    if (this.large) parts.push(this.large);
+    // Last: within a colour the course draws over the map's own objects of that colour.
+    if (this.course) parts.push(this.course);
+    // The edit part: a draft in colour order over the course; the highlight's reserved colour sorts last.
+    if (this.edit) parts.push(this.edit);
+    // The page's colours sort after every map colour: the page layer draws over the map, as in the PDF.
+    if (this.page) parts.push(this.page);
+    const f = this.filter;
+    const extra = [...(f?.hidden ?? []), ...this.patchHidden, ...this.editHidden];
+    const hidden = extra.length ? new Set([...this.hidden, ...extra]) : this.hidden;
+    const vs = buildVisibleSet(parts, hidden, f?.visible);
+    this.st.lastBuildMs = performance.now() - t0;
+    this.renderer.setVisibleSet(vs);
+    this.lru.fixedBytes = this.fixedBytes + this.renderer.documentBytes.visibleSet;
+    this.dirty = false;
+    this.arrivalOnly = false;
+    this.lastRebuildAt = performance.now();
+    this.st.rebuilds++;
+    this.st.lastRebuildMs = performance.now() - t0;
+    return true;
+  }
+
+  // ---- terrain (§5.6 "Engine API", H6) ----------------------------------------------------------
+
+  /** The mesh of the field set last, once uploaded (H7's pick and camera bounds). */
+  get terrainMesh(): TerrainMesh | null {
+    return this.mesh;
+  }
+
+  /** The field `terrainMesh` was built from (null: none); a `setTerrain` in flight replaces both when its mesh is in. */
+  get terrainField(): HeightField | null {
+    return this.field;
+  }
+
+  /**
+   * Sets the height field 3D frames draw (`null` drops it, its textures and the drape). The no-data
+   * fill, chunk ranges and normals run in the worker (§5.6 "Worker"); resolves with the mesh once
+   * uploaded. A later call supersedes one in flight, which then rejects.
+   */
+  setTerrain(field: HeightField | null): Promise<TerrainMesh | null> {
+    this.terrainWaiter?.reject(new Error("superseded by a later setTerrain"));
+    this.terrainWaiter = undefined;
+    const generation = ++this.terrainGeneration;
+    this.pendingField = field;
+    if (!field) {
+      this.field = null;
+      this.dropTerrain();
+      return Promise.resolve(null);
+    }
+    return new Promise((resolve, reject) => {
+      this.terrainWaiter = { generation, resolve, reject };
+      const z = field.z.slice();
+      this.transport.post({ type: "terrain", generation, header: field.header, z }, [z.buffer]);
+    });
+  }
+
+  private dropTerrain(): void {
+    if (this.mesh) this.renderer.terrain.clearField();
+    this.mesh = null;
+    this.renderer.releaseDrapes();
+    this.drapeLayersDrawn = [];
+    this.drapeKey = "";
+    this.drapeStale = true;
+    this.terrainPrepareMs = undefined;
+    if (this.settleTimer) clearTimeout(this.settleTimer);
+    if (this.arrivalTimer) clearTimeout(this.arrivalTimer);
+    this.settleTimer = this.arrivalTimer = undefined;
+    this.updateFixedBytes();
+    this.evict();
+    if (this.selection !== "2d" && this.view) this.setView(this.view);
+  }
+
+  private acceptTerrain(m: TerrainReply | (WorkerReply & { type: "error" })): void {
+    const w = this.terrainWaiter;
+    const generation = m.type === "terrain" ? m.generation : m.terrain;
+    const field = this.pendingField;
+    if (!w || generation !== w.generation || !field) return;
+    this.terrainWaiter = undefined;
+    if (m.type === "error") {
+      w.reject(new Error(m.message));
+      return;
+    }
+    try {
+      const origin = this.summary ? { x: this.summary.originX, y: this.summary.originY } : { x: 0, y: 0 };
+      this.renderer.releaseDrapes();
+      const t0 = performance.now();
+      this.mesh = this.renderer.terrain.setField(field, origin, { terrain: m.terrain, normals: m.normals });
+      this.field = field;
+      this.terrainUploadMs = performance.now() - t0;
+      this.terrainPrepareMs = m.ms;
+      this.drapeLayersDrawn = [];
+      this.drapeKey = "";
+      this.drapeStale = true;
+      this.updateFixedBytes();
+      this.evict();
+      w.resolve(this.mesh);
+      this.onChange?.();
+    } catch (e) {
+      w.reject(e instanceof Error ? e : new Error(String(e)));
+    }
+  }
+
+  private fieldBytes(): number {
+    return this.mesh ? fieldTextureBytes(this.mesh.width, this.mesh.height) : 0;
+  }
+
+  /** The drape's texel limits: a third of the budget (mip chains included), `DRAPE_MAX_SIDE` per side (§5.6 decision 5). */
+  drapeLimits(): { maxSide: number; maxPixels: number } {
+    return {
+      maxSide: Math.min(DRAPE_MAX_SIDE, this.renderer.maxTextureSize),
+      maxPixels: Math.floor((this.opts.budgetBytes * DRAPE_BUDGET_SHARE) / DRAPE_TEXEL_BYTES),
+    };
+  }
+
+  /** Re-renders the drape at the next 3D frame (the host changed what `opts` draw, e.g. the colours). */
+  invalidateDrape(): void {
+    this.drapeStale = true;
+  }
+
+  /**
+   * One 3D frame (§5.6 "Settling"): while the camera moves only the mesh is drawn, over the drape
+   * last rendered; once it has settled for `DRAPE_SETTLE_MS` the drape layers are re-selected for
+   * the camera's footprint. Whenever the layers or the visible set changed (content, arrivals), the
+   * map is rendered into them first — one frame = map-to-texture + mesh. `opts` are the 2D frame's.
+   */
+  renderTerrain(frame: EngineTerrainFrame, opts: DocumentRenderOptions, target?: RenderTarget): TerrainFrameStats {
+    const t0 = performance.now();
+    const mesh = this.mesh, s = this.summary;
+    if (!mesh || !s) return { mesh: null, cpuMs: 0 };
+    const e = frame.exaggeration, cam = frame.camera;
+    const c = cam.target;
+    const ck = `${c.x},${c.y},${c.z},${cam.distanceUm},${cam.bearingDeg},${cam.pitchDeg},${cam.fovYDeg ?? ""},${cam.widthPx},${cam.heightPx},${e}`;
+    if (ck !== this.cameraKey) {
+      this.cameraKey = ck;
+      this.lastMoveAt = t0;
+      if (this.settleTimer) clearTimeout(this.settleTimer);
+      this.settleTimer = setTimeout(() => {
+        this.settleTimer = undefined;
+        this.onChange?.();
+      }, DRAPE_SETTLE_MS);
+    }
+    // `drapeKey` is "" until layers are selected for this field and document ("none" when the camera sees no mesh).
+    const first = this.selection !== "3d" || this.drapeKey === "";
+    let layers = this.drapeLayersDrawn;
+    if (first || t0 - this.lastMoveAt >= DRAPE_SETTLE_MS) {
+      const next = drapeLayers(cam, meshBox(mesh, e), mesh.originUm, this.drapeLimits());
+      const key = next.map((l) => viewKey(l.view)).join(";") || "none";
+      if (first || key !== this.drapeKey) {
+        layers = next;
+        this.drapeKey = key;
+        this.selection = "3d";
+        this.selectViews(layers.map((l) => l.view), DRAW_MARGIN_CELLS);
+        this.drapeStale = true;
+      }
+    }
+    let drape: TerrainFrameStats["drape"];
+    const hopts = this.withHighlight(opts);
+    // Arrivals alone, more detail still to come: re-render at a rate the drape's cost allows.
+    const wait = Math.max(DRAPE_ARRIVAL_MS, DRAPE_ARRIVAL_FACTOR * this.drapeSt.lastMs) - (t0 - this.lastDrapeAt);
+    const holdArrivals = !this.drapeStale && this.dirty && this.arrivalOnly && !this.isComplete() && wait > 0;
+    if (holdArrivals) {
+      this.arrivalTimer ??= setTimeout(() => {
+        this.arrivalTimer = undefined;
+        this.onChange?.();
+      }, wait);
+    } else if (this.rebuild(t0)) this.drapeStale = true;
+    if (this.drapeStale && !(this.dirty && this.arrivalOnly)) {
+      const d = { drawCalls: 0, tiles: 0, cpuMs: 0, layers: layers.length };
+      layers.forEach((l, i) => {
+        const r = this.renderer.renderDrape(i, l.view, hopts);
+        d.drawCalls += r.drawCalls;
+        d.tiles += r.tiles;
+      });
+      this.renderer.releaseDrapes(layers.length);
+      d.cpuMs = performance.now() - t0;
+      drape = d;
+      this.drapeLayersDrawn = layers;
+      this.drapeStale = false;
+      this.lastDrapeAt = performance.now();
+      this.drapeSt = { renders: this.drapeSt.renders + 1, lastMs: d.cpuMs, lastDraws: d.drawCalls, lastTiles: d.tiles };
+      this.updateFixedBytes();
+      this.evict();
+    }
+    const drawnLayers = this.drapeLayersDrawn;
+    const drapes = drawnLayers.flatMap((l, i) => {
+      const texture = this.renderer.drape(i);
+      return texture ? [{ texture, matrix: viewMatrix(l.view, s.originX, s.originY) }] : [];
+    });
+    const meshStats = this.renderer.drawTerrain(
+      { camera: cam, exaggeration: e, drapes, background: opts.background ?? [1, 1, 1], lodPx: frame.lodPx, level: frame.level },
+      target,
+    );
+    return { mesh: meshStats, drape, cpuMs: performance.now() - t0 };
   }
 
   /**
@@ -731,7 +1033,7 @@ export class MapGlEngine {
   stats(): EngineStats {
     return {
       drawnCells: this.drawn.length,
-      drawnDetail: this.gated ? 0 : this.drawn.filter((id) => this.detail.has(id)).length,
+      drawnDetail: this.drawn.filter((id) => this.detailDrawn.has(id) && this.detail.has(id)).length,
       pending: this.pending.size,
       gated: this.gated,
       residentDetail: this.detail.size,
@@ -742,11 +1044,31 @@ export class MapGlEngine {
       lastRebuildMs: this.st.lastRebuildMs,
       lastBuildMs: this.st.lastBuildMs,
       prepareMs: this.st.prepareMs.slice(),
+      ...(this.mesh ? { terrain: this.terrainStats() } : {}),
+    };
+  }
+
+  private terrainStats(): TerrainStats {
+    return {
+      fieldBytes: this.fieldBytes(),
+      drapeBytes: this.renderer.drapeBytes,
+      scratchBytes: this.renderer.drapeScratchBytes,
+      layers: this.drapeLayersDrawn.map((l) => ({ role: l.role, widthPx: l.view.widthPx, heightPx: l.view.heightPx, pxPerUm: l.view.pxPerUm, ratio: l.view.pxPerUm / l.needPxPerUm })),
+      drapeRenders: this.drapeSt.renders,
+      lastDrapeMs: this.drapeSt.lastMs,
+      lastDrapeDraws: this.drapeSt.lastDraws,
+      lastDrapeTiles: this.drapeSt.lastTiles,
+      prepareMs: this.terrainPrepareMs,
+      uploadMs: this.terrainUploadMs,
     };
   }
 
   dispose(): void {
     if (this.holdTimer) clearTimeout(this.holdTimer);
+    if (this.settleTimer) clearTimeout(this.settleTimer);
+    if (this.arrivalTimer) clearTimeout(this.arrivalTimer);
+    this.terrainWaiter?.reject(new Error("map engine disposed"));
+    this.terrainWaiter = undefined;
     // A hit-test in flight is never answered now: its caller hears so.
     for (const w of this.hits.values()) w.reject(new Error("map engine disposed"));
     this.hits.clear();
