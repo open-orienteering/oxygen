@@ -3,9 +3,10 @@
 Found 2026-11-15 on `vector-map-pipeline` at `4d943463`. `course-editor.spec.ts` ›
 "F7: variations and loops › Create variation here, … Loop, export, undo" had failed
 once in each of the last three full E2E runs. Alone it passed (10/10). File-in-order
-it passed (60/60), and it also passed one full run (441/441). Fixed in the app:
-`packages/web/src/lib/editor/write-client.ts` and
-`packages/api/src/course-structure.ts`. The test did not change.
+it passed (60/60), and it also passed one full run (441/441). The main cause was
+in the app, fixed in `packages/web/src/lib/editor/write-client.ts` and
+`packages/api/src/course-structure.ts`. A second cause was in the test's leg
+click (see the section on it below).
 
 ## What happened
 
@@ -67,6 +68,23 @@ with `structureDiff`. That names a changed variation group by its own id
 - `publicIdsOf` (`course-structure.ts`) looks up only ids that are uuids. A
   group's id has no row, so the conflict's `differing` keeps it as it is, as
   §7 specifies.
+
+## A second cause in the same test: the leg click took another leg
+
+After the fix, one load run (1 failure in 15) failed earlier in the test. Under
+**Variant ▾ B**, x was numbered 3, not 2. The trace shows **Create variation
+here** wrote `[start, a, b, group, finish]`: the group came after b, not
+between a and b. The test clicked the plain midpoint of a → b and accepted any
+selected leg. Its a and b lay in one row with the finish, so the leg b → finish
+ran back over a → b, and the leg drawn on top won the hit-test. The legs spec
+had already met this (the F21 flake "Leg 72 → Mål 1", the same control 72). Its
+`twoControlCourse` picks a b whose leg a → b has a point clear of the course's
+other legs, and `selectLeg` clicks there until the Leg section names `a → b`.
+
+Those helpers (and `legClickPoint`) moved from `course-editor-legs.spec.ts` to
+`e2e/helpers/course-editor-spec.ts`. F7 and F15 ("All variations numbers …",
+the same Create-variation-here start) now build their course and select their
+leg with them.
 
 ## Tests
 

@@ -12,7 +12,7 @@ import { reseed } from "./helpers/reseed";
 import { canvasInCircle, cleanup, clickMap, controlRows, coveredBy, drag, dragHold, editorReady, emptyPoint, geometryOf, inkAt, labelOf, legBetween, legMidpoint, legPieces, nameIdOf, objectRow, plainMapAt, openEditor, pressOnEdge, printed, probeTemplate, regularCodes, select, site, sites, toolShapes, toPage, toPaper, trpcCall, viewSettled, newCourse, mapScale, nextFrames, loupeCircleAt, paperToPageOf, dragEndOnMap, turned, inkedAt, hideOthersPresence, type Site } from "./helpers/editor";
 import { touchEnd, touchMove, touchStart, touchTap } from "./helpers/touch";
 import { trpcProcedures, waitForTrpc } from "./helpers/trpc";
-import { type Pt, desktopOnly, appendClear, dropSelection, dragTarget } from "./helpers/course-editor-spec";
+import { type Pt, desktopOnly, appendClear, dropSelection, dragTarget, legClickPoint, selectLeg, twoControlCourse } from "./helpers/course-editor-spec";
 
 test.beforeAll(async () => {
   await reseed();
@@ -30,92 +30,6 @@ test.setTimeout(120_000);
 // describe, so the parallel rows' edits above merge cleanly.
 test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.7)", () => {
   desktopOnly();
-
-  /**
-   * A new course of two regular controls clear of each other's legs; the leg a → b is the one under test. A b whose
-   * leg a → b has no point clear of the course's other legs is undone and another picked: with the start, a, b and
-   * the finish in one row of the fixture's controls, the leg b → finish runs back over a → b and a click on a → b
-   * selects the leg drawn on top (F21 flake: "Leg 72 → Mål 1" took the bend, the metres under test never moved).
-   * `minChordPx`: a b whose leg is shorter on screen is undone too (F16: a smooth bend's grips are a sixth of the
-   * chord from it, and an 88 px leg put them 14.6 px from the bend's handle, docs/bugfix-course-editor-legs-flakes.md).
-   */
-  async function twoControlCourse(page: Page, prefix: string, opts: { minChordPx?: number } = {}): Promise<{ name: string; a: Site; b: Site }> {
-    await openEditor(page);
-    const name = await newCourse(page, prefix);
-    const a = await appendClear(page);
-    const tried = [a];
-    for (let attempt = 0; attempt < 6; attempt++) {
-      const b = await appendClear(page, tried);
-      await expect(controlRows(page)).toHaveCount(2, { timeout: 15000 });
-      const sa = await site(page, a), sb = await site(page, b);
-      await legMidpoint(page, name, sa.mm, sb.mm); // the leg a → b drawn (the mirror lags the write)
-      // Every leg of the course drawn: from the start, a → b and to the finish.
-      await expect.poll(async () => new Set((await legPieces(page, name)).map((l) => l.leg)).size, { timeout: 15000 }).toBeGreaterThanOrEqual(3);
-      const pa = await toPage(page, sa.mm), pb = await toPage(page, sb.mm);
-      const longEnough = Math.hypot(pb.x - pa.x, pb.y - pa.y) >= (opts.minChordPx ?? 0);
-      if (longEnough && (await legClickPoint(page, name, sa, sb)).legClear > 2) return { name, a: sa, b: sb };
-      tried.push(b);
-      const undone = waitForTrpc(page, "course.setStructure");
-      await page.getByTestId("editor-undo").click();
-      await undone;
-      await expect(controlRows(page)).toHaveCount(1, { timeout: 15000 });
-    }
-    throw new Error(`no control b whose leg from ${a} is clear of the course's other legs${opts.minChordPx ? ` and ${opts.minChordPx} px long` : ""} (tried ${tried.slice(1).join(", ")})`);
-  }
-
-  /**
-   * The point along the leg a → b farthest from every site. A leg without a line (`none`, or inside a corridor,
-   * F14) hits after the UI layer's off-course controls (§5), so a click at the plain midpoint can select a faded
-   * control lying on the leg instead (F14 run: control 79 on the leg's middle).
-   */
-  async function legClickPoint(page: Page, name: string, a: Site, b: Site): Promise<{ at: Pt; legClear: number }> {
-    const mid = await legMidpoint(page, name, a.mm, b.mm);
-    const marks = (await sites(page)).map((x) => x.mm);
-    const pieces = await legBetween(page, name, a.mm, b.mm);
-    const mine = new Set(pieces.map((l) => l.leg));
-    // The course's other legs: a click as near one of them as a → b may select it (the leg drawn on top wins).
-    const others = (await legPieces(page, name)).filter((l) => !mine.has(l.leg)).map((l) => l.points);
-    const seg = (p: Pt, u: Pt, v: Pt) => {
-      const dx = v.x - u.x, dy = v.y - u.y, l2 = dx * dx + dy * dy;
-      const t = l2 === 0 ? 0 : Math.max(0, Math.min(1, ((p.x - u.x) * dx + (p.y - u.y) * dy) / l2));
-      return Math.hypot(p.x - (u.x + t * dx), p.y - (u.y + t * dy));
-    };
-    const legClearance = (q: Pt) => Math.min(Infinity, ...others.flatMap((poly) => poly.slice(1).map((v, i) => seg(q, poly[i], v))));
-    // Sites in paper mm; another leg within 2 mm counts as a site at 0 (never pick a point it shares).
-    const clearance = (q: Pt) => Math.min(...marks.map((m) => Math.hypot(q.x - m.x, q.y - m.y)), legClearance(q) > 2 ? Infinity : 0);
-    // The middle half of the leg only: Add bend here puts the bend where the leg was clicked, and a smooth bend's
-    // handles are a sixth of the chord (F16), so a bend nearer an end than that has a handle reaching past the control
-    // and the leg's outline is no longer the straight three points (in-order run: a bend at 12 % of 86 → 61).
-    const ab2 = (b.mm.x - a.mm.x) ** 2 + (b.mm.y - a.mm.y) ** 2;
-    const along = (c: Pt) => ((c.x - a.mm.x) * (b.mm.x - a.mm.x) + (c.y - a.mm.y) * (b.mm.y - a.mm.y)) / ab2;
-    let best = mid, bestD = clearance(mid);
-    for (const piece of pieces) {
-      piece.points.slice(1).forEach((q, i) => {
-        const p0 = piece.points[i];
-        for (let t = 0.05; t < 1; t += 0.05) {
-          const c = { x: p0.x + (q.x - p0.x) * t, y: p0.y + (q.y - p0.y) * t };
-          if (along(c) < 0.25 || along(c) > 0.75) continue;
-          const d = clearance(c);
-          if (d > bestD) { best = c; bestD = d; }
-        }
-      });
-    }
-    return { at: best, legClear: legClearance(best) };
-  }
-
-  /** Click the leg a → b where it is clearest of other sites until the Leg section shows (the hit index lags the mirror by a round trip). */
-  async function selectLeg(page: Page, name: string, a: Site, b: Site): Promise<Pt> {
-    await viewSettled(page);
-    const mid = (await legClickPoint(page, name, a, b)).at;
-    await expect(async () => {
-      await dropSelection(page);
-      await clickMap(page, await toPage(page, mid));
-      await expect(page.getByTestId("editor-leg")).toBeVisible({ timeout: 3000 });
-      // The leg under test, not another one drawn over it.
-      await expect(page.getByTestId("editor-leg")).toContainText(`${a.code} → ${b.code}`, { timeout: 1000 });
-    }).toPass({ timeout: 30000 });
-    return mid;
-  }
 
   const styleOf = async (page: Page, name: string, a: Site, b: Site) => (await legBetween(page, name, a.mm, b.mm))[0]?.style ?? null;
 
