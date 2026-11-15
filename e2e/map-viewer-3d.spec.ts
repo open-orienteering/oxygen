@@ -30,7 +30,7 @@ import { uploadEventMap, waitForStableMapPanel } from "./helpers/map-upload";
 import { API_BASE } from "./helpers/api-base";
 import { E2E_HEADERS, trpc } from "./helpers/print-pdf";
 import { insertGpsRoute } from "./helpers/gps-route";
-import { DEM_PROVIDER, demFieldBytes, readyDem } from "./helpers/dem-field";
+import { DEM_PROVIDER, GLO30_PROVIDER, demFieldBytes, pendingDem, readyDem, type DemProvider } from "./helpers/dem-field";
 
 const DEMO = "docs/screenshots/fixtures/puit-de-laven-demo.omap";
 
@@ -118,7 +118,7 @@ async function patchTerrainDescriptor(page: Page, patch: (terrain: Record<string
  * Answers the DEM sources of `height.bin` (`?…&source=ground.…`, `contours.…`) with fields made from
  * the document's real `contours` field; `abortGround` fails ground's. Returns the requests seen.
  */
-async function serveDemFields(page: Page, opts: { abortGround?: boolean } = {}): Promise<{ source: string; eventId: string | undefined }[]> {
+async function serveDemFields(page: Page, opts: { abortGround?: boolean; provider?: DemProvider } = {}): Promise<{ source: string; eventId: string | undefined }[]> {
   const asked: { source: string; eventId: string | undefined }[] = [];
   await page.route(/\/height\.bin\?.*source=/, async (route) => {
     const url = new URL(route.request().url());
@@ -128,7 +128,7 @@ async function serveDemFields(page: Page, opts: { abortGround?: boolean } = {}):
     url.searchParams.delete("source");
     const res = await route.fetch({ url: url.toString() });
     expect(res.status()).toBe(200);
-    await route.fulfill({ status: 200, contentType: "application/octet-stream", body: demFieldBytes(new Uint8Array(await res.body()), source) });
+    await route.fulfill({ status: 200, contentType: "application/octet-stream", body: demFieldBytes(new Uint8Array(await res.body()), source, opts.provider) });
   });
   return asked;
 }
@@ -407,32 +407,75 @@ test.describe("the viewer's 3D mode", () => {
       expect(asked).toHaveLength(2);
     });
 
-    await test.step("2D: no attribution", async () => {
+    await test.step("2D: no attribution; re-entering keeps the choice and asks nothing", async () => {
+      await viewer.getByTestId("map-3d-source-ground").click();
+      await expect(viewer).toHaveAttribute("data-surface-source", GROUND, { timeout: 60_000 });
       await toggle.click();
       await expect(viewer).toHaveAttribute("data-view-mode", "2d");
       await expect(attribution).toHaveCount(0);
       await expect(viewer).not.toHaveAttribute("data-surface", /.*/);
+      await toggle.click();
+      await settled3d(viewer, canvas);
+      await expect(viewer).toHaveAttribute("data-surface-source", GROUND);
+      await expect(attribution).toContainText("© Lantmäteriet");
+      expect(asked).toHaveLength(2);
     });
   });
 
   test("ground below the contour gate opens 3D on its own; the map's terrain says why (H11 decision 6)", async ({ page }) => {
     test.setTimeout(120_000);
-    await patchTerrainDescriptor(page, (t) => ({ ...t, decided: 0.5, dem: readyDem(t.url as string, 0.6) }));
-    const asked = await serveDemFields(page);
+    // The coarse provider (answer 13): its label carries the resolution.
+    await patchTerrainDescriptor(page, (t) => ({ ...t, decided: 0.5, dem: readyDem(t.url as string, 0.6, GLO30_PROVIDER) }));
+    const asked = await serveDemFields(page, { provider: GLO30_PROVIDER });
     await openEvent(page);
     const { viewer, canvas } = await viewerWithMap(page);
     const toggle = viewer.getByTestId("map-3d-toggle");
     await expect(toggle).toHaveAttribute("data-state", "off");
     await toggle.click();
     await settled3d(viewer, canvas);
-    await expect(viewer).toHaveAttribute("data-surface-source", GROUND);
+    const glo = `ground.${GLO30_PROVIDER.id}`;
+    await expect(viewer).toHaveAttribute("data-surface-source", glo);
+    await expect(viewer.getByTestId("map-3d-source-ground")).toHaveText("Ground (30 m)");
     const map = viewer.getByTestId("map-3d-source-map");
     await expect(map).toHaveAttribute("aria-disabled", "true");
     await expect(map).toHaveAttribute("title", /80 %.*50 %/);
     await map.click({ force: true });
-    await expect(viewer).toHaveAttribute("data-surface-source", GROUND);
-    await expect(viewer.getByTestId("map-dem-attribution")).toContainText("© Lantmäteriet");
-    expect(asked.map((a) => a.source)).toEqual([GROUND]);
+    await expect(viewer).toHaveAttribute("data-surface-source", glo);
+    await expect(viewer.getByTestId("map-dem-attribution")).toContainText("COPERNICUS");
+    expect(asked.map((a) => a.source)).toEqual([glo]);
+  });
+
+  test("ground as the only surface that cannot be had: back to 2D with the reason (H11)", async ({ page }) => {
+    test.setTimeout(120_000);
+    await patchTerrainDescriptor(page, (t) => ({ ...t, decided: 0.5, dem: readyDem(t.url as string, 0.6) }));
+    await serveDemFields(page, { abortGround: true });
+    await openEvent(page);
+    const { viewer, canvas } = await viewerWithMap(page);
+    await viewer.getByTestId("map-3d-toggle").click();
+    await expect(viewer.getByTestId("map-3d-notice")).toHaveAttribute("data-reason", "unavailable");
+    await expect(viewer).toHaveAttribute("data-view-mode", "2d");
+    await expect(canvas).toHaveAttribute("data-mode", "2d");
+  });
+
+  test("a pending DEM: no ground offered; entering 3D asks for it once, which queues its job (H11)", async ({ page }) => {
+    test.setTimeout(120_000);
+    await patchTerrainDescriptor(page, (t) => ({ ...t, dem: pendingDem(t.url as string) }));
+    const asked = await serveDemFields(page);
+    await openEvent(page);
+    const { viewer, canvas } = await viewerWithMap(page);
+    const toggle = viewer.getByTestId("map-3d-toggle");
+    expect(asked).toHaveLength(0);
+    await toggle.click();
+    await settled3d(viewer, canvas);
+    await expect(viewer).toHaveAttribute("data-surface-source", "contours");
+    await expect(viewer.getByTestId("map-3d-surface-choice")).toHaveCount(0);
+    await expect.poll(() => asked.map((a) => a.source)).toEqual([GROUND]);
+    expect(asked[0].eventId).toBe("itest");
+    await toggle.click();
+    await expect(viewer).toHaveAttribute("data-view-mode", "2d");
+    await toggle.click();
+    await settled3d(viewer, canvas);
+    expect(asked).toHaveLength(1);
   });
 
   test("ground that cannot be had: 3D stays on the map's terrain and says why; the plain field carries no attribution (H11)", async ({ page }) => {
@@ -446,8 +489,11 @@ test.describe("the viewer's 3D mode", () => {
     await settled3d(viewer, canvas);
     await expect(viewer).toHaveAttribute("data-surface-source", "contours");
     await expect(viewer.getByTestId("map-dem-attribution")).toHaveCount(0);
+    const modes = await watchViewMode(viewer);
     await viewer.getByTestId("map-3d-source-ground").click();
     await expect(viewer.getByTestId("map-3d-notice")).toHaveAttribute("data-reason", "ground-unavailable");
+    await expect(canvas).toHaveAttribute("data-terrain-ready", "true", { timeout: 60_000 });
+    expect(await modes()).not.toContain("2d");
     await expect(viewer).toHaveAttribute("data-view-mode", "3d");
     await expect(viewer).toHaveAttribute("data-surface-source", "contours");
     await expect(viewer.getByTestId("map-3d-source-map")).toHaveAttribute("aria-pressed", "true");
@@ -548,9 +594,14 @@ test.describe("the viewer's 3D mode", () => {
     const viewer = pane.getByTestId("map-viewer");
     const canvas = viewer.getByTestId("map-vector-layer");
     await expect(canvas).toHaveAttribute("data-ready", "true", { timeout: 60_000 });
-    // The previous test's route is still there (reseed runs after the file).
-    const row = page.getByTestId("track-row").first();
-    await row.click();
+    // Two runners' tracks through the map's centre (the event's routes go with the reseed after the file).
+    const lat = Number(await viewer.getAttribute("data-center-lat")), lng = Number(await viewer.getAttribute("data-center-lng"));
+    const zigzag = (dx: number) => Array.from({ length: 10 }, (_, i) => ({ lat: lat - 0.0009 + i * 0.0002, lng: lng + dx + (i % 2 ? 0.0006 : -0.0006) }));
+    const ids = [await insertGpsRoute("itest", zigzag(0)), await insertGpsRoute("itest", zigzag(0.0004))];
+    await page.reload();
+    await expect(canvas).toHaveAttribute("data-ready", "true", { timeout: 60_000 });
+    const row = (id: number) => page.locator(`[data-testid="track-row"][data-route-id="${id}"]`);
+    await row(ids[0]).click();
     await expect(viewer.getByTestId("gps-route")).toHaveCount(1);
     await viewer.getByTestId("map-3d-toggle").click();
     await settled3d(viewer, canvas);
@@ -563,5 +614,22 @@ test.describe("the viewer's 3D mode", () => {
     await expect(viewer).toHaveAttribute("data-surface-source", ANCHORED, { timeout: 60_000 });
     await expect(canvas).toHaveAttribute("data-terrain-lines", "1");
     await expect(viewer).toHaveAttribute("data-view-mode", "3d");
+    // The next runner: the previous track stays until the next is in, so the choice and 3D hold.
+    const modes = await watchViewMode(viewer);
+    const surfaces: string[] = [];
+    await viewer.evaluate((el) => {
+      const w = window as unknown as { __surfaces: string[] };
+      w.__surfaces = [];
+      new MutationObserver(() => w.__surfaces.push(el.getAttribute("data-surface-source") ?? "")).observe(el, { attributes: true, attributeFilter: ["data-surface-source"] });
+    });
+    await row(ids[1]).click();
+    await expect(page.locator(`[data-testid="track-row"][data-route-id="${ids[1]}"] + tr`)).toBeVisible();
+    await expect(canvas).toHaveAttribute("data-terrain-lines", "1");
+    await expect(canvas).toHaveAttribute("data-terrain-ready", "true", { timeout: 60_000 });
+    surfaces.push(...(await viewer.evaluate(() => (window as unknown as { __surfaces: string[] }).__surfaces)));
+    expect(surfaces.filter((x) => x !== ANCHORED)).toEqual([]);
+    expect(await modes()).not.toContain("2d");
+    await expect(viewer).toHaveAttribute("data-surface-source", ANCHORED);
+    expect(asked.map((a) => a.source)).toEqual([GROUND, ANCHORED]);
   });
 });

@@ -991,9 +991,11 @@ export function MapViewer({
     return fitted;
   }, [fieldState, mapDoc, mapBudget, maxTextureSize]);
   // While the other surface's field loads (or ground falls back), the drawn field stays: the switch
-  // never leaves 3D (§5.4 "3D mode" "Surface").
+  // never leaves 3D (§5.4 "3D mode" "Surface"). An error keeps it too: the render after ground's
+  // fallback still holds the stale error (the hook sets `loading` in its effect); H7's errors end 3D
+  // through `want3d`.
   const shownFieldRef = useRef<ReturnType<typeof viewerField> | null>(null);
-  const keepShown = fieldState.status === "loading" || (fieldState.status === "error" && groundFallback);
+  const keepShown = fieldState.status === "loading" || fieldState.status === "error";
   const layerField = want3d && offer.kind === "available" && !fieldPending ? fittedField ?? (keepShown ? shownFieldRef.current : null) : null;
   shownFieldRef.current = layerField;
   /** Every field handed to the layer: the mesh of the one before still counts as 3D until the next one's is in. */

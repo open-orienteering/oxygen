@@ -2179,7 +2179,11 @@ into two surfaces:
   map's terrain below the gate is `aria-disabled` and its title names the
   reason and percent (decision 6). The choice holds for the mount, across
   re-entries, until the tracks come or go (the default changes with
-  them); it is not remembered, as the mode is not.
+  them); it is not remembered, as the mode is not. On the Tracks page a
+  switch from one runner to the next keeps the previous track drawn until
+  the next one is in (`getRoutePreview`'s `placeholderData`, dropped when
+  the row is collapsed), so the tracks never blink out and neither the
+  default nor the choice flips per runner.
 - **Switching** stays in 3D: the fitted field drawn stays the layer's
   `heightField` while the other loads (the engine keeps its mesh until
   the new one is in, §5.6), every field handed to the layer counts as 3D
@@ -2246,7 +2250,7 @@ mounts it only with a pinned document.
 | `hooks/__tests__/useHeightField.test.ts` (H7) | the descriptor's URL with `x-event-id` / `x-kiosk-key`, decoded; one request shared, the field kept; the Cache Storage copy serves offline and replaces the document's other versions of the same source; 403 / 404 with `reason` / 503 / 500 / unreadable / offline classified, failures not kept |
 | `lib/__tests__/map-3d.test.ts` "terrain3dSurfaces" (H11) | no ground for every `dem` state but `ready` (and an absent or null `dem`), H7's offer then; ground when ready; the anchored field as the map's terrain at ≥ 0.8, the plain one below it or with no decided share, the plain percent when both are below; ground opens 3D below the gate and the gate holds without it; pending, `none`, `over-cap` as H7; the default (ground with tracks, or alone); `surfaceOfSource`; `fieldAttribution` (none for `contours`, the provider's for `contours.<p>` and `ground.<p>`) |
 | `hooks/__tests__/useHeightField.test.ts` "three sources" (H11) | a document's `contours`, `contours.<p>` and `ground.<p>` kept side by side in memory and in Cache Storage; switching between them asks nothing again |
-| `e2e/map-viewer-3d.spec.ts` (H11) | the descriptor's `dem` rewritten to `ready`, the DEM fields answered from the real `contours` field (`helpers/dem-field.ts`: the same grid, a DEM `source` and provider, ridges for ground): 3D opens on the anchored field with "© Lantmäteriet" and "CC BY 4.0" shown; ground is one request with `x-event-id`, changes the pixels, never passes through 2D (a `MutationObserver` on `data-view-mode`), keeps centre, zoom, pitch, bearing and exaggeration; back to the map's terrain asks nothing; 2D shows no attribution; no DEM (the stack's): no choice, no attribution; ground below the contour gate opens 3D, the map's terrain `aria-disabled` with 80 % / 50 %; ground aborted: `ground-unavailable`, still 3D on the plain field, which shows no attribution; on the Tracks page with a track shown 3D opens on ground with the track drawn (`data-terrain-lines="1"`), and the map's terrain on request re-lifts it |
+| `e2e/map-viewer-3d.spec.ts` (H11) | the descriptor's `dem` rewritten to `ready`, the DEM fields answered from the real `contours` field (`helpers/dem-field.ts`: the same grid, a DEM `source` and provider, ridges for ground): 3D opens on the anchored field with "© Lantmäteriet" and "CC BY 4.0" shown; ground is one request with `x-event-id`, changes the pixels, never passes through 2D (a `MutationObserver` on `data-view-mode`), keeps centre, zoom, pitch, bearing and exaggeration; back to the map's terrain asks nothing; 2D shows no attribution; no DEM (the stack's): no choice, no attribution; ground below the contour gate opens 3D, the map's terrain `aria-disabled` with 80 % / 50 %; ground aborted: `ground-unavailable`, never through 2D, still 3D on the plain field, which shows no attribution; ground as the only surface aborted: 2D with `unavailable`; the coarse provider labelled "Ground (30 m)" with its own attribution; leaving and re-entering 3D keeps the choice and asks nothing; a pending DEM: no choice, its ground asked once with `x-event-id` on the first entry only; on the Tracks page with a track shown 3D opens on ground with the track drawn (`data-terrain-lines="1"`), the map's terrain on request re-lifts it, and the next runner's track keeps that choice and 3D throughout |
 | `e2e/map-viewer-3d.spec.ts` (H7) | the seed map (no contours): no toggle, `data-terrain-reason="no-contours"`; the demo map imported and pinned: one `height.bin?v=` request with `x-event-id`, `data-view-mode="3d"`, canvas `data-mode="3d"` and `data-terrain-ready`, pitch 45, exaggeration 2, the frame differs from 2D and carries the map's ink, measure hidden; a right-drag raises the pitch and turns the bearing, the compass resets it; a right-drag and a wheel that start on a control's ring of the UI layer orbit and zoom the 3D view (not the 2D handlers); exaggeration 5 changes the frame; two CDP touches moving up raise the pitch; back to 2D the frame equals the 2D one (< 0.5 % of pixels), re-entry asks for neither field nor document; a followed GPS fix on the screen's vertical centre line; the descriptor rewritten below the gate (79.6 %): the toggle `unavailable`, `aria-disabled`, its title the reason, a click shows `low-confidence` and stays 2D; the descriptor first `pending`: the switch fetches, the descriptor is read again and 3D is drawn; an aborted field: `map-3d-notice` `unavailable`, 2D drawn; **a GPS track (H8)**: a route inserted for `itest` (`e2e/helpers/gps-route.ts`) expanded on the Tracks page in the wide screen's pane — in 2D one SVG `gps-route` and no `data-terrain-lines`; in 3D `data-terrain-lines="1"`, no SVG path, the canvas route-red on or just above > 70 % of the mirror's projected points and > 300 route-red pixels, collapsing the row leaves under a tenth of them in the same view; back in 2D the SVG path. `MAP_3D_SHOT=1` writes `docs/screenshots/map-3d.png` and `map-3d-track.png` (the latter cropped and reduced to 256 colours for the docs) |
 
 ### 5.5 Editor
@@ -3840,7 +3844,7 @@ what became of it:
 | `packages/web/src/components/VectorMapLayer.tsx` | the vector base layer in `MapViewer` (§5.4): canvas, engine and worker lifecycle, status; the course layer request and its replies; the editor's loupe; Map mode's document objects (`mapObjects`, G5); the 3D frame (`heightField`, `terrain`, H7; `terrainLines`, H8) |
 | `packages/web/src/lib/course-layer-request.ts` | the viewer's course-layer input (§5.4 "Overlay", `course-layer.md` §5) |
 | `packages/web/src/components/MapViewer.tsx` | the host: viewport state, gestures, the SVG UI layer, editor hit-testing; the 3D mode's state and the projected UI layer (H7) |
-| `packages/web/src/components/Map3d.tsx`, `lib/map-3d.ts`, `lib/map-3d-field.ts`, `hooks/useHeightField.ts` | the 3D mode (§5.4 "3D mode", H7): toggle, exaggeration, notice and pointer surface; offer, camera, projector and gesture reducer; the field padded and coarsened; the field's loader |
+| `packages/web/src/components/Map3d.tsx`, `lib/map-3d.ts`, `lib/map-3d-field.ts`, `hooks/useHeightField.ts` | the 3D mode (§5.4 "3D mode", H7): toggle, exaggeration, notice and pointer surface; offer, camera, projector and gesture reducer; the field padded and coarsened; the field's loader. H11: the surface choice and the DEM attribution (`Map3d.tsx`), `terrain3dSurfaces` / `defaultSurface` / `fieldAttribution` (`lib/map-3d.ts`), three fields in memory |
 | `packages/web/src/lib/map-viewport.ts` | the paper viewport model (§5.4 "Viewport"), `glView` |
 | `packages/web/src/lib/vector-map.ts` | paper frame, bounds, colours, proxy colours, budget from a document header |
 | `packages/web/src/lib/map-document-cache.ts`, `map-fonts.ts` | document, font and text atlas loading for the viewer (`docs/map-storage.md` §7.1) |
@@ -4008,6 +4012,11 @@ The shared module is exported as a namespace: `import { render } from
   open appears at the next read (a reload, an event switch). A pending
   DEM's ground is asked for once on entering 3D, which only queues the
   job.
+- **§5.4 3D mode — fitted fields in memory** (H11): a viewer keeps up
+  to three fitted fields (each up to a third of the map budget) beside
+  the three decoded ones, evicted in insertion order; a phone switching
+  surfaces on a club map holds two of them at once. Unmeasured on the
+  S1 phone.
 - **§5.4 3D mode — the review's 3D line and the DEM** (H11): the import
   review's terrain line (`MapReviewPage`) still says "3D needs 80 %" from
   the plain field; with an anchored field over the gate, or ground
