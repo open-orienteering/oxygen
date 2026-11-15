@@ -295,12 +295,26 @@ test.describe("Map mode (docs/course-editor.md §13)", () => {
         if ((await inView(q)) && !(await darkAt(page, q))) { target = q; break; }
       }
       expect(target, "an inkless spot 0.8 mm from the node").not.toBeNull();
+      // The line through the node: ink within 1 mm of it along its edges (a path symbol is dashed, so the vertex itself
+      // may fall in a gap).
+      const ring = before.filter((n) => n.data.ring === node.data.ring);
+      const k = ring.indexOf(node);
+      const neighbours = [ring[k - 1], ring[k + 1]].filter((n): n is (typeof ring)[number] => !!n);
+      const lineThrough = async (q: Pt, held = false) => {
+        const probes: Pt[] = [];
+        for (const nb of neighbours) {
+          const len = Math.hypot(nb.x - q.x, nb.y - q.y);
+          for (let d = 0; d <= Math.min(1, len); d += 0.1) probes.push({ x: q.x + ((nb.x - q.x) * d) / len, y: q.y + ((nb.y - q.y) * d) / len });
+        }
+        return (await inkedAt(page, probes, "line", held)).length > 0;
+      };
       const from = await toPage(page, node), to = await toPage(page, target!);
       await page.mouse.move(from.x, from.y);
       await page.mouse.down();
       await page.mouse.move(to.x, to.y, { steps: 8 });
-      // Live: the line is drawn through the dragged node from the draft before anything is written.
-      await expect.poll(() => darkAt(page, target!), { timeout: 15_000 }).toBe(true);
+      // Live: the line is drawn through the dragged node from the draft before anything is written (probed with the
+      // overlays transparent, not hidden: a hidden one would make the pointer leave the viewer and cancel the drag).
+      await expect.poll(() => lineThrough(target!, true), { timeout: 15_000 }).toBe(true);
       expect(writes.n).toBe(0);
       const dragged = waitForTrpc(page, "mapPatch.applyChange");
       await page.mouse.up();
@@ -312,7 +326,7 @@ test.describe("Map mode (docs/course-editor.md §13)", () => {
       const moved = (await nodes()).find((n) => n.data.ring === node.data.ring && n.data.index === node.data.index)!;
       expect(Math.hypot(moved.x - target!.x, moved.y - target!.y)).toBeLessThan(0.1);
       expect(moved.data.focused).toBe("true");
-      await expect.poll(() => darkAt(page, target!), { timeout: 15_000 }).toBe(true);
+      await expect.poll(() => lineThrough(moved), { timeout: 15_000 }).toBe(true);
       expect(writes.n).toBe(1);
 
       // Undo: no ops, the node back where it was.
