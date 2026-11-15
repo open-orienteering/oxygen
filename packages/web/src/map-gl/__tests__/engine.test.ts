@@ -17,6 +17,8 @@ import { aboveZoomGate } from "../buckets";
 import { drapeTextureBytes } from "../renderer";
 import { assembleTerrainMesh, type TerrainMesh } from "../terrain/mesh";
 import type { PreparedField, TerrainFrame } from "../terrain/program";
+import type { TerrainLine } from "../terrain/lines";
+import type { TerrainLinesPass } from "../renderer";
 import { DRAPE_TEXEL_BYTES } from "../terrain/footprint";
 import { distanceForPxPerUm, type TerrainCamera } from "../terrain/camera";
 import { fieldFromGrid } from "../terrain/synthetic";
@@ -145,9 +147,11 @@ class FakeRenderer {
     return this.drapeSizes.reduce((n, d) => n + (d ? drapeTextureBytes(d.w, d.h) : 0), 0);
   }
   readonly drapeScratchBytes = 0;
-  drawTerrain(frame: TerrainFrame) {
+  readonly terrainLines: (TerrainLinesPass | undefined)[] = [];
+  drawTerrain(frame: TerrainFrame, _target?: unknown, lines?: TerrainLinesPass) {
     this.log.push("mesh");
     this.terrainFrames.push(frame);
+    this.terrainLines.push(lines);
     return { chunks: 1, culled: 0, triangles: 2, perLevel: [1, 0, 0, 0, 0, 0, 0], draws: 1, matrix: new Float32Array(16), drawCalls: 1, cpuMs: 0 };
   }
 }
@@ -926,6 +930,19 @@ describe("MapGlEngine terrain (docs/map-rendering.md §5.6 \"Engine API\", \"Set
     expect(f.background).toEqual([1, 1, 1]);
     expect(f.drapes).toHaveLength(1);
     expect([...f.drapes[0].matrix]).toEqual([...twoDMatrix(v, summary.originX, summary.originY)]);
+  });
+
+  it("passes the lines to the mesh draw (§5.6 \"Lines\"); new lines re-render no drape", async () => {
+    const { engine, renderer, cam } = await withTerrain();
+    const a: TerrainLine[] = [{ points: [{ x: 120, y: 120 }, { x: 130, y: 125 }], colour: [1, 0, 0], opacity: 0.8, widthPx: 4.5 }];
+    engine.renderTerrain({ camera: cam(125_000, 125_000), exaggeration: 1, lines: a, pxRatio: 2 }, opts);
+    expect(renderer.terrainLines[0]).toEqual({ lines: a, pxRatio: 2 });
+    const b = [...a];
+    engine.renderTerrain({ camera: cam(125_000, 125_000), exaggeration: 1, lines: b }, opts);
+    expect(renderer.terrainLines[1]).toEqual({ lines: b, pxRatio: 1 });
+    expect(renderer.drapeRenders).toHaveLength(1);
+    engine.renderTerrain({ camera: cam(125_000, 125_000), exaggeration: 1 }, opts);
+    expect(renderer.terrainLines[2]).toBeUndefined();
   });
 
   it("draws only the mesh while the camera moves and re-renders the drape once it settled", async () => {

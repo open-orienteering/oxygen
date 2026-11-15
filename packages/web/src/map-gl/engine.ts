@@ -30,6 +30,7 @@ import { DRAPE_MAX_SIDE, DRAPE_TEXEL_BYTES, drapeLayers, type DrapeLayer } from 
 import { meshBox, type TerrainMesh } from "./terrain/mesh.js";
 import { fieldTextureBytes, type TerrainDrawStats } from "./terrain/program.js";
 import type { TerrainCamera } from "./terrain/camera.js";
+import type { LineDrawStats, TerrainLine } from "./terrain/lines.js";
 import type { DrapeRenderStats } from "./renderer.js";
 import {
   createMapGlWorker, messageChannelScheduler,
@@ -141,11 +142,15 @@ export interface EngineTerrainFrame {
   exaggeration: number;
   lodPx?: number;
   level?: number;
+  /** Lines drawn on the terrain after the mesh (§5.6 "Lines", H8); not part of the drape. */
+  lines?: readonly TerrainLine[];
+  /** Device px per CSS px for the lines' widths (default 1). */
+  pxRatio?: number;
 }
 
 export interface TerrainFrameStats {
-  /** The mesh draw (null: no field, or no document). */
-  mesh: (TerrainDrawStats & FrameStats) | null;
+  /** The mesh draw (null: no field, or no document); `lines` when lines were drawn. */
+  mesh: (TerrainDrawStats & FrameStats & { lines?: LineDrawStats }) | null;
   /** Set when this frame re-rendered the drape. */
   drape?: DrapeRenderStats & { layers: number };
   /** JS time of the whole frame, ms. */
@@ -1005,6 +1010,7 @@ export class MapGlEngine {
     const meshStats = this.renderer.drawTerrain(
       { camera: cam, exaggeration: e, drapes, background: opts.background ?? [1, 1, 1], lodPx: frame.lodPx, level: frame.level },
       target,
+      frame.lines ? { lines: frame.lines, pxRatio: frame.pxRatio ?? 1 } : undefined,
     );
     return { mesh: meshStats, drape, cpuMs: performance.now() - t0 };
   }

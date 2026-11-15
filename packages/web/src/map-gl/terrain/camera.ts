@@ -71,9 +71,17 @@ export function distanceForPxPerUm(cam: Pick<TerrainCamera, "heightPx" | "fovYDe
  * The camera's eye, basis, clip planes and matrix. Near and far are the
  * smallest and largest depth along the view direction over `bounds` (the
  * drawn field) when given — not Euclidean distance, which would put an
- * off-axis point in front of the near plane — with near ≥ far / 10⁴ for a
+ * off-axis point in front of the near plane — near at `NEAR_HEADROOM` of the
+ * smallest, and ≥ far / 10⁴ for a
  * 24-bit depth buffer; otherwise they are 1 % and 100× the distance.
  */
+/**
+ * Near is this share of the box's smallest depth: lines are drawn above the surface (raised by
+ * their screen half width, then biased towards the eye — §5.6 "Lines", H8), up to a few per cent of
+ * the distance nearer than the box's top, and must stay in front of the near plane.
+ */
+export const NEAR_HEADROOM = 0.8;
+
 export function cameraFrame(cam: TerrainCamera, bounds?: Box3): CameraFrame {
   const b = cam.bearingDeg * RAD, p = clampPitch(cam.pitchDeg) * RAD;
   // Screen-up on the ground at pitch 0: (0, 1) turned by −bearing.
@@ -101,7 +109,7 @@ export function cameraFrame(cam: TerrainCamera, bounds?: Box3): CameraFrame {
           hi = Math.max(hi, depth);
         }
     far = hi > 0 ? hi * 1.01 : d * 100;
-    near = Math.max(lo * 0.99, far / 1e4);
+    near = Math.max(lo * NEAR_HEADROOM, far / 1e4);
     if (!(far > near)) far = near * 2;
   }
   const fov = (cam.fovYDeg ?? DEFAULT_FOV_Y_DEG) * RAD;

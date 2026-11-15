@@ -1855,7 +1855,7 @@ layer (`course-layer.md` §3.6, P1). What the layer draws and what it does not:
 
 | GL course layer (dynamic bucket) | SVG UI layer (React, screen widths) |
 |---|---|
-| start triangles (turned to the first control), circles with automatic and authored gaps, finish, legs clipped at circles and gapped at compact features, control numbers placed by the shared placer with manual offsets and leaders, imported courses' authored leg pieces and bends, circle gaps, 707 / 708 / 711 lines and 709 areas | selection ring, phantom, action-bar anchors, move warnings; status rings (readout punch state `ok` / `missing` / `extra`, highlighted control) around the GL symbol; completion rings, punch-count badges; the editor's faded off-course controls (left out of the layer, drawn as plain circles at 0.3 opacity, `control-faded`); class leg pills (multi-course); GPS position and tracks; measure; the description sheet; the editor's tool shapes |
+| start triangles (turned to the first control), circles with automatic and authored gaps, finish, legs clipped at circles and gapped at compact features, control numbers placed by the shared placer with manual offsets and leaders, imported courses' authored leg pieces and bends, circle gaps, 707 / 708 / 711 lines and 709 areas | selection ring, phantom, action-bar anchors, move warnings; status rings (readout punch state `ok` / `missing` / `extra`, highlighted control) around the GL symbol; completion rings, punch-count badges; the editor's faded off-course controls (left out of the layer, drawn as plain circles at 0.3 opacity, `control-faded`); class leg pills (multi-course); GPS position, and tracks in 2D (in 3D the GL frame draws them on the terrain, §5.4 "3D mode", H8); measure; the description sheet; the editor's tool shapes |
 
 The SVG draws no course symbol, leg, route or number: E4b deleted the
 legacy SVG course paths (the GeoJSON of `course.courseGeometries`, a
@@ -2084,12 +2084,45 @@ eye) instead of `mmToInner`; screen points go back through `screenRay` +
 - Markers and labels stay upright and unscaled at their projected anchor:
   punch badges, leg pills, the GPS dot and its accuracy ring (radius at
   the anchor's scale).
-- GPS tracks are SVG polylines through the projector, not lifted and not
-  depth-tested, until H8 draws them on the terrain.
+- GPS tracks (`gpsRoutes`) are not in the SVG in 3D: the GL frame draws
+  them on the terrain (H8, "Tracks on the terrain" below).
 - The course is in the drape (§5.4 "Overlay"): no SVG course symbol in 3D
   either. Control numbers are part of it, foreshortened with the ground.
 - No occlusion test: a marker behind a hill is drawn over it (§8).
 - The scale bar is hidden at pitch > 0 (the scale varies over the screen).
+
+**Tracks on the terrain (H8).** In 3D the viewer's `gpsRoutes` are
+`TerrainLine`s (§5.6 "Lines") that `MapViewer` hands to `VectorMapLayer`
+(`terrainLines`), and the GL frame draws them after the mesh: lifted a
+constant above the surface and depth-tested against it, so a hill hides
+the part of a track behind it. In 2D they stay the SVG `<path>` they
+were (`data-testid="gps-route"`).
+
+- Input: the same paper mm as 2D (`gpsRoutesMm`, WGS 84 through `mapGeo`
+  once per route set); colour the route's (`#rrggbb` or `#rgb`; any other
+  CSS colour, which no caller passes, falls back to the single-track red
+  `#e6194b`), opacity 0.8, width 4.5 CSS px — the 2D path's.
+- Height: the surface the frame draws (`surfaceHeight` of the engine's
+  mesh — the `contours` field today; whatever field the engine holds
+  once H11 chooses the surface).
+- `VectorMapLayer` passes them with the frame (`renderTerrain({ …, lines,
+  pxRatio })`); a new array is one redraw and one re-upload, a camera
+  change neither. The canvas carries `data-terrain-lines` (the lines the
+  last 3D frame drew; absent in 2D).
+- For tests the overlay mirrors each 3D track as an empty
+  `<g data-testid="gps-route-3d" visibility="hidden">` whose `data-points`
+  are the projected CSS px of its points through `projector3d` (the
+  ground line, not raised).
+
+Decided with the user (H8, 2026-11-15):
+
+1. **The GPS position stays H7's** upright SVG marker in 3D, not a GL
+   line and not depth-tested: a person following their own position
+   must not lose it behind a hill. The row's "the GPS position … become
+   3D polylines" is read as the tracks only; marker occlusion stays its
+   own Pending item (§8).
+2. **No replay view is built**: none exists ("replay tails" in the row);
+   H8 draws `gpsRoutes`, and §8 records where a replay's tails would go.
 
 **Attributes.** `map-viewer` adds `data-view-mode` (`2d` / `3d`),
 `data-pitch`, `data-exaggeration` (3D only) and `data-terrain-reason`
@@ -2129,7 +2162,7 @@ mounts it only with a pinned document.
 | `lib/__tests__/map-3d.test.ts` (H7) | the offer table (hidden, unavailable with the floored percent, pending, available; editor and kiosk hidden); exaggeration clamp; the camera at pitch 0 = `viewMatrix` on the target's plane (50 random views, DPRs, bearings); `targetZ` mid-height; the projector at pitch 0 on flat ground = `mmToInner` + the CSS rotation < 0.5 px (200 random views); tilted over a cone, project → unproject within a cell; the ground affine a rotation at pitch 0, foreshortened by cos(pitch) along the view tilted; null behind the eye; pan and wheel zoom keep the ground point under the pointer < 0.5 px (flat and tilted); zoom limits; orbit rates and pitch clamp; two-finger classification (tilt, pinch by distance, angle, midpoint, null in the slop); the reducer: one-finger pan and the page-scrolling finger, orbit drag, wheel, pinch ×2, twist from its activation without a jump, tilt, two → one finger; bearing ↔ user bearing |
 | `lib/__tests__/map-3d-field.test.ts` (H7) | padding by whole no-data cells on the grid to the bounds, `sampleHeight` unchanged inside, no copy when covered; coarsening means, the more-than-half no-data rule, confidence by majority, the corner kept; the smallest factor; a club budget pads only, an event map's coarsens by 2, a 1024-texel device |
 | `hooks/__tests__/useHeightField.test.ts` (H7) | the descriptor's URL with `x-event-id` / `x-kiosk-key`, decoded; one request shared, the field kept; the Cache Storage copy serves offline and replaces the document's other versions of the same source; 403 / 404 with `reason` / 503 / 500 / unreadable / offline classified, failures not kept |
-| `e2e/map-viewer-3d.spec.ts` (H7) | the seed map (no contours): no toggle, `data-terrain-reason="no-contours"`; the demo map imported and pinned: one `height.bin?v=` request with `x-event-id`, `data-view-mode="3d"`, canvas `data-mode="3d"` and `data-terrain-ready`, pitch 45, exaggeration 2, the frame differs from 2D and carries the map's ink, measure hidden; a right-drag raises the pitch and turns the bearing, the compass resets it; a right-drag and a wheel that start on a control's ring of the UI layer orbit and zoom the 3D view (not the 2D handlers); exaggeration 5 changes the frame; two CDP touches moving up raise the pitch; back to 2D the frame equals the 2D one (< 0.5 % of pixels), re-entry asks for neither field nor document; a followed GPS fix on the screen's vertical centre line; the descriptor rewritten below the gate (79.6 %): the toggle `unavailable`, `aria-disabled`, its title the reason, a click shows `low-confidence` and stays 2D; the descriptor first `pending`: the switch fetches, the descriptor is read again and 3D is drawn; an aborted field: `map-3d-notice` `unavailable`, 2D drawn. `MAP_3D_SHOT=1` writes `docs/screenshots/map-3d.png` |
+| `e2e/map-viewer-3d.spec.ts` (H7) | the seed map (no contours): no toggle, `data-terrain-reason="no-contours"`; the demo map imported and pinned: one `height.bin?v=` request with `x-event-id`, `data-view-mode="3d"`, canvas `data-mode="3d"` and `data-terrain-ready`, pitch 45, exaggeration 2, the frame differs from 2D and carries the map's ink, measure hidden; a right-drag raises the pitch and turns the bearing, the compass resets it; a right-drag and a wheel that start on a control's ring of the UI layer orbit and zoom the 3D view (not the 2D handlers); exaggeration 5 changes the frame; two CDP touches moving up raise the pitch; back to 2D the frame equals the 2D one (< 0.5 % of pixels), re-entry asks for neither field nor document; a followed GPS fix on the screen's vertical centre line; the descriptor rewritten below the gate (79.6 %): the toggle `unavailable`, `aria-disabled`, its title the reason, a click shows `low-confidence` and stays 2D; the descriptor first `pending`: the switch fetches, the descriptor is read again and 3D is drawn; an aborted field: `map-3d-notice` `unavailable`, 2D drawn; **a GPS track (H8)**: a route inserted for `itest` (`e2e/helpers/gps-route.ts`) expanded on the Tracks page in the wide screen's pane — in 2D one SVG `gps-route` and no `data-terrain-lines`; in 3D `data-terrain-lines="1"`, no SVG path, the canvas route-red on or just above > 70 % of the mirror's projected points and > 300 route-red pixels, collapsing the row leaves under a tenth of them in the same view; back in 2D the SVG path. `MAP_3D_SHOT=1` writes `docs/screenshots/map-3d.png` and `map-3d-track.png` (the latter cropped and reduced to 256 colours for the docs) |
 
 ### 5.5 Editor
 
@@ -2469,8 +2502,13 @@ direction.
   `rotationDeg = bearingDeg` (tested to 1e-6 in clip space).
 - Near and far enclose `bounds` (the mesh's box at the drawn
   exaggeration) by depth along the view direction: far at the box's
-  largest depth, near at its smallest (both at corners — depth is
-  linear), no closer than far / 10⁴ (a 24-bit depth buffer). Euclidean
+  largest depth, near at **0.8 of its smallest** (`NEAR_HEADROOM`; both at
+  corners — depth is linear), no closer than far / 10⁴ (a 24-bit depth
+  buffer). The headroom is H8's: lines are drawn above the surface
+  ("Lines": raised by their screen half width and biased towards the eye,
+  up to several per cent of the distance), and with near at the box's top
+  a track on a summit or on flat ground was clipped away (found by the
+  opacity test on the flat dev field). Euclidean
   distance to the box would not do: an off-axis point at distance D lies
   at depth D · cos φ, in front of such a near plane (spec review).
 - `cameraFrame` also returns the eye, the camera's basis and `focalPx`;
@@ -2530,6 +2568,106 @@ one step. It runs without the GPU, so H7's gestures and H8's lines use it
 as the tests do. Where `data` is true, `heightM` agrees with
 `sampleHeight` within one height unit (the triangles and §5.3's bilinear
 differ by less inside a quad).
+
+#### Lines (`lines.ts`, H8)
+
+GPS tracks on the terrain (research 10 §5 step 3, row H8): polylines in
+paper mm drawn by the GL frame after the mesh, on its surface and
+depth-tested against it, so a track behind a hill is hidden by the hill.
+
+```ts
+interface TerrainLine {
+  points: readonly { x: number; y: number }[];   // paper mm (WGS 84 reached them through mapGeo)
+  colour: [r, g, b];                             // 0…1
+  opacity: number;                               // 0…1, uniform over the line
+  widthPx: number;                               // CSS px; the frame's pxRatio makes it device px
+}
+type LineSurface = (xUm: number, yUm: number) => number | null;   // model µm → int16 height units
+liftPolyline(points, mesh, { surface = surfaceHeight(mesh, ·), stepUm = mesh.cellUm }?): Float32Array[];
+lineInstances(lines, mesh, surface?): { data: Float32Array; ranges: { first; count }[]; segments };
+lineVertex(p: [x, y, h], frame: { matrix; eye; zUnit; widthPx; heightPx; focalPx; halfPx }): [x, y, z];
+class TerrainLines {
+  constructor(gl: WebGL2RenderingContext);
+  draw(lines, mesh, frame: { matrix; eye; focalPx; exaggeration; pxRatio }, target): { lines; draws; segments };
+  dispose(): void;
+}
+```
+
+- **Lifting** (`liftPolyline`, pure): each point goes to model µm (the
+  mesh's `originUm` removed); every segment is cut into equal steps no
+  longer than the mesh's `cellUm` in plan, the original points kept, so
+  a chord between two GPS fixes follows the ground over a ridge instead
+  of cutting through it. Each vertex carries `(x, y, h − zMin)` in
+  model µm and **height units** — the exaggeration is applied in the
+  shader (`u_zUnit = unitUm · e`, as the mesh), so changing it re-uploads
+  nothing. The height is the **drawn surface** (`surfaceHeight`, the
+  level-0 triangles with no-data filled, §5.6 "Pick"): the surface the
+  depth test runs against; where the field has data it is
+  `sampleHeight` within one height unit. A point outside the mesh's cell
+  centres (only beyond the sheet: H7 pads the field to the document's
+  bounds) breaks the line into runs; a run of fewer than two vertices is
+  dropped. Over `MAX_LINE_SEGMENTS` (200 000) segments for one set the
+  step doubles until it fits.
+- **The height source is a parameter** (`surface`): the default reads
+  the engine's current mesh, and a new field (H11's choice of surface)
+  is a new mesh, which re-lifts the lines (below). Nothing else in the
+  lines knows which field it is.
+- **Geometry**: one instance per segment `(p0, p1)`, a unit quad
+  expanded in the vertex shader to a screen-space **capsule** of
+  `widthPx · pxRatio` about the projected segment, one pixel wider for
+  the edge's antialiasing; the fragment shader keeps the pixels within
+  half the width of the segment (screen px, `gl_FragCoord`), so joins
+  and ends are round as the 2D `<path>`'s. The width is the 2D track's
+  4.5 CSS px, not foreshortened: the track is an overlay on the ground,
+  as it was in 2D. A segment with an end behind the eye (w ≤ 0) is not
+  drawn.
+- **Lift and depth** (`lineVertex`, the vertex shader's twin in
+  TypeScript): the ground point `(x, y, h · unitUm · e)` is raised by
+  - **`LINE_LIFT_UM` (200 model µm, 2 m at 1:10 000)**, not scaled by the
+    exaggeration, plus
+  - **its half width on screen**: as much as moves it `halfPx + ½` device
+    px on screen (the screen rise of a vertical step at the point,
+    measured through the matrix), at most `LINE_RISE_CAP` (4) times that
+    in the distance's px-equivalents (`focalPx / w`) — looking straight
+    down a rise does not move the point, and the cap keeps it bounded.
+    The capsule is centred on the raised line, so its lower edge lies on
+    the ground line and every pixel of it covers terrain at or beyond the
+    ground point: at a grazing view, where the terrain under a capsule
+    centred on the ground would be nearer than the line, it is not
+    swallowed (found on the dev cone: a far flank at 1× seen 20° above
+    the horizon lost half the line's width).
+
+  then moved towards the eye by **`LINE_DEPTH_BIAS` (0.003) of its
+  distance** — screen position unchanged, depth reduced — because coarse
+  levels of detail lie above level 0 by up to a quad's height change far
+  from the eye (§5.6 "Mesh and level of detail"), which the lifts alone do
+  not cover. On screen a tilted track is drawn up to its half width (and
+  the constant lift's few pixels) above its ground line; looking straight
+  down it is on it under the eye and moved outwards by at most that
+  elsewhere. Depth test `LEQUAL` against the mesh's depth,
+  `depthMask(false)`: lines never occlude one another or the mesh. A
+  track within the lift and bias behind a crest shows through it.
+- **Opacity once**: a line's overlapping capsules (every join) must not
+  blend twice, so each line is drawn with the stencil — cleared to 0 at
+  the pass's start, line i's reference `i + 1` — in two draws: the
+  capsules' interiors (full coverage), then their antialiased edges where
+  no interior is, both `NOTEQUAL` / `REPLACE`: a fringe pixel two capsules
+  share takes the first one's coverage, once. Blending is
+  `SRC_ALPHA, ONE_MINUS_SRC_ALPHA`. Two draws per line;
+  the mesh's draw count (≤ 7) is reported apart.
+- **Buffers**: the instance data is rebuilt only when the `lines`
+  array or the mesh changes (identity); a camera or exaggeration change
+  only sets uniforms.
+- **State**: it binds the frame's target again (the mesh's depth is
+  still in it), sets the viewport, and leaves what `TerrainRenderer`
+  leaves: depth test off and `depthFunc(LESS)`, `depthMask(true)`, blend
+  and stencil test off, `stencilMask(0xff)`, no program, vertex array,
+  buffer or framebuffer bound.
+- **Frame**: `renderer.drawTerrain(frame, target, lines?)` draws them
+  after the mesh inside the GPU timer, with the mesh's matrix (the near
+  and far planes from the mesh box), eye and focal length
+  (`TerrainDrawStats.eye`, `focalPx`); the stats carry `lines: { lines,
+  draws, segments }`.
 
 #### Shading (`shade.ts`)
 
@@ -2750,7 +2888,8 @@ shows changes** — never per camera frame:
 ```ts
 engine.setTerrain(field: HeightField | null): Promise<TerrainMesh | null>;
 engine.terrainMesh / engine.terrainField;           // for H7's pick and camera bounds
-engine.renderTerrain(frame: { camera; exaggeration; lodPx?; level? }, opts: DocumentRenderOptions, target?): TerrainFrameStats;
+engine.renderTerrain(frame: { camera; exaggeration; lodPx?; level?; lines?; pxRatio? }, opts: DocumentRenderOptions, target?): TerrainFrameStats;
+                                                    // lines: TerrainLine[] (H8, "Lines"), drawn after the mesh; stats.lines
 engine.invalidateDrape(): void;
 engine.drapeLimits(): { maxSide; maxPixels };
 engine.stats().terrain  // fieldBytes, drapeBytes, scratchBytes, layers (role, size, pxPerUm, ratio = density / need),
@@ -2803,7 +2942,7 @@ yMm)` (canvas px of the surface point) and `pick(px, py)` / `lastPick`.
 `bench=1` draws 60 frames, each synced by a one-pixel read, and reports
 the p50 / p95.
 
-`?doc=course[&field=cone|flat&x=&y=&budget=<MB>&worker=1]` (H6,
+`?doc=course[&field=cone|flat&x=&y=&budget=<MB>&worker=1][&line=x,y;x,y|…&lineColour=<hex>&lineOpacity=]` (H6,
 `pages/dev/terrainDoc.ts`) loads the course fixture document
 (`map-gl/fixtures/course-document.ts`: an aligned ISOM stack, a black
 line, a top-row line, the four-control course the dynamic-bucket tests
@@ -2815,7 +2954,10 @@ engine's `onChange` (an animation frame, or a 50 ms timer where frames
 do not run). The camera looks at (`x`, `y`) mm, `zoom` 1 fitting the
 sheet. `window.__mapTerrainDoc` publishes the last frame, the engine's
 stats, `project`, `pick`, `setCamera(…)` and `compare2d()` (the same view
-drawn by `engine.render` and compared pixel by pixel).
+drawn by `engine.render` and compared pixel by pixel). `line=` (H8)
+draws lines on the terrain through the frame's `lines` (§5.6 "Lines"):
+`|` between lines, `;` between points in paper mm, 8 px, `lineOpacity` (default 1),
+`lineColour` (default `e6194b`, published as `lineRgb`).
 
 `/dev/map-gl-doc?…&terrain=1[&pitch=60&e=2]` (H6): its "Bench" runs the
 3D scenarios on a loaded map instead of the 2D ones — "Measurements
@@ -2907,14 +3049,16 @@ Mesh frames (p50 / p95 ms) and drape re-renders:
 | Test | Covers |
 |---|---|
 | `packages/shared/src/terrain/field/__tests__/read.test.ts` | the client entry reaches no derivation module; the read side exported |
-| `map-gl/terrain/__tests__/camera.test.ts` | `mat4` (multiply, invert, perspective depth and field of view); the target → clip origin at any bearing and pitch; one `Float32Array(16)`; pitch 0 = `viewMatrix` with `rotationDeg = bearingDeg` to 1e-6; a raised point projected higher and depth monotone in distance at pitch > 0; bearing 90 looks east; near / far enclose the bounds within 10⁴; sub-pixel precision 585 mm from the origin in float32 arithmetic; `screenRay` inverts the projection |
+| `map-gl/terrain/__tests__/camera.test.ts` | `mat4` (multiply, invert, perspective depth and field of view); the target → clip origin at any bearing and pitch; one `Float32Array(16)`; pitch 0 = `viewMatrix` with `rotationDeg = bearingDeg` to 1e-6; a raised point projected higher and depth monotone in distance at pitch > 0; bearing 90 looks east; near / far enclose the bounds within 10⁴, near with 20 % headroom in front of them (H8); sub-pixel precision 585 mm from the origin in float32 arithmetic; `screenRay` inverts the projection |
 | `map-gl/terrain/__tests__/mesh.test.ts` | chunk geometry: 65² + 256 vertices, every quad covered exactly once at every level, counter-clockwise, index counts, 4 · 64 / 2^l skirt quads; `meshHeights` fills from the nearest data cell without changing the field, all no-data flat at 0; vertex placement in origin-relative µm and `zUnitUm`; a partial edge chunk clamped; `chunkLevel` (0 at the eye, monotone, capped, quad edge ≤ lodPx); culling and a straddling chunk kept, the same levels at another bearing, mixed levels when tilted; skirts close every crack between any two levels on a noise field; the 4096² budget (≤ 600 000 triangles, the numbers above as a snapshot) |
 | `map-gl/terrain/__tests__/pick.test.ts` | the analytic cone met within half a cell at pitch 0, 60 (exaggeration 1, 3) and grazing; surface point → project → `screenRay` → pick within half a cell; `heightM` = `sampleHeight` within one unit at two exaggerations; `data` false on the margin; misses |
+| `map-gl/terrain/__tests__/lines.test.ts` (H8) | `liftPolyline`: origin removed, height units above `zMin`; densified to the cell with the original points kept; every vertex on the drawn surface and `sampleHeight` within one unit; a chord across the cone's apex goes over it; the filled height on the no-data margin; broken off the mesh, single points and empty input dropped, a repeated fix skipped; another `surface` sampled (H11's seam). `lineInstances`: one instance per segment, one range per line, none across a gap, the step doubled to fit `MAX_LINE_SEGMENTS`. `lineVertex`: tilted (45°–70°, three exaggerations) the vertex projects its half width + ½ px (plus the lift) above its ground point and in front of it; the bias moves it along its ray only; looking straight down it is on its ground point under the eye and the rise capped |
 | `map-gl/terrain/__tests__/shade.test.ts` | flat = 1; sin θ + cos θ facing the light, cos θ − sin θ away, cos θ across; the clamps; exaggeration in the shader = `heightNormals(field, e)`; the colour product; the GLSL's constants |
 | `map-gl/terrain/__tests__/footprint.test.ts` (H6) | footprint → view: the screen rectangle at pitch 0, the analytic trapezoid tilted, every on-screen surface point of 40 random cameras inside the footprint and a layer, the box clip, empty when looking away; the pitch-0 layer is the 2D view grown by the margin (same pixel offsets, screen parity) at any bearing; limits never exceeded over 60 random cameras; split by need on a wide depth range — each layer at its need when the cap allows, the far one at the split depth's, fewer texels than one layer, the near one inside the far one and over the ground beyond the screen's bottom edge, every on-screen ground point at least at its need; both scaled together under the cap; one layer on a narrow depth range and at pitch 0 when capped; a tiny texel allowance terminates; at pitch 0 the texels lie on the pixels even where the screen crosses the field's edge; tiles partition the layer and draw every texel where its matrix puts it |
 | `map-gl/__tests__/worker-terrain.test.ts` (H6) | the `terrain` request's prepared mesh and normals equal `buildTerrainMesh` and `heightNormals` on a cone and a noise field, without a document; the two arrays transferred; an error names its generation |
 | `map-gl/__tests__/engine.test.ts` "terrain" (H6) | the field prepared in the worker and uploaded at the document's origin; drape before mesh, the layer's matrix = `viewMatrix` of its view, the hand-over view at pitch 0; mesh only while the camera moves, the settle timer's `onChange`, one re-render after it and none for the same camera; a content change and `invalidateDrape` re-render at once over the same layers; the layers' cells requested and drawn, detail arrivals re-render, gated per layer; the field and drape in `residentBytes`, the drape ≤ ⅓ of a small budget; `setTerrain(null)` drops both; a 2D render after a 3D frame draws the 2D view's cells; a superseded `setTerrain` rejects; arrivals held to `DRAPE_ARRIVAL_MS` and the last at once; a near layer above the gate and a far one below (detail drawn and requested for the near one's cells only, `whenComplete` on them); a load moves the mesh to the new origin and re-selects; a worker failure rejects and keeps the field and mesh; `dispose` rejects a request in flight; a camera that sees no mesh renders no drape |
 | `e2e/map-terrain.spec.ts` | on the dev page in headless Chromium: the lit cone top-down with a grey drape — facing flank, far flank and flat ground at §5.6's analytic values ± 10 levels, ≤ 7 draws; the checker at pitch 60 — two adjacent squares on flat ground in their own colours, the apex projected above its foot; a south-flank point at pitch 60 at its slope's shade for e = 2 and e = 1 (the mesh lifted by the R16I heights and the exaggeration applied in the shader — a flat mesh or an ignored e would show another value); with `drape=half`, the background colour beyond the drape, flat at full strength and on the far flank shaded; no background pixel inside the noise field's projected outline at mixed levels, and auto LOD within 2 % of level 0; a click picks the point under the cursor within 0.2 mm. H6 (`doc=course`): at pitch 0 over flat ground the 3D frame equals `engine.render`'s 2D frame (north up: max 10 levels, < 0.5 % over 2 — SwiftShader's MSAA resolve; turned 25°: < 1 % over 2); tilted 60° over the cone, the leg 31–32 purple on the flank, the map's black line, paper white on the south flank at §5.6's shade for its slope, ≤ 7 draws; moved to control 32 the old drape does not reach (no purple) and no re-render happens until the camera settles, then the course is there; close and tilted, a near layer and a coarser far one (> 1.5×), each at its need, the course from the near one, texels within a third of the budget, and a 2 MB budget's third respected |
+| `e2e/map-terrain.spec.ts` "lines on the terrain" (H8) | `doc=course&field=cone&line=…`: two opaque 8 px lines across the cone, 8 mm south and north of the apex. From above both are drawn; ≤ 7 mesh draws, 2 lines in 4 draws. 20° above the horizon at 5× the near one is drawn on its flank and the far one is hidden — no line colour where it would be, and the pick there meets the cone in front of it; at 1× the far flank faces the camera and the same line is drawn to its full width (≥ 6 of the 8 px rows in the column through it: the shader's half-width rise — centred on the ground line the terrain would swallow half). An X at half opacity on the flat field, from above: at the crossing and on a single stretch the colour is one blend of the line over the frame without it (± 8 levels; twice would be three quarters) — and on flat ground at the box's top, so it is in front of the near plane (`NEAR_HEADROOM`) |
 | `e2e/map-gl-doc.spec.ts` "terrain=1" (H6) | the 3D bench on `e2e/test.ocd` at the event budget: the field prepared in the worker, 240 frames per scenario, drape re-renders only at the start and after the pauses, ≤ 7 mesh draws, drape ≤ 10 MB |
 
 ### 5.3 PDF (shared/print)
@@ -3602,13 +3746,13 @@ what became of it:
 | `packages/web/src/map-gl/renderer.ts` | WebGL2 backend, GPU stage (arena programs and draw loop; per-pass path, stencil, supersampling; the loupe's inset target and circle composite; the drape's tiled render target and textures and the terrain program on its context, H6; GPU timer) |
 | `packages/web/src/pages/dev/MapGlFixturePage.tsx` | dev-only golden page `/dev/map-gl` |
 | `packages/web/src/pages/dev/MapGlDocPage.tsx` | dev-only whole-document page `/dev/map-gl-doc` (load report, bench) |
-| `packages/web/src/map-gl/terrain/` | the terrain (§5.6): `camera.ts` + `mat4.ts` (perspective orbit camera, rays), `mesh.ts` (chunked grid, levels, skirts, culling, no-data fill; `prepareTerrain` for the worker), `pick.ts`, `shade.ts`, `program.ts` (`TerrainRenderer`, one or two drapes), `footprint.ts` (H6: footprint, drape layers, tiles), `synthetic.ts` (dev, bench and test fields) |
+| `packages/web/src/map-gl/terrain/` | the terrain (§5.6): `camera.ts` + `mat4.ts` (perspective orbit camera, rays), `mesh.ts` (chunked grid, levels, skirts, culling, no-data fill; `prepareTerrain` for the worker), `pick.ts`, `shade.ts`, `program.ts` (`TerrainRenderer`, one or two drapes), `footprint.ts` (H6: footprint, drape layers, tiles), `lines.ts` (H8: tracks lifted onto the surface, `TerrainLines`), `synthetic.ts` (dev, bench and test fields) |
 | `packages/web/src/map-gl/fixtures/course-document.ts` | the small aligned ISOM document and course request the dynamic-bucket tests and the terrain dev page share |
-| `packages/web/src/pages/dev/MapTerrainPage.tsx`, `pages/dev/terrainDoc.ts`, `e2e/map-terrain.spec.ts` | dev-only terrain page `/dev/map-terrain` (synthetic fields; `doc=course`: the course fixture draped through the engine) and its browser test |
+| `packages/web/src/pages/dev/MapTerrainPage.tsx`, `pages/dev/terrainDoc.ts`, `e2e/map-terrain.spec.ts` | dev-only terrain page `/dev/map-terrain` (synthetic fields; `doc=course`: the course fixture draped through the engine; `line=`: lines on the terrain, H8) and its browser test |
 | `e2e/__golden__/map-gl/`, `e2e/map-gl-golden.spec.ts` | committed goldens and the browser comparison |
 | `e2e/map-gl-doc.spec.ts` | whole-document pipeline on `e2e/test.ocd`: arena path, worker, eviction, arena = per-pass path |
 | `scripts/measure-gl.mjs` | corpus measurements through `/dev/map-gl-doc` (§5.2 Measurements; `--terrain`: §5.6 "Measurements (H6)") |
-| `packages/web/src/components/VectorMapLayer.tsx` | the vector base layer in `MapViewer` (§5.4): canvas, engine and worker lifecycle, status; the course layer request and its replies; the editor's loupe; Map mode's document objects (`mapObjects`, G5); the 3D frame (`heightField`, `terrain`, H7) |
+| `packages/web/src/components/VectorMapLayer.tsx` | the vector base layer in `MapViewer` (§5.4): canvas, engine and worker lifecycle, status; the course layer request and its replies; the editor's loupe; Map mode's document objects (`mapObjects`, G5); the 3D frame (`heightField`, `terrain`, H7; `terrainLines`, H8) |
 | `packages/web/src/lib/course-layer-request.ts` | the viewer's course-layer input (§5.4 "Overlay", `course-layer.md` §5) |
 | `packages/web/src/components/MapViewer.tsx` | the host: viewport state, gestures, the SVG UI layer, editor hit-testing; the 3D mode's state and the projected UI layer (H7) |
 | `packages/web/src/components/Map3d.tsx`, `lib/map-3d.ts`, `lib/map-3d-field.ts`, `hooks/useHeightField.ts` | the 3D mode (§5.4 "3D mode", H7): toggle, exaggeration, notice and pointer surface; offer, camera, projector and gesture reducer; the field padded and coarsened; the field's loader |
@@ -3765,9 +3909,11 @@ The shared module is exported as a namespace: `import { render } from
   off the main thread now, but still 0.2–0.6 s of worker time on a
   corpus map ("Measurements (H6)"), during which the worker prepares no
   cells.
-- **§5.4 3D mode — GPS tracks and replay on the terrain** (H8): until
-  then `gpsRoutes` are SVG polylines through the projector, not lifted and
-  not depth-tested.
+- **§5.4 3D mode — replay on the terrain** (H8, answer 2026-11-15): no
+  replay view exists in the web app (`tracks.getClassRoutes` has no
+  caller), so H8 draws `gpsRoutes` only. A replay's tails would be
+  `TerrainLine`s through the same `terrainLines` prop (§5.6 "Lines"),
+  re-cut per time step.
 - **§5.4 3D mode — the surface choice** (H11): the viewer draws the
   `contours` field; the DEM's ground surface and its attribution are H11's.
 - **§5.4 3D mode — UI markers behind the terrain**: no occlusion test; a
