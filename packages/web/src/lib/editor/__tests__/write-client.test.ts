@@ -26,6 +26,12 @@ function fakeClient() {
       delete: { mutate: vi.fn(respond("objDelete")) },
     },
     mapPatch: { applyChange: { mutate: vi.fn(respond("patchApply")) }, setEnabled: { mutate: vi.fn(respond("patchEnabled")) } },
+    mapTrack: {
+      import: { mutate: vi.fn(respond("trackImport")) },
+      update: { mutate: vi.fn(respond("trackUpdate")) },
+      remove: { mutate: vi.fn(respond("trackRemove")) },
+      markConverted: { mutate: vi.fn(respond("trackConverted")) },
+    },
   } as unknown as EditorClient;
   return { client, calls, fail: (e: unknown) => queue.push(() => { throw e; }), ok: (v: unknown) => queue.push(() => v) };
 }
@@ -190,6 +196,32 @@ describe("EditorWrites (docs/course-editor.md §3)", () => {
     f.fail(new Error("PATCH_STALE: the patch is keyed to another document"));
     await expect(w.applyPatchChange("ab".repeat(32), { remove: ["hide:4"] })).rejects.toThrow(/PATCH_STALE/);
     expect(f.calls).toHaveLength(3);
+  });
+
+  it("GPS track writes pass their input through and return the reply; a refusal propagates (docs/map-gps-tracks.md §5.1)", async () => {
+    const f = fakeClient();
+    const w = new EditorWrites(f.client);
+    const points = { lat: [1, 2], lng: [3, 4], time: null, ele: null };
+    f.ok({ tracks: [{ id: "t1" }] });
+    expect(await w.importTracks([{ name: "A", sourceName: "a.gpx", points }])).toEqual({ tracks: [{ id: "t1" }] });
+    expect(f.calls[0]).toEqual({ proc: "trackImport", input: { tracks: [{ name: "A", sourceName: "a.gpx", points }] } });
+    f.ok({ id: "t1", name: "B" });
+    await w.updateTrack({ id: "t1", name: "B" });
+    expect(f.calls[1]).toEqual({ proc: "trackUpdate", input: { id: "t1", name: "B" } });
+    f.ok({ removed: 1 });
+    expect(await w.removeTracks(["t1"])).toEqual({ removed: 1 });
+    expect(f.calls[2]).toEqual({ proc: "trackRemove", input: { ids: ["t1"] } });
+    f.ok({ tracks: [] });
+    await w.markTracksConverted([{ id: "t1", opId: null }]);
+    expect(f.calls[3]).toEqual({ proc: "trackConverted", input: { marks: [{ id: "t1", opId: null }] } });
+    f.fail(new Error("TRACK_LIMIT: the event would hold more than 200 tracks"));
+    await expect(w.importTracks([{ name: null, sourceName: "b.gpx", points }])).rejects.toThrow(/TRACK_LIMIT/);
+  });
+
+  it("without a mapTrack client the track writes refuse", async () => {
+    const f = fakeClient();
+    const w = new EditorWrites({ ...f.client, mapTrack: undefined });
+    expect(() => w.removeTracks(["t1"])).toThrow(/not available/);
   });
 
   it("without a mapPatch client the patch writes refuse", async () => {

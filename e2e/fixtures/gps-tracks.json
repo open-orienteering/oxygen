@@ -1,0 +1,60 @@
+{
+  "source": "e2e/test.ocd",
+  "mapScale": 7500,
+  "tracks": [
+    {
+      "name": "E2E inside",
+      "points": 5,
+      "lengthM": 375,
+      "outside": 0,
+      "mm": [
+        [
+          -15,
+          10
+        ],
+        [
+          -15,
+          0
+        ],
+        [
+          -15,
+          -10.001
+        ],
+        [
+          0,
+          -9.999
+        ],
+        [
+          15,
+          -10.001
+        ]
+      ],
+      "recordedAt": 1768642200000
+    },
+    {
+      "name": "E2E outside",
+      "points": 4,
+      "lengthM": 675,
+      "outside": 2,
+      "mm": [
+        [
+          36,
+          20
+        ],
+        [
+          66,
+          20
+        ],
+        [
+          96,
+          20
+        ],
+        [
+          126,
+          20
+        ]
+      ],
+      "recordedAt": null
+    }
+  ]
+}
