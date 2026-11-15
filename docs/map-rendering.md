@@ -1955,7 +1955,7 @@ Research 10 §5 step 3, §8; slice H answers 6 and 7.
    (decision 5), so field + drape stay within two thirds.
 
 **Decided with the user (H11, 2026-11-15)** — choosing the surface; the
-full rules land with H11's implementation below.
+rules are in "Surface (H11)" below.
 
 4. **"The map's terrain" when a DEM is ready**: the viewer draws the
    **DEM-anchored contour field** (`terrain.dem.anchored`,
@@ -1983,16 +1983,19 @@ previews, the dashboard and the Tracks page. A viewer with
 `hideControls` has no buttons, so no toggle either.
 
 **The offer** (`terrain3dOffer(terrain, host)`, `lib/map-3d.ts`) reads
-`course.mapMetadata.terrain` (`docs/map-storage.md` §4.7 "Descriptor"),
-the `contours` field — the DEM's (`terrain.dem`) is H11's choice:
+`course.mapMetadata.terrain` (`docs/map-storage.md` §4.7 "Descriptor")
+through `terrain3dSurfaces(terrain)` ("Surface (H11)" below): the map's
+terrain first, else ground. Without a ready DEM (`terrain.dem` absent,
+or any state but `ready`) there is no ground and the table is H7's:
 
 | Descriptor | Toggle (`map-3d-toggle`) | Reason (`data-terrain-reason`) |
 |---|---|---|
-| null, `none` | not shown | `no-contours` |
-| `over-cap` | shown, unavailable | `over-cap` |
-| `ready`, `decided` < `TERRAIN_3D_MIN_DECIDED` (0.8) | shown, unavailable | `low-confidence` (the floored percent, as the review's line) |
+| null, `none`; no ground | not shown | `no-contours` |
+| `over-cap`; no ground | shown, unavailable | `over-cap` |
+| `ready`, `decided` < `TERRAIN_3D_MIN_DECIDED` (0.8) on the field drawn (decision 4); no ground | shown, unavailable | `low-confidence` (the floored percent of the plain field, as the review's line) |
 | `pending` | shown | — (the click fetches, which derives; the descriptor is read again and the gate applied) |
-| `ready`, `decided` ≥ 0.8 | shown | — |
+| `ready`, `decided` ≥ 0.8 on the field drawn | shown | — |
+| the map's terrain unavailable, ground ready (decision 6) | shown | — (3D opens on ground) |
 
 An unavailable toggle is `aria-disabled`; a click shows the reason
 (`map-3d-notice`) and stays in 2D. A `pending` document is not derived
@@ -2008,22 +2011,25 @@ names the reason in `map-3d-notice` for a few seconds:
 | `unavailable` | the field cannot be had: offline and not stored, 401 / 403, another 404, 503, unreadable bytes |
 | `webgl` | `engine.setTerrain` rejects (a field over the texture limit, a lost context) |
 | `unavailable` | after a `pending` fetch, the descriptor read again is still `pending` or the read fails |
+| `ground-unavailable` | ground cannot be had (any error above) where the map's terrain can: 3D stays, on the map's terrain (H11) |
 
 **Field** (`hooks/useHeightField.ts`): `loadHeightField(url, opts)` fetches
 the descriptor's `url` as given (`/api/map-documents/:hash/height.bin?v=`,
-`?source=` for H11) through `venueAwareFetch` with the document's headers
+with `&source=ground.<p>` / `&source=contours.<p>` for the DEM's fields)
+through `venueAwareFetch` with the document's headers
 (`x-event-id`, `x-kiosk-key`), decodes it with `decodeHeightField` from
 the field's client entry, and keeps it like the document (§5.4 "Host"):
-one request per URL shared by concurrent callers, two decoded fields in
-memory, a copy in Cache Storage `map-heightfields` under the full URL
+one request per URL shared by concurrent callers, **three** decoded
+fields in memory (`FIELD_MEMORY_ENTRIES`: a document's plain, anchored
+and ground fields, so a surface switch asks nothing again, H11), a copy in Cache Storage `map-heightfields` under the full URL
 (app-written; the service worker has no route for it) that serves it
 offline, failures not cached. `useHeightField(url, eventId)` asks only
 while `url` is non-null — the viewer sets it on the first switch to 3D —
 and returns `{ state: idle | loading | ready | error (kind), retry }`.
 `viewerField(field, boundsMm, budgetBytes, maxTextureSize)`
 (`lib/map-3d-field.ts`) pads and coarsens it (answers 2 and 3), on the
-main thread, once per field, budget and texture limit (kept for a
-re-entry).
+main thread, once per field, budget and texture limit (kept per URL,
+as many as the memory entries, for a re-entry and a surface switch).
 
 **State.** The 2D state stays the state: `PaperViewport` (centre, zoom)
 and `userBearing`, plus `pitchDeg`. Zoom buttons, fit, GPS follow, the
@@ -2125,8 +2131,8 @@ were (`data-testid="gps-route"`).
   CSS colour, which no caller passes, falls back to the single-track red
   `#e6194b`), opacity 0.8, width 4.5 CSS px — the 2D path's.
 - Height: the surface the frame draws (`surfaceHeight` of the engine's
-  mesh — the `contours` field today; whatever field the engine holds
-  once H11 chooses the surface).
+  mesh — whichever field "Surface (H11)" chose; a switch is a new mesh,
+  which re-lifts the lines).
 - `VectorMapLayer` passes them with the frame (`renderTerrain({ …, lines,
   pxRatio })`); a new array is one redraw and one re-upload, a camera
   change neither. The canvas carries `data-terrain-lines` (the lines the
@@ -2146,10 +2152,64 @@ Decided with the user (H8, 2026-11-15):
 2. **No replay view is built**: none exists ("replay tails" in the row);
    H8 draws `gpsRoutes`, and §8 records where a replay's tails would go.
 
+**Surface (H11).** Decisions 4–6 above; research 10 §1 (two surfaces),
+§3 (attribution); blending them is later (§8).
+
+`terrain3dSurfaces(terrain)` (`lib/map-3d.ts`, pure) reads the
+descriptor's `dem` block (`docs/map-storage.md` §4.7; `DemDescriptorLike`)
+into two surfaces:
+
+| Surface | Field | When |
+|---|---|---|
+| the map's terrain (`map`) | `terrain.dem.anchored.url` (`contours.<p>`) | `dem.state` `ready` and `anchored.decided` ≥ 0.8 (decision 4) |
+| | `terrain.url` (`contours`) | otherwise, by H7's table (`pending` derives on the fetch) |
+| | — (`none` / `unavailable` with the reason and the plain field's percent) | H7's rows that offer nothing |
+| ground (`ground`) | `terrain.dem.ground.url` (`ground.<p>`) | `dem.state` `ready` with a provider; else none |
+
+- **Default** (`defaultSurface(surfaces, tracksShown)`): ground when it
+  exists and either GPS routes are shown (`gpsRoutes` non-empty; the GPS
+  dot alone does not count) or the map's terrain is not available
+  (decisions 5, 6); otherwise the map's terrain.
+- **The choice** (`map-3d-surface-choice`, in `Map3dToggle` while 3D is
+  drawn, above the exaggeration control): two buttons,
+  `map-3d-source-map` "Map terrain" / "Kartans terräng" and
+  `map-3d-source-ground` "Ground" / "Mark" — "Ground (30 m)" / "Mark
+  (30 m)" for a `coarse` provider (answer 13) — with `aria-pressed`;
+  shown only where ground exists and the map's terrain is not `none`. A
+  map's terrain below the gate is `aria-disabled` and its title names the
+  reason and percent (decision 6). The choice holds for the mount, across
+  re-entries, until the tracks come or go (the default changes with
+  them); it is not remembered, as the mode is not.
+- **Switching** stays in 3D: the fitted field drawn stays the layer's
+  `heightField` while the other loads (the engine keeps its mesh until
+  the new one is in, §5.6), every field handed to the layer counts as 3D
+  (`in3d`) while its mesh is drawn, and centre, zoom, bearing, pitch and
+  exaggeration are the 2D state's, so they are unchanged. The camera's
+  `targetZ` follows the new mesh. Switching back asks nothing (three
+  fields in memory, fitted per URL).
+- **Ground that cannot be had** (any `useHeightField` error) where the
+  map's terrain can: the choice goes back to the map's terrain and
+  `map-3d-notice` says `ground-unavailable`; 3D stays. Where ground was
+  the only surface it is H7's fallback (2D, `unavailable`).
+- **A pending DEM** (`dem.state` `pending`): no ground; entering 3D asks
+  `dem.ground.url` once in the background, which queues the job for a
+  document imported before H10 (the route's 503, `docs/map-storage.md`
+  §4.7). The descriptor is not read again for it (§8).
+- **Attribution** (answer 16): while the drawn field is DEM-based — its
+  header's `source` is not `contours`, i.e. ground or the anchored field
+  — `map-dem-attribution` shows the header's `provider.attribution` and
+  `provider.licence` ("Elevation data © Lantmäteriet, CC BY 4.0" /
+  "Höjddata © Lantmäteriet, CC BY 4.0") in the map's bottom-left corner
+  (`fieldAttribution(header)`). It is read from the field drawn, not the
+  descriptor: the notice travels with the bytes (offline too). 2D, the
+  kiosk, the editor and print draw no DEM-based field, so they show none.
+
 **Attributes.** `map-viewer` adds `data-view-mode` (`2d` / `3d`),
-`data-pitch`, `data-exaggeration` (3D only) and `data-terrain-reason`
+`data-pitch`, `data-exaggeration` (3D only), `data-terrain-reason`
 (the last fallback's reason until 3D is asked for again, else the
-offer's). `data-rotation` stays the GL
+offer's), and in 3D `data-surface` (`map` / `ground`, of the field drawn)
+and `data-surface-source` (its header's `source`: `contours`,
+`contours.<p>`, `ground.<p>`; H11). `data-rotation` stays the GL
 view's angle in both modes.
 
 #### Call sites
@@ -2184,6 +2244,9 @@ mounts it only with a pinned document.
 | `lib/__tests__/map-3d.test.ts` (H7) | the offer table (hidden, unavailable with the floored percent, pending, available; editor and kiosk hidden); exaggeration clamp; the camera at pitch 0 = `viewMatrix` on the target's plane (50 random views, DPRs, bearings); `targetZ` mid-height; the projector at pitch 0 on flat ground = `mmToInner` + the CSS rotation < 0.5 px (200 random views); tilted over a cone, project → unproject within a cell; the ground affine a rotation at pitch 0, foreshortened by cos(pitch) along the view tilted; null behind the eye; pan and wheel zoom keep the ground point under the pointer < 0.5 px (flat and tilted); zoom limits; orbit rates and pitch clamp; two-finger classification (tilt, pinch by distance, angle, midpoint, null in the slop); the reducer: one-finger pan and the page-scrolling finger, orbit drag, wheel, pinch ×2, twist from its activation without a jump, tilt, two → one finger; bearing ↔ user bearing |
 | `lib/__tests__/map-3d-field.test.ts` (H7) | padding by whole no-data cells on the grid to the bounds, `sampleHeight` unchanged inside, no copy when covered; coarsening means, the more-than-half no-data rule, confidence by majority, the corner kept; the smallest factor; a club budget pads only, an event map's coarsens by 2, a 1024-texel device |
 | `hooks/__tests__/useHeightField.test.ts` (H7) | the descriptor's URL with `x-event-id` / `x-kiosk-key`, decoded; one request shared, the field kept; the Cache Storage copy serves offline and replaces the document's other versions of the same source; 403 / 404 with `reason` / 503 / 500 / unreadable / offline classified, failures not kept |
+| `lib/__tests__/map-3d.test.ts` "terrain3dSurfaces" (H11) | no ground for every `dem` state but `ready` (and an absent or null `dem`), H7's offer then; ground when ready; the anchored field as the map's terrain at ≥ 0.8, the plain one below it or with no decided share, the plain percent when both are below; ground opens 3D below the gate and the gate holds without it; pending, `none`, `over-cap` as H7; the default (ground with tracks, or alone); `surfaceOfSource`; `fieldAttribution` (none for `contours`, the provider's for `contours.<p>` and `ground.<p>`) |
+| `hooks/__tests__/useHeightField.test.ts` "three sources" (H11) | a document's `contours`, `contours.<p>` and `ground.<p>` kept side by side in memory and in Cache Storage; switching between them asks nothing again |
+| `e2e/map-viewer-3d.spec.ts` (H11) | the descriptor's `dem` rewritten to `ready`, the DEM fields answered from the real `contours` field (`helpers/dem-field.ts`: the same grid, a DEM `source` and provider, ridges for ground): 3D opens on the anchored field with "© Lantmäteriet" and "CC BY 4.0" shown; ground is one request with `x-event-id`, changes the pixels, never passes through 2D (a `MutationObserver` on `data-view-mode`), keeps centre, zoom, pitch, bearing and exaggeration; back to the map's terrain asks nothing; 2D shows no attribution; no DEM (the stack's): no choice, no attribution; ground below the contour gate opens 3D, the map's terrain `aria-disabled` with 80 % / 50 %; ground aborted: `ground-unavailable`, still 3D on the plain field, which shows no attribution; on the Tracks page with a track shown 3D opens on ground with the track drawn (`data-terrain-lines="1"`), and the map's terrain on request re-lifts it |
 | `e2e/map-viewer-3d.spec.ts` (H7) | the seed map (no contours): no toggle, `data-terrain-reason="no-contours"`; the demo map imported and pinned: one `height.bin?v=` request with `x-event-id`, `data-view-mode="3d"`, canvas `data-mode="3d"` and `data-terrain-ready`, pitch 45, exaggeration 2, the frame differs from 2D and carries the map's ink, measure hidden; a right-drag raises the pitch and turns the bearing, the compass resets it; a right-drag and a wheel that start on a control's ring of the UI layer orbit and zoom the 3D view (not the 2D handlers); exaggeration 5 changes the frame; two CDP touches moving up raise the pitch; back to 2D the frame equals the 2D one (< 0.5 % of pixels), re-entry asks for neither field nor document; a followed GPS fix on the screen's vertical centre line; the descriptor rewritten below the gate (79.6 %): the toggle `unavailable`, `aria-disabled`, its title the reason, a click shows `low-confidence` and stays 2D; the descriptor first `pending`: the switch fetches, the descriptor is read again and 3D is drawn; an aborted field: `map-3d-notice` `unavailable`, 2D drawn; **a GPS track (H8)**: a route inserted for `itest` (`e2e/helpers/gps-route.ts`) expanded on the Tracks page in the wide screen's pane — in 2D one SVG `gps-route` and no `data-terrain-lines`; in 3D `data-terrain-lines="1"`, no SVG path, the canvas route-red on or just above > 70 % of the mirror's projected points and > 300 route-red pixels, collapsing the row leaves under a tenth of them in the same view; back in 2D the SVG path. `MAP_3D_SHOT=1` writes `docs/screenshots/map-3d.png` and `map-3d-track.png` (the latter cropped and reduced to 256 colours for the docs) |
 
 ### 5.5 Editor
@@ -3936,8 +3999,19 @@ The shared module is exported as a namespace: `import { render } from
   caller), so H8 draws `gpsRoutes` only. A replay's tails would be
   `TerrainLine`s through the same `terrainLines` prop (§5.6 "Lines"),
   re-cut per time step.
-- **§5.4 3D mode — the surface choice** (H11): the viewer draws the
-  `contours` field; the DEM's ground surface and its attribution are H11's.
+- **§5.4 3D mode — blending the two surfaces** (research 10 §3, later):
+  the viewer draws one field, the map's terrain or ground; a blend (the
+  map's micro-relief on the DEM's absolute ground) is not built.
+- **§5.4 3D mode — a DEM that finishes during a session** (H11): the
+  descriptor is read once per mount (`course.mapMetadata`, `staleTime:
+  Infinity`), so ground offered by a job that ends while the viewer is
+  open appears at the next read (a reload, an event switch). A pending
+  DEM's ground is asked for once on entering 3D, which only queues the
+  job.
+- **§5.4 3D mode — the review's 3D line and the DEM** (H11): the import
+  review's terrain line (`MapReviewPage`) still says "3D needs 80 %" from
+  the plain field; with an anchored field over the gate, or ground
+  (decisions 4 and 6), the viewer offers 3D the line does not mention.
 - **§5.4 3D mode — UI markers behind the terrain**: no occlusion test; a
   ring or the GPS dot behind a hill is drawn over it. A depth read-back
   or a CPU line-of-sight per marker (`pickTerrain` from the eye) would

@@ -1424,9 +1424,10 @@ grid is open data under CC0; its height data is CC BY 4.0 and needs the
 attribution. The licence and the attribution are in the header's
 `provider` block of both stored fields (§5.1), so they travel with the
 bytes, and in the descriptor (`docs/map-storage.md` §4.7). **Showing**
-it to the user (answer 16's "shows") is the viewer's, with the DEM
-surface: H11's row carries it, since H10 changes no client. Nothing draws
-a DEM surface before H11.
+it to the user (answer 16's "shows") is the viewer's: whenever its 3D
+mode draws a DEM-based field — ground, or the anchored contour field —
+it shows the drawn field's `provider.attribution` and `licence` on the
+map (`docs/map-rendering.md` §5.4 "3D mode" "Surface (H11)").
 
 **Fetching is opt-in** (§7.0 answer 4). `MAP_DEM_PROVIDERS` is a comma
 list of `lantmateriet`, `glo30`; empty or unset is none, so tests, the E2E
@@ -1655,5 +1656,3 @@ machine shared with other sessions:
   and for a document without contours (no field grid to resample onto);
   other national 1 m models (answer 13); blending the two surfaces
   (10 §3, later); a geoid conversion for GLO-30's EGM2008 heights.
-- §7: the viewer's choice of surface and the attribution shown with it
-  (H11).
