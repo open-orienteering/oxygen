@@ -1,6 +1,7 @@
 /**
- * Map mode (docs/course-editor.md §13, row G6): the event's map corrections in the editor — select, hide, move,
- * undo, the course overprint hidden, *Apply corrections*, and the patch kept across a reload. The fixture is the
+ * Map mode (docs/course-editor.md §13, rows G6, G7): the event's map corrections in the editor — select, hide, move,
+ * undo, the course overprint hidden, *Apply corrections*, the patch kept across a reload, and the nodes tool `N`
+ * (drag, insert, delete, undo; §13 "Nodes"). The fixture is the
  * seed's `itest` event with `e2e/test.ocd` pinned; every op is removed in `finally` (AGENTS.md §12), so no reseed.
  *
  * The target is a black line with no other black ink within 1 mm across it (the fixture draws its lines over a
@@ -8,7 +9,7 @@
  * (`mapObjectsAt`): the only point or line object within 0.5 mm, so hiding it leaves no black there.
  */
 import { expect, test, type Page, type Request } from "@playwright/test";
-import { EDITOR_EVENT, editorReady, inkedAt, openEditor, paperToPageOf, sites, toPage, toPaper, trpcCall, viewSettled } from "./helpers/editor";
+import { EDITOR_EVENT, editorReady, inkedAt, openEditor, paperToPageOf, sites, toPage, toPaper, toolShapes, trpcCall, viewSettled } from "./helpers/editor";
 import { mapObjectsAt } from "./helpers/event-map-pin";
 import { trpcProcedures, waitForTrpc } from "./helpers/trpc";
 
@@ -121,8 +122,9 @@ test.describe("Map mode (docs/course-editor.md §13)", () => {
     await expect(page.getByTestId("editor-page")).toHaveAttribute("data-mode", "map");
     await expect(page).toHaveURL(/[?&]mode=map(&|$)/);
     await expect(page.getByTestId("editor-mode-map")).toHaveAttribute("aria-pressed", "true");
-    // The rail is V alone; Course mode's tool keys arm nothing; a click on a control selects no control.
-    await expect(page.getByTestId("editor-tool-V")).toBeVisible();
+    // The rail is V and N (V armed); Course mode's tool keys arm nothing; a click on a control selects no control.
+    await expect(page.getByTestId("editor-tool-V")).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByTestId("editor-tool-N")).toHaveAttribute("aria-pressed", "false");
     await expect(page.getByTestId("editor-tool-K")).toHaveCount(0);
     await expect(page.getByTestId("editor-inspector-map-object")).toBeVisible();
     await expect(page.getByTestId("editor-map-object-none")).toBeVisible();
@@ -248,6 +250,126 @@ test.describe("Map mode (docs/course-editor.md §13)", () => {
       await correction(page, `modify:${sourceIndex}`).getByTestId("editor-correction-revert").click();
       await expect(page.getByTestId("editor-corrections-none")).toBeVisible();
       await expect.poll(async () => Object.keys((await trpcCall<Delivery>("mapPatch.get", undefined, false)).patch?.ops ?? {}), { timeout: 10_000 }).toEqual([]);
+    } finally {
+      await clearPatch();
+    }
+  });
+
+  test("nodes (N): drag a node, live and written once; undo; insert on an edge; delete it; undo both", async ({ page }) => {
+    test.setTimeout(240_000);
+    try {
+      await openEditor(page, "?mode=map");
+      const canvas = page.getByTestId("map-vector-layer");
+      await expect(canvas).toHaveAttribute("data-patch-version", /.+/, { timeout: 30_000 });
+      await page.keyboard.press("h");
+      await zoomTo(page, 16);
+      const { at, sourceIndex } = await findLine(page);
+      const ref = `source:${sourceIndex}`;
+      const opsNow = async () => Object.keys((await trpcCall<Delivery>("mapPatch.get", undefined, false)).patch?.ops ?? {});
+      const writes = countWrites(page);
+      const p = await toPage(page, at);
+      await page.mouse.click(p.x, p.y);
+      await expect(mapObject(page)).toHaveAttribute("data-ref", ref);
+
+      // N: the selected line's nodes, the gestures' hint; V is no longer armed.
+      await page.keyboard.press("n");
+      await expect(page.getByTestId("editor-tool-N")).toHaveAttribute("aria-pressed", "true");
+      await expect(page.getByTestId("editor-tool-V")).toHaveAttribute("aria-pressed", "false");
+      await expect(page.getByTestId("editor-map-nodes-hint")).toBeVisible();
+      const nodes = () => toolShapes(page, "editor-map-node");
+      await expect.poll(async () => (await nodes()).length).toBeGreaterThanOrEqual(2);
+      const before = await nodes();
+      const grips = await toolShapes(page, "editor-map-node-grip");
+      const r = await freeRegion(page);
+      const inView = async (q: Pt) => { const s = await toPage(page, q); return s.x > r.x0 && s.x < r.x1 && s.y > r.y0 && s.y < r.y1; };
+
+      // Drag the node nearest the line's dark pixel 0.8 mm to where there is no ink (one of four directions).
+      const visible: typeof before = [];
+      for (const n of before) if (await inView(n)) visible.push(n);
+      expect(visible.length, "a node in view").toBeGreaterThan(0);
+      visible.sort((u, w) => Math.hypot(u.x - at.x, u.y - at.y) - Math.hypot(w.x - at.x, w.y - at.y));
+      const node = visible[0];
+      let target: Pt | null = null;
+      for (const d of [{ x: 0, y: 0.8 }, { x: 0, y: -0.8 }, { x: 0.8, y: 0 }, { x: -0.8, y: 0 }]) {
+        const q = { x: node.x + d.x, y: node.y + d.y };
+        if ((await inView(q)) && !(await darkAt(page, q))) { target = q; break; }
+      }
+      expect(target, "an inkless spot 0.8 mm from the node").not.toBeNull();
+      const from = await toPage(page, node), to = await toPage(page, target!);
+      await page.mouse.move(from.x, from.y);
+      await page.mouse.down();
+      await page.mouse.move(to.x, to.y, { steps: 8 });
+      // Live: the line is drawn through the dragged node from the draft before anything is written.
+      await expect.poll(() => darkAt(page, target!), { timeout: 15_000 }).toBe(true);
+      expect(writes.n).toBe(0);
+      const dragged = waitForTrpc(page, "mapPatch.applyChange");
+      await page.mouse.up();
+      const written = (await (await dragged).json()) as { result: { data: { version: string } } }[] | { result: { data: { version: string } } };
+      const version = (Array.isArray(written) ? written[0] : written).result.data.version;
+      await expect(correction(page, `modify:${sourceIndex}`)).toBeVisible();
+      await expect(canvas).toHaveAttribute("data-patch-version", version, { timeout: 15_000 });
+      expect(await opsNow()).toEqual([`modify:${sourceIndex}`]);
+      const moved = (await nodes()).find((n) => n.data.ring === node.data.ring && n.data.index === node.data.index)!;
+      expect(Math.hypot(moved.x - target!.x, moved.y - target!.y)).toBeLessThan(0.1);
+      expect(moved.data.focused).toBe("true");
+      await expect.poll(() => darkAt(page, target!), { timeout: 15_000 }).toBe(true);
+      expect(writes.n).toBe(1);
+
+      // Undo: no ops, the node back where it was.
+      await page.keyboard.press("Control+z");
+      await expect(page.getByTestId("editor-corrections-none")).toBeVisible();
+      await expect.poll(async () => {
+        const n = (await nodes()).find((x) => x.data.ring === node.data.ring && x.data.index === node.data.index)!;
+        return Math.hypot(n.x - node.x, n.y - node.y) < 0.01;
+      }, { timeout: 15_000 }).toBe(true);
+      expect(writes.n).toBe(2);
+
+      // Insert: a double-click on the middle of a straight edge (no grip on either side) adds a node there, focused.
+      const curvedOut = new Set(grips.filter((g) => g.data.which === "out").map((g) => `${g.data.ring}:${g.data.index}`));
+      const curvedIn = new Set(grips.filter((g) => g.data.which === "in").map((g) => `${g.data.ring}:${g.data.index}`));
+      let mid: Pt | null = null, after = -1;
+      for (let i = 0; i + 1 < before.length && !mid; i++) {
+        const a = before[i], b = before[i + 1];
+        if (a.data.ring !== b.data.ring || curvedOut.has(`${a.data.ring}:${a.data.index}`) || curvedIn.has(`${b.data.ring}:${b.data.index}`)) continue;
+        const m = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+        if (Math.hypot(b.x - a.x, b.y - a.y) >= 1.5 && (await inView(m))) { mid = m; after = Number(a.data.index); }
+      }
+      expect(mid, "a straight edge of 1.5 mm or more in view").not.toBeNull();
+      const mp = await toPage(page, mid!);
+      const inserted = waitForTrpc(page, "mapPatch.applyChange");
+      await page.mouse.dblclick(mp.x, mp.y);
+      await inserted;
+      await expect.poll(async () => (await nodes()).length, { timeout: 15_000 }).toBe(before.length + 1);
+      const focused = (await nodes()).filter((n) => n.data.focused === "true");
+      expect(focused.map((n) => Number(n.data.index))).toEqual([after + 1]);
+      expect(Math.hypot(focused[0].x - mid!.x, focused[0].y - mid!.y)).toBeLessThan(0.1);
+      expect(await opsNow()).toEqual([`modify:${sourceIndex}`]);
+      await expect(mapObject(page)).toHaveAttribute("data-ref", ref);
+      expect(writes.n).toBe(3);
+
+      // Delete removes the focused node (the object stays, not hidden).
+      const deleted = waitForTrpc(page, "mapPatch.applyChange");
+      await page.keyboard.press("Delete");
+      await deleted;
+      await expect.poll(async () => (await nodes()).length, { timeout: 15_000 }).toBe(before.length);
+      await expect(mapObject(page)).toHaveAttribute("data-hidden", "false");
+      expect(await opsNow()).toEqual([`modify:${sourceIndex}`]);
+      expect(writes.n).toBe(4);
+
+      // Undo twice: the inserted node back, then the document's line with no ops.
+      await page.keyboard.press("Control+z");
+      await expect.poll(async () => (await nodes()).length, { timeout: 15_000 }).toBe(before.length + 1);
+      await page.keyboard.press("Control+z");
+      await expect(page.getByTestId("editor-corrections-none")).toBeVisible();
+      await expect.poll(async () => (await nodes()).length, { timeout: 15_000 }).toBe(before.length);
+      expect(await opsNow()).toEqual([]);
+      expect(writes.n).toBe(6);
+
+      // Undo dropped the focus, so Escape takes N back to V: no nodes drawn, the line still selected.
+      await page.keyboard.press("Escape");
+      await expect(page.getByTestId("editor-tool-V")).toHaveAttribute("aria-pressed", "true");
+      await expect(page.getByTestId("editor-tool-layer").getByTestId("editor-map-node")).toHaveCount(0);
+      await expect(mapObject(page)).toHaveAttribute("data-ref", ref);
     } finally {
       await clearPatch();
     }
