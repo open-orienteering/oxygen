@@ -1784,6 +1784,113 @@ claims `K`; All variations is read-only, labelled by number when the variants nu
 the keys of the structure being edited; the course picker lists roots;
 group ids `v<n>`, new labels the next free capital.
 
+## 13. Map mode
+
+Map mode (08 §5.2–§5.3, the Map column; row G6) edits the event's map
+corrections: the **patch** (`map-patches.md`) over the pinned document.
+The document itself never changes. G6 is the shell with select, hide and
+move; nodes are G7's, drawing and change symbol G9's, join / split / holes
+G10's, unresolved ops G11's, promote G12's.
+
+**Entering it.** `mode=map` (§1 "URL", always written); the mode group's
+fourth entry `editor-mode-map` (`IconModeMap`, a map sheet with a pencil);
+desktop only — the phone's mode switch omits it and `mode=map` on a phone
+opens Field and leaves the URL, as `mode=layout` does (08 §5.5). Entering
+it drops the tool, phantom, the control, multi and course-object selections
+(as Layout does); the course stays selected and drawn. **Course edits are
+locked**: the viewer gets Map mode's own editor props (`modes/MapMode.tsx`
+`useMapMode`, shaped like `useLayoutMode`): no control drag, label drag,
+leg click or map click, and an `exclusive` binding, so a click on a control
+selects no control; the rail is `V` alone (`editor-tool-rail`,
+`editor-tool-V`); `S` `K` `M` `X` `C` `A` `T` `G` do nothing. Undo / redo
+are the page's (one stack across modes, §3). Without a pinned document the
+mode opens and its inspector says so (`editor-map-none`). Without
+`courses.edit` (`mapPatch` writes need it, `map-patches.md` §3.2) it is
+view-only: select, locate, `H`, `F`; no hide, move, revert or toggle.
+
+**Gestures and keys** (the binding is `tools/bindings.ts`
+`mapSelectBinding`; the key table `modes/map/keys.ts`):
+
+| Gesture / key | Map mode |
+|---|---|
+| Click | asks the viewer's hit-test (`mapObjects.onHitTest`, `map-rendering.md` §5.5 "Document objects") at 6 CSS px and selects the topmost hit (`hits[0]`, the eyedropper's rule, §5); a click on empty map deselects. A late answer (a newer click went) is dropped |
+| Drag the selected object | moves it: the press must be on the selected object's drawn shape (tested on the main thread by its symbolised shape, the eyedropper's mechanism); a press elsewhere pans. The object follows through the viewer's draft (`mapObjects.draft`); the release writes one `modify` (below). A release without movement, Escape or the pointer leaving writes nothing |
+| `Tab` / `Shift+Tab` | steps through the **hit stack** under the last click, topmost down, wrapping — the only way to reach an area under a path; with no click stack (a selection made from *Corrections*, or none) it steps through the **corrected objects** in *Corrections* order, centring each (user 2026-11-15, G6 question 1; 08 §5.3's "next object" over a whole document has no order a user follows) |
+| `Delete` / `Backspace` | hides the selected object (*Hide*) |
+| `H` | hides the course overprint (and shows it again): the viewer requests no course layer and draws no UI-layer course parts. The top bar's `editor-hide-overprint` button, in the slot of `editor-hide-others` (lit, `aria-pressed`, while on). Map mode's own, off on entering |
+| `F` | fits the map (the document's bounds, `boundsMm`, through `viewRequest.bounds`) |
+| `V` | the select tool (the only one in G6) |
+| `Escape` | a drag in flight first (dropped, nothing written), then the selection, then fullscreen; never the course |
+
+The selected object is drawn highlighted (the edit part, `mapObjects.selected`;
+an outline for an area, G5) and the canvas carries `data-selected-objects`.
+
+**Ops** (`modes/map/model.ts`; `map-patches.md` §1.1–§1.2). Objects are
+named as the hit-test names them: `{ source: sourceIndex }` for a document
+object, `{ added: id }` for one the patch adds.
+
+| Gesture | Change sent | Undo |
+|---|---|---|
+| *Hide* a document object | `put [{ op: "hide", sourceIndex }]` | `remove ["hide:<n>"]` |
+| *Restore* | `remove ["hide:<n>"]` | `put` the hide again |
+| *Hide* an added object | `remove ["add:<id>"]` (§1.1: hiding an added object removes it) | `put` the add again |
+| Move a document object | `put [{ op: "modify", sourceIndex, coords, angle? }]` | the previous `modify` put back, else `remove ["modify:<n>"]` |
+| Move an added object | its `add` op rewritten with the moved `coords` | the previous `add` put back |
+| *Revert* a correction | `remove [opId]` | `put` the op again |
+
+- A move's `coords` are every effective coordinate of the object (an
+  existing `modify`'s, an `add`'s, else the document's) shifted by **one
+  integer delta** `round(Δmm × unitsPerMm)` — the shape moves rigidly,
+  flags and the count kept; an existing `angle` is kept. There is no
+  offset form in the model.
+- Every gesture is **one `mapPatch.applyChange { documentHash, put, remove }`
+  and one undo entry** (§3): the undo is the inverse change computed from the
+  patch before the gesture; redo sends the change again; a failed undo or
+  redo drops the entry and shows the error. Writes carry no token
+  (`applyChange` takes no `baseVersion`; two editors on one op id are
+  last-writer-wins, `map-patches.md` §3.2), so there is no conflict notice.
+- **Committing** (`map-rendering.md` §5.5 "Committing is the host's"):
+  the reply `{ version, patch }` becomes the session's copy
+  (`setMapPatch`) and `course.mapMetadata`'s `patchVersion`; the draft is
+  kept until the viewer has drawn that version (`onPatchDrawn`), so the
+  object never jumps back. A refused write (`PATCH_STALE`,
+  `PATCH_DOCUMENT_MISMATCH`, `PATCH_NO_DOCUMENT`, a venue box offline)
+  drops the draft, shows the editor's error (translated per code) and
+  reloads the map metadata and the patch.
+- After *Hide* the object stays selected, shown as hidden with *Restore*;
+  a hidden object is never hit (§2.4 there), so it is reached again through
+  its *Corrections* row.
+
+**Inspector** (`modes/map/ObjectSection.tsx`, `modes/map/Corrections.tsx`):
+
+- **Map object** (`editor-map-object`, `data-ref` = `source:<n>` or
+  `added:<id>`, `data-hidden`, `data-symbol`; `editor-map-object-none`
+  without a selection): the symbol's number and name
+  (`editor-map-object-symbol`: an applied match's library heading,
+  localised, else the source code and name; a patch symbol's own), its
+  swatch (`editor-map-object-swatch`, the symbol list's `swatchUrl`), and
+  *Hide* (`editor-map-object-hide`) or *Restore*
+  (`editor-map-object-restore`) by whether `hide:<sourceIndex>` is in the
+  patch.
+- **Corrections** (`editor-corrections`, its count `editor-corrections-count`,
+  `editor-corrections-none` when empty): every op of the patch in op-id
+  order (`editor-correction-row`, `data-op-id`, `data-op`, and
+  `data-issue` with the `applyPatch` issue code, `map-patches.md` §2.3 —
+  computed with the patch taken as enabled, so a switched-off patch still
+  reports them). A row click selects its object and centres the view on
+  it; *Revert* (`editor-correction-revert`) removes the op.
+- **Apply corrections** (`editor-corrections-apply`, a checkbox) is
+  `mapPatch.setEnabled` (`map-patches.md` §1.4): off, every consumer —
+  screen, print, the venue — draws the pinned document; the list keeps its
+  ops. It is an event setting, not an undo entry (as auto cuts, §4).
+  **While it is off, hide and move are disabled** with the reason shown
+  (`editor-map-disabled`); revert and the toggle stay (user 2026-11-15,
+  G6 question 3: the viewer merges a draft over the drawn patch, and a
+  disabled patch draws as the identity, so a drag would show nothing).
+
+**Presence** (§11): Map mode reports `mode: "map"`, labelled as the mode
+switch's *Map* (user 2026-11-15, G6 question 2).
+
 ## API
 
 The course and control mutations the editors write through (08 §6;
@@ -1802,7 +1909,7 @@ seq). Tokens are decimal strings.
 | `control.delete` | `courses.edit` | unchanged | `{ ok, courses: { id, version }[] }` — the courses whose structure lost the control |
 | `course.list` / `course.detail` | `courses.view` | — | rows with `version`; `detail` adds `structure` (wire form) and `structureStored` |
 | `control.list` / `control.getById` | `courses.view` | — | rows with `version`, `kind`, `circleGaps`, `notes`, `checkedAt` |
-| `course.presence` | `courses.view` | `{ courseId, mode: "course" \| "layout" \| "field", clientId }` | `{ ttlMs, others: { courseId, courseName, name, mode }[] }`: the event's other live editors (§11) |
+| `course.presence` | `courses.view` | `{ courseId, mode: "course" \| "layout" \| "field" \| "map", clientId }` | `{ ttlMs, others: { courseId, courseName, name, mode }[] }`: the event's other live editors (§11) |
 | `course.lastChange` / `control.lastChange` | `courses.view` | `{ courseId }` / `{ id }` | `{ name, at /* ISO */ } \| null`: actor and time of the row's newest `*.upserted` entry (`name` empty without a sign-in) |
 
 A stale `baseVersion` answers `CONFLICT` with `data: { kind, id, version,
