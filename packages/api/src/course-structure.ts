@@ -359,10 +359,20 @@ export async function coursesNamingInStructure(db: Db, eventId: bigint, controlU
     .map((r) => r.id);
 }
 
-/** Public ids of the given controls (the structure's wire form). */
+/** A control row's id: `controls.id` is a uuid column, and Postgres refuses any other string in a lookup. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Public ids of the given controls (the structure's wire form). Ids that are not uuids name no control and are
+ * left out of the map: `structureDiff` names a variation group by its own id ("v1", course-layer.md §7), which
+ * reached the uuid lookup and made a stale write on a course with groups a 500 instead of a `CONFLICT`
+ * (docs/bugfix-editor-overlapping-course-writes.md).
+ */
 export async function publicIdsOf(db: Db, eventId: bigint, uuids: Iterable<string>): Promise<Map<string, number>> {
+  const ids = [...new Set(uuids)].filter((id) => UUID_RE.test(id));
+  if (ids.length === 0) return new Map();
   const rows = await db.control.findMany({
-    where: { eventId, id: { in: [...new Set(uuids)] } },
+    where: { eventId, id: { in: ids } },
     select: { id: true, codes: true, seq: true },
   });
   return new Map(rows.map((r) => [r.id, publicControlId(r)]));
