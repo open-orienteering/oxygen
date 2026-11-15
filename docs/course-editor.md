@@ -2183,15 +2183,18 @@ drawn (slice G: no text creation).
   one drops the selection, Tab's stack and an open *Change symbol*, and
   opens the symbol picker ("Symbol picker") filtered to the tool's kind
   (point, line, area). The tools are **disabled** — the buttons
-  `disabled` with the reason as their title, the keys do nothing —
-  without `courses.edit`, while *Apply corrections* is off, and without a
-  pinned document; an armed drawing tool goes back to `V` when one of
+  `disabled` with the reason as their title (one text, `mapDrawOff`,
+  naming the right to edit courses and *Apply corrections*; without a
+  pinned document the inspector already says so, `editor-map-none`), the
+  keys do nothing — without `courses.edit`, while *Apply corrections* is
+  off, and without a pinned document; an armed drawing tool goes back to `V` when one of
   those becomes true. The binding is exclusive with a crosshair cursor;
   a click selects nothing.
 - **The symbol.** The tool draws with the picker's chosen symbol of its
   kind. With none chosen a click does nothing and the picker says so
   (`editor-map-palette-pick`). The choice is remembered per kind for the
-  document while the page is open (`doc:<i>` / `patch:<key>`, so a library
+  document while the page is open — leaving Map mode and coming back keeps
+  it, another document drops it (`doc:<i>` / `patch:<key>`, so a library
   item that became a patch symbol on first use stays chosen).
 - **First use** (`modes/map/symbols.ts` `symbolPut`, `map-patches.md`
   §1.3; reused by G26): a document item is `symbol: { doc: index }`; a
@@ -2252,10 +2255,11 @@ drawn (slice G: no text creation).
 
 The palette of `map-symbols.md` §11.2 (`mapDocument.mapPalette(pinned,
 patch)`), computed in the web from the model's pinned document and the
-session's patch — no procedure — is an inspector section *Symbols*
-(`editor-map-palette`, `data-kind`), shown while `P`, `L` or `A` is armed
-(the tool's kind) or *Change symbol* is open (the selected object's kind:
-type 1 point, 2 line, 3 area). It is a list rather than 08 §5.2's rail
+session's patch — no procedure — is the list `editor-map-palette`
+(`data-kind`): an inspector section *Symbols* above *Map object* while
+`P`, `L` or `A` is armed (the tool's kind), and inside the *Map object*
+section, under its *Change symbol* button, while *Change symbol* is open
+(the selected object's kind: type 1 point, 2 line, 3 area). It is a list rather than 08 §5.2's rail
 entry: with hundreds of entries it needs search and swatches, as the
 filter region's list (P3) does.
 
@@ -2283,7 +2287,7 @@ filter region's list (P3) does.
   not reachable from it; a document object picked back to its own
   symbol drops its `resymbol`; the effective symbol again writes
   nothing. *Change symbol* closes on another selection, on arming a tool,
-  and on Escape.
+  and on Escape (in the search field too).
 
 ### GPS tracks
 

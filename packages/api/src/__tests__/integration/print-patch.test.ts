@@ -265,6 +265,8 @@ describe("Map mode's drawing in print (G9)", () => {
   };
   /** The library point entry used: materialisable on this document and not the target's own symbol. */
   let entryId: string;
+  /** The patch symbol key the materialised point put. */
+  let patchKey: string | null = null;
 
   beforeAll(async () => {
     const { patch } = await applyPatchChange(ctx.db, ctx.eventId, hash, {});
@@ -279,6 +281,8 @@ describe("Map mode's drawing in print (G9)", () => {
       return !!e && Math.floor(Number.parseFloat(e.code)) !== Math.floor(Number.parseFloat(targetCode)) && mapDocument.materialiseSymbol(doc, id).ok;
     })!;
     expect(entryId, "a materialisable library point").toBeDefined();
+    // The row's page-raster proof is this test's (user 2026-11-15, G9 question 2): poppler is required, not optional.
+    expect(pdftocairo, "pdftocairo (poppler-utils) for the page raster").toBe(true);
     before = await pdf();
   }, 120_000);
 
@@ -292,7 +296,7 @@ describe("Map mode's drawing in print (G9)", () => {
     await applyPatchChange(ctx.db, ctx.eventId, hash, { put: [{ op: "add", id: PATH_ID, type: mapDocument.OBJECT_TYPE.line, symbol: { doc: lineSymbol }, coords }] });
     const after = await pdf();
     expect(after.equals(before)).toBe(false);
-    if (pdftocairo) {
+    {
       const diff = await diffPixels(before, after);
       expect(diff.length).toBeGreaterThan(0);
       expect(diff.filter((p) => !inBox(p, at.pageMm))).toEqual([]);
@@ -304,6 +308,7 @@ describe("Map mode's drawing in print (G9)", () => {
     const m = mapDocument.materialiseSymbol(doc, entryId);
     if (!m.ok) throw new Error("expected materialisable");
     const at = spot(30, 30);
+    patchKey = m.key;
     const res = await applyPatchChange(ctx.db, ctx.eventId, hash, {
       put: [{ op: "add", id: POINT_ID, type: mapDocument.OBJECT_TYPE.point, symbol: { patch: m.key }, coords: [at.native] }],
       putSymbols: { [m.key]: m.symbol },
@@ -311,7 +316,7 @@ describe("Map mode's drawing in print (G9)", () => {
     expect(JSON.stringify(res.patch?.symbols[m.key])).toBe(JSON.stringify(m.symbol));
     const after = await pdf();
     expect(after.equals(before)).toBe(false);
-    if (pdftocairo) {
+    {
       const diff = await diffPixels(before, after);
       expect(diff.length).toBeGreaterThan(0);
       expect(diff.filter((p) => !inBox(p, at.pageMm))).toEqual([]);
@@ -320,10 +325,12 @@ describe("Map mode's drawing in print (G9)", () => {
   }, 120_000);
 
   it("a resymbolled document point is redrawn inside its box", async () => {
-    await applyPatchChange(ctx.db, ctx.eventId, hash, { put: [{ op: "resymbol", sourceIndex: target.sourceIndex, symbol: { patch: entryId } }] });
+    // The patch symbol the previous test put (its key, the entry id).
+    expect(patchKey).toBe(entryId);
+    await applyPatchChange(ctx.db, ctx.eventId, hash, { put: [{ op: "resymbol", sourceIndex: target.sourceIndex, symbol: { patch: patchKey } }] });
     const after = await pdf();
     expect(after.equals(before)).toBe(false);
-    if (pdftocairo) {
+    {
       const diff = await diffPixels(before, after);
       expect(diff.length).toBeGreaterThan(0);
       expect(diff.filter((p) => !inBox(p, target.pageMm))).toEqual([]);

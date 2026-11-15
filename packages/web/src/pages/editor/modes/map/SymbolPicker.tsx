@@ -10,7 +10,7 @@ import type { mapDocument } from "@oxygen/shared";
 import { swatchUrl } from "../../../../lib/editor/symbol-groups";
 import { itemKey, itemName, paletteSwatch, paletteView, type PaletteKind } from "./palette";
 
-export function SymbolPicker({ groups, kind, query, onQuery, pressed, onPick, documentHash, nameId, hint }: {
+export function SymbolPicker({ groups, kind, query, onQuery, pressed, onPick, documentHash, nameId, hint, onEscape }: {
   groups: readonly mapDocument.PaletteGroup[];
   kind: PaletteKind;
   query: string;
@@ -22,6 +22,8 @@ export function SymbolPicker({ groups, kind, query, onQuery, pressed, onPick, do
   nameId: string;
   /** Shown above the list (the tool's gestures, or "pick a symbol"). */
   hint?: { testId: string; text: string } | null;
+  /** Escape in the search field (the page's keys skip inputs): *Change symbol* closes the picker. */
+  onEscape?: () => void;
 }) {
   const { t, i18n } = useTranslation("editor");
   const view = useMemo(() => paletteView(groups, kind, query), [groups, kind, query]);
@@ -31,6 +33,7 @@ export function SymbolPicker({ groups, kind, query, onQuery, pressed, onPick, do
       {hint && <p data-testid={hint.testId} className="text-[11px] text-slate-500">{hint.text}</p>}
       <input data-testid="editor-map-palette-search" type="search" value={query} placeholder={t("mapPaletteSearch")} aria-label={t("mapPaletteSearch")}
         onChange={(e) => onQuery(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Escape" && onEscape) { e.preventDefault(); onEscape(); } }}
         className="w-full px-1.5 py-1 border border-slate-200 rounded-md bg-white text-xs" />
       <div className="max-h-72 overflow-y-auto flex flex-col gap-2">
         {view.length === 0 && <p data-testid="editor-map-palette-none" className="text-[11px] text-slate-500">{t("mapPaletteNone")}</p>}

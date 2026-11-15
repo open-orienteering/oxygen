@@ -127,7 +127,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
   const [writing, setWriting] = useState(false);
   const writingRef = useRef(false);
   /** Drawing (§13 "Drawing"): the chosen symbol per kind, the line / area being drawn, its add id, the hover. */
-  const [chosen, setChosen] = useState<Partial<Record<DrawKind, string>>>({});
+  const [chosenState, setChosenState] = useState<{ hash: string | null; byKind: Partial<Record<DrawKind, string>> }>({ hash: null, byKind: {} });
   const [poly, setPoly] = useState<PolygonState | null>(null);
   const drawId = useRef<string | null>(null);
   const [drawHover, setDrawHover] = useState<Pt | null>(null);
@@ -150,7 +150,6 @@ export function useMapMode(a: MapModeArgs): MapMode {
     setTool("V");
     setFocusState(null);
     setSnapping(false);
-    setChosen({});
     setPoly(null);
     setChangingFor(null);
     setQuery("");
@@ -161,6 +160,9 @@ export function useMapMode(a: MapModeArgs): MapMode {
     drawGesture.current = null;
     pointGesture.current = null;
   }, [enabled, hash]);
+  // The chosen symbols belong to the document: kept across leaving and re-entering the mode, dropped for another
+  // document (§13 "Drawing").
+  const chosen = chosenState.hash === hash ? chosenState.byKind : {};
   // The focused node belongs to the selection and the tool it was set in: another one drops it (§13 "Nodes", "Focus").
   const focusOwner = `${selected ? refKey(selected) : ""}|${tool}`;
   const focus = focusState?.owner === focusOwner ? focusState.focus : null;
@@ -453,7 +455,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
   const pick = useCallback((item: mapDocument.PaletteItem) => {
     if (!item.enabled) return;
     if (drawKind) {
-      setChosen((c) => ({ ...c, [drawKind]: itemKey(item) }));
+      setChosenState((c) => ({ hash, byKind: { ...(c.hash === hash ? c.byKind : {}), [drawKind]: itemKey(item) } }));
       return;
     }
     if (!canWrite || !model || !selected || selectedHidden) return;
@@ -462,7 +464,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
     const change = resymbolChange(model, current, selected, put);
     setChanging(false);
     if (change) commit(change);
-  }, [drawKind, canWrite, model, selected, selectedHidden, current, commit, setChanging]);
+  }, [drawKind, hash, canWrite, model, selected, selectedHidden, current, commit, setChanging]);
   const rotate = useCallback((tenths: number) => {
     if (!canWrite || !model || !selected || selectedHidden) return;
     const change = angleChange(model, current, selected, tenths);
@@ -602,7 +604,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
           canChangeSymbol={!!info && kindOfType(info.type) !== null} changing={changing} onChangeSymbol={() => setChanging(!changing)}
           picker={changing && info && palette && pickerKind ? (
             <SymbolPicker groups={palette} kind={pickerKind} query={query} onQuery={setQuery} pressed={symbolKey(info.symbol)} onPick={pick}
-              documentHash={mapDoc.hash} nameId={nameId} />
+              documentHash={mapDoc.hash} nameId={nameId} onEscape={() => setChanging(false)} />
           ) : null}
           orientable={selectedOrientable} onRotate={rotate} />
         {nodes && ("path" in nodes

@@ -521,6 +521,56 @@ test.describe("Map mode drawing (docs/course-editor.md §13 \"Drawing\", \"Symbo
     }
   });
 
+  test("A closes an area on its first node; the choice survives a mode switch; drawing is off while corrections are off", async ({ page }) => {
+    test.setTimeout(240_000);
+    try {
+      await open(page);
+      const [a] = await plainSpots(page, 1, 3, 0);
+      const b = { x: a.x + 2, y: a.y }, c = { x: a.x + 1, y: a.y + 1.8 };
+      const changes = captureChanges(page);
+
+      await page.keyboard.press("a");
+      await pressed(page, "A");
+      await expect(palette(page)).toHaveAttribute("data-kind", "area");
+      const item = paletteItems(page, '[data-source="document"]').first();
+      const ref = (await item.getAttribute("data-ref"))!;
+      await item.click();
+
+      // Leaving Map mode and coming back keeps the area tool's symbol (§13 "Drawing", "The symbol").
+      await page.getByTestId("editor-mode-course").click();
+      await page.getByTestId("editor-mode-map").click();
+      await expect(page.getByTestId("editor-page")).toHaveAttribute("data-mode", "map");
+      await page.keyboard.press("a");
+      await expect(page.locator(`[data-testid="editor-map-palette-item"][data-ref="${ref}"]`)).toHaveAttribute("aria-pressed", "true");
+
+      // Three nodes, then a click on the first closes: one add of type 3 with the first point repeated at the end.
+      const pa = await toPage(page, a), pb = await toPage(page, b), pc = await toPage(page, c);
+      await page.mouse.click(pa.x, pa.y);
+      await page.mouse.click(pb.x, pb.y);
+      await page.mouse.click(pc.x, pc.y);
+      const wrote = waitForTrpc(page, "mapPatch.applyChange");
+      await page.mouse.click(pa.x, pa.y);
+      await wrote;
+      const add = changes[0].put![0] as { op: string; id: string; type: number; coords: number[][] };
+      expect(add).toMatchObject({ op: "add", type: 3, symbol: { doc: Number(ref.slice(4)) } });
+      expect(add.coords.at(-1)!.slice(0, 2)).toEqual(add.coords[0].slice(0, 2));
+      await pressed(page, "V");
+      await expect(mapObject(page)).toHaveAttribute("data-ref", `added:${add.id}`);
+
+      // Apply corrections off: P, L, A disabled (their keys do nothing) and Change symbol too; on again.
+      await page.getByTestId("editor-corrections-apply").uncheck();
+      await expect(page.getByTestId("editor-map-disabled")).toBeVisible();
+      for (const key of ["P", "L", "A"]) await expect(page.getByTestId(`editor-tool-${key}`)).toBeDisabled();
+      await page.keyboard.press("p");
+      await pressed(page, "V");
+      await expect(page.getByTestId("editor-map-object-change-symbol")).toBeDisabled();
+      await page.getByTestId("editor-corrections-apply").check();
+      await expect(page.getByTestId("editor-tool-P")).toBeEnabled();
+    } finally {
+      await clearPatch();
+    }
+  });
+
   test("P places a point with a library symbol: materialised on first use, put once; the tool stays armed", async ({ page }) => {
     test.setTimeout(240_000);
     try {
