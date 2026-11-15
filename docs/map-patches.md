@@ -126,7 +126,10 @@ What fills `symbols` is `materialiseSymbol(doc, entryId)`
 (`map-symbols.md` §11.1): the entry resolved through the document's
 stack and scaled to it, or not materialisable when the stack lacks one of
 its colours. Map mode offers the entries through `mapPalette`
-(`map-symbols.md` §11.2) and materialises one on first use (row G9).
+(`map-symbols.md` §11.2) and materialises one on first use (row G9,
+`course-editor.md` §13 "Drawing"): the client puts it with
+`putSymbols` in the change whose op first references it, unless the
+patch already holds the key.
 
 ### 1.4 The toggle
 
@@ -685,7 +688,8 @@ place. `enabled` is kept.
   symbol it needs materialised. A `modify` keeps its coordinates
   (rescaled), so the corrected shape stays where it was drawn. Refused
   (null, with why): no such entry; an `add` or a `symbol` entry (drop
-  only, until change symbol, G9); no object with that `sourceIndex`; a
+  only, until G12: attaching a `symbol` entry needs a symbol argument;
+  user 2026-11-15, G9 question 1); no object with that `sourceIndex`; a
   `modify` or `resymbol` onto an object of another `type`; a symbol that
   cannot be resolved on `doc`.
 - **Drop** is `applyChange { removeUnresolved: [key] }` (§1.5).
@@ -747,6 +751,12 @@ nothing.
   outside Map mode's one-write-at-a-time interlock — wiring them through
   `modes/MapMode.tsx` (and a `putUnresolved` for the undo of a drop) is
   for the next row that holds that file (G12). `course-editor.md` §13.
+- **Attach of a `symbol` entry** (§4.3; user 2026-11-15, G9 question 1):
+  drop-only. Attaching needs a symbol argument on
+  `mapPatch.attachUnresolved` (`attachUnresolved(…, symbol)`), for G12
+  with the rest of *Attach*. Meanwhile a `resymbol`'s is redone by hand
+  (*Change symbol*, `course-editor.md` §13) and the entry dropped; an
+  unresolved `add` keeps its geometry only in the entry.
 - **§5 Promote** (row G12): the patch applied at the import's store
   stage for a club version.
 

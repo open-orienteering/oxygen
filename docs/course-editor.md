@@ -1900,8 +1900,10 @@ group ids `v<n>`, new labels the next free capital.
 Map mode (08 §5.2–§5.3, the Map column; row G6) edits the event's map
 corrections: the **patch** (`map-patches.md`) over the pinned document.
 The document itself never changes. G6 is the shell with select, hide and
-move; G7 adds the nodes tool `N` ("Nodes" below); drawing and change symbol
-are G9's, join / split / holes G10's, unresolved ops G11's, promote G12's.
+move; G7 adds the nodes tool `N` ("Nodes" below); G9 the drawing tools
+`P` `L` `A`, the symbol picker and *Change symbol* ("Drawing", "Symbol
+picker" below); join / split / holes are G10's, unresolved ops G11's,
+promote G12's.
 
 **Entering it.** `mode=map` (§1 "URL", always written); the mode group's
 fourth entry `editor-mode-map` (`IconModeMap`, a map sheet with a pencil);
@@ -1912,19 +1914,21 @@ it drops the tool, phantom, the control, multi and course-object selections
 locked**: the viewer gets Map mode's own editor props (`modes/MapMode.tsx`
 `useMapMode`, shaped like `useLayoutMode`): no control drag, label drag,
 leg click or map click, and an `exclusive` binding, so a click on a control
-selects no control; the rail is `V` and `N` (`editor-tool-rail`,
-`editor-tool-V`, `editor-tool-N`; the armed one `aria-pressed`) and Map
-mode's own snapping toggle (`editor-snapping`, "Nodes"); `S` `K` `M` `X`
-`C` `A` `T` `G` do nothing. Entering the mode, or another document, arms
+selects no control; the rail is `V`, `N`, `P`, `L`, `A`
+(`editor-tool-rail`, `editor-tool-<key>`; the armed one `aria-pressed`) and
+Map mode's own snapping toggle (`editor-snapping`, "Nodes"); `S` `K` `M`
+`X` `C` `T` `G` do nothing. Entering the mode, or another document, arms
 `V`. Undo / redo
 are the page's (one stack across modes, §3). Without a pinned document the
 mode opens and its inspector says so (`editor-map-none`). Without
 `courses.edit` (`mapPatch` writes need it, `map-patches.md` §3.2) it is
-view-only: select, locate, `H`, `F`; no hide, move, revert or toggle.
+view-only: select, locate, `H`, `F`; no hide, move, revert or toggle,
+and no drawing or change symbol.
 
 **Gestures and keys** (the bindings are `tools/bindings.ts`
-`mapSelectBinding` for `V` and `mapNodesBinding` for `N`, "Nodes"; the key
-table `modes/map/keys.ts`):
+`mapSelectBinding` for `V`, `mapNodesBinding` for `N` ("Nodes"),
+`mapPointBinding` for `P` and `mapDrawBinding` for `L` and `A`
+("Drawing"); the key table `modes/map/keys.ts`):
 
 | Gesture / key | Map mode |
 |---|---|
@@ -1936,7 +1940,9 @@ table `modes/map/keys.ts`):
 | `F` | fits the map (the document's bounds, `boundsMm`, through `viewRequest.bounds`) |
 | `V` | the select tool |
 | `N` | the nodes tool ("Nodes"; user 2026-11-15, G7 question 1) |
-| `Escape` | a drag in flight first (dropped, nothing written), then (in `N`) the focused node, then `N` back to `V`, then the selection, then fullscreen; never the course. As in §3 (F24), the keypress that drops a drag also takes the next step |
+| `P` / `L` / `A` | the point, line and area tools ("Drawing"); nothing while drawing is disabled |
+| `Enter` | finishes the line or area being drawn ("Drawing") |
+| `Escape` | a drag in flight first (dropped, nothing written), then the line or area being drawn (dropped), then an open *Change symbol* picker, then (in `N`) the focused node, then any tool but `V` back to `V`, then the selection, then fullscreen; never the course. As in §3 (F24), the keypress that drops a drag also takes the next step |
 
 The selected object is drawn highlighted (the edit part, `mapObjects.selected`;
 an outline for an area, G5) and the canvas carries `data-selected-objects`.
@@ -1954,6 +1960,11 @@ object, `{ added: id }` for one the patch adds.
 | Move an added object | its `add` op rewritten with the moved `coords` | the previous `add` put back |
 | A node gesture on a document object ("Nodes") | `put [{ op: "modify", sourceIndex, coords, angle? }]`, `coords` every ring written back | as a move |
 | A node gesture on an added object | its `add` op rewritten with the new `coords` | the previous `add` put back |
+| Draw a point, line or area ("Drawing") | `put [{ op: "add", id, type, symbol, coords, angle? }]`, with `putSymbols` on a library symbol's first use | `remove ["add:<id>"]` (the symbol stays, `map-patches.md` §1.5) |
+| *Change symbol* of a document object ("Symbol picker") | `put [{ op: "resymbol", sourceIndex, symbol }]` (+ `putSymbols`); back to the object's own symbol: `remove ["resymbol:<n>"]` | the previous `resymbol` put back, else removed |
+| *Change symbol* of an added object | its `add` op rewritten with the `symbol` (+ `putSymbols`) | the previous `add` put back |
+| *Rotation* of a document point ("Inspector") | `put [{ op: "modify", sourceIndex, coords, angle }]`, `coords` its effective ones; back to the document's own shape and angle: `remove ["modify:<n>"]` | as a move |
+| *Rotation* of an added point | its `add` op rewritten with the `angle` (0 omitted) | the previous `add` put back |
 | *Revert* a correction | `remove [opId]` | `put` the op again |
 
 - A move's `coords` are every effective coordinate of the object (an
@@ -1968,7 +1979,8 @@ object, `{ added: id }` for one the patch adds.
   (`applyChange` takes no `baseVersion`; two editors on one op id are
   last-writer-wins, `map-patches.md` §3.2), so there is no conflict notice.
   **One gesture's write at a time**: while one is in flight the next
-  gesture (hide, move, *Restore*, revert) is refused — its inverse would be
+  gesture (hide, move, *Restore*, revert, a placed point, a closing click,
+  *Change symbol*, *Rotation*) is refused — its inverse would be
   computed from a patch that is not yet the reply's — and a held Delete
   hides once (its key repeat is ignored).
 - **Committing** (`map-rendering.md` §5.5 "Committing is the host's"):
@@ -1994,11 +2006,19 @@ object, `{ added: id }` for one the patch adds.
   an applied match's library entry, its name localised, else the source
   code and name; a patch symbol's own), its swatch
   (`editor-map-object-swatch`, the symbol list's `swatchUrl`: the
-  library's preview for an applied match, the document symbol's otherwise,
-  empty for a patch symbol), and
+  library's preview for an applied match and for a patch symbol — of the
+  entry its key names (`map-patches.md` §1.3), in the library's colours —,
+  the document symbol's otherwise), and
   *Hide* (`editor-map-object-hide`) or *Restore*
   (`editor-map-object-restore`) by whether `hide:<sourceIndex>` is in the
-  patch.
+  patch. For a point, line or area that is not hidden, *Change symbol*
+  (`editor-map-object-change-symbol`, `aria-expanded` while its picker is
+  open; "Symbol picker"); for a point whose effective symbol is
+  orientable ("Drawing"), *Rotation* (`editor-map-object-rotation`, a
+  number field in degrees, counter-clockwise, the stored `attrs.angle` ÷ 10;
+  Enter or leaving it writes, Escape restores; the value normalised to
+  0–359.9, written in 0.1°, a value equal to the current one writes
+  nothing). Both are disabled as *Hide* is.
 - **Corrections** (`editor-corrections`, its count `editor-corrections-count`,
   `editor-corrections-none` when empty): every op of the patch in op-id
   order (`editor-correction-row`, `data-op-id`, `data-op`, and
@@ -2020,7 +2040,10 @@ object, `{ added: id }` for one the patch adds.
     `map-patches.md` §4.3; user 2026-11-15, G11 question 2). Enabled for
     a `target` entry of a hide, modify or resymbol with a document object
     (`source:<n>`) selected, `courses.edit` and *Apply corrections* on (as
-    hide); a `symbol` entry is drop-only until change symbol (G9).
+    hide); a `symbol` entry is drop-only until G12 (user 2026-11-15, G9
+    question 1: attaching it needs a symbol argument on
+    `mapPatch.attachUnresolved`; meanwhile a resymbol's is redone with
+    *Change symbol* on the object and the entry dropped).
   - *Drop* (`editor-correction-drop`) removes the entry
     (`applyChange { removeUnresolved }`); with `courses.edit`, also while
     the corrections are off (as *Revert*).
@@ -2038,7 +2061,8 @@ object, `{ added: id }` for one the patch adds.
   screen, print, the venue — draws the pinned document; the list keeps its
   ops. It is an event setting, not an undo entry (as auto cuts, §4); the
   box shows the value asked for while its write is in flight.
-  **While it is off, hide, *Restore* and move are disabled** with the
+  **While it is off, hide, *Restore*, move, drawing, *Change symbol* and
+  *Rotation* are disabled** with the
   reason shown (`editor-map-disabled`); revert (a hide's row included)
   and the toggle stay (user 2026-11-15,
   G6 question 3: the viewer merges a draft over the drawn patch, and a
@@ -2146,6 +2170,120 @@ reach 7 px `HANDLE_PX`, a drag past 3 px `MAP_DRAG_PX`; mouse only):
   left out** (`snapIndexOf` over the model's document, the object masked
   as hidden; built on the first snapped drag per model and selection), so
   a node never snaps to where it started or to its own neighbours.
+
+### Drawing
+
+The point, line and area tools `P`, `L`, `A` (row G9; 08 §4.7 "draw
+point/line/area with a palette", §5.2 the Map rail) add objects to the
+patch: each finished object is one `add` op (`map-patches.md` §1.2), one
+`mapPatch.applyChange` and one undo entry (§13 "Ops"). A text is not
+drawn (slice G: no text creation).
+
+- **Arming.** The rail's `editor-tool-P`, `-L`, `-A` or the keys. Arming
+  one drops the selection, Tab's stack and an open *Change symbol*, and
+  opens the symbol picker ("Symbol picker") filtered to the tool's kind
+  (point, line, area). The tools are **disabled** — the buttons
+  `disabled` with the reason as their title, the keys do nothing —
+  without `courses.edit`, while *Apply corrections* is off, and without a
+  pinned document; an armed drawing tool goes back to `V` when one of
+  those becomes true. The binding is exclusive with a crosshair cursor;
+  a click selects nothing.
+- **The symbol.** The tool draws with the picker's chosen symbol of its
+  kind. With none chosen a click does nothing and the picker says so
+  (`editor-map-palette-pick`). The choice is remembered per kind for the
+  document while the page is open (`doc:<i>` / `patch:<key>`, so a library
+  item that became a patch symbol on first use stays chosen).
+- **First use** (`modes/map/symbols.ts` `symbolPut`, `map-patches.md`
+  §1.3; reused by G26): a document item is `symbol: { doc: index }`; a
+  library item is `symbol: { patch: key }` with `putSymbols { [key]:
+  materialiseSymbol(pinned, key).symbol }` in the same change — unless
+  the patch already has `symbols[key]`, which is then not put again. An
+  entry that is not materialisable is never chosen (listed disabled).
+  The pinned document is the model's decoded copy, so the client's
+  materialisation is the server's (`map-symbols.md` §11.1
+  "Deterministic").
+- **The op.** `id` a lowercase UUIDv7 made when the drawing starts (the
+  draft's and the write's are the same id; `map-patches.md` §2.2 orders
+  added objects by id); `type` 1 point, 2 line, 3 area; `coords` in
+  document units (paper mm × `unitsPerMm`, rounded); `angle` only when
+  not 0.
+- **Point (`P`, `mapPointBinding`).** A click places a point at the
+  pointer (snapped when snapping is on). With an **orientable** chosen
+  symbol — a point render with `orientation: "object"` and a rotatable
+  glyph, the symboliser's rule (`render/symbolise.ts`) — a press-drag
+  past 3 px (`MAP_DRAG_PX`) places it at the press and turns it: the
+  symbol's x axis points along the drag, so `angle` = the drag's
+  direction counter-clockwise from the paper's +x, in 0.1°, normalised to
+  0–3599 (user 2026-11-15, G9 question 3; OCAD's and Mapper's gesture.
+  Deviates from 08 §5.3, where a drag while armed pans). A line from the
+  press to the pointer (`editor-map-point-direction`) shows the
+  direction meanwhile, and the point is drawn turned through the draft;
+  Escape or the pointer leaving drops it. With any other symbol a drag
+  pans, as 08 §5.3 says. The tool **stays armed** with nothing selected
+  (08 §5.3 "Placement flow"): ten boulders are ten clicks.
+- **Line and area (`L`, `A`; `mapDrawBinding` over `areaBinding`).** The
+  course editor's drawing flow (§6.4 and §7 "Editing geometry", F18,
+  `tools/polygon.ts` with the kinds `map_line` — open, at least 2 nodes —
+  and `map_area` — closed, at least 3): a click per node, smooth by
+  default and a corner with `Alt`, a click-drag pulls a node's handles, a
+  placed node is dragged to adjust; a line ends by double-click or
+  `Enter`, an area closes by a click on its first node, a double-click or
+  `Enter`. Placed nodes are snapped when snapping is on. Right-click or
+  Escape drops the drawing. The dashed outline, the nodes and the grips
+  are the UI layer (`editor-polygon`, `editor-polygon-vertex`,
+  `editor-polygon-grip`); from 2 nodes (a line) or 3 (an area) the object
+  is also the draft `add` in its symbol, updated as nodes are placed or
+  dragged (hover sends nothing). The finished nodes are written by
+  `coordsOfRings` (§13 "Nodes", "Coordinates and vertices"): curves as
+  Bézier pairs, an area's ring with its first point repeated at the end.
+  After the write the tool goes back to `V` with the new object
+  (`added:<id>`) selected, so `N` and *Change symbol* apply at once (08
+  §5.3 "Area tools").
+- **Snapping** is the Map rail's `editor-snapping` ("Nodes"): a placed
+  point or node lands on the nearest point object's centre or line / area
+  vertex of the effective document within 0.5 mm (`snapIndexOf`, built
+  once per model; nothing masked: nothing drawn is in it yet).
+- **Writes.** While a write is in flight a click of `P` and a closing
+  gesture of `L` / `A` are refused (the drawing is kept); the draft is
+  kept until the canvas draws the reply's version (§13 "Committing"). A
+  refused write drops the draft and the drawing.
+
+### Symbol picker
+
+The palette of `map-symbols.md` §11.2 (`mapDocument.mapPalette(pinned,
+patch)`), computed in the web from the model's pinned document and the
+session's patch — no procedure — is an inspector section *Symbols*
+(`editor-map-palette`, `data-kind`), shown while `P`, `L` or `A` is armed
+(the tool's kind) or *Change symbol* is open (the selected object's kind:
+type 1 point, 2 line, 3 area). It is a list rather than 08 §5.2's rail
+entry: with hundreds of entries it needs search and swatches, as the
+filter region's list (P3) does.
+
+- **Search** (`editor-map-palette-search`): a heading is shown when its
+  lowercased `search` (§11.2) contains the query, trimmed and
+  lowercased; empty shows all.
+- **Groups** in the palette's order (`editor-map-palette-group`,
+  `data-group` `library` | `ISSkiOM2019` | `other`, titled the
+  document's library, *Ski-O*, *Other*), each heading's entries of the
+  kind in order; a group or heading without any is left out;
+  `editor-map-palette-none` when nothing is left.
+- **Items** (`editor-map-palette-item`, `data-ref` `doc:<i>` |
+  `patch:<key>`, `data-source` `document` | `patch` | `library`,
+  `data-kind`, `data-code`, `data-objects`; `aria-pressed` on the chosen
+  one, or on the selected object's effective symbol under *Change
+  symbol*): the swatch (`editor-map-palette-swatch`, lazily loaded: the
+  library preview of `canonicalId`, else the document symbol's own,
+  `swatchUrl`), the code and the name (Swedish when the UI is and the
+  entry has one). An item that is not materialisable is `disabled`, its
+  title naming the missing colours.
+- **Picking** under a drawing tool makes the item the tool's symbol.
+  Under *Change symbol* it changes the selected object's symbol at once
+  (§13 "Ops") and closes the picker: same object type only — the list
+  offers only the object's kind, so `applyPatch`'s `kind-mismatch` is
+  not reachable from it; a document object picked back to its own
+  symbol drops its `resymbol`; the effective symbol again writes
+  nothing. *Change symbol* closes on another selection, on arming a tool,
+  and on Escape.
 
 ### GPS tracks
 
