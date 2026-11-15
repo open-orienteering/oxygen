@@ -16,7 +16,8 @@ implemented and marks what is still pending.
  5 analyse      bounds, north, fonts, feature usage                       shared     bounds, georeference, north (§3.8); fonts and feature usage pending
  6 match        03 §6.5 staged matcher → SymbolMatch[]                    shared     done (docs/map-symbols.md §8); club decisions as stage 1 (§8.5); ISSkiOM overlay candidates on every document (§8.2, §12)
  7 align        colour stack alignment (03 §6.3)                          shared     done (docs/map-symbols.md §9); ISSkiOM's palette rows in every stack (§9.2 step 4, §12.3)
- 8 encode       02 codec → bytes; sha256 → documentHash                   shared     done
+ 8 encode       a club version's patch baked (G12a), then the 02 codec    shared     done (bake: docs/map-patches.md §5.2)
+                → bytes; sha256 → documentHash
  9 store        map_sources + map_documents rows, event pin, report      api        done, as an import job in a worker thread (docs/map-storage.md §3, §6)
 10 derive       thumbnail (map_previews), height field (map_heightfields)   api        done, inside the job after the pins (docs/map-storage.md §4.5, §4.7, §6.1)
 ```
@@ -28,6 +29,16 @@ runs them client-side today). The only Node-side piece is the reader
 loader in `packages/api/src/import/ocad.ts`; the OMAP reader itself is
 shared code (no XML library — `packages/shared/src/import/xml.ts`), so
 a Mapper file needs no Node-side dependency at all.
+
+Before encoding, an import of a promoted club version bakes its version
+patch into the matched input (`mapDocument.bakeVersionPatch`,
+`docs/map-patches.md` §5.2: hidden objects dropped, added ones numbered
+from `0x80000000`, patch symbols appended to the table).
+`importMapToDocument` takes it as `opts.patch` (the job's snapshot,
+`docs/map-storage.md` §6.1); without one the input is encoded as it is.
+An op that no longer applies is skipped with `PATCH_ISSUE` (§3.7) and
+the report gains `corrections` `{ layers, ops, issues }`; the import never
+fails for it.
 
 Stage 10 writes the thumbnail, then the height field — the terrain the
 document's contours imply and its report, derived in a worker of its own
@@ -535,6 +546,13 @@ entry per code with a count:
 | `COLOUR_AREA_ABOVE_LOWER_PURPLE` | a used area colour is drawn above the placed lower purple and hides course circles and lines under it (`colourStack.areasAboveLowerPurple`, `docs/map-symbols.md` §9.2 step 5); the source order is kept. Since lower purple is placed by rule on every import (C15) it remains only where no gap in the source order is clean |
 | `COLOUR_UNCLASSIFIED` | a colour used by symbols is not an IOF colour (`colourStack.unclassified`); its symbols stay as drawn |
 
+One more, added at stage 8 by the bake to the import report only (not
+the header; `mapImport.patchIssueWarnings`, class `outcome`):
+
+| Code | Meaning |
+|---|---|
+| `PATCH_ISSUE` | ops of a promoted club version's patch that no longer apply to the source (`docs/map-patches.md` §5.2: target gone, symbol not materialisable, kind or geometry wrong) were skipped; one `warningDetails` entry per op (`layer n, <op id>: <code>`), the list in `report.corrections.issues` |
+
 ### 3.8 Stage 5: georeference and north (both sources)
 
 `mapImport.analyseDocumentInput(input)` runs at the end of both
@@ -853,7 +871,11 @@ and in the import report (`mapImport.importReportSchema`,
 ## 6. Determinism
 
 Required and tested: same bytes in → same document bytes and hash out,
-across processes and machines. Unit tests `import-ocad.test.ts` /
+across processes and machines. The inputs are the source bytes, the
+importer and library versions, the club decisions (`docs/map-symbols.md`
+§8.5) and, for a promoted club version, its version patch
+(`docs/map-patches.md` §5; `patch-bake.test.ts` checks the bake's
+determinism and record-order blindness). Unit tests `import-ocad.test.ts` /
 `import-omap.test.ts` encode `e2e/test.ocd` / `e2e/test.xmap` twice; the corpus script
 (`scripts/measure-import.mjs`, §7) asserts `sameAsPrevious` across runs. Sources of non-determinism to avoid when extending the normaliser:
 iteration over `Map`/`Set` built from sparse arrays (use the array
@@ -874,6 +896,8 @@ document hash is identical on two machines.
 
 | Level | File | Covers |
 |---|---|---|
+| Unit (shared) | `packages/shared/src/map-document/__tests__/patch-bake.test.ts` | stage 8's bake (G12a, `docs/map-patches.md` §5.2): what the event drew, determinism, no layers = today's bytes, layers, issues, units — the full list in `map-patches.md` "Tests"; `report.test.ts` scans `patch-warnings.ts` for `PATCH_ISSUE` |
+| Integration (api) | `packages/api/src/__tests__/integration/map-promote.test.ts` | a worker import that bakes a version patch: another document hash, `map_documents.patch` and `report.corrections` recorded, the job `done` |
 | Unit (shared) | `packages/shared/src/import/__tests__/report.test.ts` | `WARNING_CLASS` classifies every code the importers, matcher and CRT parser emit and names none that nothing emits (source scan), the `unsupported` set is exactly the five codes of §7, `SYMBOL_REFERENCE_INVALID` is a `source-error`; `importReportSchema` accepts / rejects `warningDetails` |
 | Unit (shared) | `packages/shared/src/import/__tests__/xml.test.ts` | the SAX tokenizer: prolog / comments / CDATA / DOCTYPE, entities, attribute quoting, mismatched and unclosed tags, second root, the pruning tree builder |
 | Unit (shared) | `packages/shared/src/import/__tests__/omap-reader.test.ts` | barrier wrapper, both coordinate forms and every flag, symbols of all five types incl. inline sub-symbols, colours with spot components, georeferencing, parts, templates, print, tags, misnumbered symbols |
