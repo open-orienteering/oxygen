@@ -21,7 +21,7 @@ import { deriveDocumentHeightfield } from "./heightfield.js";
 import { enqueueDocumentDem } from "./dem-jobs.js";
 import { INSTANCE_ID } from "./instance.js";
 import { writePinnedMapFileColumns } from "./event-document.js";
-import { reresolveAfterPin } from "./patches.js";
+import { abandonPromote, completePromote, reresolveAfterPin } from "./patches.js";
 import { synchronizePositionedControlCoordinates } from "../event-crs.js";
 import type { ImportWorkerData, ImportWorkerMessage } from "./import-worker.js";
 
@@ -248,8 +248,16 @@ async function execute(db: Db, job: ImportJobRow): Promise<void> {
   } catch (err: unknown) {
     const message = (err instanceof Error ? err.message : String(err)).slice(0, 2000);
     console.error(`[map-import] job ${job.id} failed:`, message);
-    await db.mapImportJob.updateMany({ where: { id: job.id, claimedBy: INSTANCE_ID }, data: { state: "failed", error: message, heartbeatAt: new Date() } })
-      .catch((e: unknown) => console.error(`[map-import] marking ${job.id} failed:`, e));
+    const { count } = await db.mapImportJob.updateMany({ where: { id: job.id, claimedBy: INSTANCE_ID }, data: { state: "failed", error: message, heartbeatAt: new Date() } })
+      .catch((e: unknown) => {
+        console.error(`[map-import] marking ${job.id} failed:`, e);
+        return { count: 0 };
+      });
+    // A failed promote leaves no version behind (docs/map-patches.md §5); the event's patch was never touched.
+    if (count === 1 && isPromoteJob(job)) {
+      await abandonPromote(db, { clubMapId: job.clubMapId, sourceHash: job.sourceHash, patch: job.patch })
+        .catch((e: unknown) => console.error(`[map-import] removing the pending version of ${job.id}:`, e));
+    }
   } finally {
     clearInterval(heartbeat);
     const row = await db.mapImportJob.findUnique({ where: { id: job.id }, select: JOB_SELECT }).catch(() => null);
@@ -276,9 +284,17 @@ export async function deriveDocumentArtifacts(db: Db, hash: string): Promise<voi
  * `document_hash` moved to the new document. Idempotent. A job without a
  * target (a review round) pins nothing; `finalise` pins it later.
  */
+/** A promote's job (docs/map-patches.md §5): it targets the event and the club map, and bakes a version patch. */
+export function isPromoteJob<J extends Pick<ImportJobRow, "eventId" | "clubMapId"> & { patch?: mapDocument.VersionPatch }>(
+  job: J,
+): job is J & { eventId: bigint; clubMapId: string; patch: mapDocument.VersionPatch } {
+  return job.eventId !== null && job.clubMapId !== null && (job.patch?.length ?? 0) > 0;
+}
+
 export async function applyJobResult(db: Db, job: Pick<ImportJobRow, "eventId" | "clubMapId" | "sourceHash" | "documentHash"> & { patch?: mapDocument.VersionPatch }): Promise<void> {
   if (!job.documentHash) return;
-  if (job.eventId !== null) {
+  const promote = isPromoteJob(job);
+  if (job.eventId !== null && !promote) {
     await db.mapFile.updateMany({ where: { eventId: job.eventId, sourceHash: job.sourceHash }, data: { documentHash: job.documentHash } });
     // Quick-access columns from the pinned document (docs/map-storage.md §6.4).
     await writePinnedMapFileColumns(db, job.eventId, job.sourceHash, job.documentHash);
@@ -313,7 +329,37 @@ export async function applyJobResult(db: Db, job: Pick<ImportJobRow, "eventId" |
       });
     }
   }
+  // The promote's event half (§6.4): after its version holds the document, under the patch row lock.
+  if (promote) await completePromote(db, { eventId: job.eventId, clubMapId: job.clubMapId, sourceHash: job.sourceHash, documentHash: job.documentHash, patch: job.patch });
   await touchDocument(db, job.documentHash);
+}
+
+export interface InsertImportJobInput {
+  sourceHash: string;
+  eventId: bigint | null;
+  clubMapId: string | null;
+  startedBy: string | null;
+  decisions: mapImport.SymbolDecision[];
+  patch: mapDocument.VersionPatch;
+}
+
+/** A queued job row, in the caller's transaction (promote inserts its version and job together, §5); run it with `holdImportJob`. */
+export async function insertQueuedImportJob(db: Db, input: InsertImportJobInput): Promise<ImportJobRow> {
+  const { decisions, patch, ...target } = input;
+  return asRow(await db.mapImportJob.create({
+    data: { ...target, decisions: decisions.map((d) => ({ ...d })) as Prisma.InputJsonArray, patch: patchJson(patch), state: "queued" },
+    select: JOB_SELECT,
+  }));
+}
+
+/** Kick the engine for `row` and hold up to `holdMs` for its terminal state; the freshest row either way. */
+export async function holdImportJob(db: Db, row: ImportJobRow, holdMs = DEFAULT_HOLD_MS): Promise<ImportJobRow> {
+  const finished = waitFor(row.id, holdMs);
+  void kickImportJobs(db);
+  const result = holdMs > 0 ? await finished : null;
+  if (result) return result;
+  const fresh = await db.mapImportJob.findUnique({ where: { id: row.id }, select: JOB_SELECT });
+  return fresh ? asRow(fresh) : row;
 }
 
 export interface StartImportJobInput {

@@ -168,7 +168,8 @@ async function sweepItem(db: Db, item: RematchItem): Promise<Omit<RematchItemRes
   return { outcome: "done", jobId: null, newDocumentHash: r.to ?? (await eventDocumentHash(db, BigInt(item.id))), error: null };
 }
 
-async function rematchItem(db: Db, item: RematchItem, timeoutMs?: number): Promise<Omit<RematchItemResult, keyof RematchItem>> {
+/** One pin's re-import (exported for the promote tests, which run their own items). */
+export async function rematchItem(db: Db, item: RematchItem, timeoutMs?: number): Promise<Omit<RematchItemResult, keyof RematchItem>> {
   const target = item.kind === "club"
     ? { clubMapId: (await db.clubMapVersion.findUniqueOrThrow({ where: { id: item.id }, select: { clubMapId: true } })).clubMapId }
     : { eventId: BigInt(item.id) };

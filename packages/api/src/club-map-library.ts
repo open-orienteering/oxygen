@@ -9,6 +9,7 @@
  * unit-tested without a database.
  */
 import { TRPCError } from "@trpc/server";
+import { mapDocument } from "@oxygen/shared";
 import { canDownloadClubLibraryMap } from "./ocad-export.js";
 import { meridianStalenessFromDetection } from "./map-north.js";
 import { documentFrameSchema, mapFileMetadataFor } from "./map-store/map-file-metadata.js";
@@ -44,6 +45,8 @@ export interface ClubMapRowInput {
     source: { fileName: string; sizeBytes: number };
     /** `report` is the import report (`matching.symbols` counts); optional for callers that do not load it. */
     document: { header: unknown; report?: unknown };
+    /** The version patch (docs/map-patches.md §5); absent or `[]` for an uploaded edition. */
+    patch?: unknown;
   } | null;
   versionCount: number;
   /** Newest import job of the series. */
@@ -74,6 +77,12 @@ function reviewCounts(report: unknown): { suggested: number; reviewed: number } 
   return { suggested: symbols.suggested, reviewed: symbols.reviewed };
 }
 
+/** A version's promoted corrections: the number of layers (promotes) and of ops over them. */
+export function correctionsOf(patch: unknown): { layers: number; corrections: number } {
+  const layers = mapDocument.parseVersionPatch(patch);
+  return { layers: layers.length, corrections: mapDocument.versionPatchOpCount(layers) };
+}
+
 export function projectClubMapRow({ series, version, versionCount, job }: ClubMapRowInput) {
   const file = version?.source ?? job?.source ?? null;
   const north = version ? reportNorth(version.document.report) : null;
@@ -99,6 +108,8 @@ export function projectClubMapRow({ series, version, versionCount, job }: ClubMa
           documentHash: version.documentHash,
           uploadedAt: version.uploadedAt.toISOString(),
           uploadedBy: version.uploadedBy,
+          // Promoted corrections (docs/map-patches.md §5 answer 8): layers and ops; the download stays the original file.
+          ...correctionsOf(version.patch),
         }
       : null,
     versionCount,
@@ -132,6 +143,12 @@ interface Caller {
 export function canRemoveClubMap(args: Caller & { createdBy: string | null }): boolean {
   if (!args.authEnabled) return true;
   return Boolean(args.user && (args.user.isAdmin || args.createdBy === args.user.id));
+}
+
+/** Delete the latest promoted version (docs/map-patches.md §5 answer 7): its promoter or an instance admin, as `remove`. */
+export function canRemoveClubMapVersion(args: Caller & { uploadedBy: string | null }): boolean {
+  if (!args.authEnabled) return true;
+  return Boolean(args.user && (args.user.isAdmin || args.uploadedBy === args.user.id));
 }
 
 /** Download a version's source: the club clause of `GET /api/map-sources/:hash` (§4.4). */

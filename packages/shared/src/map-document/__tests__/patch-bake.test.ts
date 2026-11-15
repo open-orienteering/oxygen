@@ -261,5 +261,8 @@ describe("version patch values", () => {
     expect(sameVersionPatch([layer], [reordered])).toBe(true);
     expect(sameVersionPatch([layer], [])).toBe(false);
     expect(parseVersionPatch([layer])).toEqual([layer]);
+    // Record order restored: JSONB stores object keys shortest first.
+    const shuffled = { ...layer, ops: Object.fromEntries(Object.entries(layer.ops).reverse()) };
+    expect(Object.keys(parseVersionPatch([shuffled])[0].ops)).toEqual(Object.keys(layer.ops));
   });
 });

@@ -93,11 +93,20 @@ export type VersionPatchLayer = z.output<typeof versionPatchLayerSchema>;
 export const versionPatchSchema = z.array(versionPatchLayerSchema);
 export type VersionPatch = z.output<typeof versionPatchSchema>;
 
-/** The stored JSON as a version patch; `null` and an unparseable value are none (`[]`). */
+/**
+ * The stored JSON as a version patch, each layer's ops in op-id order and
+ * its symbols sorted (JSONB reorders object keys); `null` and an
+ * unparseable value are none (`[]`).
+ */
 export function parseVersionPatch(value: unknown): VersionPatch {
   if (value === null || value === undefined) return [];
   const parsed = versionPatchSchema.safeParse(value);
-  return parsed.success ? parsed.data : [];
+  if (!parsed.success) return [];
+  return parsed.data.map((l) => ({
+    unitsPerMm: l.unitsPerMm,
+    ops: Object.fromEntries(Object.keys(l.ops).sort().map((k) => [k, l.ops[k]])),
+    symbols: [...l.symbols].sort(),
+  }));
 }
 
 /** The same layers (key order ignored); null and `[]` are equal. */
