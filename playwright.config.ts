@@ -123,6 +123,9 @@ export default defineConfig({
         // depends on eventor.orientering.se being up and on it accepting
         // the placeholder key, neither of which holds.
         EVENTOR_API_BASE_URL: `http://127.0.0.1:${EVENTOR_PORT}/`,
+        // No DEM request leaves the stack, even with a provider switched on in
+        // Settings → Height data (docs/map-terrain.md §7.8 "Offline stacks").
+        MAP_DEM_OFFLINE: "1",
         AUTH_MODE: "proxy",
         OXYGEN_ADMIN_EMAILS: "e2e-admin@oxygen.test",
         OXYGEN_BUILD_ID: "e81729be4f7fd564c47bb2098137403ef6dcb922",
