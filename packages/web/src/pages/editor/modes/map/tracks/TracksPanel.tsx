@@ -1,7 +1,8 @@
 /**
  * The inspector's *GPS tracks* section (docs/course-editor.md §13 "GPS tracks"; docs/map-gps-tracks.md §5.1): import
  * by the file picker or a drop, the list with show / hide, rename, delete and locate, or the reason it is off; for
- * G26 the tracks to convert (a checkbox per ready row), *Show converted*, *Convert to line* and the convert panel.
+ * G26 the tracks to convert (a checkbox per ready row), *Show converted*, *Convert to line* and the convert panel; for
+ * G27 *Average*, the average and source marks, and the Tracks tool's hint.
  */
 
 import { useRef, useState, type DragEvent, type KeyboardEvent, type ReactNode } from "react";
@@ -56,7 +57,8 @@ function TrackRowItem({ row, selected, onSelect, onVisible, onRename, onDelete, 
   return (
     <li data-testid="editor-track-row" data-track-id={meta.id} data-state={row.state} data-visible={row.visible ? "true" : "false"}
       data-points={row.points} data-length-m={lengthM ?? undefined} data-outside={geometry ? outside : undefined}
-      data-converted={meta.convertedOp ? "true" : "false"} className="flex flex-col gap-0.5 rounded px-1 py-1 hover:bg-slate-50">
+      data-converted={meta.convertedOp ? "true" : "false"} data-average={meta.derivedFrom.length > 0 ? "true" : undefined}
+      data-source={row.isSource ? "true" : undefined} className="flex flex-col gap-0.5 rounded px-1 py-1 hover:bg-slate-50">
       <div className="flex items-center gap-1.5">
         <input type="checkbox" data-testid="editor-track-select" checked={selected} disabled={row.state !== "ready"} onChange={(e) => onSelect(meta.id, e.currentTarget.checked)}
           title={t("trackSelect")} aria-label={t("trackSelect")} className="shrink-0 w-3 h-3 cursor-pointer disabled:cursor-default" />
@@ -89,6 +91,8 @@ function TrackRowItem({ row, selected, onSelect, onVisible, onRename, onDelete, 
           <span data-testid="editor-track-outside" className="whitespace-nowrap text-amber-700" title={t("trackOutsideHint")}>{t("trackOutside", { count: outside })}</span>
         )}
         {meta.convertedOp && <span data-testid="editor-track-converted" className="whitespace-nowrap text-emerald-700">{t("trackConverted")}</span>}
+        {meta.derivedFrom.length > 0 && <span data-testid="editor-track-average" className="whitespace-nowrap text-purple-700">{t("trackAverageMark")}</span>}
+        {row.isSource && <span data-testid="editor-track-source" className="whitespace-nowrap text-slate-400">{t("trackSourceMark")}</span>}
         {row.error && <span className="whitespace-nowrap text-red-600">{t(`trackRowError_${row.error}`, { defaultValue: row.error })}</span>}
       </div>
     </li>
@@ -164,11 +168,23 @@ export function TracksPanel({ panel, convert }: { panel: Panel; convert?: Tracks
           {t("tracksShowConverted")}
         </label>
       )}
-      {convert && panel.rows.length > 0 && !convert.open && (
-        <div className="flex items-center gap-1.5">
-          <button type="button" data-testid="editor-tracks-convert" disabled={!!convert.off} onClick={convert.onOpen} title={convert.off ?? t("trackConvertHint")}
+      {panel.tool && (
+        <p data-testid="editor-tracks-tool-hint" data-state={panel.tool} className="text-[11px] text-slate-500">
+          {panel.tool === "ready" ? t("tracksToolHint") : t("tracksToolPick")}
+        </p>
+      )}
+      {panel.rows.length > 0 && !convert?.open && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {convert && (
+            <button type="button" data-testid="editor-tracks-convert" disabled={!!convert.off} onClick={convert.onOpen} title={convert.off ?? t("trackConvertHint")}
+              className="px-2 py-0.5 rounded border border-slate-200 text-slate-700 hover:bg-white disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed">
+              {t("trackConvert", { count: panel.selected.size })}
+            </button>
+          )}
+          <button type="button" data-testid="editor-tracks-average" data-busy={panel.averaging ? "true" : undefined} disabled={panel.averaging || panel.selected.size < 2}
+            onClick={panel.onAverage} title={panel.selected.size < 2 ? t("trackAverageNone") : t("trackAverageHint")}
             className="px-2 py-0.5 rounded border border-slate-200 text-slate-700 hover:bg-white disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed">
-            {t("trackConvert", { count: panel.selected.size })}
+            {panel.averaging ? t("trackAveraging") : t("trackAverage", { count: panel.selected.size })}
           </button>
         </div>
       )}

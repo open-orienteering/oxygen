@@ -95,7 +95,7 @@ function patchErrorText(e: unknown, t: TFunction<"editor">): string {
 }
 
 /** The rail buttons' labels (`editor.json`). */
-const RAIL_LABEL = { V: "toolSelect", N: "toolNodes", P: "toolMapPoint", L: "toolMapLine", A: "toolMapArea" } as const satisfies Record<MapRailTool, string>;
+const RAIL_LABEL = { V: "toolSelect", N: "toolNodes", P: "toolMapPoint", L: "toolMapLine", A: "toolMapArea", T: "toolMapTracks" } as const satisfies Record<MapRailTool, string>;
 
 export function useMapMode(a: MapModeArgs): MapMode {
   const { t, i18n } = useTranslation("editor");
@@ -212,7 +212,9 @@ export function useMapMode(a: MapModeArgs): MapMode {
   const centreOn = useCallback((pt: Pt) => setViewRequest((v) => ({ key: (v?.key ?? 0) + 1, centre: pt })), []);
   // GPS tracks (§13 "GPS tracks", G25): the reference layer over every Map-mode tool and the inspector's section.
   const fitTo = useCallback((bounds: { minX: number; minY: number; maxX: number; maxY: number }) => setViewRequest((v) => ({ key: (v?.key ?? 0) + 1, bounds })), []);
-  const tracks = useMapTracks({ enabled, nameId, mapDoc, canEdit, writes, run, record, onLocate: fitTo });
+  const tracks = useMapTracks({ enabled, nameId, mapDoc, canEdit, writes, run, record, onLocate: fitTo, armed: tool === "T" });
+  // The Tracks tool (§13 "GPS tracks: editing", G27) goes back to V when the tracks are off.
+  useEffect(() => { if (tool === "T" && tracks.toolOff) setTool("V"); }, [tool, tracks.toolOff]);
 
   // ─── Writes ──
   const deliver = useCallback((res: PatchWriteResult) => {
@@ -519,7 +521,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
   })), [drawKind, poly, chosenPut, drawHover, onDrawHover, drawDraft, finishDrawing, dropDrawing, drawSnap]);
   /** Arms a rail tool; a drawing tool only while drawing is enabled, dropping the selection and *Change symbol*. */
   const armTool = useCallback((next: MapRailTool) => {
-    if (isMapDrawTool(next) && !canDraw) return;
+    if ((isMapDrawTool(next) && !canDraw) || (next === "T" && tracks.toolOff)) return;
     setPoly(null);
     drawId.current = null;
     drawGesture.current = null;
@@ -529,7 +531,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
     if (next !== "V") setConvertOpen(false); // the convert panel keeps V (§13 "GPS tracks: convert")
     if (isMapDrawTool(next)) { setSelected(null); setStack([]); pendingSelect.current = null; }
     setTool(next);
-  }, [canDraw, setChanging]);
+  }, [canDraw, setChanging, tracks.toolOff]);
   /** `armTool` that also drops a drawing in progress from the draft (its op had an id; a waiting write's stays). */
   const armDropping = useCallback((next: MapRailTool) => {
     if (drawId.current) keepWaiting();
@@ -642,7 +644,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
     },
     onCancel: () => setDraft((d) => (d?.waitFor != null ? d : null)),
   }), [hit, canMove, model, selected, commit, select]);
-  const binding = pointBinding ?? lineBinding ?? nodesBinding ?? selectBinding;
+  const binding = tracks.toolBinding ?? pointBinding ?? lineBinding ?? nodesBinding ?? selectBinding;
 
   const selectedList = useMemo(() => (selected ? [selected] : []), [selected]);
   // The convert panel's preview is drawn with any draft still waiting for its write to be drawn.
@@ -708,9 +710,9 @@ export function useMapMode(a: MapModeArgs): MapMode {
     <div data-testid="editor-tool-rail" className="pointer-events-auto relative flex flex-col gap-1 bg-white/95 backdrop-blur-sm border border-slate-200 rounded-lg shadow-sm p-1 self-start">
       {MAP_RAIL.map((key) => {
         const label = t(RAIL_LABEL[key]);
-        const off = isMapDrawTool(key) && !canDraw;
+        const off = key === "T" ? !!tracks.toolOff : isMapDrawTool(key) && !canDraw;
         return (
-          <button key={key} type="button" data-testid={`editor-tool-${key}`} aria-pressed={tool === key} title={off ? `${label} — ${t("mapDrawOff")}` : label} aria-label={label}
+          <button key={key} type="button" data-testid={`editor-tool-${key}`} aria-pressed={tool === key} title={off ? `${label} — ${key === "T" ? tracks.toolOff : t("mapDrawOff")}` : label} aria-label={label}
             disabled={off} onClick={() => armTool(key)}
             className={`w-8 h-8 rounded-md text-xs font-semibold flex items-center justify-center cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${tool === key ? "bg-purple-100 text-purple-700" : "text-slate-600 hover:bg-slate-100"}`}>
             {key}

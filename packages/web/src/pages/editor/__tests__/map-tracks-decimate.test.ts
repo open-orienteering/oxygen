@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { gpsTrack } from "@oxygen/shared";
-import { DEFAULT_TOLERANCE_MM, LAYER_POINT_BUDGET, decimateLayer, layerShapes, toleranceMm } from "../modes/map/tracks/decimate";
+import { DEFAULT_TOLERANCE_MM, LAYER_POINT_BUDGET, decimateLayer, layerShapes, runsOf, toleranceMm } from "../modes/map/tracks/decimate";
 
 const line = (pts: [number, number][]): gpsTrack.ProjectedTrack => ({
   x: Float64Array.from(pts, (p) => p[0]),
@@ -87,5 +87,30 @@ describe("layerShapes (§5.1 'The layer')", () => {
     expect(layerShapes(out)).toEqual([
       { kind: "line", points: [{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 5, y: 5 }], color: "#2563eb", widthPx: 2, testId: "editor-gps-track", data: { "track-id": "a" } },
     ]);
+  });
+});
+
+describe("an average's single-pass spans dashed (§5.2, G27)", () => {
+  it("runsOf: solid and dashed runs that touch, each of two points at least", () => {
+    expect(runsOf(10, [])).toEqual([{ start: 0, end: 9, dashed: false }]);
+    expect(runsOf(10, [{ start: 3, end: 6 }])).toEqual([{ start: 0, end: 3, dashed: false }, { start: 3, end: 5, dashed: true }, { start: 5, end: 9, dashed: false }]);
+    expect(runsOf(10, [{ start: 0, end: 4 }, { start: 7, end: 10 }])).toEqual([
+      { start: 0, end: 3, dashed: true }, { start: 3, end: 7, dashed: false }, { start: 7, end: 9, dashed: true },
+    ]);
+    // A one-sample range has no dashed run: the solid runs meet there.
+    expect(runsOf(10, [{ start: 4, end: 5 }])).toEqual([{ start: 0, end: 4, dashed: false }, { start: 4, end: 9, dashed: false }]);
+    expect(runsOf(10, [{ start: 0, end: 10 }])).toEqual([{ start: 0, end: 9, dashed: true }]);
+  });
+
+  it("a line with ranges: one path per run under the same track id, the dashed ones marked; the run ends kept", () => {
+    const l = line(Array.from({ length: 11 }, (_, i) => [i, 0] as [number, number]));
+    const out = decimateLayer([{ id: "m", colour: "#000", line: l, dashed: [{ start: 4, end: 8 }] }], 0.01);
+    const shapes = layerShapes(out);
+    expect(shapes.map((s) => s.kind === "line" && [s.points.map((p) => p.x), !!s.dashed, s.data?.["single-pass"]])).toEqual([
+      [[0, 4], false, undefined], [[4, 7], true, "true"], [[7, 10], false, undefined],
+    ]);
+    expect(shapes.every((s) => s.kind === "line" && s.data?.["track-id"] === "m" && s.testId === "editor-gps-track")).toBe(true);
+    // Deterministic and the same objects for the same line (cached per line, ranges and tolerance).
+    expect(decimateLayer([{ id: "m", colour: "#000", line: l, dashed: [{ start: 4, end: 8 }] }], 0.01)).toEqual(out);
   });
 });

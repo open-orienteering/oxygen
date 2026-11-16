@@ -115,14 +115,20 @@ describe("Map mode's keys (§13)", () => {
     expect(k("Enter", { ctrlKey: true })).toBeNull();
   });
 
+  it("T arms the Tracks tool (§13 \"GPS tracks: editing\", G27)", () => {
+    expect(k("t")).toEqual({ kind: "tool", tool: "T" });
+    expect(k("T", { shiftKey: true })).toEqual({ kind: "tool", tool: "T" });
+    expect(k("t", { ctrlKey: true })).toBeNull();
+  });
+
   it("Course mode's tool keys and modified keys are not Map mode's (course edits locked)", () => {
-    for (const key of ["S", "K", "M", "X", "C", "T", "G", "1"]) expect(k(key)).toBeNull();
+    for (const key of ["S", "K", "M", "X", "C", "G", "1"]) expect(k(key)).toBeNull();
     expect(k("z", { ctrlKey: true })).toBeNull();
     expect(k("f", { metaKey: true })).toBeNull();
   });
 
-  it("the rail is V, N, P, L, A (§13 \"Nodes\", \"Drawing\")", () => {
-    expect(MAP_RAIL).toEqual(["V", "N", "P", "L", "A"]);
+  it("the rail is V, N, P, L, A, T (§13 \"Nodes\", \"Drawing\", \"GPS tracks: editing\")", () => {
+    expect(MAP_RAIL).toEqual(["V", "N", "P", "L", "A", "T"]);
   });
 });
 

@@ -4,7 +4,7 @@ import type { TrackMeta } from "../../../lib/editor/write-client";
 import {
   MAX_CALL_POINTS, MAX_CALL_TRACKS, MAX_TRACK_POINTS, TRACK_COLOURS, chunkTracks, deletedTrackImport, disabledReason, locateBounds, parseVisibility,
   planImport, projectTrackRow, pruneVisibility, trackColour, trackErrorCode, trackRows, type TrackGeometry, defaultVisible, nextOverrides, pruneSelection,
-  showConvertedKey, visibilityKey,
+  showConvertedKey, sourceIds, visibilityKey,
 } from "../modes/map/tracks/model";
 
 /** SWEREF99 TM, 1:10 000, 100 units per mm, origin at 500 000 / 6 500 000 (as project.test.ts). */
@@ -163,6 +163,28 @@ describe("trackRows (§5.1 'The list')", () => {
     expect(defaultVisible(meta("a"), false)).toBe(true);
     expect(defaultVisible(meta("b", conv), false)).toBe(false);
     expect(defaultVisible(meta("b", conv), true)).toBe(true);
+  });
+
+  it("an average's passes are hidden by default, Show converted or not; the eye still wins; sources and averages marked (G27)", () => {
+    const geom = new Map<string, TrackGeometry | { error: string }>();
+    const conv = { convertedOp: "add:0190a000-0000-7000-8000-0000000000c1" };
+    const avg = meta("m", { derivedFrom: ["a", "b", "gone"], singlePass: [] });
+    const metas = [meta("a"), meta("b", conv), meta("c"), avg];
+    expect([...sourceIds(metas)].sort()).toEqual(["a", "b", "gone"]);
+    const rows = trackRows(metas, geom, {});
+    expect(rows.map((r) => [r.meta.id, r.visible, r.isSource])).toEqual([["a", false, true], ["b", false, true], ["c", true, false], ["m", true, false]]);
+    expect(trackRows(metas, geom, {}, true).map((r) => r.visible)).toEqual([false, false, true, true]);
+    expect(trackRows(metas, geom, { a: true }).map((r) => r.visible)).toEqual([true, false, true, true]);
+    // The average lists its still-listed sources with their marks (a conversion marks them, §5.2).
+    expect(rows[3].sources).toEqual([{ id: "a", convertedOp: null }, { id: "b", convertedOp: conv.convertedOp }]);
+    expect(rows[0].sources).toEqual([]);
+    expect(defaultVisible(meta("a"), false, true)).toBe(false);
+    expect(defaultVisible(meta("a"), true, true)).toBe(false);
+    // Removing the average shows its passes again (no override needed).
+    expect(trackRows(metas.slice(0, 3), geom, {}).map((r) => r.visible)).toEqual([true, false, true]);
+    // An override on a source is kept only where it differs from the hidden default.
+    expect(nextOverrides({}, meta("a"), true, false, true)).toEqual({ a: true });
+    expect(nextOverrides({ a: true }, meta("a"), false, false, true)).toEqual({});
   });
 });
 
