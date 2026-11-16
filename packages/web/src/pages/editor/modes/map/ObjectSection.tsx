@@ -14,7 +14,7 @@ import { tenthsOf } from "./symbols";
 
 /** One line or area operation's button (`editor-map-object-<id>`, `data-reason`; *Join* / *Cut hole* `aria-pressed`). */
 export interface ShapeOpButton {
-  id: "reverse" | "split" | "join" | "cut-hole" | "remove-hole";
+  id: "reverse" | "split" | "join" | "snap-ends" | "cut-hole" | "remove-hole";
   reason: ShapeReason | null;
   /** A one-shot armed state (*Join*, *Cut hole*): pressed while armed. */
   pressed?: boolean;

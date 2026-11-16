@@ -1,7 +1,7 @@
 # GPS tracks
 
 Status: **draft** — chapter of the vector map pipeline specification,
-started by sub-slice G22; §4 by G23; §1 by G24; §5.1 by G25; §6 by G26. GPS tracks are new scope for slice G (user,
+started by sub-slice G22; §4 by G23; §1 by G24; §5.1 by G25; §6 by G26; §6.7 by G28. GPS tracks are new scope for slice G (user,
 2026-11-13, `docs/research/vector-map-pipeline/SLICES.md` "Slice G",
 rows G20–G28): the research decides none of it beyond 04 §7
 ("Georeferenced inputs" become paper-space overlays) and 06 §3.2 (a
@@ -754,7 +754,7 @@ Written by row G26 (`packages/web/src/pages/editor/modes/map/tracks/`
 `convert.ts`, `useTrackConvert.ts`, `ConvertPanel.tsx`; the editor's
 side in `course-editor.md` §13 "GPS tracks: convert"; decision row in
 `decisions/slice-g.md`). Snapping a converted line's ends is G28's
-(answers 4 and 5 below).
+(answers 4 and 5 below; §6.7).
 
 Decided before planning (the planner's questions and defaults, the user
 2026-11-15, every recommendation):
@@ -856,7 +856,8 @@ only where it differs from the default.
 
 Remembered on the device, not per event (`localStorage`
 `oxygen:gps-track-convert`): smoothing in whole metres, simplification to
-0.01 mm, both clamped to answer 3's ranges, and the symbol. **The symbol
+0.01 mm, both clamped to answer 3's ranges, *Snap ends* (`snapEnds`, G28,
+§6.7; absent or not `false` = on), and the symbol. **The symbol
 across maps** (decided overnight on the user's standing instruction
 (2026-11-13), for review; G26 planner's Q4): the picked item is
 remembered by its key with the document's hash, and by its library entry
@@ -886,6 +887,83 @@ half-width is `floor(windowM / 2 / stepM)` samples (§3.3), so the
 smoothing changes every 4 m (1–3 m resample only; 10 m smooths as 8 m).
 §3.3 is unchanged (§8).
 
+### 6.7 Snapping the ends
+
+Written by row G28 (`modes/map/tracks/snap-ends.ts`; the target search
+`nearestOnLines` in `lib/editor/snap.ts`, `course-editor.md` §6.2; the
+editor's side in `course-editor.md` §13 "GPS tracks: junctions"; decision
+row in `decisions/slice-g.md`). A converted line's ends are moved onto the
+track network, so that two tracks meet instead of stopping short of each
+other or running past.
+
+- **Where**: at conversion, when the panel's *Snap ends* is on (the
+  default; remembered on the device with the other settings, §6.4), and
+  afterwards as *Snap ends* on a selected added line (`course-editor.md`
+  §13 "Line and area operations").
+- **Targets** (answer 4): line objects (type 2) of the effective document,
+  added lines included, whose symbol is a **track symbol**: a document
+  line symbol whose applied match (`isAppliedMatch`: automatic, or
+  confirmed in review) is one of the twelve ISSkiOM track-group lines
+  `ISSkiOM2019:` 801.1, 801.2, 802.1, 802.2, 803.1, 803.2, 804.1, 804.2,
+  805, 807, 813.1, 813.2 (`TRACK_ENTRY_IDS`; 808 is an area); a patch
+  symbol under one of those keys; a document line symbol with **no applied
+  match** whose source code is in the 800s (`/^8\d\d(\.\d+)?$/`: a club's
+  own ski symbols). Not roads or paths (ISOM 501–508), nor anything matched
+  to another entry, nor points and areas. An unreviewed suggestion is not
+  an applied match, so a symbol that only has one counts by its code
+  (decided overnight on the user's standing instruction (2026-11-13), for review: the renderer draws it from its source too). Hidden
+  objects and hidden symbols are no targets (decided overnight on the user's standing instruction (2026-11-13), for review: as the snap
+  index). The line being snapped is never its own target.
+- **A batch** (answer 5): the tracks of one conversion are snapped in list
+  order, each seeing the document's track lines and the lines already
+  made in that batch. The batch's lines are targets only when the
+  conversion's symbol is itself a track symbol (decided overnight on the user's standing instruction (2026-11-13), for review: one rule
+  for what an end snaps onto, so a batch gives what converting the tracks
+  one at a time would). On a tie the document's line wins, then the
+  earlier line of the batch.
+- **Reach**: **1.5 mm** on paper (`SNAP_ENDS_MM`), inclusive, from the end
+  node to the nearest point on the target line — the row's own reach, not
+  the 0.5 mm of control and node snapping (`course-editor.md` §6.2).
+  Target curves are measured on their curve (flattened to 0.01 mm).
+- **Per end**, the start first and then the end (each sees the other's
+  result); the target is the nearest track line within reach, then in this
+  order:
+  1. **End to end**: when one of that line's end nodes — the first or last
+     node of the part that was hit — lies within 1.5 mm of the end, the end
+     node moves onto it; the two lines then share a vertex (joining them
+     is G10's *Join*).
+  2. **Overshoot**: else, walking back from the end while the line's nodes
+     stay within 1.5 mm of the target, the first segment that crosses it is
+     cut there: the nodes past the crossing go and the crossing becomes the
+     end. The rule "every point after the crossing within 1.5 mm" is
+     checked at the nodes of the cut-off tail (decided overnight on the user's standing instruction (2026-11-13), for review). With
+     several crossings on that segment the one nearest the end is taken
+     (decided overnight on the user's standing instruction (2026-11-13), for review: it removes the least of the recording). A tail
+     that leaves reach before a crossing is not cut.
+  3. **Short**: else the end node moves to the nearest point on the
+     target: the last segment is extended straight onto it, with no node
+     added (decided overnight on the user's standing instruction (2026-11-13), for review, the G28 planner's question 1: "moved onto it" read
+     literally; on an oblique approach the last segment turns slightly
+     rather than being prolonged along its own direction).
+  An end already on the target — within half a unit's diagonal, as a
+  snapped end rounded to whole units lies — is left as it is, apart from
+  step 1, so snapping a snapped line again changes nothing.
+  A result is rounded to whole document units. A step that would leave the
+  line under two distinct coordinates, or change nothing, is not taken and
+  the next one is tried; nothing in reach leaves the end as it was. Only a
+  straight end segment is snapped, and the walk back stops at a curve (a
+  converted line has none).
+- **The other line is never changed**: no node is inserted into it, it is
+  not split or joined. A conversion still writes only its own `add`s
+  (§6.2); *Snap ends* rewrites only the selected line's `add` — one op.
+- **Flags** (only *Snap ends* meets them; a converted line has none): a
+  moved or new end keeps the old end's flags without its border bits (at
+  the line's end they cover nothing); a new start takes the border bits of
+  the segment it now starts. Nodes cut off go with their flags, and the
+  gaps are balanced afterwards (`shape-ops.ts` `balanceGaps`).
+- **The panel** counts the ends moved (`editor-tracks-convert-snapped`),
+  and its node count and preview are of the snapped lines.
+
 ## 7. Tests
 
 | File | Proves |
@@ -906,8 +984,12 @@ smoothing changes every 4 m (1–3 m resample only; 10 m smooths as 8 m).
 | `web/src/pages/editor/__tests__/map-tracks-tool.test.ts` | §5.2, the Tracks tool's reducer and binding: a press on a handle taken (the nearer one), elsewhere or without a track not; the drag threshold; the live trim along the stored points, outward restoring, two points kept; the release writing once with the trim before, nothing at the same index, cancelled or without a gesture; a click splitting on the tool's track, nothing next to a handle, selecting another track, nothing on empty map, selecting without a tool track, the nearer of two tracks in reach winning and the tool's own on a tie; the binding exclusive, its handles at the live trim, the draft reported and cleared, the effects sent; no press while a write is in flight; no handles and no press without a track |
 | `web/src/pages/editor/__tests__/map-tracks-average.test.ts` | §5.2 *Average*: the worker's handler is `averageTracks` with the defaults (two passes 3 m apart, one covering half → the centre line, the rest on the one pass, one range), a `RangeError` its error; the passes copied (compact, never the rows' buffers); the client — one worker, answers by id, order-independent bytes, an error rejected, `dispose` terminating and cancelling a job in flight; the import item (client id, name, `sourceName` `""`, `derivedFrom`, `singlePass`, untimed WGS 84 back on the paper within 0.002 mm); refused over 200 000 points or without a georeference |
 | `web/src/pages/editor/__tests__/map-tracks-convert.test.ts` | §6 (and §5.2: an average's sources marked with its op and restored on undo, a track converted in the same batch keeping its own op, a source of two averages taking the later's, a skipped average marking none): the fixture L → one `add` at 100 and 1000 units per mm, equal to `drawOp`'s; ends pinned under smoothing; fewer nodes with smoothing and a larger tolerance; determinism and no mutation; rounded duplicates and a one-coordinate track; outside points; a conversion's ops, marks, previous marks, node counts and skipped tracks; `putSymbols` on first use only, applying without an issue; ascending ids; the controls' defaults and ranges; the node count's warning above 2000; the remembered symbol (§6.4); the picker's order |
+| `web/src/lib/editor/__tests__/snap.test.ts` (G28 cases) | §6.7's target search `nearestOnLines`: the nearest point inside a segment, the 1.5 mm reach inclusive and not beyond, the symbol filter, points / areas / texts never lines, hidden symbols and the skipped object, a tie to the lower index, a Bézier line measured on its curve with the hit part's ends, the effective document (a hidden line not found, an added one found), the bounding-box reject at the edge; `nearestOnPath` on one line in document units |
+| `web/src/pages/editor/__tests__/map-tracks-snap.test.ts` | §6.7: short (moved onto the nearest point), overshoot (cut at the crossing, over several nodes too), a tail leaving reach moved not cut, end to end (before a crossing), nothing in reach unchanged, the reach inclusive, both ends start first, a snap that would collapse the line not made, an end on an oblique line not snapped again, of two crossings the one nearest the end, determinism and no mutation, the flags of a new start (after a cut over several nodes too) and end, a curved end segment left; the filter — the twelve ids equal the library's track-group lines, document symbols (matched, unmatched 8xx, an 8xx matched elsewhere, an unreviewed suggestion, an area and a point, a 505 matched to 805), patch symbols by key, a path nearer than a track passed over |
+| `web/src/pages/editor/__tests__/map-tracks-convert.test.ts` (G28 cases) | §6.7 in a conversion: the fixture L's start end to end onto a track's end node and its end extended 1 mm onto another; off or out of reach the ops exactly as without; a path no target; a batch in list order (the second track onto the first's line; not the other way round; not when converted as a path); a tie to the document's line; the node count after a cut; *Snap ends* stored, on by default |
+| `web/src/pages/editor/__tests__/map-shape-ops.test.ts` (G28 cases) | *Snap ends* on an added line: the `add` rewritten as the only op, the track line untouched, the inverse restoring it; the line never its own target and paths none (`no-target`); `closed`, `multi-part`; nothing on a document line |
 | `api/src/__tests__/integration/print-patch.test.ts` | §6 in print (G26, the row's page raster): a line `add` with `ISSkiOM2019:801.1` materialised on first use changes the rasterised `maps.pdf` page only inside its box |
-| `e2e/map-gps-tracks.spec.ts` | §5.1 end to end on `e2e/test.ocd`: import by the picker (a non-GPX file reported), the rows, the paths at the fixture's paper mm, locate, hide kept across a reload, a converted track hidden by default and *Show converted*, rename, delete and its undo, a reload keeping the tracks; §6: the fixture track converted with 801.1 — the preview, the op, the mark, the canvas, `maps.pdf`'s strokes, undo, redo, a second conversion moving the mark, the settings and symbol across a reload, a refused mark keeping the undo entry; §5.2 on `e2e/fixtures/gps-passes.gpx` (two synthetic passes, generated with the expected average): trim by `T`'s end handle, undo / redo, outward restoring, the start handle, a reload keeping it; split, split, delete the middle, three undos bringing the original back under its id at the end of the list, the redo splitting again; *Average* of the two passes — one import with `derivedFrom` and `singlePass` as the generator's, the passes hidden, the average solid on the centre line and dashed on the one pass, converting it marking all three with one op and its undo restoring them, the average's undo showing the passes (`course-editor.md` §13 "Tests" has the detail) |
+| `e2e/map-gps-tracks.spec.ts` | §5.1 end to end on `e2e/test.ocd`: import by the picker (a non-GPX file reported), the rows, the paths at the fixture's paper mm, locate, hide kept across a reload, a converted track hidden by default and *Show converted*, rename, delete and its undo, a reload keeping the tracks; §6: the fixture track converted with 801.1 — the preview, the op, the mark, the canvas, `maps.pdf`'s strokes, undo, redo, a second conversion moving the mark, the settings and symbol across a reload, a refused mark keeping the undo entry; §6.7: two ISSkiOM 801.1 lines put through the patch, the fixture converted with *Snap ends* on (two ends counted, the start on one line's end node, the end extended onto the other, both lines unchanged), off (the line as recorded), *Snap ends* on the added line (one write, then `no-target`, undone), off remembered across a reload; §5.2 on `e2e/fixtures/gps-passes.gpx` (two synthetic passes, generated with the expected average): trim by `T`'s end handle, undo / redo, outward restoring, the start handle, a reload keeping it; split, split, delete the middle, three undos bringing the original back under its id at the end of the list, the redo splitting again; *Average* of the two passes — one import with `derivedFrom` and `singlePass` as the generator's, the passes hidden, the average solid on the centre line and dashed on the one pass, converting it marking all three with one op and its undo restoring them, the average's undo showing the passes (`course-editor.md` §13 "Tests" has the detail) |
 
 ## 8. Pending in this chapter
 
@@ -934,8 +1016,19 @@ smoothing changes every 4 m (1–3 m resample only; 10 m smooths as 8 m).
   `data-points` string on every render, so up to the 50 000-point budget
   is re-serialised per pan frame. Culling to the view (the `onView` prop
   above) or a cached path in the viewer would bound it; unmeasured.
-- Snapping a converted line's ends onto the track network (G28, §6
-  answers 4–5).
+- The end snap (§6.7) gives the target no node at the junction: a line
+  ending in the middle of another meets it without a shared vertex, so a
+  later edit of the target moves away from it. Inserting a node into the
+  other line was out of the row ("the other line is not changed").
+- *Snap ends* leaves a curved end segment alone and the overshoot walk
+  stops at a curve: converted lines are polylines, and a hand-drawn curved
+  line is snapped only where its end segment is straight.
+- *Snap ends* cutting off a tail drops the gap toggles of the nodes cut
+  off (balanced afterwards, so a gap opened before the cut and closed in
+  the tail is gone).
+- The overshoot rule checks the cut-off tail at its nodes, not between
+  them: a tail whose segment bulges more than 1.5 mm from a bending target
+  between two nodes within reach is still cut.
 - Bézier fitting of a converted line (later; polylines for now).
 - The smoothing control acts in 4 m steps (§6.6): whole metres over a
   kernel of `floor(windowM / 4)` samples at `stepM` 2. A finer kernel (a

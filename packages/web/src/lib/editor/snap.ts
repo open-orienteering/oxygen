@@ -96,3 +96,91 @@ export function snapIndexForDocument(hash: string, bytes: ArrayBuffer, patch?: M
   }
   return index;
 }
+
+// ─── The nearest point on a line (G28) ──
+
+/** A line found by `nearestOnLines`: the nearest point on it, the part it lies on (paper mm) and that part's ends. */
+export interface LineHit {
+  /** The object's index in the document; -1 for a line not in it (a batch's earlier line, `nearestOnPath`). */
+  object: number;
+  point: Pt;
+  distanceMm: number;
+  /** The part the point is on, flattened (curves to 0.01 mm), paper mm. */
+  path: Pt[];
+  /** The part's first and last nodes. */
+  ends: [Pt, Pt];
+}
+
+/** Curves of a target line are flattened to this (paper mm). */
+const FLATTEN_MM = 0.01;
+/** Floating-point slack on the inclusive reach (paper mm). */
+const EPS_MM = 1e-9;
+
+/** The nearest point of a polyline (paper mm) to `pt`, with its distance; null for an empty one. */
+export function nearestOnPolyline(path: readonly Pt[], pt: Pt): { point: Pt; distanceMm: number } | null {
+  if (path.length === 0) return null;
+  let best = path[0], bestD = Math.hypot(path[0].x - pt.x, path[0].y - pt.y);
+  for (let k = 0; k + 1 < path.length; k++) {
+    const a = path[k], b = path[k + 1];
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const len2 = dx * dx + dy * dy;
+    const t = len2 > 0 ? Math.min(1, Math.max(0, ((pt.x - a.x) * dx + (pt.y - a.y) * dy) / len2)) : 0;
+    const q = { x: a.x + t * dx, y: a.y + t * dy };
+    const d = Math.hypot(q.x - pt.x, q.y - pt.y);
+    if (d < bestD) { bestD = d; best = q; }
+  }
+  return { point: best, distanceMm: bestD };
+}
+
+/** A line's parts (a `hole` flag starts the next), curves flattened, in paper mm; parts under two points are left out. */
+export function lineParts(coords: ArrayLike<number>, flags: ArrayLike<number>, unitsPerMm: number): Pt[][] {
+  if (flags.length === 0) return [];
+  const rings = render.flattenRings(render.makePath(coords, flags), FLATTEN_MM * unitsPerMm);
+  return rings.filter((r) => r.length >= 4).map((r) => {
+    const out: Pt[] = [];
+    for (let j = 0; j < r.length; j += 2) out.push({ x: r[j] / unitsPerMm, y: r[j + 1] / unitsPerMm });
+    return out;
+  });
+}
+
+function nearestOnParts(parts: readonly Pt[][], pt: Pt, maxMm: number, object: number): LineHit | null {
+  let best: LineHit | null = null;
+  for (const path of parts) {
+    const n = nearestOnPolyline(path, pt);
+    if (!n || n.distanceMm > maxMm + EPS_MM || (best && n.distanceMm >= best.distanceMm)) continue;
+    best = { object, point: n.point, distanceMm: n.distanceMm, path, ends: [path[0], path[path.length - 1]] };
+  }
+  return best;
+}
+
+/** The nearest point within `maxMm` (inclusive) on one line given as document-unit coordinates (`object` -1). */
+export function nearestOnPath(coords: readonly (readonly number[])[], unitsPerMm: number, pt: Pt, maxMm: number): LineHit | null {
+  return nearestOnParts(lineParts(coords.flatMap((c) => [c[0], c[1]]), coords.map((c) => c[2] ?? 0), unitsPerMm), pt, maxMm, -1);
+}
+
+/**
+ * The nearest point on a line object within `maxMm` of `pt` (paper mm, inclusive) among the lines whose symbol passes
+ * `symbolFilter`, or null (docs/course-editor.md §6.2; row G28). The snap index above holds vertices only; this
+ * answers a point anywhere on a line. Lines of the effective document, added ones included; hidden objects and hidden
+ * symbols are not candidates, and neither is object `skip`. A linear scan with a bounding-box reject: it is asked
+ * twice per line on a conversion or *Snap ends*, not on every pointer move. A tie goes to the lower index.
+ */
+export function nearestOnLines(
+  doc: Pick<mapDocument.EffectiveDocument, "header" | "attrs" | "coords" | "flags" | "coordStart" | "hidden"> & { bboxes?: ArrayLike<number> },
+  pt: Pt, maxMm: number, symbolFilter: (symbolIdx: number) => boolean, skip?: number,
+): LineHit | null {
+  const { header, attrs, coords, flags, coordStart, hidden, bboxes } = doc;
+  const u = header.unitsPerMm;
+  const reach = (maxMm + EPS_MM) * u + 1, px = pt.x * u, py = pt.y * u;
+  let best: LineHit | null = null;
+  for (let i = 0; i < attrs.symbolIdx.length; i++) {
+    if (i === skip || attrs.type[i] !== mapDocument.OBJECT_TYPE.line || hidden?.[i]) continue;
+    const s = attrs.symbolIdx[i];
+    if (header.symbols[s]?.hidden || !symbolFilter(s)) continue;
+    if (bboxes && (px < bboxes[i * 4] - reach || py < bboxes[i * 4 + 1] - reach || px > bboxes[i * 4 + 2] + reach || py > bboxes[i * 4 + 3] + reach)) continue;
+    const from = coordStart[i], to = coordStart[i + 1];
+    const hit = nearestOnParts(lineParts(coords.subarray(from * 2, to * 2), flags.subarray(from, to), u), pt, maxMm, i);
+    if (hit && (!best || hit.distanceMm < best.distanceMm)) best = hit;
+  }
+  return best;
+}

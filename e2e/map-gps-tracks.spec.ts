@@ -16,7 +16,7 @@
 import { readFileSync } from "node:fs";
 import { expect, test, type Page, type Request, type Response } from "@playwright/test";
 import { allControlsSheet, EDITOR_EVENT, editorReady, openEditor, printed, toPage, trpcCall, viewSettled } from "./helpers/editor";
-import { dropEventPatch } from "./helpers/event-map-pin";
+import { dropEventPatch, patchSymbolFor } from "./helpers/event-map-pin";
 import { trpcProcedures, waitForTrpc } from "./helpers/trpc";
 
 type Pt = { x: number; y: number };
@@ -533,6 +533,120 @@ test.describe("GPS tracks in Map mode (docs/course-editor.md §13)", () => {
       expect(await listed()).toBe(opId);
     } finally {
       await sheet.drop().catch(() => undefined);
+      await dropEventPatch(EDITOR_EVENT).catch(() => undefined);
+      await clearTracks().catch(() => undefined);
+    }
+  });
+
+  // ─── G28: the ends snapped to the track network (docs/map-gps-tracks.md §6.7; course-editor.md §13 "junctions") ──
+
+  test("snap: a converted track ends on the existing track lines; off writes it as recorded; Snap ends on the added line", async ({ page }) => {
+    test.setTimeout(240_000);
+    await dropEventPatch(EDITOR_EVENT);
+    await clearTracks();
+    try {
+      await openEditor(page, "?mode=map");
+      await expect(page.getByTestId("editor-page")).toHaveAttribute("data-mode", "map");
+      // Two ski-track lines put through the patch (e2e/test.ocd has no track symbol near the fixture): T1 upright at
+      // x = 16 mm, 1 mm beyond the L's end (15, -10); T2 ending at (-15.6, 10.8), 1 mm from the L's start (-15, 10).
+      const { documentHash, key, symbol } = patchSymbolFor(EDITOR_EVENT, SKI_TRACK);
+      const T1 = "00000000-0000-7000-8000-0000000002a1", T2 = "00000000-0000-7000-8000-0000000002a2";
+      const t1 = [[1600, -2000], [1600, 0]], t2 = [[-1560, 1080], [-2500, 2000]];
+      await trpcCall("mapPatch.applyChange", {
+        documentHash,
+        put: [{ op: "add", id: T1, type: 2, symbol: { patch: key }, coords: t1 }, { op: "add", id: T2, type: 2, symbol: { patch: key }, coords: t2 }],
+        putSymbols: { [key]: symbol },
+      });
+      await page.reload();
+      await editorReady(page);
+      await expect(page.getByTestId("map-vector-layer")).toHaveAttribute("data-patch-version", /.+/, { timeout: 30_000 });
+      await expect(page.getByTestId("editor-correction-row")).toHaveCount(2);
+      await expect(page.getByTestId("editor-tracks-none")).toBeVisible({ timeout: 15_000 });
+      const imported = waitForTrpc(page, "mapTrack.import");
+      await page.getByTestId("editor-tracks-file").setInputFiles([{ name: "gps-tracks.gpx", mimeType: "application/gpx+xml", buffer: readFileSync(FIXTURE) }]);
+      await imported;
+      const a = rowNamed(page, inside.name);
+      await expect(a).toHaveAttribute("data-state", "ready", { timeout: 15_000 });
+      await a.getByTestId("editor-track-name").click();
+      await viewSettled(page);
+
+      // The panel: Snap ends on by default, both ends moved; the write is the snapped line, the tracks untouched.
+      const writes = captureChanges(page);
+      const convertButton = page.getByTestId("editor-tracks-convert");
+      await a.getByTestId("editor-track-select").check();
+      await convertButton.click();
+      const panel = page.getByTestId("editor-tracks-convert-panel");
+      const snap = page.getByTestId("editor-tracks-convert-snap");
+      await expect(snap).toBeChecked();
+      await page.getByTestId("editor-tracks-convert-smoothing").fill("0");
+      await panel.locator(`[data-testid="editor-map-palette-item"][data-ref="patch:${SKI_TRACK}"]:not([disabled])`).click();
+      await expect(page.getByTestId("editor-tracks-convert-snapped")).toHaveAttribute("data-count", "2");
+      await expect(page.getByTestId("editor-tracks-convert-nodes")).toHaveAttribute("data-nodes", "3");
+      let marked = waitForTrpc(page, "mapTrack.markConverted");
+      await page.getByTestId("editor-tracks-convert-apply").click();
+      await marked;
+      expect(writes).toHaveLength(1);
+      expect(writes[0].put).toHaveLength(1);
+      expect(writes[0].remove).toBeUndefined();
+      // The start end to end onto T2's end node (they share a vertex), the end 1 mm short extended onto T1.
+      expect(writes[0].put![0].coords).toEqual([[-1560, 1080], [-1500, -1000], [1600, -1000]]);
+      type Ops = { patch: { ops: Record<string, { coords?: number[][] }> } | null };
+      const ops = async () => (await trpcCall<Ops>("mapPatch.get", undefined, false)).patch!.ops;
+      expect((await ops())[`add:${T1}`].coords).toEqual(t1);
+      expect((await ops())[`add:${T2}`].coords).toEqual(t2);
+
+      // Undo; converted again with Snap ends off: the line as recorded, nothing counted as snapped.
+      await blur(page);
+      let unmarked = waitForTrpc(page, "mapTrack.markConverted");
+      await page.keyboard.press("Control+z");
+      await unmarked;
+      await expect(page.getByTestId("editor-correction-row")).toHaveCount(2);
+      await a.getByTestId("editor-track-select").check();
+      await convertButton.click();
+      await snap.uncheck();
+      await expect(page.getByTestId("editor-tracks-convert-snapped")).toHaveCount(0);
+      marked = waitForTrpc(page, "mapTrack.markConverted");
+      await page.getByTestId("editor-tracks-convert-apply").click();
+      await marked;
+      const plain = writes.at(-1)!.put![0];
+      expect(plain.coords).toEqual([[-1500, 1000], [-1500, -1000], [1500, -1000]]);
+
+      // Snap ends on the added line: selected on the map (its stack stepped by Tab to it), one write of its add with
+      // the ends snapped, then nothing left to snap; undo brings the recorded ends back.
+      const object = page.getByTestId("editor-map-object");
+      await clickAt(page, [0, -10]);
+      for (let i = 0; i < 8; i++) {
+        if ((await object.getAttribute("data-ref").catch(() => null)) === `added:${plain.id}`) break;
+        await page.keyboard.press("Tab");
+      }
+      await expect(object).toHaveAttribute("data-ref", `added:${plain.id}`);
+      const snapEnds = page.getByTestId("editor-map-object-snap-ends");
+      await expect(snapEnds).toBeEnabled();
+      const count = writes.length;
+      const wrote = waitForTrpc(page, "mapPatch.applyChange");
+      await snapEnds.click();
+      await wrote;
+      expect(writes).toHaveLength(count + 1);
+      expect(writes.at(-1)!.put).toEqual([{ ...plain, coords: [[-1560, 1080], [-1500, -1000], [1600, -1000]] }]);
+      await expect(snapEnds).toHaveAttribute("data-reason", "no-target");
+      await expect(snapEnds).toBeDisabled();
+      await blur(page);
+      const undone = waitForTrpc(page, "mapPatch.applyChange");
+      await page.keyboard.press("Control+z");
+      await undone;
+      await expect.poll(async () => (await ops())[`add:${plain.id}`].coords).toEqual(plain.coords);
+      expect((await ops())[`add:${T1}`].coords).toEqual(t1);
+      expect((await ops())[`add:${T2}`].coords).toEqual(t2);
+
+      // Snap ends is remembered on the device: off after a reload.
+      await page.reload();
+      await editorReady(page);
+      await expect(a).toHaveAttribute("data-state", "ready", { timeout: 15_000 });
+      await a.getByTestId("editor-track-select").check();
+      await convertButton.click();
+      await expect(snap).not.toBeChecked();
+      await page.getByTestId("editor-tracks-convert-cancel").click();
+    } finally {
       await dropEventPatch(EDITOR_EVENT).catch(() => undefined);
       await clearTracks().catch(() => undefined);
     }
