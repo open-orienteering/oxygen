@@ -149,11 +149,15 @@ interface PatchChange {
   remove?: string[];                        // drop these op ids (absent ids are no-ops)
   putSymbols?: Record<string, PatchSymbol>; // add or replace these symbols by key
   removeUnresolved?: string[];              // drop these unresolved entries (§4.3; absent keys are no-ops)
+  putUnresolved?: Record<string, UnresolvedOp>; // put these entries back by key (G12b: the undo of a drop or an attach)
 }
 ```
 
 `patchChangeSchema` rejects a change that puts one id twice or both puts
-and removes it. The result is a new patch (the input is not mutated) with
+and removes it, a `putUnresolved` key that is not its entry's
+(`unresolvedKey(from, op)`, §4.1), and a key both put and removed. The
+merge removes, then puts. `putUnresolved` is row G12b's undo of a drop
+and of an attach (decided overnight on the user's standing instruction (2026-11-13), for review). The result is a new patch (the input is not mutated) with
 `ops`, `symbols` and `unresolved` keys in sorted order (an empty
 `unresolved` omitted), so two merges reaching the same
 state also serialise to the same JSON. Merging the same change twice
@@ -382,8 +386,8 @@ column with a default, G11).
 | Procedure | Input | Permission | Result |
 |---|---|---|---|
 | `mapPatch.get` | — | `courses.view` or the kiosk key | `{ version, patch }` (§3.3) |
-| `mapPatch.applyChange` | `{ documentHash } ∧ patchChangeSchema` (`put`, `remove`, `putSymbols`, `removeUnresolved`) | `courses.edit` | `{ version, patch }` |
-| `mapPatch.attachUnresolved` | `{ documentHash, key, sourceIndex }` (§4.3) | `courses.edit` | `{ version, patch }` |
+| `mapPatch.applyChange` | `{ documentHash } ∧ patchChangeSchema` (`put`, `remove`, `putSymbols`, `removeUnresolved`, `putUnresolved`) | `courses.edit` | `{ version, patch }` |
+| `mapPatch.attachUnresolved` | `{ documentHash, key, sourceIndex?, symbol? }` (§4.3; `symbol` a `{ doc } \| { patch }` reference, G12b) | `courses.edit` | `{ version, patch }` |
 | `mapPatch.setEnabled` | `{ enabled: boolean }` | `courses.edit` | `{ version, patch }` |
 | `mapPatch.promote` | `{ label }` (1–200 characters, trimmed) | `courses.edit`, signed in (§5) | `{ version, patch, clubMapVersion, job }` |
 | `mapPatch.promoteStatus` | — | `courses.view` (not the kiosk key: the job's error text is the editor's) | the newest promote job `{ id, state, stage, progress, error }` or null (§5) |
@@ -685,18 +689,42 @@ place. `enabled` is kept.
   entry's origin again), the live op's entry is kept: it is the later
   state.
 - **Attach** (*Corrections*' fix, user 2026-11-15, G11 question 2):
-  `attachUnresolved(patch, key, doc, sourceIndex)` re-targets an entry's
-  op onto the document object the user selected — a `hide`, `modify` or
-  `resymbol` with `reason: "target"` — and returns the change that puts
-  it (replacing an op of that id) and removes the entry, with the patch
-  symbol it needs materialised. A `modify` keeps its coordinates
-  (rescaled), so the corrected shape stays where it was drawn. Refused
-  (null, with why): no such entry; an `add` or a `symbol` entry (drop
-  only, until G12b: attaching a `symbol` entry needs a symbol argument;
-  user 2026-11-15, G9 question 1); no object with that `sourceIndex`; a
-  `modify` or `resymbol` onto an object of another `type`; a symbol that
-  cannot be resolved on `doc`.
-- **Drop** is `applyChange { removeUnresolved: [key] }` (§1.5).
+  `attachUnresolved(patch, key, doc, sourceIndex?, symbol?)` returns the
+  change that puts the entry's op onto `doc` (replacing an op of that
+  id) and removes the entry, with the patch symbol it needs materialised
+  unless the patch holds it:
+  - a **`target` entry** (a `hide`, `modify` or `resymbol` whose object
+    was not found) goes onto the document object the user selected,
+    `sourceIndex` (required). A `modify` keeps its coordinates
+    (rescaled), so the corrected shape stays where it was drawn;
+  - a **`symbol` entry** — a `resymbol` whose `{ doc }` symbol has no
+    counterpart, or any `add` — takes the `symbol` the user picked (row
+    G12b; user 2026-11-15, G9 question 1): a `{ doc }` index into `doc`'s
+    table or a `{ patch: <library entry id> }` key, materialised for
+    `doc` (the argument's shape and the optional `sourceIndex`: decided overnight on the user's standing instruction (2026-11-13), for review).
+    An add keeps its coordinates (rescaled) and takes no object; a
+    resymbol's object is found as re-resolution finds it (§4.2: on the
+    entry's source by `sourceIndex`, else by its anchor) unless
+    `sourceIndex` is given. A `target` entry's `resymbol` may take a
+    `symbol` too, which replaces its own (decided overnight on the
+    user's standing instruction (2026-11-13), for review).
+  - Refused (`{ ok: false, reason }`, the API's `PATCH_ATTACH_REFUSED:
+    <reason>`): `no-entry`; `drop-only` — a `symbol` entry or an add
+    without a `symbol` (what an older client sends, so it reads as
+    before); `bad-argument` — a `target` entry without `sourceIndex`, a
+    `sourceIndex` for an add, a `symbol` for a hide or modify;
+    `no-object` — no object with that `sourceIndex` (or none found for a
+    resymbol); `type-mismatch` — a `modify` or `resymbol` onto an object
+    of another `type`; `symbol` — the picked or the op's symbol is not in
+    `doc`'s table or not materialisable; `kind-mismatch` — the picked
+    symbol is not of the object's kind (an add's `type`, a resymbol's
+    object's).
+- **Drop** is `applyChange { removeUnresolved: [key] }` (§1.5); its undo
+  is `applyChange { putUnresolved: { [key]: entry } }`, the entry as it
+  was (row G12b). Like every patch write it is refused while a promote
+  runs (`PATCH_PROMOTING`). An API image from before G12b strips the
+  unknown field, so there the undo of a drop changes nothing (the web and
+  the API ship together).
 
 ### 4.4 When it runs (server)
 
@@ -778,12 +806,14 @@ the label dialog is prefilled with the event's name and date, and
 `uploaded_by` is the promoter; other events on the base version are
 untouched; a box forwards `mapPatch.promote`; thumbnails and swatches come
 from the patched document; `symbol`-reason unresolved entries stay
-drop-only; promote does not touch `map_gps_tracks.converted_op`; filter
+drop-only (superseded by row G12b, which attaches them with a picked
+symbol, §4.3); promote does not touch `map_gps_tracks.converted_op`; filter
 regions' symbol indices are not re-keyed (Pending, as at any re-match).
 
-The API half is built (row G12a, the rest of this section); the editor's
-*Save corrections to the club map*, the Club maps card and the end-to-end
-smoke are row G12b (`course-editor.md` §13 "Promote"). Implementation:
+The API half is row G12a (the rest of this section); the editor's *Save
+corrections to the club map* (`course-editor.md` §13 "Promote"), the Club
+maps card (`map-storage.md` §6.5) and the end-to-end smoke are row G12b.
+Implementation:
 `packages/shared/src/map-document/patch-bake.ts` (the layer and the bake),
 `packages/api/src/map-store/promote.ts` (the procedure),
 `map-store/patches.ts` (`PATCH_PROMOTING`, `completePromote`,
@@ -971,7 +1001,11 @@ it while any pin, version or job references it.
 
 `clubMap.list` shows a version's `layers` and `corrections` (ops over
 every layer); `clubMap.download` stays the original source file (answer
-8).
+8), named by the source's file name, not by the promote's free-text label
+(row G12b; `map-storage.md` §6.5). The Club maps card shows the version's
+number, a promoted version's label, the note "original file; n
+corrections applied by Oxygen" and, for its uploader or an admin, *Delete
+version n* with a confirm (row G12b).
 
 ## Pending in this chapter
 
@@ -993,24 +1027,16 @@ every layer); `clubMap.download` stays the original source file (answer
 - **The `unresolved` column through checkout and dump** is covered by the
   unit `snapshotPatchOf` test and the dump's `SELECT *`; `lease.test.ts`
   and `backup.test.ts` do not assert it.
-- **Attach and drop in the editor's undo stack** (G11, user 2026-11-15,
-  question 3): *Corrections*' *Attach* and *Drop* are writes without an
-  undo entry, without centring the view on the entry's old place, and
-  outside Map mode's one-write-at-a-time interlock — wiring them through
-  `modes/MapMode.tsx` (and a `putUnresolved` for the undo of a drop) is
-  row G12b's. `course-editor.md` §13.
-- **Attach of a `symbol` entry** (§4.3; user 2026-11-15, G9 question 1):
-  drop-only. Attaching needs a symbol argument on
-  `mapPatch.attachUnresolved` (`attachUnresolved(…, symbol)`), for G12b
-  with the rest of *Attach*. Meanwhile a `resymbol`'s is redone by hand
-  (*Change symbol*, `course-editor.md` §13) and the entry dropped; an
-  unresolved `add` keeps its geometry only in the entry.
-- **Promote in the editor** (row G12b, §5): *Save corrections to the
-  club map* in Map mode (confirm with the label prefilled, progress and
-  read-only from `promoteStatus`, the refusals' texts, undo entries
-  dropped — answer 6), the Club maps card (version, label, corrections,
-  the original-file note, delete of the latest promoted version) and the
-  E2E smoke (08 §7).
+- **Promote on a venue box** (G12b, decided overnight on the user's
+  standing instruction (2026-11-13), for review): the API forwards
+  `mapPatch.promote` (§5 defaults), but `promoteStatus` is served
+  locally and the job runs in the cloud, so a box could not follow it
+  after the hold; the editor does not offer it on a venue node ("open
+  the event in the cloud"). Forwarding `promoteStatus` would lift it.
+- **A promote's running state in the E2E** (G12b): a real job on the
+  fixture finishes inside the 30 s hold, so `editor-map-promoting` and
+  the read-only gates while queued / running are unit-tested
+  (`map-promote.test.ts`) and not driven end to end.
 - **A no-op layer** (G12a, §5.5): a layer whose ops change nothing the
   encoder sees bakes the base's bytes; the content-addressed row keeps
   the patch it was first stored with, so dedup misses for that version
@@ -1034,7 +1060,11 @@ every layer); `clubMap.download` stays the original source file (answer
 | Unit (api) | `packages/api/src/__tests__/club-map-library.test.ts`, `snapshot-maps.test.ts`, `venueForwarder.test.ts` (G12a part) | a version's `layers` / `corrections` (none for an upload); `canRemoveClubMapVersion`; `snapshotDocumentPatch`; `mapPatch.promote` cloud-owned and forwarded, `promoteStatus` served locally |
 | Integration (api) | `packages/api/src/__tests__/integration/map-promote.test.ts` | §5 (G12a): the three columns' defaults and checks; refusals (`PATCH_NOTHING_TO_PROMOTE` empty, issue-only, disabled; `PATCH_NOT_CLUB_MAP` for an uploaded map; `UNAUTHORIZED` signed out; viewer `FORBIDDEN`; a blank label); `PATCH_PROMOTING` for `applyChange`, `setEnabled`, `attachUnresolved` and `promote` while a promote job runs, `promoteStatus` reporting it; a failed promote job deletes its version and leaves the patch; **08 §7**: a hide and an added path promoted — version 2 (label, promoter, one layer keyed by the event's op ids, anchors), its document baked (hidden object gone, the path at `0x80000000`, `patch` recorded, `report.corrections`), the event pinned to it, `ops` empty with a new version and `patchVersion`, the op that did not apply and an unresolved entry kept, the other event on version 1 untouched, download = the original bytes, `list` `layers` / `corrections`; `PATCH_NOT_LATEST` from version 1; dedup per patch; `decide` on the promoted document keeps it, `finalise` per version and `source-mismatch` across patches; `useClubMap` takes version 2's document; **a re-match** of version 2 and its event (stale importer) re-imports with the corrections, version 1 untouched, a second plan empty; **a second promote** stacks a layer (the path modified at the same number, another object hidden); **the GC** keeps the promoted documents; **the per-event dump** carries the document with `patch` and `restore-map-blobs.sql` restores it; **delete**: stranger `FORBIDDEN`, not the latest, unknown, the promoter deletes version 3 (the event keeps its document, `club_map_version_id` null, promote then `PATCH_NOT_CLUB_MAP`), an admin version 2, version 1 `VERSION_NOT_PROMOTED`; **completion's edges** (§5.4, `completePromote` / `abandonPromote` called directly): an op the bake skipped stays in the event's patch, a version the event pins survives a failed job, a second completion after the event moved changes nothing |
 | Integration (api) | `packages/api/src/__tests__/integration/backup.test.ts` (G12a part) | a `map_documents` section written before the `patch` column still loads |
-| E2E | `e2e/map-patch-resolve.spec.ts` | `course-editor.md` §13 "Unresolved": two hides on `itest`'s `test.ocd`, the map replaced by `test.xmap` through the upload route; Map mode lists both under *Not carried over* (`data-key`, `data-op`, `data-reason`), the ops count 0, attach disabled without a selection; *Drop* one (one `applyChange`, gone after a reload); a document object selected on the fitted map, *Attach* the other (the `hide:<n>` row, the object hidden, the block gone); reseeded before and after |
+| E2E | `e2e/map-patch-resolve.spec.ts` | `course-editor.md` §13 "Unresolved": two hides on `itest`'s `test.ocd`, the map replaced by `test.xmap` through the upload route; Map mode lists both under *Not carried over* (`data-key`, `data-op`, `data-reason`), the ops count 0, attach disabled without a selection; a row click centres the view on the entry's target (within 0.5 mm, G12b); *Drop* one (one `applyChange` with `removeUnresolved`), Ctrl+Z puts it back (one `applyChange` with `putUnresolved`, the column as before), Ctrl+Shift+Z drops it again, gone after a reload; a document object selected on the fitted map, *Attach* the other (the `hide:<n>` row, the object hidden, the block gone), Ctrl+Z (the hide removed and the entry back in one `applyChange`), Ctrl+Shift+Z (one `attachUnresolved`); a `symbol` entry's add planted with `putUnresolved`: *Attach* opens the point palette under its row, a pick is one `attachUnresolved` with `symbol` and no `sourceIndex`, the `add:<id>` row, Ctrl+Z puts the entry back; reseeded before and after |
+| Unit (shared) | `packages/shared/src/map-document/__tests__/patch.test.ts`, `patch-resolve.test.ts` (G12b part) | `putUnresolved`: merged by key after removes, sorted, twice = once, a drop and its inverse the patch as it was; refused for a wrong key, a key both put and removed, a bad entry. `attachUnresolved` with a symbol: an add with a document symbol (rescaled) and with a library symbol (materialised, `putSymbols` unless held), `kind-mismatch`, `symbol`, `bad-argument` for an object on an add; a symbol entry's resymbol found by its source or forced, `drop-only` without a symbol; a target entry without an object and a hide with a symbol `bad-argument`; a target resymbol's own symbol replaced |
+| Integration (api) | `packages/api/src/__tests__/integration/map-patches.test.ts` (G12b part) | the dropped entry put back with `putUnresolved` (twice keeps the version, a wrong key `BAD_REQUEST`); a planted add entry: without a symbol `drop-only`, a target entry without an object `bad-argument`, with `{ patch: "ISOM2017-2:204" }` the add, the symbol stored, the entry gone |
+| Unit (web) | `packages/web/src/pages/editor/__tests__/map-model.test.ts`, `map-unresolved.test.ts`, `map-promote.test.ts`, `packages/web/src/lib/__tests__/undo-stack.test.ts`, `packages/web/src/lib/editor/__tests__/write-client.test.ts` (G12b) | the inverse of a drop (`putUnresolved`), of its undo, of an attach onto a free and a held id; `changes` for unresolved-only changes; attach kind, palette kind, locate centre (anchor, an add's box), labels and row order; promote's offer and block order, running states, the label (event name and date, 200), refusal keys; `UndoStack.remove`; `attachUnresolvedPatch`'s input |
+| E2E | `e2e/map-mode.spec.ts` (G12b part) | 08 §7's smoke: not offered on the seed's upload; `test.ocd` into the club library and `course.useClubMap`; promote disabled (`nothing`); a lone line hidden and a path drawn in the UI; the dialog's label prefilled with the event's name; one `mapPatch.promote`; the event on a new version and document, the ops gone, the count 0, the line still gone and the path drawn on the baked document, Ctrl+Z writes nothing; `clubMap.list` version 2 with its label, one layer, two corrections and `fileName` `test.ocd`; the card's version, label and note; *Delete version 2* → version 1, the event keeps its document with no version, promote no longer offered; reseeded before and after, the series removed |
 | Integration (api) | `packages/api/src/__tests__/integration/lease.test.ts` | checkout carries the patch row verbatim (id, document, `enabled`, ops, token above 2^53 exact), `maps.patches` counted (0 from an exporter without the map part); the box's `mapPatch.get` and route (kiosk key) serve it with `ETag` = the token |
 | Integration (api) | `packages/api/src/__tests__/integration/backup.test.ts` | the dump's `map_patches` section directly after `map_files` with the event's row; restored into another event with `event_id` rewritten, token and ops exact |
 | Integration (api) | `packages/api/src/__tests__/integration/map-storage-gc.test.ts` | a document only a patch references is kept (dry run too) and touched; `RESTRICT` refuses its delete; collected once the patch is gone and a fresh grace passed |
