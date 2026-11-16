@@ -2,8 +2,9 @@
  * Map mode (docs/course-editor.md §13; 08 §5.2–§5.3, the Map column; row G6): the event's map corrections — the
  * patch over the pinned document (docs/map-patches.md) — with select, hide and move, the nodes tool `N` (§13
  * "Nodes", G7), the drawing tools `P` `L` `A`, the symbol picker, *Change symbol* and *Rotation* (§13 "Drawing",
- * "Symbol picker", G9), and the GPS tracks section with its conversion into lines (§13 "GPS tracks", G25, G26). Shaped like
- * `useLayoutMode`:
+ * "Symbol picker", G9), the GPS tracks section with its conversion into lines (§13 "GPS tracks", G25, G26), the
+ * unresolved corrections' *Attach* / *Drop* as undo entries and *Save corrections to the club map* (§13 "Unresolved",
+ * "Promote", G12b). Shaped like `useLayoutMode`:
  * the page asks it for the viewer's editor props, the rail, the inspector and its keys, and keeps the undo stack.
  *
  * Course edits are locked here: the editor props carry no control, label, leg or map-click callbacks and the
@@ -35,6 +36,8 @@ import { InspectorSection } from "../Inspector";
 import { mapKeyAction } from "./map/keys";
 import { MapObjectSection } from "./map/ObjectSection";
 import { CorrectionsList } from "./map/Corrections";
+import { usePromote } from "./map/Promote";
+import { entryPickerKind, unresolvedRows, type UnresolvedRow } from "./map/unresolved";
 import { MAP_NODES_MAX, nodeSnapIndex, nodesOf, nodesOp, ringRule, withRing, type NodePath } from "./map/nodes";
 import { useMapTracks } from "./map/tracks/useMapTracks";
 import { TracksPanel } from "./map/tracks/TracksPanel";
@@ -63,6 +66,8 @@ export interface MapModeArgs {
   writes: EditorWrites;
   run: <T>(op: () => Promise<T>) => Promise<T | undefined>;
   record: (undo: () => Promise<unknown>, redo: () => Promise<unknown>) => unknown;
+  /** Drops the page's undo entries `drop` matches (a promote drops Map mode's patch entries, §13 "Promote"). */
+  forget: (drop: (entry: object) => boolean) => void;
 }
 
 export interface MapMode {
@@ -95,7 +100,7 @@ const RAIL_LABEL = { V: "toolSelect", N: "toolNodes", P: "toolMapPoint", L: "too
 export function useMapMode(a: MapModeArgs): MapMode {
   const { t, i18n } = useTranslation("editor");
   const utils = trpc.useUtils();
-  const { enabled, nameId, mapDoc, canEdit, writes, run, record } = a;
+  const { enabled, nameId, mapDoc, canEdit, writes, run, record, forget } = a;
 
   // ─── The model: the pinned document with the patch over it (taken as enabled) ──
   const hash = mapDoc?.hash ?? null;
@@ -145,6 +150,10 @@ export function useMapMode(a: MapModeArgs): MapMode {
   const [query, setQuery] = useState("");
   /** The GPS tracks' convert panel is open (§13 "GPS tracks: convert", G26): `V` armed, its preview the draft. */
   const [convertOpen, setConvertOpen] = useState(false);
+  /** A `symbol` entry's *Attach* has the palette open under its row (§13 "Unresolved", G12b): the entry's key. */
+  const [attaching, setAttaching] = useState<string | null>(null);
+  /** The undo entries `commit` recorded: the patch's, which a promote drops (§13 "Promote"). */
+  const recorded = useRef(new WeakSet<object>());
 
   // Leaving the mode or another document drops it all; the overprint comes back (H is Map mode's own).
   useEffect(() => {
@@ -159,6 +168,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
     setChangingFor(null);
     setQuery("");
     setConvertOpen(false);
+    setAttaching(null);
     drawId.current = null;
     pendingSelect.current = null;
     gesture.current = null;
@@ -207,10 +217,13 @@ export function useMapMode(a: MapModeArgs): MapMode {
     setMapPatch(nameId, res);
     utils.course.mapMetadata.setData(undefined, (old) => (old ? { ...old, patchVersion: res.version } : old));
   }, [nameId, utils]);
-  /** One `applyChange`; a refusal drops the draft, reloads the metadata and the patch, and says why. */
-  const send = useCallback(async (documentHash: string, change: mapDocument.PatchChange): Promise<PatchWriteResult> => {
+  /**
+   * One `applyChange` (or `via`, another `mapPatch` write of the same change: *Attach*'s procedure); a refusal drops
+   * the draft, reloads the metadata and the patch, and says why.
+   */
+  const send = useCallback(async (documentHash: string, change: mapDocument.PatchChange, via?: () => Promise<PatchWriteResult>): Promise<PatchWriteResult> => {
     try {
-      const res = await writes.applyPatchChange(documentHash, change);
+      const res = await (via ? via() : writes.applyPatchChange(documentHash, change));
       deliver(res);
       return res;
     } catch (e) {
@@ -225,9 +238,16 @@ export function useMapMode(a: MapModeArgs): MapMode {
    * write of another store that belongs to the same entry (G26's track marks), after the patch on do, undo and redo
    * alike. The follow-up runs in its own `run`, so a refused one is reported without failing the patch's step: the
    * entry is kept (on undo and redo too). On do the entry is recorded once the follow-up has settled, so it cannot be
-   * undone while its follow-up is in flight. False when refused (a write in flight, nothing to change).
+   * undone while its follow-up is in flight. `via`: the do and redo steps' write when it is not `applyChange` of
+   * `change` (*Attach*, whose server-side procedure makes `change`; the undo is still `applyChange` of the inverse).
+   * False when refused (a write in flight, nothing to change).
    */
-  const commit = useCallback((change: mapDocument.PatchChange, keepDraft = false, follow?: { after: () => Promise<unknown>; undo: () => Promise<unknown> }): boolean => {
+  const commit = useCallback((
+    change: mapDocument.PatchChange,
+    keepDraft = false,
+    follow?: { after: () => Promise<unknown>; undo: () => Promise<unknown> },
+    via?: (documentHash: string) => Promise<PatchWriteResult>,
+  ): boolean => {
     const before = patchRef.current;
     const documentHash = hash;
     const inverse = inverseChange(before, change);
@@ -240,14 +260,16 @@ export function useMapMode(a: MapModeArgs): MapMode {
     setWriting(true);
     void run(async () => {
       try {
-        const res = await send(documentHash, change);
+        const doIt = via ? () => via(documentHash) : undefined;
+        const res = await send(documentHash, change, doIt);
         if (keepDraft) setDraft((d) => (d ? { ...d, waitFor: res.version } : d));
         if (follow) await run(follow.after);
         // Undo / redo drop the focused node: its index may name another node then (§13 "Nodes").
-        record(
+        const entry = record(
           async () => { setDraft(null); setFocusState(null); await send(documentHash, inverse); if (follow) await run(follow.undo); },
-          async () => { setDraft(null); setFocusState(null); await send(documentHash, change); if (follow) await run(follow.after); },
+          async () => { setDraft(null); setFocusState(null); await send(documentHash, change, doIt); if (follow) await run(follow.after); },
         );
+        if (entry && typeof entry === "object") recorded.current.add(entry);
       } finally {
         writingRef.current = false;
         setWriting(false);
@@ -256,12 +278,22 @@ export function useMapMode(a: MapModeArgs): MapMode {
     return true;
   }, [hash, run, send, record]);
 
-  const canWrite = enabled && canEdit && !!model && correctionsOn && !writing;
+  // ─── Inspector rows; promote (§13 "Promote"): while one runs Map mode is read-only ──
+  const lang = i18n.language;
+  const rows = useMemo(() => (enabled ? correctionRows(model, current, lang) : []), [enabled, model, current, lang]);
+  const forgetMine = useCallback(() => forget((e) => recorded.current.has(e)), [forget]);
+  const promote = usePromote({
+    enabled: enabled && !!mapDoc, nameId, canEdit, correctionsOn, applicable: rows.filter((r) => r.issue === null).length, writing, onStarted: forgetMine,
+  });
+  const locked = promote.locked;
+  /** `courses.edit` and no promote running: what every `mapPatch` write needs (revert, the toggle, drop: also while off). */
+  const canPatch = enabled && canEdit && !locked;
+  const canWrite = canPatch && !!model && correctionsOn && !writing;
   const selectedHidden = !!selected && isHidden(current, selected);
   // While the convert panel is open its preview is the draft: no move drag (§13 "GPS tracks: convert").
   const canMove = canWrite && !convertOpen && !!selected && !selectedHidden && model?.indexOf(selected) != null;
   /** Drawing's lasting conditions (§13 "Drawing"): `courses.edit`, corrections on, a document — a write in flight aside. */
-  const canDraw = enabled && canEdit && !!model && correctionsOn;
+  const canDraw = canPatch && !!model && correctionsOn;
   const drawTool = isMapDrawTool(tool) ? tool : null;
   const drawKind: DrawKind | null = drawTool ? MAP_DRAW_KIND[drawTool] : null;
   // An armed drawing tool goes back to V when drawing becomes disabled.
@@ -278,12 +310,12 @@ export function useMapMode(a: MapModeArgs): MapMode {
     commit(restoreChange(selected));
   }, [canWrite, selected, commit]);
   const revert = useCallback((row: CorrectionRow) => {
-    if (!enabled || !canEdit || !hash) return;
+    if (!canPatch || !hash) return;
     setFocusState(null); // its index may name another node after the revert (§13 "Nodes", "Focus")
     commit({ remove: [row.opId] });
-  }, [enabled, canEdit, hash, commit]);
+  }, [canPatch, hash, commit]);
   const setCorrectionsOn = useCallback((on: boolean) => {
-    if (!canEdit) return;
+    if (!canPatch) return;
     setToggling(on);
     // An event setting, not an undo entry (§13, as auto cuts).
     void run(async () => {
@@ -295,11 +327,51 @@ export function useMapMode(a: MapModeArgs): MapMode {
         setToggling(null);
       }
     });
-  }, [canEdit, run, writes, deliver, t]);
+  }, [canPatch, run, writes, deliver, t]);
 
-  // ─── Inspector rows, Tab ──
-  const lang = i18n.language;
-  const rows = useMemo(() => (enabled ? correctionRows(model, current, lang) : []), [enabled, model, current, lang]);
+  // ─── Unresolved corrections (§13 "Unresolved"; G11, G12b): Attach and Drop are gestures, one undo entry each ──
+  const unresolved = useMemo(() => (enabled ? unresolvedRows(current) : []), [enabled, current]);
+  const attachingRow = attaching ? unresolved.find((r) => r.key === attaching) ?? null : null;
+  // The palette belongs to an entry still listed, while attaching is possible.
+  useEffect(() => {
+    if (attaching && (!attachingRow || (!canWrite && !writing))) setAttaching(null);
+  }, [attaching, attachingRow, canWrite, writing]);
+  const locateEntry = useCallback((row: UnresolvedRow) => { if (row.centre) centreOn(row.centre); }, [centreOn]);
+  const dropEntry = useCallback((row: UnresolvedRow) => {
+    if (!canPatch || !hash) return;
+    if (attaching === row.key) setAttaching(null);
+    commit({ removeUnresolved: [row.key] });
+  }, [canPatch, hash, attaching, commit]);
+  /**
+   * *Attach*: the change computed here on the pinned document (the inverse needs it; a refusal is said without a
+   * write), sent through `mapPatch.attachUnresolved` — the server's copy makes the same change.
+   */
+  const attachWith = useCallback((row: UnresolvedRow, at: { sourceIndex?: number; symbol?: mapDocument.PatchSymbolRef }) => {
+    if (!canWrite || !model || !current) return;
+    const r = mapDocument.attachUnresolved(current, row.key, model.pinned, at.sourceIndex, at.symbol);
+    if (!r.ok) {
+      void run(async () => { throw new Error(`${t("patchError_PATCH_ATTACH_REFUSED")} (${r.reason})`); });
+      return;
+    }
+    setAttaching(null);
+    commit(r.change, false, undefined, (documentHash) => writes.attachUnresolvedPatch(documentHash, row.key, at));
+  }, [canWrite, model, current, run, t, commit, writes]);
+  const attachEntry = useCallback((row: UnresolvedRow) => {
+    if (!canWrite) return;
+    if (row.attach === "symbol") {
+      // The palette under the row; one palette at a time (§13 "Symbol picker").
+      if (attaching === row.key) { setAttaching(null); return; }
+      if (isMapDrawTool(tool)) { setTool("V"); setPoly(null); drawId.current = null; }
+      setChangingFor(null);
+      setConvertOpen(false);
+      setQuery("");
+      setAttaching(row.key);
+      return;
+    }
+    if (selected && "source" in selected) attachWith(row, { sourceIndex: selected.source });
+  }, [canWrite, attaching, tool, selected, attachWith]);
+
+  // ─── Tab ──
   const info = useMemo(() => (selected && model ? objectInfo(model, selected, lang) : null), [selected, model, lang]);
   const locate = useCallback((ref: MapObjectRef) => {
     setSelected(ref);
@@ -368,7 +440,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
   }, [snapping, model, selected]);
 
   // ─── Drawing and the symbol picker (§13 "Drawing", "Symbol picker") ──
-  const pickerKind: DrawKind | null = drawKind ?? (changing && info ? kindOfType(info.type) : null);
+  const pickerKind: DrawKind | null = drawKind ?? (changing && info ? kindOfType(info.type) : null) ?? (attachingRow ? entryPickerKind(attachingRow.entry) : null);
   const pinned = model?.pinned ?? null;
   const palette = useMemo(() => (pickerKind && pinned ? mapDocument.mapPalette(pinned, current) : null), [pickerKind, pinned, current]);
   /** The drawing tool's symbol: the chosen item, while it is in the palette and enabled; its first-use put. */
@@ -463,6 +535,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
     drawGesture.current = null;
     pointGesture.current = null;
     setChanging(false);
+    setAttaching(null);
     if (next !== "V") setConvertOpen(false); // the convert panel keeps V (§13 "GPS tracks: convert")
     if (isMapDrawTool(next)) { setSelected(null); setStack([]); pendingSelect.current = null; }
     setTool(next);
@@ -479,13 +552,14 @@ export function useMapMode(a: MapModeArgs): MapMode {
       setChosenState((c) => ({ hash, byKind: { ...(c.hash === hash ? c.byKind : {}), [drawKind]: itemKey(item) } }));
       return;
     }
+    if (attachingRow && !changing) { attachWith(attachingRow, { symbol: item.ref }); return; }
     if (!canWrite || !model || !selected || selectedHidden) return;
     const put = symbolPut(model.pinned, current, item.ref);
     if (!put.ok) return;
     const change = resymbolChange(model, current, selected, put);
     setChanging(false);
     if (change) commit(change);
-  }, [drawKind, hash, canWrite, model, selected, selectedHidden, current, commit, setChanging]);
+  }, [drawKind, hash, attachingRow, changing, attachWith, canWrite, model, selected, selectedHidden, current, commit, setChanging]);
   const rotate = useCallback((tenths: number) => {
     if (!canWrite || !model || !selected || selectedHidden) return;
     const change = angleChange(model, current, selected, tenths);
@@ -613,6 +687,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
         // nothing left, the page leaves fullscreen.
         if (poly) { dropDrawing(); return true; }
         if (changing) { setChanging(false); return true; }
+        if (attaching) { setAttaching(null); return true; }
         if (convertOpen) { closeConvert(); return true; }
         if (focus) { setFocus(null); return true; }
         if (tool !== "V") { armTool("V"); return true; }
@@ -621,7 +696,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
         setStack([]);
         return true;
     }
-  }, [toggleHideCourse, fit, step, hide, selected, tool, focus, deleteNode, setFocus, armTool, poly, lineBinding, finishDrawing, dropDrawing, changing, setChanging, convertOpen, closeConvert]);
+  }, [toggleHideCourse, fit, step, hide, selected, tool, focus, deleteNode, setFocus, armTool, poly, lineBinding, finishDrawing, dropDrawing, changing, setChanging, attaching, convertOpen, closeConvert]);
 
   // ─── Rail and inspector ──
   const rail = (
@@ -649,6 +724,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
   ) : (
     <>
       {!canEdit && <p data-testid="editor-map-readonly" className="px-2.5 py-1.5 text-[11px] text-slate-500">{t("mapReadOnly")}</p>}
+      {promote.banner}
       {canEdit && !correctionsOn && <p data-testid="editor-map-disabled" className="px-2.5 py-1.5 text-[11px] text-amber-700 bg-amber-50">{t("mapDisabled")}</p>}
       {drawKind && palette && (
         <InspectorSection title={t("mapSymbols")} testId="editor-inspector-map-symbols">
@@ -659,7 +735,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
       )}
       <InspectorSection title={t("mapObject")} testId="editor-inspector-map-object">
         <MapObjectSection info={info} hidden={selectedHidden} documentHash={mapDoc.hash} nameId={nameId} canWrite={canWrite} onHide={hide} onRestore={restore}
-          canChangeSymbol={!!info && kindOfType(info.type) !== null} changing={changing} onChangeSymbol={() => setChanging(!changing)}
+          canChangeSymbol={!!info && kindOfType(info.type) !== null} changing={changing} onChangeSymbol={() => { setAttaching(null); setChanging(!changing); }}
           picker={changing && info && palette && pickerKind ? (
             <SymbolPicker groups={palette} kind={pickerKind} query={query} onQuery={setQuery} pressed={symbolKey(info.symbol)} onPick={pick}
               documentHash={mapDoc.hash} nameId={nameId} onEscape={() => setChanging(false)} />
@@ -670,9 +746,29 @@ export function useMapMode(a: MapModeArgs): MapMode {
           : <p data-testid="editor-map-nodes-none" data-reason={nodes.reason} className="px-2.5 py-1.5 text-[11px] text-slate-500">{t(`mapNodesNone_${nodes.reason}`)}</p>)}
       </InspectorSection>
       <InspectorSection title={t("corrections")} testId="editor-corrections">
-        <CorrectionsList rows={rows} selected={selected} enabled={toggling ?? correctionsOn} canWrite={canEdit} busy={toggling !== null}
-          onLocate={(r) => locate(r.ref)} onRevert={revert} onEnabled={setCorrectionsOn} />
+        <CorrectionsList rows={rows} selected={selected} enabled={toggling ?? correctionsOn} canWrite={canPatch} busy={toggling !== null}
+          onLocate={(r) => locate(r.ref)} onRevert={revert} onEnabled={setCorrectionsOn}
+          unresolved={{
+            rows: unresolved,
+            source: selected && "source" in selected ? selected.source : null,
+            canAttach: canWrite,
+            canDrop: canPatch && !writing,
+            attaching,
+            picker: attachingRow && palette && pickerKind ? (
+              <SymbolPicker groups={palette} kind={pickerKind} query={query} onQuery={setQuery} pressed={null} onPick={pick}
+                documentHash={mapDoc.hash} nameId={nameId} onEscape={() => setAttaching(null)}
+                hint={{ testId: "editor-map-palette-attach", text: t("correctionAttachPick") }} />
+            ) : null,
+            onLocate: locateEntry,
+            onAttach: attachEntry,
+            onDrop: dropEntry,
+          }} />
       </InspectorSection>
+      {promote.section && (
+        <InspectorSection title={t("promoteSection")} testId="editor-inspector-map-promote">
+          {promote.section}
+        </InspectorSection>
+      )}
       {tracks.panel && (
         <InspectorSection title={t("gpsTracks")} testId="editor-tracks">
           <TracksPanel panel={tracks.panel} convert={{

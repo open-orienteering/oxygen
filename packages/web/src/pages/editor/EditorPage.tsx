@@ -378,7 +378,11 @@ export function EditorPage() {
     record,
   });
   // Map mode (§13): the event's map corrections, course edits locked — its own props, rail, inspector and keys.
-  const mapMode = useMapMode({ enabled: state.mode === "map", nameId: nameId ?? "", mapDoc, patch: mapPatch, canEdit, writes, run, record });
+  /** Drops undo entries (a promote drops Map mode's patch entries, §13 "Promote"). */
+  const forget = useCallback((drop: (entry: object) => boolean) => {
+    if (undoStack.remove(drop) > 0) bumpHistory();
+  }, [undoStack, bumpHistory]);
+  const mapMode = useMapMode({ enabled: state.mode === "map", nameId: nameId ?? "", mapDoc, patch: mapPatch, canEdit, writes, run, record, forget });
   // A root's variants as stored, with their runners (F6b): Export ▾'s variant entries (F8).
   const variantList = trpc.course.variantList.useQuery({ courseId: selectedCourse?.id ?? 1 }, { enabled: !!selectedCourse && hasGroups });
   // The keys of the structure being edited (a new key has no runners until the write lands and they are dealt).

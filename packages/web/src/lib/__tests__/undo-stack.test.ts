@@ -114,3 +114,23 @@ describe("UndoStack.nextRedo", () => {
     expect(s.nextRedo).toBeUndefined();
   });
 });
+
+describe("UndoStack.remove", () => {
+  it("drops matching entries from both branches and keeps the rest in order (G12b: a promote drops Map mode's)", async () => {
+    const log: string[] = [];
+    const s = new UndoStack(10);
+    const [a, b, c, d] = ["a", "b", "c", "d"].map((n) => entry(log, n));
+    for (const e of [a, b, c, d]) s.push(e);
+    await s.undo(); // d → future
+    const gone = new Set<object>([b, d]);
+    expect(s.remove((e) => gone.has(e))).toBe(2);
+    expect(s.canRedo).toBe(false);
+    expect(s.top).toBe(c);
+    await s.undo();
+    await s.undo();
+    expect(s.canUndo).toBe(false);
+    expect(log).toEqual(["undo:d", "undo:c", "undo:a"]);
+    expect(s.remove(() => true)).toBe(2);
+    expect(s.canRedo).toBe(false);
+  });
+});

@@ -37,6 +37,7 @@ function pinned() {
   }));
 }
 
+const mergeOf = (p: mapDocument.MapPatch, c: mapDocument.PatchChange) => mapDocument.mergePatch(p, c);
 const patchOf = (ops: mapDocument.PatchOp[], enabled = true): mapDocument.MapPatch => mapDocument.mapPatchSchema.parse({
   documentHash: HASH, enabled, symbols: {}, ops: Object.fromEntries(ops.map((op) => [mapDocument.patchOpId(op), op])),
 });
@@ -84,6 +85,28 @@ describe("Map mode's model (docs/course-editor.md §13)", () => {
     expect(changes(before, { put: [{ op: "hide", sourceIndex: 9 }] })).toBe(false);
     expect(changes(before, { remove: ["hide:3"] })).toBe(false);
     expect(changes(before, { remove: ["hide:9"] })).toBe(true);
+  });
+
+  it("the inverse of a drop puts the entry back; of an attach removes its op (or puts back the one it replaced) and the entry (G12b)", () => {
+    const from = "cd".repeat(32);
+    const lost = (op: mapDocument.PatchOp): mapDocument.UnresolvedOp => ({ op, from, fromSource: "ef".repeat(32), unitsPerMm: 100, reason: "target" });
+    const a = lost({ op: "hide", sourceIndex: 11 });
+    const ka = mapDocument.unresolvedKey(from, a.op);
+    const prev: mapDocument.PatchOp = { op: "hide", sourceIndex: 9 };
+    const before = { ...patchOf([prev]), unresolved: { [ka]: a } };
+    // Drop.
+    expect(inverseChange(before, { removeUnresolved: [ka] })).toEqual({ putUnresolved: { [ka]: a } });
+    expect(changes(before, { removeUnresolved: [ka] })).toBe(true);
+    expect(changes(before, { removeUnresolved: ["nope"] })).toBe(false);
+    expect(inverseChange(before, { removeUnresolved: ["nope"] })).toBeNull();
+    // Its undo: the entry put back; the inverse of that removes it.
+    const dropped = mergeOf(before, { removeUnresolved: [ka] });
+    expect(changes(dropped, { putUnresolved: { [ka]: a } })).toBe(true);
+    expect(changes(before, { putUnresolved: { [ka]: a } })).toBe(false);
+    expect(inverseChange(dropped, { putUnresolved: { [ka]: a } })).toEqual({ removeUnresolved: [ka] });
+    // Attach onto a free id, and onto one the patch holds.
+    expect(inverseChange(before, { put: [{ op: "hide", sourceIndex: 3 }], removeUnresolved: [ka] })).toEqual({ remove: ["hide:3"], putUnresolved: { [ka]: a } });
+    expect(inverseChange(before, { put: [{ op: "hide", sourceIndex: 9 }], removeUnresolved: [ka] })).toEqual({ put: [prev], putUnresolved: { [ka]: a } });
   });
 
   it("names the object's symbol and box; a hidden object is still found (its row restores it)", () => {

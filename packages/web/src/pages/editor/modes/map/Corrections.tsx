@@ -3,32 +3,45 @@
  * op of the event's patch in op-id order — a click locates its object, *Revert* removes it — and the
  * *Apply corrections* toggle (`mapPatch.setEnabled`).
  *
- * Under it, the corrections the pin move could not carry over (§13 "Unresolved"; map-patches §4, row G11): the
- * patch's `unresolved` entries with *Attach* (onto the selected object) and *Drop*. The block reads the session's
- * patch and writes itself, delivering replies as Map mode's writes do, so `MapMode.tsx` is unchanged (user
- * 2026-11-15, G11 question 3: no undo entry, no locate, outside Map mode's write interlock — Pending).
+ * Under it, the corrections the pin move could not carry over (§13 "Unresolved"; map-patches §4, rows G11, G12b): the
+ * patch's `unresolved` entries — a click centres the view on the entry's old place, *Attach* puts it onto the selected
+ * object or, for a `symbol` entry, opens the palette for a symbol, *Drop* removes it. Presentational: the writes, their
+ * undo entries and the interlock are Map mode's (`modes/MapMode.tsx`).
  */
 
-import { useCallback, useState, useSyncExternalStore } from "react";
-import { useParams } from "react-router-dom";
+import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import type { TFunction } from "i18next";
-import type { mapDocument } from "@oxygen/shared";
-import { trpc } from "../../../../lib/trpc";
-import { getMapPatch, loadMapPatch, setMapPatch, subscribeMapPatch, type MapPatchDelivery } from "../../../../lib/map-document-cache";
 import { refKey, sameRef, type CorrectionRow, type MapObjectRef } from "./model";
+import type { UnresolvedRow } from "./unresolved";
 
-export function CorrectionsList({ rows, selected, enabled, canWrite, busy, onLocate, onRevert, onEnabled }: {
+export interface UnresolvedProps {
+  rows: readonly UnresolvedRow[];
+  /** The selected document object's `sourceIndex` (an object entry's *Attach* needs one). */
+  source: number | null;
+  /** `courses.edit`, *Apply corrections* on, no promote running (attach is a hide-like gesture). */
+  canAttach: boolean;
+  /** `courses.edit`, no promote running (drop stays while the corrections are off, as *Revert*). */
+  canDrop: boolean;
+  /** The entry whose palette is open (a `symbol` entry's *Attach*), and the palette shown under it. */
+  attaching: string | null;
+  picker: ReactNode;
+  onLocate: (row: UnresolvedRow) => void;
+  onAttach: (row: UnresolvedRow) => void;
+  onDrop: (row: UnresolvedRow) => void;
+}
+
+export function CorrectionsList({ rows, selected, enabled, canWrite, busy, onLocate, onRevert, onEnabled, unresolved }: {
   rows: readonly CorrectionRow[];
   selected: MapObjectRef | null;
   enabled: boolean;
-  /** `courses.edit`: revert and the toggle (they stay while the corrections are off). */
+  /** `courses.edit` and no promote running: revert and the toggle (they stay while the corrections are off). */
   canWrite: boolean;
   /** The toggle's write is in flight. */
   busy: boolean;
   onLocate: (row: CorrectionRow) => void;
   onRevert: (row: CorrectionRow) => void;
   onEnabled: (enabled: boolean) => void;
+  unresolved: UnresolvedProps;
 }) {
   const { t } = useTranslation("editor");
   return (
@@ -61,104 +74,55 @@ export function CorrectionsList({ rows, selected, enabled, canWrite, busy, onLoc
           ))}
         </ul>
       )}
-      <UnresolvedCorrections selected={selected} canWrite={canWrite} correctionsOn={enabled} />
+      <UnresolvedCorrections {...unresolved} />
     </div>
   );
 }
 
 const BUTTON = "shrink-0 px-1.5 py-0.5 rounded text-[11px] text-slate-600 border border-slate-200 hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer";
 
-/** A refusal as the editor says it: the `PATCH_*` code's text, the offline text, else the message (as Map mode's). */
-function patchErrorText(e: unknown, t: TFunction<"editor">): string {
-  const message = e instanceof Error ? e.message : String(e);
-  const code = /^(PATCH_[A-Z_]+)/.exec(message)?.[1];
-  const text = code ? t(`patchError_${code}`, { defaultValue: "" }) : "";
-  if (text) return text;
-  if (/connectivity/i.test(message)) return t("patchError_offline");
-  return message;
-}
-
-/** The symbol an entry was on, as the row names it: the target's, else the op's `{ doc }` symbol, else the patch symbol key. */
-function entryLabel(e: mapDocument.UnresolvedOp): string {
-  const s = e.target?.symbol ?? e.symbol;
-  if (s) return `${s.code} ${s.name}`.trim();
-  return "symbol" in e.op && "patch" in e.op.symbol ? e.op.symbol.patch : "";
-}
-
-const NO_DELIVERY = (): MapPatchDelivery | undefined => undefined;
-
 /** *Corrections* → *Not carried over* (§13 "Unresolved"): absent while the patch has none. */
-function UnresolvedCorrections({ selected, canWrite, correctionsOn }: {
-  selected: MapObjectRef | null;
-  canWrite: boolean;
-  /** *Apply corrections*: attach is a hide-like gesture, off while the corrections are (§13). */
-  correctionsOn: boolean;
-}) {
+function UnresolvedCorrections({ rows, source, canAttach, canDrop, attaching, picker, onLocate, onAttach, onDrop }: UnresolvedProps) {
   const { t } = useTranslation("editor");
-  const { nameId = "" } = useParams<{ nameId: string }>();
-  const utils = trpc.useUtils();
-  const subscribe = useCallback((fn: () => void) => (nameId ? subscribeMapPatch(nameId, fn) : () => undefined), [nameId]);
-  const delivery = useSyncExternalStore(subscribe, nameId ? () => getMapPatch(nameId) : NO_DELIVERY);
-  const patch = delivery?.patch ?? null;
-  const attachM = trpc.mapPatch.attachUnresolved.useMutation();
-  const applyM = trpc.mapPatch.applyChange.useMutation();
-  const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const write = useCallback(async (key: string, send: () => Promise<MapPatchDelivery>) => {
-    setBusy(key);
-    setError(null);
-    try {
-      const res = await send();
-      setMapPatch(nameId, res);
-      utils.course.mapMetadata.setData(undefined, (old) => (old ? { ...old, patchVersion: res.version } : old));
-    } catch (e) {
-      setError(patchErrorText(e, t));
-      void utils.course.mapMetadata.invalidate();
-      void loadMapPatch(nameId);
-    } finally {
-      setBusy(null);
-    }
-  }, [nameId, utils, t]);
-
-  const entries = patch?.unresolved ? Object.keys(patch.unresolved).sort().map((key) => [key, patch.unresolved![key]] as const) : [];
-  if (!patch || entries.length === 0) return null;
-  const documentHash = patch.documentHash;
-  const source = selected && "source" in selected ? selected.source : null;
+  if (rows.length === 0) return null;
   return (
-    <div data-testid="editor-corrections-unresolved" data-count={entries.length} className="mt-1 pt-1.5 border-t border-slate-100 flex flex-col gap-1">
+    <div data-testid="editor-corrections-unresolved" data-count={rows.length} className="mt-1 pt-1.5 border-t border-slate-100 flex flex-col gap-1">
       <div className="flex items-center gap-1.5" title={t("correctionsUnresolvedHint")}>
         <span className="font-medium text-amber-800">{t("correctionsUnresolved")}</span>
-        <span className="ml-auto text-slate-400">{entries.length}</span>
+        <span className="ml-auto text-slate-400">{rows.length}</span>
       </div>
       <ul className="flex flex-col">
-        {entries.map(([key, e]) => {
-          const dropOnly = e.reason !== "target" || e.op.op === "add";
-          const attachTitle = dropOnly ? t("correctionAttachSymbol") : source === null ? t("correctionAttachNeedsSelection") : t("correctionAttachHint");
+        {rows.map((r) => {
+          const { key, entry: e } = r;
+          const bySymbol = r.attach === "symbol";
+          const attachTitle = bySymbol ? t("correctionAttachSymbol") : source === null ? t("correctionAttachNeedsSelection") : t("correctionAttachHint");
+          const open = attaching === key;
           return (
             <li key={key} data-testid="editor-correction-unresolved" data-key={key} data-op={e.op.op} data-reason={e.reason}
-              className="flex items-center gap-1.5 rounded px-1 py-0.5 hover:bg-slate-50">
-              <span className="flex-1 min-w-0 truncate" title={t("correctionsUnresolvedHint")}>
-                <span className="text-slate-500">{t(`op_${e.op.op}`)}</span>{" "}
-                <span>{entryLabel(e)}</span>{" "}
-                <span className="text-amber-700">· {t(`unresolved_${e.reason}`)}</span>
-              </span>
-              <button type="button" data-testid="editor-correction-attach" title={attachTitle}
-                disabled={!canWrite || !correctionsOn || dropOnly || source === null || busy !== null}
-                onClick={() => source !== null && void write(key, () => attachM.mutateAsync({ documentHash, key, sourceIndex: source }))}
-                className={BUTTON}>
-                {t("correctionAttach")}
-              </button>
-              <button type="button" data-testid="editor-correction-drop" disabled={!canWrite || busy !== null}
-                onClick={() => void write(key, () => applyM.mutateAsync({ documentHash, removeUnresolved: [key] }))}
-                className={BUTTON}>
-                {t("correctionDrop")}
-              </button>
+              className={`flex flex-col rounded px-1 py-0.5 ${open ? "bg-purple-50" : "hover:bg-slate-50"}`}>
+              <div className="flex items-center gap-1.5">
+                <button type="button" data-testid="editor-correction-unresolved-locate" onClick={() => onLocate(r)} disabled={r.centre === null}
+                  className="flex-1 min-w-0 text-left truncate cursor-pointer disabled:cursor-default" title={t("correctionsUnresolvedHint")}>
+                  <span className="text-slate-500">{t(`op_${e.op.op}`)}</span>{" "}
+                  <span>{r.label}</span>{" "}
+                  <span className="text-amber-700">· {t(`unresolved_${e.reason}`)}</span>
+                </button>
+                <button type="button" data-testid="editor-correction-attach" title={attachTitle} aria-expanded={bySymbol ? open : undefined}
+                  disabled={!canAttach || (!bySymbol && source === null)}
+                  onClick={() => onAttach(r)}
+                  className={BUTTON}>
+                  {t("correctionAttach")}
+                </button>
+                <button type="button" data-testid="editor-correction-drop" disabled={!canDrop} onClick={() => onDrop(r)}
+                  className={BUTTON}>
+                  {t("correctionDrop")}
+                </button>
+              </div>
+              {open && picker}
             </li>
           );
         })}
       </ul>
-      {error && <p data-testid="editor-corrections-unresolved-error" className="text-[11px] text-red-700">{error}</p>}
     </div>
   );
 }
