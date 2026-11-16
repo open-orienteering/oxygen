@@ -64,6 +64,14 @@ export interface AverageWorkerLike {
   terminate(): void;
 }
 
+/** A job ended by `dispose` (leaving Map mode or the document): not an error to show. */
+export class AverageCancelled extends Error {
+  constructor() {
+    super("Averaging was cancelled");
+    this.name = "AverageCancelled";
+  }
+}
+
 export interface Averager {
   /** The average of `passes` (copied, `averagePasses`); rejects with the worker's error. */
   run(passes: readonly Line[]): Promise<{ line: Line; singlePass: gpsTrack.TrackRange[] }>;
@@ -109,7 +117,7 @@ export function createAverager(createWorker: () => AverageWorkerLike = createAve
       });
     },
     dispose() {
-      failAll(new Error("Averaging was cancelled"));
+      failAll(new AverageCancelled());
       worker?.terminate();
       worker = null;
     },

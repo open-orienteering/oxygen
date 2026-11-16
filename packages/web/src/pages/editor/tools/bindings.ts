@@ -923,6 +923,8 @@ export interface MapTracksContext {
   /** The visible tracks as drawn (trimmed): a click on one selects it. */
   lines: readonly { id: string; line: gpsTrack.ProjectedTrack }[];
   gesture: { current: TrackToolState };
+  /** Presses are taken (no trim or split write in flight). */
+  canPress?: boolean;
   /** The trim a held handle shows now (the layer draws it); null when released or cancelled. */
   onDraft: (live: { id: string; trim: gpsTrack.TrackRange } | null) => void;
   /** A handle released at another point: one write, `before` for the undo. */
@@ -968,7 +970,7 @@ export function mapTracksBinding(c: MapTracksContext): EditorToolBinding {
     shapes,
     onClick: (p) => void apply(trackToolStep(c.gesture.current, { type: "click", pt: p.pt, reachMm: MAP_HIT_PX * p.mmPerPx, target: t, lines: c.lines })),
     onPointerDown: (p) => {
-      if (p.touch) return false;
+      if (p.touch || c.canPress === false) return false;
       return apply(trackToolStep(c.gesture.current, { type: "down", pt: p.pt, handleMm: HANDLE_PX * p.mmPerPx, dragMm: MAP_DRAG_PX * p.mmPerPx, target: t }));
     },
     onPointerDrag: (pt) => {

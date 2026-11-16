@@ -4,7 +4,9 @@
  * the reference layer decimated to the zoom the pointer last reported, and the writes — import, rename, delete, each
  * one undo entry. Off, with the reason and no `mapTrack` request, on a venue node, without `courses.edit`, or on a
  * map without a georeference. For G26's conversion: the tracks selected to convert, *Show converted*, and the marks a
- * conversion and its undo write (`mark`).
+ * conversion and its undo write (`mark`). For G27 (docs/map-gps-tracks.md §5.2): the Tracks tool `T` — trim by the
+ * end handles, split by a click — and *Average* in a module worker, each one undo entry; an average's passes hidden
+ * and its single-pass spans dashed.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -15,8 +17,13 @@ import { trpc } from "../../../../../lib/trpc";
 import type { LoadedMapDocument } from "../../../../../lib/map-document-cache";
 import type { EditorWrites, TrackImportItem, TrackMeta } from "../../../../../lib/editor/write-client";
 import { paperFrameOf } from "../../../../../lib/vector-map";
-import type { TrackLayer } from "../../../tools/bindings";
-import { DEFAULT_TOLERANCE_MM, decimateLayer, layerShapes, toleranceMm } from "./decimate";
+import type { EditorToolBinding } from "../../../../../components/MapViewer";
+import { mapTracksBinding, type TrackLayer } from "../../../tools/bindings";
+import { IDLE, type TrackToolState } from "../../../tools/tracks";
+import { newAddId } from "../symbols";
+import { DEFAULT_TOLERANCE_MM, decimateLayer, layerShapes, remainderShape, toleranceMm } from "./decimate";
+import { keptLine, splitUndo, viewRanges } from "./edit";
+import { AverageCancelled, averageImport, createAverager, type Averager } from "./average";
 import {
   chunkTracks, deletedTrackImport, disabledReason, locateBounds, nextOverrides, parseVisibility, planImport, projectTrackRow, pruneSelection, pruneVisibility,
   showConvertedKey, trackErrorCode, trackRows, visibilityKey, type ImportIssue, type TrackGeometry, type TrackRow, type TracksDisabled,
@@ -35,6 +42,8 @@ export interface MapTracksArgs {
   record: (undo: () => Promise<unknown>, redo: () => Promise<unknown>) => unknown;
   /** Fit the view to these paper-mm bounds (Map mode's `viewRequest`). */
   onLocate: (bounds: Bounds) => void;
+  /** The Tracks tool `T` is armed (G27). */
+  armed?: boolean;
 }
 
 export interface ImportResult {
@@ -51,6 +60,10 @@ export interface MapTracks {
   clearSelection: () => void;
   /** `mapTrack.markConverted` for the tracks still listed (G26: a conversion, its undo and redo); nothing when none is. */
   mark: (marks: readonly { id: string; opId: string | null }[]) => Promise<void>;
+  /** The Tracks tool's binding while `armed` and on (G27); null otherwise. */
+  toolBinding: EditorToolBinding | null;
+  /** Why the Tracks tool is off (a sentence for the rail's title), or null. */
+  toolOff: string | null;
   /** Null without a pinned document (Map mode's own `editor-map-none` stands). */
   panel: {
     disabled: TracksDisabled | null;
@@ -69,6 +82,11 @@ export interface MapTracks {
     onRename: (id: string, name: string) => void;
     onDelete: (id: string) => void;
     onLocate: (id: string) => void;
+    /** *Average* (G27): two or more selected ready tracks; `averaging` while the worker and the import run. */
+    onAverage: () => void;
+    averaging: boolean;
+    /** The Tracks tool's state for the panel's hint: null while not armed; `pick` without one selected visible track. */
+    tool: "pick" | "ready" | null;
   } | null;
 }
 
@@ -119,6 +137,7 @@ export function useMapTracks(a: MapTracksArgs): MapTracks {
   const { t } = useTranslation("editor");
   const utils = trpc.useUtils();
   const { enabled, nameId, mapDoc, canEdit, writes, run, record, onLocate } = a;
+  const armed = !!a.armed;
 
   // ─── Where it is off (§5.1) ──
   const lease = trpc.lease.status.useQuery(undefined, { enabled: enabled && !!mapDoc, staleTime: 60_000, refetchOnWindowFocus: false });
@@ -220,14 +239,60 @@ export function useMapTracks(a: MapTracksArgs): MapTracks {
   const clearSelection = useCallback(() => setSelectedIds([]), []);
   useEffect(() => { if (!enabled) setSelectedIds([]); }, [enabled, nameId]);
 
+  // ─── Editing (G27, §5.2): a held handle's trim, a trim written and not yet listed, a write in flight ──
+  const [draftTrim, setDraftTrim] = useState<{ id: string; trim: gpsTrack.TrackRange } | null>(null);
+  const [pendingTrim, setPendingTrim] = useState<{ id: string; trim: gpsTrack.TrackRange } | null>(null);
+  const [editing, setEditing] = useState(false);
+  const toolGesture = useRef<TrackToolState>(IDLE);
+  useEffect(() => {
+    if (!armed) {
+      toolGesture.current = IDLE;
+      setDraftTrim(null);
+    }
+  }, [armed, enabled, nameId]);
+  /** A track's whole stored line on the paper (index `i` is stored point `i`), or null. */
+  const fullLine = useCallback((m: TrackMeta): gpsTrack.ProjectedTrack | null => {
+    const p = loaded.points.get(m.id);
+    if (!p || !frame || !mapDoc) return null;
+    const g = projected(frame, mapDoc.header.bounds, { start: 0, end: m.pointCount }, p);
+    return "line" in g ? g.line : null;
+  }, [loaded, frame, mapDoc]);
+  /** The trim drawn: the held handle's, else one being written, else the stored one. */
+  const shownTrim = useCallback((m: TrackMeta): gpsTrack.TrackRange => (
+    draftTrim?.id === m.id ? draftTrim.trim : pendingTrim?.id === m.id ? pendingTrim.trim : m.trim
+  ), [draftTrim, pendingTrim]);
+  // The tool's track: the one selected track, visible and ready (G26's selection, kept for G27).
+  const toolRow = armed && active && selection.length === 1 && selection[0].visible && selection[0].geometry ? selection[0] : null;
+  const toolFull = toolRow ? fullLine(toolRow.meta) : null;
+  const target = useMemo(() => (toolRow && toolFull ? {
+    id: toolRow.meta.id, full: toolFull, trim: pendingTrim?.id === toolRow.meta.id ? pendingTrim.trim : toolRow.meta.trim,
+  } : null), [toolRow, toolFull, pendingTrim]);
+
   // ─── The layer, decimated to the pixel ──
   const [tolerance, setTolerance] = useState(DEFAULT_TOLERANCE_MM);
   const onScale = useCallback((mmPerPx: number) => setTolerance(toleranceMm(mmPerPx)), []);
-  const shapes = useMemo(() => {
+  /** The visible tracks as drawn: the shown trim's line, an average's single-pass ranges under it (§4.1). */
+  const drawnLines = useMemo(() => {
     if (!active) return [];
-    const lines = rows.flatMap((r) => (r.visible && r.geometry ? [{ id: r.meta.id, colour: r.colour, line: r.geometry.line }] : []));
-    return lines.length > 0 ? layerShapes(decimateLayer(lines, tolerance)) : [];
-  }, [active, rows, tolerance]);
+    return rows.flatMap((r) => {
+      if (!r.visible || !r.geometry) return [];
+      const trim = shownTrim(r.meta);
+      const moved = trim.start !== r.meta.trim.start || trim.end !== r.meta.trim.end;
+      const full = moved ? fullLine(r.meta) : null;
+      const shown = full ? trim : r.meta.trim;
+      const dashed = viewRanges(r.meta.singlePass, shown);
+      return [{ id: r.meta.id, colour: r.colour, line: full ? keptLine(full, trim) : r.geometry.line, ...(dashed.length > 0 ? { dashed } : {}) }];
+    });
+  }, [active, rows, shownTrim, fullLine]);
+  const shapes = useMemo(() => {
+    const out = drawnLines.length > 0 ? layerShapes(decimateLayer(drawnLines, tolerance)) : [];
+    // The tool's track whole, under the layer, while part of it is trimmed away (a handle can be dragged back over it).
+    if (target) {
+      const trim = shownTrim(toolRow!.meta);
+      if (trim.start > 0 || trim.end < target.full.x.length) out.unshift(remainderShape(target.id, target.full, tolerance));
+    }
+    return out;
+  }, [drawnLines, tolerance, target, shownTrim, toolRow]);
   const layer = useMemo<TrackLayer>(() => ({ shapes, onScale }), [shapes, onScale]);
 
   // ─── Writes ──
@@ -326,8 +391,9 @@ export function useMapTracks(a: MapTracksArgs): MapTracks {
 
   const onVisible = useCallback((id: string, visible: boolean) => {
     const meta = metaOf(id);
-    if (meta) saveOverrides(nextOverrides(overrides, meta, visible, showConverted)); // kept only where it differs from the default
-  }, [metaOf, overrides, saveOverrides, showConverted]);
+    // Kept only where it differs from the default (an average's pass is hidden by default, G27).
+    if (meta) saveOverrides(nextOverrides(overrides, meta, visible, showConverted, rows.some((r) => r.meta.id === id && r.isSource)));
+  }, [metaOf, overrides, saveOverrides, showConverted, rows]);
 
   // The marks go to tracks still listed: one deleted meanwhile (here or elsewhere) is skipped, not a failed undo.
   const metasRef = useRef(metas);
@@ -338,6 +404,115 @@ export function useMapTracks(a: MapTracksArgs): MapTracks {
     if (keep.length > 0) await send(() => writes.markTracksConverted(keep));
   }, [send, writes]);
 
+  /** The list's cached rows replaced by these answers (a trim or split shows before the list is fetched again). */
+  const patchList = useCallback((replace: (tracks: TrackMeta[]) => TrackMeta[]) => {
+    utils.mapTrack.list.setData(undefined, (old) => (old ? { ...old, tracks: replace(old.tracks as TrackMeta[]) } : old));
+  }, [utils]);
+  const putMeta = useCallback((m: TrackMeta) => patchList((ts) => ts.map((x) => (x.id === m.id ? m : x))), [patchList]);
+
+  // ─── Trim, split (the Tracks tool) and average (G27, §5.2), each one undo entry ──
+  const onTrim = useCallback((id: string, trim: gpsTrack.TrackRange, before: gpsTrack.TrackRange) => {
+    setPendingTrim({ id, trim });
+    setEditing(true);
+    void run(async () => {
+      try {
+        putMeta(await send(() => writes.updateTrack({ id, trim })));
+        record(
+          () => send(async () => putMeta(await writes.updateTrack({ id, trim: before }))),
+          () => send(async () => putMeta(await writes.updateTrack({ id, trim }))),
+        );
+      } finally {
+        setPendingTrim(null);
+        setEditing(false);
+      }
+    });
+  }, [run, send, writes, record, putMeta]);
+
+  const onSplit = useCallback((id: string, index: number) => {
+    const meta = metaOf(id);
+    const p = loaded.points.get(id);
+    if (!meta || !p || editing) return;
+    // Client ids, ascending, left first (§1.2 "Split"): the redo splits again under the same ids.
+    const now = Date.now();
+    const ids: [string, string] = [newAddId(now), newAddId(now + 1)];
+    setEditing(true);
+    void run(async () => {
+      try {
+        const res = await send(() => writes.splitTrack({ id, index, ids }));
+        // The parts' points are the stored points split (§3.5): no `get`.
+        const [left, right] = gpsTrack.splitTrack({ name: null, points: p }, index);
+        addPoints([[ids[0], left.points], [ids[1], right.points]]);
+        patchList((ts) => ts.flatMap((x) => (x.id === id ? res.tracks : [x])));
+        setSelectedIds([]);
+        const u = splitUndo(meta, p, ids);
+        record(
+          // The original again under its id, at the end of the list, with its trim and mark (§5.2, user 2026-11-15).
+          () => send(async () => {
+            await writes.removeTracks(u.remove);
+            await writes.importTracks([u.item]);
+            if (u.trim) await writes.updateTrack({ id, trim: u.trim });
+            if (u.mark) await writes.markTracksConverted([u.mark]);
+          }),
+          () => send(() => writes.splitTrack({ id, index, ids })),
+        );
+      } finally {
+        setEditing(false);
+      }
+    });
+  }, [metaOf, loaded, editing, run, send, writes, record, addPoints, patchList]);
+
+  const averager = useRef<Averager | null>(null);
+  // The worker goes with the mode or the document (a job in flight is cancelled, not reported).
+  useEffect(() => () => {
+    averager.current?.dispose();
+    averager.current = null;
+  }, [enabled, nameId]);
+  const [averaging, setAveraging] = useState(false);
+  const onAverage = useCallback(() => {
+    const picked = selection.filter((r) => r.geometry);
+    if (!active || !frame || picked.length < 2 || averaging) return;
+    setAveraging(true);
+    void run(async () => {
+      try {
+        let res: Awaited<ReturnType<Averager["run"]>>;
+        try {
+          res = await (averager.current ??= createAverager()).run(picked.map((r) => r.geometry!.line));
+        } catch (e) {
+          if (e instanceof AverageCancelled) return;
+          throw new Error(t("trackAverageError_failed"), { cause: e });
+        }
+        const id = newAddId();
+        const sources = picked.map((r) => r.meta.id);
+        const out = averageImport(frame, res, id, t("trackAverageName", { count: sources.length }), sources);
+        if (!out.ok) throw new Error(t(out.code === "too-many-points" ? "trackAverageError_too-many-points" : "trackAverageError_failed"));
+        const item = out.item;
+        await send(() => importItems([item]));
+        addPoints([[id, item.points]]);
+        // The average becomes the selection: *Convert to line* is the next click.
+        setSelectedIds([id]);
+        record(() => send(() => removeIds([id])), () => send(() => importItems([item])));
+      } finally {
+        setAveraging(false);
+      }
+    });
+  }, [selection, active, frame, averaging, run, t, send, importItems, addPoints, record, removeIds]);
+
+  const onToolSelect = useCallback((id: string) => setSelectedIds([id]), []);
+  const panelLoading = disabled === null && (!(lease.isSuccess || lease.isError) || list.isLoading);
+  const toolOff = !mapDoc ? t("mapNone") : disabled ? t(`tracksDisabled_${disabled}`) : panelLoading ? t("tracksLoading") : null;
+  const toolLines = useMemo(() => drawnLines.map((l) => ({ id: l.id, line: l.line })), [drawnLines]);
+  const toolBinding = useMemo(() => (!armed || toolOff ? null : mapTracksBinding({
+    target,
+    lines: toolLines,
+    gesture: toolGesture,
+    canPress: !editing,
+    onDraft: setDraftTrim,
+    onTrim,
+    onSplit,
+    onSelect: onToolSelect,
+    // draftTrim: the handles follow the drag.
+  })), [armed, toolOff, target, toolLines, editing, onTrim, onSplit, onToolSelect, draftTrim]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const onLocateTrack = useCallback((id: string) => {
     const g = geometry.get(id);
     if (g && "bbox" in g) onLocate(locateBounds(g.bbox));
@@ -346,7 +521,7 @@ export function useMapTracks(a: MapTracksArgs): MapTracks {
   const panel = !mapDoc ? null : {
     disabled,
     // Until the node's role is known nothing is offered (a venue box shows its reason, never an import).
-    loading: disabled === null && (!(lease.isSuccess || lease.isError) || list.isLoading),
+    loading: panelLoading,
     rows,
     importing,
     result,
@@ -359,6 +534,9 @@ export function useMapTracks(a: MapTracksArgs): MapTracks {
     onRename,
     onDelete,
     onLocate: onLocateTrack,
+    onAverage,
+    averaging,
+    tool: armed && !toolOff ? (target ? "ready" as const : "pick" as const) : null,
   };
-  return { layer, selection, clearSelection, mark, panel };
+  return { layer, selection, clearSelection, mark, toolBinding, toolOff, panel };
 }

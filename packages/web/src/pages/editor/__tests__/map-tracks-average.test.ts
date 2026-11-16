@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { gpsTrack, mapGeo } from "@oxygen/shared";
-import { averageImport, averagePasses, averageResponse, createAverager, type AverageRequest, type AverageResponse, type AverageWorkerLike } from "../modes/map/tracks/average";
+import { AverageCancelled, averageImport, averagePasses, averageResponse, createAverager, type AverageRequest, type AverageResponse, type AverageWorkerLike } from "../modes/map/tracks/average";
 
 /** SWEREF99 TM, 1:10 000, 100 units per mm (as map-tracks-model.test.ts). */
 const frame: mapGeo.PaperFrame = {
@@ -69,7 +69,7 @@ describe("averaging in Map mode (docs/map-gps-tracks.md §5.2, G27)", () => {
     const hung = createAverager(() => ({ ...inline(), postMessage() { /* never answers */ } }));
     const p = hung.run([a, b]);
     hung.dispose();
-    await expect(p).rejects.toThrow(/cancelled/);
+    await expect(p).rejects.toBeInstanceOf(AverageCancelled);
     avg.dispose();
     expect(w.terminated).toBe(true);
   });

@@ -110,13 +110,21 @@ export function decimateLayer(lines: readonly LayerLine[], tolerance: number, bu
 }
 
 /**
+ * The Tracks tool's track whole (G27, §5.2): a thin grey path (`editor-track-trimmed`) under the layer, so the
+ * trimmed-away stretches a handle can be dragged back over show.
+ */
+export function remainderShape(id: string, full: gpsTrack.ProjectedTrack, tolerance: number): ToolShape {
+  return { kind: "line", points: pointsOf(simplified(full, tolerance)), color: "#94a3b8", widthPx: 1, testId: "editor-track-trimmed", data: { "track-id": id } };
+}
+
+/**
  * One UI-layer path per line (`editor-gps-track`, `data-track-id`): 2 CSS px, solid, in its colour; a line with
  * single-pass runs is one path per run, the dashed ones with `data-single-pass`.
  */
 export function layerShapes(layer: DecimatedLayer): ToolShape[] {
   return layer.lines.flatMap((l): ToolShape[] => {
     if (!l.runs) return [{ kind: "line", points: l.points, color: l.colour, widthPx: 2, testId: "editor-gps-track", data: { "track-id": l.id } }];
-    return l.runs.map((r) => (r.dashed
+    return l.runs.map((r): ToolShape => (r.dashed
       ? { kind: "line", points: r.points, color: l.colour, widthPx: 2, dashed: true, testId: "editor-gps-track", data: { "track-id": l.id, "single-pass": "true" } }
       : { kind: "line", points: r.points, color: l.colour, widthPx: 2, testId: "editor-gps-track", data: { "track-id": l.id } }));
   });
