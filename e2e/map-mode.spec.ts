@@ -4,7 +4,8 @@
  * (drag, insert, delete, undo; §13 "Nodes"), drawing and change symbol (§13 "Drawing", "Symbol picker": a path
  * with a document symbol, a point with a library symbol materialised on first use, a resymbol; each in `maps.pdf`,
  * whose page raster is `print-patch.test.ts`'s, user 2026-11-15), and promote (§13 "Promote"; 08 §7's smoke: hide an
- * object, add a path, save them to the club map). The fixture is the seed's `itest` event with `e2e/test.ocd` pinned;
+ * object, add a path, save them to the club map), and the line and area operations (§13 "Line and area operations",
+ * G10: reverse, split, join, cut and remove a hole on lines and areas the test draws). The fixture is the seed's `itest` event with `e2e/test.ocd` pinned;
  * every op is removed in `finally` (AGENTS.md §12), so no reseed — except promote's describe, which moves the pin and
  * makes a club series: it reseeds and removes the series.
  *
@@ -712,6 +713,237 @@ test.describe("Map mode drawing (docs/course-editor.md §13 \"Drawing\", \"Symbo
       await correction(page, `resymbol:${sourceIndex}`).getByTestId("editor-correction-revert").click();
       await expect(page.getByTestId("editor-corrections-none")).toBeVisible();
       expect(await printedDrawing(page)).toBe(before);
+    } finally {
+      await clearPatch();
+    }
+  });
+});
+
+type Coord = number[];
+type OpChange = { put?: { op: string; id?: string; type?: number; symbol?: { doc?: number; patch?: string }; coords?: Coord[] }[]; remove?: string[] };
+/** The anchors of a coordinate list (the Bézier controls, flags 1 and 2, left out), as `[x, y]`. */
+const anchorsOf = (coords: Coord[]) => coords.filter((c) => ((c[2] ?? 0) & 3) === 0).map((c) => [c[0], c[1]]);
+const opsOf = async () => (await trpcCall<{ version: string; patch: { ops: Record<string, { coords?: Coord[] }> } | null }>("mapPatch.get", undefined, false)).patch?.ops ?? {};
+
+test.describe("Map mode line and area operations (docs/course-editor.md §13 \"Line and area operations\", G10)", () => {
+  test.describe.configure({ mode: "serial" });
+
+  test.beforeAll(async () => {
+    await dropEventPatch(EDITOR_EVENT);
+  });
+  test.afterAll(async () => {
+    await dropEventPatch(EDITOR_EVENT);
+  });
+
+  async function open(page: Page): Promise<void> {
+    await openEditor(page, "?mode=map");
+    await expect(page.getByTestId("editor-page")).toHaveAttribute("data-mode", "map");
+    await expect(page.getByTestId("map-vector-layer")).toHaveAttribute("data-patch-version", /.+/, { timeout: 30_000 });
+    await page.keyboard.press("h");
+    await zoomTo(page, 16);
+  }
+
+  /** Draws a line through `pts` with a document line symbol (`L`, Enter ends it): its add id, selected after. */
+  async function drawLine(page: Page, pts: Pt[]): Promise<string> {
+    await page.keyboard.press("l");
+    await pressed(page, "L");
+    const chosen = page.locator('[data-testid="editor-map-palette-item"][aria-pressed="true"]');
+    if ((await chosen.count()) === 0) {
+      const docLines = paletteItems(page, '[data-source="document"]');
+      const paths = docLines.and(page.locator('[data-code^="505"], [data-code^="506"], [data-code^="507"]'));
+      await ((await paths.count()) > 0 ? paths.first() : docLines.first()).click();
+    }
+    for (const p of pts) {
+      const q = await toPage(page, p);
+      await page.mouse.click(q.x, q.y);
+    }
+    const wrote = waitForTrpc(page, "mapPatch.applyChange");
+    await page.keyboard.press("Enter");
+    await wrote;
+    await pressed(page, "V");
+    await expect(mapObject(page)).toHaveAttribute("data-ref", /^added:/, { timeout: 15_000 });
+    return (await mapObject(page).getAttribute("data-ref"))!.slice("added:".length);
+  }
+
+  test("Reverse and Split at node on a drawn line: one write each, the start part stays the object; undo", async ({ page }) => {
+    test.setTimeout(240_000);
+    try {
+      await open(page);
+      const [a] = await plainSpots(page, 1, 3, 0);
+      const id = await drawLine(page, [{ x: a.x - 2, y: a.y }, { x: a.x, y: a.y + 0.8 }, { x: a.x + 2, y: a.y }]);
+      const drawn = (await opsOf())[`add:${id}`].coords!;
+      const changes = captureChanges(page) as OpChange[];
+
+      // Reverse: the add rewritten with its nodes in the other order; one row still.
+      await expect(page.getByTestId("editor-map-object-cut-hole")).toHaveCount(0);
+      const reversed = waitForTrpc(page, "mapPatch.applyChange");
+      await page.getByTestId("editor-map-object-reverse").click();
+      await reversed;
+      expect(changes).toHaveLength(1);
+      expect(changes[0].put).toHaveLength(1);
+      expect(changes[0].put![0]).toMatchObject({ op: "add", id, type: 2 });
+      expect(anchorsOf(changes[0].put![0].coords!)).toEqual(anchorsOf(drawn).reverse());
+      await expect(page.getByTestId("editor-correction-row")).toHaveCount(1);
+      await page.keyboard.press("Control+z");
+      await expect.poll(async () => JSON.stringify((await opsOf())[`add:${id}`]?.coords), { timeout: 15_000 }).toBe(JSON.stringify(drawn));
+
+      // Split at node: needs a focused node between the ends (N).
+      const split = page.getByTestId("editor-map-object-split");
+      await expect(split).toHaveAttribute("data-reason", "no-node");
+      await expect(split).toBeDisabled();
+      await page.keyboard.press("n");
+      await expect.poll(async () => (await toolShapes(page, "editor-map-node")).length).toBeGreaterThanOrEqual(3);
+      const nodes = await toolShapes(page, "editor-map-node");
+      const end = await toPage(page, nodes[0]);
+      await page.mouse.click(end.x, end.y);
+      await expect(split).toHaveAttribute("data-reason", "end-node");
+      const middle = nodes[Math.floor(nodes.length / 2)];
+      const mp = await toPage(page, middle);
+      await page.mouse.click(mp.x, mp.y);
+      await expect.poll(async () => (await toolShapes(page, "editor-map-node")).find((n) => n.data.focused === "true")?.data.index).toBe(middle.data.index);
+      await expect(split).toBeEnabled();
+      const wrote = waitForTrpc(page, "mapPatch.applyChange");
+      await split.click();
+      await wrote;
+      const c = changes[changes.length - 1];
+      expect(c.put).toHaveLength(2);
+      expect(c.put![0]).toMatchObject({ op: "add", id, type: 2 });
+      expect(c.put![1]).toMatchObject({ op: "add", type: 2, symbol: changes[0].put![0].symbol });
+      expect(c.put![1].id).not.toBe(id);
+      const head = anchorsOf(c.put![0].coords!), tail = anchorsOf(c.put![1].coords!);
+      expect(head.at(-1)).toEqual(tail[0]);
+      expect(head.length + tail.length - 1).toBe(anchorsOf(drawn).length);
+      await expect(page.getByTestId("editor-correction-row")).toHaveCount(2);
+      await expect(mapObject(page)).toHaveAttribute("data-ref", `added:${id}`);
+
+      // Undo: one line of all its nodes again.
+      await page.keyboard.press("Control+z");
+      await expect(page.getByTestId("editor-correction-row")).toHaveCount(1);
+      expect(JSON.stringify((await opsOf())[`add:${id}`].coords)).toBe(JSON.stringify(drawn));
+    } finally {
+      await clearPatch();
+    }
+  });
+
+  test("Join: a one-shot pick that Escape drops; the picked line's add removed, a straight segment between the ends; undo", async ({ page }) => {
+    test.setTimeout(240_000);
+    try {
+      await open(page);
+      const [a] = await plainSpots(page, 1, 3, 0);
+      // The picked line first, then the survivor (selected after drawing), their ends 2 mm apart around `a`.
+      const picked = await drawLine(page, [{ x: a.x + 1, y: a.y }, { x: a.x + 2.8, y: a.y }]);
+      const survivor = await drawLine(page, [{ x: a.x - 2.8, y: a.y }, { x: a.x - 1, y: a.y }]);
+      expect(picked).not.toBe(survivor);
+      await expect.poll(() => plainMapAt(page, a, 0.3), { timeout: 15_000 }).toBe(true);
+      const changes = captureChanges(page) as OpChange[];
+
+      const join = page.getByTestId("editor-map-object-join");
+      await join.click();
+      await expect(join).toHaveAttribute("aria-pressed", "true");
+      await expect(page.getByTestId("editor-map-join-hint")).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(join).toHaveAttribute("aria-pressed", "false");
+      await expect(mapObject(page)).toHaveAttribute("data-ref", `added:${survivor}`);
+      await join.click();
+      await expect(join).toHaveAttribute("aria-pressed", "true");
+      const q = await toPage(page, { x: a.x + 1.9, y: a.y });
+      const wrote = waitForTrpc(page, "mapPatch.applyChange");
+      await page.mouse.click(q.x, q.y);
+      await wrote;
+      expect(changes).toHaveLength(1);
+      expect(changes[0].remove).toEqual([`add:${picked}`]);
+      expect(changes[0].put).toHaveLength(1);
+      expect(changes[0].put![0]).toMatchObject({ op: "add", id: survivor });
+      expect(anchorsOf(changes[0].put![0].coords!)).toHaveLength(4);
+      await expect(join).toHaveAttribute("aria-pressed", "false");
+      await expect(page.getByTestId("editor-correction-row")).toHaveCount(1);
+      await expect(mapObject(page)).toHaveAttribute("data-ref", `added:${survivor}`);
+      // The straight segment between the ends is drawn.
+      await expect.poll(() => plainMapAt(page, a, 0.3), { timeout: 15_000 }).toBe(false);
+
+      // Undo: both lines again, nothing between them.
+      await page.keyboard.press("Control+z");
+      await expect(page.getByTestId("editor-correction-row")).toHaveCount(2);
+      await expect.poll(() => plainMapAt(page, a, 0.3), { timeout: 15_000 }).toBe(true);
+    } finally {
+      await clearPatch();
+    }
+  });
+
+  test("Cut hole with the area gesture, Remove hole from a focused node in N; undo; off while corrections are off", async ({ page }) => {
+    test.setTimeout(240_000);
+    try {
+      await open(page);
+      const [a] = await plainSpots(page, 1, 3, 0);
+      await page.keyboard.press("a");
+      await pressed(page, "A");
+      await paletteItems(page, '[data-source="document"]').first().click();
+      const outline = [{ x: a.x - 3, y: a.y - 2 }, { x: a.x + 3, y: a.y - 2 }, { x: a.x, y: a.y + 3 }];
+      for (const p of outline) {
+        const q = await toPage(page, p);
+        await page.mouse.click(q.x, q.y);
+      }
+      let wrote = waitForTrpc(page, "mapPatch.applyChange");
+      const first = await toPage(page, outline[0]);
+      await page.mouse.click(first.x, first.y);
+      await wrote;
+      await pressed(page, "V");
+      await expect(mapObject(page)).toHaveAttribute("data-ref", /^added:/);
+      const id = (await mapObject(page).getAttribute("data-ref"))!.slice("added:".length);
+      const changes = captureChanges(page) as OpChange[];
+
+      // Cut hole: armed (pressed, its hint), the ring drawn with the area gesture, closed on its first node.
+      const cut = page.getByTestId("editor-map-object-cut-hole");
+      await expect(page.getByTestId("editor-map-object-remove-hole")).toHaveCount(0);
+      await cut.click();
+      await expect(cut).toHaveAttribute("aria-pressed", "true");
+      await expect(page.getByTestId("editor-map-hole-hint")).toBeVisible();
+      const ring = [{ x: a.x - 1, y: a.y - 1 }, { x: a.x + 1, y: a.y - 1 }, { x: a.x, y: a.y + 0.8 }];
+      for (const p of ring) {
+        const q = await toPage(page, p);
+        await page.mouse.click(q.x, q.y);
+      }
+      wrote = waitForTrpc(page, "mapPatch.applyChange");
+      const r0 = await toPage(page, ring[0]);
+      await page.mouse.click(r0.x, r0.y);
+      await wrote;
+      expect(changes).toHaveLength(1);
+      expect(changes[0].put).toHaveLength(1);
+      expect(changes[0].put![0]).toMatchObject({ op: "add", id, type: 3 });
+      expect(changes[0].put![0].coords!.filter((c) => ((c[2] ?? 0) & 16) !== 0)).toHaveLength(1);
+      await expect(cut).toHaveAttribute("aria-pressed", "false");
+      await expect(mapObject(page)).toHaveAttribute("data-ref", `added:${id}`);
+      await expect(page.getByTestId("editor-correction-row")).toHaveCount(1);
+
+      // Remove hole: in N, a node of the hole focused.
+      const remove = page.getByTestId("editor-map-object-remove-hole");
+      await expect(remove).toHaveAttribute("data-reason", "no-hole-node");
+      await page.keyboard.press("n");
+      await expect.poll(async () => (await toolShapes(page, "editor-map-node")).filter((n) => n.data.ring === "1").length, { timeout: 15_000 }).toBe(3);
+      const holeNode = (await toolShapes(page, "editor-map-node")).find((n) => n.data.ring === "1")!;
+      const hp = await toPage(page, holeNode);
+      await page.mouse.click(hp.x, hp.y);
+      await expect(remove).toBeEnabled();
+      wrote = waitForTrpc(page, "mapPatch.applyChange");
+      await remove.click();
+      await wrote;
+      const last = changes[changes.length - 1];
+      expect(last.put![0]).toMatchObject({ op: "add", id, type: 3 });
+      expect(last.put![0].coords!.filter((c) => ((c[2] ?? 0) & 16) !== 0)).toHaveLength(0);
+      await expect.poll(async () => (await toolShapes(page, "editor-map-node")).filter((n) => n.data.ring === "1").length, { timeout: 15_000 }).toBe(0);
+      await expect(remove).toHaveCount(0);
+
+      // Undo: the hole back.
+      await page.keyboard.press("Control+z");
+      await expect.poll(async () => (await toolShapes(page, "editor-map-node")).filter((n) => n.data.ring === "1").length, { timeout: 15_000 }).toBe(3);
+
+      // Apply corrections off: the operations are disabled.
+      await page.getByTestId("editor-corrections-apply").uncheck();
+      await expect(page.getByTestId("editor-map-disabled")).toBeVisible();
+      await expect(cut).toBeDisabled();
+      await expect(remove).toBeDisabled();
+      await page.getByTestId("editor-corrections-apply").check();
+      await expect(cut).toBeEnabled();
     } finally {
       await clearPatch();
     }
