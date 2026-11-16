@@ -2359,7 +2359,8 @@ pick or ring was refused, the nodes hint hidden meanwhile). The button
 again, **Escape** (first, after a drag in flight), another selection,
 arming a tool, *Change symbol*, *Attach*'s palette, the convert panel, the
 object hidden, and writing becoming impossible (a promote, corrections
-off) drop them; a written operation drops it too. Arming closes *Change
+off) drop them; so does its own write, and the write of any other line
+or area operation (decided overnight). Arming closes *Change
 symbol*, the attach palette and the convert panel and keeps `V` or `N`
 (another tool goes back to `V`). No rail tools and no letter keys in G10.
 
@@ -2417,10 +2418,11 @@ every gap where it was drawn.
   else the selection itself when it is under the click — which **closes it
   into a loop**. Not a line, a loop, a multi-part line or a broken encoding
   is refused: *Join* stays armed and the hint says why (`data-reason`
-  `not-line`, `closed`, `multi-part`, `encoding`, `too-many`). The nearest
+  `not-line`, `closed`, `multi-part`, `encoding`, `too-many`, `too-few`,
+and `kind` for a picked object no longer in the document). The nearest
   pair of ends is joined (ties in the order: the selection's end to the
   pick's start, to its end, the selection's start to the pick's end, to its
-  start): **within 0.5 mm** (`SNAP_MM`, inclusive) the two ends become one
+  start; decided overnight): **within 0.5 mm** (`SNAP_MM`, inclusive) the two ends become one
   node at the selection's end, with that point's corner / dash, the next
   segment's border bits and both gap toggles (an even pair cancels);
   **farther apart**, at any distance, both ends are kept and a straight
@@ -2431,18 +2433,19 @@ every gap where it was drawn.
   ["add:<id>"]`) in the same change. Different symbols may be joined; the
   result has the selection's. The two ops are two *Corrections* rows that
   revert separately (answer 8; reverting only the hide draws the old line
-  under the joined one, Pending). **Closing**: within 0.5 mm the last node
-  moves onto the first (4 nodes or more, so the loop reads as one), farther
-  a straight segment back to the first point (3 or more); fewer is refused
-  (`too-few`). A result over 2000 nodes from a selection within them is
-  refused (`too-many`, decided overnight: the object would lose its
-  handles, as an insert at the cap, "Nodes").
+  under the joined one, Pending). **Closing** (the node counts decided
+  overnight): within 0.5 mm the last node moves onto the first (4 nodes or
+  more, so the loop reads as one, "Nodes"), farther a straight segment back
+  to the first point (3 or more); fewer is refused (`too-few`). A result over 2000 nodes from a selection within them is
+  refused (`too-many`, counted on the joined result; decided overnight: the
+  object would lose its handles, as an insert at the cap, "Nodes").
 - **Cut hole** (answers 5–6; `cutHoleChange`): *Cut hole*, then the
   ring drawn with G9's area gesture (`mapDrawBinding` over the kind
   `map_area`: a click per node, smooth by default, Alt a corner, a drag
   pulls handles; a click on the first node, a double-click or Enter closes;
   right-click or Escape drops it with the armed state; placed nodes snapped
-  when snapping is on, onto the whole effective document). From 3 nodes the
+  when snapping is on, onto the whole effective document, the area itself
+  included; decided overnight). From 3 nodes the
   area with the ring is the viewer's draft. The closed ring is appended to
   the area's coordinates (`coordsOfRings`: curves as Bézier pairs, its
   first point flagged `hole` and repeated at the end), the existing rings
@@ -2451,9 +2454,10 @@ every gap where it was drawn.
   accepted as drawn**, as OCAD does: areas fill even-odd
   (`map-rendering.md` §3.1), so a ring outside the outline is drawn filled
   and one crossing it inverts the overlap; no containment check. While a
-  write is in flight the closing gesture is held back (the ring kept); a
-  ring that would take an area within 2000 nodes over them is refused
-  (`too-many`, the ring kept; decided overnight).
+  write is in flight the closing gesture is held back (the ring kept, as
+  G9's drawing); a ring that would take an area within 2000 nodes over
+  them is refused (`too-many`, the ring kept for Escape; decided
+  overnight).
 - **Remove hole** (answer 5; `removeHoleChange`): in `N`, click a node of
   the hole (ring 1 or later) and press *Remove hole*: the area without that
   ring, every other ring as it was (later holes keep their flag); one
