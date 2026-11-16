@@ -4,7 +4,9 @@
  * hide (kept on the device across a reload), rename, delete and its undo, and a reload keeping the tracks. Row G26
  * (§13 "GPS tracks: convert"; docs/map-gps-tracks.md §6): a converted track hidden unless *Show converted*, and the
  * fixture track converted into a ski-O track line — the op, the canvas, `maps.pdf`, undo and redo, a second
- * conversion moving the mark, and the settings and symbol remembered across a reload.
+ * conversion moving the mark, and the settings and symbol remembered across a reload. Row G27 (§13 "GPS tracks:
+ * editing"; docs/map-gps-tracks.md §5.2) on `e2e/fixtures/gps-passes.gpx` (two passes, the second 3 m off, half as
+ * long, reversed): trim by `T`'s handles, split, split and delete the middle, and *Average*.
  *
  * The fixture `e2e/fixtures/gps-tracks.gpx` is synthetic, generated from the frame of `e2e/test.ocd` — the map the
  * seed's `itest` event pins — by `packages/api/scripts/generate-test-gpx.ts`, which also writes the paper mm the
@@ -12,7 +14,7 @@
  * so no reseed.
  */
 import { readFileSync } from "node:fs";
-import { expect, test, type Page, type Request } from "@playwright/test";
+import { expect, test, type Page, type Request, type Response } from "@playwright/test";
 import { allControlsSheet, EDITOR_EVENT, editorReady, openEditor, printed, toPage, trpcCall, viewSettled } from "./helpers/editor";
 import { dropEventPatch } from "./helpers/event-map-pin";
 import { trpcProcedures, waitForTrpc } from "./helpers/trpc";
@@ -81,6 +83,72 @@ async function canvasAt(page: Page, pts: readonly Pt[]): Promise<number[][]> {
   return out;
 }
 const colourDiff = (a: number[][], b: number[][]): number => Math.min(...a.map((p, i) => p.reduce((s, v, c) => s + Math.abs(v - b[i][c]), 0)));
+
+// ─── G27's fixture and helpers ──
+type Passes = { tracks: { name: string; points: number; mm: [number, number][] }[]; average: { points: number; singlePass: { start: number; end: number }[]; centreY: number; aloneY: number; splitX: number } };
+const PASSES = "e2e/fixtures/gps-passes.gpx";
+const passes = JSON.parse(readFileSync("e2e/fixtures/gps-passes.json", "utf8")) as Passes;
+const passA = passes.tracks[0];
+type ListedTrack = { id: string; pointCount: number; trim: { start: number; end: number }; derivedFrom: string[]; singlePass: { start: number; end: number }[] | null; sourceName: string };
+const listed = async () => (await trpcCall<{ tracks: ListedTrack[] }>("mapTrack.list", undefined, false)).tracks;
+const trimOf = async (id: string) => (await listed()).find((t) => t.id === id)?.trim;
+const rowById = (page: Page, id: string) => page.locator(`[data-testid="editor-track-row"][data-track-id="${id}"]`);
+const handle = (page: Page, end: "start" | "end") => page.locator(`[data-testid="editor-track-handle"][data-end="${end}"]`);
+const blur = (page: Page) => page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+const mm = (p: [number, number]): Pt => ({ x: p[0], y: p[1] });
+async function clickAt(page: Page, p: [number, number]): Promise<void> {
+  const q = await toPage(page, mm(p));
+  await page.mouse.click(q.x, q.y);
+}
+async function dragFromTo(page: Page, from: [number, number], to: [number, number]): Promise<void> {
+  const a = await toPage(page, mm(from)), b = await toPage(page, mm(to));
+  await page.mouse.move(a.x, a.y);
+  await page.mouse.down();
+  await page.mouse.move(b.x, b.y, { steps: 12 });
+  await page.mouse.up();
+}
+/** Zooms out about `about` until `p` lies right of the inspector (which floats over the map's left side). */
+async function clearOfInspector(page: Page, p: [number, number], about: [number, number]): Promise<void> {
+  const right = async () => { const b = (await page.getByTestId("editor-tracks").boundingBox())!; return b.x + b.width; };
+  for (let i = 0; i < 10 && (await toPage(page, mm(p))).x < (await right()) + 40; i++) {
+    const q = await toPage(page, mm(about));
+    await page.mouse.move(q.x, q.y);
+    await page.mouse.wheel(0, 150);
+    await viewSettled(page);
+  }
+  expect((await toPage(page, mm(p))).x).toBeGreaterThan(await right());
+}
+/** A tRPC answer's data (one call, or the call's slot of a batch). */
+async function answer<T>(res: Response): Promise<T> {
+  const body = (await res.json()) as { result: { data: T } } | { result: { data: T } }[];
+  return (Array.isArray(body) ? body[0] : body).result.data;
+}
+/** The `mapTrack.markConverted` marks the page sends, per call. */
+function captureMarks(page: Page): { id: string; opId: string | null }[][] {
+  const out: { id: string; opId: string | null }[][] = [];
+  page.on("request", (req: Request) => {
+    if (req.method() !== "POST") return;
+    const k = trpcProcedures(req.url()).indexOf("mapTrack.markConverted");
+    if (k < 0) return;
+    const body = req.postDataJSON() as Record<string, unknown> | null;
+    const entry = (body && (k.toString() in body ? body[k.toString()] : body)) as { json?: { marks: { id: string; opId: string | null }[] }; marks?: { id: string; opId: string | null }[] };
+    out.push((entry?.json ?? entry).marks ?? []);
+  });
+  return out;
+}
+/** Opens Map mode and imports the two passes by the picker; their ids. */
+async function importPasses(page: Page): Promise<{ idA: string; idB: string }> {
+  await openEditor(page, "?mode=map");
+  await expect(page.getByTestId("editor-page")).toHaveAttribute("data-mode", "map");
+  await expect(page.getByTestId("editor-tracks-none")).toBeVisible({ timeout: 15_000 });
+  const imported = waitForTrpc(page, "mapTrack.import");
+  await page.getByTestId("editor-tracks-file").setInputFiles([{ name: "gps-passes.gpx", mimeType: "application/gpx+xml", buffer: readFileSync(PASSES) }]);
+  await imported;
+  await expect(rows(page)).toHaveCount(2);
+  const ids = await rows(page).evaluateAll((els) => els.map((e) => e.getAttribute("data-track-id")!));
+  for (const id of ids) await expect(rowById(page, id)).toHaveAttribute("data-state", "ready", { timeout: 15_000 });
+  return { idA: ids[0], idB: ids[1] };
+}
 
 /** A path's drawn vertices, paper mm (`data-points`). */
 async function drawn(page: Page, id: string): Promise<Pt[]> {
@@ -465,6 +533,235 @@ test.describe("GPS tracks in Map mode (docs/course-editor.md §13)", () => {
       expect(await listed()).toBe(opId);
     } finally {
       await sheet.drop().catch(() => undefined);
+      await dropEventPatch(EDITOR_EVENT).catch(() => undefined);
+      await clearTracks().catch(() => undefined);
+    }
+  });
+
+  // ─── G27: trim, split and average (docs/map-gps-tracks.md §5.2; course-editor.md §13 "GPS tracks: editing") ──
+
+  test("trim: T's end handles drag along the track, one update each, undo / redo, outward restores, a reload keeps it", async ({ page }) => {
+    test.setTimeout(180_000);
+    try {
+      const { idA } = await importPasses(page);
+      const a = rowById(page, idA);
+      await a.getByTestId("editor-track-name").click();
+      await viewSettled(page);
+
+      // T by its key: without a selected track the hint asks for one, and no handle is drawn.
+      await blur(page);
+      await page.keyboard.press("t");
+      await expect(page.getByTestId("editor-tool-T")).toHaveAttribute("aria-pressed", "true");
+      await expect(page.getByTestId("editor-tracks-tool-hint")).toHaveAttribute("data-state", "pick");
+      await expect(page.getByTestId("editor-track-handle")).toHaveCount(0);
+      // A click on the track selects it: its two handles, at stored points 0 and 40.
+      await clickAt(page, passA.mm[25]);
+      await expect(a.getByTestId("editor-track-select")).toBeChecked();
+      await expect(page.getByTestId("editor-tracks-tool-hint")).toHaveAttribute("data-state", "ready");
+      await expect(handle(page, "start")).toHaveAttribute("data-index", "0");
+      await expect(handle(page, "end")).toHaveAttribute("data-index", "40");
+
+      // Drag the end handle in to point 30: one update, the row counts 31 points, the rest drawn faint.
+      let updated = waitForTrpc(page, "mapTrack.update");
+      await dragFromTo(page, passA.mm[40], passA.mm[30]);
+      await updated;
+      await expect(a).toHaveAttribute("data-points", "31");
+      await expect(handle(page, "end")).toHaveAttribute("data-index", "30");
+      await expect(page.locator(`[data-testid="editor-track-trimmed"][data-track-id="${idA}"]`)).toHaveCount(1);
+      expect((await drawn(page, idA)).at(-1)!.x).toBeCloseTo(passA.mm[30][0], 2);
+      expect(await trimOf(idA)).toEqual({ start: 0, end: 31 });
+
+      // Undo and redo: one update each.
+      await blur(page);
+      updated = waitForTrpc(page, "mapTrack.update");
+      await page.keyboard.press("Control+z");
+      await updated;
+      await expect(a).toHaveAttribute("data-points", "41");
+      updated = waitForTrpc(page, "mapTrack.update");
+      await page.keyboard.press("Control+Shift+z");
+      await updated;
+      await expect(a).toHaveAttribute("data-points", "31");
+
+      // Restorable: dragged back out over the faint rest to the last point.
+      updated = waitForTrpc(page, "mapTrack.update");
+      await dragFromTo(page, passA.mm[30], passA.mm[40]);
+      await updated;
+      await expect(a).toHaveAttribute("data-points", "41");
+      await expect(page.getByTestId("editor-track-trimmed")).toHaveCount(0);
+      // The start handle in to point 5 (zoomed out about the far end until the start is clear of the inspector).
+      await clearOfInspector(page, passA.mm[0], passA.mm[40]);
+      updated = waitForTrpc(page, "mapTrack.update");
+      await dragFromTo(page, passA.mm[0], passA.mm[5]);
+      await updated;
+      await expect(a).toHaveAttribute("data-points", "36");
+      expect(await trimOf(idA)).toEqual({ start: 5, end: 41 });
+
+      // A reload keeps the trim; Escape goes back to V.
+      await page.reload();
+      await editorReady(page);
+      await expect(rowById(page, idA)).toHaveAttribute("data-points", "36", { timeout: 15_000 });
+      await rowById(page, idA).getByTestId("editor-track-select").check();
+      await page.getByTestId("editor-tool-T").click();
+      await expect(handle(page, "start")).toHaveAttribute("data-index", "5");
+      await blur(page);
+      await page.keyboard.press("Escape");
+      await expect(page.getByTestId("editor-tool-V")).toHaveAttribute("aria-pressed", "true");
+      await expect(page.getByTestId("editor-track-handle")).toHaveCount(0);
+    } finally {
+      await clearTracks().catch(() => undefined);
+    }
+  });
+
+  test("split, split, delete the middle; undo brings the original back under its id at the end of the list, redo splits again", async ({ page }) => {
+    test.setTimeout(180_000);
+    try {
+      const { idA, idB } = await importPasses(page);
+      await rowById(page, idA).getByTestId("editor-track-name").click();
+      await viewSettled(page);
+      await rowById(page, idA).getByTestId("editor-track-select").check();
+      await page.getByTestId("editor-tool-T").click();
+
+      // A click on the track at point 15 splits it there: two parts sharing the point, the selection cleared.
+      let split = waitForTrpc(page, "mapTrack.split");
+      await clickAt(page, passA.mm[15]);
+      const [left, right] = (await answer<{ tracks: { id: string; pointCount: number }[] }>(await split)).tracks;
+      expect([left.pointCount, right.pointCount]).toEqual([16, 26]);
+      expect(left.id < right.id).toBe(true);
+      await expect(rows(page)).toHaveCount(3);
+      await expect(rowById(page, idA)).toHaveCount(0);
+      await expect(page.getByTestId("editor-tracks-tool-hint")).toHaveAttribute("data-state", "pick");
+      await expect(pathOf(page, left.id)).toHaveCount(1);
+      await expect(pathOf(page, right.id)).toHaveCount(1);
+
+      // Select the right part by a click on it, split it at point 25: the middle is points 15 … 25.
+      await clickAt(page, passA.mm[35]);
+      await expect(rowById(page, right.id).getByTestId("editor-track-select")).toBeChecked();
+      split = waitForTrpc(page, "mapTrack.split");
+      await clickAt(page, passA.mm[25]);
+      const [middle, rest] = (await answer<{ tracks: { id: string; pointCount: number }[] }>(await split)).tracks;
+      expect([middle.pointCount, rest.pointCount]).toEqual([11, 16]);
+      await expect(rows(page)).toHaveCount(4);
+
+      // Delete the middle: the break is cut out.
+      const removed = waitForTrpc(page, "mapTrack.remove");
+      await rowById(page, middle.id).getByTestId("editor-track-delete").click();
+      await removed;
+      await expect(rows(page)).toHaveCount(3);
+      await expect(pathOf(page, middle.id)).toHaveCount(0);
+      expect((await drawn(page, left.id)).at(-1)!.x).toBeCloseTo(passA.mm[15][0], 2);
+      expect((await drawn(page, rest.id))[0].x).toBeCloseTo(passA.mm[25][0], 2);
+
+      // Undo three times: the middle back, then the right part, then the original under its id — at the end.
+      await blur(page);
+      for (const proc of ["mapTrack.import", "mapTrack.import", "mapTrack.import"]) {
+        const done = waitForTrpc(page, proc);
+        await page.keyboard.press("Control+z");
+        await done;
+      }
+      await expect(rows(page)).toHaveCount(2);
+      expect((await listed()).map((t) => t.id)).toEqual([idB, idA]);
+      await expect(rowById(page, idA)).toHaveAttribute("data-points", "41");
+      await expect(rowById(page, idA)).toHaveAttribute("data-state", "ready");
+      await expect(rows(page).nth(1)).toHaveAttribute("data-track-id", idA);
+
+      // Redo: the same split again, under the same ids.
+      split = waitForTrpc(page, "mapTrack.split");
+      await page.keyboard.press("Control+Shift+z");
+      await split;
+      await expect(rows(page)).toHaveCount(3);
+      expect((await listed()).map((t) => t.id)).toEqual([idB, left.id, right.id]);
+    } finally {
+      await clearTracks().catch(() => undefined);
+    }
+  });
+
+  test("average two passes: one import with derivedFrom and singlePass, the passes hidden, the single-pass span dashed; converting it marks all three", async ({ page }) => {
+    test.setTimeout(240_000);
+    await dropEventPatch(EDITOR_EVENT);
+    try {
+      const { idA, idB } = await importPasses(page);
+      await rowById(page, idA).getByTestId("editor-track-name").click();
+      await viewSettled(page);
+      const average = page.getByTestId("editor-tracks-average");
+      await expect(average).toBeDisabled();
+      await rowById(page, idA).getByTestId("editor-track-select").check();
+      await expect(average).toBeDisabled();
+      await rowById(page, idB).getByTestId("editor-track-select").check();
+      await expect(average).toBeEnabled();
+
+      const imported = waitForTrpc(page, "mapTrack.import");
+      await average.click();
+      await imported;
+      await expect(rows(page)).toHaveCount(3);
+      const avg = (await listed()).find((t) => t.derivedFrom.length > 0)!;
+      expect(avg.derivedFrom).toEqual([idA, idB]);
+      expect(avg.sourceName).toBe("");
+      // The editor runs averageTracks with the defaults on the passes as projected: the generator's numbers.
+      expect(Math.abs(avg.pointCount - passes.average.points)).toBeLessThanOrEqual(1);
+      expect(avg.singlePass).toHaveLength(1);
+      expect(Math.abs(avg.singlePass![0].start - passes.average.singlePass[0].start)).toBeLessThanOrEqual(1);
+      expect(avg.singlePass![0].end).toBe(avg.pointCount);
+
+      // The passes hidden (kept, marked), the average selected and drawn: solid on the centre line, dashed on A alone.
+      const row = rowById(page, avg.id);
+      await expect(row).toHaveAttribute("data-state", "ready", { timeout: 15_000 });
+      await expect(row).toHaveAttribute("data-average", "true");
+      await expect(row.getByTestId("editor-track-select")).toBeChecked();
+      for (const id of [idA, idB]) {
+        await expect(rowById(page, id)).toHaveAttribute("data-visible", "false");
+        await expect(rowById(page, id)).toHaveAttribute("data-source", "true");
+        await expect(pathOf(page, id)).toHaveCount(0);
+      }
+      const dashed = page.locator(`[data-testid="editor-gps-track"][data-track-id="${avg.id}"][data-single-pass="true"]`);
+      const solid = page.locator(`[data-testid="editor-gps-track"][data-track-id="${avg.id}"]:not([data-single-pass])`);
+      await expect(dashed).toHaveCount(1);
+      await expect(dashed).toHaveAttribute("stroke-dasharray", /\d/);
+      await expect(solid).toHaveCount(1);
+      const at = async (l: typeof dashed) => (await l.getAttribute("data-points"))!.split(" ").map((p) => p.split(",").map(Number));
+      const { centreY, aloneY, splitX } = passes.average;
+      for (const [x, y] of await at(solid)) if (x < splitX - 3) expect(Math.abs(y - centreY), `centre at x ${x}`).toBeLessThan(0.03);
+      for (const [x, y] of await at(dashed)) if (x > splitX + 3) expect(Math.abs(y - aloneY), `alone at x ${x}`).toBeLessThan(0.03);
+      // The eye still shows a pass.
+      await rowById(page, idA).getByTestId("editor-track-visible").click();
+      await expect(pathOf(page, idA)).toHaveCount(1);
+      await rowById(page, idA).getByTestId("editor-track-visible").click();
+      await expect(pathOf(page, idA)).toHaveCount(0);
+
+      // Convert the average (§5.2): one markConverted with its op for the average and both passes; undo restores them.
+      const marks = captureMarks(page);
+      await page.getByTestId("editor-tracks-convert").click();
+      const ski = page.locator(`[data-testid="editor-map-palette-item"][data-ref="patch:${SKI_TRACK}"]:not([disabled])`);
+      await ski.click();
+      let marked = waitForTrpc(page, "mapTrack.markConverted");
+      await page.getByTestId("editor-tracks-convert-apply").click();
+      await marked;
+      expect(marks).toHaveLength(1);
+      const opId = marks[0][0].opId;
+      expect(opId).toMatch(/^add:/);
+      expect(marks[0]).toEqual([{ id: avg.id, opId }, { id: idA, opId }, { id: idB, opId }]);
+      for (const id of [avg.id, idA, idB]) await expect(rowById(page, id)).toHaveAttribute("data-converted", "true");
+      await blur(page);
+      marked = waitForTrpc(page, "mapTrack.markConverted");
+      await page.keyboard.press("Control+z");
+      await marked;
+      expect(marks[1]).toEqual([{ id: avg.id, opId: null }, { id: idA, opId: null }, { id: idB, opId: null }]);
+      for (const id of [avg.id, idA, idB]) await expect(rowById(page, id)).toHaveAttribute("data-converted", "false");
+
+      // Undo the average: removed; the passes shown again.
+      const removed = waitForTrpc(page, "mapTrack.remove");
+      await page.keyboard.press("Control+z");
+      await removed;
+      await expect(rows(page)).toHaveCount(2);
+      for (const id of [idA, idB]) {
+        await expect(rowById(page, id)).toHaveAttribute("data-visible", "true");
+        await expect(pathOf(page, id)).toHaveCount(1);
+      }
+      // Redo imports it again under its id.
+      const again = waitForTrpc(page, "mapTrack.import");
+      await page.keyboard.press("Control+Shift+z");
+      await again;
+      expect((await listed()).map((t) => t.id)).toEqual([idA, idB, avg.id]);
+    } finally {
       await dropEventPatch(EDITOR_EVENT).catch(() => undefined);
       await clearTracks().catch(() => undefined);
     }
