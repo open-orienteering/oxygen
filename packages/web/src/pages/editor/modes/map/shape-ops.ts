@@ -302,8 +302,9 @@ export function joinChange(model: MapModel, patch: mapDocument.MapPatch | null, 
   const b = singleLine(raw);
   if ("reason" in b) return b;
   if (b.closed) return { reason: "closed" };
-  if (overCap(a.nodes, a.nodes + b.nodes)) return { reason: "too-many" };
-  const op = coordsOp(patch, survivor, joinCoords(a.coords, b.coords, u));
+  const joined = joinCoords(a.coords, b.coords, u);
+  if (overCap(a.nodes, anchorIndices(joined).length)) return { reason: "too-many" };
+  const op = coordsOp(patch, survivor, joined);
   if (!op) return null;
   return "source" in picked
     ? { change: { put: [op, { op: "hide", sourceIndex: picked.source }] } }

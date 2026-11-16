@@ -291,6 +291,13 @@ describe("Map mode's line operations: join (§13 answers 1–3, 8)", () => {
     const big = patchOf([{ op: "add", id: ADD, type: 2, symbol: { doc: 1 }, coords: long }]);
     const m2 = mapModelOf(HASH, pinned(), big);
     expect(joinChange(m2, big, { added: ADD }, { source: 7 })).toEqual({ reason: "too-many" });
+    // Counted on the result: 1999 + 2 merged at the shared end is exactly 2000, still joined.
+    const merging = patchOf([{ op: "add", id: ADD, type: 2, symbol: { doc: 1 }, coords: [...Array.from({ length: MAP_NODES_MAX - 2 }, (_, k): C => [k * 10, 9000]), [6000, 2000]] }]);
+    const m3 = mapModelOf(HASH, pinned(), merging);
+    const joined = changeOf(joinChange(m3, merging, { added: ADD }, { source: 9 })).put?.[0];
+    expect(joined && joined.op === "add" ? joined.coords.length : -1).toBe(MAP_NODES_MAX);
+    // A line of two nodes picked on itself is too short to close.
+    expect(joinChange(m, null, { source: 9 }, { source: 9 })).toEqual({ reason: "too-few" });
   });
 });
 
@@ -304,6 +311,11 @@ describe("Map mode's area operations: holes (§13 answers 5–6)", () => {
     expect(cutHoleChange(m, null, { source: 5 }, [{ x: 0, y: 50 }, { x: 10, y: 50 }, { x: 10, y: 60 }])).toHaveProperty("change");
     expect(cutHoleChange(m, null, { source: 7 }, [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }])).toEqual({ reason: "kind" });
     expect(cutHoleChange(m, null, { source: 5 }, [{ x: 0, y: 0 }, { x: 1, y: 0 }])).toEqual({ reason: "too-few" });
+    // A ring that takes an area within the node cap over it is refused.
+    const outline = Array.from({ length: MAP_NODES_MAX - 1 }, (_, k): C => [Math.round(1000 * Math.cos(k / 300)), Math.round(1000 * Math.sin(k / 300))]);
+    const big = patchOf([{ op: "add", id: ADD, type: 3, symbol: { doc: 0 }, coords: [...outline, outline[0]] }]);
+    const m2 = mapModelOf(HASH, pinned(), big);
+    expect(cutHoleChange(m2, big, { added: ADD }, [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }])).toEqual({ reason: "too-many" });
   });
 
   it("remove hole: the ring of the focused node dropped, the outline untouched; ring 0 or none is refused", () => {

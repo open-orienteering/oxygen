@@ -584,11 +584,17 @@ export function useMapMode(a: MapModeArgs): MapMode {
       setFocusState(null);
     }
   }, [model, selected, commit]);
-  /** One operation's change (§13 "Ops"): one write and one undo entry; the focused node dropped once it goes. */
+  /**
+   * One operation's change (§13 "Ops"): one write and one undo entry; once it goes the focused node is dropped, and so
+   * is an armed *Join* / *Cut hole* (its ring made on the old shape).
+   */
   const runOp = useCallback((r: ReturnType<typeof reverseChange>) => {
     if (!r || "reason" in r) return;
-    if (commit(r.change)) setFocusState(null);
-  }, [commit]);
+    if (commit(r.change)) {
+      setFocusState(null);
+      if (armedState) disarm();
+    }
+  }, [commit, armedState, disarm]);
   /** The focused node of the nodes tool, as the operations name it. */
   const opFocus = tool === "N" ? focus : null;
   const reverse = useCallback(() => {

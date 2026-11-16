@@ -687,9 +687,11 @@ export interface MapSelectContext {
  * a click asks the hit-test and selects the topmost object; a press on the selected object (its drawn shape) takes
  * the gesture and moves it, one write on release. A release without movement is a click.
  */
+type MapObjectRef = import("../../../map-gl/worker").MapObjectRef;
+
 /** A click's hit-test at `MAP_HIT_PX`: every object under it, topmost first; an answer to an older click is dropped. */
 function mapHitClick(
-  c: Pick<MapSelectContext, "hit" | "clickSeq">, pt: Pt, mmPerPx: number, deliver: (stack: import("../../../map-gl/worker").MapObjectRef[]) => void,
+  c: Pick<MapSelectContext, "hit" | "clickSeq">, pt: Pt, mmPerPx: number, deliver: (stack: MapObjectRef[]) => void,
 ): void {
   const n = ++c.clickSeq.current;
   if (!c.hit) return;
@@ -736,7 +738,7 @@ export function mapSelectBinding(c: MapSelectContext): EditorToolBinding {
  * tools — exclusive with a crosshair; a click asks the hit-test as `V` does and hands its stack, topmost first, to
  * `onPick`; no press is taken, so a drag pans.
  */
-export function mapPickBinding(c: Pick<MapSelectContext, "hit" | "clickSeq"> & { onPick: (stack: import("../../../map-gl/worker").MapObjectRef[]) => void }): EditorToolBinding {
+export function mapPickBinding(c: Pick<MapSelectContext, "hit" | "clickSeq"> & { onPick: (stack: MapObjectRef[]) => void }): EditorToolBinding {
   return {
     exclusive: true,
     cursor: "crosshair",
