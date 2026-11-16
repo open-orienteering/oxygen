@@ -263,17 +263,25 @@ export function setPatchEnabled(db: PrismaClient, eventId: bigint, enabled: bool
 
 /**
  * `mapPatch.attachUnresolved` (§3.2 step 4, §4.3): unresolved entry `key`'s
- * op put onto the pinned document's object `sourceIndex`, the entry
+ * op put onto the pinned document's object `sourceIndex` (with `symbol`, the
+ * picked symbol of a `symbol` entry or an add, G12b), the entry
  * dropped. An entry already gone is a no-op (twice equals once); a refusal
  * is `BAD_REQUEST` `PATCH_ATTACH_REFUSED` with the reason.
  */
-export async function attachUnresolvedPatchOp(db: PrismaClient, eventId: bigint, documentHash: string, key: string, sourceIndex: number): Promise<PatchDelivery> {
+export async function attachUnresolvedPatchOp(
+  db: PrismaClient,
+  eventId: bigint,
+  documentHash: string,
+  key: string,
+  sourceIndex?: number,
+  symbol?: mapDocument.PatchSymbolRef,
+): Promise<PatchDelivery> {
   const doc = await decodedDocument(db, documentHash);
   return writePatch(db, eventId, async (tx) => {
     const { row, patch } = await lockPatchRow(tx, eventId, documentHash);
     if (!patch.unresolved?.[key]) return { version: row.version.toString(), patch };
     if (!doc) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "PATCH_NO_DOCUMENT: the event's map document cannot be read" });
-    const r = mapDocument.attachUnresolved(patch, key, doc, sourceIndex);
+    const r = mapDocument.attachUnresolved(patch, key, doc, sourceIndex, symbol);
     if (!r.ok) throw new TRPCError({ code: "BAD_REQUEST", message: `PATCH_ATTACH_REFUSED: ${r.reason}` });
     return writeIfChanged(tx, eventId, row, patch, mapDocument.mergePatch(patch, r.change));
   });

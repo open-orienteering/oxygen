@@ -328,6 +328,25 @@ describe("re-resolution when the pin moves (§4, G11)", () => {
       const dropped = await caller.mapPatch.applyChange({ documentHash: xmapHash, removeUnresolved: [kb] });
       expect(dropped.patch!.unresolved).toBeUndefined();
       expect((await ctx.db.mapPatch.findUniqueOrThrow({ where: { eventId: ctx.eventId } })).unresolved).toEqual({});
+
+      // G12b: the undo of a drop puts the entry back exactly; twice keeps the version; a wrong key is refused.
+      const entryB = woke.patch!.unresolved![kb];
+      const back = await caller.mapPatch.applyChange({ documentHash: xmapHash, putUnresolved: { [kb]: entryB } });
+      expect(back.patch!.unresolved).toEqual({ [kb]: entryB });
+      expect((await caller.mapPatch.applyChange({ documentHash: xmapHash, putUnresolved: { [kb]: entryB } })).version).toBe(back.version);
+      await expect(caller.mapPatch.applyChange({ documentHash: xmapHash, putUnresolved: { [ka]: entryB } })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+
+      // G12b: a `symbol` entry's add attached with a picked library symbol: the add, the symbol stored, the entry gone.
+      const addOp = { op: "add" as const, id: "019a7d2e-0000-7000-8000-0000000000ab", type: 1, symbol: { doc: 0 }, coords: [[0, 0]] as [number, number][] };
+      const lostAdd = { op: addOp, from: "ee".repeat(32), fromSource: "ff".repeat(32), unitsPerMm: xdoc.header.unitsPerMm, reason: "symbol" as const };
+      const kAdd = mapDocument.unresolvedKey(lostAdd.from, addOp);
+      await caller.mapPatch.applyChange({ documentHash: xmapHash, putUnresolved: { [kAdd]: lostAdd } });
+      await expect(caller.mapPatch.attachUnresolved({ documentHash: xmapHash, key: kAdd })).rejects.toMatchObject({ message: "PATCH_ATTACH_REFUSED: drop-only" });
+      await expect(caller.mapPatch.attachUnresolved({ documentHash: xmapHash, key: kb })).rejects.toMatchObject({ message: "PATCH_ATTACH_REFUSED: bad-argument" });
+      const withSymbol = await caller.mapPatch.attachUnresolved({ documentHash: xmapHash, key: kAdd, symbol: { patch: "ISOM2017-2:204" } });
+      expect(withSymbol.patch!.ops[`add:${addOp.id}`]).toEqual({ ...addOp, symbol: { patch: "ISOM2017-2:204" } });
+      expect(Object.keys(withSymbol.patch!.symbols)).toEqual(["ISOM2017-2:204"]);
+      expect(Object.keys(withSymbol.patch!.unresolved!)).toEqual([kb]);
     } finally {
       expect(await replaceMap("test.ocd", ocdBytes())).toBe(documentHash);
     }

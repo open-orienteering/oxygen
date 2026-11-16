@@ -146,7 +146,8 @@ export function coordsOp(patch: mapDocument.MapPatch | null, ref: MapObjectRef, 
 
 /**
  * The change that undoes `change` on `before` (§13; map-patches §1.5): every id it puts or removes goes back to its
- * state in `before` — put again when it was there, removed when it was not. Null when nothing would change.
+ * state in `before` — put again when it was there, removed when it was not — and so does every unresolved entry it
+ * drops or puts (G12b: the undo of *Drop* and *Attach*). Symbols are never removed. Null when nothing would change.
  */
 export function inverseChange(before: mapDocument.MapPatch | null, change: PatchChange): PatchChange | null {
   const put: PatchOp[] = [];
@@ -157,8 +158,22 @@ export function inverseChange(before: mapDocument.MapPatch | null, change: Patch
     if (prev) put.push(prev);
     else if (change.put?.some((op) => mapDocument.patchOpId(op) === id)) remove.push(id);
   }
-  if (put.length === 0 && remove.length === 0) return null;
-  return { ...(put.length ? { put } : {}), ...(remove.length ? { remove } : {}) };
+  const putUnresolved: Record<string, mapDocument.UnresolvedOp> = {};
+  const removeUnresolved: string[] = [];
+  const putting = change.putUnresolved ?? {};
+  for (const key of new Set([...(change.removeUnresolved ?? []), ...Object.keys(putting)])) {
+    const prev = before?.unresolved?.[key];
+    if (prev) putUnresolved[key] = prev;
+    else if (Object.hasOwn(putting, key)) removeUnresolved.push(key);
+  }
+  const putsBack = Object.keys(putUnresolved).length > 0;
+  if (put.length === 0 && remove.length === 0 && !putsBack && removeUnresolved.length === 0) return null;
+  return {
+    ...(put.length ? { put } : {}),
+    ...(remove.length ? { remove } : {}),
+    ...(putsBack ? { putUnresolved } : {}),
+    ...(removeUnresolved.length ? { removeUnresolved } : {}),
+  };
 }
 
 /** Whether `change` changes `patch` at all (the same state again writes nothing, map-patches §3.2 step 5). */
@@ -166,7 +181,9 @@ export function changes(patch: mapDocument.MapPatch | null, change: PatchChange)
   for (const op of change.put ?? []) {
     if (JSON.stringify(patch?.ops[mapDocument.patchOpId(op)] ?? null) !== JSON.stringify(op)) return true;
   }
-  return (change.remove ?? []).some((id) => !!patch?.ops[id]);
+  if ((change.remove ?? []).some((id) => !!patch?.ops[id])) return true;
+  if ((change.removeUnresolved ?? []).some((key) => !!patch?.unresolved?.[key])) return true;
+  return Object.entries(change.putUnresolved ?? {}).some(([key, e]) => JSON.stringify(patch?.unresolved?.[key] ?? null) !== JSON.stringify(e));
 }
 
 export interface MapObjectInfo {

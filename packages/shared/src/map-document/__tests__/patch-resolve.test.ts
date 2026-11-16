@@ -282,4 +282,53 @@ describe("attachUnresolved", () => {
     expect(onB.unresolved![add].reason).toBe("symbol");
     expect(attachUnresolved(onB, add, noMin, 11)).toEqual({ ok: false, reason: "drop-only" });
   });
+
+  // G12b (user 2026-11-15, G9 question 1): a `symbol` entry is attached with a symbol the user picked.
+  const addKey = () => Object.keys(onB.unresolved!).find((k) => k.endsWith(`add:${ADD_ID}`))!;
+
+  it("attaches a symbol entry's add with a picked document symbol: coordinates rescaled, the entry dropped", () => {
+    const k = addKey();
+    const r = attachUnresolved(onB, k, noMin, undefined, { doc: BOULDER });
+    expect(r).toEqual({ ok: true, change: { put: [{ op: "add", id: ADD_ID, type: OBJECT_TYPE.point, symbol: { doc: BOULDER }, coords: [[10, 10]] }], removeUnresolved: [k] } });
+    expect(attachUnresolved(onB, k, noMin, undefined, { doc: CONTOUR })).toEqual({ ok: false, reason: "kind-mismatch" });
+    expect(attachUnresolved(onB, k, noMin, undefined, { doc: 999 })).toEqual({ ok: false, reason: "symbol" });
+    // An add has no target: an object is not an argument.
+    expect(attachUnresolved(onB, k, noMin, 11, { doc: BOULDER })).toEqual({ ok: false, reason: "bad-argument" });
+  });
+
+  it("attaches an add with a library symbol: materialised and put with the op, unless the patch holds it", () => {
+    const k = addKey();
+    const sym = materialiseSymbol(noMin, "ISOM2017-2:204");
+    if (!sym.ok) throw new Error("fixture");
+    const r = attachUnresolved(onB, k, noMin, undefined, { patch: sym.key });
+    expect(r).toEqual({ ok: true, change: { put: [{ op: "add", id: ADD_ID, type: OBJECT_TYPE.point, symbol: { patch: sym.key }, coords: [[10, 10]] }], removeUnresolved: [k], putSymbols: { [sym.key]: sym.symbol } } });
+    const held = { ...onB, symbols: { [sym.key]: sym.symbol } };
+    const again = attachUnresolved(held, k, noMin, undefined, { patch: sym.key });
+    expect(again.ok && again.change.putSymbols).toBeUndefined();
+    expect(attachUnresolved(onB, k, noMin, undefined, { patch: "ISOM2017-2:nope" })).toEqual({ ok: false, reason: "symbol" });
+  });
+
+  it("attaches a symbol entry's resymbol with a picked symbol: its object found as §4.2 says, or the one given", () => {
+    const noMinA = make(SOURCE_A, 100, [point(102, 500, 500), point(103, 2000, 2000)], SYMBOLS.filter((_, i) => i !== MINBUILDING));
+    const resym: PatchOp = { op: "resymbol", sourceIndex: 102, symbol: { doc: MINBUILDING } };
+    const onA = resolvePatch(A, noMinA, patchOn(HASH_A, [resym]), { toHash: HASH_A2 }).patch;
+    const k = unresolvedKey(HASH_A, resym);
+    expect(onA.unresolved![k].reason).toBe("symbol");
+    expect(attachUnresolved(onA, k, noMinA, undefined, { doc: BOULDER })).toEqual({ ok: true, change: { put: [{ op: "resymbol", sourceIndex: 102, symbol: { doc: BOULDER } }], removeUnresolved: [k] } });
+    expect(attachUnresolved(onA, k, noMinA, 103, { doc: BOULDER })).toEqual({ ok: true, change: { put: [{ op: "resymbol", sourceIndex: 103, symbol: { doc: BOULDER } }], removeUnresolved: [k] } });
+    expect(attachUnresolved(onA, k, noMinA, undefined, { doc: CONTOUR })).toEqual({ ok: false, reason: "kind-mismatch" });
+    expect(attachUnresolved(onA, k, noMinA)).toEqual({ ok: false, reason: "drop-only" });
+  });
+
+  it("a target entry needs an object; a symbol is refused for a hide or modify and replaces a resymbol's", () => {
+    const hideKey = key({ op: "hide", sourceIndex: 101 });
+    expect(attachUnresolved(onB, hideKey, noMin)).toEqual({ ok: false, reason: "bad-argument" });
+    expect(attachUnresolved(onB, hideKey, noMin, 8, { doc: CONTOUR })).toEqual({ ok: false, reason: "bad-argument" });
+    const resym: PatchOp = { op: "resymbol", sourceIndex: 101, symbol: { doc: CONTOUR } };
+    const lost = resolvePatch(A, C, patchOn(HASH_A, [resym]), { toHash: HASH_C }).patch;
+    const k = unresolvedKey(HASH_A, resym);
+    expect(lost.unresolved![k].reason).toBe("target");
+    const onC = { ...lost, documentHash: HASH_C };
+    expect(attachUnresolved(onC, k, C, 1, { doc: 1 })).toEqual({ ok: true, change: { put: [{ op: "resymbol", sourceIndex: 1, symbol: { doc: 1 } }], removeUnresolved: [k] } });
+  });
 });

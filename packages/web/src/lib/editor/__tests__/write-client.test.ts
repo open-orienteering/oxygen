@@ -25,7 +25,11 @@ function fakeClient() {
       update: { mutate: vi.fn(respond("objUpdate")) },
       delete: { mutate: vi.fn(respond("objDelete")) },
     },
-    mapPatch: { applyChange: { mutate: vi.fn(respond("patchApply")) }, setEnabled: { mutate: vi.fn(respond("patchEnabled")) } },
+    mapPatch: {
+      applyChange: { mutate: vi.fn(respond("patchApply")) },
+      setEnabled: { mutate: vi.fn(respond("patchEnabled")) },
+      attachUnresolved: { mutate: vi.fn(respond("patchAttach")) },
+    },
     mapTrack: {
       import: { mutate: vi.fn(respond("trackImport")) },
       update: { mutate: vi.fn(respond("trackUpdate")) },
@@ -257,6 +261,13 @@ describe("EditorWrites (docs/course-editor.md §3)", () => {
     f.fail(new Error("PATCH_STALE: the patch is keyed to another document"));
     await expect(w.applyPatchChange("ab".repeat(32), { remove: ["hide:4"] })).rejects.toThrow(/PATCH_STALE/);
     expect(f.calls).toHaveLength(3);
+    // G12b: *Attach* with an object, or with a picked symbol and no object.
+    f.ok({ version: "9", patch: null });
+    await w.attachUnresolvedPatch("ab".repeat(32), "k1", { sourceIndex: 5 });
+    expect(f.calls[3]).toEqual({ proc: "patchAttach", input: { documentHash: "ab".repeat(32), key: "k1", sourceIndex: 5 } });
+    f.ok({ version: "10", patch: null });
+    await w.attachUnresolvedPatch("ab".repeat(32), "k2", { symbol: { patch: "ISOM2017-2:204" } });
+    expect(f.calls[4]).toEqual({ proc: "patchAttach", input: { documentHash: "ab".repeat(32), key: "k2", symbol: { patch: "ISOM2017-2:204" } } });
   });
 
   it("GPS track writes pass their input through and return the reply; a refusal propagates (docs/map-gps-tracks.md §5.1)", async () => {

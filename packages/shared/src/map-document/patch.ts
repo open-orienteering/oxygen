@@ -149,6 +149,8 @@ export const patchChangeSchema = z
     putSymbols: z.record(z.string().min(1), patchSymbolSchema).default({}),
     /** Drop these unresolved entries by key (§4.3); absent keys are no-ops. */
     removeUnresolved: z.array(z.string().min(1)).default([]),
+    /** Put these unresolved entries back by key (G12b: the undo of a drop or an attach); keyed as `MapPatch.unresolved`. */
+    putUnresolved: z.record(z.string(), unresolvedOpSchema).default({}),
   })
   .superRefine((c, ctx) => {
     const put = new Set<string>();
@@ -160,6 +162,12 @@ export const patchChangeSchema = z
     c.remove.forEach((id, i) => {
       if (put.has(id)) ctx.addIssue({ code: "custom", path: ["remove", i], message: `op ${id} both put and removed` });
     });
+    const dropped = new Set(c.removeUnresolved);
+    for (const [key, e] of Object.entries(c.putUnresolved)) {
+      const want = unresolvedKey(e.from, e.op);
+      if (want !== key) ctx.addIssue({ code: "custom", path: ["putUnresolved", key], message: `key must be ${want}` });
+      if (dropped.has(key)) ctx.addIssue({ code: "custom", path: ["putUnresolved", key], message: `entry ${key} both put and removed` });
+    }
   });
 /** A parsed change; `put`, `remove` and `putSymbols` may be left out. */
 export interface PatchChange {
@@ -167,6 +175,7 @@ export interface PatchChange {
   remove?: string[];
   putSymbols?: Record<string, PatchSymbol>;
   removeUnresolved?: string[];
+  putUnresolved?: Record<string, UnresolvedOp>;
 }
 
 const sortedRecord = <T>(entries: Iterable<[string, T]>): Record<string, T> =>
@@ -175,9 +184,9 @@ const sortedRecord = <T>(entries: Iterable<[string, T]>): Record<string, T> =>
 /**
  * The per-op-id merge: `remove` drops ids (absent ones are no-ops), `put`
  * sets states by id, `putSymbols` sets symbols by key, `removeUnresolved`
- * drops unresolved entries. Returns a new patch with sorted keys and an
- * empty `unresolved` omitted; twice equals once, and changes to different
- * ids commute.
+ * drops unresolved entries, then `putUnresolved` sets them by key (G12b).
+ * Returns a new patch with sorted keys and an empty `unresolved` omitted;
+ * twice equals once, and changes to different ids commute.
  */
 export function mergePatch(patch: MapPatch, change: PatchChange): MapPatch {
   const ops = new Map(Object.entries(patch.ops));
@@ -187,6 +196,7 @@ export function mergePatch(patch: MapPatch, change: PatchChange): MapPatch {
   for (const [key, sym] of Object.entries(change.putSymbols ?? {})) symbols.set(key, sym);
   const unresolved = new Map(Object.entries(patch.unresolved ?? {}));
   for (const key of change.removeUnresolved ?? []) unresolved.delete(key);
+  for (const [key, e] of Object.entries(change.putUnresolved ?? {})) unresolved.set(key, e);
   const { unresolved: _u, ...rest } = patch;
   void _u;
   const out: MapPatch = { ...rest, ops: sortedRecord(ops), symbols: sortedRecord(symbols) };

@@ -101,6 +101,9 @@ export interface EditorClient {
   mapPatch?: {
     applyChange: { mutate(input: { documentHash: string } & mapDocument.PatchChange): Promise<PatchWriteResult> };
     setEnabled: { mutate(input: { enabled: boolean }): Promise<PatchWriteResult> };
+    attachUnresolved: {
+      mutate(input: { documentHash: string; key: string; sourceIndex?: number; symbol?: mapDocument.PatchSymbolRef }): Promise<PatchWriteResult>;
+    };
   };
   /** Map mode's GPS tracks (docs/map-gps-tracks.md §1.2, §5.1). */
   mapTrack?: {
@@ -286,6 +289,14 @@ export class EditorWrites {
    */
   applyPatchChange(documentHash: string, change: mapDocument.PatchChange): Promise<PatchWriteResult> {
     return this.patches().applyChange.mutate({ documentHash, ...change });
+  }
+
+  /**
+   * *Attach* of an unresolved correction (§13 "Unresolved"; docs/map-patches.md §4.3): `mapPatch.attachUnresolved`
+   * onto the selected object (`sourceIndex`) or with a picked symbol (G12b). No token; a refusal propagates.
+   */
+  attachUnresolvedPatch(documentHash: string, key: string, at: { sourceIndex?: number; symbol?: mapDocument.PatchSymbolRef }): Promise<PatchWriteResult> {
+    return this.patches().attachUnresolved.mutate({ documentHash, key, ...at });
   }
 
   /** *Apply corrections* (§13; docs/map-patches.md §1.4): `mapPatch.setEnabled`, no token. */

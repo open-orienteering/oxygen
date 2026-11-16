@@ -1902,8 +1902,9 @@ corrections: the **patch** (`map-patches.md`) over the pinned document.
 The document itself never changes. G6 is the shell with select, hide and
 move; G7 adds the nodes tool `N` ("Nodes" below); G9 the drawing tools
 `P` `L` `A`, the symbol picker and *Change symbol* ("Drawing", "Symbol
-picker" below); join / split / holes are G10's, unresolved ops G11's,
-promote G12's.
+picker" below); join / split / holes are G10's, unresolved ops G11's
+(their *Attach* / *Drop* as undo entries and a `symbol` entry's *Attach*
+G12b's), promote G12's (the editor half G12b, "Promote" below).
 
 **Entering it.** `mode=map` (§1 "URL", always written); the mode group's
 fourth entry `editor-mode-map` (`IconModeMap`, a map sheet with a pencil);
@@ -1942,7 +1943,7 @@ and no drawing or change symbol.
 | `N` | the nodes tool ("Nodes"; user 2026-11-15, G7 question 1) |
 | `P` / `L` / `A` | the point, line and area tools ("Drawing"); nothing while drawing is disabled |
 | `Enter` | finishes the line or area being drawn ("Drawing") |
-| `Escape` | a drag in flight first (dropped, nothing written), then the line or area being drawn (dropped), then an open *Change symbol* picker, then the GPS tracks' convert panel (closed, nothing written; §13 "GPS tracks: convert"), then (in `N`) the focused node, then any tool but `V` back to `V`, then the selection, then fullscreen; never the course. As in §3 (F24), the keypress that drops a drag also takes the next step |
+| `Escape` | a drag in flight first (dropped, nothing written), then the line or area being drawn (dropped), then an open *Change symbol* picker, then the palette of a `symbol` entry's *Attach* ("Unresolved", G12b), then the GPS tracks' convert panel (closed, nothing written; §13 "GPS tracks: convert"), then (in `N`) the focused node, then any tool but `V` back to `V`, then the selection, then fullscreen; never the course. As in §3 (F24), the keypress that drops a drag also takes the next step |
 
 The selected object is drawn highlighted (the edit part, `mapObjects.selected`;
 an outline for an area, G5) and the canvas carries `data-selected-objects`.
@@ -1966,6 +1967,8 @@ object, `{ added: id }` for one the patch adds.
 | *Rotation* of a document point ("Inspector") | `put [{ op: "modify", sourceIndex, coords, angle }]`, `coords` its effective ones; back to the document's own shape and angle: `remove ["modify:<n>"]` | as a move |
 | *Rotation* of an added point | its `add` op rewritten with the `angle` (0 omitted) | the previous `add` put back |
 | *Revert* a correction | `remove [opId]` | `put` the op again |
+| *Attach* an unresolved correction ("Unresolved", G12b) | `mapPatch.attachUnresolved { documentHash, key, sourceIndex?, symbol? }`: the server puts the op and drops the entry | `applyChange { remove [opId] or put [the op it replaced], putUnresolved { key: entry } }` (the symbol stays); redo is the procedure again |
+| *Drop* an unresolved correction (G12b) | `removeUnresolved [key]` | `putUnresolved { key: entry }`, the entry as it was |
 
 - A move's `coords` are every effective coordinate of the object (an
   existing `modify`'s, an `add`'s, else the document's) shifted by **one
@@ -1980,7 +1983,7 @@ object, `{ added: id }` for one the patch adds.
   last-writer-wins, `map-patches.md` §3.2), so there is no conflict notice.
   **One gesture's write at a time**: while one is in flight the next
   gesture (hide, move, *Restore*, revert, a placed point, a closing click,
-  *Change symbol*, *Rotation*) is refused — its inverse would be
+  *Change symbol*, *Rotation*, *Attach*, *Drop*) is refused — its inverse would be
   computed from a patch that is not yet the reply's — and a held Delete
   hides once (its key repeat is ignored).
 - **Committing** (`map-rendering.md` §5.5 "Committing is the host's"):
@@ -2035,27 +2038,45 @@ object, `{ added: id }` for one the patch adds.
   else the op's symbol, else the patch symbol key) and the reason
   (*object not found* / *symbol not found*). They are drawn nowhere and
   not stepped by Tab. `editor-corrections-count` stays the count of ops.
-  - *Attach* (`editor-correction-attach`) puts the entry's op onto the
-    document object selected on the map (`mapPatch.attachUnresolved`,
-    `map-patches.md` §4.3; user 2026-11-15, G11 question 2). Enabled for
-    a `target` entry of a hide, modify or resymbol with a document object
-    (`source:<n>`) selected, `courses.edit` and *Apply corrections* on (as
-    hide); a `symbol` entry is drop-only until G12b (user 2026-11-15, G9
-    question 1: attaching it needs a symbol argument on
-    `mapPatch.attachUnresolved`; meanwhile a resymbol's is redone with
-    *Change symbol* on the object and the entry dropped).
+  - A **row click** (`editor-correction-unresolved-locate`) centres the
+    view on the entry's old place (row G12b): its target anchor's box
+    centre, else an add's own box (its coordinates ÷ the entry's
+    `unitsPerMm`), paper mm, which editions share (`map-patches.md` §4.2
+    step 3); without either the row has no locate. The selection is left
+    as it is (*Attach* needs it).
+  - *Attach* (`editor-correction-attach`; `map-patches.md` §4.3; user
+    2026-11-15, G11 question 2):
+    - a `target` entry of a hide, modify or resymbol goes onto the
+      document object (`source:<n>`) selected on the map; enabled with
+      one selected;
+    - a `symbol` entry — a resymbol whose symbol is gone, any add — opens
+      the symbol picker under its row (`aria-expanded`;
+      `editor-map-palette` in the add's kind, else the resymbol's
+      object's, with the hint `editor-map-palette-attach`), and a pick
+      attaches it with that symbol (row G12b; user 2026-11-15, G9
+      question 1). Opening it arms `V` (dropping a drawing in progress)
+      and closes *Change symbol* and the convert panel; one palette is on
+      screen at a time. Escape, the button again, *Change symbol*, another
+      tool, the entry going or attaching becoming impossible close it;
+    - both need `courses.edit` and *Apply corrections* on (as hide). The
+      change is computed in Map mode on the pinned document
+      (`mapDocument.attachUnresolved`, so a refusal is said without a
+      write and the inverse is known) and sent as
+      `mapPatch.attachUnresolved`, whose server copy makes the same
+      change; one write, one undo entry ("Ops").
   - *Drop* (`editor-correction-drop`) removes the entry
-    (`applyChange { removeUnresolved }`); with `courses.edit`, also while
-    the corrections are off (as *Revert*).
-  - A refused write shows `editor-corrections-unresolved-error` with the
-    server's reason; the patch is reloaded.
-  - **Not yet** (user 2026-11-15, G11 question 3; Pending in
-    `map-patches.md`): *Attach* and *Drop* are not undo entries, a row
-    does not centre the view on the entry's old place, and they do not
-    wait for Map mode's write in flight. The block reads the session's
-    patch itself (`useMapPatch`) and delivers its replies as Map mode's
-    writes do (`setMapPatch`, `mapMetadata.patchVersion`), so
-    `modes/MapMode.tsx` is unchanged.
+    (`applyChange { removeUnresolved }`), one undo entry whose undo puts it
+    back (`putUnresolved`, row G12b); with `courses.edit`, also while the
+    corrections are off (as *Revert*).
+  - Both are Map-mode gestures (row G12b, the G11 "Not yet" lifted):
+    through `commit`'s one-write interlock, a refusal on the editor's
+    error line (translated per code, `PATCH_ATTACH_REFUSED` with its
+    reason) with the metadata and the patch reloaded, as every Map-mode
+    write. `editor-corrections-unresolved-error` is gone (the procedure
+    for the do and redo steps and the error line: decided overnight on the user's standing instruction (2026-11-13), for review). The block is
+    presentational (`modes/map/Corrections.tsx`); its rows are
+    `modes/map/unresolved.ts` `unresolvedRows` over the session's
+    patch.
 - **Apply corrections** (`editor-corrections-apply`, a checkbox) is
   `mapPatch.setEnabled` (`map-patches.md` §1.4): off, every consumer —
   screen, print, the venue — draws the pinned document; the list keeps its
@@ -2463,6 +2484,82 @@ mode's `commit` (§13 "Ops").
   `N`, `P`, `L` or `A`, drawing becoming disabled, the selection becoming
   empty, leaving the mode or another document. Nothing is written.
 
+### Promote
+
+Row G12b, the editor half of `map-patches.md` §5 (the user's answers of
+2026-11-15; the API is G12a's): *Save corrections to the club map* turns
+the event's corrections that apply into the club map's next version
+(`modes/map/Promote.tsx` `usePromote`, the pure rules
+`modes/map/promote.ts`, the dialog `modes/map/PromoteDialog.tsx`).
+
+- **Where**: an inspector section *Club map*
+  (`editor-inspector-map-promote`) under *Corrections*, shown only when
+  the pin is a club version (`course.mapMetadata.clubMapVersionId`; an
+  event's own upload has none, `PATCH_NOT_CLUB_MAP`). The button
+  `editor-map-promote`.
+- **Disabled, with the reason** (`editor-map-promote-reason`,
+  `data-reason`; `data-block` on the button), in this order: `readonly`
+  — no `courses.edit` (answer 9); `venue` — a venue box ("open the event
+  in the cloud": `promoteStatus` is served locally and the job runs in
+  the cloud, so the box could not follow it; decided overnight on the
+  user's standing instruction (2026-11-13), for review); `running` — a
+  promote is being sent or its job is queued or running; `off` — *Apply
+  corrections* is off; `nothing` — no row of *Corrections* applies (every
+  row has an issue, or there are none) (answer 5); `busy` — a Map-mode
+  write is in flight (no text). `PATCH_NOT_LATEST` is not predicted: the
+  refusal says to take the latest version from the club library first.
+- **The dialog** (`editor-map-promote-dialog`; answer 6: promote is not
+  an undo entry, so it asks first): how many corrections apply and that
+  they leave the event's patch once the map is imported (the others
+  stay); the label (`editor-map-promote-label`) prefilled with the
+  event's name and date (`competition.dashboard`, `"<name>
+  <YYYY-MM-DD>"`, cut to 200 characters; §5 defaults), trimmed, a blank
+  one not sent; a line that Undo cannot undo it and Map mode's earlier
+  undo steps go; *Cancel* (`editor-map-promote-cancel`, Escape, the
+  backdrop) and *Save to club map* (`editor-map-promote-confirm`, Enter).
+  Portalled as the editor's other dialogs.
+- **Sending**: one `mapPatch.promote { label }`. It answers after the
+  job's hold (30 s): the delivered patch becomes the session's
+  (`setMapPatch`), the job the `promoteStatus` cache. A job already
+  `done` reloads `course.mapMetadata` (the event is on the new version's
+  baked document, so Map mode starts over on it, the corrections that
+  were promoted gone from *Corrections*), the patch and the Club maps
+  list, and says *Saved as version n* (`editor-map-promote-done`); a
+  `failed` one says its error (`editor-map-promote-error`).
+- **Read-only while it runs** (answer 4): while the request is in flight
+  and while `mapPatch.promoteStatus` (fetched on entering the mode with a
+  club pin, polled every 2 s only while the job is queued or running; no
+  live channel, as for the patch) answers `queued` / `running` — also a
+  promote another session started — every `mapPatch` write of Map mode is
+  disabled: hide, *Restore*, move, nodes, drawing, *Change symbol*,
+  *Rotation*, revert, the toggle, *Attach*, *Drop* and the GPS tracks'
+  convert. The inspector's top shows `editor-map-promoting` (`data-state`,
+  `data-progress`, the job's coarse progress). GPS-track writes are not
+  the patch's and stay. When the job ends (done or failed) the metadata,
+  the patch and the list are reloaded and the outcome said as above. A
+  write that races it is refused `PATCH_PROMOTING` (its text on the
+  error line).
+- **Undo entries dropped** (answer 6; decided overnight on the user's
+  standing instruction (2026-11-13), for review): when this session sees
+  a promote start — its own request accepted, or `promoteStatus` turning
+  queued / running for a job it had not seen — the page's undo stack
+  drops every entry Map mode's `commit` recorded (the patch's: gestures,
+  *Attach*, *Drop*, G26's conversion; `UndoStack.remove`, passed in as
+  `forget`), from both the undo and the redo branch. Their inverses were
+  computed against a patch the promote empties and a document the event
+  leaves. GPS-track entries (import, rename, delete) stay: they do not
+  touch the patch. A promote that fails does not bring the entries back.
+  Until the request is accepted (up to the 30 s hold) the entries are
+  still there; an undo in that window is refused `PATCH_PROMOTING` by the
+  server and the entry goes, as any failed undo (§3).
+- **Refusals' texts** (`promoteError_<CODE>`): `PATCH_NOT_CLUB_MAP`,
+  `PATCH_NOT_LATEST`, `PATCH_NOTHING_TO_PROMOTE`, `PATCH_PROMOTING`,
+  `PATCH_NO_DOCUMENT`, `PATCH_STALE`, `UNAUTHORIZED` (sign in), offline;
+  any other the server's message.
+- **The Club maps card** (`map-storage.md` §6.5): the version's number,
+  a promoted version's label and its corrections with the
+  original-file note, and *Delete version n* for the latest promoted one.
+
 ## API
 
 The course and control mutations the editors write through (08 §6;
@@ -2634,7 +2731,9 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | unit (web) | `pages/editor/__tests__/map-palette.test.ts`, `map-draw.test.ts`, `map-draw-bindings.test.ts`; `polygon.test.ts` "Map mode's line and area kinds"; `map-bindings.test.ts` "Map mode's keys" | §13 "Symbol picker": `paletteView` keeps one kind and drops empty headings and groups, searches the headings' text trimmed and case-insensitive; a document item's swatch and a disabled library item's missing colour; a library item keeps its key when it becomes a patch symbol; Swedish names. §13 "Drawing": `drawOp` — a point rounded to units with its angle, a line's Bézier pairs and no close (round trip through `ringsOfCoords`), an area closed with its first point repeated, each applied with no issue; nothing below the minimum. `mapPointBinding`: exclusive with a crosshair, a click places a snapped point at 0, nothing while it cannot place, no press for a symbol that does not turn, a press-drag past 3 px aims from the press and places turned (the direction line shown), a press released without movement places at 0, a cancelled aim places nothing, under `withTrackLayer`. `mapDrawBinding`: a line ends by double-click, an area closes on its first node, a closing gesture held back (the drawing kept) while a write cannot go. `map_line` / `map_area`: open from 2, closed from 3, curves; smooth by default. Keys `P` `L` `A` and Enter; `S K M X C T G` none; the rail `V N P L A` |
 | integration | `packages/api/src/__tests__/integration/print-patch.test.ts` "Map mode's drawing in print (G9)" | §13 "Drawing", "Symbol picker" in print (the row's page raster; user 2026-11-15, G9 question 2: as course objects', the raster probe is integration's — poppler is not on the E2E runners): `maps.pdf` rasterised (`pdftocairo`) before and after each op, every changed pixel inside the object's 8 mm box: a path `add` with a document line symbol; a point `add` with a library point materialised on first use (`putSymbols`, stored as put); a `resymbol` of a document point to that patch symbol; G26: a converted GPS track — a line `add` with the ski-O `ISSkiOM2019:801.1` materialised on first use — inside its box (§13 "GPS tracks: convert") |
 | E2E | `e2e/map-mode.spec.ts` "Map mode drawing" (`chromium`) | §13 "Drawing", "Symbol picker" (G9), with no patch row before and after (`dropEventPatch`: patch symbols are never removed by a change) and an all-controls sheet for `maps.pdf`. "L draws a path…": `L` pressed, the picker `data-kind="line"` with `editor-map-palette-pick`; a document path item (505–507, else the first document line) chosen → `aria-pressed`, the hint; two clicks and a double-click on plain map → one `applyChange` with an `add` of type 2 and `{ doc }`, no `putSymbols`; `V` pressed, the new object selected (`added:<id>`), its `add` row, ink at the middle node, more strokes in `maps.pdf`; Ctrl+Z → no rows, plain map again. "P places a point…": a library point (204, else the first library point) → the first click's change has `{ patch: key }` and `putSymbols` of that key, ink at the spot, `P` still pressed and nothing selected, the item now `data-source="patch"` and still pressed; a second click puts no symbol; two add rows; the stored patch holds that one symbol; `maps.pdf` changed; Escape → `V`. "P with a turning symbol…": a 519 (or 110) item; a press-drag 2 mm up the paper shows `editor-map-point-direction` and writes an add with `angle` 900; once drawn, a click in `V` selects it, `editor-map-object-rotation` shows 90, 45 + Enter rewrites the add with 450. "Change symbol…": the lone black line selected, *Change symbol* → `aria-expanded`, only line items, its own pressed; another document line → one `resymbol` of `{ doc }`, the picker closed, the row; `maps.pdf`'s drawing (its streams without the dates) changed, and back as before after *Revert* |
-| E2E | `e2e/map-patch-resolve.spec.ts` (`chromium`) | §13 "Unresolved" (G11): on the seed's `itest`, two hides through the API, then the map replaced by `e2e/test.xmap` (upload route, `course.applyUploadedMap`); at `?mode=map` `editor-corrections-unresolved` `data-count="2"` with two `editor-correction-unresolved` rows (`data-key` the patch's keys, `data-op="hide"`, `data-reason="target"`), `editor-corrections-count` 0, `editor-correction-attach` disabled with nothing selected; *Drop* → one `mapPatch.applyChange`, one row left, still one after a reload; `H`, `F`, a click selecting a `source:<n>` object, *Attach* → one `mapPatch.attachUnresolved`, the block gone, the `hide:<n>` row, `data-hidden="true"`, `mapPatch.get` holds exactly that op; reseeded before and after |
+| unit (web) | `pages/editor/__tests__/map-unresolved.test.ts`, `map-promote.test.ts`; `map-model.test.ts`, `lib/__tests__/undo-stack.test.ts` (G12b parts) | §13 "Unresolved": attach kind (object / symbol), the palette's kind, the locate centre (anchor; an add's box in its unit; none), labels, rows in key order; the inverse of a drop, of its undo and of an attach (onto a free id, onto a held one); `changes` for unresolved-only changes. "Promote": offered for a club pin only, the block order, queued / running, the label (name and date, 200 characters, blank), each refusal's key; `UndoStack.remove` from both branches |
+| E2E | `e2e/map-mode.spec.ts` "Map mode promote" (`chromium`) | §13 "Promote" (G12b; 08 §7), reseeded before and after and the series removed: no `editor-map-promote` on the seed's upload; `test.ocd` added to the club library and taken (`course.useClubMap`); `promoteStatus` routed to a running job: `editor-map-promoting` `data-state="running"`, the button `data-block="running"`, *Apply corrections* and `P` `L` `A` disabled; unrouted, the button disabled `nothing`; a lone line hidden and a path drawn in the UI; the dialog's label holds the event's name; one `mapPatch.promote`; `editor-map-promote-done`, a new `documentHash` and `clubMapVersionId`, no ops, the count 0, the line still gone and the path drawn on the baked document; Ctrl+Z writes nothing; `clubMap.list` version 2 (label, one layer, two corrections, `fileName` `test.ocd`); the card's version, label and note; *Delete version 2* → version 1, the event keeps its document with no version, no promote offered |
+| E2E | `e2e/map-patch-resolve.spec.ts` (`chromium`) | §13 "Unresolved" (G11, G12b's undo, locate and symbol attach: the full list in `map-patches.md` "Tests"): on the seed's `itest`, two hides through the API, then the map replaced by `e2e/test.xmap` (upload route, `course.applyUploadedMap`); at `?mode=map` `editor-corrections-unresolved` `data-count="2"` with two `editor-correction-unresolved` rows (`data-key` the patch's keys, `data-op="hide"`, `data-reason="target"`), `editor-corrections-count` 0, `editor-correction-attach` disabled with nothing selected; *Drop* → one `mapPatch.applyChange`, one row left, still one after a reload; `H`, `F`, a click selecting a `source:<n>` object, *Attach* → one `mapPatch.attachUnresolved`, the block gone, the `hide:<n>` row, `data-hidden="true"`, `mapPatch.get` holds exactly that op; reseeded before and after |
 | unit (web) | `pages/editor/__tests__/map-tracks-model.test.ts` | §13 "GPS tracks" (`docs/map-gps-tracks.md` §5.1): the disabled reason (venue, permission, georeference, in that order; an unknown role is no venue); an import plan — one track per segment in file order, names cut to 200 and file names to 255, points verbatim, `not-gpx` / `malformed` / `no-points` per file with the rest kept, skipped points / segments / waypoints, a track over 200 000 points refused by name, calls of ≤ 200 tracks and ≤ 500 000 points in order; the trimmed projection (length in ground metres, outside count, box) and `not-projectable` as the row's error; rows in list order with state, override, label, visible points; the colour stable and from the palette; locate's 5 % padding and 10 mm minimum; overrides parsed defensively and pruned; a deleted track's re-import (an average with its passes and ranges); the `TRACK_*` code. G26: a converted track hidden by default and shown with *Show converted*, the override winning both ways; an override kept only where it differs from the default; *Show converted*'s own key; the selection kept to listed `ready` rows in list order |
 | unit (web) | `pages/editor/__tests__/map-tracks-convert.test.ts` | §13 "GPS tracks: convert" (`docs/map-gps-tracks.md` §6): the fixture L → one `add` (type 2, its three corners rounded, no flags or angle) at 100 and 1000 units per mm; equal to `drawOp` for the same vertices; ends pinned under smoothing (4, 10, 30 m); fewer nodes with smoothing and a larger tolerance; deterministic, the input not mutated; rounded duplicates dropped and a one-coordinate track no op; outside points converted; a conversion's ops in order, marks `add:<id>`, the previous marks for the undo, node counts, a degenerate track skipped; the change with `putSymbols` on first use only, applying over the fixture without an issue; add ids ascending; the defaults (10 m, 0.1 mm, no symbol), clamping and defensive parsing; the node count's total, largest and warning only above 2000 on one track; the symbol remembered by library entry (found as a matched document symbol elsewhere, not when disabled), on its own document the very item picked (not a sibling matched to the same entry), an unmatched document symbol on its own document only, a point or area never; the picker's ski-O group and track headings first |
 | unit (web) | `pages/editor/__tests__/map-tracks-decimate.test.ts` | §13 "GPS tracks": the tolerance — half a pixel at the finer end of the octave, the default with no zoom; every point within it, ends kept, a straight line to two points, deterministic; over the 50 000-point budget the tolerance doubles until the tracks fit (and half of it would not); one 2 px path per line with its colour, `editor-gps-track` and `data-track-id` |
@@ -2688,12 +2787,10 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
   last leg is the group's exit leg); select the last top-level control
   first to append at the top level.
 
-- **Map mode beyond G9** (§13): join / split / reverse / holes (G10),
-  promote (G12); *Attach* and *Drop* of an unresolved correction as undo
-  entries with a locate (G11 left them outside `MapMode.tsx`; a
-  `PATCH_STALE` refusal, now only for a patch that cannot be re-resolved,
-  is the editor's error line), and *Attach* of a `symbol` entry (G12b, user
-  2026-11-15, G9 question 1). Multi-select (Shift-click, lasso) and the
+- **Map mode beyond G12b** (§13): join / split / reverse / holes (G10).
+  Promote is not offered on a venue box, and its queued / running state
+  is driven in the E2E only through a routed `promoteStatus` (a real job
+  on the fixture ends inside the hold; "Promote"). Multi-select (Shift-click, lasso) and the
   right-click menu of 08 §5.3's Map column are not built; a single
   selection only. Map mode has no touch gestures (desktop only, 08 §5.5)
   and no phone entry.

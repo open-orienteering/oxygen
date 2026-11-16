@@ -1,10 +1,12 @@
 /**
- * Map mode (docs/course-editor.md §13, rows G6, G7, G9): the event's map corrections in the editor — select, hide, move,
- * undo, the course overprint hidden, *Apply corrections*, the patch kept across a reload, the nodes tool `N`
- * (drag, insert, delete, undo; §13 "Nodes"), and drawing and change symbol (§13 "Drawing", "Symbol picker": a path
+ * Map mode (docs/course-editor.md §13, rows G6, G7, G9, G12b): the event's map corrections in the editor — select, hide,
+ * move, undo, the course overprint hidden, *Apply corrections*, the patch kept across a reload, the nodes tool `N`
+ * (drag, insert, delete, undo; §13 "Nodes"), drawing and change symbol (§13 "Drawing", "Symbol picker": a path
  * with a document symbol, a point with a library symbol materialised on first use, a resymbol; each in `maps.pdf`,
- * whose page raster is `print-patch.test.ts`'s, user 2026-11-15). The fixture is the
- * seed's `itest` event with `e2e/test.ocd` pinned; every op is removed in `finally` (AGENTS.md §12), so no reseed.
+ * whose page raster is `print-patch.test.ts`'s, user 2026-11-15), and promote (§13 "Promote"; 08 §7's smoke: hide an
+ * object, add a path, save them to the club map). The fixture is the seed's `itest` event with `e2e/test.ocd` pinned;
+ * every op is removed in `finally` (AGENTS.md §12), so no reseed — except promote's describe, which moves the pin and
+ * makes a club series: it reseeds and removes the series.
  *
  * The target is a black line with no other black ink within 1 mm across it (the fixture draws its lines over a
  * yellow area), found on the canvas at a zoom where 1 mm is ≥ 16 px and checked against the document
@@ -12,6 +14,9 @@
  */
 import { expect, test, type Page, type Request } from "@playwright/test";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { API_BASE } from "./helpers/api-base";
+import { reseed } from "./helpers/reseed";
 import { allControlsSheet, EDITOR_EVENT, editorReady, inflatedStreams, inkedAt, openEditor, paperToPageOf, plainMapAt, plainMapSpots, printed, sites, toPage, toPaper, toolShapes, trpcCall, viewSettled } from "./helpers/editor";
 import { dropEventPatch, mapObjectsAt } from "./helpers/event-map-pin";
 import { trpcProcedures, waitForTrpc } from "./helpers/trpc";
@@ -710,5 +715,171 @@ test.describe("Map mode drawing (docs/course-editor.md §13 \"Drawing\", \"Symbo
     } finally {
       await clearPatch();
     }
+  });
+});
+
+/** `file` through the upload route (one chunk, finalised): its source hash, for `clubMap.addFromSource`. */
+async function uploadSource(file: string, fileName: string): Promise<string> {
+  const headers = { "x-event-id": EDITOR_EVENT, "x-competition-id": EDITOR_EVENT, "x-forwarded-email": "e2e-admin@oxygen.test" };
+  const bytes = readFileSync(file);
+  const init = await fetch(`${API_BASE}/api/map-uploads`, {
+    method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ fileName, bytes: bytes.byteLength, chunkBytes: bytes.byteLength }),
+  });
+  expect(init.status).toBe(201);
+  const { uploadId } = (await init.json()) as { uploadId: string };
+  const put = await fetch(`${API_BASE}/api/map-uploads/${uploadId}/chunks/0`, { method: "PUT", headers: { ...headers, "content-type": "application/octet-stream" }, body: bytes });
+  expect(put.status).toBe(204);
+  return ((await (await fetch(`${API_BASE}/api/map-uploads/${uploadId}/finalise`, { method: "POST", headers })).json()) as { fileHash: string }).fileHash;
+}
+
+type Meta = { documentHash: string | null; clubMapVersionId: string | null };
+
+/**
+ * `mapPatch.promoteStatus` answered as a running job (another session's promote, §13 "Promote"): the batched GET is
+ * fetched and its slot for the procedure replaced. A real job on the fixture ends inside the 30 s hold.
+ */
+async function routePromoteRunning(page: Page): Promise<() => Promise<void>> {
+  const running = { id: "00000000-0000-4000-8000-0000000000e2", state: "running", stage: "match", progress: 0.55, error: null };
+  const matcher = (url: URL) => trpcProcedures(url.toString()).includes("mapPatch.promoteStatus");
+  await page.route(matcher, async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    const k = trpcProcedures(route.request().url()).indexOf("mapPatch.promoteStatus");
+    const res = await route.fetch();
+    const body = (await res.json()) as unknown;
+    const slot = { result: { data: running } };
+    const json = Array.isArray(body) ? body.map((x, i) => (i === k ? slot : x)) : slot;
+    await route.fulfill({ response: res, json });
+  });
+  return () => page.unroute(matcher);
+}
+type Card = { id: string; version: { id: string; seq: number; label: string; layers: number; corrections: number } | null; fileName: string | null };
+
+test.describe("Map mode promote (docs/course-editor.md §13 \"Promote\"; 08 §7)", () => {
+  test.describe.configure({ mode: "serial" });
+
+  // The event's map is moved onto a club version and a series is made: reseeded before and after, the series removed.
+  let clubMapId: string | null = null;
+  test.beforeAll(reseed);
+  test.afterAll(async () => {
+    if (clubMapId) await trpcCall("clubMap.remove", { id: clubMapId }).catch(() => undefined);
+    await reseed();
+  });
+
+  test("hide an object, add a path, save them to the club map: the next version, the event on it, its patch empty; the card; delete", async ({ page }) => {
+    test.setTimeout(300_000);
+    await openEditor(page, "?mode=map");
+    await expect(page.getByTestId("editor-page")).toHaveAttribute("data-mode", "map");
+    await expect(page.getByTestId("map-vector-layer")).toHaveAttribute("data-patch-version", /.+/, { timeout: 30_000 });
+    // The seed's own upload is no club version: promote is not offered.
+    expect((await trpcCall<Meta>("course.mapMetadata", undefined, false)).clubMapVersionId).toBeNull();
+    await expect(page.getByTestId("editor-map-promote")).toHaveCount(0);
+
+    // The same file into the club library (version 1, the same document by dedup), and the event onto it.
+    const fileHash = await uploadSource("e2e/test.ocd", "test.ocd");
+    const created = await trpcCall<{ id: string; importJob: { state: string } | null }>("clubMap.addFromSource", { fileHash, fileName: "test.ocd", name: "E2E promote" });
+    clubMapId = created.id;
+    expect(created.importJob?.state).toBe("done");
+    await trpcCall("course.useClubMap", { clubMapId });
+    await expect.poll(async () => (await trpcCall<Meta>("course.mapMetadata", undefined, false)).clubMapVersionId, { timeout: 60_000 }).not.toBeNull();
+    const v1 = await trpcCall<Meta>("course.mapMetadata", undefined, false);
+    expect(v1.documentHash).toMatch(/^[0-9a-f]{64}$/);
+
+    // A promote running (as another session's would be): Map mode read-only, the progress shown.
+    const unroute = await routePromoteRunning(page);
+    await page.reload();
+    await editorReady(page);
+    await expect(page.getByTestId("editor-map-promoting")).toHaveAttribute("data-state", "running", { timeout: 30_000 });
+    await expect(page.getByTestId("editor-map-promote")).toHaveAttribute("data-block", "running");
+    await expect(page.getByTestId("editor-corrections-apply")).toBeDisabled();
+    for (const key of ["P", "L", "A"]) await expect(page.getByTestId(`editor-tool-${key}`)).toBeDisabled();
+    await unroute();
+
+    await page.reload();
+    await editorReady(page);
+    await expect(page.getByTestId("map-vector-layer")).toHaveAttribute("data-patch-version", /.+/, { timeout: 30_000 });
+    await expect(page.getByTestId("editor-map-promoting")).toHaveCount(0);
+    await page.keyboard.press("h");
+    await zoomTo(page, 16);
+    const promote = page.getByTestId("editor-map-promote");
+    await expect(promote).toBeDisabled();
+    await expect(page.getByTestId("editor-map-promote-reason")).toHaveAttribute("data-reason", "nothing");
+
+    // Hide a lone line (UI).
+    const { at, sourceIndex } = await findLine(page);
+    const p = await toPage(page, at);
+    await page.mouse.click(p.x, p.y);
+    await expect(mapObject(page)).toHaveAttribute("data-ref", `source:${sourceIndex}`);
+    const hidden = waitForTrpc(page, "mapPatch.applyChange");
+    await page.keyboard.press("Delete");
+    await hidden;
+    await expect(correction(page, `hide:${sourceIndex}`)).toBeVisible();
+    await page.keyboard.press("Escape");
+
+    // Draw a path with a document line symbol (UI).
+    const [a] = await plainSpots(page, 1, 3, 0);
+    const b = { x: a.x + 1.5, y: a.y + 0.8 }, c = { x: a.x + 2.5, y: a.y - 0.5 };
+    await page.keyboard.press("l");
+    const docLines = paletteItems(page, '[data-source="document"]');
+    const paths = docLines.and(page.locator('[data-code^="505"], [data-code^="506"], [data-code^="507"]'));
+    await ((await paths.count()) > 0 ? paths.first() : docLines.first()).click();
+    const pa = await toPage(page, a), pb = await toPage(page, b), pc = await toPage(page, c);
+    await page.mouse.click(pa.x, pa.y);
+    await page.mouse.click(pb.x, pb.y);
+    const drew = waitForTrpc(page, "mapPatch.applyChange");
+    await page.mouse.dblclick(pc.x, pc.y);
+    await drew;
+    await pressed(page, "V");
+    await expect(page.getByTestId("editor-corrections-count")).toHaveAttribute("data-count", "2");
+    await expect.poll(() => plainMapAt(page, b, 0.3), { timeout: 15_000 }).toBe(false);
+    await page.keyboard.press("Escape");
+
+    // Save corrections to the club map: a confirm with the label prefilled from the event; one promote.
+    await expect(promote).toBeEnabled();
+    await promote.click();
+    const dialog = page.getByTestId("editor-map-promote-dialog");
+    await expect(dialog).toBeVisible();
+    const dashboard = await trpcCall<{ event: { name: string } }>("competition.dashboard", undefined, false);
+    await expect.poll(() => page.getByTestId("editor-map-promote-label").inputValue()).toContain(dashboard.event.name);
+    await page.getByTestId("editor-map-promote-label").fill("E2E promoted");
+    const writes = countWrites(page);
+    const promoted = waitForTrpc(page, "mapPatch.promote", { timeout: 60_000 });
+    await page.getByTestId("editor-map-promote-confirm").click();
+    await promoted;
+    await expect(page.getByTestId("editor-map-promote-done")).toBeVisible({ timeout: 60_000 });
+
+    // The event is on version 2, its baked document; the promoted ops left its patch; the drawing is the same.
+    await expect.poll(async () => (await trpcCall<Meta>("course.mapMetadata", undefined, false)).documentHash, { timeout: 60_000 }).not.toBe(v1.documentHash);
+    const v2 = await trpcCall<Meta>("course.mapMetadata", undefined, false);
+    expect(v2.clubMapVersionId).not.toBe(v1.clubMapVersionId);
+    expect(Object.keys((await trpcCall<Delivery>("mapPatch.get", undefined, false)).patch?.ops ?? {})).toEqual([]);
+    await expect(page.getByTestId("editor-corrections-count")).toHaveAttribute("data-count", "0", { timeout: 30_000 });
+    await expect.poll(async () => ({ line: await darkAt(page, at), path: !(await plainMapAt(page, b, 0.3)) }), { timeout: 30_000 }).toEqual({ line: false, path: true });
+    // Not an undo entry, and Map mode's earlier entries went (answer 6): Ctrl+Z writes nothing.
+    await page.keyboard.press("Control+z");
+    await page.waitForTimeout(1_000);
+    expect(writes.n).toBe(0);
+
+    // The Club maps card: version 2, its label, the corrections and the original-file note; the file is the source's.
+    const card = (await trpcCall<Card[]>("clubMap.list", undefined, false)).find((m) => m.id === clubMapId)!;
+    expect(card.version).toMatchObject({ seq: 2, label: "E2E promoted", layers: 1, corrections: 2 });
+    expect(card.fileName).toBe("test.ocd");
+    await page.goto("/settings");
+    const row = page.getByTestId(`library-map-card-${clubMapId}`);
+    await expect(row.getByTestId("library-map-version")).toHaveAttribute("data-seq", "2", { timeout: 15_000 });
+    await expect(row.getByTestId("library-map-version-label")).toContainText("E2E promoted");
+    await expect(row.getByTestId("library-map-corrections")).toBeVisible();
+    await expect(row.getByTestId("library-map-version")).toHaveAttribute("data-corrections", "2");
+
+    // Delete version 2: version 1 is the latest again; the event keeps its document but no longer has a version.
+    await row.getByTestId("library-map-delete-version").click();
+    await page.getByTestId("library-version-delete-confirm-btn").click();
+    await expect(row.getByTestId("library-map-version")).toHaveAttribute("data-seq", "1", { timeout: 15_000 });
+    await expect(row.getByTestId("library-map-delete-version")).toHaveCount(0);
+    const after = await trpcCall<Meta>("course.mapMetadata", undefined, false);
+    expect(after).toMatchObject({ documentHash: v2.documentHash, clubMapVersionId: null });
+    await page.goto(`/${EDITOR_EVENT}/course-editor?mode=map`);
+    await editorReady(page);
+    await expect(page.getByTestId("editor-inspector-map-object")).toBeVisible();
+    await expect(page.getByTestId("editor-map-promote")).toHaveCount(0);
   });
 });

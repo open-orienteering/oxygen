@@ -16,6 +16,7 @@ import type { MapDocument } from "./codec.js";
 import { materialiseSymbol } from "./materialise.js";
 import {
   mergePatch,
+  symbolKindOfType,
   patchOpId,
   unresolvedKey,
   type MapPatch,
@@ -206,13 +207,14 @@ function resolveSymbolRef(d: Detached, ref: PatchSymbolRef, to: Target): { ref: 
 
 /**
  * A detached op on `to`, its target forced to `forceSource` when given (attach), else found as §4.2 says:
- * on the origin's source by `sourceIndex`, on another edition by the target anchor.
+ * on the origin's source by `sourceIndex`, on another edition by the target anchor. `symbol` (attach,
+ * already checked against `to`) replaces the op's symbol reference.
  */
-function resolveDetached(d: Detached, to: Target, forceSource?: number): Outcome {
+function resolveDetached(d: Detached, to: Target, forceSource?: number, symbol?: { ref: PatchSymbolRef; key?: string }): Outcome {
   const { op } = d;
   const k = to.doc.header.unitsPerMm / d.unitsPerMm;
   if (op.op === "add") {
-    const s = resolveSymbolRef(d, op.symbol, to);
+    const s = symbol ?? resolveSymbolRef(d, op.symbol, to);
     if (!s) return { ok: false, reason: "symbol" };
     const out: PatchOp = { ...op, symbol: s.ref, coords: rescale(op.coords, k) };
     return { ok: true, op: out, symbolKey: s.key };
@@ -225,7 +227,7 @@ function resolveDetached(d: Detached, to: Target, forceSource?: number): Outcome
   const sourceIndex = to.doc.attrs.sourceIndex[i];
   if (op.op === "hide") return { ok: true, op: { op: "hide", sourceIndex } };
   if (op.op === "modify") return { ok: true, op: { ...op, sourceIndex, coords: rescale(op.coords, k) } };
-  const s = resolveSymbolRef(d, op.symbol, to);
+  const s = symbol ?? resolveSymbolRef(d, op.symbol, to);
   if (!s) return { ok: false, reason: "symbol" };
   return { ok: true, op: { op: "resymbol", sourceIndex, symbol: s.ref }, symbolKey: s.key };
 }
@@ -289,27 +291,66 @@ export function resolvePatch(from: MapDocument, to: MapDocument, patch: MapPatch
 
 // ---- attach (§4.3) -------------------------------------------------------------
 
-export type AttachRefusal = "no-entry" | "drop-only" | "no-object" | "type-mismatch" | "symbol";
+export type AttachRefusal = "no-entry" | "drop-only" | "no-object" | "type-mismatch" | "symbol" | "kind-mismatch" | "bad-argument";
 
 /**
  * *Corrections*' fix (§4.3): the change that puts unresolved entry `key`'s
- * op onto the object of `doc` (the patch's document) with `sourceIndex`, and
- * drops the entry. A `modify` keeps its coordinates (rescaled). Refused for
- * an add or a `symbol` entry (drop only), an object that does not exist,
- * a modify or resymbol onto another type, a symbol `doc` lacks.
+ * op onto `doc` (the patch's document) and drops the entry, with the patch
+ * symbol it needs materialised unless the patch holds it.
+ *
+ * - A `target` entry (hide, modify, resymbol) goes onto the object with
+ *   `sourceIndex`, which is required. A `modify` keeps its coordinates
+ *   (rescaled); a modify or resymbol onto another type is refused.
+ * - `symbol` (G12b; user 2026-11-15, G9 question 1) is the symbol the user
+ *   picked: it replaces a resymbol's or an add's symbol and must be of the
+ *   object's kind. A `symbol` entry needs it (else `drop-only`); a hide or
+ *   modify refuses it. An add takes no object; a `symbol` entry's resymbol
+ *   finds its object as re-resolution does (§4.2) unless `sourceIndex` is given.
  */
-export function attachUnresolved(patch: MapPatch, key: string, doc: MapDocument, sourceIndex: number): { ok: true; change: PatchChange } | { ok: false; reason: AttachRefusal } {
+export function attachUnresolved(
+  patch: MapPatch,
+  key: string,
+  doc: MapDocument,
+  sourceIndex?: number,
+  symbol?: PatchSymbolRef,
+): { ok: true; change: PatchChange } | { ok: false; reason: AttachRefusal } {
   const entry = patch.unresolved?.[key];
   if (!entry) return { ok: false, reason: "no-entry" };
-  if (entry.reason !== "target" || entry.op.op === "add") return { ok: false, reason: "drop-only" };
+  const { reason: why, ...d } = entry;
+  const { op } = d;
+  const takesSymbol = op.op === "resymbol" || op.op === "add";
+  if (symbol && !takesSymbol) return { ok: false, reason: "bad-argument" };
+  if ((why === "symbol" || op.op === "add") && !symbol) return { ok: false, reason: "drop-only" };
+  if (op.op === "add" && sourceIndex !== undefined) return { ok: false, reason: "bad-argument" };
+  if (why === "target" && sourceIndex === undefined) return { ok: false, reason: "bad-argument" };
+
   const target = new Target(doc, RESOLVE_TOLERANCE_MM);
-  const i = target.objectOfSource(sourceIndex);
-  if (i === undefined) return { ok: false, reason: "no-object" };
-  if (entry.op.op !== "hide" && entry.target && doc.attrs.type[i] !== entry.target.type) return { ok: false, reason: "type-mismatch" };
-  const { reason: _r, ...d } = entry;
-  void _r;
-  const r = resolveDetached(d, target, sourceIndex);
+  if (sourceIndex !== undefined) {
+    const i = target.objectOfSource(sourceIndex);
+    if (i === undefined) return { ok: false, reason: "no-object" };
+    if (op.op !== "hide" && entry.target && doc.attrs.type[i] !== entry.target.type) return { ok: false, reason: "type-mismatch" };
+  }
+  // The picked symbol, checked against `doc` here so that the resolution below cannot fail on it.
+  let picked: { ref: PatchSymbolRef; key?: string; kind: string } | undefined;
+  if (symbol) {
+    if ("patch" in symbol) {
+      const s = target.patchSymbol(symbol.patch);
+      if (!s) return { ok: false, reason: "symbol" };
+      picked = { ref: symbol, key: symbol.patch, kind: s.kind };
+    } else {
+      const s = doc.header.symbols[symbol.doc];
+      if (!s) return { ok: false, reason: "symbol" };
+      picked = { ref: symbol, kind: s.kind };
+    }
+  }
+
+  const r = resolveDetached(d, target, sourceIndex, picked);
   if (!r.ok) return { ok: false, reason: r.reason === "symbol" ? "symbol" : "no-object" };
+  if (picked) {
+    // The object's kind (a resymbol's, wherever it was found) or the add's must take the picked symbol.
+    const type = r.op.op === "add" ? r.op.type : doc.attrs.type[target.objectOfSource(r.op.sourceIndex)!];
+    if (picked.kind !== symbolKindOfType(type)) return { ok: false, reason: "kind-mismatch" };
+  }
   const change: PatchChange = { put: [r.op], removeUnresolved: [key] };
   if (r.symbolKey && !Object.hasOwn(patch.symbols, r.symbolKey)) change.putSymbols = { [r.symbolKey]: target.patchSymbol(r.symbolKey)! };
   return { ok: true, change };

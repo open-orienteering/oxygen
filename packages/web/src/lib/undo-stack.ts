@@ -57,6 +57,17 @@ export class UndoStack {
     this.future = [];
   }
 
+  /**
+   * Drop every entry `drop` matches from both branches, keeping the others in order (a promote drops Map mode's
+   * patch entries, docs/course-editor.md §13 "Promote"). @returns how many went.
+   */
+  remove(drop: (entry: UndoEntry) => boolean): number {
+    const n = this.past.length + this.future.length;
+    this.past = this.past.filter((e) => !drop(e));
+    this.future = this.future.filter((e) => !drop(e));
+    return n - this.past.length - this.future.length;
+  }
+
   /** @returns false when there was nothing to undo. */
   async undo(): Promise<boolean> {
     const entry = this.past.pop();
