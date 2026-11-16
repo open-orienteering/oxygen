@@ -1,7 +1,7 @@
 # GPS tracks
 
 Status: **draft** — chapter of the vector map pipeline specification,
-started by sub-slice G22; §4 by G23; §1 by G24; §5.1 by G25. GPS tracks are new scope for slice G (user,
+started by sub-slice G22; §4 by G23; §1 by G24; §5.1 by G25; §6 by G26. GPS tracks are new scope for slice G (user,
 2026-11-13, `docs/research/vector-map-pipeline/SLICES.md` "Slice G",
 rows G20–G28): the research decides none of it beyond 04 §7
 ("Georeferenced inputs" become paper-space overlays) and 06 §3.2 (a
@@ -568,8 +568,9 @@ decision row in `decisions/slice-g.md`).
   colour, its name (else the file name), the date it was recorded
   (`recordedAt` as a local date; a dash when untimed), its length in
   ground metres and its point count — both of the trimmed range
-  (§3.5) —, a mark with the count when points lie outside the map, and a
-  mark when it is converted (`convertedOp`, G26). Length is the sum of the
+  (§3.5) —, a mark with the count when points lie outside the map, a
+  mark when it is converted (`convertedOp`, G26), and (G26) a checkbox
+  selecting it for a conversion (§6; session only, `ready` rows). Length is the sum of the
   projected trimmed track's segment lengths × `metresPerMm` (§1.1, §3.1).
   Points are fetched per track with `mapTrack.get`, one request at a
   time, after the list (a capped track is megabytes); a row shows that it
@@ -603,9 +604,11 @@ decision row in `decisions/slice-g.md`).
   question 2): a track is shown unless hidden on this device
   (`localStorage` `oxygen:gps-tracks:<nameId>`, ids no longer listed
   dropped); the colour is one of eight, chosen by a hash of the id, so it
-  is stable everywhere and not editable. Neither is stored on the row;
-  G26 / G27 hide converted tracks and an average's passes by default
-  from `convertedOp` / `derivedFrom`, with the same per-device override.
+  is stable everywhere and not editable. Neither is stored on the row.
+  A converted track is hidden by default (G26, §6.3; *Show converted*
+  flips that default), and G27 hides an average's passes from
+  `derivedFrom`, with the same per-device override, kept only where it
+  differs from the default.
 - **Locate.** A click on a row fits the view to the track's trimmed
   bounding box, padded by 5 % with a 10 mm minimum side.
 - **Rename and delete** are `mapTrack.update { id, name }` and
@@ -632,8 +635,14 @@ Pending (G27): trim, split, average in Map mode, with these decided:
 
 ## 6. Conversion into map objects
 
-Pending (G26, G28), with these decided (the planner's questions and
-defaults, the user 2026-11-15, every recommendation):
+Written by row G26 (`packages/web/src/pages/editor/modes/map/tracks/`
+`convert.ts`, `useTrackConvert.ts`, `ConvertPanel.tsx`; the editor's
+side in `course-editor.md` §13 "GPS tracks: convert"; decision row in
+`decisions/slice-g.md`). Snapping a converted line's ends is G28's
+(answers 4 and 5 below).
+
+Decided before planning (the planner's questions and defaults, the user
+2026-11-15, every recommendation):
 
 1. **"Converted" is sticky** (G26): a converted track stays converted —
    hidden unless *Show converted* — until the conversion is undone, even
@@ -655,6 +664,110 @@ defaults, the user 2026-11-15, every recommendation):
 5. **Several tracks in one conversion** (G28) are snapped in list order,
    each seeing the document plus the lines already made in that batch.
 
+Decided overnight on the user's standing instruction (2026-11-13), for
+review, each the G26 planner's conservative recommendation: Q1 the page
+raster in integration (§6.5), Q2 *Show converted* (§6.3), Q3 two writes
+(§6.2), Q4 the symbol across maps (§6.4), and Q5 what else works while the
+panel is open (`course-editor.md` §13 "GPS tracks: convert": `V` armed, no
+move drag, closed by arming another tool).
+
+### 6.1 The line
+
+Per selected track (`ready`: its points loaded and projected, §5.1):
+
+- **Input**: the projected trimmed range (`TrackGeometry.line`, §5.1
+  "Projection"), outside points included (§3.2).
+- **Smoothing**: `smoothTrack(line, { windowM })` (§3.3, `stepM` 2) unless
+  the window is 0, which leaves the projected points as they are (no
+  resampling).
+- **Simplification**: `simplifyTrack(·, toleranceMm)` (§3.4).
+- **Units**: each vertex × the document's `unitsPerMm`, rounded to whole
+  units per axis (no flip, no offset: paper mm y-up is the document's
+  space, §3.1); a vertex whose rounded coordinate equals the previous
+  one's is dropped.
+- **The op**: `{ op: "add", id, type: 2, symbol, coords }`, corner nodes
+  (no flags), no `angle` — byte for byte what Map mode's `L` writes for the
+  same vertices (`draw.ts` `drawOp`, `course-editor.md` §13 "Drawing").
+  A track left with fewer than two coordinates is not converted (it would
+  be `geometry-invalid`, `map-patches.md` §2.3); the panel counts it.
+- **Determinism**: the same track, settings, frame and id give the same
+  op; across engines up to the projection's last bit at a rounding tie
+  (§3 intro).
+- **Ids**: one lowercase UUIDv7 per track, ascending in list order
+  (consecutive milliseconds; `map-patches.md` §2.2 orders added objects by
+  id), shared by the preview and the write: minted on opening, and all
+  again when a track joins the open panel; closing the panel drops them.
+- **The symbol**: one line symbol for every track of a conversion, from
+  the picker; a library entry is materialised on first use and put in the
+  same change (`symbolPut`, `map-patches.md` §1.3).
+
+### 6.2 The write, the mark and undo
+
+- **One change**: `mapPatch.applyChange { documentHash, put: [one add per
+  track], putSymbols? }`, then `mapTrack.markConverted { marks: [{ id,
+  opId: "add:<id>" }] }` (§1.2). One undo entry on the editor's stack.
+- **Two writes, not one transaction** (decided overnight on the user's
+  standing instruction (2026-11-13), for review; G26 planner's Q3): the
+  patch first, then the marks, on do, undo and redo alike. The marks are
+  a step of their own: a refused mark is shown and the entry kept, on undo
+  and redo too (the line is there, or gone; the track's mark is merely
+  stale). On do the entry is recorded once the marks have settled, so it
+  cannot be undone while they are in flight. Marks go
+  only to tracks still listed (one deleted meanwhile is skipped, not a
+  failed undo). A combined procedure would be an API change outside the
+  row; the worst case is a stale mark, which the eye or *Show converted*
+  overrides.
+- **Undo** removes the adds (the symbol stays, `map-patches.md` §1.5) and
+  restores each track's mark from before the conversion: null, or an
+  earlier conversion's op (answer 1). Redo writes both again.
+- Hiding, reverting or promoting the line does not touch the mark
+  (answer 1).
+
+### 6.3 Visibility and *Show converted*
+
+A converted track (`convertedOp` set) is hidden from the layer by default
+and kept in the list with its mark. *Show converted* (decided overnight on
+the user's standing instruction (2026-11-13), for review; G26 planner's
+Q2) is a checkbox in the panel, per device and per event (`localStorage`
+`oxygen:gps-tracks:<nameId>:show-converted`), shown while a listed track
+is converted: it makes the default *shown* for converted tracks. The
+track's own eye (§5.1 "Show / hide") still wins; an eye override is kept
+only where it differs from the default.
+
+### 6.4 The panel's settings and symbol
+
+Remembered on the device, not per event (`localStorage`
+`oxygen:gps-track-convert`): smoothing in whole metres, simplification to
+0.01 mm, both clamped to answer 3's ranges, and the symbol. **The symbol
+across maps** (decided overnight on the user's standing instruction
+(2026-11-13), for review; G26 planner's Q4): the picked item is
+remembered by its key with the document's hash, and by its library entry
+when it has one. On that document the item itself is chosen again (not a
+sibling document symbol matched to the same entry); on any other map the
+first enabled item offering the entry — a library item, a patch symbol,
+or a document symbol matched to it. An unmatched document symbol is
+chosen on its own document only. Anything else leaves nothing chosen, so
+another document's own symbol is never preselected.
+
+### 6.5 In print
+
+A converted line prints as any added object (`map-patches.md` §2; the
+reference track never does, §5.1). **The row's "in the PDF's page
+raster"** (decided overnight on the user's standing instruction
+(2026-11-13), for review; G26 planner's Q1, G9 question 2's precedent) is
+proven in integration — `print-patch.test.ts` rasterises `maps.pdf`
+(`pdftocairo`) before and after a line with `ISSkiOM2019:801.1` and finds
+every changed pixel inside its box — since poppler is not on the E2E job
+and no route rasterises a page; the E2E checks the op, the canvas and
+`maps.pdf`'s strokes.
+
+### 6.6 Smoothing granularity
+
+The slider is in whole metres while the kernel
+half-width is `floor(windowM / 2 / stepM)` samples (§3.3), so the
+smoothing changes every 4 m (1–3 m resample only; 10 m smooths as 8 m).
+§3.3 is unchanged (§8).
+
 ## 7. Tests
 
 | File | Proves |
@@ -671,7 +784,9 @@ defaults, the user 2026-11-15, every recommendation):
 | `api/src/__tests__/integration/backup.test.ts` | The dump's `map_gps_tracks` section holds the event's tracks; `restore-map-gps-tracks.sql` restores them exactly (points, trim, ranges, token above 2^53) into another event, a missing importer NULL, an existing one kept, twice is once |
 | `web/src/pages/editor/__tests__/map-tracks-model.test.ts` | §5.1: where it is off; the import plan (segments in file order, names cut, per-file parse errors, skip counts, the 200 000-point refusal, calls within 200 tracks / 500 000 points); the trimmed projection, length, outside count, `not-projectable`; rows; colour; locate's bounds; per-device overrides; a deleted track's re-import |
 | `web/src/pages/editor/__tests__/map-tracks-decimate.test.ts` | §5.1 "Decimation to the pixel": the octave tolerance, the tolerance bound and ends, determinism, the 50 000-point budget, the layer's paths |
-| `e2e/map-gps-tracks.spec.ts` | §5.1 end to end on `e2e/test.ocd`: import by the picker (a non-GPX file reported), the rows, the paths at the fixture's paper mm, locate, hide kept across a reload, rename, delete and its undo, a reload keeping the tracks (`course-editor.md` §13 "Tests" has the detail) |
+| `web/src/pages/editor/__tests__/map-tracks-convert.test.ts` | §6: the fixture L → one `add` at 100 and 1000 units per mm, equal to `drawOp`'s; ends pinned under smoothing; fewer nodes with smoothing and a larger tolerance; determinism and no mutation; rounded duplicates and a one-coordinate track; outside points; a conversion's ops, marks, previous marks, node counts and skipped tracks; `putSymbols` on first use only, applying without an issue; ascending ids; the controls' defaults and ranges; the node count's warning above 2000; the remembered symbol (§6.4); the picker's order |
+| `api/src/__tests__/integration/print-patch.test.ts` | §6 in print (G26, the row's page raster): a line `add` with `ISSkiOM2019:801.1` materialised on first use changes the rasterised `maps.pdf` page only inside its box |
+| `e2e/map-gps-tracks.spec.ts` | §5.1 end to end on `e2e/test.ocd`: import by the picker (a non-GPX file reported), the rows, the paths at the fixture's paper mm, locate, hide kept across a reload, a converted track hidden by default and *Show converted*, rename, delete and its undo, a reload keeping the tracks; §6: the fixture track converted with 801.1 — the preview, the op, the mark, the canvas, `maps.pdf`'s strokes, undo, redo, a second conversion moving the mark, the settings and symbol across a reload, a refused mark keeping the undo entry (`course-editor.md` §13 "Tests" has the detail) |
 
 ## 8. Pending in this chapter
 
@@ -689,8 +804,17 @@ defaults, the user 2026-11-15, every recommendation):
   `data-points` string on every render, so up to the 50 000-point budget
   is re-serialised per pan frame. Culling to the view (the `onView` prop
   above) or a cached path in the viewer would bound it; unmeasured.
-- §6 conversion into `add` ops and snapping ends onto the track network
-  (G26, G28).
+- Snapping a converted line's ends onto the track network (G28, §6
+  answers 4–5).
 - Bézier fitting of a converted line (later; polylines for now).
+- The smoothing control acts in 4 m steps (§6.6): whole metres over a
+  kernel of `floor(windowM / 4)` samples at `stepM` 2. A finer kernel (a
+  fractional half-width, or `stepM` from the window) would change §3.3's
+  weights and G23's averages; left until a mapper asks.
+- A conversion is two writes (§6.2): a refused `markConverted` leaves the
+  line written and the track unmarked (reported, the undo entry kept).
+- The convert panel's preview and node count recompute on the main thread
+  per control change: smoothing once per track and window, simplification
+  per tolerance; at the caps (a 200 000-point track) unmeasured.
 - Recording a track in the app (waits for a packaged app: a browser
   loses its GPS watch with the screen off).

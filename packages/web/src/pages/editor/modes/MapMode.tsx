@@ -2,7 +2,8 @@
  * Map mode (docs/course-editor.md §13; 08 §5.2–§5.3, the Map column; row G6): the event's map corrections — the
  * patch over the pinned document (docs/map-patches.md) — with select, hide and move, the nodes tool `N` (§13
  * "Nodes", G7), the drawing tools `P` `L` `A`, the symbol picker, *Change symbol* and *Rotation* (§13 "Drawing",
- * "Symbol picker", G9). Shaped like `useLayoutMode`:
+ * "Symbol picker", G9), and the GPS tracks section with its conversion into lines (§13 "GPS tracks", G25, G26). Shaped like
+ * `useLayoutMode`:
  * the page asks it for the viewer's editor props, the rail, the inspector and its keys, and keeps the undo stack.
  *
  * Course edits are locked here: the editor props carry no control, label, leg or map-click callbacks and the
@@ -37,6 +38,8 @@ import { CorrectionsList } from "./map/Corrections";
 import { MAP_NODES_MAX, nodeSnapIndex, nodesOf, nodesOp, ringRule, withRing, type NodePath } from "./map/nodes";
 import { useMapTracks } from "./map/tracks/useMapTracks";
 import { TracksPanel } from "./map/tracks/TracksPanel";
+import { ConvertPanel } from "./map/tracks/ConvertPanel";
+import { useTrackConvert } from "./map/tracks/useTrackConvert";
 import { SymbolPicker } from "./map/SymbolPicker";
 import { findItem, itemKey } from "./map/palette";
 import { drawOp, minNodes, type DrawKind } from "./map/draw";
@@ -140,6 +143,8 @@ export function useMapMode(a: MapModeArgs): MapMode {
   /** *Change symbol*'s picker is open for this selection (`refKey`; another selection closes it); the picker's search. */
   const [changingFor, setChangingFor] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  /** The GPS tracks' convert panel is open (§13 "GPS tracks: convert", G26): `V` armed, its preview the draft. */
+  const [convertOpen, setConvertOpen] = useState(false);
 
   // Leaving the mode or another document drops it all; the overprint comes back (H is Map mode's own).
   useEffect(() => {
@@ -153,6 +158,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
     setPoly(null);
     setChangingFor(null);
     setQuery("");
+    setConvertOpen(false);
     drawId.current = null;
     pendingSelect.current = null;
     gesture.current = null;
@@ -214,15 +220,21 @@ export function useMapMode(a: MapModeArgs): MapMode {
       throw new Error(patchErrorText(e, t), { cause: e });
     }
   }, [writes, deliver, utils, nameId, t]);
-  /** A gesture's write and its undo entry (§13 "Ops"); `keepDraft`: a move, whose draft stays until drawn. */
-  const commit = useCallback((change: mapDocument.PatchChange, keepDraft = false) => {
+  /**
+   * A gesture's write and its undo entry (§13 "Ops"); `keepDraft`: a move, whose draft stays until drawn. `follow`: a
+   * write of another store that belongs to the same entry (G26's track marks), after the patch on do, undo and redo
+   * alike. The follow-up runs in its own `run`, so a refused one is reported without failing the patch's step: the
+   * entry is kept (on undo and redo too). On do the entry is recorded once the follow-up has settled, so it cannot be
+   * undone while its follow-up is in flight. False when refused (a write in flight, nothing to change).
+   */
+  const commit = useCallback((change: mapDocument.PatchChange, keepDraft = false, follow?: { after: () => Promise<unknown>; undo: () => Promise<unknown> }): boolean => {
     const before = patchRef.current;
     const documentHash = hash;
     const inverse = inverseChange(before, change);
-    if (writingRef.current) return;
+    if (writingRef.current) return false;
     if (!documentHash || !inverse || !changes(before, change)) {
       setDraft(null);
-      return;
+      return false;
     }
     writingRef.current = true;
     setWriting(true);
@@ -230,21 +242,24 @@ export function useMapMode(a: MapModeArgs): MapMode {
       try {
         const res = await send(documentHash, change);
         if (keepDraft) setDraft((d) => (d ? { ...d, waitFor: res.version } : d));
+        if (follow) await run(follow.after);
         // Undo / redo drop the focused node: its index may name another node then (§13 "Nodes").
         record(
-          async () => { setDraft(null); setFocusState(null); await send(documentHash, inverse); },
-          async () => { setDraft(null); setFocusState(null); await send(documentHash, change); },
+          async () => { setDraft(null); setFocusState(null); await send(documentHash, inverse); if (follow) await run(follow.undo); },
+          async () => { setDraft(null); setFocusState(null); await send(documentHash, change); if (follow) await run(follow.after); },
         );
       } finally {
         writingRef.current = false;
         setWriting(false);
       }
     });
+    return true;
   }, [hash, run, send, record]);
 
   const canWrite = enabled && canEdit && !!model && correctionsOn && !writing;
   const selectedHidden = !!selected && isHidden(current, selected);
-  const canMove = canWrite && !!selected && !selectedHidden && model?.indexOf(selected) != null;
+  // While the convert panel is open its preview is the draft: no move drag (§13 "GPS tracks: convert").
+  const canMove = canWrite && !convertOpen && !!selected && !selectedHidden && model?.indexOf(selected) != null;
   /** Drawing's lasting conditions (§13 "Drawing"): `courses.edit`, corrections on, a document — a write in flight aside. */
   const canDraw = enabled && canEdit && !!model && correctionsOn;
   const drawTool = isMapDrawTool(tool) ? tool : null;
@@ -448,9 +463,15 @@ export function useMapMode(a: MapModeArgs): MapMode {
     drawGesture.current = null;
     pointGesture.current = null;
     setChanging(false);
+    if (next !== "V") setConvertOpen(false); // the convert panel keeps V (§13 "GPS tracks: convert")
     if (isMapDrawTool(next)) { setSelected(null); setStack([]); pendingSelect.current = null; }
     setTool(next);
   }, [canDraw, setChanging]);
+  /** `armTool` that also drops a drawing in progress from the draft (its op had an id; a waiting write's stays). */
+  const armDropping = useCallback((next: MapRailTool) => {
+    if (drawId.current) keepWaiting();
+    armTool(next);
+  }, [armTool, keepWaiting]);
   /** The picker's pick: the tool's symbol, or *Change symbol*'s write (one op, one undo entry; §13 "Ops"). */
   const pick = useCallback((item: mapDocument.PaletteItem) => {
     if (!item.enabled) return;
@@ -471,6 +492,35 @@ export function useMapMode(a: MapModeArgs): MapMode {
     if (change) commit(change);
   }, [canWrite, model, selected, selectedHidden, current, commit]);
   const selectedOrientable = !!info && !!model && info.type === mapDocument.OBJECT_TYPE.point && isOrientableRef(model.pinned, current, info.symbol);
+
+  // ─── GPS tracks: convert (§13 "GPS tracks: convert", G26) ──
+  const convertRows = tracks.selection;
+  const convert = useTrackConvert({
+    open: convertOpen, rows: convertRows, pinned, patch: current, unitsPerMm: model?.unitsPerMm ?? null, documentHash: hash,
+  });
+  // Closed when drawing becomes disabled or nothing is left to convert.
+  useEffect(() => {
+    if (convertOpen && (!canDraw || convertRows.length === 0)) setConvertOpen(false);
+  }, [convertOpen, canDraw, convertRows.length]);
+  const openConvert = useCallback(() => {
+    if (!canDraw || convertRows.length === 0) return;
+    armDropping("V"); // a drawing in progress is dropped, its draft with it
+    setConvertOpen(true);
+  }, [canDraw, convertRows.length, armDropping]);
+  const closeConvert = useCallback(() => {
+    setConvertOpen(false);
+    keepWaiting();
+  }, [keepWaiting]);
+  /** *Convert*: one `applyChange` of every add (the symbol's first use with it) and the marks, one undo entry. */
+  const applyConvert = useCallback(() => {
+    const r = convert.result;
+    if (!r || writingRef.current) return;
+    setDraft({ ops: r.plan.ops, ...(r.change.putSymbols ? { symbols: r.change.putSymbols } : {}), waitFor: null });
+    const marks = r.plan.marks, before = r.plan.before;
+    if (!commit(r.change, true, { after: () => tracks.mark(marks), undo: () => tracks.mark(before) })) return;
+    setConvertOpen(false);
+    tracks.clearSelection();
+  }, [convert.result, commit, tracks]);
 
   // ─── The binding ──
   const select = useCallback((ref: MapObjectRef | null, refs: MapObjectRef[]) => { setSelected(ref); setStack(refs); }, []);
@@ -516,7 +566,14 @@ export function useMapMode(a: MapModeArgs): MapMode {
   const binding = pointBinding ?? lineBinding ?? nodesBinding ?? selectBinding;
 
   const selectedList = useMemo(() => (selected ? [selected] : []), [selected]);
-  const draftInput = useMemo(() => (draft ? { ops: draft.ops, ...(draft.symbols ? { symbols: draft.symbols } : {}) } : null), [draft]);
+  // The convert panel's preview is drawn with any draft still waiting for its write to be drawn.
+  const preview = convertOpen ? convert.preview : null;
+  const draftInput = useMemo(() => {
+    if (!draft && !preview) return null;
+    const ops = [...(draft?.ops ?? []), ...(preview?.ops ?? [])];
+    const symbols = draft?.symbols || preview?.symbols ? { ...draft?.symbols, ...preview?.symbols } : undefined;
+    return { ops, ...(symbols ? { symbols } : {}) };
+  }, [draft, preview]);
   const editor = useMemo<MapViewerEditorProps>(() => ({
     tool: withTrackLayer(binding, tracks.layer),
     viewRequest,
@@ -556,6 +613,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
         // nothing left, the page leaves fullscreen.
         if (poly) { dropDrawing(); return true; }
         if (changing) { setChanging(false); return true; }
+        if (convertOpen) { closeConvert(); return true; }
         if (focus) { setFocus(null); return true; }
         if (tool !== "V") { armTool("V"); return true; }
         if (!selected) return false;
@@ -563,7 +621,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
         setStack([]);
         return true;
     }
-  }, [toggleHideCourse, fit, step, hide, selected, tool, focus, deleteNode, setFocus, armTool, poly, lineBinding, finishDrawing, dropDrawing, changing, setChanging]);
+  }, [toggleHideCourse, fit, step, hide, selected, tool, focus, deleteNode, setFocus, armTool, poly, lineBinding, finishDrawing, dropDrawing, changing, setChanging, convertOpen, closeConvert]);
 
   // ─── Rail and inspector ──
   const rail = (
@@ -615,7 +673,19 @@ export function useMapMode(a: MapModeArgs): MapMode {
         <CorrectionsList rows={rows} selected={selected} enabled={toggling ?? correctionsOn} canWrite={canEdit} busy={toggling !== null}
           onLocate={(r) => locate(r.ref)} onRevert={revert} onEnabled={setCorrectionsOn} />
       </InspectorSection>
-      {tracks.panel && <InspectorSection title={t("gpsTracks")} testId="editor-tracks"><TracksPanel panel={tracks.panel} /></InspectorSection>}
+      {tracks.panel && (
+        <InspectorSection title={t("gpsTracks")} testId="editor-tracks">
+          <TracksPanel panel={tracks.panel} convert={{
+            open: convertOpen,
+            off: !canDraw ? t("mapDrawOff") : convertRows.length === 0 ? t("trackConvertNone") : writing ? t("trackConvertBusy") : null,
+            onOpen: openConvert,
+            content: (
+              <ConvertPanel convert={convert} tracks={convertRows.length} documentHash={mapDoc.hash} nameId={nameId} busy={writing}
+                onApply={applyConvert} onCancel={closeConvert} />
+            ),
+          }} />
+        </InspectorSection>
+      )}
     </>
   );
 

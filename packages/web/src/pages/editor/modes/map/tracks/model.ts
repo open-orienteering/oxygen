@@ -2,7 +2,8 @@
  * Map mode's GPS tracks, the pure part (docs/map-gps-tracks.md §5.1; docs/course-editor.md §13 "GPS tracks"; row G25):
  * where the panel is off, an import planned from the files' text (parsed on the device, chunked to the API's caps),
  * a stored track projected onto the pinned document, the list's rows, the colour, locate's bounds, the per-device
- * visibility overrides, and a deleted track's re-import (its undo).
+ * visibility overrides over a default that hides converted tracks unless *Show converted* (G26, §6 answer 1), the
+ * conversion's track selection, and a deleted track's re-import (its undo).
  */
 
 import { gpsTrack, type mapGeo } from "@oxygen/shared";
@@ -151,11 +152,15 @@ export interface TrackRow {
   points: number;
 }
 
-/** The list's rows in `mapTrack.list` order; `geometry` per id (absent: still loading). */
+/**
+ * The list's rows in `mapTrack.list` order; `geometry` per id (absent: still loading). Shown is the device's override,
+ * else the default (`defaultVisible`).
+ */
 export function trackRows(
   metas: readonly TrackMeta[],
   geometry: ReadonlyMap<string, TrackGeometry | { error: string }>,
   overrides: Readonly<Record<string, boolean>>,
+  showConverted = false,
 ): TrackRow[] {
   return metas.map((meta) => {
     const g = geometry.get(meta.id);
@@ -164,7 +169,7 @@ export function trackRows(
       meta,
       label: meta.name ?? (meta.sourceName || meta.id),
       colour: trackColour(meta.id),
-      visible: overrides[meta.id] ?? true,
+      visible: overrides[meta.id] ?? defaultVisible(meta, showConverted),
       state: !g ? "loading" : error ? "error" : "ready",
       geometry: g && !("error" in g) ? g : null,
       error,
@@ -217,6 +222,31 @@ export function parseVisibility(raw: string | null): Record<string, boolean> {
   } catch {
     return {};
   }
+}
+
+/**
+ * A track's default visibility (§5.1 "Show / hide"; §6 answer 1): shown, except a converted one — hidden until the
+ * conversion is undone, unless *Show converted* is on.
+ */
+export const defaultVisible = (meta: Pick<TrackMeta, "convertedOp">, showConverted: boolean): boolean => !meta.convertedOp || showConverted;
+
+/** The overrides after the eye set `visible`: an override is kept only where it differs from the default. */
+export function nextOverrides(
+  overrides: Readonly<Record<string, boolean>>, meta: Pick<TrackMeta, "id" | "convertedOp">, visible: boolean, showConverted: boolean,
+): Record<string, boolean> {
+  const next = { ...overrides };
+  if (visible === defaultVisible(meta, showConverted)) delete next[meta.id];
+  else next[meta.id] = visible;
+  return next;
+}
+
+/** `localStorage` key of an event's *Show converted* (per device, beside the overrides; `pruneVisibility` keeps ids only). */
+export const showConvertedKey = (nameId: string): string => `oxygen:gps-tracks:${nameId}:show-converted`;
+
+/** The conversion's selection kept to rows that are listed and ready (projected), in list order. */
+export function pruneSelection(selected: readonly string[], rows: readonly Pick<TrackRow, "meta" | "state">[]): string[] {
+  const keep = new Set(selected);
+  return rows.filter((r) => r.state === "ready" && keep.has(r.meta.id)).map((r) => r.meta.id);
 }
 
 /** Overrides of ids still listed. */

@@ -3,7 +3,8 @@
  * tracks listed (`mapTrack.list`), their points fetched one track at a time and projected onto the pinned document,
  * the reference layer decimated to the zoom the pointer last reported, and the writes — import, rename, delete, each
  * one undo entry. Off, with the reason and no `mapTrack` request, on a venue node, without `courses.edit`, or on a
- * map without a georeference.
+ * map without a georeference. For G26's conversion: the tracks selected to convert, *Show converted*, and the marks a
+ * conversion and its undo write (`mark`).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -17,8 +18,8 @@ import { paperFrameOf } from "../../../../../lib/vector-map";
 import type { TrackLayer } from "../../../tools/bindings";
 import { DEFAULT_TOLERANCE_MM, decimateLayer, layerShapes, toleranceMm } from "./decimate";
 import {
-  chunkTracks, deletedTrackImport, disabledReason, locateBounds, parseVisibility, planImport, projectTrackRow, pruneVisibility, trackErrorCode, trackRows,
-  visibilityKey, type ImportIssue, type TrackGeometry, type TrackRow, type TracksDisabled,
+  chunkTracks, deletedTrackImport, disabledReason, locateBounds, nextOverrides, parseVisibility, planImport, projectTrackRow, pruneSelection, pruneVisibility,
+  showConvertedKey, trackErrorCode, trackRows, visibilityKey, type ImportIssue, type TrackGeometry, type TrackRow, type TracksDisabled,
 } from "./model";
 
 type Bounds = { minX: number; minY: number; maxX: number; maxY: number };
@@ -45,6 +46,11 @@ export interface ImportResult {
 export interface MapTracks {
   /** The reference layer for `withTrackLayer`. */
   layer: TrackLayer;
+  /** The rows selected to convert (listed and ready, list order; session only). */
+  selection: TrackRow[];
+  clearSelection: () => void;
+  /** `mapTrack.markConverted` for the tracks still listed (G26: a conversion, its undo and redo); nothing when none is. */
+  mark: (marks: readonly { id: string; opId: string | null }[]) => Promise<void>;
   /** Null without a pinned document (Map mode's own `editor-map-none` stands). */
   panel: {
     disabled: TracksDisabled | null;
@@ -54,6 +60,12 @@ export interface MapTracks {
     result: ImportResult | null;
     onImport: (files: readonly File[]) => void;
     onVisible: (id: string, visible: boolean) => void;
+    /** The conversion's selection (G26). */
+    selected: ReadonlySet<string>;
+    onSelect: (id: string, on: boolean) => void;
+    /** *Show converted* (per device and event, G26): converted tracks without an override are drawn. */
+    showConverted: boolean;
+    onShowConverted: (on: boolean) => void;
     onRename: (id: string, name: string) => void;
     onDelete: (id: string) => void;
     onLocate: (id: string) => void;
@@ -92,6 +104,14 @@ function readOverrides(nameId: string): Record<string, boolean> {
     return parseVisibility(localStorage.getItem(visibilityKey(nameId)));
   } catch {
     return {};
+  }
+}
+
+function readShowConverted(nameId: string): boolean {
+  try {
+    return localStorage.getItem(showConvertedKey(nameId)) === "1";
+  } catch {
+    return false;
   }
 }
 
@@ -163,6 +183,17 @@ export function useMapTracks(a: MapTracksArgs): MapTracks {
   const [saved, setSaved] = useState(0);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- `saved` re-reads the store after a write
   const overrides = useMemo(() => readOverrides(nameId), [nameId, saved]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- as above
+  const showConverted = useMemo(() => readShowConverted(nameId), [nameId, saved]);
+  const onShowConverted = useCallback((on: boolean) => {
+    try {
+      if (on) localStorage.setItem(showConvertedKey(nameId), "1");
+      else localStorage.removeItem(showConvertedKey(nameId));
+    } catch {
+      // Storage refused: not kept.
+    }
+    setSaved((n) => n + 1);
+  }, [nameId]);
   /** Writes the overrides of ids still listed (§5.1: ids no longer listed are dropped). */
   const saveOverrides = useCallback((next: Record<string, boolean>) => {
     const pruned = pruneVisibility(next, metas.map((m) => m.id));
@@ -175,7 +206,19 @@ export function useMapTracks(a: MapTracksArgs): MapTracks {
     setSaved((n) => n + 1);
   }, [nameId, metas]);
 
-  const rows = useMemo(() => trackRows(metas, geometry, overrides), [metas, geometry, overrides]);
+  const rows = useMemo(() => trackRows(metas, geometry, overrides, showConverted), [metas, geometry, overrides, showConverted]);
+
+  // ─── The conversion's selection (G26), session only ──
+  const [selectedIds, setSelectedIds] = useState<readonly string[]>([]);
+  const selectionIds = useMemo(() => pruneSelection(selectedIds, rows), [selectedIds, rows]);
+  const selection = useMemo(() => {
+    const keep = new Set(selectionIds);
+    return rows.filter((r) => keep.has(r.meta.id));
+  }, [rows, selectionIds]);
+  const selectedSet = useMemo(() => new Set(selectionIds), [selectionIds]);
+  const onSelect = useCallback((id: string, on: boolean) => setSelectedIds((s) => (on ? [...s.filter((x) => x !== id), id] : s.filter((x) => x !== id))), []);
+  const clearSelection = useCallback(() => setSelectedIds([]), []);
+  useEffect(() => { if (!enabled) setSelectedIds([]); }, [enabled, nameId]);
 
   // ─── The layer, decimated to the pixel ──
   const [tolerance, setTolerance] = useState(DEFAULT_TOLERANCE_MM);
@@ -282,11 +325,18 @@ export function useMapTracks(a: MapTracksArgs): MapTracks {
   }, [metaOf, run, send, writes, record, utils, loaded, addPoints]);
 
   const onVisible = useCallback((id: string, visible: boolean) => {
-    const next = { ...overrides };
-    if (visible) delete next[id]; // shown is the default
-    else next[id] = false;
-    saveOverrides(next);
-  }, [overrides, saveOverrides]);
+    const meta = metaOf(id);
+    if (meta) saveOverrides(nextOverrides(overrides, meta, visible, showConverted)); // kept only where it differs from the default
+  }, [metaOf, overrides, saveOverrides, showConverted]);
+
+  // The marks go to tracks still listed: one deleted meanwhile (here or elsewhere) is skipped, not a failed undo.
+  const metasRef = useRef(metas);
+  metasRef.current = metas;
+  const mark = useCallback(async (marks: readonly { id: string; opId: string | null }[]) => {
+    const listed = new Set(metasRef.current.map((m) => m.id));
+    const keep = marks.filter((m) => listed.has(m.id));
+    if (keep.length > 0) await send(() => writes.markTracksConverted(keep));
+  }, [send, writes]);
 
   const onLocateTrack = useCallback((id: string) => {
     const g = geometry.get(id);
@@ -302,9 +352,13 @@ export function useMapTracks(a: MapTracksArgs): MapTracks {
     result,
     onImport,
     onVisible,
+    selected: selectedSet,
+    onSelect,
+    showConverted,
+    onShowConverted,
     onRename,
     onDelete,
     onLocate: onLocateTrack,
   };
-  return { layer, panel };
+  return { layer, selection, clearSelection, mark, panel };
 }
