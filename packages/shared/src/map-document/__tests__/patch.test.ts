@@ -218,6 +218,32 @@ describe("patch schema: unresolved entries (§4.1, G11)", () => {
     expect(p.unresolved).toHaveProperty(unresolvedKey(FROM, a.op));
   });
 
+  it("mergePatch puts entries back by key (G12b, the undo of a drop): removes first, sorted, twice = once", () => {
+    const a = lost({ op: "hide", sourceIndex: 9 });
+    const b = lost({ op: "hide", sourceIndex: 2 });
+    const ka = unresolvedKey(FROM, a.op);
+    const kb = unresolvedKey(FROM, b.op);
+    const p = mapPatchSchema.parse({ documentHash: HASH, unresolved: { [ka]: a } });
+    const put = mergePatch(p, { putUnresolved: { [kb]: b } });
+    expect(Object.keys(put.unresolved!)).toEqual([kb, ka]);
+    expect(mergePatch(put, { putUnresolved: { [kb]: b } })).toEqual(put);
+    // A drop then its inverse is the patch as it was.
+    expect(mergePatch(mergePatch(put, { removeUnresolved: [ka] }), { putUnresolved: { [ka]: a } })).toEqual(put);
+    // Into a patch that had none.
+    const fresh = mergePatch(mapPatchSchema.parse({ documentHash: HASH }), { putUnresolved: { [ka]: a } });
+    expect(fresh.unresolved).toEqual({ [ka]: a });
+  });
+
+  it("patchChangeSchema: putUnresolved must be keyed by its entry, and not both put and removed", () => {
+    const a = lost({ op: "hide", sourceIndex: 9 });
+    const ka = unresolvedKey(FROM, a.op);
+    expect(patchChangeSchema.parse({ putUnresolved: { [ka]: a } }).putUnresolved).toEqual({ [ka]: a });
+    expect(patchChangeSchema.parse({}).putUnresolved).toEqual({});
+    expect(patchChangeSchema.safeParse({ putUnresolved: { [`${"cd".repeat(8)}:hide:8`]: a } }).success).toBe(false);
+    expect(patchChangeSchema.safeParse({ putUnresolved: { [ka]: a }, removeUnresolved: [ka] }).success).toBe(false);
+    expect(patchChangeSchema.safeParse({ putUnresolved: { [ka]: { ...a, reason: "gone" } } }).success).toBe(false);
+  });
+
   it("applyPatch draws nothing of them: the same document and issues with and without", () => {
     const doc = makeDoc();
     const base = patchOf([{ op: "hide", sourceIndex: 11 }]);

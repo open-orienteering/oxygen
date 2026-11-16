@@ -22,7 +22,7 @@ export const mapPatchRouter = router({
   get: kioskOrCoursesViewProcedure.query(({ ctx }): Promise<PatchDelivery> => eventPatch(ctx.db, ctx.event.id)),
 
   /**
-   * Merge `put` / `remove` / `putSymbols` / `removeUnresolved` per id (§1.5) into the patch keyed onto
+   * Merge `put` / `remove` / `putSymbols` / `removeUnresolved` / `putUnresolved` per id (§1.5) into the patch keyed onto
    * `documentHash`, which must be the pin. A dormant row is re-resolved onto the pin first (§3.2 step 3, §4.4).
    */
   applyChange: coursesEditProcedure
@@ -32,10 +32,19 @@ export const mapPatchRouter = router({
       return applyPatchChange(ctx.db, ctx.event.id, documentHash, change);
     }),
 
-  /** *Corrections*' fix (§4.3): unresolved entry `key`'s op put onto the pinned document's object `sourceIndex`. */
+  /**
+   * *Corrections*' fix (§4.3): unresolved entry `key`'s op put onto the pinned document's object `sourceIndex`
+   * (a `target` entry), with `symbol` the user picked for a `symbol` entry or an add (G12b).
+   */
   attachUnresolved: coursesEditProcedure
-    .input(z.object({ documentHash: documentHashSchema, key: z.string().min(1).max(200), sourceIndex: z.number().int().min(0).max(0xfffffffe) }))
-    .mutation(({ ctx, input }): Promise<PatchDelivery> => attachUnresolvedPatchOp(ctx.db, ctx.event.id, input.documentHash, input.key, input.sourceIndex)),
+    .input(z.object({
+      documentHash: documentHashSchema,
+      key: z.string().min(1).max(200),
+      sourceIndex: z.number().int().min(0).max(0xfffffffe).optional(),
+      symbol: mapDocument.patchSymbolRefSchema.optional(),
+    }))
+    .mutation(({ ctx, input }): Promise<PatchDelivery> =>
+      attachUnresolvedPatchOp(ctx.db, ctx.event.id, input.documentHash, input.key, input.sourceIndex, input.symbol)),
 
   /**
    * *Save corrections to the club map* (§5): the ops that apply to the pinned club version's document become its
