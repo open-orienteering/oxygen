@@ -672,6 +672,15 @@ modified and added ones snap where it puts them. The
 viewer applies `editor.snap` to its control drags; the tools snap their
 own points.
 
+The grid holds vertices only. The nearest point **on a line** is
+`nearestOnLines(doc, pt, maxMm, symbolFilter, skip?)` beside it (row G28):
+the line objects of the effective document whose symbol passes the filter
+(hidden objects and symbols, and object `skip`, left out), curves
+flattened to 0.01 mm, the reach inclusive, a tie to the lower index; it
+returns the point, its distance, and the hit part with its two end nodes.
+A linear scan with a bounding-box reject, asked twice per line by the GPS
+tracks' end snap (§13 "GPS tracks: junctions"), not on pointer moves.
+
 ### 6.3 Gaps (`G`)
 
 On the selected control's circle, or on the leg last clicked (its
@@ -2332,11 +2341,12 @@ overnight" were decided on the user's standing instruction (2026-11-13),
 for review. The pure rules are `modes/map/shape-ops.ts`; the wiring is
 `MapMode.tsx`.
 
-**Buttons, no keys** (answer 7). The five are buttons in the *Map object*
+**Buttons, no keys** (answer 7). They are buttons in the *Map object*
 section (`editor-map-object-ops`), after *Change symbol* and *Rotation*,
 shown for an object that is not hidden: on a **line** (type 2) *Reverse*
 (`editor-map-object-reverse`), *Split at node* (`-split`) and *Join*
-(`-join`); on an **area** (type 3) *Cut hole* (`-cut-hole`) and, when the
+(`-join`), and on an added line *Snap ends* (`-snap-ends`, G28, "GPS tracks:
+junctions"); on an **area** (type 3) *Cut hole* (`-cut-hole`) and, when the
 area has a hole, *Remove hole* (`-remove-hole`). A point, a text and a line
 text (type 6) get none (decided overnight: 08 §4.7 says "lines"). Each is
 disabled as *Hide* is (`courses.edit`, no promote running — `canPatch`,
@@ -2345,12 +2355,13 @@ does not apply: `data-reason` and the reason as its title:
 
 | `data-reason` | Buttons | Meaning |
 |---|---|---|
-| `encoding` | all three line ones | the curve encoding does not parse (`ringsOfCoords`, "Nodes") |
-| `multi-part` | *Split*, *Join* | the line has more than one part (a `hole` flag inside a line) |
-| `closed` | *Join* | the selected line is a loop |
+| `encoding` | all the line ones | the curve encoding does not parse (`ringsOfCoords`, "Nodes") |
+| `multi-part` | *Split*, *Join*, *Snap ends* | the line has more than one part (a `hole` flag inside a line) |
+| `closed` | *Join*, *Snap ends* | the selected line is a loop |
 | `no-node` | *Split* | no focused node: `N` and a click on the node to split at |
 | `end-node` | *Split* | the focused node is an end (an open line's first or last, a loop's first) |
 | `no-hole-node` | *Remove hole* | no focused node of a hole: `N` and a click on one |
+| `no-target` | *Snap ends* | no end of the added line within 1.5 mm of a track line (G28, "GPS tracks: junctions") |
 
 *Join* and *Cut hole* are **one-shot armed states** on the selection
 (`aria-pressed`; their hint `editor-map-join-hint` /
@@ -2506,8 +2517,8 @@ answers the section above writes out.
 The mapper's GPS tracks of the event (`docs/map-gps-tracks.md` §5.1, row
 G25; stored by G24, `mapTrack`): a reference layer to draw the map from,
 converted into map lines (G26, "GPS tracks: convert" below), and trimmed,
-split and averaged (G27, "GPS tracks: editing" below); snapping a
-converted line's ends is G28's.
+split and averaged (G27, "GPS tracks: editing" below); a converted line's
+ends snapped to the track network (G28, "GPS tracks: junctions" below).
 
 - **Panel** (`modes/map/tracks/TracksPanel.tsx`, the hook
   `useMapTracks.ts`, the pure list state `model.ts` and `decimate.ts`):
@@ -2595,7 +2606,10 @@ mode's `commit` (§13 "Ops").
   `data-nodes` the total, `data-max` the largest track's), the warning
   `editor-tracks-convert-warning` when a track's line has more than
   `MAP_NODES_MAX` (2000) nodes — it will not be node-editable in `N`; it is
-  still one `add` —, `editor-tracks-convert-skipped` (`data-count`) for
+  still one `add` —, *Snap ends to tracks* (`editor-tracks-convert-snap`, a
+  checkbox, on by default; G28, "GPS tracks: junctions") with the ends it
+  moves (`editor-tracks-convert-snapped`, `data-count`, shown while one
+  does), `editor-tracks-convert-skipped` (`data-count`) for
   tracks that come out under two coordinates (left out), and *Convert*
   (`editor-tracks-convert-apply`, disabled until a symbol is chosen and a
   track converts, and while a write is in flight) and *Cancel*
@@ -2604,8 +2618,10 @@ mode's `commit` (§13 "Ops").
   projected track (outside points included), smoothed unless the window is
   0, simplified, rounded to whole document units with consecutive equal
   coordinates dropped, as an `add` of type 2 with corner nodes — byte for
-  byte what `L` writes for those vertices (`drawOp`). One symbol for every
-  track of a conversion.
+  byte what `L` writes for those vertices (`drawOp`), then its ends snapped
+  when *Snap ends* is on (G28). One symbol for every track of a conversion.
+  Once a symbol is chosen the node count is the plan's (a cut may drop
+  nodes).
 - **The preview** is the viewer's draft (`mapObjects.draft`, the object
   under edit in its symbol, `map-rendering.md` §5.5) with the adds' final
   ids and the symbol's first use: drawn as soon as a symbol is chosen, and
@@ -2631,7 +2647,8 @@ mode's `commit` (§13 "Ops").
   the conversion is undone — not when the line is hidden, reverted or
   promoted (§6 answer 1).
 - **Remembered on the device** (`localStorage` `oxygen:gps-track-convert`,
-  not per event): both controls, and the symbol — on its own document the
+  not per event): both controls, *Snap ends* (`snapEnds`, absent = on;
+  decided overnight on the user's standing instruction (2026-11-13), for review, as every other panel control), and the symbol — on its own document the
   item picked (by key), elsewhere the first item offering its library
   entry (library, patch or a document symbol matched to it); an unmatched
   document symbol on its own document only; a symbol the map cannot draw is
@@ -2639,6 +2656,39 @@ mode's `commit` (§13 "Ops").
 - **Closing**: *Cancel*, Escape (after an open *Change symbol*), arming
   `N`, `P`, `L`, `A` or `T`, drawing becoming disabled, the selection becoming
   empty, leaving the mode or another document. Nothing is written.
+
+### GPS tracks: junctions
+
+A converted line's ends snapped onto the track network (row G28;
+`docs/map-gps-tracks.md` §6.7 has the rules, answers 4–5 there the user's
+of 2026-11-15). The pure part is `modes/map/tracks/snap-ends.ts` (the
+track-symbol filter, `snapLineEnds`), the target search `nearestOnLines`
+(§6.2), the conversion's use `convert.ts` `planConversion`, the button's
+`shape-ops.ts` `snapEndsChange`.
+
+- **What it does**: each end of the line within 1.5 mm on paper of a line
+  with a track symbol (the ISSkiOM track group, matched or as a patch
+  symbol; an unmatched 8xx document line symbol; not roads or paths) is
+  moved onto it — onto that line's end node when one is within reach
+  (the two then share a vertex; joining them is *Join*, "Line and area
+  operations"), else an overshoot is cut at the crossing and a short end
+  is extended straight onto the nearest point. The other line is never
+  changed; the line is never its own target.
+- **At conversion** ("GPS tracks: convert"): *Snap ends to tracks*
+  (`editor-tracks-convert-snap`), on by default and remembered on the
+  device; the preview, the node count and `editor-tracks-convert-snapped`
+  (`data-count`, the ends moved) show the snapped lines before *Convert*.
+  Several tracks are snapped in list order, each seeing the lines made
+  before it in the batch when the symbol is a track symbol. Off, the ops
+  are exactly G26's.
+- ***Snap ends*** (`editor-map-object-snap-ends`) on a selected **added**
+  line (any symbol; the filter is for targets) in the *Map object* section,
+  after *Join*: one `mapPatch.applyChange` rewriting its `add`, one undo
+  entry, the focused node dropped and an armed *Join* / *Cut hole* dropped
+  as for the other operations ("Line and area operations", "Writes").
+  Disabled with `data-reason` as they are: `encoding`, `multi-part`,
+  `closed`, and `no-target` when no end would move. A document line gets
+  no button (decided overnight on the user's standing instruction (2026-11-13), for review: the row names "an added line").
 
 ### Promote
 
@@ -2952,7 +3002,8 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | unit (web) | `pages/editor/__tests__/map-bindings.test.ts` (`withTrackLayer`) | the tracks below the tool's own shapes; `exclusive`, `hoverPoint` and the press's answer kept; the zoom reported from hover (not a leave), press and click, each chained; a tool without a press handler gets none |
 | unit (web) | `lib/editor/__tests__/write-client.test.ts` (track writes) | `importTracks`, `updateTrack`, `removeTracks`, `markTracksConverted`, `splitTrack` (G27, with the part ids) pass their input through and return the reply; a `TRACK_*` refusal propagates; without a `mapTrack` client they refuse |
 | unit (web) | `pages/editor/__tests__/map-tracks-edit.test.ts`, `map-tracks-tool.test.ts`, `map-tracks-average.test.ts`; the G27 cases of `map-tracks-model.test.ts`, `map-tracks-decimate.test.ts`, `map-tracks-convert.test.ts` | §13 "GPS tracks: editing" (`docs/map-gps-tracks.md` §5.2 and §7 have the detail): handle ↔ stored-point index, the handles' bounds, a drag along the points (outward restoring, an out-and-back keeping its leg), the split index, the track under a click, the ranges under a trim, a split's undo; the Tracks tool's reducer (press on a handle, threshold, live trim, one write on release, nothing at the same point or cancelled, click to split / select) and `mapTracksBinding`; the averaging worker's handler, copies, client and import item; an average's passes hidden by default and listed with their marks; dashed single-pass runs; a conversion marking an average's sources once each |
-| E2E | `e2e/map-gps-tracks.spec.ts` (`chromium`) | §13 "GPS tracks", on the seed's `itest` with `test.ocd` pinned, every track removed before and in `finally`. The fixture `e2e/fixtures/gps-tracks.gpx` (synthetic, from `test.ocd`'s frame by `packages/api/scripts/generate-test-gpx.ts`, which also writes the expected paper mm `gps-tracks.json`) and a KML named `.gpx` through `editor-tracks-file` → one `mapTrack.import`, `data-imported="2"`, one error `not-gpx` for the KML; two rows in file order, `ready`, points, length within 0.2 m, outside 0 / 2 with the mark on the second, a date on the timed one and a dash on the other; two paths, the stroke the swatch's colour, the L's ends and corner among the drawn vertices within 0.01 mm, the outside track's far end (past the map) drawn; a row click → the view centred on the track's box within 0.5 mm and the path's page box on the projected ends and corner within 3 px; the second track trimmed to 3 points and marked converted through the API, hidden after the reload (3 points, the *converted* mark; G26), *Show converted* draws it and its eye still hides and shows it; hide → no path, kept after a reload, show → back; rename → `mapTrack.update`, the name, Ctrl+Z and Ctrl+Shift+Z each one `update`; delete → `mapTrack.remove`, the list without it; Ctrl+Z → re-imported under its id with its trim and converted mark, drawn; a drop of a GPX on `editor-tracks-drop` (`data-drag-over` while over it) → one import, a third row; a reload keeps the three rows, the name and the paths, and `mapTrack.list` holds exactly them. "convert the fixture track into a ski-O track line" (G26, `maps.pdf` from an all-controls sheet, the patch row dropped before and after): *Convert to line* disabled until the row is selected; the panel on `V`, a line picker with `ISSkiOM2019` first, nothing pressed, *Convert* disabled, the defaults 10 m / 0.1 mm, a node count, no warning; smoothing 0 → 3 nodes; picking 801.1 → the canvas at the legs' middles changes (the preview) with no write; *Convert* → one `applyChange` with one `add` (type 2, `{ patch: "ISSkiOM2019:801.1" }`, coordinates `[-1500, 1000]`, `[-1500, -1000]`, `[1500, -1000]`) and the symbol in `putSymbols`, then `markConverted`; the row converted, hidden, unselected, its path gone, a correction row, `mapTrack.list` marked; the canvas changed and `maps.pdf` with more strokes; *Show converted* on and off; Ctrl+Z → one `markConverted`, no corrections, the row unconverted and shown, the canvas and the stroke count as before; Ctrl+Shift+Z → marked again; a second conversion of the converted track → a new add without `putSymbols`, the mark moved to it, its undo moving it back; the tolerance set to 0.3 and the panel cancelled, a reload → 0.3, smoothing 0 and 801.1 pressed; Escape closes it without a write; arming `L` closes it; a refused `markConverted` (aborted) → the line written, `editor-error` shown, the mark unchanged, and Ctrl+Z still removes the line and writes the mark from before. G27, on `e2e/fixtures/gps-passes.gpx` (two synthetic passes 3 m apart, the second covering half and recorded the other way round; the generator writes the expected average): "trim" — `T` by its key with no selection → `data-state="pick"`, no handle; a click on pass A selects it, handles at 0 and 40; the end handle dragged to point 30 → one `mapTrack.update`, 31 points, the grey rest, the path ending at point 30, the stored trim; Ctrl+Z / Ctrl+Shift+Z one `update` each; dragged back out → 41 points, no grey rest; (zoomed out clear of the inspector) the start handle to point 5 → trim `[5, 41)`; a reload keeps it; Escape → `V`, no handles. "split" — a click at point 15 → one `mapTrack.split` (16 and 26 points, ids ascending), the original's row gone, the selection cleared; a click selects the right part, a click at point 25 splits it (11 and 16); the middle deleted; its neighbours' paths end at points 15 and 25; three Ctrl+Z → three imports, the original back under its id at the end of the list with 41 points; Ctrl+Shift+Z → the same split under the same ids. "average" — *Average* disabled under two selected, one `mapTrack.import`: `derivedFrom` both passes, `sourceName` `""`, the point count and single-pass range within one of the generator's, the range to the end; the average selected, the passes hidden and marked, one solid path on the centre line (within 0.03 mm) and one dashed on pass A alone; the eye shows a pass; converting the average → one `markConverted` with its op for it and both passes, all three marked; Ctrl+Z → one `markConverted` restoring null for all three; Ctrl+Z → the average removed, the passes shown; Ctrl+Shift+Z → imported again under its id. "off on a venue node": `lease.status` answered as `venue` → `editor-tracks-disabled` `data-reason="venue"`, no import button or file input, *Corrections* still there, and no `mapTrack.` request |
+| unit (web) | `lib/editor/__tests__/snap.test.ts` (G28 cases), `pages/editor/__tests__/map-tracks-snap.test.ts`; the G28 cases of `map-tracks-convert.test.ts`, `map-shape-ops.test.ts` | §13 "GPS tracks: junctions" (`docs/map-gps-tracks.md` §6.7 and §7 have the detail): `nearestOnLines` (reach inclusive, the filter, hidden and skipped objects, curves, the effective document); short, overshoot, end to end, nothing in reach, the symbol filter, both ends, flags; a batch in list order; *Snap ends* stored on by default; `snapEndsChange` one op, its inverse, `no-target`, `closed`, `multi-part` |
+| E2E | `e2e/map-gps-tracks.spec.ts` (`chromium`) | §13 "GPS tracks", on the seed's `itest` with `test.ocd` pinned, every track removed before and in `finally`. The fixture `e2e/fixtures/gps-tracks.gpx` (synthetic, from `test.ocd`'s frame by `packages/api/scripts/generate-test-gpx.ts`, which also writes the expected paper mm `gps-tracks.json`) and a KML named `.gpx` through `editor-tracks-file` → one `mapTrack.import`, `data-imported="2"`, one error `not-gpx` for the KML; two rows in file order, `ready`, points, length within 0.2 m, outside 0 / 2 with the mark on the second, a date on the timed one and a dash on the other; two paths, the stroke the swatch's colour, the L's ends and corner among the drawn vertices within 0.01 mm, the outside track's far end (past the map) drawn; a row click → the view centred on the track's box within 0.5 mm and the path's page box on the projected ends and corner within 3 px; the second track trimmed to 3 points and marked converted through the API, hidden after the reload (3 points, the *converted* mark; G26), *Show converted* draws it and its eye still hides and shows it; hide → no path, kept after a reload, show → back; rename → `mapTrack.update`, the name, Ctrl+Z and Ctrl+Shift+Z each one `update`; delete → `mapTrack.remove`, the list without it; Ctrl+Z → re-imported under its id with its trim and converted mark, drawn; a drop of a GPX on `editor-tracks-drop` (`data-drag-over` while over it) → one import, a third row; a reload keeps the three rows, the name and the paths, and `mapTrack.list` holds exactly them. "convert the fixture track into a ski-O track line" (G26, `maps.pdf` from an all-controls sheet, the patch row dropped before and after): *Convert to line* disabled until the row is selected; the panel on `V`, a line picker with `ISSkiOM2019` first, nothing pressed, *Convert* disabled, the defaults 10 m / 0.1 mm, a node count, no warning; smoothing 0 → 3 nodes; picking 801.1 → the canvas at the legs' middles changes (the preview) with no write; *Convert* → one `applyChange` with one `add` (type 2, `{ patch: "ISSkiOM2019:801.1" }`, coordinates `[-1500, 1000]`, `[-1500, -1000]`, `[1500, -1000]`) and the symbol in `putSymbols`, then `markConverted`; the row converted, hidden, unselected, its path gone, a correction row, `mapTrack.list` marked; the canvas changed and `maps.pdf` with more strokes; *Show converted* on and off; Ctrl+Z → one `markConverted`, no corrections, the row unconverted and shown, the canvas and the stroke count as before; Ctrl+Shift+Z → marked again; a second conversion of the converted track → a new add without `putSymbols`, the mark moved to it, its undo moving it back; the tolerance set to 0.3 and the panel cancelled, a reload → 0.3, smoothing 0 and 801.1 pressed; Escape closes it without a write; arming `L` closes it; a refused `markConverted` (aborted) → the line written, `editor-error` shown, the mark unchanged, and Ctrl+Z still removes the line and writes the mark from before. "snap" (G28, the patch row dropped before and after): two `ISSkiOM2019:801.1` lines put through `mapPatch.applyChange` (the symbol materialised by `e2e/helpers/patch-symbol-cli.ts`), T1 upright at x = 16 mm and T2 ending at (−15.6, 10.8); the fixture converted at smoothing 0 with *Snap ends* checked → `editor-tracks-convert-snapped` `data-count="2"`, 3 nodes, one `add` `[-1560, 1080]`, `[-1500, -1000]`, `[1600, -1000]` (end to end and extended), no `remove`, T1 and T2 unchanged in `mapPatch.get`; Ctrl+Z, then off → `[-1500, 1000]`, `[-1500, -1000]`, `[1500, -1000]`; the line selected on the map (Tab through its stack), `editor-map-object-snap-ends` → one `applyChange` with the snapped coordinates, then `data-reason="no-target"`, Ctrl+Z → the recorded ends back, T1 and T2 unchanged; a reload → the checkbox still off. G27, on `e2e/fixtures/gps-passes.gpx` (two synthetic passes 3 m apart, the second covering half and recorded the other way round; the generator writes the expected average): "trim" — `T` by its key with no selection → `data-state="pick"`, no handle; a click on pass A selects it, handles at 0 and 40; the end handle dragged to point 30 → one `mapTrack.update`, 31 points, the grey rest, the path ending at point 30, the stored trim; Ctrl+Z / Ctrl+Shift+Z one `update` each; dragged back out → 41 points, no grey rest; (zoomed out clear of the inspector) the start handle to point 5 → trim `[5, 41)`; a reload keeps it; Escape → `V`, no handles. "split" — a click at point 15 → one `mapTrack.split` (16 and 26 points, ids ascending), the original's row gone, the selection cleared; a click selects the right part, a click at point 25 splits it (11 and 16); the middle deleted; its neighbours' paths end at points 15 and 25; three Ctrl+Z → three imports, the original back under its id at the end of the list with 41 points; Ctrl+Shift+Z → the same split under the same ids. "average" — *Average* disabled under two selected, one `mapTrack.import`: `derivedFrom` both passes, `sourceName` `""`, the point count and single-pass range within one of the generator's, the range to the end; the average selected, the passes hidden and marked, one solid path on the centre line (within 0.03 mm) and one dashed on pass A alone; the eye shows a pass; converting the average → one `markConverted` with its op for it and both passes, all three marked; Ctrl+Z → one `markConverted` restoring null for all three; Ctrl+Z → the average removed, the passes shown; Ctrl+Shift+Z → imported again under its id. "off on a venue node": `lease.status` answered as `venue` → `editor-tracks-disabled` `data-reason="venue"`, no import button or file input, *Corrections* still there, and no `mapTrack.` request |
 | E2E | `e2e/editor-url.spec.ts` (`chromium`) | §1 "URL" (F31): from the Courses page, a pick → `?course=`; Class view → `view=class&class=`, Course view drops them; Layout → `mode=layout&sheet=<the course's sheet>`; a reload restores the course, Layout and the sheet, then Class view; Field + All controls → `mode=field&view=all`; `history.length` unchanged by every change and one Back lands on `/courses`; `mode=bogus&view=nope` → Course mode, Course view, only `course=` left; a class not the course's → Course view, `view` / `class` gone; `mode=layout&sheet=99999` → Layout, the sheet gone; a deleted course → no course, `course` gone; `mode=layout&template=<seq>` → template scope, kept over a reload, and *New extra template* there opens the new template and writes `template=<new>` (it stays open: the review's create-then-open case); the Courses page's pencil lands on its course (`course=` only), the Controls page's on its control with `control=` gone; on a Pixel 7 viewport no `mode` → Field and `mode=field`, Course → `mode=course` kept over a reload, `mode=layout&sheet=1` → Field and `mode=field` |
 | E2E | `e2e/editor-space.spec.ts` (`chromium`) | §2 "The editor fills the window" (F28): at 1840 × 1090 `editor-page` is at least the viewport less 64 px wide, its bottom within 16 px of the viewport's and not below it, the page has no vertical scroll (`scrollHeight` ≤ `innerHeight`), the header's inner row (`shell-header-inner`) is as wide; on `/courses` `shell-container` and `shell-header-inner` stay ≤ 1280 px |
 | unit (web) | `lib/__tests__/course-overlay-ids.test.ts` | §6.1 (P5): the overlay ids of a start-only course (the regression) and a finish-only one; a full course with explicit ends; the explicit ends win over the nearest; the legacy fallback to the start nearest the first control and the finish nearest the last; no controls and no explicit end → the event default (lowest id); a stale id or one of the wrong role treated as none; none under `firstAsStart` / `lastAsFinish`; no start or finish in the event; an end already at the head or tail not repeated; an unpositioned first control keeps the explicit start, else the default |
@@ -3015,8 +3066,10 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
   the snap index without the edited object is built on the main thread per
   selection, its Club-full cost unmeasured; a dragged node does not snap
   to the object's own nodes (closing a line is *Join* on itself, G10).
-- **GPS tracks beyond G27** (§13 "GPS tracks"): snapping a converted
-  line's ends (G28); Bézier fitting of a converted line (polylines for
+- **GPS tracks beyond G28** (§13 "GPS tracks"): the end snap gives the
+  target no node at the junction, leaves curved end segments alone and
+  checks an overshoot's tail at its nodes (`docs/map-gps-tracks.md` §8);
+  Bézier fitting of a converted line (polylines for
   now); trim and split at stored points only, *Average* without a cancel
   or progress, a split's parts without the original's eye override
   (`docs/map-gps-tracks.md` §8). The layer's
