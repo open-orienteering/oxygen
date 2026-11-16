@@ -68,6 +68,8 @@ const F = render.COORD_FLAG;
 const CURVE = F.bezierFirst | F.bezierSecond;
 const SIDES = F.noLeft | F.noRight;
 const EPS = 1e-9;
+/** An end this close to its target (document units: half a unit's diagonal) is on it — a snapped end, rounded. */
+const ON_LINE_UNITS = Math.SQRT1_2 + 1e-6;
 const flagsOf = (c: C): number => c[2] ?? 0;
 const at = (x: number, y: number, f: number): C => (f ? [x, y, f] : [x, y]);
 const isAnchor = (c: C): boolean => (flagsOf(c) & CURVE) === 0;
@@ -155,6 +157,9 @@ function snapLastEnd(coords: readonly C[], find: FindLine, u: number): { coords:
     const r = result([...coords.slice(0, -1), round(node, endFlags)], "end");
     if (r) return r;
   }
+  // An end already on the line (within the rounding to whole units) stays: cutting further back or moving it would
+  // only re-snap what is snapped.
+  if (hit.distanceMm <= ON_LINE_UNITS / u) return same;
   // 2. Overshoot: walk back from the end while the nodes stay within reach; cut at the first crossing met.
   for (let j = n - 2; j >= 0; j--) {
     if (!isAnchor(coords[j]) || distanceTo(hit.path, mm(coords[j + 1])) > SNAP_ENDS_MM + EPS) break;

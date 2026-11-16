@@ -83,8 +83,31 @@ describe("snapLineEnds: the rules (§6.7)", () => {
 
   it("a snap that would leave fewer than two distinct coordinates is not made", () => {
     // A 0.5 mm stub across the line: cutting or moving the end would collapse it onto the moved start.
+    // The start is cut onto the line; the end's cut and move would land on that start, so the end stays.
     const r = snapLineEnds([[5000, 20], [5000, -20]], find, U);
-    expect(new Set(r.coords.map((c) => `${c[0]},${c[1]}`)).size).toBeGreaterThanOrEqual(2);
+    expect(r.coords).toEqual([[5000, 0], [5000, -20]]);
+    expect(r.how).toEqual(["cut", null]);
+  });
+
+  it("an end already on the line (an oblique one, rounded to whole units) stays: snapping again changes nothing", () => {
+    const oblique = findOn([[0, 0], [10000, 3333]]);
+    const first = snapLineEnds([[2000, 5000], [3000, 1050], [3300, 1050], [3600, 1260]], oblique, U);
+    expect(first.snapped).toBe(1);
+    const second = snapLineEnds(first.coords, oblique, U);
+    expect(second.snapped).toBe(0);
+    expect(second.coords).toEqual(first.coords);
+  });
+
+  it("of two crossings on the end segment the one nearest the end is cut", () => {
+    // A hook running right and back: the upright line crosses it at y = 0.75 mm and 0.25 mm.
+    const hook = findOn([[0, 0], [4900, 0], [5100, 50], [4900, 100], [0, 100]]);
+    expect(snapLineEnds([[5000, 2000], [5000, -100]], hook, U).coords).toEqual([[5000, 2000], [5000, 25]]);
+  });
+
+  it("a start cut over several nodes takes the border bits of the segment it now starts", () => {
+    const r = snapLineEnds([[5000, -100, F.noLeft], [5000, -50, F.noRight], [5000, 4000]], find, U);
+    expect(r.coords).toEqual([[5000, 0, F.noRight], [5000, 4000]]);
+    expect(r.how).toEqual(["cut", null]);
   });
 
   it("is deterministic and does not mutate its input", () => {

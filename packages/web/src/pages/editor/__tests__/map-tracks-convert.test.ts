@@ -229,6 +229,14 @@ describe("a conversion's end snap (§6.7, §6 answer 5; row G28)", () => {
     expect(asPath.ops[1].coords).toEqual([[0, -1100], [0, -3000]]);
   });
 
+  it("a tie between a document line and a batch line goes to the document's", () => {
+    // t2's start (0, -11) is 1 mm from t1's leg (y = -10, the batch) and from a document track at y = -12: the
+    // document's wins, so the start is cut at y = -12 rather than moved up to -10.
+    const snap = docWith([[-500, -1200], [500, -1200]]);
+    const plan = planConversion([{ id: "t1", convertedOp: null, simplified }, t("t2", [[0, -11], [0, -30]])], ids, SKI, 100, snap);
+    expect(plan.ops[1].coords).toEqual([[0, -1200], [0, -3000]]);
+  });
+
   it("the node count follows a cut: a hook past a track is cut off at the crossing", () => {
     const snap = docWith([[1400, -2000], [1400, 0]]);
     const plan = planConversion([t("t1", [[0, -30], [0, -10], [14.5, -10], [14.5, -9]])], ids, SKI, 100, snap);
