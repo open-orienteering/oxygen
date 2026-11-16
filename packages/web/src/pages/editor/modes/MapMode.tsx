@@ -37,7 +37,7 @@ import { InspectorSection } from "../Inspector";
 import { mapKeyAction } from "./map/keys";
 import { MapObjectSection, type ShapeOpButton } from "./map/ObjectSection";
 import {
-  areaRings, cutHoleChange, joinChange, lineShape, removeHoleChange, reverseChange, splitChange, type ShapeReason,
+  areaRings, cutHoleChange, joinChange, lineShape, removeHoleChange, reverseChange, snapEndsChange, splitChange, type ShapeReason,
 } from "./map/shape-ops";
 import { CorrectionsList } from "./map/Corrections";
 import { usePromote } from "./map/Promote";
@@ -609,6 +609,11 @@ export function useMapMode(a: MapModeArgs): MapMode {
     if (!canWrite || !model || !selected || selectedHidden) return;
     runOp(removeHoleChange(model, current, selected, opFocus ? opFocus.ring : null));
   }, [canWrite, model, selected, selectedHidden, current, opFocus, runOp]);
+  /** *Snap ends* on an added line (§13 "GPS tracks: junctions", G28): one op, one undo entry. */
+  const snapEnds = useCallback(() => {
+    if (!canWrite || !model || !selected || selectedHidden) return;
+    runOp(snapEndsChange(model, current, selected));
+  }, [canWrite, model, selected, selectedHidden, current, runOp]);
 
   /** Arms a rail tool; a drawing tool only while drawing is enabled, dropping the selection and *Change symbol*. */
   const armTool = useCallback((next: MapRailTool) => {
@@ -690,10 +695,13 @@ export function useMapMode(a: MapModeArgs): MapMode {
       const encoding = "reason" in s ? s.reason : null;
       const joinReason: ShapeReason | null = "reason" in s ? s.reason : s.parts > 1 ? "multi-part" : s.closed ? "closed" : null;
       const split = splitChange(model, current, selected, opFocus && opFocus.ring === 0 ? opFocus.index : null, "00000000-0000-7000-8000-000000000000");
+      // *Snap ends* on an added line (G28): its reason computed now (`no-target` when no end would move).
+      const snap = "added" in selected ? snapEndsChange(model, current, selected) : null;
       return [
         { id: "reverse", reason: encoding, onClick: reverse },
         { id: "split", reason: split && "reason" in split ? split.reason : null, onClick: splitAtNode },
         { id: "join", reason: joinReason, pressed: armed?.kind === "join", onClick: () => armOp("join") },
+        ...("added" in selected ? [{ id: "snap-ends" as const, reason: snap && "reason" in snap ? snap.reason : null, onClick: snapEnds }] : []),
       ];
     }
     if (info.type === mapDocument.OBJECT_TYPE.area) {
@@ -706,7 +714,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
       ];
     }
     return [];
-  }, [model, selected, info, selectedHidden, current, opFocus, armed?.kind, reverse, splitAtNode, removeHole, armOp]);
+  }, [model, selected, info, selectedHidden, current, opFocus, armed?.kind, reverse, splitAtNode, removeHole, armOp, snapEnds]);
 
   // ─── GPS tracks: convert (§13 "GPS tracks: convert", G26) ──
   const convertRows = tracks.selection;

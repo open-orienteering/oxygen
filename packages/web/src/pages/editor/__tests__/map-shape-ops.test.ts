@@ -3,7 +3,7 @@ import { mapDocument, render } from "@oxygen/shared";
 import { inverseChange, mapModelOf, objectInfo } from "../modes/map/model";
 import { MAP_NODES_MAX } from "../modes/map/nodes";
 import {
-  balanceGaps, closeCoords, cutHoleChange, joinChange, joinCoords, lineShape, removeHoleChange, reverseChange, reverseCoords, splitChange,
+  balanceGaps, closeCoords, cutHoleChange, joinChange, joinCoords, lineShape, removeHoleChange, reverseChange, reverseCoords, snapEndsChange, splitChange,
   splitCoords,
 } from "../modes/map/shape-ops";
 
@@ -338,5 +338,45 @@ describe("Map mode's area operations: holes (§13 answers 5–6)", () => {
     expect(op && op.op === "modify" ? op.coords.filter((c) => flagsOf(c) & F.hole).length : -1).toBe(1);
     const second = changeOf(removeHoleChange(m2, p, { source: 3 }, 2));
     expect(second.put?.[0]).toMatchObject({ coords: [[0, 0], [4000, 0], [4000, 4000], [0, 4000], [1000, 1000, F.hole], [1500, 1000], [1500, 1500]] });
+  });
+});
+
+describe("Snap ends on an added line (§13 \"GPS tracks: junctions\"; row G28)", () => {
+  const SKI = { patch: "ISSkiOM2019:801.1" } as const;
+  const TRK = "00000000-0000-7000-8000-0000000000a1";
+  const skiSymbol = {
+    code: "801.1", name: "Very wide track", kind: "line", origin: "source", hidden: false,
+    render: { type: "line", id: "ISSkiOM2019:801.1", code: "801.1", name: "Very wide track", main: { colour: 0, widthUm: 850 } },
+  } as mapDocument.PatchSymbol;
+  /** The selection `ADD` (801.1) of `coords`, and a track line `TRK` along y = 10 mm from x = 60 to 90 mm. */
+  const withLine = (coords: C[]) => mapDocument.mapPatchSchema.parse({
+    documentHash: HASH, enabled: true, symbols: { "ISSkiOM2019:801.1": skiSymbol },
+    ops: {
+      [`add:${ADD}`]: { op: "add", id: ADD, type: T.line, symbol: SKI, coords },
+      [`add:${TRK}`]: { op: "add", id: TRK, type: T.line, symbol: SKI, coords: [[6000, 1000], [9000, 1000]] },
+    },
+  });
+
+  it("moves an end 1 mm short onto the track line: the add rewritten as the only op, the track untouched; the inverse restores it", () => {
+    const patch = withLine([[7000, 3000], [7000, 1100]]);
+    const change = changeOf(snapEndsChange(mapModelOf(HASH, pinned(), patch), patch, { added: ADD }));
+    expect(change.put).toEqual([{ op: "add", id: ADD, type: T.line, symbol: SKI, coords: [[7000, 3000], [7000, 1000]] }]);
+    expect(change.remove).toBeUndefined();
+    roundTrips(patch, change);
+  });
+
+  it("the line is never its own target; paths (the document's 505 / 506 lines) are none either", () => {
+    // Its end is near only itself and the document's 505 path (y = 20 mm): nothing to snap to.
+    const patch = withLine([[1000, 4000], [1000, 2100]]);
+    expect(snapEndsChange(mapModelOf(HASH, pinned(), patch), patch, { added: ADD })).toEqual({ reason: "no-target" });
+  });
+
+  it("refuses a loop and a multi-part line; offers nothing on a document line", () => {
+    const loop = withLine([[6500, 1100], [7500, 1100], [7500, 2000], [6500, 2000], [6500, 1100]]);
+    expect(snapEndsChange(mapModelOf(HASH, pinned(), loop), loop, { added: ADD })).toEqual({ reason: "closed" });
+    const multi = withLine([[7000, 3000], [7000, 1100], [8000, 3000, F.hole], [8000, 1100]]);
+    expect(snapEndsChange(mapModelOf(HASH, pinned(), multi), multi, { added: ADD })).toEqual({ reason: "multi-part" });
+    const patch = withLine([[7000, 3000], [7000, 1100]]);
+    expect(snapEndsChange(mapModelOf(HASH, pinned(), patch), patch, { source: 7 })).toBeNull();
   });
 });

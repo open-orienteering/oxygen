@@ -1,6 +1,7 @@
 /**
  * Map mode's line and area operations (docs/course-editor.md §13 "Line and area operations"; 08 §4.7; row G10):
- * *Reverse*, *Split at node* and *Join* on a line, *Cut hole* and *Remove hole* on an area — each the object's
+ * *Reverse*, *Split at node* and *Join* on a line, *Snap ends* on an added line (G28), *Cut hole* and *Remove hole* on
+ * an area — each the object's
  * coordinates rewritten (a `modify`, an added object's `add` rewritten, `model.ts` `coordsOp`), a join also hiding
  * (or removing) the picked line and a split also adding the second part. Pure: the inverse is `inverseChange`'s.
  *
@@ -19,10 +20,11 @@
 
 import { mapDocument, render } from "@oxygen/shared";
 import { coordsOfRings, ringsOfCoords, type Vertex } from "../../../../lib/editor/geometry-edit";
-import { SNAP_MM } from "../../../../lib/editor/snap";
+import { SNAP_MM, nearestOnLines } from "../../../../lib/editor/snap";
 import { coordsOf, coordsOp, objectInfo, sameRef, type MapModel, type MapObjectRef } from "./model";
 import { MAP_NODES_MAX } from "./nodes";
 import { addOp } from "./symbols";
+import { SNAP_ENDS_MM, snapLineEnds, trackSymbolFilter } from "./tracks/snap-ends";
 
 type C = mapDocument.PatchCoord;
 type PatchChange = mapDocument.PatchChange;
@@ -41,7 +43,8 @@ const dist = (a: C, b: C): number => Math.hypot(a[0] - b[0], a[1] - b[1]);
 
 /** Why an operation does not apply (`data-reason` of its button, §13 "Line and area operations"). */
 export type ShapeReason =
-  | "kind" | "encoding" | "multi-part" | "closed" | "too-few" | "too-many" | "no-node" | "end-node" | "no-hole-node" | "not-line";
+  | "kind" | "encoding" | "multi-part" | "closed" | "too-few" | "too-many" | "no-node" | "end-node" | "no-hole-node" | "not-line"
+  | "no-target";
 
 /** A raw path's parts: a `hole` flag on an anchor starts the next one (a multi-part line, an area's rings). */
 function partsOf(coords: readonly C[]): C[][] {
@@ -309,6 +312,24 @@ export function joinChange(model: MapModel, patch: mapDocument.MapPatch | null, 
   return "source" in picked
     ? { change: { put: [op, { op: "hide", sourceIndex: picked.source }] } }
     : { change: { put: [op], remove: [`add:${picked.added}`] } };
+}
+
+/**
+ * *Snap ends* (§13 "GPS tracks: junctions"; map-gps-tracks §6.7; row G28) on an added line: its ends snapped onto
+ * the track lines of the effective document within 1.5 mm, the line itself never a target — one op, the add
+ * rewritten; the other line is not changed. `no-target` when no end moves. Open single-part lines only.
+ */
+export function snapEndsChange(model: MapModel, patch: mapDocument.MapPatch | null, ref: MapObjectRef): Built | null {
+  if (!("added" in ref)) return null;
+  const s = singleLine(lineShape(model, ref));
+  if ("reason" in s) return s;
+  if (s.closed) return { reason: "closed" };
+  const filter = trackSymbolFilter(model.doc);
+  const self = model.indexOf(ref) ?? undefined;
+  const r = snapLineEnds(s.coords, (pt) => nearestOnLines(model.doc, pt, SNAP_ENDS_MM, filter, self), model.unitsPerMm);
+  if (r.snapped === 0) return { reason: "no-target" };
+  const op = coordsOp(patch, ref, balanceGaps(r.coords));
+  return op ? { change: { put: [op] } } : null;
 }
 
 /** *Cut hole* (§13 answers 5–6): the drawn ring (paper mm) added to the area as a hole, as drawn. */
