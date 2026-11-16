@@ -687,16 +687,20 @@ export interface MapSelectContext {
  * a click asks the hit-test and selects the topmost object; a press on the selected object (its drawn shape) takes
  * the gesture and moves it, one write on release. A release without movement is a click.
  */
+/** A click's hit-test at `MAP_HIT_PX`: every object under it, topmost first; an answer to an older click is dropped. */
+function mapHitClick(
+  c: Pick<MapSelectContext, "hit" | "clickSeq">, pt: Pt, mmPerPx: number, deliver: (stack: import("../../../map-gl/worker").MapObjectRef[]) => void,
+): void {
+  const n = ++c.clickSeq.current;
+  if (!c.hit) return;
+  void c.hit(pt, MAP_HIT_PX * mmPerPx).then((hits) => {
+    if (n !== c.clickSeq.current) return;
+    deliver(hits.flatMap((h) => (h.ref ? [h.ref] : [])));
+  }, () => undefined);
+}
+
 export function mapSelectBinding(c: MapSelectContext): EditorToolBinding {
-  const click = (pt: Pt, mmPerPx: number) => {
-    const n = ++c.clickSeq.current;
-    if (!c.hit) return;
-    void c.hit(pt, MAP_HIT_PX * mmPerPx).then((hits) => {
-      if (n !== c.clickSeq.current) return;
-      const stack = hits.flatMap((h) => (h.ref ? [h.ref] : []));
-      c.onSelect(stack[0] ?? null, stack);
-    }, () => undefined);
-  };
+  const click = (pt: Pt, mmPerPx: number) => mapHitClick(c, pt, mmPerPx, (stack) => c.onSelect(stack[0] ?? null, stack));
   return {
     exclusive: true,
     onClick: (p) => click(p.pt, p.mmPerPx),
@@ -724,6 +728,19 @@ export function mapSelectBinding(c: MapSelectContext): EditorToolBinding {
       }
       c.redraw?.();
     },
+  };
+}
+
+/**
+ * *Join*'s pick (docs/course-editor.md §13 "Line and area operations", G10): a one-shot armed state over Map mode's
+ * tools — exclusive with a crosshair; a click asks the hit-test as `V` does and hands its stack, topmost first, to
+ * `onPick`; no press is taken, so a drag pans.
+ */
+export function mapPickBinding(c: Pick<MapSelectContext, "hit" | "clickSeq"> & { onPick: (stack: import("../../../map-gl/worker").MapObjectRef[]) => void }): EditorToolBinding {
+  return {
+    exclusive: true,
+    cursor: "crosshair",
+    onClick: (p) => mapHitClick(c, p.pt, p.mmPerPx, c.onPick),
   };
 }
 

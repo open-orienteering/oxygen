@@ -1,19 +1,31 @@
 /**
  * The inspector's *Map object* section (docs/course-editor.md §13 "Inspector"): the selected document object's
- * symbol (number, name, swatch), *Hide* / *Restore*, *Change symbol* and an orientable point's *Rotation* (G9).
+ * symbol (number, name, swatch), *Hide* / *Restore*, *Change symbol* and an orientable point's *Rotation* (G9), and
+ * the line and area operations (§13 "Line and area operations", G10): buttons shown when they apply, disabled with
+ * the reason as their title.
  */
 
 import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { swatchUrl } from "../../../../lib/editor/symbol-groups";
 import { refKey, type MapObjectInfo } from "./model";
+import type { ShapeReason } from "./shape-ops";
 import { tenthsOf } from "./symbols";
+
+/** One line or area operation's button (`editor-map-object-<id>`, `data-reason`; *Join* / *Cut hole* `aria-pressed`). */
+export interface ShapeOpButton {
+  id: "reverse" | "split" | "join" | "cut-hole" | "remove-hole";
+  reason: ShapeReason | null;
+  /** A one-shot armed state (*Join*, *Cut hole*): pressed while armed. */
+  pressed?: boolean;
+  onClick: () => void;
+}
 
 /** The rotation field's text for an angle in 0.1°. */
 const degrees = (tenths: number): string => String(tenths / 10);
 
 
-export function MapObjectSection({ info, hidden, documentHash, nameId, canWrite, onHide, onRestore, canChangeSymbol, changing, onChangeSymbol, picker, orientable, onRotate }: {
+export function MapObjectSection({ info, hidden, documentHash, nameId, canWrite, onHide, onRestore, canChangeSymbol, changing, onChangeSymbol, picker, orientable, onRotate, ops = [] }: {
   info: MapObjectInfo | null;
   hidden: boolean;
   documentHash: string;
@@ -31,6 +43,8 @@ export function MapObjectSection({ info, hidden, documentHash, nameId, canWrite,
   /** The effective symbol turns with the angle: *Rotation* is offered. */
   orientable: boolean;
   onRotate: (tenths: number) => void;
+  /** The line and area operations that apply to the object (G10). */
+  ops?: readonly ShapeOpButton[];
 }) {
   const { t } = useTranslation("editor");
   if (!info) return <p data-testid="editor-map-object-none" className="px-2.5 py-2 text-[11px] text-slate-500">{t("mapObjectNone")}</p>;
@@ -68,6 +82,19 @@ export function MapObjectSection({ info, hidden, documentHash, nameId, canWrite,
           {changing && picker}
           {/* Keyed by the object and its angle: a new selection or a written angle starts the field afresh. */}
           {orientable && <RotationField key={`${refKey(info.ref)}:${info.angle}`} angle={info.angle} disabled={!canWrite} onRotate={onRotate} />}
+          {ops.length > 0 && (
+            <div data-testid="editor-map-object-ops" className="flex flex-wrap gap-1">
+              {ops.map((op) => (
+                <button key={op.id} type="button" data-testid={`editor-map-object-${op.id}`} data-reason={op.reason ?? undefined}
+                  aria-pressed={op.pressed === undefined ? undefined : op.pressed}
+                  title={op.reason ? t(`mapOpReason_${op.reason}`) : undefined}
+                  disabled={!canWrite || !!op.reason} onClick={op.onClick}
+                  className={`w-fit px-2 py-1 rounded-md border disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer ${op.pressed ? "border-purple-300 bg-purple-50 text-purple-800" : "border-slate-200 hover:bg-slate-50"}`}>
+                  {t(`mapOp_${op.id}`)}
+                </button>
+              ))}
+            </div>
+          )}
         </>
       )}
     </div>
