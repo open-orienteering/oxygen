@@ -63,6 +63,18 @@ export function mapObjectsAt(nameId: string, xMm: number, yMm: number, radiusMm:
 }
 
 /**
+ * A library entry materialised on the event's pinned document, as the patch stores it under `key`
+ * (`patch-symbol-cli.ts`), and the document's hash: what `mapPatch.applyChange`'s `putSymbols` takes.
+ */
+export function patchSymbolFor(nameId: string, entryId: string): { documentHash: string; key: string; symbol: Record<string, unknown> } {
+  const out = execFileSync("pnpm", ["exec", "tsx", "e2e/helpers/patch-symbol-cli.ts", nameId, entryId], {
+    encoding: "utf8",
+    env: { ...process.env, DATABASE_URL: E2E_DATABASE_URL },
+  });
+  return JSON.parse(out.trim().split("\n").pop()!) as { documentHash: string; key: string; symbol: Record<string, unknown> };
+}
+
+/**
  * Pin a copy of the event's document whose colour stack is not aligned
  * (`CourseStackError`, `stackless-document-cli.ts`). Returns a function that
  * pins the original back and deletes the copy.
