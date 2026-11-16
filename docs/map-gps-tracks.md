@@ -606,9 +606,9 @@ decision row in `decisions/slice-g.md`).
   dropped); the colour is one of eight, chosen by a hash of the id, so it
   is stable everywhere and not editable. Neither is stored on the row.
   A converted track is hidden by default (G26, §6.3; *Show converted*
-  flips that default), and G27 hides an average's passes from
-  `derivedFrom`, with the same per-device override, kept only where it
-  differs from the default.
+  flips that default), and an average's passes — named in a listed
+  track's `derivedFrom` — are hidden by default too (G27, §5.2), with the
+  same per-device override, kept only where it differs from the default.
 - **Locate.** A click on a row fits the view to the track's trimmed
   bounding box, padded by 5 % with a 10 mm minimum side.
 - **Rename and delete** are `mapTrack.update { id, name }` and
@@ -623,15 +623,127 @@ decision row in `decisions/slice-g.md`).
 
 ### 5.2 Editing
 
-Pending (G27): trim, split, average in Map mode, with these decided:
+Written by row G27 (`packages/web/src/pages/editor/modes/map/tracks/`
+`edit.ts`, `average.ts`, `average-worker-entry.ts`, the hook
+`useMapTracks.ts`; the tool `tools/tracks.ts` and `tools/bindings.ts`
+`mapTracksBinding`; the editor's side in `course-editor.md` §13 "GPS
+tracks: editing"; decision row in `decisions/slice-g.md`). Trim and
+split are the Map-mode tool `T`; *Average* is a button of the panel.
+Each gesture is one undo entry on the editor's stack. No API change: G24's
+`update`, `split`, `import`, `remove` and `markConverted` carry it all.
 
-- **Converting an average marks its sources** (G27 planner's Q3, the
-  user 2026-11-15): converting an average also marks its still-listed
-  source passes converted with the same op id; undoing the conversion
-  clears them all.
+Decided by the user before planning (2026-11-15):
+
+- **Converting an average marks its sources** (G27 planner's Q3):
+  converting an average also marks its still-listed source passes
+  converted with the same op id; undoing the conversion clears them all —
+  precisely, restores each one's mark from before, which is null unless
+  the pass was converted itself (§6.2; decided overnight, below).
 - **A split's undo** removes the two parts and imports the original
   again under its id, then restores its trim and `convertedOp`; it comes
   back at the end of the list (the wart G25 accepted for delete's undo).
+
+**The tool's track.** `T` acts on the one track selected in the list
+(G26's checkboxes) while it is visible and `ready`; with none or several
+selected it has no track, and the panel says so
+(`editor-tracks-tool-hint`, `data-state` `pick` | `ready`). In `T` a
+click on a visible track other than the tool's selects it alone (the
+nearest within 6 CSS px; ties to list order); a click on empty map does
+nothing. `T` needs the panel on (§5.1 "Where it is off", and loaded) —
+not *Apply corrections*: track writes do not touch the patch — and falls
+back to `V` when the panel turns off.
+
+**Trim.** The tool's track has two handles (`editor-track-handle`,
+`data-end` `start` | `end`, `data-index`) on its stored points
+`trim.start` and `trim.end − 1` (§3.5), placed on the full projected
+track (index-aligned, §3.2). A press within 7 CSS px of a handle takes the
+gesture; past 3 px it moves along the stored points: to the stored point
+nearest the pointer, over the whole track (so a trim is restored by
+dragging back out), keeping two points between the handles. Where two
+stretches of the track run side by side (an out-and-back), among the
+points within the handle's reach of the nearest one the handle takes the
+one nearest in index to where it was, so it stays on its own leg. While
+held, the layer draws the live trim; while part of the track is trimmed
+away the whole track is drawn under it thin and grey
+(`editor-track-trimmed`). The release writes one
+`mapTrack.update { id, trim }` — none when the handle is back on its
+point, or when the drag was cancelled (Escape, the pointer leaving); undo
+and redo are one `update` each. Until the write settles the new trim is
+drawn and no new press is taken. Trim is at stored points only: the API
+takes indices, and the points never change under an id (§1.2).
+
+**Split.** A click on the tool's track within 6 CSS px splits it at the
+nearer stored point of the nearest kept segment (ties to the earlier),
+when that leaves two visible points on each side
+(`trim.start + 1 … trim.end − 2`, §1.2 "Split"); next to a handle a
+click does nothing. One `mapTrack.split { id, index, ids }`, the ids
+UUIDv7 minted on the device in consecutive milliseconds (ascending, left
+first); the parts' points are the stored points split on the device
+(`splitTrack`, §3.5), so nothing is fetched. The selection is cleared.
+The undo is the user's answer above (remove the parts, `import` the
+original under its id with its points, name, file name, `derivedFrom` and
+`singlePass`, then `update` its trim when not whole and `markConverted`
+its mark when set); the redo splits again under the same ids. Cutting out
+a break or a wrong turn is split, split, delete the middle (§3.5).
+
+**Average.** *Average* (`editor-tracks-average`, `data-busy` while it
+runs) is enabled with two or more selected rows. Its input is each
+selected row's projected trimmed track (hidden or converted rows count
+when selected), in list order; `averageTracks` (§4) runs with the
+defaults — the 15 m gate, two iterations, no control for either — in a
+module worker (`average-worker-entry.ts`), the passes sent as compact
+copies so the rows' cached lines are never detached. The result is
+stored like an imported track: `unprojectTrack` (§3.2) on the main
+thread, one `mapTrack.import` item with a client UUIDv7 id, the name
+"Average of *n* tracks" (localised when made; renameable), `sourceName`
+`""`, `derivedFrom` the selected ids and `singlePass` the result's
+ranges. Over 200 000 points it is refused on the device. The average then
+becomes the selection, so *Convert to line* is the next click. Its undo
+removes it; its redo imports it again under its id. An average may itself
+be averaged (`derivedFrom` names the averages, not their passes). No
+cancel button: leaving Map mode or the document terminates the worker,
+and a job in flight is dropped without an error.
+
+**Sources and single-pass spans.** A track named in a listed track's
+`derivedFrom` is hidden by default — *Show converted* or not — under the
+same per-device eye override (§5.1 "Show / hide"); deleting or undoing the
+average shows its passes again. The rows carry `data-average` /
+`data-source` and the marks `editor-track-average` / `editor-track-source`.
+An average's single-pass ranges, clipped to its trim and shifted by
+`trim.start`, are drawn dashed: the line is drawn as runs, each a path of
+its own (`editor-gps-track` with the same `data-track-id`; the dashed ones
+`data-single-pass="true"`), simplified each on its own so the run ends
+stay, solid and dashed runs sharing their boundary point; a one-sample
+range has no dashed run. A track without ranges stays one path. The
+ranges convert like the rest of the line (§6).
+
+**Converting an average** (§6.2): `planConversion` adds a mark with the
+average's op for each of its still-listed sources, and their marks from
+before to the undo's; one `markConverted` never names an id twice — a
+track converted itself in the same batch keeps its own op, a source of
+two averages in one batch takes the later one's (list order).
+
+Decided overnight on the user's standing instruction (2026-11-13), for
+review — each the G27 planner's conservative recommendation:
+
+- **Q1 the undo of an average's conversion restores each source's mark
+  from before** (§6.2), not always null: a pass converted on its own keeps
+  that conversion's mark, which is sticky until that conversion is undone
+  (§6 answer 1). In the usual case the marks were null, so "clears them
+  all" holds.
+- **Q2 the tool's track and split gesture**: the single checkbox-selected
+  visible track; split is a plain click on it (no armed *Split* button),
+  at stored points only; a click elsewhere selects another track or does
+  nothing.
+- **Q3 after a split** the selection is cleared and the original's eye
+  override is not carried to the parts (only a visible track can be split;
+  a part of a converted track shown by its eye falls back to hidden).
+- **Q4 restoring a trim** is dragging the handle back out over the grey
+  rest; there is no *Reset trim*.
+- **Q5 an average's input** is the trimmed range of each selected row;
+  `derivedFrom` is the selected ids, not flattened through averages.
+- **Q6 sources stay hidden under *Show converted*** unless their eye says
+  otherwise; there is no *Show passes*.
 
 ## 6. Conversion into map objects
 
@@ -720,6 +832,9 @@ Per selected track (`ready`: its points loaded and projected, §5.1):
 - **Undo** removes the adds (the symbol stays, `map-patches.md` §1.5) and
   restores each track's mark from before the conversion: null, or an
   earlier conversion's op (answer 1). Redo writes both again.
+- **An average's sources** (G27, §5.2, user 2026-11-15) are marked with
+  the average's op in the same `markConverted`, and restored the same way
+  on undo; an id is never named twice in one call.
 - Hiding, reverting or promoting the line does not touch the mark
   (answer 1).
 
@@ -783,14 +898,24 @@ smoothing changes every 4 m (1–3 m resample only; 10 m smooths as 8 m).
 | `api/src/__tests__/integration/map-gps-tracks.test.ts` | The CHECKs; cascade with the event; `created_by` SET NULL; import / list / get round trip (deep-equal points, null columns, input order, list without points), an average with `derivedFrom` + `singlePass`, refusals writing nothing, a retried import by id, an id of another event, scoping; caps (200 000 points, 500 000 a call, 200 tracks with concurrent imports, split at the cap); update (trim set and restored, non-destructive, unchanged keeps the version, every bad trim, `single_pass` untouched); split (shared point, trims, ranges, the row replaced, order, a repeat with ids, split-split-remove); remove twice; markConverted (set, clear, unknown id writes nothing); a course setter does all, a viewer, a kiosk key and a stranger nothing; not in the checkout snapshot; no journal entry |
 | `api/src/__tests__/integration/backup.test.ts` | The dump's `map_gps_tracks` section holds the event's tracks; `restore-map-gps-tracks.sql` restores them exactly (points, trim, ranges, token above 2^53) into another event, a missing importer NULL, an existing one kept, twice is once |
 | `web/src/pages/editor/__tests__/map-tracks-model.test.ts` | §5.1: where it is off; the import plan (segments in file order, names cut, per-file parse errors, skip counts, the 200 000-point refusal, calls within 200 tracks / 500 000 points); the trimmed projection, length, outside count, `not-projectable`; rows; colour; locate's bounds; per-device overrides; a deleted track's re-import |
-| `web/src/pages/editor/__tests__/map-tracks-decimate.test.ts` | §5.1 "Decimation to the pixel": the octave tolerance, the tolerance bound and ends, determinism, the 50 000-point budget, the layer's paths |
-| `web/src/pages/editor/__tests__/map-tracks-convert.test.ts` | §6: the fixture L → one `add` at 100 and 1000 units per mm, equal to `drawOp`'s; ends pinned under smoothing; fewer nodes with smoothing and a larger tolerance; determinism and no mutation; rounded duplicates and a one-coordinate track; outside points; a conversion's ops, marks, previous marks, node counts and skipped tracks; `putSymbols` on first use only, applying without an issue; ascending ids; the controls' defaults and ranges; the node count's warning above 2000; the remembered symbol (§6.4); the picker's order |
+| `web/src/pages/editor/__tests__/map-tracks-decimate.test.ts` | §5.1 "Decimation to the pixel": the octave tolerance, the tolerance bound and ends, determinism, the 50 000-point budget, the layer's paths; §5.2: an average's runs (solid and dashed touching, a one-sample range none, a range over the whole line), one path per run under one track id, the dashed ones marked |
+| `web/src/pages/editor/__tests__/map-tracks-edit.test.ts` | §5.2: handle ↔ stored-point index and back (start inclusive, end exclusive), the handles' bounds over the whole track keeping two points, a drag to the nearest point within the bounds (outward too, stopping at a bound), an out-and-back keeping the handle on its leg; the split index (the nearer vertex of the nearest kept segment, ties earlier, out of reach or too near an end none, the trimmed-away stretch not clickable); the track under a click; the kept line; an average's ranges clipped and shifted by the trim; a split's undo (remove the parts, the original's re-import, trim and mark only when set, an average's `derivedFrom` / `singlePass` kept) |
+| `web/src/pages/editor/__tests__/map-tracks-tool.test.ts` | §5.2, the Tracks tool's reducer and binding: a press on a handle taken (the nearer one), elsewhere or without a track not; the drag threshold; the live trim along the stored points, outward restoring, two points kept; the release writing once with the trim before, nothing at the same index, cancelled or without a gesture; a click splitting on the tool's track, nothing next to a handle, selecting another track, nothing on empty map, selecting without a tool track; the binding exclusive, its handles at the live trim, the draft reported and cleared, the effects sent; no handles and no press without a track |
+| `web/src/pages/editor/__tests__/map-tracks-average.test.ts` | §5.2 *Average*: the worker's handler is `averageTracks` with the defaults (two passes 3 m apart, one covering half → the centre line, the rest on the one pass, one range), a `RangeError` its error; the passes copied (compact, never the rows' buffers); the client — one worker, answers by id, order-independent bytes, an error rejected, `dispose` terminating and cancelling a job in flight; the import item (client id, name, `sourceName` `""`, `derivedFrom`, `singlePass`, untimed WGS 84 back on the paper within 0.002 mm); refused over 200 000 points or without a georeference |
+| `web/src/pages/editor/__tests__/map-tracks-convert.test.ts` | §6 (and §5.2: an average's sources marked with its op and restored on undo, a track converted in the same batch keeping its own op, a source of two averages taking the later's, a skipped average marking none): the fixture L → one `add` at 100 and 1000 units per mm, equal to `drawOp`'s; ends pinned under smoothing; fewer nodes with smoothing and a larger tolerance; determinism and no mutation; rounded duplicates and a one-coordinate track; outside points; a conversion's ops, marks, previous marks, node counts and skipped tracks; `putSymbols` on first use only, applying without an issue; ascending ids; the controls' defaults and ranges; the node count's warning above 2000; the remembered symbol (§6.4); the picker's order |
 | `api/src/__tests__/integration/print-patch.test.ts` | §6 in print (G26, the row's page raster): a line `add` with `ISSkiOM2019:801.1` materialised on first use changes the rasterised `maps.pdf` page only inside its box |
-| `e2e/map-gps-tracks.spec.ts` | §5.1 end to end on `e2e/test.ocd`: import by the picker (a non-GPX file reported), the rows, the paths at the fixture's paper mm, locate, hide kept across a reload, a converted track hidden by default and *Show converted*, rename, delete and its undo, a reload keeping the tracks; §6: the fixture track converted with 801.1 — the preview, the op, the mark, the canvas, `maps.pdf`'s strokes, undo, redo, a second conversion moving the mark, the settings and symbol across a reload, a refused mark keeping the undo entry (`course-editor.md` §13 "Tests" has the detail) |
+| `e2e/map-gps-tracks.spec.ts` | §5.1 end to end on `e2e/test.ocd`: import by the picker (a non-GPX file reported), the rows, the paths at the fixture's paper mm, locate, hide kept across a reload, a converted track hidden by default and *Show converted*, rename, delete and its undo, a reload keeping the tracks; §6: the fixture track converted with 801.1 — the preview, the op, the mark, the canvas, `maps.pdf`'s strokes, undo, redo, a second conversion moving the mark, the settings and symbol across a reload, a refused mark keeping the undo entry; §5.2 on `e2e/fixtures/gps-passes.gpx` (two synthetic passes, generated with the expected average): trim by `T`'s end handle, undo / redo, outward restoring, the start handle, a reload keeping it; split, split, delete the middle, three undos bringing the original back under its id at the end of the list, the redo splitting again; *Average* of the two passes — one import with `derivedFrom` and `singlePass` as the generator's, the passes hidden, the average solid on the centre line and dashed on the one pass, converting it marking all three with one op and its undo restoring them, the average's undo showing the passes (`course-editor.md` §13 "Tests" has the detail) |
 
 ## 8. Pending in this chapter
 
-- §5.2 trim / split / average in Map mode (G27).
+- Trim and split at stored points only (§5.2): on a sparse recording (a
+  point every 10 s) a handle or a split lands up to a fix away from the
+  pointer. Splitting between points would need new points under an id, or
+  a new track; left until a mapper asks.
+- *Average* has no cancel and no progress: a long job (§4.6: 3 s at 50 km)
+  shows only the busy button; leaving Map mode drops it.
+- A split's parts fall back to the default visibility (§5.2 Q3), so a
+  converted track shown by its eye vanishes when split.
 - The layer's zoom (§5.1): from pointer events only, so a zoom with the
   pointer still keeps the old decimation until it moves, and no culling to
   the view; a viewer `onView` prop would make both exact (user
