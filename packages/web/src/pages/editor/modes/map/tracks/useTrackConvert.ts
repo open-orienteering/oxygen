@@ -1,8 +1,9 @@
 /**
  * The convert panel's state (docs/map-gps-tracks.md §6; docs/course-editor.md §13 "GPS tracks: convert"; row G26):
  * the selected tracks smoothed and simplified at the controls' values, the symbol picked from the palette (ski-O
- * track group first), the live node count, the preview ops, and the change and marks *Convert* writes. Settings and
- * the symbol are remembered on the device; nothing is chosen the first time. The write itself is Map mode's
+ * track group first), the live node count, the preview ops, and the change and marks *Convert* writes; with *Snap
+ * ends* (G28, §6.7, on by default) the ops' ends snapped to the track network. Settings, the symbol and *Snap ends*
+ * are remembered on the device; nothing is chosen the first time. The write itself is Map mode's
  * (`commit`, one undo entry); this hook only plans it.
  */
 
@@ -12,6 +13,7 @@ import { findItem, itemKey } from "../palette";
 import { newAddId, symbolPut, type SymbolPut } from "../symbols";
 import { MAP_NODES_MAX } from "../nodes";
 import type { TrackRow } from "./model";
+import { trackSymbolFilter } from "./snap-ends";
 import {
   clampSettings, conversionChange, convertPalette, convertStoreKey, mintAddIds, nodeCount, nodeSummary, parseStoredConvert, planConversion, rememberedOf, resolveRemembered,
   smoothedLine, type ConvertSettings, type Conversion, type StoredConvert,
@@ -26,6 +28,8 @@ export interface TrackConvertArgs {
   patch: mapDocument.MapPatch | null;
   unitsPerMm: number | null;
   documentHash: string | null;
+  /** The effective document (Map mode's model): the end snap's targets (§6.7). */
+  doc: mapDocument.EffectiveDocument | null;
 }
 
 export interface TrackConvert {
@@ -37,6 +41,11 @@ export interface TrackConvert {
   onQuery: (q: string) => void;
   settings: ConvertSettings;
   onSettings: (s: Partial<ConvertSettings>) => void;
+  /** *Snap ends* (§6.7): the checkbox, remembered on the device. */
+  snapEnds: boolean;
+  onSnapEnds: (on: boolean) => void;
+  /** Ends the snap moves in the current plan (0 without a symbol or with *Snap ends* off). */
+  snapped: number;
   /** Nodes per track at the current settings, the total and the largest; `over` when one exceeds `MAP_NODES_MAX`. */
   nodes: { id: string; count: number }[];
   totalNodes: number;
@@ -83,7 +92,7 @@ function simplifiedLine(line: gpsTrack.ProjectedTrack, s: ConvertSettings): gpsT
 }
 
 export function useTrackConvert(a: TrackConvertArgs): TrackConvert {
-  const { open, rows, pinned, patch, unitsPerMm, documentHash } = a;
+  const { open, rows, pinned, patch, unitsPerMm, documentHash, doc } = a;
 
   // ─── Settings and the symbol, read from the device on opening ──
   const [stored, setStored] = useState<StoredConvert>(() => readStored());
@@ -106,6 +115,13 @@ export function useTrackConvert(a: TrackConvertArgs): TrackConvert {
   const onSettings = useCallback((next: Partial<ConvertSettings>) => {
     setStored((s) => {
       const out = { ...s, ...clampSettings({ ...s, ...next }) };
+      writeStored(out);
+      return out;
+    });
+  }, []);
+  const onSnapEnds = useCallback((on: boolean) => {
+    setStored((s) => {
+      const out = { ...s, snapEnds: on };
       writeStored(out);
       return out;
     });
@@ -159,16 +175,20 @@ export function useTrackConvert(a: TrackConvertArgs): TrackConvert {
     const p = symbolPut(pinned, patch, chosenItem.ref);
     return p.ok ? p : null;
   }, [chosenItem, pinned, patch]);
+  const snapEnds = stored.snapEnds;
+  const snap = useMemo(() => (open && snapEnds && doc ? { doc, filter: trackSymbolFilter(doc) } : null), [open, snapEnds, doc]);
   const result = useMemo(() => {
     if (!put || !unitsPerMm || lines.length === 0) return null;
-    const plan = planConversion(lines.filter((l) => addIds.has(l.id)), addIds, put.ref, unitsPerMm);
+    const plan = planConversion(lines.filter((l) => addIds.has(l.id)), addIds, put.ref, unitsPerMm, snap);
     return plan.ops.length > 0 ? { change: conversionChange(put, plan.ops), plan } : null;
-  }, [put, unitsPerMm, lines, addIds]);
+  }, [put, unitsPerMm, lines, addIds, snap]);
   const preview = useMemo(
     () => (result ? { ops: result.plan.ops as mapDocument.PatchOp[], ...(result.change.putSymbols ? { symbols: result.change.putSymbols } : {}) } : null),
     [result],
   );
-  const summary = nodeSummary(counts.nodes, MAP_NODES_MAX);
+  // The plan's counts once there is one (a snap may cut or keep nodes); before a symbol is chosen, the lines'.
+  const nodes = result ? result.plan.nodes : counts.nodes;
+  const summary = nodeSummary(nodes, MAP_NODES_MAX);
 
   return {
     palette,
@@ -178,7 +198,10 @@ export function useTrackConvert(a: TrackConvertArgs): TrackConvert {
     onQuery: setQuery,
     settings,
     onSettings,
-    nodes: counts.nodes,
+    snapEnds,
+    onSnapEnds,
+    snapped: result?.plan.snapped ?? 0,
+    nodes,
     totalNodes: summary.total,
     maxNodes: summary.largest,
     over: summary.over,

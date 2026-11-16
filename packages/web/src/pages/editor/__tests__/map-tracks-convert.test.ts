@@ -12,6 +12,7 @@ import {
 } from "../modes/map/tracks/convert";
 import { drawOp } from "../modes/map/draw";
 import { newAddId, symbolPut } from "../modes/map/symbols";
+import { trackSymbolFilter } from "../modes/map/tracks/snap-ends";
 import { HASH, patchOf, pinnedDoc } from "./map-fixture";
 
 const OTHER = "cd".repeat(32);
@@ -176,11 +177,71 @@ describe("a conversion: ops, marks, the change", () => {
   });
 });
 
+describe("a conversion's end snap (§6.7, §6 answer 5; row G28)", () => {
+  const simplified = convertLine(line(L_MM), { windowM: 0, toleranceMm: 0.1 });
+  const ids = new Map([["t1", "0190a000-0000-7000-8000-000000000001"], ["t2", "0190a000-0000-7000-8000-000000000002"]]);
+  const SKI = { patch: "ISSkiOM2019:801.1" } as const;
+  const skiSymbol = {
+    code: "801.1", name: "Very wide track", kind: "line", origin: "source", hidden: false,
+    render: { type: "line", id: "ISSkiOM2019:801.1", code: "801.1", name: "Very wide track", main: { colour: 0, widthUm: 850 } },
+  } as mapDocument.PatchSymbol;
+  /** The fixture (its 505 path along y = 20 mm) with `adds` of 801.1 lines: the end snap's document. */
+  const docWith = (...adds: mapDocument.PatchCoord[][]) => {
+    const ops = adds.map((coords, k): mapDocument.PatchOp => ({ op: "add", id: `0190a000-0000-7000-8000-0000000001${k}0`, type: 2, symbol: SKI, coords }));
+    const doc = mapDocument.applyPatch(pinnedDoc(), patchOf(ops, { "ISSkiOM2019:801.1": skiSymbol })).document;
+    return { doc, filter: trackSymbolFilter(doc) };
+  };
+  const t = (id: string, mm: [number, number][]) => ({ id, convertedOp: null, simplified: convertLine(line(mm), { windowM: 0, toleranceMm: 0.1 }) });
+
+  it("the L's start end to end onto a track's end node, its end 1 mm short extended onto another track", () => {
+    const snap = docWith([[1600, -2000], [1600, 0]], [[-1560, 1080], [-2500, 2000]]);
+    const plan = planConversion([{ id: "t1", convertedOp: null, simplified }], ids, SKI, 100, snap);
+    expect(plan.ops[0].coords).toEqual([[-1560, 1080], [-1500, -1000], [1600, -1000]]);
+    expect(plan.snapped).toBe(2);
+    expect(plan.nodes).toEqual([{ id: "t1", count: 3 }]);
+  });
+
+  it("off (no snap) or nothing in reach: the ops are exactly the unsnapped ones", () => {
+    const plain = planConversion([{ id: "t1", convertedOp: null, simplified }], ids, SKI, 100);
+    expect(plain.ops[0].coords).toEqual([[-1500, 1000], [-1500, -1000], [1500, -1000]]);
+    expect(plain.snapped).toBe(0);
+    const far = planConversion([{ id: "t1", convertedOp: null, simplified }], ids, SKI, 100, docWith([[1700, -2000], [1700, 0]]));
+    expect(JSON.stringify(far)).toBe(JSON.stringify(plain));
+  });
+
+  it("a path is no target: an end 1 mm from the fixture's 505 line stays", () => {
+    const plan = planConversion([t("t1", [[10, 21], [10, 40]])], ids, SKI, 100, docWith());
+    expect(plan.ops[0].coords).toEqual([[1000, 2100], [1000, 4000]]);
+  });
+
+  it("a batch snaps in list order, each track seeing the lines made before it (with a track symbol)", () => {
+    const snap = docWith();
+    const t2 = t("t2", [[0, -11], [0, -30]]);
+    const inOrder = planConversion([{ id: "t1", convertedOp: null, simplified }, t2], ids, SKI, 100, snap);
+    expect(inOrder.ops[1].coords).toEqual([[0, -1000], [0, -3000]]);
+    expect(inOrder.snapped).toBe(1);
+    // The other way round t2 is made first and sees nothing; t1's ends are far from t2.
+    const reversed = planConversion([t2, { id: "t1", convertedOp: null, simplified }], ids, SKI, 100, snap);
+    expect(reversed.ops[0].coords).toEqual([[0, -1100], [0, -3000]]);
+    expect(reversed.snapped).toBe(0);
+    // Converted as a path (505), the batch's lines are no targets.
+    const asPath = planConversion([{ id: "t1", convertedOp: null, simplified }, t2], ids, LINE_SYMBOL, 100, snap);
+    expect(asPath.ops[1].coords).toEqual([[0, -1100], [0, -3000]]);
+  });
+
+  it("the node count follows a cut: a hook past a track is cut off at the crossing", () => {
+    const snap = docWith([[1400, -2000], [1400, 0]]);
+    const plan = planConversion([t("t1", [[0, -30], [0, -10], [14.5, -10], [14.5, -9]])], ids, SKI, 100, snap);
+    expect(plan.ops[0].coords).toEqual([[0, -3000], [0, -1000], [1400, -1000]]);
+    expect(plan.nodes).toEqual([{ id: "t1", count: 3 }]);
+  });
+});
+
 describe("controls and per-device memory (§6 answer 3)", () => {
   it("defaults: smoothing 10 m, simplification 0.1 mm, no symbol the first time", () => {
-    expect(parseStoredConvert(null)).toEqual({ windowM: SMOOTH_DEFAULT_M, toleranceMm: TOL_DEFAULT_MM, symbol: null });
-    expect(parseStoredConvert("not json")).toEqual({ windowM: 10, toleranceMm: 0.1, symbol: null });
-    expect(parseStoredConvert("[1,2]")).toEqual({ windowM: 10, toleranceMm: 0.1, symbol: null });
+    expect(parseStoredConvert(null)).toEqual({ windowM: SMOOTH_DEFAULT_M, toleranceMm: TOL_DEFAULT_MM, symbol: null, snapEnds: true });
+    expect(parseStoredConvert("not json")).toEqual({ windowM: 10, toleranceMm: 0.1, symbol: null, snapEnds: true });
+    expect(parseStoredConvert("[1,2]")).toEqual({ windowM: 10, toleranceMm: 0.1, symbol: null, snapEnds: true });
   });
 
   it("clamps to 0–30 m (whole metres) and 0.02–0.5 mm (0.01 mm)", () => {
@@ -189,9 +250,12 @@ describe("controls and per-device memory (§6 answer 3)", () => {
     expect(clampSettings({ windowM: 12.4, toleranceMm: 0.234 })).toEqual({ windowM: 12, toleranceMm: 0.23 });
     expect(clampSettings({ windowM: Number.NaN })).toEqual(DEFAULT_CONVERT);
     const symbol = { key: "patch:ISSkiOM2019:801.1", documentHash: HASH, entry: "ISSkiOM2019:801.1" };
-    expect(parseStoredConvert(JSON.stringify({ windowM: 0, toleranceMm: 0.3, symbol }))).toEqual({ windowM: 0, toleranceMm: 0.3, symbol });
+    expect(parseStoredConvert(JSON.stringify({ windowM: 0, toleranceMm: 0.3, symbol }))).toEqual({ windowM: 0, toleranceMm: 0.3, symbol, snapEnds: true });
     expect(parseStoredConvert(JSON.stringify({ symbol: { key: "doc:2", documentHash: HASH } })).symbol).toEqual({ key: "doc:2", documentHash: HASH, entry: null });
-    expect(parseStoredConvert(JSON.stringify({ windowM: "x", symbol: { key: 3 } }))).toEqual({ ...DEFAULT_CONVERT, symbol: null });
+    expect(parseStoredConvert(JSON.stringify({ windowM: "x", symbol: { key: 3 } }))).toEqual({ ...DEFAULT_CONVERT, symbol: null, snapEnds: true });
+    // *Snap ends* (§6.7): on unless stored off; anything but `false` is on.
+    expect(parseStoredConvert(JSON.stringify({ snapEnds: false })).snapEnds).toBe(false);
+    expect(parseStoredConvert(JSON.stringify({ snapEnds: "no" })).snapEnds).toBe(true);
   });
 
   const item = (over: Partial<mapDocument.PaletteItem>): mapDocument.PaletteItem => ({

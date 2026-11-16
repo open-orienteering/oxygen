@@ -7,9 +7,11 @@
  */
 
 import { gpsTrack, type mapDocument } from "@oxygen/shared";
+import { nearestOnLines, nearestOnPath, type LineHit } from "../../../../../lib/editor/snap";
 import { drawOp } from "../draw";
 import type { SymbolPut } from "../symbols";
 import { findItem } from "../palette";
+import { SNAP_ENDS_MM, isTrackSymbolRef, snapLineEnds } from "./snap-ends";
 
 type AddOp = Extract<mapDocument.PatchOp, { op: "add" }>;
 type PaletteGroup = mapDocument.PaletteGroup;
@@ -105,6 +107,17 @@ export interface Conversion {
   nodes: { id: string; count: number }[];
   /** Tracks left with fewer than two coordinates: not converted. */
   skipped: string[];
+  /** Ends moved by the end snap (§6.7), over every op; 0 without it. */
+  snapped: number;
+}
+
+/**
+ * The end snap of a conversion (§6.7; row G28): the effective document and its track-symbol filter
+ * (`trackSymbolFilter`). The batch's earlier lines are targets when the conversion's symbol is a track symbol.
+ */
+export interface ConvertSnap {
+  doc: Parameters<typeof nearestOnLines>[0] & Pick<mapDocument.EffectiveDocument, "patch">;
+  filter: (symbolIdx: number) => boolean;
 }
 
 export interface ConvertInput {
@@ -117,19 +130,46 @@ export interface ConvertInput {
 }
 
 /**
+ * The nearest target of an end (paper mm) within `SNAP_ENDS_MM`: a track line of the document, else of the batch's
+ * earlier `lines` (document units) — the document's on a tie, then the earlier line's.
+ */
+function nearestTarget(snap: ConvertSnap, lines: readonly (readonly mapDocument.PatchCoord[])[], unitsPerMm: number, pt: { x: number; y: number }): LineHit | null {
+  let best = nearestOnLines(snap.doc, pt, SNAP_ENDS_MM, snap.filter);
+  for (const coords of lines) {
+    const hit = nearestOnPath(coords, unitsPerMm, pt, SNAP_ENDS_MM);
+    if (hit && (!best || hit.distanceMm < best.distanceMm)) best = hit;
+  }
+  return best;
+}
+
+/**
  * The tracks' ops (one symbol for all, the add id per track from `addIds`), marks and node counts. An average's
  * sources take its op (§5.2), so one `markConverted` never names an id twice (§1.2): a track converted in the same
  * batch keeps its own op, a source of two averages the later one's; `before` is each id's mark before the batch.
+ *
+ * With `snap` (§6.7), each op's ends are snapped in list order, each seeing the document's track lines and — when
+ * `symbol` is a track symbol — the lines already made in the batch (§6 answer 5). The op's coordinates are then the
+ * snapped ones; nothing else changes.
  */
 export function planConversion(
   tracks: readonly ConvertInput[], addIds: ReadonlyMap<string, string>, symbol: mapDocument.PatchSymbolRef, unitsPerMm: number,
+  snap: ConvertSnap | null = null,
 ): Conversion {
-  const out: Conversion = { ops: [], marks: [], before: [], nodes: [], skipped: [] };
+  const out: Conversion = { ops: [], marks: [], before: [], nodes: [], skipped: [], snapped: 0 };
   const marks = new Map<string, string>(), before = new Map<string, string | null>();
   const converted: { t: ConvertInput; opId: string }[] = [];
+  const batchTargets = !!snap && isTrackSymbolRef(snap.doc, symbol);
   for (const t of tracks) {
     const addId = addIds.get(t.id);
-    const op = addId ? lineOp(addId, t.simplified, symbol, unitsPerMm) : null;
+    let op = addId ? lineOp(addId, t.simplified, symbol, unitsPerMm) : null;
+    if (op && snap) {
+      const lines = batchTargets ? out.ops.map((o) => o.coords) : [];
+      const r = snapLineEnds(op.coords, (pt) => nearestTarget(snap, lines, unitsPerMm, pt), unitsPerMm);
+      if (r.snapped > 0) {
+        op = { ...op, coords: r.coords };
+        out.snapped += r.snapped;
+      }
+    }
     if (!op) {
       out.skipped.push(t.id);
       continue;
@@ -182,6 +222,8 @@ export type RememberedSymbol = { key: string; documentHash: string; entry: strin
 
 export interface StoredConvert extends ConvertSettings {
   symbol: RememberedSymbol;
+  /** *Snap ends* (§6.7): on unless turned off on this device. */
+  snapEnds: boolean;
 }
 
 /** The stored settings, clamped; anything unreadable the defaults with no symbol (§6 answer 3: none the first time). */
@@ -192,14 +234,14 @@ export function parseStoredConvert(raw: string | null): StoredConvert {
   } catch {
     v = null;
   }
-  if (!v || typeof v !== "object" || Array.isArray(v)) return { ...DEFAULT_CONVERT, symbol: null };
+  if (!v || typeof v !== "object" || Array.isArray(v)) return { ...DEFAULT_CONVERT, symbol: null, snapEnds: true };
   const o = v as Record<string, unknown>;
   const s = clampSettings({ windowM: o.windowM as number, toleranceMm: o.toleranceMm as number });
   const sym = o.symbol as Record<string, unknown> | null | undefined;
   const symbol: RememberedSymbol = sym && typeof sym === "object" && typeof sym.key === "string" && typeof sym.documentHash === "string"
     ? { key: sym.key, documentHash: sym.documentHash, entry: typeof sym.entry === "string" && sym.entry ? sym.entry : null }
     : null;
-  return { ...s, symbol };
+  return { ...s, symbol, snapEnds: o.snapEnds !== false };
 }
 
 /** What to remember of a picked item. */

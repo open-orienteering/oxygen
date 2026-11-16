@@ -1,6 +1,7 @@
 /**
  * The convert panel under the *GPS tracks* list (docs/course-editor.md §13 "GPS tracks: convert"; docs/map-gps-tracks.md
- * §6; row G26): the line-symbol picker (ski-O track group first), smoothing and simplification, the live node count
+ * §6; rows G26, G28): the line-symbol picker (ski-O track group first), smoothing and simplification, *Snap ends*
+ * (§6.7, the ends moved counted), the live node count
  * with the 2000-node warning, and *Convert* / *Cancel*. The preview is drawn on the map by Map mode (the viewer's draft).
  */
 
@@ -46,6 +47,16 @@ export function ConvertPanel({ convert, tracks, documentHash, nameId, busy, onAp
         <input data-testid="editor-tracks-convert-tolerance" type="range" min={TOL_MIN_MM} max={TOL_MAX_MM} step={0.01} value={settings.toleranceMm}
           onChange={(e) => convert.onSettings({ toleranceMm: Number(e.currentTarget.value) })} className="flex-1 min-w-0" />
         <span data-testid="editor-tracks-convert-tolerance-value" className="w-12 text-right tabular-nums">{fmt(settings.toleranceMm, 2)} mm</span>
+      </label>
+      <label className="flex items-center gap-1.5 text-[11px] text-slate-600" title={t("trackConvertSnapHint")}>
+        <input data-testid="editor-tracks-convert-snap" type="checkbox" checked={convert.snapEnds}
+          onChange={(e) => convert.onSnapEnds(e.currentTarget.checked)} />
+        {t("trackConvertSnap")}
+        {convert.snapEnds && convert.snapped > 0 && (
+          <span data-testid="editor-tracks-convert-snapped" data-count={convert.snapped} className="ml-auto text-slate-500">
+            {t("trackConvertSnapped", { count: convert.snapped })}
+          </span>
+        )}
       </label>
       <p data-testid="editor-tracks-convert-nodes" data-nodes={convert.totalNodes} data-max={convert.maxNodes} className="text-[11px] text-slate-600">
         {t("trackConvertNodes", { count: convert.totalNodes })}

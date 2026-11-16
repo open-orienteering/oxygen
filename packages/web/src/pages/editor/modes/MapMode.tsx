@@ -712,6 +712,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
   const convertRows = tracks.selection;
   const convert = useTrackConvert({
     open: convertOpen, rows: convertRows, pinned, patch: current, unitsPerMm: model?.unitsPerMm ?? null, documentHash: hash,
+    doc: model?.doc ?? null,
   });
   // Closed when drawing becomes disabled or nothing is left to convert.
   useEffect(() => {
