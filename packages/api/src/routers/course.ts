@@ -1612,10 +1612,13 @@ export const courseRouter = router({
         where: { fileHash: version.sourceHash },
         select: { fileName: true },
       });
+      const layers = mapDocument.parseVersionPatch(version.patch);
       const result = await applyEventMap(
         ctx.db,
         ctx.event.id,
-        version.label || source.fileName,
+        // A promoted version's label is the promote's free text: the event's file is named by its source (G12b, as
+        // `clubMap.download`, map-storage §6.5).
+        (layers.length > 0 ? "" : version.label) || source.fileName,
         null,
         {
           fromClubLibrary: true,
@@ -1624,7 +1627,7 @@ export const courseRouter = router({
           rotationCorrection: series.rotationCorrection,
           fileHash: version.sourceHash,
           // A promoted version's corrections (docs/map-patches.md §5): the import bakes them, dedup finds its document.
-          patch: mapDocument.parseVersionPatch(version.patch),
+          patch: layers,
         },
       );
       await ctx.db.mapFile.updateMany({

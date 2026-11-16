@@ -110,6 +110,8 @@ export function usePromote(a: PromoteArgs): Promote {
       utils.mapPatch.promoteStatus.setData(undefined, res.job);
       if (isPromoting(res.job)) watching.current = res.job.id;
       else {
+        // Ended inside the hold: said here, not again by the job-end effect (a refetch may have seen it running).
+        watching.current = null;
         void utils.course.mapMetadata.invalidate();
         void utils.clubMap.list.invalidate();
         void loadMapPatch(nameId);

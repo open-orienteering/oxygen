@@ -733,6 +733,25 @@ async function uploadSource(file: string, fileName: string): Promise<string> {
 }
 
 type Meta = { documentHash: string | null; clubMapVersionId: string | null };
+
+/**
+ * `mapPatch.promoteStatus` answered as a running job (another session's promote, §13 "Promote"): the batched GET is
+ * fetched and its slot for the procedure replaced. A real job on the fixture ends inside the 30 s hold.
+ */
+async function routePromoteRunning(page: Page): Promise<() => Promise<void>> {
+  const running = { id: "00000000-0000-4000-8000-0000000000e2", state: "running", stage: "match", progress: 0.55, error: null };
+  const matcher = (url: URL) => trpcProcedures(url.toString()).includes("mapPatch.promoteStatus");
+  await page.route(matcher, async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    const k = trpcProcedures(route.request().url()).indexOf("mapPatch.promoteStatus");
+    const res = await route.fetch();
+    const body = (await res.json()) as unknown;
+    const slot = { result: { data: running } };
+    const json = Array.isArray(body) ? body.map((x, i) => (i === k ? slot : x)) : slot;
+    await route.fulfill({ response: res, json });
+  });
+  return () => page.unroute(matcher);
+}
 type Card = { id: string; version: { id: string; seq: number; label: string; layers: number; corrections: number } | null; fileName: string | null };
 
 test.describe("Map mode promote (docs/course-editor.md §13 \"Promote\"; 08 §7)", () => {
@@ -765,9 +784,20 @@ test.describe("Map mode promote (docs/course-editor.md §13 \"Promote\"; 08 §7)
     const v1 = await trpcCall<Meta>("course.mapMetadata", undefined, false);
     expect(v1.documentHash).toMatch(/^[0-9a-f]{64}$/);
 
+    // A promote running (as another session's would be): Map mode read-only, the progress shown.
+    const unroute = await routePromoteRunning(page);
+    await page.reload();
+    await editorReady(page);
+    await expect(page.getByTestId("editor-map-promoting")).toHaveAttribute("data-state", "running", { timeout: 30_000 });
+    await expect(page.getByTestId("editor-map-promote")).toHaveAttribute("data-block", "running");
+    await expect(page.getByTestId("editor-corrections-apply")).toBeDisabled();
+    for (const key of ["P", "L", "A"]) await expect(page.getByTestId(`editor-tool-${key}`)).toBeDisabled();
+    await unroute();
+
     await page.reload();
     await editorReady(page);
     await expect(page.getByTestId("map-vector-layer")).toHaveAttribute("data-patch-version", /.+/, { timeout: 30_000 });
+    await expect(page.getByTestId("editor-map-promoting")).toHaveCount(0);
     await page.keyboard.press("h");
     await zoomTo(page, 16);
     const promote = page.getByTestId("editor-map-promote");

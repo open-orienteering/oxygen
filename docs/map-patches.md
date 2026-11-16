@@ -1033,10 +1033,14 @@ version n* with a confirm (row G12b).
   locally and the job runs in the cloud, so a box could not follow it
   after the hold; the editor does not offer it on a venue node ("open
   the event in the cloud"). Forwarding `promoteStatus` would lift it.
-- **A promote's running state in the E2E** (G12b): a real job on the
-  fixture finishes inside the 30 s hold, so `editor-map-promoting` and
-  the read-only gates while queued / running are unit-tested
-  (`map-promote.test.ts`) and not driven end to end.
+- **A promote's running state in the E2E** (G12b; decided overnight on
+  the user's standing instruction (2026-11-13), for review): a real job
+  on the fixture finishes inside the 30 s hold, so the E2E answers
+  `promoteStatus` as running through a routed response
+  (`editor-map-promoting`, the button `running`, the toggle and the
+  drawing tools disabled); the remaining gates (hide, nodes, revert,
+  attach, drop, the convert) follow the same `canPatch` and are not each
+  driven while running, and no real job is held in `queued` / `running`.
 - **A no-op layer** (G12a, §5.5): a layer whose ops change nothing the
   encoder sees bakes the base's bytes; the content-addressed row keeps
   the patch it was first stored with, so dedup misses for that version
@@ -1064,7 +1068,7 @@ version n* with a confirm (row G12b).
 | Unit (shared) | `packages/shared/src/map-document/__tests__/patch.test.ts`, `patch-resolve.test.ts` (G12b part) | `putUnresolved`: merged by key after removes, sorted, twice = once, a drop and its inverse the patch as it was; refused for a wrong key, a key both put and removed, a bad entry. `attachUnresolved` with a symbol: an add with a document symbol (rescaled) and with a library symbol (materialised, `putSymbols` unless held), `kind-mismatch`, `symbol`, `bad-argument` for an object on an add; a symbol entry's resymbol found by its source or forced, `drop-only` without a symbol; a target entry without an object and a hide with a symbol `bad-argument`; a target resymbol's own symbol replaced |
 | Integration (api) | `packages/api/src/__tests__/integration/map-patches.test.ts` (G12b part) | the dropped entry put back with `putUnresolved` (twice keeps the version, a wrong key `BAD_REQUEST`); a planted add entry: without a symbol `drop-only`, a target entry without an object `bad-argument`, with `{ patch: "ISOM2017-2:204" }` the add, the symbol stored, the entry gone |
 | Unit (web) | `packages/web/src/pages/editor/__tests__/map-model.test.ts`, `map-unresolved.test.ts`, `map-promote.test.ts`, `packages/web/src/lib/__tests__/undo-stack.test.ts`, `packages/web/src/lib/editor/__tests__/write-client.test.ts` (G12b) | the inverse of a drop (`putUnresolved`), of its undo, of an attach onto a free and a held id; `changes` for unresolved-only changes; attach kind, palette kind, locate centre (anchor, an add's box), labels and row order; promote's offer and block order, running states, the label (event name and date, 200), refusal keys; `UndoStack.remove`; `attachUnresolvedPatch`'s input |
-| E2E | `e2e/map-mode.spec.ts` (G12b part) | 08 §7's smoke: not offered on the seed's upload; `test.ocd` into the club library and `course.useClubMap`; promote disabled (`nothing`); a lone line hidden and a path drawn in the UI; the dialog's label prefilled with the event's name; one `mapPatch.promote`; the event on a new version and document, the ops gone, the count 0, the line still gone and the path drawn on the baked document, Ctrl+Z writes nothing; `clubMap.list` version 2 with its label, one layer, two corrections and `fileName` `test.ocd`; the card's version, label and note; *Delete version 2* → version 1, the event keeps its document with no version, promote no longer offered; reseeded before and after, the series removed |
+| E2E | `e2e/map-mode.spec.ts` (G12b part) | 08 §7's smoke: not offered on the seed's upload; `test.ocd` into the club library and `course.useClubMap`; `promoteStatus` routed as running: the banner, the button `running`, the toggle and drawing disabled; promote disabled (`nothing`); a lone line hidden and a path drawn in the UI; the dialog's label prefilled with the event's name; one `mapPatch.promote`; the event on a new version and document, the ops gone, the count 0, the line still gone and the path drawn on the baked document, Ctrl+Z writes nothing; `clubMap.list` version 2 with its label, one layer, two corrections and `fileName` `test.ocd`; the card's version, label and note; *Delete version 2* → version 1, the event keeps its document with no version, promote no longer offered; reseeded before and after, the series removed |
 | Integration (api) | `packages/api/src/__tests__/integration/lease.test.ts` | checkout carries the patch row verbatim (id, document, `enabled`, ops, token above 2^53 exact), `maps.patches` counted (0 from an exporter without the map part); the box's `mapPatch.get` and route (kiosk key) serve it with `ETag` = the token |
 | Integration (api) | `packages/api/src/__tests__/integration/backup.test.ts` | the dump's `map_patches` section directly after `map_files` with the event's row; restored into another event with `event_id` rewritten, token and ops exact |
 | Integration (api) | `packages/api/src/__tests__/integration/map-storage-gc.test.ts` | a document only a patch references is kept (dry run too) and touched; `RESTRICT` refuses its delete; collected once the patch is gone and a fresh grace passed |

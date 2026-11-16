@@ -134,6 +134,8 @@ export function useMapMode(a: MapModeArgs): MapMode {
   /** A gesture's write is in flight: the next gesture waits (its `before` would be stale, §13 "Ops"). */
   const [writing, setWriting] = useState(false);
   const writingRef = useRef(false);
+  /** A promote is being sent or runs (§13 "Promote"): every patch write is refused here, not only by its gate. */
+  const lockedRef = useRef(false);
   /** Drawing (§13 "Drawing"): the chosen symbol per kind, the line / area being drawn, its add id, the hover. */
   const [chosenState, setChosenState] = useState<{ hash: string | null; byKind: Partial<Record<DrawKind, string>> }>({ hash: null, byKind: {} });
   const [poly, setPoly] = useState<PolygonState | null>(null);
@@ -251,7 +253,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
     const before = patchRef.current;
     const documentHash = hash;
     const inverse = inverseChange(before, change);
-    if (writingRef.current) return false;
+    if (writingRef.current || lockedRef.current) return false;
     if (!documentHash || !inverse || !changes(before, change)) {
       setDraft(null);
       return false;
@@ -286,6 +288,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
     enabled: enabled && !!mapDoc, nameId, canEdit, correctionsOn, applicable: rows.filter((r) => r.issue === null).length, writing, onStarted: forgetMine,
   });
   const locked = promote.locked;
+  lockedRef.current = locked;
   /** `courses.edit` and no promote running: what every `mapPatch` write needs (revert, the toggle, drop: also while off). */
   const canPatch = enabled && canEdit && !locked;
   const canWrite = canPatch && !!model && correctionsOn && !writing;
@@ -356,20 +359,6 @@ export function useMapMode(a: MapModeArgs): MapMode {
     setAttaching(null);
     commit(r.change, false, undefined, (documentHash) => writes.attachUnresolvedPatch(documentHash, row.key, at));
   }, [canWrite, model, current, run, t, commit, writes]);
-  const attachEntry = useCallback((row: UnresolvedRow) => {
-    if (!canWrite) return;
-    if (row.attach === "symbol") {
-      // The palette under the row; one palette at a time (§13 "Symbol picker").
-      if (attaching === row.key) { setAttaching(null); return; }
-      if (isMapDrawTool(tool)) { setTool("V"); setPoly(null); drawId.current = null; }
-      setChangingFor(null);
-      setConvertOpen(false);
-      setQuery("");
-      setAttaching(row.key);
-      return;
-    }
-    if (selected && "source" in selected) attachWith(row, { sourceIndex: selected.source });
-  }, [canWrite, attaching, tool, selected, attachWith]);
 
   // ─── Tab ──
   const info = useMemo(() => (selected && model ? objectInfo(model, selected, lang) : null), [selected, model, lang]);
@@ -395,8 +384,9 @@ export function useMapMode(a: MapModeArgs): MapMode {
     return op && op.op !== "hide" && op.op !== "resymbol" ? op.coords : null;
   }, [draft, selected]);
   const nodes = useMemo(
-    () => (tool === "N" && selected && model ? nodesOf(model, selected, { canEdit, correctionsOn, coords: draftCoords }) : null),
-    [tool, selected, model, canEdit, correctionsOn, draftCoords],
+    // No node editing while a promote runs (§13 "Promote"): `canPatch`, not `canEdit`.
+    () => (tool === "N" && selected && model ? nodesOf(model, selected, { canEdit: canPatch, correctionsOn, coords: draftCoords }) : null),
+    [tool, selected, model, canPatch, correctionsOn, draftCoords],
   );
   const nodePath: NodePath | null = nodes && "path" in nodes ? nodes.path : null;
   const pathRef = useRef(nodePath);
@@ -545,6 +535,21 @@ export function useMapMode(a: MapModeArgs): MapMode {
     if (drawId.current) keepWaiting();
     armTool(next);
   }, [armTool, keepWaiting]);
+  /** *Attach* (§13 "Unresolved"): a `symbol` entry opens the palette under its row, an object entry attaches to the selection. */
+  const attachEntry = useCallback((row: UnresolvedRow) => {
+    if (!canWrite) return;
+    if (row.attach === "symbol") {
+      // The palette under the row; one palette at a time (§13 "Symbol picker"): V armed, a drawing in progress dropped,
+      // *Change symbol* (by armTool) and the convert panel closed.
+      if (attaching === row.key) { setAttaching(null); return; }
+      armDropping("V");
+      setConvertOpen(false);
+      setQuery("");
+      setAttaching(row.key);
+      return;
+    }
+    if (selected && "source" in selected) attachWith(row, { sourceIndex: selected.source });
+  }, [canWrite, attaching, armDropping, selected, attachWith]);
   /** The picker's pick: the tool's symbol, or *Change symbol*'s write (one op, one undo entry; §13 "Ops"). */
   const pick = useCallback((item: mapDocument.PaletteItem) => {
     if (!item.enabled) return;

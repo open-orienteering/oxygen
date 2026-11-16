@@ -334,6 +334,8 @@ describe("the patch-aware import", () => {
     extra.push(E);
     await useClubMap(E);
     expect(await pin(E)).toEqual({ documentHash: v2.documentHash, clubMapVersionId: v2.id });
+    // Named by the source, not the promote's label (G12b; map-storage §6.5).
+    expect((await E.db.mapFile.findFirstOrThrow({ where: { eventId: E.eventId }, select: { fileName: true } })).fileName).toBe("test.ocd");
   });
 });
 
