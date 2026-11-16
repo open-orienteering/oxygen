@@ -2,8 +2,8 @@
  * Map mode's GPS tracks, the pure part (docs/map-gps-tracks.md §5.1; docs/course-editor.md §13 "GPS tracks"; row G25):
  * where the panel is off, an import planned from the files' text (parsed on the device, chunked to the API's caps),
  * a stored track projected onto the pinned document, the list's rows, the colour, locate's bounds, the per-device
- * visibility overrides over a default that hides converted tracks unless *Show converted* (G26, §6 answer 1), the
- * conversion's track selection, and a deleted track's re-import (its undo).
+ * visibility overrides over a default that hides converted tracks unless *Show converted* (G26, §6 answer 1) and an
+ * average's passes (G27, §5.2), the conversion's track selection, and a deleted track's re-import (its undo).
  */
 
 import { gpsTrack, type mapGeo } from "@oxygen/shared";
@@ -150,11 +150,22 @@ export interface TrackRow {
   error: string | null;
   /** Points of the trimmed range. */
   points: number;
+  /** A listed average names it in `derivedFrom` (G27): hidden by default. */
+  isSource: boolean;
+  /** An average's sources still listed, with their marks (G27: a conversion marks them too, §5.2). */
+  sources: { id: string; convertedOp: string | null }[];
+}
+
+/** The ids a listed track names in its `derivedFrom` (an average's passes, §4; listed or not). */
+export function sourceIds(metas: readonly Pick<TrackMeta, "derivedFrom">[]): Set<string> {
+  const out = new Set<string>();
+  for (const m of metas) for (const id of m.derivedFrom) out.add(id);
+  return out;
 }
 
 /**
  * The list's rows in `mapTrack.list` order; `geometry` per id (absent: still loading). Shown is the device's override,
- * else the default (`defaultVisible`).
+ * else the default (`defaultVisible`; an average's passes are sources, G27).
  */
 export function trackRows(
   metas: readonly TrackMeta[],
@@ -162,18 +173,26 @@ export function trackRows(
   overrides: Readonly<Record<string, boolean>>,
   showConverted = false,
 ): TrackRow[] {
+  const sources = sourceIds(metas);
+  const byId = new Map(metas.map((m) => [m.id, m]));
   return metas.map((meta) => {
     const g = geometry.get(meta.id);
     const error = g && "error" in g ? g.error : null;
+    const isSource = sources.has(meta.id);
     return {
       meta,
       label: meta.name ?? (meta.sourceName || meta.id),
       colour: trackColour(meta.id),
-      visible: overrides[meta.id] ?? defaultVisible(meta, showConverted),
+      visible: overrides[meta.id] ?? defaultVisible(meta, showConverted, isSource),
       state: !g ? "loading" : error ? "error" : "ready",
       geometry: g && !("error" in g) ? g : null,
       error,
       points: meta.trim.end - meta.trim.start,
+      isSource,
+      sources: meta.derivedFrom.flatMap((id) => {
+        const s = id === meta.id ? undefined : byId.get(id);
+        return s ? [{ id, convertedOp: s.convertedOp }] : [];
+      }),
     };
   });
 }
@@ -226,16 +245,18 @@ export function parseVisibility(raw: string | null): Record<string, boolean> {
 
 /**
  * A track's default visibility (§5.1 "Show / hide"; §6 answer 1): shown, except a converted one — hidden until the
- * conversion is undone, unless *Show converted* is on.
+ * conversion is undone, unless *Show converted* is on — and a listed average's pass (`isSource`, G27), hidden while
+ * the average is listed, *Show converted* or not.
  */
-export const defaultVisible = (meta: Pick<TrackMeta, "convertedOp">, showConverted: boolean): boolean => !meta.convertedOp || showConverted;
+export const defaultVisible = (meta: Pick<TrackMeta, "convertedOp">, showConverted: boolean, isSource = false): boolean =>
+  !isSource && (!meta.convertedOp || showConverted);
 
 /** The overrides after the eye set `visible`: an override is kept only where it differs from the default. */
 export function nextOverrides(
-  overrides: Readonly<Record<string, boolean>>, meta: Pick<TrackMeta, "id" | "convertedOp">, visible: boolean, showConverted: boolean,
+  overrides: Readonly<Record<string, boolean>>, meta: Pick<TrackMeta, "id" | "convertedOp">, visible: boolean, showConverted: boolean, isSource = false,
 ): Record<string, boolean> {
   const next = { ...overrides };
-  if (visible === defaultVisible(meta, showConverted)) delete next[meta.id];
+  if (visible === defaultVisible(meta, showConverted, isSource)) delete next[meta.id];
   else next[meta.id] = visible;
   return next;
 }

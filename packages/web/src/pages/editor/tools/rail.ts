@@ -4,10 +4,13 @@ import type { EditorTool } from "../../../lib/editor/state";
 
 export type RailTool = "V" | "S" | "K" | "M" | "X" | "C" | "A" | "T" | "G";
 
-/** Map mode's tools (docs/course-editor.md §13): `V` select (G6), `N` nodes (G7), `P` / `L` / `A` point, line, area (G9). */
-export type MapRailTool = "V" | "N" | "P" | "L" | "A";
+/**
+ * Map mode's tools (docs/course-editor.md §13): `V` select (G6), `N` nodes (G7), `P` / `L` / `A` point, line, area
+ * (G9), `T` the GPS tracks' trim and split (G27).
+ */
+export type MapRailTool = "V" | "N" | "P" | "L" | "A" | "T";
 /** Map mode's rail, in order. */
-export const MAP_RAIL: readonly MapRailTool[] = ["V", "N", "P", "L", "A"];
+export const MAP_RAIL: readonly MapRailTool[] = ["V", "N", "P", "L", "A", "T"];
 /** Map mode's drawing tools (§13 "Drawing") and the kind each draws. */
 export type MapDrawTool = "P" | "L" | "A";
 export const MAP_DRAW_KIND: Record<MapDrawTool, "point" | "line" | "area"> = { P: "point", L: "line", A: "area" };

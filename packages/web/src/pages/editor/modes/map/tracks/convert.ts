@@ -97,9 +97,9 @@ export interface TrackMark {
 export interface Conversion {
   /** One `add` per converted track, in the tracks' order. */
   ops: AddOp[];
-  /** `markConverted` after the write: each converted track → its op (`add:<id>`). */
+  /** `markConverted` after the write: each converted track → its op (`add:<id>`), and an average's sources (G27). */
   marks: TrackMark[];
-  /** `markConverted` for the undo: each converted track's mark before (null, or an earlier conversion's op). */
+  /** `markConverted` for the undo: each marked track's mark before (null, or an earlier conversion's op). */
   before: TrackMark[];
   /** Nodes per converted track (a straight polyline: one per coordinate). */
   nodes: { id: string; count: number }[];
@@ -112,13 +112,21 @@ export interface ConvertInput {
   convertedOp: string | null;
   /** The simplified line (`convertLine`). */
   simplified: gpsTrack.ProjectedTrack;
+  /** An average's sources still listed, with their marks: marked with its op too (§5.2, user 2026-11-15). */
+  sources?: readonly { id: string; convertedOp: string | null }[];
 }
 
-/** The tracks' ops (one symbol for all, the add id per track from `addIds`), marks and node counts. */
+/**
+ * The tracks' ops (one symbol for all, the add id per track from `addIds`), marks and node counts. An average's
+ * sources take its op (§5.2), so one `markConverted` never names an id twice (§1.2): a track converted in the same
+ * batch keeps its own op, a source of two averages the later one's; `before` is each id's mark before the batch.
+ */
 export function planConversion(
   tracks: readonly ConvertInput[], addIds: ReadonlyMap<string, string>, symbol: mapDocument.PatchSymbolRef, unitsPerMm: number,
 ): Conversion {
   const out: Conversion = { ops: [], marks: [], before: [], nodes: [], skipped: [] };
+  const marks = new Map<string, string>(), before = new Map<string, string | null>();
+  const converted: { t: ConvertInput; opId: string }[] = [];
   for (const t of tracks) {
     const addId = addIds.get(t.id);
     const op = addId ? lineOp(addId, t.simplified, symbol, unitsPerMm) : null;
@@ -127,10 +135,21 @@ export function planConversion(
       continue;
     }
     out.ops.push(op);
-    out.marks.push({ id: t.id, opId: `add:${op.id}` });
-    out.before.push({ id: t.id, opId: t.convertedOp });
+    marks.set(t.id, `add:${op.id}`);
+    before.set(t.id, t.convertedOp);
+    converted.push({ t, opId: `add:${op.id}` });
     out.nodes.push({ id: t.id, count: op.coords.length });
   }
+  const own = new Set(marks.keys());
+  for (const { t, opId } of converted) {
+    for (const s of t.sources ?? []) {
+      if (own.has(s.id)) continue;
+      marks.set(s.id, opId);
+      if (!before.has(s.id)) before.set(s.id, s.convertedOp);
+    }
+  }
+  out.marks = [...marks].map(([id, opId]) => ({ id, opId }));
+  out.before = [...before].map(([id, opId]) => ({ id, opId }));
   return out;
 }
 

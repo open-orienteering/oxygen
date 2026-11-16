@@ -138,7 +138,10 @@ export function useTrackConvert(a: TrackConvertArgs): TrackConvert {
   // ─── The lines, the counts, the plan ──
   const lines = useMemo(() => {
     if (!open || !unitsPerMm) return [];
-    return rows.flatMap((r) => (r.geometry ? [{ id: r.meta.id, convertedOp: r.meta.convertedOp, simplified: simplifiedLine(r.geometry.line, settings) }] : []));
+    return rows.flatMap((r) => (r.geometry ? [{
+      id: r.meta.id, convertedOp: r.meta.convertedOp, simplified: simplifiedLine(r.geometry.line, settings),
+      sources: r.sources,
+    }] : []));
   }, [open, rows, settings, unitsPerMm]);
   const counts = useMemo(() => {
     const nodes: { id: string; count: number }[] = [];

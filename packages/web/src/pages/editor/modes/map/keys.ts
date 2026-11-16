@@ -1,12 +1,12 @@
 /**
  * Map mode's keys (docs/course-editor.md §13 "Gestures and keys"; 08 §5.3, the Map column). Undo / redo are the
- * page's, as in every mode. Course mode's tool keys (`S K M X C T G`) are not here: course edits are locked; `P` `L` `A` are Map mode's drawing tools (§13 "Drawing").
+ * page's, as in every mode. Course mode's tool keys (`S K M X C G`) are not here: course edits are locked; `P` `L` `A` are Map mode's drawing tools (§13 "Drawing"), `T` its Tracks tool (§13 "GPS tracks: editing").
  */
 
 import type { MapRailTool } from "../../tools/rail";
 
 export type MapKeyAction =
-  /** `V` select, `N` nodes (§13 "Nodes"), `P` / `L` / `A` drawing (§13 "Drawing"). */
+  /** `V` select, `N` nodes (§13 "Nodes"), `P` / `L` / `A` drawing (§13 "Drawing"), `T` tracks (§13 "GPS tracks: editing"). */
   | { kind: "tool"; tool: MapRailTool }
   /** `Enter`: finish the line or area being drawn. */
   | { kind: "finish" }
@@ -33,6 +33,7 @@ export function mapKeyAction(e: KeyLike): MapKeyAction | null {
     case "P": return { kind: "tool", tool: "P" };
     case "L": return { kind: "tool", tool: "L" };
     case "A": return { kind: "tool", tool: "A" };
+    case "T": return { kind: "tool", tool: "T" };
     case "H": return { kind: "toggle-overprint" };
     case "F": return { kind: "fit" };
     default: return null;

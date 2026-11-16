@@ -106,6 +106,7 @@ export interface EditorClient {
   mapTrack?: {
     import: { mutate(input: { tracks: TrackImportItem[] }): Promise<{ tracks: TrackMeta[] }> };
     update: { mutate(input: { id: string; name?: string | null; trim?: gpsTrack.TrackRange }): Promise<TrackMeta> };
+    split: { mutate(input: { id: string; index: number; ids?: [string, string] }): Promise<{ tracks: [TrackMeta, TrackMeta] }> };
     remove: { mutate(input: { ids: string[] }): Promise<{ removed: number }> };
     markConverted: { mutate(input: { marks: { id: string; opId: string | null }[] }): Promise<{ tracks: TrackMeta[] }> };
   };
@@ -308,6 +309,11 @@ export class EditorWrites {
 
   updateTrack(input: { id: string; name?: string | null; trim?: gpsTrack.TrackRange }): Promise<TrackMeta> {
     return this.tracks().update.mutate(input);
+  }
+
+  /** `mapTrack.split` (§1.2 "Split"): the row replaced by two; `ids` client-minted, ascending, left first (G27). */
+  splitTrack(input: { id: string; index: number; ids: [string, string] }): Promise<{ tracks: [TrackMeta, TrackMeta] }> {
+    return this.tracks().split.mutate(input);
   }
 
   removeTracks(ids: string[]): Promise<{ removed: number }> {

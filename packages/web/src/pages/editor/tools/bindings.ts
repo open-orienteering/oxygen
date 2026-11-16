@@ -16,6 +16,8 @@ import { isClosedKind, pointInPolygon, smoothed, step, type PolygonState } from 
 import { nearestEdge, outlinePoints, vertexRule, type Vertex } from "../../../lib/editor/geometry-edit";
 import { ringRule } from "../modes/map/nodes";
 import { angleOfDrag } from "../modes/map/symbols";
+import { liveTrim, trackToolStep, type TrackToolState, type TrackToolStep, type TrackToolTarget } from "./tracks";
+import type { gpsTrack } from "@oxygen/shared";
 import {
   dragGeometry, geometryHandles, geometryShapes, gripsOf, insertAtEdge, pressGeometry, releaseGeometry, type GeometryDrag,
 } from "../../../lib/editor/geometry-gestures";
@@ -911,6 +913,75 @@ export function withTrackLayer(b: EditorToolBinding, layer: TrackLayer): EditorT
     };
   }
   return out;
+}
+
+// ─── Map mode's `T`: the Tracks tool (docs/course-editor.md §13 "GPS tracks: editing", G27) ──────────
+
+export interface MapTracksContext {
+  /** The tool's track (the one selected, visible, ready track), or null: no handles, a click selects. */
+  target: TrackToolTarget | null;
+  /** The visible tracks as drawn (trimmed): a click on one selects it. */
+  lines: readonly { id: string; line: gpsTrack.ProjectedTrack }[];
+  gesture: { current: TrackToolState };
+  /** The trim a held handle shows now (the layer draws it); null when released or cancelled. */
+  onDraft: (live: { id: string; trim: gpsTrack.TrackRange } | null) => void;
+  /** A handle released at another point: one write, `before` for the undo. */
+  onTrim: (id: string, trim: gpsTrack.TrackRange, before: gpsTrack.TrackRange) => void;
+  /** A click on the tool's track: split at stored point `index`. */
+  onSplit: (id: string, index: number) => void;
+  /** A click on another track: it becomes the tool's track (the selection alone). */
+  onSelect: (id: string) => void;
+  redraw?: Redraw;
+}
+
+/**
+ * Map mode's Tracks tool (§13 "GPS tracks: editing"; docs/map-gps-tracks.md §5.2): exclusive, so a drag off a handle
+ * pans; the tool's track's two end handles (`editor-track-handle`, at stored points `trim.start` and `trim.end − 1`)
+ * drag along its stored points, one trim write on release; a click on the track splits it, on another track selects
+ * it (`tools/tracks.ts`).
+ */
+export function mapTracksBinding(c: MapTracksContext): EditorToolBinding {
+  const t = c.target;
+  const live = liveTrim(c.gesture.current);
+  const trim = t && live?.id === t.id ? live.trim : t?.trim;
+  const shapes: ToolShape[] = [];
+  if (t && trim) {
+    for (const end of ["start", "end"] as const) {
+      const i = end === "start" ? trim.start : trim.end - 1;
+      shapes.push({ kind: "handle", x: t.full.x[i], y: t.full.y[i], active: live !== null, testId: "editor-track-handle", data: { "track-id": t.id, end, index: String(i) } });
+    }
+  }
+  /** The step's state kept, the drafted trim reported when it changed, the effect sent; whether the press was taken. */
+  const apply = (r: TrackToolStep): boolean => {
+    const was = liveTrim(c.gesture.current);
+    c.gesture.current = r.state;
+    const now = liveTrim(r.state);
+    if (was?.trim.start !== now?.trim.start || was?.trim.end !== now?.trim.end) c.onDraft(now);
+    const e = r.effect;
+    if (e?.kind === "trim") c.onTrim(e.id, e.trim, e.before);
+    else if (e?.kind === "split") c.onSplit(e.id, e.index);
+    else if (e?.kind === "select") c.onSelect(e.id);
+    return r.taken;
+  };
+  return {
+    exclusive: true,
+    shapes,
+    onClick: (p) => void apply(trackToolStep(c.gesture.current, { type: "click", pt: p.pt, reachMm: MAP_HIT_PX * p.mmPerPx, target: t, lines: c.lines })),
+    onPointerDown: (p) => {
+      if (p.touch) return false;
+      return apply(trackToolStep(c.gesture.current, { type: "down", pt: p.pt, handleMm: HANDLE_PX * p.mmPerPx, dragMm: MAP_DRAG_PX * p.mmPerPx, target: t }));
+    },
+    onPointerDrag: (pt) => {
+      apply(trackToolStep(c.gesture.current, { type: "drag", pt }));
+      c.redraw?.();
+      const s = c.gesture.current;
+      if (s.kind === "drag") return { x: s.target.full.x[s.index], y: s.target.full.y[s.index] };
+    },
+    onPointerUp: (pt) => {
+      apply(trackToolStep(c.gesture.current, { type: "up", pt }));
+      c.redraw?.();
+    },
+  };
 }
 
 // ─── Map mode's `P`, `L`, `A`: drawing (docs/course-editor.md §13 "Drawing", G9) ──────────

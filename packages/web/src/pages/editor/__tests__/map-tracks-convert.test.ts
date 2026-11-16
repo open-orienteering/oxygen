@@ -112,6 +112,32 @@ describe("a conversion: ops, marks, the change", () => {
     expect(plan.skipped).toEqual(["t2"]);
   });
 
+  it("an average's still-listed sources are marked with its op; the undo restores each one's mark before (§5.2, G27)", () => {
+    const earlier = "add:0190a000-0000-7000-8000-0000000000ff";
+    const plan = planConversion([
+      { id: "t1", convertedOp: null, simplified, sources: [{ id: "p", convertedOp: null }, { id: "q", convertedOp: earlier }] },
+    ], ids, LINE_SYMBOL, 100);
+    const op = `add:${ids.get("t1")}`;
+    expect(plan.ops).toHaveLength(1);
+    expect(plan.marks).toEqual([{ id: "t1", opId: op }, { id: "p", opId: op }, { id: "q", opId: op }]);
+    expect(plan.before).toEqual([{ id: "t1", opId: null }, { id: "p", opId: null }, { id: "q", opId: earlier }]);
+    expect(plan.nodes).toEqual([{ id: "t1", count: 3 }]);
+  });
+
+  it("no id twice in one markConverted: a track converted in the batch keeps its own op; a source of two averages the later's", () => {
+    const plan = planConversion([
+      { id: "t1", convertedOp: null, simplified, sources: [{ id: "t3", convertedOp: null }, { id: "p", convertedOp: null }] },
+      { id: "t3", convertedOp: null, simplified, sources: [{ id: "p", convertedOp: null }] },
+    ], ids, LINE_SYMBOL, 100);
+    const op1 = `add:${ids.get("t1")}`, op3 = `add:${ids.get("t3")}`;
+    expect(plan.marks).toEqual([{ id: "t1", opId: op1 }, { id: "t3", opId: op3 }, { id: "p", opId: op3 }]);
+    expect(plan.before).toEqual([{ id: "t1", opId: null }, { id: "t3", opId: null }, { id: "p", opId: null }]);
+    // A skipped average marks no source.
+    const skipped = planConversion([{ id: "t2", convertedOp: null, simplified: line([[0, 0], [0.001, 0]]), sources: [{ id: "p", convertedOp: null }] }], ids, LINE_SYMBOL, 100);
+    expect(skipped.marks).toEqual([]);
+    expect(skipped.before).toEqual([]);
+  });
+
   it("the change puts the symbol on first use only, and applies over the document without an issue", () => {
     const pinned = pinnedDoc();
     // A library line the fixture's stack can draw (black): a ski track symbol follows the same rule on a map with green.
