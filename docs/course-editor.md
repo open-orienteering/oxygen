@@ -1902,7 +1902,8 @@ corrections: the **patch** (`map-patches.md`) over the pinned document.
 The document itself never changes. G6 is the shell with select, hide and
 move; G7 adds the nodes tool `N` ("Nodes" below); G9 the drawing tools
 `P` `L` `A`, the symbol picker and *Change symbol* ("Drawing", "Symbol
-picker" below); join / split / holes are G10's, unresolved ops G11's
+picker" below); reverse / split / join and holes G10 ("Line and area
+operations" below), unresolved ops G11's
 (their *Attach* / *Drop* as undo entries and a `symbol` entry's *Attach*
 G12b's), promote G12's (the editor half G12b, "Promote" below); G27 the
 GPS tracks' Tracks tool `T` ("GPS tracks: editing" below).
@@ -1925,7 +1926,7 @@ are the page's (one stack across modes, §3). Without a pinned document the
 mode opens and its inspector says so (`editor-map-none`). Without
 `courses.edit` (`mapPatch` writes need it, `map-patches.md` §3.2) it is
 view-only: select, locate, `H`, `F`; no hide, move, revert or toggle,
-and no drawing or change symbol.
+and no drawing, change symbol or line and area operation.
 
 **Gestures and keys** (the bindings are `tools/bindings.ts`
 `mapSelectBinding` for `V`, `mapNodesBinding` for `N` ("Nodes"),
@@ -1945,8 +1946,8 @@ table `modes/map/keys.ts`):
 | `N` | the nodes tool ("Nodes"; user 2026-11-15, G7 question 1) |
 | `P` / `L` / `A` | the point, line and area tools ("Drawing"); nothing while drawing is disabled |
 | `T` | the Tracks tool ("GPS tracks: editing"; G27): trim and split the selected GPS track; nothing while the GPS tracks are off |
-| `Enter` | finishes the line or area being drawn ("Drawing") |
-| `Escape` | a drag in flight first (dropped, nothing written), then the line or area being drawn (dropped), then an open *Change symbol* picker, then the palette of a `symbol` entry's *Attach* ("Unresolved", G12b), then the GPS tracks' convert panel (closed, nothing written; §13 "GPS tracks: convert"), then (in `N`) the focused node, then any tool but `V` back to `V`, then the selection, then fullscreen; never the course. As in §3 (F24), the keypress that drops a drag also takes the next step |
+| `Enter` | finishes the line or area being drawn ("Drawing"), or closes *Cut hole*'s ring ("Line and area operations") |
+| `Escape` | a drag in flight first (dropped, nothing written), then an armed *Join* or *Cut hole* (dropped, a hole's ring with it; "Line and area operations"), then the line or area being drawn (dropped), then an open *Change symbol* picker, then the palette of a `symbol` entry's *Attach* ("Unresolved", G12b), then the GPS tracks' convert panel (closed, nothing written; §13 "GPS tracks: convert"), then (in `N`) the focused node, then any tool but `V` back to `V`, then the selection, then fullscreen; never the course. As in §3 (F24), the keypress that drops a drag also takes the next step |
 
 The selected object is drawn highlighted (the edit part, `mapObjects.selected`;
 an outline for an area, G5) and the canvas carries `data-selected-objects`.
@@ -1969,6 +1970,10 @@ object, `{ added: id }` for one the patch adds.
 | *Change symbol* of an added object | its `add` op rewritten with the `symbol` (+ `putSymbols`) | the previous `add` put back |
 | *Rotation* of a document point ("Inspector") | `put [{ op: "modify", sourceIndex, coords, angle }]`, `coords` its effective ones; back to the document's own shape and angle: `remove ["modify:<n>"]` | as a move |
 | *Rotation* of an added point | its `add` op rewritten with the `angle` (0 omitted) | the previous `add` put back |
+| *Reverse* a line ("Line and area operations") | `put [{ op: "modify", sourceIndex, coords }]` (an added line's `add` rewritten), the coordinates reversed | as a move |
+| *Split at node* | `put [the first part's modify (or add rewritten), { op: "add", id, type: 2, symbol, coords }]`; a loop: the `modify` alone | the previous op put back, else removed; the new `add` removed |
+| *Join* | `put [the selection's modify (or add rewritten), { op: "hide", sourceIndex }]` for a picked document line; `put [the selection's op], remove ["add:<id>"]` for a picked added one; closing a loop: the selection's op alone | every id back as it was before: the previous ops put back, the hide removed, the picked `add` put again |
+| *Cut hole* / *Remove hole* on an area | `put [{ op: "modify", sourceIndex, coords }]` (an added area's `add` rewritten), the ring appended / dropped | as a move |
 | *Revert* a correction | `remove [opId]` | `put` the op again |
 | *Attach* an unresolved correction ("Unresolved", G12b) | `mapPatch.attachUnresolved { documentHash, key, sourceIndex?, symbol? }`: the server puts the op and drops the entry | `applyChange { remove [opId] or put [the op it replaced], putUnresolved { key: entry } }` (the symbol stays); redo is the procedure again |
 | *Drop* an unresolved correction (G12b) | `removeUnresolved [key]` | `putUnresolved { key: entry }`, the entry as it was |
@@ -1986,7 +1991,8 @@ object, `{ added: id }` for one the patch adds.
   last-writer-wins, `map-patches.md` §3.2), so there is no conflict notice.
   **One gesture's write at a time**: while one is in flight the next
   gesture (hide, move, *Restore*, revert, a placed point, a closing click,
-  *Change symbol*, *Rotation*, *Attach*, *Drop*) is refused — its inverse would be
+  *Change symbol*, *Rotation*, *Attach*, *Drop*, a line or area operation)
+  is refused — its inverse would be
   computed from a patch that is not yet the reply's — and a held Delete
   hides once (its key repeat is ignored).
 - **Committing** (`map-rendering.md` §5.5 "Committing is the host's"):
@@ -2024,7 +2030,9 @@ object, `{ added: id }` for one the patch adds.
   number field in degrees, counter-clockwise, the stored `attrs.angle` ÷ 10;
   Enter or leaving it writes, Escape restores; the value normalised to
   0–359.9, written in 0.1°, a value equal to the current one writes
-  nothing). Both are disabled as *Hide* is.
+  nothing). Both are disabled as *Hide* is. For a line *Reverse*, *Split
+  at node* and *Join*, for an area *Cut hole* and *Remove hole* (row G10,
+  "Line and area operations").
 - **Corrections** (`editor-corrections`, its count `editor-corrections-count`,
   `editor-corrections-none` when empty): every op of the patch in op-id
   order (`editor-correction-row`, `data-op-id`, `data-op`, and
@@ -2085,8 +2093,8 @@ object, `{ added: id }` for one the patch adds.
   screen, print, the venue — draws the pinned document; the list keeps its
   ops. It is an event setting, not an undo entry (as auto cuts, §4); the
   box shows the value asked for while its write is in flight.
-  **While it is off, hide, *Restore*, move, drawing, *Change symbol* and
-  *Rotation* are disabled** with the
+  **While it is off, hide, *Restore*, move, drawing, *Change symbol*,
+  *Rotation* and the line and area operations are disabled** with the
   reason shown (`editor-map-disabled`); revert (a hide's row included)
   and the toggle stay (user 2026-11-15,
   G6 question 3: the viewer merges a draft over the drawn patch, and a
@@ -2313,11 +2321,152 @@ filter region's list (P3) does.
   nothing. *Change symbol* closes on another selection, on arming a tool,
   and on Escape (in the search field too).
 
+### Line and area operations
+
+Row G10 (08 §4.7 "join/split/reverse lines, holes", which names the
+operations only): *Reverse*, *Split at node* and *Join* on a selected
+line, *Cut hole* and *Remove hole* on a selected area. The behaviour was
+decided with the user (2026-11-15, the G10 planner's questions 1–8, every
+recommendation; marked "answer n" below); the points marked "decided
+overnight" were decided on the user's standing instruction (2026-11-13),
+for review. The pure rules are `modes/map/shape-ops.ts`; the wiring is
+`MapMode.tsx`.
+
+**Buttons, no keys** (answer 7). The five are buttons in the *Map object*
+section (`editor-map-object-ops`), after *Change symbol* and *Rotation*,
+shown for an object that is not hidden: on a **line** (type 2) *Reverse*
+(`editor-map-object-reverse`), *Split at node* (`-split`) and *Join*
+(`-join`); on an **area** (type 3) *Cut hole* (`-cut-hole`) and, when the
+area has a hole, *Remove hole* (`-remove-hole`). A point, a text and a line
+text (type 6) get none (decided overnight: 08 §4.7 says "lines"). Each is
+disabled as *Hide* is (`courses.edit`, no promote running — `canPatch`,
+§13 "Promote" —, *Apply corrections* on, no write in flight), and while it
+does not apply: `data-reason` and the reason as its title:
+
+| `data-reason` | Buttons | Meaning |
+|---|---|---|
+| `encoding` | all three line ones | the curve encoding does not parse (`ringsOfCoords`, "Nodes") |
+| `multi-part` | *Split*, *Join* | the line has more than one part (a `hole` flag inside a line) |
+| `closed` | *Join* | the selected line is a loop |
+| `no-node` | *Split* | no focused node: `N` and a click on the node to split at |
+| `end-node` | *Split* | the focused node is an end (an open line's first or last, a loop's first) |
+| `no-hole-node` | *Remove hole* | no focused node of a hole: `N` and a click on one |
+
+*Join* and *Cut hole* are **one-shot armed states** on the selection
+(`aria-pressed`; their hint `editor-map-join-hint` /
+`editor-map-hole-hint` under the section, with `data-reason` when the last
+pick or ring was refused, the nodes hint hidden meanwhile). The button
+again, **Escape** (first, after a drag in flight), another selection,
+arming a tool, *Change symbol*, *Attach*'s palette, the convert panel, the
+object hidden, and writing becoming impossible (a promote, corrections
+off) drop them; so does its own write, and the write of any other line
+or area operation (decided overnight). Arming closes *Change
+symbol*, the attach palette and the convert panel and keeps `V` or `N`
+(another tool goes back to `V`). No rail tools and no letter keys in G10.
+
+**Writes.** Each operation is one `mapPatch.applyChange` and one undo entry
+through the Map-mode `commit` (§13 "Ops": the one-write interlock, the
+promote lock, a refusal on the error line with the metadata and the patch
+reloaded); the inverse is `inverseChange`'s, so undo takes a join's two ops
+back at once. The focused node is dropped after each (its index may name
+another node). The selection stays on the object.
+
+**Coordinates and flags** (decided overnight, from the renderer's reading,
+`render/measure.ts` `pathSections` / `gapIntervals`, `render/symbolise.ts`
+borders; `map-document-format.md` §4). Line operations work on the raw
+effective coordinates in document units, so every flag is kept exactly;
+the hole operations through the rings. `corner` (4), `dash` (8) and `gap`
+(128) are read at their point and stay on it. `noLeft` (32) / `noRight`
+(64) on an anchor cover the segment from it to the next anchor, so they
+belong to that segment. Gap points pair up in path order; before an
+operation the gaps are **balanced** (`balanceGaps`): an opener that is
+never closed loses its bit, and a flagged last point that closes nothing
+loses its bit — neither draws anything — so a reverse, split or join keeps
+every gap where it was drawn.
+
+- **Reverse** (`reverseChange`): the coordinates in the other order — each
+  part of a multi-part line on its own, in its place, the `hole` flag on
+  each later part's new first point. A cubic's two controls swap roles
+  (`bezierFirst` ↔ `bezierSecond`), their own bits kept with left and right
+  swapped. `noLeft` / `noRight` move to the segment's other end with left
+  and right swapped (new anchor *j* takes old anchor *m − 2 − j*'s; the new
+  last anchor has none), so the drawn borders stay where they were. A loop
+  keeps its start node. Dash and glyph layout then run from the new start
+  (the row's "dash and glyph phase follow"). One `modify` (an added line's
+  `add` rewritten, its symbol and id kept); reversing twice writes the
+  coordinates back, a `modify` equal to the document as a move back is.
+- **Split at node** (answer 4; `splitChange`): at the focused node of `N`
+  (so a line of at most 2000 nodes). An open line is cut there: the part
+  from the start to the node stays the object (its `modify`, or its `add`
+  rewritten, with its other corrections), the rest becomes a new added
+  line (`add`, a fresh UUIDv7, type 2, the object's **effective** symbol —
+  after a *Change symbol* the new one; it exists already, so no
+  `putSymbols`) starting on that node; both ops in one change. The node is
+  in both parts; the first part's last point drops its border bits, and a
+  gap open across the node ends the first part and opens the second. A
+  **loop opens at the node as one object**: its coordinates rotated to
+  start and end there (the old start a node of the path again, its flags
+  kept), one `modify`. Since a line whose last node sits on its first is a
+  loop ("Nodes"), the result is still a loop with its start moved — as
+  OCAD stores such a line (decided overnight; a loop cannot be cut in two,
+  Pending). An end node does nothing (the button is disabled).
+- **Join** (answers 1–3, 8; `joinChange`): *Join*, then a click on the
+  other line (`tools/bindings.ts` `mapPickBinding`: exclusive, crosshair, the
+  hit-test of `V` at 6 px, no press, so a drag pans). The pick is the first
+  line under the click that is not the selection (decided overnight: a
+  click where two lines meet must not close the selection by accident),
+  else the selection itself when it is under the click — which **closes it
+  into a loop**. Not a line, a loop, a multi-part line or a broken encoding
+  is refused: *Join* stays armed and the hint says why (`data-reason`
+  `not-line`, `closed`, `multi-part`, `encoding`, `too-many`, `too-few`,
+and `kind` for a picked object no longer in the document). The nearest
+  pair of ends is joined (ties in the order: the selection's end to the
+  pick's start, to its end, the selection's start to the pick's end, to its
+  start; decided overnight): **within 0.5 mm** (`SNAP_MM`, inclusive) the two ends become one
+  node at the selection's end, with that point's corner / dash, the next
+  segment's border bits and both gap toggles (an even pair cancels);
+  **farther apart**, at any distance, both ends are kept and a straight
+  segment joins them (the point before it loses its border bits). The
+  **selection survives** with its identity, symbol and direction; the
+  picked line's nodes are reversed where needed and it is **hidden** (a
+  document object: `hide`) or **removed** (an added one: `remove
+  ["add:<id>"]`) in the same change. Different symbols may be joined; the
+  result has the selection's. The two ops are two *Corrections* rows that
+  revert separately (answer 8; reverting only the hide draws the old line
+  under the joined one, Pending). **Closing** (the node counts decided
+  overnight): within 0.5 mm the last node moves onto the first (4 nodes or
+  more, so the loop reads as one, "Nodes"), farther a straight segment back
+  to the first point (3 or more); fewer is refused (`too-few`). A result over 2000 nodes from a selection within them is
+  refused (`too-many`, counted on the joined result; decided overnight: the
+  object would lose its handles, as an insert at the cap, "Nodes").
+- **Cut hole** (answers 5–6; `cutHoleChange`): *Cut hole*, then the
+  ring drawn with G9's area gesture (`mapDrawBinding` over the kind
+  `map_area`: a click per node, smooth by default, Alt a corner, a drag
+  pulls handles; a click on the first node, a double-click or Enter closes;
+  right-click or Escape drops it with the armed state; placed nodes snapped
+  when snapping is on, onto the whole effective document, the area itself
+  included; decided overnight). From 3 nodes the
+  area with the ring is the viewer's draft. The closed ring is appended to
+  the area's coordinates (`coordsOfRings`: curves as Bézier pairs, its
+  first point flagged `hole` and repeated at the end), the existing rings
+  kept coordinate for coordinate: one `modify` (an added area's `add`
+  rewritten), its draft kept until drawn (§13 "Committing"). **A hole is
+  accepted as drawn**, as OCAD does: areas fill even-odd
+  (`map-rendering.md` §3.1), so a ring outside the outline is drawn filled
+  and one crossing it inverts the overlap; no containment check. While a
+  write is in flight the closing gesture is held back (the ring kept, as
+  G9's drawing); a ring that would take an area within 2000 nodes over
+  them is refused (`too-many`, the ring kept for Escape; decided
+  overnight).
+- **Remove hole** (answer 5; `removeHoleChange`): in `N`, click a node of
+  the hole (ring 1 or later) and press *Remove hole*: the area without that
+  ring, every other ring as it was (later holes keep their flag); one
+  `modify`.
+
 ### Line and area operations (G10): decided with the user (2026-11-15)
 
-Row G10's planner asked; the user took every recommendation. 08 §4.7
-names the operations only ("join/split/reverse lines, holes"); this is
-the normative behaviour. G10 writes the rest of the section.
+Row G10's planner asked; the user took every recommendation. These are the
+answers the section above writes out.
 
 1. **Join names the second line by a pick.** Select a line, press
    *Join*, click the other line: the nearest pair of ends is joined;
@@ -2793,6 +2942,8 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | integration | `packages/api/src/__tests__/integration/print-patch.test.ts` "Map mode's drawing in print (G9)" | §13 "Drawing", "Symbol picker" in print (the row's page raster; user 2026-11-15, G9 question 2: as course objects', the raster probe is integration's — poppler is not on the E2E runners): `maps.pdf` rasterised (`pdftocairo`) before and after each op, every changed pixel inside the object's 8 mm box: a path `add` with a document line symbol; a point `add` with a library point materialised on first use (`putSymbols`, stored as put); a `resymbol` of a document point to that patch symbol; G26: a converted GPS track — a line `add` with the ski-O `ISSkiOM2019:801.1` materialised on first use — inside its box (§13 "GPS tracks: convert") |
 | E2E | `e2e/map-mode.spec.ts` "Map mode drawing" (`chromium`) | §13 "Drawing", "Symbol picker" (G9), with no patch row before and after (`dropEventPatch`: patch symbols are never removed by a change) and an all-controls sheet for `maps.pdf`. "L draws a path…": `L` pressed, the picker `data-kind="line"` with `editor-map-palette-pick`; a document path item (505–507, else the first document line) chosen → `aria-pressed`, the hint; two clicks and a double-click on plain map → one `applyChange` with an `add` of type 2 and `{ doc }`, no `putSymbols`; `V` pressed, the new object selected (`added:<id>`), its `add` row, ink at the middle node, more strokes in `maps.pdf`; Ctrl+Z → no rows, plain map again. "P places a point…": a library point (204, else the first library point) → the first click's change has `{ patch: key }` and `putSymbols` of that key, ink at the spot, `P` still pressed and nothing selected, the item now `data-source="patch"` and still pressed; a second click puts no symbol; two add rows; the stored patch holds that one symbol; `maps.pdf` changed; Escape → `V`. "P with a turning symbol…": a 519 (or 110) item; a press-drag 2 mm up the paper shows `editor-map-point-direction` and writes an add with `angle` 900; once drawn, a click in `V` selects it, `editor-map-object-rotation` shows 90, 45 + Enter rewrites the add with 450. "Change symbol…": the lone black line selected, *Change symbol* → `aria-expanded`, only line items, its own pressed; another document line → one `resymbol` of `{ doc }`, the picker closed, the row; `maps.pdf`'s drawing (its streams without the dates) changed, and back as before after *Revert* |
 | unit (web) | `pages/editor/__tests__/map-unresolved.test.ts`, `map-promote.test.ts`; `map-model.test.ts`, `lib/__tests__/undo-stack.test.ts` (G12b parts) | §13 "Unresolved": attach kind (object / symbol), the palette's kind, the locate centre (anchor; an add's box in its unit; none), labels, rows in key order; the inverse of a drop, of its undo and of an attach (onto a free id, onto a held one); `changes` for unresolved-only changes. "Promote": offered for a club pin only, the block order, queued / running, the label (name and date, 200 characters, blank), each refusal's key; `UndoStack.remove` from both branches |
+| unit (web) | `pages/editor/__tests__/map-shape-ops.test.ts`; `map-bindings.test.ts` "Map mode's Join pick" | §13 "Line and area operations" (G10): `reverseCoords` — the points reversed, `corner` / `dash` / `gap` on their node, `noLeft` / `noRight` moved to the segment's other end and swapped (the suppressed border intervals and the drawn gaps, measured with `render.PathMeasure` / `gapIntervals`, the mirror of the original's), a curve's controls swapping roles with their own bits, twice the identity, an unpaired gap balanced first, a loop's start kept, each part of a two-part line in its place; `splitCoords` — an interior node in both parts with a gap across it drawn in both, a curve's controls with their segment, an end node and out of range nothing, a loop opened as one rotated path; `joinCoords` — the four end pairings (the survivor's direction kept), merged at exactly 0.5 mm and bridged just over and at any distance, the merged node's flags and cancelling gap pair, a bridge's gaps and cleared border bits, a curve at the joined end; `closeCoords` — merge from 4 nodes, a segment back from 3, fewer refused; the changes — *Reverse* one `modify` / an added line's `add` rewritten, *Split* the first part's op and a new `add` with the effective symbol (after a `resymbol`), a loop one `modify`, *Join* the `modify` and a `hide` (a picked document line) or the picked `add` removed, an added survivor's `add` rewritten, closing a loop, the refusals (`kind`, `encoding`, `multi-part`, `closed`, `not-line`, `no-node`, `end-node`, `too-many` over `MAP_NODES_MAX`), *Cut hole* the ring appended with its first point flagged `hole` and repeated, the rest kept, a ring outside accepted, *Remove hole* the ring dropped and later holes keeping their flag, `no-hole-node`; each change applied with no `applyPatch` issue and its `inverseChange` restoring the patch (a document object with and without a prior `modify`, an added one). `mapPickBinding`: exclusive with a crosshair, a click's hit stack to `onPick`, an older answer dropped, no press, under `withTrackLayer` |
+| E2E | `e2e/map-mode.spec.ts` "Map mode line and area operations" (`chromium`) | §13 "Line and area operations" (G10), with no patch row before and after, on lines and areas the test draws on plain map with a document symbol. "Reverse and Split…": a 3-node line drawn with `L` (Enter ends it), no *Cut hole* on it; *Reverse* → one `applyChange`, the `add` rewritten with its anchors reversed, one row; Ctrl+Z → the stored coordinates as drawn; *Split* `data-reason="no-node"` and disabled; `N`, an end node clicked → `end-node`; the middle node clicked (focused) → enabled; *Split* → one change of two `add`s (the same id, then a new id of type 2 with the same symbol), the first part's last anchor the second's first, the anchors all kept, two rows, the line still selected; Ctrl+Z → one row, the coordinates as drawn. "Join…": two 2-node lines 2 mm apart around a plain spot, the second (the survivor) selected; *Join* → `aria-pressed`, `editor-map-join-hint`; Escape → not pressed, still selected; *Join* again and a click on the first line → one change putting the survivor's `add` with 4 anchors and removing `add:<picked>`, not pressed, one row, the survivor selected, ink at the spot between the ends; Ctrl+Z → two rows, the spot plain. "Cut hole…": a triangle drawn with `A`, no *Remove hole*; *Cut hole* → pressed, `editor-map-hole-hint`; a ring of three clicks inside closed on its first → one change, the area's `add` with exactly one `hole`-flagged coordinate, not pressed, still selected, one row; *Remove hole* `no-hole-node`; `N` → three nodes of ring 1; one clicked → enabled; *Remove hole* → one change without a `hole` flag, no ring-1 node, no *Remove hole*; Ctrl+Z → the ring's nodes back; *Apply corrections* off → *Cut hole* and *Remove hole* disabled, on → enabled |
 | E2E | `e2e/map-mode.spec.ts` "Map mode promote" (`chromium`) | §13 "Promote" (G12b; 08 §7), reseeded before and after and the series removed: no `editor-map-promote` on the seed's upload; `test.ocd` added to the club library and taken (`course.useClubMap`); `promoteStatus` routed to a running job: `editor-map-promoting` `data-state="running"`, the button `data-block="running"`, *Apply corrections* and `P` `L` `A` disabled; unrouted, the button disabled `nothing`; a lone line hidden and a path drawn in the UI; the dialog's label holds the event's name; one `mapPatch.promote`; `editor-map-promote-done`, a new `documentHash` and `clubMapVersionId`, no ops, the count 0, the line still gone and the path drawn on the baked document; Ctrl+Z writes nothing; `clubMap.list` version 2 (label, one layer, two corrections, `fileName` `test.ocd`); the card's version, label and note; *Delete version 2* → version 1, the event keeps its document with no version, no promote offered |
 | E2E | `e2e/map-patch-resolve.spec.ts` (`chromium`) | §13 "Unresolved" (G11, G12b's undo, locate and symbol attach: the full list in `map-patches.md` "Tests"): on the seed's `itest`, two hides through the API, then the map replaced by `e2e/test.xmap` (upload route, `course.applyUploadedMap`); at `?mode=map` `editor-corrections-unresolved` `data-count="2"` with two `editor-correction-unresolved` rows (`data-key` the patch's keys, `data-op="hide"`, `data-reason="target"`), `editor-corrections-count` 0, `editor-correction-attach` disabled with nothing selected; *Drop* → one `mapPatch.applyChange`, one row left, still one after a reload; `H`, `F`, a click selecting a `source:<n>` object, *Attach* → one `mapPatch.attachUnresolved`, the block gone, the `hide:<n>` row, `data-hidden="true"`, `mapPatch.get` holds exactly that op; reseeded before and after |
 | unit (web) | `pages/editor/__tests__/map-tracks-model.test.ts` | §13 "GPS tracks" (`docs/map-gps-tracks.md` §5.1): the disabled reason (venue, permission, georeference, in that order; an unknown role is no venue); an import plan — one track per segment in file order, names cut to 200 and file names to 255, points verbatim, `not-gpx` / `malformed` / `no-points` per file with the rest kept, skipped points / segments / waypoints, a track over 200 000 points refused by name, calls of ≤ 200 tracks and ≤ 500 000 points in order; the trimmed projection (length in ground metres, outside count, box) and `not-projectable` as the row's error; rows in list order with state, override, label, visible points; the colour stable and from the palette; locate's 5 % padding and 10 mm minimum; overrides parsed defensively and pruned; a deleted track's re-import (an average with its passes and ranges); the `TRACK_*` code. G26: a converted track hidden by default and shown with *Show converted*, the override winning both ways; an override kept only where it differs from the default; *Show converted*'s own key; the selection kept to listed `ready` rows in list order |
@@ -2849,8 +3000,7 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
   last leg is the group's exit leg); select the last top-level control
   first to append at the top level.
 
-- **Map mode beyond G12b** (§13): join / split / reverse / holes (G10).
-  Promote is not offered on a venue box, and its queued / running state
+- **Map mode beyond G12b** (§13): Promote is not offered on a venue box, and its queued / running state
   is driven in the E2E only through a routed `promoteStatus` (a real job
   on the fixture ends inside the hold; "Promote"). Multi-select (Shift-click, lasso) and the
   right-click menu of 08 §5.3's Map column are not built; a single
@@ -2863,8 +3013,8 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
   not edited (a split curve's new half carries none); Map
   mode's snapping toggle is its own and the status bar does not show it;
   the snap index without the edited object is built on the main thread per
-  selection, its Club-full cost unmeasured; snapping to the object's own
-  nodes waits for G10's join.
+  selection, its Club-full cost unmeasured; a dragged node does not snap
+  to the object's own nodes (closing a line is *Join* on itself, G10).
 - **GPS tracks beyond G27** (§13 "GPS tracks"): snapping a converted
   line's ends (G28); Bézier fitting of a converted line (polylines for
   now); trim and split at stored points only, *Average* without a cancel
@@ -2895,6 +3045,18 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
   mode is desktop only). Two quick points: a point placed while the
   previous one's reply is not yet drawn replaces its draft, so the
   previous point can vanish for a frame until the canvas draws it.
+- **Line and area operations beyond G10** (§13 "Line and area
+  operations"): a loop cannot be cut in two — a split at a node of a loop
+  only moves its start, since a line whose ends meet reads as a loop
+  (answer 4 as written; decided overnight); split is at an existing node
+  only (no split at a point between nodes); split and join refuse
+  multi-part lines and broken curve encodings; a join over 2000 nodes is
+  refused, and so is a hole that would take an area over them. Reverting
+  only one of a join's two ops (answer 8) draws the old line under the
+  joined one, and reverting only a split's new `add` leaves the first part
+  short — every op reverts on its own; undo takes both back. The merged
+  node of a join takes the selection's corner / dash and drops the picked
+  end's. No keys, no rail tools, no multi-select join (answer 7), no touch.
 - **Course selection highlight**: the course editor's selection and
   multi-selection rings and object outlines stay UI layer (D5 left 04 §7's
   highlight because it was `map-gl` work outside its area). G5 built the

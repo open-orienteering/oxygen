@@ -4,7 +4,8 @@
  * "Nodes", G7), the drawing tools `P` `L` `A`, the symbol picker, *Change symbol* and *Rotation* (§13 "Drawing",
  * "Symbol picker", G9), the GPS tracks section with its conversion into lines (§13 "GPS tracks", G25, G26), the
  * unresolved corrections' *Attach* / *Drop* as undo entries and *Save corrections to the club map* (§13 "Unresolved",
- * "Promote", G12b). Shaped like `useLayoutMode`:
+ * "Promote", G12b), the line and area operations *Reverse*, *Split at node*, *Join*, *Cut hole* and *Remove hole* (§13
+ * "Line and area operations", G10). Shaped like `useLayoutMode`:
  * the page asks it for the viewer's editor props, the rail, the inspector and its keys, and keeps the undo stack.
  *
  * Course edits are locked here: the editor props carry no control, label, leg or map-click callbacks and the
@@ -24,7 +25,7 @@ import { loadMapPatch, setMapPatch, type LoadedMapDocument, type MapPatchDeliver
 import type { EditorWrites, PatchWriteResult } from "../../../lib/editor/write-client";
 import { boundsMm } from "../../../lib/vector-map";
 import {
-  mapDrawBinding, mapNodesBinding, mapPointBinding, mapSelectBinding, withTrackLayer, type Gesture, type MapGestureRef, type MapNodeFocus,
+  mapDrawBinding, mapNodesBinding, mapPickBinding, mapPointBinding, mapSelectBinding, withTrackLayer, type Gesture, type MapGestureRef, type MapNodeFocus,
   type MapNodesGestureRef, type MapPointGestureRef,
 } from "../tools/bindings";
 import { isMapDrawTool, MAP_DRAW_KIND, MAP_RAIL, type MapRailTool } from "../tools/rail";
@@ -34,7 +35,10 @@ import { deleteVertex, type Vertex } from "../../../lib/editor/geometry-edit";
 import { snapIndexOf, type SnapIndex } from "../../../lib/editor/snap";
 import { InspectorSection } from "../Inspector";
 import { mapKeyAction } from "./map/keys";
-import { MapObjectSection } from "./map/ObjectSection";
+import { MapObjectSection, type ShapeOpButton } from "./map/ObjectSection";
+import {
+  areaRings, cutHoleChange, joinChange, lineShape, removeHoleChange, reverseChange, splitChange, type ShapeReason,
+} from "./map/shape-ops";
 import { CorrectionsList } from "./map/Corrections";
 import { usePromote } from "./map/Promote";
 import { entryPickerKind, unresolvedRows, type UnresolvedRow } from "./map/unresolved";
@@ -154,6 +158,12 @@ export function useMapMode(a: MapModeArgs): MapMode {
   const [convertOpen, setConvertOpen] = useState(false);
   /** A `symbol` entry's *Attach* has the palette open under its row (§13 "Unresolved", G12b): the entry's key. */
   const [attaching, setAttaching] = useState<string | null>(null);
+  /**
+   * A one-shot line or area operation armed on the selection (§13 "Line and area operations", G10): *Join*'s pick or
+   * *Cut hole*'s ring; `key` the selection it was armed on (another one drops it), `reason` why the last pick or ring
+   * was refused.
+   */
+  const [armedState, setArmedState] = useState<{ kind: "join" | "hole"; key: string; reason: ShapeReason | null } | null>(null);
   /** The undo entries `commit` recorded: the patch's, which a promote drops (§13 "Promote"). */
   const recorded = useRef(new WeakSet<object>());
 
@@ -171,6 +181,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
     setQuery("");
     setConvertOpen(false);
     setAttaching(null);
+    setArmedState(null);
     drawId.current = null;
     pendingSelect.current = null;
     gesture.current = null;
@@ -206,6 +217,8 @@ export function useMapMode(a: MapModeArgs): MapMode {
   const selectedKey = selected ? refKey(selected) : null;
   const changing = changingFor !== null && changingFor === selectedKey;
   const setChanging = useCallback((open: boolean) => setChangingFor(open ? selectedKey : null), [selectedKey]);
+  // A line or area operation belongs to the selection it was armed on.
+  const armed = armedState && armedState.key === selectedKey ? armedState : null;
 
   const onHitTest = useCallback((h: DocumentHitTest | null) => setHit(() => h), []);
   const onPatchDrawn = useCallback((v: string) => setDrawn(v), []);
@@ -446,7 +459,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
   }, [chosenItem, chosenKey, pinned, current]);
   const chosenOrientable = !!chosenPut && !!pinned && drawKind === "point" && isOrientableRef(pinned, current, chosenPut.ref);
   /** Snapping for placed points and nodes: the whole effective document (nothing drawn is in it yet). */
-  const drawSnapIndex = useMemo(() => (snapping && drawTool && model ? snapIndexOf(model.doc) : null), [snapping, drawTool, model]);
+  const drawSnapIndex = useMemo(() => (snapping && (drawTool || armed?.kind === "hole") && model ? snapIndexOf(model.doc) : null), [snapping, drawTool, armed?.kind, model]);
   const drawSnap = useCallback((pt: Pt): Pt => drawSnapIndex?.nearest(pt) ?? pt, [drawSnapIndex]);
   const keepWaiting = useCallback(() => setDraft((d) => (d?.waitFor != null ? d : null)), []);
   const dropDrawing = useCallback(() => {
@@ -519,9 +532,88 @@ export function useMapMode(a: MapModeArgs): MapMode {
     snap: drawSnap,
     canClose: () => !writingRef.current && !!chosenPut,
   })), [drawKind, poly, chosenPut, drawHover, onDrawHover, drawDraft, finishDrawing, dropDrawing, drawSnap]);
+  // ─── Line and area operations (§13 "Line and area operations", G10) ──
+  /** Drops an armed *Join* or *Cut hole*, the hole's ring with it (its draft too, unless a write waits for it). */
+  const disarm = useCallback(() => {
+    setArmedState(null);
+    setPoly(null);
+    drawGesture.current = null;
+    keepWaiting();
+  }, [keepWaiting]);
+  // Dropped with another selection, a hidden one, or when writing becomes impossible (a promote, corrections off).
+  useEffect(() => {
+    if (armedState && (armedState.key !== selectedKey || !canDraw || selectedHidden)) disarm();
+  }, [armedState, selectedKey, canDraw, selectedHidden, disarm]);
+  /** The cut hole's ring as the area's draft, from 3 nodes (§13 "Drawing", as an area). */
+  const holeDraft = useCallback((state: PolygonState) => {
+    if (!model || !selected || state.vertices.length < 3) { keepWaiting(); return; }
+    const r = cutHoleChange(model, patchRef.current, selected, state.vertices);
+    if (r && "change" in r && r.change.put) setDraft({ ops: r.change.put, waitFor: null });
+    else keepWaiting();
+  }, [model, selected, keepWaiting]);
+  /** *Cut hole*'s closed ring: one `modify` (an added area's `add` rewritten), its draft kept until drawn. */
+  const finishHole = useCallback((vertices: PolygonState["vertices"]) => {
+    if (!model || !selected || writingRef.current || vertices.length < 3) return;
+    const r = cutHoleChange(model, patchRef.current, selected, vertices);
+    if (!r) return;
+    if ("reason" in r) { setArmedState((a) => (a ? { ...a, reason: r.reason } : a)); return; }
+    setDraft({ ops: r.change.put ?? [], waitFor: null });
+    if (!commit(r.change, true)) return;
+    setArmedState(null);
+    setPoly(null);
+    drawGesture.current = null;
+    setFocusState(null); // the rings changed: a focused index may name another node
+  }, [model, selected, commit]);
+  /**
+   * *Join*'s pick (§13 answers 1–3): the first line under the click that is not the selection, else the selection
+   * itself (closed into a loop); a refused pick keeps *Join* armed and says why.
+   */
+  const onJoinPick = useCallback((hits: MapObjectRef[]) => {
+    if (!model || !selected || writingRef.current) return;
+    const isLine = (r: MapObjectRef) => {
+      const i = model.indexOf(r);
+      return i !== null && model.doc.attrs.type[i] === mapDocument.OBJECT_TYPE.line;
+    };
+    const other = hits.find((r) => !sameRef(r, selected) && isLine(r));
+    const picked = other ?? (hits.some((r) => sameRef(r, selected)) ? selected : null);
+    const r: ReturnType<typeof joinChange> = picked ? joinChange(model, patchRef.current, selected, picked) : { reason: "not-line" };
+    if (!r) return;
+    if ("reason" in r) { setArmedState((a) => (a ? { ...a, reason: r.reason } : a)); return; }
+    if (commit(r.change)) {
+      setArmedState(null);
+      setFocusState(null);
+    }
+  }, [model, selected, commit]);
+  /**
+   * One operation's change (§13 "Ops"): one write and one undo entry; once it goes the focused node is dropped, and so
+   * is an armed *Join* / *Cut hole* (its ring made on the old shape).
+   */
+  const runOp = useCallback((r: ReturnType<typeof reverseChange>) => {
+    if (!r || "reason" in r) return;
+    if (commit(r.change)) {
+      setFocusState(null);
+      if (armedState) disarm();
+    }
+  }, [commit, armedState, disarm]);
+  /** The focused node of the nodes tool, as the operations name it. */
+  const opFocus = tool === "N" ? focus : null;
+  const reverse = useCallback(() => {
+    if (!canWrite || !model || !selected || selectedHidden) return;
+    runOp(reverseChange(model, current, selected));
+  }, [canWrite, model, selected, selectedHidden, current, runOp]);
+  const splitAtNode = useCallback(() => {
+    if (!canWrite || !model || !selected || selectedHidden) return;
+    runOp(splitChange(model, current, selected, opFocus && opFocus.ring === 0 ? opFocus.index : null, newAddId()));
+  }, [canWrite, model, selected, selectedHidden, current, opFocus, runOp]);
+  const removeHole = useCallback(() => {
+    if (!canWrite || !model || !selected || selectedHidden) return;
+    runOp(removeHoleChange(model, current, selected, opFocus ? opFocus.ring : null));
+  }, [canWrite, model, selected, selectedHidden, current, opFocus, runOp]);
+
   /** Arms a rail tool; a drawing tool only while drawing is enabled, dropping the selection and *Change symbol*. */
   const armTool = useCallback((next: MapRailTool) => {
     if ((isMapDrawTool(next) && !canDraw) || (next === "T" && tracks.toolOff)) return;
+    setArmedState(null);
     setPoly(null);
     drawId.current = null;
     drawGesture.current = null;
@@ -537,6 +629,22 @@ export function useMapMode(a: MapModeArgs): MapMode {
     if (drawId.current) keepWaiting();
     armTool(next);
   }, [armTool, keepWaiting]);
+  /**
+   * *Join* / *Cut hole* (§13 answer 7): a one-shot armed state on the selection; the button again drops it. Arming
+   * closes *Change symbol*, the attach palette and the convert panel and keeps `V` or `N` (another tool goes to `V`).
+   */
+  const armOp = useCallback((kind: "join" | "hole") => {
+    if (!canWrite || !selectedKey) return;
+    if (armed?.kind === kind) { disarm(); return; }
+    if (tool !== "V" && tool !== "N") armTool("V");
+    setChanging(false);
+    setAttaching(null);
+    setConvertOpen(false);
+    setPoly(null);
+    drawGesture.current = null;
+    keepWaiting();
+    setArmedState({ kind, key: selectedKey, reason: null });
+  }, [canWrite, selectedKey, armed?.kind, disarm, tool, armTool, setChanging, keepWaiting]);
   /** *Attach* (§13 "Unresolved"): a `symbol` entry opens the palette under its row, an object entry attaches to the selection. */
   const attachEntry = useCallback((row: UnresolvedRow) => {
     if (!canWrite) return;
@@ -573,6 +681,32 @@ export function useMapMode(a: MapModeArgs): MapMode {
     if (change) commit(change);
   }, [canWrite, model, selected, selectedHidden, current, commit]);
   const selectedOrientable = !!info && !!model && info.type === mapDocument.OBJECT_TYPE.point && isOrientableRef(model.pinned, current, info.symbol);
+  /** The line and area operations that apply to the selection, each with why it cannot run now (§13 answer 7). */
+  const shapeOps = useMemo((): ShapeOpButton[] => {
+    if (!model || !selected || !info || selectedHidden) return [];
+    if (info.type === mapDocument.OBJECT_TYPE.line) {
+      const s = lineShape(model, selected);
+      if (!s) return [];
+      const encoding = "reason" in s ? s.reason : null;
+      const joinReason: ShapeReason | null = "reason" in s ? s.reason : s.parts > 1 ? "multi-part" : s.closed ? "closed" : null;
+      const split = splitChange(model, current, selected, opFocus && opFocus.ring === 0 ? opFocus.index : null, "00000000-0000-7000-8000-000000000000");
+      return [
+        { id: "reverse", reason: encoding, onClick: reverse },
+        { id: "split", reason: split && "reason" in split ? split.reason : null, onClick: splitAtNode },
+        { id: "join", reason: joinReason, pressed: armed?.kind === "join", onClick: () => armOp("join") },
+      ];
+    }
+    if (info.type === mapDocument.OBJECT_TYPE.area) {
+      const s = areaRings(model, selected);
+      const holes = s && !("reason" in s) ? s.holes : 0;
+      const rm = holes > 0 ? removeHoleChange(model, current, selected, opFocus ? opFocus.ring : null) : null;
+      return [
+        { id: "cut-hole", reason: null, pressed: armed?.kind === "hole", onClick: () => armOp("hole") },
+        ...(holes > 0 ? [{ id: "remove-hole" as const, reason: rm && "reason" in rm ? rm.reason : null, onClick: removeHole }] : []),
+      ];
+    }
+    return [];
+  }, [model, selected, info, selectedHidden, current, opFocus, armed?.kind, reverse, splitAtNode, removeHole, armOp]);
 
   // ─── GPS tracks: convert (§13 "GPS tracks: convert", G26) ──
   const convertRows = tracks.selection;
@@ -644,7 +778,20 @@ export function useMapMode(a: MapModeArgs): MapMode {
     },
     onCancel: () => setDraft((d) => (d?.waitFor != null ? d : null)),
   }), [hit, canMove, model, selected, commit, select]);
-  const binding = tracks.toolBinding ?? pointBinding ?? lineBinding ?? nodesBinding ?? selectBinding;
+  // An armed line or area operation takes the clicks (§13 "Line and area operations"): Join's pick, Cut hole's ring.
+  const joinBinding = useMemo(() => (armed?.kind !== "join" ? null : mapPickBinding({ hit, clickSeq, onPick: onJoinPick })), [armed?.kind, hit, onJoinPick]);
+  const holeBinding = useMemo(() => (armed?.kind !== "hole" ? null : mapDrawBinding({
+    gesture: drawGesture,
+    poly: poly ?? { kind: "map_area", vertices: [] },
+    hover: drawHover,
+    onHover: onDrawHover,
+    onPoly: (next) => { setPoly(next); holeDraft(next); },
+    onDone: finishHole,
+    onCancel: disarm,
+    snap: drawSnap,
+    canClose: () => !writingRef.current,
+  })), [armed?.kind, poly, drawHover, onDrawHover, holeDraft, finishHole, disarm, drawSnap]);
+  const binding = tracks.toolBinding ?? joinBinding ?? holeBinding ?? pointBinding ?? lineBinding ?? nodesBinding ?? selectBinding;
 
   const selectedList = useMemo(() => (selected ? [selected] : []), [selected]);
   // The convert panel's preview is drawn with any draft still waiting for its write to be drawn.
@@ -673,11 +820,15 @@ export function useMapMode(a: MapModeArgs): MapMode {
     switch (action.kind) {
       case "tool": armTool(action.tool); return true;
       case "finish": {
-        // Enter ends the line or closes the area being drawn (§13 "Drawing"), through the flow's minimum.
-        if (!poly || !lineBinding) return false;
+        // Enter ends the line or closes the area (or the cut hole's ring) being drawn (§13 "Drawing"), through the
+        // flow's minimum.
+        if (!poly || !(lineBinding || holeBinding)) return false;
         e.preventDefault();
         const r = polygonStep(poly, { type: "enter" });
-        if (r.done) finishDrawing(r.done);
+        if (r.done) {
+          if (holeBinding) finishHole(r.done);
+          else finishDrawing(r.done);
+        }
         return true;
       }
       case "toggle-overprint": toggleHideCourse(); return true;
@@ -692,6 +843,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
       case "escape":
         // The viewer cancels a drag in flight first (§3); then the focused node, N back to V, the selection; with
         // nothing left, the page leaves fullscreen.
+        if (armed) { disarm(); return true; }
         if (poly) { dropDrawing(); return true; }
         if (changing) { setChanging(false); return true; }
         if (attaching) { setAttaching(null); return true; }
@@ -703,7 +855,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
         setStack([]);
         return true;
     }
-  }, [toggleHideCourse, fit, step, hide, selected, tool, focus, deleteNode, setFocus, armTool, poly, lineBinding, finishDrawing, dropDrawing, changing, setChanging, attaching, convertOpen, closeConvert]);
+  }, [toggleHideCourse, fit, step, hide, selected, tool, focus, deleteNode, setFocus, armTool, poly, lineBinding, holeBinding, finishDrawing, finishHole, dropDrawing, changing, setChanging, attaching, convertOpen, closeConvert, armed, disarm]);
 
   // ─── Rail and inspector ──
   const rail = (
@@ -742,13 +894,20 @@ export function useMapMode(a: MapModeArgs): MapMode {
       )}
       <InspectorSection title={t("mapObject")} testId="editor-inspector-map-object">
         <MapObjectSection info={info} hidden={selectedHidden} documentHash={mapDoc.hash} nameId={nameId} canWrite={canWrite} onHide={hide} onRestore={restore}
-          canChangeSymbol={!!info && kindOfType(info.type) !== null} changing={changing} onChangeSymbol={() => { setAttaching(null); setChanging(!changing); }}
+          canChangeSymbol={!!info && kindOfType(info.type) !== null} changing={changing} onChangeSymbol={() => { setAttaching(null); if (armed) disarm(); setChanging(!changing); }}
           picker={changing && info && palette && pickerKind ? (
             <SymbolPicker groups={palette} kind={pickerKind} query={query} onQuery={setQuery} pressed={symbolKey(info.symbol)} onPick={pick}
               documentHash={mapDoc.hash} nameId={nameId} onEscape={() => setChanging(false)} />
           ) : null}
-          orientable={selectedOrientable} onRotate={rotate} />
-        {nodes && ("path" in nodes
+          orientable={selectedOrientable} onRotate={rotate} ops={shapeOps} />
+        {armed && (
+          <div data-testid={armed.kind === "join" ? "editor-map-join-hint" : "editor-map-hole-hint"} data-reason={armed.reason ?? undefined}
+            className="px-2.5 py-1.5 text-[11px] text-purple-800 bg-purple-50 flex flex-col gap-0.5">
+            <span>{t(armed.kind === "join" ? "mapJoinHint" : "mapHoleHint")}</span>
+            {armed.reason && <span className="text-amber-700">{t(`mapOpReason_${armed.reason}`)}</span>}
+          </div>
+        )}
+        {nodes && !armed && ("path" in nodes
           ? <p data-testid="editor-map-nodes-hint" className="px-2.5 py-1.5 text-[11px] text-slate-500">{t("mapNodesHint")}</p>
           : <p data-testid="editor-map-nodes-none" data-reason={nodes.reason} className="px-2.5 py-1.5 text-[11px] text-slate-500">{t(`mapNodesNone_${nodes.reason}`)}</p>)}
       </InspectorSection>

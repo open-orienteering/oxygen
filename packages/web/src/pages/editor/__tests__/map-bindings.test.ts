@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { MAP_HIT_PX, mapSelectBinding, withTrackLayer, type MapGestureRef, type MapSelectContext } from "../tools/bindings";
+import { MAP_HIT_PX, mapPickBinding, mapSelectBinding, withTrackLayer, type MapGestureRef, type MapSelectContext } from "../tools/bindings";
 import { mapKeyAction } from "../modes/map/keys";
 import { MAP_RAIL } from "../tools/rail";
 import type { ToolPointer, ToolShape } from "../../../components/MapViewer";
@@ -170,5 +170,35 @@ describe("withTrackLayer (§13 \"GPS tracks\", the layer)", () => {
     const b = withTrackLayer({ exclusive: true }, { shapes: [track], onScale: vi.fn() });
     expect(b.onPointerDown).toBeUndefined();
     expect(b.shapes).toEqual([track]);
+  });
+});
+
+describe("Map mode's Join pick (docs/course-editor.md §13 \"Line and area operations\", G10)", () => {
+  it("is exclusive with a crosshair: a click hands the hit stack to onPick, an older answer is dropped, no press is taken", async () => {
+    let first: (v: readonly { ref: MapObjectRef | null }[]) => void = () => undefined;
+    const answers = [new Promise<readonly { ref: MapObjectRef | null }[]>((r) => { first = r; }), Promise.resolve([{ ref: { source: 9 } as MapObjectRef }, { ref: null }])];
+    const hit = vi.fn(() => answers.shift()!);
+    const onPick = vi.fn();
+    const b = mapPickBinding({ hit, clickSeq: { current: 0 }, onPick });
+    expect(b.exclusive).toBe(true);
+    expect(b.cursor).toBe("crosshair");
+    expect(b.onPointerDown).toBeUndefined();
+    b.onClick!(ptr(1, 2));
+    b.onClick!(ptr(3, 4));
+    expect(hit).toHaveBeenLastCalledWith({ x: 3, y: 4 }, MAP_HIT_PX * 0.1);
+    await flush();
+    expect(onPick).toHaveBeenCalledWith([{ source: 9 }]);
+    first([{ ref: { source: 7 } }]);
+    await flush();
+    expect(onPick).toHaveBeenCalledTimes(1);
+  });
+
+  it("works under the GPS-track layer", async () => {
+    const onPick = vi.fn(), onScale = vi.fn();
+    const b = withTrackLayer(mapPickBinding({ hit: vi.fn(async () => [{ ref: { added: "x" } as MapObjectRef }]), clickSeq: { current: 0 }, onPick }), { shapes: [], onScale });
+    b.onClick!(ptr(0, 0, { mmPerPx: 0.4 }));
+    expect(onScale).toHaveBeenCalledWith(0.4);
+    await flush();
+    expect(onPick).toHaveBeenCalledWith([{ added: "x" }]);
   });
 });
