@@ -244,7 +244,7 @@ export const clubMapRouter = router({
           versions: {
             orderBy: { seq: "desc" },
             take: 1,
-            select: { label: true, sourceHash: true, uploadedBy: true },
+            select: { label: true, sourceHash: true, uploadedBy: true, patch: true },
           },
         },
       });
@@ -261,7 +261,8 @@ export const clubMapRouter = router({
         select: { fileName: true, bytes: true },
       });
       return {
-        fileName: version.label || source.fileName,
+        // The original file (docs/map-patches.md §5 answer 8): a promoted version's label is free text, so it is named by its source.
+        fileName: (mapDocument.parseVersionPatch(version.patch).length > 0 ? "" : version.label) || source.fileName,
         fileDataBase64: Buffer.from(source.bytes).toString("base64"),
       };
     }),

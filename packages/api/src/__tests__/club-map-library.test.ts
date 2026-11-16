@@ -178,6 +178,10 @@ describe("projectClubMapRow", () => {
     expect(projectClubMapRow(base).version).toMatchObject({ layers: 0, corrections: 0 });
     const promoted = projectClubMapRow(input({ version: { ...base.version!, patch: [layer(2), layer(3)] } }));
     expect(promoted.version).toMatchObject({ layers: 2, corrections: 5 });
+    // A promoted version's label is free text (the event's name): the file is named by its source (G12b).
+    const labelled = projectClubMapRow(input({ version: { ...base.version!, label: "Vårserien 2026-11-16", patch: [layer(1)] } }));
+    expect(labelled.fileName).toBe("first-name.ocd");
+    expect(labelled.version?.label).toBe("Vårserien 2026-11-16");
     expect(correctionsOf("not a patch")).toEqual({ layers: 0, corrections: 0 });
   });
 

@@ -115,7 +115,8 @@ export function projectClubMapRow({ series, version, versionCount, job }: ClubMa
     versionCount,
     review: version ? reviewCounts(version.document.report) : null,
     importJob: !version && job ? { id: job.id, state: job.state, error: job.error } : null,
-    fileName: version?.label || file?.fileName || null,
+    // A promoted version's label is the promote's free text (the event's name): the file is the source's (G12b).
+    fileName: (version && correctionsOf(version.patch).layers > 0 ? file?.fileName : version?.label || file?.fileName) || null,
     sizeBytes: file?.sizeBytes ?? null,
     scale: version ? headerScale(version.document.header) : null,
     uploadedAt: (version?.uploadedAt ?? series.createdAt).toISOString(),

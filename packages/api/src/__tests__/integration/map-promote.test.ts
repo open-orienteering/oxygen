@@ -293,7 +293,10 @@ describe("promote (08 §7)", () => {
     // The download stays the original file (§5 answer 8); the list counts the corrections.
     const dl = await as(A, promoter).clubMap.download({ id: clubMapId });
     expect(Buffer.from(dl.fileDataBase64, "base64").equals(fixture)).toBe(true);
+    // Named by its source, not by the promote's free-text label (G12b).
+    expect(dl.fileName).toBe("test.ocd");
     const listed = (await open(A).clubMap.list()).find((m) => m.id === clubMapId)!;
+    expect(listed.fileName).toBe("test.ocd");
     expect(listed.version).toMatchObject({ id: v2.id, seq: 2, layers: 1, corrections: 2, documentHash: v2.documentHash });
     expect(listed.versionCount).toBe(2);
   }, 120_000);
