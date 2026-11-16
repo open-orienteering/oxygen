@@ -285,11 +285,13 @@ export function useMapTracks(a: MapTracksArgs): MapTracks {
     });
   }, [active, rows, shownTrim, fullLine]);
   const shapes = useMemo(() => {
-    const out = drawnLines.length > 0 ? layerShapes(decimateLayer(drawnLines, tolerance)) : [];
+    const decimated = drawnLines.length > 0 ? decimateLayer(drawnLines, tolerance) : null;
+    const out = decimated ? layerShapes(decimated) : [];
     // The tool's track whole, under the layer, while part of it is trimmed away (a handle can be dragged back over it).
     if (target) {
       const trim = shownTrim(toolRow!.meta);
-      if (trim.start > 0 || trim.end < target.full.x.length) out.unshift(remainderShape(target.id, target.full, tolerance));
+      // At the tolerance the layer settled on (doubled over the budget); one track, outside the budget's count.
+      if (trim.start > 0 || trim.end < target.full.x.length) out.unshift(remainderShape(target.id, target.full, decimated?.tolerance ?? tolerance));
     }
     return out;
   }, [drawnLines, tolerance, target, shownTrim, toolRow]);

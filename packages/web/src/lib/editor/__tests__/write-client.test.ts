@@ -29,6 +29,7 @@ function fakeClient() {
     mapTrack: {
       import: { mutate: vi.fn(respond("trackImport")) },
       update: { mutate: vi.fn(respond("trackUpdate")) },
+      split: { mutate: vi.fn(respond("trackSplit")) },
       remove: { mutate: vi.fn(respond("trackRemove")) },
       markConverted: { mutate: vi.fn(respond("trackConverted")) },
     },
@@ -277,12 +278,19 @@ describe("EditorWrites (docs/course-editor.md §3)", () => {
     expect(f.calls[3]).toEqual({ proc: "trackConverted", input: { marks: [{ id: "t1", opId: null }] } });
     f.fail(new Error("TRACK_LIMIT: the event would hold more than 200 tracks"));
     await expect(w.importTracks([{ name: null, sourceName: "b.gpx", points }])).rejects.toThrow(/TRACK_LIMIT/);
+    // G27: split with the client's part ids.
+    f.ok({ tracks: [{ id: "l" }, { id: "r" }] });
+    expect(await w.splitTrack({ id: "t1", index: 3, ids: ["l", "r"] })).toEqual({ tracks: [{ id: "l" }, { id: "r" }] });
+    expect(f.calls.at(-1)).toEqual({ proc: "trackSplit", input: { id: "t1", index: 3, ids: ["l", "r"] } });
+    f.fail(new Error("TRACK_SPLIT_INVALID: index 1 leaves fewer than two points"));
+    await expect(w.splitTrack({ id: "t1", index: 1, ids: ["l", "r"] })).rejects.toThrow(/TRACK_SPLIT_INVALID/);
   });
 
   it("without a mapTrack client the track writes refuse", async () => {
     const f = fakeClient();
     const w = new EditorWrites({ ...f.client, mapTrack: undefined });
     expect(() => w.removeTracks(["t1"])).toThrow(/not available/);
+    expect(() => w.splitTrack({ id: "t1", index: 3, ids: ["l", "r"] })).toThrow(/not available/);
   });
 
   it("without a mapPatch client the patch writes refuse", async () => {

@@ -67,6 +67,11 @@ describe("the Tracks tool's reducer (docs/map-gps-tracks.md §5.2; tools/tracks.
     expect(trackToolStep(IDLE, { type: "click", pt: { x: 1.2, y: 0 }, reachMm: 0.3, target, lines }).effect).toBeNull();
     expect(trackToolStep(IDLE, { type: "click", pt: { x: 4, y: 2.9 }, reachMm: 0.3, target, lines }).effect).toEqual({ kind: "select", id: "o" });
     expect(trackToolStep(IDLE, { type: "click", pt: { x: 4, y: 1.5 }, reachMm: 0.3, target, lines }).effect).toBeNull();
+    // In reach of both: the nearer one wins; on a tie the tool's own track.
+    const near = [lines[0], { id: "n", line: line([[0, 0.4], [9, 0.4]]) }];
+    expect(trackToolStep(IDLE, { type: "click", pt: { x: 4, y: 0.3 }, reachMm: 0.5, target, lines: near }).effect).toEqual({ kind: "select", id: "n" });
+    expect(trackToolStep(IDLE, { type: "click", pt: { x: 4, y: 0.1 }, reachMm: 0.5, target, lines: near }).effect).toEqual({ kind: "split", id: "t", index: 4 });
+    expect(trackToolStep(IDLE, { type: "click", pt: { x: 4, y: 0.2 }, reachMm: 0.5, target, lines: near }).effect).toEqual({ kind: "split", id: "t", index: 4 });
     // No tool track yet (none or several selected): a click on a track selects it alone.
     expect(trackToolStep(IDLE, { type: "click", pt: { x: 4, y: 0 }, reachMm: 0.3, target: null, lines }).effect).toEqual({ kind: "select", id: "t" });
   });
@@ -95,6 +100,14 @@ describe("mapTracksBinding (tools/bindings.ts)", () => {
     b.onClick!(ptr(4, 3));
     expect(onSelect).toHaveBeenCalledWith("o");
   });
+  it("while a write is in flight (canPress false) a press on a handle is not taken", () => {
+    const gesture = { current: IDLE as TrackToolState };
+    const b = mapTracksBinding({ target, lines, gesture, canPress: false, onDraft: vi.fn(), onTrim: vi.fn(), onSplit: vi.fn(), onSelect: vi.fn() });
+    expect((b.shapes ?? []).filter((s) => s.kind === "handle")).toHaveLength(2);
+    expect(b.onPointerDown!(ptr(8, 0))).toBe(false);
+    expect(gesture.current).toBe(IDLE);
+  });
+
   it("without a tool track: no handles, presses not taken", () => {
     const b = mapTracksBinding({ target: null, lines, gesture: { current: IDLE }, onDraft: vi.fn(), onTrim: vi.fn(), onSplit: vi.fn(), onSelect: vi.fn() });
     expect(b.shapes ?? []).toEqual([]);

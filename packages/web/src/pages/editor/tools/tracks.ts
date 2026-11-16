@@ -85,13 +85,16 @@ export function trackToolStep(s: TrackToolState, e: TrackToolEvent): TrackToolSt
     }
     case "click": {
       const t = e.target;
-      // On the tool's track: a split, or nothing next to a handle (a click there never selects another track).
-      if (t && nearestTrack([{ id: t.id, line: keptLine(t.full, t.trim) }], e.pt, e.reachMm) !== null) {
+      // The nearest visible track within reach, the tool's own first on a tie: on it a split (or nothing next to a
+      // handle), on another one a selection, on none nothing.
+      const lines = t ? [{ id: t.id, line: keptLine(t.full, t.trim) }, ...e.lines.filter((l) => l.id !== t.id)] : e.lines;
+      const id = nearestTrack(lines, e.pt, e.reachMm);
+      if (id === null) return none();
+      if (t && id === t.id) {
         const index = splitIndexAt(t.full, t.trim, e.pt, e.reachMm);
         return { state: s, taken: false, effect: index === null ? null : { kind: "split", id: t.id, index } };
       }
-      const id = nearestTrack(e.lines.filter((l) => l.id !== t?.id), e.pt, e.reachMm);
-      return { state: s, taken: false, effect: id === null ? null : { kind: "select", id } };
+      return { state: s, taken: false, effect: { kind: "select", id } };
     }
   }
 }
