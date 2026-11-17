@@ -184,21 +184,54 @@ async function main() {
     return rasterisePassStream(stream, { colour: (i) => hex[i] ?? "#ff00ff", bounds, pxPerMm, background: "#ffffff", glyphOutline });
   }
 
+  /** How many shared top layers are peeled off, at most, to find a change under them (§6.5 "Naming"). */
+  const PEEL_DEPTH = 3;
+
   /**
    * Names the changed pixels of one tile (§6.5 "Naming"): by the layers on
-   * top in the two paint images; where that cannot tell, by the pair of
-   * layers around the pixel whose order flipped; else by the neighbours.
+   * top in the two paint images, else the pair of layers around the pixel
+   * whose order flipped; where both orders have the same layer on top, the
+   * same again on paint images with that layer peeled off (up to
+   * PEEL_DEPTH); else by the neighbours.
    */
   async function nameTile(mask, width, height, streams, side) {
-    const pa = await co.rasterisePaints(streams[0], { bounds: side.bounds, pxPerMm: opts.pxPerMm, glyphOutline });
-    const pb = await co.rasterisePaints(streams[1], { bounds: side.bounds, pxPerMm: opts.pxPerMm, glyphOutline });
-    const view = {
-      source: pa.ids,
-      candidate: pb.ids,
-      nameSource: co.paintNamer(pa.paints, side.sourceLayers, side.symbols),
-      nameCandidate: co.paintNamer(pb.paints, side.candidateLayers, side.symbols),
+    const paintView = async (peel) => {
+      const rows = (layers) => new Set(layers.filter((l) => peel.includes(l.name)).map((l) => l.row));
+      const [sa, sb] = peel.length ? [co.withoutRows(streams[0], rows(side.sourceLayers)), co.withoutRows(streams[1], rows(side.candidateLayers))] : streams;
+      const pa = await co.rasterisePaints(sa, { bounds: side.bounds, pxPerMm: opts.pxPerMm, glyphOutline });
+      const pb = await co.rasterisePaints(sb, { bounds: side.bounds, pxPerMm: opts.pxPerMm, glyphOutline });
+      return {
+        source: pa.ids,
+        candidate: pb.ids,
+        nameSource: co.paintNamer(pa.paints, side.sourceLayers, side.symbols),
+        nameCandidate: co.paintNamer(pb.paints, side.candidateLayers, side.symbols),
+      };
     };
-    return co.nameChanges(mask, width, height, co.viewKindOf(view, width, height, side.rowOf));
+    const kindAt = new Map();
+    let pending = new Map([["", { peel: [], pixels: [] }]]);
+    for (let i = 0; i < mask.length; i++) if (mask[i]) pending.get("").pixels.push(i);
+    for (let depth = 0; depth <= PEEL_DEPTH && pending.size; depth++) {
+      const groups = [...pending.values()];
+      pending = new Map();
+      for (const { peel, pixels } of groups) {
+        const v = await paintView(peel);
+        const kindOf = co.viewKindOf(v, width, height, side.rowOf);
+        for (const i of pixels) {
+          const k = kindOf(i);
+          if (k) {
+            kindAt.set(i, k);
+            continue;
+          }
+          const top = co.sharedTop(v, i);
+          if (!top || depth === PEEL_DEPTH) continue;
+          const next = [...peel, top];
+          const key = [...next].sort().join("\n");
+          if (!pending.has(key)) pending.set(key, { peel: next, pixels: [] });
+          pending.get(key).pixels.push(i);
+        }
+      }
+    }
+    return co.nameChanges(mask, width, height, (i) => kindAt.get(i));
   }
 
   mkdirSync(opts.out, { recursive: true });

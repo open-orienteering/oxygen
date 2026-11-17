@@ -324,6 +324,34 @@ export function nameChanges(mask: Uint8Array, width: number, height: number, kin
   return kinds;
 }
 
+/** The stream without the passes drawn in `rows`: a paint image with those layers peeled off. */
+export function withoutRows(stream: render.PassStream, rows: ReadonlySet<number>): render.PassStream {
+  const keep: number[] = [];
+  stream.passes.forEach((p, i) => {
+    if (!rows.has(p.colour)) keep.push(i);
+  });
+  return {
+    ...stream,
+    passes: keep.map((i) => stream.passes[i]),
+    objectIdx: Uint32Array.from(keep, (i) => stream.objectIdx[i]),
+    symbolIdx: Uint32Array.from(keep, (i) => stream.symbolIdx[i]),
+    ...(stream.maskIdx ? { maskIdx: Int32Array.from(keep, (i) => stream.maskIdx![i]) } : {}),
+  };
+}
+
+/**
+ * The layer both orders have on top at `i`, the one to peel off when a
+ * view cannot tell the change: null for the paper, a blended value, or two
+ * different layers. `graphic:` is stripped (peeling removes the row).
+ */
+export function sharedTop(v: PaintView, i: number): string | null {
+  const a = v.source[i], b = v.candidate[i];
+  if (a < 0 || b < 0) return null;
+  const strip = (n: string) => (n.startsWith(GRAPHIC_PREFIX) ? n.slice(GRAPHIC_PREFIX.length) : n);
+  const from = strip(v.nameSource(a));
+  return from === strip(v.nameCandidate(b)) ? from : null;
+}
+
 // ---------------------------------------------------------------- layers
 
 /** A row of a colour stack as the harness names it. */

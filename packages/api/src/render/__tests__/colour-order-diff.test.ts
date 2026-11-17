@@ -31,6 +31,8 @@ import {
   UNATTRIBUTED,
   UNDECODABLE,
   viewKind,
+  sharedTop,
+  withoutRows,
   viewKindOf,
   flipKind,
   type PaintView,
@@ -171,6 +173,27 @@ describe("naming changes", () => {
     // the paper takes no part; a layer one stack lacks takes no part
     expect(flipKind(view([NOTHING, 2, NOTHING], [NOTHING, 2, NOTHING]), 1, 3, 1, rowOf)).toBeUndefined();
     expect(flipKind(view([0, 2, 0], [0, 2, 0]), 1, 3, 1, { source: rowOf.source, candidate: (n) => (n === "brown50-paved" ? undefined : candidate.get(n)) })).toBeUndefined();
+  });
+
+  it("finds the layer to peel where both orders have the same one on top", () => {
+    const v = view([2, 0, NOTHING, UNDECODABLE], [2, 1, NOTHING, 2]);
+    expect([0, 1, 2, 3].map((i) => sharedTop(v, i))).toEqual(["black100", null, null, null]);
+    const graphic: PaintView = { ...v, nameSource: (id) => `graphic:${named(id)}` };
+    expect(sharedTop(graphic, 0)).toBe("black100");
+  });
+
+  it("peels layers off a stream by row, keeping the per-pass arrays aligned", () => {
+    const sq = render.makePath([0, 0, 1000, 0, 1000, 1000, 0, 1000], undefined, true);
+    const b = new render.PassStreamBuilder();
+    b.push({ kind: "fill", colour: 0, path: sq, rule: "evenodd" }, 10, 100);
+    b.push({ kind: "fill", colour: 1, path: sq, rule: "evenodd" }, 11, 101);
+    b.push({ kind: "fill", colour: 2, path: sq, rule: "evenodd" }, 12, 102);
+    const s = { ...b.build(), maskIdx: Int32Array.from([-1, 0, -1]), masks: [{ regions: [] }] };
+    const peeled = withoutRows(s, new Set([1]));
+    expect(peeled.passes.map((p) => p.colour)).toEqual([0, 2]);
+    expect([...peeled.objectIdx]).toEqual([10, 12]);
+    expect([...peeled.symbolIdx]).toEqual([100, 102]);
+    expect([...peeled.maskIdx!]).toEqual([-1, -1]);
   });
 
   it("counts every changed pixel once; one no view can tell takes its neighbours' kind, else is unattributed", () => {
