@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { render, type mapDocument } from "@oxygen/shared";
+import { mapDocument, render } from "@oxygen/shared";
 import { glyphOutlineFrom, loadBundledFonts } from "../fonts.js";
 import { rasterisePassStream } from "../reference-raster.js";
 import {
@@ -22,6 +22,8 @@ import {
   permutationOrder,
   permuteStack,
   permutedRenderOptions,
+  namePeeled,
+  namePatternMatches,
   rankTiles,
   rasterisePaints,
   sideBySide,
@@ -197,6 +199,31 @@ describe("naming changes", () => {
     expect([...peeled.maskIdx!]).toEqual([-1, -1]);
   });
 
+  it("peels a shared top layer off to find the change under it, one view per peel set, at most three deep", async () => {
+    // 2×1: pixel 0 has black100 on top in both orders over a swap of the paved brown and the building grey;
+    // pixel 1 has the same black100 on top at every depth (nothing under it changed).
+    const seen: string[][] = [];
+    const views: Record<string, PaintView> = {
+      "": view([2, 2], [2, 2]),
+      black100: view([1, 2], [0, 2]),
+    };
+    const k = await namePeeled(Uint8Array.from([1, 1]), 2, 1, async (peel) => {
+      seen.push([...peel]);
+      return views[peel.join("+")] ?? view([2, 2], [2, 2]);
+    }, { source: () => undefined, candidate: () => undefined });
+    expect(Object.fromEntries(k)).toEqual({ [kindKey("black50-building", "brown50-paved")]: 2 }); // pixel 1 by its neighbour
+    // pixel 1 is peeled once and then has black100 on top again: peeling never repeats a layer
+    expect(seen).toEqual([[], ["black100"]]);
+    let calls = 0;
+    const deep = await namePeeled(Uint8Array.from([1]), 1, 1, async (peel) => {
+      calls++;
+      const top = ["brown50-paved", "black50-building", "black100", "yellow100", "blue100-line"][peel.length];
+      return { source: Int32Array.from([0]), candidate: Int32Array.from([0]), nameSource: () => top, nameCandidate: () => top };
+    }, { source: () => undefined, candidate: () => undefined }, 3);
+    expect(calls).toBe(4); // the full view, then three peels; a fourth is not tried
+    expect(Object.fromEntries(deep)).toEqual({ [UNATTRIBUTED]: 1 });
+  });
+
   it("counts every changed pixel once; one no view can tell takes its neighbours' kind, else is unattributed", () => {
     // 3×3; the centre has black100 on top in both and no flipped pair around; its named neighbours vote.
     const v = view([1, 1, 2, 2, 2, 2, 2, 2, 2], [0, 0, 0, 2, 2, 2, 2, 2, 2]);
@@ -283,6 +310,42 @@ describe("the permutation candidate", () => {
   });
 });
 
+describe("the permutation keeps proxy-drawn objects' colour", () => {
+  it("draws an object whose symbol has no IR in the same colour in both orders", () => {
+    const header: mapDocument.MapDocumentInput["header"] = {
+      format: { version: 1, importer: "test-1" },
+      source: { kind: "ocad", version: "2018.8.3", hash: "00".repeat(32), bytes: 1 },
+      unitsPerMm: 100,
+      mapScale: 15000,
+      georeferencing: { crs: null, paperOrigin: { x: 0, y: 0 }, gridRotationDeg: 0 },
+      colours: [
+        { id: "src:0", name: "Black", cmyk: [0, 0, 0, 1], sourceNumber: 0 },
+        { id: "src:1", name: "Yellow", cmyk: [0, 0.27, 0.79, 0], sourceNumber: 1, paletteIds: ["yellow100"] },
+      ],
+      symbols: [
+        { code: "graphic", name: "Frame bar", kind: "area", origin: "graphic", render: null },
+        { code: "401", name: "Open land", kind: "area", render: { type: "area", id: "s:401", code: "401", name: "Open land", fill: 1 } },
+      ],
+    };
+    const ring = [0, 0, 1000, 0, 1000, 1000, 0, 1000, 0, 0];
+    const doc = mapDocument.decodeMapDocument(mapDocument.encodeMapDocument({
+      header,
+      objects: [0, 1].map((symbolIdx) => ({ symbolIdx, type: mapDocument.OBJECT_TYPE.area, sourceIndex: symbolIdx, coords: ring, flags: new Array(5).fill(0) })),
+    }));
+    const order = [1, 0]; // the black moves on top: row 0 becomes row 1
+    const inks = (d: mapDocument.MapDocument, opts: mapDocument.DocumentRenderOptions = {}) => {
+      const input = mapDocument.documentRenderInput(d, opts);
+      const { stream } = render.symbolise({ objects: input.objects, symbols: input.symbols, fonts: [] });
+      return stream.passes.map((p, i) => [input.symbols[stream.symbolIdx[i]].code, d.header.colours[p.colour].name]).sort();
+    };
+    const source = inks(doc);
+    expect(source).toEqual([["401", "Yellow"], ["proxy-area", "Black"]]);
+    const permuted = permuteStack(doc, order);
+    expect(inks(permuted, permutedRenderOptions(order))).toEqual(source);
+    expect(inks(permuted)).not.toEqual(source); // without the options the proxy takes the yellow now at row 0
+  });
+});
+
 describe("colourCensus", () => {
   it("counts used rows, rows without a palette entry, multi-role rows and symbols by match state", () => {
     const f = fixture();
@@ -331,6 +394,14 @@ describe("classification", () => {
     ]);
     expect(r).toMatchObject({ changed: 100, unclassified: 20, unclassifiedShare: 0.2, unusedRules: [3, 4] });
     expect(r.byClass).toMatchObject({ "multi-role": 50, layout: 30, unclassified: 20, mask: 0 });
+  });
+
+  it("matches a prefix ending in * (every graphic object's paint)", () => {
+    expect(namePatternMatches("graphic:*", "graphic:none:red:area")).toBe(true);
+    expect(namePatternMatches("graphic:*", "none:red:area")).toBe(false);
+    expect(namePatternMatches("brown50-road", "brown50-road#3")).toBe(false);
+    const c = parseClassification({ version: 1, rules: [{ from: "*", to: "graphic:*", class: "layout" }, { from: "graphic:*", to: "*", class: "layout" }] });
+    expect(classify(kinds, c, "sprint").byClass).toMatchObject({ layout: 30, unclassified: 70 });
   });
 
   it("never classifies unattributed or unnamed pixels, even under a catch-all rule", () => {

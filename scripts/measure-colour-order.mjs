@@ -32,7 +32,7 @@
  * names the map's colours. Standard output carries labels, palette ids and
  * numbers only.
  *
- * Exit status: 0 when every map imported and no changed pixel is
+ * Exit status: 0 when every map ran (imported, a tile in the window) and no changed pixel is
  * unclassified; 1 otherwise; 2 on usage errors.
  */
 
@@ -184,18 +184,9 @@ async function main() {
     return rasterisePassStream(stream, { colour: (i) => hex[i] ?? "#ff00ff", bounds, pxPerMm, background: "#ffffff", glyphOutline });
   }
 
-  /** How many shared top layers are peeled off, at most, to find a change under them (§6.5 "Naming"). */
-  const PEEL_DEPTH = 3;
-
-  /**
-   * Names the changed pixels of one tile (§6.5 "Naming"): by the layers on
-   * top in the two paint images, else the pair of layers around the pixel
-   * whose order flipped; where both orders have the same layer on top, the
-   * same again on paint images with that layer peeled off (up to
-   * PEEL_DEPTH); else by the neighbours.
-   */
-  async function nameTile(mask, width, height, streams, side) {
-    const paintView = async (peel) => {
+  /** Names the changed pixels of one tile (§6.5 "Naming"; `namePeeled`). */
+  function nameTile(mask, width, height, streams, side) {
+    const view = async (peel) => {
       const rows = (layers) => new Set(layers.filter((l) => peel.includes(l.name)).map((l) => l.row));
       const [sa, sb] = peel.length ? [co.withoutRows(streams[0], rows(side.sourceLayers)), co.withoutRows(streams[1], rows(side.candidateLayers))] : streams;
       const pa = await co.rasterisePaints(sa, { bounds: side.bounds, pxPerMm: opts.pxPerMm, glyphOutline });
@@ -207,31 +198,7 @@ async function main() {
         nameCandidate: co.paintNamer(pb.paints, side.candidateLayers, side.symbols),
       };
     };
-    const kindAt = new Map();
-    let pending = new Map([["", { peel: [], pixels: [] }]]);
-    for (let i = 0; i < mask.length; i++) if (mask[i]) pending.get("").pixels.push(i);
-    for (let depth = 0; depth <= PEEL_DEPTH && pending.size; depth++) {
-      const groups = [...pending.values()];
-      pending = new Map();
-      for (const { peel, pixels } of groups) {
-        const v = await paintView(peel);
-        const kindOf = co.viewKindOf(v, width, height, side.rowOf);
-        for (const i of pixels) {
-          const k = kindOf(i);
-          if (k) {
-            kindAt.set(i, k);
-            continue;
-          }
-          const top = co.sharedTop(v, i);
-          if (!top || depth === PEEL_DEPTH) continue;
-          const next = [...peel, top];
-          const key = [...next].sort().join("\n");
-          if (!pending.has(key)) pending.set(key, { peel: next, pixels: [] });
-          pending.get(key).pixels.push(i);
-        }
-      }
-    }
-    return co.nameChanges(mask, width, height, (i) => kindAt.get(i));
+    return co.namePeeled(mask, width, height, view, side.rowOf);
   }
 
   mkdirSync(opts.out, { recursive: true });
@@ -275,6 +242,7 @@ async function main() {
       const k = 1000 / H.unitsPerMm;
       const full = { minX: H.bounds.minX * k, minY: H.bounds.minY * k, maxX: H.bounds.maxX * k, maxY: H.bounds.maxY * k };
       const grid = co.tileGrid(full, opts.tileMm, opts.window ?? undefined);
+      if (grid.tiles.length === 0) throw new Error("the window meets no tile of this map");
       const kinds = new Map();
       const tiles = [];
       let px = 0, inked = 0, changed = 0;
@@ -349,8 +317,10 @@ async function main() {
       writeFileSync(join(dir, "classes.suggested.json"), JSON.stringify({ version: 1, rules: suggestedRules }, null, 1) + "\n");
       printMap(m);
     } catch (err) {
-      m = { label, error: err instanceof Error ? err.stack ?? err.message : String(err) };
-      console.log(`  ERROR ${m.error}`);
+      // The message only, on standard error: a stack or an importer message may quote the map's own names.
+      m = { label, error: err instanceof Error ? err.message : String(err) };
+      console.log("  ERROR (see standard error)");
+      console.error(`${label}: ${m.error}`);
     }
     results.push(m);
   }
@@ -361,7 +331,7 @@ async function main() {
   const unclassifiedAll = ok.reduce((t, r) => t + r.unclassifiedPx, 0);
   console.log(`\n=== summary: ${results.length} maps, candidate ${opts.candidate}, tolerance ${opts.tolerance}`);
   for (const r of ok) console.log(`  ${r.label.padEnd(24)} changed ${pct(r.changedPx, r.px)} of pixels, ${pct(r.changedPx, r.inked)} of ink; unclassified ${pct(r.unclassifiedPx, r.changedPx, 1)} of changed`);
-  console.log(`  import errors   ${errors}  ${errors ? "FAIL" : "pass"}`);
+  console.log(`  map errors      ${errors}  ${errors ? "FAIL" : "pass"}`);
   console.log(`  unclassified    ${int(unclassifiedAll)} of ${int(changedAll)} changed px (${pct(unclassifiedAll, changedAll, 1)})  ${unclassifiedAll ? "FAIL" : "pass"}`);
   console.log(`  written to      ${opts.out}`);
   writeFileSync(join(opts.out, "run.json"), JSON.stringify({ tool: "measure-colour-order", ranAt: new Date().toISOString(), node: process.version, candidate: opts.candidate, tolerance: opts.tolerance, maps: Object.fromEntries(results.map(({ label, ...r }) => [label, r.error ? { error: r.error } : { changedPx: r.changedPx, px: r.px, inked: r.inked, unclassifiedPx: r.unclassifiedPx, namedShare: r.namedShare }])) }, null, 1) + "\n");

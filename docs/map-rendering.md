@@ -3855,7 +3855,9 @@ puit-de-laven's changed pixels. In order, a pixel takes the first of:
    the one above in the source, then the one above in the candidate;
    several: the most often seen, ties by name (`flipKind`);
 3. steps 1–2 again on paint images with that shared top layer peeled
-   off (`withoutRows`), up to three layers deep: a change under a black
+   off (`withoutRows`; `namePeeled`, one pair of images per distinct
+   set of peeled layers, never the same layer twice), up to three
+   layers deep: a change under a black
    area that covers all but a sliver of the pixel (Club-2026: the road
    outline and the paved brown swapped under a building);
 4. the most frequent kind of its changed 8-neighbours (ties by name),
@@ -3889,7 +3891,9 @@ palette, kept or dropped by the candidate, `map-symbols.md` §9.3),
 ```
 
 — rules in file order, the first whose `map` (absent: every map),
-`from` and `to` (a name or `*`) match decides (`classify`).
+`from` and `to` match decides (`classify`); `from` and `to` are a layer
+name, `*` (any layer) or a prefix ending in `*` (`graphic:*`: every
+graphic object's paint) (`namePatternMatches`).
 The corpus's file is committed as `scripts/colour-order-classes.json`
 by I4 (decided overnight on the user's standing instruction, 2026-11-17,
 for review: maps by their spec labels, layers by palette id).
@@ -3931,9 +3935,11 @@ suggestion, the class totals, unused rules, the worst tiles),
 `classes.suggested.json` and `worst-<n>-tile-<x>-<y>.png` — source |
 candidate | difference (red where changed, the source at a quarter of
 its contrast elsewhere) at `--worst-px-per-mm` — and `run.json` for the
-run. `--window` (paper mm, y-up) keeps the tiles it meets. Exit 0 when
-every map imported and nothing is unclassified, 1 otherwise, 2 on usage
-errors. The corpus and every output stay in `.local/` (AGENTS.md §12).
+run. `--window` (paper mm, y-up) keeps the tiles it meets; a map it
+meets no tile of is an error, not a pass. Exit 0 when every map ran —
+imported, a tile in the window — and nothing is unclassified, 1
+otherwise, 2 on usage errors. A map's error goes to standard error as
+its message only (an importer's message may quote the map's names). The corpus and every output stay in `.local/` (AGENTS.md §12).
 
 **Baseline (I1, 2026-11-17).** The experiment's permutation on the ten
 maps of the slice (the five corpus maps, Mörtsjön, the Erstavik crop and
@@ -3992,8 +3998,8 @@ Tests:
 
 | Test | Asserts |
 |---|---|
-| `packages/api/src/render/__tests__/colour-order-diff.test.ts` | the tolerance boundary and ink count; the side-by-side image; the tile grid, a window, ranking; paint ids rising with the sort key, the id colour round trip, crisp paint images on five contract fixtures (every pixel decodes, the reference raster's grid), an overlap of one ink named by the upper row; `viewKind`, `flipKind` (a thin line over a swapped pair, no flip, the paper and a missing layer taking no part), `sharedTop`, `withoutRows`, `nameChanges` (neighbour vote, unattributed, counts); layers (roles, uses, kind, class, names, `#n`, `graphic:`); the permutation (palette rank, roleless areas and others, ties), `permuteStack` re-indexing, `inverseOrder`, the proxies' row (`permutedRenderOptions`); the census; `parseClassification`, `classify` (first match, map scope, `*`, unattributed never classified, unused rules, share), `suggestClass` |
-| `scripts/__tests__/measure-colour-order.test.mjs` (`pnpm test:scripts`) | on `docs/screenshots/fixtures/puit-de-laven.omap` from a `--maps` file: exit 1 with nothing classified, kinds summing to the changed pixels, named share ≥ 95 %, a change between two palette layers, the census, tiles, suggestions and worst images written, no colour name on standard output; a window over one tile classified by a file → exit 0; usage errors (no maps, `--out` outside `.local/colour-order/`, an unknown candidate, a bad window or tile size, an unknown option, a missing file, a bad rule) → exit 2 |
+| `packages/api/src/render/__tests__/colour-order-diff.test.ts` | the tolerance boundary and ink count; the side-by-side image; the tile grid, a window, ranking; paint ids rising with the sort key, the id colour round trip, crisp paint images on five contract fixtures (every pixel decodes, the reference raster's grid), an overlap of one ink named by the upper row; `viewKind`, `flipKind` (a thin line over a swapped pair, no flip, the paper and a missing layer taking no part), `sharedTop`, `withoutRows`, `namePeeled` (a swap under a shared top layer, one view per peel set, no layer peeled twice, the depth limit), `nameChanges` (neighbour vote, unattributed, counts); layers (roles, uses, kind, class, names, `#n`, `graphic:`); the permutation (palette rank, roleless areas and others, ties), `permuteStack` re-indexing, `inverseOrder`, the proxies' row (`permutedRenderOptions`) and its effect — an IR-less object on an encoded document drawn in the same colour in both orders, and not without the options; the census; `parseClassification`, `classify` (first match, map scope, `*`, a `graphic:*` prefix, unattributed never classified, unused rules, share), `suggestClass` |
+| `scripts/__tests__/measure-colour-order.test.mjs` (`pnpm test:scripts`) | on `docs/screenshots/fixtures/puit-de-laven.omap` from a `--maps` file: exit 1 with nothing classified, kinds summing to the changed pixels, named share ≥ 95 %, a change between two palette layers, the census, tiles, suggestions and worst images written, none of the map's colour names on standard output; a window over one tile classified by a file → exit 0; a window that meets no tile → exit 1, the reason on standard error; usage errors (no maps, `--out` outside `.local/colour-order/`, an unknown candidate, a bad window or tile size, an unknown option, a missing file, a bad rule) → exit 2 |
 
 ## 7. Where things live
 

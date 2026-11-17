@@ -339,6 +339,52 @@ export function withoutRows(stream: render.PassStream, rows: ReadonlySet<number>
   };
 }
 
+/** How many shared top layers `namePeeled` peels off at most. */
+export const PEEL_DEPTH = 3;
+
+/**
+ * Names a tile's changed pixels (docs/map-rendering.md §6.5 "Naming"):
+ * `view([])` gives the full paint images; where a pixel's kind cannot be
+ * told (`viewKindOf`) and both orders have the same layer on top, it is
+ * looked for again on `view(peeled)` — the images without that layer —
+ * up to `depth` layers deep, one view per distinct peel set; what remains
+ * goes to `nameChanges`' neighbour vote.
+ */
+export async function namePeeled(
+  mask: Uint8Array,
+  width: number,
+  height: number,
+  view: (peel: readonly string[]) => Promise<PaintView>,
+  rowOf: Parameters<typeof flipKind>[4],
+  depth = PEEL_DEPTH,
+): Promise<Map<string, number>> {
+  const kindAt = new Map<number, string>();
+  let pending = new Map<string, { peel: string[]; pixels: number[] }>([["", { peel: [], pixels: [] }]]);
+  for (let i = 0; i < mask.length; i++) if (mask[i]) pending.get("")!.pixels.push(i);
+  for (let d = 0; d <= depth && pending.size; d++) {
+    const groups = [...pending.values()];
+    pending = new Map();
+    for (const { peel, pixels } of groups) {
+      const v = await view(peel);
+      const kindOf = viewKindOf(v, width, height, rowOf);
+      for (const i of pixels) {
+        const k = kindOf(i);
+        if (k) {
+          kindAt.set(i, k);
+          continue;
+        }
+        const top = sharedTop(v, i);
+        if (!top || d === depth || peel.includes(top)) continue;
+        const next = [...peel, top];
+        const key = [...next].sort().join("\n");
+        if (!pending.has(key)) pending.set(key, { peel: next, pixels: [] });
+        pending.get(key)!.pixels.push(i);
+      }
+    }
+  }
+  return nameChanges(mask, width, height, (i) => kindAt.get(i));
+}
+
 /**
  * The layer both orders have on top at `i`, the one to peel off when a
  * view cannot tell the change: null for the paper, a blended value, or two
@@ -566,7 +612,7 @@ export const UNCLASSIFIED = "unclassified";
 const ruleSchema = z.object({
   /** A map label; absent: every map. */
   map: z.string().min(1).optional(),
-  /** Layer names (as printed), or `*`. Directional: the source's on top, then the candidate's. */
+  /** Layer names (as printed), `*`, or a prefix ending in `*`. Directional: the source's on top, then the candidate's. */
   from: z.string().min(1),
   to: z.string().min(1),
   class: z.enum(CHANGE_CLASSES),
@@ -575,6 +621,11 @@ const ruleSchema = z.object({
 const classificationSchema = z.object({ version: z.literal(1), rules: z.array(ruleSchema) });
 export type ClassRule = z.output<typeof ruleSchema>;
 export type Classification = z.output<typeof classificationSchema>;
+
+/** A rule's `from` / `to`: `*` matches any layer, a trailing `*` a prefix (`graphic:*`), anything else the name exactly. */
+export function namePatternMatches(pattern: string, name: string): boolean {
+  return pattern === "*" || pattern === name || (pattern.endsWith("*") && name.startsWith(pattern.slice(0, -1)));
+}
 
 /** Reads a classification file's JSON; throws naming the first bad rule. */
 export function parseClassification(json: unknown): Classification {
@@ -621,7 +672,7 @@ export function classify(kinds: ReadonlyMap<string, number>, c: Classification, 
     changed += px;
     const rule = from === UNATTRIBUTED || to === UNATTRIBUTED
       ? -1
-      : c.rules.findIndex((r) => (r.map === undefined || r.map === mapLabel) && (r.from === "*" || r.from === from) && (r.to === "*" || r.to === to));
+      : c.rules.findIndex((r) => (r.map === undefined || r.map === mapLabel) && namePatternMatches(r.from, from) && namePatternMatches(r.to, to));
     const cls = rule < 0 ? UNCLASSIFIED : c.rules[rule].class;
     if (rule >= 0) used.add(rule);
     byClass[cls] += px;

@@ -56,8 +56,10 @@ describe("measure-colour-order.mjs", () => {
     assert.equal(suggested.version, 1);
     assert.ok(suggested.rules.length > 0 && suggested.rules.every((r) => r.map === "puit"));
     assert.ok(existsSync(path.join(out, "run.json")));
-    // standard output names layers by palette id, never by the map's own colour names
-    for (const u of c.unidentifiedList) assert.ok(!first.stdout.includes(u.name), u.name);
+    // standard output names layers by palette id, never by the map's own colour names (every one of them)
+    const names = [...readFileSync(map, "utf8").matchAll(/<color\b[^>]*\bname="([^"]+)"/g)].map((m) => m[1]);
+    assert.ok(names.length > 30 && names.includes(c.unidentifiedList[0].name));
+    for (const name of names) assert.ok(!first.stdout.includes(name), name);
   });
 
   it("passes on a window whose changes a classification file names", () => {
@@ -75,6 +77,13 @@ describe("measure-colour-order.mjs", () => {
     assert.equal(r.status, 0, r.stdout + r.stderr);
     assert.match(r.stdout, /tiles {6}1 of 60 mm/);
     assert.match(r.stdout, /unclassified\s+0 of [\d ]+ changed px \(0\.0 %\)\s+pass/);
+  });
+
+  it("fails a map whose window meets no tile, rather than passing it with nothing compared", () => {
+    const r = run(map, "--out", path.join(out, "nowhere"), "--window", "100000,100000,100001,100001");
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.match(r.stderr, /window meets no tile/);
+    assert.match(r.stdout, /map errors\s+1\s+FAIL/);
   });
 
   it("refuses bad usage with exit 2", () => {
