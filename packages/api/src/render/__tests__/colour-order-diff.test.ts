@@ -21,6 +21,7 @@ import {
   parseClassification,
   permutationOrder,
   permuteStack,
+  permutedRenderOptions,
   rankTiles,
   rasterisePaints,
   sideBySide,
@@ -277,6 +278,8 @@ describe("the permutation candidate", () => {
       expect(p.header.colours[render.renderColourRefs(s.render!)[0]]).toBe(f.colours[render.renderColourRefs(f.symbols[i])[0]]);
     });
     expect(() => inverseOrder([0, 0, 1])).toThrow(/permutation/);
+    // objects without IR are drawn by the bridge's proxies in row 0: the candidate's take the row it moved to
+    expect(permutedRenderOptions(order)).toEqual({ proxyColours: { line: 5, area: 5, point: 5, text: 5 } });
   });
 });
 

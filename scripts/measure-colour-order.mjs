@@ -165,7 +165,7 @@ async function main() {
   const glyphOutline = glyphOutlineFrom(fonts);
 
   /** The pass stream of `doc`'s objects near `bounds` (µm). */
-  function streamOf(doc, bounds) {
+  function streamOf(doc, bounds, renderOptions = {}) {
     const H = doc.header;
     const k = H.unitsPerMm / 1000;
     const b = { minX: (bounds.minX - TILE_MARGIN_UM) * k, minY: (bounds.minY - TILE_MARGIN_UM) * k, maxX: (bounds.maxX + TILE_MARGIN_UM) * k, maxY: (bounds.maxY + TILE_MARGIN_UM) * k };
@@ -174,7 +174,7 @@ async function main() {
       const o = i * 4;
       if (doc.bboxes[o] <= b.maxX && doc.bboxes[o + 2] >= b.minX && doc.bboxes[o + 1] <= b.maxY && doc.bboxes[o + 3] >= b.minY) only.push(i);
     }
-    const input = mapDocument.documentRenderInput(doc, { only });
+    const input = mapDocument.documentRenderInput(doc, { ...renderOptions, only });
     return render.symbolise({ objects: input.objects, symbols: input.symbols, fonts }).stream;
   }
 
@@ -263,6 +263,7 @@ async function main() {
       // The candidate (I1: the experiment's permutation; from I3 on the importer's layers).
       const order = co.permutationOrder(sourceLayers, rank);
       const candidateDoc = co.permuteStack(doc, order);
+      const candidateOptions = co.permutedRenderOptions(order);
       const candidateLayers = order.map((old, row) => ({ ...sourceLayers[old], row }));
       const census = co.colourCensus(doc, sourceLayers, perSymbol);
       const byName = new Map(sourceLayers.map((l) => [l.name, l]));
@@ -278,7 +279,7 @@ async function main() {
       const tiles = [];
       let px = 0, inked = 0, changed = 0;
       for (const t of grid.tiles) {
-        const sa = streamOf(doc, t.bounds), sb = streamOf(candidateDoc, t.bounds);
+        const sa = streamOf(doc, t.bounds), sb = streamOf(candidateDoc, t.bounds, candidateOptions);
         const a = await visible(doc, sa, t.bounds, opts.pxPerMm);
         const b = await visible(candidateDoc, sb, t.bounds, opts.pxPerMm);
         const d = co.changedMask(a, b, opts.tolerance);
@@ -306,7 +307,7 @@ async function main() {
       for (const [n, t] of co.rankTiles(tiles, opts.worst).entries()) {
         const bounds = { minX: t.boundsMm[0] * 1000, minY: t.boundsMm[1] * 1000, maxX: t.boundsMm[2] * 1000, maxY: t.boundsMm[3] * 1000 };
         const a = await visible(doc, streamOf(doc, bounds), bounds, opts.worstPxPerMm);
-        const b = await visible(candidateDoc, streamOf(candidateDoc, bounds), bounds, opts.worstPxPerMm);
+        const b = await visible(candidateDoc, streamOf(candidateDoc, bounds, candidateOptions), bounds, opts.worstPxPerMm);
         const name = `worst-${n + 1}-tile-${t.x}-${t.y}.png`;
         writeFileSync(join(dir, name), await encodePng(co.sideBySide(a, b, co.changedMask(a, b, opts.tolerance).mask)));
         worst.push({ x: t.x, y: t.y, changed: t.changed, file: name });

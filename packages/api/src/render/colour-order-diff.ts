@@ -495,6 +495,17 @@ export function permuteStack<D extends Pick<MapDocument, "header">>(doc: D, orde
   };
 }
 
+/**
+ * The render-bridge options that draw a permuted document like its source:
+ * objects whose symbol has no IR are drawn by the bridge's proxies, which
+ * default to stack row 0 (`proxySymbols`), so the candidate's proxies take
+ * the row that source row 0 moved to — else a permutation recolours them.
+ */
+export function permutedRenderOptions(order: readonly number[]): Pick<mapDocument.DocumentRenderOptions, "proxyColours"> {
+  const at = inverseOrder(order)[0] ?? 0;
+  return { proxyColours: { line: at, area: at, point: at, text: at } };
+}
+
 // ---------------------------------------------------------------- census
 
 export interface ColourCensus {
