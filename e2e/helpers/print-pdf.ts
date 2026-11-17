@@ -31,9 +31,12 @@ export const E2E_HEADERS = { "x-competition-id": "itest", "x-forwarded-email": "
  * Every indirect object of a PDF as text (a stream: its dictionary and its
  * raw bytes in hex), but the `Info` dictionary and the cross-reference and
  * object streams — what two prints of one job may differ in without
- * `deterministic` (`CreationDate`, `/ID`; course-print.md §3.2, §8.5).
+ * `deterministic` (`CreationDate`, `/ID`; course-print.md §3.2, §8.5). The
+ * cross-reference stream holds byte offsets, which move by a byte when the
+ * compressed object stream with the dates does: a print a second later can
+ * differ there and nowhere else (docs/bugfix-printed-drawing-hash.md).
  */
-async function pdfObjects(bytes: Uint8Array): Promise<{ pages: number; objects: Map<string, string> }> {
+export async function pdfObjects(bytes: Uint8Array): Promise<{ pages: number; objects: Map<string, string> }> {
   const pdf = await PDFDocument.load(bytes);
   const info = pdf.context.trailerInfo.Info?.toString();
   const objects = new Map<string, string>();
