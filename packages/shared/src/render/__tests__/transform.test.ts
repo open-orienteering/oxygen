@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseRenderSymbol } from "../symbol.js";
-import { formatColourPath, mapRenderColourRefs, remapRenderColours, renderColourPaths, renderColourRefs } from "../transform.js";
+import { formatColourPath, mapRenderColourRefs, reindexRenderColours, remapRenderColours, renderColourPaths, renderColourRefs } from "../transform.js";
 
 const stroke = (colour: number) => ({ kind: "stroke" as const, colour, widthUm: 100, geometry: { coords: [0, 0, 100, 0] } });
 
@@ -77,5 +77,26 @@ describe("mapRenderColourRefs", () => {
 
   it("rejects an index the IR does not accept", () => {
     expect(() => mapRenderColourRefs(paved, () => -1)).toThrow();
+  });
+});
+
+describe("reindexRenderColours", () => {
+  it("gives the k-th reference (renderColourPaths order) rows[k]: one black on two rows", () => {
+    const out = reindexRenderColours(road, [4, 4, 2, 7]);
+    expect(renderColourPaths(out).map((r) => [formatColourPath(r.path), r.colour])).toEqual([
+      ["borders.left.colour", 4],
+      ["borders.right.colour", 4],
+      ["borders.backgroundColour", 2],
+      ["glyphs[0].glyph.parts[0].colour", 7],
+    ]);
+  });
+
+  it("is the identity for the references' own colours", () => {
+    expect(reindexRenderColours(paved, renderColourPaths(paved).map((r) => r.colour))).toEqual(paved);
+  });
+
+  it("throws when the rows do not match the references one to one", () => {
+    expect(() => reindexRenderColours(road, [1, 2, 3])).toThrow(/4 colour references, 3 rows/);
+    expect(() => reindexRenderColours(road, [1, 2, 3, 4, 5])).toThrow(/4 colour references, 5 rows/);
   });
 });

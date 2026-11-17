@@ -109,6 +109,19 @@ export function mapRenderColourRefs(sym: RenderSymbol, fn: (ref: RenderColourRef
   return parseRenderSymbol(mapped);
 }
 
+/**
+ * Re-index per reference from a list: the k-th reference in
+ * `renderColourPaths` order takes `rows[k]` (docs/map-symbols.md §9.3
+ * "Layers": a colour split into rows, one row per role). Throws unless
+ * there is exactly one row per reference.
+ */
+export function reindexRenderColours(sym: RenderSymbol, rows: ArrayLike<number>): RenderSymbol {
+  const n = renderColourPaths(sym).length;
+  if (n !== rows.length) throw new Error(`${sym.id}: ${n} colour references, ${rows.length} rows`);
+  let k = 0;
+  return mapRenderColourRefs(sym, () => rows[k++]);
+}
+
 /** Path as text, `border.borders.left.colour`, `glyph.parts[2].colour`. */
 export function formatColourPath(path: ColourPath): string {
   return path.map((p, i) => (typeof p === "number" ? `[${p}]` : i === 0 ? p : `.${p}`)).join("");
