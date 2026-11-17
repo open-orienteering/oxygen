@@ -7,8 +7,8 @@
  * a reload or a shared link restores the state:
  *
  * - `course=<seq>` — the selected course;
- * - `mode=layout|field` — absent is Course (a phone with no `mode` opens Field,
- *   so a phone in Course mode writes `mode=course`; Layout is not a phone mode);
+ * - `mode=layout|field|map` — absent is Course (a phone with no `mode` opens Field,
+ *   so a phone in Course mode writes `mode=course`; Layout and Map are not phone modes);
  * - `view=all|class|variant|all-variations` — absent is Course view, with
  *   `class=<seq>` (Class view) and `variant=<key>` (Variant view; also the
  *   variant Class view and Layout draw, F8);
@@ -48,7 +48,7 @@ export interface ParsedEditorUrl extends EditorUrlState {
 /** Every query param the editor owns; others are left as they are. */
 export const EDITOR_URL_PARAMS = ["course", "mode", "view", "class", "variant", "sheet", "template", "control"] as const;
 
-const MODES: readonly EditorMode[] = ["course", "layout", "field"];
+const MODES: readonly EditorMode[] = ["course", "layout", "field", "map"];
 const VIEWS: readonly EditorView[] = ["course", "all", "class", "variant", "all-variations"];
 /** A variant key (`AC`, `ABA`): its groups' labels; the course's variant list decides whether it is one. */
 const VARIANT_KEY = /^\S{1,64}$/;
@@ -142,7 +142,7 @@ export interface EditorSearchOptions {
 export function editorSearchFor(s: EditorUrlState, keep?: URLSearchParams | string, opts: EditorSearchOptions = {}): string {
   const q = new URLSearchParams();
   if (s.course !== null) q.set("course", String(s.course));
-  if (s.mode === "layout" || s.mode === "field" || (s.mode === "course" && opts.phone)) q.set("mode", s.mode);
+  if (s.mode === "layout" || s.mode === "field" || s.mode === "map" || (s.mode === "course" && opts.phone)) q.set("mode", s.mode);
   if (s.view !== "course") q.set("view", s.view);
   if (s.view === "class" && s.classSeq !== null) q.set("class", String(s.classSeq));
   if (s.variantKey !== null && (s.view === "variant" || ((s.view === "class" || s.mode === "layout") && s.variantKey !== opts.firstVariant))) {

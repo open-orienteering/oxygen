@@ -12,9 +12,18 @@
  * open-land area is picked beside it, the area away from it. Hidden symbols
  * are not drawn and never picked. Texts are picked by their stored box
  * (the main thread has no fonts) and count as on top.
+ *
+ * The index is of the effective document (docs/map-patches.md §2.4):
+ * objects the patch hides are neither picked nor counted, modified ones are
+ * picked where they now are, added ones of a document symbol are picked and
+ * counted. An object drawn with a patch symbol is not picked by symbol — a
+ * filter region stores document symbol indices (map-rendering §4.11) and a
+ * patch symbol's index moves with the patch (map-patches §2.2) — so a click
+ * on it picks what is under it.
  */
 
 import { mapDocument, render } from "@oxygen/shared";
+import type { MapPatchDelivery } from "../map-document-cache";
 
 type Pt = { x: number; y: number };
 
@@ -34,11 +43,14 @@ export interface PickIndex {
 
 const TEXT_TYPES = new Set<number>([mapDocument.OBJECT_TYPE.text, mapDocument.OBJECT_TYPE.formattedText, mapDocument.OBJECT_TYPE.lineText]);
 
-export function pickIndexOf(doc: mapDocument.MapDocument): PickIndex {
-  const { header, attrs, bboxes } = doc;
+export function pickIndexOf(doc: mapDocument.EffectiveDocument): PickIndex {
+  const { header, attrs, bboxes, hidden } = doc;
   const n = attrs.symbolIdx.length;
-  const objectsPerSymbol = new Uint32Array(header.symbols.length);
-  for (let i = 0; i < n; i++) if (attrs.symbolIdx[i] < objectsPerSymbol.length) objectsPerSymbol[attrs.symbolIdx[i]]++;
+  /** Document symbols only: a patch symbol (index ≥ this) is not pickable. */
+  const symbolCount = doc.patch?.baseSymbols ?? header.symbols.length;
+  const pickable = (i: number) => !hidden?.[i] && attrs.symbolIdx[i] < symbolCount;
+  const objectsPerSymbol = new Uint32Array(symbolCount);
+  for (let i = 0; i < n; i++) if (pickable(i)) objectsPerSymbol[attrs.symbolIdx[i]]++;
   const u = header.unitsPerMm;
   return {
     objectsPerSymbol,
@@ -48,6 +60,7 @@ export function pickIndexOf(doc: mapDocument.MapDocument): PickIndex {
       let text: number | null = null;
       for (let i = 0; i < n; i++) {
         if (x < bboxes[i * 4] - r || x > bboxes[i * 4 + 2] + r || y < bboxes[i * 4 + 1] - r || y > bboxes[i * 4 + 3] + r) continue;
+        if (!pickable(i)) continue;
         if (header.symbols[attrs.symbolIdx[i]]?.hidden) continue;
         if (TEXT_TYPES.has(attrs.type[i])) text = i;
         else shapes.push(i);
@@ -69,13 +82,19 @@ export function pickIndexOf(doc: mapDocument.MapDocument): PickIndex {
 
 const cache = new Map<string, PickIndex>();
 
-/** The index of a loaded document, built on first use and kept per hash. */
-export function pickIndexForDocument(hash: string, bytes: ArrayBuffer): PickIndex {
-  let index = cache.get(hash);
+/**
+ * The index of a loaded document with the event's patch (`useMapPatch`), built on first use and
+ * kept per hash and patch version. A patch keyed onto another document is not applied.
+ */
+export function pickIndexForDocument(hash: string, bytes: ArrayBuffer, patch?: MapPatchDelivery | null): PickIndex {
+  const p = patch?.patch && patch.patch.documentHash === hash ? patch : null;
+  const key = `${hash}:${p ? p.version : "0"}`;
+  let index = cache.get(key);
   if (!index) {
-    index = pickIndexOf(mapDocument.decodeMapDocument(new Uint8Array(bytes)));
+    const doc = mapDocument.decodeMapDocument(new Uint8Array(bytes));
+    index = pickIndexOf(mapDocument.applyPatch(doc, p?.patch).document);
     cache.clear();
-    cache.set(hash, index);
+    cache.set(key, index);
   }
   return index;
 }

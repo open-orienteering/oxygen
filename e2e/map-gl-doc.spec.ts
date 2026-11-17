@@ -68,9 +68,32 @@ interface DocWindow {
       warnings: Record<string, number>;
     };
     bench?: Scenario & { paper1x?: Scenario };
+    terrainBench?: {
+      field: { width: number; height: number; fieldBytes: number; prepareMs?: { fill: number; normals: number } };
+      orbit: TerrainScenario;
+      close: TerrainScenario;
+    };
     compare?: { fraction: number; differing: number; total: number; target: "canvas" | "fbo" };
     error?: string;
+    pick?: {
+      seq: number;
+      hits: { objectIndex: number; ref: { source: number } | { added: string } | null; code: string | null; type: number; distanceUm: number }[];
+      edit?: { selected: number[]; highlighted: number };
+    };
   };
+  __mapGlDocLines?: () => { sourceIndex: number; code: string; x: number; y: number }[];
+}
+
+interface TerrainScenario {
+  frames: number;
+  seconds: number;
+  meshCpuMs: { p50: number; p95: number };
+  maxMeshDraws: number;
+  drapeRenders: number;
+  drapeWallMs?: { p50: number; max: number };
+  layers: { role: string; widthPx: number; heightPx: number; ratio: number }[];
+  drapeBytes: number;
+  maxResidentBytes: number;
 }
 
 const notBlank = async (page: import("@playwright/test").Page) => {
@@ -144,6 +167,37 @@ test.describe("WebGL2 map backend — whole document", () => {
       await expect(page.getByTestId("map-gl-doc-bench-result")).toContainText("fps");
     });
   }
+
+  test("terrain=1: the 3D bench drapes the document over a field, re-rendering only when the camera settles (§5.6, H6)", async ({ page }, testInfo) => {
+    test.setTimeout(180_000); // 480 software-rendered 3D frames
+    // the event budget: the drape may take a third of it
+    await page.goto("/dev/map-gl-doc?mode=envelope&terrain=1&budget=30");
+    await page.getByTestId("map-gl-doc-file").setInputFiles("e2e/test.ocd");
+    const canvas = page.getByTestId("map-gl-doc-canvas");
+    await expect(canvas).toHaveAttribute("data-ready", "true", { timeout: 30_000 });
+    await page.getByTestId("map-gl-doc-bench").click();
+    await expect(canvas).toHaveAttribute("data-bench", "done", { timeout: 120_000 });
+    const t = await page.evaluate(() => (window as unknown as DocWindow).__mapGlDoc?.terrainBench);
+    expect(t).toBeDefined();
+    if (!t) return;
+    testInfo.annotations.push({ type: "map-gl-doc-terrain-bench", description: JSON.stringify(t) });
+    expect(t.field.fieldBytes).toBe(t.field.width * t.field.height * 5);
+    expect(t.field.prepareMs).toBeDefined(); // prepared in the worker
+    for (const sc of [t.orbit, t.close]) {
+      expect(sc.frames).toBe(240);
+      // the first frame and once after each of the three pauses, plus detail arrivals at most every
+      // DRAPE_ARRIVAL_MS (500 ms) while they stream: never once per frame as the camera turns
+      expect(sc.drapeRenders).toBeGreaterThanOrEqual(1);
+      expect(sc.drapeRenders).toBeLessThanOrEqual(4 + Math.ceil((sc.seconds * 1000) / 500));
+      expect(sc.drapeRenders).toBeLessThan(sc.frames / 4);
+      expect(sc.maxMeshDraws).toBeGreaterThan(0);
+      expect(sc.maxMeshDraws).toBeLessThanOrEqual(7);
+      expect(sc.layers.length).toBeGreaterThan(0);
+      expect(sc.drapeBytes).toBeLessThanOrEqual((30 * 1024 * 1024) / 3);
+      expect(sc.maxResidentBytes).toBeGreaterThan(sc.drapeBytes);
+    }
+    await expect(page.getByTestId("map-gl-doc-terrain-bench-result")).toContainText("bench 3D orbit");
+  });
 
   test("the worker and the inline handler agree; a tiny budget evicts and still draws", async ({ page }, testInfo) => {
     const run = async (query: string, bench: boolean) => {
@@ -306,5 +360,76 @@ test.describe("WebGL2 map backend — whole document", () => {
     await expect(page.getByTestId("map-gl-doc-error")).toBeVisible({ timeout: 15_000 });
     const err = await page.evaluate(() => (window as unknown as DocWindow).__mapGlDoc?.error);
     expect(err).toBeTruthy();
+  });
+
+  // docs/map-rendering.md §5.5 "Document objects" (row G5): the hit-test over the document through the worker,
+  // and the selected object highlighted through the edit part, in the frame.
+  test("a click on the fixture's path reports its object, and the highlight is in the frame", async ({ page }) => {
+    test.setTimeout(90_000);
+    await page.goto("/dev/map-gl-doc?mode=source&pick=1");
+    await page.getByTestId("map-gl-doc-file").setInputFiles("e2e/test.ocd");
+    const canvas = page.getByTestId("map-gl-doc-canvas");
+    await expect(canvas).toHaveAttribute("data-ready", "true", { timeout: 30_000 });
+
+    const lines = () => page.evaluate(() => (window as unknown as DocWindow).__mapGlDocLines!());
+    // The canvas runs below the viewport: only points on screen can be clicked.
+    const viewport = page.viewportSize()!;
+    const onScreen = async (p: { x: number; y: number }) => {
+      const box = (await canvas.boundingBox())!;
+      return p.x > box.x + 20 && p.x < Math.min(viewport.width, box.x + box.width) - 20 && p.y > box.y + 20 && p.y < Math.min(viewport.height, box.y + box.height) - 20;
+    };
+    // A Path (505) of the fixture on screen: at its first segment's mid-point it is the topmost object, over an area.
+    const all = await lines();
+    let path: (typeof all)[number] | undefined;
+    for (const l of all) if (!path && l.code.startsWith("505") && (await onScreen(l))) path = l;
+    expect(path, JSON.stringify(all)).toBeDefined();
+    const source = path!.sourceIndex;
+    const pathOf = async () => (await lines()).find((l) => l.sourceIndex === source)!;
+    // Zoom in on it (the wheel keeps the point under the cursor).
+    await page.mouse.move(path!.x, path!.y);
+    for (let i = 0; i < 3; i++) await page.mouse.wheel(0, -500);
+    path = await pathOf();
+    expect(await onScreen(path)).toBe(true);
+
+    // The highlight blue (#2563eb) near a client point, from the drawing buffer (preserveDrawingBuffer).
+    const blueNear = async (p: { x: number; y: number }, radiusPx: number) => {
+      const box = (await canvas.boundingBox())!;
+      const dataUrl = await canvas.evaluate((c) => (c as HTMLCanvasElement).toDataURL("image/png"));
+      const png = PNG.sync.read(Buffer.from(dataUrl.split(",")[1], "base64"));
+      const k = png.width / box.width;
+      const cx = Math.round((p.x - box.x) * k), cy = Math.round((p.y - box.y) * k), r = Math.round(radiusPx * k);
+      let n = 0;
+      for (let y = Math.max(0, cy - r); y <= Math.min(png.height - 1, cy + r); y++) {
+        for (let x = Math.max(0, cx - r); x <= Math.min(png.width - 1, cx + r); x++) {
+          const i = 4 * (y * png.width + x);
+          if (Math.abs(png.data[i] - 0x25) < 40 && Math.abs(png.data[i + 1] - 0x63) < 40 && Math.abs(png.data[i + 2] - 0xeb) < 40) n++;
+        }
+      }
+      return n;
+    };
+    const pickReport = async (seq: number) => {
+      await expect(canvas).toHaveAttribute("data-pick", String(seq), { timeout: 15_000 });
+      return (await page.evaluate(() => (window as unknown as DocWindow).__mapGlDoc?.pick))!;
+    };
+
+    expect(await blueNear(path, 8), "no highlight before the click").toBe(0);
+    await page.mouse.click(path.x, path.y);
+    const pick = await pickReport(1);
+    // Reports its object: the path on top (by its source index and symbol), the area under it next.
+    expect(pick.hits[0], JSON.stringify(pick.hits)).toMatchObject({ ref: { source: path.sourceIndex }, code: path.code, type: 2 });
+    expect(pick.hits.length).toBeGreaterThan(1);
+    expect(pick.edit).toMatchObject({ selected: [pick.hits[0].objectIndex], highlighted: 1 });
+    // The highlight is in the frame: the path's passes redrawn in the highlight colour.
+    expect(await blueNear(path, 8), "the highlight around the clicked path").toBeGreaterThan(10);
+
+    // A click on another line moves the highlight there: the path's blue goes.
+    let spot: { x: number; y: number } | undefined;
+    for (const l of await lines()) if (!spot && l.sourceIndex !== source && Math.hypot(l.x - path.x, l.y - path.y) > 80 && (await onScreen(l))) spot = l;
+    // No other line on screen: a point well away from the path.
+    spot ??= { x: path.x, y: path.y > viewport.height / 2 ? path.y - 150 : path.y + 150 };
+    await page.mouse.click(spot.x, spot.y);
+    const second = await pickReport(2);
+    expect(second.hits[0]?.ref).not.toEqual({ source });
+    await expect.poll(() => blueNear(path, 8)).toBe(0);
   });
 });

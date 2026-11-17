@@ -12,7 +12,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { reseed } from "./helpers/reseed";
 import { analysePdf, arm, canvasInCircle, cleanup, clickMap, clickTab, controlRows, coveredBy, drag, editorReady, emptyPoint, ensureCoursesAndMap, labelOf, legMidpoint, legPieces, nameIdOf, openEditor, place, placeOneShot, probeTemplate, regularCodes, select, selectCompetition, selectedCode, selectedPosition, siteCuts, site, sitePoint, sites, toolShapes, toPage, toPaper, trpcCall, viewCentre, viewSettled, newCourse, mapScale, statsRow, sheetBoxes, type Site } from "./helpers/editor";
 import { waitForTrpc } from "./helpers/trpc";
-import { type Pt, desktopOnly, courseIdByName, act, appendClear, dropSelection, dragNumber, dragTarget } from "./helpers/course-editor-spec";
+import { type Pt, desktopOnly, courseIdByName, act, appendClear, dropSelection, dragNumber, dragTarget, selectLeg, twoControlCourse } from "./helpers/course-editor-spec";
 
 test.beforeAll(async () => {
   await reseed();
@@ -781,23 +781,16 @@ test.describe("F7: variations and loops (docs/course-editor.md §12)", () => {
   }
 
   test("Create variation here, a control into B, Variant and All-variations views, the unbalanced check, Loop, export, undo", async ({ page }) => {
-    await openEditor(page);
-    const name = await newCourse(page, "F7 variation");
-    const codeA = await appendClear(page);
-    const codeB = await appendClear(page, [codeA]);
-    await expect(controlRows(page)).toHaveCount(2, { timeout: 15000 });
-    const a = await site(page, codeA), b = await site(page, codeB);
+    // A leg a → b clear of the course's other legs: b → finish can run back over it, and a click there selects the
+    // leg drawn on top — Create variation here then groups after b (load run: x numbered 3 in Variant B, not 2).
+    const { name, a, b } = await twoControlCourse(page, "F7 variation");
+    const codeA = a.code;
     const courseId = (await trpcCall<{ id: number; name: string }[]>("course.list", undefined, false)).find((c) => c.name === name)!.id;
     const keys = async () => (await trpcCall<{ variantKey: string }[]>("course.variantList", { courseId }, false)).map((v) => v.variantKey);
 
     // The leg a → b, then Create variation here: one write, A and B empty (answer 5), the leg still drawn straight.
-    await viewSettled(page);
-    const mid = await legMidpoint(page, name, a.mm, b.mm);
-    await expect(async () => {
-      await dropSelection(page);
-      await clickMap(page, await toPage(page, mid));
-      await expect(page.getByTestId("editor-action-create-variation")).toBeVisible({ timeout: 3000 });
-    }).toPass({ timeout: 30000 });
+    await selectLeg(page, name, a, b);
+    await expect(page.getByTestId("editor-action-create-variation")).toBeVisible();
     const created = waitForTrpc(page, "course.setStructure");
     await page.getByTestId("editor-action-bar").getByTestId("editor-action-create-variation").click();
     await created;
@@ -906,19 +899,11 @@ test.describe("F7: variations and loops (docs/course-editor.md §12)", () => {
   });
 
   test("F15: All variations numbers the sites when the variants number alike, codes when a fork is unequal (course-layer.md §12.7)", async ({ page }) => {
-    await openEditor(page);
-    const name = await newCourse(page, "F15 numbers");
-    const codeA = await appendClear(page);
-    const codeB = await appendClear(page, [codeA]);
-    await expect(controlRows(page)).toHaveCount(2, { timeout: 15000 });
-    const a = await site(page, codeA), b = await site(page, codeB);
-    await viewSettled(page);
-    const mid = await legMidpoint(page, name, a.mm, b.mm);
-    await expect(async () => {
-      await dropSelection(page);
-      await clickMap(page, await toPage(page, mid));
-      await expect(page.getByTestId("editor-action-create-variation")).toBeVisible({ timeout: 3000 });
-    }).toPass({ timeout: 30000 });
+    // A leg a → b clear of the course's other legs: b → finish can run back over it, and a click there selects the
+    // leg drawn on top — Create variation here then groups after b (load run: x numbered 3 in Variant B, not 2).
+    const { name, a, b } = await twoControlCourse(page, "F15 numbers");
+    await selectLeg(page, name, a, b);
+    await expect(page.getByTestId("editor-action-create-variation")).toBeVisible();
     const created = waitForTrpc(page, "course.setStructure");
     await page.getByTestId("editor-action-bar").getByTestId("editor-action-create-variation").click();
     await created;

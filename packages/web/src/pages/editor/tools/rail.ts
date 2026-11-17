@@ -3,6 +3,18 @@
 import type { EditorTool } from "../../../lib/editor/state";
 
 export type RailTool = "V" | "S" | "K" | "M" | "X" | "C" | "A" | "T" | "G";
+
+/**
+ * Map mode's tools (docs/course-editor.md §13): `V` select (G6), `N` nodes (G7), `P` / `L` / `A` point, line, area
+ * (G9), `T` the GPS tracks' trim and split (G27).
+ */
+export type MapRailTool = "V" | "N" | "P" | "L" | "A" | "T";
+/** Map mode's rail, in order. */
+export const MAP_RAIL: readonly MapRailTool[] = ["V", "N", "P", "L", "A", "T"];
+/** Map mode's drawing tools (§13 "Drawing") and the kind each draws. */
+export type MapDrawTool = "P" | "L" | "A";
+export const MAP_DRAW_KIND: Record<MapDrawTool, "point" | "line" | "area"> = { P: "point", L: "line", A: "area" };
+export const isMapDrawTool = (t: MapRailTool): t is MapDrawTool => t === "P" || t === "L" || t === "A";
 export type AreaChoice = "oob_area" | "oob_line" | "whiteout" | "filter_region" | "toner_saver" | "marked_route";
 export const AREA_CHOICES: AreaChoice[] = ["oob_area", "oob_line", "whiteout", "filter_region", "toner_saver", "marked_route"];
 

@@ -21,9 +21,12 @@ import { registerCourseExportRoute } from "./course-export.js";
 import { registerDescriptionsPdfRoute } from "./course-maps/descriptions-pdf.js";
 import { registerMapDocumentRoutes } from "./map-store/routes.js";
 import { registerMapPreviewRoutes } from "./map-store/preview-routes.js";
+import { registerMapHeightfieldRoutes } from "./map-store/heightfield-routes.js";
 import { registerMapSourceRoutes } from "./map-store/source-routes.js";
 import { registerMapUploadRoutes } from "./map-store/upload-routes.js";
 import { startImportJobEngine } from "./map-store/jobs.js";
+import { installDemConfigSource } from "./map-store/dem-settings-store.js";
+import { startDemJobEngine } from "./map-store/dem-jobs.js";
 import { registerCourseMapRoutes } from "./course-maps/routes.js";
 import { registerStaticServe } from "./staticServe.js";
 import "dotenv/config";
@@ -91,11 +94,20 @@ async function main() {
   // `sha-…`). Images carry their immutable SHA ref by default; deploy
   // tooling overrides it with the actual tag used for the rollout.
   const DEPLOY_REF = process.env.OXYGEN_DEPLOY_REF || null;
+  // The application version (Dockerfile ARG BUILD_VERSION, computed by
+  // scripts/build-version.mjs): `0.7.0` on a release, `0.7.0-3-gabc1234`
+  // past it. Null on a local build; the web then shows its own baked value.
+  const VERSION = process.env.OXYGEN_VERSION || null;
   server.get("/health", async () => ({ status: "ok", startedAt: SERVER_START }));
   server.get("/api/version", async (_req, reply) =>
     reply
       .header("Cache-Control", "no-store")
-      .send({ startedAt: SERVER_START, buildId: BUILD_ID, deployRef: DEPLOY_REF }),
+      .send({
+        startedAt: SERVER_START,
+        buildId: BUILD_ID,
+        deployRef: DEPLOY_REF,
+        version: VERSION,
+      }),
   );
 
   registerBackupRoute(server);
@@ -103,9 +115,14 @@ async function main() {
   registerDescriptionsPdfRoute(server);
   registerMapDocumentRoutes(server);
   registerMapPreviewRoutes(server);
+  registerMapHeightfieldRoutes(server);
   registerMapSourceRoutes(server);
   registerMapUploadRoutes(server);
   startImportJobEngine(prisma());
+  // DEM fetch is opt-in (docs/map-terrain.md §7.0 answer 4, §7.8): Settings →
+  // Height data over the MAP_DEM_* environment, re-read before each engine kick.
+  installDemConfigSource(process.env);
+  startDemJobEngine(prisma());
   registerCourseMapRoutes(server);
 
   // Single-container deployments (Cloud Run) serve the web bundle from the

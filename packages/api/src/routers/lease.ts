@@ -3,8 +3,8 @@
  *
  * Two audiences:
  *   - **Node-to-node** (peerProcedure, shared-secret): `acquire`, `release`,
- *     `exportSnapshot`, `exportSettings`, `exportBlob` — the cloud-side
- *     surface a venue's checkout/checkin drives.
+ *     `exportSnapshot`, `exportSettings`, `exportBlob`, `exportMapRows` —
+ *     the cloud-side surface a venue's checkout/checkin and refreshes drive.
  *   - **Operator** (public/eventProcedure): `status` for the shell badge,
  *     `checkout`/`checkin` on the venue box, `forceTakeover` on the node
  *     that needs control back after a venue box died.
@@ -34,9 +34,10 @@ import {
 import { shipEventOnce, makePeerTransport } from "../sync/shipper.js";
 import {
   exportBlobInput,
-  exportBlobSlice,
   fetchSnapshotBlobs,
 } from "../sync/snapshotMaps.js";
+import { exportPeerBlobSlice, fetchSnapshotGraphics } from "../sync/snapshotGraphics.js";
+import { exportMapRows } from "../sync/mapRefresh.js";
 import {
   nodeId,
   nodeRole,
@@ -113,12 +114,20 @@ export const leaseRouter = router({
   }),
 
   /**
-   * One slice (≤ 4 MiB, base64) of a map blob the event's `map_files` pin
-   * — the bytes of the snapshot's `maps` part (docs/map-storage.md §7.2).
+   * One slice (≤ 4 MiB, base64) of a map blob the event's `map_files` pin,
+   * or of a graphic the event draws — the bytes of the snapshot's `maps`
+   * and `graphics` parts (docs/map-storage.md §7.2).
    */
   exportBlob: peerProcedure
     .input(exportBlobInput)
-    .query(async ({ ctx, input }) => exportBlobSlice(ctx.db, ctx.event.id, input)),
+    .query(async ({ ctx, input }) => exportPeerBlobSlice(ctx.db, ctx.event.id, input)),
+
+  /**
+   * The event's cloud-owned map rows without bytes — the source of a box's
+   * map refresh during a lease (row G19, docs/map-storage.md §7.2
+   * "Following the cloud during a lease"). Bytes follow through `exportBlob`.
+   */
+  exportMapRows: peerProcedure.query(async ({ ctx }) => exportMapRows(ctx.db, ctx.event.id)),
 
   // ─── Operator surface ─────────────────────────────────────
 
@@ -151,7 +160,13 @@ export const leaseRouter = router({
               peer.exportBlob(input.nameId, { table, hash, start, length }),
             )
           : undefined;
-        const event = await importEventSnapshot(db, snapshot, blobs);
+        // Graphics the same way, by id (docs/map-storage.md §7.2).
+        const graphicBlobs = snapshot.graphics
+          ? await fetchSnapshotGraphics(db, snapshot.graphics, (id, start, length) =>
+              peer.exportBlob(input.nameId, { table: "graphics", id, start, length }),
+            )
+          : undefined;
+        const event = await importEventSnapshot(db, snapshot, blobs, graphicBlobs);
         // Journal-from-there: pulls start at the exporter's journal head;
         // history before it is baked into the snapshot. Push starts empty.
         await db.journalSyncState.upsert({
@@ -185,6 +200,11 @@ export const leaseRouter = router({
             fetchedBytes: blobs?.fetchedBytes ?? 0,
             skipped: snapshot.maps?.skipped ?? 0,
             decisions: snapshot.maps?.decisions?.length ?? 0,
+            patches: snapshot.maps?.patch ? 1 : 0,
+          },
+          graphics: {
+            rows: snapshot.graphics?.length ?? 0,
+            fetchedBytes: graphicBlobs?.fetchedBytes ?? 0,
           },
         };
       } catch (err) {

@@ -6,13 +6,15 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { ALIAS_LIBRARIES, type SymbolLibraryId, getLibraryEntry, getSymbolLibrary, listSymbolLibraries, symbolLibraryInputs, symbolLibrarySchema, validateLibrary } from "../index.js";
+import { ALIAS_LIBRARIES, type SymbolLibraryId, getLibraryEntry, getSymbolLibrary, listSymbolLibraries, symbolLibraryInputs, symbolLibraryNameSources, symbolLibrarySchema, validateLibrary } from "../index.js";
 import { withNamesAndAliases } from "../authoring.js";
 
 /** Headings the Swedish translation does not carry (§3.2). */
 const SV_UNSOURCED: Record<SymbolLibraryId, string[]> = {
   "ISOM2017-2": [],
   "ISSprOM2019-2": ["105.2", "533", "715"],
+  // No SOFT translation of ISSkiOM exists (docs/map-symbols.md §12.4): every heading.
+  ISSkiOM2019: ["301.1", "301.2", "310.1", "801.1", "801.2", "802.1", "802.2", "803.1", "803.2", "804.1", "804.2", "805", "807", "808", "813.1", "813.2"],
 };
 
 const SV_SPOT: Record<string, string> = {
@@ -72,6 +74,11 @@ describe("Swedish names (§3)", () => {
   it.each(Object.keys(SV_UNSOURCED) as SymbolLibraryId[])("%s: every heading has name.sv except the listed unsourced ones", (id) => {
     const missing = getSymbolLibrary(id).entries.filter((e) => e.variant === null && !e.name.sv).map((e) => e.code);
     expect(missing).toEqual(SV_UNSOURCED[id]);
+  });
+
+  it("name sources: ISSkiOM has no Swedish source and no alias table", () => {
+    expect(symbolLibraryNameSources.ISSkiOM2019).toEqual({ sv: null, aliases: null });
+    expect(symbolLibraryNameSources["ISOM2017-2"].sv).toMatch(/^ISOM 2017-2 Internationella Kartnormen/);
   });
 
   it("spot table matches the SOFT headings verbatim", () => {

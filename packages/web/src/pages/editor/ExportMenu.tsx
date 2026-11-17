@@ -8,8 +8,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../../lib/trpc";
-import { downloadSameOriginFile } from "../../lib/download-api";
+import { downloadExport } from "../../lib/download-api";
+import { ensureSheetsBestEffort } from "../../lib/trpc-links";
 import { exportEntries, type ExportEntry, type ExportState } from "../../lib/editor/export-menu";
+import { formatStoredAt, isOfflinePrepareError, offlinePrintErrorCode, useOfflinePrintProgress, useStoreMapsOffline } from "../../hooks/useOfflineMaps";
 import { DescriptionSheetsDialog } from "./DescriptionSheetsDialog";
 import { IconExport } from "../../components/map-icons";
 import { TOP_BAR_TIER1_HIDE } from "../../components/top-bar-collapse";
@@ -24,18 +26,53 @@ const LABEL = {
   all: "exportAll",
   allControls: "exportAllControls",
   setter: "exportSetter",
+  offline: "exportOffline",
   descriptions: "exportDescriptions",
   iofxml: "exportIofXml",
   ppen: "exportPpen",
 } as const;
 
+/** An `OfflinePrintError`'s message (G17, course-print.md §8.6 "Offline"); null for any other error. */
+const OFFLINE_ERROR = { notStored: "exportNotStored", tooLarge: "exportTooLarge", unsupported: "exportOfflineUnsupported", failed: "exportOfflineFailed" } as const;
+
 export function ExportMenu({ state, onError }: { state: ExportState; onError: (message: string) => void }) {
-  const { t } = useTranslation("editor");
+  const { t, i18n } = useTranslation("editor");
   const utils = trpc.useUtils();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  /** This menu started the store step: only then does the button show its progress (the silent run shows only in the sync panel). */
+  const [storing, setStoring] = useState(false);
   const [descriptions, setDescriptions] = useState(false);
+  /** What the last export or store said beyond its file (G17): printed from the stored job, or what was stored. */
+  const [notice, setNotice] = useState<{ text: string; storedAt?: string } | null>(null);
+  const storeOffline = useStoreMapsOffline(state.nameId, state.canEdit);
+  const progress = useOfflinePrintProgress(state.nameId);
   const box = useRef<HTMLDivElement>(null);
+
+  const message = (err: unknown): string => {
+    const code = offlinePrintErrorCode(err);
+    if (code) return t(OFFLINE_ERROR[code]);
+    if (isOfflinePrepareError(err)) return t("exportOfflineStoreFailed");
+    return err instanceof Error ? err.message : String(err);
+  };
+
+  /** *Make maps available offline* (G17): the store step, its progress on the button. */
+  const store = async () => {
+    setBusy(true);
+    setStoring(true);
+    try {
+      const r = await storeOffline();
+      if (r.status === "unsupported") onError(t("exportOfflineUnsupported"));
+      else if (r.status === "offline") onError(t("exportOfflineNotOnline"));
+      else if (r.status === "partial") onError(t("exportOfflinePartial"));
+      else if (r.manifest) setNotice({ text: t("exportOfflineStored", { count: r.manifest.queries.length, time: formatStoredAt(r.manifest.storedAt, i18n.language) }) });
+    } catch (err) {
+      onError(message(err));
+    } finally {
+      setBusy(false);
+      setStoring(false);
+    }
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -52,23 +89,32 @@ export function ExportMenu({ state, onError }: { state: ExportState; onError: (m
       setDescriptions(true);
       return;
     }
+    setNotice(null);
+    if (e.action === "offline") return store();
     setBusy(true);
     try {
       if (e.ensure) {
-        const r = await utils.client.layout.autoSheets.mutate(e.ensure);
-        if (r.createdSheets.length || r.createdTemplates.length) {
+        const ensure = e.ensure;
+        // Skipped on an offline venue box: it prints its copy's sheets (row G18).
+        const r = await ensureSheetsBestEffort(() => utils.client.layout.autoSheets.mutate(ensure));
+        if (r && (r.createdSheets.length || r.createdTemplates.length)) {
           void utils.courseMap.list.invalidate();
           void utils.mapTemplate.list.invalidate();
           void utils.layout.classOverrides.invalidate();
         }
       }
-      await downloadSameOriginFile(e.url);
+      // maps.pdf composes on the device when it can (course-print.md §8.6), offline from its stored job; other files download as they are.
+      const out = await downloadExport(e.url);
+      if (out.storedAt) setNotice({ text: t("exportPrintedStored", { time: formatStoredAt(out.storedAt, i18n.language) }), storedAt: out.storedAt });
     } catch (err) {
-      onError(err instanceof Error ? err.message : String(err));
+      onError(message(err));
     } finally {
       setBusy(false);
     }
   };
+
+  // The silent run (Layout mode) shows only in the sync panel: the progress is this menu's own run's.
+  const label = storing && progress ? t("exportOfflineStoring", { done: progress.done, total: progress.total }) : busy ? t("exportBusy") : t("export");
 
   return (
     <div ref={box} className="relative">
@@ -79,13 +125,13 @@ export function ExportMenu({ state, onError }: { state: ExportState; onError: (m
         aria-expanded={open}
         disabled={busy}
         onClick={() => setOpen((v) => !v)}
-        aria-label={`${busy ? t("exportBusy") : t("export")} ▾`}
-        title={busy ? t("exportBusy") : t("export")}
+        aria-label={`${label} ▾`}
+        title={label}
         className="inline-flex items-center gap-1.5 px-2 py-1 text-xs rounded-md border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 cursor-pointer disabled:opacity-50 disabled:cursor-default whitespace-nowrap"
       >
         {/* Icon + label (F29); the label is the first to go when the top bar's row is short. */}
         <span className="inline-flex shrink-0 [&>svg]:w-4 [&>svg]:h-4"><IconExport /></span>
-        <span data-toolbar-label="" className={TOP_BAR_TIER1_HIDE}>{busy ? t("exportBusy") : t("export")}</span>
+        <span data-toolbar-label="" className={TOP_BAR_TIER1_HIDE}>{label}</span>
         <span aria-hidden="true">▾</span>
       </button>
       {open && (
@@ -103,6 +149,13 @@ export function ExportMenu({ state, onError }: { state: ExportState; onError: (m
               {e.id === "course" && e.labelValues ? t("exportCourseVariants", e.labelValues) : t(LABEL[e.id], e.labelValues ?? {})}
             </button>
           ))}
+        </div>
+      )}
+      {notice && (
+        <div role="status" data-testid="editor-export-notice" data-stored-at={notice.storedAt ?? ""}
+          className="absolute right-0 z-30 mt-1 w-64 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800 shadow">
+          <span>{notice.text}</span>
+          <button type="button" onClick={() => setNotice(null)} className="ml-2 cursor-pointer text-emerald-500 hover:text-emerald-700">{t("dismiss")}</button>
         </div>
       )}
       {descriptions && <DescriptionSheetsDialog nameId={state.nameId} onClose={() => setDescriptions(false)} />}

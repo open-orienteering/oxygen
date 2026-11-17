@@ -8,7 +8,7 @@
 import type { MapPoint, MapWindow } from "../course-maps/schema.js";
 import { pointInWindow } from "../course-maps/geometry.js";
 import { OBJECT_TYPE } from "../map-document/header.js";
-import type { MapDocument } from "../map-document/codec.js";
+import type { EffectiveDocument } from "../map-document/patch.js";
 import { isAppliedMatch } from "../map-document/render-bridge.js";
 import { COORD_FLAG } from "../render/pass-stream.js";
 import type { SymbolLibraryId } from "../symbol-library/index.js";
@@ -166,9 +166,11 @@ export function invertedCode(code: number): number | null {
  * The obstacles of a pinned document (§9.3): line and area objects whose
  * symbol — the applied match's code, else the source code — is
  * uncrossable or out of bounds; on-curve vertices, an area's outer ring.
+ * Reads an effective document (docs/map-patches.md §2.4): objects the
+ * patch hides are skipped.
  */
-export function checkObstaclesOfDocument(doc: Pick<MapDocument, "header" | "attrs" | "coords" | "flags" | "coordStart">): CheckDocument {
-  const { header, attrs, coords, flags, coordStart } = doc;
+export function checkObstaclesOfDocument(doc: Pick<EffectiveDocument, "header" | "attrs" | "coords" | "flags" | "coordStart" | "hidden">): CheckDocument {
+  const { header, attrs, coords, flags, coordStart, hidden } = doc;
   const ctx = courseDocumentContext(header);
   const kinds = header.symbols.map((s): { kind: CheckObstacle["kind"]; code: string } | null => {
     if (s.hidden) return null;
@@ -182,7 +184,7 @@ export function checkObstaclesOfDocument(doc: Pick<MapDocument, "header" | "attr
   const obstacles: CheckObstacle[] = [];
   for (let i = 0; i < attrs.symbolIdx.length; i++) {
     const type = attrs.type[i];
-    if (type !== OBJECT_TYPE.line && type !== OBJECT_TYPE.area) continue;
+    if ((type !== OBJECT_TYPE.line && type !== OBJECT_TYPE.area) || hidden?.[i]) continue;
     const k = kinds[attrs.symbolIdx[i]];
     if (!k) continue;
     const points: MapPoint[] = [];

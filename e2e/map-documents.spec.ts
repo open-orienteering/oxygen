@@ -13,7 +13,9 @@ import { API_BASE } from "./helpers/api-base";
  * so the GL dev page can load it straight from the API; the original file
  * streams back from `/api/map-sources/:hash` to an event manager. The
  * second test drives the chunked upload route and the import job status
- * end to end.
+ * end to end. The third delivers the event's map patch beside its
+ * document (docs/map-patches.md §3.3). The fourth imports the CC0 demo
+ * map (it has contours) and reads its height field (map-storage.md §4.7).
  */
 
 const EVENT = "itest";
@@ -170,5 +172,85 @@ test.describe("Map documents", () => {
     expect((await status.json())?.result?.data).toMatchObject({ state: "done", documentHash: result.documentHash, clubMapId: created.id });
     const removed = await request.post(`${API_BASE}/trpc/clubMap.remove`, { data: { id: created.id } });
     expect(removed.ok()).toBe(true);
+  });
+
+  test("the event's map patch is delivered beside its document, revalidated by its version", async ({ request }) => {
+    // Pin a document: one chunk, then apply by hash.
+    const file = readFileSync("e2e/test.ocd");
+    const init = await request.post(`${API_BASE}/api/map-uploads`, { headers: HEADERS, data: { fileName: "patched.ocd", bytes: file.byteLength, chunkBytes: file.byteLength } });
+    expect(init.status()).toBe(201);
+    const { uploadId } = (await init.json()) as { uploadId: string };
+    const put = await request.put(`${API_BASE}/api/map-uploads/${uploadId}/chunks/0`, { headers: { ...HEADERS, "content-type": "application/octet-stream" }, data: file });
+    expect(put.status()).toBe(204);
+    const { fileHash } = (await (await request.post(`${API_BASE}/api/map-uploads/${uploadId}/finalise`, { headers: HEADERS })).json()) as { fileHash: string };
+    const applied = await request.post(`${API_BASE}/trpc/course.applyUploadedMap`, { headers: HEADERS, data: { fileHash, fileName: "patched.ocd" } });
+    const documentHash = (await applied.json())?.result?.data?.documentHash as string;
+    expect(documentHash).toMatch(/^[0-9a-f]{64}$/);
+
+    const url = `${API_BASE}/api/maps/${EVENT}/patch`;
+    const empty = await request.get(url, { headers: HEADERS });
+    expect(empty.status()).toBe(200);
+    expect(await empty.json()).toEqual({ version: "0", patch: null });
+
+    const change = await request.post(`${API_BASE}/trpc/mapPatch.applyChange`, { headers: HEADERS, data: { documentHash, put: [{ op: "hide", sourceIndex: 0 }] } });
+    expect(change.ok()).toBe(true);
+    const written = (await change.json())?.result?.data as { version: string; patch: { ops: Record<string, unknown> } };
+    expect(BigInt(written.version)).toBeGreaterThan(0n);
+
+    const res = await request.get(url, { headers: HEADERS });
+    expect(res.status()).toBe(200);
+    expect(res.headers()["etag"]).toBe(`"${written.version}"`);
+    expect(res.headers()["cache-control"]).toBe("private, no-cache");
+    expect(await res.json()).toEqual({ version: written.version, patch: { documentHash, enabled: true, ops: { "hide:0": { op: "hide", sourceIndex: 0 } }, symbols: {} } });
+    const notModified = await request.get(url, { headers: { ...HEADERS, "if-none-match": `"${written.version}"` } });
+    expect(notModified.status()).toBe(304);
+
+    // The descriptor names the same version; anonymous callers are refused.
+    const meta = await request.get(`${API_BASE}/trpc/course.mapMetadata`, { headers: HEADERS });
+    expect((await meta.json())?.result?.data?.patchVersion).toBe(written.version);
+    expect((await request.get(url, { headers: { ...HEADERS, "x-forwarded-email": "" } })).status()).toBe(401);
+  });
+  test("a map with contours gets a height field: the descriptor names it and height.bin serves it", async ({ request }) => {
+    test.setTimeout(180_000);
+    const file = readFileSync("docs/screenshots/fixtures/puit-de-laven-demo.omap");
+    const init = await request.post(`${API_BASE}/api/map-uploads`, { headers: HEADERS, data: { fileName: "demo.omap", bytes: file.byteLength, chunkBytes: file.byteLength } });
+    expect(init.status()).toBe(201);
+    const { uploadId } = (await init.json()) as { uploadId: string };
+    const put = await request.put(`${API_BASE}/api/map-uploads/${uploadId}/chunks/0`, { headers: { ...HEADERS, "content-type": "application/octet-stream" }, data: file });
+    expect(put.status()).toBe(204);
+    const { fileHash } = (await (await request.post(`${API_BASE}/api/map-uploads/${uploadId}/finalise`, { headers: HEADERS })).json()) as { fileHash: string };
+    const applied = await request.post(`${API_BASE}/trpc/course.applyUploadedMap`, { headers: HEADERS, data: { fileHash, fileName: "demo.omap" }, timeout: 120_000 });
+    expect(applied.ok()).toBe(true);
+    const result = (await applied.json())?.result?.data as { documentHash: string | null; importJob: { state: string } };
+    expect(result.importJob.state).toBe("done");
+    const hash = result.documentHash!;
+
+    // Stage 10 derived the field before the job was done; the descriptor reads the row.
+    const meta = await request.get(`${API_BASE}/trpc/course.mapMetadata`, { headers: HEADERS });
+    const terrain = (await meta.json())?.result?.data?.terrain as { state: string; url: string; version: number; decided: number };
+    expect(terrain).toMatchObject({ state: "ready", source: "contours", url: `/api/map-documents/${hash}/height.bin?v=${terrain.version}` });
+    expect(terrain.decided).toBeGreaterThan(0.8);
+
+    const res = await request.get(`${API_BASE}${terrain.url}`, { headers: HEADERS });
+    expect(res.status()).toBe(200);
+    expect(res.headers()["content-type"]).toBe("application/vnd.oxygen.heightfield");
+    expect(res.headers()["cache-control"]).toBe("private, max-age=31536000, immutable");
+    expect(res.headers()["etag"]).toBe(`"${hash}/height/contours/${terrain.version}"`);
+    const body = await res.body();
+    expect(body.subarray(0, 4).toString("latin1")).toBe("OXHF");
+    const notModified = await request.get(`${API_BASE}${terrain.url}`, { headers: { ...HEADERS, "if-none-match": `"${hash}/height/contours/${terrain.version}"` } });
+    expect(notModified.status()).toBe(304);
+    expect((await request.get(`${API_BASE}${terrain.url}`, { headers: { ...HEADERS, "x-forwarded-email": "" } })).status()).toBe(401);
+    expect((await request.get(`${API_BASE}/api/map-documents/${hash}/height.bin?v=${terrain.version + 1}`, { headers: HEADERS })).status()).toBe(404);
+
+    // The DEM (docs/map-terrain.md §7): fetching is opt-in and the E2E stack enables no provider.
+    expect((terrain as unknown as { dem: unknown }).dem).toEqual({ state: "disabled", reason: null, provider: null, ground: null, anchored: null });
+    const dem = await request.get(`${API_BASE}${terrain.url}&source=ground.glo30-30m`, { headers: HEADERS });
+    expect(dem.status()).toBe(404);
+    expect(await dem.json()).toMatchObject({ reason: "source" });
+    expect((await request.get(`${API_BASE}${terrain.url}&source=dem.nonsense`, { headers: HEADERS })).status()).toBe(400);
+    const named = await request.get(`${API_BASE}${terrain.url}&source=contours`, { headers: HEADERS });
+    expect(named.status()).toBe(200);
+    expect(named.headers()["etag"]).toBe(`"${hash}/height/contours/${terrain.version}"`);
   });
 });

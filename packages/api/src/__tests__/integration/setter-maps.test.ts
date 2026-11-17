@@ -12,14 +12,12 @@ import { resolve } from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
 import { PDFDocument } from "pdf-lib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { STANDARD_PRINT_SCALES, setterSheetPropsSchema } from "@oxygen/shared";
+import { STANDARD_PRINT_SCALES, setterSheetPropsSchema, resolveSheet, sheetInputForMapRow } from "@oxygen/shared";
 import { registerCourseMapRoutes } from "../../course-maps/routes.js";
 import { createTestEvent, disconnect, type TestEventContext } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
 import { applyEventMap } from "../../event-map.js";
 import { clearEventDocumentCaches } from "../../map-store/event-document.js";
-import { sheetInputForMapRow } from "../../course-maps/pdf-page.js";
-import { resolveSheet } from "../../course-maps/resolve-sheet.js";
 
 const fixture = resolve(__dirname, "../../../../../e2e/test.ocd");
 

@@ -11,9 +11,10 @@ import type { AreaSymbol, LineSymbol, PointSymbol, RenderSymbol, TextSymbol } fr
 import { type RenderObject, symbolise } from "../../render/symbolise.js";
 import { liberation } from "../../render/__tests__/fonts.js";
 import {
-  type SymbolLibraryId, entriesForCode, getLibraryEntry, getSymbolLibrary, listSymbolLibraries, materialiseLibrary, parseSymbolLibrary,
-  resolveEntry, symbolLibraryInputs, symbolLibrarySchema, validateLibrary,
+  type SymbolLibraryId, UnknownPaletteIdError, colourRefs, entriesForCode, getLibraryEntry, getSymbolLibrary, isOverlayLibrary, libraryFactor,
+  listSymbolLibraries, materialiseLibrary, parseSymbolLibrary, resolveEntry, symbolLibraryInputs, symbolLibrarySchema, validateLibrary,
 } from "../index.js";
+import { chooseLibrary } from "../../import/matcher.js";
 import { paletteIndex } from "../palette.js";
 
 // Appendix A of 03, typed by hand — the spec's headings, not derived from the entries.
@@ -33,9 +34,23 @@ const ISSPROM_HEADINGS = `101 102 103 104 105.1 105.2 107 108 109 110 111 112 11
 601
 701 702 703 704 705 706 707 708 709 710.1 710.2 714 715`.split(/\s+/);
 
+// ISSkiOM 2019 Revision 4, typed by hand from the text: §3.3.2's water / marsh variants and §3.3.1's
+// track symbols — the overlay's scope (docs/map-symbols.md §12.1). Not 515 (ISOM's own), not §3.3.3.
+const ISSKIOM_HEADINGS = `301.1 301.2 310.1
+801.1 801.2 802.1 802.2 803.1 803.2 804.1 804.2 805 807 808 813.1 813.2`.split(/\s+/);
+
+/** Citation prefix per library (§6 (a)). */
+const CITATION: Record<SymbolLibraryId, RegExp> = {
+  "ISOM2017-2": /^ISOM 2017-2 Rev 6/,
+  "ISSprOM2019-2": /^ISSprOM 2019-2 Rev 6/,
+  ISSkiOM2019: /^ISSkiOM 2019 Revision 4 \(IOF Map Commission, September 2026\)/,
+};
+
 const PURPLE_ROLES: Record<SymbolLibraryId, Record<string, "lower" | "upper">> = {
   "ISOM2017-2": { 701: "lower", 702: "upper", 703: "lower", 704: "upper", 705: "lower", 706: "lower", 707: "upper", 708: "lower", 709: "upper", 710: "lower", 711: "upper", 712: "lower", 713: "lower", 715: "lower" },
   "ISSprOM2019-2": { 701: "lower", 702: "upper", 703: "lower", 704: "upper", 705: "lower", 706: "lower", 707: "upper", 708: "lower", 709: "upper", "710.1": "lower", "710.2": "upper", 714: "upper", 715: "lower" },
+  // The overlay has no course symbols (docs/map-symbols.md §12.1).
+  ISSkiOM2019: {},
 };
 
 const sym = (lib: SymbolLibraryId, id: string): RenderSymbol => {
@@ -54,6 +69,7 @@ const spacedOf = (s: RenderSymbol, i = 0) => {
 };
 const ISOM_IDX = paletteIndex("iof2024", "ISOM2017-2");
 const SPR_IDX = paletteIndex("iof2024", "ISSprOM2019-2");
+const SKI_IDX = paletteIndex("iof2024", "ISSkiOM2019");
 
 describe("symbol library — schema validity (a)", () => {
   it.each(Object.keys(symbolLibraryInputs) as SymbolLibraryId[])("%s parses and passes the authoring checks", (id) => {
@@ -62,12 +78,14 @@ describe("symbol library — schema validity (a)", () => {
     expect(() => parseSymbolLibrary(symbolLibraryInputs[id])).not.toThrow();
   });
 
-  it("libraries are what 03 §6.4 scopes for the first edition", () => {
+  it("libraries are what 03 §6.4 scopes for the first edition, plus the ISSkiOM overlay (§12)", () => {
     const libs = listSymbolLibraries();
-    expect(libs.map((l) => [l.id, l.spec, l.referenceScale, l.palette])).toEqual([
-      ["ISOM2017-2", "ISOM2017-2", 15_000, "iof2024"],
-      ["ISSprOM2019-2", "ISSprOM2019-2", 4_000, "iof2024"],
+    expect(libs.map((l) => [l.id, l.spec, l.referenceScale, l.palette, l.kind])).toEqual([
+      ["ISOM2017-2", "ISOM2017-2", 15_000, "iof2024", "base"],
+      ["ISSprOM2019-2", "ISSprOM2019-2", 4_000, "iof2024", "base"],
+      ["ISSkiOM2019", "ISSkiOM2019", 15_000, "iof2024", "overlay"],
     ]);
+    expect(getSymbolLibrary("ISSkiOM2019").revision).toBe("Revision 4 (September 2026)");
     expect(getSymbolLibrary("ISOM2017-2").entries.length).toBeGreaterThanOrEqual(140);
     expect(getSymbolLibrary("ISSprOM2019-2").entries.length).toBeGreaterThanOrEqual(130);
   });
@@ -76,7 +94,7 @@ describe("symbol library — schema validity (a)", () => {
     for (const lib of listSymbolLibraries()) {
       const seenHeading = new Set<string>();
       for (const e of lib.entries) {
-        expect(e.source).toMatch(new RegExp(`^${lib.spec.replace("2017-2", " 2017-2").replace("2019-2", " 2019-2")} Rev 6`));
+        expect(e.source).toMatch(CITATION[lib.id as SymbolLibraryId]);
         if (e.variant === null) seenHeading.add(e.code);
         else expect(seenHeading.has(e.code), `${e.id} has no heading entry before it`).toBe(true);
       }
@@ -106,6 +124,35 @@ describe("symbol library — schema validity (a)", () => {
       "duplicate id",
     ]));
   });
+
+  it("validateLibrary reports the overlay and scale-rule mistakes (§5, §12.2)", () => {
+    const ski = symbolLibrarySchema.parse(symbolLibraryInputs.ISSkiOM2019);
+    const track = ski.entries.find((e) => e.id === "ISSkiOM2019:801.1")!;
+    const broken = {
+      ...ski,
+      scaleRules: {
+        track: [{ mapScale: 10_000, factor: 1 }, { mapScale: 10_000, factor: 1.2 }],
+        other: [{ mapScale: 15_000, factor: 1 }],
+      },
+      entries: [
+        track,
+        { ...track, id: "ISSkiOM2019:705", code: "705", purpleRole: "lower" as const },
+        { ...track, id: "ISSkiOM2019:802.1", code: "802.1", scaleGroup: "nope" },
+        { ...track, id: "ISSkiOM2019:803.1", code: "803.1", scaleGroup: undefined },
+      ],
+    };
+    const messages = validateLibrary(broken).map((p) => p.message);
+    expect(messages).toEqual(expect.arrayContaining([
+      "an overlay library has no course symbols",
+      'scale group "track" lists 1:10000 twice',
+      'scale group "track" needs factor 1 at the reference scale 1:15000',
+      'scale group "nope" is not in the library\'s scaleRules',
+      "entries need a scaleGroup when the library has scaleRules",
+    ]));
+    const base = symbolLibrarySchema.parse(symbolLibraryInputs["ISOM2017-2"]);
+    const stray = validateLibrary({ ...base, entries: [{ ...base.entries[0], scaleGroup: "track" }] }).map((p) => p.message);
+    expect(stray).toContain("scaleGroup needs scaleRules on the library");
+  });
 });
 
 describe("symbol library — heading coverage (b)", () => {
@@ -121,11 +168,109 @@ describe("symbol library — heading coverage (b)", () => {
     expect(missing).toEqual([]);
   });
 
+  it("ISSkiOM 2019: all 16 overlay headings have a heading entry, and nothing else is in it", () => {
+    expect(ISSKIOM_HEADINGS).toHaveLength(16);
+    const missing = ISSKIOM_HEADINGS.filter((code) => !entriesForCode("ISSkiOM2019", code).some((e) => e.variant === null));
+    expect(missing).toEqual([]);
+    expect(getSymbolLibrary("ISSkiOM2019").entries.map((e) => e.code)).toEqual(ISSKIOM_HEADINGS);
+  });
+
   it("no entry uses a code outside its spec's headings", () => {
     const stray = (lib: SymbolLibraryId, headings: string[]) =>
       getSymbolLibrary(lib).entries.filter((e) => !headings.includes(e.code)).map((e) => e.id);
     expect(stray("ISOM2017-2", ISOM_HEADINGS)).toEqual([]);
     expect(stray("ISSprOM2019-2", ISSPROM_HEADINGS)).toEqual([]);
+    expect(stray("ISSkiOM2019", ISSKIOM_HEADINGS)).toEqual([]);
+  });
+});
+
+describe("symbol library — the ISSkiOM overlay (§12)", () => {
+  it("is an overlay: no base heading code, no course symbol, never chosen for a document", () => {
+    expect(isOverlayLibrary("ISSkiOM2019")).toBe(true);
+    expect(isOverlayLibrary("ISOM2017-2")).toBe(false);
+    expect(isOverlayLibrary("ISSprOM2019-2")).toBe(false);
+    expect(ISSKIOM_HEADINGS.filter((c) => ISOM_HEADINGS.includes(c) || ISSPROM_HEADINGS.includes(c))).toEqual([]);
+    expect(getSymbolLibrary("ISSkiOM2019").entries.filter((e) => e.code.startsWith("7"))).toEqual([]);
+    for (const scale of [1_000, 3_000, 4_000, 5_000, 7_500, 10_000, 15_000, 20_000]) expect(chooseLibrary(scale)).not.toBe("ISSkiOM2019");
+  });
+
+  it("uses exactly these palette ids — what G21 must insert into a stack that lacks them", () => {
+    const used = new Set(getSymbolLibrary("ISSkiOM2019").entries.flatMap((e) => [...colourRefs(e.render)]));
+    expect([...used].sort()).toEqual(["black100", "blue100-area", "blue100-line", "blue50-area", "green-skio", "green100-area", "orange-skio", "white-skio"]);
+  });
+
+  it("no Swedish names, no aliases (§12.4)", () => {
+    for (const e of getSymbolLibrary("ISSkiOM2019").entries) {
+      expect(e.name.sv, e.id).toBeUndefined();
+      expect(e.aliases, e.id).toEqual([]);
+    }
+  });
+
+  it("the compulsory states do not resolve against the 2022 edition, which has no Ski-O orange", () => {
+    expect(() => materialiseLibrary("ISSkiOM2019", "iof2022")).toThrow(UnknownPaletteIdError);
+  });
+});
+
+describe("libraryFactor (§12.2; 03 §6.6)", () => {
+  it("base libraries: referenceScale / mapScale, the code ignored", () => {
+    expect(libraryFactor("ISOM2017-2", 15_000)).toBe(1);
+    expect(libraryFactor("ISOM2017-2", 10_000)).toBe(1.5);
+    expect(libraryFactor("ISOM2017-2", 7_500)).toBe(2);
+    expect(libraryFactor("ISOM2017-2", 10_000, "503")).toBe(1.5);
+    expect(libraryFactor("ISSprOM2019-2", 4_000)).toBe(1);
+    expect(libraryFactor("ISSprOM2019-2", 3_000)).toBeCloseTo(4 / 3, 12);
+    for (const lib of ["ISOM2017-2", "ISSprOM2019-2"] as const) {
+      for (const scale of [2_500, 4_000, 5_000, 7_500, 10_000, 12_500, 15_000]) {
+        expect(libraryFactor(lib, scale)).toBe(getSymbolLibrary(lib).referenceScale / scale);
+      }
+    }
+  });
+
+  // ISSkiOM 2019 Revision 4 §3.2, typed by hand: [map scale, track symbols, other symbols].
+  const SKI_SCALES: [number, number, number][] = [
+    [15_000, 1, 1],
+    [12_500, 1, 1.2],
+    [10_000, 1, 1.5],
+    [7_500, 1.33, 1.5],
+    [5_000, 1.5, 1.5],
+  ];
+
+  it.each(SKI_SCALES)("ISSkiOM 1:%i — track symbols ×%f, other symbols ×%f", (scale, track, other) => {
+    for (const code of ["801.1", "803.2", "805", "807", "808", "813.2"]) expect(libraryFactor("ISSkiOM2019", scale, code), code).toBe(track);
+    for (const code of ["301.1", "301.2", "310.1"]) expect(libraryFactor("ISSkiOM2019", scale, code), code).toBe(other);
+  });
+
+  it("ISSkiOM: every entry names its row set", () => {
+    const groups = Object.fromEntries(getSymbolLibrary("ISSkiOM2019").entries.map((e) => [e.code, e.scaleGroup]));
+    expect(groups).toEqual({
+      "301.1": "other", "301.2": "other", "310.1": "other",
+      "801.1": "track", "801.2": "track", "802.1": "track", "802.2": "track", "803.1": "track", "803.2": "track",
+      "804.1": "track", "804.2": "track", "805": "track", "807": "track", "808": "track", "813.1": "track", "813.2": "track",
+    });
+  });
+
+  it("ISSkiOM: an unlisted scale takes the row nearest by ratio, clamped at the ends", () => {
+    expect(libraryFactor("ISSkiOM2019", 4_000, "803.1")).toBe(1.5);
+    expect(libraryFactor("ISSkiOM2019", 1_000, "301.1")).toBe(1.5);
+    expect(libraryFactor("ISSkiOM2019", 20_000, "803.1")).toBe(1);
+    expect(libraryFactor("ISSkiOM2019", 9_000, "803.1")).toBe(1); // nearer 1:10 000 than 1:7 500
+    expect(libraryFactor("ISSkiOM2019", 8_000, "803.1")).toBe(1.33); // nearer 1:7 500
+    expect(libraryFactor("ISSkiOM2019", 14_000, "301.1")).toBe(1); // nearer 1:15 000 than 1:12 500
+  });
+
+  it("ISSkiOM: a tie by ratio goes to the larger denominator", () => {
+    // 1:13 693.06… is the geometric mean of 1:12 500 and 1:15 000.
+    const mid = Math.sqrt(12_500 * 15_000);
+    expect(libraryFactor("ISSkiOM2019", mid, "301.1")).toBe(1);
+  });
+
+  it("throws on a missing or unknown code where the library has row sets, and on a bad scale", () => {
+    expect(() => libraryFactor("ISSkiOM2019", 10_000)).toThrow(/needs an entry code/);
+    expect(() => libraryFactor("ISSkiOM2019", 10_000, "503")).toThrow(/no entry 503/);
+    for (const bad of [0, -10_000, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => libraryFactor("ISOM2017-2", bad)).toThrow(/map scale/);
+      expect(() => libraryFactor("ISSkiOM2019", bad, "801.1")).toThrow(/map scale/);
+    }
   });
 });
 
@@ -324,6 +469,92 @@ describe("symbol library — dimension table, ISSprOM 2019-2 Rev 6 (c)", () => {
     expect(A("709").hatches![0]).toMatchObject({ widthUm: 400, spacingUm: 1200 }); // Rev 6: 0.25 → 0.4
     expect(P("710.1").glyph.parts[0]).toMatchObject({ widthUm: 500 }); // Rev 6: 0.35 → 0.5
     expect(A("714")).toMatchObject({ fill: SPR_IDX.get("purple50"), border: { main: { widthUm: 100, colour: SPR_IDX.get("purple-upper") } } });
+  });
+});
+
+describe("symbol library — dimension table, ISSkiOM 2019 Revision 4 (c)", () => {
+  // Typed from ISSkiOM 2019 Revision 4 §3.3.1–3.3.2 (µm at 1:15 000), not from the entry files.
+  const L = (id: string) => asLine(sym("ISSkiOM2019", id));
+  const A = (id: string) => asArea(sym("ISSkiOM2019", id));
+  const G = SKI_IDX.get("green-skio");
+  const O = SKI_IDX.get("orange-skio");
+  const K = SKI_IDX.get("black100");
+  const W = SKI_IDX.get("white-skio");
+  const dash = (dashUm: number, gapUm: number) => ({ layout: "ocad", dashUm, gapUm });
+  /** Black 0.12 inside edges of a compulsory state whose overall width is `overallUm`. */
+  const edges = (overallUm: number) => ({ colour: K, widthUm: 120, shiftUm: overallUm / 2 - 60 });
+
+  it("801–802: very wide and wide tracks, green and compulsory, same overall width, white mask 0.15 each side", () => {
+    expect(L("801.1").main).toMatchObject({ colour: G, widthUm: 850, halo: { colour: W, widthUm: 150 } });
+    expect(L("801.1").borders).toBeUndefined();
+    expect(L("801.2").main).toMatchObject({ colour: O, widthUm: 610, halo: { colour: W, widthUm: (850 + 300 - 610) / 2 } });
+    expect(L("801.2").borders).toMatchObject({ left: edges(850), right: edges(850) });
+    expect(L("802.1").main).toMatchObject({ colour: G, widthUm: 600, halo: { colour: W, widthUm: 150 } });
+    expect(L("802.2").main).toMatchObject({ colour: O, widthUm: 360, halo: { colour: W, widthUm: (600 + 300 - 360) / 2 } });
+    expect(L("802.2").borders).toMatchObject({ left: edges(600), right: edges(600) });
+  });
+
+  it("803: track 0.8 - 1.2 m dashed 3.0 / 0.5, the mask continuous, the compulsory edges dashed with it", () => {
+    expect(L("803.1").main).toMatchObject({ colour: G, widthUm: 500, dash: dash(3000, 500), halo: { colour: W, widthUm: 150, continuous: true } });
+    expect(L("803.2").main).toMatchObject({ colour: O, widthUm: 260, dash: dash(3000, 500), halo: { colour: W, widthUm: (500 + 300 - 260) / 2, continuous: true } });
+    expect(L("803.2").borders).toMatchObject({ left: { ...edges(500), dash: dash(3000, 500) }, right: { ...edges(500), dash: dash(3000, 500) } });
+  });
+
+  it("804: slow track, dots ø 0.70 every 1.3 (CC), each on a white ø 1.0 mask; compulsory: orange ø 0.46 in black ø 0.70", () => {
+    expect(L("804.1").main).toBeUndefined();
+    expect(spacedOf(L("804.1"))).toMatchObject({ distanceUm: 1300 });
+    expect(L("804.1").glyphs![0].glyph.parts).toMatchObject([{ kind: "disc", colour: W, diameterUm: 1000 }, { kind: "disc", colour: G, diameterUm: 700 }]);
+    expect(spacedOf(L("804.2"))).toMatchObject({ distanceUm: 1300 });
+    expect(L("804.2").glyphs![0].glyph.parts).toMatchObject([
+      { kind: "disc", colour: W, diameterUm: 1000 }, { kind: "disc", colour: K, diameterUm: 700 }, { kind: "disc", colour: O, diameterUm: 460 },
+    ]);
+  });
+
+  it("805, 807: the ski-only roads, black, no mask", () => {
+    expect(L("805").main).toEqual({ colour: K, widthUm: 700, cap: "flat", join: "miter" });
+    expect(L("807").main).toBeUndefined();
+    // Two 0.12 lines with a 0.14 gap: 0.38 overall, dashed 3.0 / 0.5 together.
+    expect(L("807").borders).toMatchObject({
+      left: { colour: K, widthUm: 120, shiftUm: 130, dash: dash(3000, 500) },
+      right: { colour: K, widthUm: 120, shiftUm: 130, dash: dash(3000, 500) },
+    });
+  });
+
+  it("808: prepared area, green 100 % cross-hatch 0.20 at 0.80 (CC) ±45°, Ski-O green 0.13 outline", () => {
+    expect(A("808").hatches).toMatchObject([
+      { colour: SKI_IDX.get("green100-area"), widthUm: 200, spacingUm: 800, angleDeg: 45, rotate: "never" },
+      { colour: SKI_IDX.get("green100-area"), widthUm: 200, spacingUm: 800, angleDeg: -45, rotate: "never" },
+    ]);
+    expect(A("808").border!.main).toMatchObject({ colour: G, widthUm: 130 });
+    expect(A("808").fill).toBeUndefined();
+  });
+
+  it("813: snow mobile route 0.81 overall, the core dashed 1.5 / 1.0 over the mask; .1 green, core 0.57; .2 black, orange, core 0.33", () => {
+    expect(L("813.1").main).toMatchObject({ colour: G, widthUm: 570, dash: dash(1500, 1000), halo: { colour: W, widthUm: (810 + 300 - 570) / 2, continuous: true } });
+    expect(L("813.1").borders).toMatchObject({ left: { colour: G, widthUm: 120, shiftUm: 345 }, right: { colour: G, widthUm: 120, shiftUm: 345 } });
+    expect(L("813.1").borders!.left!.dash).toBeUndefined();
+    expect(L("813.2").main).toMatchObject({ colour: O, widthUm: 330, dash: dash(1500, 1000), halo: { colour: W, widthUm: (810 + 300 - 330) / 2, continuous: true } });
+    expect(L("813.2").borders).toMatchObject({
+      left: { colour: O, widthUm: 120, shiftUm: 225 },
+      right: { colour: O, widthUm: 120, shiftUm: 225 },
+      extraPairs: [{ left: { colour: K, widthUm: 120, shiftUm: 345 }, right: { colour: K, widthUm: 120, shiftUm: 345 } }],
+    });
+  });
+
+  it("301.1, 301.2, 310.1: the ski versions of water and marsh", () => {
+    expect(A("301.1")).toMatchObject({ fill: SKI_IDX.get("blue50-area"), border: { main: { colour: SKI_IDX.get("blue100-line"), widthUm: 100 } } });
+    expect(A("301.2")).toMatchObject({ fill: SKI_IDX.get("blue100-area"), border: { main: { colour: K, widthUm: 300 } } });
+    // "The same symbol as Indistinct marsh (310)" of ISOM 2017-2, in blue 50 %, orientated to north.
+    expect(A("310.1").patterns).toMatchObject([
+      { cellWidthUm: 1150, cellHeightUm: 300, shiftedRows: true, rotate: "never", glyph: { parts: [{ colour: SKI_IDX.get("blue50-area"), widthUm: 100, geometry: { coords: [-450, 0, 450, 0] } }] } },
+    ]);
+    expect(A("310.1").fill).toBeUndefined();
+  });
+
+  it("the track symbols' masks are all in white-skio, under the track colours", () => {
+    for (const id of ["801.1", "801.2", "802.1", "802.2", "803.1", "803.2", "813.1", "813.2"]) expect(L(id).main!.halo!.colour, id).toBe(W);
+    expect(W!).toBeLessThan(K!);
+    expect(K!).toBeLessThan(O!);
   });
 });
 

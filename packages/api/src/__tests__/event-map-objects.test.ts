@@ -85,6 +85,19 @@ describe("slimObjectsOfDocument", () => {
     expect(slim([sym("204.0", "point", { hidden: true })], [obj(0, OBJECT_TYPE.point, [0, 0])])).toEqual([]);
   });
 
+  it("drops objects the patch hides and keeps the ones it adds (map-patches §2.4)", () => {
+    const doc = mapDocument.decodeMapDocument(mapDocument.encodeMapDocument({
+      header: header([sym("204.0", "point")]),
+      objects: [{ ...obj(0, OBJECT_TYPE.point, [100, 200]), sourceIndex: 4 }, { ...obj(0, OBJECT_TYPE.point, [300, 400]), sourceIndex: 5 }],
+    }));
+    const id = "00000000-0000-4000-8000-0000000000c3";
+    const { document } = mapDocument.applyPatch(doc, mapDocument.mapPatchSchema.parse({
+      documentHash: "ab".repeat(32),
+      ops: { "hide:4": { op: "hide", sourceIndex: 4 }, [`add:${id}`]: { op: "add", id, type: OBJECT_TYPE.point, symbol: { doc: 0 }, coords: [[500, 600]] } },
+    }));
+    expect(slimObjectsOfDocument(document).map((o) => o.coordinates[0])).toEqual([[300, 400], [500, 600]]);
+  });
+
   it("drops non-numeric codes (graphics)", () => {
     expect(slim([sym("graphic", "line", { origin: "graphic" })], [obj(0, OBJECT_TYPE.line, [0, 0, 10, 10])])).toEqual([]);
   });

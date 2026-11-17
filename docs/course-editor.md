@@ -48,7 +48,7 @@ link restores them (`lib/editor/url.ts`: `parseEditorUrl`,
 | Param | Value | Absent |
 |---|---|---|
 | `course` | the selected course's seq | no course |
-| `mode` | `layout` \| `field`; on a phone also `course` | Course mode (a phone: Field, §10) |
+| `mode` | `layout` \| `field` \| `map` (§13); on a phone also `course` | Course mode (a phone: Field, §10) |
 | `view` | `all` \| `class` \| `variant` \| `all-variations` | Course view |
 | `class` | Class view's class (seq), with `view=class` | — |
 | `variant` | Variant view's key, with `view=variant`; in Class view and Layout the variant drawn when it is not the first (F8) | the first variant |
@@ -101,17 +101,20 @@ link restores them (`lib/editor/url.ts`: `parseEditorUrl`,
   is always written, so a link from a phone opens Field on a desktop too.
   A phone in Course mode writes `mode=course` (Course is not its
   default), so a reload keeps it; a desktop omits it. `mode=layout` on a
-  phone opens Field and leaves the URL (Layout is a desktop mode, §10).
+  phone opens Field and leaves the URL (Layout is a desktop mode, §10);
+  so does `mode=map` (Map mode, §13, is desktop only), which a desktop
+  always writes.
 - **Inbound links** keep working unchanged: the Courses page's pencil
   (`?course=<seq>`), the Controls page's (`?control=<id>`), the Courses
   page's *Edit layout* (`layoutEditorHref`, `course-layout.md` §4) and
   the retired pages' redirects. The editor rewrites them to their
   canonical order once taken.
 
-**Modes** (08 §5.1): Course, Layout, Field share one canvas, selection and
+**Modes** (08 §5.1): Course, Layout, Field and Map share one canvas and
 undo history. Course mode is this chapter; **Layout mode** — the sheet as
 the view, course edits locked — is `course-layout.md`; Field mode is D9's
-(§9; the initial mode on a phone, §10). The **view** picker
+(§9; the initial mode on a phone, §10); **Map mode** — the event's map
+corrections, course edits locked, desktop only — is §13 (G6). The **view** picker
 offers *Course* (the selected course full-strength, other controls faded)
 and *All controls* (every site with its code, no legs; the inspector keeps
 the selected course). *Class* (`editor-view-class`, a picker of the
@@ -133,15 +136,16 @@ exit bubble on every pointer move
 
 | Part | `data-testid` | What it holds |
 |---|---|---|
-| Top bar (`TopBar.tsx`) | `editor-top-bar` | course picker (`editor-course-picker`; roots and plain courses — a materialised variant is edited through its root, §12), view (`editor-view-course` / `-all` / `-class`, and for a course with variations `editor-view-variant` (Variant ▾) and `editor-view-all-variations`, §12), mode (`editor-mode-course` / `-layout` / `-field`; icons alone when the row is short, "Top bar" below), undo / redo (`editor-undo` / `-redo`), hide other controls (`editor-hide-others`), auto cuts (`editor-toggle-cuts`), the placement loupe toggle (`editor-placement-loupe`, a magnifier, lit — `aria-pressed` — when on; §10 "Loupe", F27), Export ▾ (`editor-export`, icon + label, `course-layout.md` §7), the map info (`editor-map-info`, below), the course-info button and the save indicator (below), who else has a course open (§11), help popover; MapPanel adds descriptions, fullscreen and the viewer its zoom on the same row |
-| Tool rail (`ToolRail.tsx`; Layout mode: `layout/LayoutRail.tsx`, `editor-layout-rail`, `course-layout.md` §3) | `editor-tool-rail` | `editor-tool-<key>` for `V`, `S`, `K`, `M`, `X` (map exchange, §6.9), `C` (crossing point, §6.8), `A` (menu `editor-area-menu`, `editor-area-<kind>`, and `editor-area-corridor` — §6.7), `T`, `G`; the snapping toggle `editor-snapping` (§6) |
+| Top bar (`TopBar.tsx`) | `editor-top-bar` | course picker (`editor-course-picker`; roots and plain courses — a materialised variant is edited through its root, §12), view (`editor-view-course` / `-all` / `-class`, and for a course with variations `editor-view-variant` (Variant ▾) and `editor-view-all-variations`, §12), mode (`editor-mode-course` / `-layout` / `-field` / `-map`, §13; icons alone when the row is short, "Top bar" below), undo / redo (`editor-undo` / `-redo`), hide other controls (`editor-hide-others`; in Map mode its slot is `editor-hide-overprint`, §13), auto cuts (`editor-toggle-cuts`), the placement loupe toggle (`editor-placement-loupe`, a magnifier, lit — `aria-pressed` — when on; §10 "Loupe", F27), Export ▾ (`editor-export`, icon + label, `course-layout.md` §7), the map info (`editor-map-info`, below), the course-info button and the save indicator (below), who else has a course open (§11), help popover; MapPanel adds descriptions, fullscreen and the viewer its zoom on the same row |
+| Tool rail (`ToolRail.tsx`; Layout mode: `layout/LayoutRail.tsx`, `editor-layout-rail`, `course-layout.md` §3; Map mode: `V` and `N` and its own `editor-snapping`, §13) | `editor-tool-rail` | `editor-tool-<key>` for `V`, `S`, `K`, `M`, `X` (map exchange, §6.9), `C` (crossing point, §6.8), `A` (menu `editor-area-menu`, `editor-area-<kind>`, and `editor-area-corridor` — §6.7), `T`, `G`; the snapping toggle `editor-snapping` (§6) |
 | Action bar (`ActionBar.tsx`) | `editor-action-bar` | the selection's or phantom's entries, horizontal, centred under the selection, hidden during a drag; ids `editor-action-<id>` as the legacy popover's. Always inside the viewer, 8 px from its edges (`lib/editor/action-bar-place.ts`): near a side it is shifted sideways, and when it does not fit below the selection it goes above it (`data-placement="below" \| "above"`). It is never wider than the viewer less 16 px. The *Also in* line is one line cut with an ellipsis, with the whole list in its `title` (the inspector lists the courses too) (`docs/bugfix-action-bar-off-viewer.md`). The viewer positions it (`actionLayout: "bar"`); on a phone the same list is the bottom sheet's peek row (`actionLayout: "host"`, §10) |
 | Inspector (`Inspector.tsx`, `modes/CourseMode.tsx`, `modes/ObjectSection.tsx`) | `editor-inspector` | collapsible sections: course (create, sequence — a variation group as a nested block `editor-variation`, §12 —, visit order, description sheet — `editor-description-instructions`, §4 —, clone), selection (a site: code, kind, position, description summary, "also in", hidden number, notes — §6.6; several controls: `editor-multi` with the bulk actions — §6.5; a course object: `editor-object` — §7; a leg: `editor-leg` — §6.7, `modes/LegSection.tsx`), inventory (`editor-inventory-panel`, collapsed), checks (`editor-checks`, §8) |
 | Map info (`MapInfoDialog.tsx`, model `lib/editor/map-info.ts`; P6) | `editor-map-info` → `editor-map-info-dialog` | a map icon button (`IconMap`, `components/map-icons.tsx`) in the top bar right after Export ▾ (`aria-haspopup="dialog"`, `aria-expanded`); a click opens a modal (`role="dialog"`, `aria-modal="true"`, centred over a dimmed backdrop; the close button `editor-map-info-close`, a backdrop click or Escape closes it). Its header shows the map's file name (`editor-map-info-name`, `data-name`) or, without a map, `editor-map-info-none`. Its rows, each only when it has a value: the scale `editor-map-info-scale` (`data-scale`, `1:10 000`), the north lines `editor-map-info-north` (the `NorthLinesBadge` sentence, `north-lines-badge` with `data-north-lines`; *No magnetic north lines found* when the file has none), the file `editor-map-info-file` (size and upload time, `data-bytes`, `data-uploaded`); then the document section `editor-map-info-document` (`data-source`, `data-objects`, `data-symbols`, `data-colours`; read from the loaded document's header, absent while it loads or the import runs) with `editor-map-info-source` (OCAD and its version, or OpenOrienteering Mapper), `-content` (objects · symbols · colours), `-symbol-library` (the matched symbol library and version; not `-library`, which is the action below), `-crs` (EPSG code and name) and `-importer`. Its actions: *Review symbols* (`editor-map-info-review`, a link to `/<event>/map-review/<documentHash>`, only once the document exists — `map-symbols.md` §8.7), *Replace map* (`editor-map-info-replace`; *Upload map* without a map; the hidden `accept=".ocd"` input), *From club library* (`editor-map-info-library`, only when the club library lists a map; opens `club-map-picker`, `club-library.md`). An upload's progress, error and the stale-north-lines notice (`map-upload-notice`) show in the dialog's footer |
 | Course info (`EditorStatus.tsx` `StatsButton`, model `lib/editor/status.ts`) | `editor-stats` → `editor-stats-popover` | an icon button in the top bar (`aria-haspopup="dialog"`, `aria-expanded`) with the check count as its amber badge (`editor-stats-badge`, `data-count`, absent at zero, §8); a click opens the popover (`role="dialog"`; a second click, an outside click or Escape closes it — Escape closes only the popover, the editor's Escape cascade of §3 is not stepped, so an armed tool stays armed). Its rows, each only when it has a value, in this order: `editor-stats-controls` (`data-count`), `editor-stats-length` (`data-m`), `editor-stats-climb` (`data-m`), the shown sheet's key in Layout mode and Class view (`editor-stats-sheet`, `data-key`, `course-layout.md` §6), `editor-stats-snapping` when on, `editor-stats-checks` (`data-count`, amber). No map scale since P6: it is the map-info dialog's (`courseInfoRows`). With no course and no sheet the popover says *No course* |
-| Save indicator (`EditorStatus.tsx` `SaveIndicator`) | `editor-save-state` | in the top bar after the course-info button: a dot and the save state's words (`data-state` = `saved` / `saving` / `error` / `conflict`, `role="status"`, `aria-live="polite"`, the words also its `title`). `saved` / `saving` are the dot alone (green / grey pulsing; the words `sr-only`), so P2 adds a dot (≤ 16 px) and an icon button (≤ 32 px) to the top bar's row (how the row makes room on a laptop screen: "Top bar" below, F29); `error` / `conflict` show their words (`editor-save-state-text`, red) at every width — a failed or conflicting save never hides behind a popover or a tooltip |
+| Save indicator (`EditorStatus.tsx` `SaveIndicator`) | `editor-save-state` | in the top bar after the course-info button: a dot and the save state's words (`data-state` = `saved` / `saving` / `error` / `conflict` / `queued` — Field mode's writes waiting in the outbox, §9 "Offline", D9c —, `role="status"`, `aria-live="polite"`, the words also its `title`). `saved` / `saving` are the dot alone (green / grey pulsing; the words `sr-only`), so P2 adds a dot (≤ 16 px) and an icon button (≤ 32 px) to the top bar's row (how the row makes room on a laptop screen: "Top bar" below, F29); `error` / `conflict` show their words (`editor-save-state-text`, red) at every width — a failed or conflicting save never hides behind a popover or a tooltip; `queued` shows its words too, amber |
 | Conflict notice | `editor-conflict` | §3 |
-| Field mode (§9) | `editor-inspector-field`, `editor-field-selection`, `editor-nudge-pad`, `editor-field-offline` | the control list with distance / bearing and check-off in place of the sequence; the selection's distance, check-off and nudge pad; no tool rail |
+| Map mode (§13) | `editor-mode-map`, `editor-hide-overprint`, `editor-inspector-map-object`, `editor-map-object` (`-none`, `-symbol`, `-swatch`, `-hide`, `-restore`), `editor-corrections` (`-count`, `-none`, `-apply`), `editor-correction-row` (`-locate`, `-revert`), `editor-map-none`, `editor-map-disabled`, `editor-map-readonly`, `editor-tool-N`, `editor-map-node`, `editor-map-node-grip`, `editor-map-nodes-hint`, `editor-map-nodes-none` (`data-reason`), `editor-snapping` (Map mode's own, "Nodes") | the inspector's *Map object* and *Corrections* sections in place of the course's; the rail's `V`, `N` and snapping toggle |
+| Field mode (§9) | `editor-inspector-field`, `editor-field-selection`, `editor-nudge-pad`, `editor-field-offline` | the control list with distance / bearing and check-off in place of the sequence; the selection's distance, check-off and nudge pad; no tool rail; the outbox notice (offline, or writes waiting: the count, Retry / Discard; §9 "Offline") |
 | Phone chrome (§10) | `editor-field-top-bar`, `editor-overflow`, `editor-sheet`, `editor-field-add` | below 640 px: the compact top bar, the bottom sheet (peek: the status line `editor-status` — `StatusBar.tsx`: `editor-status-kpis`, `editor-status-checks`, `editor-save-state` —, selection, action bar) and the floating `+` instead of the top bar, rail and inspector strip above |
 
 **Top bar: icons when the row is short** (F29, feedback-2026-11-11 item 2
@@ -157,7 +161,7 @@ literal Tailwind `@max-[…px]/toolbar:` strings):
 |---|---|
 | ≥ 1600 px | every label |
 | < 1600 px (tier 1) | the labels of `editor-hide-others`, `editor-toggle-cuts`, `map-toggle-descriptions` (MapPanel's, in the editor only — `labelClassName` is set when the panel has an `editor`, so other pages' map panels keep the `sm` rule alone) and `editor-export` are hidden, and the course picker's *Course* word; the buttons show their icons (Export ▾ is icon + label + ▾ since F29, `IconExport`) |
-| < 1170 px (tier 2) | in addition the mode switch shows its icons alone: `IconModeCourse` (a start triangle, a leg and a control circle), `IconModeLayout` (a sheet with its map frame and title bar), `IconModeField` (a control flag), `components/map-icons.tsx` |
+| < 1220 px (tier 2) | in addition the mode switch shows its icons alone: `IconModeCourse` (a start triangle, a leg and a control circle), `IconModeLayout` (a sheet with its map frame and title bar), `IconModeField` (a control flag), `IconModeMap` (a folded map sheet with a pencil, §13), `components/map-icons.tsx` |
 | narrower still | `flex-wrap` on the top bar, the last resort |
 
 The view group (Course · All controls · Class ▾ · Variant ▾ · All
@@ -170,11 +174,14 @@ through `aria-label` (its `<label>` word may be hidden), Export ▾ through
 top bar (§10) and `ToolbarButton`'s own `sm` rule still hides every label.
 
 The thresholds are measured (`e2e/editor-top-bar.spec.ts`, the E2E seed's
-widest row: *Bana 1* with its Class ▾): the full row's content is 1346 px
-in English and 1374 px in Swedish; a course with variations adds Variant ▾
-and All variations (about 200 px), so tier 1 starts below 1600 px. Tier 1
-saves about 385 px (410 px in Swedish), leaving at most about 1161 px with
-variations, so tier 2 starts below 1170 px; it saves about 60 px more.
+widest row: *Bana 1* with its Class ▾): the full row's content was 1346 px
+in English and 1374 px in Swedish before G6; Map mode's entry (§13) adds
+41 px with its word (measured, English; 32 px as an icon), so about 1387 px
+and 1420 px. A course with variations adds Variant ▾ and All variations
+(about 200 px), so tier 1 starts below 1600 px. Tier 1 saves about 385 px
+(410 px in Swedish), leaving at most about 1202 px with variations (about
+1214 px in Swedish), so tier 2 starts below 1220 px (1170 px before G6's
+fourth mode); it saves about 70 px more.
 Presence chips (§11) and long course names (the picker is capped at
 10 rem) can still wrap the row below that. At 1840 × 1090, the user's
 laptop, the row's content is about 1760 px with F28's wide editor, so
@@ -271,9 +278,20 @@ restored position.
 (`setInstructions`, §4) and `control.update` sends `baseVersion` from a
 `VersionBook` (`lib/version-book.ts`) — the newest token seen per row,
 from `course.list`, `control.list`, `course.detail` and each write's
-result — so back-to-back writes send their predecessor's token.
+result — so back-to-back writes send their predecessor's token. One write
+per row is in flight: a write of a row with one in flight waits for it to
+settle (`EditorWrites.serial`) and then reads the token its result seeded —
+Ctrl+Z pressed twice before the first undo's reply is two writes in order,
+not two on one token (docs/bugfix-editor-overlapping-course-writes.md). A
+refused write passes the token its refusal seeded to the next; writes of
+different rows do not wait for each other.
 `course.setControlLabelOffset`, `course.create` / `clone` and
-`control.delete` take no token and seed the ones they return.
+`control.delete` take no token and seed the ones they return
+(`setControlLabelOffset` advances the course's token, so it queues as a
+course write). Map mode's
+`mapPatch.applyChange` / `setEnabled` (§13, `applyPatchChange`,
+`setPatchEnabled`) take none either: the patch merges per op id,
+last-writer-wins (`map-patches.md` §3.2).
 
 **Conflicts** (`lib/editor/conflict.ts`; `course-layer.md` §7 "Client
 rules"):
@@ -289,7 +307,18 @@ rules"):
 The reload is the usual cache invalidation after every write. The moved
 notice names who and when when the journal has it (§11).
 
+**Queued writes** (D9c, §9 "Offline"): Field mode's moves and check-offs
+that could not go out wait in the device's outbox and replay in order
+under the same rules, each move on the token it was queued with; a
+`moved` on replay is the same notice, its buttons settling the entry.
+One gesture is still one undo entry; offline, undo / redo run only those
+entries, and an undo back to where a waiting move started drops it.
+
 ## 4. Course mode
+
+Course mode's gestures and keys below are locked in Layout mode
+(`course-layout.md`) and Map mode (§13): neither gets the control, label,
+leg or map-click callbacks, and their rails and keys are their own.
 
 Structure writes go through `course.setStructure` with the course's
 token; edits are pure functions over the wire form
@@ -416,8 +445,10 @@ shared stage (04 §7; `map-rendering.md` §5.5), not SVG hit targets:
   is Map mode's (slice G).
 - The filter region's **eyedropper** (§6.4) asks the *document* which
   symbol is under a click, also on the main thread
-  (`lib/editor/symbol-pick.ts`, built once per document hash like the
-  snap index): the objects whose stored box, grown by the tolerance,
+  (`lib/editor/symbol-pick.ts`, built once per document hash and patch
+  version like the snap index, over the effective document — G4: hidden
+  objects are not picked or counted, an object of a patch symbol is not
+  picked by symbol): the objects whose stored box, grown by the tolerance,
   holds the point are symbolised with the shared stage
   (`documentRenderInput(doc, { only })`, `map-document-format.md` §8;
   `render.symbolise` without fonts) and hit-tested with
@@ -633,10 +664,22 @@ object's centre or line / area vertex** of the map document within
 **0.5 mm** on paper (`lib/editor/snap.ts`, `SNAP_MM`). The candidates are
 document geometry — a point object's coordinate and the on-curve vertices
 of lines and areas; Bézier control points, texts and hidden symbols do
-not snap — read once per document hash into a 2 mm grid, on the main
-thread (the document bytes are the viewer's `useMapDocument` copy). The
+not snap — read once per document hash (and patch version) into a 2 mm
+grid, on the main thread (the document bytes are the viewer's
+`useMapDocument` copy). The grid is of the effective document (G4,
+`map-patches.md` §2.4): objects the event's patch hides do not snap,
+modified and added ones snap where it puts them. The
 viewer applies `editor.snap` to its control drags; the tools snap their
 own points.
+
+The grid holds vertices only. The nearest point **on a line** is
+`nearestOnLines(doc, pt, maxMm, symbolFilter, skip?)` beside it (row G28):
+the line objects of the effective document whose symbol passes the filter
+(hidden objects and symbols, and object `skip`, left out), curves
+flattened to 0.01 mm, the reach inclusive, a tie to the lower index; it
+returns the point, its distance, and the hit part with its two end nodes.
+A linear scan with a bounding-box reject, asked twice per line by the GPS
+tracks' end snap (§13 "GPS tracks: junctions"), not on pointer moves.
 
 ### 6.3 Gaps (`G`)
 
@@ -1422,18 +1465,101 @@ the selection and the undo history (`editorReducer`'s `mode`).
 - **No tool rail** on the desktop / tablet layout in Field mode: the
   setter in the field checks and moves, the keys still arm the tools. The
   phone's `+` (§10) is the field's way to create.
-- **Offline** (decision log, D9). The row asked for "view + check-off
-  only while offline" when no queue covers the moves; that cannot hold
-  yet either, because check-off is itself a mutation: no outbox covers `control.update` /
-  `control.check` (the offline outbox carries the timing journal's event
-  types; course mutations are cloud-owned and "unavailable offline",
-  `offline-architecture.md`), so Field mode offline **views only**:
-  `editor-field-offline` says "Offline — viewing only. Moves and check-offs
-  need a connection.", the nudge pad, the check toggles and `+` are
-  disabled, a drag snaps back without a write. The map keeps drawing from
-  the cached document (B4, `map-storage.md` §7.1). A queue for these
-  writes, with the field-move rebase of §3 on replay, is row D9c (after
-  the offline architecture's phase 2).
+- **Offline** (row D9c; 08 §5.5 "Offline", §12 "Field-mode conflicts";
+  decision log, D9 and D9c). Field mode's moves — a long-press drag, a
+  nudge, the pad's numeric fields — and its check-offs, with their undo /
+  redo, go through the device's **outbox** (`lib/offline/control-outbox.ts`,
+  the page's `useFieldOutbox`). The map keeps drawing from the cached
+  document (B4, `map-storage.md` §7.1).
+  - **When a write queues.** Offline (`navigator.onLine` false), while
+    entries already wait (order is kept), or when the request gets no
+    answer from a server (a tRPC client error without an error body). A
+    server's answer of any kind is never re-queued. Online with an empty
+    queue a write goes out at once, as in the other modes, and its
+    conflicts are §3's.
+  - **Storage.** The Dexie table `controlWrites` in `oxygen-offline`
+    (version 4, additive; `offline-architecture.md` "Station
+    resilience"), keyed by an increasing `seq` — the replay order — with
+    the event's `nameId`. It survives a reload and a browser restart; the
+    timing journal's `events` outbox and `events.push` are not used
+    (decision log, D9c: they carry last-writer-wins upserts without the
+    version token).
+  - **One move and one check entry per control.** A second move of a
+    control merges into its entry: the first `from` and token are kept,
+    the newest position taken. A move back to where the entry started,
+    or a check-off toggled back, drops the entry — an undo offline sends
+    nothing. An entry in flight is never dropped: the newer value goes
+    out after it (from where the first put the control, on the token that
+    write returned). The count shows controls waiting, not gestures.
+    An entry keeps its class across merges, so the replay applies the
+    right row of §3: a **move** entry (it has a `from`) stays a pure move
+    — the position and `autoDescribe`, as online — even when an undo's
+    description restore merges into it (offline nothing reached the
+    server, so the restore is the stored description, and the move rule
+    must not re-send a description over one edited elsewhere); a **plain**
+    entry (an undo of a move already sent, restoring its description,
+    no `from`) stays plain — the newest position and the newest
+    description restore — and a conflict on it is "changed elsewhere"
+    (*failed*), never a rebase. A drain starting clears a flight flag left
+    by a tab closed mid-send. Decided by the D9c session (planner's
+    recommendation, the class rule after the spec review), for the
+    user's review.
+  - **Each move keeps the token it was queued with** (§3 "Tokens"):
+    `updateControl(input, from, { baseVersion })`. After reconnect the
+    refetch seeds the `VersionBook` with the server's newer token, which
+    would hide a move made elsewhere meanwhile. A check-off sends none, as
+    online.
+  - **Shown at once.** The queued positions and check-offs are patched
+    into the query cache (`course.controlCoordinates`, `control.list`
+    `checkedAt`) over the server's last rows, re-applied after every
+    refetch; the canvas, the list, the pad and the peek KPI read them
+    there. An entry that drops out offline shows the server's value
+    again; a sent one holds until the refetch answers.
+  - **Replay** on mount, when the device comes back online, when the tab
+    is shown again and every 10 s while entries wait and the browser
+    says it is online; one tab at a time (`navigator.locks`). Entries go
+    out in `seq` order through `EditorWrites` under §3's rules:
+    - the other side changed only fields a move does not touch → the
+      move is re-sent once on the server's token, no notice;
+    - the other side moved the control too → the entry stays as a
+      *conflict* and becomes the moved notice (`editor-conflict`,
+      `data-kind="moved"`, "Moved by ‹who› at ‹time› to x, y" from
+      `control.lastChange`, §11), one at a time: **Keep mine** sends it
+      again from their position on the server's token, **Keep theirs**
+      drops it. A new move of that control does what Keep mine does,
+      from where it now is. A `moved` answer at the entry's own position
+      is the write having landed before its answer was lost: done;
+    - an undo's write restoring a description (not a move) that cannot
+      be merged, or any server refusal (`NOT_FOUND`, `FORBIDDEN`, a
+      leased event's "checked out to venue") → the entry is kept as
+      *failed*, never dropped silently; no answer → the drain stops, the
+      rest wait.
+  - **The notice** `editor-field-offline` (`FieldQueueNotice`) shows in
+    Field mode while offline and in any mode while entries wait:
+    `data-online`, `data-pending` (entries pending or in conflict),
+    `data-failed`. Offline with nothing waiting: "Offline — moves and
+    check-offs are kept on this device and sent when the connection is
+    back."; with *n* waiting: "Offline — *n* changes waiting to be sent.",
+    online "Sending *n* changes…"; failed ones: "*n* changes not sent:
+    ‹reason›" with **Retry** (`editor-field-queue-retry`; a move then goes
+    on the book's newest token) and **Discard**
+    (`editor-field-queue-discard`). The save indicator reads `queued`
+    ("Waiting to send", amber, words shown) while entries wait and
+    `error` while one has failed — never *Saved* (§2).
+  - **Another mode's move of a waiting control.** A drag in Course or
+    Layout mode of a control whose move waits in the outbox (a conflict
+    not yet chosen, a failed entry, a write with no answer) goes through
+    the outbox too and merges into that entry, so the two cannot race and
+    a later Keep mine or Retry sends the newest position.
+  - **What stays online-only.** `+` (a create needs server-allocated ids)
+    is disabled offline; the site fields of §6.6 (description, codes,
+    notes) and every other mode's writes are not queued and fail with
+    *Not saved*. Undo / redo offline run only Field mode's queued
+    entries: any other entry's write would fail and §3 would drop it.
+  - Decided by the D9c session (planner's recommendation), for the
+    user's review: the sibling table rather than `events.push`; the
+    coalescing; the `queued` save state; only Field mode's moves and
+    check-offs queue, drained by the open editor in any mode.
 
 ## 10. Phone and tablet
 
@@ -1457,8 +1583,8 @@ so a tablet gets the touch rules below with the desktop chrome.
 - **Compact top bar** (`editor-field-top-bar`, in MapPanel's toolbar row
   beside its descriptions and fullscreen buttons): back to the Courses
   page (`editor-back`), the course picker (`editor-course-picker`), the
-  mode switch Course · Field (`editor-mode-*`; Layout stays a desktop
-  mode), the overflow `editor-overflow` → `editor-overflow-menu` with undo,
+  mode switch Course · Field (`editor-mode-*`; Layout and Map stay
+  desktop modes), the overflow `editor-overflow` → `editor-overflow-menu` with undo,
   redo, the view picker, hide other controls, auto cuts and the placement
   loupe toggle (F27; the desktop ids, a pressed dot when on). No tool rail, no inspector strip, no course-info button or save
   indicator (the peek line below has both), no map icon (§2's map-info
@@ -1606,7 +1732,7 @@ and an editor never lists itself. The server upserts one row per
 go with the switch), deletes rows older than the **30 s TTL** and answers
 the live rows of the event's other editors. The top bar lists them as
 `name · course · mode` ("Anna · Lång · Field"; the mode label is the
-mode switch's), those on the open course first and highlighted
+mode switch's, *Map* included since G6), those on the open course first and highlighted
 (`editor-presence`, `editor-presence-entry` with `data-here`; two entries inline, the rest a "+n" chip, so the bar stays one row and the map keeps its height); the phone's
 compact bar shows the count with the entries in its tooltip. `name` is the
 signed-in user's display name, else email; an instance without sign-in
@@ -1778,6 +1904,922 @@ claims `K`; All variations is read-only, labelled by number when the variants nu
 the keys of the structure being edited; the course picker lists roots;
 group ids `v<n>`, new labels the next free capital.
 
+## 13. Map mode
+
+Map mode (08 §5.2–§5.3, the Map column; row G6) edits the event's map
+corrections: the **patch** (`map-patches.md`) over the pinned document.
+The document itself never changes. G6 is the shell with select, hide and
+move; G7 adds the nodes tool `N` ("Nodes" below); G9 the drawing tools
+`P` `L` `A`, the symbol picker and *Change symbol* ("Drawing", "Symbol
+picker" below); reverse / split / join and holes G10 ("Line and area
+operations" below), unresolved ops G11's
+(their *Attach* / *Drop* as undo entries and a `symbol` entry's *Attach*
+G12b's), promote G12's (the editor half G12b, "Promote" below); G27 the
+GPS tracks' Tracks tool `T` ("GPS tracks: editing" below).
+
+**Entering it.** `mode=map` (§1 "URL", always written); the mode group's
+fourth entry `editor-mode-map` (`IconModeMap`, a map sheet with a pencil);
+desktop only — the phone's mode switch omits it and `mode=map` on a phone
+opens Field and leaves the URL, as `mode=layout` does (08 §5.5). Entering
+it drops the tool, phantom, the control, multi and course-object selections
+(as Layout does); the course stays selected and drawn. **Course edits are
+locked**: the viewer gets Map mode's own editor props (`modes/MapMode.tsx`
+`useMapMode`, shaped like `useLayoutMode`): no control drag, label drag,
+leg click or map click, and an `exclusive` binding, so a click on a control
+selects no control; the rail is `V`, `N`, `P`, `L`, `A`, `T`
+(`editor-tool-rail`, `editor-tool-<key>`; the armed one `aria-pressed`) and
+Map mode's own snapping toggle (`editor-snapping`, "Nodes"); `S` `K` `M`
+`X` `C` `G` do nothing. Entering the mode, or another document, arms
+`V`. Undo / redo
+are the page's (one stack across modes, §3). Without a pinned document the
+mode opens and its inspector says so (`editor-map-none`). Without
+`courses.edit` (`mapPatch` writes need it, `map-patches.md` §3.2) it is
+view-only: select, locate, `H`, `F`; no hide, move, revert or toggle,
+and no drawing, change symbol or line and area operation.
+
+**Gestures and keys** (the bindings are `tools/bindings.ts`
+`mapSelectBinding` for `V`, `mapNodesBinding` for `N` ("Nodes"),
+`mapPointBinding` for `P`, `mapDrawBinding` for `L` and `A`
+("Drawing") and `mapTracksBinding` for `T` ("GPS tracks: editing"); the key
+table `modes/map/keys.ts`):
+
+| Gesture / key | Map mode |
+|---|---|
+| Click | asks the viewer's hit-test (`mapObjects.onHitTest`, `map-rendering.md` §5.5 "Document objects") at 6 CSS px and selects the topmost hit (`hits[0]`, the eyedropper's rule, §5); a click on empty map deselects. A late answer (a newer click went) is dropped |
+| Drag the selected object | moves it: the press must be on the selected object's drawn shape (tested on the main thread by its symbolised shape, the eyedropper's mechanism); a press elsewhere pans. The object follows through the viewer's draft (`mapObjects.draft`); the release writes one `modify` (below). Escape or the pointer leaving writes nothing; a release without movement writes nothing and is a click (the hit-test again) |
+| `Tab` / `Shift+Tab` | steps through the **hit stack** under the last click, topmost down, wrapping — the only way to reach an area under a path; with no click stack (a selection made from *Corrections*, or none) it steps through the **corrected objects** in *Corrections* order (rows whose object is missing skipped), centring each (user 2026-11-15, G6 question 1; 08 §5.3's "next object" over a whole document has no order a user follows) |
+| `Delete` / `Backspace` | hides the selected object (*Hide*); in `N` with a node focused it deletes the node instead ("Nodes") |
+| `H` | hides the course overprint (and shows it again): the viewer requests no course layer, mirrors no course sites (`editor-site`, `course-site`) and draws no description sheet (`MapViewerEditorProps.hideCourse`). The top bar's `editor-hide-overprint` button, in the slot of `editor-hide-others` (lit, `aria-pressed`, while on). Map mode's own, off on entering |
+| `F` | fits the map (the document's bounds, `boundsMm`, through `viewRequest.bounds`) |
+| `V` | the select tool |
+| `N` | the nodes tool ("Nodes"; user 2026-11-15, G7 question 1) |
+| `P` / `L` / `A` | the point, line and area tools ("Drawing"); nothing while drawing is disabled |
+| `T` | the Tracks tool ("GPS tracks: editing"; G27): trim and split the selected GPS track; nothing while the GPS tracks are off |
+| `Enter` | finishes the line or area being drawn ("Drawing"), or closes *Cut hole*'s ring ("Line and area operations") |
+| `Escape` | a drag in flight first (dropped, nothing written), then an armed *Join* or *Cut hole* (dropped, a hole's ring with it; "Line and area operations"), then the line or area being drawn (dropped), then an open *Change symbol* picker, then the palette of a `symbol` entry's *Attach* ("Unresolved", G12b), then the GPS tracks' convert panel (closed, nothing written; §13 "GPS tracks: convert"), then (in `N`) the focused node, then any tool but `V` back to `V`, then the selection, then fullscreen; never the course. As in §3 (F24), the keypress that drops a drag also takes the next step |
+
+The selected object is drawn highlighted (the edit part, `mapObjects.selected`;
+an outline for an area, G5) and the canvas carries `data-selected-objects`.
+
+**Ops** (`modes/map/model.ts`; `map-patches.md` §1.1–§1.2). Objects are
+named as the hit-test names them: `{ source: sourceIndex }` for a document
+object, `{ added: id }` for one the patch adds.
+
+| Gesture | Change sent | Undo |
+|---|---|---|
+| *Hide* a document object | `put [{ op: "hide", sourceIndex }]` | `remove ["hide:<n>"]` |
+| *Restore* | `remove ["hide:<n>"]` | `put` the hide again |
+| *Hide* an added object | `remove ["add:<id>"]` (§1.1: hiding an added object removes it) | `put` the add again |
+| Move a document object | `put [{ op: "modify", sourceIndex, coords, angle? }]` | the previous `modify` put back, else `remove ["modify:<n>"]` |
+| Move an added object | its `add` op rewritten with the moved `coords` | the previous `add` put back |
+| A node gesture on a document object ("Nodes") | `put [{ op: "modify", sourceIndex, coords, angle? }]`, `coords` every ring written back | as a move |
+| A node gesture on an added object | its `add` op rewritten with the new `coords` | the previous `add` put back |
+| Draw a point, line or area ("Drawing") | `put [{ op: "add", id, type, symbol, coords, angle? }]`, with `putSymbols` on a library symbol's first use | `remove ["add:<id>"]` (the symbol stays, `map-patches.md` §1.5) |
+| *Change symbol* of a document object ("Symbol picker") | `put [{ op: "resymbol", sourceIndex, symbol }]` (+ `putSymbols`); back to the object's own symbol: `remove ["resymbol:<n>"]` | the previous `resymbol` put back, else removed |
+| *Change symbol* of an added object | its `add` op rewritten with the `symbol` (+ `putSymbols`) | the previous `add` put back |
+| *Rotation* of a document point ("Inspector") | `put [{ op: "modify", sourceIndex, coords, angle }]`, `coords` its effective ones; back to the document's own shape and angle: `remove ["modify:<n>"]` | as a move |
+| *Rotation* of an added point | its `add` op rewritten with the `angle` (0 omitted) | the previous `add` put back |
+| *Reverse* a line ("Line and area operations") | `put [{ op: "modify", sourceIndex, coords }]` (an added line's `add` rewritten), the coordinates reversed | as a move |
+| *Split at node* | `put [the first part's modify (or add rewritten), { op: "add", id, type: 2, symbol, coords }]`; a loop: the `modify` alone | the previous op put back, else removed; the new `add` removed |
+| *Join* | `put [the selection's modify (or add rewritten), { op: "hide", sourceIndex }]` for a picked document line; `put [the selection's op], remove ["add:<id>"]` for a picked added one; closing a loop: the selection's op alone | every id back as it was before: the previous ops put back, the hide removed, the picked `add` put again |
+| *Cut hole* / *Remove hole* on an area | `put [{ op: "modify", sourceIndex, coords }]` (an added area's `add` rewritten), the ring appended / dropped | as a move |
+| *Revert* a correction | `remove [opId]` | `put` the op again |
+| *Attach* an unresolved correction ("Unresolved", G12b) | `mapPatch.attachUnresolved { documentHash, key, sourceIndex?, symbol? }`: the server puts the op and drops the entry | `applyChange { remove [opId] or put [the op it replaced], putUnresolved { key: entry } }` (the symbol stays); redo is the procedure again |
+| *Drop* an unresolved correction (G12b) | `removeUnresolved [key]` | `putUnresolved { key: entry }`, the entry as it was |
+
+- A move's `coords` are every effective coordinate of the object (an
+  existing `modify`'s, an `add`'s, else the document's) shifted by **one
+  integer delta** `round(Δmm × unitsPerMm)` — the shape moves rigidly,
+  flags and the count kept; an existing `angle` is kept. There is no
+  offset form in the model.
+- Every gesture is **one `mapPatch.applyChange { documentHash, put, remove }`
+  and one undo entry** (§3): the undo is the inverse change computed from the
+  patch before the gesture; redo sends the change again; a failed undo or
+  redo drops the entry and shows the error. Writes carry no token
+  (`applyChange` takes no `baseVersion`; two editors on one op id are
+  last-writer-wins, `map-patches.md` §3.2), so there is no conflict notice.
+  **One gesture's write at a time**: while one is in flight the next
+  gesture (hide, move, *Restore*, revert, a placed point, a closing click,
+  *Change symbol*, *Rotation*, *Attach*, *Drop*, a line or area operation)
+  is refused — its inverse would be
+  computed from a patch that is not yet the reply's — and a held Delete
+  hides once (its key repeat is ignored).
+- **Committing** (`map-rendering.md` §5.5 "Committing is the host's"):
+  the reply `{ version, patch }` becomes the session's copy
+  (`setMapPatch`, which every viewer of the event follows) and
+  `course.mapMetadata`'s `patchVersion`; the draft is kept until the
+  layer has drawn that version or a later one (`VectorMapObjects.onPatchDrawn`,
+  called with each version the canvas comes to show; versions are the
+  row's increasing token), so the object never jumps back. A refused write (`PATCH_STALE`,
+  `PATCH_DOCUMENT_MISMATCH`, `PATCH_NO_DOCUMENT`, a venue box offline)
+  drops the draft, shows the editor's error (translated per code) and
+  reloads the map metadata and the patch.
+- After *Hide* the object stays selected, shown as hidden with *Restore*;
+  a hidden object is never hit (§2.4 there), so it is reached again through
+  its *Corrections* row.
+
+**Inspector** (`modes/map/ObjectSection.tsx`, `modes/map/Corrections.tsx`):
+
+- **Map object** (section `editor-inspector-map-object`; `editor-map-object`,
+  `data-ref` = `source:<n>` or `added:<id>`, `data-hidden`, `data-symbol`
+  the effective symbol index; `editor-map-object-none` without a
+  selection): the symbol's number and name (`editor-map-object-symbol`:
+  an applied match's library entry, its name localised, else the source
+  code and name; a patch symbol's own), its swatch
+  (`editor-map-object-swatch`, the symbol list's `swatchUrl`: the
+  library's preview for an applied match and for a patch symbol — of the
+  entry its key names (`map-patches.md` §1.3), in the library's colours —,
+  the document symbol's otherwise), and
+  *Hide* (`editor-map-object-hide`) or *Restore*
+  (`editor-map-object-restore`) by whether `hide:<sourceIndex>` is in the
+  patch. For a point, line or area that is not hidden, *Change symbol*
+  (`editor-map-object-change-symbol`, `aria-expanded` while its picker is
+  open; "Symbol picker"); for a point whose effective symbol is
+  orientable ("Drawing"), *Rotation* (`editor-map-object-rotation`, a
+  number field in degrees, counter-clockwise, the stored `attrs.angle` ÷ 10;
+  Enter or leaving it writes, Escape restores; the value normalised to
+  0–359.9, written in 0.1°, a value equal to the current one writes
+  nothing). Both are disabled as *Hide* is. For a line *Reverse*, *Split
+  at node* and *Join*, for an area *Cut hole* and *Remove hole* (row G10,
+  "Line and area operations").
+- **Corrections** (`editor-corrections`, its count `editor-corrections-count`,
+  `editor-corrections-none` when empty): every op of the patch in op-id
+  order (`editor-correction-row`, `data-op-id`, `data-op`, and
+  `data-issue` with the `applyPatch` issue code, `map-patches.md` §2.3 —
+  computed with the patch taken as enabled, so a switched-off patch still
+  reports them). A row click selects its object and centres the view on
+  it; *Revert* (`editor-correction-revert`) removes the op.
+- **Unresolved** (row G11; `map-patches.md` §4): when the pin moved and
+  some corrections could not follow their objects, a block under the
+  list (`editor-corrections-unresolved`, `data-count`; absent when there
+  are none) lists the patch's `unresolved` entries in key order
+  (`editor-correction-unresolved`, `data-key`, `data-op`, `data-reason`
+  `target` | `symbol`): the op, the symbol it was on (the target's,
+  else the op's symbol, else the patch symbol key) and the reason
+  (*object not found* / *symbol not found*). They are drawn nowhere and
+  not stepped by Tab. `editor-corrections-count` stays the count of ops.
+  - A **row click** (`editor-correction-unresolved-locate`) centres the
+    view on the entry's old place (row G12b): its target anchor's box
+    centre, else an add's own box (its coordinates ÷ the entry's
+    `unitsPerMm`), paper mm, which editions share (`map-patches.md` §4.2
+    step 3); without either the row has no locate. The selection is left
+    as it is (*Attach* needs it).
+  - *Attach* (`editor-correction-attach`; `map-patches.md` §4.3; user
+    2026-11-15, G11 question 2):
+    - a `target` entry of a hide, modify or resymbol goes onto the
+      document object (`source:<n>`) selected on the map; enabled with
+      one selected;
+    - a `symbol` entry — a resymbol whose symbol is gone, any add — opens
+      the symbol picker under its row (`aria-expanded`;
+      `editor-map-palette` in the add's kind, else the resymbol's
+      object's, with the hint `editor-map-palette-attach`), and a pick
+      attaches it with that symbol (row G12b; user 2026-11-15, G9
+      question 1). Opening it arms `V` (dropping a drawing in progress)
+      and closes *Change symbol* and the convert panel; one palette is on
+      screen at a time. Escape, the button again, *Change symbol*, another
+      tool, the entry going or attaching becoming impossible close it;
+    - both need `courses.edit` and *Apply corrections* on (as hide). The
+      change is computed in Map mode on the pinned document
+      (`mapDocument.attachUnresolved`, so a refusal is said without a
+      write and the inverse is known) and sent as
+      `mapPatch.attachUnresolved`, whose server copy makes the same
+      change; one write, one undo entry ("Ops").
+  - *Drop* (`editor-correction-drop`) removes the entry
+    (`applyChange { removeUnresolved }`), one undo entry whose undo puts it
+    back (`putUnresolved`, row G12b); with `courses.edit`, also while the
+    corrections are off (as *Revert*).
+  - Both are Map-mode gestures (row G12b, the G11 "Not yet" lifted):
+    through `commit`'s one-write interlock, a refusal on the editor's
+    error line (translated per code, `PATCH_ATTACH_REFUSED` with its
+    reason) with the metadata and the patch reloaded, as every Map-mode
+    write. `editor-corrections-unresolved-error` is gone (the procedure
+    for the do and redo steps and the error line: decided overnight on the user's standing instruction (2026-11-13), confirmed by the user 2026-11-17). The block is
+    presentational (`modes/map/Corrections.tsx`); its rows are
+    `modes/map/unresolved.ts` `unresolvedRows` over the session's
+    patch.
+- **Apply corrections** (`editor-corrections-apply`, a checkbox) is
+  `mapPatch.setEnabled` (`map-patches.md` §1.4): off, every consumer —
+  screen, print, the venue — draws the pinned document; the list keeps its
+  ops. It is an event setting, not an undo entry (as auto cuts, §4); the
+  box shows the value asked for while its write is in flight.
+  **While it is off, hide, *Restore*, move, drawing, *Change symbol*,
+  *Rotation* and the line and area operations are disabled** with the
+  reason shown (`editor-map-disabled`); revert (a hide's row included)
+  and the toggle stay (user 2026-11-15,
+  G6 question 3: the viewer merges a draft over the drawn patch, and a
+  disabled patch draws as the identity, so a drag would show nothing).
+
+**Presence** (§11): Map mode reports `mode: "map"`, labelled as the mode
+switch's *Map* (user 2026-11-15, G6 question 2).
+
+### Nodes
+
+The nodes tool `N` (row G7; 08 §4.7 "node editing with Bézier handles",
+§5.3 the Map column) edits the nodes of the **selected line or area**. It
+is a tool of its own, not `V`'s drag (user 2026-11-15, G7 question 1: on a
+dense map a press by a node and a move of the object compete; OCAD's and
+Mapper's split): `V` selects and moves, `N` shows and edits nodes. In `N`
+a click selects as in `V` (the hit-test, Tab's stack), except a click
+within reach of the selected object's edge, which keeps it and drops the
+focused node; a press that is not on a node or grip is not the tool's, so
+a drag there pans and nothing moves the whole object.
+
+**Which objects.** The selected object's nodes are shown when it is a line
+or an area, not hidden, its coordinates parse (below), it has at most
+**2000 nodes** over all its rings (`MAP_NODES_MAX`; user 2026-11-15, G7
+question 2: the handles are UI-layer elements and the page has no view to
+cull them to), and the gestures can write (`courses.edit`, *Apply
+corrections* on). Otherwise the inspector says why
+(`editor-map-nodes-none`, `data-reason` `kind` — a point or text —,
+`hidden`, `encoding`, `too-many`, `read-only`, `disabled`); while nodes are
+shown it shows the gestures' hint (`editor-map-nodes-hint`). Both only
+while `N` is armed and an object is selected. While a write is in flight
+the handles stay and a press on them is refused (§13 "Ops").
+
+**Coordinates and vertices** (`lib/editor/geometry-edit.ts`
+`ringsOfCoords` / `coordsOfRings`; `map-document-format.md` §4). The
+object's effective coordinates (the patch's, else the document's) become
+rings of vertices in paper mm (document units / `unitsPerMm`, the axes as
+stored — the space of the move and the hit-test), which the §7 edits take
+unchanged:
+
+- A cubic is anchor, control (`bezierFirst`), control (`bezierSecond`),
+  anchor: the controls become the first anchor's `hOut` and the second's
+  `hIn`. A control on its own anchor is no handle, unless both are (the
+  segment stays a curve); a broken run (a lone control, a ring that starts
+  or ends on one) makes the object not node-editable (`encoding`) rather
+  than rewritten.
+- A `hole` flag starts the next ring; on writing it is set on the first
+  point of every ring after the first, so deleting a hole's first node
+  keeps the hole. A `hole` flag on the object's very first point would be
+  lost on writing, so such an object is not node-editable (`encoding`). Every ring of an area is closed; a line whose last
+  anchor sits on its first (three anchors or more) is a closed ring too,
+  so its start never tears open.
+- A ring that writes its close out (its first point repeated at the end)
+  keeps doing so, the repeat written at the first vertex with the
+  repeat's own flags as read (`endFlags`, none included); an implicitly
+  closed ring gains the repeat, without flags, only when its closing
+  segment becomes curved (an implicit close is straight).
+- An anchor's other flags (corner, dash, gap, no-left, no-right) ride on
+  its vertex (`Vertex.flags`, the low byte) through every edit, and so do
+  its control points' own bits besides the curve ones (no-left /
+  no-right on a curve: the out-handle's from bit 8, the in-handle's from
+  bit 16); an inserted node has none. Corner / smooth here is the handles
+  only (F18): the flag bits are never set or cleared.
+- Writing rounds every point to whole document units. Unedited, the round
+  trip is exact: every line and area of `e2e/test.ocd` and of the local
+  corpus maps comes back coordinate for coordinate, flags included
+  (checked once locally, G7; the corpus stays in `.local/`).
+
+**Gestures** (`tools/bindings.ts` `mapNodesBinding`, through
+`geometry-gestures.ts` and `geometry-edit.ts` as §7 "Editing geometry";
+reach 7 px `HANDLE_PX`, a drag past 3 px `MAP_DRAG_PX`; mouse only):
+
+| Gesture | Edit |
+|---|---|
+| drag a node (`editor-map-node`, `data-ring`, `data-index`, `data-focused`) | moves it with its handles; snapped when snapping is on (below); the node is focused after |
+| click a node | focuses it (drawn filled) |
+| `Alt`-click a node | `toggleSmooth` (a handle → a corner, a corner → smooth from its neighbours, the closed wrap; an open end corner: nothing) |
+| drag a grip (`editor-map-node-grip`, `data-ring`, `data-index`, `data-which`) | `dragGrip` by the pointer's offset: a mirrored or smooth pair kept, `Alt` (live) breaks it, `Shift` 45°; never snapped |
+| double-click the edge (within reach, off a node) | `insertAtEdge`: a smooth node (on a curve the de Casteljau split), `Alt` a corner; focused; never snapped. At the cap (2000 nodes) nothing is inserted: the object would lose its handles |
+| `Delete` / `Backspace` with a node focused | `deleteVertex` down to the ring's minimum — 2 nodes open, 3 closed; at the minimum nothing happens. Without a focused node it hides the object as in `V` |
+
+- **Pressing order**: a node, then a grip, over every ring (the outline,
+  then the holes).
+- **Writes**: each gesture is one `modify` (an added object's `add`
+  rewritten), one `mapPatch.applyChange` and one undo entry (§13 "Ops"); a
+  click that focuses, a drag that rounds to the coordinates already there,
+  a cancelled drag (Escape, the pointer leaving) write nothing. A drag
+  whose release finds the patch changed since its press (an undo, a
+  *Revert*, a reply that landed meanwhile) or a write still in flight is
+  dropped the same way — it was made on the old coordinates — and
+  `Delete` is ignored while a node or grip is held.
+- **Live redraw**: during a drag the gesture's op is the viewer's draft
+  (`mapObjects.draft`, `map-rendering.md` §5.5 "Document objects"), drawn
+  from the dynamic bucket; it is kept until the canvas draws the reply's
+  version, as a move's. The handles are drawn from the draft while there
+  is one, else from the model, so they never jump back.
+- **Focus** is the tool's state: dropped when the selection changes, on
+  undo / redo and *Revert* (its index may name another node), on leaving
+  `N`, and by a click on the edge or any click that selects (the same
+  object included); it survives the gesture that set it.
+- **Snapping** (08 §5.3 "Node snapping"; §6.2): the Map rail's
+  `editor-snapping` — Map mode's own toggle, off on entering the mode (the
+  page's Course-mode toggle is outside Map mode). On, a dragged node lands
+  on the nearest point object's centre or line / area vertex within
+  0.5 mm (`SNAP_MM`) of the effective document **with the edited object
+  left out** (`snapIndexOf` over the model's document, the object masked
+  as hidden; built on the first snapped drag per model and selection), so
+  a node never snaps to where it started or to its own neighbours.
+
+### Drawing
+
+The point, line and area tools `P`, `L`, `A` (row G9; 08 §4.7 "draw
+point/line/area with a palette", §5.2 the Map rail) add objects to the
+patch: each finished object is one `add` op (`map-patches.md` §1.2), one
+`mapPatch.applyChange` and one undo entry (§13 "Ops"). A text is not
+drawn (slice G: no text creation).
+
+- **Arming.** The rail's `editor-tool-P`, `-L`, `-A` or the keys. Arming
+  one drops the selection, Tab's stack and an open *Change symbol*, and
+  opens the symbol picker ("Symbol picker") filtered to the tool's kind
+  (point, line, area). The tools are **disabled** — the buttons
+  `disabled` with the reason as their title (one text, `mapDrawOff`,
+  naming the right to edit courses and *Apply corrections*; without a
+  pinned document the inspector already says so, `editor-map-none`), the
+  keys do nothing — without `courses.edit`, while *Apply corrections* is
+  off, and without a pinned document; an armed drawing tool goes back to `V` when one of
+  those becomes true. The binding is exclusive with a crosshair cursor;
+  a click selects nothing.
+- **The symbol.** The tool draws with the picker's chosen symbol of its
+  kind. With none chosen a click does nothing and the picker says so
+  (`editor-map-palette-pick`). The choice is remembered per kind for the
+  document while the page is open — leaving Map mode and coming back keeps
+  it, another document drops it (`doc:<i>` / `patch:<key>`, so a library
+  item that became a patch symbol on first use stays chosen).
+- **First use** (`modes/map/symbols.ts` `symbolPut`, `map-patches.md`
+  §1.3; reused by G26): a document item is `symbol: { doc: index }`; a
+  library item is `symbol: { patch: key }` with `putSymbols { [key]:
+  materialiseSymbol(pinned, key).symbol }` in the same change — unless
+  the patch already has `symbols[key]`, which is then not put again. An
+  entry that is not materialisable is never chosen (listed disabled).
+  The pinned document is the model's decoded copy, so the client's
+  materialisation is the server's (`map-symbols.md` §11.1
+  "Deterministic").
+- **The op.** `id` a lowercase UUIDv7 made when the drawing starts (the
+  draft's and the write's are the same id; `map-patches.md` §2.2 orders
+  added objects by id); `type` 1 point, 2 line, 3 area; `coords` in
+  document units (paper mm × `unitsPerMm`, rounded); `angle` only when
+  not 0.
+- **Point (`P`, `mapPointBinding`).** A click places a point at the
+  pointer (snapped when snapping is on). With an **orientable** chosen
+  symbol — a point render with `orientation: "object"` and a rotatable
+  glyph, the symboliser's rule (`render/symbolise.ts`) — a press-drag
+  past 3 px (`MAP_DRAG_PX`) places it at the press and turns it: the
+  symbol's x axis points along the drag, so `angle` = the drag's
+  direction counter-clockwise from the paper's +x, in 0.1°, normalised to
+  0–3599 (user 2026-11-15, G9 question 3; OCAD's and Mapper's gesture.
+  Deviates from 08 §5.3, where a drag while armed pans). A line from the
+  press to the pointer (`editor-map-point-direction`) shows the
+  direction meanwhile, and the point is drawn turned through the draft;
+  Escape or the pointer leaving drops it. With any other symbol a drag
+  pans, as 08 §5.3 says. The tool **stays armed** with nothing selected
+  (08 §5.3 "Placement flow"): ten boulders are ten clicks.
+- **Line and area (`L`, `A`; `mapDrawBinding` over `areaBinding`).** The
+  course editor's drawing flow (§6.4 and §7 "Editing geometry", F18,
+  `tools/polygon.ts` with the kinds `map_line` — open, at least 2 nodes —
+  and `map_area` — closed, at least 3): a click per node, smooth by
+  default and a corner with `Alt`, a click-drag pulls a node's handles, a
+  placed node is dragged to adjust; a line ends by double-click or
+  `Enter`, an area closes by a click on its first node, a double-click or
+  `Enter`. Placed nodes are snapped when snapping is on. Right-click or
+  Escape drops the drawing. The dashed outline, the nodes and the grips
+  are the UI layer (`editor-polygon`, `editor-polygon-vertex`,
+  `editor-polygon-grip`); from 2 nodes (a line) or 3 (an area) the object
+  is also the draft `add` in its symbol, updated as nodes are placed or
+  dragged (hover sends nothing). The finished nodes are written by
+  `coordsOfRings` (§13 "Nodes", "Coordinates and vertices"): curves as
+  Bézier pairs, an area's ring with its first point repeated at the end.
+  After the write the tool goes back to `V` with the new object
+  (`added:<id>`) selected, so `N` and *Change symbol* apply at once (08
+  §5.3 "Area tools").
+- **Snapping** is the Map rail's `editor-snapping` ("Nodes"): a placed
+  point or node lands on the nearest point object's centre or line / area
+  vertex of the effective document within 0.5 mm (`snapIndexOf`, built
+  once per model; nothing masked: nothing drawn is in it yet).
+- **Writes.** While a write is in flight a click of `P` and a closing
+  gesture of `L` / `A` are refused (the drawing is kept); the draft is
+  kept until the canvas draws the reply's version (§13 "Committing"). A
+  refused write drops the draft and the drawing.
+
+### Symbol picker
+
+The palette of `map-symbols.md` §11.2 (`mapDocument.mapPalette(pinned,
+patch)`), computed in the web from the model's pinned document and the
+session's patch — no procedure — is the list `editor-map-palette`
+(`data-kind`): an inspector section *Symbols* above *Map object* while
+`P`, `L` or `A` is armed (the tool's kind), and inside the *Map object*
+section, under its *Change symbol* button, while *Change symbol* is open
+(the selected object's kind: type 1 point, 2 line, 3 area). It is a list rather than 08 §5.2's rail
+entry: with hundreds of entries it needs search and swatches, as the
+filter region's list (P3) does.
+
+- **Search** (`editor-map-palette-search`): a heading is shown when its
+  lowercased `search` (§11.2) contains the query, trimmed and
+  lowercased; empty shows all.
+- **Groups** in the palette's order (`editor-map-palette-group`,
+  `data-group` `library` | `ISSkiOM2019` | `other`, titled the
+  document's library, *Ski-O*, *Other*), each heading's entries of the
+  kind in order; a group or heading without any is left out;
+  `editor-map-palette-none` when nothing is left.
+- **Items** (`editor-map-palette-item`, `data-ref` `doc:<i>` |
+  `patch:<key>`, `data-source` `document` | `patch` | `library`,
+  `data-kind`, `data-code`, `data-objects`; `aria-pressed` on the chosen
+  one, or on the selected object's effective symbol under *Change
+  symbol*): the swatch (`editor-map-palette-swatch`, lazily loaded: the
+  library preview of `canonicalId`, else the document symbol's own,
+  `swatchUrl`), the code and the name (Swedish when the UI is and the
+  entry has one). An item that is not materialisable is `disabled`, its
+  title naming the missing colours.
+- **Picking** under a drawing tool makes the item the tool's symbol.
+  Under *Change symbol* it changes the selected object's symbol at once
+  (§13 "Ops") and closes the picker: same object type only — the list
+  offers only the object's kind, so `applyPatch`'s `kind-mismatch` is
+  not reachable from it; a document object picked back to its own
+  symbol drops its `resymbol`; the effective symbol again writes
+  nothing. *Change symbol* closes on another selection, on arming a tool,
+  and on Escape (in the search field too).
+
+### Line and area operations
+
+Row G10 (08 §4.7 "join/split/reverse lines, holes", which names the
+operations only): *Reverse*, *Split at node* and *Join* on a selected
+line, *Cut hole* and *Remove hole* on a selected area. The behaviour was
+decided with the user (2026-11-15, the G10 planner's questions 1–8, every
+recommendation; marked "answer n" below); the points marked "decided
+overnight" were decided on the user's standing instruction (2026-11-13),
+confirmed by the user 2026-11-17. The pure rules are `modes/map/shape-ops.ts`; the wiring is
+`MapMode.tsx`.
+
+**Buttons, no keys** (answer 7). They are buttons in the *Map object*
+section (`editor-map-object-ops`), after *Change symbol* and *Rotation*,
+shown for an object that is not hidden: on a **line** (type 2) *Reverse*
+(`editor-map-object-reverse`), *Split at node* (`-split`) and *Join*
+(`-join`), and on an added line *Snap ends* (`-snap-ends`, G28, "GPS tracks:
+junctions"); on an **area** (type 3) *Cut hole* (`-cut-hole`) and, when the
+area has a hole, *Remove hole* (`-remove-hole`). A point, a text and a line
+text (type 6) get none (decided overnight: 08 §4.7 says "lines"). Each is
+disabled as *Hide* is (`courses.edit`, no promote running — `canPatch`,
+§13 "Promote" —, *Apply corrections* on, no write in flight), and while it
+does not apply: `data-reason` and the reason as its title:
+
+| `data-reason` | Buttons | Meaning |
+|---|---|---|
+| `encoding` | all the line ones | the curve encoding does not parse (`ringsOfCoords`, "Nodes") |
+| `multi-part` | *Split*, *Join*, *Snap ends* | the line has more than one part (a `hole` flag inside a line) |
+| `closed` | *Join*, *Snap ends* | the selected line is a loop |
+| `no-node` | *Split* | no focused node: `N` and a click on the node to split at |
+| `end-node` | *Split* | the focused node is an end (an open line's first or last, a loop's first) |
+| `no-hole-node` | *Remove hole* | no focused node of a hole: `N` and a click on one |
+| `no-target` | *Snap ends* | no end of the added line within 1.5 mm of a track line (G28, "GPS tracks: junctions") |
+
+*Join* and *Cut hole* are **one-shot armed states** on the selection
+(`aria-pressed`; their hint `editor-map-join-hint` /
+`editor-map-hole-hint` under the section, with `data-reason` when the last
+pick or ring was refused, the nodes hint hidden meanwhile). The button
+again, **Escape** (first, after a drag in flight), another selection,
+arming a tool, *Change symbol*, *Attach*'s palette, the convert panel, the
+object hidden, and writing becoming impossible (a promote, corrections
+off) drop them; so does its own write, and the write of any other line
+or area operation (decided overnight). Arming closes *Change
+symbol*, the attach palette and the convert panel and keeps `V` or `N`
+(another tool goes back to `V`). No rail tools and no letter keys in G10.
+
+**Writes.** Each operation is one `mapPatch.applyChange` and one undo entry
+through the Map-mode `commit` (§13 "Ops": the one-write interlock, the
+promote lock, a refusal on the error line with the metadata and the patch
+reloaded); the inverse is `inverseChange`'s, so undo takes a join's two ops
+back at once. The focused node is dropped after each (its index may name
+another node). The selection stays on the object.
+
+**Coordinates and flags** (decided overnight, from the renderer's reading,
+`render/measure.ts` `pathSections` / `gapIntervals`, `render/symbolise.ts`
+borders; `map-document-format.md` §4). Line operations work on the raw
+effective coordinates in document units, so every flag is kept exactly;
+the hole operations through the rings. `corner` (4), `dash` (8) and `gap`
+(128) are read at their point and stay on it. `noLeft` (32) / `noRight`
+(64) on an anchor cover the segment from it to the next anchor, so they
+belong to that segment. Gap points pair up in path order; before an
+operation the gaps are **balanced** (`balanceGaps`): an opener that is
+never closed loses its bit, and a flagged last point that closes nothing
+loses its bit — neither draws anything — so a reverse, split or join keeps
+every gap where it was drawn.
+
+- **Reverse** (`reverseChange`): the coordinates in the other order — each
+  part of a multi-part line on its own, in its place, the `hole` flag on
+  each later part's new first point. A cubic's two controls swap roles
+  (`bezierFirst` ↔ `bezierSecond`), their own bits kept with left and right
+  swapped. `noLeft` / `noRight` move to the segment's other end with left
+  and right swapped (new anchor *j* takes old anchor *m − 2 − j*'s; the new
+  last anchor has none), so the drawn borders stay where they were. A loop
+  keeps its start node. Dash and glyph layout then run from the new start
+  (the row's "dash and glyph phase follow"). One `modify` (an added line's
+  `add` rewritten, its symbol and id kept); reversing twice writes the
+  coordinates back, a `modify` equal to the document as a move back is.
+- **Split at node** (answer 4; `splitChange`): at the focused node of `N`
+  (so a line of at most 2000 nodes). An open line is cut there: the part
+  from the start to the node stays the object (its `modify`, or its `add`
+  rewritten, with its other corrections), the rest becomes a new added
+  line (`add`, a fresh UUIDv7, type 2, the object's **effective** symbol —
+  after a *Change symbol* the new one; it exists already, so no
+  `putSymbols`) starting on that node; both ops in one change. The node is
+  in both parts; the first part's last point drops its border bits, and a
+  gap open across the node ends the first part and opens the second. A
+  **loop opens at the node as one object**: its coordinates rotated to
+  start and end there (the old start a node of the path again, its flags
+  kept), one `modify`. Since a line whose last node sits on its first is a
+  loop ("Nodes"), the result is still a loop with its start moved — as
+  OCAD stores such a line (decided overnight; a loop cannot be cut in two,
+  Pending). An end node does nothing (the button is disabled).
+- **Join** (answers 1–3, 8; `joinChange`): *Join*, then a click on the
+  other line (`tools/bindings.ts` `mapPickBinding`: exclusive, crosshair, the
+  hit-test of `V` at 6 px, no press, so a drag pans). The pick is the first
+  line under the click that is not the selection (decided overnight: a
+  click where two lines meet must not close the selection by accident),
+  else the selection itself when it is under the click — which **closes it
+  into a loop**. Not a line, a loop, a multi-part line or a broken encoding
+  is refused: *Join* stays armed and the hint says why (`data-reason`
+  `not-line`, `closed`, `multi-part`, `encoding`, `too-many`, `too-few`,
+and `kind` for a picked object no longer in the document). The nearest
+  pair of ends is joined (ties in the order: the selection's end to the
+  pick's start, to its end, the selection's start to the pick's end, to its
+  start; decided overnight): **within 0.5 mm** (`SNAP_MM`, inclusive) the two ends become one
+  node at the selection's end, with that point's corner / dash, the next
+  segment's border bits and both gap toggles (an even pair cancels);
+  **farther apart**, at any distance, both ends are kept and a straight
+  segment joins them (the point before it loses its border bits). The
+  **selection survives** with its identity, symbol and direction; the
+  picked line's nodes are reversed where needed and it is **hidden** (a
+  document object: `hide`) or **removed** (an added one: `remove
+  ["add:<id>"]`) in the same change. Different symbols may be joined; the
+  result has the selection's. The two ops are two *Corrections* rows that
+  revert separately (answer 8; reverting only the hide draws the old line
+  under the joined one, Pending). **Closing** (the node counts decided
+  overnight): within 0.5 mm the last node moves onto the first (4 nodes or
+  more, so the loop reads as one, "Nodes"), farther a straight segment back
+  to the first point (3 or more); fewer is refused (`too-few`). A result over 2000 nodes from a selection within them is
+  refused (`too-many`, counted on the joined result; decided overnight: the
+  object would lose its handles, as an insert at the cap, "Nodes").
+- **Cut hole** (answers 5–6; `cutHoleChange`): *Cut hole*, then the
+  ring drawn with G9's area gesture (`mapDrawBinding` over the kind
+  `map_area`: a click per node, smooth by default, Alt a corner, a drag
+  pulls handles; a click on the first node, a double-click or Enter closes;
+  right-click or Escape drops it with the armed state; placed nodes snapped
+  when snapping is on, onto the whole effective document, the area itself
+  included; decided overnight). From 3 nodes the
+  area with the ring is the viewer's draft. The closed ring is appended to
+  the area's coordinates (`coordsOfRings`: curves as Bézier pairs, its
+  first point flagged `hole` and repeated at the end), the existing rings
+  kept coordinate for coordinate: one `modify` (an added area's `add`
+  rewritten), its draft kept until drawn (§13 "Committing"). **A hole is
+  accepted as drawn**, as OCAD does: areas fill even-odd
+  (`map-rendering.md` §3.1), so a ring outside the outline is drawn filled
+  and one crossing it inverts the overlap; no containment check. While a
+  write is in flight the closing gesture is held back (the ring kept, as
+  G9's drawing); a ring that would take an area within 2000 nodes over
+  them is refused (`too-many`, the ring kept for Escape; decided
+  overnight).
+- **Remove hole** (answer 5; `removeHoleChange`): in `N`, click a node of
+  the hole (ring 1 or later) and press *Remove hole*: the area without that
+  ring, every other ring as it was (later holes keep their flag); one
+  `modify`.
+
+### Line and area operations (G10): decided with the user (2026-11-15)
+
+Row G10's planner asked; the user took every recommendation. These are the
+answers the section above writes out.
+
+1. **Join names the second line by a pick.** Select a line, press
+   *Join*, click the other line: the nearest pair of ends is joined;
+   Escape cancels. A click on the selected line itself closes it into a
+   loop (its two ends joined). 08 §5.3's multi-select is still not built,
+   and join does not use it.
+2. **Ends that do not meet.** Within 0.5 mm on paper (`SNAP_MM`) the two
+   ends become one node at the surviving line's end; farther apart both
+   end nodes are kept and a straight segment joins them, at any distance.
+3. **The selected line survives a join**, with its identity, symbol and
+   direction; the picked line is hidden (a document object) or removed
+   (an added one), its nodes reversed where needed. Two lines of
+   different symbols may be joined; the result has the survivor's symbol.
+4. **A split keeps the part from the line's start to the node** as the
+   object (with its existing correction); the rest becomes a new added
+   line with the same effective symbol; the first part stays selected.
+   A split is at an existing node; a closed line opens there as one
+   object; an end node does nothing.
+5. **Holes.** *Cut hole* on a selected area, then draw the ring with
+   G9's area-drawing gesture: one `modify`. *Remove hole*: in `N`, focus a
+   node of the hole and press it.
+6. **A hole is accepted as drawn**, as OCAD does: areas fill even-odd
+   (`map-rendering.md` §3.1), so a ring outside the outline is drawn
+   filled and one crossing it inverts the overlap. No containment check.
+7. **Buttons, no keys.** *Reverse*, *Split at node*, *Join*, *Cut hole*
+   and *Remove hole* are buttons in the inspector's *Map object* section,
+   shown when they apply and disabled with a reason; *Join* and *Cut
+   hole* are one-shot armed states that Escape drops first. No rail tools
+   or letter keys in G10.
+8. **A join's two corrections revert separately** (the `modify` and the
+   `hide` / `remove`), as every op does; undo reverts both at once.
+   Reverting only the hide draws the old line under the joined one
+   (Pending).
+
+### GPS tracks
+
+The mapper's GPS tracks of the event (`docs/map-gps-tracks.md` §5.1, row
+G25; stored by G24, `mapTrack`): a reference layer to draw the map from,
+converted into map lines (G26, "GPS tracks: convert" below), and trimmed,
+split and averaged (G27, "GPS tracks: editing" below); a converted line's
+ends snapped to the track network (G28, "GPS tracks: junctions" below).
+
+- **Panel** (`modes/map/tracks/TracksPanel.tsx`, the hook
+  `useMapTracks.ts`, the pure list state `model.ts` and `decimate.ts`):
+  the inspector section *GPS tracks* (`editor-tracks`) after
+  *Corrections*. Off with the reason (`editor-tracks-disabled`,
+  `data-reason` `venue` | `no-permission` | `not-georeferenced`, in that
+  order) and no `mapTrack` request on a venue node, without
+  `courses.edit`, or on a map without a georeference; with tracks off,
+  the rest of Map mode is unchanged.
+- **Import** (`editor-tracks-import`, the hidden
+  `<input type="file" multiple accept=".gpx,application/gpx+xml">`
+  `editor-tracks-file`; a
+  drop of files on the section's body `editor-tracks-drop`, which shows
+  `data-drag-over` meanwhile):
+  parsed on the device and sent as `docs/map-gps-tracks.md` §5.1 says.
+  While it runs the button is disabled (`data-busy`); afterwards
+  `editor-tracks-import-result` (`data-imported`, the count) and one
+  `editor-tracks-import-error` per refused file or track (`data-file`,
+  `data-code`: a `GpxParseError` code, `too-many-points`, the server's
+  `TRACK_*` code, or `failed` for a refusal without one; a refused call is
+  reported under its first file). Until the node's role is known the
+  section shows only `editor-tracks-loading`.
+- **Rows** (`editor-track-row`, `data-track-id`, `data-state` `loading`
+  | `ready` | `error`, `data-visible`, `data-points`, `data-length-m`,
+  `data-outside`, `data-converted`, and `data-average` / `data-source` on
+  an average and on its passes, G27): the checkbox selecting it for a
+  conversion, an average or the Tracks tool (`editor-track-select`,
+  enabled on a `ready` row; G26), the
+  swatch (`editor-track-swatch`, `data-colour`), the name (`editor-track-name`; a click locates), the
+  date (`editor-track-date`), length and points (`editor-track-stats`),
+  *outside the map* (`editor-track-outside`, with the count) and
+  *converted* (`editor-track-converted`), *average* (`editor-track-average`)
+  and *in an average* (`editor-track-source`) when they apply, and the
+  buttons show / hide (`editor-track-visible`, `aria-pressed` while
+  shown), rename (`editor-track-rename`: the name becomes the input
+  `editor-track-name-input`; Enter or leaving it writes, Escape drops)
+  and delete (`editor-track-delete`, no confirmation — it is an undo
+  entry). `editor-tracks-none` when the event has none. A converted track
+  is hidden by default (G26); *Show converted*
+  (`editor-tracks-show-converted`, a checkbox shown while a listed track is
+  converted) draws converted tracks without an override of their own.
+- **The layer.** Every visible, ready track is a UI-layer path over the
+  map (`editor-gps-track`, `data-track-id`, `data-points` the drawn
+  paper-mm vertices), drawn through the Map-mode binding's `shapes`
+  (`tools/bindings.ts` `withTrackLayer`, which every Map-mode tool wraps
+  its binding with) below the tool's own shapes; never a hit target —
+  clicks still select map objects. Decimated to the pixel as §5.1 there
+  says; the zoom is the last pointer event's `mmPerPx` (the wrapper reads
+  it from hover, press and click). The viewer draws the description sheet
+  above the UI layer, so the sheet covers a track under it until `H`
+  hides the overprint.
+- **Undo** (§3, one stack across modes): import, rename and delete are
+  one entry each (`docs/map-gps-tracks.md` §5.1 "Rename and delete");
+  show / hide and locate are none. A failed undo or redo drops the entry
+  and shows the error, as Map mode's patch writes do.
+
+### GPS tracks: convert
+
+One or more selected tracks become line objects of the event's patch
+(`docs/map-gps-tracks.md` §6, row G26; the user's answers of 2026-11-15
+there). The pure part is `modes/map/tracks/convert.ts`, the panel's state
+`useTrackConvert.ts`, the panel `ConvertPanel.tsx`; the write is Map
+mode's `commit` (§13 "Ops").
+
+- **Selecting and opening.** The rows' checkboxes (`editor-track-select`)
+  hold the selection: session only, kept to listed `ready` rows in list
+  order. *Convert to line* (`editor-tracks-convert`, the count in its
+  label) under the list is disabled, its title the reason, without a
+  selection, while drawing is off (`mapDrawOff`: no `courses.edit`,
+  *Apply corrections* off, no document, §13 "Drawing") or while a write is
+  in flight. It stays available on a converted track (a new line; the
+  mark moves to it, `docs/map-gps-tracks.md` §6 answer 1). Opening arms
+  `V` (a drawing in progress is dropped with its draft, *Change symbol* closes) and
+  replaces the button with the panel.
+- **The panel** (`editor-tracks-convert-panel`, `data-tracks`): the
+  symbol picker of §13 "Symbol picker" for lines (`editor-map-palette`,
+  `data-kind="line"`) with the ski-O group first — the overlay group
+  `ISSkiOM2019`, or the document's own library group on an ISSkiOM map —
+  and its track headings (801–813) before its others; `editor-map-palette-pick`
+  while nothing is chosen. Nothing is chosen the first time (§6 answer 3).
+  Then *Smoothing* (`editor-tracks-convert-smoothing`, a range 0–30 m in
+  whole metres, 0 = off, default 10; the value beside it) and
+  *Simplification* (`editor-tracks-convert-tolerance`, 0.02–0.5 mm in
+  steps of 0.01, default 0.1), the node count (`editor-tracks-convert-nodes`,
+  `data-nodes` the total, `data-max` the largest track's), the warning
+  `editor-tracks-convert-warning` when a track's line has more than
+  `MAP_NODES_MAX` (2000) nodes — it will not be node-editable in `N`; it is
+  still one `add` —, *Snap ends to tracks* (`editor-tracks-convert-snap`, a
+  checkbox, on by default; G28, "GPS tracks: junctions") with the ends it
+  moves (`editor-tracks-convert-snapped`, `data-count`, shown while one
+  does), `editor-tracks-convert-skipped` (`data-count`) for
+  tracks that come out under two coordinates (left out), and *Convert*
+  (`editor-tracks-convert-apply`, disabled until a symbol is chosen and a
+  track converts, and while a write is in flight) and *Cancel*
+  (`editor-tracks-convert-cancel`).
+- **The line** of each track (`docs/map-gps-tracks.md` §6): the trimmed,
+  projected track (outside points included), smoothed unless the window is
+  0, simplified, rounded to whole document units with consecutive equal
+  coordinates dropped, as an `add` of type 2 with corner nodes — byte for
+  byte what `L` writes for those vertices (`drawOp`), then its ends snapped
+  when *Snap ends* is on (G28). One symbol for every track of a conversion.
+  Once a symbol is chosen the node count is the plan's (a cut may drop
+  nodes).
+- **The preview** is the viewer's draft (`mapObjects.draft`, the object
+  under edit in its symbol, `map-rendering.md` §5.5) with the adds' final
+  ids and the symbol's first use: drawn as soon as a symbol is chosen, and
+  again on every control change; the reference tracks stay drawn over it.
+  While the panel is open a move drag is off (the preview holds the draft);
+  hide, revert and *Change symbol* still work (decided overnight on the
+  user's standing instruction (2026-11-13), confirmed by the user 2026-11-17; G26 planner's Q5:
+  the smallest restriction that keeps the one draft the preview's).
+- **The write.** *Convert*: one `mapPatch.applyChange { put: [one add per
+  track], putSymbols? }` (the symbol on first use, `symbolPut`), then
+  `mapTrack.markConverted` with each track's `add:<id>` — one undo entry.
+  The marks follow the patch on do, undo and redo as a step of their own
+  (`commit`'s follow-up, in its own `run`), so a refused mark is shown and
+  the entry kept, on undo and redo too; on do the entry is recorded once
+  the marks have settled. Marks go only to tracks still listed. Undo removes the
+  adds (the symbol stays, `map-patches.md` §1.5) and restores each track's
+  mark from before (null, or an earlier conversion's op); redo does both
+  again. The panel closes and the selection clears; the draft stays until
+  the canvas has drawn the reply's version (§13 "Drawing").
+- **Afterwards** the line is an ordinary added object: a *Corrections*
+  row, selectable, `N` up to 2000 nodes, *Change symbol*, print. The track
+  stays converted, and hidden unless *Show converted* or its eye, until
+  the conversion is undone — not when the line is hidden, reverted or
+  promoted (§6 answer 1).
+- **Remembered on the device** (`localStorage` `oxygen:gps-track-convert`,
+  not per event): both controls, *Snap ends* (`snapEnds`, absent = on;
+  decided overnight on the user's standing instruction (2026-11-13), confirmed by the user 2026-11-17, as every other panel control), and the symbol — on its own document the
+  item picked (by key), elsewhere the first item offering its library
+  entry (library, patch or a document symbol matched to it); an unmatched
+  document symbol on its own document only; a symbol the map cannot draw is
+  not chosen.
+- **Closing**: *Cancel*, Escape (after an open *Change symbol*), arming
+  `N`, `P`, `L`, `A` or `T`, drawing becoming disabled, the selection becoming
+  empty, leaving the mode or another document. Nothing is written.
+
+### GPS tracks: junctions
+
+A converted line's ends snapped onto the track network (row G28;
+`docs/map-gps-tracks.md` §6.7 has the rules, answers 4–5 there the user's
+of 2026-11-15). The pure part is `modes/map/tracks/snap-ends.ts` (the
+track-symbol filter, `snapLineEnds`), the target search `nearestOnLines`
+(§6.2), the conversion's use `convert.ts` `planConversion`, the button's
+`shape-ops.ts` `snapEndsChange`.
+
+- **What it does**: each end of the line within 1.5 mm on paper of a line
+  with a track symbol (the ISSkiOM track group, matched or as a patch
+  symbol; an unmatched 8xx document line symbol; not roads or paths) is
+  moved onto it — onto that line's end node when one is within reach
+  (the two then share a vertex; joining them is *Join*, "Line and area
+  operations"), else an overshoot is cut at the crossing and a short end
+  is extended straight onto the nearest point. The other line is never
+  changed; the line is never its own target.
+- **At conversion** ("GPS tracks: convert"): *Snap ends to tracks*
+  (`editor-tracks-convert-snap`), on by default and remembered on the
+  device; the preview, the node count and `editor-tracks-convert-snapped`
+  (`data-count`, the ends moved) show the snapped lines before *Convert*.
+  Several tracks are snapped in list order, each seeing the lines made
+  before it in the batch when the symbol is a track symbol. Off, the ops
+  are exactly G26's.
+- ***Snap ends*** (`editor-map-object-snap-ends`) on a selected **added**
+  line (any symbol; the filter is for targets) in the *Map object* section,
+  after *Join*: one `mapPatch.applyChange` rewriting its `add`, one undo
+  entry, the focused node dropped and an armed *Join* / *Cut hole* dropped
+  as for the other operations ("Line and area operations", "Writes").
+  Disabled with `data-reason` as they are: `encoding`, `multi-part`,
+  `closed`, and `no-target` when no end would move. A document line gets
+  no button (decided overnight on the user's standing instruction (2026-11-13), confirmed by the user 2026-11-17: the row names "an added line").
+
+### Promote
+
+Row G12b, the editor half of `map-patches.md` §5 (the user's answers of
+2026-11-15; the API is G12a's): *Save corrections to the club map* turns
+the event's corrections that apply into the club map's next version
+(`modes/map/Promote.tsx` `usePromote`, the pure rules
+`modes/map/promote.ts`, the dialog `modes/map/PromoteDialog.tsx`).
+
+- **Where**: an inspector section *Club map*
+  (`editor-inspector-map-promote`) under *Corrections*, shown only when
+  the pin is a club version (`course.mapMetadata.clubMapVersionId`; an
+  event's own upload has none, `PATCH_NOT_CLUB_MAP`). The button
+  `editor-map-promote`.
+- **Disabled, with the reason** (`editor-map-promote-reason`,
+  `data-reason`; `data-block` on the button), in this order: `readonly`
+  — no `courses.edit` (answer 9); `venue` — a venue box ("open the event
+  in the cloud": `promoteStatus` is served locally and the job runs in
+  the cloud, so the box could not follow it; decided overnight on the
+  user's standing instruction (2026-11-13), confirmed by the user 2026-11-17); `running` — a
+  promote is being sent or its job is queued or running; `off` — *Apply
+  corrections* is off; `nothing` — no row of *Corrections* applies (every
+  row has an issue, or there are none) (answer 5); `busy` — a Map-mode
+  write is in flight (no text). `PATCH_NOT_LATEST` is not predicted: the
+  refusal says to take the latest version from the club library first.
+- **The dialog** (`editor-map-promote-dialog`; answer 6: promote is not
+  an undo entry, so it asks first): how many corrections apply and that
+  they leave the event's patch once the map is imported (the others
+  stay); the label (`editor-map-promote-label`) prefilled with the
+  event's name and date (`competition.dashboard`, `"<name>
+  <YYYY-MM-DD>"`, cut to 200 characters; §5 defaults), trimmed, a blank
+  one not sent; a line that Undo cannot undo it and Map mode's earlier
+  undo steps go; *Cancel* (`editor-map-promote-cancel`, Escape, the
+  backdrop) and *Save to club map* (`editor-map-promote-confirm`, Enter).
+  Portalled as the editor's other dialogs.
+- **Sending**: one `mapPatch.promote { label }`. It answers after the
+  job's hold (30 s): the delivered patch becomes the session's
+  (`setMapPatch`), the job the `promoteStatus` cache. A job already
+  `done` reloads `course.mapMetadata` (the event is on the new version's
+  baked document, so Map mode starts over on it, the corrections that
+  were promoted gone from *Corrections*), the patch and the Club maps
+  list, and says *Saved as version n* (`editor-map-promote-done`); a
+  `failed` one says its error (`editor-map-promote-error`).
+- **Read-only while it runs** (answer 4): while the request is in flight
+  and while `mapPatch.promoteStatus` (fetched on entering the mode with a
+  club pin, polled every 2 s only while the job is queued or running; no
+  live channel, as for the patch) answers `queued` / `running` — also a
+  promote another session started — every `mapPatch` write of Map mode is
+  disabled: hide, *Restore*, move, nodes, drawing, *Change symbol*,
+  *Rotation*, revert, the toggle, *Attach*, *Drop* and the GPS tracks'
+  convert. The inspector's top shows `editor-map-promoting` (`data-state`,
+  `data-progress`, the job's coarse progress). GPS-track writes are not
+  the patch's and stay. When the job ends (done or failed) the metadata,
+  the patch and the list are reloaded and the outcome said as above. A
+  write that races it is refused `PATCH_PROMOTING` (its text on the
+  error line).
+- **Undo entries dropped** (answer 6; decided overnight on the user's
+  standing instruction (2026-11-13), confirmed by the user 2026-11-17): when this session sees
+  a promote start — its own request accepted, or `promoteStatus` turning
+  queued / running for a job it had not seen — the page's undo stack
+  drops every entry Map mode's `commit` recorded (the patch's: gestures,
+  *Attach*, *Drop*, G26's conversion; `UndoStack.remove`, passed in as
+  `forget`), from both the undo and the redo branch. Their inverses were
+  computed against a patch the promote empties and a document the event
+  leaves. GPS-track entries (import, rename, delete) stay: they do not
+  touch the patch. A promote that fails does not bring the entries back.
+  Until the request is accepted (up to the 30 s hold) the entries are
+  still there; an undo in that window is refused `PATCH_PROMOTING` by the
+  server and the entry goes, as any failed undo (§3).
+- **Refusals' texts** (`promoteError_<CODE>`): `PATCH_NOT_CLUB_MAP`,
+  `PATCH_NOT_LATEST`, `PATCH_NOTHING_TO_PROMOTE`, `PATCH_PROMOTING`,
+  `PATCH_NO_DOCUMENT`, `PATCH_STALE`, `UNAUTHORIZED` (sign in), offline;
+  any other the server's message.
+- **The Club maps card** (`map-storage.md` §6.5): the version's number,
+  a promoted version's label and its corrections with the
+  original-file note, and *Delete version n* for the latest promoted one.
+
+### GPS tracks: editing
+
+Trim, split and average (`docs/map-gps-tracks.md` §5.2, row G27; the
+user's answers of 2026-11-15 there). The pure parts are
+`modes/map/tracks/edit.ts` (handles, split index, a split's undo, the
+ranges under a trim) and `average.ts` (the worker's handler and client,
+the import item), the tool's reducer `tools/tracks.ts` with its binding
+`tools/bindings.ts` `mapTracksBinding`, the writes in `useMapTracks.ts`.
+No patch write: none of it needs *Apply corrections*.
+
+- **The Tracks tool `T`** (`editor-tool-T`, after `A`; key `T`) is
+  disabled, its title the reason, while the *GPS tracks* section is off
+  or loading, and falls back to `V` when it turns off. Exclusive: a drag
+  off a handle pans. Its track is the one selected row's
+  (`editor-track-select`) while visible and `ready`; the section shows
+  `editor-tracks-tool-hint` (`data-state` `pick` without one, `ready`
+  with it). A click goes to the nearest visible track within 6 CSS px (its
+  own first on a tie, then list order): its own track splits (below),
+  another is selected alone; a click on empty map does nothing. Escape goes back to `V` (the table above).
+- **Trim**: the track's two handles (`editor-track-handle`, `data-track-id`,
+  `data-end` `start` | `end`, `data-index` the stored point) on its stored
+  points `trim.start` and `trim.end − 1`. A press within 7 CSS px takes a
+  handle; past 3 px it follows the pointer along the stored points (the
+  whole track: dragging back out restores; two points kept between the
+  handles; on an out-and-back the point nearest in index among the near
+  ones). The layer draws the live trim, and the whole track thin and grey
+  under it while part is trimmed away (`editor-track-trimmed`). The release
+  writes one `mapTrack.update { id, trim }` — one undo entry, nothing at
+  the same point or when cancelled; until it settles the new trim stays
+  drawn and no press is taken.
+- **Split**: a click on the tool's track splits it at the nearer stored
+  point of the nearest kept segment, when two visible points remain on
+  each side (next to a handle nothing happens): one `mapTrack.split` with
+  two client UUIDv7 ids (ascending, left first), the parts' points split
+  on the device, the selection cleared. Undo removes the parts and
+  re-imports the original under its id — at the end of the list — with its
+  trim and mark; redo splits again under the same ids. Cutting out a
+  stretch is split, split, delete the middle.
+- **Average** (`editor-tracks-average`, the count in its label, beside
+  *Convert to line*; disabled under two selected rows, `data-busy` while it
+  runs): `averageTracks` with the defaults (15 m, two iterations) on the
+  selected rows' trimmed lines in a module worker, the result unprojected
+  and imported as one track named "Average of *n* tracks" with
+  `derivedFrom` and `singlePass` — one undo entry (undo removes it, redo
+  imports it again under its id). It then becomes the selection. Leaving
+  the mode or the document terminates the worker and drops a job in flight
+  silently.
+- **An average's passes** are hidden by default while it is listed (their
+  eye still shows them; *Show converted* does not), and its single-pass
+  spans are dashed paths of their own (`editor-gps-track` with
+  `data-single-pass="true"`, the same `data-track-id`). Converting an
+  average marks its listed passes converted with its op in the same
+  `markConverted`; the undo restores each one's mark from before.
+
 ## API
 
 The course and control mutations the editors write through (08 §6;
@@ -1796,7 +2838,7 @@ seq). Tokens are decimal strings.
 | `control.delete` | `courses.edit` | unchanged | `{ ok, courses: { id, version }[] }` — the courses whose structure lost the control |
 | `course.list` / `course.detail` | `courses.view` | — | rows with `version`; `detail` adds `structure` (wire form) and `structureStored` |
 | `control.list` / `control.getById` | `courses.view` | — | rows with `version`, `kind`, `circleGaps`, `notes`, `checkedAt` |
-| `course.presence` | `courses.view` | `{ courseId, mode: "course" \| "layout" \| "field", clientId }` | `{ ttlMs, others: { courseId, courseName, name, mode }[] }`: the event's other live editors (§11) |
+| `course.presence` | `courses.view` | `{ courseId, mode: "course" \| "layout" \| "field" \| "map", clientId }` | `{ ttlMs, others: { courseId, courseName, name, mode }[] }`: the event's other live editors (§11) |
 | `course.lastChange` / `control.lastChange` | `courses.view` | `{ courseId }` / `{ id }` | `{ name, at /* ISO */ } \| null`: actor and time of the row's newest `*.upserted` entry (`name` empty without a sign-in) |
 
 A stale `baseVersion` answers `CONFLICT` with `data: { kind, id, version,
@@ -1904,7 +2946,7 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | unit (web) | `pages/editor/__tests__/bindings.test.ts` "geometry editing on a selected object", "while drawing: a press places a smooth vertex…" | §7 "Editing geometry": the sampled outline and grips; Alt-drag moves the vertex with one write (F18), a filter region's Alt-drag moves it too; Alt-click toggles (handles → a corner, a corner → smooth `(next − prev) / 6`; a filter region: no write), a plain click focuses, a body click unfocuses, the focused handle drawn; a grip drag mirrored, Alt live breaks it; double-click on an edge inserts a smooth vertex with collinear handles, Alt a corner (inside, on a vertex, on a text: nothing); a press within reach of the edge is the object's; §6.4 the area tool's press places a smooth vertex (its neighbour gaining handles on the same write), a drag past 3 px pulls handles (Shift 45°), back within 3 px the press's kind, the curved preview and its grips; Alt at the press a corner (the pull still wins, the corner kept; no Alt = smooth; a filter region ignores Alt), the closing click wraps every smooth vertex, Alt on it makes the first a corner, `onDone` carries no flags; the preview shows the hover as a smooth vertex (a ring of three curves throughout; a filter region's straight) with no provisional grips and nothing written (F18) |
 | unit (web) | `lib/editor/__tests__/geometry-gestures.test.ts` | §7 "Editing geometry" after D16's extraction: the pressing order (vertex, grip, edge within reach, the inside no press, the caller's body), a vertex drag in the caller's units (nothing until it moves), Alt-drag moves and Alt-click toggles both ways (F18; the wrap at vertex 0, nothing for an open end and a filter region), focus (none for fixed kinds, the body unfocuses), a cancelled drag, insert on an edge (smooth with collinear handles, Alt a corner, a filter region a corner; on a curve the split, Alt dropping the new vertex's handles; not on a vertex, not inside, not for fixed kinds), the shapes with the caller's ids; `bindings.test.ts` unchanged is the net for `selectBinding` |
 | unit (web) | `pages/editor/__tests__/bindings.test.ts` | §6, §7: V (Shift-click, lasso, object select / move / vertex, outlines, double-click leg; D12: for every closed kind an interior press declines, selected or not, an edge press within 7 px or the hit-test's outline target drags it, a vertex still wins; a line's stroke press is the object's), armed (exclusive, right-click, touch, ghost label and leg length label, no UI-layer leg; the ghost circle only without a drawn provisional visit, a finish's two circles, P4), area (vertex drag, first-vertex close), G (rim drag, click removes, leg) |
-| unit (web) | `lib/__tests__/undo-stack.test.ts` | §6.1: `UndoStack.top`, which `Ctrl+Z` while armed checks before stepping the chain back |
+| unit (web) | `lib/__tests__/undo-stack.test.ts` | §6.1: `UndoStack.top`, which `Ctrl+Z` while armed checks before stepping the chain back; §9 "Offline" (D9c): `nextRedo` |
 | unit (web) | `lib/editor/__tests__/snap.test.ts`, `hit.test.ts`, `state.test.ts`, `structure-edit.test.ts`, `write-client.test.ts` | §6.2 snap candidates and distance; §5 object targets (stream and UI-layer outline); §6 Escape order, multi-selection, object selection, tools; §6.3 / §6.6 `setLegGaps`, `setNumberHidden`; §7 object tokens |
 | E2E | `e2e/course-editor-tools.spec.ts` "tools" | §6.1 ten controls in ten clicks with `K` (the ghost label — its circle is the layer's, P4 —, no UI-layer pending leg, the leg length label "‹n› m" and no `editor-pending-leg-length` (P2), no action bar and no `editor-selection-ring` while armed, `Ctrl+Z`, `Esc`, the ring back on a click in `V`), reuse of a site; §5 / §7 the area-press rule (D12): a drag starting inside an `oob_area` (created through `courseObject.create`) moves the view (`data-centre-x`) and leaves the area unselected and unchanged, a click on its outline selects it (four handles), a drag inside the selected area pans and keeps the selection, a drag of its edge translates every vertex (one `courseObject.update`), a click inside deselects it; the armed `K` over the map: a `course-leg` piece of the course ends at the cursor's circle (absent before the hover, follows a second hover), no `editor-pending-leg`, the label = the metres from the last placed control's stored mm to the cursor's paper point at the map scale (read from the map-info dialog's `editor-map-info-scale`, P6) within 2 m (P2); a drag of the middle control shows two `editor-leg-length`, none after release; §6.5 Shift-click three controls → one add-to-course (one undo entry), §6.6 a site's notes written and reloaded; §6.3 a rim drag stores a circle gap, Reset gaps clears it; the layer draws what the tools store (D1's request path): a leg gap cuts the drawn leg, a circle gap is in the drawn site's cuts (`course-site` `data-cuts`), a hidden number leaves the site without its `course-label`; §6.4 / §7 an out-of-bounds area drawn (Alt-clicks: corners, F18), drawn on the canvas (709: purple inside it), its hatch (710) and border later set from the inspector (the stored props; 710 on the canvas is the shared layer path, probed in print only), printed (the all-controls `maps.pdf`: one page, the 709 hatch's clip-and-stroke operators present with the `all`-scoped area, one more run with `hatch: "710"`, gone when it is parked), selected again on the canvas (a click on its outline), deleted and undone; §6.4 / §7 "Editing geometry" a curved white-out in three clicks and one drag (two Alt-clicks — corners —, a click-drag that shows two `editor-polygon-grip`, the closing click): the stored vertex has `hOut` = the drag on paper and `hIn` its negation, the selection outline has 8 samples per curved segment, the all-controls `maps.pdf` gains exactly one curved fill (a fill path with `c` segments — the base map has its own); a double-click on a straight edge inserts a smooth vertex at its midpoint (handles 3 → 4, `hOut` ≈ the edge on paper / 6, grips 2 → 4), a click focuses it and `Delete` removes it (the object stays), `Ctrl+Z` brings it back, `Alt`-click on the corner b makes it smooth (grips 4 → 6, `hOut` stored), `Alt`-click again a corner (6 → 4, no handle stored); §6.4 smooth by default (F18): three clicks, Alt held at the third — no grips until the third lands, then two — and a plain closing click store `g[1].hOut` = `(g[2] − g[0]) / 6` (and ≈ the clicks' chord on paper / 6), `hIn` its negation, `g[0].hOut` = `(g[1] − g[2]) / 6` (the wrap), the Alt corner `g[2]` without handles, no `smooth` / `corner` / `pulled` key stored, four grips, and one `Ctrl+Z` removes the object (one undo entry); a filter region hides the 505 path under it live (canvas ink probe; its entry is the heading `editor-filter-symbol-505`, §7); §6.4 the toner saver (`A` then `S`, D13): `marginMm` 25, Bézier arcs stored, the outline sampled, and the course's `maps.pdf` (its sheet made first) carries at least one more `c` operator per stored curved vertex than without it (D13's deferred print check) |
 | unit (web) | `lib/editor/__tests__/symbol-groups.test.ts` | §7 filter region: one entry per heading (an applied match's library heading, `601.b` + `601` merged; else the source base, `101.1` joins `101`; a suggested match is not applied), library names by UI language (`sv`, `sv-SE`), hidden / unused / missing / proxy-drawn symbols not listed, library headings first in code order and Other last (a rectangle frame, `graphic`), swatches (the most used applied entry, else the document symbol), search (heading, both library names, member codes and names), all / some / none, a toggle completes or removes the whole group, the group of a symbol, the swatch URLs (versioned library path; event-scoped document preview) |
@@ -1928,19 +2970,45 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | unit (web) | `lib/__tests__/course-layer-request.test.ts` "provisional visit" | `provisionalDrawn`: false without a visit or for a reuse, true otherwise, and the layer adds the `provisional` site exactly then (P4) |
 | E2E | `e2e/course-editor-placing.spec.ts` "P1: …" "no blue circle beside a placed control while K is armed…" (`chromium`) | §6.1, D12: with `K` armed (hover, after each of two placing clicks) and after switching to Field, Course and Layout no `editor-phantom` and no `editor-selection-ring` |
 | E2E | `e2e/course-editor-placing.spec.ts` "P4: the dashed ring back after placing…" (`chromium`) | §4, §6.1, P4: `K` armed without a course draws the `editor-ghost` circle with its label; with a course no `editor-ghost` while hovering and after a placing click (`editor-ghost-label` "‹n› · ‹code›", no ring, no action bar); over an existing control "Add ‹code›" with the `editor-ghost` circle (a reuse); in `V` the phantom's *Add control* selects the new control with one `editor-selection-ring` and a visible `editor-action-bar` |
-| unit (web) | `lib/editor/__tests__/state.test.ts`, `write-client.test.ts` | §9: Field entered and left keeping the selection, Layout entered dropping all but the course (`course-layout.md`); `checkControl` sends no token and seeds the control's |
+| unit (web) | `lib/editor/__tests__/state.test.ts`, `write-client.test.ts` | §9: Field entered and left keeping the selection, Layout entered dropping all but the course (`course-layout.md`); `checkControl` sends no token and seeds the control's; D9c: a queued move sends its own `baseVersion` over the book's newer one, rebases on a check elsewhere, throws `moved` on a move |
+| unit (web) | `lib/__tests__/control-outbox.test.ts` | §9 "Offline" (D9c): coalescing (first `from` and token kept, a move back or a check toggled back drops the entry, per event and control, a conflict moved on is pending from their position on the server's token, an entry in flight never dropped; an undo's description merged into a move kept a pure move, a move merged into a plain write kept plain and replayed without `from`); the overlays (queued positions and check-offs, the same reference when nothing changes); counts; `isNetworkFailure`; the drain: enqueue order with each move's own token and `from`, `onSent`, `moved` kept as a conflict and Keep mine / Keep theirs, `moved` at our own position done, a refusal failed with Retry / Discard, `refresh` failed as changed elsewhere, a network failure stops with the rest pending, a write merged in flight sent after on the returned token, a check toggled back in flight re-sent, a stale flight flag cleared at drain start, a second drain does nothing |
+| integration | `course-structure.test.ts` "a move queued before a check-off elsewhere" | §9 "Offline" (D9c): a stale move after `control.check` answers `CONFLICT` with `differing` naming `checkedAt`, not `xpos` / `ypos` — the rebase the replay relies on |
 | unit (web) | `pages/editor/__tests__/bindings.test.ts` "pinch-scale" | §10: `scaleAbout` (handles scale with it), a finger on the ring starts it, the draft per move, one write on lift, nothing selected / cancelled / within 1 % writes nothing |
-| unit (web) | `lib/editor/__tests__/status.test.ts` | §2, §3, §8, §10 (P2): the peek line's rows for a course (controls · length · climb · scale · checks, numeric `data`), without a course (scale only), the sheet key in place of the scale, snapping on, zero climb and checks absent; the desktop popover's `courseInfoRows` (P6): no scale row, no rows without a course and a sheet, the sheet key kept; the badge (the count, none at zero); the save indicator (`saved` / `saving` the dot alone, `error` / `conflict` always show their words) |
+| unit (web) | `lib/editor/__tests__/status.test.ts` | §2, §3, §8, §10 (P2): the peek line's rows for a course (controls · length · climb · scale · checks, numeric `data`), without a course (scale only), the sheet key in place of the scale, snapping on, zero climb and checks absent; the desktop popover's `courseInfoRows` (P6): no scale row, no rows without a course and a sheet, the sheet key kept; the badge (the count, none at zero); the save indicator (`saved` / `saving` the dot alone, `error` / `conflict` / `queued` always show their words) |
 | Unit | `lib/editor/__tests__/action-bar-place.test.ts` | §2: the action bar centred under the selection; shifted inside at the left and right edges; the start kept in view when the viewer is narrower than the bar; above the selection near the bottom, below when it just fits, below and shifted up when it fits neither way; the size-0 first frame clamped to the margins |
 | E2E | `e2e/course-editor.spec.ts` "The action bar stays inside the viewer" (`chromium`) | §2: fourteen courses through every control (a long *Also in*). On the leftmost clear control the bar, *Add to …* and the ellipsised Also-in line lie inside the viewer, and the line's `title` names the last course; *Add to …* writes. On the lowest clear control the bar lies inside the viewer vertically (`data-placement="above"` and above the control when it does not fit below); *Add to …* writes. The viewer's `scrollLeft` / `scrollTop` stay 0 |
 | E2E | `e2e/course-editor-status.spec.ts` "P2: the status bar out of the footer" (`chromium`) | §2, §3 (P2): no `editor-status` on the desktop; `editor-save-state` inside `editor-top-bar` reaches `saved`; `editor-stats` opens the popover (`aria-expanded`) with the controls (`data-count` 0, then 1 after a `K` placement) and length rows and no `editor-stats-scale` (P6), a second click and an outside click close it, Escape with `K` armed closes it and leaves `K` pressed (a second Escape returns to `V`); at 1280 × 720 with `saved` the words take no room (width ≤ 1 px, the title set), the indicator is ≤ 16 px and the button ≤ 32 px wide; at 1024 × 700 a `control.create` aborted at the network → `data-state="error"` with `editor-save-state-text` visible, non-empty and inside the viewport. The shell test ("mounts the new editor") asserts the indicator and the button visible and no `editor-status`; the Layout / Class view test reads the sheet key from `editor-stats-sheet` |
 | unit (web) | `lib/editor/__tests__/map-info.test.ts` | §2 (P6): the map-info dialog's rows with a loaded document (name · scale · file, then source · content · library · CRS · importer, their `data`), the map's rows only while the document loads or the import runs, no library and no CRS (rows absent, an OOM source named in full), no map (no rows), an unknown size (the date alone), the club picker's KB / MB rule |
 | E2E | `e2e/course-editor-status.spec.ts` "P6: the map footer out; the map-info dialog" (`chromium`) | §2 (P6): no footer — the viewer reaches `map-panel`'s bottom (< 4 px), no `map-review-link`, *Replace map* or `use-club-map` in the panel; `editor-map-info` follows `editor-export` in document order and opens `editor-map-info-dialog` (`role="dialog"`, `aria-modal`, `aria-expanded`; focus inside it through five Tabs and six Shift+Tabs) with the name (`.ocd`), the scale (`data-scale`, "1:"), the north row, the file (`data-bytes` > 0), the document (`data-source="ocad"`, objects and symbols > 0, importer `ocad-‹n›`), *Review symbols* (`href` `/map-review/‹64 hex›`), *Replace map*, at most one *From club library*; the close button and a backdrop click close it, and the course-info popover has no scale row; *Replace map* opens a single-file chooser with `accept=".ocd"` and changes nothing; the backdrop is the element at the page's corner (it covers the shell's header); Escape with `K` armed closes only the dialog (a letter pressed while open does not switch the tool; the next Escape returns to `V`), and with a control selected keeps the selection and the course; an event with no map: `editor-map-info-none`, no scale, no review, *Upload map*. `e2e/map-review.spec.ts` and `e2e/club-map-library.spec.ts` reach the review link, the north-lines badge and the club picker through the dialog (the picker's Escape closes it before the dialog's; a pick from it closes the picker, keeps the dialog without an error, and its `editor-map-info-file` `data-uploaded` follows the new map row); `e2e/mobile-layout.spec.ts` asserts no `editor-map-info` and no *Replace map* in the phone editor; `e2e/editor-fullscreen.spec.ts` opens the dialog in fullscreen (inside `document.fullscreenElement`), and its Escape keeps fullscreen |
+| unit (web) | `pages/editor/__tests__/map-model.test.ts` | §13 "Ops": refs and op ids; *Hide* of a document object is a hide op, of an added object the add removed; *Restore*; a move is one rounded integer delta on every coordinate, flags kept, nothing for a delta under a unit or an unknown object; a move over an existing `modify` starts from its coordinates and keeps its angle; a move of an added object rewrites its add; the inverse puts back what was there and removes what was not, none for a no-op; `changes` is false for the same state again; the object's symbol (code, name, swatch) and box, a hidden one still found; the press test on the drawn shape, never on a hidden object, at a moved object's new place; *Corrections* rows in op-id order with the issue of a switched-off patch (taken as enabled) and none for a patch of another document; Tab's corrected-object list and stepping with wrap, a row whose object is missing skipped; `drawnCovers`: a draft goes once its version or a later one is drawn |
+| unit (web) | `pages/editor/__tests__/map-bindings.test.ts` | §13 "Gestures and keys": `mapSelectBinding` is exclusive, a click asks the hit-test at 6 px and selects the topmost with the stack (refs only), empty map deselects, an older click's answer is dropped; a press off the selection, without `canMove` or by touch is not taken; a drag past 3 px draws the draft and writes once on release; a release without movement writes nothing and is a click; a cancelled drag drops the draft; `mapKeyAction`: V, N, H, F, Tab / Shift+Tab, Delete / Backspace (a key repeat none), Escape, and none of Course mode's tool keys or modified keys; `MAP_RAIL` is `V`, `N` |
+| unit (web) | `lib/editor/__tests__/geometry-edit-coords.test.ts` | §13 "Nodes", coordinates ↔ vertices: a straight open line in paper mm and back; a cubic's controls as the ends' handles and back; a control on its own anchor no handle, written back as it was; an area with a hole as two closed rings, the hole flag on the hole's first point only; anchor flags (dash, corner + no-left, gap) through smooth, grip, retract, insert (the new vertex none, a curve's split too) and delete; a repeated close dropped and written back from the first vertex, deleting vertex 0 moves both ends; a hole's first vertex deleted moves the hole flag; a curved close repeated at the end as the first vertex's in-handle and the last's out-handle; an implicit close made curved gains the repeat (read back the same path); the repeat's own flags kept, none included; control points' own bits (no-left / no-right) kept through a grip drag and a vertex move, and on a curved repeated close; rounding to whole units; a broken curve encoding (a lone control, a ring starting or ending on one) or nothing → null |
+| unit (web) | `pages/editor/__tests__/map-nodes.test.ts` | §13 "Nodes": `nodesOf` — a line's and an area's rings (the hole its own), the curve's controls as handles with an anchor flag; the reasons `kind` (a point), `encoding`, `read-only`, `disabled`, `hidden`, `too-many` above `MAP_NODES_MAX` (exactly 2000 still edited), null for an unknown object; the draft's coordinates win; `nodesOp` — one `modify` of every ring with the hole flag and the existing angle, null when it rounds to the coordinates already there; an added object's `add` rewritten; `ringRule` 2 open, 3 closed; `nodeSnapIndex` without the edited object (its vertex no candidate, a neighbour's is). `mapNodesBinding`: exclusive; a node per vertex over every ring (`data-ring`, `data-index`, `data-focused`), a grip per handle, none without rings; a node drag past 3 px drafts its ring and writes once, focused, the placed point returned; snapping moves the node and its handles onto the candidate; a grip drag by the offset, mirrored, Alt live breaks it, never snapped; node before grip over every ring, a press off them, on the edge, by touch or with a write in flight not taken; a click focuses, Alt-click toggles with one write (an open end nothing), a grip click nothing; a cancelled drag writes nothing; a click within reach of the edge drops the focus without a hit-test, elsewhere it selects as `V`; a double-click on the nearest ring's edge inserts smooth (Alt a corner), focused, nothing on a node, off the path or with a write in flight; under `withTrackLayer` the tracks stay below |
+| unit (web) | `lib/editor/__tests__/{url,state,field,write-client}.test.ts` | §13 "Entering it": `mode=map` round-trips and is always written; entering Map mode keeps the course and drops the tool, phantom and selections; `mode=map` on a phone opens Field; `applyPatchChange` / `setPatchEnabled` send the hash and no token, return the reply, propagate a refusal, refuse without a `mapPatch` client |
+| integration | `packages/api/src/__tests__/integration/course-presence.test.ts` "takes Map mode" | §13 "Presence": a heartbeat with `mode: "map"` lists as `map` |
+| E2E | `e2e/map-mode.spec.ts` (`chromium`) | §13, on the seed's `itest` with `test.ocd` pinned, every op removed before, after and in `finally`. "the fourth mode": entered from Course mode after the map loaded → `data-mode="map"`, `mode=map` in the URL, the rail `V` (pressed) and `N` (no `editor-tool-K`), *Map object* empty; `K` and a click on a control select no control (none selected back in Course mode); `H` → `editor-hide-overprint` pressed, no `editor-site`, no `course-site`, no description sheet; again → back; `F` after a zoom fits (≤ 2× the fitted zoom). "select, hide, undo, move…": at `?mode=map` with `H`, zoomed to ≥ 16 px/mm, a lone black line found on the canvas and checked with `mapObjectsAt` (the only point or line within 0.5 mm); a click → `editor-map-object` `data-ref="source:<n>"`, the symbol named, `data-selected-objects="1"`; Tab then Shift+Tab back; Delete → one `applyChange`, `data-hidden`, the `hide:<n>` row, the line gone, `mapPatch.get` holds exactly that op; Ctrl+Z → no rows, the line back; Ctrl+Shift+Z → hidden; *Restore* → back (4 writes); a drag 0.8 mm across → one `modify`, the canvas's `data-patch-version` = the reply's, ink at the new place and none at the old; *Apply corrections* off → `editor-map-disabled`, the row kept, the line at its old place, *Hide* disabled; on → moved again, no `applyChange` for the toggle; Escape deselects; a reload keeps `data-mode="map"`, the `modify:<n>` row and the drawn version; the row's locate selects the object, *Revert* empties the list and the stored ops. "nodes (N)…" (G7, §13 "Nodes"): the same line selected, `N` → `editor-tool-N` pressed, `V` not, `editor-map-nodes-hint`, two nodes or more; the node nearest the line's dark pixel dragged 0.8 mm to an inkless spot → the line's ink within 1 mm of it along its edges (505 is dashed, so the vertex itself may sit in a gap) from the draft before any write (live), then one `applyChange`, the `modify:<n>` row, `data-patch-version` = the reply's, `mapPatch.get` that op alone, the node within 0.1 mm of the drop and focused; Ctrl+Z → no rows, the node back; a double-click on the middle of a straight edge of 1.5 mm or more (no grip on either side) → one write, one node more, the new one (index after the edge's first) focused at the click, the object still selected; Delete → one write, the count back, `data-hidden="false"`; Ctrl+Z → the inserted node back, Ctrl+Z → no ops (6 writes in all); Escape → `V` pressed, no `editor-map-node`, the line still selected |
+| unit (web) | `pages/editor/__tests__/map-symbols.test.ts` (fixture `map-fixture.ts`) | §13 "Drawing", "Symbol picker", "Ops" (G9): `symbolPut` — a document symbol as it is (out of range refused), a library entry materialised with `putSymbols` the same JSON as `materialiseSymbol`'s, a key the patch holds not put again, `missing-colours` with the missing palette ids and `unknown-entry` refused; `symbolKey` / `refOfSymbolKey` round trip; `addOp` (angle only when not 0) and `addChange` parsed, merged and applied with no issue, its inverse removing the add only; `newAddId` a lowercase UUIDv7 the schema takes, ordered by time; `kindOfType`; `angleOfDrag` (0.1°, counter-clockwise from +x, normalised) and, symbolised, the glyph's x axis along the drag; `isOrientable` / `isOrientableRef` (document, library and patch symbols); `resymbolChange` — a document object's resymbol, back to its own symbol drops it, the same symbol writes nothing, a library symbol with its `putSymbols`, an added object's add rewritten; `angleChange` — a document point's modify with its coordinates, back to its own shape and angle drops it, a moved point keeps its move, an added point's add rewritten with 0 omitted; `tenthsOf` (comma, normalised, not a number); `objectInfo` of a drawn object: the patch key, the library preview swatch, the angle |
+| unit (web) | `pages/editor/__tests__/map-palette.test.ts`, `map-draw.test.ts`, `map-draw-bindings.test.ts`; `polygon.test.ts` "Map mode's line and area kinds"; `map-bindings.test.ts` "Map mode's keys" | §13 "Symbol picker": `paletteView` keeps one kind and drops empty headings and groups, searches the headings' text trimmed and case-insensitive; a document item's swatch and a disabled library item's missing colour; a library item keeps its key when it becomes a patch symbol; Swedish names. §13 "Drawing": `drawOp` — a point rounded to units with its angle, a line's Bézier pairs and no close (round trip through `ringsOfCoords`), an area closed with its first point repeated, each applied with no issue; nothing below the minimum. `mapPointBinding`: exclusive with a crosshair, a click places a snapped point at 0, nothing while it cannot place, no press for a symbol that does not turn, a press-drag past 3 px aims from the press and places turned (the direction line shown), a press released without movement places at 0, a cancelled aim places nothing, under `withTrackLayer`. `mapDrawBinding`: a line ends by double-click, an area closes on its first node, a closing gesture held back (the drawing kept) while a write cannot go. `map_line` / `map_area`: open from 2, closed from 3, curves; smooth by default. Keys `P` `L` `A` and Enter, `T` (G27); `S K M X C G` none; the rail `V N P L A T` |
+| integration | `packages/api/src/__tests__/integration/print-patch.test.ts` "Map mode's drawing in print (G9)" | §13 "Drawing", "Symbol picker" in print (the row's page raster; user 2026-11-15, G9 question 2: as course objects', the raster probe is integration's — poppler is not on the E2E runners): `maps.pdf` rasterised (`pdftocairo`) before and after each op, every changed pixel inside the object's 8 mm box: a path `add` with a document line symbol; a point `add` with a library point materialised on first use (`putSymbols`, stored as put); a `resymbol` of a document point to that patch symbol; G26: a converted GPS track — a line `add` with the ski-O `ISSkiOM2019:801.1` materialised on first use — inside its box (§13 "GPS tracks: convert") |
+| E2E | `e2e/map-mode.spec.ts` "Map mode drawing" (`chromium`) | §13 "Drawing", "Symbol picker" (G9), with no patch row before and after (`dropEventPatch`: patch symbols are never removed by a change) and an all-controls sheet for `maps.pdf`. "L draws a path…": `L` pressed, the picker `data-kind="line"` with `editor-map-palette-pick`; a document path item (505–507, else the first document line) chosen → `aria-pressed`, the hint; two clicks and a double-click on plain map → one `applyChange` with an `add` of type 2 and `{ doc }`, no `putSymbols`; `V` pressed, the new object selected (`added:<id>`), its `add` row, ink at the middle node, more strokes in `maps.pdf`; Ctrl+Z → no rows, plain map again. "P places a point…": a library point (204, else the first library point) → the first click's change has `{ patch: key }` and `putSymbols` of that key, ink at the spot, `P` still pressed and nothing selected, the item now `data-source="patch"` and still pressed; a second click puts no symbol; two add rows; the stored patch holds that one symbol; `maps.pdf` changed; Escape → `V`. "P with a turning symbol…": a 519 (or 110) item; a press-drag 2 mm up the paper shows `editor-map-point-direction` and writes an add with `angle` 900; once drawn, a click in `V` selects it, `editor-map-object-rotation` shows 90, 45 + Enter rewrites the add with 450. "Change symbol…": the lone black line selected, *Change symbol* → `aria-expanded`, only line items, its own pressed; another document line → one `resymbol` of `{ doc }`, the picker closed, the row; `maps.pdf`'s drawing (its streams without the dates) changed, and back as before after *Revert* |
+| unit (web) | `pages/editor/__tests__/map-unresolved.test.ts`, `map-promote.test.ts`; `map-model.test.ts`, `lib/__tests__/undo-stack.test.ts` (G12b parts) | §13 "Unresolved": attach kind (object / symbol), the palette's kind, the locate centre (anchor; an add's box in its unit; none), labels, rows in key order; the inverse of a drop, of its undo and of an attach (onto a free id, onto a held one); `changes` for unresolved-only changes. "Promote": offered for a club pin only, the block order, queued / running, the label (name and date, 200 characters, blank), each refusal's key; `UndoStack.remove` from both branches |
+| unit (web) | `pages/editor/__tests__/map-shape-ops.test.ts`; `map-bindings.test.ts` "Map mode's Join pick" | §13 "Line and area operations" (G10): `reverseCoords` — the points reversed, `corner` / `dash` / `gap` on their node, `noLeft` / `noRight` moved to the segment's other end and swapped (the suppressed border intervals and the drawn gaps, measured with `render.PathMeasure` / `gapIntervals`, the mirror of the original's), a curve's controls swapping roles with their own bits, twice the identity, an unpaired gap balanced first, a loop's start kept, each part of a two-part line in its place; `splitCoords` — an interior node in both parts with a gap across it drawn in both, a curve's controls with their segment, an end node and out of range nothing, a loop opened as one rotated path; `joinCoords` — the four end pairings (the survivor's direction kept), merged at exactly 0.5 mm and bridged just over and at any distance, the merged node's flags and cancelling gap pair, a bridge's gaps and cleared border bits, a curve at the joined end; `closeCoords` — merge from 4 nodes, a segment back from 3, fewer refused; the changes — *Reverse* one `modify` / an added line's `add` rewritten, *Split* the first part's op and a new `add` with the effective symbol (after a `resymbol`), a loop one `modify`, *Join* the `modify` and a `hide` (a picked document line) or the picked `add` removed, an added survivor's `add` rewritten, closing a loop, the refusals (`kind`, `encoding`, `multi-part`, `closed`, `not-line`, `no-node`, `end-node`, `too-many` over `MAP_NODES_MAX`), *Cut hole* the ring appended with its first point flagged `hole` and repeated, the rest kept, a ring outside accepted, *Remove hole* the ring dropped and later holes keeping their flag, `no-hole-node`; each change applied with no `applyPatch` issue and its `inverseChange` restoring the patch (a document object with and without a prior `modify`, an added one). `mapPickBinding`: exclusive with a crosshair, a click's hit stack to `onPick`, an older answer dropped, no press, under `withTrackLayer` |
+| E2E | `e2e/map-mode.spec.ts` "Map mode line and area operations" (`chromium`) | §13 "Line and area operations" (G10), with no patch row before and after, on lines and areas the test draws on plain map with a document symbol. "Reverse and Split…": a 3-node line drawn with `L` (Enter ends it), no *Cut hole* on it; *Reverse* → one `applyChange`, the `add` rewritten with its anchors reversed, one row; Ctrl+Z → the stored coordinates as drawn; *Split* `data-reason="no-node"` and disabled; `N`, an end node clicked → `end-node`; the middle node clicked (focused) → enabled; *Split* → one change of two `add`s (the same id, then a new id of type 2 with the same symbol), the first part's last anchor the second's first, the anchors all kept, two rows, the line still selected; Ctrl+Z → one row, the coordinates as drawn. "Join…": two 2-node lines 2 mm apart around a plain spot, the second (the survivor) selected; *Join* → `aria-pressed`, `editor-map-join-hint`; Escape → not pressed, still selected; *Join* again and a click on the first line → one change putting the survivor's `add` with 4 anchors and removing `add:<picked>`, not pressed, one row, the survivor selected, ink at the spot between the ends; Ctrl+Z → two rows, the spot plain. "Cut hole…": a triangle drawn with `A`, no *Remove hole*; *Cut hole* → pressed, `editor-map-hole-hint`; a ring of three clicks inside closed on its first → one change, the area's `add` with exactly one `hole`-flagged coordinate, not pressed, still selected, one row; *Remove hole* `no-hole-node`; `N` → three nodes of ring 1; one clicked → enabled; *Remove hole* → one change without a `hole` flag, no ring-1 node, no *Remove hole*; Ctrl+Z → the ring's nodes back; *Apply corrections* off → *Cut hole* and *Remove hole* disabled, on → enabled |
+| E2E | `e2e/map-mode.spec.ts` "Map mode promote" (`chromium`) | §13 "Promote" (G12b; 08 §7), reseeded before and after and the series removed: no `editor-map-promote` on the seed's upload; `test.ocd` added to the club library and taken (`course.useClubMap`); `promoteStatus` routed to a running job: `editor-map-promoting` `data-state="running"`, the button `data-block="running"`, *Apply corrections* and `P` `L` `A` disabled; unrouted, the button disabled `nothing`; a lone line hidden and a path drawn in the UI; the dialog's label holds the event's name; one `mapPatch.promote`; `editor-map-promote-done`, a new `documentHash` and `clubMapVersionId`, no ops, the count 0, the line still gone and the path drawn on the baked document; Ctrl+Z writes nothing; `clubMap.list` version 2 (label, one layer, two corrections, `fileName` `test.ocd`); the card's version, label and note; *Delete version 2* → version 1, the event keeps its document with no version, no promote offered |
+| E2E | `e2e/map-patch-resolve.spec.ts` (`chromium`) | §13 "Unresolved" (G11, G12b's undo, locate and symbol attach: the full list in `map-patches.md` "Tests"): on the seed's `itest`, two hides through the API, then the map replaced by `e2e/test.xmap` (upload route, `course.applyUploadedMap`); at `?mode=map` `editor-corrections-unresolved` `data-count="2"` with two `editor-correction-unresolved` rows (`data-key` the patch's keys, `data-op="hide"`, `data-reason="target"`), `editor-corrections-count` 0, `editor-correction-attach` disabled with nothing selected; *Drop* → one `mapPatch.applyChange`, one row left, still one after a reload; `H`, `F`, a click selecting a `source:<n>` object, *Attach* → one `mapPatch.attachUnresolved`, the block gone, the `hide:<n>` row, `data-hidden="true"`, `mapPatch.get` holds exactly that op; reseeded before and after |
+| unit (web) | `pages/editor/__tests__/map-tracks-model.test.ts` | §13 "GPS tracks" (`docs/map-gps-tracks.md` §5.1): the disabled reason (venue, permission, georeference, in that order; an unknown role is no venue); an import plan — one track per segment in file order, names cut to 200 and file names to 255, points verbatim, `not-gpx` / `malformed` / `no-points` per file with the rest kept, skipped points / segments / waypoints, a track over 200 000 points refused by name, calls of ≤ 200 tracks and ≤ 500 000 points in order; the trimmed projection (length in ground metres, outside count, box) and `not-projectable` as the row's error; rows in list order with state, override, label, visible points; the colour stable and from the palette; locate's 5 % padding and 10 mm minimum; overrides parsed defensively and pruned; a deleted track's re-import (an average with its passes and ranges); the `TRACK_*` code. G26: a converted track hidden by default and shown with *Show converted*, the override winning both ways; an override kept only where it differs from the default; *Show converted*'s own key; the selection kept to listed `ready` rows in list order |
+| unit (web) | `pages/editor/__tests__/map-tracks-convert.test.ts` | §13 "GPS tracks: convert" (`docs/map-gps-tracks.md` §6): the fixture L → one `add` (type 2, its three corners rounded, no flags or angle) at 100 and 1000 units per mm; equal to `drawOp` for the same vertices; ends pinned under smoothing (4, 10, 30 m); fewer nodes with smoothing and a larger tolerance; deterministic, the input not mutated; rounded duplicates dropped and a one-coordinate track no op; outside points converted; a conversion's ops in order, marks `add:<id>`, the previous marks for the undo, node counts, a degenerate track skipped; the change with `putSymbols` on first use only, applying over the fixture without an issue; add ids ascending; the defaults (10 m, 0.1 mm, no symbol), clamping and defensive parsing; the node count's total, largest and warning only above 2000 on one track; the symbol remembered by library entry (found as a matched document symbol elsewhere, not when disabled), on its own document the very item picked (not a sibling matched to the same entry), an unmatched document symbol on its own document only, a point or area never; the picker's ski-O group and track headings first |
+| unit (web) | `pages/editor/__tests__/map-tracks-decimate.test.ts` | §13 "GPS tracks": the tolerance — half a pixel at the finer end of the octave, the default with no zoom; every point within it, ends kept, a straight line to two points, deterministic; over the 50 000-point budget the tolerance doubles until the tracks fit (and half of it would not); one 2 px path per line with its colour, `editor-gps-track` and `data-track-id` |
+| unit (web) | `pages/editor/__tests__/map-bindings.test.ts` (`withTrackLayer`) | the tracks below the tool's own shapes; `exclusive`, `hoverPoint` and the press's answer kept; the zoom reported from hover (not a leave), press and click, each chained; a tool without a press handler gets none |
+| unit (web) | `lib/editor/__tests__/write-client.test.ts` (track writes) | `importTracks`, `updateTrack`, `removeTracks`, `markTracksConverted`, `splitTrack` (G27, with the part ids) pass their input through and return the reply; a `TRACK_*` refusal propagates; without a `mapTrack` client they refuse |
+| unit (web) | `pages/editor/__tests__/map-tracks-edit.test.ts`, `map-tracks-tool.test.ts`, `map-tracks-average.test.ts`; the G27 cases of `map-tracks-model.test.ts`, `map-tracks-decimate.test.ts`, `map-tracks-convert.test.ts` | §13 "GPS tracks: editing" (`docs/map-gps-tracks.md` §5.2 and §7 have the detail): handle ↔ stored-point index, the handles' bounds, a drag along the points (outward restoring, an out-and-back keeping its leg), the split index, the track under a click, the ranges under a trim, a split's undo; the Tracks tool's reducer (press on a handle, threshold, live trim, one write on release, nothing at the same point or cancelled, click to split / select) and `mapTracksBinding`; the averaging worker's handler, copies, client and import item; an average's passes hidden by default and listed with their marks; dashed single-pass runs; a conversion marking an average's sources once each |
+| unit (web) | `lib/editor/__tests__/snap.test.ts` (G28 cases), `pages/editor/__tests__/map-tracks-snap.test.ts`; the G28 cases of `map-tracks-convert.test.ts`, `map-shape-ops.test.ts` | §13 "GPS tracks: junctions" (`docs/map-gps-tracks.md` §6.7 and §7 have the detail): `nearestOnLines` (reach inclusive, the filter, hidden and skipped objects, curves, the effective document); short, overshoot, end to end, nothing in reach, the symbol filter, both ends, flags; a batch in list order; *Snap ends* stored on by default; `snapEndsChange` one op, its inverse, `no-target`, `closed`, `multi-part` |
+| E2E | `e2e/map-gps-tracks.spec.ts` (`chromium`) | §13 "GPS tracks", on the seed's `itest` with `test.ocd` pinned, every track removed before and in `finally`. The fixture `e2e/fixtures/gps-tracks.gpx` (synthetic, from `test.ocd`'s frame by `packages/api/scripts/generate-test-gpx.ts`, which also writes the expected paper mm `gps-tracks.json`) and a KML named `.gpx` through `editor-tracks-file` → one `mapTrack.import`, `data-imported="2"`, one error `not-gpx` for the KML; two rows in file order, `ready`, points, length within 0.2 m, outside 0 / 2 with the mark on the second, a date on the timed one and a dash on the other; two paths, the stroke the swatch's colour, the L's ends and corner among the drawn vertices within 0.01 mm, the outside track's far end (past the map) drawn; a row click → the view centred on the track's box within 0.5 mm and the path's page box on the projected ends and corner within 3 px; the second track trimmed to 3 points and marked converted through the API, hidden after the reload (3 points, the *converted* mark; G26), *Show converted* draws it and its eye still hides and shows it; hide → no path, kept after a reload, show → back; rename → `mapTrack.update`, the name, Ctrl+Z and Ctrl+Shift+Z each one `update`; delete → `mapTrack.remove`, the list without it; Ctrl+Z → re-imported under its id with its trim and converted mark, drawn; a drop of a GPX on `editor-tracks-drop` (`data-drag-over` while over it) → one import, a third row; a reload keeps the three rows, the name and the paths, and `mapTrack.list` holds exactly them. "convert the fixture track into a ski-O track line" (G26, `maps.pdf` from an all-controls sheet, the patch row dropped before and after): *Convert to line* disabled until the row is selected; the panel on `V`, a line picker with `ISSkiOM2019` first, nothing pressed, *Convert* disabled, the defaults 10 m / 0.1 mm, a node count, no warning; smoothing 0 → 3 nodes; picking 801.1 → the canvas at the legs' middles changes (the preview) with no write; *Convert* → one `applyChange` with one `add` (type 2, `{ patch: "ISSkiOM2019:801.1" }`, coordinates `[-1500, 1000]`, `[-1500, -1000]`, `[1500, -1000]`) and the symbol in `putSymbols`, then `markConverted`; the row converted, hidden, unselected, its path gone, a correction row, `mapTrack.list` marked; the canvas changed and `maps.pdf` with more strokes; *Show converted* on and off; Ctrl+Z → one `markConverted`, no corrections, the row unconverted and shown, the canvas and the stroke count as before; Ctrl+Shift+Z → marked again; a second conversion of the converted track → a new add without `putSymbols`, the mark moved to it, its undo moving it back; the tolerance set to 0.3 and the panel cancelled, a reload → 0.3, smoothing 0 and 801.1 pressed; Escape closes it without a write; arming `L` closes it; a refused `markConverted` (aborted) → the line written, `editor-error` shown, the mark unchanged, and Ctrl+Z still removes the line and writes the mark from before. "snap" (G28, the patch row dropped before and after): two `ISSkiOM2019:801.1` lines put through `mapPatch.applyChange` (the symbol materialised by `e2e/helpers/patch-symbol-cli.ts`), T1 upright at x = 16 mm and T2 ending at (−15.6, 10.8); the fixture converted at smoothing 0 with *Snap ends* checked → `editor-tracks-convert-snapped` `data-count="2"`, 3 nodes, one `add` `[-1560, 1080]`, `[-1500, -1000]`, `[1600, -1000]` (end to end and extended), no `remove`, T1 and T2 unchanged in `mapPatch.get`; Ctrl+Z, then off → `[-1500, 1000]`, `[-1500, -1000]`, `[1500, -1000]`; the line selected on the map (Tab through its stack), `editor-map-object-snap-ends` → one `applyChange` with the snapped coordinates, then `data-reason="no-target"`, Ctrl+Z → the recorded ends back, T1 and T2 unchanged; a reload → the checkbox still off. G27, on `e2e/fixtures/gps-passes.gpx` (two synthetic passes 3 m apart, the second covering half and recorded the other way round; the generator writes the expected average): "trim" — `T` by its key with no selection → `data-state="pick"`, no handle; a click on pass A selects it, handles at 0 and 40; the end handle dragged to point 30 → one `mapTrack.update`, 31 points, the grey rest, the path ending at point 30, the stored trim; Ctrl+Z / Ctrl+Shift+Z one `update` each; dragged back out → 41 points, no grey rest; (zoomed out clear of the inspector) the start handle to point 5 → trim `[5, 41)`; a reload keeps it; Escape → `V`, no handles. "split" — a click at point 15 → one `mapTrack.split` (16 and 26 points, ids ascending), the original's row gone, the selection cleared; a click selects the right part, a click at point 25 splits it (11 and 16); the middle deleted; its neighbours' paths end at points 15 and 25; three Ctrl+Z → three imports, the original back under its id at the end of the list with 41 points; Ctrl+Shift+Z → the same split under the same ids. "average" — *Average* disabled under two selected, one `mapTrack.import`: `derivedFrom` both passes, `sourceName` `""`, the point count and single-pass range within one of the generator's, the range to the end; the average selected, the passes hidden and marked, one solid path on the centre line (within 0.03 mm) and one dashed on pass A alone; the eye shows a pass; converting the average → one `markConverted` with its op for it and both passes, all three marked; Ctrl+Z → one `markConverted` restoring null for all three; Ctrl+Z → the average removed, the passes shown; Ctrl+Shift+Z → imported again under its id. "off on a venue node": `lease.status` answered as `venue` → `editor-tracks-disabled` `data-reason="venue"`, no import button or file input, *Corrections* still there, and no `mapTrack.` request |
 | E2E | `e2e/editor-url.spec.ts` (`chromium`) | §1 "URL" (F31): from the Courses page, a pick → `?course=`; Class view → `view=class&class=`, Course view drops them; Layout → `mode=layout&sheet=<the course's sheet>`; a reload restores the course, Layout and the sheet, then Class view; Field + All controls → `mode=field&view=all`; `history.length` unchanged by every change and one Back lands on `/courses`; `mode=bogus&view=nope` → Course mode, Course view, only `course=` left; a class not the course's → Course view, `view` / `class` gone; `mode=layout&sheet=99999` → Layout, the sheet gone; a deleted course → no course, `course` gone; `mode=layout&template=<seq>` → template scope, kept over a reload, and *New extra template* there opens the new template and writes `template=<new>` (it stays open: the review's create-then-open case); the Courses page's pencil lands on its course (`course=` only), the Controls page's on its control with `control=` gone; on a Pixel 7 viewport no `mode` → Field and `mode=field`, Course → `mode=course` kept over a reload, `mode=layout&sheet=1` → Field and `mode=field` |
 | E2E | `e2e/editor-space.spec.ts` (`chromium`) | §2 "The editor fills the window" (F28): at 1840 × 1090 `editor-page` is at least the viewport less 64 px wide, its bottom within 16 px of the viewport's and not below it, the page has no vertical scroll (`scrollHeight` ≤ `innerHeight`), the header's inner row (`shell-header-inner`) is as wide; on `/courses` `shell-container` and `shell-header-inner` stay ≤ 1280 px |
 | unit (web) | `lib/__tests__/course-overlay-ids.test.ts` | §6.1 (P5): the overlay ids of a start-only course (the regression) and a finish-only one; a full course with explicit ends; the explicit ends win over the nearest; the legacy fallback to the start nearest the first control and the finish nearest the last; no controls and no explicit end → the event default (lowest id); a stale id or one of the wrong role treated as none; none under `firstAsStart` / `lastAsFinish`; no start or finish in the event; an end already at the head or tail not repeated; an unpositioned first control keeps the explicit start, else the default |
 | E2E | `e2e/course-editor-placing.spec.ts` "P5: the pending leg from a just-placed start" (`chromium`) | §6.1 (P5): on a fresh course the armed `K`'s hover draws a `course-leg` piece from the default start (the inspector's start row) to the cursor; `S` places a start (`course.setStructure`), the start row names it and `K` is pressed; the hover shows `editor-leg-length` "‹n› m" and a `course-leg` piece from the new start's rim to the cursor's; the click adds the control row, and after `Esc` (no label) the leg start → control is still drawn |
-| E2E | `e2e/field-mode.spec.ts` (`mobile` project: Pixel 7, `vector`) | §10: opens in Field mode, full-bleed, compact bar and overflow, no rail / inspector / `editor-stats`, the sheet's status line (`editor-status`, `editor-save-state` `saved`) (P2), ≥ 44 px targets; §9: `setGeolocation` → the marker with its accuracy, every row's distance and bearing = the paper geometry at one scale; detents (tap, handle drag to full) and a list row's control centred above the sheet; a quick drag on an unselected control pans without selecting, a long press selects, shows the stem and the loupe (`editor-loupe`, 120 px, above the handle; the canvas inside it differs from the same circle after release — the 1× map — and has the map's purple; gone on release) and drops the control 48 px above the finger (persisted); two fingers cancel a pending press and zoom; nudge 2 × 0.1 mm, 1 m, the x field, four undos back; `+` → `K` → Place above the sheet adds a site, Done; F27: the overflow's `editor-placement-loupe` (pressed dot) on → `localStorage` `true`, no loupe without a tool; `+` → `K` → `editor-loupe` `data-pointer="touch"`, `data-mode="hover"`, 120 px, its bottom 16 px above `editor-touch-crosshair`'s centre and centred on it (±1 px), its `data-x` / `data-y` within 3 mm of the crosshair's paper point (snapped); the overflow → off → none, the same circle at 1× differs in > 10 % of its pixels; on again → the loupe, *Done* → none; a tap on an `oob_area`'s outline (created through `courseObject.create`) selects it, a tap inside deselects it (D12), and two fingers on its corners scale it by their spread, the map's zoom unchanged; check-off persists over a reload; offline: the notice, `+` disabled, a long-press move snaps back. "Field mode on a desktop" (desktop viewport in the same spec): the mode switch, no rail, the list's distance after a fix, check-off and `Ctrl+Z`, back to Course mode; F10: the setter-map picker (*None* + two after `layout.setterMaps { groups: 2 }`), Setter 1 picked → its controls in the sheet's order and the KPI, *None* → the course's list |
+| E2E | `e2e/field-mode.spec.ts` (`mobile` project: Pixel 7, `vector`) | §10: opens in Field mode, full-bleed, compact bar and overflow, no rail / inspector / `editor-stats`, the sheet's status line (`editor-status`, `editor-save-state` `saved`) (P2), ≥ 44 px targets; §9: `setGeolocation` → the marker with its accuracy, every row's distance and bearing = the paper geometry at one scale; detents (tap, handle drag to full) and a list row's control centred above the sheet; a quick drag on an unselected control pans without selecting, a long press selects, shows the stem and the loupe (`editor-loupe`, 120 px, above the handle; the canvas inside it differs from the same circle after release — the 1× map — and has the map's purple; gone on release) and drops the control 48 px above the finger (persisted); two fingers cancel a pending press and zoom; nudge 2 × 0.1 mm, 1 m, the x field, four undos back; `+` → `K` → Place above the sheet adds a site, Done; F27: the overflow's `editor-placement-loupe` (pressed dot) on → `localStorage` `true`, no loupe without a tool; `+` → `K` → `editor-loupe` `data-pointer="touch"`, `data-mode="hover"`, 120 px, its bottom 16 px above `editor-touch-crosshair`'s centre and centred on it (±1 px), its `data-x` / `data-y` within 3 mm of the crosshair's paper point (snapped); the overflow → off → none, the same circle at 1× differs in > 10 % of its pixels; on again → the loupe, *Done* → none; a tap on an `oob_area`'s outline (created through `courseObject.create`) selects it, a tap inside deselects it (D12), and two fingers on its corners scale it by their spread, the map's zoom unchanged; check-off persists over a reload; offline (D9c, `context.setOffline`): the notice at `data-pending` 0 and `+` disabled, two nudges → one entry drawn at once, a check-off → two and `editor-save-state` `queued`, an undo drops the check entry, no `control.update` / `control.check` request until reconnect, then the notice gone, the server at the nudged position (one `control.update`) and after a reload; after the undo a second check-off → two again, and on reconnect `control.update` then `control.check` in that order with the check-off kept; a long-press move offline with notes written elsewhere replays with no notice and keeps both; a queued nudge the server refuses (`page.route` answering a tRPC `FORBIDDEN`) → `data-failed` 1, `editor-field-queue-failed` with the reason, `editor-save-state` `error`, the position still shown and the server unchanged, Retry unrouted → sent; a nudge offline with a move elsewhere → `editor-conflict` `moved` with their x, the entry still counted, Keep mine → the server at the page's position; a `control.update` aborted at the network (`page.route`, exact procedure) queues while online, the entry and its position survive a reload, unrouted it is sent by the retry timer. "Field mode on a desktop" (desktop viewport in the same spec): the mode switch, no rail, the list's distance after a fix, check-off and `Ctrl+Z`, back to Course mode; F10: the setter-map picker (*None* + two after `layout.setterMaps { groups: 2 }`), Setter 1 picked → its controls in the sheet's order and the KPI, *None* → the course's list |
 | unit (web) | `lib/editor/__tests__/setter-maps.test.ts` "a setter's Field rows" | §9 (F10): the sheet's order, start / finish as such, other kinds as controls, unknown ids left out, distance / bearing / checked through `fieldRows` |
 | unit, integration, E2E | `course-layout.md` "Tests" | Layout mode |
 | unit (web) | `pages/editor/__tests__/placement.test.ts` "X: the map exchange tool", `rail.test.ts` "railKeyOf", `lib/editor/__tests__/sequence.test.ts` "part headings" | §6.9: `X` armed, numbered and advanced as a control, `K` ↔ `X` keep the chain, not a chain end; the rail lights `X`; the exchange row marked, part 1 before the first row and part 2 after the exchange, none without one |
@@ -1952,7 +3020,7 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 
 ## Pending in this chapter
 
-- **The top bar past tier 2** (§2 "Top bar", F29): below 1170 px of row
+- **The top bar past tier 2** (§2 "Top bar", F29): below 1220 px of row
   only the mode words have gone; the view group, presence chips, a save
   error's words and course names longer than the seed's still wrap the row
   (`flex-wrap`, the last resort the user chose). The thresholds were
@@ -1983,10 +3051,71 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
   last leg is the group's exit leg); select the last top-level control
   first to append at the top level.
 
-- **Selection highlight through the dynamic bucket** (04 §7: the
-  selected object's passes redrawn in a highlight colour): the selection
-  and multi-selection rings and object outlines stay UI layer; D5 left it
-  because it is `map-gl` work outside its area (decision log, D5).
+- **Map mode beyond G12b** (§13): Promote is not offered on a venue box, and its queued / running state
+  is driven in the E2E only through a routed `promoteStatus` (a real job
+  on the fixture ends inside the hold; "Promote"). Multi-select (Shift-click, lasso) and the
+  right-click menu of 08 §5.3's Map column are not built; a single
+  selection only. Map mode has no touch gestures (desktop only, 08 §5.5)
+  and no phone entry.
+- **Nodes beyond G7** (§13 "Nodes"): objects over 2000 nodes take no node
+  editing until the UI layer is culled to the view (the viewer's `onView`,
+  as the GPS tracks' Pending); one focused node at a time (no multi-node
+  selection); the document's corner / dash / gap / border flags are kept,
+  not edited (a split curve's new half carries none); Map
+  mode's snapping toggle is its own and the status bar does not show it;
+  the snap index without the edited object is built on the main thread per
+  selection, its Club-full cost unmeasured; a dragged node does not snap
+  to the object's own nodes (closing a line is *Join* on itself, G10).
+- **GPS tracks beyond G28** (§13 "GPS tracks"): the end snap gives the
+  target no node at the junction, leaves curved end segments alone and
+  checks an overshoot's tail at its nodes (`docs/map-gps-tracks.md` §8);
+  Bézier fitting of a converted line (polylines for
+  now); trim and split at stored points only, *Average* without a cancel
+  or progress, a split's parts without the original's eye override
+  (`docs/map-gps-tracks.md` §8). The layer's
+  decimation follows the zoom only when the pointer reports it (hover,
+  press, click), so a wheel or button zoom with the pointer still keeps the
+  old octave until it moves, and the layer is not culled to the view: the
+  viewer reports no view change to the page (user 2026-11-15, G25
+  question 1; a viewer `onView` prop is the follow-up once `MapViewer.tsx`
+  is free). Tracks are not hit targets except to the Tracks tool `T`, so
+  outside `T` a track is selected only from its row.
+- **Map mode's second decode** (§13): the model decodes the pinned
+  document on the main thread once per hash, beside the snap and pick
+  indices' own decode and the worker's; a shared main-thread copy is a
+  follow-up. Its Club-full cost, and the draft's (G5's Pending), are
+  unmeasured.
+- **A patch symbol's swatch** (§13 "Inspector", "Symbol picker"): it is
+  the library's preview of the entry its key names, in the library's
+  colours and at the library's size — not the materialised symbol as the
+  document's stack and factor draw it; the server has no preview route for
+  patch symbols.
+- **Drawing beyond G9** (§13 "Drawing"): no text objects (slice G); the
+  placement loupe (F27) is not offered by `P`; a point's rotation is set
+  by its press-drag or the inspector, not by a handle on the map; an area
+  pattern's rotation is not edited; the chosen symbol per kind is kept
+  only while the page is open; the drawing tools have no touch flow (Map
+  mode is desktop only). Two quick points: a point placed while the
+  previous one's reply is not yet drawn replaces its draft, so the
+  previous point can vanish for a frame until the canvas draws it.
+- **Line and area operations beyond G10** (§13 "Line and area
+  operations"): a loop cannot be cut in two — a split at a node of a loop
+  only moves its start, since a line whose ends meet reads as a loop
+  (answer 4 as written; decided overnight); split is at an existing node
+  only (no split at a point between nodes); split and join refuse
+  multi-part lines and broken curve encodings; a join over 2000 nodes is
+  refused, and so is a hole that would take an area over them. Reverting
+  only one of a join's two ops (answer 8) draws the old line under the
+  joined one, and reverting only a split's new `add` leaves the first part
+  short — every op reverts on its own; undo takes both back. The merged
+  node of a join takes the selection's corner / dash and drops the picked
+  end's. No keys, no rail tools, no multi-select join (answer 7), no touch.
+- **Course selection highlight**: the course editor's selection and
+  multi-selection rings and object outlines stay UI layer (D5 left 04 §7's
+  highlight because it was `map-gl` work outside its area). G5 built the
+  highlight for **document objects** (`map-rendering.md` §5.5 "Document
+  objects": the edit part, `MapViewerEditorProps.mapObjects`), which Map
+  mode (§13, G6) uses; course objects do not go through it.
 - **Course objects**: draw order (`courseObject.reorder`) has no control
   in the editor; no image (logo) tool; `inset_frame` is slice F's.
 - **Derived instruction rows**: 13.3 / 13.4 derive from the legs'
@@ -2037,9 +3166,36 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
   taps follow the default, answered by the user on 2026-11-08). Corners on
   touch wait for a vertex action bar on the selection with **Smooth** /
   **Corner** buttons (and insert, delete).
-- **Offline writes in Field mode** (§9 "Offline"): a queue for
-  `control.update` / `control.check` with the field-move rebase on replay
-  (row D9c).
+- **Field mode's outbox, what D9c left** (§9 "Offline"):
+  - queued writes are sent only while that event's editor is open (no
+    drain from the shell or a service worker);
+  - a code renumbered elsewhere while a write waits can address another
+    control (the entry keys on the public id); it surfaces as `moved` or
+    a failed entry;
+  - a queued check-off's `checked_at` is the replay time, not the tap's
+    (`control.check` takes no client time);
+  - only Field mode's moves and check-offs queue: `+`, the site fields,
+    notes and every other mode's writes still need a connection;
+  - "Moved by ‹name›" on replay is not asserted by name in E2E (the E2E
+    other side writes through the API as the admin);
+  - an entry whose request never gets a tRPC answer (an HTML 502 / 503,
+    a login page in front of the API) stays pending and is retried every
+    10 s with no cap; Discard is offered only for failed entries;
+  - the outbox is keyed by event, not by user: on a shared device one
+    user's waiting writes are sent under the next user's session (a
+    refusal still lands as failed);
+  - an undo merged into a move while that move is on the wire goes out
+    as a pure move back with `autoDescribe`, not as the description
+    restore: a control that had no description can keep the one
+    auto-filled for the undone position (online the undo restores it);
+  - a first write of a control without stored coordinates is queued
+    plain and loses `autoDescribe` when a move merges into it;
+  - another mode's move of a waiting control (through the outbox) has
+    no test of its own;
+  - the overlay's base is the cache as found when the page mounts: a
+    remount offline with overlaid rows in the persisted cache shows a
+    dropped entry's queued value until the next refetch (the undo stack
+    is gone after a remount, so only Discard / Keep theirs drop one).
 - **Tablet bottom action bar** (08 §5.5 "Tablet: collapsible side
   inspector + bottom action bar"): a tablet keeps the desktop chrome and
   the action bar under the selection, with the touch gestures (§10).

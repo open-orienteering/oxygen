@@ -1,0 +1,1918 @@
+# Map terrain
+
+Normative specification of **terrain derived from a map document**: the
+contour graph (§1–2), the solve that gives each contour its uphill side and
+level (§3), the height field (§4–5), and the DEM anchor (§6–7). Research
+record: `docs/research/vector-map-pipeline/10-terrain.md` (with spike T1,
+§7) and the slice H split in `SLICES.md` ("Slice H"); decisions in
+`decisions/slice-h.md`. Slice H.
+
+Implementation: `packages/shared/src/terrain/` — pure TypeScript, no Node
+APIs, no randomness. `terrain/graph/` is §1–2 (H1), `terrain/solve/` is
+§3 (H2), `terrain/field/` is §4–5 and `terrain/index.ts` is
+`deriveTerrain` (§5.5, H3), `terrain/anchor/` is §6 (H9); §4.9, the
+ground field (§7.4) and `deriveAnchoredTerrain` (§5.5) are H10's. §7's
+fetch, reader and job are the API's (`packages/api/src/map-store/dem*.ts`,
+H10). Consumers
+import by subpath, `@oxygen/shared/src/terrain/graph/index.js`,
+`@oxygen/shared/src/terrain/solve/index.js`,
+`@oxygen/shared/src/terrain/field/index.js`,
+`@oxygen/shared/src/terrain/anchor/index.js` and
+`@oxygen/shared/src/terrain/index.js`; the package's root `index.ts`
+re-exports none of them.
+
+Units throughout: **paper millimetres, x right, y up** (the document's
+native units divided by `header.unitsPerMm`). Distances that describe the
+ground (gap bridging) are given in ground metres and converted through
+`header.mapScale` (`groundMPerMm = mapScale / 1000`).
+
+## 1. Inputs
+
+`contourInputs(doc: MapDocument): ContourInputs` reads every object of the
+document once, classifies it by its symbol and flattens its geometry (§1.4).
+
+### 1.1 Classification
+
+A symbol is classified by its **canonical code**: the part of
+`symbol.match.canonicalId` after the `:` (`ISOM2017-2:101.b` → `101.b`;
+an id without `:` has no code),
+**in any match state** — `auto`, `suggested` (reviewed or not) and
+`unmatched` with a non-null id alike. Terrain is derived, not drawn; a
+suggestion is the matcher's best reading, and T1's verdict was measured on
+it (user, 2026-11-13). This differs on purpose from the course checks
+(`course/checks.ts`), which use only applied matches. Hidden symbols
+(`symbol.hidden`) are skipped. The symbol kind must agree with the class:
+
+| Class | Canonical code | Symbol kind | Role |
+|---|---|---|---|
+| `contour` | `101` | line | chain, barrier |
+| `index` | `102` | line | chain (index part), barrier |
+| `form` | `103` | line | form-line chain (not a barrier) |
+| `tick` | `101.b` | point | slope tick on a contour (evidence, §3) |
+| `formTick` | `103.b` | point | slope tick on a form line (evidence, §3) |
+| `cliff` | `201`, `201.*`, `202`, `202.*` | line | barrier; evidence when tagged (§3) |
+| `water` | `301`, `301.*`, `302`, `302.*` | area | evidence (§3) |
+| `other` | number in [101, 600) | any | mapped-area mask only (§2.3) |
+
+`other` is the only class that falls back to the source code
+(`parseFloat(symbol.code)`) when the symbol has no canonical id; the named
+classes never fall back. Every object of every class contributes its parts
+to the mapped-area mask. Slope ticks are ISOM `101.b` / `103.b`, not `104`
+(the earth bank; `decisions/slice-h.md`, T1). `201.c` (a single cliff tag
+drawn as its own line) is a cliff barrier like any other `201.*` and is
+untagged.
+
+### 1.2 Cliffs: tagged or not
+
+A cliff is **tagged** when its definition (`symbol.render`, a line symbol)
+carries a glyph with a stroke part whose end point lies more than 0.1 mm
+off the line (`|geometry.coords[3]| > 100` µm). The tag side is the sign
+of that coordinate in the line's local frame: `+1` the tags lie left of
+the drawing direction, `−1` right (ISOM draws them right, downhill).
+Untagged cliffs, and cliffs whose `render` is `null`, have tag side `0`.
+The canonical id's variant is not used: sources map tagged cliffs to the
+plain id often enough that the definition is the reliable reading.
+
+### 1.3 Ticks and water
+
+A tick is its object's first coordinate and its rotation
+(`attrs.angle`, 0.1°, counter-clockwise) in radians. A water area keeps its
+rings of three points or more (outer first, then holes). Both are carried for §3; H1 uses them
+only for counts.
+
+### 1.4 Flattening
+
+`flattenObject(doc, i): Float64Array[]` returns the object's parts (an
+area's rings, split at hole flags), each a flat `[x0, y0, x1, y1, …]` in
+paper mm. Bézier runs are read by `pathRings` / `ringSegments`
+(`render/path.ts`, `map-document-format.md` §4); a malformed control run
+degrades to straight lines. A cubic becomes `clamp(⌈L / 0.25 mm⌉, 3, 24)`
+chords, where `L` is the length of its control polygon. A contour or form
+piece with fewer than two points or shorter than 0.02 mm is dropped; a
+piece is **closed** when it has at least four points and its last point
+equals its first.
+
+```ts
+interface ContourPiece { pts: Float64Array; closed: boolean; index: boolean; object: number }
+interface SlopeTick { x: number; y: number; angleRad: number; object: number }
+interface CliffLine { pts: Float64Array; tagSide: -1 | 0 | 1; object: number }
+interface WaterArea { rings: Float64Array[]; object: number }
+interface ContourInputs {
+  groundMPerMm: number;
+  contours: ContourPiece[];      // 101 and 102, `index` set for 102
+  formLines: ContourPiece[];
+  ticks: SlopeTick[]; formTicks: SlopeTick[];
+  cliffs: CliffLine[]; water: WaterArea[];
+  extentParts: Float64Array[];   // every part of every classified object, for §2.3
+  counts: InputCounts;           // objects per class, tagged cliffs
+}
+```
+
+`object` is the object's index in the document, in document order; every
+list is in document order.
+
+## 2. The band graph
+
+The research describes contour adjacency by nesting and normal sampling
+(10 §2.1 step 1). Slice H builds it in T1's **band form**: contour pieces
+are joined into chains, the chains and the cliffs are rasterised as
+barriers, the free cells fall apart into regions (bands between
+contours), and each chain separates the region on its left from the
+region on its right. §3 then decides one uphill side per chain.
+
+`buildContourGraph(doc, opts?): ContourGraph | null` runs §1 and §2.1–2.6
+in order; `null` when the document has no contour pieces.
+
+### 2.1 Snap join and the continuation rule
+
+Pieces are joined end to end. An **end** is a piece's first or last point
+with its outward unit tangent, taken from the end point back to the first
+point at least 0.6 mm along the piece (or the far end, if the piece is
+shorter). Two ends **continue** each other when their outward tangents
+point away from each other: `t₁ · t₂ < −0.3` (a turn of less than about
+70°).
+
+Joining is greedy. Every pair of free ends within the tolerance whose
+pieces may join is a candidate, scored `d + 0.2 · (1 + t₁ · t₂)` (distance
+plus a penalty for a turn), so that where several ends meet in one point
+the straightest pair joins first. Candidates are taken in ascending score,
+ties by the ends' order (piece order, start before end); an end joins at
+most once. A piece does not join its own other end when it is shorter than
+`max(3 · tolerance, 1 mm)`. Chains are then emitted in this order: pieces
+that were already closed (unchanged); open chains, walked in piece order
+from each unlinked end (start before end); then the remaining rings,
+walked from their lowest piece's start. A walk that returns to its
+starting end is closed. Gaps bridged by a join add their length to the
+chain; a closed chain's closing gap is not added.
+
+The **snap join** uses a tolerance of 0.15 mm and the continuation rule
+alone. Contours and form lines are snap-joined separately; form lines go
+no further than this step, so a form chain's `ends` stay `dangling` as
+built and carry no meaning (§3 reads form chains for their geometry only).
+
+### 2.2 End classes and gap bridging
+
+After the snap join every open contour chain's two ends are classified, in
+this order (first match wins):
+
+| Class | Rule |
+|---|---|
+| `frame` | a point straight ahead of the end (along its outward tangent, 0.25 mm steps up to 3 mm) lies outside the mapped area (§2.3) |
+| `merge` | another chain lies within 0.2 mm of the end point |
+| `cliff` | a cliff lies within 0.4 mm of the end point |
+| `dangling` | none of the above |
+
+Then **gap bridging** joins `dangling` ends to each other with the join of
+§2.1 at a tolerance of **45 m on the ground** (`45 / groundMPerMm` mm on
+paper: 3 mm at 1:15 000, 11.25 mm at 1:4 000). Ends of the other classes
+do not bridge. A bridge must continue the line and each end must look at
+the other: with `u` the unit vector from end `a` to end `b`,
+`la = ta · u` and `lb = −tb · u`, the gap `d` is bridged when
+
+| Gap | Condition |
+|---|---|
+| `d ≤ 0.6 mm` | `la > 0` and `lb > 0` |
+| `0.6 < d ≤ 1.5 mm` | `la > cos 55°` and `lb > cos 55°` |
+| `d > 1.5 mm` | `la > cos 40°` and `lb > cos 40°` |
+
+A bridged chain keeps the classes of its outer ends; a chain closed by
+bridging has none. Chains of 0.3 mm or less are dropped after bridging. A
+chain is an **index chain** when more than half its length comes from
+index-contour pieces.
+
+During rasterisation (§2.4) a `dangling` end may become **`extended`**: the
+fifth class.
+
+| Constant | Value |
+|---|---|
+| snap tolerance | 0.15 mm |
+| continuation | `t₁ · t₂ < −0.3` |
+| turn penalty | 0.2 · (1 + t₁ · t₂) |
+| end tangent | over 0.6 mm |
+| frame look-ahead | 3 mm in 0.25 mm steps |
+| merge / cliff radius | 0.2 mm / 0.4 mm |
+| bridge | 45 m on the ground (`bridgeGroundM`) |
+| minimum chain | > 0.3 mm |
+| extension (§2.4) | frame ends 4 mm; dangling ends ≤ 1.5 mm |
+
+These are T1's constants, unchanged: T1's verdict and H2's targets were
+measured with them.
+
+### 2.3 Mapped-area mask
+
+The mapped area is where the map says something about the terrain. Every
+part in `extentParts` is drawn into a grid of **0.5 mm** cells over the
+contour pieces' bounding box padded by 4 mm + 3 cells (5.5 mm); what lies
+beyond that grid is not drawn, so the mapped area never reaches more than
+5.5 mm past the outermost contour. The drawn cells are closed with radius
+**4 mm** (3-4 chamfer distance: dilate, fill everything not reachable from
+the grid border, erode). `maskAt(mask, x, y)` is true inside. The mask is
+coarse on purpose: it says where the frame of the mapped terrain is, not
+where each line ends.
+
+### 2.4 Barrier raster
+
+The graph raster covers the contour pieces' bounding box padded by 2 mm,
+with square cells of `max(cellMm, √(area / maxCells))` (defaults 0.1 mm
+and 60 M cells). Each cell holds an `Int32` label:
+
+| Label | Meaning |
+|---|---|
+| `-1` | outside the mapped area (§2.3, at the cell centre) |
+| `-3` | cliff |
+| `-10 − i` | chain `i` |
+| `0` | free, before labelling |
+| `1 … regionCount` | region |
+
+Barriers are drawn by stepping each segment at half a cell: cliffs first,
+then chains in order (a chain overwrites a cliff). A closed chain includes
+its closing segment. Each `frame` end is extended 4 mm straight ahead
+without overwriting another chain or the outside, so that a band cut by
+the frame stays cut. Then each `dangling` end looks straight ahead from 2
+cells to 1.5 mm; if it meets a cliff or another chain before the outside,
+the gap is drawn onto it (without overwriting other chains or the outside)
+and the end becomes `extended` (a near-miss merge).
+
+### 2.5 Regions
+
+Free cells are flood-filled 4-connected, in cell order (row-major from the
+lower-left), into regions `1 … regionCount`; per region the cell count and
+whether it touches the outside or the raster's edge.
+
+### 2.6 Incidence, leaky chains, cliff links
+
+Each chain is sampled every cell length along its polyline (first sample
+half a step in). At a sample, the chain's left and right sides are probed
+along the normal at 1, 1.5, … 3 cells, skipping the chain's own cells; the
+first other label is kept when it is a region, else the side is lost. A
+`(left, right)` pair counts when it occurs at least `max(3, 2 %)` of the
+chain's samples. A chain is **leaky** when no pair survives or pairs with
+the same region on both sides make up half or more of the surviving
+samples — its band leaks around it (a gap the joins did not close); a
+leaky chain has no pairs. Otherwise same-region pairs are dropped.
+
+Region pairs are keyed as `left · 2²² + right`; `chainIncidence` throws a
+`RangeError` when a raster holds 2²² regions or more (the corpus peaks
+near 10⁴).
+
+`regionChains[r]` maps each chain bordering region `r` to side bits
+(`1` the region is left of the chain, `2` right). **Cliff links** are the
+pairs of different regions facing each other across a cliff line (sampled
+the same way), for §3–4.
+
+```ts
+type EndClass = "frame" | "merge" | "cliff" | "extended" | "dangling";
+interface Chain {
+  pts: Float64Array; closed: boolean;
+  lengthMm: number; indexLengthMm: number; index: boolean;
+  ends: [EndClass, EndClass] | null;   // null when closed
+  objects: number[];                   // document objects, in walk order
+}
+interface SidePair { left: number; right: number; samples: number }
+interface ContourGraph {
+  inputs: ContourInputs;
+  chains: Chain[]; formChains: Chain[];
+  mask: AreaMask; raster: RegionRaster;
+  pairs: SidePair[][]; leaky: Uint8Array;
+  regionChains: Map<number, number>[];
+  cliffLinks: [number, number][];
+  stats: ContourGraphStats;
+}
+```
+
+### 2.7 Determinism
+
+The same document gives the same graph, field for field: candidate lists
+are sorted with index tie-breaks, maps iterate in insertion order, flood
+fill and sampling go in a fixed cell and vertex order, and nothing reads
+the clock or a random source. `stats` carries counts only (no timings).
+
+### 2.8 Measured on the corpus
+
+H1's corpus check (a `.local/` script, not committed: the corpus is real
+club maps) builds the graph of the five corpus maps and the CC0 demo map
+(`docs/screenshots/fixtures/puit-de-laven.omap`), imported with no stored
+decisions, and compares every count with T1's output. Measured 2026-11-13:
+
+| Map | chains | closed | snap joins | bridged | extended | form chains | ends frame / merge / cliff / dangling | regions | components | leaky % of length |
+|---|---|---|---|---|---|---|---|---|---|---|
+| crop-a | 294 | 221 | 75 | 1 | 2 | 412 | 107 / 25 / 6 / 6 | 516 | 1 | 0.5 |
+| crop-b | 212 | 174 | 43 | 0 | 4 | 352 | 55 / 10 / 2 / 5 | 469 | 1 | 0.5 |
+| club-2026 | 2654 | 1823 | 1246 | 99 | 88 | 3593 | 429 / 686 / 240 / 219 | 4306 | 8 | 5.4 |
+| club-full | 5617 | 3999 | 2263 | 148 | 194 | 7555 | 368 / 1341 / 778 / 555 | 10495 | 27 | 10.0 |
+| sprint | 124 | 81 | 1 | 40 | 4 | 162 | 64 / 4 / 0 / 14 | 305 | 1 | 21.2 |
+| puit-de-laven | 181 | 108 | 2 | 1 | 1 | 0 | 138 / 0 / 0 / 7 | 490 | 1 | 4.0 |
+
+Object counts, raster sizes, bridged gaps, extended ends, form chains and
+component counts equal T1's on every map; crop-a, crop-b, sprint and
+puit-de-laven match T1 in every count (sprint's leaky share is 21.2 % here; T1 reported it as two shares rounded separately, 5.9 + 15.2). On the two club maps the snap
+join finds more joins than T1, and the counts that follow from a join
+move with it (H1 − T1):
+
+| Count | club-2026 | club-full |
+|---|---|---|
+| snap joins | +6 | +10 |
+| chains | −5 | −6 |
+| closed chains | +1 | +4 |
+| ends: merge | −10 | −12 |
+| ends: cliff | 0 | −4 |
+| ends: dangling | −2 | −4 |
+| regions | 0 | −1 |
+| contour length | +1 mm | 0 |
+
+Every other count is equal. The cause is T1's candidate grid: it computed
+a neighbour cell as `⌊(x ± tol) / tol⌋`, which skips a cell when an end
+lies on a multiple of the 0.15 mm tolerance — common, since OCAD
+coordinates sit on a 0.01 mm grid. H1 steps integer cells (§2.1); with
+T1's key put back in for a trial run, club-2026 reproduced T1 in every
+count. The extra joins are valid joins by §2.1's rule; the merge, cliff
+and dangling ends they remove were the ends those joins connected.
+
+Time for §1–2 on the largest map (club-full, 46 M raster cells): 2.7 s
+to 6.4 s on a 16-core machine shared with other jobs (the slower run at
+load average 26, where T1's identical mask code also ran 4× slower than
+in T1), about 0.7 GB peak RSS for the whole process including the import.
+T1 measured the same stages at 1.9 s. Region labelling and the raster dominate. H3 sets the height field's cell
+and budget (T1: 18 s / 1.5 GB for the whole spike at 0.1 mm).
+
+## 3. The solve: uphill side and levels
+
+`solveTerrain(graph, opts?)` (`terrain/solve/`, H2; import
+`@oxygen/shared/src/terrain/solve/index.js`) decides for every chain of
+§2 which side is uphill and gives every region a level: an integer
+number of contour intervals, 0 the lowest region of its connected set. It
+reads only the `ContourGraph` and does not change it; the interval in
+metres is H3's (header) and H9's (measured). Sides: `+1` uphill is left
+of the chain's drawing direction, `−1` right, `0` undecided.
+
+### 3.0 Decided with the user (2026-11-14)
+
+1. **External (DEM) side against the map's evidence**: when an external
+   side (H9: the DEM) and a tick, tagged cliff or lake speak about the same
+   chain and disagree, **the external side decides**; the disagreement is
+   counted per class in the report (`external.disagreements`). H9 takes
+   the chain's height from the DEM median, so a sign against it would
+   contradict the chain's own heights.
+2. **Strict and decided**: closure is flagged (answer 15) and a decision
+   propagated from a flagged chain is flagged too, so strict shares are
+   lower than T1's. The report carries both `share.strict` and
+   `share.decided` (strict + flagged, conflict length removed); the corpus
+   comparison with T1 is made on T1's definition, recomputed by the
+   `.local` script; **the 3D gate of answer 7 (80 %) reads
+   `share.decided`**.
+3. **Index consistency without a DEM**: the report's figure is the share
+   of neighbouring index-contour pairs (by graph distance) whose levels sit
+   on one residue mod 5, with T1's one-residue share of the largest
+   component beside it. The map alone cannot tell a drifted block from a
+   second contour ladder; the row's target (≥ 90 % on one residue per
+   ladder area) is checked by the `.local` corpus script on ladder areas
+   taken from the DEM's phase (T2), not by the solve.
+4. **The ≥ 90 % index target moves to H9** (user, 2026-11-14, after a
+   corpus run): from the map alone H2 puts 85.5 % of club-2026's main
+   index ladder on one residue and 57–65 % of its three small ones
+   (final run, §3.9; 87.5 / 56–61 % when the question was put); with
+   perfect (DEM) signs the same solve reaches 85.5 % and 49–65 %. The
+   limit is the band graph — bands that leak around a gap span two
+   levels (§3.3) — not the signs. H2 lands with leak-aware tiers and
+   trial-checked index repair; H9 carries the index target with the DEM.
+   Splitting multi-level bands in the graph is a pending item.
+5. **A ladder area, for the index target, is an index phase**: the
+   index contours whose DEM median falls on one peak of the median mod
+   25 m (5 intervals) holding ≥ 8 % of the index length. club-2026's index
+   contours lie on four such phases (about 23, 21, 19 and 0 m), which T2's 5 m contour phase cannot
+   separate; the 5 m figure is reported beside it.
+
+### 3.1 Evidence
+
+Each evidence item says which side of one chain is uphill, with a weight.
+The classes and the order in which they are applied are the split's
+(SLICES "Decided in this split"); the external side comes first (answer 14).
+
+| Class | Source | Weight | Rule |
+|---|---|---|---|
+| `dem` | `opts.external` (H9) | 1 | one item per chain with a non-zero side |
+| `tick` | slope tick `101.b` | 4 | on the chain within 0.3 mm; the tick points downhill (the glyph's +y turned counter-clockwise by the object's angle, §1.3); dropped when `|sin|` between tick and chain < 0.5 |
+| `cliff` | tagged cliff (§1.2) | 1.5 | tags point downhill. A cliff whose midpoint lies within 0.5 mm of a chain speaks about that chain (dropped at `|sin|` 0.7 or below); otherwise it speaks about the chains on both sides by ray (0.5 … 4 mm); cliffs shorter than 0.3 mm end to end are skipped |
+| `lake` | water area (§1.3) | 1.5 | rays every 0.5 mm along the outer ring, outwards, 0.2 … 10 mm; a chain hit by ≥ 4 rays and ≥ 20 % of them lies above the lake; rings under 2 mm² skipped |
+| `top` | an innermost closed chain | 2 | a closed, non-leaky chain whose inside region borders no other chain and does not touch the outside is a top: uphill inside |
+| `formTick` | slope tick `103.b` on an open form line | 1.5 | on a form line within 0.3 mm; by ray from the tick, 0.25 … 8 mm both ways; ticks on closed form lines are skipped |
+
+A **ray** marches through the region raster in half cells to the first
+chain cell; it stops at the outside, and is dropped when no segment of
+that chain lies within 3 cells + 0.2 mm of the hit or when it grazes the
+chain (`|sin|` < 0.3). From a known downhill direction the chain met downhill
+is seen from its uphill side and the chain met uphill from its downhill
+side; both rays are dropped when they meet the same chain, and a ray is
+dropped when it crosses a form line first (tested from 0.3 mm beyond the
+ray's start, past the tick's own line) (it then describes a detail,
+not the band). T1's constants, unchanged; T1's per-map tick-direction
+detection and its automatic cliff-convention flip are not kept (they
+never fired on the corpus).
+
+### 3.2 Staged signs
+
+Evidence is applied in **stages**; a stage only touches chains still
+undecided. In a stage the signed weights are summed per chain; the sign
+of the sum decides and the chain's class is the strongest contributor on
+the winning side (ties to the class earlier in the table). A chain whose
+weights cancel exactly stays undecided for that stage. A chain decided in
+a stage with items on both sides counts in `evidence.conflictingChains`.
+
+1. `dem` (when `opts.external` is given);
+2. `tick`, `cliff`, `lake`, `top` together;
+3. `formTick` — only where stages 1–2 and what follows them left a chain
+   open;
+4. the flagged heuristics of §3.4.
+
+After every stage the solve **settles**: two-contour slope propagation,
+then index repair (§3.5) and closure (§3.4) in turn, until nothing
+changes (at most 60 rounds). **Slope propagation**: in a region bordered
+by exactly two chains one is its lower and the other its upper boundary,
+so a decided chain decides the other.
+
+Every decided chain has a **root**: itself for direct evidence and the
+heuristics, the root of the chain it was propagated from for slope
+propagation. A chain is **flagged** when its root's class is flagged
+(closure, band-drain, band-upper, closed-hill — answer 15); index repair
+lifts the flag of a group it confirms or flips (§3.5).
+
+With an external side, a tick, cliff or lake that disagrees with it on
+the same chain sets a bit in `externalDisagrees` (tick 1, cliff 2,
+lake 4); the external side decides (§3.0, 1).
+
+### 3.3 Levels
+
+Region levels come from a **weighted union-find with offsets**: every
+edge says `level(a) − level(b) = d`.
+
+| Edge | `a`, `b` | `d` |
+|---|---|---|
+| pair of a decided chain | uphill, downhill region | 1, or the step index repair set |
+| cliff link (§2.6) | second, first region | 0 (assumed), or the step index repair set |
+| pair of an undecided chain | left, right region | 0 |
+
+Edges are taken in **trust tiers**, and within a tier by most samples
+first (ties by edge key). A pair is weak (tier 3) whatever its chain's
+flag; tiers 1 and 2 hold the other pairs of decided chains:
+
+| Tier | Edges |
+|---|---|
+| 1 strict | pairs of unflagged chains |
+| 2 flagged | pairs of flagged chains |
+| 3 weak pair | pairs along a cliff (≥ 50 % of the pair's samples within 0.5 mm of a cliff line) or beside a band that spans two levels |
+| 4 | cliff links with a step set by index repair |
+| 5 | other cliff links (weak links) |
+| 6 | pairs of undecided chains (weak links) |
+
+A band **spans two levels** when a chain sees it on both of its sides at
+`max(3, 2 %)` of its samples (§2.6's pair rule applied to the
+same-region pairs, leaky chains and partial leaks alike): the band runs
+around the chain, so it joins the bands of two levels into one region.
+Its pairs are weak, so levels reach the regions around it by other paths
+first. On club-2026 this alone moved the index contours of T2's main 5 m
+ladder from 66 % to 78 % on one residue, the share of length on its true
+level from 62 % to 71 % and the drift RMS from 2.05 to 1.16 intervals
+(§3.9).
+
+An edge whose regions are already joined **closes a cycle** with the
+difference `d′` the levels already give:
+
+- decided chain: `d′ = d` consistent; `d′ ≥ 1` otherwise **multi-step**
+  (`chainStep = d′`: contours merged into this one, e.g. along a cliff);
+  `d′ ≤ 0` a **conflict** (`conflict` += the pair's share of the chain's
+  samples);
+- cliff link: `cliffStep = d′`, source `implied`.
+
+A tree edge of tier 5 or 6 is a **weak link**: it keeps the surface
+continuous but says nothing about the step. `regionComponent` is the
+union over tiers 1–4. The forest's tree edges are read as a tree rooted,
+in each connected set, at the **root block**: the tier-1 block with most
+regions (ties to the block whose root region has the lowest index),
+visited breadth first. `regionWeak` marks regions whose component is not
+the root block's. Levels are normalised so that
+the lowest region of each connected set is 0. A chain's **level** is the
+higher floor of the two sides of its pair with most samples (the highest
+contour level it stands for); `NO_LEVEL` without pairs.
+
+### 3.4 Flagged heuristics
+
+Every decision here is flagged and is its own root.
+
+- **Closure** (in every settle): an undecided chain whose strongest
+  pair's two regions are already levelled in one component takes the
+  sign of their difference (when it is not 0). It runs in T1's place,
+  between the strict stages; run after the band rules it was 63 % true
+  on club-2026, here 79 %.
+- **Band-drain**: in a region bordered by three chains or more that does
+  not touch the outside, whose known chains (at least two) are all upper
+  boundaries and which has one unknown chain, that chain is its lower
+  boundary.
+- **Band-upper**: in a region bordered by three chains or more with a
+  known lower boundary, the unknown chains are upper boundaries.
+- **Closed-hill**: the last default — an undecided closed, non-leaky
+  chain is a hill.
+
+They run in rounds (band-drain, else band-upper, else closed-hill; one
+rule per round, at most 200 rounds), each followed by a settle.
+`opts.heuristics: false` leaves those chains undecided.
+
+### 3.5 Index repair
+
+Every fifth contour is an index contour, so two index contours' levels
+should differ by a multiple of five. Index repair turns that into steps
+and signs (`opts.indexRepair`, default on).
+
+- **Neighbours**: each index chain with pairs takes its up to 4 nearest
+  other index chains, by bands crossed: breadth first over chain pairs
+  and cliff links from the chain's own regions (ring 0) to ring 12; an
+  index chain bordering a region of ring `d` is `d` bands away; ties by
+  chain. Each neighbour pair
+  weighs `min(length i, length j)`.
+- **Votes**: the level forest of §3.3 is read as a tree. A neighbour
+  pair in one connected set whose tree path crosses a **suspect edge**
+  (tier ≥ 2) votes on it for the shift (mod 5) of the edge's far side
+  that would put the pair on one residue. A chain's place in the tree is
+  the region whose floor is its level.
+- **Proposals**: an edge whose modal shift holds ≥ 80 % of its vote
+  weight proposes one change, by tier: a weak pair takes the step
+  `k ∈ 1 … 5` that gives the shift; a cliff link the step that gives it
+  within `0 … 4` towards the untagged side when the cliff is tagged
+  (tags point downhill), else within `−2 … 2`; an undecided chain the
+  sign whose step `±1` gives it (class `index`, strict); a flagged
+  group — its root and every chain with that root — is **flipped** when
+  the shift is not 0 (class `index` on the root, `corrected` on the
+  group) and **confirmed** when it is 0 (its flag lifted). Flips are
+  proposed only in the last settle, after the heuristics.
+- **Trial**: each proposal is applied on its own and kept only when the
+  weight of neighbour pairs on one residue rises (a confirmation: does
+  not fall) and the conflict length does not grow; otherwise it is
+  undone. Proposals are taken in tree order from the root blocks; the
+  votes of one pass are collected once, so a later proposal of the same
+  pass may already be satisfied and is then undone. One pass runs per
+  settle round (§3.2, at most 60).
+
+Strict chains are never flipped (T2: tick, cliff and lake 99.8–100 %
+true, top 98 %). A drifted block and a second contour ladder look the
+same from the map alone (§3.0, 3); repair only ever moves a suspect edge
+and only keeps a change the index contours agree with, so a ladder
+border inside strictly chained contours is left as it is. H1's band
+graph limits what repair can reach (§3.0, 4).
+
+Measured against hard index anchors (index pairs joined first at the
+rounded counted step): they put 97 / 99 % of club-2026's index contours
+on one residue per 5 m ladder but broke the levels around them (drift
+RMS 1.7 → 3.1 intervals on club-2026, 5.9 on crop-b) and were dropped.
+
+### 3.6 The report and the components
+
+`TerrainReport` is plain JSON; shares are fractions of contour length.
+
+| Field | Meaning |
+|---|---|
+| `share.strict`, `share.flagged` | decided chains, by their flag |
+| `share.decided` | strict + flagged, conflict length removed — **the 3D gate reads this** (answer 7, §3.0) |
+| `share.undecided`, `share.leakyUndecided`, `share.leakySigned` | undecided non-leaky and leaky chains; leaky chains that evidence decided |
+| `share.conflict`, `share.multiStep` | conflict length (a chain whose conflict share exceeds ½ counts whole, else by its share); length of chains with `chainStep` > 1 |
+| `byClass` | length by deciding class, `conflict`, `none`, `leaky` |
+| `evidence` | items per class, `conflictingChains` |
+| `external` | source, chains, length share decided by it, disagreements per class; null without |
+| `levels` | components, largest component's share and levels, multi-step chains, weak regions |
+| `index` | index length, neighbour pairs, `consistency` (weight share of neighbour pairs in one connected set on one residue), `modalShare` (T1's figure: the largest component's index length on its modal residue), and repair counts summed over all passes: steps set, groups flipped (and their length), groups confirmed, chains decided, and `unresolved` — attempts that found no agreeing vote, no legal step or failed their trial (a standing edge counts once per pass) |
+| `chains`, `lengthMm` | chain count and total contour length (0 for no chains) |
+| `components` | the 8 largest: length share, confidence, levels, index consistency |
+
+A **component** (`TerrainComponent`, in `TerrainSolution.components`,
+largest first) is a set of regions joined by tiers 1–4 with its decided
+chains: `id` (its root region), `regions`, `lengthMm` (decided chains),
+`confidence` = (strict length − conflict length) / length,
+`flaggedShare`, `minLevel` / `maxLevel` (over its regions),
+`indexLengthMm`, `indexConsistency` (neighbour pairs whose first chain is
+in it; null without).
+
+### 3.7 Interface
+
+```ts
+type EvidenceClass = "dem" | "tick" | "cliff" | "lake" | "top" | "formTick";
+type SignClass = EvidenceClass | "slope" | "index" | "closure" | "bandDrain" | "bandUpper" | "closedHill";
+const SIGN_CLASSES: readonly ["none", "dem", "tick", …];        // signClass indexes this
+interface SideEvidence { chain: number; side: 1 | -1; weight: number }
+type EvidenceSet = Record<Exclude<EvidenceClass, "dem">, SideEvidence[]>;
+interface ExternalSide { source: string; side: Int8Array }      // per chain, H9
+interface SolveOptions { evidence?: EvidenceSet; external?: ExternalSide; heuristics?: boolean; indexRepair?: boolean }
+interface TerrainSolution {
+  side: Int8Array; signClass: Uint8Array; flagged: Uint8Array; root: Int32Array; corrected: Uint8Array;
+  chainLevel: Int32Array; chainStep: Uint8Array; conflict: Float32Array; externalDisagrees: Uint8Array;
+  regionLevel: Int32Array; regionComponent: Int32Array; regionWeak: Uint8Array;
+  cliffStep: Int32Array; cliffStepSource: Uint8Array;            // per graph.cliffLinks entry: implied / index / assumed
+  components: TerrainComponent[]; report: TerrainReport;
+}
+function gatherEvidence(graph: ContourGraph): EvidenceSet;
+function solveTerrain(graph: ContourGraph, opts?: SolveOptions): TerrainSolution;
+```
+
+The building blocks (`buildForest`, `slopeFix`, `repairPass`,
+`indexNeighbours`, the probes) are exported for tests and for H3 / H9.
+
+### 3.8 Determinism
+
+The same graph and options give the same solution field for field: edges
+are sorted with key tie-breaks, regions and chains are visited in index
+order, maps iterate in insertion order, and nothing reads the clock or a
+random source. The graph is not mutated.
+
+### 3.9 Measured on the corpus
+
+A `.local/` script (not committed) solves the five corpus maps and
+compares the result with ground truth from Lantmäteriet's 1 m model,
+sampled on H1's chains the way T2 did (a chain's side: median of
+left − right at ±8 m on the 5 m-smoothed model, decided at ≥ 0.4 m, ≥ 65 %
+agreement and ≥ 90 % coverage; its height: the median along it). Shares
+of contour length, 2026-11-14:
+
+| Map | strict (T1 def.) | T1 | strict | flagged | decided | true sign | T1 true | solve ms |
+|---|---|---|---|---|---|---|---|---|
+| crop-a | 94.3 | 94.8 | 90.6 | 8.6 | 99.2 | 99.4 | 99–99.5 | 90 |
+| crop-b | 94.2 | 95.3 | 97.5 | 2.0 | 96.9 | 99.4 | 99–99.5 | 58 |
+| club-2026 | 86.5 | 87.0 | 82.8 | 14.3 | 94.1 | 96.4 | 96.6 | 604 |
+| club-full | 85.0 | 85.4 | 83.2 | 12.8 | 92.7 | 96.8 | 96.3 | 1642 |
+| sprint | 81.9 | 81.9 | 85.5 | 8.5 | 90.3 | 99.0 | 99–99.5 | 32 |
+
+"strict (T1 def.)" counts T1's strict classes (tick … closure) whatever
+they descend from, conflict length removed (§3.0, 2); T1's figures were
+measured on T1's graph (H1 has 6 / 10 more snap joins on the club maps,
+§2.8). True sign per class on club-2026 (in brackets the class's share
+of contour length among the chains the DEM decides too, conflict length
+included — so they sum to more than "decided"; "slope from a flagged
+root" is apart from "slope"): cliff 99.9 (29.3), tick 100 (20.8), top 98.3 (15.1), slope
+98.7 (9.0), closure 78.7 (6.0), band-upper 78.2 (5.8), lake 100 (3.4),
+form tick 91.9 (2.7), band-drain 100 (1.8), slope from a flagged root
+80.5 (0.5), index 70.6 (0.3); on club-full: cliff 99.5, top 97.3, slope
+96.6, tick 99.1, band-upper 85.0, closure 79.2, form tick 94.6,
+band-drain 98.8, lake 100, index 100. T1's hold-out (one evidence class
+against the others) is not repeated: the DEM truth replaces it.
+
+**Index contours on one residue**, per index ladder (§3.0, 5; each
+ladder's index length in mm), per component:
+
+| Map | H2 | H2 without index repair | H2 with the DEM side | T1 (per map, 5 m) |
+|---|---|---|---|---|
+| crop-a | 100 (1208) | 98.4 | 100 | 100 |
+| crop-b | 93.2 (1170) | 93.2 | 93.2 | — |
+| club-2026 | 85.5 (4049) / 64.8 (594) / 61.5 (958) / 56.5 (436) | 85.5 / 57.3 / 56.6 / 49.3 | 85.5 / 48.7 / 64.7 / 59.0 | 62.8 |
+| club-full | 35.8 (6686) / 46.6 (5117) / 70.3 (686) / 71.4 (1993) | 43.9 / 49.2 / 60.1 / 72.0 | 38.7 / 49.4 / 78.5 / 84.9 | 30 |
+
+On T2's two 5 m ladders club-2026 reads 84.3 / 52.9 %. The DEM's own
+levels put only 88.5 / 50.5 % of club-2026's index contours on one
+residue per 5 m ladder, which is why the target is read per index phase.
+
+**Level drift** (intervals): each tight chain's DEM level on its 5 m
+ladder against the solve's, one offset per (component, ladder); share of
+compared length exactly right, off by 1, 2, ≥ 3, and the RMS:
+
+| Map | exact | 1 | 2 | ≥ 3 | RMS | without repair: exact / RMS | T1 (T2) |
+|---|---|---|---|---|---|---|---|
+| crop-a | 99.4 | 0.6 | 0 | 0 | 0.08 | 99.1 / 0.13 | |
+| crop-b | 91.6 | 6.9 | 1.5 | 0 | 0.36 | 91.6 / 0.36 | |
+| club-2026 | 74.4 | 8.3 | 7.9 | 9.4 | 1.20 | 75.1 / 0.96 | block-wise ±1–3 |
+| club-full | 36.6 | 20.8 | 13.7 | 28.9 | 2.80 | 38.6 / 3.04 | block-wise ±6–8 |
+| sprint | 61.6 | 36.9 | 1.5 | 0 | 0.65 | 61.6 / 0.65 | |
+
+The baseline before H2's changes (T1's solve on H1's graph, closure
+flagged, no leak tiers) was 61.8 % exact / RMS 2.05 on club-2026 and
+41.7 % / 2.23 on club-full. Index repair's net effect on the corpus is
+small and of mixed sign: club-2026's small ladders gain 5–8 points but
+its drift RMS rises from 0.96 to 1.20 (exact 75.1 → 74.4 %); club-full's
+largest ladder loses 8 points while its RMS falls from 3.04 to 2.80; club-full's drift stays block-wise even
+with the DEM's signs (43 % exact), the graph limit of §3.0, 4.
+
+Time: the solve takes 1.6 s on club-full (5617 chains, 10 495 regions)
+on top of §2's graph, on a shared 16-core machine.
+## 4. The surface
+
+`buildHeightField(graph, levels, opts?)` (`terrain/field/`, H3) turns the
+band graph (§2) and the solve's levels (§3) into a height per cell.
+
+### 4.0 Decided with the user (2026-11-14)
+
+1. **Height unit: 1/64 of a contour interval** (7.8 cm at 5 m, range
+   ±512 intervals), not the 1/8 interval of the slice H split: 0.625 m
+   steps terrace a gentle slope on 3 m cells and band the hill shading.
+   The header carries the scale in metres (`zScaleM`), so no reader
+   assumes it.
+2. **An anchored field is a re-derived field with absolute cells**, not a
+   relative field plus an offset. The header carries `zOffsetM` and
+   `datum: "relative" | "absolute"`; with H9's per-chain DEM heights
+   (T2 answer 12) the interpolation is run again from those heights and
+   written as its own field (§4.9). Per-chain heights never enter the
+   format.
+3. **Cell budget**: the field cell is 0.2 mm where it fits; it grows by
+   whole multiples of the graph cell to stay within **4 M cells and 4096
+   cells per side** (a phone's texture limit). Interpolation still runs
+   on the graph raster (0.1 mm by default).
+
+### 4.1 Method and input
+
+The surface is the raster alternative of 10 §2.2 in T1's band form: inside
+each region (a band between chains, §2.5) a cell's height lies between
+the band's lower and upper chains, weighted by its **geodesic distance**
+to each inside the region. It is the surface T1 drew and the user
+accepted (answer 2), with T1's formulas and constants; 10 §2.2's TIN with
+medial-axis points is not built.
+
+The input is the graph (§2) and the parts of the solution (§3.7) the
+surface reads:
+
+```ts
+type FieldLevels = Pick<TerrainSolution, "regionLevel" | "regionWeak" | "side" | "flagged" | "conflict">;
+```
+
+`regionLevel` is each region's floor in intervals (§3.3), `side` +1 / −1
+/ 0, `flagged`, `conflict` and `regionWeak` feed the confidence bit
+(§4.7).
+
+Heights are in intervals until §4.8. The work runs on the graph raster
+(§2.4: 0.1 mm by default), so the field covers the raster's extent: the
+contour pieces' box padded by 2 mm.
+
+### 4.2 Sources
+
+A region's **floor** is `regionLevel`; the region spans floor to
+floor + 1. Each chain is walked at one cell length and probed left and
+right as in §2.6 (first region cell within 1–3 cells along the normal,
+skipping the chain's own cells). With `d = floor(left) − floor(right)`
+(the chain's `side` when a side is unseen; 0 for a leaky chain):
+
+| Cell | Kind | Height |
+|---|---|---|
+| on the high side (`d ≠ 0`) | LOW: the region's lower bound | its floor |
+| on the low side (`d ≠ 0`) | UP: the region's upper bound | its floor + 1 |
+| either side when `d = 0` | FORM | its floor + ½ |
+
+A multi-step chain (§3) therefore carries its whole drop in its own
+cells; a cliff link needs no sources, since the floors on its two sides
+already differ by the link's step. Every form-line chain (§2.1) seeds
+FORM in each region cell it crosses: a form line lies half an interval
+above the contour below (10 §2.1 step 4), closed or not, ticked or not.
+
+### 4.3 Geodesic distance
+
+`geodesicDistance(raster, seeds)`: one pass per kind, from all its seeds
+at once, 8-connected and confined to the seed's region
+(`labels[j] = labels[i]`), steps 2 orthogonal and 3 diagonal (half-cell
+units), as `Uint16` saturating at 65 535 (unreachable; 3.3 m on paper at
+0.1 mm). Dial's algorithm on four typed-array buckets, in cell order.
+
+### 4.4 Height in a band
+
+With `w = 1 / (d + 1)` per kind (0 when unreachable), where at least two
+kinds reach a cell and one of them is LOW or UP:
+
+```
+frac = (w_up + ½ · w_form) / (w_low + w_up + w_form)
+height = floor + frac
+```
+
+Between a lower and an upper chain with no form line this is close to
+linear in distance.
+
+### 4.5 Tops, pits and empty regions
+
+| Region reaches | `frac` | Shape |
+|---|---|---|
+| LOW only (a top, or the uphill band at the frame) | `½ · min(1, R / 20 m) · d_low / d_max` | a dome up to half an interval |
+| UP only (a pit, or the lowest band) | `1 − ½ · min(1, R / 20 m) · d_up / d_max` | a bowl down to half an interval |
+| FORM only, or nothing | ½ | flat |
+
+`d_max` is the region's largest distance of that kind and `R` that
+distance on the ground. Knolls and depressions (point symbols) are not
+read.
+
+### 4.6 Field grid, resampling, smoothing
+
+The field cell is `k` graph cells, `k` the smallest integer with
+`k · cellMm ≥ 0.2 mm` such that the field has at most 4 M cells and at
+most 4096 per side (§4.0 answer 3); the field grid starts at the
+raster's corner `(x0, y0)` and has `⌈width / k⌉ × ⌈height / k⌉` cells.
+
+1. A field cell is **no-data** when more than half its graph cells lie
+   outside the mapped area (label −1).
+2. Its height is the mean of its region cells; barrier cells (chains,
+   cliffs) are holes.
+3. Two passes of a normalised box blur of radius
+   `max(1, round(4 m / field cell on the ground))` average over data
+   cells only, filling holes; no-data cells stay out of it.
+4. A hole still empty after the blur takes the mean of its data
+   neighbours, outwards (0 where nothing reaches).
+
+T1 blurred the 0.1 mm raster; the field blurs after resampling, at the
+same ground radius, for a fraction of the memory.
+
+### 4.7 Confidence
+
+A region is **confident** when it is not weak, it has LOW or UP sources,
+and at least half of those seed samples come from **good** chains:
+decided (`side ≠ 0`), not flagged, not leaky, conflict ≤ 0.5. A field
+cell's bit is set when more of its region cells lie in confident regions
+than not (clear on a tie, and with no region cells).
+
+### 4.8 Quantisation
+
+`z = round(height · 64)`, clamped to ±32 767; −32 768 is no-data. Height
+0 is the floor of the lowest region of each connected set (§3); sets no
+chain joins float independently. `datum` is `relative`, `zOffsetM` 0.
+
+### 4.9 With a DEM anchor
+
+Built in H10 (§7.0 answer 1). `buildHeightField(graph, levels, { anchored })`
+with
+
+```ts
+interface AnchoredFieldInput {
+  chainHeightsM: Float64Array;   // per chain, metres above the DEM's datum; NaN = none
+  chainConfident?: Uint8Array;   // per chain, good evidence for §4.7; absent = §4.7's rule
+  source: string;                // `contours.<provider>` (§7.0 answer 3)
+  provider?: HeightFieldProvider; // §5.1
+}
+```
+
+writes the field from per-chain absolute heights (§6.8) instead of floor
+and floor + 1; the passes and weights are §4.3–4.5's.
+
+- **Offset.** `zOffsetM` is the whole interval at or below the lowest
+  chain height (`anchoredOffsetM`); heights count in intervals above it,
+  so §4.8's quantisation is unchanged (±512 intervals of relief).
+- **Sources.** §4.2's walk decides LOW, UP and FORM by the floors as
+  before; each seed carries its chain's height as an int16 in 1/64
+  interval above the offset. A chain without a height seeds nothing. A
+  form line takes its band's floor + ½, the floor being the mean height
+  of the band's LOW seeds (else its UP seeds less one interval); a band
+  with neither has no form seeds.
+- **Distance.** `geodesicNearest(raster, seeds, values)` is §4.3's pass
+  carrying the nearest seed's value (the first seed to reach a cell wins
+  a tie): three passes, three extra int16 planes over the graph raster.
+- **Height.** Where two kinds reach a cell and one is LOW or UP: the
+  weighted mean `(w_low·h_low + w_up·h_up + w_form·h_form) / Σw` of the
+  nearest seeds' heights — §4.4's formula when the heights are floor,
+  floor + 1 and floor + ½. A top: `h_low + ½ · min(1, R / 20 m) · d_low /
+  d_max`; a pit the mirror from `h_up`; form only: `h_form`; nothing:
+  the band's floor + ½, else no height (a hole the blur fills).
+- **Confidence.** §4.7 with `chainConfident` in place of "good", and a
+  weak region not held against it (its levels come from the DEM).
+- **Header.** `datum: "absolute"`, the `source` and `provider` given.
+  Per-chain heights never enter the format (§4.0 answer 2).
+
+On a regular ladder this is the relative field shifted by the anchored
+offset to within the quantisation (test). The extra planes add 6 B per
+graph cell over §4's (club-full: 46 M cells, ~280 MB; §7.7).
+
+## 5. The height field
+
+### 5.1 `HeightField`
+
+```ts
+interface HeightFieldHeader {
+  version: number;          // TERRAIN_VERSION (1), bumped when §1–7 change the field a document derives
+  source: "contours" | string; // or a DEM source matching DEM_FIELD_SOURCE_RE (§7.0 answer 3)
+  cellMm: number; x0: number; y0: number; width: number; height: number;  // §2's Grid, y up
+  groundMPerMm: number;
+  intervalM: number;        // 5, or 2.5 for ISSprOM (answer 8)
+  zScaleM: number;          // metres per unit: intervalM / 64
+  zOffsetM: number;         // metres = z · zScaleM + zOffsetM
+  datum: "relative" | "absolute";
+  zMin: number; zMax: number; // over data cells; both 0 without data
+  provider?: HeightFieldProvider; // a DEM-based field's (§7.1); absent on `contours`
+}
+interface HeightFieldProvider {
+  id: string;               // provider and resolution chosen: "lantmateriet-2m", "glo30-30m"
+  resolutionM: number;      // the level read: the id's, or one overview coarser over the window cap (§7.0c answer 12)
+  grade: "anchor" | "coarse";
+  licence: string;          // "CC BY 4.0"
+  attribution: string;      // "© Lantmäteriet" — shown with the surface (answer 16)
+  verticalDatum: string;    // "RH 2000", "EGM2008"
+}
+interface HeightField { header: HeightFieldHeader; z: Int16Array; confident: Uint8Array }
+```
+
+`DEM_FIELD_SOURCE_RE` is `^(ground|contours)\.[a-z0-9][a-z0-9-]{0,47}$`:
+`ground.<provider>` is the DEM itself on the field grid (§7.4),
+`contours.<provider>` the anchored contour field (§4.9). The schema
+rejects any other source. An optional block absent on `contours` leaves
+its bytes and `TERRAIN_VERSION` unchanged (the golden test).
+
+Values sit at cell centres, row-major from the lower-left. `confident`
+is bit-packed, `⌈width · height / 8⌉` bytes, cell `i` at bit `i % 8` of
+byte `i >> 3` (`isConfident`): a separate plane, so the int16 grid
+uploads to the GPU as it is.
+
+### 5.2 Bytes
+
+`encodeHeightField(field)` / `decodeHeightField(bytes)`, little-endian:
+
+| Offset | Content |
+|---|---|
+| 0 | magic `OXHF` |
+| 4 | u32 container version, 1 |
+| 8 | u32 header byte length `n` (a multiple of 4) |
+| 12 | the header as UTF-8 JSON, zero-padded to `n` |
+| 12 + n | `width · height` int16 |
+| then | the confidence plane |
+
+The length must match exactly. Decoding throws `HeightFieldFormatError`
+on a bad magic, an unknown container version, a header the schema
+rejects, or a length that does not match; encoding throws when the planes
+do not match the header. No compression: the transport's (H4). The same
+field gives the same bytes.
+
+### 5.3 Sampling
+
+`sampleHeight(field, { x, y })` → metres or `null`: bilinear over the
+four nearest cell centres, clamped at the outer centres; `null` outside
+the grid or when the containing cell is no-data; no-data neighbours are
+dropped and the remaining weights renormalised.
+`sampleConfident(field, p)` reads the containing cell's bit (false
+outside).
+
+### 5.4 Normals
+
+`heightNormals(field, exaggeration = 1)` → `Int8Array`, three snorm8 per
+cell (x right, y up, z up): central differences in ground metres
+(`cellMm · groundMPerMm`), one-sided beside no-data and at the edge, a
+zero slope on an axis with no data neighbour; (0, 0, 127) in no-data
+cells. Computed on demand, not stored.
+
+**Client entry.** A client that reads a stored field imports
+`@oxygen/shared/src/terrain/field/read.js` — the types, the codec,
+§5.3 and §5.4 — never `field/index.js`, which adds the derivation
+(`build`, `interpolate` and through them `graph/` and `solve/`). The web
+draws the field through it (`map-rendering.md` §5.6).
+
+### 5.5 `deriveTerrain(doc)`
+
+```ts
+interface DeriveTerrainOptions {
+  intervalM?: number;                           // default contourIntervalM(doc.header)
+  graph?: ContourGraphOptions;                  // §2.4: 0.1 mm, 60 M cells
+  solve?: SolveOptions;                         // §3.7; H9's external side enters here
+  field?: Omit<HeightFieldOptions, "intervalM">; // §4.6: 0.2 mm, 4 M cells, 4096 per side
+}
+function contourIntervalM(header: Pick<MapDocumentHeader, "library">): number;
+function deriveTerrain(doc: MapDocument, opts?: DeriveTerrainOptions): { field: HeightField; report: TerrainReport } | null;
+```
+
+`buildContourGraph` (§2) → `solveTerrain` (§3) → `buildHeightField`
+(§4); `null` when the document has no contours.
+
+```ts
+interface AnchoredDem { sample: DemSampler; grade: "anchor" | "coarse"; demCellM: number; providerId: string; provider?: HeightFieldProvider }
+function deriveAnchoredTerrain(doc: MapDocument, dem: AnchoredDem, opts?: DeriveTerrainOptions):
+  (DerivedTerrain & { anchor: AnchorReport; heights: AnchoredHeights["report"]; acceptedOfCovered: number }) | null;
+```
+
+§7.5's derive: the graph, `anchorLevels` (§6), `solveTerrain` with the
+DEM's side as `external`, `anchoredHeights` (§6.8), then §4.9's field
+with source `contours.<providerId>`. A chain the DEM gave no height but
+§3 a level takes the median component offset plus `I · level`, without
+confidence; one with neither seeds nothing. Confidence follows
+`chainConfident` (a DEM height, or a neighbours' height not bounded) for
+an anchor-grade model, §4.7's rule for a coarse one. `acceptedOfCovered`
+(accepted over covered contour length, §6.4) is the misalignment gate's
+input (§7.0 answer 2). The interval is the
+assumed one (answer 8): 2.5 m when the document's library id starts with
+`ISSprOM`, else 5 m. The field is built whatever the report says: the 3D
+gate (`report.share.decided` ≥ 80 %, answer 7) is the viewer's (H7). The
+report travels beside the field, not inside its bytes: H4 stores it on
+the height-field row and hands it out through the event's descriptor
+(`course.mapMetadata.terrain`) and the import review
+(`docs/map-storage.md` §4.7).
+
+The graph keeps H1's budget (0.1 mm, 60 M cells): H2's shares were
+measured on it, and the field's own budget bounds what is stored.
+
+**The stored field is derived with the defaults** (user, 2026-11-14):
+the `contours` artifact H4 keys on `(document hash, source, version)`
+is always `deriveTerrain(doc)` with no options, so the key names one
+field. The options are for tests, the corpus script and H9: a field
+built with a DEM (its side passed to the solve, or its heights, §4.9) is
+H9's re-derived field and carries its own `source` value, never
+`contours`. `TERRAIN_VERSION` is bumped whenever §1–5 change the bytes
+`deriveTerrain(doc)` gives; a golden test on a synthetic hill
+(`terrain/__tests__/derive.test.ts`) fails when they change.
+
+### 5.6 Measured on the corpus
+
+A `.local/` script (not committed: the corpus is real club maps) runs the
+three stages on each corpus map and the CC0 demo map, one map per process,
+from the imported document (no stored decisions), and writes a hillshade
+for inspection. Measured 2026-11-14 on a 16-core machine shared with other
+sessions:
+
+| Map | graph cells (0.1 mm) | field | cell | encoded | data / confident | graph s | solve s | field s | total s | peak RSS |
+|---|---|---|---|---|---|---|---|---|---|---|
+| crop-a | 1.4 M | 696 × 511 | 0.2 mm (3 m) | 0.76 MB | 94 % / 96 % | 0.1 | 0.1 | 0.3 | 0.5 | 191 MB |
+| crop-b | 1.1 M | 464 × 610 | 0.2 mm (3 m) | 0.6 MB | 81 % / 98 % | 0.1 | 0.1 | 0.2 | 0.4 | 186 MB |
+| club-2026 | 13.9 M | 1570 × 2211 | 0.2 mm (3 m) | 7.38 MB | 85 % / 89 % | 0.7 | 0.7 | 3.3 | 4.8 | 442 MB |
+| club-full | 46.4 M | 2355 × 1231 | 0.4 mm (6 m) | 6.16 MB | 72 % / 94 % | 1.9 | 2.0 | 11.1 | 15.0 | 984 MB |
+| sprint | 11.8 M | 2068 × 1423 | 0.2 mm (0.8 m) | 6.25 MB | 55 % / 96 % | 0.4 | 0.1 | 1.5 | 1.9 | 351 MB |
+| puit-de-laven | 4.0 M | 986 × 1014 | 0.2 mm (2 m) | 2.12 MB | 92 % / 81 % | 0.2 | 0.1 | 0.7 | 1.1 | 247 MB |
+
+"data" is the share of field cells inside the mapped area, "confident"
+the share of those with the confidence bit (§4.7). Times are from the
+decoded document (import excluded); peak RSS is the whole process,
+about 130–160 MB of it the runtime and the decoded document.
+
+**Against T1** (18 s / 1.5 GB for the whole spike on club-full at
+0.1 mm): club-full now takes 15.0 s and 0.98 GB for graph, solve and
+field, and stores a 2355 × 1231 field at 0.4 mm (6 m), 6.2 MB, the only
+corpus map the budget coarsens. The field stage is 74 % of the time,
+almost all of it the three geodesic passes over the 0.1 mm raster
+(46 M cells); club-2026 and the sprint keep 0.2 mm (3 m and 0.8 m). The
+same run with the load average near 15 (other sessions' tests) took
+20 s. The 0.2 mm cell and the 4 M / 4096 budget are kept (§4.0, 3).
+
+
+## 6. The DEM anchor
+
+`anchorLevels(graph, sampleDem, opts)` (`terrain/anchor/`, H9) reads a
+digital elevation model along every chain of §2: the chain's height, the
+DEM's statement of its uphill side (handed to §3 as the external side),
+the contour ladder it belongs to and, where that ladder is clear, an
+integer level. `anchoredHeights(graph, anchor, solved)` runs after §3's
+solve and gives a height to the chains the DEM could not anchor. Both are
+pure; the provider, the fetch and the paper → projected transform are
+§7's (H10).
+
+### 6.0 Decided with the user (2026-11-14)
+
+1. **Grade is declared by the caller.** `grade: "anchor"` (Lantmäteriet's
+   1 m model) or `"coarse"` (GLO-30, answer 13). A coarse DEM's side uses
+   T2's GLO-30 parameters (§6.3) and enters §3 as the external side like
+   an anchor-grade one (T2: 99.2 % sign agreement with Lantmäteriet). A
+   coarse DEM gets per-chain heights and levels only when its own interval
+   concentration R(I) ≥ 0.6 (§6.5; puit-de-laven 0.774); below that it
+   gives one offset per component and a drift bound (§6.8).
+2. **The interval is reported, never changed.** `intervalM` is an input
+   (answer 8's assumed 5 m / 2.5 m); the report carries R at I and I/2,
+   globally and within each ladder, and `intervalSuspect` (§6.5). This
+   narrows answer 8's "H9 measures it": a scan would pick 2.5 m on both
+   full club maps, whose two ladders sit half an interval apart. The
+   per-map override stays later.
+3. **A ladder area is spatial**, and the corpus target is read per area:
+   on club-2026, ≥ 94 % of snapped index-contour length lies on its
+   area's modal residue (mod 5), **and** snapped index length is ≥ 80 % of
+   covered index length, so the target cannot be met by snapping less. If
+   one connected area still holds two residues in separate blocks, areas
+   are split by index residue and §6.7 says so.
+4. **The DEM's side decides** against a tick, cliff or lake (§3.0 answer 1,
+   which supersedes answer 14's "reported, not overridden"); H9 emits the
+   side under answer 14's thresholds, unchanged.
+5. **§3.0's moved index target is read per index phase and contour
+   ladder** (user, 2026-11-14, after H2 merged into H9): H2's ≥ 90 % per
+   index phase (§3.0, 4–5) is measured on H9's snapped levels within each
+   (index phase × contour ladder of §6.6), because a level counts from its
+   own ladder's phase and one index phase can hold index contours of two
+   contour ladders (club-2026's phase at 18.25 m — §3.0's "about 19 m" —
+   72.8 % across both ladders, 100 % within each). H9's own acceptance stays answer 3's
+   spatial target. §6.10 reports both readings and the literal per-phase
+   figure.
+
+### 6.1 Inputs
+
+```ts
+/** DEM height in metres at a paper position (mm, x right, y up); NaN = no data. */
+type DemSampler = (xMm: number, yMm: number) => number;
+interface AnchorOptions {
+  intervalM: number;           // the assumed interval (answer 8)
+  source: string;              // e.g. "lantmateriet-1m"; the external side's source
+  grade: "anchor" | "coarse";  // §6.0 answer 1
+  demCellM: number;            // ground cell of the model behind sampleDem
+}
+```
+
+The sampler is in paper millimetres: the chapter's unit; §7 composes the
+paper → projected transform and the provider's grid. Ground distances
+below convert through `graph.inputs.groundMPerMm`.
+
+### 6.2 Chain statistics
+
+Each chain is sampled every 2 m on the ground (`2 / groundMPerMm` mm),
+H1's walk (§2.6: first sample half a step in, a closed chain's closing
+segment included). At each sample the DEM height is read; **coverage**
+is valid (non-NaN) samples over all samples. Over the valid heights: the
+**median** and the **half-IQR** (`(q75 − q25) / 2`), quantiles linearly
+interpolated between order statistics. A chain with coverage < 0.9 is
+**uncovered**.
+
+### 6.3 The DEM side
+
+At each sample the left and right probes sit at ±`offset` along the
+normal (left = `(−ty, tx)` of the drawing direction) and read the
+**smoothed** model; a valid sample (§6.2) counts when both its probes
+are valid. There is no minimum number of counted samples beyond the
+chain's coverage. Over the
+counted differences `left − right`: `sideMedian` and `sideAgree`, the
+share of differences with the median's sign. The side is
+`sign(sideMedian)` (+1: uphill left, §3's convention) when the chain is
+covered, `|sideMedian| ≥ min` and `sideAgree ≥ 0.65`; else 0.
+
+| Grade | offset | smoothing | min |
+|---|---|---|---|
+| anchor | 8 m | 5 m box mean | 0.4 m |
+| coarse | 20 m | none | 0.5 m |
+
+The 5 m box mean is computed by H9 from point samples: an n × n stencil
+at `demCellM` spacing along the paper axes, `n = 2·round((5 / demCellM −
+1) / 2) + 1` clamped to 1…5 (5 × 5 at 1 m, 3 × 3 at 2 m); any NaN in the
+stencil makes the probe NaN. The side is emitted for every chain that
+passes this test, accepted by §6.4 or not; `anchor.external` is §3's
+`ExternalSide` (`{ source, side: Int8Array }`).
+
+### 6.4 Acceptance and height
+
+A covered chain is **accepted** at half-IQR ≤ 0.3 I; else it is
+**spread-failed** and §6.8 gives its height. An accepted chain's height
+is its **unsnapped median** (answer 12), also when it is snapped (§6.7);
+per-chain absolute heights replace the header's single offset. Under a
+coarse grade that is not promoted (§6.0 answer 1) an accepted chain has
+no per-chain height (status `coarse`).
+
+Statuses: `uncovered`, `spreadFailed`, `unsnapped` ("DEM, unsnapped"),
+`snapped`, `coarse`.
+
+### 6.5 Interval concentration
+
+**Contributors** are covered chains with half-IQR ≤ 0.25 I (anchor;
+0.5 I coarse) and ground length ≥ 60 m. For a trial interval J,
+`R(J) = |Σ w·e^{2πi·m/J}| / Σ w` over contributors (w the chain's length,
+m its median) and the phase `arg(…)·J / 2π mod J`. The report carries
+R(I), R(I/2), the global phase at I, the number of contributors, and per
+ladder (§6.6) R(I) over its members. **Promotion**: a coarse DEM is
+promoted when R(I) ≥ 0.6. **`intervalSuspect`** is set when R(I/2) ≥ 0.6
+and less than half of the contributors' length is labelled by §6.6's
+vote — two phases half an interval apart mixed everywhere, which is what
+a true interval of I/2 looks like (two ladders in separate places are
+labelled, so a two-ladder map is not suspect).
+
+### 6.6 Ladders: candidates, evidence and the vote
+
+The phase is estimated per neighbourhood, never per map (answer 12), as
+discrete ladders and a vote — not T2's windowed circular mean, which
+mixes two ladders at their border and splits a ladder whose phase is near
+0 / I between two levels (decision log).
+
+1. **Candidates.** A length-weighted circular density of `m mod I` over
+   the contributors (100 bins, wrapped Gaussian σ = 0.06 I). Local maxima
+   in descending density; one is kept when the contributors' length
+   within ±0.15 I is ≥ 4 % of the total and it lies ≥ 0.2 I from every
+   kept one; at most 4. A kept ladder's phase is the circular mean of the
+   contributors within ±0.15 I of its peak, in [0, I). No ladder: every
+   accepted chain is unsnapped.
+2. **Members.** A contributor belongs to the nearest ladder within 0.2 I
+   (circular distance); its **deviation** is `m − phase` wrapped to
+   (−I/2, I/2].
+3. **Evidence grid.** 100 m ground cells over the chains' bounding box;
+   per cell and ladder, the member length passing through the cell (the
+   §6.2 samples, each its step length) and the length-weighted deviation.
+   Summed-area tables make every window O(1).
+4. **Vote per chain.** With f_c the chain's share of its length in cell
+   c, `E_l(r) = Σ_c f_c · Σ_{window(c, r)} (evidence_l − own_l)` — the
+   chain's own contribution removed, so its residual is tested against
+   its neighbours only. The window's half-width r grows from 1 cell
+   (300 m) to 5 (1.1 km) until `T(r) = Σ_l E_l(r) ≥ 1500 m`; r = 5 if it
+   never does. The chain is **labelled** with the winning ladder when
+   `T ≥ 300 m` and the winner's share `E_l / T ≥ 0.6`; else unlabelled.
+
+### 6.7 Local phase, areas, levels
+
+- **Local phase**: the winning ladder's phase plus the mean deviation of
+  its members in the winning window (own removed, same weights). It
+  follows slow drift and never wraps.
+- **Ladder areas**: every cell is labelled by the same vote centred on
+  the cell, with all evidence; cells of one ladder form areas by
+  4-connection; an area whose own ladder evidence is under 1500 m is
+  dissolved (its cells unlabelled). A chain's area is the area holding
+  most of its length; −1 when none.
+- **Split by index residue** (§6.0 answer 3's rider): a map's index
+  contours can sit on different levels in different parts of one ladder
+  area (club-2026: whole 1 km blocks one level apart; the mapper's
+  sources, not the DEM). After snapping, within each area every cell votes
+  among the residues `ladderLevel mod 5` of the area's snapped index
+  chains (their length in the area's cells; the same adaptive window and
+  thresholds as the chain vote, no own removal), else no residue; the
+  cells of one area and one residue (or of none) form sub-areas by
+  4-connection; a sub-area with under 1500 m of the area ladder's member
+  evidence is dissolved. A chain belongs to the area holding most of its
+  length whatever its own vote label; the residue vote does not require
+  the label to equal the area's ladder. These sub-areas are the **ladder areas** of the
+  report and of `chains.area`.
+- **Level**: `ladderLevel = round((median − localPhase) / I)` and
+  `residual = median − localPhase − I · ladderLevel`. An accepted,
+  labelled chain is **snapped** when `|residual| ≤ 0.3 I` and levels are
+  allowed (anchor grade, or coarse promoted); else unsnapped.
+  `ladderLevel` is absolute (`localPhase + I · ladderLevel` is the snapped
+  height in metres), named apart from §3's relative `chainLevel`;
+  `NO_LEVEL` (−2³¹) unless snapped.
+
+### 6.8 After the solve: anchored heights
+
+`anchoredHeights(graph, anchor, solved)` reads §3's per-chain `side`,
+`chainLevel` and `chainStep` and per-region `regionComponent`. A chain's
+component is that of the left region of its first side pair; chains
+without pairs, without a level (`NO_LEVEL`), or left undecided by §3
+(side 0 or step 0) have none — such a chain keeps its DEM height when
+accepted but takes no part in offsets, candidates or the drift report.
+
+- **Accepted chains** keep the DEM median (source `dem`).
+- **Component offset**: the length-weighted median of `h_j − I · L_j`
+  over the component's accepted chains with a level.
+- **A chain the DEM did not anchor** (spread-failed, or uncovered) with a
+  level: its band neighbours are the chains sharing a region with it
+  (`pairs`, `regionChains`); breadth-first to depth 3, the first depth
+  with accepted chains of the same component gives candidates
+  `h_j + I · (L_u − L_j)`; the height is their length-weighted median,
+  clamped into [max h_j of neighbours with L_j < L_u, min h_j of
+  neighbours with L_j > L_u] (source `neighbours`). It is **bounded**
+  when the clamp moved it or the candidates spread over more than I/2;
+  when the lower bound lies above the upper (§3's levels contradict the
+  DEM's order), it is bounded and left unclamped.
+  With no accepted chain within 3 bands: the component offset plus
+  `I · L_u` (source `component`). With no accepted chain in the
+  component: no height (source `none`, NaN). This borrows §3's step for
+  the chains the DEM left out only; band-neighbour step propagation from
+  DEM differences is not built (T2: worse).
+- **Coarse, not promoted**: no chain has a per-chain height; the
+  component offset is taken over covered chains with half-IQR ≤ 0.5 I,
+  every chain with a level gets `offset + I · L_u` (source `component`),
+  and the **drift bound**: where a covered chain's median lies more than
+  1.5 I from that height, the height moves by `I · round(residual / I)`
+  (counted `driftShifted`) — the DEM keeps §3's levels within ±1 interval
+  of it (answer 13). The result is flagged `coarse` (a 30 m surface
+  model).
+
+```ts
+interface AnchoredHeights {
+  height: Float64Array;          // metres; NaN = none
+  source: Uint8Array;            // HEIGHT_SOURCE: none 0, dem 1, neighbours 2, component 3
+  bounded: Uint8Array;
+  componentOffset: Map<number, number>;  // component root region → metres
+  coarse: boolean;
+  report: { share: { dem; neighbours; component; none: number }; bounded: number;
+            driftShifted: number; drift: Record<string, number> };
+}
+```
+
+`report.drift` is the length share of accepted chains with a component
+(coarse: the chains the offset is taken over) by
+`round((h_j − offset − I · L_j) / I)`: §3's level drift against the DEM,
+in intervals.
+
+### 6.9 The report
+
+```ts
+interface AnchorReport {
+  source: string; grade: "anchor" | "coarse"; intervalM: number;
+  levelsAllowed: boolean; intervalSuspect: boolean;
+  coverage: number;                                 // covered share of contour length
+  interval: { contributors: number; rAtI: number; rAtHalfI: number; phaseM: number };
+  ladders: { phaseM: number; lengthShare: number; rAtI: number }[];
+  areas: { ladder: number; lengthShare: number; indexResidue: number | null; indexOnResidue: number | null }[];
+  share: { sideDecided; accepted; snapped; unsnapped; spreadFailed; uncovered; unlabelled: number };
+  index: { lengthMm: number; snappedShare: number; inAreasShare: number; onOneResiduePerArea: number | null };
+  alongContour: { halfIqrP50: number; halfIqrP90: number };   // metres, length-weighted
+}
+```
+
+Shares are of contour length, except `ladders[].lengthShare` (member
+length over the contributors' length) and `index.*`. `share.unsnapped`
+includes the `coarse` status (accepted, no height); `share.unlabelled` is
+the accepted chains without a vote label. `index.lengthMm` is covered
+index length; `index.snappedShare` is snapped over covered index length, `inAreasShare` snapped index length in an area over
+all snapped index length. An area's index residue is the modal
+`ladderLevel mod 5` of its snapped index chains, by length;
+`onOneResiduePerArea` sums every area's modal length over the snapped
+index length in areas (§6.0 answer 3).
+
+### 6.10 Measured on the corpus
+
+H9's corpus check (`.local/h9/`, not committed: real club maps and a
+licensed DEM) runs `anchorLevels` on H1's graph of the five corpus maps
+with Lantmäteriet's 1 m model (T2's tiles), through a bilinear point
+sampler, and compares with T2. Measured 2026-11-14:
+
+| Map | spread-accepted % (T2) | half-IQR p50 m (T2) | R(I) / R(I/2) (T2) | side decided % | snapped % | ladders (phase m, share %) | areas | index snapped % (T2) | index on area residue % (T2 per map) |
+|---|---|---|---|---|---|---|---|---|---|
+| crop-a | 99.9 (99.9) | 0.33 (0.34) | 0.931 / 0.802 (same) | 99.5 | 98.8 | 0.12 / 98 | 1 | 100 (100) | 100 (98.8) |
+| crop-b | 99.9 (99.9) | 0.35 (0.35) | 0.946 / 0.835 (0.946 / 0.834) | 99.5 | 99.1 | 0.15 / 98 | 1 | 99.3 (100) | 100 (100) |
+| club-2026 | 95.0 (94.9) | 0.42 (0.43) | 0.439 / 0.530 (0.438 / 0.529) | 97.6 | 76.7 | 2.76 / 69, 0.33 / 23 | 14 | 85.0 (73.3) | 99.2 (94.5) |
+| club-full | 96.6 (96.6) | 0.40 (0.40) | 0.184 / 0.546 (0.183 / 0.547) | 98.2 | 78.0 | 0.05 / 55, 2.75 / 39 | 19 | 81.9 (74.6) | 98.9 (66.4) |
+| sprint (I = 2.5 m) | 90.5 (90.5) | 0.26 (0.26) | 0.771 / 0.521 (0.722 / —) | 95.5 | 84.8 | 0.01 / 92 | 1 | 100 (—) | 100 (100) |
+
+- **The side** equals T2's method (median at ±8 m on the 5 m box, 0.4 m,
+  65 %) on the same H1 chains on 100.00 % of the length both decide; each
+  method alone decides 0.05–0.7 % of length (the stencil here is along
+  the paper axes on bilinear samples, T2's a box blur of the grid).
+- **R** differs from T2 only on sprint: T2 took contributors at half-IQR
+  ≤ 1.25 m on every map, §6.5 takes 0.25 I (0.625 m at 2.5 m).
+- **The target (§6.0 answer 3) holds on club-2026**: 85.0 % of covered
+  index length snapped (floor 80 %), 99.8 % of it in an area, 99.2 % on
+  its area's residue. Without the residue split (ladder areas only) the
+  figure is 91.8 %: the off-residue length sits in whole blocks (3.4 km of
+  index contours in one 1 km block one level below their area). T2's
+  1.1 km circular mean snapped 64.1 % of club-2026's length and 73.3 % of
+  its index length; the vote snaps 76.7 % and 85.0 %.
+- **§3.0's index target per index phase** (H2's phases: peaks of the
+  index contours' DEM median mod 25 m holding ≥ 8 % of tight index
+  length, ±1.5 m), on H9's snapped levels — share of snapped index length
+  on one residue across contour ladders / within each contour ladder
+  (§6.0 answer 5), and the share of the phase's index length snapped:
+
+  | Map | phase m (index km) | snapped % | on one residue % | per contour ladder % |
+  |---|---|---|---|---|
+  | club-2026 | 23.25 (65.3) | 91.2 | 98.3 | 100 |
+  | club-2026 | 20.25 (15.4) | 79.1 | 100 | 100 |
+  | club-2026 | 18.25 (7.1) | 70.4 | 72.8 | 100 |
+  | club-2026 | 0.25 (6.6) | 92.0 | 94.8 | 100 |
+  | club-full | 24.25 (103.3) | 89.3 | 98.9 | 100 |
+  | club-full | 22.25 (78.9) | 93.7 | 100 | 100 |
+  | club-full | 1.25 (10.3) | 84.6 | 100 | 100 |
+  | club-full | 19.75 (35.8) | 57.1 | 100 | 100 |
+  | crop-a | 0.25 (18.3) | 100 | 100 | 100 |
+  | crop-b | 24.75 (17.9) | 99.3 | 100 | 100 |
+
+  Against §3.9 (H2's map-only levels, per component: club-2026 85.5 /
+  64.8 / 61.5 / 56.5 %, club-full 35.8 / 46.6 / 70.3 / 71.4 %) the DEM's
+  levels reach the target wherever they are snapped; the off-residue
+  length across ladders is the other contour ladder's index contours
+  (66 mm, 54 mm, 91 mm, 21 mm of club-2026's four phases).
+- **Anchored heights (§6.8)** after §3's solve with the DEM side
+  (`solveTerrain(graph, { external })`), share of contour length by
+  source, bounded, §3's level drift against the DEM (share of accepted
+  length at 0 / ±1 interval), and §3's `external.disagreements`:
+
+  | Map | dem | neighbours | none | bounded | drift 0 / ±1 | disagreements tick / cliff / lake | ms |
+  |---|---|---|---|---|---|---|---|
+  | crop-a | 99.9 | 0.1 | 0 | 0.1 | 99.9 / 0.2 | 0 / 0 / 0 | 3 |
+  | crop-b | 99.9 | 0.1 | 0 | 0.1 | 91.8 / 6.8 | 0 / 1 / 0 | 1 |
+  | club-2026 | 95.0 | 4.7 | 0.3 | 4.2 | 69.3 / 21.0 | 0 / 5 / 0 | 13 |
+  | club-full | 96.6 | 2.9 | 0.6 | 2.5 | 28.8 / 32.4 | 1 / 10 / 1 | 16 |
+  | sprint (I = 2.5 m) | 90.5 | 8.5 | 1.0 | 8.5 | 60.5 / 39.3 | 0 / 0 / 0 | 0 |
+
+  No chain falls back to the component offset (every unanchored chain
+  with a level has an accepted chain within 3 bands). Most chains taken
+  from neighbours are bounded: §3's levels drift block-wise against the
+  DEM (§3.9), so candidates from neighbours on either side of a drift
+  step disagree by more than I/2 and the clamp holds the chain between
+  them.
+- §6.6's starting constants are kept: the vote met the target as first
+  specified, so no variant (smaller fixed windows, a graph neighbourhood,
+  smoothing of the cell field) was needed.
+- Time on the largest map (club-full, 5617 chains): `anchorLevels` 0.9 s
+  after loading (the 1 m grid and import take 10 s, outside H9).
+
+## 7. The DEM: providers, fetch and the artifacts
+
+H10 fetches a digital elevation model for a document on the server, by
+HTTP range from a cloud-optimised GeoTIFF, resamples it onto the
+document's paper grid and derives two artifacts per provider: the
+**ground** field (the DEM itself on H3's field grid) and the **anchored
+contour field** (§4.9: the contours re-derived with §6's per-chain
+heights). Storage, the job and the route are `docs/map-storage.md` §4.7.
+
+### 7.0 Decided with the user (2026-11-14)
+
+1. **The §4.9 seam is H10's.** The row's area is widened to
+   `packages/shared/src/terrain/{field/,index.ts}`; one PR, the seam its
+   first step. The `contours` field's bytes and `TERRAIN_VERSION` do not
+   change.
+2. **The document's own frame, with a misalignment gate.** The DEM is
+   fetched and sampled through the document's georeference with no
+   operator correction (`correctionDeg` 0). When an anchor-grade DEM
+   accepts less than half of the contour length it covers (§6.4; T2: 90–
+   99.9 % when aligned), nothing is written and the job ends
+   `unavailable: misaligned`. A pin with a `rotation_correction ≠ 0`
+   reports the DEM as unavailable. A per-pin DEM is later.
+3. **Rows and job.** `map_heightfields` is unchanged: provider and
+   resolution are encoded in `source` (`ground.lantmateriet-2m`,
+   `contours.lantmateriet-2m`, `ground.glo30-30m`, `contours.glo30-30m`),
+   two rows per provider. Licence and attribution travel in the field
+   header's `provider` block. One new table, `map_dem_jobs`, holds the
+   job's state. Raw tiles are not cached: the derived rows are the cache.
+4. **Fetching is opt-in.** No DEM is fetched unless `MAP_DEM_PROVIDERS`
+   names the providers; `scripts/gcp/deploy.sh` sets
+   `lantmateriet,glo30` when the Geotorget secret exists. GLO-30 serves a
+   document wherever Lantmäteriet has no coverage or is not enabled —
+   a Swedish map on an instance without the credential included (widens
+   answer 13's "outside LM coverage"; its reduced role is unchanged).
+
+### 7.0b Decided with the user (2026-11-15): the settings tab
+
+These amend answer 4 (opt-in by environment) and SLICES answer 5 (the
+credential from the instance's secret store). H12 implements them (§7.8).
+
+5. **The DEM is configured in Settings → Height data**
+   (`/settings?tab=terrain`), an admin tab of its own beside *Eventor*,
+   not part of it. It holds the providers on or off (Lantmäteriet,
+   GLO-30), the Geotorget account, the resolution (2 m or 1 m), a *Test
+   connection* that runs §7.6's live check, and each club map's DEM
+   state with a retry.
+6. **Saved settings override the environment.** `MAP_DEM_PROVIDERS`,
+   `MAP_DEM_LANTMATERIET_AUTH` and `MAP_DEM_LANTMATERIET_RESOLUTION_M`
+   stay as the defaults a deploy sets; a value saved in the tab wins.
+   Fetching stays opt-in: with nothing saved and nothing in the
+   environment, no provider is on.
+7. **The account is write-only and encrypted at rest.** The password is
+   never sent back to the browser (the tab shows only that one is saved,
+   the user name and when it was saved); only an admin sets or clears it;
+   it is stored encrypted, not in plaintext as the Eventor keys are; its
+   reach is §7.1's (Lantmäteriet's hosts only, never logged). Saving a new
+   account queues every map whose DEM ended `failed: auth`, so a fixed
+   credential needs no redeploy.
+8. **The tab explains itself.** Above the controls, in en and sv: what a
+   height model is and what it is good for here (the 3D ground surface,
+   absolute heights for the map's own terrain via the anchor so fewer
+   contour artefacts, GPS tracks on the real ground); the two providers
+   (Lantmäteriet: Sweden, 1 m / 2 m, free open data under CC BY 4.0, needs
+   a Geotorget account; GLO-30: worldwide, 30 m, no account); how to get
+   the account (create a Geotorget user at Lantmäteriet, order the free
+   *Markhöjdmodell Nedladdning* product, then enter that user name and
+   password here); that the attribution "© Lantmäteriet" is shown on the
+   map whenever its heights are drawn; and what *Test connection* checks.
+9. **The live check runs from the tab.** *Test connection* runs §7.6 on a
+   club map the admin picks (under the 1 m window cap), as the admin's
+   explicit action; it prints the same aggregates, and its result and time
+   are stored and shown. The CLI script stays.
+10. **The sealing key lives in the database** (H12's question,
+    2026-11-15). The password is sealed with a key kept in
+    `oxygen_settings` beside it, so the deploy gains no secret: it keeps
+    the password out of plaintext reads, screens, logs and exports, not
+    away from someone holding the whole database (§7.8 "Sealing").
+11. **Admin-only is `adminProcedure`** (H12's question, 2026-11-15): on an
+    instance with auth off every caller may set or clear the account and
+    start *Test connection*, as with the Eventor keys; nobody can read it.
+
+### 7.0c Decided with the user (2026-11-15): maps over the window cap
+
+Found on 8080 after H12: a 1:15 000 club map whose objects span about
+20 × 17 km (its print window is A3, about 6.3 × 4.5 km) needs about 89 M
+window cells at 2 m, over §7.2's 64 M cap, and ended `unavailable:
+over-cap` with no DEM. H13 implemented this answer (2026-11-15); the
+mechanism is in §7.2 "Level" and "Caps", §7.4, §7.8 and
+`docs/map-storage.md` §4.7.
+
+12. **A map over the cap at its level reads the next coarser overview.**
+    When the window at the level `chooseLevel` picks (2 m for
+    `lantmateriet-2m`, 1 m for the 1 m setting) is over §7.2's 64 M
+    cells, the fetch reads the tiles' next coarser overview instead (4 m
+    from 2 m, 2 m from 1 m) — the same tiles and requests, no extra
+    download. One step only: if that level is over the cap too, the map
+    stays `unavailable: over-cap`. The cap itself is not raised (its
+    memory reasoning in §7.2 stands), and the extent is not cut to the
+    print window. The level actually read is recorded with the DEM
+    artifact and shown in the tab's state list (e.g. "read at 4 m"); the
+    §7.5 gate applies unchanged. Maps that already ended `unavailable:
+    over-cap` are queued again once, since the new rule can change their
+    result. An `over-cap` ending stores which cap it hit (tiles, window
+    cells or STAC pages) in the job's error, and the tab says so instead
+    of only "the map is too large".
+
+### 7.1 Providers
+
+`packages/api/src/map-store/dem-providers.ts`. In this order; the first
+whose job does not end `no-coverage` serves the document
+(`docs/map-storage.md` §4.7 "The DEM").
+
+| | Lantmäteriet (anchor grade) | Copernicus GLO-30 (coarse) |
+|---|---|---|
+| Id | `lantmateriet-2m` (`-1m` at the 1 m resolution: Settings → Height data, or `MAP_DEM_LANTMATERIET_RESOLUTION_M=1`) | `glo30-30m` |
+| Locate | STAC `https://api.lantmateriet.se/stac-hojd/v1/search?collections=dtm-cog&bbox=w,s,e,n` (WGS 84), `next` links followed (10 pages at most); per item the asset whose type is a cloud-optimised GeoTIFF, else the `data` role's GeoTIFF | computed: one tile per 1° cell, `copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_<N|S>dd_00_<E|W>ddd_00_DEM/….tif` by its south-west corner |
+| Tiles | 10 km COGs, SWEREF 99 TM (EPSG:3006), 1 m with overviews 2, 4, … m, PixelIsArea, nodata −9999 | 1° COGs, WGS 84, 1″ × 1–2″ (PixelIsPoint), no nodata; a missing tile (sea) is no data, not a failure |
+| Read at | the 2 m overview (answer 17; §7.6); the 4 m overview for a map whose 2 m window is over §7.2's cap (2 m at the 1 m setting, §7.0c answer 12) | full resolution (its overviews by the same rule; no real map reaches the cap) |
+| Auth | Basic, the instance's one Geotorget account (answer 5): saved in Settings → Height data, sealed (§7.8), else `MAP_DEM_LANTMATERIET_AUTH` = `user:password` from the instance's secret store (`docs/deploy-gcp-cloud-run.md` "Height data") | none |
+| Vertical datum | RH 2000 | EGM2008 (no conversion: sub-metre here, and the coarse model's offsets are per component anyway) |
+| Licence | **CC BY 4.0** | the Copernicus DEM licence (free, with attribution) |
+| Attribution | **© Lantmäteriet** | © DLR e.V. 2010–2014 and © Airbus Defence and Space GmbH 2014–2018, provided under COPERNICUS by the European Union and ESA |
+
+**Licence correction** (answer 16): research 10 §3 says Lantmäteriet's
+grid is open data under CC0; its height data is CC BY 4.0 and needs the
+attribution. The licence and the attribution are in the header's
+`provider` block of both stored fields (§5.1), so they travel with the
+bytes, and in the descriptor (`docs/map-storage.md` §4.7). **Showing**
+it to the user (answer 16's "shows") is the viewer's: whenever its 3D
+mode draws a DEM-based field — ground, or the anchored contour field —
+it shows the drawn field's `provider.attribution` and `licence` on the
+map (`docs/map-rendering.md` §5.4 "3D mode" "Surface (H11)").
+
+**Fetching is opt-in** (§7.0 answer 4, §7.0b 6). The providers are
+switched on in Settings → Height data (§7.8); unsaved, `MAP_DEM_PROVIDERS`
+is the deploy's default, a comma list of `lantmateriet`, `glo30`. Nothing
+saved and the variable empty or unset is none, so tests, the E2E stack
+(which also sets `MAP_DEM_OFFLINE`, §7.8) and a venue box reach no
+external host. Lantmäteriet on without a credential of the form
+`user:password` stays off with a warning.
+
+**The credential's reach.** It is sent as `Authorization: Basic` only
+over https to `lantmateriet.se` and its subdomains. Redirects are
+followed by hand (five at most): a hop to another host goes without the
+header, a hop to plain http is refused. It never appears in a log, an
+error column or a row; a stored error has any `Basic …` value masked.
+
+### 7.2 Reading the COG
+
+`packages/api/src/map-store/dem-cog.ts`. A window of one level of a COG,
+read by HTTP range through an injected fetch (tests serve the recorded
+fixture; no test opens a socket).
+
+- **Profile.** Classic little-endian TIFF, one float32 sample, tiled,
+  DEFLATE (8 or 32946) or none, predictor 3 (floating point) or none,
+  overviews as further IFDs (`NewSubfileType` bit 0; masks skipped).
+  Anything else — BigTIFF, big-endian, other compression, strips — is a
+  `format` failure. T2's tiles of both providers have this profile; the
+  reader matched `geotiff` exactly on them (decision log, H10).
+- **Georeference.** `ModelPixelScale`, `ModelTiepoint`, the geokeys'
+  projected (3072) or geographic (2048) EPSG code and raster type; a
+  PixelIsPoint tiepoint is moved half a pixel to the area corner, and an
+  overview's pixel is the full resolution's times `full width / its
+  width` (GDAL's convention). `GDAL_NODATA` and NaN read as no data.
+- **Level.** The coarsest whose pixel is at most the provider's target
+  (`chooseLevel`): 2 m for `lantmateriet-2m`. **Over the window cap at
+  that level, the next coarser overview** (§7.0c answer 12;
+  `fetchDemMosaic`): every tile's header is read and its window sized
+  (`cogWindowCells`, the same cut `readCogWindow` makes) before any tile
+  bytes; when the windows together are over 64 M cells, every tile is
+  read one level coarser instead (`coarserLevel`: the overview with the
+  smallest pixel still larger — 4 m after 2 m, 2 m after 1 m), so the
+  mosaic stays one resolution and nothing is fetched twice. One step: over
+  the cap there too, a tile holding part of the extent without a coarser
+  overview, or tiles whose coarser overviews differ in ratio, is
+  `over-cap` and no window is read; a located tile that holds none of the
+  extent is not read and does not count. The level read, in the provider's metres
+  (`resolutionM × read cell / chosen cell`, right in degrees too), is the
+  mosaic's `resolutionM`. The step applies to any provider; GLO-30 would
+  need a map about 200 km across to reach it. §7.6's check turns it off
+  (`coarser: false`): it compares 1 m with 2 m.
+- **Bytes.** The header in 64 KiB blocks (at most 4 MiB, else "not a
+  COG"); the window's tiles in runs of adjacent byte ranges, one request
+  per run (up to 16 MiB); every request carries `Range` and must answer
+  206 — a 200 is a server without range support and fails (`http`), so a
+  ~400 MB tile is never pulled whole. 30 s per request. Inflate runs in
+  libuv's pool.
+- **Caps.** 16 tiles per document; 64 M window cells (256 MB of float32)
+  over all tiles, at the chosen level and at the next coarser one; §7.1's
+  10 STAC pages: each is `over-cap`. The cap hit travels with the failure
+  (`DemFetchError.cap`: `tiles`, `window-cells`, `stac-pages`; H4's cap
+  on the document itself is `field`) into the job's error (§7.8).
+
+### 7.3 The extent and the paper sampler
+
+`packages/api/src/map-store/dem.ts`. Through `mapGeo` only (10 §3), in
+the document's own frame (`documentPaperFrame(db, hash, 0)`, §7.0
+answer 2).
+
+- **Extent.** The stored header summary's bounds (native units → mm),
+  padded by the graph raster's 2 mm (§2.4) and 30 m of ground (§6.3's
+  probes and stencil): the contours' box is inside it, so no graph is
+  built before the fetch. Its WGS 84 box (edges sampled, eight points
+  each) locates the tiles; its box in each tile's CRS, one pixel wider,
+  is the window. Not the paper bounds of 10 §3: a margin beyond them.
+- **Paper → raster CRS.** `mm · unitsPerMm` → `paperToProjected` (grid
+  rotation, scale factor) → proj4 when the tile's CRS is not the
+  document's.
+- **Paper grid.** In the worker, the windows are resampled onto a
+  paper-aligned grid over the extent at the model's ground cell (at most
+  10 m; coarser if it would exceed 64 M cells): each cell centre's
+  raster-CRS position is exact at lattice nodes ≤ 250 m apart and
+  bilinear between (within 0.05 m on a 600 m map in WGS 84, test), then
+  bilinear in whichever window holds it. `DemSampler` (§6.1) is bilinear
+  on this grid, no-data aware. Per-sample proj4 would be ~15 M calls on
+  club-full.
+
+The anchor (§6) samples this grid at the model's own resolution — not
+the field grid: 10 §3's "resampled onto the same paper-space grid" holds
+for the stored ground field only.
+
+### 7.4 The ground field
+
+`buildGroundField(sample, { grid, source, provider })`
+(`terrain/field/ground.ts`): one value per cell of the `contours`
+field's grid (`cellMm`, `x0`, `y0`, `width`, `height` equal, so both
+sources line up cell for cell and the renderer sees one shape, 10 §3) —
+the sampler at the cell centre where the cell spans at most 1.5 model
+cells, else the mean of n × n samples (n = ⌈cell / model cell⌉ ≤ 8) so
+club-full's 6 m cell does not alias a 2 m model. No-data where more than
+half the samples are; not masked to the mapped area. `zScaleM` is
+`intervalM / 64` as for the contours (no renderer change), `zOffsetM`
+the whole interval at or below the lowest value, `datum: "absolute"`.
+The `provider` block's `resolutionM` is the level read (§7.2; 4 m for a
+`lantmateriet-2m` map over the cap), its `id` the provider's — the
+source stays `ground.lantmateriet-2m` (§7.0c answer 12): the job key and
+the pending descriptor's URLs exist before the level is known. The paper
+grid, the box mean's n and the anchor's stencil (`demCellM`) all follow
+the level read.
+The confidence plane is all set for an anchor-grade model and all clear
+for a coarse one (answer 13: a 30 m surface model). Source
+`ground.<provider>`.
+
+### 7.5 The anchored field and the gate
+
+In a worker of its own (`dem-worker.ts`): the paper grid (§7.3),
+`deriveAnchoredTerrain(doc, dem)` (§5.5), then:
+
+| Result | When |
+|---|---|
+| `no-contours` | `deriveAnchoredTerrain` is null |
+| `no-coverage` | no chain is covered (`anchor.coverage = 0`) |
+| `misaligned` | anchor grade and `acceptedOfCovered < 0.5` (§7.0 answer 2) |
+| done | the ground field on the anchored field's grid, both encoded |
+
+A coarse model has no misalignment gate: its spread is wide by nature
+(T2), and its heights are offsets on §3's levels (§6.8). Both fields are
+keyed by `TERRAIN_VERSION`, whose bump rule now covers §4.9, §6 and §7:
+a change to what a document's DEM rows hold bumps it, and the next
+request re-fetches.
+
+### 7.6 The live check (pending the operator's run)
+
+Answer 17 adopts the 2 m overview "once it has confirmed the anchor
+spread holds at 2 m and that the download service serves HTTP range
+requests". That is a check against the live service with a real
+credential, which no session makes. The operator runs it either from
+Settings → Height data, *Test connection* on a club map they pick, with
+the saved (or the environment's) account (§7.0b 9, §7.8), or from the
+CLI with their own `MAP_DEM_LANTMATERIET_AUTH`: `pnpm --filter
+@oxygen/api dem:live-check -- --map <club map>`
+(`packages/api/scripts/dem-live-check.ts`). The logic is
+`map-store/dem-live-check.ts`, tested against the fixture. Either way on
+a map under the 1 m window cap (club-2026's size, not club-full's, §7.7),
+and at the two levels it compares only, never the next coarser overview
+(§7.2). It
+locates the map's tiles, sends one `Range` request through any
+redirect, reads the tile profile, and runs `anchorLevels` at 1 m and
+2 m. It prints aggregates only; the CLI writes nothing, the tab stores
+the same aggregates and verdict with its time (§7.8). **Pass**: 206 with
+`Content-Range`; the credential reached Lantmäteriet's hosts only; the
+profile reads and has a 2 m level; at 2 m the accepted share of covered
+length is within 2 points of 1 m's and the half-IQR median ≤ 0.3 I. On
+a fail the instance switches to 1 m (the tab's resolution, or
+`MAP_DEM_LANTMATERIET_RESOLUTION_M=1`; 75 MB
+for club-2026 instead of 22 MB) and the result is recorded here. **Not
+run yet** (2026-11-14): the 2 m default ships on T2's evidence and this
+check is pending; H10 is done without it (the coordinator's brief).
+
+### 7.7 Measured on the corpus
+
+A `.local/` script (not committed: real club maps and a licensed DEM)
+runs the job's path on each corpus map without a network: T2's two
+Lantmäteriet tiles (`m657_67`, `m657_68`, the user's download) served by
+a file-backed range fetch behind a fake STAC, `fetchDemMosaic`, then
+`deriveDemFields` in-process, one map per process. "added" is the peak
+RSS above the process with both tiles loaded. 2026-11-14, 16-core
+machine shared with other sessions:
+
+| Map | read at | window cells | range read | requests | fetch s | derive s | added peak | field | accepted % (T2, 1 m) | decided % | DEM heights % |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| crop-a | 2 m | 1.0 M | 4.4 MB | 10 | 0.1 | 1.1 | 23 MB | 696 × 511, 0.2 mm | 99.9 (99.9) | 100 | 99.9 |
+| crop-a | 1 m | 4.0 M | 12.1 MB | 26 | 0.3 | 3.4 | 25 MB | same | 99.9 | 100 | 99.9 |
+| crop-b | 2 m | 1.5 M | 7.7 MB | 18 | 0.2 | 1.2 | 24 MB | 464 × 610, 0.2 mm | 99.9 (99.9) | 97.6 | 99.9 |
+| crop-b | 1 m | 6.1 M | 16.7 MB | 38 | 0.4 | 3.7 | 24 MB | same | 99.9 | 97.6 | 99.9 |
+| club-2026 | 2 m | 8.4 M | 32.0 MB | 58 | 0.6 | 11.7 | 198 MB | 1570 × 2211, 0.2 mm | 95.1 (94.9) | 97.4 | 95.1 |
+| club-2026 | 1 m | 33.6 M | 90.8 MB | 170 | 1.8 | 33.2 | 396 MB | same | 95.0 | 97.4 | 95.0 |
+| club-full | 2 m | 35.6 M | 76.0 MB | 152 | 1.6 | 41.4 | 1010 MB | 2355 × 1231, 0.4 mm | 96.7 (96.6) | 97.2 | 96.7 |
+| club-full | 1 m | 142 M | — | — | — | — | — | `over-cap` (64 M window cells) | — | — | — |
+| sprint | 2 m | 0.9 M | 5.3 MB | 11 | 0.1 | 3.3 | 35 MB | 2068 × 1423, 0.2 mm | 90.5 (90.5) | 94.3 | 90.5 |
+| sprint | 1 m | 3.4 M | 15.1 MB | 27 | 0.3 | 4.3 | 58 MB | same | 90.5 | 94.3 | 90.5 |
+
+- **The spread holds at 2 m on the corpus**: the accepted share of
+  covered contour length at the tiles' own 2 m overview equals the 1 m
+  model's within 0.1 point on every map (and T2's 1 m figures). That is
+  the first half of answer 17's condition, measured offline on the same
+  COGs; range support, the redirect and the STAC assets' profile remain
+  for §7.6's live run.
+- **Bytes**: 2 m reads about a third of 1 m's (club-2026 32 MB against
+  91 MB; answer 17 estimated 22 / 75 MB for the bare extent — this one
+  carries §7.3's 30 m margin and whole 512-pixel tiles).
+- **club-full needs the 2 m overview**: at 1 m its window is 142 M cells,
+  over the 64 M cap; a fail of §7.6 would leave such maps without a DEM
+  unless the cap is raised with the instance's memory.
+- **Memory and time**: the derive's added peak is the contour derive's
+  (H4: 840 MB on club-full) plus §4.9's three planes and the paper grid;
+  41 s on club-full, under the worker's 240 s. The window cells move to
+  the worker (transferred). One derive of either kind runs at a time per
+  instance (`docs/map-storage.md` §4.7), so on the 4 GiB Cloud Run
+  instance the DEM derive's ~1.0 GB does not stack with the contours'.
+
+### 7.8 Settings → Height data (H12)
+
+§7.0b's tab. Store `packages/api/src/map-store/dem-settings.ts`, router
+`packages/api/src/routers/demSettings.ts` (`demSettings.*`), panel
+`packages/web/src/components/HeightDataPanel.tsx`.
+
+**Keys.** Rows of `oxygen_settings` (no migration; `map_storage_gc.*` is
+the precedent):
+
+| Key | Value | Absent |
+|---|---|---|
+| `map_dem.providers` | comma list of `lantmateriet`, `glo30`; `""` is explicitly none | `MAP_DEM_PROVIDERS` |
+| `map_dem.lantmateriet_resolution_m` | `1` or `2` | `MAP_DEM_LANTMATERIET_RESOLUTION_M`, else 2 |
+| `map_dem.lantmateriet_account` | JSON `{ user, secret, savedAt, savedBy }`, `secret` the sealed password | `MAP_DEM_LANTMATERIET_AUTH` |
+| `map_dem.secret_key` | the sealing key: 32 random bytes, base64 | created on the first save of an account |
+| `map_dem.live_check` | JSON: the last *Test connection* (below) | never run from the tab |
+
+**Precedence** (§7.0b 6). Each of the three values — the provider pair,
+the resolution, the account — is the saved row when there is one, else
+the environment, independently; the tab shows each one's origin
+(`saved`, `environment`, `default`) and a reset to the deploy's default
+(deleting the row). With neither, no provider is on. Lantmäteriet on
+without a usable account stays off with a warning, as in §7.1, and the
+tab says so. A saved account that cannot be opened (the key row lost)
+leaves Lantmäteriet off with a warning asking for the account again; it
+never falls back to the environment's, because the saved value wins.
+
+**Sealing** (§7.0b 7; decided with the user 2026-11-15, answer 10).
+AES-256-GCM from `node:crypto`: a random 12-byte IV per seal, the setting
+key as additional data, stored `v1:<iv>:<tag>:<ciphertext>` (base64).
+The key is `map_dem.secret_key` in the same table, created once with an
+insert that loses a race quietly (every instance reads back the one
+row); clearing the account keeps it. **What this protects:** the
+password never appears in plaintext in a read of the row, a screen of
+the table, a log or a settings export; it does **not** protect against
+someone holding the whole database, who has the key beside it. The
+deploy gains no secret. The user name is stored and shown in the clear
+(it is not the secret).
+
+**What leaves the server.** `demSettings.get` returns the providers with
+their origin, the resolution with its origin, the account as `{ saved,
+user, savedAt, savedBy, origin }` or null, the warnings, and the last
+live check. No procedure returns, logs or stores the password, its
+sealed form or the `user:password` string; failures pass through
+§7.1's masking (`demErrorText`), and free texts shown in the tab (a job's
+error, the check's error) through `maskSecret`, which removes the
+credential, the password and their base64 when at least 6 characters
+long (a shorter one would mangle ordinary words; none of these texts is
+ever built from it). The panel shows the router's refusals by their code
+in the viewer's language.
+
+**Who.** Every `demSettings` procedure is `adminProcedure`, the queries
+too. On an instance with auth off that admits every caller, as it does
+for the Eventor keys (answer 11); the password stays unreadable either
+way.
+
+**Reading the configuration at runtime.** The registry
+(`dem-registry.ts`) no longer is set once at startup: an installed source
+reads the rows over the environment (`refreshDemProviders`) before each
+engine kick, on the 60 s tick (which now always runs, so a provider
+turned on in the tab works without a restart) and after every save, and
+rebuilds the providers only when the effective configuration's
+fingerprint changed. The engine re-reads before every claim, not only at
+the kick, so a loop already running follows a save; a job whose
+Lantmäteriet provider was rebuilt while it ran (a new account saved) and
+that then fails `auth` is queued again from its first attempt instead of
+waiting an hour. The descriptor re-reads when its last read is older than
+15 s, so another instance's tab follows a save within 15 s on a view and
+one tick for the engine. Concurrent reads apply in the order they
+started: an older read finishing last is dropped. Tests without a source
+set providers directly, as before.
+
+**Saving an account** checks its form only (a user name without `:` or
+whitespace, a non-empty password; no request is made), seals and saves
+it, refreshes, then queues every `lantmateriet-*` job that ended
+`failed: auth` — waiting or final, whether Lantmäteriet is on or not —
+from its first attempt, and kicks the engine (§7.0b 7). The startup
+requeue stays for the environment's credential.
+
+**Changing a provider or the resolution** queues nothing: a map fetches
+at its next view (H10's lazy path) or through the list's retry. The
+resolution is in the provider id, so after a change from 2 m to 1 m a
+map's `lantmateriet-2m` rows are no longer served; they stay until the
+GC's version pass (pending below).
+
+**The state list.** One row per club map, its newest version's document
+(`club_map_versions` by `seq`): the name, the descriptor's DEM state and
+reason (`demDescriptor`, with the series' `rotation_correction`), the
+serving job's attempts, next attempt and masked error, and whether *Test
+connection* may run on it; on a ready map the level read (`readAtM`,
+the descriptor's provider block, which is the row's: "read at 2 m", or
+"read at 4 m, one level coarser: the map is too large for 2 m"), and on
+an `over-cap` ending the cap it hit (`overCap`, §7.0c answer 12). The job
+stores an `over-cap` ending's error as `<cap>: <message>` (`tiles`,
+`window-cells`, `stac-pages`, `field`; `demOverCapText`), and the list
+reads the cap back (`demOverCapOf`) so the tab names it in the viewer's
+language below "the map is too large". **Retry** queues the map: a
+`failed` job of the serving provider (waiting or final) goes back to
+`queued` from its first attempt; a map with no job is enqueued; an
+`unavailable` ending is not retried (the document is immutable, so the
+result would repeat). **The one re-queue** (§7.0c answer 12): at engine
+start `requeueOverCap` queues, from their first attempt, the
+`unavailable: over-cap` jobs without an error — those ended before H13,
+since every ending since stores its cap — so each is taken once, with no
+marker and no migration, and an instance of the older image that ends one
+again (error null) leaves it for the next start.
+
+**Test connection** (§7.0b 9) runs `runLiveCheck` (§7.6) with the
+effective credential — saved or environment, never one typed and not
+saved — on a club map the admin picks, also while Lantmäteriet is
+switched off. It refuses, before any request, without a credential, and
+on a map without a georeference (`documentDemExtent` null), over H4's
+cap, or whose extent at 1 m exceeds §7.2's 64 M window cells, and while
+another is `queued` or `running` (a check-then-set: two instances
+starting at the same moment may both run, which costs a second download
+and nothing else). It writes `map_dem.live_check = { state: "queued",
+requestedAt, clubMapId, mapName, by }`, returns at once, and runs in a
+worker thread (`dem-live-check-worker.ts`) on the derive queue — it
+builds the contour graph and holds up to ~250 MB at 1 m; when the queue
+gives it its turn the record becomes `running` with `startedAt`. It then
+writes `{ state: "done", finishedAt, report }` (§7.6's aggregates and
+verdict: no heights, no secret — the report is stored as it is, and
+withheld as an error if it ever held the credential or the password) or
+`{ state: "error", finishedAt, error }` (masked). A `running` record
+whose run started over 15 minutes ago (the worker's limit is 10), or a
+`queued` one over 2 hours old, reads as a stale error (its instance went
+away; the panel says so in the viewer's language). The panel polls `get`
+while one is queued or runs. It never changes the resolution: on a fail
+the tab advises 1 m.
+
+**Offline stacks.** `MAP_DEM_OFFLINE=1` makes the base fetch refuse
+every DEM request (`DemFetchError("http")`) before a socket opens. The
+E2E stack sets it, so the tab can be driven with a provider on and no
+network; a job there ends `failed: http`.
+
+**The panel.** The explanation of §7.0b 8 above the controls (en, sv;
+the attribution and licence strings of §7.1); the two provider switches
+with origin and reset; the account card — a password field never
+prefilled (`autoComplete="new-password"`), "saved" with the user name
+and when, change and clear; the resolution (2 m / 1 m) with origin and
+reset; *Test connection* with a map picker, the verdict's five checks,
+the aggregates and the time; the state list with a retry per row.
+
+## Tests
+
+| Test | Covers |
+|---|---|
+| `terrain/graph/__tests__/inputs.test.ts` | classification by canonical id in any match state, hidden skipped, tagged / untagged cliff and tag side, tick angle (§1.1–1.3) |
+| `terrain/graph/__tests__/flatten.test.ts` | Bézier chords, hole rings, malformed control run (§1.4) |
+| `terrain/graph/__tests__/chains.test.ts` | snap join, continuation rule, tie by end order, no short self-closing, three ends at a cliff, gap bridged in ground metres at two scales, the three look-at cones, merge and cliff ends not bridged, short chains dropped, a dangling end, a chain cut by the frame (§2.1–2.2) |
+| `terrain/graph/__tests__/raster.test.ts` | mask (closing, the 5.5 mm grid), nested rings → regions, frame ends close a band, near-miss ends `extended` onto a chain and a cliff, chains over cliffs, cell budget (§2.3–2.5) |
+| `terrain/graph/__tests__/graph.test.ts` | incidence on nested rings, a leaky chain, cliff links, determinism, no contours (§2.6–2.7) |
+| `terrain/graph/__tests__/synthetic.ts` | the fixture: ISOM symbols with canonical matches and library definitions, geometry in mm, a mapped area around the contours |
+| `.local/h1/counts.mts` (not committed) | T1's corpus counts reproduced (§2.8) |
+| `terrain/solve/__tests__/evidence.test.ts` | tick direction and side, grazing and off-chain ticks dropped, tops by orientation and not around another chain, a tagged cliff between contours and on a contour, lakes and the 2 mm² floor, form ticks on open lines, dropped on closed lines and across another form line (§3.1) |
+| `terrain/solve/__tests__/levels.test.ts` | union-find offsets, a ladder levelled from 0, multi-step on a cycle, conflict share, weak pairs after strict ones, pairs beside a two-level band weak, tier order, weak links and their components, a step set by index repair, no level without pairs (§3.3) |
+| `terrain/solve/__tests__/solve.test.ts` | slope propagation and roots, evidence both ways by weight, the external side first, over a tick (disagreement reported) and over closure, band-upper flagged and inherited, heuristics off, band-drain, closed-hill, cliff-borne pairs and two-level bands, determinism and no mutation, report shares, leaky-signed (§3.2–3.4, 3.6, 3.8) |
+| `terrain/solve/__tests__/index-repair.test.ts` | a cliff hiding two contours recovered from the index contours (step 2, source `index`), the zero default without repair or without an index contour above; an undecided chain decided by the index contours; a proposal undone by its trial; a flipped flagged group corrected, a strictly decided nest left alone (§3.5) |
+| `terrain/solve/__tests__/fixtures.ts` | the graph fixture with chain lookup, ticks, arcs |
+| `.local/h2/{truth,measure,ladders}.mts` (not committed) | the corpus run against Lantmäteriet's 1 m model (§3.9) |
+| `terrain/field/__tests__/codec.test.ts` | round trip, magic and layout, determinism, unaligned input, bad magic / version / length, an unaligned header length, a header the schema rejects (both ways), planes against the header (§5.2) |
+| `terrain/field/__tests__/sample.test.ts` | bilinear exact on a plane, clamping, offset, null outside and in no-data, renormalising at a no-data border, confidence (§5.3) |
+| `terrain/field/__tests__/read.test.ts` | the client entry `read.js` reaches only types, codec, sample and normals (its import graph walked), and exports the read side without `buildHeightField` (§5.4 "Client entry") |
+| `terrain/field/__tests__/normals.test.ts` | a plane's analytic normal, exaggeration, flat and no-data cells, one-sided beside no-data (§5.4) |
+| `terrain/field/__tests__/interpolate.test.ts` | sources by side, geodesic distance inside a region; a slope and a cone within 0.1 interval, a top and a pit, a form line at ½, a multi-step drop, a chain level on both sides, a leaky chain as a form line, no-data, confidence (weak, flagged, undecided, conflicted), the ±32 767 clamp, the blur over data cells only, determinism; the field grid, its budget and a budget below one cell (§4) |
+| `terrain/field/__tests__/levels.ts` | hand-written levels standing in for §3 |
+| `terrain/__tests__/derive.test.ts` | a hill derived end to end (graph, solve, field), null without contours, the interval (5 m, 2.5 m on ISSprOM, an override), the field budget, the solve's options passed through, determinism, the golden bytes that pin `TERRAIN_VERSION` (§5.5) |
+| `.local/h3/corpus.mts` (not committed) | time, peak RSS, field size and a hillshade per corpus map (§5.6) |
+| `terrain/anchor/__tests__/sample.test.ts` | quantiles, median and half-IQR on a cone and a plane, 2 m spacing at two scales, coverage and no data, a closed chain's closing segment, the box stencil and NaN in it (§6.2–6.3) |
+| `terrain/anchor/__tests__/side.test.ts` | hill and pit sides, the 0.4 m and 65 % thresholds, an uncovered chain, the coarse grade's ±20 m and 0.5 m (§6.3) |
+| `terrain/anchor/__tests__/interval.test.ts` | R at I and I/2 for one and two ladders, phase, weights, noise, circular deviation (§6.5) |
+| `terrain/anchor/__tests__/ladder.test.ts` | candidates (one, two, the wrap, under 4 %, noise), the vote per hill and at a border, own evidence removed, the 0.6 share and the 300 m floor, the growing window and an unlabelled chain, continuous levels at the wrap, determinism (§6.6–6.7) |
+| `terrain/anchor/__tests__/anchor.test.ts` | through H1's graph: a shifted ladder snapped, the external side, noise, an accepted chain off its ladder unsnapped, spread-failed and uncovered chains, two ladders per area, the residue split, coarse promoted and not, no ladder, a suspect interval, determinism (§6.4, §6.7, §6.9) |
+| `terrain/anchor/__tests__/resolve.test.ts` | DEM heights kept, a spread-failed chain from its neighbours, bounded by spread and by the clamp, neighbours at exactly 3 bands, the 3-band search, a chain §3 left undecided, the component offset, no height, the drift report, the coarse offset and drift bound, determinism (§6.8) |
+| `terrain/anchor/__tests__/anchor-solve.test.ts` | with §3's `solveTerrain`: a wrong tick against the DEM — the DEM side decides, the disagreement counted; `anchoredHeights` on a real solution (§3.0 answer 1, §6.3, §6.8) |
+| `terrain/anchor/__tests__/synthetic-dem.ts` | analytic DEMs (cone, pit, plane), rings, a seeded generator |
+| `.local/h9/anchor.mts`, `side.mts`, `heights.mts` (not committed) | T2's corpus aggregates and side reproduced, the §6.0 answer 3 target, §3.0's index target per index phase, anchored heights after the solve (§6.10) |
+| `terrain/field/__tests__/anchored.test.ts` | `geodesicNearest` carries the nearest seed's value at `geodesicDistance`'s distances, refuses mismatched values; the anchored cone at absolute heights, `datum` absolute, the offset a whole interval below; the relative field shifted on a regular ladder; a chain off its ladder bends the surface there only; a chain without a height seeds nothing; confidence from `chainConfident`; determinism and round trip, no chain heights in the bytes; mismatched heights refused; `anchoredOffsetM`; the header's DEM sources and provider block accepted and rejected; the ground field on a given grid, the box mean over a fine model, coarse unconfident, no-data only where the DEM has none (§4.9, §5.1, §7.4) |
+| `terrain/__tests__/derive-anchored.test.ts` | `deriveAnchoredTerrain` on the hill with an analytic cone: absolute heights, provider, the relative field's grid, `acceptedOfCovered` high aligned and under ½ off-centre, coarse grade, null without contours, determinism (§5.5, §7.5) |
+| `packages/api/src/__tests__/map-dem-cog.test.ts` | §7.2 against the synthetic COG: georeference and pyramid, PixelIsPoint and a geographic CRS without nodata, `chooseLevel`, BigTIFF / big-endian / garbage as `format`, a server ignoring `Range` and 401 / 403 / 503, a 2 m window by range in one run per tile row, every level with and without DEFLATE and predictor, nodata, a box beside the raster, `over-cap` naming `window-cells`, a cut-short tile; `coarserLevel` (1 m → 2 m → 4 m, none past the coarsest) and `cogWindowCells` without a request (§7.0c answer 12) |
+| `packages/api/src/__tests__/map-dem-providers.test.ts` | §7.1: the STAC search (box, Basic auth, `next` links, the COG asset, duplicates), no-coverage, 401 / 403 / 429 / 502 / not JSON without the secret in the message, 1 m; the asset choice; the credential's hosts, redirects kept / dropped / refused; GLO-30 tile names in every quadrant, the 1° tiles, no credential, the tile cap; the caps named (`stac-pages`, `tiles`); `demProvidersFromEnv` opt-in, order, the credential's form, warnings without the secret |
+| `packages/api/src/__tests__/map-dem.test.ts` | §7.3: the extent's padding and WGS 84 box, null without CRS / origin / known code / bounds; the projection with and without proj4, a rotated box; the paper grid exact through rotation and scale factor, within 0.6 mm of height (0.06 m of position) through a WGS 84 window, two windows, the cell budget; `fetchDemMosaic` over two tiles at 2 m with Range and auth on every tile request, no-coverage, GLO-30's missing tile skipped and Lantmäteriet's failing, the mosaic cap; §7.0c answer 12: 2 m over and 4 m fitting reads 4 m from the same tiles (`resolutionM` 4, `stepped`), its own level when it fits, both over is `over-cap` naming both levels after the headers only, 1 m → 2 m, a tile without a coarser overview, the step off (`coarser: false`) over-cap at its own level, a located tile holding nothing ignored, tiles with differing pyramids refused |
+| `packages/api/src/__tests__/map-dem-worker.test.ts` | §7.4–7.5 on the recorded fixture: both fields on the `contours` grid with the provider block, heights against the cone, the reports; the worker thread gives the same bytes; `misaligned`, `no-contours`; GLO-30 coarse and unconfident |
+| `packages/api/src/__tests__/map-dem-live-check.test.ts` | §7.6 against the recorded fixture: the pass, a server without range support, the spread rule both ways, the credential's reach; no secret in the report; both measurements with the step off |
+| `packages/api/src/__tests__/secret-box.test.ts` | §7.8 "Sealing": round trip, a fresh IV per seal, neither the plaintext nor its base64 in the sealed value; a wrong key, another row, a flipped byte, a malformed value and a short key refused, without the secret in the error |
+| `packages/api/src/__tests__/map-dem-settings.test.ts` | §7.8: off with nothing saved and nothing in the environment; the environment alone; each saved value winning on its own, a saved empty list over a named one; Lantmäteriet without a usable account off with a warning that carries no secret; an unopenable saved account never falling back to the environment's; the store sealing the row with one key, refusing a malformed account, clear and reset keeping the key; the status for every combination without the password, the sealed value or the key; `maskSecret`; the registry rebuilt only on a changed fingerprint, kept without a source and on a failed read, `maxAgeMs`; `MAP_DEM_OFFLINE` refusing before the base fetch; the live check's worker thread through the offline fetch |
+| `packages/api/src/__tests__/integration/map-dem-settings.test.ts` | §7.8 through the router on the recorded fixture: off by default; the account saved and read back without the password, the row sealed; providers and resolution saved over the environment and reset to it; clear back to the environment's account; a malformed account refused without echo; every procedure FORBIDDEN to a member; the club maps' states; a `failed: auth` map queued by a saved account and completing with it; retry from the first attempt, an unavailable map refused, retry with no provider refused; Test connection refused without an account and before any request, run against the fixture (the pass, stored, shown, no secret; a second run refused while one runs), a thrown check stored masked, a map without a georeference and one over the 1 m cap refused; §7.0c answer 12: the state list's level read (2 m, and 4 m over the lowered cap) and the cap an over-cap ending hit (`window-cells`), its retry still refused |
+| `e2e/settings-height-data.spec.ts` | §7.8 in the browser with `MAP_DEM_OFFLINE`: the tab beside Eventor, the explanation and the Geotorget link (en and sv); off by default; the account saved, shown as saved with the user name, never sent back or prefilled after a reload; GLO-30 on, the map not fetched, Fetch now ending `failed: http` with a retry; Test connection's stored error; clear and reset back to off; Lantmäteriet on without an account says so; the resolution saved and reset; §7.0c answer 12 on seeded rows: "read at 4 m, one level coarser" and the window-cells cap named, en and sv |
+| `packages/api/src/__tests__/helpers/{synthetic-cog.ts,dem-fixture.ts}` | the recorded fixture: a COG writer (classic TIFF, DEFLATE, predictor 3, overviews) from analytic surfaces, a fake range server; a Lantmäteriet tile with a cone under the test hill, a GLO-30 piece, a fake STAC with switchable failures — no real DEM bytes, no socket |
+| `.local/h10/dem-mem.mts` (not committed) | §7.7: the job's path on the corpus with T2's tiles — window, bytes, requests, time, added peak, accepted share at 2 m and 1 m |
+
+## Pending in this chapter
+
+- §3: bands that span two levels are only demoted in the level forest,
+  not split; splitting them (H1's raster) is what would lift the levels
+  further (§3.0, 4). No row yet.
+- §3: 10 §2.1's depressions, spot heights and text labels are not
+  evidence (the split's order leaves them out).
+- §4: the surface does not read knolls, depressions or spot heights, and
+  the band weighting leaves a slight kink at each contour (visible as
+  faint terraces in flat ground); a TIN with medial-axis points (10 §2.2)
+  is the alternative if that matters. No row.
+- §7.0c: the map that prompted answer 12 (about 22 M window cells at
+  4 m) is larger than any in §7.7's table; its derive time against the
+  worker's 240 s and its added peak at 4 m are unmeasured until the
+  re-queue runs on 8080. No row.
+- §7.8: a change of resolution or provider queues no existing map (they
+  re-fetch lazily at their next view), and the other resolution's rows
+  are not collected until a `TERRAIN_VERSION` bump. No row.
+- §7.6: the live check against Lantmäteriet's service (range requests
+  through the redirect, the STAC assets' profile) is pending the
+  operator's run with their own credential; the 2 m default ships on
+  §7.7's offline evidence. Record its result in §7.6.
+- §7: a DEM for a rotation-corrected pin (a per-pin DEM, §7.0 answer 2)
+  and for a document without contours (no field grid to resample onto);
+  other national 1 m models (answer 13); blending the two surfaces
+  (10 §3, later); a geoid conversion for GLO-30's EGM2008 heights.

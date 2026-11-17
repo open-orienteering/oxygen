@@ -931,7 +931,9 @@ table of entries `(colour, group, object, start, count)`: colour-major
 (the stream's order), one entry per run of an object's indices — or
 instances, where `group` is the atlas size class (glyphs) or the text
 atlas page (text). Entries of one colour
-are contiguous, so a colour of a part is one span.
+are contiguous, so a colour of a part is one span. `object` is the
+document's effective `objectIndex` ("Object identity and the patch"
+below); the course part's start at `COURSE_OBJECT_BASE`.
 
 **Visible set (04 §6.8 point 2).** `buildVisibleSet(parts, hidden)`
 concatenates the drawn parts' spans per (colour, kind) into one index
@@ -942,8 +944,8 @@ present + size classes + text pages + 3 per clip group — independent of how ma
 when the drawn cell set or the gate state changes, when detail of a
 drawn cell arrives (coalesced, `ARRIVAL_REBUILD_MS`), and when the
 hidden set changes; never while zooming within the same cells. Hidden
-objects (`engine.setHidden`, stream `objectIdx`) are skipped entry by
-entry. With a filter (`buildVisibleSet(parts, hidden, filter)`, "Filter
+objects (`engine.setHidden`, effective `objectIndex`; a patch's hidden
+objects and a filter's join them) are skipped entry by entry. With a filter (`buildVisibleSet(parts, hidden, filter)`, "Filter
 regions" below) an entry goes to the draw of its mask: per colour the
 unmasked draw first, then one per mask, masks ascending — every kind in
 that order, which `VisibleSet.layers` lists as the draw loop's
@@ -980,10 +982,14 @@ growth factor).
 
 | Message | Payload | Reply |
 |---|---|---|
-| `load` | document bytes + `DocumentRenderOptions` (or, dev only, render objects + symbols, or a symbolised stream), font files, the text atlas pages (JSON, in the renderer's page order), optional first view (a view, or "fit into w × h"), gate flag | `loaded`: summary (bounds, origin, grid, detail cells, the first view resolved, stage times, bytes, text: pages, glyphs resolved, glyphs missing), mesh atlas, every cell's base part, the large part — then, without a further request, the first view's detail parts unless it is below the gate |
+| `load` | document bytes + `DocumentRenderOptions` + the event's patch (or, dev only, render objects + symbols, or a symbolised stream), font files, the text atlas pages (JSON, in the renderer's page order), optional first view (a view, or "fit into w × h"), gate flag | `loaded`: summary (bounds, origin, grid, detail cells, the first view resolved, stage times, bytes, text: pages, glyphs resolved, glyphs missing), mesh atlas, every cell's base part, the large part — then, without a further request, the first view's detail parts unless it is below the gate |
 | `prepare` | bucket ids, most urgent first | replaces the queue; one `part` per id |
+| `patch` | a generation number, the patch (or `null`) and the cells whose detail the engine holds | `patched`: the generation, the patch state (hidden ids, issues), the touched buckets' fresh parts, the detail cells, the bytes, the mesh atlas when it grew — "Object identity and the patch" below |
 | `course` | a generation number and the course layer's input without the document (`CourseLayerRequest`: structure, sites, objects, appearance, view options, filter regions, `fastFilter`), or `null` | `course`: the generation, the dynamic bucket's part (or `null`), the stack to draw with, the derivation and symbol sizes, warnings, the mesh atlas when it grew, and the filter over the static buckets (or `null`) — "Dynamic bucket" and "Filter regions" below |
-| — | | `error` on a failed load; on a `course` request whose derivation throws, with that request's generation (F20b) |
+| `hit` (G5) | an id, a paper point (µm) and a tolerance | `hit`: the id and the effective document's objects under the point, topmost first (`DocumentHit`s) — §5.5 "Document objects" |
+| `terrain` (H6) | a generation number, a height field's header and its int16 grid | `terrain`: the generation, the mesh's prepared part (filled heights, height range, chunk ranges) and the normals, transferred — §5.6 "Worker"; needs no loaded document |
+| `edit` (G5) | a generation number and the edit input (selected refs, a draft of patch ops), or `null` | `edit`: the generation, the edit part (`EDIT_BUCKET`, or `null`), the static copies to hide, the selected refs' indices and the count drawn highlighted, the draft's issues, the mesh atlas when it grew — §5.5 "Document objects"; a `patched` reply carries the same state as `edit` while an input is held |
+| — | | `error` on a failed load; on a `course` request whose derivation throws, with that request's generation (F20b); on a `patch` request that throws, with `patch` = its generation; on a `hit` with `hit` = its id; on an `edit` with `edit` = its generation; on a `terrain` request with `terrain` = its generation |
 
 Every typed array goes back as a transferable. The worker decodes,
 bridges (`documentRenderInput`), symbolises, builds the atlas, assigns
@@ -1004,7 +1010,10 @@ The course layer (`docs/course-layer.md`) is drawn by this backend as
 one more part — the **dynamic bucket** of 04 §7 — beside the static
 buckets, so map and course are one colour-ordered picture: lower purple
 under black, brown and blue line art, white-outs above the map's ink,
-upper purple on top. The viewer's use of it is §5.4 "Overlay".
+upper purple on top. The viewer's use of it is §5.4 "Overlay". Since G5
+the dynamic bucket has a second part, the **edit part** (`E`,
+`EDIT_BUCKET`): Map mode's selection highlight and the document objects
+under edit, with its own request (§5.5 "Document objects").
 
 **Stack at load.** A load with `courseLayer: true` (the viewer's; the
 dev page and the bench leave it off) builds the static buckets on the
@@ -1020,18 +1029,20 @@ own without `courseLayer`) and `LoadSummary.courseLayer` says whether a
 course can be drawn: `{ supported: true, cutFeatures }`, or — a stack
 without both purples, `CourseStackError` — `{ supported: false, reason }`
 with the document drawn on its own stack, unchanged. The same load
-extracts the automatic-cut features once (`cutFeaturesOfDocument`,
-`course-layer.md` §3.4) and keeps the decoded context, the parsed fonts,
-the text pages and the mesh atlas builder for the course requests.
+extracts the automatic-cut features (`cutFeaturesOfDocument`,
+`course-layer.md` §3.4) of the effective document — again with every
+patch change ("Object identity and the patch") — and keeps the decoded
+context, the parsed fonts, the text pages and the mesh atlas builder for
+the course requests.
 
 **A course request.** `course { generation, input }` runs, in the worker,
 `courseLayer({ ...input, document, cutFeatures })`, `symbolise` on the
 layer's objects and symbols alone (its symbols already index the
 completed stack) and `prepareBucketPart(…, COURSE_BUCKET, every pass,
 "all")` — one part with every kind, bucket id `COURSE_BUCKET` (−2).
-Its range-table object ids continue after the document's stream objects
-(`courseRenderInput`'s `courseObjectOffset`), so `setHidden` can address
-document and course objects in one set. Glyph parts (701, 706) join the
+Its range-table object ids start at `COURSE_OBJECT_BASE` (2³⁰; "Object
+identity and the patch"), so `setHidden` can address document and course
+objects in one set and a patch's added objects never shift them. Glyph parts (701, 706) join the
 **same mesh atlas**, keyed by their geometry (the course stream's glyph
 ids are local to each run); growth is append-only, so the reply carries
 the whole atlas only when a mesh was added and every resident instance
@@ -1116,9 +1127,13 @@ selects (04 §7: "nothing is re-tessellated when the region moves").
 **Worker.** A `course` request's `regions` (paper mm, document colours)
 go through `courseLayer()` like the rest of the input; the worker then
 runs `render.filterStream(stream, layer.regions, { fast: fastFilter,
-objectBounds })` on the **document stream it loaded** — the course part
-is never filtered — with the objects' symbolised bounds computed once on
-the first filter request and kept. The reply's `filter` (`FilterReply`)
+objectBounds })` on the **effective document** — the document stream it
+loaded, whose results for the objects a patch changed are dropped, and
+the patch's own stream ("Object identity and the patch"), the two
+replies concatenated (the patch's masks after the document's) — so a
+moved object is filtered where it is now and an added one is filtered
+too. The course part is never filtered. The objects' symbolised bounds
+are computed once per stream on the first filter request and kept. The reply's `filter` (`FilterReply`)
 carries the hidden object ids, the masked range-table entries as
 `(object, colour, mask)` triples (a mask is a function of the pair,
 §4.11), and each mask's region triangles: every region flattened at the
@@ -1155,6 +1170,103 @@ in the parity bit and moves it into `REGION_BIT` under the region's
 cover (union over regions), adds `REGION_BIT` to every stencil test of
 the item (fill and hatch covers, instanced covers, strokes, pattern
 clips), and clears the bit after the item.
+
+#### Object identity and the patch (G4)
+
+**Object identity.** For a document source the range tables' `object`
+is the document's own **effective `objectIndex`** (`map-patches.md`
+§2.2). The bridge keeps only drawn objects (objects of hidden symbols,
+dropped and textless ones are left out), so the worker rewrites the
+symbolised stream's `objectIdx` — an index into the bridge's object
+list — through `documentRenderInput`'s `docIdx`. `setHidden`, a filter
+reply's `hidden` and `entries`, and a patch's hidden ids all speak these
+ids; objects a patch adds are `N …` (from the pinned count up). The
+course part's ids start at `COURSE_OBJECT_BASE` = 2³⁰ and the page
+part's after the course's, so a patch that adds objects never shifts
+them; the edit part's start at `EDIT_OBJECT_BASE` = 0x6000_0000 (G5, §5.5),
+so its copies are never skipped with the static objects they draw. The
+dev `objects` and `stream` sources keep the stream's ids.
+
+**The patch.** The viewer draws the event's patch over the pinned
+document (`map-patches.md` §2) — hide, modify, resymbol, add — without
+reloading the document:
+
+- **In.** The `load` message's document source takes `patch`
+  (`MapPatch | null`), so the first frame is the effective document. A
+  change is a `patch { generation, patch, detail }` message, `detail`
+  being the cells whose detail part the engine holds. The caller pairs
+  the patch with the document by hash (`patchForDocument`, §5.4 "Host");
+  the worker applies it to the pinned document it decoded
+  (`applyPatch`), **always from the pinned state**: a patch is a set of
+  keyed states (`map-patches.md` §1.1), so what is drawn is a function of
+  its content, not of the changes before it. A null, disabled or empty
+  patch is the document itself (§2.1).
+- **Hide is ids only.** The reply's `patch.hidden` (effective indices)
+  joins `setHidden`'s and the filter's in the engine; nothing is
+  re-prepared (04 §7: hiding is skipping ranges). A hidden object that is
+  also modified stays hidden, and its modify re-prepares nothing.
+- **Modify, resymbol, add.** The *changed* set is the objects the applied
+  modify and resymbol ops target (unless hidden) and every added object.
+  The worker bridges and symbolises the changed set alone
+  (`documentRenderInput { only }`, the load's options and colour remap),
+  its ids rewritten through `docIdx`; its glyph meshes join the mesh atlas
+  by content (`c/<geometry>`, as the course's), its text resolves against
+  the loaded pages. Each changed object goes to the load's grid by the
+  centre of its symbolised bounds (`assignToGrid`); one larger than
+  `LARGE_CELLS`, or centred outside the grid (the grid is the load's and
+  its cell ids are fixed), goes to the large bucket. A bucket's part is
+  then its pinned passes **without the changed objects'**, merged by
+  colour with the patch's passes in it (`prepareBucketPartFrom`: two
+  sources, the pinned one first within a colour; ink of one colour is
+  opaque, so the pixels are those of one symbolisation of the effective
+  document). One id per object: a replaced object is drawn again under
+  its own index, never as a hidden one plus a copy.
+- **Touched buckets.** Per bucket the overlay keeps a signature: the
+  pinned objects the bucket loses and, for each object it gains, its
+  index, its ops' states and — for a patch symbol — the symbol. A change
+  re-prepares only the buckets whose signature differs from the previous
+  overlay's: a second change elsewhere leaves the first's cells alone,
+  and the toggle off touches the cells the patch had touched and gives
+  back parts deep-equal to the unpatched load's.
+- **Reply.** `patched { generation, patch, touched, base, detail,
+  large?, detailCells, bytes, atlas?, ms }`: every touched cell's fresh base
+  part (a touched cell absent from `base` has none now), the fresh
+  detail parts of the touched cells the request said the engine holds,
+  the large part when touched (`null`: empty now), every cell's detail
+  membership now, the base and large bytes, and the whole atlas when it
+  grew (append-only, so resident instances keep their `base`). `patch` is
+  `PatchState { hidden, changed, added, issues, cutFeatures? }`;
+  `applyPatch`'s issues are reported, never thrown. A request that
+  throws answers `error { patch: generation }` and leaves the worker as
+  the engine still has it: the overlay, the cut features and the byte
+  counts are put back, so the next change is diffed against the last
+  reply, and an atlas the failed request grew goes with the next reply
+  (growth is measured against the meshes last sent). A worker error
+  without a generation (`onerror`) ends the engine's patch request in
+  flight too, rejecting its callers, and the waiting input is sent. The `prepare` queue goes
+  on with the new content: every part is prepared from the current
+  overlay.
+- **Engine.** `setPatch(patch | null)`: before the load the patch goes
+  with the load message; after it, one request is in flight and the
+  latest input waits, as with `setCourse`. It resolves with the
+  `PatchState` once a reply covering its input is applied. A reply
+  releases each touched cell's resident parts and uploads the fresh ones
+  in the same step, so a cell's line art never blinks; replaces `L` when
+  touched; takes `detailCells`, the bytes and the hidden ids; rebuilds
+  the visible set at once; and re-sends the view's want list — a touched
+  cell whose detail was in transit when the request went (prepared before
+  the change) is dropped and asked for again. It re-posts the course
+  input, since the cuts and the filter read the effective document. No
+  `load`, no new context, no document request.
+- **Readers.** With a course layer the cut features are recomputed from
+  the effective document (`cutFeaturesOfDocument` skips hidden objects
+  and reads modified ones where they are); filter regions act on the
+  effective document ("Filter regions").
+- **Cost.** A change costs one `applyPatch` (linear in the document,
+  `map-patches.md` §2.4), a bridge and symbolisation of the changed
+  objects only, and the preparation of the touched buckets. A changed
+  object that lands in the large bucket re-prepares the whole large
+  bucket; that cost is not measured on Club-full (§8).
 
 #### Text atlas (B3)
 
@@ -1504,8 +1616,11 @@ residency budget (MB, default 150), `lod=0` turns off the glyph skip,
 the text skip and the hatch tint, `kinds=fill,stroke,…` draws only those kinds; `compare=1`
 also draws the same stream through the per-pass golden path into a
 second canvas at a zoom where every stroke is ≥ 1.5 px and publishes
-the fraction of pixels differing by more than 16 levels (§6.2's channel tolerance). Pan by drag,
-zoom by wheel or pinch. Reports and the encoded document bytes are
+the fraction of pixels differing by more than 16 levels (§6.2's channel tolerance); `pick=1` (G5)
+makes a click hit-test the document (`hitDocument`, 6 CSS px) and select the top hit through the
+edit part, publishing the hits and the edit state as `__mapGlDoc.pick` once the frame that draws it
+is drawn (the canvas's `data-pick`), and `window.__mapGlDocLines()` lists every line object's first
+segment mid-point in client px. Pan by drag, zoom by wheel or pinch. Reports and the encoded document bytes are
 published on `window.__mapGlDoc` for Playwright.
 
 #### Tests
@@ -1536,6 +1651,9 @@ published on `window.__mapGlDoc` for Playwright.
 | `map-gl/__tests__/engine.test.ts` (loupe) | `renderInset`: one more `renderDocument` with the loupe view into the inset target, the page clip forwarded, `compositeInset` at the box; no rebuild, no worker message; nothing before the load; `releaseInset` forwarded |
 | `map-gl/__tests__/engine.test.ts` (filter regions) | a clip region masks the black line's draw, a hide region removes it, the reply's hidden ids join `setHidden`'s, `null` clears mask and hidden set |
 | `map-gl/__tests__/prepare.test.ts` (filter regions) | every item of a masked pass carries one fan per region, shared by the passes of one mask |
+| `map-gl/__tests__/worker-patch.test.ts` (G4) | object identity: range-table ids are the `objectIndex`, though the bridge drops an object of a hidden symbol; a load without a patch, with `null`, a disabled or an empty patch → the identity state and the same parts; hide → ids only, nothing touched; modify within a cell → that cell only, the object under its own id at its new place, the queue preparing the new content; a move across cells → both touched, the old cell out of the detail set; add → id N in its cell; add outside the grid → the large bucket, `null` once removed; resymbol to a patch symbol with a new glyph → the atlas grown, earlier meshes in place, the instance on the new mesh; hide + modify → hidden wins, nothing touched; a second change elsewhere → its cell only, the toggle off → parts deep-equal to the unpatched load's; detail only for the held cells; issues reported; transferables; a patch with the load drawn from the first frame; a request before the load → `error { patch }`; a request whose symbolisation throws → `error`, the next change diffed against the last reply; `worker-patch-failure.test.ts`: a request that throws while preparing puts the overlay, bytes and cut features back, the atlas it grew goes with the next reply; with a course layer: cut features skip a hidden boulder, course ids from `COURSE_OBJECT_BASE`, a hide region acts where a moved object is now and on an added one, clip regions over pinned and patch objects → the document's masks first, the patch's after, each with its own triangles |
+| `map-gl/__tests__/buckets.test.ts` (G4) | `prepareBucketPartFrom`: two streams merged by colour into one colour-major range table, the first source first within a colour, each source's own glyph meshes; left-out passes absent; one source = `prepareBucketPart`; `sourcesHaveLayer`; `assignToGrid`: the load's grid by centre, outside it or large → the large bucket |
+| `map-gl/__tests__/engine.test.ts` (G4) | `setPatch` before the load goes with it and the first frame hides the object; a change posts `patch`, never `load`, hide skips the object's ranges and the toggle off restores the same visible set; a touched cell's resident detail swapped in the same reply, a cell that left the detail set released and not asked for; a touched cell's detail in transit when the request went dropped and asked again (old part, then the new one); one request in flight, the latest next, a failed one rejecting only its callers; a worker `error` without a generation ends the request in flight and the waiting input is sent; a reply's atlas reaches the renderer, `L` replaced and cleared with its bytes; a reply re-posts the course |
 | `e2e/map-gl-golden.spec.ts` (filter regions) | the four `filter-*` scenes on the per-pass path at the contract budget, and through the arena path at `ARENA_FILTER_MAX_RATIO` with pixel probes on both sides of each region (§6.2) |
 
 ### 5.4 Viewer
@@ -1655,7 +1773,10 @@ session) and the text atlas pages the document's strings need (§5.2
 `engine.load` with the document bytes (a copy: the
 original stays with the cache), `{ unmatched: "proxy", proxyColours }`
 (the stack's darkest colour for lines, points and text, its lightest
-non-white for areas) and the current view as `firstView`. Every view
+non-white for areas), the event's patch (`patch` prop, §5.2 "Object
+identity and the patch") and the current view as `firstView`. A change of
+`patch` goes to `engine.setPatch` without remounting the canvas or
+reloading the document. Every view
 change and every `engine.onChange` asks for one redraw on the next
 animation frame (`setView` then `render`; a canvas resize happens in the
 same frame). With the `loupe` prop (`VectorLoupe`: the point in paper µm,
@@ -1667,7 +1788,8 @@ each `header.colours[i].cmyk`. Unmount disposes the engine (terminating
 the worker) and the renderer.
 
 The canvas carries `data-testid="map-vector-layer"`,
-`data-document-hash`, `data-status` (`loading` → `drawn` → `complete`;
+`data-document-hash`, `data-patch-version` (the patch version last drawn,
+`"0"` for none; absent until the load), `data-status` (`loading` → `drawn` → `complete`;
 `error`, `webgl`) and `data-ready="true"` once the first view's detail is
 resident (`engine.whenComplete()`). A failed load shows a message with
 *Try again*; a browser without WebGL2 (the renderer fails to construct)
@@ -1693,6 +1815,22 @@ decision 2026-10-22) set → `mapBudget="club"`, 150 MB
   `docs/map-storage.md` §7.1) and shows *Loading map…* until the header
   is there, or the error with *Try again* (offline and not cached,
   no access, not found, unreadable);
+- fetches the event's patch beside it (G4; `useMapPatch(nameId,
+  patchVersion)`, `lib/map-document-cache.ts`): `GET
+  /api/maps/:nameId/patch` (`map-patches.md` §3.3) with the kiosk key as
+  a header, revalidated with `If-None-Match`, kept per event for the
+  session; asked again when `mapMetadata.patchVersion` (`MapPanel`'s
+  `patchVersion` prop) differs from the session's copy and when the page
+  regains focus, becomes visible or comes back online — there is no live
+  channel. The layer gets the patch paired with its document
+  (`patchForDocument`: none when `documentHash` is another document's)
+  and does not wait for it: until it answers, the document is drawn as
+  pinned. A failed fetch keeps the session's copy, else none; an
+  unparseable patch is none, with a warning. `setMapPatch` replaces the
+  copy for every viewer of the event (Map mode's writes, G6:
+  `course-editor.md` §13). Viewer,
+  kiosk and editor all mount `MapViewer` through `MapPanel`, so all three
+  draw the effective document;
 - needs no map bounds or calibration (a map without a CRS draws without
   geo inputs); the editor's loupe is drawn by the layer (§5.5
   "Loupe");
@@ -1717,7 +1855,7 @@ layer (`course-layer.md` §3.6, P1). What the layer draws and what it does not:
 
 | GL course layer (dynamic bucket) | SVG UI layer (React, screen widths) |
 |---|---|
-| start triangles (turned to the first control), circles with automatic and authored gaps, finish, legs clipped at circles and gapped at compact features, control numbers placed by the shared placer with manual offsets and leaders, imported courses' authored leg pieces and bends, circle gaps, 707 / 708 / 711 lines and 709 areas | selection ring, phantom, action-bar anchors, move warnings; status rings (readout punch state `ok` / `missing` / `extra`, highlighted control) around the GL symbol; completion rings, punch-count badges; the editor's faded off-course controls (left out of the layer, drawn as plain circles at 0.3 opacity, `control-faded`); class leg pills (multi-course); GPS position and tracks; measure; the description sheet; the editor's tool shapes |
+| start triangles (turned to the first control), circles with automatic and authored gaps, finish, legs clipped at circles and gapped at compact features, control numbers placed by the shared placer with manual offsets and leaders, imported courses' authored leg pieces and bends, circle gaps, 707 / 708 / 711 lines and 709 areas | selection ring, phantom, action-bar anchors, move warnings; status rings (readout punch state `ok` / `missing` / `extra`, highlighted control) around the GL symbol; completion rings, punch-count badges; the editor's faded off-course controls (left out of the layer, drawn as plain circles at 0.3 opacity, `control-faded`); class leg pills (multi-course); GPS position, and tracks in 2D (in 3D the GL frame draws them on the terrain, §5.4 "3D mode", H8); measure; the description sheet; the editor's tool shapes |
 
 The SVG draws no course symbol, leg, route or number: E4b deleted the
 legacy SVG course paths (the GeoJSON of `course.courseGeometries`, a
@@ -1787,6 +1925,297 @@ paper mm) holding its `course-label` (`data-text`, `data-x/y`), and one
 not in the accessibility tree; an accessible map description is slice
 D's editor work). With an editor, `data-editor-hit="shared"`.
 
+#### 3D mode (H7)
+
+The viewer's 2D / 3D switch: the same canvas, engine and context draw the
+document draped over its height field (§5.6) under a perspective camera.
+Research 10 §5 step 3, §8; slice H answers 6 and 7.
+
+**Decided with the user (H7, 2026-11-15)**
+
+1. **Exaggeration**: default **2×**, a control from 1× to 5× in steps of
+   0.5 (`EXAGGERATION`), remembered per browser
+   (`oxygen.map.exaggeration`). The H-gate's club member may move the
+   default. §5.6 decision 2 left it here.
+2. **The sheet beyond the field** (§5.6 decision 4): the viewer pads the
+   field with **no-data cells out to the document's bounds** (`boundsMm`
+   of the header) before it reaches the engine. §5.6 "No-data" draws them
+   at the nearest data cell's height with flat normals, so the title,
+   legend and margins are drawn in 3D in their printed colours and the
+   field's edge has no wall. A truly flat apron (decision 4's word) would
+   leave a step wherever the edge is not at the apron's height.
+3. **The field's share of the budget** (§5.6 decision 5 counts it, sets no
+   limit): the viewer **coarsens** the padded field by the smallest whole
+   factor `f` for which `W · H · 5 ≤ budget / 3` and both sides ≤
+   `min(4096, MAX_TEXTURE_SIZE)` — a cell of the result is the mean of the
+   data cells of its `f × f` block, no-data when more than half of the
+   block is no-data, confident when most of its data cells are. A club
+   map's 150 MB never coarsens a corpus field; an event map's 30 MB takes
+   a sprint's 0.2 mm cells to 0.4 mm. The drape keeps its own third
+   (decision 5), so field + drape stay within two thirds.
+
+**Decided with the user (H11, 2026-11-15)** — choosing the surface; the
+rules are in "Surface (H11)" below.
+
+4. **"The map's terrain" when a DEM is ready**: the viewer draws the
+   **DEM-anchored contour field** (`terrain.dem.anchored`,
+   `contours.<provider>-<res>`, `docs/map-terrain.md` §7) when
+   `terrain.dem.state` is `ready` and its `decided` ≥
+   `TERRAIN_3D_MIN_DECIDED`, else the plain `contours` field. The 80 %
+   gate (answer 7) is read on the field that is drawn. The anchored
+   field's heights derive from the provider's data, so it shows the
+   provider's attribution like ground does (answer 16).
+5. **"Tracks default to the DEM"**: with GPS routes shown and ground
+   (`terrain.dem.ground`) ready, entering 3D draws **ground** — the coarse
+   GLO-30 ground too, labelled with its resolution (answer 13). Without
+   routes, 3D opens on the map's terrain. Tracks always take their height
+   from the surface that is drawn, never from the other one.
+6. **Ground below the contour gate**: a ready ground surface **opens 3D
+   on its own** when the map's contour field is below the gate; the
+   map's-terrain choice is then disabled and names its percent. H7's
+   offer row "`ready`, `decided` < 0.8 → unavailable" applies only where
+   no ground is ready.
+
+**Where it is offered** (answer 6): every `MapPanel` mount except the
+editor (`editor` set) and the kiosk (`MapPanel allow3d={false}` from
+`KioskPage`) — the viewer, the shell's map pane, the readout and runner
+previews, the dashboard and the Tracks page. A viewer with
+`hideControls` has no buttons, so no toggle either.
+
+**The offer** (`terrain3dOffer(terrain, host)`, `lib/map-3d.ts`) reads
+`course.mapMetadata.terrain` (`docs/map-storage.md` §4.7 "Descriptor")
+through `terrain3dSurfaces(terrain)` ("Surface (H11)" below): the map's
+terrain first, else ground. Without a ready DEM (`terrain.dem` absent,
+or any state but `ready`) there is no ground and the table is H7's:
+
+| Descriptor | Toggle (`map-3d-toggle`) | Reason (`data-terrain-reason`) |
+|---|---|---|
+| null, `none`; no ground | not shown | `no-contours` |
+| `over-cap`; no ground | shown, unavailable | `over-cap` |
+| `ready`, `decided` < `TERRAIN_3D_MIN_DECIDED` (0.8) on the field drawn (decision 4); no ground | shown, unavailable | `low-confidence` (the floored percent of the plain field, as the review's line) |
+| `pending` | shown | — (the click fetches, which derives; the descriptor is read again and the gate applied) |
+| `ready`, `decided` ≥ 0.8 on the field drawn | shown | — |
+| the map's terrain unavailable, ground ready (decision 6) | shown | — (3D opens on ground) |
+
+An unavailable toggle is `aria-disabled`; a click shows the reason
+(`map-3d-notice`) and stays in 2D. A `pending` document is not derived
+until someone asks for 3D (a derive is up to ~20 s of server time).
+
+**Fallback.** Whatever refuses or loses 3D leaves the 2D view drawn and
+names the reason in `map-3d-notice` for a few seconds:
+
+| Reason | When |
+|---|---|
+| `low-confidence` | after a `pending` fetch, the re-read descriptor is below the gate |
+| `no-contours`, `over-cap` | a `pending` descriptor's fetch answered 404 with that `reason` (the derive found no contours, or the cap); the descriptor is read again and hides or disables the toggle |
+| `unavailable` | the field cannot be had: offline and not stored, 401 / 403, another 404, 503, unreadable bytes |
+| `webgl` | `engine.setTerrain` rejects (a field over the texture limit, a lost context) |
+| `unavailable` | after a `pending` fetch, the descriptor read again is still `pending` or the read fails |
+| `ground-unavailable` | ground cannot be had (any error above) where the map's terrain can: 3D stays, on the map's terrain (H11) |
+
+**Field** (`hooks/useHeightField.ts`): `loadHeightField(url, opts)` fetches
+the descriptor's `url` as given (`/api/map-documents/:hash/height.bin?v=`,
+with `&source=ground.<p>` / `&source=contours.<p>` for the DEM's fields)
+through `venueAwareFetch` with the document's headers
+(`x-event-id`, `x-kiosk-key`), decodes it with `decodeHeightField` from
+the field's client entry, and keeps it like the document (§5.4 "Host"):
+one request per URL shared by concurrent callers, **three** decoded
+fields in memory (`FIELD_MEMORY_ENTRIES`: a document's plain, anchored
+and ground fields, so a surface switch asks nothing again, H11), a copy in Cache Storage `map-heightfields` under the full URL
+(app-written; the service worker has no route for it) that serves it
+offline, failures not cached. `useHeightField(url, eventId)` asks only
+while `url` is non-null — the viewer sets it on the first switch to 3D —
+and returns `{ state: idle | loading | ready | error (kind), retry }`.
+`viewerField(field, boundsMm, budgetBytes, maxTextureSize)`
+(`lib/map-3d-field.ts`) pads and coarsens it (answers 2 and 3), on the
+main thread, once per field, budget and texture limit (kept per URL,
+as many as the memory entries, for a re-entry and a surface switch).
+
+**State.** The 2D state stays the state: `PaperViewport` (centre, zoom)
+and `userBearing`, plus `pitchDeg`. Zoom buttons, fit, GPS follow, the
+compass and the `data-centre-*` attributes work on it unchanged in 3D.
+The view is `View3d { centreX, centreY, pxPerUm, bearingDeg, pitchDeg }`
+with `bearingDeg` the GL view's `rotationDeg` (−the inner frame's angle).
+
+- **Entering** 3D (the toggle, once the field's mesh is up) sets pitch
+  **45°**; pitch is clamped to [0, **70**] (`PITCH`: H6 measured at 60°;
+  beyond 70° the footprint reaches the whole map, §8 "Club-full tilted
+  close up"). No animation.
+- **Leaving** keeps centre and zoom; the bearing is kept when the rotation
+  lock is off and reset to north up when it is on (the lock's promise in
+  2D). The engine gets `setTerrain(null)`: 2D pays no field bytes, and a
+  re-entry prepares the field again in the worker (the decoded field
+  stays in memory).
+- The mode is not remembered; the exaggeration is.
+
+**Camera** (`camera3d(view, scene)`): the target is the view centre (model
+µm, the arenas' origin removed) at **`targetZ`, the mesh box's mid-height
+at the drawn exaggeration** — constant while the field and exaggeration
+are, so pans, zooms and orbits are exact on the target's plane and the
+camera does not bob over the ground; `distanceUm =
+distanceForPxPerUm(pxPerUm · dpr)`; `bearingDeg`; `pitchDeg`; the canvas's
+device size. At pitch 0 this is the 2D view (the §5.6 hand-over), so
+entering and leaving 3D at pitch 0 changes no pixel (§5.6 "Drape layers").
+
+**Drawing** (`VectorMapLayer`): props `heightField` (the fitted field,
+`null` in 2D) and `terrain` (`{ camera, exaggeration }`, `null` in 2D),
+`onTerrain` (`{ mesh, field }` once the mesh is up — the model origin is
+`mesh.originUm` — and `null` when it goes: the field dropped, or the
+engine remounted) and `onTerrainError`. After the load (and after a remount) the
+layer calls `engine.setTerrain(heightField)`; a superseded rejection is
+ignored. A frame with `terrain` and a mesh is `engine.renderTerrain(terrain,
+opts)` with the colours and `background` paper white; every other frame
+is the 2D `setView` + `render` (+ loupe), which re-selects the 2D view
+by itself. Every camera change and every `onChange` (settle timer,
+arrivals, §5.6 "Settling") is one redraw. The renderer is made with `{
+depth: true }` (the mesh's depth test). The canvas carries `data-mode`
+(`2d` / `3d`, the frame last drawn) and `data-terrain-ready="true"` once
+the camera has been still for 250 ms, `whenComplete()` has resolved and a
+3D frame followed; a 2D frame forgets it, so a re-entry waits again.
+
+**Gestures** (`lib/map-3d.ts`, pure, `reduceGesture3d(state, event,
+scene)`): the 3D view takes the pointer, touch and wheel events on the
+viewer in the capture phase, before they reach the UI layer or the 2D
+handlers, wherever they start — on the canvas or on a ring of the UI
+layer — except on the viewer's own controls (buttons, inputs, labels).
+A gesture's moves are followed on the window, without pointer capture,
+so a click on a ring still reaches the ring. `map-3d-surface`, a layer
+over the canvas under the UI layer, carries the cursor and the
+`touch-action`. The 2D handlers are not involved.
+
+| Input | 3D |
+|---|---|
+| left drag, one finger | pan: the grabbed ground point (the pick, else the target's plane) stays under the pointer (ray ∩ the horizontal plane at its height) |
+| wheel | zoom by ±0.15 log₂ about the ground point under the cursor (same rule), within the 2D zoom limits |
+| right drag, ctrl / ⌘ + left drag | orbit: 180° of bearing per container width, 90° of pitch per container height (drag up tilts towards the horizon) |
+| two fingers | classified in their first 8 px and held: **tilt** when both move vertically the same way (each ≥ 8 px, the fingers' distance and angle steady) — pitch by the midpoint's vertical motion; otherwise **pinch** — zoom about the midpoint and pan with it, plus **twist** of the bearing once the angle passes 8°, whatever the 2D rotation lock (orbiting is what the mode is for) |
+| compass | bearing to north up (as in 2D); pitch kept |
+
+One finger follows 2D's rule: on a coarse pointer outside fullscreen it
+scrolls the page (`touch-action: pan-y`) and the map takes two fingers.
+A gesture breaks GPS follow as in 2D. Measuring and the editor's
+gestures are 2D-only: the measure button is hidden in 3D and entering 3D
+ends a measurement.
+
+**UI layer** (the SVG over the canvas): in 3D the overlay frame is
+unrotated and container-sized, and every paper point reaches it through
+the camera (`projector3d`: the surface height at the point — `surfaceZ`,
+`targetZ` off the mesh — then the camera matrix, CSS px; null behind the
+eye) instead of `mmToInner`; screen points go back through `screenRay` +
+`pickTerrain`. WGS 84 inputs still reach paper mm through `mapGeo` only.
+
+- Rings that circle a draped symbol (status, completion, click targets)
+  take the anchor's ground affine (the projection's 2 × 2 Jacobian there,
+  over the centre's scale) as an SVG transform, so they lie on the ground
+  around the drawn circle; at pitch 0 the affine is a rotation, which
+  leaves a circle as it is.
+- Markers and labels stay upright and unscaled at their projected anchor:
+  punch badges, leg pills, the GPS dot and its accuracy ring (radius at
+  the anchor's scale).
+- GPS tracks (`gpsRoutes`) are not in the SVG in 3D: the GL frame draws
+  them on the terrain (H8, "Tracks on the terrain" below).
+- The course is in the drape (§5.4 "Overlay"): no SVG course symbol in 3D
+  either. Control numbers are part of it, foreshortened with the ground.
+- No occlusion test: a marker behind a hill is drawn over it (§8).
+- The scale bar is hidden at pitch > 0 (the scale varies over the screen).
+
+**Tracks on the terrain (H8).** In 3D the viewer's `gpsRoutes` are
+`TerrainLine`s (§5.6 "Lines") that `MapViewer` hands to `VectorMapLayer`
+(`terrainLines`), and the GL frame draws them after the mesh: lifted a
+constant above the surface and depth-tested against it, so a hill hides
+the part of a track behind it. In 2D they stay the SVG `<path>` they
+were (`data-testid="gps-route"`).
+
+- Input: the same paper mm as 2D (`gpsRoutesMm`, WGS 84 through `mapGeo`
+  once per route set); colour the route's (`#rrggbb` or `#rgb`; any other
+  CSS colour, which no caller passes, falls back to the single-track red
+  `#e6194b`), opacity 0.8, width 4.5 CSS px — the 2D path's.
+- Height: the surface the frame draws (`surfaceHeight` of the engine's
+  mesh — whichever field "Surface (H11)" chose; a switch is a new mesh,
+  which re-lifts the lines).
+- `VectorMapLayer` passes them with the frame (`renderTerrain({ …, lines,
+  pxRatio })`); a new array is one redraw and one re-upload, a camera
+  change neither. The canvas carries `data-terrain-lines` (the lines the
+  last 3D frame drew; absent in 2D).
+- For tests the overlay mirrors each 3D track as an empty
+  `<g data-testid="gps-route-3d" visibility="hidden">` whose `data-points`
+  are the projected CSS px of its points through `projector3d` (the
+  ground line, not raised).
+
+Decided with the user (H8, 2026-11-15):
+
+1. **The GPS position stays H7's** upright SVG marker in 3D, not a GL
+   line and not depth-tested: a person following their own position
+   must not lose it behind a hill. The row's "the GPS position … become
+   3D polylines" is read as the tracks only; marker occlusion stays its
+   own Pending item (§8).
+2. **No replay view is built**: none exists ("replay tails" in the row);
+   H8 draws `gpsRoutes`, and §8 records where a replay's tails would go.
+
+**Surface (H11).** Decisions 4–6 above; research 10 §1 (two surfaces),
+§3 (attribution); blending them is later (§8).
+
+`terrain3dSurfaces(terrain)` (`lib/map-3d.ts`, pure) reads the
+descriptor's `dem` block (`docs/map-storage.md` §4.7; `DemDescriptorLike`)
+into two surfaces:
+
+| Surface | Field | When |
+|---|---|---|
+| the map's terrain (`map`) | `terrain.dem.anchored.url` (`contours.<p>`) | `dem.state` `ready` and `anchored.decided` ≥ 0.8 (decision 4) |
+| | `terrain.url` (`contours`) | otherwise, by H7's table (`pending` derives on the fetch) |
+| | — (`none` / `unavailable` with the reason and the plain field's percent) | H7's rows that offer nothing |
+| ground (`ground`) | `terrain.dem.ground.url` (`ground.<p>`) | `dem.state` `ready` with a provider; else none |
+
+- **Default** (`defaultSurface(surfaces, tracksShown)`): ground when it
+  exists and either GPS routes are shown (`gpsRoutes` non-empty; the GPS
+  dot alone does not count) or the map's terrain is not available
+  (decisions 5, 6); otherwise the map's terrain.
+- **The choice** (`map-3d-surface-choice`, in `Map3dToggle` while 3D is
+  drawn, above the exaggeration control): two buttons,
+  `map-3d-source-map` "Map terrain" / "Kartans terräng" and
+  `map-3d-source-ground` "Ground" / "Mark" — "Ground (30 m)" / "Mark
+  (30 m)" for a `coarse` provider (answer 13) — with `aria-pressed`;
+  shown only where ground exists and the map's terrain is not `none`. A
+  map's terrain below the gate is `aria-disabled` and its title names the
+  reason and percent (decision 6). The choice holds for the mount, across
+  re-entries, until the tracks come or go (the default changes with
+  them); it is not remembered, as the mode is not. On the Tracks page a
+  switch from one runner to the next keeps the previous track drawn until
+  the next one is in (`getRoutePreview`'s `placeholderData`, dropped when
+  the row is collapsed), so the tracks never blink out and neither the
+  default nor the choice flips per runner.
+- **Switching** stays in 3D: the fitted field drawn stays the layer's
+  `heightField` while the other loads (the engine keeps its mesh until
+  the new one is in, §5.6), every field handed to the layer counts as 3D
+  (`in3d`) while its mesh is drawn, and centre, zoom, bearing, pitch and
+  exaggeration are the 2D state's, so they are unchanged. The camera's
+  `targetZ` follows the new mesh. Switching back asks nothing (three
+  fields in memory, fitted per URL).
+- **Ground that cannot be had** (any `useHeightField` error) where the
+  map's terrain can: the choice goes back to the map's terrain and
+  `map-3d-notice` says `ground-unavailable`; 3D stays. Where ground was
+  the only surface it is H7's fallback (2D, `unavailable`).
+- **A pending DEM** (`dem.state` `pending`): no ground; entering 3D asks
+  `dem.ground.url` once in the background, which queues the job for a
+  document imported before H10 (the route's 503, `docs/map-storage.md`
+  §4.7). The descriptor is not read again for it (§8).
+- **Attribution** (answer 16): while the drawn field is DEM-based — its
+  header's `source` is not `contours`, i.e. ground or the anchored field
+  — `map-dem-attribution` shows the header's `provider.attribution` and
+  `provider.licence` ("Elevation data © Lantmäteriet, CC BY 4.0" /
+  "Höjddata © Lantmäteriet, CC BY 4.0") in the map's bottom-left corner
+  (`fieldAttribution(header)`). It is read from the field drawn, not the
+  descriptor: the notice travels with the bytes (offline too). 2D, the
+  kiosk, the editor and print draw no DEM-based field, so they show none.
+
+**Attributes.** `map-viewer` adds `data-view-mode` (`2d` / `3d`),
+`data-pitch`, `data-exaggeration` (3D only), `data-terrain-reason`
+(the last fallback's reason until 3D is asked for again, else the
+offer's), and in 3D `data-surface` (`map` / `ground`, of the field drawn)
+and `data-surface-source` (its header's `source`: `contours`,
+`contours.<p>`, `ground.<p>`; H11). `data-rotation` stays the GL
+view's angle in both modes.
+
 #### Call sites
 
 Every 09 §1 call site reaches the base layer through `MapPanel` →
@@ -1810,12 +2239,19 @@ mounts it only with a pinned document.
 | `lib/__tests__/map-viewport.test.ts` | centre, y flip, mm round trip, WGS 84 through `mapGeo` (1e-6 mm), no CRS, wheel and pinch anchors, clamp, pan, GPS centre, fit, scale, Mercator-equivalent zoom; rotation by the meridian tilt; a +3° tilted meridian vertical on the overlay and through `viewMatrix`; overlay = GL canvas < 0.5 px on 200 random views (rotation, DPR) |
 | `lib/__tests__/legacy-caches.test.ts` | the retired `map-tiles` Cache Storage is deleted on start; no Cache Storage, a refused delete |
 | `lib/__tests__/map-import-view.test.ts` | `mapImportView`: pending while loading / queued / running, review for a done job with a document, failed, unknown without a job or a document |
-| `lib/__tests__/map-document-cache.test.ts` | route regex (documents, not previews); URL without query, `x-event-id` / `x-kiosk-key` headers; one request shared, same bytes; bounded memory; 401/403/404/5xx → kinds, failures not cached; offline; unreadable bytes; `storage.persist()` once, absent API |
-| `lib/__tests__/vector-map.test.ts` | paper frame with correction, bounds in mm, stack colours, proxy colours, budgets |
-| `e2e/map-vector-layer.spec.ts` | the pinned document by hash (no query, `x-event-id`), canvas ready and drawn, container-sized, `data-*` attributes; wheel zoom keeps the paper point under the cursor (< 0.5 px); a GPS fix → follow centres it and the marker is at the viewer's centre; **lower purple under black**: a leg made across a black path on white paper (two controls through the API) is black at the crossing and lower purple 2 mm to either side, zoomed to ≥ 0.02 px/µm, with no SVG control label (fails with the course drawn on the top row); **without WebGL2** `data-status="webgl"`, the message; **a lost context** remounts once (`data-attempt` 1, ready again), a second shows the message; **no pin** (`map_files.document_hash` cleared): `map-import-state` `review` with the review link, no viewer; **an unaligned stack** (a palette-stripped copy of the document pinned by `e2e/helpers/stackless-document-cli.ts`): the layer draws, `data-course-layer="none"`, `map-course-layer-unsupported` shown, no `course-layer` mirror and no SVG `control-label`; in the editor a click on a control selects nothing (no hit index) |
+| `lib/__tests__/map-document-cache.test.ts` | route regex (documents, not previews); URL without query, `x-event-id` / `x-kiosk-key` headers; one request shared, same bytes; bounded memory; 401/403/404/5xx → kinds, failures not cached; offline; unreadable bytes; `storage.persist()` once, absent API; the patch (G4): the event's route with the kiosk key, kept for the session, `If-None-Match` revalidation (304 keeps the copy, a 200 replaces it and tells subscribers), no row = `NO_PATCH`, a failure keeps the copy else none and never rejects, one request per event, a wanted version joining a stale in-flight request asks once more (`refreshMapPatch`), an unparseable patch is none |
+| `lib/__tests__/vector-map.test.ts` | paper frame with correction, bounds in mm, stack colours, proxy colours, budgets; `patchForDocument` pairs by hash |
+| `e2e/map-vector-layer.spec.ts` | the pinned document by hash (no query, `x-event-id`), canvas ready and drawn, container-sized, `data-*` attributes; **the event's patch** (G4): on a black line on white paper, `mapPatch.applyChange` hides the objects there (`e2e/helpers/map-objects-at-cli.ts`) and adds a 2 mm line of the same symbol 2.5 mm off — after a `focus` the canvas's `data-patch-version` is the new version, the line's pixels are white and the added one is ink, with no new document request and the same `data-attempt`; `setEnabled(false)` restores both; wheel zoom keeps the paper point under the cursor (< 0.5 px); a GPS fix → follow centres it and the marker is at the viewer's centre; **lower purple under black**: a leg made across a black path on white paper (two controls through the API) is black at the crossing and lower purple 2 mm to either side, zoomed to ≥ 0.02 px/µm, with no SVG control label (fails with the course drawn on the top row); **without WebGL2** `data-status="webgl"`, the message; **a lost context** remounts once (`data-attempt` 1, ready again), a second shows the message; **no pin** (`map_files.document_hash` cleared): `map-import-state` `review` with the review link, no viewer; **an unaligned stack** (a palette-stripped copy of the document pinned by `e2e/helpers/stackless-document-cli.ts`): the layer draws, `data-course-layer="none"`, `map-course-layer-unsupported` shown, no `course-layer` mirror and no SVG `control-label`; in the editor a click on a control selects nothing (no hit index) |
 | `lib/__tests__/course-layer-request.test.ts` | sites from visible positioned controls with kinds; highlighted courses as items (by flag or name, one or several, none → `null`); all-controls when a drawn site is on no course; sequence numbers only for one ordered course with the sheet or editor; single-course label offsets, pending ones winning; positions as given; faded controls left out; an imported course's preclipped legs → pieces, its cuts → circle gaps, extras; generated legs: bent path kept, automatic gaps and cuts not read, a leg count that does not match ignored |
 | `e2e/map-control-circles.spec.ts`, `e2e/map-multicourse.spec.ts` | code labels of the selected course (the GL layer's `course-label` mirror), sequence numbers for one course with descriptions, codes for several; pills and the sheet SVG text; `data-course-layer="gl"` |
 | `e2e/map-viewer-gestures.spec.ts`, `mobile-layout.spec.ts`, `course-editor*.spec.ts`, `wide-screen-map-pane.spec.ts`, `webserial.spec.ts`, `kiosk*.spec.ts` | the paper view's gestures, measure, event switching (vector layer ready) and the readout map, once in `chromium` (E3: no per-pipeline projects) |
+| `lib/__tests__/map-3d.test.ts` (H7) | the offer table (hidden, unavailable with the floored percent, pending, available; editor and kiosk hidden); exaggeration clamp; the camera at pitch 0 = `viewMatrix` on the target's plane (50 random views, DPRs, bearings); `targetZ` mid-height; the projector at pitch 0 on flat ground = `mmToInner` + the CSS rotation < 0.5 px (200 random views); tilted over a cone, project → unproject within a cell; the ground affine a rotation at pitch 0, foreshortened by cos(pitch) along the view tilted; null behind the eye; pan and wheel zoom keep the ground point under the pointer < 0.5 px (flat and tilted); zoom limits; orbit rates and pitch clamp; two-finger classification (tilt, pinch by distance, angle, midpoint, null in the slop); the reducer: one-finger pan and the page-scrolling finger, orbit drag, wheel, pinch ×2, twist from its activation without a jump, tilt, two → one finger; bearing ↔ user bearing |
+| `lib/__tests__/map-3d-field.test.ts` (H7) | padding by whole no-data cells on the grid to the bounds, `sampleHeight` unchanged inside, no copy when covered; coarsening means, the more-than-half no-data rule, confidence by majority, the corner kept; the smallest factor; a club budget pads only, an event map's coarsens by 2, a 1024-texel device |
+| `hooks/__tests__/useHeightField.test.ts` (H7) | the descriptor's URL with `x-event-id` / `x-kiosk-key`, decoded; one request shared, the field kept; the Cache Storage copy serves offline and replaces the document's other versions of the same source; 403 / 404 with `reason` / 503 / 500 / unreadable / offline classified, failures not kept |
+| `lib/__tests__/map-3d.test.ts` "terrain3dSurfaces" (H11) | no ground for every `dem` state but `ready` (and an absent or null `dem`), H7's offer then; ground when ready; the anchored field as the map's terrain at ≥ 0.8, the plain one below it or with no decided share, the plain percent when both are below; ground opens 3D below the gate and the gate holds without it; pending, `none`, `over-cap` as H7; the default (ground with tracks, or alone); `surfaceOfSource`; `fieldAttribution` (none for `contours`, the provider's for `contours.<p>` and `ground.<p>`) |
+| `hooks/__tests__/useHeightField.test.ts` "three sources" (H11) | a document's `contours`, `contours.<p>` and `ground.<p>` kept side by side in memory and in Cache Storage; switching between them asks nothing again |
+| `e2e/map-viewer-3d.spec.ts` (H11) | the descriptor's `dem` rewritten to `ready`, the DEM fields answered from the real `contours` field (`helpers/dem-field.ts`: the same grid, a DEM `source` and provider, ridges for ground): 3D opens on the anchored field with "© Lantmäteriet" and "CC BY 4.0" shown; ground is one request with `x-event-id`, changes the pixels, never passes through 2D (a `MutationObserver` on `data-view-mode`), keeps centre, zoom, pitch, bearing and exaggeration; back to the map's terrain asks nothing; 2D shows no attribution; no DEM (the stack's): no choice, no attribution; ground below the contour gate opens 3D, the map's terrain `aria-disabled` with 80 % / 50 %; ground aborted: `ground-unavailable`, never through 2D, still 3D on the plain field, which shows no attribution; ground as the only surface aborted: 2D with `unavailable`; the coarse provider labelled "Ground (30 m)" with its own attribution; leaving and re-entering 3D keeps the choice and asks nothing; a pending DEM: no choice, its ground asked once with `x-event-id` on the first entry only; on the Tracks page with a track shown 3D opens on ground with the track drawn (`data-terrain-lines="1"`), the map's terrain on request re-lifts it, and the next runner's track keeps that choice and 3D throughout |
+| `e2e/map-viewer-3d.spec.ts` (H7) | the seed map (no contours): no toggle, `data-terrain-reason="no-contours"`; the demo map imported and pinned: one `height.bin?v=` request with `x-event-id`, `data-view-mode="3d"`, canvas `data-mode="3d"` and `data-terrain-ready`, pitch 45, exaggeration 2, the frame differs from 2D and carries the map's ink, measure hidden; a right-drag raises the pitch and turns the bearing, the compass resets it; a right-drag and a wheel that start on a control's ring of the UI layer orbit and zoom the 3D view (not the 2D handlers); exaggeration 5 changes the frame; two CDP touches moving up raise the pitch; back to 2D the frame equals the 2D one (< 0.5 % of pixels), re-entry asks for neither field nor document; a followed GPS fix on the screen's vertical centre line; the descriptor rewritten below the gate (79.6 %): the toggle `unavailable`, `aria-disabled`, its title the reason, a click shows `low-confidence` and stays 2D; the descriptor first `pending`: the switch fetches, the descriptor is read again and 3D is drawn; an aborted field: `map-3d-notice` `unavailable`, 2D drawn; **a GPS track (H8)**: a route inserted for `itest` (`e2e/helpers/gps-route.ts`) expanded on the Tracks page in the wide screen's pane — in 2D one SVG `gps-route` and no `data-terrain-lines`; in 3D `data-terrain-lines="1"`, no SVG path, the canvas route-red on or just above > 70 % of the mirror's projected points and > 300 route-red pixels, collapsing the row leaves under a tenth of them in the same view; back in 2D the SVG path. `MAP_3D_SHOT=1` writes `docs/screenshots/map-3d.png` and `map-3d-track.png` (the latter cropped and reduced to 256 colours for the docs) |
 
 ### 5.5 Editor
 
@@ -1834,10 +2270,14 @@ with its distance to the drawn shape (0 on or inside):
 | fill, hatch | inside, even-odd (§3.1), or within the tolerance of its outline |
 | stroke | the flattened centre line (10 µm) within half the width + tolerance; a closed path's interior too with `closedStrokeInterior` |
 | glyph | within the mesh radius × instance scale of an instance (a pattern-clipped glyph pass: its clip area) |
-| text | within a glyph box: 0.65 em wide (the course layer's estimate, `course-layer.md` §3.5), 0.2 em below to 0.8 em above the baseline |
+| text | within a glyph box: 0.65 em wide (the course layer's estimate, `course-layer.md` §3.5), 0.2 em below to 0.8 em above the baseline, turned with the glyph (`angles`, §3.5) about its origin (G5: the document's rotated and line text) |
 
 Bounding boxes reject first. No GPU readback: the same function serves
 the editor and the tests (pixel-exact GPU picking stays 04 §7's fallback).
+`passes` restricts the test to some pass indices; `hitTestStreams`
+tests several streams at once — the effective document's pinned stream
+and its patch's — and orders their hits as the GL backend draws: colour,
+kind, the later stream over the earlier, stream order (G5).
 
 **Editor targets.** The course reply's `hit` index (§5.2) reaches the
 viewer with `CourseInfo`; with an `editor` and the GL course layer
@@ -1854,7 +2294,8 @@ it. This is the only hit-testing: the SVG hit targets and the
 `sharedHitTest` opt-in went with the legacy editor (E4b). The viewer
 mirrors every editor site as a hidden `editor-site` (paper mm) for
 tests. Without the course layer (§5.4 "Fallback") there is no hit
-index and no target. The hit index is the course part only.
+index and no target. The hit index is the course part only; the
+document's objects are hit through the worker (G5, "Document objects").
 The filter region's eyedropper (P3, `course-editor.md` §5 / §6.4) is the
 one hit-test over the map document: on the main thread, over the few
 objects whose stored box holds the click, symbolised for the purpose
@@ -1863,7 +2304,123 @@ goes to the worker.
 Snapping (D5, `course-editor.md` §6.2) does not hit-test the document's
 stream: point centres and vertices are geometry, read once per document
 into a main-thread grid (`lib/editor/snap.ts`); a worker request over the
-document stream is Map mode's (slice G).
+document stream is Map mode's (G5, "Document objects" below).
+Both main-thread indices are of the **effective document** (G4,
+`map-patches.md` §2.4): `snapIndexForDocument(hash, bytes, patch)` and
+`pickIndexForDocument(…)` apply the event's patch (`useMapPatch`), kept
+per hash and patch version. Hidden objects neither snap nor are picked
+or counted; modified and added objects are where the patch puts them. An
+object drawn with a patch symbol is not picked by symbol — a filter
+region stores document symbol indices (§4.11) and a patch symbol's index
+moves with the patch — so a click on it picks what is under it (§8).
+
+**Document objects** (G5; 04 §7 "Editing and overlay hooks"). Map mode
+(slice G, `course-editor.md` §13) selects and edits objects of the map
+document itself. Three pieces, all in the viewer's worker and engine:
+
+- **Hit-test over the document.** `MapGlEngine.hitDocument(x, y,
+  toleranceUm)` (paper µm) posts `hit { id, x, y, toleranceUm }`; the
+  worker answers `hit { id, hits, ms }` — the **effective document's**
+  objects under the point, topmost first, by the symbolised shape.
+  Candidates are the passes of the point's grid cell and its eight
+  neighbours (an object's reach is within one cell of its centre's cell,
+  §5.2 "Assignment") and of the large bucket — the bucket grid stands in
+  for 04 §7's R-tree — from both sources of the effective document: the
+  pinned stream without the objects the patch changed or hides, and the
+  patch's own stream. `render.hitTestStreams` tests them exactly
+  (the table above) and orders them by colour, kind (§3.6), the patch's
+  stream over the pinned one, then stream order — the GL backend's order
+  up to its part order within one (colour, kind), which does not show
+  (ink of one colour is opaque).
+  `closedStrokeInterior` is off: a contour ring is not grabbed by its
+  inside. A `DocumentHit` is `{ objectIndex, ref, symbol, type, colour,
+  distanceUm }`: the effective `objectIndex` (valid for the patch drawn
+  now), a stable `ref` — `{ source: sourceIndex }` or `{ added: id }`
+  (`map-patches.md` §1.2; `null` for the dev `objects` / `stream`
+  sources) — the drawn symbol as a `PatchSymbolRef`, the object type and
+  the colour of the topmost pass that hit. A patch-hidden object is never
+  hit; a modified one only where the patch draws it. The engine drops hits
+  on objects it does not draw (`setHidden`'s, a filter region's, an object
+  under edit's static copy); masked objects still hit. Before the load it
+  resolves `[]`; a request that throws answers `error { hit: id }` and
+  rejects that call only; one in flight when the engine is disposed is
+  rejected. Several may be in flight.
+- **Highlight through the dynamic bucket.** `MapGlEngine.setEdit({
+  selected, draft? } | null)` posts `edit { generation, input }`. The
+  worker copies each selected object's passes from the stream that draws
+  it (the pinned stream, the patch's, or the draft's below) into the
+  **edit part** — `EDIT_BUCKET` (−4), one `all` part, its range-table ids
+  from `EDIT_OBJECT_BASE` (0x6000_0000, above the course's and the
+  page's) — in the reserved colour `HIGHLIGHT_COLOUR` (0xFFFF). The
+  engine resolves that index to its highlight colour (`EngineOptions.
+  highlight`, default `#2563eb`, the editor's selection blue), so it sorts
+  after every map, course and page colour and draws on top of everything,
+  unclipped by a page frame. Strokes, glyphs and text are redrawn as
+  they are (text halos are left out); **a fill or hatch is drawn as a
+  150 µm outline** (`HIGHLIGHT_OUTLINE_UM`) of its area, and a
+  pattern-clipped glyph pass as the outline of its clip — the stream has
+  no alpha (§8 "Alpha"), and a flooded area would hide what is selected
+  inside it (user decision 2026-11-14; deviation from 04 §7's "passes
+  redrawn in a highlight colour"). Selecting re-symbolises and
+  re-prepares nothing static: the copies keep their tessellation input,
+  the static parts are untouched.
+- **An object under edit.** `draft { ops, symbols? }` are patch ops
+  (`map-patches.md` §1.1: modify, resymbol, add, hide) the host is
+  editing and has not written. The worker merges them over the drawn
+  patch (`mergePatch`), applies the result to the pinned document and
+  bridges and symbolises the draft's targets alone (`documentRenderInput
+  { only }`, the load's options and colour remap; glyph meshes join the
+  atlas by content, text resolves against the loaded pages). Their passes
+  join the edit part **in their own colours**, so they are drawn in colour
+  order with the static buckets (04 §7 "Dynamic bucket"); each target's
+  static copy — its index in the drawn effective document; none for a new
+  add — is in the reply's `hidden`, which the engine joins to the hidden
+  set: skipped through the range table, nothing re-prepared. A selected
+  object the draft draws is highlighted from the draft's passes. The
+  draft's copy is drawn under an edit-part id, so `setHidden` and filter
+  regions, which address the static id, do not reach it (§8).
+  `applyPatch`'s issues for the merged patch are reported.
+
+**Edit replies.** `edit { generation, part, hidden, selected,
+highlighted, issues, atlas?, ms }`: `selected[k]` is the effective index
+of `selected[k]` in the drawn document, −1 when it is not drawn there
+(hidden, absent, or a draft's add); `highlighted` counts the selected refs
+drawn highlighted (a draft's add included). The engine keeps one edit request in flight and the latest
+input next, as `setCourse` (F20), re-posts the input after a `load`,
+uploads the part under key `E` — after the course and before the page,
+always resident, drawn at every zoom, never evicted, its bytes fixed —
+rebuilds the visible set at once and calls `onEdit` with the state. The
+worker keeps the last edit input: a `patched` reply carries `edit`, the
+edit state recomputed against the new effective document, applied in the
+same step, so no frame shows a highlight or a hidden id of the previous
+patch; if recomputing it throws, the reply carries an empty edit state
+(nothing highlighted, nothing hidden) and the patch is drawn. `null`
+clears. A request that throws answers `error { edit:
+generation }`, ends that request only and leaves the part drawn as it
+was. Committing is the host's: it keeps the draft until `setPatch`
+resolves with the written patch, then clears it — the object moves to
+its static bucket without a frame missing it (04 §7 "on commit").
+
+**In the viewer.** `MapViewerEditorProps.mapObjects { selected?, draft?,
+onHitTest? }` reaches `VectorMapLayer`'s `edit`: `onHitTest` hands the
+page `hit(pt, toleranceMm)` (paper mm in, `DocumentHit`s out) once the
+layer has loaded — or when `mapObjects` arrives after that — and `null`
+to that callback when it is replaced, the layer reloads or unmounts — the
+request is asynchronous,
+so it cannot ride `ToolPointer.target`, and Map mode's tools decide when
+to ask (click, drag start, Tab; user decision 2026-11-14). The canvas
+carries `data-selected-objects`: the latest edit state's `highlighted`
+count. Without
+`mapObjects` nothing is posted. `mapObjects.onPatchDrawn(version)` (G6)
+is called with each patch version the canvas comes to show (its
+`data-patch-version`): the host's signal that the patch carrying a
+committed draft is drawn, since the patch reaches the layer through the
+session's copy (`setMapPatch`) rather than from the host. Map mode
+(`course-editor.md` §13) is the first editor user: it asks the hit-test
+on a click (Tab steps the answer's stack), tests a press on the selected
+object on the main thread, and with `MapViewerEditorProps.hideCourse`
+(its `H`) the viewer requests no course layer, mirrors no course sites
+and draws no description sheet.
 
 **Tools.** `MapViewerEditorProps.tool` (D5, `course-editor.md` §6): the
 viewer offers pointer-down to the active tool first, routes clicks of an
@@ -1909,14 +2466,689 @@ popover beside it; same entries and ids.
 
 | Test | Covers |
 |---|---|
-| `packages/shared/src/render/__tests__/hit-test.test.ts` | the table above: order, reach, even-odd, interior on request, glyph discs, text boxes, object filter, distance |
+| `packages/shared/src/render/__tests__/hit-test.test.ts` | the table above: order, reach, even-odd, interior on request, glyph discs, text boxes, object filter, distance; G5: hit order over fill / stroke / glyph / text by the colour stack whatever the kinds, kind order within one colour, a pass subset, turned text in its turned box, `hitTestStreams` (colour, kind, then the patch's stream over the pinned one; each source's own passes and objects) |
+| `map-gl/__tests__/worker-hit.test.ts` (G5) | `hit` over the effective document: index, ref, symbol, type, colour; reach and tolerance; an object of a hidden symbol not hit; topmost first across the pinned and the patch's stream (an added line over an area); a patch-hidden object never hit, a moved one only at its new place, the toggle off; an object centred in the neighbour cell and one in the large bucket; a request before the load → `error { hit }` |
+| `map-gl/__tests__/worker-edit.test.ts` (G5) | the edit part at `EDIT_BUCKET`: a selected line's strokes in `HIGHLIGHT_COLOUR` under edit-part ids; an area as its outline (no fill); a point's glyphs; several refs with an unknown and a patch-hidden one (−1); `null` / empty clear; an added object by its id; `highlightPasses` (text kept, halo dropped, fill and clipped pattern as outlines); a modify draft at its new place in its own colour with its static copy hidden; a new add with none; a selected draft object highlighted where the draft draws it; a draft over the drawn patch's add, a hide draft; the draft's own issues; a draft glyph grows the atlas; a patch change carries the edit state; a request before the load → `error { edit }`, the next answered |
+| `map-gl/__tests__/engine.test.ts` (document objects, G5) | `hitDocument`: the worker's hits, `[]` before the load, hits on `setHidden`'s objects, on a hide region's (filter regions test) and on an object under edit dropped, several in flight by id, a worker error and `dispose` reject them; `setEdit`: `E` uploaded and drawn, the highlight index resolved to `EngineOptions.highlight`, bytes fixed, `null` releases it; a draft's static copy skipped, nothing re-prepared; one request in flight, the latest next, an input before the load right after it; an edit error ends that request only, the part kept; a patch reply's edit state applied in the same step |
+| `e2e/map-gl-doc.spec.ts` "a click on the fixture's path reports its object…" (G5) | `/dev/map-gl-doc?pick=1` on `e2e/test.ocd`: a click on the first Path (505) reports it on top (source index, symbol code) with the area under it; the edit part selects it and the frame has the highlight blue round it, none before; a click elsewhere moves the highlight and the path's blue goes |
 | `map-gl/__tests__/worker-course.test.ts`, `engine.test.ts` | the reply's hit index and its way to the host |
 | `lib/editor/__tests__/hit.test.ts` | editor targets over the real worker's index |
+| `lib/editor/__tests__/snap.test.ts`, `symbol-pick.test.ts` (G4) | over the effective document: a hidden object neither snaps nor is picked or counted; a modified or added one snaps and is picked where the patch puts it; an added object of a patch symbol is neither picked nor counted |
 | `e2e/course-editor.spec.ts` | selecting, dragging and leg clicks on the canvas with no SVG targets |
 | `lib/editor/__tests__/touch.test.ts` (loupe) | `loupePlacement`: above the handle, flipped below the finger at the top, kept inside sideways; with no lift (F24) above the cursor, flipped and clamped the same way |
 | `e2e/course-editor-legs.spec.ts` "F24: the loupe on mouse drags" | the loupe during a mouse drag of a control (the magnified map: purple, differing from the 1× circle) and a bend (F30: none on a number): `data-pointer="mouse"`, its bottom 16 px above the cursor, no stem; gone on release, on the mouseleave cancel and on Escape (which cancels the drag, nothing written); none for a click; "…object's vertex drag": the loupe during an object's vertex drag |
 | `e2e/course-editor-legs.spec.ts` "F23: bend drags on a tablet" | the loupe during a tablet's bend and grip drags (the point `onPointerDrag` returns): its bottom 16 px above the lifted bend, gone on lift |
 | `e2e/field-mode.spec.ts` (`mobile`) | the loupe during a long-press drag: 120 px above the handle; the canvas inside it differs from the same circle after release (the 1× map) and has the map's purple; gone on release |
+
+### 5.6 Terrain (web)
+
+The 3D drawing side of research topic 10 §5 step 2 (H5): a height field
+(`docs/map-terrain.md` §5) drawn as a mesh under a perspective camera,
+textured and lit. H6 makes the map the texture and runs this on the
+renderer's context; H7 puts it in the viewer. The terrain side lives in
+`packages/web/src/map-gl/terrain/`; H6 joins it to the arena path through
+`renderer.ts` (the drape target, the terrain program on the renderer's
+context), `engine.ts` (the 3D frame: footprint, cells, settling, budget)
+and `worker.ts` (the field's CPU preparation).
+
+#### Decided with the user (2026-11-14)
+
+1. **Shading: flat ground is exactly 1, both ways** (10 §8's open
+   lighting question). The light comes from the north-west, 45° up, as in
+   T1's hillshade: in paper space (x right, y up, z up) the direction to
+   the light is `l = (−½, ½, √½)`. With `n` the unit normal at the
+   drawn exaggeration, `s = max(0, n·l) / l.z` and
+   `shade = clamp(s, 0.4, 1.25)`; the drawn colour is
+   `min(1, colour · shade)` per channel, no tint. Flat terrain, the
+   sheet's margin and the legend keep the 2D and printed colours exactly;
+   slopes away from the light darken, slopes towards it brighten (white
+   cannot). The light is fixed in paper space, not the camera's, so
+   relief reads the same from every bearing.
+2. **Vertical exaggeration is a draw parameter with no default here.**
+   The dev page and the E2E pass it explicitly; the viewer's default (2×)
+   and range (1–5×) are §5.4 "3D mode" decision 1 (H7).
+
+#### Decided with the user (H6, 2026-11-14)
+
+3. **Two drape layers, near and far, split by need.** One orthographic
+   texture has one texel density, and a tilted camera needs several times
+   more at the near edge of the screen than at the far edge (≈ 3.4× at
+   pitch 60). `TerrainFrame` takes `drapes[]` (1–2), the first whose uv
+   is inside wins. Rendering the map through the perspective matrix every
+   frame was rejected: it needs a per-vertex screen density (§8
+   "perspective cameras") and contradicts "re-rendered when the camera
+   settles".
+   - *As first decided*: the far layer at the density the cap allows, a
+     near layer only where the cap left the far one below 0.7 of the need.
+   - **Amended after the bench (user, 2026-11-14)**: on Club-full at 1×
+     paper tilted 60° the camera sees the whole map to the horizon, and a
+     far layer at the nearest point's density (the cap allowed 96 %)
+     rendered all of its detail — 200 ms per re-render, 166 MB resident
+     against 150 MB. Now, **whenever the footprint's depth range is wide**
+     (far / near depth > `DRAPE_SPLIT_RATIO` = 2), the near layer covers
+     the ground up to a depth D at the nearest point's density and the far
+     layer covers the whole footprint at `focalPx / D` — what the ground
+     beyond D needs — with D chosen to minimise the texels; both are then
+     scaled down together if over the cap. Pitch 0 (depth range 1) stays
+     one layer, the 2D view. Distant ground falls below the zoom gate as
+     it would in 2D at that density.
+4. **The drape is clipped to the mesh.** The height field covers the
+   contours' bounding box + 2 mm (`map-terrain.md` §2.4, §5), so sheet
+   parts outside it — a title, a legend, a margin beyond the field — are
+   not drawn in 3D by the engine. The viewer pads the field with no-data
+   cells to the document's bounds before it gets there (H7, §5.4 "3D
+   mode" decision 2), so the sheet is drawn at the edge's heights.
+5. **The cap is inside the residency budget.** The height and normal
+   textures and the drape layers count against the existing budget
+   (30 MB event maps, 150 MB club maps; `budgetBytes()`); the drape
+   layers together may take at most a third of it (10 / 50 MB, mip chain
+   included) and at most 4096 texels per side. On a phone at an event
+   map that is ≈ 1.9 M drape texels against a 2.6 M-pixel canvas (0.85×
+   linear at pitch 0). Revisited only if the measurements or the H-gate
+   show it.
+
+#### Input
+
+A `HeightField` (`docs/map-terrain.md` §5.1), imported from the field's
+client entry `@oxygen/shared/src/terrain/field/read.js` (types, codec,
+`sampleHeight`, `heightNormals` — not the derivation, so the web bundle
+carries none of `graph/` or `solve/`; `map-terrain.md` §5.4 "Client
+entry").
+
+#### Units
+
+Model space is the arenas' (§5.2 "Projection"): origin-relative paper µm,
+x right, y up — and z up in the same µm, so the texture H6 renders with
+the 2D `viewMatrix` lands on the mesh through that matrix alone. For
+cell (ix, iy) and int16 height h:
+
+```
+x = (x0 + (ix + ½) · cellMm) · 1000 − originX      (likewise y)
+z = (h − zMin) · unitUm · exaggeration
+unitUm = zScaleM · 1000 / groundMPerMm              (metres → paper µm through the map scale)
+```
+
+The lowest drawn height sits at z = 0 for both datums (`zBaseM = zMin ·
+zScaleM + zOffsetM` is the metres there), which keeps z small in float32
+for an absolute field. Metres reach the GPU only through `unitUm`.
+
+#### Camera (`camera.ts`, `mat4.ts`)
+
+`TerrainCamera { target {x, y, z} (model µm), distanceUm, bearingDeg,
+pitchDeg, fovYDeg = 35, widthPx, heightPx }` → `terrainCamera(cam,
+bounds?)`: one column-major model → clip `Float32Array(16)`, composed in
+float64 (`mat4.ts`) and converted once, as `viewMatrix` is (10 §6 point
+1). An orbit: the eye is `distanceUm` from the target, opposite the view
+direction.
+
+- `pitchDeg` 0 looks straight down; it is clamped to [0, 85].
+- `bearingDeg` turns the view as `View.rotationDeg` does
+  (counter-clockwise on screen); at pitch > 0 the camera looks along the
+  ground direction that is screen-up at pitch 0.
+- **2D ↔ 3D hand-over**: at pitch 0 and `distanceUm = focalPx / pxPerUm`
+  (`distanceForPxPerUm`, `focalPx = (heightPx / 2) / tan(fovY / 2)`) the
+  target's z plane is drawn exactly as `viewMatrix` draws it with
+  `rotationDeg = bearingDeg` (tested to 1e-6 in clip space).
+- Near and far enclose `bounds` (the mesh's box at the drawn
+  exaggeration) by depth along the view direction: far at the box's
+  largest depth, near at **0.8 of its smallest** (`NEAR_HEADROOM`; both at
+  corners — depth is linear), no closer than far / 10⁴ (a 24-bit depth
+  buffer). The headroom is H8's: lines are drawn above the surface
+  ("Lines": raised by their screen half width and biased towards the eye,
+  up to several per cent of the distance), and with near at the box's top
+  a track on a summit or on flat ground was clipped away (found by the
+  opacity test on the flat dev field). Euclidean
+  distance to the box would not do: an off-axis point at distance D lies
+  at depth D · cos φ, in front of such a near plane (spec review).
+- `cameraFrame` also returns the eye, the camera's basis and `focalPx`;
+  `screenRay(cam, px, py)` is the ray through a canvas pixel (y down),
+  the inverse of the projection; `projectToScreen(m, …)` the forward map.
+
+#### Mesh and level of detail (`mesh.ts`)
+
+The vertices are the field's cell centres; the mesh spans the outer
+centres (the half-cell rim, 0.1 mm at 0.2 mm cells, is not drawn).
+
+- **Chunks** of `CHUNK` = 64 × 64 quads tile the grid from (0, 0); an
+  edge chunk that runs past the grid clamps its vertices to the last
+  column / row, so its outer quads collapse to degenerate triangles.
+- **One vertex grid for all chunks**: 65 × 65 vertices of three bytes
+  (i, j, skirt = 0) plus a ring of 256 skirt vertices (skirt = 1) on the
+  border. Each chunk is an instance `(ix0, iy0, zMin)`.
+- **Levels** 0 … 6: level l takes every 2^l-th vertex, (64 / 2^l)² quads
+  as triangles (a, b, c), (a, c, d) counter-clockwise from the lower-left,
+  plus 4 · 64 / 2^l skirt quads; level 6 is one quad. All levels' indices
+  sit in one `Uint16` buffer.
+- **Choice of level**: `chunkLevel(d) = clamp(⌊log2(lodPx · d / (focalPx
+  · cellUm))⌋, 0, 6)` with d the eye's distance to the chunk's box — the
+  coarsest level whose quad edge, at the chunk's nearest point, is at
+  most `lodPx` = 8 screen px. Level 0 at the eye, monotone in distance,
+  independent of bearing. Geometry this coarse is enough because the
+  lighting comes per pixel from the full-resolution normal map, and the
+  drape is a texture.
+- **Cracks**: each chunk hangs a skirt from its border down to its own
+  lowest height. Where a coarse edge (a straight line between every
+  2^l-th border height) and a fine edge differ, the higher of the two
+  has a skirt reaching the lower: both edges' heights are border heights
+  of both chunks, so each chunk's `zMin` lies below the other's edge
+  (tested on a noise field for every pair of levels).
+- **Culling**: a chunk is dropped when its box (xy extent × its height
+  range at the exaggeration) lies wholly outside one clip plane.
+- **Draws**: one `drawElementsInstanced` per level in use — at most 7 per
+  frame, against 04 §9's 300 for the whole frame.
+
+#### No-data
+
+No-data cells are drawn, at the height of the nearest data cell
+(breadth-first over four neighbours, `meshHeights`; all at `zMin` when
+nothing has data): the sheet's margin, the legend and the area outside
+the mapped area are part of the drape, and holes or walls at the mapped
+area's edge would be artefacts. The field itself is not changed; the pick
+reports such a point with `data: false`.
+
+#### Pick (`pick.ts`)
+
+`pickTerrain(mesh, field, ray, exaggeration)` → `{ x, y }` paper mm, the
+model point, `heightM` (exaggeration removed), `data` and the ray
+distance, or null on a miss. A CPU march over the level-0 triangles the
+mesh draws (`surfaceZ`), clipped to the mesh's box, in steps of half a
+cell in plan, the first crossing refined by bisection; a vertical ray is
+one step. It runs without the GPU, so H7's gestures and H8's lines use it
+as the tests do. Where `data` is true, `heightM` agrees with
+`sampleHeight` within one height unit (the triangles and §5.3's bilinear
+differ by less inside a quad).
+
+#### Lines (`lines.ts`, H8)
+
+GPS tracks on the terrain (research 10 §5 step 3, row H8): polylines in
+paper mm drawn by the GL frame after the mesh, on its surface and
+depth-tested against it, so a track behind a hill is hidden by the hill.
+
+```ts
+interface TerrainLine {
+  points: readonly { x: number; y: number }[];   // paper mm (WGS 84 reached them through mapGeo)
+  colour: [r, g, b];                             // 0…1
+  opacity: number;                               // 0…1, uniform over the line
+  widthPx: number;                               // CSS px; the frame's pxRatio makes it device px
+}
+type LineSurface = (xUm: number, yUm: number) => number | null;   // model µm → int16 height units
+liftPolyline(points, mesh, { surface = surfaceHeight(mesh, ·), stepUm = mesh.cellUm }?): Float32Array[];
+lineInstances(lines, mesh, surface?): { data: Float32Array; ranges: { first; count }[]; segments };
+lineVertex(p: [x, y, h], frame: { matrix; eye; zUnit; widthPx; heightPx; focalPx; halfPx }): [x, y, z];
+class TerrainLines {
+  constructor(gl: WebGL2RenderingContext);
+  draw(lines, mesh, frame: { matrix; eye; focalPx; exaggeration; pxRatio }, target): { lines; draws; segments };
+  dispose(): void;
+}
+```
+
+- **Lifting** (`liftPolyline`, pure): each point goes to model µm (the
+  mesh's `originUm` removed); every segment is cut into equal steps no
+  longer than the mesh's `cellUm` in plan, the original points kept, so
+  a chord between two GPS fixes follows the ground over a ridge instead
+  of cutting through it. Each vertex carries `(x, y, h − zMin)` in
+  model µm and **height units** — the exaggeration is applied in the
+  shader (`u_zUnit = unitUm · e`, as the mesh), so changing it re-uploads
+  nothing. The height is the **drawn surface** (`surfaceHeight`, the
+  level-0 triangles with no-data filled, §5.6 "Pick"): the surface the
+  depth test runs against; where the field has data it is
+  `sampleHeight` within one height unit. A point outside the mesh's cell
+  centres (only beyond the sheet: H7 pads the field to the document's
+  bounds) breaks the line into runs; a run of fewer than two vertices is
+  dropped. Over `MAX_LINE_SEGMENTS` (200 000) segments for one set the
+  step doubles until it fits.
+- **The height source is a parameter** (`surface`): the default reads
+  the engine's current mesh, and a new field (H11's choice of surface)
+  is a new mesh, which re-lifts the lines (below). Nothing else in the
+  lines knows which field it is.
+- **Geometry**: one instance per segment `(p0, p1)`, a unit quad
+  expanded in the vertex shader to a screen-space **capsule** of
+  `widthPx · pxRatio` about the projected segment, one pixel wider for
+  the edge's antialiasing; the fragment shader keeps the pixels within
+  half the width of the segment (screen px, `gl_FragCoord`), so joins
+  and ends are round as the 2D `<path>`'s. The width is the 2D track's
+  4.5 CSS px, not foreshortened: the track is an overlay on the ground,
+  as it was in 2D. A segment with an end behind the eye (w ≤ 0) is not
+  drawn.
+- **Lift and depth** (`lineVertex`, the vertex shader's twin in
+  TypeScript): the ground point `(x, y, h · unitUm · e)` is raised by
+  - **`LINE_LIFT_UM` (200 model µm, 2 m at 1:10 000)**, not scaled by the
+    exaggeration, plus
+  - **its half width on screen**: as much as moves it `halfPx + ½` device
+    px on screen (the screen rise of a vertical step at the point,
+    measured through the matrix), at most `LINE_RISE_CAP` (4) times that
+    in the distance's px-equivalents (`focalPx / w`) — looking straight
+    down a rise does not move the point, and the cap keeps it bounded.
+    The capsule is centred on the raised line, so its lower edge lies on
+    the ground line and every pixel of it covers terrain at or beyond the
+    ground point: at a grazing view, where the terrain under a capsule
+    centred on the ground would be nearer than the line, it is not
+    swallowed (found on the dev cone: a far flank at 1× seen 20° above
+    the horizon lost half the line's width).
+
+  then moved towards the eye by **`LINE_DEPTH_BIAS` (0.003) of its
+  distance** — screen position unchanged, depth reduced — because coarse
+  levels of detail lie above level 0 by up to a quad's height change far
+  from the eye (§5.6 "Mesh and level of detail"), which the lifts alone do
+  not cover. On screen a tilted track is drawn up to its half width (and
+  the constant lift's few pixels) above its ground line; looking straight
+  down it is on it under the eye and moved outwards by at most that
+  elsewhere. Depth test `LEQUAL` against the mesh's depth,
+  `depthMask(false)`: lines never occlude one another or the mesh. A
+  track within the lift and bias behind a crest shows through it.
+- **Opacity once**: a line's overlapping capsules (every join) must not
+  blend twice, so each line is drawn with the stencil — cleared to 0 at
+  the pass's start, line i's reference `i + 1` — in two draws: the
+  capsules' interiors (full coverage), then their antialiased edges where
+  no interior is, both `NOTEQUAL` / `REPLACE`: a fringe pixel two capsules
+  share takes the first one's coverage, once. Blending is
+  `SRC_ALPHA, ONE_MINUS_SRC_ALPHA`. Two draws per line;
+  the mesh's draw count (≤ 7) is reported apart.
+- **Buffers**: the instance data is rebuilt only when the `lines`
+  array or the mesh changes (identity); a camera or exaggeration change
+  only sets uniforms.
+- **State**: it binds the frame's target again (the mesh's depth is
+  still in it), sets the viewport, and leaves what `TerrainRenderer`
+  leaves: depth test off and `depthFunc(LESS)`, `depthMask(true)`, blend
+  and stencil test off, `stencilMask(0xff)`, no program, vertex array,
+  buffer or framebuffer bound.
+- **Frame**: `renderer.drawTerrain(frame, target, lines?)` draws them
+  after the mesh inside the GPU timer, with the mesh's matrix (the near
+  and far planes from the mesh box), eye and focal length
+  (`TerrainDrawStats.eye`, `focalPx`); the stats carry `lines: { lines,
+  draws, segments }`.
+
+#### Shading (`shade.ts`)
+
+Decision 1 above, written once in TypeScript (`shade`, `shadeColour`) and
+emitted into the fragment shader from the same constants (`SHADE_GLSL`).
+Normals are `heightNormals(field, 1)`, uploaded once; the shader applies
+the exaggeration as `normalize(n.xy · e, n.z)`, which is
+`heightNormals(field, e)` — so changing the exaggeration (H7's control)
+costs no upload.
+
+#### Drawing (`program.ts`)
+
+```ts
+class TerrainRenderer {
+  constructor(gl: WebGL2RenderingContext);        // the caller's context
+  setField(field: HeightField, originUm: { x; y }, prepared?: PreparedField): TerrainMesh;
+  setOrigin(originUm: { x; y }): TerrainMesh;      // the same field in a new document's model space, no upload
+  clearField(): void;
+  get mesh(): TerrainMesh | null;
+  get bytes(): number;                             // fieldTextureBytes(W, H) = W · H · 5
+  draw(frame: TerrainFrame, target: RenderTarget): TerrainDrawStats | null;
+  dispose(): void;
+}
+interface TerrainFrame {
+  camera: TerrainCamera; exaggeration: number;
+  drapes: { texture: WebGLTexture; matrix: Float32Array }[];   // 1–2 (MAX_DRAPES), priority order
+  background: [r, g, b]; lodPx?: number; level?: number;
+}
+```
+
+- `setField` uploads the filled int16 grid as an `R16I` texture (read
+  with `texelFetch` in the vertex shader — `map-terrain.md` §5.1's "as it
+  is"; 4096 per side is the phone texture limit §4.0 answer 3 sized the
+  grid to) and the normals as `RGB8_SNORM`, linear. A field over
+  `MAX_TEXTURE_SIZE` throws.
+- `setField` without `prepared` does the CPU work itself (the dev page's
+  synthetic mode); the engine passes the worker's (§5.6 "Worker").
+- `draw` clears `target` (colour to `background`, depth to 1), draws with
+  depth test `LEQUAL`, and samples each drape at `uv = (matrix · (x, y,
+  0, 1)).xy / w · ½ + ½`; the **first drape whose uv lies in [0, 1]** is
+  drawn (H6: the near layer, then the far one — decision 3). Both
+  samplers are read outside the branch so the mip level's derivatives
+  stay defined; an absent second drape binds the first and is never
+  chosen. Outside every drape the `background` colour stands in and is
+  **shaded like it** — it is ground no texture covers (the footprint ends
+  before the field does, and the camera moved before the drape followed,
+  "Settling"), and an unlit patch would read as a hole. The colour is
+  `min(1, colour · shade)`, opaque.
+- It sets what it draws with — blend, face culling, scissor and stencil
+  off, every colour channel written — since the arena path leaves blend
+  on after a 2D frame.
+- **The seam**: a drape is any texture plus the matrix it was drawn
+  with, so the map rendered into framebuffer textures with the 2D
+  `viewMatrix` over the camera's footprint (below) and the dev page's
+  checker go through the same path. The renderer takes a context, not a
+  canvas, and leaves it as the arena path expects: depth test off and
+  `depthFunc(LESS)`, no program, vertex array, framebuffer or texture of
+  its own bound, `TEXTURE0` active, unpack alignment 4. The viewport,
+  clear colour, clear depth and `depthMask(true)` stay as drawn; the
+  arena path sets its own each frame. `MapGlRenderer` owns one
+  (`renderer.terrain`, made on first use) on its own context.
+
+#### Footprint (`footprint.ts`, H6)
+
+The research's step 1 (10 §5) renders the map "to a texture … at the
+view's resolution"; under a perspective camera the screen has no single
+resolution on the ground, so the drape is **orthographic textures over
+the camera's ground footprint**, rendered with the unchanged arena path
+and `viewMatrix` (10 §6 points 1–2: one matrix, an explicit target).
+
+`groundFootprint(cam, box)` is the plan region whose surface the camera
+can see: the four side planes of the frustum (through the eye; with
+`tanY = tan(fovY / 2)`, `tanX = tanY · width / height`, inside where
+`|p·right| ≤ tanX · depth`, `|p·up| ≤ tanY · depth`) clip each face of
+`box` — the mesh's box at the drawn exaggeration (`meshBox`) — and the
+xy convex hull of what is left (plus the eye, where it lies inside the
+box) is the footprint, counter-clockwise, model µm; empty when the
+frustum misses the box. Clipping the **box** rather than the z = 0 plane:
+
+- a hilltop seen beyond the flat-ground trapezoid is covered (the drape
+  is a vertical projection: a surface point takes the texel of its
+  plan position, whatever its height);
+- the box bounds the footprint at the horizon, so a camera looking over
+  the field has a finite footprint without a far plane.
+
+Tested: the screen rectangle at pitch 0, the analytic trapezoid when
+tilted, every on-screen surface point of random cameras inside the
+polygon and inside a layer, the box clip, empty when looking away.
+
+#### Drape layers (H6, decision 3)
+
+`drapeLayers(cam, box, originUm, limits)` → one or two `DrapeLayer {
+role: "near" | "far", view: ViewRect, needPxPerUm }`, priority order:
+
+- **Rectangle**: the footprint's bounding box in the camera's bearing
+  frame (`u` along screen-right at pitch 0, `v` along screen-up — the
+  frame `viewMatrix` turns by `rotationDeg`), grown by `DRAPE_MARGIN` =
+  5 % of its extent per side (small moves stay covered and bilinear
+  filtering has its neighbours at the edge), clipped to the box's extent
+  in that frame. The view's `rotationDeg` is the camera's `bearingDeg`.
+- **Density**: what the screen needs at the footprint's nearest point:
+  `need = focalPx / depth`, depth along the view direction of the
+  footprint's vertices placed at the target's z (`depth` is linear, so
+  its minimum is at a vertex). At pitch 0 every point is at the same
+  depth and `need = focalPx / distanceUm` — the 2D `pxPerUm`
+  (`distanceForPxPerUm`'s inverse).
+- **Cap** (decision 5): the density is lowered until the layer's sides
+  are at most `limits.maxSide` and its texels at most `limits.maxPixels`.
+  The rectangle's edges are snapped outward to the screen's pixel grid
+  at pitch 0 (`u = u_t + (k − width / 2) / ρ` about the target, k
+  whole), so at pitch 0 the texel centres fall on the pixel centres —
+  also where the field's edge clips the layer off the screen's centre
+  (review finding; H7 hands over on maps whose sheet passes the field).
+  A size loop under the texel allowance is bounded: snapping keeps at
+  least a texel a side.
+- **The 2D ↔ 3D hand-over**: at pitch 0 with the budget's room the one
+  layer *is* the 2D view, grown by the margin and snapped to its pixel
+  grid (centre within a texel, same `pxPerUm` and rotation), so the 3D frame over flat ground equals the 2D frame —
+  exactly on a GPU (max 1 level, north up), to the MSAA resolve's
+  rounding in SwiftShader (E2E). Turned, the texel grid is turned
+  against the pixels and the frame is a bilinear resample of the 2D one
+  (< 1 % of pixels, all on edges, differ by more than 2 levels).
+- **Split by need** (decision 3 as amended): with `dMin`, `dMax` the
+  footprint's smallest and largest depth, a footprint with `dMax / dMin
+  ≤ DRAPE_SPLIT_RATIO` = 2 (pitch 0, a slight tilt) is one layer at
+  `need`. A wider one is two: for split depths D in 12 geometric steps
+  between `dMin` and `dMax`, the near layer is the rectangle of the
+  footprint clipped to `depth ≤ D` (the depth is linear: one half-plane)
+  at `need`, the far layer the whole rectangle at `focalPx / D` — enough
+  for every point beyond D — and the D with the fewest texels is taken
+  (when it beats one layer). Over the cap both densities are scaled by
+  the same factor and each layer gets its share of the texels. Every
+  on-screen ground point is then drawn at least at the density it needs,
+  times that factor (tested on a grid of points); `needPxPerUm` is the
+  near layer's `need` and the far layer's `focalPx / D`, and a layer's
+  `ratio` in the stats is its density over that.
+
+`drapeTiles(view, tile)` partitions a layer's texels into views of at
+most `tile` per side: each is the layer's density and rotation, centred
+on its rectangle, so its pixels are the layer's pixels shifted by a
+whole number (tested: the partition, and every texel where the layer's
+matrix puts it).
+
+#### Rendering the drape (`renderer.ts`, H6)
+
+`renderer.renderDrape(slot, view, opts)` renders the visible set with
+`renderDocument` into drape slot `slot`'s texture, `view.widthPx ×
+view.heightPx` texels (made, or remade at a new size, as `RGBA8` with a
+full mip chain via `texStorage2D`; `LINEAR_MIPMAP_LINEAR`, anisotropy up
+to 8 with `EXT_texture_filter_anisotropic`):
+
+- tile by tile (`drapeTiles`, `DRAPE_TILE` = 1024): each tile is drawn
+  into one square target of `min(DRAPE_TILE, the layer's longer side)`
+  (remade when that changes) with 4× MSAA colour and
+  `DEPTH24_STENCIL8` (the loupe's recipe: pattern clips need the
+  stencil), resolved into that target's own texture with a blit of the
+  same rectangle (a multisampled blit cannot move pixels), then blitted
+  into its rectangle of the drape. A 4096² MSAA target would hold
+  ~512 MB; the tile target holds 36 MB (`drapeScratchBytes`);
+- then `generateMipmap`: far ground is minified several times at a tilt,
+  and a line map shimmers without mips.
+
+The screen-only rules (hairline floor, glyph and text skips, hatch tint)
+read the layer's `pxPerUm` — the drape is drawn as the 2D map at its
+density. `drape(slot)` is the texture, `releaseDrapes(from)` frees slots
+from `from` on (the tile target with the last), `drapeBytes` is the
+budget's count (`drapeTextureBytes`: 4 bytes per texel over the chain,
+≈ 4/3). `drawTerrain(frame, target)` draws the mesh under the GPU timer.
+
+#### Settling (`engine.ts`, H6)
+
+The drape is re-rendered **when the camera settles, or when what it
+shows changes** — never per camera frame:
+
+- `renderTerrain` keys the camera (target, distance, bearing, pitch,
+  field of view, size, exaggeration). A change restarts a
+  `DRAPE_SETTLE_MS` = 150 ms timer that calls `onChange` (the host draws
+  a frame: the camera has settled).
+- While the camera moves, the frame is the mesh alone over the drape
+  last rendered; ground it does not reach is the shaded background
+  (§5.6 "Drawing").
+- Once the camera has been still for 150 ms, the layers are re-selected
+  for the footprint; if any view differs, the drawn cells are the
+  layers' (below) and the drape is stale. The first 3D frame after a
+  field, a load or a 2D frame selects at once; a camera that sees none
+  of the mesh selects no layer once, not every frame.
+- Whatever makes the 2D visible set dirty — a course or edit reply, a
+  patch, `setHidden`, a filter — rebuilds it and makes the drape stale
+  at once, over the layers it has: a course drag does not wait for the
+  camera. `invalidateDrape()` is the host's (other colours, say).
+- **Detail arrivals** alone, while more of the layers' detail is still
+  pending, re-render the drape at most every `DRAPE_ARRIVAL_MS` = 500 ms,
+  or `DRAPE_ARRIVAL_FACTOR` = 4 × the last re-render's JS time where that
+  is longer (a club map's drape takes 100–300 ms); a held frame still
+  draws the mesh, and a timer calls `onChange` when the hold ends. The
+  arrival that completes the layers' detail re-renders at once.
+- A stale drape is rendered at the start of the frame, every layer, then
+  the mesh: **one frame = map-to-texture + mesh**.
+
+#### Budget (H6, decision 5)
+
+- The field's textures (`W · H · 5` bytes: R16I and RGB8_SNORM) and the
+  drape layers' (`drapeBytes`, mips included) join the engine's fixed
+  bytes, so the LRU evicts detail around them as it does around the
+  course part.
+- `drapeLimits()`: `maxSide = min(DRAPE_MAX_SIDE = 4096,
+  MAX_TEXTURE_SIZE)`, `maxPixels = budget · DRAPE_BUDGET_SHARE (⅓) /
+  DRAPE_TEXEL_BYTES (16 / 3)` — 1.97 M texels at an event map's 30 MB,
+  9.8 M at a club map's 150 MB.
+- Not counted: the tile target (as the canvas's own MSAA buffers and the
+  loupe's target are not) — reported in the stats.
+- A drape re-render is not a frame for 04 §9's "≤ 300 draws": its draws
+  and time are reported apart ("Measurements (H6)"); mesh frames are held
+  to the frame budget.
+
+#### Engine API (H6)
+
+```ts
+engine.setTerrain(field: HeightField | null): Promise<TerrainMesh | null>;
+engine.terrainMesh / engine.terrainField;           // for H7's pick and camera bounds
+engine.renderTerrain(frame: { camera; exaggeration; lodPx?; level?; lines?; pxRatio? }, opts: DocumentRenderOptions, target?): TerrainFrameStats;
+                                                    // lines: TerrainLine[] (H8, "Lines"), drawn after the mesh; stats.lines
+engine.invalidateDrape(): void;
+engine.drapeLimits(): { maxSide; maxPixels };
+engine.stats().terrain  // fieldBytes, drapeBytes, scratchBytes, layers (role, size, pxPerUm, ratio = density / need),
+                        // drapeRenders, lastDrapeMs / Draws / Tiles, the worker's prepareMs, uploadMs
+```
+
+- `setTerrain` posts the field to the worker (a copy of the grid; the
+  engine keeps the field for the pick, and `terrainField` turns to it
+  only with its mesh, so the pair always matches), uploads the reply in the
+  document's model space (the arenas' origin; a later `load` moves the
+  mesh with `setOrigin`) and resolves with the mesh; a later call
+  rejects one in flight; `null` drops the textures and the drape and
+  returns the drawn set to the 2D view.
+- **Cells for the drape**: `setView`'s selection takes several views
+  (`selectViews`): the drawn cells are the union of each layer's cells
+  with the draw margin, a layer's detail is drawn and requested only
+  above the zoom gate *at its own density* (with the draw margin as the
+  prefetch), and the LRU protects the detail drawn. A 2D view is the
+  one-view case, unchanged. `render` after a 3D frame re-selects the 2D
+  view; `renderTerrain` after a 2D frame re-selects the layers.
+- `whenComplete()` resolves once every layer's ungated detail is
+  resident; the next 3D frame then renders the complete drape.
+
+#### Worker (H6)
+
+`setField`'s CPU work moved to the map worker (§8's choice between the
+worker and GPU normals: `RGB8_SNORM` is not colour-renderable in WebGL2,
+and the chunk ranges are needed on the CPU anyway): the request
+`terrain { generation, header, z }` answers `terrain { generation,
+terrain: PreparedTerrain, normals, ms }` — `prepareTerrain(field)` (the
+no-data fill, the height range, the chunks' ranges: `buildTerrainMesh`
+without the origin) and `heightNormals(field, 1)`, both arrays
+transferred. It needs no loaded document. The main thread keeps the
+assembly (`assembleTerrainMesh`) and the two uploads (`uploadMs`).
+
+#### Dev page
+
+`/dev/map-terrain?field=cone|slope|noise[&n=<W>x<H>]&texture=checker|grey|white[&drape=half]&pitch=&bearing=&e=&lod=auto|0…6&zoom=&w=&h=&bg=<hex>[&bench=1]`
+(`pages/dev/MapTerrainPage.tsx`, routed only when `import.meta.env.DEV`)
+builds a synthetic field (`map-gl/terrain/synthetic.ts`: a 1 : 4 cone
+45 m high on flat ground with a no-data margin, a plane, seeded value
+noise tapered to 0 at the border), round-trips it through the `OXHF`
+codec, and draws it with a checker (`CHECKER`, 2 mm squares), flat grey
+or white drape over the field's paper extent (`drape=half`: its west
+half only, the rest in the background colour), the camera fitted to the
+field at `zoom` 1. The canvas (`data-testid="map-terrain-canvas"`,
+`preserveDrawingBuffer`) gets `data-ready`; a click picks and sets
+`data-pick`. `window.__mapTerrain` publishes the draw stats, `project(xMm,
+yMm)` (canvas px of the surface point) and `pick(px, py)` / `lastPick`.
+`bench=1` draws 60 frames, each synced by a one-pixel read, and reports
+the p50 / p95.
+
+`?doc=course[&field=cone|flat&x=&y=&budget=<MB>&worker=1][&line=x,y;x,y|…&lineColour=<hex>&lineOpacity=]` (H6,
+`pages/dev/terrainDoc.ts`) loads the course fixture document
+(`map-gl/fixtures/course-document.ts`: an aligned ISOM stack, a black
+line, a top-row line, the four-control course the dynamic-bucket tests
+use) into a real `MapGlEngine` with its course layer, sets a field over
+the 80 × 60 mm sheet and a 10 mm rim (`docField`: flat, or a 45 m cone
+of 22 mm radius at (35, 25) mm), and draws `renderTerrain` frames — the
+map and the course in the drape, then the mesh — redrawing on the
+engine's `onChange` (an animation frame, or a 50 ms timer where frames
+do not run). The camera looks at (`x`, `y`) mm, `zoom` 1 fitting the
+sheet. `window.__mapTerrainDoc` publishes the last frame, the engine's
+stats, `project`, `pick`, `setCamera(…)` and `compare2d()` (the same view
+drawn by `engine.render` and compared pixel by pixel). `line=` (H8)
+draws lines on the terrain through the frame's `lines` (§5.6 "Lines"):
+`|` between lines, `;` between points in paper mm, 8 px, `lineOpacity` (default 1),
+`lineColour` (default `e6194b`, published as `lineRgb`).
+
+`/dev/map-gl-doc?…&terrain=1[&pitch=60&e=2]` (H6): its "Bench" runs the
+3D scenarios on a loaded map instead of the 2D ones — "Measurements
+(H6)".
+
+#### Measurements (H5)
+
+A 4096 × 4096 field (the §4.0 cap) at 1920 × 1080, exaggeration 2
+(`mesh.test.ts`, snapshot):
+
+| Camera | Triangles | Chunks drawn / culled | Chunks per level 0–6 | Draws |
+|---|---|---|---|---|
+| overview, pitch 0, field fitted | 247 904 | 4096 / 0 | 0/0/0/0/3740/356/0 | 2 |
+| 60° tilt, 2× | 336 576 | 3063 / 1033 | 0/0/0/1098/1965/0/0 | 2 |
+| close-up, 45°, 4 px per cell | 324 352 | 63 / 4033 | 28/35/0/0/0/0/0 | 2 |
+
+The table is the unit test's sinusoid (pinned by its snapshot). The dev
+page's noise field at the same size and cameras: 98 304, 330 624 and
+346 624 triangles. CPU per frame, chunk selection on the 4096 chunks: 0.66 ms p50 / 1.0 ms p95
+(Node, laptop). `setField` on 16 M cells: the mesh (no-data fill, chunk
+ranges) 0.26 s; `heightNormals` 1.9 s — main-thread work H6 moves (§8).
+Headless Chromium draws in software (SwiftShader), 64–200 ms a frame
+here; GPU frame times are H6's, on the bench harness with the map
+texture.
+
+#### Measurements (H6)
+
+`scripts/measure-gl.mjs --terrain --modes=source` on the corpus through
+`/dev/map-gl-doc?terrain=1` (2026-11-14): headed Chromium on the laptop's
+iGPU (Intel ADL GT2, Mesa); desktop 1280 × 800 at DPR 1, and the phone
+profile 412 × 915 at DPR 2.625 with the main thread CPU-throttled 4×
+(the worker is not throttled; the GPU is the laptop's — a real phone is
+the H-gate's). The field is seeded noise over the map's bounds at 0.2 mm
+(the 4096-cell cap coarsens Club-full's to 0.23 mm), exaggeration 2,
+pitch 60. Each scenario is 240 frames orbiting 360°, holding still past
+`DRAPE_SETTLE_MS` every 60 frames: **orbit** at the fit view, **close**
+at 1× paper over the densest cell. Mesh frames and drape re-renders are
+reported apart (a re-render's wall time is synced by a one-pixel read).
+Club budget (150 MB; the drape's third is 50 MB).
+
+The field (once per map): the worker's preparation (fill + normals) and
+the main thread's upload.
+
+| Map | Field | Textures | Worker fill + normals | Upload, desktop / phone |
+|---|---|---|---|---|
+| Sprint | 2127 × 1946 | 19.7 MB | 57 + 224 ms | 21 / 43 ms |
+| Crop-B | 756 × 703 | 2.5 MB | 12 + 26 ms | 5 / 8 ms |
+| Club-2026 | 1642 × 2196 | 17.2 MB | 48 + 192 ms | 8 / 16 ms |
+| Club-full | 4096 × 2153 | 42.1 MB | 95 + 451 ms | 23 / 92 ms |
+
+Mesh frames (p50 / p95 ms) and drape re-renders:
+
+| Map, scenario | Mesh CPU desktop / phone | Mesh GPU desktop / phone | Draws | Re-renders | Re-render wall p50 / max, desktop / phone | Layers (desktop / phone) | Drape MB d / p | Resident max MB d / p |
+|---|---|---|---|---|---|---|---|---|
+| Sprint orbit | 0.8/1.5 · 1.0/1.9 | 1.9/2.5 · 2.8/3.7 | 2 | 4 | 40/56 · 44/78 | far / far | 5.8 / 7.0 | 33 / 34 |
+| Sprint close | 0.9/1.6 · 1.5/2.2 | 2.3/3.4 · 4.0/8.1 | 3 | 3 | 66/77 · 75/78 | near + far / near + far | 14.5 / 48.1 | 47 / 77 |
+| Crop-B orbit | 0.5/0.9 · 0.8/1.3 | 1.9/2.2 · 2.5/3.4 | 2 | 4 | 17/22 · 19/31 | far / far | 5.6 / 7.1 | 15 / 16 |
+| Crop-B close | 0.4/0.6 · 0.6/1.0 | 1.0/1.2 · 4.1/5.3 | 2 | 3 | 11/14 · 23/25 | far / far | 2.6 / 16.4 | 15 / 26 |
+| Club-2026 orbit | 0.6/0.9 · 1.2/1.9 | 1.4/3.0 · 2.6/4.5 | 2 | 4 | 43/43 · 57/66 | far / far | 3.1 / 10.0 | 56 / 64 |
+| Club-2026 close | 0.8/1.4 · 1.4/2.1 | 2.2/3.7 · 2.9/6.3 | 3 | 3 | 75/131 · 93/105 | near + far / near + far | 11.7 / 37.5 | 65 / 94 |
+| Club-full orbit | 1.2/1.8 · 1.6/2.5 | 1.9/3.8 · 1.4/2.8 | 2 | 4 | 107/158 · 69/108 | near + far / far | 8.1 / 4.1 | 125 / 121 |
+| Club-full close | 1.5/2.4 · 2.4/3.3 | 3.1/4.9 · 2.9/6.6 | 3 | 62 / 63 | 193/225 · 299/336 | near + far @100 % / @86 % | 31.4 / 50.0 | **156 / 155** |
+
+- **Mesh frames are inside 04 §9** everywhere: CPU ≤ 3.3 ms p95, GPU
+  ≤ 8.1 ms p95 (the phone profile's Sprint close-up, 437 k triangles at
+  2.6 M pixels), ≤ 3 draws, and frame p95 ≤ 17.4 ms — 60 fps — on every
+  run but Club-full's close-up.
+- **A drape re-render is a hitch** of 11–131 ms on desktop and 19–105 ms
+  on the phone profile for the event maps and Club-2026 (6–12 tiles,
+  50–840 draws), once per settle. It is not a frame for the ≤ 300 draws
+  rule ("Budget").
+- **Club-full's close-up streams the whole map**: tilted at 1× paper the
+  camera sees the map to the horizon; split by need, the far layer is at
+  0.3–0.5× paper, above the zoom gate, so the whole map's detail is
+  requested. While it streams, arrivals re-render the drape
+  (`DRAPE_ARRIVAL_MS`, 62–63 times in the run, 193–336 ms each), the frame
+  p95 is 259 ms (desktop) / 488 ms (phone), and residency peaks at
+  155–156 MB against 150 (the field's 42 MB and the drape's 31–50 MB are
+  fixed bytes; drawn detail is protected; the engine reports over budget).
+  Before the split (decision 3 as first decided) it was 120 re-renders,
+  280 ms p95 and 166 MB, with one 3874 × 2536 layer. §8 has the remedy.
+- The phone profile's close-ups take more texels (2.6 M canvas pixels):
+  Club-full's is capped at 86 % of its need.
+- The tile target is 36 MB (19 MB for Crop-B's single 692-texel tile
+  side), not in the budget.
+
+#### Tests
+
+| Test | Covers |
+|---|---|
+| `packages/shared/src/terrain/field/__tests__/read.test.ts` | the client entry reaches no derivation module; the read side exported |
+| `map-gl/terrain/__tests__/camera.test.ts` | `mat4` (multiply, invert, perspective depth and field of view); the target → clip origin at any bearing and pitch; one `Float32Array(16)`; pitch 0 = `viewMatrix` with `rotationDeg = bearingDeg` to 1e-6; a raised point projected higher and depth monotone in distance at pitch > 0; bearing 90 looks east; near / far enclose the bounds within 10⁴, near with 20 % headroom in front of them (H8); sub-pixel precision 585 mm from the origin in float32 arithmetic; `screenRay` inverts the projection |
+| `map-gl/terrain/__tests__/mesh.test.ts` | chunk geometry: 65² + 256 vertices, every quad covered exactly once at every level, counter-clockwise, index counts, 4 · 64 / 2^l skirt quads; `meshHeights` fills from the nearest data cell without changing the field, all no-data flat at 0; vertex placement in origin-relative µm and `zUnitUm`; a partial edge chunk clamped; `chunkLevel` (0 at the eye, monotone, capped, quad edge ≤ lodPx); culling and a straddling chunk kept, the same levels at another bearing, mixed levels when tilted; skirts close every crack between any two levels on a noise field; the 4096² budget (≤ 600 000 triangles, the numbers above as a snapshot) |
+| `map-gl/terrain/__tests__/pick.test.ts` | the analytic cone met within half a cell at pitch 0, 60 (exaggeration 1, 3) and grazing; surface point → project → `screenRay` → pick within half a cell; `heightM` = `sampleHeight` within one unit at two exaggerations; `data` false on the margin; misses |
+| `map-gl/terrain/__tests__/lines.test.ts` (H8) | `liftPolyline`: origin removed, height units above `zMin`; densified to the cell with the original points kept; every vertex on the drawn surface and `sampleHeight` within one unit; a chord across the cone's apex goes over it; the filled height on the no-data margin; broken off the mesh, single points and empty input dropped, a repeated fix skipped; another `surface` sampled (H11's seam). `lineInstances`: one instance per segment, one range per line, none across a gap, the step doubled to fit `MAX_LINE_SEGMENTS`. `lineVertex`: tilted (45°–70°, three exaggerations) the vertex projects its half width + ½ px (plus the lift) above its ground point and in front of it; the bias moves it along its ray only; looking straight down it is on its ground point under the eye and the rise capped |
+| `map-gl/terrain/__tests__/shade.test.ts` | flat = 1; sin θ + cos θ facing the light, cos θ − sin θ away, cos θ across; the clamps; exaggeration in the shader = `heightNormals(field, e)`; the colour product; the GLSL's constants |
+| `map-gl/terrain/__tests__/footprint.test.ts` (H6) | footprint → view: the screen rectangle at pitch 0, the analytic trapezoid tilted, every on-screen surface point of 40 random cameras inside the footprint and a layer, the box clip, empty when looking away; the pitch-0 layer is the 2D view grown by the margin (same pixel offsets, screen parity) at any bearing; limits never exceeded over 60 random cameras; split by need on a wide depth range — each layer at its need when the cap allows, the far one at the split depth's, fewer texels than one layer, the near one inside the far one and over the ground beyond the screen's bottom edge, every on-screen ground point at least at its need; both scaled together under the cap; one layer on a narrow depth range and at pitch 0 when capped; a tiny texel allowance terminates; at pitch 0 the texels lie on the pixels even where the screen crosses the field's edge; tiles partition the layer and draw every texel where its matrix puts it |
+| `map-gl/__tests__/worker-terrain.test.ts` (H6) | the `terrain` request's prepared mesh and normals equal `buildTerrainMesh` and `heightNormals` on a cone and a noise field, without a document; the two arrays transferred; an error names its generation |
+| `map-gl/__tests__/engine.test.ts` "terrain" (H6) | the field prepared in the worker and uploaded at the document's origin; drape before mesh, the layer's matrix = `viewMatrix` of its view, the hand-over view at pitch 0; mesh only while the camera moves, the settle timer's `onChange`, one re-render after it and none for the same camera; a content change and `invalidateDrape` re-render at once over the same layers; the layers' cells requested and drawn, detail arrivals re-render, gated per layer; the field and drape in `residentBytes`, the drape ≤ ⅓ of a small budget; `setTerrain(null)` drops both; a 2D render after a 3D frame draws the 2D view's cells; a superseded `setTerrain` rejects; arrivals held to `DRAPE_ARRIVAL_MS` and the last at once; a near layer above the gate and a far one below (detail drawn and requested for the near one's cells only, `whenComplete` on them); a load moves the mesh to the new origin and re-selects; a worker failure rejects and keeps the field and mesh; `dispose` rejects a request in flight; a camera that sees no mesh renders no drape |
+| `e2e/map-terrain.spec.ts` | on the dev page in headless Chromium: the lit cone top-down with a grey drape — facing flank, far flank and flat ground at §5.6's analytic values ± 10 levels, ≤ 7 draws; the checker at pitch 60 — two adjacent squares on flat ground in their own colours, the apex projected above its foot; a south-flank point at pitch 60 at its slope's shade for e = 2 and e = 1 (the mesh lifted by the R16I heights and the exaggeration applied in the shader — a flat mesh or an ignored e would show another value); with `drape=half`, the background colour beyond the drape, flat at full strength and on the far flank shaded; no background pixel inside the noise field's projected outline at mixed levels, and auto LOD within 2 % of level 0; a click picks the point under the cursor within 0.2 mm. H6 (`doc=course`): at pitch 0 over flat ground the 3D frame equals `engine.render`'s 2D frame (north up: max 10 levels, < 0.5 % over 2 — SwiftShader's MSAA resolve; turned 25°: < 1 % over 2); tilted 60° over the cone, the leg 31–32 purple on the flank, the map's black line, paper white on the south flank at §5.6's shade for its slope, ≤ 7 draws; moved to control 32 the old drape does not reach (no purple — the frame read in the same task as the move, H8: a second round trip outlasted the 150 ms settle on CI) and no re-render happens until the camera settles, then the course is there; close and tilted, a near layer and a coarser far one (> 1.5×), each at its need, the course from the near one, texels within a third of the budget, and a 2 MB budget's third respected |
+| `e2e/map-terrain.spec.ts` "lines on the terrain" (H8) | `doc=course&field=cone&line=…`: two opaque 8 px lines across the cone, 8 mm south and north of the apex. From above both are drawn; ≤ 7 mesh draws, 2 lines in 4 draws. 20° above the horizon at 5× the near one is drawn on its flank and the far one is hidden — no line colour where it would be, and the pick there meets the cone in front of it; at 1× the far flank faces the camera and the same line is drawn to its full width (≥ 6 of the 8 px rows in the column through it: the shader's half-width rise — centred on the ground line the terrain would swallow half). An X at half opacity on the flat field, from above: at the crossing and on a single stretch the colour is one blend of the line over the frame without it (± 8 levels; twice would be three quarters) — and on flat ground at the box's top, so it is in front of the near plane (`NEAR_HEADROOM`) |
+| `e2e/map-gl-doc.spec.ts` "terrain=1" (H6) | the 3D bench on `e2e/test.ocd` at the event budget: the field prepared in the worker, 240 frames per scenario, drape re-renders only at the start and after the pauses, ≤ 7 mesh draws, drape ≤ 10 MB |
 
 ### 5.3 PDF (shared/print)
 
@@ -2597,17 +3829,22 @@ what became of it:
 | `packages/web/src/map-gl/buckets.ts` | cells, large bucket, per-part preparation and range table, visible set, clip groups, zoom gate, LRU |
 | `packages/web/src/map-gl/arena.ts` | vertex arenas: free list, growth by copy |
 | `packages/web/src/map-gl/worker.ts`, `worker-entry.ts` | the worker's message handler and its binding |
-| `packages/web/src/map-gl/engine.ts` | main-thread controller: worker transport, residency, visible-set rebuilds, the one course request in flight (F20) |
+| `packages/web/src/map-gl/engine.ts` | main-thread controller: worker transport, residency, visible-set rebuilds, the one course request in flight (F20), the document hit-test and the edit part (G5), the 3D frame (H6: `setTerrain`, `renderTerrain`, settling, the drape's budget) |
+| `packages/shared/src/render/hit-test.ts` | `hitTest`, `hitTestStreams` on the symbolised shape (§5.5) |
 | `packages/web/src/map-gl/view.ts` | the arena path's model → clip matrix, `RenderTarget`, `loupeView` |
-| `packages/web/src/map-gl/renderer.ts` | WebGL2 backend, GPU stage (arena programs and draw loop; per-pass path, stencil, supersampling; the loupe's inset target and circle composite; GPU timer) |
+| `packages/web/src/map-gl/renderer.ts` | WebGL2 backend, GPU stage (arena programs and draw loop; per-pass path, stencil, supersampling; the loupe's inset target and circle composite; the drape's tiled render target and textures and the terrain program on its context, H6; GPU timer) |
 | `packages/web/src/pages/dev/MapGlFixturePage.tsx` | dev-only golden page `/dev/map-gl` |
 | `packages/web/src/pages/dev/MapGlDocPage.tsx` | dev-only whole-document page `/dev/map-gl-doc` (load report, bench) |
+| `packages/web/src/map-gl/terrain/` | the terrain (§5.6): `camera.ts` + `mat4.ts` (perspective orbit camera, rays), `mesh.ts` (chunked grid, levels, skirts, culling, no-data fill; `prepareTerrain` for the worker), `pick.ts`, `shade.ts`, `program.ts` (`TerrainRenderer`, one or two drapes), `footprint.ts` (H6: footprint, drape layers, tiles), `lines.ts` (H8: tracks lifted onto the surface, `TerrainLines`), `synthetic.ts` (dev, bench and test fields) |
+| `packages/web/src/map-gl/fixtures/course-document.ts` | the small aligned ISOM document and course request the dynamic-bucket tests and the terrain dev page share |
+| `packages/web/src/pages/dev/MapTerrainPage.tsx`, `pages/dev/terrainDoc.ts`, `e2e/map-terrain.spec.ts` | dev-only terrain page `/dev/map-terrain` (synthetic fields; `doc=course`: the course fixture draped through the engine; `line=`: lines on the terrain, H8) and its browser test |
 | `e2e/__golden__/map-gl/`, `e2e/map-gl-golden.spec.ts` | committed goldens and the browser comparison |
 | `e2e/map-gl-doc.spec.ts` | whole-document pipeline on `e2e/test.ocd`: arena path, worker, eviction, arena = per-pass path |
-| `scripts/measure-gl.mjs` | corpus measurements through `/dev/map-gl-doc` (§5.2 Measurements) |
-| `packages/web/src/components/VectorMapLayer.tsx` | the vector base layer in `MapViewer` (§5.4): canvas, engine and worker lifecycle, status; the course layer request and its replies; the editor's loupe |
+| `scripts/measure-gl.mjs` | corpus measurements through `/dev/map-gl-doc` (§5.2 Measurements; `--terrain`: §5.6 "Measurements (H6)") |
+| `packages/web/src/components/VectorMapLayer.tsx` | the vector base layer in `MapViewer` (§5.4): canvas, engine and worker lifecycle, status; the course layer request and its replies; the editor's loupe; Map mode's document objects (`mapObjects`, G5); the 3D frame (`heightField`, `terrain`, H7; `terrainLines`, H8) |
 | `packages/web/src/lib/course-layer-request.ts` | the viewer's course-layer input (§5.4 "Overlay", `course-layer.md` §5) |
-| `packages/web/src/components/MapViewer.tsx` | the host: viewport state, gestures, the SVG UI layer, editor hit-testing |
+| `packages/web/src/components/MapViewer.tsx` | the host: viewport state, gestures, the SVG UI layer, editor hit-testing; the 3D mode's state and the projected UI layer (H7) |
+| `packages/web/src/components/Map3d.tsx`, `lib/map-3d.ts`, `lib/map-3d-field.ts`, `hooks/useHeightField.ts` | the 3D mode (§5.4 "3D mode", H7): toggle, exaggeration, notice and pointer surface; offer, camera, projector and gesture reducer; the field padded and coarsened; the field's loader. H11: the surface choice and the DEM attribution (`Map3d.tsx`), `terrain3dSurfaces` / `defaultSurface` / `fieldAttribution` (`lib/map-3d.ts`), three fields in memory |
 | `packages/web/src/lib/map-viewport.ts` | the paper viewport model (§5.4 "Viewport"), `glView` |
 | `packages/web/src/lib/vector-map.ts` | paper frame, bounds, colours, proxy colours, budget from a document header |
 | `packages/web/src/lib/map-document-cache.ts`, `map-fonts.ts` | document, font and text atlas loading for the viewer (`docs/map-storage.md` §7.1) |
@@ -2652,17 +3889,42 @@ The shared module is exported as a namespace: `import { render } from
 - **§5.2 bucket preparation on dense cells.** p95 over the 04 §9 budget
   on club-density cells (measurements); the shared flattening and earcut
   dominate what is left.
-- **§5.2 object identity across the bridge.** The range table keys on
-  the stream's `objectIdx` — an index into the bridge's filtered object
-  list; hiding a *document* object needs the bridge to expose that
-  mapping. The viewer (B4) hides nothing; the first consumer is the
-  editor's hide / replace (slice D).
-- **§5.5 highlight through the dynamic bucket.** Hit-testing landed in
-  D4 (§5.5); the selection is still marked by the SVG ring. 04 §7's
-  highlight — the selected object's passes redrawn in a highlight colour
-  in the dynamic bucket — and hiding an edited document object are still
-  open: D5 kept its selection, multi-selection and object outlines in the
-  UI layer (`map-gl` was outside its area); Map mode (slice G) needs both.
+- **§5.2 the patch's large-bucket cost** (G4). A changed object that
+  lands in the large bucket — larger than two cells, or centred outside
+  the load's grid — re-prepares the whole large bucket. Its time on
+  Club-full is not measured; if it is over the 04 §9 budget, such objects
+  get a bucket of their own.
+- **§5.5 the snap and pick indices per patch version** (G4). A new patch
+  version decodes the document again and rebuilds the index on the main
+  thread (once per hash before G4). Map mode (G6) writes a version per
+  gesture; its own model keeps the decoded document per hash
+  (`modes/map/model.ts`), the snap and pick indices still decode per
+  version (a shared main-thread copy is a follow-up, `course-editor.md`
+  Pending). The worker's `sourceIndex` map is built on the first patch.
+- **§5.5 patch symbols in the eyedropper** (G4; decided overnight on the
+  user's standing instruction, 2026-11-13, for review). An object drawn with a
+  patch symbol is not picked by symbol: a filter region stores document
+  symbol indices and a patch symbol's index `S + k` moves when another
+  patch symbol is added. Needs a stable symbol key in the region props
+  (a `course_objects` change); regions by `all` or by colour act on such
+  objects already. No patch symbol exists before G8 / G9.
+- **§5.5 document objects: cost on a club map** (G5). A `hit` tests the
+  passes of nine cells and the large bucket, an `edit` with a draft runs
+  one `applyPatch` of patch + draft (linear in the document, as a patch
+  change) and symbolises the draft's targets — not 04 §7's "< 1 ms" for a
+  single object. Neither is measured on Club-full; Map mode's drags (G6,
+  G7) will say whether a draft needs the targets alone re-applied.
+- **§5.5 an object under edit and the hidden set** (G5). A draft's copy
+  is drawn under an edit-part id, so `setHidden` and a filter region's
+  `hide` or mask, which address the object's static id, leave it drawn
+  and unmasked while it is edited. Map mode (G6) does not turn the course
+  overprint or filter regions off for a move (its `H` is the user's), so
+  a moved object under a filter region's mask is drawn unmasked while it
+  is dragged and until the write is drawn; if that matters, the worker maps
+  the edit part's ids back to their targets for the visible set.
+- **§5.5 course objects in the edit part.** The highlight is of document
+  objects; the course editor's selection rings and object outlines stay
+  in the UI layer (`course-editor.md` Pending).
 - **§5.2 dynamic bucket: main-thread symbolisation.** A drag re-derives
   the layer in the worker (one request in flight, the latest input next —
   F20). If D's
@@ -2710,11 +3972,74 @@ The shared module is exported as a namespace: `import { render } from
   the arena = per-pass pixel comparison relies on both paths using MSAA
   alone; the B-gate's parity check against tiles (§6.4) is where it is
   judged.
-- **§5.2 perspective cameras** (terrain draping, research topic 10):
-  the projection is already one matrix and the target any framebuffer;
-  still needed are cell selection from the camera's footprint instead of
-  the `View` rectangle, and a per-vertex screen density for the
-  screen-only rules instead of the one `pxPerUm`.
+- **§5.2 perspective cameras — the vectors themselves** (research topic
+  10 §5's alternative): H6 drapes orthographic textures (§5.6 "Drape
+  layers"), so cell selection already follows the camera's footprint.
+  Drawing the vectors through the perspective matrix would still need a
+  per-vertex screen density for the screen-only rules instead of the one
+  `pxPerUm`; nothing plans it.
+- **§5.6 a drape re-render is one hitch** (H6): every layer is rendered
+  in the frame the camera settles in (tiles, mips) — "Measurements (H6)"
+  has its time per map. Spreading the tiles over frames, or keeping the
+  old drape until the new one is complete, is the remedy if the H-gate's
+  phone shows the hitch.
+- **§5.6 Club-full tilted close up** (H6, "Measurements (H6)"): the far
+  layer sees the whole map above the zoom gate, so its detail streams for
+  seconds while arrivals re-render the drape (frame p95 259 / 488 ms,
+  desktop / phone profile) and residency passes the club budget by
+  ~6 MB. Remedies, none built: a drape-only zoom gate higher than 2D's
+  for the far layer, rendering a re-render's tiles over several frames,
+  or keeping the far layer's detail out of the protected set.
+- **§5.6 the tile target is outside the budget** (H6): 36 MB while a drape
+  exists (4× MSAA colour + depth/stencil at 1024², and its resolve
+  texture), freed with the last drape; like the canvas's own MSAA
+  buffers and the loupe's target it is not counted.
+- **§5.6 `heightNormals` in the worker** (H6): the field's preparation is
+  off the main thread now, but still 0.2–0.6 s of worker time on a
+  corpus map ("Measurements (H6)"), during which the worker prepares no
+  cells.
+- **§5.4 3D mode — replay on the terrain** (H8, answer 2026-11-15): no
+  replay view exists in the web app (`tracks.getClassRoutes` has no
+  caller), so H8 draws `gpsRoutes` only. A replay's tails would be
+  `TerrainLine`s through the same `terrainLines` prop (§5.6 "Lines"),
+  re-cut per time step.
+- **§5.4 3D mode — blending the two surfaces** (research 10 §3, later):
+  the viewer draws one field, the map's terrain or ground; a blend (the
+  map's micro-relief on the DEM's absolute ground) is not built.
+- **§5.4 3D mode — a DEM that finishes during a session** (H11): the
+  descriptor is read once per mount (`course.mapMetadata`, `staleTime:
+  Infinity`), so ground offered by a job that ends while the viewer is
+  open appears at the next read (a reload, an event switch). A pending
+  DEM's ground is asked for once on entering 3D, which only queues the
+  job.
+- **§5.4 3D mode — fitted fields in memory** (H11): a viewer keeps up
+  to three fitted fields (each up to a third of the map budget) beside
+  the three decoded ones, evicted in insertion order; a phone switching
+  surfaces on a club map holds two of them at once. Unmeasured on the
+  S1 phone.
+- **§5.4 3D mode — the review's 3D line and the DEM** (H11): the import
+  review's terrain line (`MapReviewPage`) still says "3D needs 80 %" from
+  the plain field; with an anchored field over the gate, or ground
+  (decisions 4 and 6), the viewer offers 3D the line does not mention.
+- **§5.4 3D mode — UI markers behind the terrain**: no occlusion test; a
+  ring or the GPS dot behind a hill is drawn over it. A depth read-back
+  or a CPU line-of-sight per marker (`pickTerrain` from the eye) would
+  hide it.
+- **§5.4 3D mode — camera animation**: entering and leaving 3D, and the
+  compass's north-up, jump; a short tween of pitch and bearing is not
+  built.
+- **§5.4 3D mode — the field's fitting on the main thread**: padding and
+  coarsening a field (`viewerField`) runs in the page, once per field; a
+  club field near the 60 M-cell cap is tens of millions of cells and may
+  be a hitch of its own on entering 3D. Not measured on the corpus;
+  moving it to the map worker beside `prepareTerrain` is the remedy.
+- **§5.4 3D mode — measuring in 3D**: the measure tool is 2D-only (hidden
+  in 3D); plan distances through `unproject` would serve it.
+- **§5.6 level-of-detail popping.** A chunk changes level in one frame
+  (no geomorphing), and coarse levels point-sample the heights at their
+  vertices rather than filtering them; with the normal map carrying the
+  light, neither showed on the dev page's noise field (auto LOD within
+  2 % of full detail), but a real field under a moving camera may.
 - **§5.2 zoom-banded flattening tolerance** (S1 §4.1): not built; strips
   and the gate meet the memory budgets without it.
 - **§5.2 earcut deviation check** (04 §6.1): polygons earcut gets wrong

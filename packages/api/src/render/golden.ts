@@ -46,7 +46,7 @@ export async function renderGoldenPng(name: render.GoldenSceneName): Promise<Buf
 /** `e2e/__golden__/library/` — one directory of swatches per library, plus `<libraryId>.md`. */
 export const libraryGoldenDir = new URL("../../../../e2e/__golden__/library/", import.meta.url);
 
-export const LIBRARY_GOLDEN_IDS: readonly symbolLibrary.SymbolLibraryId[] = ["ISOM2017-2", "ISSprOM2019-2"];
+export const LIBRARY_GOLDEN_IDS: readonly symbolLibrary.SymbolLibraryId[] = ["ISOM2017-2", "ISSprOM2019-2", "ISSkiOM2019"];
 
 /** `302.b.png` for `ISOM2017-2:302.b`: the entry id after the library prefix. */
 export function libraryGoldenFile(entry: Pick<symbolLibrary.LibraryEntry, "id">): string {
@@ -87,7 +87,7 @@ export function librarySheetMarkdown(id: symbolLibrary.SymbolLibraryId): string 
     "",
     `${library.entries.length} entries, ${library.revision}, library version ${symbolLibrary.SYMBOL_LIBRARY_VERSION}. Swatches at ${render.SWATCH.pxPerMm} px/mm; points drawn ×${render.SWATCH.pointScale}.`,
     "",
-    `Svenska: ${symbolLibrary.symbolLibraryNameSources[id].sv}. Aliases: ${symbolLibrary.symbolLibraryNameSources[id].aliases ?? "none yet"}.`,
+    `Svenska: ${symbolLibrary.symbolLibraryNameSources[id].sv ?? "none found"}. Aliases: ${symbolLibrary.symbolLibraryNameSources[id].aliases ?? "none yet"}.`,
     "",
     "| Swatch | Entry | Type | English | Svenska | Aliases |",
     "|---|---|---|---|---|---|",

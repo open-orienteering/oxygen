@@ -17,8 +17,23 @@ describe("BACKUP_TABLES", () => {
     expect(BACKUP_TABLES[0]).toBe("events");
   });
 
-  it("does not carry previews (a cache) or the global tile cache", () => {
+  it("puts the map patch directly after map_files (its document is restored before it)", () => {
+    const i = (t: string) => BACKUP_TABLES.indexOf(t as (typeof BACKUP_TABLES)[number]);
+    expect(i("map_patches")).toBe(i("map_files") + 1);
+  });
+
+  it("carries the GPS tracks after the map patch, filtered by event (map-gps-tracks.md §1.3)", () => {
+    const i = (t: string) => BACKUP_TABLES.indexOf(t as (typeof BACKUP_TABLES)[number]);
+    expect(i("map_gps_tracks")).toBe(i("map_patches") + 1);
+    expect(buildBackupScript(42n)).toContain("\\copy (SELECT * FROM oxygen.map_gps_tracks WHERE event_id = 42) TO STDOUT");
+  });
+
+  it("does not carry previews or height fields (caches) or the global tile cache", () => {
     expect(BACKUP_TABLES).not.toContain("map_previews");
+    // The height field is cache too: a restore derives its own (map-storage.md §4.7).
+    expect(BACKUP_TABLES).not.toContain("map_heightfields");
+    // So is the DEM job's state: a restore fetches its own (map-storage.md §4.7).
+    expect(BACKUP_TABLES).not.toContain("map_dem_jobs");
     expect(BACKUP_TABLES).not.toContain("map_tiles");
     // Dropped with the raster pipeline (E5).
     expect(BACKUP_TABLES).not.toContain("rendered_maps");
@@ -38,11 +53,14 @@ describe("buildBackupScript", () => {
     const line = script.split("\n").find((l) => l.includes("FROM oxygen.map_sources"))!;
     expect(line).toContain("f.source_hash FROM oxygen.map_files f WHERE f.event_id = 42");
     expect(line).toContain("d.source_hash FROM oxygen.map_documents d JOIN oxygen.map_files f ON f.document_hash = d.hash WHERE f.event_id = 42");
+    expect(line).toContain("d.source_hash FROM oxygen.map_documents d JOIN oxygen.map_patches p ON p.document_hash = d.hash WHERE p.event_id = 42");
   });
 
   it("filters map_documents to the event's document pins", () => {
     const line = script.split("\n").find((l) => l.includes("FROM oxygen.map_documents s"))!;
     expect(line).toContain("f.document_hash FROM oxygen.map_files f WHERE f.event_id = 42");
+    // A dormant patch's document (docs/map-patches.md §3.5).
+    expect(line).toContain("p.document_hash FROM oxygen.map_patches p WHERE p.event_id = 42");
   });
 
   it("carries the club's symbol decisions whole (instance-global)", () => {
@@ -52,6 +70,7 @@ describe("buildBackupScript", () => {
   it("keeps the event-scoped filters", () => {
     expect(script).toContain("SELECT * FROM oxygen.events WHERE id = 42");
     expect(script).toContain("SELECT * FROM oxygen.map_files WHERE event_id = 42");
+    expect(script).toContain("SELECT * FROM oxygen.map_patches WHERE event_id = 42");
     expect(script).toContain("JOIN oxygen.courses c ON c.id = cc.course_id WHERE c.event_id = 42");
   });
 

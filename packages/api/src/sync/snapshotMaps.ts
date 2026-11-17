@@ -7,11 +7,15 @@
  * 4 MiB slices through `lease.exportBlob` and checks size and SHA-256
  * before inserting: sources reach tens of MB, above Cloud Run's 32 MiB
  * response ceiling, so the bytes cannot ride inside the one JSON body.
+ *
+ * The event's map patch (docs/map-patches.md §3.4) rides here too, as
+ * `patch`: it is inserted after the documents its `RESTRICT` FK needs.
  */
 
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
+import { mapDocument } from "@oxygen/shared";
 import { Prisma, type PrismaClient } from "../generated/prisma/client.js";
 import { getBlob, getBlobSize, type BlobTable } from "../map-store/blob-store.js";
 import { SOURCE_SLICE_BYTES, sliceRanges } from "../map-store/source-routes.js";
@@ -22,12 +26,29 @@ type Db = PrismaClient | Prisma.TransactionClient;
 /** Largest slice `lease.exportBlob` returns: the source route's slice. */
 export const EXPORT_BLOB_MAX_BYTES = SOURCE_SLICE_BYTES;
 
-export const exportBlobInput = z.object({
-  table: z.enum(["map_sources", "map_documents"]),
-  hash: z.string().regex(/^[0-9a-f]{64}$/),
+const sliceBounds = {
   start: z.number().int().min(0),
   length: z.number().int().min(1).max(EXPORT_BLOB_MAX_BYTES),
+};
+
+/** A map blob by its content address. */
+export const mapBlobInput = z.object({
+  table: z.enum(["map_sources", "map_documents"]),
+  hash: z.string().regex(/^[0-9a-f]{64}$/),
+  ...sliceBounds,
 });
+export type MapBlobInput = z.infer<typeof mapBlobInput>;
+
+/** A `graphics` row by its id, decimal (ids travel verbatim, docs/map-storage.md §7.2). */
+export const graphicBlobInput = z.object({
+  table: z.literal("graphics"),
+  id: z.string().regex(/^[1-9][0-9]{0,17}$/),
+  ...sliceBounds,
+});
+export type GraphicBlobInput = z.infer<typeof graphicBlobInput>;
+
+/** `lease.exportBlob`'s input: a map blob by hash, or a graphic by id. */
+export const exportBlobInput = z.union([mapBlobInput, graphicBlobInput]);
 export type ExportBlobInput = z.infer<typeof exportBlobInput>;
 
 export interface ExportBlobResult {
@@ -52,6 +73,14 @@ export interface SnapshotMapDocument {
   sourceHash: string;
   header: unknown;
   report: unknown;
+  /** The version patch the document was baked with (docs/map-patches.md §5); absent = none, and from an older peer. */
+  patch?: unknown;
+}
+
+/** The `map_documents.patch` column of a snapshot document: only a non-empty, parseable version patch (§5). */
+export function snapshotDocumentPatch(patch: unknown): { patch?: Prisma.InputJsonArray } {
+  const layers = mapDocument.parseVersionPatch(patch);
+  return layers.length ? { patch: layers as unknown as Prisma.InputJsonArray } : {};
 }
 
 export interface SnapshotDecision {
@@ -75,9 +104,36 @@ export interface SnapshotMaps {
   skipped: number;
   /** The whole `club_symbol_decisions` table (club-level, map-symbols.md §8.5). */
   decisions?: SnapshotDecision[];
+  /**
+   * The event's `map_patches` row (docs/map-patches.md §3.4), when its
+   * document is among `documents`. Absent from an exporter that predates
+   * it, and for an event without a patch or with a dormant one.
+   */
+  patch?: SnapshotMapPatch;
+}
+
+/** A `map_patches` row on the wire: the token as a decimal string (an HLC exceeds 2^53; the snapshot is JSON). */
+export interface SnapshotMapPatch {
+  id: string;
+  documentHash: string;
+  enabled: boolean;
+  ops: unknown;
+  symbols: unknown;
+  /** Unresolved entries (docs/map-patches.md §4.1, G11); absent from an exporter that predates it = none. */
+  unresolved?: unknown;
+  version: string;
 }
 
 // ---- pure helpers -----------------------------------------------------------
+
+/** The patch row as the snapshot carries it: only when its document travels too (its FK target on the box). */
+export function snapshotPatchOf(
+  row: { id: string; documentHash: string; enabled: boolean; ops: unknown; symbols: unknown; unresolved: unknown; version: bigint } | null,
+  documentHashes: readonly string[],
+): SnapshotMapPatch | null {
+  if (!row || !documentHashes.includes(row.documentHash)) return null;
+  return { id: row.id, documentHash: row.documentHash, enabled: row.enabled, ops: row.ops, symbols: row.symbols, unresolved: row.unresolved, version: row.version.toString() };
+}
 
 /** Sorted, distinct hashes the event's pins reference, each document's own source included. */
 export function pinnedHashes(
@@ -150,9 +206,55 @@ export async function fetchBlob(table: BlobTable, hash: string, sizeBytes: numbe
   return whole;
 }
 
+/** A JSON null arrives as null; Prisma wants the DbNull sentinel for a nullable Json column. */
+export function withDbNulls(row: Record<string, unknown>, fields: readonly string[]): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...row };
+  for (const k of fields) if (out[k] === null) out[k] = Prisma.DbNull;
+  return out;
+}
+
+/**
+ * Concurrency tokens by row id, as decimal strings. An HLC exceeds 2^53
+ * and the snapshot crosses HTTP as JSON, where a BigInt becomes a rounded
+ * number (`bigint-json.ts`), so the tokens of the cloud-owned layout rows
+ * travel beside the rows (docs/map-storage.md §7.2).
+ */
+export function tokenMapOf(rows: ReadonlyArray<Record<string, unknown>>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const r of rows) {
+    const v = r.version;
+    if (typeof r.id !== "string") continue;
+    if (typeof v === "bigint" || (typeof v === "number" && Number.isSafeInteger(v))) out[r.id] = BigInt(v).toString();
+  }
+  return out;
+}
+
+const MAX_INT8 = 2n ** 63n - 1n;
+
+/**
+ * Each row with its exact token from `tokens`; a row the map lacks (an old
+ * exporter) keeps what it carries. A token that is not a non-negative
+ * `bigint` column value fails the checkout with the typed error.
+ */
+export function applyTokens(rows: ReadonlyArray<Record<string, unknown>>, tokens: Record<string, string> | undefined): Record<string, unknown>[] {
+  return rows.map((r) => {
+    const t = tokens && typeof r.id === "string" ? tokens[r.id] : undefined;
+    if (t === undefined) return { ...r };
+    const v = typeof t === "string" && /^[0-9]{1,19}$/.test(t) ? BigInt(t) : null;
+    if (v === null || v > MAX_INT8) {
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Checkout: row ${String(r.id)} arrived with token ${String(t)}.` });
+    }
+    return { ...r, version: v };
+  });
+}
+
 // ---- exporter (cloud) -------------------------------------------------------
 
-export async function exportSnapshotMaps(db: Db, eventId: bigint): Promise<SnapshotMaps> {
+/**
+ * The event's map part. `decisions: false` leaves the club's decisions out
+ * (the refresh during a lease carries none, docs/map-storage.md §7.2).
+ */
+export async function exportSnapshotMaps(db: Db, eventId: bigint, opts: { decisions?: boolean } = {}): Promise<SnapshotMaps> {
   const rows = await db.mapFile.findMany({
     where: { eventId },
     orderBy: { uploadedAt: "asc" },
@@ -160,7 +262,7 @@ export async function exportSnapshotMaps(db: Db, eventId: bigint): Promise<Snaps
   const { files, skipped } = partitionMapFiles(rows as unknown as Array<Record<string, unknown>>);
   const pinned = rows.filter((r) => r.sourceHash !== null);
   const documentHashes = [...new Set(pinned.flatMap((r) => (r.documentHash ? [r.documentHash] : [])))];
-  const documents = await db.mapDocument.findMany({
+  const documentRows = await db.mapDocument.findMany({
     where: { hash: { in: documentHashes } },
     select: {
       hash: true,
@@ -171,20 +273,31 @@ export async function exportSnapshotMaps(db: Db, eventId: bigint): Promise<Snaps
       sourceHash: true,
       header: true,
       report: true,
+      patch: true,
     },
     orderBy: { hash: "asc" },
   });
+  // A document without corrections carries no `patch` key: the snapshot of an unpatched event is as before G12a.
+  const documents: SnapshotMapDocument[] = documentRows.map(({ patch, ...d }) => (patch === null ? d : { ...d, patch }));
   const hashes = pinnedHashes(pinned, documents);
   const sources = await db.mapSource.findMany({
     where: { fileHash: { in: hashes.sources } },
     select: { fileHash: true, kind: true, sizeBytes: true, fileName: true },
     orderBy: { fileHash: "asc" },
   });
-  const decisions = await db.clubSymbolDecision.findMany({
-    select: { fingerprint: true, libraryVersion: true, canonicalId: true, decidedAt: true },
-    orderBy: [{ fingerprint: "asc" }, { libraryVersion: "asc" }],
+  const decisions =
+    opts.decisions === false
+      ? undefined
+      : await db.clubSymbolDecision.findMany({
+          select: { fingerprint: true, libraryVersion: true, canonicalId: true, decidedAt: true },
+          orderBy: [{ fingerprint: "asc" }, { libraryVersion: "asc" }],
+        });
+  const patchRow = await db.mapPatch.findUnique({
+    where: { eventId },
+    select: { id: true, documentHash: true, enabled: true, ops: true, symbols: true, unresolved: true, version: true },
   });
-  return { files, sources, documents, skipped, decisions };
+  const patch = snapshotPatchOf(patchRow, documents.map((d) => d.hash));
+  return { files, sources, documents, skipped, ...(decisions ? { decisions } : {}), ...(patch ? { patch } : {}) };
 }
 
 /** Whether the event's `map_files` reference the blob — the `lease.exportBlob` gate. */
@@ -199,7 +312,7 @@ export async function eventReferencesBlob(db: Db, eventId: bigint, table: BlobTa
 }
 
 /** `lease.exportBlob`: one slice of a blob the event pins. */
-export async function exportBlobSlice(db: Db, eventId: bigint, input: ExportBlobInput): Promise<ExportBlobResult> {
+export async function exportBlobSlice(db: Db, eventId: bigint, input: MapBlobInput): Promise<ExportBlobResult> {
   const sizeBytes = (await eventReferencesBlob(db, eventId, input.table, input.hash))
     ? await getBlobSize(db, input.table, input.hash)
     : null;
@@ -247,7 +360,7 @@ export async function fetchSnapshotBlobs(db: Db, maps: SnapshotMaps, fetchSlice:
 }
 
 /**
- * Insert the blobs and the event's `map_files` rows inside the snapshot
+ * Insert the blobs, the event's `map_files` rows and its patch inside the snapshot
  * transaction, after the event row. `club_map_version_id` stays NULL: the
  * venue has no club library. Every row's source must be on this node
  * (fetched above or held already).
@@ -257,7 +370,23 @@ export async function importSnapshotMaps(
   eventId: bigint,
   maps: SnapshotMaps,
   blobs: SnapshotBlobs,
-): Promise<{ files: number; sources: number; documents: number; decisions: number }> {
+): Promise<{ files: number; sources: number; documents: number; decisions: number; patches: number }> {
+  await insertSnapshotBlobs(tx, maps, blobs);
+  await createSnapshotMapFiles(tx, eventId, maps.files, blobs);
+  for (const d of maps.decisions ?? []) await mergeDecision(tx, d);
+  // The patch after its document (RESTRICT FK); verbatim, token included.
+  if (maps.patch) await createSnapshotPatch(tx, eventId, maps.patch);
+  return {
+    files: maps.files.length,
+    sources: maps.sources.length,
+    documents: maps.documents.length,
+    decisions: maps.decisions?.length ?? 0,
+    patches: maps.patch ? 1 : 0,
+  };
+}
+
+/** The fetched blobs, append-only: a blob the node holds is neither fetched nor rewritten. */
+export async function insertSnapshotBlobs(tx: Prisma.TransactionClient, maps: SnapshotMaps, blobs: SnapshotBlobs): Promise<void> {
   const newSources = maps.sources.filter((s) => blobs.sources.has(s.fileHash));
   if (newSources.length > 0) {
     await tx.mapSource.createMany({
@@ -285,23 +414,45 @@ export async function importSnapshotMaps(
         sourceHash: d.sourceHash,
         header: d.header as Prisma.InputJsonValue,
         report: d.report as Prisma.InputJsonValue,
+        ...snapshotDocumentPatch(d.patch),
       })),
       skipDuplicates: true,
     });
   }
-  for (const f of maps.files) {
+}
+
+/** The event's `map_files` rows with the venue NULLs; each row's source must be on this node. */
+export async function createSnapshotMapFiles(
+  tx: Prisma.TransactionClient,
+  eventId: bigint,
+  files: readonly Record<string, unknown>[],
+  blobs: SnapshotBlobs,
+): Promise<void> {
+  for (const f of files) {
     const sourceHash = String(f.sourceHash);
     if (!blobs.sources.has(sourceHash) && (await getBlobSize(tx, "map_sources", sourceHash)) === null) {
       throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Checkout: map source ${sourceHash} is missing on this node.` });
     }
     // A v0.6.0 exporter still sends the columns E5 dropped.
     const row: Record<string, unknown> = { ...withoutDroppedFields("mapFile", f), eventId, clubMapVersionId: null };
-    // A JSON null arrives as null; Prisma wants the DbNull sentinel for a nullable Json column.
-    for (const k of NULLABLE_JSON_FILE_FIELDS) if (row[k] === null) row[k] = Prisma.DbNull;
-    await tx.mapFile.create({ data: row as never });
+    await tx.mapFile.create({ data: withDbNulls(row, NULLABLE_JSON_FILE_FIELDS) as never });
   }
-  for (const d of maps.decisions ?? []) await mergeDecision(tx, d);
-  return { files: maps.files.length, sources: maps.sources.length, documents: maps.documents.length, decisions: maps.decisions?.length ?? 0 };
+}
+
+/** The patch row verbatim, its token exact; its document must be on this node (RESTRICT). */
+export async function createSnapshotPatch(tx: Prisma.TransactionClient, eventId: bigint, p: SnapshotMapPatch): Promise<void> {
+  await tx.mapPatch.create({
+    data: {
+      id: p.id,
+      eventId,
+      documentHash: p.documentHash,
+      enabled: p.enabled,
+      ops: p.ops as Prisma.InputJsonValue,
+      symbols: p.symbols as Prisma.InputJsonValue,
+      unresolved: (p.unresolved ?? {}) as Prisma.InputJsonValue,
+      version: BigInt(p.version),
+    },
+  });
 }
 
 /**

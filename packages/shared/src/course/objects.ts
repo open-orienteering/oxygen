@@ -140,6 +140,17 @@ export function courseObjectInScope<Id>(scope: CourseObjectScope<Id>, drawn: { c
   return scope.courses.some((c) => drawn.courses.includes(c)) || scope.classes.some((c) => drawn.classes.includes(c));
 }
 
+/** A scope with course / class UUIDs: a `course_objects` row's (the wire names them by public id). */
+export type StoredScope = CourseObjectScope<string>;
+/** A `course_objects` row as the layer, the snapshot and the print pipeline read it: body + UUID scope. */
+export type StoredCourseObject = CourseObjectBody & { id: string; seq: number; scope: StoredScope; z: number; version: bigint };
+
+/** The objects drawn with a course (UUID), or with no course (`null`: `all`-scoped only). */
+export function objectsInScope(objects: readonly StoredCourseObject[], courseId: string | null, byCourse: ReadonlyMap<string, string[]>): StoredCourseObject[] {
+  const drawn = courseId === null ? null : { courses: [courseId], classes: byCourse.get(courseId) ?? [] };
+  return objects.filter((o) => courseObjectInScope(o.scope, drawn));
+}
+
 const FONT = { sans: "liberation-sans", condensed: "liberation-sans-narrow", serif: "liberation-serif", mono: "liberation-mono" } as const;
 
 /** Hex colours course objects draw in (a text's own colour), in object order. */

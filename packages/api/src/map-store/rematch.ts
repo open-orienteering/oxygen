@@ -15,27 +15,40 @@
  *
  * A document is judged once per run whatever pins it. Every item is
  * keyed by content hash, so a re-run finds only what is still stale.
+ *
+ * Each item's pin re-keys the event's map patch (`applyJobResult`); the
+ * pass ends with a sweep that re-keys every live event's patch still
+ * keyed to another document than its pin (docs/map-patches.md §4.4).
  */
 
-import { symbolLibrary } from "@oxygen/shared";
+import { mapDocument, symbolLibrary } from "@oxygen/shared";
 import type { Prisma, PrismaClient } from "../generated/prisma/client.js";
 import { IMPORTER_VERSIONS } from "../import/ocad.js";
 import { loadClubDecisions, storedDocumentFollowsDecisions } from "./decisions.js";
+import { eventDocumentHash } from "./event-document.js";
 import { awaitImportJob, startImportJob, type ImportJobRow } from "./jobs.js";
+import { reresolveEventPatch } from "./patches.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
-export type RematchReason = "importer" | "library" | "decisions" | "unpinned";
+/** `patch`: an event's map patch keyed to another document than its pin (the sweep, docs/map-patches.md §4.4). */
+export type RematchReason = "importer" | "library" | "decisions" | "unpinned" | "patch";
 
 export interface RematchItem {
-  kind: "club" | "event";
-  /** `club_map_versions.id`, or the event id for an event's pins of one source. */
+  kind: "club" | "event" | "patch";
+  /** `club_map_versions.id`, or the event id for an event's pins of one source or its patch. */
   id: string;
   name: string;
+  /** The pin's source; empty for a `patch` item. */
   sourceHash: string;
-  /** The stale document; null for an `unpinned` row. */
+  /** The stale document (a `patch` item: the one the patch is keyed onto); null for an `unpinned` row. */
   documentHash: string | null;
   reason: RematchReason;
+  /**
+   * The corrections the re-import bakes (docs/map-patches.md §5 answer 1): a club item's version patch, an event
+   * item's from the document it replaces, an `unpinned` row's from its club version; absent = none.
+   */
+  patch?: mapDocument.VersionPatch;
 }
 
 export interface RematchItemResult extends RematchItem {
@@ -77,7 +90,7 @@ export async function planRematch(db: Db, opts: Pick<RematchOptions, "eventId" |
     ? []
     : await db.clubMapVersion.findMany({
         orderBy: [{ uploadedAt: "asc" }, { id: "asc" }],
-        select: { id: true, sourceHash: true, documentHash: true, label: true, clubMap: { select: { name: true } } },
+        select: { id: true, sourceHash: true, documentHash: true, label: true, patch: true, clubMap: { select: { name: true } } },
       });
   const files = await db.mapFile.findMany({
     where: { documentHash: { not: null }, sourceHash: { not: null }, event: { removed: false }, ...(opts.eventId ? { eventId: opts.eventId } : {}) },
@@ -88,8 +101,10 @@ export async function planRematch(db: Db, opts: Pick<RematchOptions, "eventId" |
   const hashes = [...new Set([...versions.map((v) => v.documentHash), ...files.map((f) => f.documentHash!)])];
   const docs = await db.mapDocument.findMany({
     where: { hash: { in: hashes } },
-    select: { hash: true, importerVersion: true, libraryVersion: true, report: true, source: { select: { kind: true } } },
+    select: { hash: true, importerVersion: true, libraryVersion: true, report: true, patch: true, source: { select: { kind: true } } },
   });
+  const patchOf = new Map(docs.map((d) => [d.hash, mapDocument.parseVersionPatch(d.patch)]));
+  const withPatch = (patch: mapDocument.VersionPatch | undefined) => (patch && patch.length ? { patch } : {});
   const decisionsByKind = new Map<string, Awaited<ReturnType<typeof loadClubDecisions>>>();
   const reasons = new Map<string, RematchReason | null>();
   for (const d of docs) {
@@ -106,7 +121,7 @@ export async function planRematch(db: Db, opts: Pick<RematchOptions, "eventId" |
   const items: RematchItem[] = [];
   for (const v of versions) {
     const reason = reasons.get(v.documentHash) ?? null;
-    if (reason) items.push({ kind: "club", id: v.id, name: `${v.clubMap.name} (${v.label})`, sourceHash: v.sourceHash, documentHash: v.documentHash, reason });
+    if (reason) items.push({ kind: "club", id: v.id, name: `${v.clubMap.name} (${v.label})`, sourceHash: v.sourceHash, documentHash: v.documentHash, reason, ...withPatch(mapDocument.parseVersionPatch(v.patch)) });
   }
   const seen = new Set<string>();
   for (const f of files) {
@@ -116,43 +131,76 @@ export async function planRematch(db: Db, opts: Pick<RematchOptions, "eventId" |
     const key = `${f.eventId}|${f.sourceHash}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    items.push({ kind: "event", id: String(f.eventId), name: f.event.name || f.event.nameId, sourceHash: f.sourceHash!, documentHash: f.documentHash!, reason });
+    items.push({ kind: "event", id: String(f.eventId), name: f.event.name || f.event.nameId, sourceHash: f.sourceHash!, documentHash: f.documentHash!, reason, ...withPatch(patchOf.get(f.documentHash!)) });
   }
   const unpinned = await db.mapFile.findMany({
     where: { documentHash: null, sourceHash: { not: null }, event: { removed: false }, ...(opts.eventId ? { eventId: opts.eventId } : {}) },
     orderBy: [{ eventId: "asc" }, { id: "asc" }],
-    select: { eventId: true, sourceHash: true, event: { select: { name: true, nameId: true } } },
+    select: { eventId: true, sourceHash: true, event: { select: { name: true, nameId: true } }, clubMapVersion: { select: { patch: true } } },
   });
   for (const f of unpinned) {
     const key = `${f.eventId}|${f.sourceHash}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    items.push({ kind: "event", id: String(f.eventId), name: f.event.name || f.event.nameId, sourceHash: f.sourceHash!, documentHash: null, reason: "unpinned" });
+    items.push({ kind: "event", id: String(f.eventId), name: f.event.name || f.event.nameId, sourceHash: f.sourceHash!, documentHash: null, reason: "unpinned", ...withPatch(mapDocument.parseVersionPatch(f.clubMapVersion?.patch)) });
   }
   return opts.limit ? items.slice(0, opts.limit) : items;
 }
 
-async function rematchItem(db: Db, item: RematchItem, timeoutMs?: number): Promise<Omit<RematchItemResult, keyof RematchItem>> {
+/** The sweep's items (§4.4): live events whose patch row is keyed to another document than their pin. */
+export async function planPatchSweep(db: Db, opts: Pick<RematchOptions, "eventId"> = {}): Promise<RematchItem[]> {
+  const rows = await db.mapPatch.findMany({
+    where: { event: { removed: false }, ...(opts.eventId ? { eventId: opts.eventId } : {}) },
+    orderBy: { eventId: "asc" },
+    select: { eventId: true, documentHash: true, event: { select: { name: true, nameId: true } } },
+  });
+  const items: RematchItem[] = [];
+  for (const r of rows) {
+    const pin = await eventDocumentHash(db, r.eventId);
+    if (pin && pin !== r.documentHash) items.push({ kind: "patch", id: String(r.eventId), name: r.event.name || r.event.nameId, sourceHash: "", documentHash: r.documentHash, reason: "patch" });
+  }
+  return items;
+}
+
+async function sweepItem(db: Db, item: RematchItem): Promise<Omit<RematchItemResult, keyof RematchItem>> {
+  const r = await reresolveEventPatch(db, BigInt(item.id));
+  if (r.outcome === "failed") return { outcome: "failed", jobId: null, newDocumentHash: null, error: r.error ?? "re-resolution failed" };
+  return { outcome: "done", jobId: null, newDocumentHash: r.to ?? (await eventDocumentHash(db, BigInt(item.id))), error: null };
+}
+
+/** One pin's re-import (exported for the promote tests, which run their own items). */
+export async function rematchItem(db: Db, item: RematchItem, timeoutMs?: number): Promise<Omit<RematchItemResult, keyof RematchItem>> {
   const target = item.kind === "club"
     ? { clubMapId: (await db.clubMapVersion.findUniqueOrThrow({ where: { id: item.id }, select: { clubMapId: true } })).clubMapId }
     : { eventId: BigInt(item.id) };
-  let job: ImportJobRow | null = await startImportJob(db, { sourceHash: item.sourceHash, ...target, holdMs: 0 });
+  let job: ImportJobRow | null = await startImportJob(db, { sourceHash: item.sourceHash, ...target, patch: item.patch ?? [], holdMs: 0 });
   if (job.state !== "done" && job.state !== "failed") job = await awaitImportJob(db, job.id, timeoutMs ? { timeoutMs } : {});
   if (job?.state === "done") return { outcome: "done", jobId: job.id, newDocumentHash: job.documentHash, error: null };
   const error = job?.state === "failed" ? (job.error ?? "import failed") : `import still ${job?.state ?? "missing"} when the wait ended`;
   return { outcome: "failed", jobId: job?.id ?? null, newDocumentHash: null, error };
 }
 
-/** One pass, one map at a time; a failed item is reported, never an abort. */
+/**
+ * One pass, one map at a time; a failed item is reported, never an abort.
+ * The patch sweep is planned after the pins ran (their pins re-key most
+ * patches); a dry run lists the patches dormant now.
+ */
 export async function runRematch(db: Db, opts: RematchOptions = {}): Promise<RematchRun & { failures: RematchItemResult[] }> {
-  const items = await planRematch(db, opts);
+  const pins = await planRematch(db, opts);
+  const items = opts.dryRun ? [...pins, ...(await planPatchSweep(db, opts))] : pins;
   const run: RematchRun & { failures: RematchItemResult[] } = { dryRun: !!opts.dryRun, total: items.length, processed: 0, done: 0, failed: 0, startedAt: new Date(), finishedAt: null, failures: [] };
   opts.onPlan?.(items);
   if (!run.dryRun) {
-    for (const item of items) {
+    const work = async function* () {
+      yield* items;
+      const sweep = await planPatchSweep(db, opts);
+      run.total += sweep.length;
+      yield* sweep;
+    };
+    for await (const item of work()) {
       let r: Omit<RematchItemResult, keyof RematchItem>;
       try {
-        r = await rematchItem(db, item, opts.itemTimeoutMs);
+        r = item.kind === "patch" ? await sweepItem(db, item) : await rematchItem(db, item, opts.itemTimeoutMs);
       } catch (err: unknown) {
         r = { outcome: "failed", jobId: null, newDocumentHash: null, error: (err instanceof Error ? err.message : String(err)).slice(0, 2000) };
       }

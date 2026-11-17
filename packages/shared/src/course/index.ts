@@ -5,6 +5,7 @@
  */
 
 export * from "./types.js";
+export { splitStructure, rowKind, courseSequenceOf, crossingRowsOf, type StructureParts, type SequenceSite, type SequenceColumns, type CourseSequenceParts } from "./sequence.js";
 export { courseLayer, courseRenderInput, legLine, type CourseRenderInput } from "./layer.js";
 export { legLengthMm, routedBends } from "./derive.js";
 export { LEG_FLATTEN_TOLERANCE_MM, PPEN_FLATTEN_TOLERANCE_MM, bendSegmentAt, hasCurvedBends, isCurvedSegment, legPolylineOf, reverseBends, type BendSegmentHit } from "./bends.js";
@@ -65,6 +66,9 @@ export {
   courseObjectBodySchema,
   courseObjectScopeSchemaOf,
   courseObjectInScope,
+  objectsInScope,
+  type StoredCourseObject,
+  type StoredScope,
   courseObjectRefId,
   filterRegionOf,
   type CourseLayerObject,

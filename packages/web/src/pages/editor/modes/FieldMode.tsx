@@ -9,7 +9,9 @@
  *   and the nudge pad (±0.1 mm, ±1 m, numeric x / y);
  * - `FieldTopBar`, `AddMenu` — the phone's compact top bar and the floating
  *   `+` that opens the creation tools;
- * - `OfflineNotice` — offline, Field mode views only (§9 "Offline").
+ * - `FieldQueueNotice` — offline, or with writes waiting in the device's
+ *   outbox: the count, and Retry / Discard for those the server refused
+ *   (§9 "Offline", row D9c).
  */
 
 import { useMemo, useState, type ReactNode } from "react";
@@ -21,6 +23,7 @@ import { NUDGE_FINE_MM, fieldRows, metreStepMm, nudge, type FieldRow, type Nudge
 import { allSetterSheets, setterRowInputs } from "../../../lib/editor/setter-maps";
 import type { EditorMode, EditorView } from "../../../lib/editor/state";
 import { AREA_CHOICES, type AreaChoice } from "../tools/rail";
+import { CHANGED_ELSEWHERE } from "../../../lib/offline/control-outbox";
 
 type Pt = { x: number; y: number };
 
@@ -212,13 +215,40 @@ export function NudgePad({ pt, mapScale, onNudge, disabled }: { pt: Pt; mapScale
   );
 }
 
-/** Offline: Field mode views only — no outbox covers its writes (§9 "Offline"). */
-export function OfflineNotice() {
+/**
+ * Offline, or with Field mode's writes waiting in the device's outbox (§9 "Offline", D9c): moves and check-offs
+ * are kept and sent on reconnect; the count of those waiting, and the refused ones with Retry / Discard.
+ */
+export function FieldQueueNotice({ online, waiting, failed, reason, onRetry, onDiscard }: {
+  online: boolean;
+  /** Entries pending or in conflict. */
+  waiting: number;
+  failed: number;
+  /** The first refused entry's reason (the server's message, or `CHANGED_ELSEWHERE`). */
+  reason: string | null;
+  onRetry: () => void;
+  onDiscard: () => void;
+}) {
   const { t } = useTranslation("editor");
+  const line = !online
+    ? waiting > 0 ? t("fieldQueueOffline", { count: waiting }) : t("fieldOffline")
+    : waiting > 0 ? t("fieldQueueSending", { count: waiting }) : null;
   return (
-    <p data-testid="editor-field-offline" role="status" className="pointer-events-auto rounded-md border border-amber-300 bg-amber-50 text-amber-900 text-xs px-2 py-1.5">
-      {t("fieldOffline")}
-    </p>
+    <div data-testid="editor-field-offline" data-online={String(online)} data-pending={waiting} data-failed={failed} role="status"
+      className="pointer-events-auto rounded-md border border-amber-300 bg-amber-50 text-amber-900 text-xs px-2 py-1.5 flex flex-col gap-1">
+      {line && <p>{line}</p>}
+      {failed > 0 && (
+        <>
+          <p data-testid="editor-field-queue-failed">{t("fieldQueueFailed", { count: failed, reason: reason === CHANGED_ELSEWHERE ? t("fieldQueueChanged") : reason ?? "" })}</p>
+          <div className="flex gap-1.5">
+            <button type="button" data-testid="editor-field-queue-retry" onClick={onRetry} disabled={!online}
+              className="min-h-8 px-2 rounded bg-amber-600 text-white cursor-pointer disabled:opacity-50">{t("fieldQueueRetry")}</button>
+            <button type="button" data-testid="editor-field-queue-discard" onClick={onDiscard}
+              className="min-h-8 px-2 rounded border border-amber-300 cursor-pointer">{t("fieldQueueDiscard")}</button>
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 

@@ -3,8 +3,7 @@
  * worker tests: what the corpus tool (`render/print-run.ts`, deleted in
  * E4a; docs/course-print.md §11) printed each map on.
  */
-import { defaultMapAppearance, getPaperDimensions, mapDocument, type ControlDescription } from "@oxygen/shared";
-import type { LayoutControlSource, LayoutCourseSource, LayoutTemplateSource } from "../../course-maps/resolve-layout.js";
+import { defaultMapAppearance, getPaperDimensions, mapDocument, type ControlDescription, type LayoutControlSource, type LayoutCourseSource, type LayoutTemplateSource } from "@oxygen/shared";
 
 /** Paper margin of the corpus sheet, mm. */
 const PRINT_MARGIN_MM = 3;

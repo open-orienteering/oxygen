@@ -8,7 +8,8 @@
  * dialog, keeps it on its peek line (`statusRows`).
  */
 
-export type SaveState = "saved" | "saving" | "error" | "conflict";
+/** `queued`: Field mode's writes wait in the device's outbox (D9c, docs/course-editor.md §9 "Offline"). */
+export type SaveState = "saved" | "saving" | "error" | "conflict" | "queued";
 
 export interface StatusInput {
   /** The selected course's control count; null without a course. */
@@ -61,10 +62,10 @@ export function courseInfoRows(s: Omit<StatusInput, "scale">, t: T): StatusRow[]
 export const checksBadge = (checks: number | null): number | null => (checks && checks > 0 ? checks : null);
 
 export interface SaveIndicator {
-  tone: "ok" | "busy" | "alert";
-  /** True for a failed or conflicting save: its words show, never only in a tooltip; otherwise the dot alone. */
+  tone: "ok" | "busy" | "alert" | "wait";
+  /** True for a failed, conflicting or queued save: its words show, never only in a tooltip; otherwise the dot alone. */
   alwaysText: boolean;
-  key: "statusSaved" | "statusSaving" | "statusError" | "statusConflict";
+  key: "statusSaved" | "statusSaving" | "statusError" | "statusConflict" | "statusQueued";
 }
 
 export function saveIndicator(save: SaveState): SaveIndicator {
@@ -73,5 +74,6 @@ export function saveIndicator(save: SaveState): SaveIndicator {
     case "saving": return { tone: "busy", alwaysText: false, key: "statusSaving" };
     case "error": return { tone: "alert", alwaysText: true, key: "statusError" };
     case "conflict": return { tone: "alert", alwaysText: true, key: "statusConflict" };
+    case "queued": return { tone: "wait", alwaysText: true, key: "statusQueued" };
   }
 }

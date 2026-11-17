@@ -89,11 +89,32 @@ export function formatBuildCommit(buildId: string | null | undefined): string | 
   return sha.slice(0, 7);
 }
 
-/** Reduce a full container reference to the tag/digest operators recognize. */
-export function formatDeployRef(deployRef: string): string {
+/**
+ * Reduce a full container reference to the tag/digest operators recognize.
+ *
+ * With the running `version`, a ref that is that version's own tag
+ * (`v0.7.0` or `0.7.0` for `0.7.0`) gives `null`: the footer's
+ * `Image:` part appears only when it says something the version does not
+ * (`edge`, `stable`, `sha-…`, `source-…`, another release).
+ */
+export function formatDeployRef(deployRef: string, version?: string | null): string | null {
   const digestAt = deployRef.lastIndexOf("@");
   if (digestAt >= 0) return deployRef.slice(digestAt + 1);
   const tagAt = deployRef.lastIndexOf(":");
   const slashAt = deployRef.lastIndexOf("/");
-  return tagAt > slashAt ? deployRef.slice(tagAt + 1) : deployRef;
+  const tag = tagAt > slashAt ? deployRef.slice(tagAt + 1) : deployRef;
+  if (version && (tag === version || tag === `v${version}`)) return null;
+  return tag;
+}
+
+/**
+ * The application version the footer shows: the server's (`OXYGEN_VERSION`
+ * baked into its image), else the bundle's own (`__APP_VERSION__`, which is
+ * `<package version>-dev` on a local build).
+ */
+export function displayVersion(
+  serverVersion: string | null | undefined,
+  bakedVersion: string,
+): string {
+  return serverVersion || bakedVersion;
 }

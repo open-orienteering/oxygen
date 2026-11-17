@@ -482,6 +482,10 @@ describe("courseDocumentContext", () => {
     expect(courseDocumentContext({ colours, library: null, documentFactor: 1, mapScale: 4000 })).toMatchObject({ libraryId: "ISSprOM2019-2", documentFactor: 1, mapScale: 4000 });
   });
 
+  it("never takes an overlay library as the document's (map-symbols.md §12)", () => {
+    expect(courseDocumentContext({ colours, library: { id: "ISSkiOM2019", version: "x" }, documentFactor: 1, mapScale: 10000 })).toMatchObject({ libraryId: "ISOM2017-2", documentFactor: 1.5 });
+  });
+
   it("a site at the origin is not drawn", () => {
     const layer = courseLayer(layerInput({ sites: [site("31", "control", 0, 0)], structure: linear(["31"]) }));
     expect(layer.objects).toEqual([]);

@@ -20,6 +20,7 @@ import {
   pruneDescriptionInstructions,
   course as courseShared,
   encodeHlc,
+  mapDocument,
   mapGeo,
 } from "@oxygen/shared";
 
@@ -56,6 +57,8 @@ import {
 import { latestVersionOrRefuse } from "../club-map-library.js";
 import { cutRotationDeg, meridianStalenessFromDetection } from "../map-north.js";
 import { documentNorth, eventPin } from "../map-store/event-document.js";
+import { eventPatchVersion } from "../map-store/patches.js";
+import { terrainDescriptor } from "../map-store/heightfield.js";
 import { canDownloadEventMap } from "../ocad-export.js";
 import { loadEventCrs } from "../event-crs.js";
 import { rebuildCourseLengths } from "../course-geometry.js";
@@ -1037,7 +1040,7 @@ export const courseRouter = router({
     .input(
       z.object({
         courseId: z.number().int(),
-        mode: z.enum(["course", "layout", "field"]),
+        mode: z.enum(["course", "layout", "field", "map"]),
         clientId: z.string().min(1).max(64),
       }),
     )
@@ -1244,6 +1247,10 @@ export const courseRouter = router({
       documentHash: row.documentHash,
       /** The pinned club map version, null for an event's own upload; the viewer's GPU budget follows it (docs/map-rendering.md §5.4). */
       clubMapVersionId: row.clubMapVersionId,
+      /** The delivered patch's token (docs/map-patches.md §3.3); `"0"` when nothing is delivered. Refetch `/api/maps/:nameId/patch` when it changes. */
+      patchVersion: await eventPatchVersion(ctx.db, ctx.event.id, row.documentHash),
+      /** The pinned document's height field (docs/map-storage.md §4.7): state, `url` to fetch (fetching a `pending` one derives it), `decided` for the 3D gate, and `dem` (the DEM's fields, none for a rotation-corrected pin); null until the pin. */
+      terrain: row.documentHash ? await terrainDescriptor(ctx.db, row.documentHash, undefined, { rotationCorrection }) : null,
       cutRotationDeg: cutRotationDeg(
         northOffset,
         north?.meridian?.medianTiltDeg ?? null,
@@ -1590,7 +1597,7 @@ export const courseRouter = router({
           versions: {
             orderBy: { seq: "desc" },
             take: 1,
-            select: { id: true, label: true, sourceHash: true, uploadedBy: true },
+            select: { id: true, label: true, sourceHash: true, uploadedBy: true, patch: true },
           },
         },
       });
@@ -1605,10 +1612,13 @@ export const courseRouter = router({
         where: { fileHash: version.sourceHash },
         select: { fileName: true },
       });
+      const layers = mapDocument.parseVersionPatch(version.patch);
       const result = await applyEventMap(
         ctx.db,
         ctx.event.id,
-        version.label || source.fileName,
+        // A promoted version's label is the promote's free text: the event's file is named by its source (G12b, as
+        // `clubMap.download`, map-storage §6.5).
+        (layers.length > 0 ? "" : version.label) || source.fileName,
         null,
         {
           fromClubLibrary: true,
@@ -1616,6 +1626,8 @@ export const courseRouter = router({
           startedBy: ctx.user?.id ?? null,
           rotationCorrection: series.rotationCorrection,
           fileHash: version.sourceHash,
+          // A promoted version's corrections (docs/map-patches.md §5): the import bakes them, dedup finds its document.
+          patch: layers,
         },
       );
       await ctx.db.mapFile.updateMany({

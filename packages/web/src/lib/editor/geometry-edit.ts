@@ -9,8 +9,13 @@
 
 type Pt = { x: number; y: number };
 
-/** A stored vertex (`PathVertex`). */
-export interface Vertex { x: number; y: number; hIn?: Pt; hOut?: Pt }
+/**
+ * A stored vertex (`PathVertex`). `flags` carries a map document's `COORD_FLAG` bits (`ringsOfCoords`): the low byte
+ * the anchor's own besides the hole bit (dash, corner, gap, no-left / no-right), the next its out-handle control
+ * point's and the next its in-handle control point's besides the curve bits. The edits keep it on its vertex; a new
+ * vertex has none.
+ */
+export interface Vertex { x: number; y: number; hIn?: Pt; hOut?: Pt; flags?: number }
 
 /** The UI layer samples each curved segment in this many steps. */
 export const CURVE_STEPS = 8;
@@ -24,7 +29,7 @@ const EPS = 1e-6;
  */
 export function vertexRule(kind: string): { min: number; max: number; curves: boolean; closed: boolean } {
   switch (kind) {
-    case "oob_line": case "marked_route": case "inset_frame": return { min: 2, max: Infinity, curves: true, closed: false };
+    case "oob_line": case "marked_route": case "inset_frame": case "map_line": return { min: 2, max: Infinity, curves: true, closed: false };
     case "text": return { min: 1, max: 1, curves: false, closed: false };
     case "image": return { min: 2, max: 2, curves: false, closed: false };
     case "filter_region": return { min: 3, max: Infinity, curves: false, closed: true };
@@ -41,7 +46,7 @@ const isCurve = (a: Vertex, b: Vertex) => !!(a.hOut || b.hIn);
 
 /** `v` with its handles set; a missing or zero-length handle is dropped. */
 function withHandles(v: Vertex, hIn: Pt | undefined, hOut: Pt | undefined): Vertex {
-  const out: Vertex = { x: v.x, y: v.y };
+  const out: Vertex = v.flags ? { x: v.x, y: v.y, flags: v.flags } : { x: v.x, y: v.y };
   if (hIn && len(hIn) > EPS) out.hIn = hIn;
   if (hOut && len(hOut) > EPS) out.hOut = hOut;
   return out;
@@ -224,7 +229,7 @@ export function mapVertices(g: readonly Vertex[], f: (p: Pt) => Pt): Vertex[] {
       const tip = f({ x: v.x + h.x, y: v.y + h.y });
       return { x: tip.x - at.x, y: tip.y - at.y };
     };
-    return withHandles(at, handle(v.hIn), handle(v.hOut));
+    return withHandles(v.flags ? { ...at, flags: v.flags } : at, handle(v.hIn), handle(v.hOut));
   });
 }
 
@@ -234,4 +239,117 @@ export function constrain45(v: Pt): Pt {
   if (l < EPS) return v;
   const a = Math.round(Math.atan2(v.y, v.x) / (Math.PI / 4)) * (Math.PI / 4);
   return { x: l * Math.cos(a), y: l * Math.sin(a) };
+}
+
+// ─── A map object's coordinates (Map mode's nodes, docs/course-editor.md §13 "Nodes", G7) ──
+
+/** A map document coordinate: `[x, y]` or `[x, y, flags]` in document units (`PatchCoord`, map-patches §1.2). */
+export type DocCoord = [number, number] | [number, number, number];
+
+/**
+ * One ring of a map object as an editable path: its vertices in paper mm (document units / `unitsPerMm`, the axes as
+ * stored), closed for an area's rings and a line that ends on its first point. `repeatsFirst`: the source writes the
+ * close out as a last point on the first one (its `endFlags` kept), so the write does too.
+ */
+export interface PathRing { vertices: Vertex[]; closed: boolean; repeatsFirst: boolean; endFlags?: number }
+
+const BEZIER_FIRST = 1, BEZIER_SECOND = 2, HOLE = 16;
+const CURVE_BITS = BEZIER_FIRST | BEZIER_SECOND;
+/** `Vertex.flags`: the out-handle control's extra bits from bit 8, the in-handle control's from bit 16. */
+const OUT_SHIFT = 8, IN_SHIFT = 16, IN_MASK = 0xff << IN_SHIFT;
+const withFlags = (v: Vertex, bits: number): void => {
+  const f = (v.flags ?? 0) | bits;
+  if (f) v.flags = f;
+};
+
+/**
+ * A map object's coordinates as rings of vertices (§13 "Nodes"): an anchor's two following control points (flags
+ * `bezierFirst`, `bezierSecond`, the OCAD convention) become its `hOut` and the next anchor's `hIn`; a `hole` flag
+ * starts the next ring; an anchor's other flags, and its controls' other bits, ride on its vertex (`Vertex.flags`).
+ * A ring of three anchors or more whose last anchor sits on its first is closed and that last anchor dropped
+ * (`repeatsFirst`, its own flags kept as `endFlags`); an area's rings are always closed. Null
+ * when the curve encoding is broken (a lone control point, a ring that starts or ends on one) or there is nothing.
+ */
+export function ringsOfCoords(coords: readonly DocCoord[], unitsPerMm: number, area: boolean): PathRing[] | null {
+  if (coords.length === 0) return null;
+  const u = unitsPerMm;
+  const rings: { vertices: Vertex[]; ends: number[] }[] = [];
+  let cur: { vertices: Vertex[]; ends: number[] } | null = null;
+  for (let k = 0; k < coords.length; k++) {
+    const [x, y, f = 0] = coords[k];
+    if (f & CURVE_BITS) {
+      // A cubic: control, control, anchor — after an anchor of this ring.
+      const c2 = coords[k + 1], end = coords[k + 2];
+      if (!cur || (f & CURVE_BITS) !== BEZIER_FIRST || !c2 || ((c2[2] ?? 0) & CURVE_BITS) !== BEZIER_SECOND || !end) return null;
+      const endFlags = end[2] ?? 0;
+      if (endFlags & (CURVE_BITS | HOLE)) return null;
+      const prev = cur.vertices[cur.vertices.length - 1];
+      const v: Vertex = { x: end[0] / u, y: end[1] / u };
+      // A control point on its anchor is no handle (as `withHandles` drops one) unless both are: the segment stays a curve.
+      const hOut = { x: x / u - prev.x, y: y / u - prev.y }, hIn = { x: c2[0] / u - v.x, y: c2[1] / u - v.y };
+      const zeroOut = x === Math.round(prev.x * u) && y === Math.round(prev.y * u), zeroIn = c2[0] === end[0] && c2[1] === end[1];
+      if (!zeroOut || zeroIn) prev.hOut = hOut;
+      if (!zeroIn || zeroOut) v.hIn = hIn;
+      withFlags(prev, (f & ~CURVE_BITS) << OUT_SHIFT);
+      withFlags(v, endFlags | (((c2[2] ?? 0) & ~CURVE_BITS) << IN_SHIFT));
+      cur.vertices.push(v);
+      cur.ends.push(endFlags);
+      k += 2;
+      continue;
+    }
+    // A hole flag on the very first point would be lost on writing (only later rings are flagged): not editable.
+    if (!cur && f & HOLE) return null;
+    if (!cur || f & HOLE) rings.push((cur = { vertices: [], ends: [] }));
+    const v: Vertex = { x: x / u, y: y / u };
+    if (f & ~HOLE) v.flags = f & ~HOLE;
+    cur.vertices.push(v);
+    cur.ends.push(f & ~HOLE);
+  }
+  return rings.map(({ vertices, ends }) => {
+    const n = vertices.length, first = vertices[0], last = vertices[n - 1];
+    if (n >= 4 && last.x === first.x && last.y === first.y && !last.hOut) {
+      const kept = vertices.slice(0, -1);
+      if (last.hIn || ((last.flags ?? 0) & IN_MASK)) {
+        // The closing segment's in-handle and its control's bits (a control on its anchor too) belong to the first vertex.
+        const f = ((first.flags ?? 0) & ~IN_MASK) | ((last.flags ?? 0) & IN_MASK);
+        const { flags: _drop, hIn: _hIn, ...rest } = first;
+        kept[0] = { ...rest, ...(last.hIn ? { hIn: last.hIn } : {}), ...(f ? { flags: f } : {}) };
+      }
+      return { vertices: kept, closed: true, repeatsFirst: true, endFlags: ends[n - 1] };
+    }
+    return { vertices, closed: area, repeatsFirst: false };
+  });
+}
+
+/**
+ * The rings back as coordinates (§13 "Nodes"): whole document units (rounded), each curved segment as its two
+ * control points (with their own bits from `Vertex.flags`), every ring after the first flagged `hole` on its first
+ * point. A closed ring writes its close out — a last point on the first one, with the source's flags for it
+ * (`endFlags`) — when the source did (`repeatsFirst`) or its closing segment is curved (an implicit close is
+ * straight; the point it gains has no flags).
+ */
+export function coordsOfRings(rings: readonly PathRing[], unitsPerMm: number): DocCoord[] {
+  const u = unitsPerMm;
+  const at = (x: number, y: number, f: number): DocCoord => (f ? [Math.round(x * u), Math.round(y * u), f] : [Math.round(x * u), Math.round(y * u)]);
+  const out: DocCoord[] = [];
+  rings.forEach((ring, r) => {
+    const g = ring.vertices;
+    if (g.length === 0) return;
+    const segment = (a: Vertex, b: Vertex, endFlags: number) => {
+      if (isCurve(a, b)) {
+        const c1 = a.hOut ?? { x: 0, y: 0 }, c2 = b.hIn ?? { x: 0, y: 0 };
+        out.push(
+          at(a.x + c1.x, a.y + c1.y, BEZIER_FIRST | (((a.flags ?? 0) >> OUT_SHIFT) & 0xff)),
+          at(b.x + c2.x, b.y + c2.y, BEZIER_SECOND | (((b.flags ?? 0) >> IN_SHIFT) & 0xff)),
+        );
+      }
+      out.push(at(b.x, b.y, endFlags));
+    };
+    const own = (v: Vertex) => (v.flags ?? 0) & 0xff;
+    out.push(at(g[0].x, g[0].y, own(g[0]) | (r > 0 ? HOLE : 0)));
+    for (let i = 1; i < g.length; i++) segment(g[i - 1], g[i], own(g[i]));
+    const last = g[g.length - 1];
+    if (ring.closed && g.length > 1 && (ring.repeatsFirst || isCurve(last, g[0]))) segment(last, g[0], ring.repeatsFirst ? ring.endFlags ?? 0 : 0);
+  });
+  return out;
 }

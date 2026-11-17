@@ -1,42 +1,12 @@
 /** The structure ↔ columns mirror (docs/course-layer.md §6.2). */
 
 import { describe, expect, it } from "vitest";
-import { carryLegs, crossingRowsOf, layerPropsOfStored, splitStructure, structureFromColumns, structureToWire, structureFromWire } from "../course-structure.js";
+import { carryLegs, layerPropsOfStored, splitStructure, structureFromColumns, structureToWire, structureFromWire } from "../course-structure.js";
 
 const KIND: Record<string, string> = { S1: "start", S2: "start", a: "control", b: "control", F1: "finish" };
 const kindOf = (id: string) => KIND[id];
 const items = (...ids: Array<string | { siteId: string; role?: "start" | "finish" | "control"; numberHidden?: boolean }>) =>
   ids.map((i) => (typeof i === "string" ? { siteId: i } : i));
-
-describe("splitStructure", () => {
-  it("takes a leading start site and a trailing finish site out of the sequence", () => {
-    expect(splitStructure(items("S1", "a", "b", "F1"), kindOf)).toEqual({
-      start: "S1",
-      finish: "F1",
-      middle: items("a", "b"),
-      firstAsStart: false,
-      lastAsFinish: false,
-    });
-  });
-
-  it("leaves the start / finish implicit when the structure names none (the reader completes the default)", () => {
-    expect(splitStructure(items("a", "b"), kindOf)).toEqual({ start: null, finish: null, middle: items("a", "b"), firstAsStart: false, lastAsFinish: false });
-  });
-
-  it("reads a control with role start / finish as firstAsStart / lastAsFinish", () => {
-    const s = splitStructure(items({ siteId: "a", role: "start" }, "b", { siteId: "a", role: "finish" }), kindOf);
-    expect(s).toMatchObject({ start: null, finish: null, firstAsStart: true, lastAsFinish: true });
-    expect(s.middle.map((i) => i.siteId)).toEqual(["a", "b", "a"]);
-  });
-
-  it("keeps a start site that is not first in the sequence (as course_controls may today)", () => {
-    expect(splitStructure(items("a", "S2", "b"), kindOf).middle.map((i) => i.siteId)).toEqual(["a", "S2", "b"]);
-  });
-
-  it("handles a structure of only a start", () => {
-    expect(splitStructure(items("S1"), kindOf)).toEqual({ start: "S1", finish: null, middle: [], firstAsStart: false, lastAsFinish: false });
-  });
-});
 
 describe("structureFromColumns", () => {
   const starts = [{ id: "S1", name: "Start 1" }, { id: "S2", name: "Start 2" }];
@@ -98,28 +68,6 @@ describe("wire form (public control ids)", () => {
     const alt = (wire.items[2] as { alternatives: { items: { leg?: { crossing: { controlId: number } } }[] }[] }).alternatives[0].items[0];
     expect(alt.leg!.crossing.controlId).toBe(90);
     expect(structureFromWire(wire, (id) => back.get(id)!)).toEqual(stored);
-  });
-});
-
-describe("crossingRowsOf (the derived 13.3 / 13.4 rows, F4)", () => {
-  const publicId = new Map([["S1", 1], ["a", 31], ["b", 32], ["F1", 2]]);
-  const of = (items: unknown[]) =>
-    crossingRowsOf({ version: 1, id: "c", orderMode: "ordered", items }, (id) => publicId.get(id), (id) => KIND[id] === "start");
-
-  it("anchors each leg's row after the item it leaves, null after the start", () => {
-    expect(
-      of([
-        { siteId: "S1" },
-        { siteId: "a", leg: { crossing: { controlId: "P" } } },
-        { siteId: "b", leg: { crossing: { controlId: "P", section: true } } },
-        { siteId: "F1" },
-      ]),
-    ).toEqual([{ afterControlId: null, section: false }, { afterControlId: 31, section: true }]);
-  });
-
-  it("is empty for a NULL column or a course without crossings", () => {
-    expect(crossingRowsOf(null, () => 1)).toEqual([]);
-    expect(of([{ siteId: "S1" }, { siteId: "a" }])).toEqual([]);
   });
 });
 

@@ -112,6 +112,39 @@ tRPC, never journaled, and **cloud-owned even during a lease**:
 - The venue keeps a **checkout-time copy** of cloud-owned data for local
   reads, refreshed periodically while online. Staleness is acceptable
   because of the boundary rule below.
+- **The event's map patch** (`map_patches`, `docs/map-patches.md` §3.4)
+  is cloud-owned the same way: it travels in the checkout snapshot's
+  `maps` part for the venue's map, and `mapPatch.` writes are forwarded.
+- **The event's GPS tracks** (`map_gps_tracks`, `docs/map-gps-tracks.md`
+  §1.3) are cloud-owned and not journaled, and they are **not** in the
+  checkout snapshot: `mapTrack.` writes are forwarded, and a box's
+  `mapTrack.list` answers empty during a lease (mapping is not a venue
+  task; user 2026-11-14).
+- **Layout and print data** (row G18, slice G answer 4): sheets
+  (`course_maps`), templates, course objects and the graphics they draw
+  travel in the checkout snapshot (`docs/map-storage.md` §7.2), so the box
+  prints from its copy with the uplink down (`docs/course-print.md`
+  §8.7): **print reads local, writes go to the cloud**. `courseMap.`,
+  `mapTemplate.`, `layout.`, `graphics.` and `courseObject.` mutations are
+  forwarded; offline they answer the typed error, so nothing edited on a
+  box is lost at checkin. The box follows the cloud's copy (row G19,
+  `docs/map-storage.md` §7.2 "Following the cloud during a lease"): on
+  the settings cadence it mirrors the event's map files and documents,
+  the patch, sheets, templates, course objects, graphics and the classes'
+  print overrides, and it refreshes once more right after a layout or
+  patch write it forwarded, so an editor on the box reads its own write.
+  Offline it keeps what it has.
+- **Batches.** The forwarder forwards a tRPC batch only when every
+  procedure in it is cloud-owned. A batch that mixes cloud-owned and
+  local mutations is refused whole with the typed error (`data.reason:
+  "MIXED_BATCH"`; nothing runs), since running it locally would write the
+  cloud-owned part on the box — before G18 it ran locally. The web since
+  G18 never produces one (a tab on an older bundle can, and is refused):
+  both of its tRPC clients send cloud-owned mutations
+  through a batch link of their own (`packages/web/src/lib/trpc-links.ts`;
+  the list is `@oxygen/shared`'s `cloud-ownership.ts`). The offline error
+  carries `data.reason: "CLOUD_UNREACHABLE"`, which the export menu reads
+  to skip its sheet-ensuring step and print the box's copy.
 - **Global tables** (`runner_directory`, `club_directory`,
   `eventor_event_meta`, `oxygen_settings`) are cloud-owned by definition —
   they are not event-scoped and never participate in a lease.
@@ -205,7 +238,9 @@ early keeps the ordering honest.
 > forwarder for cloud-owned mutations, and the shell badge + EventPage
 > panel. The venue additionally refreshes its copy of cloud-owned event
 > settings on a slow cadence while a lease is held
-> (`SYNC_SETTINGS_REFRESH_MS`, default 5 min; closure fields excluded).
+> (`SYNC_SETTINGS_REFRESH_MS`, default 5 min; closure fields excluded),
+> and on the same cadence its copy of the event's cloud-owned map rows
+> (`lease.exportMapRows`, row G19, `docs/map-storage.md` §7.2).
 
 One row per checked-out event: `event_lease (event_id, holder_node_id,
 acquired_at, released_at, forced)`.
@@ -320,6 +355,24 @@ Stations are clients, not replicas. When a station loses its node
   that's the venue node.
 - `computeLocalReadout` (the client-side readout fallback) remains for
   blip-mode card reads, with parity to the server path asserted by tests.
+
+**The course editor's Field-mode outbox** (row D9c; `course-editor.md` §9
+"Offline") is a second Dexie table beside `events`, `controlWrites` in the
+same `oxygen-offline` database (version 4, additive). It holds the
+setter's control moves (`control.update { xpos, ypos }`) and check-offs
+(`control.check`) made without a connection, and replays them as the
+tRPC mutations themselves — not through `events.push` — in order, through
+the editor's write client, each move with the version token it was queued
+with. Controls are journaled reference data written on the node the client
+talks to ("Reference data during a lease"), not cloud-owned: `events.push`
+would apply them as full-row last-writer-wins `control.upserted` entries
+keyed by the row UUID, which the web holds neither of, and without the
+token neither the field-move rebase nor "Moved by X" (`course-editor.md`
+§3) could happen. A refusal (a leased event's "checked out to venue", a
+deleted control) is kept as a failed entry with Retry / Discard; nothing
+is dropped silently. Its own-writes overlay patches the editor's query
+cache (`course.controlCoordinates`, `control.list`) rather than a
+projection table, because the canvas reads the cache.
 
 ## Transport: Local Network Access (no TLS certificates)
 

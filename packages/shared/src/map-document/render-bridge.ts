@@ -13,10 +13,12 @@ import type { RenderSymbol, TextSymbol } from "../render/symbol.js";
 import type { RenderObject } from "../render/symbolise.js";
 import { scaleRenderSymbol } from "../render/transform.js";
 import { getLibraryEntry } from "../symbol-library/index.js";
-import { resolveEntry } from "../symbol-library/schema.js";
+import { type LibraryEntry, resolveEntry } from "../symbol-library/schema.js";
 import { paletteIndexOfStack } from "../import/colour-align.js";
+import { entryFactor, isDocumentLibraryId } from "../import/matcher.js";
 import { type DocumentSymbol, OBJECT_TYPE } from "./header.js";
 import type { MapDocument } from "./codec.js";
+import type { EffectiveDocument } from "./patch.js";
 
 export interface DocumentRenderOptions {
   /** What to do with objects whose symbol has no `render`: draw a proxy, or drop. Default `proxy`. */
@@ -46,6 +48,8 @@ export interface DocumentRenderInput {
   docIdx: number[];
   stats: {
     total: number; rendered: number; proxied: number; hidden: number; dropped: number; coordinates: number;
+    /** Objects a patch hides (map-patches §2.4); `hidden` counts the objects of hidden symbols. */
+    patchHidden: number;
     /** Symbols drawn from a canonical entry rather than their source definition. */
     canonicalSymbols: number;
     /** Applied matches whose entry or colours could not be resolved (library changed); drawn from source. */
@@ -61,7 +65,8 @@ export function isAppliedMatch(match: DocumentSymbol["match"]): match is NonNull
 /**
  * The canonical `RenderSymbol` for a matched document symbol: the library
  * entry resolved through the aligned colour stack and scaled by the
- * document factor (03 §6.6). `undefined` when the match is not applied or
+ * document factor (03 §6.6) — an overlay entry by its `entryFactor`
+ * (docs/map-symbols.md §12.2). `undefined` when the match is not applied or
  * cannot be resolved against the current library.
  */
 export function canonicalRender(doc: Pick<MapDocument, "header">, sym: DocumentSymbol, index = paletteIndexOfStack(doc.header.colours)): RenderSymbol | undefined {
@@ -69,11 +74,24 @@ export function canonicalRender(doc: Pick<MapDocument, "header">, sym: DocumentS
   const entry = getLibraryEntry(sym.match.canonicalId);
   if (!entry) return undefined;
   try {
-    const canonical = scaleRenderSymbol(resolveEntry(entry, index), doc.header.documentFactor);
+    const { library, documentFactor, mapScale } = doc.header;
+    // An overlay entry at its own table's factor × the document's symbol scale (docs/map-symbols.md §12.2).
+    const factor = library && isDocumentLibraryId(library.id) ? entryFactor({ libraryId: library.id, documentFactor, mapScale }, entry.id) : documentFactor;
+    const canonical = canonicalEntryRender(entry, index, factor);
     return canonical.type === "text" && sym.render?.type === "text" ? withSourceTextLayout(canonical, sym.render) : canonical;
   } catch {
     return undefined;
   }
+}
+
+/**
+ * The resolve-and-scale step every canonical drawing goes through
+ * (`canonicalRender`, `materialiseSymbol` — map-symbols §11.1): the entry's
+ * palette ids → stack indices, then its dimensions × `factor`. Throws
+ * `UnknownPaletteIdError` when the stack lacks a colour.
+ */
+export function canonicalEntryRender(entry: LibraryEntry, index: ReadonlyMap<string, number>, factor: number): RenderSymbol {
+  return scaleRenderSymbol(resolveEntry(entry, index), factor);
 }
 
 /** Layout fields a canonically drawn text symbol keeps from its source (map-document-format §8). */
@@ -97,14 +115,15 @@ const kindOfType = (type: number): RenderSymbol["type"] | undefined =>
 export const textLayoutOfType = (type: number): RenderObject["textLayout"] =>
   type === OBJECT_TYPE.formattedText ? "box" : type === OBJECT_TYPE.lineText ? "path" : undefined;
 
-export function documentRenderInput(doc: MapDocument, opts: DocumentRenderOptions = {}): DocumentRenderInput {
+/** `doc` may be an effective document (`applyPatch`, map-patches §2.4): its patch-hidden objects are skipped. */
+export function documentRenderInput(doc: EffectiveDocument, opts: DocumentRenderOptions = {}): DocumentRenderInput {
   const unmatched = opts.unmatched ?? "proxy";
   const canonical = opts.canonical ?? true;
   const unitUm = 1000 / doc.header.unitsPerMm;
   const symbols: RenderSymbol[] = [];
   const proxyIdx: Partial<Record<RenderSymbol["type"], number>> = {};
   const proxies = proxySymbols(opts.proxyColours);
-  const stats = { total: doc.header.objects.count, rendered: 0, proxied: 0, hidden: 0, dropped: 0, coordinates: 0, canonicalSymbols: 0, canonicalMissing: 0 };
+  const stats = { total: doc.header.objects.count, rendered: 0, proxied: 0, hidden: 0, patchHidden: 0, dropped: 0, coordinates: 0, canonicalSymbols: 0, canonicalMissing: 0 };
   // Symbol i of the document maps to symbols[i]; placeholders keep indices aligned.
   const placeholder = proxies[0];
   const index = canonical ? paletteIndexOfStack(doc.header.colours) : undefined;
@@ -128,6 +147,10 @@ export function documentRenderInput(doc: MapDocument, opts: DocumentRenderOption
   const count = order ? order.length : doc.header.objects.count;
   for (let k = 0; k < count; k++) {
     const i = order ? order[k] : k;
+    if (doc.hidden?.[i]) {
+      stats.patchHidden++;
+      continue;
+    }
     const symIdx = doc.attrs.symbolIdx[i];
     const sym = doc.header.symbols[symIdx];
     if (!sym) {

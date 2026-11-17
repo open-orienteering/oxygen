@@ -254,6 +254,20 @@ describe("concurrency (course-layer.md §7)", () => {
     expect((await ccOf(id)).map((cc) => cc.control.codes)).toEqual(["32"]);
   });
 
+  it("a stale token on a course with a variation group is a CONFLICT naming the group by its id, not a 500", async () => {
+    // docs/bugfix-editor-overlapping-course-writes.md: the group's id reached the uuid lookup of the differing sites.
+    const { id } = await caller.course.create({ name: "Race variation" });
+    const group = (b: number[]) => ({
+      version: 1 as const, id: "s", orderMode: "ordered" as const,
+      items: [{ siteId: 31 }, { kind: "variation" as const, id: "v1", alternatives: [{ label: "A", items: [] }, { label: "B", items: b.map((siteId) => ({ siteId })) }] }, { siteId: 33 }],
+    });
+    const v0 = (await caller.course.setStructure({ courseId: id, structure: group([32]) })).version;
+    const v1 = (await caller.course.setStructure({ courseId: id, structure: group([]), baseVersion: v0 })).version;
+    const conflict = await conflictOf(caller.course.setStructure({ courseId: id, structure: group([34]), baseVersion: v0 }));
+    expect(conflict).toMatchObject({ kind: "course", id, version: v1 });
+    expect(conflict.differing).toEqual(["v1"]);
+  });
+
   it("refuses a stale control token, naming the fields that differ", async () => {
     const before = (await caller.control.list()).find((c) => c.id === 32)!;
     const moved = await caller.control.update({ id: 32, xpos: 51, ypos: 21, baseVersion: before.version });
@@ -261,6 +275,17 @@ describe("concurrency (course-layer.md §7)", () => {
     expect(conflict).toMatchObject({ kind: "control", id: 32, version: moved.version, differing: ["xpos", "ypos"] });
     expect(conflict.current).toMatchObject({ xpos: 51, ypos: 21 });
     expect(conflict.differing).not.toContain("notes");
+  });
+
+  it("a move queued before a check-off elsewhere: differing names the check, not the position (D9c rebases it)", async () => {
+    const before = (await caller.control.list()).find((c) => c.id === 33)!;
+    const checked = await caller.control.check({ controlId: 33, checked: true });
+    const conflict = await conflictOf(caller.control.update({ id: 33, xpos: 53, ypos: 23, baseVersion: before.version }));
+    expect(conflict).toMatchObject({ kind: "control", id: 33, version: checked.version });
+    expect(conflict.differing).toContain("checkedAt");
+    expect(conflict.differing).not.toContain("xpos");
+    expect(conflict.differing).not.toContain("ypos");
+    await caller.control.check({ controlId: 33, checked: false });
   });
 
   it("reports differing as null when the base entry is not on this node (token 0)", async () => {

@@ -10,15 +10,18 @@
  *   (a control circle is grabbed by its interior, not only its ring);
  * - glyphs: a disc of the mesh radius × instance scale per instance;
  * - text: a box per glyph, 0.65 em wide (the course layer's own estimate,
- *   course-layer.md §3.5), from 0.2 em below the baseline to 0.8 em above.
+ *   course-layer.md §3.5), from 0.2 em below the baseline to 0.8 em above,
+ *   turned with the glyph (`angles`) about its origin.
  *
  * All within `toleranceUm` (the caller's screen tolerance converted to
  * paper). Hits are ordered topmost first: backends draw the stream front
  * to back (§3.6), so a later pass is on top of an earlier one.
+ * `hitTestStreams` merges several streams — the effective document's pinned
+ * stream and its patch's (G5) — in the GL backend's draw order.
  */
 
 import { flattenRings, pointInRings, type FlatRing } from "./geometry.js";
-import type { Pass, PassStream } from "./pass-stream.js";
+import { PASS_KIND_ORDER, type Pass, type PassStream } from "./pass-stream.js";
 import { pathBounds } from "./path.js";
 
 export interface HitOptions {
@@ -28,6 +31,8 @@ export interface HitOptions {
   objects?: (objectIdx: number) => boolean;
   /** A closed stroke hits over its whole interior. */
   closedStrokeInterior?: boolean;
+  /** Only these passes, ascending stream indices (default: every pass). */
+  passes?: readonly number[];
 }
 
 export interface Hit {
@@ -114,8 +119,15 @@ function passDistance(stream: PassStream, p: Pass, x: number, y: number, opts: H
       let best = Infinity;
       for (let i = 0; i < p.positions.length; i += 2) {
         const gx = p.positions[i], gy = p.positions[i + 1];
-        const dx = Math.max(gx - x, 0, x - (gx + TEXT_ADVANCE_EM * em));
-        const dy = Math.max(gy - 0.2 * em - y, 0, y - (gy + 0.8 * em));
+        // The point in the glyph's own frame: turned back about its origin (§3.5).
+        let lx = x - gx, ly = y - gy;
+        const deg = p.angles?.[i / 2];
+        if (deg) {
+          const a = (-deg * Math.PI) / 180, c = Math.cos(a), s = Math.sin(a);
+          [lx, ly] = [lx * c - ly * s, lx * s + ly * c];
+        }
+        const dx = Math.max(-lx, 0, lx - TEXT_ADVANCE_EM * em);
+        const dy = Math.max(-0.2 * em - ly, 0, ly - 0.8 * em);
         best = Math.min(best, Math.hypot(dx, dy));
       }
       return best;
@@ -128,7 +140,9 @@ export function hitTest(stream: PassStream, x: number, y: number, opts: HitOptio
   const radii = new Map<number, number>();
   const seen = new Set<number>();
   const hits: Hit[] = [];
-  for (let i = stream.passes.length - 1; i >= 0; i--) {
+  const passes = opts.passes;
+  for (let k = (passes ? passes.length : stream.passes.length) - 1; k >= 0; k--) {
+    const i = passes ? passes[k] : k;
     const obj = stream.objectIdx[i];
     if (seen.has(obj) || (opts.objects && !opts.objects(obj))) continue;
     const d = passDistance(stream, stream.passes[i], x, y, opts, radii);
@@ -138,4 +152,33 @@ export function hitTest(stream: PassStream, x: number, y: number, opts: HitOptio
     }
   }
   return hits;
+}
+
+/** One stream of several hit-tested together, with its own pass and object selection. */
+export interface HitSource {
+  stream: PassStream;
+  /** Ascending stream indices (default: every pass). */
+  passes?: readonly number[];
+  objects?: (objectIdx: number) => boolean;
+}
+
+/**
+ * The objects of several streams under (x, y), topmost first in the order the GL backend draws
+ * their passes (§5.2 "Drawing"): colour, then kind (§3.6), then the later source over the earlier
+ * one, then stream order. One hit per (source, object); `source` indexes `sources`.
+ */
+export function hitTestStreams(sources: readonly HitSource[], x: number, y: number, opts: Omit<HitOptions, "objects" | "passes">): (Hit & { source: number })[] {
+  const all = sources.flatMap((s, source) =>
+    hitTest(s.stream, x, y, { ...opts, ...(s.objects ? { objects: s.objects } : {}), ...(s.passes ? { passes: s.passes } : {}) }).map((h) => ({ ...h, source })));
+  const key = (h: Hit & { source: number }) => {
+    const p = sources[h.source].stream.passes[h.passIdx];
+    return [p.colour, PASS_KIND_ORDER[p.kind], h.source, h.passIdx];
+  };
+  return all
+    .map((h) => ({ h, k: key(h) }))
+    .sort((a, b) => {
+      for (let i = 0; i < 4; i++) if (a.k[i] !== b.k[i]) return b.k[i] - a.k[i];
+      return 0;
+    })
+    .map(({ h }) => h);
 }

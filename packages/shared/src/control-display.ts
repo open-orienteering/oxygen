@@ -3,6 +3,13 @@
  * API (labels, sheets, the IOF / Purple Pen export) and the web.
  */
 
+/** Extract the first numeric code from a control's `codes` string. */
+export function firstCode(codes: string): number {
+  const head = codes.split(";")[0]?.trim();
+  const n = parseInt(head ?? "", 10);
+  return Number.isNaN(n) ? 0 : n;
+}
+
 /** Whether a row is a start or finish: its kind, else the legacy `status` 4 / 5. */
 export function isStartOrFinish(c: { kind?: string | null; status?: string | null }): boolean {
   return c.kind === "start" || c.kind === "finish" || c.status === "start" || c.status === "finish";

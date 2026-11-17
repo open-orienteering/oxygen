@@ -83,6 +83,8 @@ export interface MapPanelPublicProps {
   focusControlCodes?: string[];
   /** Hide the toolbar (filter/description/fullscreen buttons) entirely */
   hideToolbar?: boolean;
+  /** Offer the viewer's 3D mode (docs/map-rendering.md §5.4 "3D mode"); the kiosk passes false. */
+  allow3d?: boolean;
   /** GPS route traces to overlay on the map. */
   gpsRoutes?: Array<{ color: string; points: Array<{ lat: number; lng: number }> }>;
   /**
@@ -129,6 +131,7 @@ function MapPanelImpl({
   punchStatusByCode,
   focusControlCodes,
   hideToolbar = false,
+  allow3d = true,
   gpsRoutes,
   fillContainer = false,
   onPaneCollapse,
@@ -672,6 +675,7 @@ function MapPanelImpl({
           documentHash={documentHash}
           mapBudget={mapMetadata.data?.clubMapVersionId ? "club" : "event"}
           rotationCorrection={mapMetadata.data?.rotationCorrection}
+          patchVersion={mapMetadata.data?.patchVersion}
           controls={controlOverlays}
           courses={courseOverlays}
           courseObjects={courseObjectsInView}
@@ -696,6 +700,9 @@ function MapPanelImpl({
           hideControls={false}
           gpsRoutes={gpsRoutes}
           editor={editor}
+          terrain={mapMetadata.data?.terrain ?? null}
+          allow3d={allow3d}
+          onTerrainFetched={refetchMapMetadata}
         />
         {mapOverlay && (
           // Spans the map's full height so a tall overlay (the editor's

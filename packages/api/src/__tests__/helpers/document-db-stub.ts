@@ -26,11 +26,21 @@ export interface StubPin {
   rotationCorrection?: number;
 }
 
+/** The event's `map_patches` row (docs/map-patches.md §3.1). */
+export interface StubPatchRow {
+  documentHash: string;
+  enabled: boolean;
+  ops: unknown;
+  symbols: unknown;
+  version: bigint;
+}
+
 export interface StubDb {
   db: PrismaClient;
   /** How often each table was read, for cache assertions. */
-  reads: { mapFile: number; mapDocument: number; blobs: number };
+  reads: { mapFile: number; mapDocument: number; blobs: number; mapPatch: number };
   setPin(pin: StubPin | null): void;
+  setPatch(row: StubPatchRow | null): void;
 }
 
 /** Import a source file in memory and return what `storeImportedDocument` would write. */
@@ -48,7 +58,8 @@ export async function importForStub(bytes: Buffer, fileName: string, kind: "ocad
 
 export function documentDbStub(documents: StubDocument[], sources: Record<string, Uint8Array>, pin: StubPin | null): StubDb {
   let current = pin;
-  const reads = { mapFile: 0, mapDocument: 0, blobs: 0 };
+  let patch: StubPatchRow | null = null;
+  const reads = { mapFile: 0, mapDocument: 0, blobs: 0, mapPatch: 0 };
   const byHash = new Map(documents.map((d) => [d.hash, d]));
   const db = {
     mapFile: {
@@ -68,6 +79,12 @@ export function documentDbStub(documents: StubDocument[], sources: Record<string
           northOffset: null,
           calibration: null,
         };
+      },
+    },
+    mapPatch: {
+      findUnique: async () => {
+        reads.mapPatch++;
+        return patch;
       },
     },
     mapDocument: {
@@ -90,5 +107,5 @@ export function documentDbStub(documents: StubDocument[], sources: Record<string
       return [{ chunk: buf }];
     },
   };
-  return { db: db as unknown as PrismaClient, reads, setPin: (p) => { current = p; } };
+  return { db: db as unknown as PrismaClient, reads, setPin: (p) => { current = p; }, setPatch: (r) => { patch = r; } };
 }

@@ -23,7 +23,7 @@ import type { DescriptionBlockInput } from "./description.js";
 /** Page mm → page µm. */
 const um = (mm: number) => Math.round(mm * 1000);
 
-/** Everything one page needs; `resolveSheet` (api) builds it from template, sheet and course rows. */
+/** Everything one page needs; `resolveSheet` (`course-maps/resolve-sheet.ts`) builds it from template, sheet and course rows. */
 export interface PageInput {
   /** Paper size, mm. */
   paper: { widthMm: number; heightMm: number };

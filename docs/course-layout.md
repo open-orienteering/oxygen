@@ -65,8 +65,9 @@ composer's own stream, symbolised in the worker (`map-rendering.md` §5.2
 
 ### What the editor reads
 
-`courseMap.resolveSheet` (`courses.view`) wraps `resolve-sheet.ts` through
-the row mapping `maps.pdf` uses (`sheetInputForMapRow`, `pdf-page.ts`):
+`courseMap.resolveSheet` (`courses.view`) wraps `resolveSheet` through
+the row mapping `maps.pdf` uses (`sheetInputForMapRow`; both in
+`@oxygen/shared`, `course-maps/{resolve-sheet,sheet-rows}.ts` since G13):
 
 - `{ seq }` → a sheet; `{ templateSeq, courseSeq? }` → a template
   previewed with a course (the window centred on the course, as
@@ -513,6 +514,9 @@ which runs `autoSheets` for the class's course in the same transaction —
 not by `class.update` (`manageRace`): they are layout data. They are
 cloud-owned and **not journaled**: `class.upserted` leaves both columns
 out (`referenceJournal.ts`), since a peer may not hold the template row.
+A venue checkout carries them with the class rows and the templates
+(G18, `map-storage.md` §7.2; NULL when the exporter sent no templates),
+and `layout.` writes on a box are forwarded to the cloud.
 The Layout inspector's *Classes* section (`editor-layout-classes`,
 `editor-layout-class-<seq>` with `data-sheets`) edits them per class of
 the sheet's course — scale (`…-class-scale-<seq>`, blank = none),
@@ -522,7 +526,7 @@ reads them. The Courses page's print overview stays per course: class
 sheets are left out of its template and status columns (SLICES "Decided
 in this split").
 
-**Printing a class** (`rowForClass`, `course-maps/pdf-page.ts`, both
+**Printing a class** (`rowForClass`, `@oxygen/shared` `course-maps/sheet-rows.ts`, both
 pipelines): the description header and `{classes}` name that class only;
 a class without its own sheets prints its course's own sheets with the
 override applied — template `sheet_template_id ?? the sheet's`, scale
@@ -567,6 +571,7 @@ entries; `lib/editor/export-menu.ts`), each on an existing route:
 | All courses (`…-all`) | `maps.pdf` (every own sheet and the all-controls sheet) | `autoSheets {}` |
 | All controls (`…-allControls`) | `maps.pdf?allControls=1` | `autoSheets { allControls: true }` (E-pages) |
 | Setter maps (`…-setter`; F10) | `maps.pdf?setter=1` (every setter sheet of the event, §8) | — (generating needs a group count: Layout mode's *Setter maps*; none → the route's "No setter maps found" on the error line) |
+| Make maps available offline (`…-offline`; G17) | no download: stores every map export of the event on this device (`course-print.md` §8.6 "Offline"); the button shows the progress | `autoSheets {}` and `{ allControls: true }` |
 | Description sheets… (`…-descriptions`; F11) | opens the dialog (`editor-descriptions-dialog`), then `descriptions.pdf?classes=<seq,…>&copies=&cell=` (`course-print.md` §6.4) | — (no sheet row) |
 | IOF XML (`…-iofxml`), Purple Pen (`…-ppen`) | `/api/export/course-data?format=` | — |
 
@@ -581,6 +586,28 @@ templates are managed"); a variant's row has `export-variant-<seq>`
 (F8), each ensuring the root's sheets. This sheet is a phase-1 entry 08
 §5.2 does not list: the Maps page's *Selected map*, kept so a second
 sheet prints alone; on a root's sheet it prints every variant too.
+
+**Where the PDF is made** (G16; `course-print.md` §8.6): every `maps.pdf`
+entry above — and the Courses page's exports — goes through
+`downloadMapsPdf` (`lib/download-api.ts`; Export ▾ through
+`downloadExport`, which recognises a `maps.pdf` URL): after `autoSheets`,
+the browser asks `GET /api/maps/:nameId/print-job` with the entry's query
+and composes the PDF itself when the device can, else downloads
+`maps.pdf`. Selection, order, caps, file name and the error line are the
+route's either way (a job error is `maps.pdf`'s message). Description
+sheets, IOF XML and Purple Pen are always the server's.
+
+**Offline** (G17; `course-print.md` §8.6 "Offline"): *Make maps available
+offline* — here, in the Courses page's export menu
+(`course-export-offline`) and in the sync panel — stores the event's
+print jobs, their graphics, the faces and the document on the device;
+opening Layout mode refreshes them silently (at most every 30 min, no
+sheet created). With no network a map entry composes from the stored
+job: the `autoSheets` step is skipped, the PDF downloads, and the notice
+under Export ▾ (`editor-export-notice`; on the Courses page
+`course-maps-notice`) says *Printed offline from the maps stored on
+{{time}}*. An export that was not stored says so (*not stored on this
+device*) on the error line.
 
 **`maps.pdf`'s selection** (`selectPrintPages`, `course-print.md` §4.6,
 §8): one of `maps=<seq,…>`, `courses=<seq,…>` (a variant's seq prints
@@ -686,7 +713,7 @@ template only setter sheets use is never it: their fitted keys are not
 the event's look.
 
 **What a setter sheet draws** (`sheetInputForMapRow` → `setterSheetInput`,
-`course-maps/pdf-page.ts`; `course-print.md` §5.2): the all-controls
+`@oxygen/shared` `course-maps/sheet-rows.ts`; `course-print.md` §5.2): the all-controls
 branch of `resolveMapLayout` (`kind === "setter"` joins it: no layer
 change) over the group's sites only — every site by its kind (702 for a
 map-issue point, 710 for a crossing point, start, finish), labels by code,
@@ -758,7 +785,8 @@ of the event, course seq (the event's last), sort order, seq.
 | unit (web) | `lib/editor/__tests__/layout-href.test.ts` | the Courses page's *Edit layout* link — a sheet with its course, a template with and without a preview course, a null course omitted, the event name encoded, in the editor's canonical order (`course=…&mode=layout&sheet=…`, F31); E-pages: `retiredPageHref` (`/maps` → Courses with its query, `/map-templates` → Layout mode on `?template=`, an invalid one ignored) |
 | unit (web) | `lib/editor/__tests__/export-menu.test.ts`, `pages/editor/__tests__/layout-model.test.ts`, `src/__tests__/new-template-form.test.ts`, `lib/__tests__/template-picker.test.ts`, `lib/__tests__/shell-tabs.test.ts`, `lib/structured-search/__tests__/new-anchors.test.ts` | E-pages: This sheet (`maps=`, disabled without a sheet, nothing ensured) and All controls ensuring `{ allControls: true }`; the template name in the snapshot and the template write (`templateWriteOf`); `nextSheetName`; a new template's name defaulting to the key's; the picker's values round-trip, a club template's free name; no Maps / Map templates tab; the course anchors' `template` and `status` |
 | E2E | `e2e/course-maps.spec.ts` "the Courses page and Layout mode (E-pages)" | New template… from a course's picker (the dialog creates and applies it; the auto badge; status not *No map*); Edit layout into Layout mode on the sheet; rename (`courseMap.update`), Add a sheet (opens, the picker lists two), Export ▾ This sheet = one A4 page, Delete; the template's name (`mapTemplate.update`); Save to the club library, Bring in (template scope on a new template, no notice); New template opens an A5 key-named one, Delete returns to the sheet; view All → Create the all-controls sheet (one `all_controls` row, shown). Then the overview: bulk Template on two courses (badges), a club template from the picker's optgroup (free name), the course's PDF (1 page), All controls (1), All maps (≥ 3; every course then has a sheet), `maps.pdf` without a pipeline header, the scroll wrapper; Layout's club section deletes a club template |
-| E2E | `e2e/course-maps.spec.ts` "export a course that has no template yet" | a course without a map exports one A4 page from the Courses page; the auto badge with its key; the route answers `application/pdf`; in Layout mode the template's key badge and its key name; a course without a sheet: *Create sheet* in Layout mode makes and shows it |
+| E2E | `e2e/course-maps.spec.ts` "export a course that has no template yet" | a course without a map exports one A4 page from the Courses page; the auto badge with its key; the route answers `application/pdf`; in Layout mode the template's key badge and its key name; a course without a sheet: *Create sheet* in Layout mode makes and shows it; G16: the export composed on the device (`print-job` asked, `maps.pdf` not) equals `maps.pdf` object for object, also with a PNG and an SVG on the sheet (`print.png`, the SVG at its box); "the server prints when the device cannot": `deviceMemory` 0.5 → `maps.pdf` asked, no job, one A4 page |
+| unit (web) | `print/__tests__/imports.test.ts` "mapsPdfTarget", `print/__tests__/client.test.ts` | G16 (§7 "Where the PDF is made"): every map entry of Export ▾ goes to the device path with its query, descriptions / IOF XML / Purple Pen do not; the device path and each fallback (`course-print.md` §9.1) |
 | E2E | `e2e/course-maps.spec.ts` "the retired Maps and Map templates pages redirect…" | E-pages: `/maps?course=1` → `/courses?course=1`, `/map-templates` → Layout mode; neither tab is shown |
 | E2E | `e2e/course-editor-layout.spec.ts` "Course editor auto templates" | Export ▾ → this course creates the sheet and prints one page; the auto badge and the sheet key; a class scale makes a class sheet; Class view shows `1:15000`; this class exports; Create extra template moves the course, its row moves it back, undo moves it again |
 | E2E | `e2e/course-editor-layout.spec.ts` "Course editor layout" "graphics: upload an SVG…" | E3 (ported from `course-maps.spec.ts`'s legacy layout editor): the Graphics section uploads an SVG (`graphics.upload`), its Place button arms the image tool, a click on the page places it (one `saveLayout`, an `image` row in the list and in `courseMap.get`); selected from the list and deleted, gone from both |

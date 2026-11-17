@@ -55,8 +55,12 @@ RUN node -e "\
   p.exports={'.':'./dist/src/index.js','./print':'./dist/src/print/index.js','./src/*':'./dist/src/*'};\
   fs.writeFileSync('packages/shared/package.json',JSON.stringify(p,null,2))"
 
-# Build the web frontend (vite build only — skip tsc type-check for speed)
-RUN cd packages/web && npx vite build
+# Build the web frontend (vite build only — skip tsc type-check for speed).
+# BUILD_VERSION (scripts/build-version.mjs, passed by publish.yml and
+# deploy.sh --from-source) is baked as the bundle's fallback version; empty
+# gives `<package version>-dev`. Declared here so earlier layers stay cached.
+ARG BUILD_VERSION=""
+RUN cd packages/web && OXYGEN_VERSION="$BUILD_VERSION" npx vite build
 
 # ─── Stage 4: API production image ────────────────────────
 FROM base AS api
@@ -71,6 +75,11 @@ ARG BUILD_ID=""
 ENV OXYGEN_BUILD_ID=$BUILD_ID
 ARG BUILD_REF=""
 ENV OXYGEN_DEPLOY_REF=$BUILD_REF
+# The application version /api/version answers and the footer shows
+# (`0.7.0`, `0.7.0-3-gabc1234`); empty on local builds, where the web falls
+# back to its own baked `<package version>-dev`.
+ARG BUILD_VERSION=""
+ENV OXYGEN_VERSION=$BUILD_VERSION
 
 WORKDIR /app
 

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { mapDocument } from "@oxygen/shared";
 import { CLUB_BUDGET_BYTES, EVENT_BUDGET_BYTES } from "../../map-gl/buckets";
-import { boundsMm, budgetBytes, documentColours, documentProxyColours, paperFrameOf } from "../vector-map";
+import { boundsMm, budgetBytes, documentColours, documentProxyColours, paperFrameOf, patchForDocument } from "../vector-map";
 
 const header = {
   unitsPerMm: 100,
@@ -40,5 +40,14 @@ describe("vector map header helpers", () => {
   it("budgets by provenance", () => {
     expect(budgetBytes("event")).toBe(EVENT_BUDGET_BYTES);
     expect(budgetBytes("club")).toBe(CLUB_BUDGET_BYTES);
+  });
+
+  it("pairs the patch with the document it is keyed onto (map-patches §2)", () => {
+    const A = "aa".repeat(32), B = "bb".repeat(32);
+    const patch: mapDocument.MapPatch = { documentHash: A, enabled: true, ops: {}, symbols: {} };
+    expect(patchForDocument(A, { patch })).toBe(patch);
+    expect(patchForDocument(B, { patch })).toBeNull();
+    expect(patchForDocument(A, { patch: null })).toBeNull();
+    expect(patchForDocument(A, undefined)).toBeNull();
   });
 });

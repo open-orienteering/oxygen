@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import { importReportSchema, importWarningDetailSchema, isUnsupportedPrimitive, WARNING_CLASS } from "../report.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const SOURCES = ["ocad-source", "omap-source", "omap-reader", "omap-symbols", "ocad-symbols", "match-document", "crt"];
+const SOURCES = ["ocad-source", "omap-source", "omap-reader", "omap-symbols", "ocad-symbols", "match-document", "crt", "patch-warnings"];
 
 /** Every upper-case code literal passed to a warning sink or typed into a code union in the importer sources. */
 function emittedCodes(): Set<string> {
@@ -71,6 +71,14 @@ describe("importReportSchema warningDetails", () => {
     expect(importReportSchema.safeParse(base).success).toBe(true);
     const detailed = { ...base, warningDetails: [{ code: "SYMBOL_REFERENCE_INVALID", message: "301.2: border symbol 301002 is the symbol itself", symbolIdx: 4 }, { code: "TEMPLATES_DROPPED", message: "1 template(s)" }] };
     expect(importReportSchema.safeParse(detailed).success).toBe(true);
+  });
+
+  it("accepts a colour stack with and without the displaced purples (absent before ocad-18 / omap-11)", () => {
+    const stack = { source: 3, inserted: ["purple-lower"], aliased: [], conflicts: [], unclassified: [], areasAboveLowerPurple: [] };
+    expect(importReportSchema.safeParse({ ...base, colourStack: stack }).success).toBe(true);
+    const displaced = { ...stack, purplesDisplaced: [{ name: "Violett", sourceNumber: 1153, role: "lower", why: "position" }, { name: "Upper Purple for Course Overprint", role: "upper", why: "duplicate" }] };
+    expect(importReportSchema.parse({ ...base, colourStack: displaced }).colourStack?.purplesDisplaced).toHaveLength(2);
+    expect(importReportSchema.safeParse({ ...base, colourStack: { ...stack, purplesDisplaced: [{ name: "Violett", role: "middle", why: "position" }] } }).success).toBe(false);
   });
 
   it("rejects an entry without a message or with a negative symbol index", () => {

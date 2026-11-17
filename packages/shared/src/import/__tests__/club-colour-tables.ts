@@ -10,7 +10,7 @@ import type { DocumentColour } from "../../map-document/header.js";
 
 export type ColourRow = readonly [sourceNumber: number, name: string, c: number, m: number, y: number, k: number];
 
-export const toColours = (rows: readonly ColourRow[]): DocumentColour[] =>
+export const toColours = (rows: readonly (ColourRow | ColourRowUsed)[]): DocumentColour[] =>
   rows.map(([n, name, c, m, y, k]) => ({ id: `src:${n}`, name, cmyk: [c / 100, m / 100, y / 100, k / 100], sourceNumber: n }));
 
 /** Ny_karta_test (67 colours): the mapper's own upper purple, no lower; "Green 100% + 50% Black Area Feature" at the bottom of the area block. */
@@ -208,4 +208,101 @@ export const ungdomsserien: readonly ColourRow[] = [
   [0, "Registration black (all printed colors)", 100, 100, 100, 100],
   [1051, "Orange", 0, 50, 100, 0],
   [1050, "Red", 0, 100, 100, 0],
+];
+
+/** A row with the number of objects that use the colour (what `matchDocument` passes as `usage`). */
+export type ColourRowUsed = readonly [...ColourRow, usage: number];
+
+export const toUsage = (rows: readonly ColourRowUsed[]): number[] => rows.map((r) => r[6]);
+
+/**
+ * Nackareservatet 2023 (Testkarta; Club-full in the corpus, 81 colours,
+ * ISOM 2017-2, iof2022), with usage — docs/bugfix-course-purples-under-map.md.
+ * Six full purples: "Övre violett" at the bottom (index 0, the most used),
+ * another at 2, "Upper Purple for Course Overprint" at 23 and 79, the only
+ * lower candidate "Violett" (by position) at 25 under the whole area block,
+ * and "Violett" on top at 80.
+ */
+export const nackareservatet2023: readonly ColourRowUsed[] = [
+  [1348, "Övre violett för banpåtryck", 20, 90, 0, 0, 2676],
+  [1322, "Svart", 0, 90, 0, 100, 7],
+  [1319, "Övre violett för banpåtryck", 20, 85, 0, 0, 51],
+  [1314, "SOFT-blå", 100, 50, 0, 55, 6],
+  [1313, "SOFT-vit", 0, 0, 0, 0, 19],
+  [1312, "SOFT-gul", 0, 0, 100, 0, 10],
+  [24, "Svart för odlad mark och sandområden", 0, 0, 0, 100, 10],
+  [1150, "Grön", 65, 0, 85, 0, 3],
+  [1148, "Blå 50%", 42, 0, 0, 0, 2],
+  [1142, "Blå", 83, 0, 0, 0, 6],
+  [1139, "Brun", 16, 68, 100, 0, 2],
+  [1137, "Svart", 0, 0, 0, 100, 19],
+  [1135, "Röd", 0, 100, 100, 0, 12],
+  [34, "Svart överst", 0, 0, 0, 100, 421],
+  [1189, "Gul", 0, 19, 92, 0, 1],
+  [1178, "För asfalt Green 100% - Area Feature", 71, 0, 91, 0, 2],
+  [1173, "Röda spåret Hellas", 0, 100, 100, 0, 3],
+  [1172, "Cykelspår Hellas", 100, 0, 0, 0, 3],
+  [1171, "Källtorpssjön runt", 0, 0, 100, 0, 2],
+  [1170, "Sörmlandsleden", 0, 50, 100, 0, 1],
+  [1169, "Grön Naturreservat", 71, 0, 91, 0, 2],
+  [1162, "Blue 100%  - Line Feature", 83, 0, 0, 0, 4],
+  [1156, "All printing colours", 100, 100, 100, 100, 1],
+  [1155, "Upper Purple for Course Overprint", 10, 100, 10, 0, 3],
+  [13, "NEW COLOR", 16, 68, 100, 0, 0],
+  [1153, "Violett", 10, 100, 10, 0, 1],
+  [9, "Gul", 0, 22, 92, 0, 1],
+  [1132, "Orange 50%- Area Feature", 0, 14, 36, 0, 5],
+  [1128, "White for Yellow", 0, 0, 0, 0, 5],
+  [1127, "Grey 25%- Area Feature", 0, 0, 0, 20, 14],
+  [115, "Green 100% + 50% Black Area Feature", 65, 0, 85, 40, 13],
+  [1114, "Blue 100% - Area Feature", 83, 0, 0, 0, 5],
+  [1103, "Blue 100% - Point Feature", 83, 0, 0, 0, 2],
+  [1087, "Orange 100% - Narrow Ride", 0, 19, 100, 0, 1],
+  [1086, "Brown 50% - Area Feature", 4, 33, 33, 0, 7],
+  [1072, "Vit mask för text och kontrollb", 0, 0, 0, 0, 4],
+  [38, "Röd", 0, 90, 100, 0, 1],
+  [123, "Orange 50%- Area Feature", 0, 14, 36, 0, 2125],
+  [263, "Gul 75% för hällmark", 0, 17, 48, 0, 1602],
+  [112, "Orange 100% - Narrow Ride", 0, 22, 92, 0, 37],
+  [122, "Orange 100% - Area Feature", 0, 22, 92, 0, 2949],
+  [121, "White for Yellow", 0, 0, 0, 0, 1259],
+  [456, "Grå 20%", 0, 0, 0, 13, 1],
+  [120, "Grey 25%- Area Feature", 0, 0, 0, 20, 61],
+  [118, "Green 30% - Area Feature", 14, 0, 28, 0, 1230],
+  [117, "Green 60% - Area Feature", 32, 0, 52, 0, 1002],
+  [119, "Green 100% - Undergrowth", 76, 0, 91, 0, 431],
+  [116, "Green 100% - Area Feature", 76, 0, 91, 0, 486],
+  [114, "White for Green", 0, 0, 0, 0, 4],
+  [1, "För asfalt Green 100% - Area Feature", 76, 0, 91, 0, 38],
+  [113, "Orange100%/Green 50%", 30, 22, 82, 0, 2050],
+  [111, "Brown 50% - Area Feature", 4, 33, 33, 0, 4858],
+  [109, "Blue 70% - Area Feature", 62, 0, 0, 0, 265],
+  [108, "Blue 100% - Area Feature", 83, 0, 0, 0, 3138],
+  [8, "Röda spåret Hellas", 0, 100, 100, 0, 2],
+  [6, "Cykelspår Hellas", 100, 0, 0, 0, 2],
+  [5, "Källtorpssjön runt", 0, 0, 100, 0, 1],
+  [4, "Sörmlandsleden", 0, 50, 100, 0, 2],
+  [40, "Grön Naturreservat", 76, 0, 91, 0, 32],
+  [103, "Black 20% - Area Feature", 0, 0, 0, 20, 42],
+  [36, "Brun gc-vägar nära hus", 18, 44, 70, 0, 141],
+  [107, "Brown 100% - Line Feature", 12, 71, 100, 12, 9811],
+  [15, "Brun - Linjeobjekt", 12, 71, 100, 12, 7308],
+  [106, "Blue 100%  - Line Feature", 83, 0, 0, 0, 1562],
+  [97, "Green 100%  - Point Feature", 76, 0, 91, 0, 245],
+  [96, "Brown 100%  - Point Feature", 12, 71, 100, 12, 5494],
+  [95, "Blue 100% - Point Feature", 83, 0, 0, 0, 48],
+  [101, "Black 100% - Street", 0, 0, 0, 100, 2466],
+  [99, "Brown 50% - Street Infill", 4, 33, 33, 0, 2414],
+  [98, "Black 100% - Street Middleline", 0, 0, 0, 100, 1308],
+  [100, "White for Railway", 0, 0, 0, 0, 46],
+  [468, "Svart 100%", 0, 0, 0, 100, 8658],
+  [0, "Svart", 0, 0, 0, 100, 925],
+  [1102, "Black 100%", 0, 0, 0, 100, 3],
+  [93, "Black 100%", 0, 0, 0, 100, 44283],
+  [432, "Vit mask för text och kontrollb", 0, 0, 0, 0, 606],
+  [3, "T-bana", 90, 32, 0, 0, 40],
+  [1071, "All printing colours", 100, 100, 100, 100, 3],
+  [92, "All printing colours", 100, 100, 100, 100, 651],
+  [89, "Upper Purple for Course Overprint", 10, 90, 10, 0, 24],
+  [428, "Violett", 10, 90, 10, 0, 29],
 ];

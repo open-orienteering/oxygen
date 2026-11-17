@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { render } from "@oxygen/shared";
+import { mapDocument, render } from "@oxygen/shared";
 import { MapGlEngine, type Transport } from "../engine";
 import { createMapGlWorker, type WorkerReply, type WorkerRequest } from "../worker";
 import { CELL_UM, type PreparedPart, type ResidentPart, type VisibleSet, type ViewRect } from "../buckets";
@@ -10,6 +10,20 @@ import { loupeView, type RenderTarget } from "../view";
 import { parseTextAtlasPage } from "../text-atlas";
 import type { MeshAtlas } from "../mesh-atlas";
 import { documentBytes, indexOf, request } from "./course-fixture";
+import { vi } from "vitest";
+import type { HeightField } from "@oxygen/shared/src/terrain/field/read.js";
+import { DRAPE_ARRIVAL_MS, DRAPE_SETTLE_MS } from "../engine";
+import { aboveZoomGate } from "../buckets";
+import { drapeTextureBytes } from "../renderer";
+import { assembleTerrainMesh, type TerrainMesh } from "../terrain/mesh";
+import type { PreparedField, TerrainFrame } from "../terrain/program";
+import type { TerrainLine } from "../terrain/lines";
+import type { TerrainLinesPass } from "../renderer";
+import { DRAPE_TEXEL_BYTES } from "../terrain/footprint";
+import { distanceForPxPerUm, type TerrainCamera } from "../terrain/camera";
+import { fieldFromGrid } from "../terrain/synthetic";
+import { viewMatrix as twoDMatrix } from "../view";
+import { CELL_UM as PATCH_CELL_UM, cell, discSym, documentBytes as patchDocumentBytes, index, moveLine1, patchOf } from "./patch-fixture";
 
 const fontsDir = resolve(import.meta.dirname, "../../../../shared/fonts");
 const fontBytes = () => {
@@ -90,13 +104,63 @@ class FakeRenderer {
   get documentBytes() {
     return { arenas: 0, arenasUsed: 0, atlas: 0, text: 0, visibleSet: 0, total: 0 };
   }
+  // ---- terrain (§5.6 "Engine API") ----
+  /** Every renderer call of a 3D frame, in order. */
+  log: string[] = [];
+  fields: { header: HeightField["header"]; origin: { x: number; y: number }; prepared: unknown }[] = [];
+  drapeRenders: { slot: number; view: ViewRect; opts: DocumentRenderOptions }[] = [];
+  terrainFrames: TerrainFrame[] = [];
+  drapeSizes: ({ w: number; h: number } | undefined)[] = [];
+  private fieldNow: HeightField | null = null;
+  private meshNow: TerrainMesh | null = null;
+  readonly maxTextureSize = 4096;
+  readonly terrain = {
+    setField: (field: HeightField, origin: { x: number; y: number }, prepared?: PreparedField) => {
+      this.fields.push({ header: field.header, origin, prepared });
+      this.fieldNow = field;
+      this.meshNow = assembleTerrainMesh(field.header, prepared!.terrain, origin);
+      return this.meshNow;
+    },
+    setOrigin: (origin: { x: number; y: number }) => {
+      this.meshNow = assembleTerrainMesh(this.fieldNow!.header, this.meshNow!, origin);
+      return this.meshNow;
+    },
+    clearField: () => {
+      this.log.push("clearField");
+      this.fieldNow = this.meshNow = null;
+    },
+  };
+  renderDrape(slot: number, view: ViewRect, opts: DocumentRenderOptions) {
+    this.log.push(`drape${slot}`);
+    this.drapeRenders.push({ slot, view, opts });
+    this.drapeSizes[slot] = { w: view.widthPx, h: view.heightPx };
+    return { drawCalls: 3, tiles: 1, cpuMs: 0 };
+  }
+  drape(slot: number) {
+    return this.drapeSizes[slot] ? ({ slot } as unknown as WebGLTexture) : undefined;
+  }
+  releaseDrapes(from = 0) {
+    this.log.push(`release${from}`);
+    this.drapeSizes.length = Math.min(this.drapeSizes.length, from);
+  }
+  get drapeBytes() {
+    return this.drapeSizes.reduce((n, d) => n + (d ? drapeTextureBytes(d.w, d.h) : 0), 0);
+  }
+  readonly drapeScratchBytes = 0;
+  readonly terrainLines: (TerrainLinesPass | undefined)[] = [];
+  drawTerrain(frame: TerrainFrame, _target?: unknown, lines?: TerrainLinesPass) {
+    this.log.push("mesh");
+    this.terrainFrames.push(frame);
+    this.terrainLines.push(lines);
+    return { chunks: 1, culled: 0, triangles: 2, perLevel: [1, 0, 0, 0, 0, 0, 0], draws: 1, matrix: new Float32Array(16), drawCalls: 1, cpuMs: 0 };
+  }
 }
 
 /** The worker's handler behind a transport whose messages are delivered only when `flush()` runs. */
 function manualTransport() {
   const tasks: (() => void)[] = [];
   const posted: WorkerRequest[] = [];
-  const t: Transport & { flush(): void; posted: WorkerRequest[] } = {
+  const t: Transport & { flush(): void; step(n: number): void; posted: WorkerRequest[] } = {
     posted,
     onMessage: undefined,
     terminate: () => undefined,
@@ -106,6 +170,10 @@ function manualTransport() {
     },
     flush: () => {
       for (let guard = 0; tasks.length && guard < 10_000; guard++) tasks.shift()!();
+    },
+    /** Runs the next `n` tasks only (a message handled, a prepare slice, a reply delivered). */
+    step: (n) => {
+      for (let i = 0; i < n && tasks.length; i++) tasks.shift()!();
     },
   };
   const handler = createMapGlWorker((msg: WorkerReply) => tasks.push(() => t.onMessage?.(msg)), (fn) => tasks.push(fn), 1e9);
@@ -392,9 +460,17 @@ describe("MapGlEngine dynamic bucket (docs/map-rendering.md §5.2 Dynamic bucket
     expect(blackDraws(clipped).map((d) => d.mask)).toEqual([0]);
     expect(clipped.filter?.masks).toHaveLength(1);
 
+    const hitLine = async () => {
+      const h = engine.hitDocument(25_000, 10_000, 0);
+      transport.flush();
+      return (await h).map((x) => x.ref);
+    };
+    expect(await hitLine()).toEqual([{ source: 0 }]);
     engine.setCourse(request({ regions: [{ rings: [square], mode: "hide", symbols: "all" }] }));
     transport.flush();
     expect(blackDraws(draw())).toEqual([]);
+    // What a hide region removes is not hit either (§5.5 "Document objects").
+    expect(await hitLine()).toEqual([]);
     engine.setHidden(new Set([1]));
     expect(draw().stroke.draws.filter((d) => d.colour !== black && d.mask === undefined).length).toBeGreaterThan(0);
 
@@ -498,3 +574,584 @@ describe("MapGlEngine dynamic bucket (docs/map-rendering.md §5.2 Dynamic bucket
   });
 });
 
+describe("MapGlEngine patch (docs/map-rendering.md §5.2 \"Patch\")", () => {
+  /** All five cells of the patch fixture in view, above the gate. */
+  const whole: ViewRect = { centreX: 25_000, centreY: 5_000, pxPerUm: 0.02, widthPx: 1500, heightPx: 600 };
+  const patchLoad = () => ({ source: { kind: "document" as const, bytes: patchDocumentBytes(), options: { unmatched: "proxy" as const } }, fonts: [], cellUm: PATCH_CELL_UM });
+  async function patchEngine(before?: ReturnType<typeof patchOf> | null) {
+    const renderer = new FakeRenderer();
+    const transport = manualTransport();
+    const engine = new MapGlEngine(renderer as unknown as MapGlRenderer, transport, { budgetBytes: 1 << 30 });
+    let changes = 0;
+    engine.onChange = () => changes++;
+    const early = before !== undefined ? engine.setPatch(before) : undefined;
+    const p = engine.load(patchLoad());
+    transport.flush();
+    const summary = await p;
+    engine.setView(whole);
+    transport.flush();
+    engine.render({ colour: () => [0, 0, 0] });
+    return { renderer, transport, engine, summary, early, changes: () => changes };
+  }
+  const strokes = (r: FakeRenderer) => r.visibleSets.at(-1)!.stroke.indices.length;
+  const fills = (r: FakeRenderer) => r.visibleSets.at(-1)!.fill.indices.length;
+  const loads = (t: { posted: WorkerRequest[] }) => t.posted.filter((m) => m.type === "load").length;
+  const patches = (t: { posted: WorkerRequest[] }) => t.posted.filter((m) => m.type === "patch") as Extract<WorkerRequest, { type: "patch" }>[];
+
+  it("a patch before the load goes with it: the first frame hides the object", async () => {
+    const plain = await patchEngine();
+    const { transport, renderer, early, engine } = await patchEngine(patchOf([{ op: "hide", sourceIndex: 3 }]));
+    const load = transport.posted.find((m) => m.type === "load")!;
+    expect(load.type === "load" && load.source.kind === "document" && load.source.patch?.ops["hide:3"]).toBeTruthy();
+    expect(Array.from((await early!).hidden)).toEqual([index(3)]);
+    expect(engine.patchState?.hidden.length).toBe(1);
+    expect(fills(renderer)).toBeLessThan(fills(plain.renderer));
+    expect(patches(transport)).toHaveLength(0);
+  });
+
+  it("a change redraws without reloading: hide skips the object's ranges, the toggle off restores the same visible set", async () => {
+    const { engine, transport, renderer, changes } = await patchEngine();
+    const before = { strokes: strokes(renderer), fills: fills(renderer) };
+    const c0 = changes();
+    const done = engine.setPatch(patchOf([{ op: "hide", sourceIndex: 2 }, { op: "hide", sourceIndex: 3 }]));
+    transport.flush();
+    expect(Array.from((await done).hidden).sort()).toEqual([index(2), index(3)].sort());
+    expect(changes()).toBeGreaterThan(c0);
+    engine.render({ colour: () => [0, 0, 0] });
+    expect(strokes(renderer)).toBeLessThan(before.strokes);
+    expect(fills(renderer)).toBeLessThan(before.fills);
+    const off = engine.setPatch(null);
+    transport.flush();
+    await off;
+    engine.render({ colour: () => [0, 0, 0] });
+    expect({ strokes: strokes(renderer), fills: fills(renderer) }).toEqual(before);
+    expect(loads(transport)).toBe(1);
+  });
+
+  it("a touched cell's resident detail is swapped in the same reply; a cell that left the detail set is released", async () => {
+    const { engine, transport, renderer } = await patchEngine();
+    const old0 = renderer.parts.get(`d${cell(0)}`)!;
+    expect(old0).toBeDefined();
+    engine.setPatch(patchOf([moveLine1(7)]));
+    const req = patches(transport).at(-1)!;
+    expect(req.detail.sort()).toEqual([0, 1, 3]); // the cells with detail, all resident
+    transport.flush();
+    const new0 = renderer.parts.get(`d${cell(0)}`)!;
+    expect(new0).not.toBe(old0);
+    expect(new Float32Array(new0.stroke!.verts)[0]).not.toBe(new Float32Array(old0.stroke!.verts)[0]);
+    // Into cell 1: cell 0 has no detail any more and nothing is asked for it.
+    engine.setPatch(patchOf([moveLine1(15.5)]));
+    transport.flush();
+    expect(renderer.parts.has(`d${cell(0)}`)).toBe(false);
+    expect(prepares(transport).at(-1)!.ids).not.toContain(cell(0));
+    expect(engine.stats().pending).toBe(0);
+    expect(loads(transport)).toBe(1);
+  });
+
+  it("a touched cell's detail that arrived after the request was sent is dropped and asked for again", async () => {
+    const renderer = new FakeRenderer();
+    const transport = manualTransport();
+    const engine = new MapGlEngine(renderer as unknown as MapGlRenderer, transport, { budgetBytes: 1 << 30 });
+    const p = engine.load(patchLoad());
+    transport.flush();
+    await p;
+    // The view's detail is prepared (the worker's slice runs) but not yet delivered when the patch is posted.
+    engine.setView(whole);
+    transport.step(2);
+    engine.setPatch(patchOf([moveLine1(7)]));
+    expect(patches(transport).at(-1)!.detail).toEqual([]);
+    const asked = prepares(transport).length;
+    const uploads: PreparedPart[] = [];
+    const upload = renderer.uploadPart.bind(renderer);
+    renderer.uploadPart = (key, part) => {
+      if (key === `d${cell(0)}`) uploads.push(part);
+      return upload(key, part);
+    };
+    transport.flush();
+    // The old part arrived first and was dropped by the reply; the cell was asked for again and came back new.
+    expect(prepares(transport).length).toBeGreaterThan(asked);
+    expect(prepares(transport).at(-1)!.ids).toContain(cell(0));
+    expect(uploads.map((u) => Math.round(new Float32Array(u.stroke!.verts)[0] + engine.summary!.originX))).toEqual([5000, 7000]);
+    expect(renderer.parts.get(`d${cell(0)}`)).toBe(uploads[1]);
+  });
+
+  it("a reply grows the atlas, replaces the large part and its bytes", async () => {
+    const { engine, transport, renderer } = await patchEngine();
+    const atlases = renderer.atlases.length;
+    engine.setPatch(patchOf([
+      { op: "resymbol", sourceIndex: 4, symbol: { patch: "K:1" } },
+      { op: "add", id: "00000000-0000-7000-8000-0000000000aa", type: 2, symbol: { doc: 0 }, coords: [[500, 5000], [900, 5000]] },
+    ], { "K:1": mapDocument.patchSymbolSchema.parse(discSym("K:1", 1500)) }));
+    transport.flush();
+    expect(renderer.atlases.length).toBe(atlases + 1);
+    expect(renderer.parts.has("L")).toBe(true);
+    expect(engine.summary!.bytes.large).toBe(renderer.parts.get("L")!.gpuBytes);
+    engine.setPatch(null);
+    transport.flush();
+    expect(renderer.parts.has("L")).toBe(false);
+    expect(engine.summary!.bytes.large).toBe(0);
+  });
+
+  it("a reply re-posts the course: its cuts and filter read the effective document", async () => {
+    const renderer = new FakeRenderer();
+    const transport = manualTransport();
+    const engine = new MapGlEngine(renderer as unknown as MapGlRenderer, transport, { budgetBytes: 1 << 30 });
+    const p = engine.load({ source: { kind: "document", bytes: documentBytes(), options: { unmatched: "proxy" } }, fonts: [{ family: "liberation-sans", bytes: fontBytes() }], courseLayer: true });
+    transport.flush();
+    await p;
+    engine.setCourse(request());
+    transport.flush();
+    const courses = transport.posted.filter((m) => m.type === "course").length;
+    engine.setPatch(patchOf([{ op: "hide", sourceIndex: 0 }]));
+    transport.flush();
+    expect(transport.posted.filter((m) => m.type === "course").length).toBe(courses + 1);
+  });
+
+  it("a worker error without a generation ends the patch request in flight; the next input is sent", async () => {
+    const { engine, transport } = await patchEngine();
+    const a = engine.setPatch(patchOf([{ op: "hide", sourceIndex: 1 }]));
+    const b = engine.setPatch(patchOf([{ op: "hide", sourceIndex: 2 }]));
+    const posted = patches(transport).length;
+    transport.onMessage!({ type: "error", message: "worker failed" });
+    await expect(a).rejects.toThrow("worker failed");
+    expect(patches(transport)).toHaveLength(posted + 1);
+    transport.flush();
+    expect(Array.from((await b).hidden)).toEqual([index(2)]);
+  });
+
+  it("one request in flight, the latest input next; a failed one rejects only its own callers", async () => {
+    const { engine, transport } = await patchEngine();
+    const before = patches(transport).length;
+    const a = engine.setPatch(patchOf([{ op: "hide", sourceIndex: 1 }]));
+    const b = engine.setPatch(patchOf([{ op: "hide", sourceIndex: 2 }]));
+    const c = engine.setPatch(patchOf([{ op: "hide", sourceIndex: 3 }]));
+    expect(patches(transport)).toHaveLength(before + 1);
+    transport.flush();
+    expect(patches(transport)).toHaveLength(before + 2);
+    expect(Array.from((await a).hidden)).toEqual([index(1)]);
+    expect(Array.from((await b).hidden)).toEqual([index(3)]);
+    expect(Array.from((await c).hidden)).toEqual([index(3)]);
+    // The worker throws on a request it cannot apply (a patch op object it cannot read): only that promise rejects.
+    const bad = engine.setPatch({ ...patchOf([]), ops: { "hide:1": null } } as unknown as ReturnType<typeof patchOf>);
+    transport.flush();
+    await expect(bad).rejects.toThrow();
+    const ok = engine.setPatch(null);
+    transport.flush();
+    expect((await ok).hidden.length).toBe(0);
+  });
+});
+
+describe("MapGlEngine document objects (docs/map-rendering.md §5.5 \"Document objects\")", () => {
+  const whole: ViewRect = { centreX: 25_000, centreY: 5_000, pxPerUm: 0.02, widthPx: 1500, heightPx: 600 };
+  async function editEngine(opts: { highlight?: [number, number, number]; edit?: Parameters<MapGlEngine["setEdit"]>[0] } = {}) {
+    const renderer = new FakeRenderer();
+    const transport = manualTransport();
+    const engine = new MapGlEngine(renderer as unknown as MapGlRenderer, transport, { budgetBytes: 1 << 30, ...(opts.highlight ? { highlight: opts.highlight } : {}) });
+    const infos: unknown[] = [];
+    let changes = 0;
+    engine.onEdit = (i) => infos.push(i);
+    engine.onChange = () => changes++;
+    if (opts.edit !== undefined) engine.setEdit(opts.edit);
+    const p = engine.load({ source: { kind: "document", bytes: patchDocumentBytes(), options: { unmatched: "proxy" } }, fonts: [], cellUm: PATCH_CELL_UM });
+    transport.flush();
+    await p;
+    engine.setView(whole);
+    transport.flush();
+    engine.render({ colour: () => [0, 0, 0] });
+    return { renderer, transport, engine, infos, changes: () => changes };
+  }
+  const edits = (t: { posted: WorkerRequest[] }) => t.posted.filter((m) => m.type === "edit") as Extract<WorkerRequest, { type: "edit" }>[];
+  const strokes = (r: FakeRenderer) => r.visibleSets.at(-1)!.stroke.indices.length;
+  const drawnColours = (r: FakeRenderer) => r.visibleSets.at(-1)!.stroke.draws.map((d) => d.colour);
+
+  it("hitDocument: the worker's hits, topmost first; before the load []", async () => {
+    const bare = new MapGlEngine(new FakeRenderer() as unknown as MapGlRenderer, manualTransport());
+    expect(await bare.hitDocument(0, 0, 0)).toEqual([]);
+    const { engine, transport } = await editEngine();
+    const h = engine.hitDocument(5000, 5000, 0);
+    transport.flush();
+    expect((await h).map((x) => x.ref)).toEqual([{ source: 1 }]);
+  });
+
+  it("hitDocument drops objects the engine does not draw: setHidden's and an object under edit's static copy", async () => {
+    const { engine, transport } = await editEngine();
+    engine.setHidden(new Set([index(1)]));
+    const a = engine.hitDocument(5000, 5000, 0);
+    transport.flush();
+    expect(await a).toEqual([]);
+    engine.setHidden(new Set());
+    engine.setEdit({ selected: [], draft: { ops: [moveLine1(7)] } });
+    transport.flush();
+    const b = engine.hitDocument(5000, 5000, 0);
+    transport.flush();
+    expect(await b).toEqual([]);
+  });
+
+  it("several hit-tests in flight are answered by id; a worker error rejects them", async () => {
+    const { engine, transport } = await editEngine();
+    const a = engine.hitDocument(5000, 5000, 0), b = engine.hitDocument(25_000, 5000, 0);
+    transport.flush();
+    expect((await a)[0].ref).toEqual({ source: 1 });
+    expect((await b)[0].ref).toEqual({ source: 3 });
+    const c = engine.hitDocument(5000, 5000, 0);
+    transport.onMessage?.({ type: "error", message: "worker died" });
+    await expect(c).rejects.toThrow("worker died");
+    // One in flight when the engine goes is settled too.
+    const d = engine.hitDocument(5000, 5000, 0);
+    engine.dispose();
+    await expect(d).rejects.toThrow("disposed");
+  });
+
+  it("setEdit uploads E, draws it in every visible set with the highlight colour resolved, its bytes fixed", async () => {
+    const { engine, transport, renderer, infos } = await editEngine({ highlight: [0.1, 0.2, 0.3] });
+    const before = strokes(renderer);
+    engine.setEdit({ selected: [{ source: 1 }] });
+    transport.flush();
+    expect(renderer.parts.has("E")).toBe(true);
+    expect(infos.at(-1)).toEqual({ selected: [index(1)], highlighted: 1, issues: [] });
+    engine.render({ colour: () => [0, 0, 0] });
+    expect(strokes(renderer)).toBeGreaterThan(before);
+    expect(drawnColours(renderer).at(-1)).toBe(0xffff);
+    const opts = renderer.renderOpts.at(-1)!;
+    expect(opts.colour(0xffff)).toEqual([0.1, 0.2, 0.3]);
+    expect(opts.colour(1)).toEqual([0, 0, 0]);
+    expect(engine.stats().residentBytes).toBeGreaterThan(0);
+    engine.setEdit(null);
+    transport.flush();
+    expect(renderer.parts.has("E")).toBe(false);
+    engine.render({ colour: () => [0, 0, 0] });
+    expect(strokes(renderer)).toBe(before);
+  });
+
+  it("a draft hides its target's static copy through the range table and draws it from E", async () => {
+    const { engine, transport, renderer } = await editEngine();
+    const plain = renderer.visibleSets.at(-1)!;
+    engine.setEdit({ selected: [], draft: { ops: [moveLine1(7)] } });
+    transport.flush();
+    engine.render({ colour: () => [0, 0, 0] });
+    // Same stroke count (the line drawn once, from E), nothing re-prepared: no patch, no load.
+    expect(strokes(renderer)).toBe(plain.stroke.indices.length);
+    expect(transport.posted.filter((m) => m.type === "patch" || m.type === "load")).toHaveLength(1);
+    expect(engine.editState?.selected).toEqual([]);
+  });
+
+  it("one edit request in flight, the latest input next; an input before the load goes right after it", async () => {
+    const early = await editEngine({ edit: { selected: [{ source: 3 }] } });
+    const kinds = early.transport.posted.map((m) => m.type);
+    expect(kinds.indexOf("edit")).toBe(kinds.indexOf("load") + 1);
+    expect(early.engine.editState?.selected).toEqual([index(3)]);
+
+    const { engine, transport } = await editEngine();
+    const n = edits(transport).length;
+    engine.setEdit({ selected: [{ source: 1 }] });
+    engine.setEdit({ selected: [{ source: 2 }] });
+    engine.setEdit({ selected: [{ source: 4 }] });
+    expect(edits(transport)).toHaveLength(n + 1);
+    transport.flush();
+    expect(edits(transport)).toHaveLength(n + 2);
+    expect(edits(transport).at(-1)!.input?.selected).toEqual([{ source: 4 }]);
+    expect(engine.editState?.selected).toEqual([index(4)]);
+  });
+
+  it("an edit error ends that request only; the part stays as it was", async () => {
+    const { engine, transport, renderer } = await editEngine();
+    engine.setEdit({ selected: [{ source: 1 }] });
+    transport.flush();
+    const shown = renderer.parts.get("E");
+    engine.setEdit({ selected: [{ source: 2 }] });
+    const g = edits(transport).at(-1)!.generation;
+    engine.setEdit({ selected: [{ source: 4 }] });
+    const n = edits(transport).length;
+    // The answer to the one in flight is an error: it ends that request, the waiting input is posted.
+    transport.onMessage?.({ type: "error", message: "x", edit: g });
+    expect(edits(transport)).toHaveLength(n + 1);
+    expect(edits(transport).at(-1)!.input?.selected).toEqual([{ source: 4 }]);
+    expect(renderer.parts.get("E")).toBe(shown);
+    // An error of a generation no longer in flight ends nothing.
+    transport.onMessage?.({ type: "error", message: "x", edit: g });
+    transport.flush();
+    expect(engine.editState?.selected).toEqual([index(4)]);
+  });
+
+  it("a patch reply carries the edit state: hidden ids and part replaced in the same step", async () => {
+    const { engine, transport, infos } = await editEngine();
+    engine.setEdit({ selected: [{ source: 1 }] });
+    transport.flush();
+    const n = infos.length;
+    const done = engine.setPatch(patchOf([{ op: "hide", sourceIndex: 1 }]));
+    transport.flush();
+    await done;
+    expect(infos.length).toBe(n + 1);
+    expect(engine.editState).toEqual({ selected: [-1], highlighted: 0, issues: [] });
+  });
+});
+
+describe("MapGlEngine terrain (docs/map-rendering.md §5.6 \"Engine API\", \"Settling\")", () => {
+  /** A 2 mm field over the 5 × 5 block of cells, a gentle dome. */
+  const field = () => fieldFromGrid(126, 126, (cx, cy) => 20 - Math.hypot(cx - 63, cy - 63) * 0.2, { cellMm: 2 });
+  const opts = { colour: () => [0, 0, 0] as [number, number, number], background: [1, 1, 1] as [number, number, number] };
+
+  async function withTerrain(budget = 1 << 30) {
+    const h = await loaded(budget);
+    const p = h.engine.setTerrain(field());
+    h.transport.flush();
+    const mesh = (await p)!;
+    const cam = (x: number, y: number, over: Partial<TerrainCamera> = {}, pxPerUm = 0.02): TerrainCamera => {
+      const c: TerrainCamera = { target: { x: x - h.summary.originX, y: y - h.summary.originY, z: 0 }, distanceUm: 0, bearingDeg: 0, pitchDeg: 0, widthPx: 500, heightPx: 500, ...over };
+      c.distanceUm = distanceForPxPerUm(c, pxPerUm);
+      return c;
+    };
+    return { ...h, mesh, cam };
+  }
+
+  it("prepares the field in the worker and uploads it in the document's model space", async () => {
+    const { renderer, transport, mesh, summary, engine } = await withTerrain();
+    expect(transport.posted.filter((m) => m.type === "terrain")).toHaveLength(1);
+    expect(renderer.fields).toHaveLength(1);
+    expect(renderer.fields[0].origin).toEqual({ x: summary.originX, y: summary.originY });
+    expect(renderer.fields[0].prepared).toMatchObject({ terrain: { chunksX: 2 }, normals: expect.any(Int8Array) });
+    expect(engine.terrainMesh).toBe(mesh);
+    // the caller's field keeps its heights (the request sent a copy)
+    expect(engine.terrainField!.z.length).toBe(126 * 126);
+  });
+
+  it("renders the map into the drape first, then the mesh through the layer's matrix", async () => {
+    const { engine, renderer, cam, summary } = await withTerrain();
+    const st = engine.renderTerrain({ camera: cam(125_000, 125_000, { bearingDeg: 30 }), exaggeration: 2 }, opts);
+    expect(renderer.log.filter((l) => !l.startsWith("release"))).toEqual(["drape0", "mesh"]);
+    expect(st.drape).toMatchObject({ layers: 1, drawCalls: 3 });
+    const v = renderer.drapeRenders[0].view;
+    // the 2D view at pitch 0 (the hand-over), turned by the bearing
+    expect(v.pxPerUm).toBeCloseTo(0.02, 9);
+    expect(v.rotationDeg).toBe(30);
+    expect(v.centreX).toBeCloseTo(125_000, 3);
+    const f = renderer.terrainFrames[0];
+    expect(f.exaggeration).toBe(2);
+    expect(f.background).toEqual([1, 1, 1]);
+    expect(f.drapes).toHaveLength(1);
+    expect([...f.drapes[0].matrix]).toEqual([...twoDMatrix(v, summary.originX, summary.originY)]);
+  });
+
+  it("passes the lines to the mesh draw (§5.6 \"Lines\"); new lines re-render no drape", async () => {
+    const { engine, renderer, cam } = await withTerrain();
+    const a: TerrainLine[] = [{ points: [{ x: 120, y: 120 }, { x: 130, y: 125 }], colour: [1, 0, 0], opacity: 0.8, widthPx: 4.5 }];
+    engine.renderTerrain({ camera: cam(125_000, 125_000), exaggeration: 1, lines: a, pxRatio: 2 }, opts);
+    expect(renderer.terrainLines[0]).toEqual({ lines: a, pxRatio: 2 });
+    const b = [...a];
+    engine.renderTerrain({ camera: cam(125_000, 125_000), exaggeration: 1, lines: b }, opts);
+    expect(renderer.terrainLines[1]).toEqual({ lines: b, pxRatio: 1 });
+    expect(renderer.drapeRenders).toHaveLength(1);
+    engine.renderTerrain({ camera: cam(125_000, 125_000), exaggeration: 1 }, opts);
+    expect(renderer.terrainLines[2]).toBeUndefined();
+  });
+
+  it("draws only the mesh while the camera moves and re-renders the drape once it settled", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      const { engine, renderer, cam } = await withTerrain();
+      let changes = 0;
+      engine.onChange = () => changes++;
+      engine.renderTerrain({ camera: cam(125_000, 125_000), exaggeration: 1 }, opts);
+      for (let i = 1; i <= 5; i++) {
+        vi.advanceTimersByTime(16);
+        engine.renderTerrain({ camera: cam(125_000 + i * 2000, 125_000, { pitchDeg: i * 5 }), exaggeration: 1 }, opts);
+      }
+      expect(renderer.drapeRenders).toHaveLength(1);
+      expect(renderer.terrainFrames).toHaveLength(6);
+      expect(changes).toBe(0);
+      vi.advanceTimersByTime(DRAPE_SETTLE_MS);
+      expect(changes).toBe(1); // the settle timer asks the host for a frame
+      engine.renderTerrain({ camera: cam(135_000, 125_000, { pitchDeg: 25 }), exaggeration: 1 }, opts);
+      expect(renderer.drapeRenders).toHaveLength(2);
+      // a tilted camera's footprint reaches further ahead than behind its target
+      const v = renderer.drapeRenders[1].view;
+      expect(v.centreY).toBeGreaterThan(125_000);
+      // the same settled camera does not render again
+      vi.advanceTimersByTime(DRAPE_SETTLE_MS);
+      engine.renderTerrain({ camera: cam(135_000, 125_000, { pitchDeg: 25 }), exaggeration: 1 }, opts);
+      expect(renderer.drapeRenders).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-renders the drape at once when the content changes, over the layers it has", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      const { engine, renderer, cam } = await withTerrain();
+      engine.renderTerrain({ camera: cam(125_000, 125_000), exaggeration: 1 }, opts);
+      vi.advanceTimersByTime(16);
+      engine.renderTerrain({ camera: cam(140_000, 125_000), exaggeration: 1 }, opts);
+      expect(renderer.drapeRenders).toHaveLength(1);
+      engine.setHidden(new Set([3]));
+      vi.advanceTimersByTime(16);
+      engine.renderTerrain({ camera: cam(141_000, 125_000), exaggeration: 1 }, opts);
+      expect(renderer.drapeRenders).toHaveLength(2);
+      expect(renderer.drapeRenders[1].view).toEqual(renderer.drapeRenders[0].view);
+      // so does the host's invalidation (e.g. other colours)
+      engine.invalidateDrape();
+      engine.renderTerrain({ camera: cam(141_000, 125_000), exaggeration: 1 }, opts);
+      expect(renderer.drapeRenders).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("requests and draws the drape layers' cells, gated per layer", async () => {
+    const { engine, renderer, transport, cam } = await withTerrain();
+    engine.renderTerrain({ camera: cam(125_000, 125_000), exaggeration: 1 }, opts);
+    // 500 px at 0.02 px/µm (+ margin) = 27.5 mm about the centre cell; the draw margin adds a ring
+    expect([...prepares(transport).at(-1)!.ids].sort((a, b) => a - b)).toHaveLength(9);
+    transport.flush();
+    let st = engine.stats();
+    expect(st.drawnDetail).toBe(9);
+    // the arrivals re-render the drape (coalesced, as 2D rebuilds)
+    engine.renderTerrain({ camera: cam(125_000, 125_000), exaggeration: 1 }, opts);
+    expect(renderer.drapeRenders.length).toBeGreaterThanOrEqual(2);
+    const vs = renderer.visibleSets.at(-1)!;
+    expect(vs.stroke.draws.length).toBeGreaterThan(0);
+    // far out: below the zoom gate, base parts only and the queue cancelled
+    const n = prepares(transport).length;
+    engine.setTerrain(field());
+    transport.flush();
+    await Promise.resolve();
+    engine.renderTerrain({ camera: cam(125_000, 125_000, {}, 1e-4), exaggeration: 1 }, opts);
+    st = engine.stats();
+    expect(st.gated).toBe(true);
+    expect(prepares(transport).length).toBe(n + 1);
+    expect(prepares(transport).at(-1)!.ids).toEqual([]);
+  });
+
+  it("re-renders the drape for arrivals at most every DRAPE_ARRIVAL_MS while detail streams in, and at once for the last", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      const { engine, renderer, transport, cam } = await withTerrain();
+      let changes = 0;
+      engine.onChange = () => changes++;
+      engine.renderTerrain({ camera: cam(125_000, 125_000), exaggeration: 1 }, opts);
+      expect(renderer.drapeRenders).toHaveLength(1);
+      transport.step(2); // the prepare request handled, the slice run: nine part replies queued
+      transport.step(3); // three arrive
+      vi.advanceTimersByTime(200);
+      engine.renderTerrain({ camera: cam(125_000, 125_000), exaggeration: 1 }, opts);
+      expect(renderer.drapeRenders).toHaveLength(1); // held
+      expect(renderer.terrainFrames).toHaveLength(2); // the mesh still drawn
+      const before = changes;
+      vi.advanceTimersByTime(DRAPE_ARRIVAL_MS);
+      expect(changes).toBeGreaterThan(before); // the hold's timer asks for a frame
+      engine.renderTerrain({ camera: cam(125_000, 125_000), exaggeration: 1 }, opts);
+      expect(renderer.drapeRenders).toHaveLength(2);
+      transport.flush(); // the rest: complete
+      vi.advanceTimersByTime(16);
+      engine.renderTerrain({ camera: cam(125_000, 125_000), exaggeration: 1 }, opts);
+      expect(renderer.drapeRenders).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("counts the field and the drape in the budget, the drape at most a third", async () => {
+    const budget = 2 * 1024 * 1024;
+    const { engine, renderer, cam } = await withTerrain(budget);
+    engine.renderTerrain({ camera: cam(125_000, 125_000, { widthPx: 1600, heightPx: 1200 }), exaggeration: 1 }, opts);
+    const t = engine.stats().terrain!;
+    expect(t.fieldBytes).toBe(126 * 126 * 5);
+    expect(t.drapeBytes).toBe(renderer.drapeBytes);
+    expect(t.drapeBytes).toBeGreaterThan(0);
+    const texels = t.layers.reduce((n, l) => n + l.widthPx * l.heightPx, 0);
+    expect(texels).toBeLessThanOrEqual(budget / 3 / DRAPE_TEXEL_BYTES);
+    expect(t.layers[0].ratio).toBeLessThan(1); // the cap bit: coarser than the screen
+    expect(engine.stats().residentBytes).toBeGreaterThanOrEqual(t.fieldBytes + t.drapeBytes);
+  });
+
+  it("drops the field and the drape with setTerrain(null); a 2D render draws the 2D view again", async () => {
+    const { engine, renderer, cam } = await withTerrain();
+    engine.renderTerrain({ camera: cam(125_000, 125_000), exaggeration: 1 }, opts);
+    await engine.setTerrain(null);
+    expect(renderer.log).toContain("clearField");
+    expect(renderer.drapeBytes).toBe(0);
+    expect(engine.stats().terrain).toBeUndefined();
+    expect(engine.renderTerrain({ camera: cam(125_000, 125_000), exaggeration: 1 }, opts).mesh).toBeNull();
+    engine.setView(cellView(0, 0));
+    engine.render(opts);
+    expect(engine.stats().drawnCells).toBe(4); // the corner cell and its ring, clamped to the grid
+  });
+
+  it("returns to the 2D view's cells on a 2D render after a 3D frame", async () => {
+    const { engine, cam, transport, renderer } = await withTerrain();
+    engine.setView(cellView(4, 4));
+    transport.flush();
+    engine.renderTerrain({ camera: cam(25_000, 25_000), exaggeration: 1 }, opts);
+    expect(engine.stats().drawnCells).toBe(4);
+    const before = renderer.visibleSets.length;
+    engine.render(opts);
+    // the 2D view's cells around (4, 4) again, rebuilt, their detail resident from the 2D request
+    expect(engine.stats().drawnCells).toBe(4);
+    expect(engine.stats().drawnDetail).toBe(4);
+    expect(renderer.visibleSets.length).toBe(before + 1);
+  });
+
+  it("gates each layer by its own density: the near layer's detail drawn and requested, the far one's not", async () => {
+    const { engine, transport, cam } = await withTerrain();
+    // a small canvas low over the field: near above the zoom gate, far below it
+    engine.renderTerrain({ camera: cam(126_000, 66_000, { pitchDeg: 70, widthPx: 150, heightPx: 150 }, 0.0012), exaggeration: 1 }, opts);
+    const t = engine.stats().terrain!;
+    expect(t.layers.map((l) => [l.role, aboveZoomGate(l.pxPerUm)])).toEqual([["near", true], ["far", false]]);
+    transport.flush();
+    const st = engine.stats();
+    expect(st.gated).toBe(false);
+    expect(st.drawnDetail).toBeGreaterThan(0);
+    expect(st.drawnDetail).toBeLessThan(st.drawnCells);
+    expect(prepares(transport).at(-1)!.ids.length).toBeLessThan(st.drawnCells);
+    // and whenComplete waits for the near layer's detail only
+    await engine.whenComplete();
+  });
+
+  it("moves the mesh to a new document's origin and re-selects the drape after a load", async () => {
+    const { engine, renderer, transport, cam } = await withTerrain();
+    engine.renderTerrain({ camera: cam(125_000, 125_000), exaggeration: 1 }, opts);
+    const n = renderer.drapeRenders.length;
+    const p = engine.load({ source: { kind: "objects", objects: objects().map((o) => ({ ...o, path: { ...o.path, coords: Int32Array.from(o.path.coords, (v) => v + 40_000) } })), symbols: render.pilotSymbols }, fonts: [{ family: "liberation-sans", bytes: fontBytes() }] });
+    transport.flush();
+    const s2 = await p;
+    expect(engine.terrainMesh!.originUm).toEqual({ x: s2.originX, y: s2.originY });
+    engine.renderTerrain({ camera: cam(125_000, 125_000), exaggeration: 1 }, opts);
+    expect(renderer.drapeRenders.length).toBe(n + 1);
+  });
+
+  it("rejects a setTerrain the worker fails, keeping the field and mesh it had", async () => {
+    const { engine, transport, mesh } = await withTerrain();
+    const bad = field();
+    bad.z = new Int16Array(5);
+    const p = engine.setTerrain(bad);
+    transport.flush();
+    await expect(p).rejects.toThrow(/heights for/);
+    expect(engine.terrainMesh).toBe(mesh);
+    expect(engine.terrainField!.z.length).toBe(126 * 126);
+  });
+
+  it("rejects a setTerrain in flight on dispose", async () => {
+    const { engine } = await loaded(1 << 30);
+    const p = engine.setTerrain(field());
+    engine.dispose();
+    await expect(p).rejects.toThrow(/disposed/);
+  });
+
+  it("does not count re-renders for a camera that sees no mesh", async () => {
+    const { engine, renderer, cam } = await withTerrain();
+    const away = cam(125_000, -2_000_000, { pitchDeg: 60, bearingDeg: 180 });
+    for (let i = 0; i < 3; i++) engine.renderTerrain({ camera: away, exaggeration: 1 }, opts);
+    expect(engine.stats().terrain!.layers).toEqual([]);
+    expect(renderer.drapeRenders).toHaveLength(0);
+    expect(engine.stats().terrain!.drapeRenders).toBeLessThanOrEqual(1);
+  });
+
+  it("rejects a setTerrain overtaken by a later one", async () => {
+    const { engine, transport } = await loaded(1 << 30);
+    const a = engine.setTerrain(field());
+    const b = engine.setTerrain(field());
+    transport.flush();
+    await expect(a).rejects.toThrow(/superseded/);
+    await expect(b).resolves.toBeTruthy();
+  });
+});

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { render } from "@oxygen/shared";
 import {
-  aboveZoomGate, assignBuckets, BucketLru, buildVisibleSet, CELL_UM, cellId, filterEntryKey, passBounds, prepareBucketPart, visibleCells,
+  aboveZoomGate, assignBuckets, assignToGrid, BucketLru, buildVisibleSet, CELL_UM, cellId, filterEntryKey, passBounds, prepareBucketPart, prepareBucketPartFrom, sourcesHaveLayer, visibleCells,
   type PrepareContext, type ResidentPart, type VisibleFilter,
 } from "../buckets";
 import { MeshAtlasBuilder, sizeClass, INSTANCE_FLOATS } from "../mesh-atlas";
@@ -190,6 +190,77 @@ describe("range table (04 §7)", () => {
     const i16 = new Int16Array(v.verts), u16 = new Uint16Array(v.verts);
     expect(u16[6]).toBe(125); // 62.5 µm
     expect(Math.abs(i16[5] / 32767) * 4).toBeCloseTo(1, 3); // unit normal (0, ±1)
+  });
+});
+
+describe("parts from two streams (§5.2 \"Patch\", G4)", () => {
+  /** The pinned document's bucket and a patch's objects: glyph id 7 means a different mesh in each. */
+  function streams() {
+    const a = new PassStreamBuilder();
+    a.push(fill(2, 0, 0, 1000), 0, 0);
+    a.push(fill(4, 2000, 0, 1000), 1, 0);
+    a.push(stroke(3, [0, 0, 1000, 0]), 2, 1);
+    a.glyphTable.push({ glyphId: 7, partIdx: 0, fills: [square(-100, -100, 200)], strokes: [] });
+    a.push({ kind: "glyph", colour: 5, glyphId: 7, partIdx: 0, instances: Float32Array.from([100, 100, 1, 0, 1]) }, 3, 2);
+    const b = new PassStreamBuilder();
+    b.push(fill(3, 0, 2000, 1000), 100, 0);
+    b.push(fill(2, 2000, 2000, 1000), 101, 0);
+    b.glyphTable.push({ glyphId: 7, partIdx: 0, fills: [render.circlePath(0, 0, 300)], strokes: [] });
+    b.push({ kind: "glyph", colour: 5, glyphId: 7, partIdx: 0, instances: Float32Array.from([500, 500, 1, 0, 1]) }, 102, 1);
+    const sa = a.build(), sb = b.build();
+    const atlas = new MeshAtlasBuilder();
+    const meshA = new Map([["7/0", atlas.glyph(sa.glyphTable[0], 2, "a")]]);
+    const meshB = new Map([["7/0", atlas.glyph(sb.glyphTable[0], 2, "b")]]);
+    const ctx = { toleranceUm: 10, originX: 0, originY: 0, meshes: atlas.build().meshes };
+    const all = (s: render.PassStream) => s.passes.map((_, i) => i);
+    return { sa, sb, meshA, meshB, ctx, all };
+  }
+
+  it("merges by colour into one colour-major range table, the first source first within a colour", () => {
+    const { sa, sb, meshA, meshB, ctx, all } = streams();
+    const part = prepareBucketPartFrom([
+      { stream: sa, passes: all(sa), glyphMesh: meshA, textGlyph: new Map() },
+      { stream: sb, passes: all(sb), glyphMesh: meshB, textGlyph: new Map() },
+    ], 0, "all", ctx);
+    expect(Array.from(part.fill!.ranges.colour)).toEqual([2, 2, 3, 4]);
+    expect(Array.from(part.fill!.ranges.object)).toEqual([0, 101, 100, 1]);
+    // Each source's glyph resolves through its own mesh table.
+    const bases = [];
+    for (let i = 0; i < part.glyph!.instances.length; i += INSTANCE_FLOATS) bases.push(part.glyph!.instances[i + 5]);
+    expect(bases.sort()).toEqual([ctx.meshes[meshA.get("7/0")!].base, ctx.meshes[meshB.get("7/0")!].base].sort());
+  });
+
+  it("a source's left-out passes are absent; one source equals prepareBucketPart", () => {
+    const { sa, meshA, ctx, all } = streams();
+    const without1 = all(sa).filter((pi) => sa.objectIdx[pi] !== 1);
+    const part = prepareBucketPartFrom([{ stream: sa, passes: without1, glyphMesh: meshA, textGlyph: new Map() }], 0, "all", ctx);
+    expect(Array.from(part.fill!.ranges.object)).toEqual([0]);
+    const one = prepareBucketPartFrom([{ stream: sa, passes: all(sa), glyphMesh: meshA, textGlyph: new Map() }], 0, "base", ctx);
+    const old = prepareBucketPart(sa, 0, all(sa), "base", { ...ctx, glyphMesh: meshA, textGlyph: new Map() });
+    expect({ ...one, ms: 0 }).toEqual({ ...old, ms: 0 });
+  });
+
+  it("sourcesHaveLayer by kind", () => {
+    const { sb, meshB, all } = streams();
+    const fills = all(sb).filter((pi) => sb.passes[pi].kind === "fill");
+    const src = (passes: number[]) => [{ stream: sb, passes, glyphMesh: meshB, textGlyph: new Map() }];
+    expect(sourcesHaveLayer(src(fills), "base")).toBe(true);
+    expect(sourcesHaveLayer(src(fills), "detail")).toBe(false);
+    expect(sourcesHaveLayer(src(all(sb)), "detail")).toBe(true);
+    expect(sourcesHaveLayer(src([]), "all")).toBe(false);
+  });
+
+  it("assignToGrid: an object goes to the load's grid by its centre; outside it or too large to the large bucket", () => {
+    const b = new PassStreamBuilder();
+    b.push(fill(1, 60_000, 10_000, 5_000), 500, 0); // cell (1, 0)
+    b.push(fill(1, 500_000, 10_000, 5_000), 501, 0); // outside a 2 × 2 grid
+    b.push(stroke(1, [0, 0, 200_000, 0]), 502, 0); // large
+    const grid = { cellUm: CELL_UM, minCol: 0, minRow: 0, cols: 2, rows: 2 };
+    const a = assignToGrid(b.build(), noMesh, grid, 4);
+    expect(a.objectBucket.get(500)).toBe(cellId(grid, 1, 0));
+    expect(a.objectBucket.get(501)).toBe(4);
+    expect(a.objectBucket.get(502)).toBe(4);
+    expect([...a.bucketPasses.keys()].sort()).toEqual([1, 4]);
   });
 });
 

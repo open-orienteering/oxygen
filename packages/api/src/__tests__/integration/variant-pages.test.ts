@@ -20,7 +20,7 @@ import { PDFArray, PDFDict, PDFDocument, PDFHexString, PDFName } from "pdf-lib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { WireCourseStructure } from "@oxygen/shared";
 import { registerCourseMapRoutes, selectPrintPages } from "../../course-maps/routes.js";
-import { allVariationsSuffix, sheetForMapRow } from "../../course-maps/pdf-page.js";
+import { allVariationsSuffix, sheetForMapRow } from "@oxygen/shared";
 import { createTestEvent, disconnect, type TestEventContext } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
 import { applyEventMap } from "../../event-map.js";

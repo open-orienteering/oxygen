@@ -83,6 +83,9 @@ export interface LayoutMode {
   settled: boolean;
 }
 
+/** Layout mode's silent offline-print refresh starts this long after the mode opens (G17). */
+const LAYOUT_OFFLINE_DELAY_MS = 5_000;
+
 interface WriteTarget { key: string; scope: "sheet" | "template"; sheetSeq: number | null; templateSeq: number }
 
 export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
@@ -91,6 +94,18 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
   const coarse = useMediaQuery("(pointer: coarse)");
   const canEdit = useCapabilities().has("courses.edit");
   const [target, setTarget] = useState<LayoutTarget | null>(null);
+
+  // G17 (course-print.md §8.6 "Offline"): opening Layout mode refreshes the event's offline print store,
+  // silently — online only, at most every 30 min, no sheet created — a moment after it opened.
+  useEffect(() => {
+    if (!a.enabled || !a.nameId) return;
+    const timer = setTimeout(() => {
+      void import("../../../print/offline-prepare")
+        .then((m) => m.prepareOfflinePrint(a.nameId, { auto: true }))
+        .catch((err: unknown) => console.warn("offline print: Layout mode's refresh failed", err));
+    }, LAYOUT_OFFLINE_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [a.enabled, a.nameId]);
 
   const sheets = trpc.courseMap.list.useQuery(undefined, { enabled: a.enabled });
   // F31: an opened sheet or template that is not this event's gives way to the default (and leaves the URL);

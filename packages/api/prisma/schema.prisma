@@ -209,6 +209,8 @@ model Event {
   mapTemplates       MapTemplate[]
   courseMaps         CourseMap[]
   courseObjects      CourseObject[]
+  mapPatch           MapPatch?
+  mapGpsTracks       MapGpsTrack[]
   coursePresence     CoursePresence[]
   graphics           Graphic[]
   tracks             Track[]
@@ -287,6 +289,7 @@ model User {
 
   @@map("users")
   @@schema("oxygen")
+  mapGpsTracks         MapGpsTrack[]
 }
 
 model PermissionGroup {
@@ -1299,15 +1302,79 @@ model MapDocument {
   createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   /// Bumped when a reference is created; GC input.
   lastReferencedAt DateTime @default(now()) @map("last_referenced_at") @db.Timestamptz(6)
+  /// The version patch (layers) the document was baked with; null = none (docs/map-patches.md §5, row G12a).
+  patch            Json?
 
   source   MapSource        @relation(fields: [sourceHash], references: [fileHash], onDelete: Restrict)
   previews MapPreview[]
+  heightfields MapHeightfield[]
+  demJobs      MapDemJob[]
   mapFiles MapFile[]
   versions ClubMapVersion[]
   jobs     MapImportJob[]
+  patches  MapPatch[]
 
   @@index([sourceHash])
   @@map("map_documents")
+  @@schema("oxygen")
+}
+
+/// An event's corrections to its pinned map document (docs/map-patches.md
+/// §3; slice G answer 1): keyed-state ops merged on the server per op id,
+/// one row per event, cloud-owned, not journaled. Travels in the checkout
+/// snapshot's `maps` part and the per-event dump; a GC reference.
+model MapPatch {
+  id           String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  eventId      BigInt   @unique @map("event_id")
+  /// The document the ops are keyed onto; a row keyed to another document than the pin is dormant (§3.2).
+  documentHash String   @map("document_hash")
+  enabled      Boolean  @default(true)
+  /// Record keyed by op id (docs/map-patches.md §1.2).
+  ops          Json     @default("{}")
+  /// Record keyed by the library entry id a symbol was materialised from (§1.3).
+  symbols      Json     @default("{}")
+  /// Ops that lost their object when the pin moved, keyed `<origin hash, 16 hex>:<op id>` (§4.1, row G11).
+  unresolved   Json     @default("{}")
+  /// Token (docs/course-layer.md §7): an HLC minted on every write that changes the row.
+  version      BigInt   @default(0)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  event    Event       @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  document MapDocument @relation(fields: [documentHash], references: [hash], onDelete: Restrict)
+
+  @@index([documentHash])
+  @@map("map_patches")
+  @@schema("oxygen")
+}
+
+/// GPS tracks per event (docs/map-gps-tracks.md §1; row G24): WGS 84, cloud-owned, not journaled, not in the snapshot.
+model MapGpsTrack {
+  id          String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  eventId     BigInt    @map("event_id")
+  name        String?
+  sourceName  String    @default("") @map("source_name")
+  /// TrackPoints { lat, lng, time, ele } verbatim (§2.1).
+  points      Json
+  pointCount  Int       @map("point_count")
+  recordedAt  DateTime? @map("recorded_at") @db.Timestamptz(3)
+  trimStart   Int       @default(0) @map("trim_start")
+  trimEnd     Int       @map("trim_end")
+  /// An average's passes: provenance only, no FK.
+  derivedFrom String[]  @default([]) @map("derived_from") @db.Uuid
+  /// An average's single-pass ranges [{ start, end }] (§4.1).
+  singlePass  Json?     @map("single_pass")
+  convertedOp String?   @map("converted_op")
+  createdBy   String?   @map("created_by") @db.Uuid
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  /// Token (docs/course-layer.md §7): an HLC minted on every write that changes the row.
+  version     BigInt    @default(0)
+
+  event   Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  creator User? @relation(fields: [createdBy], references: [id], onDelete: SetNull)
+
+  @@index([eventId, createdAt, id])
+  @@map("map_gps_tracks")
   @@schema("oxygen")
 }
 
@@ -1325,6 +1392,60 @@ model MapPreview {
 
   @@id([documentHash, kind, key])
   @@map("map_previews")
+  @@schema("oxygen")
+}
+
+/// The terrain a document's contours imply (docs/map-storage.md §4.7;
+/// docs/map-terrain.md §5): cache keyed by (document, source, terrain
+/// version), written once, never updated, cascading with the document.
+/// `bytes`, `sizeBytes`, `header` and `report` are null together: a row
+/// without bytes records a document without contours.
+model MapHeightfield {
+  documentHash String   @map("document_hash")
+  /// 'contours'; a DEM-based source (H10) takes its own value.
+  source       String
+  /// TERRAIN_VERSION.
+  version      Int
+  bytes        Bytes?
+  sizeBytes    Int?     @map("size_bytes")
+  /// HeightFieldHeader (docs/map-terrain.md §5.1).
+  header       Json?
+  /// TerrainReport (docs/map-terrain.md §3.6).
+  report       Json?
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  document MapDocument @relation(fields: [documentHash], references: [hash], onDelete: Cascade)
+
+  @@id([documentHash, source, version])
+  @@map("map_heightfields")
+  @@schema("oxygen")
+}
+
+/// DEM fetch jobs (docs/map-storage.md §4.7, docs/map-terrain.md §7): the
+/// background fetch and derive of a document's `ground.<provider>` and
+/// `contours.<provider>` height fields. Cascades with the document.
+model MapDemJob {
+  documentHash  String    @map("document_hash")
+  /// Provider id and resolution, e.g. 'lantmateriet-2m'.
+  provider      String
+  /// TERRAIN_VERSION.
+  version       Int
+  /// queued | running | done | unavailable | failed
+  state         String
+  reason        String?
+  error         String?
+  attempts      Int       @default(0)
+  nextAttemptAt DateTime? @map("next_attempt_at") @db.Timestamptz(6)
+  claimedBy     String?   @map("claimed_by")
+  heartbeatAt   DateTime? @map("heartbeat_at") @db.Timestamptz(6)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  document MapDocument @relation(fields: [documentHash], references: [hash], onDelete: Cascade)
+
+  @@id([documentHash, provider, version])
+  @@index([state, nextAttemptAt], map: "map_dem_jobs_runnable_idx")
+  @@map("map_dem_jobs")
   @@schema("oxygen")
 }
 
@@ -1359,6 +1480,8 @@ model ClubMapVersion {
   documentHash String   @map("document_hash")
   uploadedBy   String?  @map("uploaded_by") @db.Uuid
   uploadedAt   DateTime @default(now()) @map("uploaded_at") @db.Timestamptz(6)
+  /// Promoted corrections: an ordered list of immutable layers baked at the store stage (docs/map-patches.md §5, row G12a).
+  patch        Json     @default("[]")
 
   clubMap  ClubMap     @relation(fields: [clubMapId], references: [id], onDelete: Cascade)
   source   MapSource   @relation(fields: [sourceHash], references: [fileHash], onDelete: Restrict)
@@ -1419,6 +1542,8 @@ model MapImportJob {
   sourceHash   String    @map("source_hash")
   /// Snapshot of the club symbol decisions stage 6 applies (`SymbolDecision[]`, docs/map-storage.md §6.1), taken at insert.
   decisions    Json      @default("[]")
+  /// Snapshot of the version patch (layers) the store stage bakes (docs/map-patches.md §5, row G12a); `[]` = none.
+  patch        Json      @default("[]")
   /// queued | running | done | failed.
   state        String
   /// Import stage name while running.

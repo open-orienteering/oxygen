@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { OBJECT_TYPE, decodeMapDocument, encodeMapDocument, type MapDocumentInput, type MapObjectInput } from "../index.js";
 import { documentRenderInput } from "../render-bridge.js";
+import { applyPatch, mapPatchSchema, patchOpId, type PatchOp } from "../patch.js";
 import { COORD_FLAG } from "../../render/pass-stream.js";
 import { symbolise } from "../../render/symbolise.js";
 import { liberation } from "../../render/__tests__/fonts.js";
@@ -154,5 +155,77 @@ describe("documentRenderInput — a subset of objects (`only`, the editor's eyed
     expect(input.docIdx).toEqual([road, text]);
     expect(input.objects.map((o) => o.symbolIdx)).toEqual([1, 3]);
     expect(input.symbols).toHaveLength(documentRenderInput(d).symbols.length);
+  });
+});
+
+describe("documentRenderInput over an effective document (map-patches §2.4)", () => {
+  const HASH = "ab".repeat(32);
+  const ADD_ID = "019a7d2e-0000-7000-8000-000000000001";
+  const track = {
+    code: "801", name: "Ski track", kind: "line",
+    render: { type: "line", id: "ISSkiOM2019:801", code: "801", name: "Ski track", main: { colour: 3, widthUm: 700 } },
+  };
+  const patch = (ops: PatchOp[], enabled = true) =>
+    mapPatchSchema.parse({ documentHash: HASH, enabled, ops: Object.fromEntries(ops.map((op) => [patchOpId(op), op])), symbols: { "ISSkiOM2019:801": track } });
+  const ops: PatchOp[] = [
+    { op: "hide", sourceIndex: 0 },
+    { op: "modify", sourceIndex: 1, coords: [[5000, 5000], [6000, 5000], [7000, 5000]] },
+    { op: "add", id: ADD_ID, type: OBJECT_TYPE.line, symbol: { patch: "ISSkiOM2019:801" }, coords: [[0, 8000], [4000, 8000]] },
+  ];
+
+  it("skips hidden objects, draws modified and added ones", () => {
+    const d = doc();
+    const { document: eff, issues } = applyPatch(d, patch(ops));
+    expect(issues).toEqual([]);
+    const input = documentRenderInput(eff, { unmatched: "drop" });
+    const gully = [...d.attrs.sourceIndex].indexOf(0), road = [...d.attrs.sourceIndex].indexOf(1);
+    expect(input.stats).toMatchObject({ total: 5, rendered: 4, patchHidden: 1, hidden: 0, dropped: 0 });
+    expect(input.docIdx).not.toContain(gully);
+    expect(input.docIdx).toContain(4);
+    // Modified: the road at its new place, µm.
+    const r = input.objects[input.docIdx.indexOf(road)];
+    expect(Array.from(r.path.coords)).toEqual([50000, 50000, 60000, 50000, 70000, 50000]);
+    // Added: drawn with the patch symbol (index 4, after the document's four).
+    const added = input.objects[input.docIdx.indexOf(4)];
+    expect(added.symbolIdx).toBe(4);
+    expect(input.symbols[4]).toMatchObject({ id: "ISSkiOM2019:801" });
+    // And it symbolises.
+    const { stream, warnings } = symbolise({ ...input, fonts: [liberation().sans] });
+    expect(warnings).toEqual([]);
+    expect(Array.from(stream.symbolIdx)).toContain(4);
+  });
+
+  it("`only` takes effective indices, an added one included", () => {
+    const { document: eff } = applyPatch(doc(), patch(ops));
+    const input = documentRenderInput(eff, { only: [4] });
+    expect(input.docIdx).toEqual([4]);
+    expect(input.objects[0].symbolIdx).toBe(4);
+  });
+
+  it("a disabled patch gives what the unpatched document gives", () => {
+    const d = doc();
+    const off = applyPatch(d, patch(ops, false)).document;
+    expect(off).toBe(d);
+    expect(documentRenderInput(off)).toEqual(documentRenderInput(d));
+    expect(documentRenderInput(d).stats.patchHidden).toBe(0);
+  });
+
+  it("draws a patch symbol from its own render, never through a match (another library's scale, G8)", () => {
+    const d = decodeMapDocument(encodeMapDocument({
+      header: { ...header, library: { id: "ISOM2017-2", version: SYMBOL_LIBRARY_VERSION }, documentFactor: 1.5,
+        colours: header.colours.map((c, i) => ({ ...c, paletteIds: [["black100"], ["brown100-line", "brown100-point"], ["white"], ["purple-upper"]][i] })),
+        symbols: [{ ...header.symbols[0], match: { canonicalId: "ISOM2017-2:107", method: "code+geometry", state: "auto", confidence: 1, libraryVersion: SYMBOL_LIBRARY_VERSION } }] },
+      objects: [obj({ sourceIndex: 0, coords: [0, 0, 1000, 0] })],
+    }));
+    // The same match on a patch symbol is dropped by the parse: drawn as materialised.
+    const p = mapPatchSchema.parse({
+      documentHash: HASH,
+      ops: { "hide:0": { op: "hide", sourceIndex: 0 } },
+      symbols: { "ISSkiOM2019:801": { ...track, match: { canonicalId: "ISOM2017-2:107", method: "explicit", state: "auto", confidence: 1, libraryVersion: SYMBOL_LIBRARY_VERSION } } },
+    });
+    const input = documentRenderInput(applyPatch(d, p).document);
+    expect(input.stats.canonicalSymbols).toBe(1); // the document's own 107 only
+    expect(input.symbols[0].id).toBe("ISOM2017-2:107");
+    expect(input.symbols[1]).toEqual(p.symbols["ISSkiOM2019:801"].render);
   });
 });

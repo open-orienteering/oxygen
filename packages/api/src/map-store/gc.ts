@@ -7,7 +7,8 @@
  * blob. Each deletion is its own autocommit statement that re-checks its
  * conditions, so a reference created mid-run turns that row into a no-op,
  * an interrupted run leaves a consistent state, and the next run picks up
- * the rest. `RESTRICT` on `map_files` / `club_map_versions` is the belt.
+ * the rest. `RESTRICT` on `map_files` / `club_map_versions` / `map_patches`
+ * is the belt.
  *
  * A leader-lease singleton (docs/background-jobs-lease.md): the
  * supervisor's reconcile calls `maybeStartStorageGc`, which runs at most
@@ -17,6 +18,7 @@
 import type { PrismaClient } from "../generated/prisma/client.js";
 import { getSetting, prisma, setSetting } from "../db.js";
 import { sweepImportHousekeeping } from "./jobs.js";
+import { TERRAIN_VERSION } from "@oxygen/shared/src/terrain/field/types.js";
 
 export const GC_GRACE_DAYS = 30;
 /** A day between runs, measured from the last finish. */
@@ -104,6 +106,8 @@ export interface StorageGcResult {
   sources: string[];
   /** Candidates that gained a reference before their delete ran. */
   skipped: number;
+  /** Height-field rows of a superseded terrain version deleted (or, on a dry run, collectable) — §4.7. */
+  heightfields: number;
   /** Rows removed by the housekeeping pass. */
   uploads: number;
   jobs: number;
@@ -112,12 +116,14 @@ export interface StorageGcResult {
 const DOCUMENT_UNREFERENCED = `
       NOT EXISTS (SELECT 1 FROM oxygen.map_files f WHERE f.document_hash = d.hash)
   AND NOT EXISTS (SELECT 1 FROM oxygen.club_map_versions v WHERE v.document_hash = d.hash)
-  AND NOT EXISTS (SELECT 1 FROM oxygen.map_import_jobs j WHERE j.document_hash = d.hash)`;
+  AND NOT EXISTS (SELECT 1 FROM oxygen.map_import_jobs j WHERE j.document_hash = d.hash)
+  AND NOT EXISTS (SELECT 1 FROM oxygen.map_patches p WHERE p.document_hash = d.hash)`;
 
 const DOCUMENT_REFERENCED = `
       EXISTS (SELECT 1 FROM oxygen.map_files f WHERE f.document_hash = d.hash)
    OR EXISTS (SELECT 1 FROM oxygen.club_map_versions v WHERE v.document_hash = d.hash)
-   OR EXISTS (SELECT 1 FROM oxygen.map_import_jobs j WHERE j.document_hash = d.hash)`;
+   OR EXISTS (SELECT 1 FROM oxygen.map_import_jobs j WHERE j.document_hash = d.hash)
+   OR EXISTS (SELECT 1 FROM oxygen.map_patches p WHERE p.document_hash = d.hash)`;
 
 /** `$ignore` lists documents to treat as already gone (a dry run's document candidates). */
 const SOURCE_UNREFERENCED = (ignore: string) => `
@@ -136,7 +142,7 @@ export async function runStorageGc(db: PrismaClient, opts: StorageGcOptions = {}
   const dryRun = opts.dryRun === true;
   const shouldStop = opts.shouldStop ?? (() => false);
   const cutoff = gcCutoff(now, graceDays);
-  const result: StorageGcResult = { graceDays, dryRun, stopped: false, touched: 0, documents: [], sources: [], skipped: 0, uploads: 0, jobs: 0 };
+  const result: StorageGcResult = { graceDays, dryRun, stopped: false, touched: 0, documents: [], sources: [], skipped: 0, heightfields: 0, uploads: 0, jobs: 0 };
 
   // 1. Touch: the grace runs from the last pass that saw a reference.
   if (!dryRun) {
@@ -210,7 +216,21 @@ export async function runStorageGc(db: PrismaClient, opts: StorageGcOptions = {}
     }
   }
 
-  // 4. Expired uploads and job rows (§6.6).
+  // 4. Height fields and DEM jobs of a superseded terrain version (§4.7): cache nothing reads, every
+  // source (contours and the DEM's, docs/map-terrain.md §7). `<`, not `<>`: an older image's run
+  // during a rollout leaves the newer rows alone.
+  if (await shouldStop()) return finishStopped(result);
+  if (dryRun) {
+    const rows = await db.$queryRawUnsafe<{ n: number }[]>(`SELECT count(*)::int AS n FROM oxygen.map_heightfields WHERE version < $1`, TERRAIN_VERSION);
+    result.heightfields = rows[0]?.n ?? 0;
+  } else {
+    result.heightfields = await db.$executeRawUnsafe(`DELETE FROM oxygen.map_heightfields WHERE version < $1`, TERRAIN_VERSION);
+    const demJobs = await db.$executeRawUnsafe(`DELETE FROM oxygen.map_dem_jobs WHERE version < $1`, TERRAIN_VERSION);
+    if (result.heightfields > 0) console.log(`[map-gc] deleted ${result.heightfields} height field(s) older than terrain version ${TERRAIN_VERSION}`);
+    if (demJobs > 0) console.log(`[map-gc] deleted ${demJobs} DEM job(s) older than terrain version ${TERRAIN_VERSION}`);
+  }
+
+  // 5. Expired uploads and job rows (§6.6).
   if (!dryRun) {
     if (await shouldStop()) return finishStopped(result);
     const swept = await sweepImportHousekeeping(db, now);
@@ -229,7 +249,7 @@ function finishStopped(result: StorageGcResult): StorageGcResult {
 }
 
 function summaryLine(r: StorageGcResult): string {
-  return `grace ${r.graceDays} d, touched ${r.touched}, documents ${r.documents.length}, sources ${r.sources.length}, skipped ${r.skipped}, uploads ${r.uploads}, jobs ${r.jobs}`;
+  return `grace ${r.graceDays} d, touched ${r.touched}, documents ${r.documents.length}, sources ${r.sources.length}, skipped ${r.skipped}, heightfields ${r.heightfields}, uploads ${r.uploads}, jobs ${r.jobs}`;
 }
 
 /** What the schedule stores in `settings`: counts, not hashes. */
@@ -242,6 +262,7 @@ export function storedSummary(r: StorageGcResult, finishedAt: Date): Record<stri
     documents: r.documents.length,
     sources: r.sources.length,
     skipped: r.skipped,
+    heightfields: r.heightfields,
     uploads: r.uploads,
     jobs: r.jobs,
   };

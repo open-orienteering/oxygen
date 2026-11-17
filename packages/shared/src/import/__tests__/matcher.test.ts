@@ -13,7 +13,7 @@ import { paletteIndex, paletteStack } from "../../symbol-library/palette.js";
 import { resolveEntry } from "../../symbol-library/schema.js";
 import { paletteClass } from "../colour-class.js";
 import {
-  baseCode, canonicalCandidates, chooseLibrary, descriptionTokens, detectDocumentFactor, MATCH_THRESHOLDS, matchContext, matchSymbol, normaliseCode,
+  baseCode, canonicalCandidates, chooseLibrary, descriptionTokens, detectDocumentFactor, entryFactor, MATCH_THRESHOLDS, matchContext, matchSymbol, normaliseCode,
   snapFactor, type SourceSymbolLike,
 } from "../matcher.js";
 
@@ -269,5 +269,89 @@ describe("remapRenderColours", () => {
     const remapped = remapRenderColours(sym, map) as LineSymbol;
     expect(remapped.borders!.left!.colour).toBe((sym as LineSymbol).borders!.left!.colour + 10);
     expect(() => remapRenderColours(sym, [])).toThrow();
+  });
+});
+
+describe("overlay candidates: ISSkiOM 2019 beside the document's library (docs/map-symbols.md §8.2, §12)", () => {
+  // A ski map's source table: the ISSkiOM stack (its 20 rows) stands in for the source colours.
+  const skiStack = paletteStack("iof2024", "ISSkiOM2019");
+  const skiIdx = paletteIndex("iof2024", "ISSkiOM2019");
+  const skiClassOf = (i: number) => paletteClass(skiStack[i].id.replace(/^[^:]+:/, ""), "iof2024");
+  const ski = (code: string, factor = 1): RenderSymbol => scaleRenderSymbol(resolveEntry(getLibraryEntry(`ISSkiOM2019:${code}`)!, skiIdx), factor);
+  /** An ISOM document at 1:mapScale drawn at the spec's enlargement. */
+  const isomAt = (mapScale: number, edition: "iof2024" | "iof2022" = "iof2024") => matchContext("ISOM2017-2", edition, 15000 / mapScale, skiClassOf, undefined, mapScale);
+
+  it("entryFactor: the document factor for its own library; libraryFactor × symbolScale for an overlay entry", () => {
+    const doc = { libraryId: "ISOM2017-2" as const, documentFactor: 1.5, mapScale: 10000 };
+    expect(entryFactor(doc, "ISOM2017-2:101")).toBe(1.5);
+    expect(entryFactor(doc, "ISSkiOM2019:801.1")).toBe(1); // tracks: ×1 at 1:10 000
+    expect(entryFactor(doc, "ISSkiOM2019:301.1")).toBe(1.5); // other symbols: ×1.5
+    // A map drawn 1.2× its spec size (symbolScale 1.2) draws its tracks 1.2× too.
+    expect(entryFactor({ ...doc, documentFactor: 1.8 }, "ISSkiOM2019:801.1")).toBeCloseTo(1.2, 9);
+    expect(entryFactor({ libraryId: "ISSprOM2019-2", documentFactor: 1, mapScale: 4000 }, "ISSkiOM2019:803.1")).toBe(1.5);
+    // The other base library (Map mode materialising, G8): its own reference scale × symbolScale.
+    expect(entryFactor(doc, "ISSprOM2019-2:529")).toBeCloseTo(4000 / 10000, 12);
+    expect(entryFactor({ ...doc, documentFactor: 1.8 }, "ISSprOM2019-2:529")).toBeCloseTo((4000 / 10000) * 1.2, 12);
+    // An unknown id falls back to the document factor.
+    expect(entryFactor(doc, "ISOM2017-2:999")).toBe(1.5);
+    expect(entryFactor(doc, "nope")).toBe(1.5);
+  });
+
+  it("an 8xx track drawn to spec is auto-matched to its ISSkiOM entry, at the overlay's factor", () => {
+    for (const code of ["801.1", "801.2", "802.1", "803.1", "803.2", "804.1", "805", "807", "808", "813.1", "813.2"]) {
+      const m = matchSymbol(src(code, "Spår", ski(code)), isomAt(10000)).match;
+      expect(m, code).toMatchObject({ canonicalId: `ISSkiOM2019:${code}`, state: "auto", method: "code+geometry" });
+      // The document's library and release, not the overlay's (decisions and the review UI unchanged).
+      expect(m.libraryVersion).toMatch(/^ISOM2017-2@/);
+    }
+    // The same green line at the document factor (×1.5, 1.275 mm) is not the 0.85 mm track.
+    const wide = matchSymbol(src("801.1", "Spår", ski("801.1", 1.5)), isomAt(10000)).match;
+    expect(wide.state === "auto" && wide.canonicalId === "ISSkiOM2019:801.1").toBe(false);
+    // At 1:7 500 the tracks are ×1.33.
+    expect(matchSymbol(src("802.1", "Spår", ski("802.1", 1.33)), isomAt(7500)).match).toMatchObject({ canonicalId: "ISSkiOM2019:802.1", state: "auto" });
+  });
+
+  it("an 8xx code without an ISSkiOM heading is never pulled into the overlay's family (club numbering)", () => {
+    const text = matchSymbol(src("821", "Ramtext", ski("801.1")), isomAt(10000)).match;
+    expect(text.method).not.toBe("family+geometry");
+    expect(text.method).not.toBe("variant");
+  });
+
+  it("301.1, 301.2 and 310.1 are exact-code candidates on any document; an ISOM 301 numbered 301.1 (Mapper's) stays ISOM's", () => {
+    for (const code of ["301.1", "301.2", "310.1"]) {
+      expect(matchSymbol(src(code, "Vatten", ski(code, 1.5)), isomAt(10000)).match, code).toMatchObject({ canonicalId: `ISSkiOM2019:${code}`, state: "auto" });
+    }
+    const mapper = src("301.1", "Uncrossable body of water, area", canonical("ISOM2017-2:301"));
+    const isom3011 = matchSymbol(mapper, ctx()).match;
+    const isom3011WithOverlay = matchSymbol(mapper, matchContext("ISOM2017-2", "iof2024", 1, classOf, undefined, 15000)).match;
+    expect(isom3011.canonicalId).toBe("ISOM2017-2:301");
+    expect(isom3011WithOverlay.canonicalId).toBe(isom3011.canonicalId);
+    expect(isom3011WithOverlay.state).toBe(isom3011.state);
+  });
+
+  it("ISOM and ISSprOM codes are unaffected: every non-overlay code matches exactly as without the overlay", () => {
+    const overlayCodes = new Set(getSymbolLibrary("ISSkiOM2019").entries.map((e) => e.code));
+    for (const [libraryId, mapScale] of [["ISOM2017-2", 15000], ["ISSprOM2019-2", 4000]] as const) {
+      const l = getSymbolLibrary(libraryId);
+      const st = paletteStack("iof2024", l.spec);
+      const ix = paletteIndex("iof2024", l.spec);
+      const cls = (i: number) => paletteClass(st[i].id.replace(/^[^:]+:/, ""), "iof2024");
+      const without = matchContext(libraryId, "iof2024", 1, cls);
+      const withOverlay = matchContext(libraryId, "iof2024", 1, cls, undefined, mapScale);
+      for (const e of l.entries) {
+        if (overlayCodes.has(e.code)) continue;
+        const s = src(e.code, e.name.en, resolveEntry(e, ix));
+        expect(matchSymbol(s, withOverlay), e.id).toEqual(matchSymbol(s, without));
+      }
+    }
+  });
+
+  it("a 2022-edition document matches the compulsory (orange) states too: the overlay is fingerprinted on its own palette", () => {
+    expect(matchSymbol(src("803.2", "Spår", ski("803.2")), isomAt(15000, "iof2022")).match).toMatchObject({ canonicalId: "ISSkiOM2019:803.2", state: "auto" });
+  });
+
+  it("a decision may name an overlay entry (stage 1)", () => {
+    const c = matchContext("ISOM2017-2", "iof2024", 1, skiClassOf, [{ code: "899", canonicalId: "ISSkiOM2019:801.1" }], 15000);
+    expect(matchSymbol(src("899", "Skidspår", ski("802.1")), c).match).toMatchObject({ canonicalId: "ISSkiOM2019:801.1", method: "explicit", state: "auto", reviewed: true });
   });
 });

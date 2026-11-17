@@ -18,6 +18,9 @@ import { MITRE_LIMIT, type FanGeometry, type Prepared, type PreparedStream, type
 import { GpuArena } from "./arena.js";
 import { ATLAS_WIDTH, INSTANCE_FLOATS, type MeshAtlas } from "./mesh-atlas.js";
 import { viewMatrix, type RenderTarget } from "./view.js";
+import { DRAPE_TILE, drapeTiles } from "./terrain/footprint.js";
+import { TerrainRenderer, type TerrainDrawStats, type TerrainFrame } from "./terrain/program.js";
+import { TerrainLines, type LineDrawStats, type TerrainLine } from "./terrain/lines.js";
 import { buildTextGlyphs, GLYPH_TABLE_TEXELS, GLYPH_TABLE_WIDTH, type TextAtlasPage } from "./text-atlas.js";
 import {
   FILL_VERTEX_BYTES, HATCH_VERTEX_BYTES, STROKE_VERTEX_BYTES,
@@ -362,6 +365,27 @@ export interface InsetBox {
 
 type Offscreen = { w: number; h: number; msaa: WebGLFramebuffer; resolve: WebGLFramebuffer; tex: WebGLTexture; rbs: WebGLRenderbuffer[] };
 
+/** A drape layer's texture (docs/map-rendering.md §5.6 "Rendering the drape"): RGBA8 with a full mip chain. */
+type DrapeTexture = { w: number; h: number; tex: WebGLTexture; fb: WebGLFramebuffer; levels: number };
+
+export interface DrapeRenderStats {
+  /** Draw calls over all tiles. */
+  drawCalls: number;
+  tiles: number;
+  /** JS time of the tiles, the resolves and the mip chain, ms. */
+  cpuMs: number;
+}
+
+/** GPU bytes of a drape layer's texture: RGBA8 and its mip chain. */
+export function drapeTextureBytes(w: number, h: number): number {
+  let n = 0;
+  for (let lw = w, lh = h; ; lw = Math.max(1, lw >> 1), lh = Math.max(1, lh >> 1)) {
+    n += lw * lh * 4;
+    if (lw === 1 && lh === 1) break;
+  }
+  return n;
+}
+
 export interface FrameStats {
   drawCalls: number;
   /** JS time of the frame, ms. */
@@ -446,6 +470,12 @@ function classVertices(cls: number): number {
   return Math.ceil(2 ** cls / 3) * 3;
 }
 
+/** The lines a 3D frame draws over the mesh (§5.6 "Lines"): CSS widths × `pxRatio`. */
+export interface TerrainLinesPass {
+  lines: readonly TerrainLine[];
+  pxRatio: number;
+}
+
 export class MapGlRenderer {
   readonly gl: WebGL2RenderingContext;
   private readonly programs: Record<"fan" | "fanInst" | "cover" | "stroke" | "strokeInst" | "blit", Program>;
@@ -454,8 +484,12 @@ export class MapGlRenderer {
   /** Last resolved GPU frame time, ms (needs EXT_disjoint_timer_query_webgl2). */
   lastGpuMs: number | undefined;
   private uploaded: Uploaded[] = [];
-  /** Offscreen MSAA + stencil targets: the supersample path's and the loupe's (`insetTarget`). */
-  private offscreen: Partial<Record<"supersample" | "inset", Offscreen>> = {};
+  /** Offscreen MSAA + stencil targets: the supersample path's, the loupe's (`insetTarget`) and the drape tiles' (`renderDrape`). */
+  private offscreen: Partial<Record<"supersample" | "inset" | "drape", Offscreen>> = {};
+  /** The drape layers' textures, by layer slot (§5.6 "Rendering the drape"). */
+  private drapes: (DrapeTexture | undefined)[] = [];
+  private terrainRenderer?: TerrainRenderer;
+  private terrainLinesProgram?: TerrainLines;
   private quad?: WebGLBuffer;
 
   constructor(canvas: HTMLCanvasElement | OffscreenCanvas, attrs: WebGLContextAttributes = {}) {
@@ -556,6 +590,11 @@ export class MapGlRenderer {
     this.disposeTextAtlas();
     this.deleteOffscreen("supersample");
     this.deleteOffscreen("inset");
+    this.releaseDrapes();
+    this.terrainRenderer?.dispose();
+    this.terrainRenderer = undefined;
+    this.terrainLinesProgram?.dispose();
+    this.terrainLinesProgram = undefined;
     this.deleteBuffers();
     if (this.quad) this.gl.deleteBuffer(this.quad);
     this.quad = undefined;
@@ -618,6 +657,138 @@ export class MapGlRenderer {
     this.deleteOffscreen("inset");
   }
 
+  // ---- terrain (§5.6, H6) ------------------------------------------------------
+
+  /** The terrain program on this renderer's context, made on first use. */
+  get terrain(): TerrainRenderer {
+    this.terrainRenderer ??= new TerrainRenderer(this.gl);
+    return this.terrainRenderer;
+  }
+
+  /** The largest texture side this context allows. */
+  get maxTextureSize(): number {
+    return this.gl.getParameter(this.gl.MAX_TEXTURE_SIZE) as number;
+  }
+
+  /**
+   * Renders the visible set with the orthographic `view` into drape layer `slot`'s texture
+   * (`view.widthPx × view.heightPx` texels; made or remade at that size): tile by tile
+   * (`drapeTiles`) through one `DRAPE_TILE`² MSAA + stencil target, each tile resolved and then
+   * copied into its rectangle (a multisampled blit cannot move pixels), then the mip chain.
+   */
+  renderDrape(slot: number, view: View, opts: DocumentRenderOptions): DrapeRenderStats {
+    const gl = this.gl;
+    const t0 = performance.now();
+    const d = this.drapeTexture(slot, view.widthPx, view.heightPx);
+    const side = Math.min(DRAPE_TILE, Math.max(view.widthPx, view.heightPx));
+    const scratch = this.offscreenFramebuffer("drape", side, side);
+    let drawCalls = 0;
+    const tiles = drapeTiles(view, side);
+    for (const t of tiles) {
+      const { widthPx: w, heightPx: h } = t.view;
+      drawCalls += this.renderDocument(t.view, opts, { framebuffer: scratch.msaa, width: w, height: h }).drawCalls;
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, scratch.msaa);
+      gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, scratch.resolve);
+      gl.blitFramebuffer(0, 0, w, h, 0, 0, w, h, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, scratch.resolve);
+      gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, d.fb);
+      gl.blitFramebuffer(0, 0, w, h, t.x, t.y, t.x + w, t.y + h, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.bindTexture(gl.TEXTURE_2D, d.tex);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    return { drawCalls, tiles: tiles.length, cpuMs: performance.now() - t0 };
+  }
+
+  /** Drape layer `slot`'s texture, if rendered. */
+  drape(slot: number): WebGLTexture | undefined {
+    return this.drapes[slot]?.tex;
+  }
+
+  /** Frees drape layers from `slot` on (all by default), and the tile target with the last of them. */
+  releaseDrapes(from = 0): void {
+    const gl = this.gl;
+    for (let i = from; i < this.drapes.length; i++) {
+      const d = this.drapes[i];
+      if (!d) continue;
+      gl.deleteFramebuffer(d.fb);
+      gl.deleteTexture(d.tex);
+    }
+    this.drapes.length = Math.min(this.drapes.length, from);
+    if (!this.drapes.some(Boolean)) this.deleteOffscreen("drape");
+  }
+
+  /** GPU bytes of the drape layers' textures (the budget's count; the tile target is not in it). */
+  get drapeBytes(): number {
+    return this.drapes.reduce((n, d) => n + (d ? drapeTextureBytes(d.w, d.h) : 0), 0);
+  }
+
+  /** GPU bytes of the tile target: 4× MSAA colour + depth/stencil and the resolve texture. */
+  get drapeScratchBytes(): number {
+    const s = this.offscreen.drape;
+    return s ? s.w * s.h * (4 * 8 + 4) : 0;
+  }
+
+  /**
+   * Draws the terrain (§5.6 "Drawing") into `target` (default the canvas), then `lines` over it
+   * (§5.6 "Lines", H8), under the GPU timer when there is one.
+   */
+  drawTerrain(frame: TerrainFrame, target?: RenderTarget, lines?: TerrainLinesPass): (TerrainDrawStats & FrameStats & { lines?: LineDrawStats }) | null {
+    const gl = this.gl;
+    const t0 = performance.now();
+    this.resolveTimers();
+    const q = this.timer ? gl.createQuery() : null;
+    if (q && this.timer) gl.beginQuery(this.timer.ext.TIME_ELAPSED_EXT, q);
+    const t = target ?? { framebuffer: null, width: gl.drawingBufferWidth, height: gl.drawingBufferHeight };
+    const stats = this.terrain.draw(frame, t);
+    const mesh = this.terrain.mesh;
+    let lineStats: LineDrawStats | undefined;
+    if (stats && mesh && lines && lines.lines.length > 0) {
+      this.terrainLinesProgram ??= new TerrainLines(gl);
+      lineStats = this.terrainLinesProgram.draw(lines.lines, mesh, { matrix: stats.matrix, eye: stats.eye, focalPx: stats.focalPx, exaggeration: frame.exaggeration, pxRatio: lines.pxRatio }, t);
+    }
+    if (q && this.timer) {
+      gl.endQuery(this.timer.ext.TIME_ELAPSED_EXT);
+      this.timer.pending.push({ q, frame: this.frameCounter });
+    }
+    this.frameCounter++;
+    if (!stats) return null;
+    const out: TerrainDrawStats & FrameStats & { lines?: LineDrawStats } = { ...stats, drawCalls: stats.draws, cpuMs: performance.now() - t0 };
+    if (lineStats) out.lines = lineStats;
+    if (this.lastGpuMs !== undefined) out.gpuMs = this.lastGpuMs;
+    return out;
+  }
+
+  private drapeTexture(slot: number, w: number, h: number): DrapeTexture {
+    const cur = this.drapes[slot];
+    if (cur && cur.w === w && cur.h === h) return cur;
+    const gl = this.gl;
+    if (cur) {
+      gl.deleteFramebuffer(cur.fb);
+      gl.deleteTexture(cur.tex);
+    }
+    const levels = Math.floor(Math.log2(Math.max(w, h))) + 1;
+    const tex = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texStorage2D(gl.TEXTURE_2D, levels, gl.RGBA8, w, h);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    // Far ground is seen at a grazing angle: anisotropic filtering keeps its lines from blurring away.
+    const aniso = gl.getExtension("EXT_texture_filter_anisotropic");
+    if (aniso) gl.texParameterf(gl.TEXTURE_2D, aniso.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(8, gl.getParameter(aniso.MAX_TEXTURE_MAX_ANISOTROPY_EXT) as number));
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    const fb = gl.createFramebuffer()!;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    const d: DrapeTexture = { w, h, tex, fb, levels };
+    this.drapes[slot] = d;
+    return d;
+  }
+
   private resolveOffscreen(fb: Offscreen): void {
     const gl = this.gl;
     gl.bindFramebuffer(gl.READ_FRAMEBUFFER, fb.msaa);
@@ -646,7 +817,7 @@ export class MapGlRenderer {
     gl.drawArrays(gl.TRIANGLES, 0, 6);
   }
 
-  private offscreenFramebuffer(slot: "supersample" | "inset", w: number, h: number): Offscreen {
+  private offscreenFramebuffer(slot: "supersample" | "inset" | "drape", w: number, h: number): Offscreen {
     const gl = this.gl;
     const cur = this.offscreen[slot];
     if (cur && cur.w === w && cur.h === h) return cur;
@@ -681,7 +852,7 @@ export class MapGlRenderer {
     return fb;
   }
 
-  private deleteOffscreen(slot: "supersample" | "inset"): void {
+  private deleteOffscreen(slot: "supersample" | "inset" | "drape"): void {
     const fb = this.offscreen[slot];
     if (!fb) return;
     const gl = this.gl;

@@ -77,6 +77,7 @@ export const WARNING_CLASS: Readonly<Record<string, WarningClass>> = {
   CRT_SOURCE_NOT_REVIEWABLE: "outcome",
   CRT_TARGET_UNKNOWN: "outcome",
   READER_WARNING: "reader",
+  PATCH_ISSUE: "outcome",
 };
 
 /** The S0 gate's test: does this code mean a source construct could not be represented? */
@@ -150,6 +151,8 @@ export const importReportSchema = z.object({
       unclassified: z.array(z.object({ sourceNumber: z.number().int().optional(), name: z.string() })),
       /** Absent before `ocad-16` / `omap-9`. */
       areasAboveLowerPurple: z.array(z.object({ name: z.string(), sourceNumber: z.number().int().optional(), paletteId: z.string().optional() })).optional(),
+      /** Absent before `ocad-18` / `omap-11` (docs/map-symbols.md §9.2 step 4, C15). */
+      purplesDisplaced: z.array(z.object({ name: z.string(), sourceNumber: z.number().int().optional(), role: z.enum(["lower", "upper"]), why: z.enum(["position", "duplicate"]) })).optional(),
     })
     .optional(),
   /** Stage 5 (docs/map-import.md §3.8): the header's georeference projected to WGS 84. Absent before `ocad-5` / `omap-2`. */
@@ -182,6 +185,19 @@ export const importReportSchema = z.object({
       declinationDeg: z.number().nullable(),
       meridianStalenessDeg: z.number().nullable(),
       asOf: z.string(),
+    })
+    .optional(),
+  /**
+   * A promoted club version's corrections baked at the store stage
+   * (docs/map-patches.md §5, row G12a): the layers and ops, and the ops that
+   * no longer apply (skipped, `PATCH_ISSUE`). Absent for an import without
+   * a version patch.
+   */
+  corrections: z
+    .object({
+      layers: z.number().int().min(1),
+      ops: z.number().int().min(0),
+      issues: z.array(z.object({ layer: z.number().int().min(0), opId: z.string(), code: z.string() })),
     })
     .optional(),
   /** Milliseconds per stage. */

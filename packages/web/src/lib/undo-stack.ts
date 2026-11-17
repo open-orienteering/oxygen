@@ -43,6 +43,11 @@ export class UndoStack {
     return this.past[this.past.length - 1];
   }
 
+  /** The entry the next `redo` re-applies, if any. */
+  get nextRedo(): UndoEntry | undefined {
+    return this.future[this.future.length - 1];
+  }
+
   /** Record a completed change. Clears the redo branch. */
   push(entry: UndoEntry): void {
     this.past.push(entry);
@@ -50,6 +55,17 @@ export class UndoStack {
       this.past.splice(0, this.past.length - this.cap);
     }
     this.future = [];
+  }
+
+  /**
+   * Drop every entry `drop` matches from both branches, keeping the others in order (a promote drops Map mode's
+   * patch entries, docs/course-editor.md §13 "Promote"). @returns how many went.
+   */
+  remove(drop: (entry: UndoEntry) => boolean): number {
+    const n = this.past.length + this.future.length;
+    this.past = this.past.filter((e) => !drop(e));
+    this.future = this.future.filter((e) => !drop(e));
+    return n - this.past.length - this.future.length;
   }
 
   /** @returns false when there was nothing to undo. */

@@ -98,3 +98,39 @@ describe("UndoStack.top", () => {
     expect(s.top).toBe(a);
   });
 });
+
+describe("UndoStack.nextRedo", () => {
+  it("is the entry the next redo re-applies (D9c: offline, only Field mode's queued writes undo / redo)", async () => {
+    const s = new UndoStack(5);
+    expect(s.nextRedo).toBeUndefined();
+    const a = { undo: () => {}, redo: () => {} }, b = { undo: () => {}, redo: () => {} };
+    s.push(a);
+    s.push(b);
+    await s.undo();
+    expect(s.nextRedo).toBe(b);
+    await s.undo();
+    expect(s.nextRedo).toBe(a);
+    s.push(b);
+    expect(s.nextRedo).toBeUndefined();
+  });
+});
+
+describe("UndoStack.remove", () => {
+  it("drops matching entries from both branches and keeps the rest in order (G12b: a promote drops Map mode's)", async () => {
+    const log: string[] = [];
+    const s = new UndoStack(10);
+    const [a, b, c, d] = ["a", "b", "c", "d"].map((n) => entry(log, n));
+    for (const e of [a, b, c, d]) s.push(e);
+    await s.undo(); // d → future
+    const gone = new Set<object>([b, d]);
+    expect(s.remove((e) => gone.has(e))).toBe(2);
+    expect(s.canRedo).toBe(false);
+    expect(s.top).toBe(c);
+    await s.undo();
+    await s.undo();
+    expect(s.canUndo).toBe(false);
+    expect(log).toEqual(["undo:d", "undo:c", "undo:a"]);
+    expect(s.remove(() => true)).toBe(2);
+    expect(s.canRedo).toBe(false);
+  });
+});

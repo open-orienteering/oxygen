@@ -8,8 +8,13 @@
 
 import { describe, expect, it } from "vitest";
 import type { DocumentColour } from "../../map-document/header.js";
-import { alignColourStack, identifySourceColours, paletteIndexOfStack } from "../colour-align.js";
-import { nyKartaTest, toColours, ungdomsserien } from "./club-colour-tables.js";
+import { getSymbolLibrary } from "../../symbol-library/index.js";
+import { resolveEntry } from "../../symbol-library/schema.js";
+import { alignColourStack, identifySourceColours, OVERLAY_STACK_IDS, paletteIndexOfStack } from "../colour-align.js";
+import { nackareservatet2023, nyKartaTest, toColours, toUsage, ungdomsserien } from "./club-colour-tables.js";
+
+/** ISSkiOM's own rows, inserted into every stack that lacks them (docs/map-symbols.md §12.3). */
+const SKI = ["white-skio", "orange-skio", "green-skio"];
 
 const c = (sourceNumber: number, name: string, cmyk: [number, number, number, number]): DocumentColour => ({ id: `src:${sourceNumber}`, name, cmyk: cmyk.map((v) => v / 100) as [number, number, number, number], sourceNumber });
 
@@ -68,15 +73,15 @@ describe("alignColourStack", () => {
     return alignColourStack({ colours, infos, spec, edition: "iof2024", needed: new Set(needed), usage });
   };
 
-  it("keeps every source colour, tags palette ids, and inserts nothing when the source has what is needed", () => {
+  it("keeps every source colour, tags palette ids, and inserts only the overlay's rows when the source has what is needed", () => {
     const r = align(sprintStack, ["black100", "brown50-road", "yellow100", "purple-lower"]);
     expect(r.colours.filter((x) => x.sourceNumber !== undefined)).toHaveLength(sprintStack.length);
-    expect(r.inserted).toEqual([]);
+    expect(r.inserted).toEqual(SKI);
     expect(r.index.get("brown50-road")).toBe(r.remap[sprintStack.findIndex((x) => x.sourceNumber === 18)]);
     expect(r.colours[r.index.get("purple-lower")!]).toMatchObject({ sourceNumber: 23, purpleRole: "lower", paletteIds: ["purple-lower"] });
     expect(r.colours[r.index.get("purple-upper")!]).toMatchObject({ sourceNumber: 25, purpleRole: "upper" });
-    // The remap is a permutation of the source indices onto the new stack.
-    expect([...r.remap].sort((a, b) => a - b)).toEqual(sprintStack.map((_, i) => i).filter((i) => r.remap.includes(i)));
+    // The remap keeps the source order; inserted rows only shift indices.
+    for (let i = 1; i < r.remap.length; i++) expect(r.remap[i]).toBeGreaterThan(r.remap[i - 1]);
   });
 
   it("aliases a needed palette id onto a same-class source colour instead of inserting a duplicate", () => {
@@ -90,7 +95,7 @@ describe("alignColourStack", () => {
 
   it("inserts a needed palette entry at its palette position when nothing can stand for it", () => {
     const r = align(sprintStack, ["black20-canopy"]);
-    expect(r.inserted).toEqual(["black20-canopy"]);
+    expect(r.inserted).toEqual(["black20-canopy", ...SKI]);
     const at = r.index.get("black20-canopy")!;
     expect(r.colours[at]).toMatchObject({ id: "iof2024:black20-canopy", paletteIds: ["black20-canopy"] });
     expect(r.colours[at].sourceNumber).toBeUndefined();
@@ -103,7 +108,7 @@ describe("alignColourStack", () => {
   it("an inserted purple copies the map's own purple of the other role; palette CMYK only when it has none (C9)", () => {
     const onlyUpper = sprintStack.filter((x) => !/Undre violett/.test(x.name)).map((x) => (x.sourceNumber === 25 ? { ...x, cmyk: [0.1, 0.9, 0.1, 0] as [number, number, number, number] } : x));
     const r = align(onlyUpper, []);
-    expect(r.inserted).toEqual(["purple-lower"]);
+    expect(r.inserted).toEqual(["purple-lower", ...SKI]);
     expect(r.colours[r.index.get("purple-lower")!]).toMatchObject({ id: "iof2024:purple-lower", cmyk: [0.1, 0.9, 0.1, 0] });
     expect(r.colours[r.index.get("purple-lower")!].sourceNumber).toBeUndefined();
     const onlyLower = sprintStack.filter((x) => !/Övre violett/.test(x.name)).map((x) => (x.sourceNumber === 23 ? { ...x, cmyk: [0.1, 0.9, 0.1, 0] as [number, number, number, number] } : x));
@@ -153,6 +158,8 @@ describe("alignColourStack", () => {
 
   describe("lower purple: above every area colour, below the 100 % line and point colours (bugfix-lower-purple-under-areas)", () => {
     const lowerOf = (r: ReturnType<typeof align>) => r.index.get("purple-lower")!;
+    /** The nearest source colour below lower purple (inserted rows — the track mask, green 100 % — skipped). */
+    const sourceBelow = (r: ReturnType<typeof align>) => r.colours.slice(0, lowerOf(r)).reverse().find((x) => x.sourceNumber !== undefined)!;
     /** New positions of the source colours with these numbers. */
     const at = (r: ReturnType<typeof align>, ...numbers: number[]) => numbers.map((n) => r.colours.findIndex((x) => x.sourceNumber === n));
 
@@ -165,7 +172,7 @@ describe("alignColourStack", () => {
       const lower = lowerOf(r);
       expect(r.inserted).toContain("purple-lower");
       // Above the highest area colour and the road infill the mapper drew over it; below the first line colour.
-      expect(r.colours.slice(lower - 2, lower + 2).map((x) => x.name)).toEqual(["Black 20% - Area Feature", "Brun gc-vägar nära hus", "Lower purple for course overprint", "Brown 100% - Line Feature"]);
+      expect(r.colours.slice(lower - 3, lower + 2).map((x) => x.name)).toEqual(["Black 20% - Area Feature", "Brun gc-vägar nära hus", "White under Ski-O tracks", "Lower purple for course overprint", "Brown 100% - Line Feature"]);
       expect(r.remap[darkGreen]).toBeLessThan(lower);
       // Brown / blue line, green / brown / blue point, railway white, black 100 %, the map's upper purple.
       for (const pos of at(r, 18, 16, 15, 14, 13, 9, 5, 2)) expect(pos).toBeGreaterThan(lower);
@@ -179,7 +186,7 @@ describe("alignColourStack", () => {
       const colours = toColours(ungdomsserien);
       const r = align(colours, [], "ISOM2017-2");
       const lower = lowerOf(r);
-      expect(r.colours[lower - 1]).toMatchObject({ name: "Blå 100% - Ytobjekt", sourceNumber: 19 });
+      expect(sourceBelow(r)).toMatchObject({ name: "Blå 100% - Ytobjekt", sourceNumber: 19 });
       expect(r.colours[lower + 1]).toMatchObject({ name: "Brun 100% - Linjeobjekt", sourceNumber: 18 });
       // The last copy's brown / blue line, green / brown / blue point, black 100 % and upper purple.
       for (const pos of at(r, 18, 17, 8, 7, 6, 5, 3)) expect(pos).toBeGreaterThan(lower);
@@ -191,7 +198,7 @@ describe("alignColourStack", () => {
     it("one stray area colour on top does not drag lower purple over the line colours", () => {
       const stack = [c(1, "Gul", [0, 27, 79, 0]), c(2, "Grön 60%", [48, 0, 60, 0]), c(3, "Brun 100% - Linjeobjekt", [25, 75, 100, 0]), c(4, "Svart", [0, 0, 0, 100]), c(5, "Övre violett", [35, 85, 0, 0]), c(6, "Gul över platta", [0, 27, 79, 0])];
       const r = align(stack, [], "ISOM2017-2");
-      expect(r.colours[lowerOf(r) - 1].sourceNumber).toBe(2);
+      expect(sourceBelow(r).sourceNumber).toBe(2);
       expect(r.areasAboveLowerPurple).toEqual([{ name: "Gul över platta", sourceNumber: 6, paletteId: "yellow100" }]);
       expect(r.conflicts.filter((x) => /purple-lower/.test(x.reason))).toEqual([]);
     });
@@ -200,33 +207,321 @@ describe("alignColourStack", () => {
       const stack = [c(1, "Gul", [0, 27, 79, 0]), c(2, "Brun 100% - Linjeobjekt", [25, 75, 100, 0]), c(3, "Svart", [0, 0, 0, 100]), c(4, "Naturreservat - Area Feature", [90, 32, 0, 0])];
       const r = align(stack, [], "ISOM2017-2");
       expect(r.areasAboveLowerPurple).toEqual([{ name: "Naturreservat - Area Feature", sourceNumber: 4 }]);
-      expect(r.colours[lowerOf(r) - 1].sourceNumber).toBe(1);
+      expect(sourceBelow(r).sourceNumber).toBe(1);
     });
 
     it("colours no object uses neither steer the anchor nor raise warnings", () => {
       const stack = [c(1, "Gul", [0, 27, 79, 0]), c(2, "Svart", [0, 0, 0, 100]), c(3, "Gul (oanvänd)", [0, 27, 79, 0]), c(4, "Brun 100% - Linjeobjekt", [25, 75, 100, 0])];
       const r = align(stack, [], "ISOM2017-2", [10, 10, 0, 10]);
-      expect(r.colours[lowerOf(r) - 1].sourceNumber).toBe(1);
+      expect(sourceBelow(r).sourceNumber).toBe(1);
       expect(r.areasAboveLowerPurple).toEqual([]);
       const all = align(stack, [], "ISOM2017-2");
       expect(all.areasAboveLowerPurple).toEqual([]);
-      expect(all.colours[lowerOf(all) - 1].sourceNumber).toBe(3);
+      expect(all.colours[lowerOf(all) - 2].sourceNumber).toBe(3);
     });
 
     it("without area colours: directly below the first colour the palette puts above lower purple", () => {
       const r = align([c(1, "Brun 50% - Vägfyllning", [10, 35, 50, 0]), c(2, "Svart", [0, 0, 0, 100])], [], "ISOM2017-2");
       expect(r.colours[lowerOf(r) + 1].sourceNumber).toBe(2);
-      expect(r.colours[lowerOf(r) - 1].sourceNumber).toBe(1);
+      expect(sourceBelow(r).sourceNumber).toBe(1);
     });
 
-    it("a map's own lower purple keeps its place; what it hides and what sits on the wrong side are reported", () => {
-      // Vinterserien's shape: the named lower purple drawn above the named upper one, an area on top of the lower.
+    it("Vinterserien's shape: a source purple off its ruled place is displaced, both course purples placed by rule (C15)", () => {
+      // The named lower purple drawn above the named upper one, an area on top of both.
       const stack = [c(1, "Gul", [0, 27, 79, 0]), c(2, "Svart", [0, 0, 0, 100]), c(3, "Övre violett för banpåtryck", [35, 85, 0, 0]), c(4, "Undre violett för banpåtryck", [35, 85, 0, 0]), c(5, "Grön 30% - Ytobjekt", [24, 0, 30, 0])];
       const r = align(stack, [], "ISOM2017-2");
-      expect(r.inserted).toEqual([]);
-      expect(r.colours.map((x) => x.sourceNumber)).toEqual([1, 2, 3, 4, 5]);
-      expect(r.conflicts.map((x) => x.colour)).toEqual(expect.arrayContaining(["black100", "purple-upper"]));
-      expect(r.areasAboveLowerPurple).toEqual([{ name: "Grön 30% - Ytobjekt", sourceNumber: 5, paletteId: "green30-area" }]);
+      expect(r.inserted).toEqual(["purple-lower", "purple-upper", "green100-area", ...SKI]);
+      // Source order kept; both candidates stay as ordinary colours.
+      expect(r.colours.map((x) => x.sourceNumber).filter((n) => n !== undefined)).toEqual([1, 2, 3, 4, 5]);
+      for (const n of [3, 4]) expect(r.colours[at(r, n)[0]]).not.toHaveProperty("paletteIds");
+      expect(r.purplesDisplaced).toEqual([
+        { name: "Övre violett för banpåtryck", sourceNumber: 3, role: "upper", why: "position" },
+        { name: "Undre violett för banpåtryck", sourceNumber: 4, role: "lower", why: "position" },
+      ]);
+      // Lower purple above the area on top (one misplaced either way; fewest areas above wins).
+      expect(lowerOf(r)).toBeGreaterThan(at(r, 5)[0]);
+      expect(r.areasAboveLowerPurple).toEqual([]);
+      // Black under it is the 5a conflict left; the green screen drawn over black is 5b's, as before.
+      expect(r.conflicts.map((x) => x.colour)).toEqual(["black100", "green30-area"]);
+      expect(r.index.get("purple-upper")).toBe(r.colours.length - 1);
     });
+  });
+});
+
+describe("ISSkiOM's rows in every stack (docs/map-symbols.md §9.2, §12.3; answer 8 widened)", () => {
+  type Spec = "ISOM2017-2" | "ISSprOM2019-2";
+  const align = (colours: DocumentColour[], spec: Spec = "ISOM2017-2", edition: "iof2024" | "iof2022" = "iof2024", needed: string[] = []) =>
+    alignColourStack({ colours, infos: identifySourceColours(colours, spec, edition), spec, edition, needed: new Set(needed) });
+  const isom: DocumentColour[] = [
+    c(1, "Gul", [0, 27, 79, 0]),
+    c(2, "Grön 100%", [80, 0, 100, 0]),
+    c(3, "Blå 50%", [50, 0, 0, 0]),
+    c(4, "Brun 100%", [25, 75, 100, 0]),
+    c(5, "Blå 100%", [100, 0, 0, 0]),
+    c(6, "Svart", [0, 0, 0, 100]),
+    c(7, "Övre violett", [35, 85, 0, 0]),
+  ];
+  const at = (r: ReturnType<typeof align>, id: string) => r.index.get(id)!;
+  const count = (r: ReturnType<typeof align>, id: string) => r.colours.filter((x) => x.paletteIds?.includes(id)).length;
+
+  it("identifies a source's ski colours by name, else by ink above black, and does not insert them again", () => {
+    const withSki = [...isom.slice(0, 6), c(8, "White under Ski-O tracks", [0, 0, 0, 0]), c(9, "Orange", [0, 60, 100, 0]), c(10, "Grön", [91, 0, 83, 0]), isom[6]];
+    const infos = identifySourceColours(withSki, "ISOM2017-2", "iof2024");
+    expect(infos.slice(6, 9).map((i) => [i.paletteId, i.via])).toEqual([["white-skio", "name"], ["orange-skio", "position"], ["green-skio", "position"]]);
+    expect(infos[1].paletteId).toBe("green100-area");
+    const r = align(withSki);
+    expect(r.inserted).toEqual(["purple-lower"]);
+    for (const id of OVERLAY_STACK_IDS) expect(count(r, id)).toBe(1);
+    expect(r.colours[at(r, "green-skio")].sourceNumber).toBe(10);
+  });
+
+  it("inserts all four exactly once where the source lacks them: green 100 % by steps 3–4, the mask directly below lower purple, the inks below upper purple and above black", () => {
+    const noGreen = isom.filter((x) => x.sourceNumber !== 2);
+    const r = align(noGreen);
+    expect(r.inserted).toEqual(["purple-lower", ...OVERLAY_STACK_IDS]);
+    for (const id of OVERLAY_STACK_IDS) expect(count(r, id)).toBe(1);
+    expect(at(r, "white-skio")).toBe(at(r, "purple-lower") - 1);
+    expect(at(r, "green100-area")).toBeLessThan(at(r, "purple-lower"));
+    expect(at(r, "orange-skio")).toBe(at(r, "green-skio") - 1);
+    expect(at(r, "green-skio")).toBe(at(r, "purple-upper") - 1);
+    expect(at(r, "orange-skio")).toBeGreaterThan(at(r, "black100"));
+    for (const id of OVERLAY_STACK_IDS) {
+      const e = r.colours[at(r, id)];
+      expect(e).toMatchObject({ id: `iof2024:${id}`, paletteIds: [id] });
+      expect(e.sourceNumber).toBeUndefined();
+    }
+    expect(r.colours[at(r, "green-skio")].cmyk).toEqual([0.91, 0, 0.83, 0]);
+    // Source order kept; nothing the source drew changes side, so no new conflict.
+    expect(r.colours.filter((x) => x.sourceNumber !== undefined).map((x) => x.sourceNumber)).toEqual([1, 3, 4, 5, 6, 7]);
+    expect(r.conflicts).toEqual([]);
+    expect(r.areasAboveLowerPurple).toEqual([]);
+  });
+
+  it("rows inserted for the overlay take no part in step 5b: the source's conflicts are those it had without them", () => {
+    // e2e/test.ocd's order: white over green, blue line, yellow, black, purple — yellow is the one out of order.
+    const stack = [c(1, "White", [0, 0, 0, 0]), c(2, "Blue", [100, 0, 0, 0]), c(3, "Yellow", [0, 27, 79, 0]), c(4, "Black", [0, 0, 0, 100]), c(5, "Purple", [35, 85, 0, 0])];
+    const r = align(stack);
+    expect(r.inserted).toContain("green100-area");
+    expect(r.conflicts.map((x) => x.colour).sort()).toEqual(["blue100-line", "yellow100"]);
+  });
+
+  it("… also when an applied track match needs them", () => {
+    const stack = [c(1, "White", [0, 0, 0, 0]), c(2, "Blue", [100, 0, 0, 0]), c(3, "Yellow", [0, 27, 79, 0]), c(4, "Black", [0, 0, 0, 100]), c(5, "Purple", [35, 85, 0, 0])];
+    const r = align(stack, "ISOM2017-2", "iof2024", ["green-skio", "white-skio", "orange-skio", "black100"]);
+    expect(r.inserted).toEqual(expect.arrayContaining(["white-skio", "orange-skio", "green-skio"]));
+    expect(r.conflicts.map((x) => x.colour).sort()).toEqual(["blue100-line", "yellow100"]);
+  });
+
+  it("never aliases a ski row to another colour, nor another row to a ski colour", () => {
+    // Green 83 % (Ski-O) and green 100 % are one class; a white mask is the same class as every white.
+    const r = align(isom.slice(), "ISOM2017-2", "iof2024", ["white-over-yellow"]);
+    expect(r.aliased.map((a) => a.paletteId)).not.toEqual(expect.arrayContaining(["green-skio"]));
+    expect(r.inserted).toEqual(expect.arrayContaining(["white-skio", "green-skio"]));
+    const skiOnly = [isom[0], c(2, "Green for Ski-O", [91, 0, 83, 0]), ...isom.slice(2)];
+    const r2 = align(skiOnly);
+    expect(r2.inserted).toContain("green100-area");
+    expect(r2.aliased).toEqual([]);
+  });
+
+  it("keeps the tracks above black where a Mapper-ordered table keeps railway white below it", () => {
+    const mapper = [c(1, "Yellow", [0, 27, 79, 0]), c(2, "Brown", [25, 75, 100, 0]), c(3, "White for railway", [0, 0, 0, 0]), c(4, "Black", [0, 0, 0, 100]), c(5, "Upper purple", [35, 85, 0, 0])];
+    const r = align(mapper);
+    expect(at(r, "orange-skio")).toBeGreaterThan(at(r, "black100"));
+    expect(at(r, "green-skio")).toBe(at(r, "purple-upper") - 1);
+  });
+
+  it("keeps the tracks above lower purple where a table keeps a copy of its upper purple at the bottom", () => {
+    const stack = [c(1, "Övre violett för banpåtryck", [35, 85, 0, 0]), c(2, "Gul", [0, 27, 79, 0]), c(3, "Undre violett", [35, 85, 0, 0]), c(4, "Brun", [25, 75, 100, 0]), c(5, "Svart", [0, 0, 0, 100]), c(6, "Övre violett för banpåtryck", [35, 85, 0, 0])];
+    const r = align(stack);
+    const top = r.colours.findIndex((x) => x.sourceNumber === 6);
+    expect(at(r, "green-skio")).toBe(top - 1);
+    expect(at(r, "orange-skio")).toBe(top - 2);
+    expect(r.conflicts.filter((x) => /skio/.test(x.colour))).toEqual([]);
+  });
+
+  it("in both base specs and both editions; a 2022 stack gets the 2024 orange", () => {
+    for (const [stack, spec] of [[isom, "ISOM2017-2"], [sprintStack, "ISSprOM2019-2"]] as const) {
+      for (const edition of ["iof2024", "iof2022"] as const) {
+        const r = align([...stack], spec, edition);
+        for (const id of OVERLAY_STACK_IDS) expect(count(r, id), `${spec} ${edition} ${id}`).toBe(1);
+      }
+    }
+    const r = align(isom.slice(), "ISOM2017-2", "iof2022");
+    expect(r.colours[at(r, "orange-skio")]).toMatchObject({ id: "iof2024:orange-skio", cmyk: [0, 0.6, 1, 0] });
+    expect(r.colours[at(r, "white-skio")].id).toBe("iof2022:white-skio");
+  });
+
+  it("every ISSkiOM track symbol resolves against the aligned stack of any map", () => {
+    const lib = getSymbolLibrary("ISSkiOM2019");
+    for (const [stack, spec] of [[isom, "ISOM2017-2"], [sprintStack, "ISSprOM2019-2"], [toColours(nyKartaTest), "ISOM2017-2"], [toColours(ungdomsserien), "ISOM2017-2"]] as const) {
+      const index = paletteIndexOfStack(align([...stack], spec).colours);
+      for (const e of lib.entries.filter((x) => x.scaleGroup === "track")) expect(() => resolveEntry(e, index), `${spec} ${e.id}`).not.toThrow();
+    }
+  });
+});
+
+describe("course purples placed by rule (C15; docs/map-symbols.md §9.2 step 4)", () => {
+  const purpleRows = (r: ReturnType<typeof alignColourStack>) => ({
+    lower: r.colours.filter((x) => x.paletteIds?.includes("purple-lower")).length,
+    upper: r.colours.filter((x) => x.paletteIds?.includes("purple-upper")).length,
+    roles: r.colours.filter((x) => x.purpleRole).length,
+  });
+  const sourceAt = (r: ReturnType<typeof alignColourStack>, n: number) => r.colours.findIndex((x) => x.sourceNumber === n);
+  /** Nearest source colour below / above an index (inserted rows skipped). */
+  const sourceNear = (r: ReturnType<typeof alignColourStack>, i: number, dir: -1 | 1) => {
+    for (let j = i + dir; j >= 0 && j < r.colours.length; j += dir) if (r.colours[j].sourceNumber !== undefined) return r.colours[j];
+    return undefined;
+  };
+
+  describe("Nackareservatet 2023 (Testkarta): its only lower candidate under the area block, its upper candidates at the bottom", () => {
+    const colours = toColours(nackareservatet2023);
+    const usage = toUsage(nackareservatet2023);
+    const infos = identifySourceColours(colours, "ISOM2017-2", "iof2022");
+    const r = alignColourStack({ colours, infos, spec: "ISOM2017-2", edition: "iof2022", needed: new Set(), usage });
+    const lower = r.index.get("purple-lower")!;
+    const upper = r.index.get("purple-upper")!;
+
+    it("inserts lower purple above the area block and the road infill on it, below the 100 % line colours", () => {
+      expect(r.inserted).toContain("purple-lower");
+      expect(r.colours[lower]).toMatchObject({ id: "iof2022:purple-lower", purpleRole: "lower", paletteIds: ["purple-lower"] });
+      expect(sourceNear(r, lower, -1)).toMatchObject({ name: "Brun gc-vägar nära hus", sourceNumber: 36 });
+      expect(r.colours[lower + 1]).toMatchObject({ name: "Brown 100% - Line Feature", sourceNumber: 107 });
+      // Every yellow and green area screen is under it now (28 were above it under ocad-17).
+      for (const n of [122, 123, 263, 118, 117, 116, 119, 113, 111, 108]) expect(sourceAt(r, n), String(n)).toBeLessThan(lower);
+      // Only the stray text mask the mapper keeps above black is left above it.
+      expect(r.areasAboveLowerPurple).toEqual([{ name: "Vit mask för text och kontrollb", sourceNumber: 432, paletteId: "white-over-green-brown" }]);
+    });
+
+    it("reuses the purple already on top as upper purple", () => {
+      expect(r.inserted).not.toContain("purple-upper");
+      expect(upper).toBe(r.colours.length - 1);
+      expect(r.colours[upper]).toMatchObject({ name: "Violett", sourceNumber: 428, purpleRole: "upper", paletteIds: ["purple-upper"] });
+    });
+
+    it("leaves the other five source purples where the mapper put them, as ordinary colours", () => {
+      expect(r.purplesDisplaced).toEqual([
+        { name: "Övre violett för banpåtryck", sourceNumber: 1348, role: "upper", why: "position" },
+        { name: "Övre violett för banpåtryck", sourceNumber: 1319, role: "upper", why: "position" },
+        { name: "Upper Purple for Course Overprint", sourceNumber: 1155, role: "upper", why: "position" },
+        { name: "Violett", sourceNumber: 1153, role: "lower", why: "position" },
+        { name: "Upper Purple for Course Overprint", sourceNumber: 89, role: "upper", why: "duplicate" },
+      ]);
+      for (const d of r.purplesDisplaced) {
+        const row = r.colours[sourceAt(r, d.sourceNumber!)];
+        expect(row.paletteIds).toBeUndefined();
+        expect(row.purpleRole).toBeUndefined();
+        expect(row.cmyk).toEqual(colours.find((x) => x.sourceNumber === d.sourceNumber)!.cmyk);
+      }
+      // Source order kept, every source colour still in the stack (the map objects drawn in them are unchanged).
+      for (let i = 1; i < r.remap.length; i++) expect(r.remap[i]).toBeGreaterThan(r.remap[i - 1]);
+      expect(purpleRows(r)).toEqual({ lower: 1, upper: 1, roles: 2 });
+    });
+
+    it("no conflict is about a purple, and both course purples are one ink (C9)", () => {
+      expect(r.conflicts.filter((x) => /purple/.test(x.colour) || /"(Violett|Övre violett|Upper Purple)/.test(x.reason))).toEqual([]);
+      expect(r.colours[lower].cmyk).toEqual(r.colours[upper].cmyk);
+      expect(r.colours[upper].cmyk).toEqual([0.1, 0.9, 0.1, 0]);
+    });
+
+    it("the ISSkiOM rows follow the placed rows", () => {
+      expect(r.index.get("white-skio")).toBe(lower - 1);
+      expect(r.index.get("green-skio")).toBe(upper - 1);
+      expect(r.index.get("orange-skio")).toBe(upper - 2);
+      expect(r.index.get("green100-area")!).toBeLessThan(lower);
+    });
+  });
+
+  describe("a table whose purples already stand right keeps them: the stack ocad-17 built", () => {
+    const snapshot = (r: ReturnType<typeof alignColourStack>) => r.colours.map((x) => [x.id, x.paletteIds ?? null, x.purpleRole ?? null]);
+    const run = (colours: DocumentColour[], spec: "ISOM2017-2" | "ISSprOM2019-2") => alignColourStack({ colours, infos: identifySourceColours(colours, spec, "iof2024"), spec, edition: "iof2024", needed: new Set() });
+
+    it("a sprint table: lower purple directly above the line block it belongs under, upper on top", () => {
+      const r = run(sprintStack, "ISSprOM2019-2");
+      expect(r.purplesDisplaced).toEqual([]);
+      expect(r.inserted).toEqual(SKI);
+      expect(snapshot(r)).toEqual([
+        ["src:10", ["yellow100"], null], ["src:11", ["white-over-yellow"], null], ["src:12", ["green30-area"], null], ["src:13", ["green60-area"], null],
+        ["src:14", ["green100-area"], null], ["src:15", ["darkgreen-area"], null], ["src:16", ["brown30-road"], null], ["src:17", ["brown50-paved"], null],
+        ["src:18", ["brown50-road"], null], ["src:19", ["black50-building"], null], ["src:20", ["blue50-area"], null], ["src:21", ["blue100-pointline"], null],
+        ["src:22", ["brown100"], null], ["iof2024:white-skio", ["white-skio"], null], ["src:23", ["purple-lower"], "lower"], ["src:24", ["black100"], null],
+        ["iof2024:orange-skio", ["orange-skio"], null], ["iof2024:green-skio", ["green-skio"], null], ["src:25", ["purple-upper"], "upper"],
+      ]);
+    });
+
+    it("a forest table: lower purple between the areas and the line colours", () => {
+      const isom = [c(1, "Gul", [0, 27, 79, 0]), c(2, "Grön 100%", [80, 0, 100, 0]), c(3, "Blå 50%", [50, 0, 0, 0]), c(4, "Undre violett", [35, 85, 0, 0]), c(5, "Brun 100%", [25, 75, 100, 0]), c(6, "Blå 100%", [100, 0, 0, 0]), c(7, "Svart", [0, 0, 0, 100]), c(8, "Övre violett", [35, 85, 0, 0])];
+      const r = run(isom, "ISOM2017-2");
+      expect(r.purplesDisplaced).toEqual([]);
+      expect(r.conflicts).toEqual([]);
+      expect(snapshot(r)).toEqual([
+        ["src:1", ["yellow100"], null], ["src:2", ["green100-area"], null], ["src:3", ["blue50-area"], null], ["iof2024:white-skio", ["white-skio"], null],
+        ["src:4", ["purple-lower"], "lower"], ["src:5", ["brown100-line"], null], ["src:6", ["blue100-line"], null], ["src:7", ["black100"], null],
+        ["iof2024:orange-skio", ["orange-skio"], null], ["iof2024:green-skio", ["green-skio"], null], ["src:8", ["purple-upper"], "upper"],
+      ]);
+    });
+  });
+
+  it("the ski rows follow an inserted lower purple, and a displaced upper copy between it and the top does not stop the track inks", () => {
+    const stack = [c(1, "Gul", [0, 27, 79, 0]), c(2, "Undre violett", [35, 85, 0, 0]), c(3, "Grön 60%", [48, 0, 60, 0]), c(4, "Brun 100%", [25, 75, 100, 0]), c(5, "Övre violett", [35, 85, 0, 0]), c(6, "Svart", [0, 0, 0, 100]), c(7, "Övre violett", [35, 85, 0, 0])];
+    const r = alignColourStack({ colours: stack, infos: identifySourceColours(stack, "ISOM2017-2", "iof2024"), spec: "ISOM2017-2", edition: "iof2024", needed: new Set() });
+    const lower = r.index.get("purple-lower")!, upper = r.index.get("purple-upper")!;
+    expect(r.inserted).toContain("purple-lower");
+    expect(sourceNear(r, lower, -1)?.sourceNumber).toBe(3);
+    expect(r.colours[lower + 1].sourceNumber).toBe(4);
+    expect(r.colours[upper].sourceNumber).toBe(7);
+    expect(r.purplesDisplaced.map((d) => [d.sourceNumber, d.role, d.why])).toEqual([[2, "lower", "position"], [5, "upper", "position"]]);
+    expect(r.index.get("white-skio")).toBe(lower - 1);
+    expect(r.index.get("green-skio")).toBe(upper - 1);
+    expect(r.index.get("orange-skio")).toBe(upper - 2);
+    expect(r.index.get("orange-skio")!).toBeGreaterThan(sourceAt(r, 6));
+  });
+
+  describe("edge cases (spec review)", () => {
+    const run = (stack: DocumentColour[], usage?: number[]) => alignColourStack({ colours: stack, infos: identifySourceColours(stack, "ISOM2017-2", "iof2024"), spec: "ISOM2017-2", edition: "iof2024", needed: new Set(), usage });
+    const gul = c(1, "Gul", [0, 27, 79, 0]), brun = c(3, "Brun 100%", [25, 75, 100, 0]), svart = c(4, "Svart", [0, 0, 0, 100]);
+
+    it("a purple candidate whose name says area takes no side: neither steers lower purple nor is reported as an area", () => {
+      const reused = run([gul, brun, svart, c(5, "Övre violett - Ytobjekt", [35, 85, 0, 0])], [5, 5, 5, 1]);
+      expect(reused.colours[reused.index.get("purple-upper")!].sourceNumber).toBe(5);
+      expect(reused.areasAboveLowerPurple).toEqual([]);
+      const displaced = run([c(0, "Undre violett - Ytobjekt", [35, 85, 0, 0]), gul, brun, svart, c(5, "Övre violett", [35, 85, 0, 0])], [1, 5, 5, 5, 1]);
+      expect(displaced.purplesDisplaced).toEqual([{ name: "Undre violett - Ytobjekt", sourceNumber: 0, role: "lower", why: "position" }]);
+      expect(displaced.areasAboveLowerPurple).toEqual([]);
+      expect(sourceNear(displaced, displaced.index.get("purple-lower")!, -1)?.sourceNumber).toBe(1);
+    });
+
+    it("an unused candidate at the ruled place is reused: the test is its position", () => {
+      const r = run([gul, c(2, "Undre violett", [35, 85, 0, 0]), brun, svart, c(5, "Övre violett", [35, 85, 0, 0])], [5, 0, 5, 5, 0]);
+      expect(r.purplesDisplaced).toEqual([]);
+      expect(r.colours[r.index.get("purple-lower")!].sourceNumber).toBe(2);
+      expect(r.colours[r.index.get("purple-upper")!].sourceNumber).toBe(5);
+    });
+
+    it("several candidates at the ruled place: the most used, ties to the highest for upper and the lowest for lower; the rest are duplicates", () => {
+      const a = c(5, "Övre violett", [35, 85, 0, 0]), b = c(6, "Övre violett", [35, 85, 0, 0]);
+      const tie = run([gul, brun, svart, a, b], [5, 5, 5, 2, 2]);
+      expect(tie.colours[tie.index.get("purple-upper")!].sourceNumber).toBe(6);
+      expect(tie.purplesDisplaced).toEqual([{ name: "Övre violett", sourceNumber: 5, role: "upper", why: "duplicate" }]);
+      const used = run([gul, brun, svart, a, b], [5, 5, 5, 3, 2]);
+      expect(used.colours[used.index.get("purple-upper")!].sourceNumber).toBe(5);
+      expect(used.purplesDisplaced).toEqual([{ name: "Övre violett", sourceNumber: 6, role: "upper", why: "duplicate" }]);
+      const lowers = run([gul, c(10, "Undre violett", [35, 85, 0, 0]), c(11, "Undre violett", [35, 85, 0, 0]), brun, svart, a], [5, 2, 2, 5, 5, 1]);
+      expect(lowers.colours[lowers.index.get("purple-lower")!].sourceNumber).toBe(10);
+      expect(lowers.purplesDisplaced).toEqual([{ name: "Undre violett", sourceNumber: 11, role: "lower", why: "duplicate" }]);
+    });
+
+    it("lower purple never lands above a reused upper purple, even on a table with nothing that steers it", () => {
+      const r = run([c(1, "Övre violett", [35, 85, 0, 0]), c(2, "T-bana", [90, 32, 0, 0])], [4, 0]);
+      expect(r.colours[r.index.get("purple-upper")!].sourceNumber).toBe(1);
+      expect(r.index.get("purple-lower")!).toBeLessThan(r.index.get("purple-upper")!);
+    });
+  });
+
+  it("an inserted pair takes the map's most used purple ink, not the palette's", () => {
+    const stack = [c(1, "Övre violett", [10, 90, 10, 0]), c(2, "Gul", [0, 27, 79, 0]), c(3, "Svart", [0, 0, 0, 100]), c(4, "Gul över platta", [0, 27, 79, 0])];
+    const r = alignColourStack({ colours: stack, infos: identifySourceColours(stack, "ISOM2017-2", "iof2024"), spec: "ISOM2017-2", edition: "iof2024", needed: new Set(), usage: [5, 10, 10, 1] });
+    expect(r.inserted).toEqual(expect.arrayContaining(["purple-lower", "purple-upper"]));
+    expect(r.colours[r.index.get("purple-lower")!].cmyk).toEqual([0.1, 0.9, 0.1, 0]);
+    expect(r.colours[r.index.get("purple-upper")!].cmyk).toEqual([0.1, 0.9, 0.1, 0]);
   });
 });

@@ -25,6 +25,18 @@ function fakeClient() {
       update: { mutate: vi.fn(respond("objUpdate")) },
       delete: { mutate: vi.fn(respond("objDelete")) },
     },
+    mapPatch: {
+      applyChange: { mutate: vi.fn(respond("patchApply")) },
+      setEnabled: { mutate: vi.fn(respond("patchEnabled")) },
+      attachUnresolved: { mutate: vi.fn(respond("patchAttach")) },
+    },
+    mapTrack: {
+      import: { mutate: vi.fn(respond("trackImport")) },
+      update: { mutate: vi.fn(respond("trackUpdate")) },
+      split: { mutate: vi.fn(respond("trackSplit")) },
+      remove: { mutate: vi.fn(respond("trackRemove")) },
+      markConverted: { mutate: vi.fn(respond("trackConverted")) },
+    },
   } as unknown as EditorClient;
   return { client, calls, fail: (e: unknown) => queue.push(() => { throw e; }), ok: (v: unknown) => queue.push(() => v) };
 }
@@ -78,6 +90,24 @@ describe("EditorWrites (docs/course-editor.md §3)", () => {
     expect(w.versions.get("control", 31)).toBe("9");
   });
 
+  it("a queued move sends the token it was queued with, not the book's newer one (D9c, §9 \"Offline\")", async () => {
+    const f = fakeClient();
+    const w = new EditorWrites(f.client);
+    w.versions.seed("control", 31, "12");
+    f.fail(conflictError({ kind: "control", id: 31, version: "12", current: { xpos: 10, ypos: 20 }, differing: ["checkedAt", "checkedBy"] }));
+    f.ok({ version: "13" });
+    await w.updateControl({ id: 31, xpos: 15, ypos: 25, autoDescribe: true }, { x: 10, y: 20 }, { baseVersion: "5" });
+    // The stale base answers CONFLICT; only a check changed there, so it rebases once on the server's token.
+    expect(f.calls.map((c) => c.input.baseVersion)).toEqual(["5", "12"]);
+    expect(w.versions.get("control", 31)).toBe("13");
+    // Moved there too: `moved`, as without the override.
+    w.versions.seed("control", 31, "20");
+    f.fail(conflictError({ kind: "control", id: 31, version: "20", current: { xpos: 11, ypos: 20 }, differing: ["xpos"] }));
+    const err = await w.updateControl({ id: 31, xpos: 16, ypos: 25 }, { x: 15, y: 25 }, { baseVersion: "13" }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(EditorConflict);
+    expect(f.calls[2].input.baseVersion).toBe("13");
+  });
+
   it("a stale structure throws `refresh` with the differing items, never re-sent", async () => {
     const f = fakeClient();
     const w = new EditorWrites(f.client);
@@ -112,6 +142,67 @@ describe("EditorWrites (docs/course-editor.md §3)", () => {
     expect((err as EditorConflict).decision.kind).toBe("refresh");
     expect(f.calls).toHaveLength(1);
     expect(w.versions.get("course", 1)).toBe("9");
+  });
+
+  /** A client whose `setStructure` answers only when the test resolves it, so two writes can overlap. */
+  function heldClient() {
+    const sent: { baseVersion: unknown; answer: (v: unknown) => void; refuse: (e: unknown) => void }[] = [];
+    const mutate = vi.fn((input: Record<string, unknown>) => new Promise((answer, refuse) => sent.push({ baseVersion: input.baseVersion, answer, refuse })));
+    const client = {
+      course: { setStructure: { mutate }, setControlLabelOffset: { mutate }, update: { mutate } },
+      control: { update: { mutate } },
+    } as unknown as EditorClient;
+    return { client, sent };
+  }
+  const settle = () => new Promise((r) => setTimeout(r, 0));
+
+  it("a write made while one of the same course is in flight waits for it and sends its token (Ctrl+Z twice, bugfix-editor-overlapping-course-writes)", async () => {
+    const h = heldClient();
+    const w = new EditorWrites(h.client);
+    w.versions.seed("course", 1, "5");
+    const first = w.setStructure(1, S);
+    const second = w.setStructure(1, S);
+    const label = w.setLabelOffset(1, 31, null);
+    await settle();
+    // One in flight: the second is not sent before the first's reply has seeded its token.
+    expect(h.sent.map((s) => s.baseVersion)).toEqual(["5"]);
+    h.sent[0].answer({ version: "6" });
+    await first;
+    await settle();
+    expect(h.sent.map((s) => s.baseVersion)).toEqual(["5", "6"]);
+    h.sent[1].answer({ version: "7" });
+    await second;
+    await settle();
+    // The label offset takes no token but advances the course's: it queues as a course write.
+    expect(h.sent).toHaveLength(3);
+    h.sent[2].answer({ version: "8" });
+    await label;
+    expect(w.versions.get("course", 1)).toBe("8");
+  });
+
+  it("a refused write does not stop the queue: the next sends the token the refusal seeded", async () => {
+    const h = heldClient();
+    const w = new EditorWrites(h.client);
+    w.versions.seed("course", 1, "5");
+    const first = w.setStructure(1, S).catch((e: unknown) => e);
+    const second = w.setStructure(1, S);
+    await settle();
+    h.sent[0].refuse(conflictError({ kind: "course", id: 1, version: "9", current: {}, differing: ["32"] }));
+    expect(await first).toBeInstanceOf(EditorConflict);
+    await settle();
+    expect(h.sent.map((s) => s.baseVersion)).toEqual(["5", "9"]);
+    h.sent[1].answer({ version: "10" });
+    await expect(second).resolves.toEqual({ version: "10" });
+  });
+
+  it("writes of different rows do not wait for each other", async () => {
+    const h = heldClient();
+    const w = new EditorWrites(h.client);
+    void w.setStructure(1, S);
+    void w.setStructure(2, S);
+    void w.updateControl({ id: 31, xpos: 1, ypos: 2 });
+    await settle();
+    expect(h.sent).toHaveLength(3);
   });
 
   it("other errors pass through", async () => {
@@ -156,5 +247,66 @@ describe("EditorWrites (docs/course-editor.md §3)", () => {
     expect(f.calls[0]).toEqual({ proc: "check", input: { controlId: 31, checked: true } });
     await w.updateControl({ id: 31, xpos: 1, ypos: 2 });
     expect(f.calls[1].input.baseVersion).toBe("9");
+  });
+
+  it("map patch writes carry the document hash and no token; the reply is returned, a refusal propagates (§13)", async () => {
+    const f = fakeClient();
+    const w = new EditorWrites(f.client);
+    f.ok({ version: "7", patch: null });
+    const res = await w.applyPatchChange("ab".repeat(32), { put: [{ op: "hide", sourceIndex: 4 }] });
+    expect(res).toEqual({ version: "7", patch: null });
+    expect(f.calls[0]).toEqual({ proc: "patchApply", input: { documentHash: "ab".repeat(32), put: [{ op: "hide", sourceIndex: 4 }] } });
+    f.ok({ version: "8", patch: null });
+    await w.setPatchEnabled(false);
+    expect(f.calls[1]).toEqual({ proc: "patchEnabled", input: { enabled: false } });
+    f.fail(new Error("PATCH_STALE: the patch is keyed to another document"));
+    await expect(w.applyPatchChange("ab".repeat(32), { remove: ["hide:4"] })).rejects.toThrow(/PATCH_STALE/);
+    expect(f.calls).toHaveLength(3);
+    // G12b: *Attach* with an object, or with a picked symbol and no object.
+    f.ok({ version: "9", patch: null });
+    await w.attachUnresolvedPatch("ab".repeat(32), "k1", { sourceIndex: 5 });
+    expect(f.calls[3]).toEqual({ proc: "patchAttach", input: { documentHash: "ab".repeat(32), key: "k1", sourceIndex: 5 } });
+    f.ok({ version: "10", patch: null });
+    await w.attachUnresolvedPatch("ab".repeat(32), "k2", { symbol: { patch: "ISOM2017-2:204" } });
+    expect(f.calls[4]).toEqual({ proc: "patchAttach", input: { documentHash: "ab".repeat(32), key: "k2", symbol: { patch: "ISOM2017-2:204" } } });
+  });
+
+  it("GPS track writes pass their input through and return the reply; a refusal propagates (docs/map-gps-tracks.md §5.1)", async () => {
+    const f = fakeClient();
+    const w = new EditorWrites(f.client);
+    const points = { lat: [1, 2], lng: [3, 4], time: null, ele: null };
+    f.ok({ tracks: [{ id: "t1" }] });
+    expect(await w.importTracks([{ name: "A", sourceName: "a.gpx", points }])).toEqual({ tracks: [{ id: "t1" }] });
+    expect(f.calls[0]).toEqual({ proc: "trackImport", input: { tracks: [{ name: "A", sourceName: "a.gpx", points }] } });
+    f.ok({ id: "t1", name: "B" });
+    await w.updateTrack({ id: "t1", name: "B" });
+    expect(f.calls[1]).toEqual({ proc: "trackUpdate", input: { id: "t1", name: "B" } });
+    f.ok({ removed: 1 });
+    expect(await w.removeTracks(["t1"])).toEqual({ removed: 1 });
+    expect(f.calls[2]).toEqual({ proc: "trackRemove", input: { ids: ["t1"] } });
+    f.ok({ tracks: [] });
+    await w.markTracksConverted([{ id: "t1", opId: null }]);
+    expect(f.calls[3]).toEqual({ proc: "trackConverted", input: { marks: [{ id: "t1", opId: null }] } });
+    f.fail(new Error("TRACK_LIMIT: the event would hold more than 200 tracks"));
+    await expect(w.importTracks([{ name: null, sourceName: "b.gpx", points }])).rejects.toThrow(/TRACK_LIMIT/);
+    // G27: split with the client's part ids.
+    f.ok({ tracks: [{ id: "l" }, { id: "r" }] });
+    expect(await w.splitTrack({ id: "t1", index: 3, ids: ["l", "r"] })).toEqual({ tracks: [{ id: "l" }, { id: "r" }] });
+    expect(f.calls.at(-1)).toEqual({ proc: "trackSplit", input: { id: "t1", index: 3, ids: ["l", "r"] } });
+    f.fail(new Error("TRACK_SPLIT_INVALID: index 1 leaves fewer than two points"));
+    await expect(w.splitTrack({ id: "t1", index: 1, ids: ["l", "r"] })).rejects.toThrow(/TRACK_SPLIT_INVALID/);
+  });
+
+  it("without a mapTrack client the track writes refuse", async () => {
+    const f = fakeClient();
+    const w = new EditorWrites({ ...f.client, mapTrack: undefined });
+    expect(() => w.removeTracks(["t1"])).toThrow(/not available/);
+    expect(() => w.splitTrack({ id: "t1", index: 3, ids: ["l", "r"] })).toThrow(/not available/);
+  });
+
+  it("without a mapPatch client the patch writes refuse", async () => {
+    const f = fakeClient();
+    const w = new EditorWrites({ ...f.client, mapPatch: undefined });
+    expect(() => w.setPatchEnabled(true)).toThrow(/not available/);
   });
 });

@@ -23,7 +23,7 @@ See `docs/architecture.md` for the full system architecture.
 | TypeScript build | `pnpm build` | All 3 packages must compile cleanly |
 | Unit tests | `pnpm test` | Vitest across shared, api, web (518+ tests) |
 | Integration tests | `pnpm --filter api exec vitest run --config vitest.integration.config.ts` | 69 tests, requires the test Postgres container (`pnpm test:db:up`) |
-| E2E tests | `pnpm test:e2e` | 195 tests, Playwright — full runs are sharded across up to 4 isolated stacks, scaled to the machine (see `docs/e2e-sharding.md`); CI runs one shard per runner, a matrix of 6 (`E2E_SHARD_TOTAL` / `E2E_SHARD_INDEX`, `docs/e2e-sharding.md` "CI"); `pnpm test:e2e e2e/foo.spec.ts` runs a single spec unsharded on its own stack (API :4100, web :4200, eventor :4300), which it starts itself — never the dev servers on 3002/5173, so it tests the checkout it is run from |
+| E2E tests | `pnpm test:e2e` | 195 tests, Playwright — full runs are sharded across up to 4 isolated stacks, scaled to the machine (see `docs/e2e-sharding.md`); CI runs one shard per runner, a matrix of 6 (`E2E_SHARD_TOTAL` / `E2E_SHARD_INDEX`, `docs/e2e-sharding.md` "CI"); `pnpm test:e2e e2e/foo.spec.ts` runs a single spec unsharded on its own stack (API :4100, web :4200, eventor :4300), which it starts itself — never the dev servers on 3002/5173, so it tests the checkout it is run from; a full run then runs the preview stack (the production bundle under `vite preview` on :4400 with its service worker, `*.preview.spec.ts`; `pnpm test:e2e --preview` alone, CI job `e2e-preview`; `docs/e2e-sharding.md` "The preview stack") |
 | E2E tests (serial) | `pnpm test:e2e:serial` | Escape hatch: plain single-stack `playwright test` on the same 4100/4200/4300 ports |
 | Test coverage | `pnpm test:coverage` | V8 coverage reports (HTML + LCOV) |
 | Lint | `pnpm lint` | ESLint |
@@ -108,7 +108,7 @@ in your final message and explain why.
 1. **`pnpm build`** — Zero TypeScript errors across all three packages.
 2. **`pnpm test`** — All unit tests pass. Always required.
 3. **Integration tests** — Run for any DB-related changes. Always required for features: `pnpm --filter api exec vitest run --config vitest.integration.config.ts`
-4. **E2E tests** — During iterative development, run only the spec files covering the affected area (`pnpm test:e2e e2e/specific-file.spec.ts` — runs unsharded on its own stack at 4100/4200/4300 with database `oxygen_e2e`; the run starts every server itself and never attaches to a running one, so it is safe next to `pnpm dev` and always tests the code it is run from). Before declaring a task complete, run the full suite once: `pnpm test:e2e` (sharded across up to 4 isolated stacks, ~3-5 min; see `docs/e2e-sharding.md`). For minor fixes confined to `docs/` or other non-shipping files, E2E can be skipped — state so in your final message.
+4. **E2E tests** — During iterative development, run only the spec files covering the affected area (`pnpm test:e2e e2e/specific-file.spec.ts` — runs unsharded on its own stack at 4100/4200/4300 with database `oxygen_e2e`; the run starts every server itself and never attaches to a running one, so it is safe next to `pnpm dev` and always tests the code it is run from). Before declaring a task complete, run the full suite once: `pnpm test:e2e` (sharded across up to 4 isolated stacks, ~3-5 min, then the preview stack on :4400; see `docs/e2e-sharding.md`). A change to the service worker (`vite.config.ts` `VitePWA`) or to a chunk it routes (the print worker) also runs `pnpm test:e2e --preview`. For minor fixes confined to `docs/` or other non-shipping files, E2E can be skipped — state so in your final message.
 5. **Rebuild Docker** — Run `docker compose -f docker-compose.host-db.yml up --build -d` so the running stack reflects the latest code. **Required for every change that touches `packages/api/`, `packages/web/`, `packages/shared/`, `docker/`, any `Dockerfile`, `docker-compose*.yml`, or `pnpm-lock.yaml`.** You may skip it only for changes confined to `docs/`, `AGENTS.md`, `.claude/`, or test fixtures that don't ship in either image — and when you skip it, state so in your final message. Verify the output ends with both `Image oxygen-api Built` / `Image oxygen-web Built` and both containers `Started`; treat anything else as a failure.
 6. **Major-version drift report** — After all other steps pass, run `pnpm outdated -r --long` and list any **direct** dependencies (production or dev) with a major-version update available. Format each as `package: current → latest — one-line note on what changes / "no notable changes documented"`. Informational only; do not bump majors as part of an unrelated PR. The user decides whether to act.
 
@@ -135,7 +135,10 @@ shaped the original layout was retired in May 2026
 - **Content-addressed map store** (`map_sources`, `map_documents`,
   `map_previews`) is keyed by SHA-256 hash; the club map series
   (`club_maps`, `club_map_versions`) and the import plumbing
-  (`map_uploads`, `map_import_jobs`) use UUIDs (`docs/map-storage.md` §2).
+  (`map_uploads`, `map_import_jobs`) use UUIDs (`docs/map-storage.md` §2),
+  as does an event's map patch (`map_patches`, one row per event,
+  `docs/map-patches.md` §3.1) and its GPS tracks (`map_gps_tracks`,
+  client-mintable, `docs/map-gps-tracks.md` §1.1).
 - **Top-level entity** (`events`) uses `BIGSERIAL` — there is no offline-
   authored event.
 - **Global directories** (`runner_directory`, `club_directory`,
@@ -145,6 +148,9 @@ shaped the original layout was retired in May 2026
 
 - `xpos` / `ypos` are stored as `DOUBLE PRECISION` in meters (no x10 scaling).
 - `lat` / `lng` are stored as `DOUBLE PRECISION` in degrees (no x1e6 scaling).
+  The exception is a GPS track's points (`map_gps_tracks.points`): columnar
+  JSONB of integer 1e-7 degrees, quantised at parse
+  (`docs/map-gps-tracks.md` §2.1).
 
 ### Time storage
 

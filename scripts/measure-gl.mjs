@@ -6,7 +6,11 @@
 //
 //   node scripts/measure-gl.mjs --base=http://127.0.0.1:5291 --corpus=/abs/dir [--maps=sprint,crop-b]
 //     [--modes=pilot,envelope] [--query=worker=0&gate=0] [--throttle=4]
-//     [--viewport=412x915] [--dpr=2.625] [--headless] [--out=results.json]
+//     [--viewport=412x915] [--dpr=2.625] [--headless] [--out=results.json] [--terrain]
+//
+// --terrain runs the 3D bench instead (`terrain=1`, docs/map-rendering.md §5.6 "Measurements (H6)"):
+// a noise field over the map, the fit view and 1× paper orbited at pitch 60 (`--query=pitch=…&e=…`),
+// mesh frames and drape re-renders reported apart.
 //
 // The S1 columns of docs/map-rendering.md §5.2 were measured with this script before B2 removed the S1
 // batch path (it took `path=s1` then); it now measures the arena path only.
@@ -32,6 +36,7 @@ const headless = args.includes("--headless");
 const [vw, vh] = opt("viewport", "1280x800").split("x").map(Number);
 const dpr = Number(opt("dpr", "1"));
 const out = opt("out");
+const terrain = args.includes("--terrain");
 
 const browser = await chromium.launch({ headless, args: headless ? ["--use-angle=swiftshader"] : ["--ignore-gpu-blocklist", "--enable-gpu-rasterization"] });
 const ctx = await browser.newContext({ viewport: { width: vw, height: vh }, deviceScaleFactor: dpr });
@@ -44,10 +49,10 @@ for (const map of maps) {
       const page = await ctx.newPage();
       const cdp = await ctx.newCDPSession(page);
       if (throttle > 1) await cdp.send("Emulation.setCPUThrottlingRate", { rate: throttle });
-      await page.goto(`${base}/dev/map-gl-doc?mode=${mode}&bench=1${extra ? `&${extra}` : ""}`);
+      await page.goto(`${base}/dev/map-gl-doc?mode=${mode}&bench=1${terrain ? "&terrain=1" : ""}${extra ? `&${extra}` : ""}`);
       await page.getByTestId("map-gl-doc-file").setInputFiles(resolve(corpus, `${map}.ocd`));
-      await page.waitForFunction(() => window.__mapGlDoc && (window.__mapGlDoc.bench || window.__mapGlDoc.error), null, { timeout: 600_000 });
-      const r = await page.evaluate(() => { const d = window.__mapGlDoc; return { load: d.load, bench: d.bench, error: d.error }; });
+      await page.waitForFunction(() => window.__mapGlDoc && (window.__mapGlDoc.bench || window.__mapGlDoc.terrainBench || window.__mapGlDoc.error), null, { timeout: 600_000 });
+      const r = await page.evaluate(() => { const d = window.__mapGlDoc; return { load: d.load, bench: d.bench, terrainBench: d.terrainBench, error: d.error }; });
       const gpu = await page.evaluate(() => {
         const gl = document.createElement("canvas").getContext("webgl2");
         const d = gl.getExtension("WEBGL_debug_renderer_info");
@@ -57,6 +62,19 @@ for (const map of maps) {
       results.push({ map, mode, path, query: extra, throttle, headless, viewport: `${vw}x${vh}@${dpr}`, gpu, ...r });
       if (r.error) {
         console.log(`${map} ${mode} ${path}: ERROR ${r.error}`);
+        continue;
+      }
+      if (r.terrainBench) {
+        const t = r.terrainBench, f = t.field;
+        const sc = (k) => {
+          const x = t[k];
+          return `${k}: mesh cpu ${x.meshCpuMs.p50}/${x.meshCpuMs.p95}${x.meshGpuMs ? ` gpu ${x.meshGpuMs.p50}/${x.meshGpuMs.p95}` : ""} frame p95 ${x.frameMs.p95} draws ${x.maxMeshDraws} tri ${x.maxTriangles}` +
+            ` | drape ×${x.drapeRenders}${x.drapeWallMs ? ` wall ${x.drapeWallMs.p50}/${x.drapeWallMs.max} cpu ${x.drapeCpuMs.p50}/${x.drapeCpuMs.max}` : ""} draws ${x.maxDrapeDraws} tiles ${x.maxDrapeTiles}` +
+            ` | ${x.layers.map((l) => `${l.role} ${l.widthPx}x${l.heightPx}@${Math.round(l.ratio * 100)}%`).join(",")} drape ${mb(x.drapeBytes)} scratch ${mb(x.scratchBytes)} res ${mb(x.maxResidentBytes)}`;
+        };
+        console.log(`${map.padEnd(10)} ${mode.padEnd(8)} 3D x${throttle} | field ${f.width}x${f.height}@${f.cellMm} ${mb(f.fieldBytes)} MB prep ${Math.round(f.prepareMs?.fill ?? 0)}+${Math.round(f.prepareMs?.normals ?? 0)} upload ${Math.round(f.uploadMs ?? 0)} set ${f.setTerrainMs} ms`);
+        console.log(`  ${sc("orbit")}`);
+        console.log(`  ${sc("close")}`);
         continue;
       }
       const l = r.load, b = r.bench, p = b.paper1x;

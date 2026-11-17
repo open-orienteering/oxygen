@@ -2,14 +2,18 @@
 
 Normative chapter for 03 §6.3–6.4 (slice B). It covers the IOF colour
 palette as data, the canonical symbol libraries `ISOM2017-2` and
-`ISSprOM2019-2` authored in the `RenderSymbol` IR, the authoring rules,
+`ISSprOM2019-2` authored in the `RenderSymbol` IR — plus `ISSkiOM2019`,
+an overlay library of the ski-O symbols (§12) — the authoring rules,
 how a library entry becomes a plain `RenderSymbol` against a document's
 colour stack, and the tests that keep the library honest. The IR itself
 (`render/symbol.ts`) and its drawing semantics are specified in
 `docs/map-rendering.md` §4; the OCAD import that produces IR for *source*
 symbols is in `docs/map-import.md` §3.3. Matching imported symbols to
 library entries (03 §6.5–6.6) and aligning the colour stack (03 §6.3) are
-§8–§9; their code lives in `packages/shared/src/import/`.
+§8–§9; their code lives in `packages/shared/src/import/`. Placing a
+library entry in a document for Map mode (materialisation) and the
+palette Map mode draws from are §11; their code is
+`packages/shared/src/map-document/materialise.ts`.
 
 Everything lives in `packages/shared/src/symbol-library/` and is exported
 as `symbolLibrary` from `@oxygen/shared`.
@@ -23,6 +27,7 @@ symbol-library/
 ├── ISOM2017-2/           common.ts + landforms, rock, water, vegetation,
 │                         manmade, technical, course, names, index
 ├── ISSprOM2019-2/        same layout
+├── ISSkiOM2019/          common.ts + water, tracks, names, index (overlay, §12)
 └── __tests__/            palette.test.ts, library.test.ts, names.test.ts
 ```
 
@@ -42,11 +47,15 @@ interface PaletteEntry {
 }
 ```
 
-Two editions exist. `iof2024` (43 rows) is Rev 4 of the IOF document and
-is what both libraries declare as their `palette`. `iof2022` is the
+Two editions exist. `iof2024` (44 rows) is Rev 4 of the IOF document
+plus Oxygen's `white-skio` row, and is what every library declares as its
+`palette`. `iof2022` is the
 previous edition for documents that must keep the older ink values: the
 same ids minus `orange-skio`, the pre-2024 brown and green CMYK, black
-area screen 30 % instead of 35 %. Ids are stable between editions so a
+area screen 30 % instead of 35 %. Two cells depart from the IOF table,
+both for ISSkiOM 2019 (§12.3): the `white-skio` row ("White under Ski-O
+tracks", directly below `purple-lower`, ISSkiOM only) and the ISSkiOM
+tick on `green100-area`. Ids are stable between editions so a
 library entry never has to change when a document picks the other
 edition.
 
@@ -63,6 +72,12 @@ sit above `purple-lower` in ISOM; ISSprOM puts `brown100` below
 are below purple everywhere. Tests assert these positions, not the raw
 row numbers.
 
+Stage 7 ranks a document's colours against `alignmentPalette(edition,
+spec)` (`import/colour-align.ts`): the spec's rows plus every row an
+overlay library's entries use (§12.3), in the table's order; a row the
+edition lacks (`orange-skio` in `iof2022`) is the 2024 row and an
+inserted one carries the id `iof2024:orange-skio`.
+
 ## 2. Library and entry schema
 
 A library (`symbolLibrarySchema`):
@@ -70,10 +85,12 @@ A library (`symbolLibrarySchema`):
 ```ts
 {
   id: "ISOM2017-2",
-  spec: "ISOM2017-2" | "ISSprOM2019-2",
+  spec: "ISOM2017-2" | "ISSprOM2019-2" | "ISSkiOM2019" | "ISMTBOM2022",
   revision: "Rev 6 (20 January 2024)",
   referenceScale: 15_000,
   palette: "iof2024",
+  kind: "base" | "overlay",        // default "base"; ISSkiOM2019 is the overlay (§12)
+  scaleRules?: Record<group, { mapScale, factor }[]>,  // the spec's own enlargement table (§12.2)
   entries: LibraryEntry[]
 }
 ```
@@ -96,7 +113,8 @@ An entry (`libraryEntrySchema`) — the 03 §6.4 shape with `render` in
   aliases: { library: string; code: string }[],  // older-spec codes, headings only; library ∈ ALIAS_LIBRARIES (§3, checked in §5)
   render: LibraryRender,           // RenderSymbol minus id/code/name, colours as palette ids
   notes?: string,                  // deviations and tool-dependent choices
-  source: string                   // citation, e.g. "ISOM 2017-2 Rev 6 (…), §3.8"
+  source: string,                  // citation, e.g. "ISOM 2017-2 Rev 6 (…), §3.8"
+  scaleGroup?: string              // its scaleRules row set; required exactly when the library has scaleRules
 }
 ```
 
@@ -129,7 +147,8 @@ per-symbol decisions.
   very high earth bank, `709.b/c` out-of-bounds with solid/dashed
   boundary). A heading entry must precede its variants in the file.
 - **Dimensions come from the spec text and drawings only** (Rev 6 of both
-  documents, §3.8 / §4.8 "precise definitions"). The OpenOrienteering
+  documents, §3.8 / §4.8 "precise definitions"; ISSkiOM 2019 Revision 4,
+  §3.3, for the overlay — §12). The OpenOrienteering
   Mapper symbol sets were used as a cross-check for shapes the spec only
   draws (713 cup, 710 crossing-point flares, 512.1 bridge ends), never
   copied — they are GPL and not in the repository. Where OOM and the Rev 6
@@ -205,7 +224,9 @@ per-symbol decisions.
   rev 5 has the same symbol under the same code — the one exception is
   `105.1`, rev 5's `105 Liten jordvall`, the same symbol before Rev 6
   renumbered it; a heading the translation lacks has no `sv` and is listed
-  in §3.2 — absence is the mark, nothing is invented. The names live in a
+  in §3.2 — absence is the mark, nothing is invented. SOFT has no
+  ISSkiOM translation, so the overlay has no Swedish names and its
+  `SV_SOURCE` is `null` (§12.4). The names live in a
   per-library table (`<library>/names.ts`, keyed by the entry id after the
   library prefix) that `withNamesAndAliases` (`authoring.ts`) attaches to
   the entries, so names and drawings are edited independently; the helper
@@ -245,6 +266,7 @@ per-symbol decisions.
 |---|---|---|---|
 | `ISOM2017-2` | 113 | 152 | 180–200 |
 | `ISSprOM2019-2` | 105 | 141 | 170–190 |
+| `ISSkiOM2019` (overlay) | 16 of ISSkiOM's (§12.1) | 16 | — (03 §2.1: not inventoried) |
 
 Names and aliases (B7):
 
@@ -252,6 +274,7 @@ Names and aliases (B7):
 |---|---|---|---|
 | `ISOM2017-2` | 152 / 152 | — | 97 `ISOM2000` codes on 96 headings |
 | `ISSprOM2019-2` | 138 / 141 | `105.2`, `533`, `715` | none (no ISSOM 2007 table) |
+| `ISSkiOM2019` | 0 / 16 | all (no SOFT translation, §12.4) | none |
 
 The estimate assumed more drawings per heading than the Rev 6 documents
 actually show once the spec's own prose is followed (many "variants" are
@@ -267,6 +290,9 @@ seen only from one side*, `533` *Area with obstacles*, `715` *Continuing
 point after map exchange*. They get `sv` when SOFT publishes a Rev 6
 translation; borrowing the ISOM heading for 715 was considered and not
 done, because the rule is one source per library.
+
+`ISSkiOM2019` has no Swedish names at all: SOFT has published no
+ISSkiOM translation (§12.4). They get `sv` if one appears.
 
 ISOM 2017-2 headings without an ISOM 2000 alias (17): the symbols with
 no ISOM 2000 predecessor in Mapper's table (`105.2`, `114`, `203.2`,
@@ -315,8 +341,10 @@ the document factor (`docs/course-layer.md` §1, §3.1).
 
 Registry functions: `listSymbolLibraries()`, `getSymbolLibrary(id)`,
 `getLibraryEntry("ISOM2017-2:302.b")`, `entriesForCode("ISOM2017-2",
-"302")` (heading first, then variants). Libraries are parsed once and
-cached.
+"302")` (heading first, then variants), `isOverlayLibrary(id)` and
+`libraryFactor(id, mapScale, code?)` (§12.2). Libraries are parsed once
+and cached. `SymbolLibraryId` names all three; the library preview route
+(`map-storage.md` §4.5) serves the overlay's swatches like the others'.
 
 ## 5. Validation
 
@@ -335,9 +363,12 @@ cached.
 | an alias on a variant entry | `aliases are for heading entries only` |
 | a variant's `sv` not `<heading sv>, <qualifier>` / heading without `sv` | `variant name should start with "<heading sv>, "` / `variant has a Swedish name but its heading has none` |
 | point without `orientation` / non-point with one | `point symbols need an orientation` / `orientation is only for point symbols` |
+| a 7xx entry in an overlay library | `an overlay library has no course symbols` |
+| a `scaleRules` row set listing one scale twice / without factor 1 at the reference scale | `scale group "g" lists 1:s twice` / `scale group "g" needs factor 1 at the reference scale 1:s` |
+| an entry without `scaleGroup` on a library with `scaleRules`, or naming a set it lacks / `scaleGroup` on a library without | `entries need a scaleGroup when the library has scaleRules` / `scale group "g" is not in the library's scaleRules` / `scaleGroup needs scaleRules on the library` |
 | `render` does not resolve to a valid `RenderSymbol` | the resolver's / Zod's message |
 
-The registry throws if either shipped library has any problem, so a bad
+The registry throws if any shipped library has any problem, so a bad
 entry fails every consumer at import time rather than at draw time.
 
 ## 6. Tests
@@ -345,27 +376,40 @@ entry fails every consumer at import time rather than at draw time.
 `packages/shared/src/symbol-library/__tests__/` implements 03 §6.4 (a)–(c)
 plus the purple-role and materialisation checks:
 
-- **palette.test.ts** — 43 / 42 rows per edition in Appendix B order,
-  the 2022 overrides (brown, green, black 30 %, olive name), per-spec tick
-  counts (ISOM 29, ISSprOM 33), the §2.4 layering as stack-index
-  inequalities, prefixed stack ids and CMYK → hex.
+- **palette.test.ts** — 44 / 43 rows per edition in Appendix B order
+  plus `white-skio`, the 2022 overrides (brown, green, black 30 %, olive
+  name), per-spec tick counts (ISOM 29, ISSprOM 33, ISSkiOM 20 / 19 in
+  2022, listed in order), the §2.4 layering as stack-index inequalities
+  (and the ISSkiOM order of §12.3), prefixed stack ids and CMYK → hex.
 - **library.test.ts**
-  - (a) both libraries parse, `validateLibrary` is empty, every entry cites
-    `<spec> Rev 6`, heading entries precede variants; a deliberately broken
-    copy produces each `validateLibrary` message.
-  - (b) hand-typed Appendix A heading lists (113 ISOM, 105 ISSprOM) each
-    have a heading entry, and no entry uses a code outside its list.
+  - (a) all three libraries parse, `validateLibrary` is empty, every entry
+    cites its edition (`<spec> Rev 6`, `ISSkiOM 2019 Revision 4`), heading
+    entries precede variants; deliberately broken copies produce each
+    `validateLibrary` message, the overlay and scale-rule ones included.
+  - (b) hand-typed Appendix A heading lists (113 ISOM, 105 ISSprOM) and
+    the 16 ISSkiOM overlay headings typed from the ISSkiOM text each have a
+    heading entry, and no entry uses a code outside its list.
   - (c) hand-typed dimension tables per spec (≈ 70 ISOM and ≈ 60 ISSprOM
     assertions on widths, dash lengths, diameters, grid cells, spacing,
     border shifts, halo colours, minima), including every Rev 6 change
     that differs from the earlier revisions and from OOM, and the B10
     drawing corrections: slope-line ticks to +y, 107's taper, ISOM 111
     north, 509 / 509.1 white-over-black with black ends, 510 / 511 /
-    511.b pylons at corners with 510's ±0.37 mm bar.
+    511.b pylons at corners with 510's ±0.37 mm bar; and a table for every
+    ISSkiOM entry (§12.1: widths, dashes, dots, the white mask, the
+    compulsory edges, 813's bands, 808's cross-hatch, the water / marsh
+    variants).
+  - **the overlay (§12)** — `isOverlayLibrary`, no base heading code and
+    no 7xx, `chooseLibrary` never returns it, the exact palette ids it
+    uses, no names or aliases, the 2022 edition rejected; **`libraryFactor`**
+    — base libraries `referenceScale / mapScale`, ISSkiOM §3.2's table typed
+    by hand per scale group, nearest-by-ratio for unlisted scales, the tie
+    rule, and the throws.
   - (d) purple roles per 03 §2.4 for every 7xx entry; lower entries never
     use `purple-upper` and vice versa; ISOM-only (711–713) and
-    ISSprOM-only (710.1/.2, 714) codes are not cross-listed.
-  - (e) `materialiseLibrary` for both libraries: every colour index is
+    ISSprOM-only (710.1/.2, 714) codes are not cross-listed; the overlay
+    has none.
+  - (e) `materialiseLibrary` for every library: every colour index is
     inside the stack, every entry symbolised against a representative
     object (line with corner + dash point, 20 × 20 mm area at 30°, point at
     45°, text "31") emits at least one pass and no warnings; the 2022
@@ -373,6 +417,49 @@ plus the purple-role and materialisation checks:
     symbols carry id/code/name; 107 in both editions symbolises to a
     pointed stroke pass carrying its 0.75 mm taper (the contact sheet
     cannot show it: the reference raster draws `pointed` as butt).
+- **The ISSkiOM overlay on any document (G21)** — `import/__tests__/matcher.test.ts`
+  "overlay candidates": `entryFactor` (own library, tracks ×1 and other
+  ×1.5 at 1:10 000, symbol scale, ISSprOM), every track drawn to spec is
+  `auto` to its entry with the document library's `libraryVersion`, the
+  same line at the document factor is not, ×1.33 at 1:7 500, an `821`
+  never joins the overlay family, 301.1 / 301.2 / 310.1 at stage 2 and
+  Mapper's ISOM 301 numbered `301.1` stays ISOM's, every ISOM and ISSprOM
+  entry outside the overlay's codes matches deep-equal with and without
+  the overlay, a 2022 document matches 803.2, a decision naming an
+  overlay entry; `colour-class.test.ts` `skiPaletteIdFor` (names in
+  English and Swedish, other hues, trail words, the inks by position,
+  OCAD's orange); `colour-align.test.ts` "ISSkiOM's rows in every stack"
+  (identified not inserted, all four once with their positions and CMYK,
+  no new conflict, never aliased, Mapper's railway-white order, a copy
+  of upper purple at the bottom, inserted rows out of step 5b, both specs
+  and editions with the 2024 orange, every track entry resolves on four
+  tables incl. Ny_karta_test and Ungdomsserien); `match-document.test.ts`
+  "on a ski map" (a 1:10 000 map's 801.1 `auto`, the mapper's colours
+  identified, drawn by the bridge at 850 µm with `canonicalMissing` 0);
+  `api/…/import-ocad.test.ts` (the fixture's inserted list and the three
+  top rows); integration `map-import-jobs.test.ts` (the stored document's
+  stack, `ocad-17`, `@2026.11.1`); `map-rematch-cli.test.ts` (a pre-G21
+  document is stale); `scripts/__tests__/measure-import.test.mjs` (the
+  `ski-o` line).
+- **Course purples placed by rule (C15)** — `import/__tests__/colour-align.test.ts`
+  "course purples placed by rule" on Nackareservatet 2023's colour table
+  (`club-colour-tables.ts`: names, CMYK, order and usage only): lower
+  purple inserted between "Brun gc-vägar nära hus" and "Brown 100% - Line
+  Feature" with only the stray text mask above it, the top "Violett"
+  reused as upper purple, the other five source purples displaced in
+  source order (`position` ×4, `duplicate` ×1) with their CMYK and no
+  palette ids or role, one row per purple id, no purple conflict, one
+  ink, the ski rows against the placed rows; a sprint and a forest table
+  whose purples are right keep `ocad-17`'s stack row for row; the ski
+  rows against an inserted lower purple with a displaced upper copy
+  between it and the top; an inserted pair takes the map's most used
+  purple ink; Vinterserien's shape re-expected (§9.2 step 5a);
+  `match-document.test.ts` (a displaced purple in `colourStack`, the
+  mapper's purple line still drawn in it); `report.test.ts`
+  (`purplesDisplaced` optional, roles checked);
+  `scripts/__tests__/measure-import.test.mjs` (the `purple` line with
+  `upper at … (source)`); `api/…/import-ocad.test.ts` unchanged on
+  `e2e/test.ocd`.
 - **`import/__tests__/fingerprint.test.ts`** — C9: cap / join classes (bevel = miter, square = flat), round vs flat same width and colour = 0.903 and above `auto`, each field once, `null` without a main stroke, 201.b vs a flat 0.35 stroke; `matcher.test.ts` — a source round no-tag 201 takes 201.b at 1.0, a flat one scores ≤ 0.91 and never auto-matches the tagged 201. Also — OCAD's railway (white
   dashes over a black band) and OCAD's power line (corner symbol) score
   `auto` against 509 / 510; `render/__tests__/library-fixtures.test.ts`
@@ -383,7 +470,8 @@ plus the purple-role and materialisation checks:
   `api/src/__tests__/import-omap.test.ts` states that Mapper's railway
   is `auto` against `ISOM2017-2:509` (A15).
 
-- **names.test.ts** — every heading has `name.sv` except the §3.2 list;
+- **names.test.ts** — every heading has `name.sv` except the §3.2 list
+  (all 16 ISSkiOM headings, whose `sv` source is `null`);
   hand-typed spot tables of SOFT headings (23) and of ISOM 2000 pairs the
   IOF change document states (18), typed from the sources, not from
   `names.ts`; every variant name is `<heading sv>, <qualifier>`; aliases
@@ -408,7 +496,38 @@ plus the purple-role and materialisation checks:
   on a stale index; a determinism check renders one entry of each IR type
   twice and requires identical bytes. A change to an entry *or* to the
   symbolisation stage therefore fails here until the sheet is regenerated
-  — whichever branch merges second regenerates it.
+  — whichever branch merges second regenerates it. The ISSkiOM sheet is
+  `e2e/__golden__/library/ISSkiOM2019/` (16 PNGs) and its index; the
+  determinism check includes 813.2 and 804.2.
+
+- **`map-document/__tests__/materialise.test.ts`** (§11) — every entry
+  of all three libraries on six fixtures (the small match fixture, the
+  same ×1.5, an ISSprOM document, the small one with the ski rows
+  appended, `e2e/test.xmap`, `puit-de-laven.omap`) either materialises
+  (a `patchSymbolSchema` parse fixed point, no `match` or `sourceIndex`,
+  every colour index inside the stack) or reports exactly `colourRefs`
+  minus the stack's ids; an unknown id is a result; an own-library entry
+  equals `canonicalRender` of a document symbol auto-matched to it; same
+  input, same JSON, also from a second decode of the same map; the stack
+  untouched; ISSkiOM 801.1 missing `green-skio` / `white-skio` on a plain
+  stack, materialised with the ski rows, 801.2 still missing
+  `orange-skio` without it; the factor table (1:10 000 at 1.5 and at 1 —
+  symbolScale ⅔ —, 1:7 500, 1:5 000, the other base library both ways, a
+  never-matched header); a materialised symbol put in a patch and used by
+  an `add` applies without issue and is drawn from its own render. The
+  "without the ski rows" cases strip the overlay ids from the rows
+  alignment inserted (a document stored before G21).
+  `mapPalette`: group order and presence (ski group with the stack, with a
+  ski patch symbol), headings in code order with the library heading's
+  names, variants under their heading, document items by match or source
+  base, unused ones kept, hidden / graphic / text / proxy-drawn left out,
+  the mapper's own 7xx kept and the library's 7xx and text entries left
+  out, covered entries not repeated, the other base library not offered,
+  disabled items with `missing`, patch items (library, overlay and a
+  non-library key), every enabled ref applying as an `add` of its kind,
+  the order inside a heading (applied match, objects, index; patch items
+  by key between document and library items), `compareSymbolCodes`, an
+  effective document refused, determinism, the sprint palette.
 
 The OOM dimension spot check (e) is not implemented; see §10.
 
@@ -423,6 +542,9 @@ The OOM dimension spot check (e) is not implemented; see §10.
 | `aliases` as given | `ISOM2000` only, plain successors only (§3) | Mapper's CRT is the only table; the IOF change document rules out the merges. No ISSOM 2007 table exists on disk. |
 | Appendix B palette as a "versioned table" | Two editions, ids stable, document picks edition | Same intent; the id stability rule is what keeps entries edition-free. |
 | 180–200 / 170–190 entries | 152 / 141 | Counted against Rev 6; §3.1. |
+| One library per specification, every heading covered (03 §6.4); ISSkiOM "not inventoried" (03 §2.1) | `ISSkiOM2019` is an **overlay** of 16 ski headings — §3.3.1's tracks and §3.3.2's water / marsh variants — offered beside a document's own library (§12; slice G answer 9, user scope 2026-11-13) | A ski-O map's base symbols are ISOM 2017-2's; the ski symbols are what a mapper adds, also to a summer map. ISSkiOM's base-symbol deviations and course symbols wait (§10). |
+| ISSkiOM "scales the symbol set and course symbols by different factors — encode as `scaleRules`" (03 §6.6) | `scaleRules` per row set (`track`, `other`) with `scaleGroup` per entry; `libraryFactor(id, mapScale, code?)` (§12.2) | ISSkiOM §3.2 has two symbol columns, and the overlay holds entries of both; its course symbols' sizes are fixed at every scale (Rev 4). |
+| Appendix B as the palette | Plus a `white-skio` row and an ISSkiOM tick on `green100-area` (§12.3; user decisions 2026-11-13) | ISSkiOM's own colour lines name a white under lower purple and green 100 %, which its column of the IOF table lacks. |
 | Railway "black, white" drawn as stated: black dashes, white between, rails | 509 / 509.1 are white 0.25 dashes 1.0 / 1.5 over a black 0.45 band, the white shortened 1.5 mm at each end (§3; B10) | Appendix B sorts white-for-railway above black, so the first edition's black dashes under a white band drew all white inside. The OCAD construction is the only one the palette allows; the black ends follow the spec ("two black dashes"), not OCAD's sets (white end dash). Consequence: OCAD railways built to the spec's widths now match (Sprint's 509.100, white 0.26 in black 0.45: `auto`); club-2026's / club-full's 509.1 (white 0.21 in black 0.35 — the set reads "0.35" as the outer width) stays unmatched, now on width instead of colour; Crop-A / Crop-B's grey 509.0 stays unmatched; Mapper's railway (black dashes over white, Mapper's own colour order) hard-failed on main colour for the 2026.10.3 release alone (`e2e/test.xmap`: `auto` 5 → 4 symbols); the fingerprint now reads both constructions as one (§8.1, A15) and it is `auto` again. |
 | Glyph placement per 03 Appendix C (Mapper dash symbol → `dashPoints`) | 510 / 511 / 511.b pylons at `corners` (B10) | Both importers deliver pylons as corner flags (`map-import.md` §3.3, §4.2); no importer produces dash-point positions for them, so canonically drawn power lines had no poles and the fingerprint missed on placement. |
 | Directional point glyphs: no convention stated (03 §6.2) | Angle 0 = north, slope ticks to +y (§3; B10) | OCAD and Mapper both draw the 101.b / 103.b tick to +y; the first edition used the line-tag convention (−y) and every auto-matched slope line pointed uphill (52–66 % shape difference, `map-rendering.md` §6.4). |
@@ -445,6 +567,12 @@ and a `MatchingSummary` in the import report.
 const { input, matching, colourStack, warnings } =
   mapImport.matchDocument(sourceInput, { library?, edition?, factor?, decisions? });
 ```
+
+Beside the document's library every overlay library's entries are
+candidates (`ISSkiOM2019`, §12; "Overlay candidates" in §8.2):
+`matchContext(libraryId, edition, factor, classOf, decisions?, mapScale?)`
+adds them when it is given the map scale, which `matchDocument` and
+`reviewRows` always pass.
 
 Library choice: `ISSprOM2019-2` for `mapScale ≤ 5000`, else `ISOM2017-2`
 (`chooseLibrary`; the option overrides). Palette edition:
@@ -525,13 +653,48 @@ summary so tuning is visible): auto 0.85, suggest 0.6, strict 0.95.
 
 | # | method | Candidates | Outcome |
 |---|---|---|---|
-| 1 | `explicit` | a `SymbolDecision` for (code, name?, irHash?) | `auto` + `reviewed` for an entry id; `unmatched` + `reviewed` for `canonicalId: null` (keep the source drawing). A decision naming an entry the library lacks falls through and warns `DECISION_UNKNOWN_ENTRY`. |
+| 1 | `explicit` | a `SymbolDecision` for (code, name?, irHash?) | `auto` + `reviewed` for an entry id (of the document's library or an overlay's, §8.5); `unmatched` + `reviewed` for `canonicalId: null` (keep the source drawing). A decision naming an entry the library lacks falls through and warns `DECISION_UNKNOWN_ENTRY`. |
 | 2 | `code+geometry` | entries with the source's exact spec code (`505.1` → `505.1`) | `auto` at ≥ 0.85 |
 | 3 | `family+geometry` | same base number (`505.3` → every `505*`), else the hundred group | `auto` ≥ 0.85, `suggested` ≥ 0.6 |
 | — | `variant` | family exists, source IR type differs from every family entry, name carries a template-variant hint (`VARIANT_NAME`: minimi, enskild, kontur, outline, single dot, …) | `unmatched`, drawn from source, counted separately — a minimum-size building point or a cliff outline line is not a mistake and not a review item |
 | 4 | `geometry` | every entry of the IR type | `suggested` only, at ≥ 0.95 (never auto: a 0.14 mm brown line is a contour or a form line only by its code) |
 | 5 | `description` | same type, not ruled out by a hard fail, ≥ 2 shared name tokens, or 1 token when the code matches or the geometry is partly compatible. Source tokens go through the Swedish → English lexicon `SV_EN`; an entry's tokens are the union of its `name.en` and `name.sv` tokens (the latter through the same lexicon), so a Swedish source word the lexicon lacks still meets the SOFT heading | `suggested` at 0.3 + 0.1 × tokens, capped 0.5 |
 | 6 | `none` | — | `unmatched`, warns `SYMBOL_UNMATCHED` |
+
+**Overlay candidates** (G21; slice G answers 8, 9). The overlay's entries
+(§12) join the ladder on every document, with these limits:
+
+- **Exact code, for every source.** Stage 2 scores the overlay entries
+  of the source's exact code beside the document library's, so a source
+  `301.1`, `301.2` or `310.1` meets ISSkiOM's water and marsh entries on
+  any map. Geometry separates them from the base symbols those numbers
+  also name (Mapper numbers ISOM 301 as `301.1`: blue 100 % with a black
+  edge, a hard fail against ISSkiOM's blue 50 %).
+- **Family, geometry and description only for an 8xx source.** Stages
+  3–5 add the overlay entries when the source's hundred group is 8.
+  There is no hundred-group fallback into the overlay: an 8xx code
+  without an ISSkiOM heading (`821`, `850.1` — club texts and frames in
+  the corpus) meets the overlay only in stages 4–5, never as a family,
+  so it never becomes a `variant`.
+- **Scored at the entry's own factor.** An overlay candidate is compared
+  at `entryFactor(doc, entryId)` = `libraryFactor(overlay, mapScale,
+  code) × symbolScale`, with `symbolScale = documentFactor /
+  libraryFactor(document library, mapScale)` unrounded (§12.2): a 0.85 mm
+  green line on a 1:10 000 ISOM map (document factor 1.5) is 801.1 at ×1,
+  and the same line at 1.275 mm is not. The factor shows in the reasons
+  (`ISSkiOM2019:802.1 0.97 at ×1.333`).
+- **The document's library first.** On an equal score the document's own
+  entry ranks before an overlay entry, then ids.
+- **Never the document factor.** Overlay entries take no part in
+  `detectDocumentFactor` or in the scale-anomaly check; their widths
+  follow their own table.
+- **Fingerprinted on the overlay's palette in 2024**, whatever the
+  document's edition (the 2022 ISSkiOM stack has no `orange-skio`; the
+  rows the overlay uses classify the same in both editions).
+
+`match.libraryVersion`, `matching.library` and the decision rows stay
+keyed by the document's library: an overlay entry is something a
+document of that library draws, not a second library.
 
 Every match carries `reasons[]` (the feature notes of the deciding
 comparison, e.g. `glyph height 6000 vs 1200 µm (0.00)`), `confidence`,
@@ -542,7 +705,9 @@ that fit only at another `FACTOR_SNAP` factor are reported as
 size in a 1:15000 table.
 
 What is drawn: `auto` and reviewed matches resolve the library entry
-against the aligned stack (§9) and are scaled by the document factor;
+against the aligned stack (§9) and are scaled by the document factor —
+an overlay entry by its `entryFactor` (§12.2; `canonicalRender` in
+`map-document/render-bridge.ts`), the factor it was scored at;
 `suggested`, `unmatched` and `variant` keep their source IR
 (`map-document/render-bridge.ts` `isAppliedMatch`, `canonical:false`
 turns this off). Reviewing a suggestion is `mapImport.review` /
@@ -612,6 +777,22 @@ accepted because stage 5 only suggests and the corpus has no such case — and t
 `ej`, `inte`, `without`, `non`, `not`, `no`) is dropped, so `Stig eller
 spår utan belagd yta` does not share *paved* with `Belagd gångbana`.
 
+**ISSkiOM overlay (G21, `ocad-17` / `omap-10`, library `2026.11.1`).**
+Measured on all five corpus maps with `scripts/measure-import.mjs`
+against the code before G21: symbol and object outcomes, the method
+histogram and the document factor are identical on every map (no corpus
+map has a ski symbol; its 8xx codes are club texts and frames, which
+the no-fallback rule keeps out of the overlay family). The colour stack
+grows by the three ISSkiOM rows on every map — every map has its own
+green 100 % area colour — lower purple moves up one index (the track mask
+below it), and the areas above lower purple, the order conflicts and the
+warning histogram are unchanged. Two placement rules came from this run
+(§9.2 step 4): the track inks are placed searching up from lower purple
+(Club-full keeps a copy of its upper purple at the bottom of the table,
+which put them under the whole map), and inserted overlay rows take no
+part in step 5b (an inserted row tipped the longest increasing
+subsequence and `e2e/test.ocd` reported a different pair).
+
 ### 8.5 Club decisions (06 §5.3)
 
 A reviewed outcome outlives the document it was made on: next year's
@@ -647,6 +828,16 @@ id under every release. Rows of the other library (an ISSprOM decision on
 an ISOM map) are ignored: `SymbolDecision.libraryId`, filtered by
 `matchDocument` after `chooseLibrary`.
 
+**Overlay entries** (G21; decided overnight on the user's standing
+instruction, 2026-11-13, for review). A decision may name an overlay
+library's entry (`ISSkiOM2019:801.1`): `isDocumentEntryId(libraryId,
+id)` — an entry of the document's library or of an overlay library — is
+what `decide` accepts, what a CRT rule may target (§8.6) and what
+`documentFollowsDecisions` counts as applying. The row is stored under
+the document library's `<library>@<release>` like any other, so no
+schema changes; an ISSkiOM decision on an ISOM map does not apply to the
+same symbol on a sprint map.
+
 **Scope.** The instance belongs to one club (`docs/club-library.md`), so
 the table has no event or series column: a decision made while reviewing
 an event map applies to the club map of the same symbols and vice versa.
@@ -655,7 +846,7 @@ Rows of another source kind never apply (`omap:` rows to an OCAD file).
 **Does a stored document follow the decisions?**
 `documentFollowsDecisions(header, decisions)` — for every source symbol
 with a fingerprint, the decision that would apply (an entry the library
-has, or `null`) equals what the header records (`method: "explicit"` with
+or an overlay has, or `null`) equals what the header records (`method: "explicit"` with
 that `canonicalId`, or no explicit match when no decision applies). The
 dedup short-cut and the re-match pass (`docs/map-storage.md` §6.1, §6.9)
 use it, so a document is reused only if re-importing it now would give
@@ -685,17 +876,22 @@ proposal's entry with its reasons, then its `alternatives` re-scored by
 `compareFingerprints` for their reasons. A reviewed row therefore shows
 the decision as `match` and what `reset` would return to as
 `candidates[0]`. Reasons are not stored in the header for alternatives,
-so they are recomputed here. `club-symbol` means no library entry shares
-the code's base number (a metro line `900`, a club's own `8xx`);
+so they are recomputed here; overlay candidates (§8.2) are re-scored at
+their own factor. `club-symbol` means no entry of the library or an
+overlay shares the code's base number (a metro line `900`, a club's own
+`821`; ISSkiOM's `801.1` is not one);
 `unused` is zero objects; `text` the source kind. A pre-matcher header
 (no `library`) has rows with `match: null` and no candidates.
 
 Tests: `packages/shared/src/import/__tests__/decisions.test.ts`
 (fingerprint equality between source and stored stack, name
 independence, newest-wins and tie rules, library and kind filtering,
-`documentFollowsDecisions` matrix incl. a dangling entry, review rows on
-the stage 6–7 fixture with flags and candidates, attrs-only object
-counts); the API side in `docs/map-storage.md` §10.
+`documentFollowsDecisions` matrix incl. a dangling entry and an overlay
+entry (G21), `documentLibraryId` never an overlay, review rows on
+the stage 6–7 fixture with flags and candidates (an ISSkiOM heading is
+not a `club-symbol`), attrs-only object counts); the API side in
+`docs/map-storage.md` §10 (`map-symbol-decisions.test.ts` accepts an
+overlay entry under the document library's release).
 
 ### 8.6 CRT export / import (06 §5.1, §5.3; 03 §3.2)
 
@@ -808,7 +1004,7 @@ offending text.
 | `CRT_QUERY_UNSUPPORTED` | a Mapper object query as source (whitespace, `=`, quotes, parentheses) |
 | `CRT_SOURCE_UNKNOWN` | no source symbol of the document has that code |
 | `CRT_SOURCE_NOT_REVIEWABLE` | the symbols of that code have no render, hence no fingerprint |
-| `CRT_TARGET_UNKNOWN` | the target is not an entry of the document's library |
+| `CRT_TARGET_UNKNOWN` | the target is not an entry of the document's library or of an overlay library (`ISSkiOM2019:801.1` is a valid target on any map, §8.5) |
 | `CRT_FINGERPRINT_MISMATCH` | the `# fp` names no symbol here; applied by code (also counted as applied). A line skipped for another reason reports that code alone |
 | `CRT_LIBRARY_MISMATCH` | the header names another library id; once per file |
 
@@ -819,8 +1015,8 @@ Tests: `packages/shared/src/import/__tests__/crt.test.ts` (Mapper's
 grammar incl. its shipped `ISOM2000-ISOM 2017-2.crt` lines, every
 warning code, `702` ≡ `702.0`, duplicate-code fan-out, fingerprint
 precedence and mismatch, later-wins, unchanged, the header, `# keep`,
-`includeMatches`, byte-stable output and the round trip
-`resolveCrt(parseCrt(formatCrt(…)))`); the API side in
+`includeMatches`, byte-stable output, the round trip
+`resolveCrt(parseCrt(formatCrt(…)))` and an overlay target — G21); the API side in
 `docs/map-storage.md` §10.
 
 ### 8.7 Review UI (06 §5.1)
@@ -868,7 +1064,11 @@ event maps (06 §5.1):
 stands: *in use* (it is the club version's / the event's pinned
 document), *not used yet* with **Use this version** (`finalise`), and
 *not up to date* when `review.current` is false (the current library,
-importer or club decisions would import the source differently). Summary
+importer or club decisions would import the source differently). One
+terrain line from `review.terrain` (`docs/map-storage.md` §4.7): the
+share of contour length with a decided uphill side and whether it reaches
+the 80 % the 3D view needs (floored, so 79.6 % never reads as 80), or
+*no contours*, *too large for this server*, *not derived yet*. Summary
 chips count rows by outcome.
 
 **Rows.** One per `ReviewRow`, ordered by `objects` (most used first,
@@ -895,9 +1095,10 @@ Beside the swatch, the ≤ 3 `candidates`, best first, each with its
 library swatch, entry name, confidence, its `reasons` under **Why?**, and
 a mark on the one the document draws now.
 
-**Decisions.** Per row: **Use this** on a candidate (`accept`), **Other
+**Decisions.** Per row: **Use this** on a candidate (`accept`; a
+candidate may be an ISSkiOM overlay entry, §8.2), **Other
 library symbol…** (`accept` of any entry of the document's library — the
-API takes any entry; a row with no close candidate needs it), **Keep as
+API takes any entry, an overlay's included; a row with no close candidate needs it), **Keep as
 drawn** (`unmatch`) and, on a row with a club decision, **Back to
 suggestion** (`reset`). Decisions are collected locally, one per row (a
 later choice replaces an earlier one; a choice that restates the row's
@@ -979,6 +1180,23 @@ only dark green is the hedge line colour, so "Green 100% + 50% Black Area
 Feature" is classified dark green but stands for no palette entry, while
 "Grön 100% + 50% Svart - Linjeobjekt" is `darkgreen-hedge`.
 
+**ISSkiOM's own rows** (G21, §12.3) are identified before the spec's
+entries, on any map (`skiPaletteIdFor`, `SKI_PALETTE_IDS`): a name with a
+ski-orienteering token — `ski`, `skio` ("Ski-O"), `skid…` (`skidspår`,
+`skidorientering`), `längdspår…` — and the row's hue is `green-skio`
+(green), `orange-skio` (orange) or `white-skio` (white), wherever the
+colour sits; a green must also be at least 70 % and nearer 91/0/83/0
+than the edition's green 100 % rows ("Grön 100% skidområde" at green
+100 % ink is 808's raster green, "Green 50% Ski-O" no track ink). Without such a name, a colour drawn above every black 100 %
+is the Ski-O orange within CMYK distance 0.08 of 0/60/100/0, or the
+Ski-O green within 0.08 of 91/0/83/0 and nearer to it than to the
+edition's green 100 % rows (`via: "position"`); OCAD's template "Orange"
+0/50/100/0 is 0.10 away and stays no palette entry. The mask is
+identified by name only. A ski green is green 83 %, the same class as
+green 100 % under the 20-point tolerance, which is why it is decided
+first: otherwise it would be the area green. "Motionsspår" and
+"Cykelspår" are not ski words.
+
 ### 9.2 Steps
 
 `identifySourceColours` then `alignColourStack`:
@@ -987,13 +1205,17 @@ Feature" is classified dark green but stands for no palette entry, while
    are listed in `colourStack.unclassified` and warn `COLOUR_UNCLASSIFIED`
    (a metro line colour on a sprint map stays as it is, drawn from source).
 2. **Identify**: one source colour per palette id — the most used by
-   objects, ties to the lowest. Full purples take their role from the
+   objects, ties to the lowest; ISSkiOM's rows first (§9.1). Full purples take their role from the
    name, else from position: above every black 100 % → `purple-upper`,
-   else `purple-lower`.
+   else `purple-lower`. A purple identified this way is only a
+   *candidate* for that role: which row carries the course purple is
+   decided by position in step 4 (C15), not here.
 3. **Alias**: a palette id that applied matches need but the source lacks,
    when the source has a colour of the same class → that colour stands for
    both (`black-road-outline` on a source with one black;
-   `colourStack.aliased`). Purples are never aliased.
+   `colourStack.aliased`). Purples are never aliased, and neither are
+   ISSkiOM's own rows, in either direction: a ski green or mask never
+   stands for green 100 % or a white, nor they for it.
 4. **Insert** the rest in palette order, each directly above its nearest
    lower palette neighbour already in the stack (else below the nearest
    upper one); `purple-upper` always on top. Inserted entries have
@@ -1023,6 +1245,50 @@ Feature" is classified dark green but stands for no palette entry, while
    colour, else on top. The source order is never changed; what stays on
    the wrong side is step 5's.
 
+   **Course purples are placed by rule** (C15, user decision 2026-11-14).
+   A map file holds no course, so where a source purple sits says nothing
+   about where the course belongs; Testkarta (Nackareservatet 2023,
+   Club-full in the corpus) keeps its only lower-purple candidate,
+   "Violett", under 28 used area colours, and step 2 had taken the upper
+   candidate at index 0. On every import:
+   - the **lower-purple position** is always the gap above, computed over
+     the source stack with every purple candidate (step 2, either role)
+     taking no side;
+   - the **upper-purple position** is always above every used colour;
+   - a source candidate of that role is **reused** only when it already
+     stands at the ruled position — lower: its own gap scores the same
+     (misplaced, areas above, *below* colours above) as the ruled gap;
+     upper: no used colour other than a purple candidate stands above
+     it. Several qualify → the most used, ties to the lowest for lower and
+     to the highest for upper. An unused candidate may be reused: the test
+     is its position;
+   - otherwise a row is **inserted** at the ruled position (lower: the
+     ruled gap; upper: on top), with `purpleRole` and the map's purple
+     CMYK (C9 below);
+   - a candidate takes no side in any of this, whatever its name says (a
+     "Violett - Ytobjekt" is not an area colour);
+   - lower purple is never placed above a reused upper purple (on a table
+     with no used colour that steers it, it goes directly below it);
+   - every other candidate is **displaced**: it keeps its index, `id`,
+     `sourceNumber`, name and CMYK as an ordinary source colour — no
+     `purpleRole`, no `paletteIds` — so the map objects drawn in it are
+     drawn as before, and the source order still never changes. Each is
+     listed in `colourStack.purplesDisplaced` as `{ name, sourceNumber,
+     role, why }`, in source order: `why` is `"position"` when it does
+     not stand at the ruled place, `"duplicate"` when it does but another
+     candidate was reused.
+
+   Exactly one row carries `purple-lower` and one `purple-upper`. A table
+   whose purples already stand right keeps them (a sprint table with
+   "Undre violett" directly above its brown 100 % and "Övre violett" on
+   top), and its stack is the one `ocad-17` built.
+   On Club-full the lower purple is inserted between the area block
+   (with the road infill on it) and "Brown 100% - Line Feature", the top
+   "Violett" is reused as upper purple, and the other five candidates
+   stay where the mapper put them. Before C15 a candidate *was* the
+   course purple wherever it stood (03 §6.3 step 4; the deviation is in
+   `decisions/slice-c.md`).
+
    Before C14 the anchor was "directly below the first source colour the
    palette puts above lower purple". OCAD-made maps keep the mapper's
    dark-green colour at the bottom of the area block and §9.1 read it as
@@ -1035,30 +1301,68 @@ Feature" is classified dark green but stands for no palette entry, while
    own purple of the other role when it has one (the course overprint is
    one ink: Ny_karta_test's `src:2` "Upper Purple for Course Overprint"
    10/90/10/0 gives the inserted lower purple 10/90/10/0, not 35/85/0/0);
-   the palette CMYK only when the map has no purple at all. Purples are
-   still never aliased.
+   the palette CMYK only when the map has no purple at all. Since C15 an
+   inserted purple takes the CMYK of the reused purple of the other role,
+   else of the most used purple candidate of either role (ties to the
+   highest index) — the same ink for both when both are inserted. Purples
+   are still never aliased.
+
+   **The overlay's rows** (G21; slice G answer 8 as widened, §12.3) come
+   after both purples, so nothing placed so far moves: every stack
+   carries `OVERLAY_STACK_IDS` — `green100-area`, `white-skio`,
+   `orange-skio`, `green-skio` — once, whether or not a match needs them.
+   Every rule below is measured from the *placed* purple rows (C15): a
+   displaced candidate neither anchors nor stops them. Where the source
+   lacks one:
+   - `green100-area` aliases or is inserted as above (steps 3–4), but
+     never above lower purple (a stray area colour on top of a table does
+     not take it there);
+   - `white-skio` goes **directly below lower purple** — the ISSkiOM
+     text's "white (under lower purple)", which the user chose over the
+     301.1 drawing (2026-11-13, §12.3);
+   - `orange-skio`, then `green-skio`, go directly below the first colour
+     *above lower purple* that the palette ranks above them (the upper
+     overprint colours: `purple-upper`, `white-upper`, `purple50`), else
+     on top — so orange sits directly under green, both above black and
+     every 100 % line colour, both under upper purple. The search starts
+     at lower purple because some tables keep a copy of their upper purple
+     at the bottom (Club-full); a nearest-neighbour rule would put the
+     tracks under black on a Mapper-ordered table that keeps railway
+     white below black.
 5. **Flag**, never reorder. (a) Against lower purple, every used colour
    with a side: an *above* colour below it or a *below* colour above it is
    a `COLOUR_ORDER_CONFLICT` naming the colour (`blue100-line: source
    places "Blå" below purple-lower; …`); an *area* colour above it is
    `COLOUR_AREA_ABOVE_LOWER_PURPLE` — it hides the course overprint —
    listed in `colourStack.areasAboveLowerPurple` (name, source number,
-   palette id). This holds for a map's own lower purple too: Vinterserien's
-   named lower purple drawn above its upper purple keeps its place and
-   reports the upper purple and every 100 % line colour under it.
+   palette id). Both are measured against the placed lower purple, so
+   they remain only where no gap is clean; a displaced candidate takes no
+   side and raises neither. Before C15, Vinterserien's named lower purple
+   drawn above its upper purple kept its place and reported the upper
+   purple and every 100 % line colour under it; now both candidates are
+   displaced and the course purples placed by rule.
    (b) The other palette ids whose relative order disagrees with the
    palette (longest increasing subsequence of palette ranks, lower purple
    left to (a); everything outside it is a `COLOUR_ORDER_CONFLICT` with the
-   pair it contradicts).
+   pair it contradicts). The overlay's rows inserted above take no part,
+   whether or not an applied match needs them: they are placed by rule,
+   not drawn by the mapper, and must not tip which source colours are
+   reported (a source's own ski colours do take part). A `green100-area`
+   inserted in step 4 because a match needs it takes part as before.
 
-   `scripts/measure-import.mjs` prints per map where lower purple sits,
-   the area colours above it and the conflict count (`purple` line). The
+   `scripts/measure-import.mjs` prints per map where lower and upper
+   purple sit and whether each is the `source` candidate or `inserted`
+   (with the displaced candidates' names), the area colours above lower
+   purple and the conflict count (`purple` line), and
+   where each overlay row comes from (`ski-o` line: `inserted`, `aliased`
+   or `source "<name>"`, with its index). The
    map review page has no colour-stack panel; the report's
    `colourStack` (`mapImport.review` → `stack.alignment`) carries the
    lists.
 
 Output: `header.colours` with `paletteIds[]` and `purpleRole` on every
-entry that stands for a palette colour, and the source symbols' IR
+entry that stands for a palette colour (a displaced purple has neither),
+and the source symbols' IR
 remapped to the new indices (`remapRenderColours`). The render bridge
 resolves canonical entries through `paletteIndexOfStack(header.colours)`.
 
@@ -1068,7 +1372,15 @@ resolves canonical entries through `paletteIndexOfStack(header.colours)`.
   and a variant table to Mapper's sub-numbers, if a club needs either.
 - Library variants for the OCAD template conventions (§8.4) if the auto
   rate needs to rise.
-- `ISMTBOM2022` / `ISSkiOM2019` libraries (palette rows exist).
+- The `ISMTBOM2022` library (palette rows exist).
+- ISSkiOM overlay entries in the review page's **Other library symbol…**
+  picker (§8.7; it lists the document's library, while candidates and
+  the API already take overlay entries, §8.2, §8.5).
+- The rest of ISSkiOM 2019 (§12.1 "Left out"): its deviations to ISOM
+  base symbols (75 % open land, vegetation as 406, contours 0.11 mm, the
+  "other symbols" factors applied to the base library on a ski map) and
+  its course-planning symbols with their fixed sizes; Swedish ISSkiOM
+  names if SOFT publishes a translation (§12.4).
 - Swedish names for `ISSprOM2019-2:105.2`, `533`, `715` when SOFT
   publishes a Rev 6 translation of ISSprOM (§3.2).
 - `ISSOM2007` aliases for `ISSprOM2019-2` once an ISSOM 2007 → ISSprOM
@@ -1081,3 +1393,367 @@ resolves canonical entries through `paletteIndexOfStack(header.colours)`.
   course layer's appearance multipliers (§7).
 - Mapper's 511-coded power line (suggested 510 only) is not normalised
   (A15 scoped to the railway); revisit if a Mapper corpus map shows it.
+
+## 11. Materialisation and the palette (Map mode)
+
+Map mode (`course-editor.md` §13) draws new objects and re-symbols old
+ones with symbols the document's table may not have. A library entry
+placed in a document for that purpose is **materialised**: its colours
+resolved through the document's aligned stack and its dimensions scaled
+to the document, giving a `patchSymbolSchema` entry the event's patch
+stores under the entry's full id (`map-patches.md` §1.3). The **palette**
+is what Map mode offers to draw with. Both live in
+`packages/shared/src/map-document/materialise.ts` and are exported from
+`mapDocument`; both are pure, read only the document's header and
+object table, and never change the colour stack (slice G, "Decided in
+this split": a patch never changes the colour stack).
+
+### 11.1 `materialiseSymbol`
+
+```ts
+materialiseSymbol(doc: Pick<MapDocument, "header">, canonicalId: string): MaterialiseResult
+
+type MaterialiseResult =
+  | { ok: true; key: string; symbol: PatchSymbol; factor: number }
+  | { ok: false; reason: "unknown-entry" }
+  | { ok: false; reason: "missing-colours"; missing: string[] };
+```
+
+- `canonicalId` is a full entry id of **any** registered library
+  (`ISOM2017-2:206`, `ISSprOM2019-2:529`, `ISSkiOM2019:803.2`). An id
+  `getLibraryEntry` does not know is `unknown-entry` — a result, never a
+  throw.
+- **Materialisable** means every palette id of `colourRefs(entry.render)`
+  (§4) is in the stack's palette index (`paletteIndexOfStack`, the index
+  the render bridge resolves canonical matches through, §9). Otherwise the
+  result is `missing-colours` with the absent ids, sorted. There is no
+  same-class substitution: an entry whose `blue100-area` the stack lacks
+  is not drawn in the stack's blue line colour. The stack is never
+  extended: G21's importer inserts the overlay's rows (`green100-area`,
+  `white-skio`, `orange-skio`, `green-skio`) into every aligned stack
+  (§9.2, §12.3), so on a document imported at `ocad-17` / `omap-10` or
+  later every ISSkiOM entry resolves; a document stored before that lacks
+  them until the release's re-match, and its ski entries report the
+  missing rows.
+- **The factor** the entry is scaled by:
+  - an entry of the **document's library** (`header.library.id`):
+    `header.documentFactor` — the same number `canonicalRender` uses, so
+    a materialised symbol draws exactly as a document symbol auto-matched
+    to the same entry (`map-document-format.md` §8);
+  - an entry of **another library** (the `ISSkiOM2019` overlay; a base
+    library that is not the document's): `libraryFactor(library,
+    mapScale, entry.code) × symbolScale` (§12.2), the entry's code picking
+    ISSkiOM's track or other scale column. **`symbolScale` is derived**,
+    not stored: `documentFactor ÷ libraryFactor(documentLibrary,
+    mapScale)`, unrounded — 1 for a map drawn at its spec's enlargement for
+    its scale (§8.3). The header stores only `documentFactor`; the import
+    report's `matching.factor.symbolScale` is the same quotient rounded to
+    three decimals, so the two can differ in the fourth;
+  - a header with `library: null` (never matched) or naming a library
+    that is not a registered base library: `symbolScale` 1, so every
+    entry, of whichever library, takes `libraryFactor(library, mapScale,
+    entry.code)`.
+
+  `materialiseFactor(header, entry)` is this rule on its own (exported
+  for G9 and the tests). For a matched header it is G21's
+  `entryFactor(doc, entryId)` (`import/matcher.ts`, §12.2), the one
+  formula the matcher, the render bridge and materialisation share;
+  `entryFactor` gives an entry of the other base library its own factor ×
+  symbolScale too (no matcher or render-bridge caller passes one).
+- **The symbol**: `code` = the entry's code, `name` = its English name,
+  `kind` = the render's type, `origin: "source"`, `hidden: false`, no
+  `match`, no `sourceIndex`, and `render` = `resolveEntry(entry, index)`
+  scaled by the factor (`render.id` is the full entry id). `key` is
+  `canonicalId`. It is the `patchSymbolSchema` parse of that value, so
+  the client's put and the server's parsed copy serialise identically.
+- **Deterministic**: the result is a function of the entry, the stack's
+  palette ids, `library`, `documentFactor` and `mapScale`; the same input
+  gives the same JSON, which is what makes two clients materialising the
+  same key on first use put the same state (`map-patches.md` §1.3).
+- Every entry materialises, text and 7xx included; what Map mode offers
+  is the palette's choice (§11.2).
+
+`canonicalEntryRender(entry, index, factor)` is the one
+resolve-and-scale step, shared with `canonicalRender`; it throws
+`UnknownPaletteIdError` on a missing colour.
+
+### 11.2 `mapPalette`
+
+```ts
+mapPalette(doc: MapDocument, patch?: MapPatch | null): PaletteGroup[]   // doc: the pinned document
+
+interface PaletteGroup {
+  id: "library" | "ISSkiOM2019" | "other";
+  library: SymbolLibraryId | null;   // the document's library, the overlay, null for "other"
+  headings: PaletteHeading[];
+}
+interface PaletteHeading {
+  code: string;                       // "302", "801.1", or a source base code ("850")
+  name: { en: string; sv?: string };
+  entries: PaletteItem[];             // at least one
+  search: string;                     // lowercased: code, names, every entry's code and names
+}
+interface PaletteItem {
+  kind: "point" | "line" | "area";
+  source: "document" | "patch" | "library";
+  ref: PatchSymbolRef;                // { doc: index } | { patch: full entry id }
+  canonicalId: string | null;         // the entry it is drawn as (the swatch); null = the document symbol's own drawing
+  code: string;
+  name: string;                       // source name, or the entry's English name
+  nameSv?: string;
+  objects: number;                    // objects using it in the document; 0 for patch and library items
+  enabled: boolean;
+  missing?: string[];                 // palette ids, when not enabled
+}
+```
+
+The document's source table presented through its matches, plus the
+entries it can materialise (03 §1, 08 §4.7), grouped as the course
+editor's symbol list (P3, `course-editor.md` §7 "filter region").
+`doc` is the **pinned** document the patch is keyed onto; an effective
+document (`applyPatch`'s output, whose table already has the patch's
+symbols appended) throws, as `applyPatch` does on one.
+
+- **Document items**: every source symbol that can be drawn — its own
+  `render`, or an applied match to a known entry — of kind point, line or
+  area, used by objects or not. Not listed: hidden symbols, `missing`
+  and `graphic` ones, text, rectangle and unknown kinds (an `add` is a
+  point, line or area, `map-patches.md` §1.2), and symbols drawn by proxy.
+  `ref: { doc: index }`; `canonicalId` is the applied match's entry, else
+  null.
+- **Patch items**: every point, line or area symbol of `patch.symbols`,
+  referenced by an op or not, `ref: { patch: key }`, always enabled (it was materialisable
+  when it was put).
+- **Library items**: the point, line and area entries of the document's
+  library (`documentLibraryId`) except the **course symbols (7xx)** —
+  course overprint is the course layer's (08 §4.5); the mapper's own
+  7xx source symbols stay listed as document items (user 2026-11-13) —
+  and, when the stack's palette index has `green-skio`, every entry of
+  `ISSkiOM2019`. `ref: { patch: entryId }`, which Map mode fills by
+  `materialiseSymbol` on first use (row G9). An entry that is not
+  materialisable is listed **disabled** with its `missing` palette ids
+  (slice G, "Decided in this split"). An entry already covered — the
+  applied match of a document item, or a key of `patch.symbols` — is not
+  repeated. The other base library is not offered (an ISSprOM entry on an
+  ISOM map); `materialiseSymbol` accepts it all the same.
+- **Headings**: a document item's heading is its applied match's entry
+  code, else its source code's base (`505.1` → `505`); a patch or library
+  item's is its entry's code. The heading's name is the library heading
+  entry's (variant `null`) whenever the heading is one of the library's,
+  matched or not — P3 names an unmatched heading after its source
+  symbol; here the heading also holds the library's own entries — else
+  the first item's name.
+- **Groups**: `library` (headings of the document's library), then
+  `ISSkiOM2019` (items of the overlay: its entries, document symbols
+  matched to it, patch symbols keyed by it), then `other` (headings outside
+  both — club codes, symbols of another library). An empty group is left
+  out, so the overlay group is absent on a stack without `green-skio`
+  (a document stored before G21) unless the document or the patch already
+  has ski symbols; on every document imported since G21 it is present.
+- **Order**: headings by code (`compareSymbolCodes`: numerically where
+  both are numeric, numeric before non-numeric, else by string); within a heading, document
+  items (applied match first, then more objects first, then index), then
+  patch items (by key), then library items (heading entry before its
+  variants, library order).
+- Every enabled item's `ref`, put with its materialised symbol where it
+  is a library item, passes `applyPatch`'s symbol and kind checks for an
+  `add` of its `kind` (`map-patches.md` §2.3).
+
+The palette carries no materialised symbols and no swatches: G9's picker
+(`course-editor.md` §13 "Symbol picker") draws a swatch from
+`canonicalId` (the library preview route, `map-storage.md` §4.5) or the
+document symbol's own route, and calls `materialiseSymbol` when an item
+is used (`modes/map/symbols.ts` `symbolPut`), in the web, over the
+model's pinned copy of the document.
+
+## 12. ISSkiOM 2019: an overlay library
+
+`ISSkiOM2019` is the third registered library (G20; slice G answer 9).
+It is **not** a third base library: a ski-O map's base symbols stay
+ISOM 2017-2's (or ISSprOM's), and `ISSkiOM2019` holds only what ski
+orienteering adds — the track symbols in every width and state, the
+two ski-only roads, the prepared area, and the ski versions of three water
+and marsh symbols. Its entries are offered and matched on **any**
+document beside the document's own library (G8, G21); a document's
+`header.library` is never the overlay, and `chooseLibrary` never returns
+it. The guards that read a stored header's library —
+`documentLibraryId`, `documentFollowsDecisions`, `courseDocumentContext`
+— go through `isDocumentLibraryId` (registered and not an overlay), so a
+header naming `ISSkiOM2019` is treated as having no library and falls
+back to the scale's. Matching (§8.2 "Overlay candidates"), the factor an
+overlay entry is drawn at (§12.2, `entryFactor`) and the colour rows
+every stack carries (§12.3) landed with G21.
+
+Source: *ISSkiOM 2019, International Specification for Ski Orienteering
+Maps, Revision 4* (IOF Map Commission, September 2026, valid from
+1 November 2026), fetched from the IOF's mapping page (orienteering.sport)
+on 2026-11-13 and kept under `.local/research/iof-specs/` with the other
+spec texts (never committed). Dimensions are the text's and its
+drawings' only (§3), in µm at the text's reference scale **1:15 000**.
+
+### 12.1 What is in it
+
+The user's scope (2026-11-13): §3.3.1's thirteen track symbols plus
+§3.3.2's three water / marsh variants. Sixteen headings, one entry each
+(no variants):
+
+| Entry | Heading | Type | Scale group | Drawing (µm at 1:15 000) | Palette ids |
+|---|---|---|---|---|---|
+| `801.1` | Very wide track > 3.0 m | L | track | green 850 | `green-skio`, `white-skio` |
+| `801.2` | Very wide track > 3.0 m, compulsory to stay on | L | track | orange 610 inside black 120 edges (850 overall) | `orange-skio`, `black100`, `white-skio` |
+| `802.1` | Wide track 1.5 - 3.0 m | L | track | green 600 | `green-skio`, `white-skio` |
+| `802.2` | Wide track 1.5 - 3.0 m, compulsory to stay on | L | track | orange 360 inside black 120 edges (600) | `orange-skio`, `black100`, `white-skio` |
+| `803.1` | Track 0.8 - 1.2 m | L | track | green 500, dashes 3 000 / gaps 500 | `green-skio`, `white-skio` |
+| `803.2` | Track 0.8 - 1.2 m, compulsory to stay on | L | track | orange 260 inside black 120 edges (500), dashed 3 000 / 500 together | `orange-skio`, `black100`, `white-skio` |
+| `804.1` | Track, slow 0.8 - 1.0 m | L | track | green dots ø 700 every 1 300 (CC) | `green-skio`, `white-skio` |
+| `804.2` | Track, slow 0.8 - 1.0 m, compulsory to stay on | L | track | black dots ø 700 with orange ø 460 inside, every 1 300 (CC) | `orange-skio`, `black100`, `white-skio` |
+| `805` | Road covered with snow | L | track | black 700 | `black100` |
+| `807` | Unploughed road | L | track | two black 120 lines 140 apart (380 overall), dashed 3 000 / 500 | `black100` |
+| `808` | Prepared area | A | track | green 100 % cross-hatch: lines 200 wide, 800 (CC), ±45°; Ski-O green outline 130 | `green100-area`, `green-skio` |
+| `813.1` | Public snow mobile route | L | track | green 810: 120 edges, a 570 core dashed 1 500 green / 1 000 white | `green-skio`, `white-skio` |
+| `813.2` | Public snow mobile route, compulsory to stay on | L | track | black 120, orange 120, a 330 core dashed 1 500 orange / 1 000 white, orange 120, black 120 (810 overall) | `orange-skio`, `black100`, `white-skio` |
+| `301.1` | Crossable body of water | A | other | blue 50 % with a 100 blue bank line (as ISOM 302) | `blue50-area`, `blue100-line` |
+| `301.2` | Body of water that shall not be crossed | A | other | blue 100 % with a 300 black bank line | `blue100-area`, `black100` |
+| `310.1` | Marsh (in ski orienteering map) | A | other | ISOM 2017-2 310's dashes (900 × 100, gap 250, rows 300 (CC), alternate rows shifted) in blue 50 %, orientated to north — the text's "same symbol as 310"; the ISSkiOM drawing is unlabelled and visibly finer | `blue50-area` |
+
+Readings of the text, each in the entry's `notes`:
+
+- **The white mask** — "a white mask (0.15 mm on each side) is used
+  under all green and orange track symbols" — is the main stroke's
+  `halo` in `white-skio`, 150 µm beyond the symbol's overall width on each
+  side, `continuous` under dashed tracks (the drawings outline the whole
+  dashed line), and a white disc ø 1 000 under each dot of 804.1 / 804.2
+  (the drawings ring each dot). 805, 807 and 808 are black or area
+  symbols and have none.
+- **"Compulsory to stay on"** (§2.5, Rev 4: "black outline 0.12 mm
+  (inside)"): the orange core is `main`, the black edges are `borders`
+  120 wide whose outer edge is the symbol's overall width, so 801.2,
+  802.2 and 803.2 are exactly as wide as their green states. Dashed
+  borders share the main line's dash phase (`map-rendering.md` §4.4).
+- **813.1 / 813.2's white dashes** are where the core's dashes leave a
+  gap and the mask shows through: no white row sits above Ski-O green,
+  and the colour line names only the white under lower purple.
+- **813 is 0.81 mm overall in both states.** 813.1's "0.12 / < 0.57 /
+  0.12" labels its green edges and its core, as 801.2's "0.12 / < 0.61 /
+  0.12" does (measured: both 813 drawings are the same width, at the
+  scale on which 801.2 measures 0.85). 813.2 labels five bands — 0.12,
+  0.12, 0.33, 0.12, 0.12 — Rev 4's black edges inside and the white core
+  "reduced to 0.33 mm" from 0.57, so like every compulsory state it keeps
+  its green state's overall width.
+- **Junctions** ("drawn solid", "the beginning of a slow track is drawn
+  with a short line") are the mapper's drawing, not the symbol's;
+  OCAD's dash fitting (`DASH_NOTE`) starts and ends every dashed section
+  with a full dash.
+
+Left out, waiting (§10): ISSkiOM's deviations to ISOM base symbols
+(§3.1: open land at 75 %, all vegetation as 406, 416's dotted line only,
+contours 0.11 mm; §3.3.2's 515 *Impassable wall (barrier)*, which is
+ISOM 2017-2's 515 drawn as specified there), and its course-planning
+symbols (§3.3.3: 701–707, 709, 715, 716, 717, 719, 720.1, 720.2 and 841
+*One-way compulsory*), whose sizes are fixed at every scale — the course
+layer's job.
+
+### 12.2 Scale: `scaleRules` and `libraryFactor`
+
+ISSkiOM §3.2 enlarges the track symbols and the other symbols by
+different factors (03 §6.6, "a per-library table rather than a
+formula"):
+
+| Map scale | Track symbols | Other symbols |
+|---|---|---|
+| 1:15 000 | 1 | 1 |
+| 1:12 500 | 1 | 1.2 |
+| 1:10 000 | 1 | 1.5 |
+| 1:7 500 | 1.33 | 1.5 |
+| 1:5 000 | 1.5 | 1.5 |
+
+The library carries the table as `scaleRules: { track: [...], other:
+[...] }` (`{ mapScale, factor }` rows, the factors as printed — 1.33, not
+4/3) and every entry names its row set in `scaleGroup` (§2). The
+registry exports
+
+```ts
+libraryFactor(libraryId: SymbolLibraryId, mapScale: number, code?: string): number
+```
+
+the enlargement of the library's dimensions on a map at `1:mapScale`,
+unrounded:
+
+- a library without `scaleRules` (ISOM 2017-2, ISSprOM 2019-2):
+  `referenceScale / mapScale` — the same number `course/context.ts`
+  computes today (`ISOM2017-2` at 1:10 000 → 1.5, `ISSprOM2019-2` at
+  1:3 000 → 1.333…); `code` is ignored;
+- a library with `scaleRules`: the row set of the entry with heading
+  `code` (`"803.2"`, `"301.1"`); `code` may be omitted only when the
+  library has one row set; an unknown code throws;
+- a scale the table does not list takes the row whose scale is nearest
+  by ratio (|ln(mapScale / row)|), a tie to the larger denominator — so
+  1:4 000 takes the 1:5 000 row and 1:20 000 the 1:15 000 row;
+- a non-finite or non-positive scale throws.
+
+G8 multiplies it by the document's `symbolScale` when it materialises an
+entry of another library than the document's (§11.1: `symbolScale` is
+derived as `documentFactor ÷ libraryFactor(documentLibrary, mapScale)`).
+The matcher and the render bridge do the same through `entryFactor(doc,
+entryId)` (`import/matcher.ts`), which `materialiseFactor` calls:
+`libraryFactor(library, mapScale, code) × documentFactor /
+libraryFactor(document library, mapScale)`, unrounded, for an entry of
+any other library, and the document factor for an entry of the
+document's own library.
+
+### 12.3 Colours
+
+ISSkiOM's colour line names two colours the IOF colour table's ISSkiOM
+column does not tick (user decisions 2026-11-13):
+
+- **`white-skio`** "White under Ski-O tracks" — a palette row Oxygen
+  adds, directly below `purple-lower` in both editions, ticked for
+  ISSkiOM only. The text says "white (under lower purple)"; the table's
+  ISSkiOM whites are upper white (above the tracks) and white over
+  yellow (below every map colour but yellow). In the ISSkiOM stack the
+  mask therefore hides brown, the road and area colours, and is itself
+  under black, blue lines, the tracks and both purples. ISSkiOM's 301.1
+  drawing shows a track's mask cutting the blue bank line as well; no
+  position satisfies both that and "under lower purple" (blue lines sort
+  above lower purple), so the text's colour line wins — **the user chose
+  the IOF colour table over the 301.1 drawing** (2026-11-13, before G21
+  inserted the row into every stack): on every map the mask is directly
+  below lower purple, over the area and road colours and under every
+  line, black and the tracks. A source that keeps its own used mask
+  higher — directly under the track green, as the 301.1 drawing has it —
+  keeps its order and gets a `COLOUR_ORDER_CONFLICT` against lower purple
+  (§9.2 step 5: flag, never reorder).
+- **`green100-area` is ticked for ISSkiOM** — 808's raster is "green
+  100 %" since the 2023 erratum; the row already exists in every ISOM and
+  ISSprOM stack.
+
+The ISSkiOM stack is 20 rows in `iof2024` (the table's 18 plus these
+two) and 19 in `iof2022`, which has no `orange-skio` — the five
+compulsory states do not resolve against a 2022 ISSkiOM stack.
+
+**Answer 8 widened** (user 2026-11-13): G21's importer inserts every
+palette row the overlay uses — `green-skio`, `orange-skio`, `white-skio`
+and, for 808, `green100-area` — where a document's stack lacks it, at its
+palette position, so every track state can be drawn on any map; the
+patch still never changes a stack. A 2022-edition document receives
+`orange-skio` with its 2024 CMYK.
+
+Implemented in G21 (§9.1, §9.2 step 4): a source's own Ski-O colours
+are identified (name, else ink above black) and never aliased; where a
+stack lacks one, `green100-area` goes in by steps 3–4 (never above
+lower purple), `white-skio` directly below lower purple, `orange-skio`
+and `green-skio` directly below the upper overprint colours above lower
+purple (orange under green). "At its palette position" is read as these
+rules rather than the nearest-neighbour rule of step 4, which on real
+tables put the tracks under black (Mapper keeps railway white below
+black) or under the whole map (a copy of upper purple at the bottom) —
+decided overnight on the user's standing instruction, 2026-11-13, for
+review. Every ISSkiOM track entry resolves against every aligned stack.
+
+### 12.4 Names
+
+No Swedish ISSkiOM text from SOFT was found (2026-11-13: SOFT's ski-O
+pages describe the track model in prose and publish ISOM and ISSprOM
+translations only), so every entry's `name.sv` is absent and
+`symbolLibraryNameSources.ISSkiOM2019.sv` is `null` (answer 11; §3.2).
+No aliases: there is no older-spec table.

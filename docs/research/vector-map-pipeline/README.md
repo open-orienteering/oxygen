@@ -48,7 +48,8 @@ Spec chapters by slice:
 | C | `course-layer.md`, `course-print.md` | 08 §4.1, 05 |
 | D | `course-editor.md` (rewritten), `course-layout.md` | 08 |
 | E–F | `migrations/2026-vector-map-pipeline.md`, `AGENTS.md` §7/§15 | 09 |
-| G | `map-editing.md` | 08 §4.7, 03 §1 |
+| G | `map-patches.md` (§1–2 written 2026-11-13 by G2: patch model, merge, application) | 08 §4.1, §4.7, 03 §1 |
+| H | `map-terrain.md` (§1–2 contour graph written 2026-11-13 by H1; §3 solve H2, §4–5 height field H3, §6–7 DEM H9–H10) | 10 |
 
 ## Objectives
 
@@ -125,5 +126,7 @@ The log is split into one file per slice under [`decisions/`](decisions/), so th
 | [`decisions/slice-e.md`](decisions/slice-e.md) | Slice E — full migration |
 | [`decisions/slice-p.md`](decisions/slice-p.md) | Slice P — polish after slice E |
 | [`decisions/slice-f.md`](decisions/slice-f.md) | Slice F — course structure |
+| [`decisions/slice-g.md`](decisions/slice-g.md) | Slice G — Map mode and offline print |
+| [`decisions/slice-h.md`](decisions/slice-h.md) | Slice H — terrain |
 
 **Adding a row.** Append it to the file of the row's slice (`decisions/slice-<letter>.md`; a new slice starts a new file and gets a line in the table above). A decision that belongs to no slice — a research topic, a gate, a release, a cross-slice bug fix — goes to `decisions/general.md`. Keep the four columns. When a slice's file passes about 120 KB, continue it in `decisions/slice-<letter>-2.md` and list that here.

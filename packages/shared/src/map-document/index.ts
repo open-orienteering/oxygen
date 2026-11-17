@@ -3,3 +3,7 @@ export * from "./header.js";
 export * from "./codec.js";
 export * from "./projection.js";
 export * from "./render-bridge.js";
+export * from "./patch.js";
+export * from "./materialise.js";
+export * from "./patch-resolve.js";
+export * from "./patch-bake.js";

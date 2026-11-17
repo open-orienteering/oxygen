@@ -65,8 +65,18 @@ background: [`offline-architecture.md`](offline-architecture.md).
    imported document), so the box holds it locally. A map whose import
    failed has no document: upload it again (or run
    `pnpm map:rematch --event <name_id>` on the cloud) before checking
-   out, or the box gets no map. A map re-uploaded on the cloud during the
-   lease does not reach the box.
+   out, or the box gets no map. The snapshot also carries the print
+   layout — sheets, templates, course objects and their logos — so the
+   box prints maps and description sheets itself, with or without
+   internet. While the box is online it follows the cloud: a map
+   re-uploaded there, and sheets, templates or logos edited there, reach
+   the box within the settings refresh interval (`SYNC_SETTINGS_REFRESH_MS`,
+   5 minutes by default), and an edit made on the box (forwarded to the
+   cloud) shows on the box at once. Offline the box keeps printing what
+   it has, so make the sheets you need (**Export ▾** or Layout mode)
+   while it is online. A course object imported with **Import courses**
+   on the box, or a map uploaded on the box, is replaced by the cloud's
+   at the next refresh — do those on the cloud.
 2. The shell shows the green **Venue mode** badge. From this moment the
    cloud rejects race-critical writes for this event with "checked out to
    `<node>`".
@@ -102,7 +112,17 @@ instead.
 - Cloud-owned admin (Eventor sync, club directory, report templates) is
   forwarded upstream when the box has internet, and fails with a clear
   "requires connectivity" error when it doesn't. Don't fight it — nothing
-  in that set affects results.
+  in that set affects results. Course-map layout is in that set too:
+  edit sheets, templates, course objects and logos **on the cloud**
+  during a lease, not on the box. The box forwards such edits to the
+  cloud (and needs internet for it), but its own copy does not follow
+  them yet, so a second edit there conflicts and a new logo is missing
+  from its prints. Printing needs no internet: **Export ▾** on the box
+  prints from its copy.
+- After upgrading the box, reload the station and admin tabs that use it:
+  a tab still running the previous web bundle can send a layout edit in
+  one request with other calls, which the box now refuses ("batched with
+  local calls; nothing was run").
 - Station devices with the **offline resilience mode** toggle on (sync
   panel) additionally survive LAN blips: reads come from their local
   snapshot cache, writes queue in the outbox and drain on reconnect.

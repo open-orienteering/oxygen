@@ -28,6 +28,7 @@ import {
   pendingToDecisions,
   rowOutcome,
   scopePreviewUrl,
+  terrainLine,
   setPending,
   summariseOutcomes,
   type PendingDecision,
@@ -310,6 +311,14 @@ function MapReview({ documentHash, target, pinnedHash, mapName, canEdit, backTo,
             {t("outdated")}
           </p>
         )}
+        {(() => {
+          const line = terrainLine(data.terrain);
+          return (
+            <p data-testid="review-terrain" data-terrain-state={data.terrain.state} className="text-slate-600">
+              {t(line.key, line.values)}
+            </p>
+          );
+        })()}
         {!canEdit && <p className="text-slate-500">{t("readOnly")}</p>}
         <div className="flex flex-wrap gap-2 pt-1">
           {SUMMARY_ORDER.filter((o) => counts[o] > 0 || o === "suggested").map((o) => (

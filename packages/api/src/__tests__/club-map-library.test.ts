@@ -8,6 +8,8 @@ import { mapGeo } from "@oxygen/shared";
 import {
   canDownloadClubMapVersion,
   canRemoveClubMap,
+  canRemoveClubMapVersion,
+  correctionsOf,
   latestVersionOrRefuse,
   projectClubMapRow,
   type ClubMapRowInput,
@@ -170,6 +172,19 @@ describe("projectClubMapRow", () => {
     });
   });
 
+  it("counts a promoted version's layers and corrections (docs/map-patches.md §5 answer 8); none for an upload", () => {
+    const layer = (n: number) => ({ unitsPerMm: 100, symbols: [], ops: Object.fromEntries(Array.from({ length: n }, (_, i) => [`hide:${i}`, { op: "hide", sourceIndex: i }])) });
+    const base = input();
+    expect(projectClubMapRow(base).version).toMatchObject({ layers: 0, corrections: 0 });
+    const promoted = projectClubMapRow(input({ version: { ...base.version!, patch: [layer(2), layer(3)] } }));
+    expect(promoted.version).toMatchObject({ layers: 2, corrections: 5 });
+    // A promoted version's label is free text (the event's name): the file is named by its source (G12b).
+    const labelled = projectClubMapRow(input({ version: { ...base.version!, label: "Vårserien 2026-11-16", patch: [layer(1)] } }));
+    expect(labelled.fileName).toBe("first-name.ocd");
+    expect(labelled.version?.label).toBe("Vårserien 2026-11-16");
+    expect(correctionsOf("not a patch")).toEqual({ layers: 0, corrections: 0 });
+  });
+
   it("drops the import job once a version exists", () => {
     const row = projectClubMapRow(
       input({ job: { id: "job", state: "done", error: null, source: { fileName: "x.ocd", sizeBytes: 1 } } }),
@@ -202,6 +217,14 @@ describe("ownership", () => {
     expect(canRemoveClubMap({ authEnabled: true, user, createdBy: "other" })).toBe(false);
     expect(canRemoveClubMap({ authEnabled: true, user, createdBy: null })).toBe(false);
     expect(canRemoveClubMap({ authEnabled: true, user: null, createdBy: null })).toBe(false);
+  });
+
+  it("remove a version: its promoter or admin; auth off allows", () => {
+    expect(canRemoveClubMapVersion({ authEnabled: false, user: null, uploadedBy: "x" })).toBe(true);
+    expect(canRemoveClubMapVersion({ authEnabled: true, user, uploadedBy: "u1" })).toBe(true);
+    expect(canRemoveClubMapVersion({ authEnabled: true, user: { id: "a", isAdmin: true }, uploadedBy: "u1" })).toBe(true);
+    expect(canRemoveClubMapVersion({ authEnabled: true, user, uploadedBy: "other" })).toBe(false);
+    expect(canRemoveClubMapVersion({ authEnabled: true, user, uploadedBy: null })).toBe(false);
   });
 
   it("download: version uploader or admin; auth off allows", () => {

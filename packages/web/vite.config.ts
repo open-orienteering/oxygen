@@ -7,12 +7,16 @@ import { readFileSync } from "node:fs";
 
 // Build version: timestamp at build time, used for cache busting
 const BUILD_VERSION = new Date().toISOString();
-// Application version is deliberately manual: releases update package.json.
-const APP_VERSION = (
+// Application version baked into the bundle: the image build passes
+// OXYGEN_VERSION (scripts/build-version.mjs via the Dockerfile's
+// BUILD_VERSION); any other build is `<package version>-dev`. The footer
+// prefers the server's /api/version answer and falls back to this.
+const PACKAGE_VERSION = (
   JSON.parse(
     readFileSync(path.resolve(import.meta.dirname, "../../package.json"), "utf8"),
   ) as { version: string }
 ).version;
+const APP_VERSION = process.env.OXYGEN_VERSION || `${PACKAGE_VERSION}-dev`;
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -111,6 +115,20 @@ export default defineConfig({
             },
           },
           {
+            // The print worker (docs/course-print.md §8.6, G16): the PDF
+            // writer and the composer, loaded on the first map export and
+            // kept from then on. Not precached (`globIgnores` below), so
+            // devices that never export a PDF do not download it.
+            urlPattern: (ctx: { sameOrigin: boolean; url: URL }) =>
+              ctx.sameOrigin && /^\/assets\/print-worker-entry-[\w-]+\.js$/.test(ctx.url.pathname),
+            handler: "CacheFirst",
+            options: {
+              cacheName: "print-worker",
+              expiration: { maxEntries: 4, maxAgeSeconds: 365 * 24 * 60 * 60 },
+              cacheableResponse: { statuses: [200] },
+            },
+          },
+          {
             // API version endpoint
             urlPattern: /\/api\/version/,
             handler: "NetworkFirst",
@@ -124,8 +142,8 @@ export default defineConfig({
             },
           },
         ],
-        // Don't precache source maps
-        globIgnores: ["**/*.map"],
+        // Don't precache source maps, nor the print worker (runtime-cached, `print-worker` above)
+        globIgnores: ["**/*.map", "**/print-worker-entry-*.js"],
       },
     }),
   ],
@@ -140,6 +158,12 @@ export default defineConfig({
       // ocad2geojson imports 'fs' but only uses it for file-path loading (we always pass Buffers)
       fs: path.resolve(import.meta.dirname, "src/lib/empty-module.ts"),
     },
+  },
+  optimizeDeps: {
+    // The print worker's PDF library (docs/course-print.md §8.6): the dep
+    // scanner does not follow `new Worker(new URL(…))`, so without this the
+    // dev server would discover it on the first export and reload the page.
+    include: ["@oxygen/shared > @cantoo/pdf-lib"],
   },
   server: {
     // WEB_PORT / API_PROXY_PORT are set by the E2E harness so each shard

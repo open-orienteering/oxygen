@@ -53,6 +53,8 @@
  * so placement is unit-testable.
  */
 
+import { compareLabels } from "./collate.js";
+
 export interface PlacementCircle {
   id: string;
   x: number;
@@ -289,8 +291,9 @@ export function placeControlLabels(
   // that is identical in every renderer (editor ids are punch codes,
   // print ids are database ids), and greedy order decides who wins a
   // contested slot — so it must not depend on which caller is asking.
-  const numeric = (a: string, b: string) =>
-    a.localeCompare(b, undefined, { numeric: true });
+  // `compareLabels` pins the locale (G16): a Swedish browser and the
+  // en-US server break ties alike, so the device's PDF is the server's.
+  const numeric = compareLabels;
   const labeled = circles
     .filter((c) => c.label !== undefined && c.label !== "")
     .map((c) => ({ c, p: pressure(c) }))

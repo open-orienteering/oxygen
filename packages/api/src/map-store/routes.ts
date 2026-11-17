@@ -12,6 +12,9 @@
  * document — an event capability or kiosk key via `x-event-id` /
  * `?event=`, a signed-in user for a club-library version, or the user
  * who started the import job that produced it.
+ *
+ * `GET /api/maps/:nameId/patch` (docs/map-patches.md §3.3) is registered
+ * beside it: the event's corrections to that document.
  */
 
 import { brotliCompressSync, constants as zlib, gzipSync } from "node:zlib";
@@ -21,7 +24,9 @@ import { authDevEmail, authHeaderName, authMode, parseIdentityEmail, resolveUser
 import { prisma, resolveEvent } from "../db.js";
 import { resolveEventCapabilities } from "../permissions.js";
 import { kioskKeyMatches, KIOSK_KEY_HEADER } from "../trpc.js";
+import { assertRestAccess } from "../restGuard.js";
 import { getBlob, getBlobSize } from "./blob-store.js";
+import { eventPatch, patchEtag } from "./patches.js";
 
 export const MAP_DOCUMENT_CONTENT_TYPE = "application/vnd.oxygen.map";
 export const MAP_DOCUMENT_CACHE_CONTROL = "private, max-age=31536000, immutable";
@@ -234,6 +239,7 @@ export async function requireDocumentAccess(req: FastifyRequest, reply: FastifyR
 // ---- route ------------------------------------------------------------------
 
 export function registerMapDocumentRoutes(server: FastifyInstance): void {
+  registerMapPatchRoute(server);
   server.get<{ Params: { hash: string } }>("/api/map-documents/:hash", async (req, reply) => {
     const hash = parseDocumentHash(req.params.hash);
     if (!hash) return reply.code(400).send({ error: "Invalid document hash" });
@@ -269,6 +275,26 @@ export function registerMapDocumentRoutes(server: FastifyInstance): void {
     return sendWhole(reply, bytes, negotiateEncoding(req.headers["accept-encoding"]));
   });
 }
+
+/**
+ * `GET /api/maps/:nameId/patch` (docs/map-patches.md §3.3): the event's
+ * patch, paired with its pin, to whoever may read the event's document
+ * through the event (§4.2's event clause: auth off, the kiosk key,
+ * `courses.view`). Revalidated on every use; the ETag is the row's token.
+ */
+function registerMapPatchRoute(server: FastifyInstance): void {
+  server.get<{ Params: { nameId: string } }>("/api/maps/:nameId/patch", async (req, reply) => {
+    const event = await assertRestAccess(req, reply, { nameId: req.params.nameId, cap: VIEW_CAP, allowKiosk: true });
+    if (!event) return reply;
+    const delivery = await eventPatch(prisma(), event.id);
+    const etag = patchEtag(delivery.version);
+    void reply.header("Cache-Control", MAP_PATCH_CACHE_CONTROL).header("ETag", etag);
+    if (matchesEtag(req.headers["if-none-match"], etag)) return reply.code(304).send();
+    return reply.header("Content-Type", "application/json; charset=utf-8").send(JSON.stringify(delivery));
+  });
+}
+
+export const MAP_PATCH_CACHE_CONTROL = "private, no-cache";
 
 function sendWhole(reply: FastifyReply, bytes: Buffer, enc: Encoding): FastifyReply {
   if (enc && bytes.byteLength >= COMPRESS_MIN_BYTES) {

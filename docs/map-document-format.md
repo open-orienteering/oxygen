@@ -281,6 +281,20 @@ which is what makes the hash stable across machines (§6).
   where `objectIndex` is the position in `attrs`; `sourceIndex` is used to
   re-resolve them after a re-import of the same file (08 owns the
   tolerance rule for new editions).
+- `sourceIndex` is unique within a document (both importers number the
+  source object list; dropped objects leave gaps). An event's
+  corrections are a **patch** keyed on it and applied on top of the
+  document, never written into it: `docs/map-patches.md`. The effective
+  document keeps every `objectIndex` of the pinned one and appends added
+  objects after them, so these references survive a patch.
+- A **promoted club version** (`docs/map-patches.md` §5, row G12a) is the
+  one document whose corrections are written into it: the import bakes
+  its version patch before encoding. Its hidden objects are absent, and
+  each added object has `sourceIndex = 0x80000000 + n` (`n` numbered over
+  the version's layers in order, never reused), above every source
+  object's index; its patch symbols are table entries with `origin:
+  "source"` and neither `match` nor `sourceIndex`. No format change: the
+  fields and their widths are as above.
 
 ## 7. JSON projection
 
@@ -301,7 +315,9 @@ text (type 5), `path` for line text (type 6), absent otherwise
 (`map-rendering.md` §4.9). Symbol resolution per object: for a symbol whose `match` is
 applied (`state: "auto"`, or `reviewed` with a `canonicalId`) the library
 entry resolved through the stack's `paletteIds` and scaled by
-`documentFactor` (`canonical: false` turns this off and draws every
+`documentFactor` — an overlay library's entry (ISSkiOM, `docs/map-symbols.md`
+§12) by `entryFactor`, its own scale table × the document's symbol scale
+(§12.2) — (`canonical: false` turns this off and draws every
 symbol from source); otherwise the symbol's `render` when it exists and
 its kind agrees with the object type; otherwise a proxy per kind
 (`unmatched: "proxy"`, the S1 envelope) or nothing (`unmatched: "drop"`).
@@ -311,8 +327,10 @@ in document order — the editor's eyedropper symbolises the few under a
 click (`course-editor.md` §5); the symbol table stays whole and aligned.
 The result's `docIdx[i]` is the document object `objects[i]` came from
 (every call: skipped and dropped objects leave gaps). Statistics:
-`total, rendered, proxied, hidden, dropped, coordinates, canonicalSymbols,
-canonicalMissing` (the last counts applied matches whose entry or colours
+`total, rendered, proxied, hidden, patchHidden, dropped, coordinates,
+canonicalSymbols, canonicalMissing` (`patchHidden` counts the objects an
+applied patch hides — the bridge takes an effective document,
+`docs/map-patches.md` §2.4; the last counts applied matches whose entry or colours
 could not be resolved — always 0 for a document the importer produced).
 
 **Canonically drawn text keeps the source's layout** (user decision
@@ -368,6 +386,7 @@ typed arrays, warm.
 | `packages/shared/src/map-document/codec.ts` | `encodeMapDocument`, `decodeMapDocument`, `readMapDocumentHeader`, `mapDocumentHash`, `hilbertIndex` |
 | `packages/shared/src/map-document/projection.ts` | `toJsonProjection`, `fromJsonProjection`, `projectBytes` |
 | `packages/shared/src/map-document/render-bridge.ts` | `documentRenderInput` |
+| `packages/shared/src/map-document/patch.ts` | the map patch: schemas, `mergePatch`, `applyPatch` (`docs/map-patches.md`) |
 | `packages/shared/src/map-document/__tests__/` | codec, projection and bridge tests |
 | `packages/shared/src/geo/` | `mapGeo`: proj4 EPSG definitions, paper ↔ projected ↔ WGS 84 over §2.3, convergence, paper-north bearing, WGS 84 extent and calibration corners, meridian clustering (`docs/map-import.md` §3.8) |
 | `packages/api/src/import/ocad.ts` | `importOcadToDocument` (reader + normaliser + encode + hash) |

@@ -180,9 +180,14 @@ scripts/gcp/deploy.sh --from-source   # Cloud Build this working tree (fallback)
 ```
 
 Migrations run first against the chosen image, then Cloud Run is updated.
-The script records the selected argument as `OXYGEN_DEPLOY_REF`, so the UI
-footer shows `Image: edge`, `Image: v1.2.3`, or the chosen SHA alongside
-the baked commit identity.
+The script records the selected argument as `OXYGEN_DEPLOY_REF`. The UI
+footer shows the version baked into the image (`Oxygen v1.2.3`,
+`Oxygen v1.2.3-4-gabc1234` for a later `main` commit) and the baked commit;
+it adds `Image: edge`, `Image: stable` or the chosen SHA only when the ref is
+not that version's own tag, so `./deploy.sh v1.2.3` shows no `Image:` part
+([releases-and-images.md](releases-and-images.md#the-footer)).
+`--from-source` computes the version locally with `scripts/build-version.mjs`
+(Cloud Build's upload has no `.git`) and passes it as `_BUILD_VERSION`.
 Idle vs event mode on the live service is **preserved** (a deploy during a
 competition will not flip you back to scale-to-zero). Use
 `./event-mode.sh` / `./idle-mode.sh` to change that on purpose.
@@ -295,6 +300,91 @@ UTC, 7 retained). Restore via `gcloud sql backups list/restore`.
 the container) works as documented in `docs/backup-restore.md` — the
 image ships `postgresql-client`.
 
+## Height data (Lantmäteriet)
+
+The 3D terrain (docs/map-terrain.md §7) can anchor a map's contours to a
+digital elevation model fetched by the server. **Fetching is off by
+default.** Lantmäteriet's height model (CC BY 4.0, "© Lantmäteriet") needs
+**one Geotorget account for the instance** (the club's); Copernicus GLO-30
+(open, no account) serves where Lantmäteriet has no coverage.
+
+**The normal way is the app: Settings → Height data** (`/settings?tab=terrain`,
+an admin tab, map-terrain §7.8). The page explains itself; in short:
+
+1. Create a user on Lantmäteriet's Geotorget
+   (<https://geotorget.lantmateriet.se/>) and order the free product
+   *Markhöjdmodell Nedladdning* for it. That user name and password are
+   the download API's (`api.lantmateriet.se/stac-hojd/v1`).
+2. In the tab, enter the user name and password and save. The password is
+   stored encrypted in the database (with a key kept in the database
+   beside it: it never shows in plaintext in a row, a screen, a log or a
+   settings export, but anyone holding the whole database could open it,
+   map-terrain §7.0b answer 10), is never shown again, and is sent only to
+   Lantmäteriet's hosts. Saving queues every map whose fetch failed on the
+   old account — no redeploy.
+3. Switch the providers on (Lantmäteriet, GLO-30) and keep the resolution
+   at 2 m.
+4. Once, run **Test connection** on one club map of ordinary size (a few
+   km across, like the corpus's club-2026; the largest maps are over the
+   1 m cap and the tab will not offer them). It reads about 100 MB of
+   height data for that map in a worker thread, stores and shows only
+   aggregates, and changes nothing. If it fails, choose 1 m in the tab
+   (the largest club maps then get no DEM until the cap is raised) and
+   record the result in docs/map-terrain.md §7.6.
+
+Nothing in the deploy needs to change for this. Each value saved in the
+tab wins over its environment variable; a value not saved falls back to
+the deploy's (map-terrain §7.0b 6). **The environment remains as the
+deploy's default**, for an instance that prefers its secret store:
+
+- Create the secret yourself — the value is typed at the prompt, never
+  written to a file or your shell history (finish with Enter, then
+  Ctrl-D):
+
+  ```bash
+  gcloud secrets create oxygen-geotorget-credentials --data-file=- --project="$PROJECT_ID"
+  ```
+
+  The value is `username:password` (surrounding whitespace, such as the
+  newline Enter adds, is trimmed when it is read). To rotate later:
+  `gcloud secrets versions add oxygen-geotorget-credentials --data-file=-`.
+- Let the runtime account read it, and deploy:
+
+  ```bash
+  ./provision.sh
+  ```
+
+  ```bash
+  ./deploy.sh
+  ```
+
+  `deploy.sh` finds the secret by name and adds
+  `MAP_DEM_LANTMATERIET_AUTH=oxygen-geotorget-credentials:latest` to
+  `--set-secrets` and `MAP_DEM_PROVIDERS=lantmateriet,glo30` to the
+  environment; without the secret it deploys with no provider in the
+  environment (the tab can still switch them on). `DEM_SECRET` in
+  `env.sh` names a different secret; `MAP_DEM_PROVIDERS` in `env.sh`
+  overrides the providers (`glo30` alone for an instance outside Sweden,
+  which needs no secret); `MAP_DEM_LANTMATERIET_RESOLUTION_M=1` selects
+  the 1 m model.
+- The tab shows such an account as "From the deploy configuration" with
+  its user name. A secret fixed in Secret Manager reaches the instance on
+  the next deploy or restart, which queues the maps that failed on it.
+- The live check also runs from your own machine with your own
+  credential (`read -rs MAP_DEM_LANTMATERIET_AUTH; export
+  MAP_DEM_LANTMATERIET_AUTH`, then
+  `pnpm --filter @oxygen/api dem:live-check -- --map /path/to/club-map.ocd`);
+  it prints aggregates and writes nothing.
+
+The fetch runs in the background after an import and is retried on
+failure (docs/map-storage.md §4.7 "The DEM"); the tab lists every club
+map's state, with **Retry** for a failed one. A refused credential shows
+as `failed: auth`; it is retried after an hour, three times, then left
+until a new account is saved in the tab (or, for the environment's, the
+next deploy or restart). Memory: one DEM derive adds about 1 GB on the
+largest corpus map, the order of the contour derive, and the two never
+run at once on an instance (Test connection waits in the same queue).
+
 ## Sizing notes
 
 - **Print and import memory.** `maps.pdf` composes in a worker thread
@@ -305,6 +395,16 @@ keep it at 1, or 2 for small maps. Workers use no database connection.
 The rest of the 4 GiB is headroom for the map import worker (an OCAD
 file parsed into a map document); since v0.6.1 (E5) the upload itself
 parses nothing — it stores the chunks and starts the job.
+- **Height-field memory.** Every import ends by deriving the map's
+height field from its contours in a worker thread of its own
+(`map-storage.md` §4.7), one at a time per instance: about 0.3 GB
+added for a typical club map, 0.84 GB for Club-full, about 1.1 GB at
+the 60 M-cell graph budget, which caps it. Beside a 2.6 GB Club-full
+print that is about 3.7 GB, under the 4 GiB limit. The typed arrays live
+outside the V8 heap, so `--max-old-space-size` does not bound them.
+`MAP_HEIGHTFIELD_MAX_CELLS` (default 60 000 000, which refuses nothing)
+lowers the cap on a smaller instance; a map over it gets no height field
+(`over-cap`) and no 3D.
 - **The render gate.** Each print also takes a permit of the process's
 render gate (`renderGate()` in `packages/api/src/map-render-limits.ts`,
 `MAP_RENDER_CONCURRENCY`, default 2, `deploy.sh` sets 3). Since E4a the

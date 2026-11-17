@@ -4,8 +4,11 @@ import { courseLabels, expectLabelShown } from "./helpers/course-labels";
 import { API_BASE as API } from "./helpers/api-base";
 
 // Mutates seed data (imports courses, uploads a map, reassigns classes) —
-// start from a clean seed per the e2e hygiene convention.
+// start from a clean seed per the e2e hygiene convention, and leave one:
+// a later spec in the same shard (rental-cards' kiosk readout punches the
+// seed's course 2) fails on the imported courses A–E otherwise.
 test.beforeAll(reseed);
+test.afterAll(reseed);
 
 const EVENT = "itest";
 

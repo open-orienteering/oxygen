@@ -202,6 +202,8 @@ export interface EntryOpts {
   notes?: string;
   /** Overrides the library's default citation. */
   source?: string;
+  /** The library's `scaleRules` row set for this entry (docs/map-symbols.md §12.2). */
+  scaleGroup?: string;
 }
 
 export interface Author {
@@ -227,6 +229,7 @@ export function authorFor(libraryId: string, citation: string): Author {
     if (opts.minimum) entry.minimum = opts.minimum;
     if (opts.footprintM !== undefined) entry.footprintM = opts.footprintM;
     if (opts.notes) entry.notes = opts.notes;
+    if (opts.scaleGroup) entry.scaleGroup = opts.scaleGroup;
     return entry;
   };
 }

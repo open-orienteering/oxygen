@@ -119,5 +119,19 @@
   "timeAgo_monthAgo": "1 month ago",
   "timeAgo_monthsAgo": "{{count}} months ago",
   "timeAgo_yearAgo": "1 year ago",
-  "timeAgo_yearsAgo": "{{count}} years ago"
+  "timeAgo_yearsAgo": "{{count}} years ago",
+  "offlineMaps": "Maps on this device",
+  "offlineMapsDocumentStored": "Map stored on this device",
+  "offlineMapsDocumentNone": "Map not stored on this device",
+  "offlineMapsPrintStored": "Print stored {{time}} ({{count}} exports)",
+  "offlineMapsPrintPartial": "Print partly stored {{time}}",
+  "offlineMapsPrintNone": "Print not stored",
+  "offlineMapsPrintUnsupported": "Printing offline needs a device that can compose PDFs",
+  "offlineMapsPersisted": "Storage: kept by the browser",
+  "offlineMapsNotPersisted": "Storage: may be cleared by the browser",
+  "offlineMapsStore": "Make maps available offline",
+  "offlineMapsStoring": "Storing maps… {{done}}/{{total}}",
+  "offlineMapsPartialError": "The network went while storing; some exports are not stored.",
+  "offlineMapsFailed": "The maps could not be stored on this device.",
+  "offlineMapsNotOnline": "Storing the maps needs the network."
 }

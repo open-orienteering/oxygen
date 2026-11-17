@@ -29,6 +29,7 @@ export const WEIGHTS = {
   "registration-dialog.spec.ts": 46,
   "course-presence.spec.ts": 45,
   "map-vector-layer.spec.ts": 41,
+  "map-viewer-3d.spec.ts": 75, // H7: the demo map imported, 3D toggle, gestures; H8: a Tracks page route on the terrain (+12 s); H11: four surface tests (+20 s); not yet measured in CI
   "map-gl-doc.spec.ts": 39,
   "map-gl-golden.spec.ts": 34,
   "course-editor-phone.spec.ts": { mobile: 31 }, // the editor's phone subset (touch, F3/F7 on a phone)
@@ -85,6 +86,16 @@ export const WEIGHTS = {
 };
 
 export const DEFAULT_WEIGHT = 10;
+
+/**
+ * A spec for the preview stack (G29, docs/e2e-sharding.md "The preview
+ * stack"): the production bundle under `vite preview`, run by project
+ * `preview` with `E2E_PREVIEW=1` (`PREVIEW_SPECS` in playwright.config.ts).
+ * It is in no shard of the split and carries no weight.
+ */
+export function isPreviewSpec(file) {
+  return file.endsWith(".preview.spec.ts");
+}
 
 /** A spec file's total weight: the sum over the projects that run it (a plain number is one run). */
 export function weightOf(file) {

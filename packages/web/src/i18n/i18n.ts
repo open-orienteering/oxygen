@@ -24,6 +24,7 @@ import enAuth from "./locales/en/auth.json";
 import enLibrary from "./locales/en/library.json";
 import enMapReview from "./locales/en/mapReview.json";
 import enEditor from "./locales/en/editor.json";
+import enHeightData from "./locales/en/heightData.json";
 
 import svCommon from "./locales/sv/common.json";
 import svNav from "./locales/sv/nav.json";
@@ -48,6 +49,7 @@ import svAuth from "./locales/sv/auth.json";
 import svLibrary from "./locales/sv/library.json";
 import svMapReview from "./locales/sv/mapReview.json";
 import svEditor from "./locales/sv/editor.json";
+import svHeightData from "./locales/sv/heightData.json";
 
 export const defaultNS = "common" as const;
 
@@ -76,6 +78,7 @@ export const resources = {
     library: enLibrary,
     mapReview: enMapReview,
     editor: enEditor,
+    heightData: enHeightData,
   },
   sv: {
     common: svCommon,
@@ -101,6 +104,7 @@ export const resources = {
     library: svLibrary,
     mapReview: svMapReview,
     editor: svEditor,
+    heightData: svHeightData,
   },
 } as const;
 

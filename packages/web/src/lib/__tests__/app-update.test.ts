@@ -4,6 +4,7 @@ import {
   formatBuildVersion,
   formatBuildCommit,
   formatDeployRef,
+  displayVersion,
   createUpdateActivator,
   versionIdentity,
 } from "../app-update";
@@ -156,5 +157,44 @@ describe("formatDeployRef", () => {
     expect(formatDeployRef("ghcr.io/open-orienteering/oxygen@sha256:abc")).toBe(
       "sha256:abc",
     );
+  });
+});
+
+describe("formatDeployRef hiding (V1)", () => {
+  // The footer shows `Image:` only when the deploy ref says something the
+  // version does not: a release deployed by its own tag is just noise.
+  it("hides the ref that is the version's own tag", () => {
+    expect(formatDeployRef("v0.7.0", "0.7.0")).toBeNull();
+    expect(formatDeployRef("0.7.0", "0.7.0")).toBeNull();
+    expect(formatDeployRef("ghcr.io/open-orienteering/oxygen:v0.7.0", "0.7.0")).toBeNull();
+  });
+
+  it("shows moving tags, SHAs, source builds, digests and other versions", () => {
+    expect(formatDeployRef("edge", "0.7.0-3-gabc1234")).toBe("edge");
+    expect(formatDeployRef("stable", "0.7.0")).toBe("stable");
+    expect(formatDeployRef("sha-0123456789abcdef", "0.7.0")).toBe("sha-0123456789abcdef");
+    expect(formatDeployRef("source-2dd412d-20261113", "0.7.0-dev")).toBe(
+      "source-2dd412d-20261113",
+    );
+    expect(formatDeployRef("ghcr.io/x/oxygen@sha256:abc", "0.7.0")).toBe("sha256:abc");
+    expect(formatDeployRef("v0.6.1", "0.7.0")).toBe("v0.6.1");
+    expect(formatDeployRef("v0.7.0", "0.7.0-3-gabc1234")).toBe("v0.7.0");
+  });
+
+  it("shows the ref when the version is unknown", () => {
+    expect(formatDeployRef("v0.7.0", null)).toBe("v0.7.0");
+    expect(formatDeployRef("v0.7.0")).toBe("v0.7.0");
+  });
+});
+
+describe("displayVersion", () => {
+  it("prefers the server's version", () => {
+    expect(displayVersion("0.7.0-3-gabc1234", "0.7.0-dev")).toBe("0.7.0-3-gabc1234");
+  });
+
+  it("falls back to the bundle's own baked version", () => {
+    expect(displayVersion(null, "0.7.0-dev")).toBe("0.7.0-dev");
+    expect(displayVersion(undefined, "0.7.0")).toBe("0.7.0");
+    expect(displayVersion("", "0.7.0")).toBe("0.7.0");
   });
 });

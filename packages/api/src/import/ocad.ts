@@ -44,6 +44,8 @@ export interface MapImportResult {
   analysis: mapImport.DocumentAnalysis;
   /** `<library id>@<library version>` — part of the document's identity for dedup. */
   libraryVersion: string;
+  /** The version patch baked before encoding (docs/map-patches.md §5); absent without one. */
+  corrections?: NonNullable<mapImport.ImportReport["corrections"]>;
   timings: { read: number; normalise: number; match: number; encode: number };
 }
 
@@ -72,6 +74,8 @@ export interface ImportOptions {
   onStage?: (stage: ImportStage) => void;
   match?: mapImport.MatchDocumentOptions;
   importer?: string;
+  /** A promoted club version's layers, baked into the matched input before encoding (docs/map-patches.md §5). */
+  patch?: mapDocument.VersionPatch;
 }
 
 /** Stages 3–4 for one source kind: parse the file and normalise it to a `MapDocumentInput`. */
@@ -121,17 +125,22 @@ export async function importMapToDocument(
   const match = performance.now() - t;
   onStage?.("encode");
   t = performance.now();
-  const bytes = mapDocument.encodeMapDocument(matched.input);
+  // The version patch (docs/map-patches.md §5): an op that no longer applies is skipped with PATCH_ISSUE, never a failure.
+  const layers = opts.patch ?? [];
+  const baked = mapDocument.bakeVersionPatch(matched.input, layers);
+  const bytes = mapDocument.encodeMapDocument(baked.input);
   const encode = performance.now() - t;
+  const { warnings: patchWarnings, details: patchDetails } = mapImport.patchIssueWarnings(baked.issues);
   return {
+    ...(layers.length ? { corrections: { layers: layers.length, ops: mapDocument.versionPatchOpCount(layers), issues: baked.issues } } : {}),
     bytes,
     documentHash: sha256Hex(bytes),
     fileHash,
     kind,
     counts,
-    warnings: [...warnings, ...matched.warnings.map((w) => ({ code: w.code, count: w.count, message: w.message }))],
+    warnings: [...warnings, ...matched.warnings.map((w) => ({ code: w.code, count: w.count, message: w.message })), ...patchWarnings],
     readerWarnings: "readerWarnings" in source ? source.readerWarnings : [],
-    warningDetails: source.warningDetails,
+    warningDetails: patchDetails.length ? [...source.warningDetails, ...patchDetails].slice(0, mapImport.WARNING_DETAILS_MAX) : source.warningDetails,
     matching: matched.matching,
     colourStack: matched.colourStack,
     analysis,

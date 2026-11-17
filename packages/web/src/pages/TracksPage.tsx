@@ -38,9 +38,12 @@ export function TracksPage() {
   });
   const hasOcdMap = mapMetadata.data != null;
 
+  // Switching rows keeps the previous route drawn until the next one is in: the map's tracks never
+  // blink out, so the 3D view's surface (ground with tracks shown, map-rendering.md §5.4 "Surface
+  // (H11)") and the user's choice of it hold from runner to runner. Collapsing drops it.
   const expandedPreview = trpc.tracks.getRoutePreview.useQuery(
     { routeId: expandedId ?? 0 },
-    { enabled: !!expandedId, staleTime: 60_000 },
+    { enabled: !!expandedId, staleTime: 60_000, placeholderData: (previous) => (expandedId ? previous : undefined) },
   );
 
   // Single-track GPS overlay for the persistent pane. Red is the
@@ -208,6 +211,9 @@ export function TracksPage() {
                 return (
                   <Fragment key={route.id}>
                     <tr
+                      data-testid="track-row"
+                      data-route-id={route.id}
+                      aria-expanded={isExpanded}
                       className={`hover:bg-slate-50 cursor-pointer transition-colors ${isExpanded ? "bg-slate-50" : ""}`}
                       onClick={() =>
                         setExpandedId(isExpanded ? null : route.id)
@@ -259,8 +265,8 @@ export function TracksPage() {
                       <tr>
                         <td colSpan={6} className="px-4 pb-4 pt-2 bg-slate-50">
                           <ExpandedDetail
-                            preview={expandedPreview.data ?? null}
-                            isPreviewLoading={expandedPreview.isLoading}
+                            preview={expandedPreview.isPlaceholderData ? null : expandedPreview.data ?? null}
+                            isPreviewLoading={expandedPreview.isLoading || expandedPreview.isPlaceholderData}
                             hasOcdMap={hasOcdMap}
                           />
                         </td>

@@ -1,0 +1,291 @@
+/** `resolveMapLayout` and `layoutCourseEnds` (docs/course-print.md §5; moved from the API with the print pipeline, G13). */
+import { describe, expect, it } from "vitest";
+import { layoutCourseEnds, resolveMapLayout } from "../course-maps/resolve-layout.js";
+
+const template = {
+  paper: "A4",
+  orientation: "portrait",
+  paperWidthMm: null,
+  paperHeightMm: null,
+  printScale: 7500,
+  settings: {
+    printMarginMm: 3,
+    mapFrame: { x: 8, y: 8, width: 194, height: 281 },
+    description: { visible: true, x: 150, y: 12, cellSizeMm: 6 },
+    appearance: {
+      purple: "#c026d3",
+      circleRadiusMm: 2.5,
+      lineWidthMm: 0.35,
+      numberHeightMm: 3.5,
+    },
+  },
+  objects: [],
+};
+
+const controls = [
+  {
+    id: "c1",
+    seq: 1,
+    codes: "31",
+    xpos: 10,
+    ypos: 20,
+    description: { column_d: "boulder" },
+  },
+  {
+    id: "c2",
+    seq: 2,
+    codes: "45;145",
+    xpos: 30,
+    ypos: 40,
+    description: { column_d: "path" },
+  },
+];
+
+describe("resolveMapLayout description rows", () => {
+  it("builds the full IOF sheet (header, start, controls, finish) for course maps", () => {
+    const layout = resolveMapLayout({
+      kind: "course",
+      template,
+      course: {
+        name: "H40",
+        lengthM: 3200,
+        climbM: 40,
+        classes: [{ name: "H40" }, { name: "H45" }],
+        controls,
+        descriptionInstructions: {
+          // Anchored by the public control id (the punch code 31, not seq 1),
+          // as the editor, the on-map sheet and setStructure's prune use it (E3b).
+          specials: [{ afterControlId: 31, kind: "13.1", lengthM: 60 }],
+          finish: { kind: "14.1" },
+        },
+        // Finish 40 mm east of the last control → 600 m at 1:15000.
+        finish: { id: "f1", codes: "", name: "Mål 1", status: "finish", kind: "finish", xpos: 70, ypos: 40 },
+      },
+      event: { name: "Spring Cup", date: new Date("2026-05-01") },
+      mapScale: 15_000,
+    });
+    // Same model as the on-map sheet in the course editor.
+    expect(layout.descriptionHeader).toEqual({
+      eventName: "Spring Cup",
+      classNames: "H40, H45",
+      courseName: "H40",
+      lengthKm: "3.20 km",
+      climbM: "40 m",
+    });
+    expect(layout.descriptionRows).toEqual([
+      { kind: "start", code: "", description: null, symbolKey: "start" },
+      { kind: "control", sequence: 1, code: "31", description: { column_d: "boulder" } },
+      { kind: "special", code: "", symbolKey: "13.1", lengthM: 60 },
+      { kind: "control", sequence: 2, code: "45", description: { column_d: "path" } },
+      { kind: "finish", code: "", symbolKey: "14.1", lengthM: 600 },
+    ]);
+    expect(layout.textValues.controls).toBe("2");
+  });
+
+  it("falls back to the course name and no header text when no event is given", () => {
+    const layout = resolveMapLayout({
+      kind: "course",
+      template,
+      course: { name: "H40", lengthM: 0, climbM: 0, controls },
+    });
+    expect(layout.descriptionHeader).toMatchObject({
+      eventName: "",
+      courseName: "H40",
+      lengthKm: "",
+    });
+    // No finish row / no map scale → no measured finish distance.
+    expect(layout.descriptionRows.at(-1)).toEqual({
+      kind: "finish",
+      code: "",
+      symbolKey: "14.3",
+    });
+  });
+
+  it("builds unsequenced numerically sorted rows for all-controls maps", () => {
+    const layout = resolveMapLayout({
+      kind: "all_controls",
+      template,
+      allControls: [
+        {
+          id: "start",
+          seq: 20,
+          codes: "",
+          status: "start",
+          xpos: -5,
+          ypos: -5,
+          description: null,
+        },
+        { id: "b", seq: 2, codes: "100", xpos: 5, ypos: 5, description: null },
+        { id: "a", seq: 1, codes: "31", xpos: 1, ypos: 1, description: null },
+        {
+          id: "finish",
+          seq: 24,
+          codes: "",
+          status: "finish",
+          xpos: 10,
+          ypos: 10,
+          description: null,
+        },
+        // Zero-position controls have no map placement and are skipped.
+        { id: "z", seq: 3, codes: "99", xpos: 0, ypos: 0, description: null },
+      ],
+    });
+    expect(layout.descriptionRows.map((row) => row.code)).toEqual([
+      "31",
+      "100",
+    ]);
+    expect(layout.descriptionRows[0]).not.toHaveProperty("sequence");
+    // All-controls maps keep the single title row.
+    expect(layout.descriptionHeader).toBeNull();
+    expect(layout.controls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "start", code: "20", type: "start" }),
+        expect.objectContaining({ id: "finish", code: "24", type: "finish" }),
+      ]),
+    );
+    expect(layout.textValues.controls).toBe("2");
+  });
+});
+
+describe("resolveMapLayout orientation", () => {
+  it("counter-rotates the window by the in-paper meridian tilt", () => {
+    const layout = resolveMapLayout({
+      kind: "course",
+      template,
+      course: { name: "H40", lengthM: 0, climbM: 0, controls },
+      mapScale: 15_000,
+      meridianTiltDeg: 3.3,
+    });
+    // Print renders raw paper space, so only the drawing's own tilt is
+    // compensated — NOT north_offset, whose true-north component applies
+    // only to the tile pipeline's mercator-warped rasters.
+    expect(layout.window.rotationDeg).toBe(-3.3);
+  });
+
+  it("omits rotation for negligible or missing tilts", () => {
+    for (const meridianTiltDeg of [null, 0, 0.04]) {
+      const layout = resolveMapLayout({
+        kind: "course",
+        template,
+        course: { name: "H40", lengthM: 0, climbM: 0, controls },
+        mapScale: 15_000,
+        meridianTiltDeg,
+      });
+      expect(layout.window.rotationDeg).toBeUndefined();
+    }
+  });
+});
+
+describe("resolveMapLayout label offset", () => {
+  it("turns a stored offset into a labelPosition on the overlay control", () => {
+    const layout = resolveMapLayout({
+      kind: "course",
+      template,
+      course: {
+        name: "H40",
+        lengthM: 1000,
+        climbM: 0,
+        controls: [{ ...controls[0], labelOffset: { dx: 5, dy: -3 } }],
+      },
+    });
+    const overlay = layout.controls.find((c) => c.code === "31");
+    expect(overlay?.labelPosition).toEqual({
+      x: controls[0].xpos + 5,
+      y: controls[0].ypos - 3,
+    });
+  });
+});
+
+describe("resolveMapLayout course sites (docs/course-print.md §5.2)", () => {
+  const start = { id: "s1", codes: "", name: "Start 1", status: "start", kind: "start", xpos: 0, ypos: 5 };
+  const finish = { id: "f1", codes: "", name: "Mål 1", status: "finish", kind: "finish", xpos: 50, ypos: 45 };
+
+  it("start, the course controls and finish from the rows, legs centre to centre", () => {
+    const layout = resolveMapLayout({ kind: "course", template, course: { name: "A", lengthM: 0, climbM: 0, controls, start, finish } });
+    expect(layout.controls.map((c) => [c.id, c.type, c.x, c.y])).toEqual([
+      ["s1", "start", 0, 5],
+      ["c1", "control", 10, 20],
+      ["c2", "control", 30, 40],
+      ["f1", "finish", 50, 45],
+    ]);
+    expect(layout.controls.every((c) => c.cuts === undefined)).toBe(true);
+    expect(layout.legs).toEqual([
+      { points: [{ x: 0, y: 5 }, { x: 10, y: 20 }], kind: "leg" },
+      { points: [{ x: 10, y: 20 }, { x: 30, y: 40 }], kind: "leg" },
+      { points: [{ x: 30, y: 40 }, { x: 50, y: 45 }], kind: "leg" },
+    ]);
+  });
+
+  it("an unplaced start or finish (0, 0) is not drawn", () => {
+    const layout = resolveMapLayout({
+      kind: "course",
+      template,
+      course: { name: "A", lengthM: 0, climbM: 0, controls, start: { ...start, xpos: 0, ypos: 0 }, finish: null },
+    });
+    expect(layout.controls.map((c) => c.id)).toEqual(["c1", "c2"]);
+  });
+});
+
+describe("layoutCourseEnds (the one sequence rule, course-layer.md §6.2)", () => {
+  const all = [
+    { id: "s1", seq: 1, codes: "", name: "Start 1", status: "start", kind: "start", xpos: 0, ypos: 5 },
+    { id: "s2", seq: 2, codes: "", name: "Start 2", status: "start", kind: "start", xpos: 1, ypos: 5 },
+    { id: "c1", seq: 3, codes: "31", name: "", status: "ok", kind: "control", xpos: 10, ypos: 20 },
+    { id: "f2", seq: 5, codes: "", name: "Mål 2", status: "finish", kind: "finish", xpos: 50, ypos: 46 },
+    { id: "f1", seq: 4, codes: "", name: "Mål 1", status: "finish", kind: "finish", xpos: 50, ypos: 45 },
+  ];
+  const cols = { structure: null, startName: "", finishControlId: null, firstAsStart: false, lastAsFinish: false };
+
+  it("a NULL structure reads the columns, the defaults the lowest seq", () => {
+    expect(layoutCourseEnds({ ...cols, startName: "Start 2" }, ["c1"], all)).toMatchObject({ start: { id: "s2" }, finish: { id: "f1" } });
+    expect(layoutCourseEnds({ ...cols, finishControlId: "f2", firstAsStart: true }, ["c1"], all)).toMatchObject({ start: null, finish: { id: "f2" } });
+  });
+
+  it("a stored structure names its ends", () => {
+    const structure = { version: 1, id: "x", orderMode: "ordered", items: [{ siteId: "s2" }, { siteId: "c1" }, { siteId: "f2" }] };
+    expect(layoutCourseEnds({ ...cols, structure }, [], all)).toMatchObject({ start: { id: "s2" }, finish: { id: "f2" } });
+  });
+});
+
+describe("resolveMapLayout free_order", () => {
+  it("drops connecting legs, uses code labels, and omits sequence on the sheet", () => {
+    const layout = resolveMapLayout({
+      kind: "course",
+      template,
+      course: {
+        name: "Free",
+        lengthM: 0,
+        climbM: 0,
+        orderMode: "free_order",
+        controls,
+        start: { id: "s1", codes: "", name: "Start 1", status: "start", kind: "start", xpos: 0, ypos: 5 },
+      },
+    });
+    expect(layout.labelMode).toBe("code");
+    expect(layout.legs).toEqual([]);
+    expect(
+      layout.descriptionRows
+        .filter((r) => r.kind === "control")
+        .every((r) => r.sequence === undefined),
+    ).toBe(true);
+  });
+
+  it("honours manual number offsets on free-order courses", () => {
+    const layout = resolveMapLayout({
+      kind: "course",
+      template,
+      course: {
+        name: "Free",
+        lengthM: 0,
+        climbM: 0,
+        orderMode: "free_order",
+        controls: [{ ...controls[0], labelOffset: { dx: 5, dy: -3 } }],
+      },
+    });
+    const overlay = layout.controls.find((c) => c.code === "31");
+    expect(overlay?.labelPosition).toEqual({
+      x: controls[0].xpos + 5,
+      y: controls[0].ypos - 3,
+    });
+  });
+});

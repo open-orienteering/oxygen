@@ -24,7 +24,7 @@ async function decode(png: Buffer): Promise<{ width: number; height: number; pix
 const STALE = "run pnpm --filter @oxygen/api golden:render";
 
 describe("library contact sheet", () => {
-  it("covers both libraries", () => {
+  it("covers every library, the ISSkiOM overlay included", () => {
     expect(LIBRARY_GOLDEN_IDS).toEqual(symbolLibrary.listSymbolLibraries().map((l) => l.id));
   });
 
@@ -78,8 +78,8 @@ describe("library contact sheet", () => {
   }
 
   it("rendering is deterministic: the same entry twice gives the same bytes", async () => {
-    // One entry of each IR type: point, line (dashes + glyphs), area (pattern), text.
-    const pick = ["ISOM2017-2:204", "ISOM2017-2:516", "ISOM2017-2:409", "ISOM2017-2:704", "ISSprOM2019-2:532", "ISSprOM2019-2:520"];
+    // One entry of each IR type: point, line (dashes + glyphs), area (pattern), text; ISSkiOM: a dashed track with halo and borders, a dot track.
+    const pick = ["ISOM2017-2:204", "ISOM2017-2:516", "ISOM2017-2:409", "ISOM2017-2:704", "ISSprOM2019-2:532", "ISSprOM2019-2:520", "ISSkiOM2019:813.2", "ISSkiOM2019:804.2"];
     for (const entryId of pick) {
       const libId = entryId.slice(0, entryId.indexOf(":")) as symbolLibrary.SymbolLibraryId;
       const { library, colours, symbols } = symbolLibrary.materialiseLibrary(libId);

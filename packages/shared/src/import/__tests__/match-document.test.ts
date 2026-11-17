@@ -13,9 +13,9 @@ import { type LineSymbol, parseRenderSymbol } from "../../render/symbol.js";
 import { renderColourRefs } from "../../render/transform.js";
 import { getLibraryEntry, SYMBOL_LIBRARY_VERSION } from "../../symbol-library/index.js";
 import { resolveEntry } from "../../symbol-library/schema.js";
-import { paletteIndexOfStack } from "../colour-align.js";
+import { OVERLAY_STACK_IDS, paletteIndexOfStack } from "../colour-align.js";
 import { matchDocument } from "../match-document.js";
-import { colours, input } from "./match-fixture.js";
+import { BLACK, colours, input } from "./match-fixture.js";
 
 describe("matchDocument", () => {
   const res = matchDocument(input());
@@ -68,7 +68,9 @@ describe("matchDocument", () => {
     // The fixture's yellow is used by no object: lower purple goes directly below the brown line colour.
     const lower = paletteIndexOfStack(h.colours).get("purple-lower")!;
     expect(h.colours[lower + 1].sourceNumber).toBe(3);
-    expect(h.colours[lower - 1].sourceNumber).toBe(4);
+    // The track mask sits directly below it (docs/map-symbols.md §12.3), then the source's own colours.
+    expect(h.colours[lower - 1].paletteIds).toEqual(["white-skio"]);
+    expect(h.colours.slice(0, lower).reverse().find((x) => x.sourceNumber !== undefined)?.sourceNumber).toBe(4);
     expect(res.colourStack.areasAboveLowerPurple).toEqual([]);
     const base = input();
     const green = { id: "src:6", name: "Grön 30% - Ytobjekt", cmyk: [0.24, 0, 0.27, 0] as [number, number, number, number], sourceNumber: 6 };
@@ -82,6 +84,43 @@ describe("matchDocument", () => {
     // One stray area on top does not pull lower purple above black and brown.
     const lowerR = paletteIndexOfStack(r.input.header.colours).get("purple-lower")!;
     expect(r.input.header.colours[lowerR + 1].sourceNumber).toBe(3);
+  });
+
+  it("a source purple off its ruled place is displaced: reported, and its objects still drawn in it (C15)", () => {
+    const base = input();
+    const n = base.header.colours.length;
+    // The mapper's upper purple with a green area drawn over it: not where the course's upper purple belongs.
+    const purple = { id: "src:7", name: "Övre violett för banpåtryck", cmyk: [0.1, 0.9, 0.1, 0] as [number, number, number, number], sourceNumber: 7 };
+    const green = { id: "src:6", name: "Grön 30% - Ytobjekt", cmyk: [0.24, 0, 0.27, 0] as [number, number, number, number], sourceNumber: 6 };
+    const sym = base.header.symbols.length;
+    const withPurple: typeof base = {
+      header: {
+        ...base.header,
+        colours: [...base.header.colours, purple, green],
+        symbols: [
+          ...base.header.symbols,
+          { code: "999.0", name: "Lila linje", kind: "line", render: { type: "line", id: "src:999", code: "999", name: "Lila linje", main: { colour: n, widthUm: 300 } } },
+          { code: "406.0", name: "Grön", kind: "area", render: { type: "area", id: "src:406", code: "406", name: "Grön", fill: n + 1 } },
+        ],
+      },
+      objects: [
+        ...base.objects,
+        { symbolIdx: sym, type: OBJECT_TYPE.line, sourceIndex: 9, coords: [0, 0, 100, 0], flags: [0, 0] },
+        { symbolIdx: sym + 1, type: OBJECT_TYPE.area, sourceIndex: 10, coords: [0, 0, 100, 0, 100, 100], flags: [0, 0, 0] },
+      ],
+    };
+    const r = matchDocument(withPurple);
+    const hc = r.input.header.colours;
+    expect(r.colourStack.purplesDisplaced).toEqual([{ name: "Övre violett för banpåtryck", sourceNumber: 7, role: "upper", why: "position" }]);
+    expect(r.colourStack.inserted).toEqual(expect.arrayContaining(["purple-lower", "purple-upper"]));
+    // The mapper's purple line still points at the mapper's purple, which is no longer the course purple.
+    const line = r.input.header.symbols[sym].render as LineSymbol;
+    expect(hc[line.main!.colour]).toMatchObject({ sourceNumber: 7, cmyk: purple.cmyk });
+    expect(hc[line.main!.colour].paletteIds).toBeUndefined();
+    expect(hc[line.main!.colour].purpleRole).toBeUndefined();
+    const index = paletteIndexOfStack(hc);
+    expect(index.get("purple-upper")).toBe(hc.length - 1);
+    expect(hc[index.get("purple-upper")!].cmyk).toEqual(purple.cmyk);
   });
 
   it("reports the non-IOF colour that symbols use and the unmatched symbols as warnings", () => {
@@ -164,5 +203,50 @@ describe("codec + render bridge", () => {
     const enlarged = decodeMapDocument(encodeMapDocument(matchDocument(input({ factor: 1.5 })).input));
     const got = canonicalRender(enlarged, enlarged.header.symbols[0]) as LineSymbol;
     expect(got.main!.widthUm).toBe(210);
+  });
+});
+
+describe("matchDocument on a ski map (docs/map-symbols.md §8.2, §12)", () => {
+  // The fixture enlarged to 1:10 000 (document factor 1.5), with the mapper's Ski-O colours on top and a very wide track.
+  const base = input({ factor: 1.5 });
+  const GREEN = base.header.colours.length, MASK = GREEN + 1;
+  const track = resolveEntry(getLibraryEntry("ISSkiOM2019:801.1")!, new Map([["green-skio", GREEN], ["white-skio", MASK], ["black100", BLACK]]));
+  const ski: typeof base = {
+    header: {
+      ...base.header,
+      colours: [...base.header.colours, { id: "src:6", name: "Green for Ski-O", cmyk: [0.91, 0, 0.83, 0], sourceNumber: 6 }, { id: "src:7", name: "White under Ski-O tracks", cmyk: [0, 0, 0, 0], sourceNumber: 7 }],
+      symbols: [...base.header.symbols, { code: "801.1", name: "Mycket brett spår", kind: "line", render: track }],
+    },
+    objects: [...base.objects, { symbolIdx: base.header.symbols.length, type: OBJECT_TYPE.line, sourceIndex: 20, coords: [0, 0, 1000, 1000], flags: [0, 0] }],
+  };
+  const res = matchDocument(ski);
+  const h = res.input.header;
+  const sym = h.symbols[h.symbols.length - 1];
+
+  it("matches the track to the ISSkiOM entry at the track table's factor, keeping the document's library", () => {
+    expect(res.matching.factor.factor).toBe(1.5);
+    expect(sym.match).toMatchObject({ canonicalId: "ISSkiOM2019:801.1", state: "auto", method: "code+geometry" });
+    expect(h.library?.id).toBe("ISOM2017-2");
+    expect(sym.match!.libraryVersion).toBe(`ISOM2017-2@${SYMBOL_LIBRARY_VERSION}`);
+  });
+
+  it("identifies the mapper's Ski-O colours and inserts only what the map lacks", () => {
+    expect(res.colourStack.inserted).toEqual(expect.arrayContaining(["green100-area", "orange-skio"]));
+    expect(res.colourStack.inserted).not.toContain("green-skio");
+    expect(res.colourStack.inserted).not.toContain("white-skio");
+    for (const id of OVERLAY_STACK_IDS) expect(h.colours.filter((c) => c.paletteIds?.includes(id)), id).toHaveLength(1);
+  });
+
+  it("is drawn canonically at ×1 (the 0.85 mm of 1:15 000), not at the document factor", () => {
+    const doc = decodeMapDocument(encodeMapDocument(res.input));
+    const s = doc.header.symbols[doc.header.symbols.length - 1];
+    expect(isAppliedMatch(s.match)).toBe(true);
+    const drawn = canonicalRender(doc, s) as LineSymbol;
+    expect(drawn.main!.widthUm).toBe(850);
+    expect(documentRenderInput(doc).stats.canonicalMissing).toBe(0);
+  });
+
+  it("every stack carries the overlay's four rows, once", () => {
+    for (const id of OVERLAY_STACK_IDS) expect(matchDocument(input()).input.header.colours.filter((c) => c.paletteIds?.includes(id)), id).toHaveLength(1);
   });
 });

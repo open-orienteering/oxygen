@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 import { courseLayer } from "../layer.js";
-import { courseObjectBodySchema, courseObjectInScope, courseObjectScopeSchemaOf, type CourseLayerObject } from "../objects.js";
+import { courseObjectBodySchema, courseObjectInScope, courseObjectScopeSchemaOf, objectsInScope, type CourseLayerObject, type StoredCourseObject } from "../objects.js";
 import { COORD_FLAG } from "../../render/pass-stream.js";
 import { layerInput } from "./helpers.js";
 import { z } from "zod";
@@ -69,6 +69,19 @@ describe("courseObjectInScope (§8.2)", () => {
     expect(courseObjectInScope({ courses: [1], classes: [7] }, null)).toBe(false);
     // A parked object (both lists empty) is drawn nowhere.
     expect(courseObjectInScope({ courses: [], classes: [] }, drawn)).toBe(false);
+  });
+});
+
+describe("objectsInScope (stored rows, UUID scope; §8.2)", () => {
+  const row = (seq: number, scope: StoredCourseObject["scope"]): StoredCourseObject =>
+    ({ id: `u${seq}`, seq, scope, z: 0, version: 0n, kind: "text", geometry: { type: "Point", coordinates: [0, 0] }, props: { text: "x" } }) as unknown as StoredCourseObject;
+  const objects = [row(1, { all: true }), row(2, { courses: ["A"], classes: [] }), row(3, { courses: [], classes: ["k"] }), row(4, { courses: ["B"], classes: [] })];
+  const byCourse = new Map([["A", ["k"]]]);
+
+  it("a course takes its own, its classes' and the all-scoped rows; no course the all-scoped only", () => {
+    expect(objectsInScope(objects, "A", byCourse).map((o) => o.seq)).toEqual([1, 2, 3]);
+    expect(objectsInScope(objects, "B", byCourse).map((o) => o.seq)).toEqual([1, 4]);
+    expect(objectsInScope(objects, null, byCourse).map((o) => o.seq)).toEqual([1]);
   });
 });
 

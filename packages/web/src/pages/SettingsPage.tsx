@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { trpc } from "../lib/trpc";
 import { LanguageSelector } from "../components/LanguageSelector";
 import { UserChip } from "../components/UserChip";
@@ -12,12 +13,13 @@ import { LibraryClassesTab } from "./LibraryClassesTab";
 import { UsersAdminPanel } from "../components/UsersAdminPanel";
 import { MaintenancePanel } from "../components/MaintenancePanel";
 import { EventorKeysPanel } from "../components/EventorKeysPanel";
+import { HeightDataPanel } from "../components/HeightDataPanel";
 import { NorthLinesBadge } from "../components/NorthLinesBadge";
 import { ClubMapImportState } from "../components/ClubMapImportState";
 import { isClubMapImportPending } from "../lib/club-map-import";
 
 const CLUB_TABS = ["maps", "controls", "classes", "groups"] as const;
-const ADMIN_TABS = ["users", "eventor", "maintenance"] as const;
+const ADMIN_TABS = ["users", "eventor", "terrain", "maintenance"] as const;
 
 type SettingsTab = (typeof CLUB_TABS)[number] | (typeof ADMIN_TABS)[number];
 
@@ -28,6 +30,7 @@ const TAB_LABEL_KEYS = {
   groups: "tabGroups",
   users: "tabUsers",
   eventor: "tabEventor",
+  terrain: "tabTerrain",
   maintenance: "tabMaintenance",
 } as const satisfies Record<SettingsTab, string>;
 
@@ -49,6 +52,12 @@ function formatBytes(n: number | null): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** A refused version delete in the library's words (`VERSION_NOT_LATEST`, `VERSION_NOT_PROMOTED`, `PATCH_PROMOTING`). */
+function versionErrorText(message: string, t: TFunction<"library">): string {
+  const code = /^(VERSION_[A-Z_]+|PATCH_PROMOTING)/.exec(message)?.[1];
+  return (code ? t(`versionError_${code}`, { defaultValue: "" }) : "") || message;
 }
 
 export function SettingsPage() {
@@ -77,6 +86,13 @@ export function SettingsPage() {
       void utils.clubMap.list.invalidate();
     },
   });
+  // The latest promoted version (docs/map-patches.md §5.6, answer 7); refusals are said in the dialog.
+  const removeVersion = trpc.clubMap.removeVersion.useMutation({
+    onSuccess: () => {
+      setPendingVersionDelete(null);
+      void utils.clubMap.list.invalidate();
+    },
+  });
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -84,6 +100,12 @@ export function SettingsPage() {
   const [pendingDelete, setPendingDelete] = useState<{
     id: string;
     name: string;
+  } | null>(null);
+  const [pendingVersionDelete, setPendingVersionDelete] = useState<{
+    id: string;
+    versionId: string;
+    name: string;
+    seq: number;
   } | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   // True from the first chunk until the series exists (or the upload fails).
@@ -176,6 +198,8 @@ export function SettingsPage() {
           <UsersAdminPanel />
         ) : tab === "eventor" ? (
           <EventorKeysPanel />
+        ) : tab === "terrain" ? (
+          <HeightDataPanel />
         ) : tab === "maintenance" ? (
           <MaintenancePanel />
         ) : tab === "groups" ? (
@@ -332,6 +356,27 @@ export function SettingsPage() {
                         {new Date(row.uploadedAt).toLocaleString(i18n.language)}
                       </span>
                     </div>
+                    {row.version && (
+                      // The version and, for a promoted one, its label and corrections (docs/map-patches.md §5 answer 8).
+                      <div
+                        data-testid="library-map-version"
+                        data-seq={row.version.seq}
+                        data-corrections={row.version.corrections}
+                        className="mt-1 text-xs text-slate-500 flex flex-wrap gap-x-3 gap-y-1"
+                      >
+                        <span>
+                          {t("version", { seq: row.version.seq })}
+                          {row.version.layers > 0 && row.version.label && (
+                            <span data-testid="library-map-version-label">: {row.version.label}</span>
+                          )}
+                        </span>
+                        {row.version.corrections > 0 && (
+                          <span data-testid="library-map-corrections" className="text-purple-700">
+                            {t("correctionsNote", { count: row.version.corrections })}
+                          </span>
+                        )}
+                      </div>
+                    )}
                     {row.version == null && (
                       <ClubMapImportState
                         job={row.importJob}
@@ -393,6 +438,19 @@ export function SettingsPage() {
                           {t("download")}
                         </button>
                       )}
+                      {row.version && row.version.layers > 0 && canManageSource(row.version.uploadedBy) && (
+                        <button
+                          type="button"
+                          data-testid="library-map-delete-version"
+                          className="px-3 py-1 text-xs text-red-600 border border-red-100 rounded-lg cursor-pointer hover:bg-red-50"
+                          onClick={() => {
+                            removeVersion.reset();
+                            setPendingVersionDelete({ id: row.id, versionId: row.version!.id, name: row.name, seq: row.version!.seq });
+                          }}
+                        >
+                          {t("deleteVersion", { seq: row.version.seq })}
+                        </button>
+                      )}
                       {canManageSource(row.createdBy) && (
                         <button
                           type="button"
@@ -413,6 +471,47 @@ export function SettingsPage() {
           </>
         )}
       </div>
+
+      {pendingVersionDelete && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+          <div
+            data-testid="library-version-delete-confirm"
+            className="bg-white rounded-xl p-6 max-w-sm w-full shadow-lg"
+          >
+            <h2 className="font-semibold text-slate-900 mb-2">
+              {t("deleteVersionTitle", { seq: pendingVersionDelete.seq })}
+            </h2>
+            <p className="text-sm text-slate-600 mb-4">
+              {t("deleteVersionBody", { name: pendingVersionDelete.name, seq: pendingVersionDelete.seq })}
+            </p>
+            {removeVersion.error && (
+              <p data-testid="library-version-delete-error" className="text-sm text-red-700 mb-4">
+                {versionErrorText(removeVersion.error.message, t)}
+              </p>
+            )}
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                className="px-3 py-1.5 text-sm border border-slate-200 rounded-lg cursor-pointer"
+                onClick={() => setPendingVersionDelete(null)}
+              >
+                {t("cancel")}
+              </button>
+              <button
+                type="button"
+                data-testid="library-version-delete-confirm-btn"
+                disabled={removeVersion.isPending}
+                className="px-3 py-1.5 text-sm bg-red-600 text-white rounded-lg cursor-pointer disabled:opacity-50"
+                onClick={() =>
+                  removeVersion.mutate({ id: pendingVersionDelete.id, versionId: pendingVersionDelete.versionId })
+                }
+              >
+                {t("confirmDeleteVersion")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {pendingDelete && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">

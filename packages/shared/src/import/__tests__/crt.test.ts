@@ -256,6 +256,12 @@ describe("resolveCrt", () => {
     expect(r.warnings.find((w) => w.code === "CRT_SOURCE_UNKNOWN")!.message).toBe("line 5: 888.0; line 6: 777; line 10: graphic");
   });
 
+  it("a rule may name an overlay library's entry (docs/map-symbols.md §8.6, §12)", () => {
+    const r = resolveCrt(parseCrt("ISSkiOM2019:801.1 101.0\nISSkiOM2019:999 204.0\n"), stored());
+    expect(r.decisions).toEqual([{ symbolIdx: 0, accept: "ISSkiOM2019:801.1" }]);
+    expect(r.skipped.map((s) => [s.line, s.code])).toEqual([[2, "CRT_TARGET_UNKNOWN"]]);
+  });
+
   it("resolves against a pre-matcher document by the scale's library", () => {
     const header = readMapDocumentHeader(encodeMapDocument(input())).header;
     expect(header.library).toBeFalsy();

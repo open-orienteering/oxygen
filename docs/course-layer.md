@@ -174,7 +174,7 @@ automatic cuts; an empty list means automatic (decision log 2026-11-01,
 | `objects` | `CourseLayerObject[]`: the course objects (§8) — since F12 a sheet's layout objects are all page-anchored and the page layer's (§3.6) | the event's course objects in scope (§8.3) |
 | `appearance` | `{ circle?, line?, number?, numberStyle? }`, multipliers (1 = the spec) | `appearanceFromTemplate(template.appearance)`; the template's `purple` is not read (the purple is the stack's row) |
 | `viewOptions` | `{ allControls?, labelMode?, labels?, autoCuts?, window?, textValues?, setterMarks?, section?, allVariations? }` — `allVariations` (§12.7): the tinted structures draw on tint rows, screen only; `labels` (F15, §12.7): explicit text per control site, read before the sequence number and the code | the view: all-controls, label mode (and, for All variations, the explicit labels), the event's **Auto cuts** toggle (`Event.autoOverprintCuts`; `false` = no automatic cuts, §3.4; absent = on), the frame polygon for white-out-outside, `{course}` placeholder values; `setterMarks` (§10.3): the map-issue points and every crossing point are drawn — the editor's Course and All-controls views and the all-controls sheet set it, a course sheet never does; `section` (§11): one part of a course split by map exchanges — a part sheet in print, Layout mode and Class view set it from `course_maps.section_index`, Course mode never does |
-| `document` | `{ colours, libraryId, documentFactor, mapScale }` — the aligned stack, the library, the document factor (§3.1) and the base map's scale denominator (corridor widths, §10.2) | `courseDocumentContext(header)` (`context.ts`): the viewer's worker and the print route (`pdf-page.ts`) build it from the pinned document's header; `mapScale` is `header.mapScale` |
+| `document` | `{ colours, libraryId, documentFactor, mapScale }` — the aligned stack, the library, the document factor (§3.1) and the base map's scale denominator (corridor widths, §10.2) | `courseDocumentContext(header)` (`context.ts`): the viewer's worker and the print pipeline (`pageInputFor`, `@oxygen/shared/print` `course-pages.ts`, G13) build it from the pinned document's header; `mapScale` is `header.mapScale` |
 | `cutFeatures` | `{ x, y, r? }[]` (`r` the drawn symbol's radius) | `cutFeaturesOfDocument(doc)` of the pinned document (every event since E1, §4.2) |
 | `regions` | `{ rings: MapPoint[][], mode: "clip" \| "hide", symbols: "all" \| number[] \| { colours }, invert? }[]` — filter regions over the map, `rings` outer first; symbol indices are the document's, colours its own stack's | explicit regions, then every `filter_region` course object in `objects` (§8.3); the layer returns them as `CourseLayer.regions` (µm paths, colours on the completed stack) and `courseRenderInput` passes them to `symbolise` with the document's object count as `regionObjectLimit` — the rule is `map-rendering.md` §4.11 |
 
@@ -347,7 +347,10 @@ as today). `r` is the farthest ink of the symbol **the document draws**
 factor) of an applied match, else the document's own render; the library
 entry × document factor only when there is neither. The source is the
 event's pinned document, whatever its pipeline (§4.2; the slice-C split
-tied it to `vector`, slice E1 made it every event's).
+tied it to `vector`, slice E1 made it every event's), as the **effective
+document** (`docs/map-patches.md` §2; G14): an object the event's patch
+hides is no feature, an added one is (a patch symbol's code and own
+render decide, as an unmatched symbol's).
 
 **The event's toggle** (`Event.autoOverprintCuts`, written by
 `course.setOverprintCuts`, read by `course.getOverprintCuts`; the
@@ -588,7 +591,7 @@ before its `course.upserted`:
 
 | Event | Source | Radii |
 |---|---|---|
-| a pinned document (`map_files.document_hash` of the latest row), whatever `map_pipeline` (`map-storage.md` §4.6) | `cutFeaturesOfDocument` of the pinned document, memoised per hash | what the document draws (§3.4) |
+| a pinned document (`map_files.document_hash` of the latest row), whatever `map_pipeline` (`map-storage.md` §4.6) | `cutFeaturesOfDocument` of the effective document (the pin with the event's patch, G14), memoised per hash + patch version | what the document draws (§3.4) |
 | no map, no pin yet, or a missing / unreadable document | — | no cuts |
 
 Slice E1 removed the OCAD source (the parse of the latest upload with
@@ -771,7 +774,8 @@ LegProps = { style?: "line" | "marked_route" | "none", gaps?: { from, to }[],
 
 What timing, export, the kiosk and the Courses page read stays in the
 flat columns, written **in the same transaction** as the structure and a
-pure function of it (`splitStructure`, `packages/api/src/course-structure.ts`):
+pure function of it (`splitStructure`, `packages/shared/src/course/sequence.ts`
+since G13, re-exported by the API's `course-structure.ts`):
 
 | Structure | Columns |
 |---|---|
@@ -823,7 +827,8 @@ re-mirrors every stored structure naming the site, a variant's included,
 with the same result; `control.delete` prunes a root in every
 alternative and re-materialises it.
 
-**Readers.** One rule, `courseSequenceOf` (`course-structure.ts`, E6),
+**Readers.** One rule, `courseSequenceOf` (`course/sequence.ts` in
+`@oxygen/shared` since G13, `course.courseSequenceOf`; E6),
 used by `loadCourseSequences` (`course-geometry.ts`, hence `legs` and
 lengths), the IOF / PPen export
 (`course-export.ts`) and the print layout (`layoutCourseEnds`,
@@ -1172,11 +1177,16 @@ client did not write earns a one-line notice. "Moved by X at T" reads
 `actorId` and the physical part of `hlc` of the row's last `*.upserted`
 journal entry (`course.lastChange`, `control.lastChange`).
 
-**`map_patches` (slice G, no code).** Patch operations are idempotent and
+**`map_patches` (slice G; `docs/map-patches.md` §3).** Patch operations are idempotent and
 commutative: each op is keyed by `(object id, op id)` and sets a state
 (hidden, colour override, …) rather than applying a relative change, so
-applying twice equals once and two devices' patches merge through the
-journal in any order.
+applying twice equals once and two devices' patches merge in any order.
+They merge **on the server per op id** (`mapPatch.applyChange { put, remove }`
+under the row lock), not through the journal: the patch is one cloud-owned
+`map_patches` row per event, outside the results closure, carried in the
+checkout snapshot and written from a venue box by forwarding to the cloud
+(user 2026-11-13, slice G answer 1; deviates from the ordered `PatchOp[]`
+of research 08 §4.7). The full model is `docs/map-patches.md` (rows G2, G3).
 
 ## 8. Course objects
 
@@ -1293,8 +1303,12 @@ type `course.CourseObject = { id: seq, kind, geometry, props, scope, z, version,
 | `reorder { ids }` | `courses.edit` | `z` = the position in `ids`; takes and advances no token |
 
 Writes are not lease-guarded: objects are cloud-owned non-critical data
-(08 §4.8), like the sheets; a venue holding a checkout keeps its
-snapshot's copy until the next checkout.
+(08 §4.8), like the sheets. Since G18 `courseObject.` mutations on a
+venue box are forwarded to the cloud (typed 412 offline,
+`offline-architecture.md` "Non-critical data"); before, they ran on the
+box and were lost at checkin. The box's copy follows the cloud's (row
+G19, `map-storage.md` §7.2 "Following the cloud during a lease"): at the
+settings cadence and right after a forwarded write.
 
 **Token** (§7). Objects are not journaled, so their token is not a
 journal entry's HLC: every `create` / `update` mints one from the node's
@@ -1310,7 +1324,9 @@ the structure rule: refresh and redo.
 
 `course_objects` rows travel in the checkout snapshot
 (`SNAPSHOT_TABLES`, rows verbatim with their UUIDs, `seq`, scope UUIDs
-and token; `map-storage.md` §7.2) and in the per-event dump after
+and token — exact since G18 through the snapshot's `versions`, where the
+row's own `version` crosses HTTP as a rounded JSON number;
+`map-storage.md` §7.2) and in the per-event dump after
 `class_course_pools` (`BACKUP_TABLES`; `map-storage.md` §7.3) — the
 venue's kiosk map draws them (08 §4.8; 07 §9.2).
 
@@ -1383,7 +1399,9 @@ terrain. Course-scoped codes run over the course's items only.
 `checkObstaclesOfDocument(doc)` reads a pinned document as
 `cutFeaturesOfDocument` does (§3.4): a symbol's code is its applied
 match's canonical code, else its source code; hidden symbols are
-skipped. It keeps line and area objects of the `UNCROSSABLE_CODES`
+skipped, and so are objects the event's patch hides — `course.checks`
+reads the effective document (`docs/map-patches.md` §2.4; G14), so an
+added uncrossable or out-of-bounds object is an obstacle. It keeps line and area objects of the `UNCROSSABLE_CODES`
 (kind `uncrossable`) and of 708 / 709 (kind `oob`) as polylines of their
 on-curve vertices (Bézier handles skipped; an area's outer ring only,
 holes ignored — the approximation snapping makes, `course-editor.md`
@@ -2184,7 +2202,7 @@ label.
 | pass-stream | `scenes.test.ts`, snapshots in `render/__fixtures__/streams/course/` | the course scenes (`map-rendering.md` §6.3; `course-leg-styles` since F1, `course-corridor` since F2, `course-legs-curved` since F13 — symbolised with the layer's regions, masks in the snapshot; `course-corridor` re-recorded in F14: no 705 along its three corridor legs, in F13: one buffer ring per run, and re-shaped in F19: a 60 m edged run S → 31 → 32 and a 150 m unedged leg, the mouths, 31 opened twice, the round-capped edge; re-recorded in F22: the band stops on the line through 33, its only terminal end — the golden `course-corridor.png` changed in 4 032 px, all in one box round 33; `scenes.test.ts` probes the map behind 33 and the band beside the leg before it) warning-free and equal to their snapshots at 1 µm, plus each scene's rule |
 | unit | `packages/api/src/__tests__/course-geometry.test.ts` | `editorCourseLayer`: sequence in order with roles, centre-to-centre legs, unpositioned controls skipped, free order without legs, no automatic cuts; `hasPositionedItems` (`length_source` derived / NULL); `legDistancesMm(layer)` from the derived legs = the pre-E6 sequence formula bit for bit (fixtures + 50 generated sequences, per-leg and total rounding at two scales, E6); `courseLengthM` |
 | unit | `packages/api/src/__tests__/document-readers-parity.test.ts` | cut features of the document = the legacy OCAD adapter's (now a test oracle, `__tests__/helpers/ocad-oracle.ts`) within 1e-6 mm on the fixture and the corpus (§4.2) |
-| unit | `packages/api/src/__tests__/course-sequence.test.ts` | §6.2 "Readers" (E6): `courseSequenceOf` — columns (defaults, `start_name`, a live `finish_control_id`, unmatched fall back, the flags), a stored structure (explicit ends, no ends → defaults, roles), a deleted explicit start, an invalid column read as the columns, no starts / finishes |
+| unit | `packages/shared/src/course/__tests__/sequence.test.ts` (the API's `course-sequence.test.ts` until G13; also `splitStructure`, `crossingRowsOf`) | §6.2 "Readers" (E6): `courseSequenceOf` — columns (defaults, `start_name`, a live `finish_control_id`, unmatched fall back, the flags), a stored structure (explicit ends, no ends → defaults, roles), a deleted explicit start, an invalid column read as the columns, no starts / finishes |
 | integration | `packages/api/src/__tests__/integration/overprint-cuts.test.ts` | what the layer draws for a stored course with the pinned document's cut features (`drawnCuts`, E5): rim slit over the boulder across north, no gap through the building, leg gap over the boulder, cuts follow a move, a course created before the map is cut once the upload pins, the toggle off draws none and writes nothing else (course row and journal untouched); two events pinning the same map read the same features and cut alike within 1e-6, no cuts without a pin; the toggle off reaches the vector print (composed sheet = the page without cut features, a stored circle gap still drawn) and `getOverprintCuts` reads with a kiosk key (§3.4) |
 | integration | `control-editor.test.ts`, `journal-completeness.test.ts`, `course-export.test.ts`, `eventor-reentry.test.ts` | the drawn course (`helpers/course-drawn.ts`) and lengths on create / move / delete / copy, `length_source = 'derived'`; `course.upserted` payloads carry no `length_source`; the export's length and the Eventor sync key on `length_source` (E6; the E6 migration's backfill test went with `geometry_source` in E5) |
 | unit | `packages/shared/src/course/__tests__/structure.test.ts` | §6.1: C0's linear shape accepted, the 08 leg props, groups and loops, an empty alternative beside a non-empty one (answer 5), a group of empty alternatives only (F7); nesting, overlap, unanchored, duplicate ids / labels, < 2 alternatives, out-of-range gaps refused; interim `path` / `pieces` / `circleGaps` and `extras` refused; the wire form; site rules; `linearStructure`, `structureControlIds`; `structureDiff` (equal, moved, added, removed, leg / offset changes) |
@@ -2266,7 +2284,8 @@ label.
 | `packages/api/src/course-import-structure.ts`, `course-import-objects.ts` | §6.4: pieces → gaps and the object bodies (pure), writing import-marked objects; `routers/course.ts` `importCourses` (the backfill and its CLI went in E6) |
 
 | `packages/shared/src/course/structure.ts` | §6.1: `courseStructureSchema`, `courseStructureWireSchema`, `structureSiteIssues`, `linearStructure`, `structureControlIds`, `structureDiff` |
-| `packages/api/src/course-structure.ts` | §6.2: `splitStructure`, `structureFromColumns`, `courseSequenceOf` (the readers' rule, E6), `carryLegs`, `persistStructure`, `rewriteStructureFromColumns`, wire mapping, `assertCourseVersion` |
+| `packages/shared/src/course/sequence.ts` (G13) | §6.2: `splitStructure`, `courseSequenceOf` (the readers' rule, E6), `rowKind`, `crossingRowsOf` — pure, read by the print pipeline's layout half too (`course-print.md` §1) |
+| `packages/api/src/course-structure.ts` | §6.2: `structureFromColumns`, `carryLegs`, the shared sequence functions re-exported, `persistStructure`, `rewriteStructureFromColumns`, wire mapping, `assertCourseVersion` |
 | `packages/shared/src/course/variants.ts` | §12.1: `materialiseVariants`, `variantStructure`, `variantCount`, `variantKeyDuplicates`, `structureSiteIds`, `pruneSiteFromStructure`, `MAX_VARIANTS`; F7: `variantOrders`, `pathOfOrders`, `groupOrder`; F15: `uniformVariantNumbers` |
 | `packages/shared/src/course/colour-stack.ts` (`withTintColours`, `VARIATION_TINTS`), `layer.ts` (`variationTints`) | §12.7: the screen-only tints |
 | `packages/web/src/lib/editor/variation-view.ts` | §5 / §12.7: the editor's drawn course of a grouped structure (`courseDrawOf`, `allVariationDraws`, `withCourseOverride`) |
@@ -2275,7 +2294,7 @@ label.
 | `packages/web/src/lib/version-book.ts` | §7 the client's row tokens |
 | `packages/web/src/lib/course-layer-request.ts` | the viewer's request (§5), `courseObjectsForView` (§8.2) |
 | `packages/shared/src/course/objects.ts` | §8: `courseObjectBodySchema`, `courseObjectScopeSchemaOf`, `courseObjectInScope`, `isCourseObject`, `filterRegionOf`, the kinds' drawing |
-| `packages/api/src/course-objects.ts`, `routers/courseObject.ts` | §8.4: wire ↔ row, scope ids, `writeCourseObject` (shared with D1's importers), `loadCourseObjects`, `classesByCourse`, `objectsInScope`; the router |
+| `packages/api/src/course-objects.ts`, `routers/courseObject.ts` | §8.4: wire ↔ row, scope ids, `writeCourseObject` (shared with D1's importers), `loadCourseObjects`, `classesByCourse`, `objectsInScope` (shared since G13, `course/objects.ts`, re-exported); the router |
 | `packages/web/src/map-gl/worker.ts` (`courseReply`), `engine.ts` (`setCourse`) | the dynamic bucket that draws it |
 | `packages/shared/src/course/checks.ts` | §9: `courseChecks`, `checkObstaclesOfDocument`, `UNCROSSABLE_CODES`, `OOB_CODES`, `invertedCode` |
 | `packages/api/src/course-checks.ts`, `event-map-objects.ts` (`loadEventCheckDocument`), `description-autodetect.ts` (`describeAt`, `descriptionsEqual`) | §9.4: the server's list, `DESCRIPTION_STALE`; `routers/course.ts` `checks`, `setStructure` |

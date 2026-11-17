@@ -126,8 +126,13 @@ function parseDatabaseUrl(): PgConnectionParams {
  * carries the rows this event's `map_files` pin, ahead of `map_files`
  * (docs/map-storage.md §7.3). `club_symbol_decisions` is club-level state
  * a restored event's re-match reads; it travels whole (no event column,
- * and its fingerprints are not derivable in SQL). `map_previews` are a
- * cache and stay out.
+ * and its fingerprints are not derivable in SQL). `map_previews` and
+ * `map_heightfields` with `map_dem_jobs` (docs/map-storage.md §4.7) are
+ * caches and stay out. The event's `map_patches` row follows `map_files`;
+ * the blob sections also carry its document and that document's source,
+ * so a dormant patch (docs/map-patches.md §3.5) restores too. The
+ * event's GPS tracks follow it (docs/map-gps-tracks.md §1.3), restored by
+ * `scripts/restore-map-gps-tracks.sql`.
  */
 export const BACKUP_TABLES = [
   "events",
@@ -148,6 +153,8 @@ export const BACKUP_TABLES = [
   "map_documents",
   "club_symbol_decisions",
   "map_files",
+  "map_patches",
+  "map_gps_tracks",
   "tracks",
   "routes",
   "event_seqs",
@@ -164,18 +171,21 @@ function backupSelect(t: BackupTable, eventId: bigint): string {
     case "class_course_pools":
       return `SELECT ccp.* FROM oxygen.class_course_pools ccp JOIN oxygen.classes cl ON cl.id = ccp.class_id WHERE cl.event_id = ${eventId}`;
     case "map_sources":
-      // The pins' sources, and the source of every pinned document, so the
-      // section is FK-complete even if a pin and its document disagree.
+      // The pins' sources, and the source of every pinned or patched
+      // document, so the section is FK-complete even if a pin and its
+      // document disagree.
       return (
         `SELECT s.* FROM oxygen.map_sources s WHERE s.file_hash IN (` +
         `SELECT f.source_hash FROM oxygen.map_files f WHERE f.event_id = ${eventId} AND f.source_hash IS NOT NULL ` +
-        `UNION SELECT d.source_hash FROM oxygen.map_documents d JOIN oxygen.map_files f ON f.document_hash = d.hash WHERE f.event_id = ${eventId}) ` +
+        `UNION SELECT d.source_hash FROM oxygen.map_documents d JOIN oxygen.map_files f ON f.document_hash = d.hash WHERE f.event_id = ${eventId} ` +
+        `UNION SELECT d.source_hash FROM oxygen.map_documents d JOIN oxygen.map_patches p ON p.document_hash = d.hash WHERE p.event_id = ${eventId}) ` +
         `ORDER BY s.file_hash`
       );
     case "map_documents":
       return (
         `SELECT s.* FROM oxygen.map_documents s WHERE s.hash IN (` +
-        `SELECT f.document_hash FROM oxygen.map_files f WHERE f.event_id = ${eventId} AND f.document_hash IS NOT NULL) ` +
+        `SELECT f.document_hash FROM oxygen.map_files f WHERE f.event_id = ${eventId} AND f.document_hash IS NOT NULL ` +
+        `UNION SELECT p.document_hash FROM oxygen.map_patches p WHERE p.event_id = ${eventId}) ` +
         `ORDER BY s.hash`
       );
     case "club_symbol_decisions":

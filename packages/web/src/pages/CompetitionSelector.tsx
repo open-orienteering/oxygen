@@ -6,7 +6,9 @@ import { trpc } from "../lib/trpc";
 import { formatDate } from "../lib/format";
 import { LanguageSelector } from "../components/LanguageSelector";
 import { UserChip } from "../components/UserChip";
-import { BuildInfoLine } from "../components/BuildInfoLine";
+import { BuildInfoText } from "../components/BuildInfoLine";
+import { useBuildInfo } from "../hooks/useBuildInfo";
+import { displayVersion } from "../lib/app-update";
 import { LiveCompassLogo } from "../components/OxygenLogo";
 import { useCurrentUser } from "../context/CurrentUserContext";
 import {
@@ -21,6 +23,7 @@ import {
 export function CompetitionSelector() {
   const navigate = useNavigate();
   const { t } = useTranslation("event");
+  const buildInfo = useBuildInfo();
   const competitions = trpc.competition.list.useQuery();
   const selectMutation = trpc.competition.select.useMutation({
     onSuccess: (data) => {
@@ -324,8 +327,10 @@ export function CompetitionSelector() {
             <LanguageSelector />
           </div>
           <div className="text-center space-y-1">
-            <div>{t("footer", { version: __APP_VERSION__ })}</div>
-            <BuildInfoLine className="text-xs" />
+            <div data-testid="app-version">
+              {t("footer", { version: displayVersion(buildInfo?.version, __APP_VERSION__) })}
+            </div>
+            <BuildInfoText info={buildInfo} className="text-xs" />
           </div>
         </footer>
       </div>
