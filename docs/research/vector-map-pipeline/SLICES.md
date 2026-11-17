@@ -1186,13 +1186,16 @@ correction or the DEM anchor first); knolls, depressions and earth banks
 as relief; the interval as a per-map setting; 3D in the editor or on the
 kiosk.
 
-## Slice I — canonical colour layers (future; user 2026-11-14)
+## Slice I — canonical colour layers (split 2026-11-17; user 2026-11-14)
 
 Draw every map on the IOF colour order instead of the mapper's table, so
 the course layer and the library symbols never depend on a source table
-being well ordered. C15 fixes the course purples only; this is the full
-fix the user asked to keep as a future slice. Parked until the user
-starts it.
+being well ordered. C15 fixed the course purples only; this is the full
+fix. Split 2026-11-17 by the I0 planner (Fable) on the user's "let's do
+I0 and get it sliced", from `map-symbols.md` §1 and §9, 03 §2.4, §6.3 and
+Appendix B, the importer's stage 7 (`colour-align.ts`,
+`match-document.ts`), the render bridge and the experiment below. The
+user's answers are below; the normative record is `map-symbols.md` §9.3.
 
 **What the 2026-11-14 experiment found** (throwaway script and per-map
 results in `.local/colour-order/`, never committed — real club maps; ten
@@ -1217,9 +1220,75 @@ maps: the corpus, Mörtsjön, an Erstavik crop, three Mapper files):
   unclassified colours on a layer above the map and falls back to source
   order for a few cases (whites).
 
+### Answers (user 2026-11-17)
+
+1. **On for every map, with a per-map switch back** to the map's own
+   order on the review page (the planner's recommendation). The switch is
+   the rollback.
+2. **Roads over contours is kept by default; every deviation is listed;
+   the defaults can be changed** — the user: "I would like to have roads
+   over contours. But I would also like to have a settings pane or
+   similar where it's possible to change the overridden defaults. Or if
+   settings is a lot of extra work that way, at least list all the
+   deviations." Read as: the list is in the slice (I6); the overrides are
+   per map, in the colour panel, as a row of their own (I7) that the
+   slice can ship without. A club-wide default list is not planned.
+3. **A read-only colour-layers panel** on the review page (the
+   recommendation), with the before / after picture; I7 makes its
+   deviation rows editable.
+
+### Decided in this split
+
+For the user's review; each is in `map-symbols.md` §9.3 and the decision
+log (`decisions/slice-i.md`).
+
+- **The unit that takes a place is a colour *use***, not a colour: one
+  colour reference of one symbol gets a role (a palette id), and a source
+  colour serving several roles becomes several rows. A permutation of the
+  table cannot be right on 8 of the 10 maps.
+- **A role comes from** the matched or *suggested* library entry first,
+  then a rule on class, percent, kind and part, else none. A suggested
+  match steers the layer without being drawn from the library.
+- **`header.colours` stays "index = draw order"**: rows are layers, so
+  the renderers, the course layer and materialisation do not change.
+- **Source order stays the rule** for mask whites, graphic objects'
+  colours and uses with no role; the exact placement is I4's, fixed
+  against the corpus.
+- **A deviation** is a pair of used roles the source orders against the
+  palette; kept or dropped, always reported.
+- **Today's alignment is kept whole as the `source` order** (answer 1's
+  switch), not removed.
+- **One importer bump** (`ocad-19` / `omap-12`) in I5; every pin
+  re-matched at the release.
+- **The harness comes first** (I1), so I3–I5 have an oracle, as B9 and C7
+  gave theirs.
+
+### Waves
+
+One row per wave after the first: I3, I4 and I5 work in the same files.
+
+- Wave 1: **I1 ∥ I2** (the script and `api/render/` beside
+  `shared/import/colour-roles.ts`; different spec chapters).
+- Then I3 → I4 → I5 → I6 → I7, and the I-gate after I6.
+
+### Done
+
+| Id | Sub-slice | Status |
+|----|-----------|--------|
+| I0 | **Plan and split** (Fable): the rows below, three questions to the user | done 2026-11-17 (answers above) |
+
+### Remaining
+
 | Id | Sub-slice | Spec home | Research | Depends on | Area (files a session may touch) | Status |
 |----|-----------|-----------|----------|------------|----------------------------------|--------|
-| I0 | **Plan and split** (Fable): a layer per *symbol pass* — a source colour that serves several palette entries becomes several stack rows, each symbol's IR re-indexed by the role it uses the colour in (matched symbols already name palette ids; unmatched ones by kind and part: area fill, pattern, border, road infill / outline, point, text); source order kept as the rule for whites / masks, layout and graphic objects, and colours without a palette entry (placed by kind); how deliberate deviations are kept or reported; whether the order is always on or a per-map choice on the review page (with the before / after diff shown); document identity, importer bump and re-match; the acceptance harness = the two-order raster diff over the corpus with every remaining difference classified (as B9 / C7 did). Questions for the user before any row starts: always-on or opt-in per map; which deviations the mapper keeps (streets over contours); whether a colour-stack panel on the review page belongs here | new §9.3 in `map-symbols.md` (or a chapter of its own), `map-import.md` §3 / §7 | 03 §6.3 (superseded in part), Appendix B; the experiment above | C15 | planning only; rows it adds name their areas (`packages/shared/src/import/`, `render/transform.ts`, the review page) | ready (parked — the user starts it) |
+| I1 | **Harness: the two-order corpus diff.** `scripts/measure-colour-order.mjs` (committed; the corpus and its output stay in `.local/colour-order/`), the 2026-11-14 experiment made a tool. Per map (the five corpus maps, Mörtsjön, the Erstavik crop, the three Mapper files — one of them the CC0 `puit-de-laven.omap`): import, draw the whole map with the reference raster in two colour orders (60 mm tiles at 6 px/mm), diff with a tolerance, name every change by the two layers involved ("black50-building → brown30-paved"), rank the tiles, write source / candidate / difference images of the worst ones and a `summary.json`. A **classification file** names each kind of change as multi-role, mask, layout, deviation kept, deviation dropped, no role or unclassified, and the run prints the unclassified share — the gate I4 and I5 close. The candidate order is a parameter: here the experiment's permutation (the baseline numbers go into the spec); from I3 on the importer's layers. A **census** per map: used colours, colours without a palette entry, colours serving several palette ids, symbols by match state. Pure helpers (diff, naming, classification) under `packages/api/src/render/` with unit tests; a run on the CC0 map as the committed test | `map-rendering.md` §6 (new "Colour-order parity"), numbers into `map-symbols.md` §9.3 | the experiment above; 03 §6.9 (B9 / C7's classification) | — | `scripts/measure-colour-order.mjs`, `packages/api/src/render/colour-order-diff.ts` (new) + tests, `map-rendering.md` §6 | ready |
+| I2 | **Roles: every colour use of every symbol gets a layer (shared, pure).** `colourUses(render)` — each colour reference of a `RenderSymbol` with its path and the part that draws (area fill, pattern, border, a line's main stroke, double-line infill or outline, dash glyph, point glyph part, text, halo); `roleOfUse(use, colourInfo, symbol, palette)` → a palette id or none, in §9.3's order: the entry of `match.canonicalId` **in any match state** (as H1's terrain classes read it) when it uses exactly one palette id of the colour's class; else the rule table by class, percent, kind and part (brown 50 % area fill → `brown50-paved`, as a line's infill → `brown50-road`; black 100 % as a line's outline over an infill → `black-road-outline`, as an area's dot pattern → `black-cultivated`, else `black100`; black 50 % area → `black50-building`; blue / green / brown 100 % by area, line and point; the screens by percent), per spec (ISSprOM's rows differ); whites and purples get a role from the hint only. No importer change. Tests: unit — synthetic symbols shaped like the corpus cases (no club geometry), both specs, the hint beating the rule, two parts of one symbol taking two roles, the same colour twice in one symbol | `map-symbols.md` §9.3 ("Roles", the rule table) | 03 §6.3, Appendix B; the experiment (CourseCraft's colour + type + part) | — | `packages/shared/src/import/colour-roles.ts` (new) + tests, `packages/shared/src/render/transform.ts` (a path-aware visitor) + tests, `map-symbols.md` §9.3 | ready |
+| I3 | **The layered stack (shared, pure).** `buildColourLayers({ colours, infos, uses, needed, spec, edition })` → `{ colours, reindex, report }`: one row per (source colour, role) that objects use, in the palette's order, two colours of one role in source order; a colour serving several roles split into rows with the same CMYK and `sourceNumber` (row ids: `src:<n>` for its first row, `src:<n>/<paletteId>` for the others — into `map-document-format.md`); rows a match needs taking a same-class source CMYK, else the palette's (today's alias / insert); lower and upper purple and the overlay's rows at their palette places; unused source colours kept once; `reindexRenderColours(render, use → row)` per reference. **No exceptions yet**: a use with no role goes by kind (area → the top of the area block, else below upper purple — the experiment's rule) so the harness runs. The harness takes this as its candidate; the numbers recorded, the multi-role class gone (Club-2026's and Sprint's buildings). Tests: unit — splits, order, ties, CMYK, purples, the overlay rows, re-index incl. one colour twice in a symbol, `documentSymbolFingerprints` unchanged, determinism | `map-symbols.md` §9.3 ("Layers"), `map-document-format.md` (colour ids) | 03 §6.3; 03 Appendix B | I1, I2 | `packages/shared/src/import/colour-layers.ts` (new) + tests, `render/transform.ts`, `scripts/measure-colour-order.mjs`, `map-symbols.md` §9.3, `map-document-format.md` | blocked: I1, I2 |
+| I4 | **Source order where the palette cannot place, and deviations (shared, pure).** In `buildColourLayers`: (a) the **source-order rule** for whites that are no palette white (masks), the colours of `origin: "graphic"` symbols (logos, frame bars) and uses with no role — each placed relative to the layers its source position stood between; the rule fixed against the harness (the ski-O map's mask, the frame bars) and written out; (b) **deviations** — pairs of used roles whose source order contradicts the palette's (generalising §9.2 step 5b), each with its object counts; `KEPT_BY_DEFAULT` = road infill and paved-area brown over the contour brown (answer 2: `brown50-road`, `brown30-road`, `brown50-paved`, `brown30-paved` over `brown100-line` / ISSprOM's `brown100`); which row of a kept pair moves and how far is fixed here against the harness, and never puts an area or infill colour above lower purple (moving the contour brown under the paved brown must not sink it under the lakes and buildings it was drawn over); input `deviations: Record<pair, "keep" \| "drop">` overriding the default (the mechanism; the UI is I7); kept pairs that contradict each other resolved deterministically and reported; (c) the report: `split`, `sourceOrdered`, `noRole`, `deviations[{ upper, lower, kept, byDefault, objects }]`. **Gate: the harness's unclassified share is 0 on the ten maps**, every remaining difference a named class; numbers and the per-class table into the spec. Tests: unit — fixtures from corpus colour tables (names, CMYK, order; no geometry): a mask white, a frame bar, streets over contours kept, dropped by override, another deviation dropped by default and kept by override, contradicting keeps | `map-symbols.md` §9.3 ("Source order", "Deviations") | the experiment (whites, layout, deviations); 03 §6.3 step 5 | I3 | `packages/shared/src/import/colour-layers.ts` + tests, `scripts/measure-colour-order.mjs`, `map-symbols.md` §9.3 | blocked: I3 |
+| I5 | **The importer draws on layers.** Stage 7 (`match-document.ts`) takes `colourOrder: "iof" \| "source"` (default `iof`) and `deviations`; `iof` builds the layers (I3, I4), `source` is §9.2 as it stands; `header.colourOrder` and the kept deviations recorded (schema, `map-document-format.md`); the report's `colourStack` carries I4's lists; warnings in `iof` mode (`COLOUR_DEVIATION_KEPT` / `_DROPPED`, `COLOUR_NO_ROLE`; `COLOUR_AREA_ABOVE_LOWER_PURPLE` and step 5 stay for `source`); `scripts/measure-import.mjs` lines. Consumers checked and tested, none expected to change: the render bridge, `courseColourStack`, `materialiseSymbol` / `mapPalette`, a patch re-resolved across a pin that moves onto layers (G11), print (one ink for a split colour), the GL worker, hit-test. **Importer bump** `ocad-19` / `omap-12`; the corpus runs again — the colour-order harness (0 unclassified), `measure-parity` (B9), `measure-print` (C7) — with the numbers updated. Tests: unit and integration per AGENTS.md §4; E2E `map-vector-layer.spec.ts` on a generated fixture with a multi-role colour and a badly ordered table (`scripts/generate-test-ocd.mjs`): a building over its paved area, a leg over an area, a kept street over a contour. After the merge the coordinator re-matches dev and `oxygen_demo`; the showcase fixture regenerated if the publish smoke needs it | `map-symbols.md` §9 (§9.3 written out as the default, §9.2 as the `source` order), `map-import.md` §3 / §7, `map-document-format.md`, `docs/features.md` | 03 §6.3 (superseded in part: decision-log row) | I4 | `packages/shared/src/import/{match-document,report,colour-align}.ts`, `packages/shared/src/map-document/header.ts`, `packages/api/src/import/`, `scripts/{measure-import,measure-colour-order,generate-test-ocd}.mjs`, `e2e/map-vector-layer.spec.ts`, docs | blocked: I4 |
+| I6 | **The per-map switch and the colour panel** (answers 1 and 3). A map's colour settings `{ order, deviations }` stored per map — a club map (kept across its versions) and an event's own upload — and read by every import and re-match of it (migration; the row's planner fixes the table); `mapImport.setColourOrder` (the permission `decide` has) → the document rebuilt as `decide` does; `mapImport.review` returns the layers and I4's lists. Review page: a **Colour layers** panel — the rows in draw order with swatch, the map's colour name, the role, the object count and flags (split, source-ordered, no role); the **deviations list**, every one, kept or dropped, with which is the default (answer 2's minimum); the **switch** *IOF order / the map's own order*; a **before / after picture** of the map in both orders (the reference raster over a capped window, an endpoint). en and sv. Tests: unit, integration (settings survive a re-match and a new club map version; the permission), E2E `map-review.spec.ts` — the panel on the fixture, the switch flipped and back, the picture loaded | `map-symbols.md` §8.7 (the panel), §9.3; `map-storage.md` (the settings); `map-import.md` §2.2; `docs/features.md` | 06 §5.1 (the review page) | I5 | `packages/api/prisma/` (schema, a migration), `packages/api/src/routers/{mapImport,clubMap}.ts`, `packages/api/src/map-store/review.ts`, `packages/web/src/pages/MapReviewPage.tsx` + new components, locales, `e2e/map-review.spec.ts`, docs | blocked: I5 |
+| I7 | **Deviation overrides per map** (answer 2: "possible to change the overridden defaults", if it is not a lot of extra work — a row of its own so the slice can ship without it). The panel's deviation rows become editable: keep or drop each, *Reset to default*; `mapImport.setDeviation` writes I6's settings and rebuilds the document; the picture and the list follow. Not here: a club-wide default list. Tests: unit, integration, E2E — a dropped deviation kept and the default one dropped on the fixture, reset | `map-symbols.md` §8.7, §9.3 | — | I6 | `packages/api/src/routers/mapImport.ts`, `packages/api/src/map-store/review.ts`, `packages/web/src/pages/MapReviewPage.tsx` and the panel's components, locales, `e2e/map-review.spec.ts`, docs | blocked: I6 |
+| I-gate | `map-vector-layer.spec.ts` and `map-review.spec.ts` green; the colour-order harness at 0 unclassified on the ten maps; on the club's instance after the re-match: every club map's before / after picture looked at by the user; a course on a map whose table is badly ordered (Testkarta) — circles and legs over the areas, numbers on top; one map switched to its own order and back; one map printed; release notes naming the switch and the rollback | `map-symbols.md` §9.3 | — | I1–I6 (I7 may follow) | user + club | manual |
 
 ## General — outside the map pipeline
 

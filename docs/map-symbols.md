@@ -1366,8 +1366,99 @@ and the source symbols' IR
 remapped to the new indices (`remapRenderColours`). The render bridge
 resolves canonical entries through `paletteIndexOfStack(header.colours)`.
 
+### 9.3 Canonical layers (slice I): decided with the user (2026-11-17)
+
+Not built yet: §9.2 above is what the importer does. This section
+records what slice I (`SLICES.md` rows I1–I7) builds and the user's
+answers to its three questions; each row writes its own part out here.
+
+**The aim.** A document is drawn on the IOF colour order (§1, 03
+Appendix B) instead of the mapper's table, so the course layer and the
+library's symbols never depend on a source table being well ordered.
+§9.2's "the source order wins, alignment only identifies, inserts and
+flags" becomes the *source* order of answer 1; the default is the *IOF*
+order below.
+
+**Why not a permutation of the table.** The 2026-11-14 experiment
+(`SLICES.md` "Slice I") drew ten maps in both orders: on 8 of 10 one
+source colour serves several IOF rows (brown 50 % as paved area and road
+infill, one black as buildings and cultivated-land dots), so no single
+place for it is right. The unit that takes a place is therefore not the
+colour but the **use**: one colour reference of one symbol.
+
+**Decided in the split** (the planner, 2026-11-17):
+
+- **Roles.** Every colour reference of every symbol's source `render`
+  gets a *role*: a palette id of the alignment palette (§1), or none.
+  In order: the library entry the symbol is matched to — applied or only
+  suggested — when it uses exactly one palette id of the source colour's
+  class; else a rule on the colour's class and percent, the symbol's
+  kind and the part that draws (area fill, pattern, border, a line's
+  infill or outline, point, text); else no role.
+- **Layers.** `header.colours` holds one row per (source colour, role)
+  that objects use, in the palette's order; two source colours of one
+  role keep their source order. A source colour that serves several
+  roles becomes several rows with the same CMYK and `sourceNumber`. A
+  row a match needs and no source colour gives takes the CMYK of a
+  source colour of its class, else the palette's (today's alias and
+  insert, §9.2 steps 3–4). Index = draw order is unchanged, so the
+  renderers, the course layer (`paletteIndexOfStack`) and
+  materialisation (§11) need no change; each symbol's `render` is
+  re-indexed per reference.
+- **Purples and the overlay.** Lower and upper purple and the overlay's
+  rows (§9.2, §12.3) stand at their palette places. A source purple that
+  map objects draw in is an ordinary colour with or without a role; C15's
+  reuse rule applies to the *source* order only.
+- **Source order kept as the rule** for what the palette cannot place:
+  whites that are no palette white (masks), the colours of graphic
+  objects' synthesised symbols (`origin: "graphic"`, `map-import.md`
+  §3.2: logos, frame bars) and colours with no role. Each is placed
+  relative to the layers its source position stood between; the exact
+  rule is row I4's, fixed against the corpus diff.
+- **A deviation** is a pair of used roles whose source order contradicts
+  the palette's. Kept = the pair is drawn in the source order; dropped =
+  in the palette's. Which row moves, and how far, is row I4's, fixed
+  against the corpus, under one constraint: a kept deviation never puts
+  an area or infill colour above lower purple (the course stays on top
+  of it). Every deviation is reported, kept or dropped.
+- **Identity.** The importer versions bump; the release re-matches every
+  pin. A symbol's fingerprint (§8.5) is unchanged: split rows keep their
+  colour's class.
+- **Acceptance** is the two-order raster diff over the corpus
+  (`scripts/measure-colour-order.mjs`, row I1) with every remaining
+  difference classified, as B9 and C7 did for theirs.
+
+**The user's answers.**
+
+1. **On for every map, with a switch back per map.** Every map is drawn
+   in the IOF order from the release's re-match on. The review page has
+   a per-map switch to the map's own order (§9.2 as it stands, C15's
+   purples included), remembered for the map across re-matches. The
+   switch is also the rollback.
+2. **Roads over contours is kept by default; every deviation is listed;
+   the defaults can be overridden.** Where the map's own table draws
+   road infill and paved-area brown over the contour brown (6 of the 10
+   maps), that deviation is kept without anyone asking. Every other
+   deviation is dropped by default. All of them are listed, kept and
+   dropped. Each can be switched the other way per map in the colour
+   panel (row I7). The user asked for the overrides "if it is not a lot
+   of extra work", and at least the list: the list is row I6's, the
+   overrides are a row of their own after it, so the slice can ship
+   without them.
+3. **A read-only colour-layers panel on the review page**: the layers in
+   draw order with the map's colour, the role, the object count and
+   flags (split, kept or dropped deviation, source-ordered, no role), a
+   before / after picture of the map in both orders, and answer 1's
+   switch. Answer 2's overrides make the deviation rows editable (I7).
+
 ## 10. Pending in this chapter
 
+- **Canonical layers (§9.3)**: nothing of slice I is built. Rows I1–I7
+  in `SLICES.md`: the harness, the roles, the layered stack, the
+  source-order exceptions and kept deviations, the importer wiring and
+  bump, the per-map switch with the review page's colour panel, the
+  per-map deviation overrides. Not in the slice: a club-wide default for
+  which deviations are kept.
 - Mapper object queries as CRT sources (§8.6 `CRT_QUERY_UNSUPPORTED`)
   and a variant table to Mapper's sub-numbers, if a club needs either.
 - Library variants for the OCAD template conventions (§8.4) if the auto
