@@ -114,8 +114,11 @@ const table: DocumentColour[] = [
   col(21, "Grön för skidspår", 91, 0, 83, 0), // 20 ski green (by name)
   col(22, "Orange", 0, 60, 100, 0),       // 21 ski orange (by position: above every black)
   col(23, "Vit under skidspår", 0, 0, 0, 0), // 22 ski mask white (by name)
+  col(24, "Gul 75%", 0, 20, 59, 0),       // 23 yellow 75
+  col(25, "Svart 80%", 0, 0, 0, 80),      // 24 black 80
+  col(26, "Grön 80%", 64, 0, 80, 0),      // 25 green 80
 ];
-const C = { yellow: 0, yellow50: 1, green30: 2, green60: 3, green: 4, dark: 5, brown50: 6, brown30: 7, grey35: 8, black50: 9, black20: 10, blue50: 11, blue70: 12, blue30: 13, blue: 14, brown: 15, olive: 16, black: 17, white: 18, purple: 19, skiGreen: 20, skiOrange: 21, skiWhite: 22 };
+const C = { yellow: 0, yellow50: 1, green30: 2, green60: 3, green: 4, dark: 5, brown50: 6, brown30: 7, grey35: 8, black50: 9, black20: 10, blue50: 11, blue70: 12, blue30: 13, blue: 14, brown: 15, olive: 16, black: 17, white: 18, purple: 19, skiGreen: 20, skiOrange: 21, skiWhite: 22, yellow75: 23, black80: 24, green80: 25 };
 const infosFor = (spec: SpecId, edition: PaletteEdition = "iof2024"): RoleColourInfo[] => identifySourceColours(table, spec, edition);
 
 type Match = RoleSymbol["match"];
@@ -173,6 +176,21 @@ describe("roleOfUse: the rule table (no match)", () => {
     expect(rolesOnly(line({ main: { colour: C.white, widthUm: 250 }, borders: { backgroundColour: C.black, backgroundWidthUm: 450 } }))).toEqual([null, "black100"]);
   });
 
+  it("a black outline over an infill that is no brown screen is black 100 %", () => {
+    expect(rolesOnly(line(road(C.blue50, C.black)))).toEqual(["black100", "black100", "blue50-area"]);
+    expect(rolesOnly(line(road(C.yellow, C.black)), SPR)).toEqual(["black100", "black100", "yellow100"]);
+    expect(rolesOnly(line({ main: { colour: C.blue, widthUm: 300, halo: { colour: C.black, widthUm: 100 } } }))).toEqual(["blue100-line", "black100"]);
+  });
+
+  it("a class no candidate row is within tolerance of gets none; a tie goes to the earlier row", () => {
+    expect(rolesOnly(area({ fill: C.yellow75 }), ISOM)).toEqual(["yellow75"]);
+    expect(rolesOnly(area({ fill: C.yellow75 }), SPR)).toEqual([null]);
+    expect(rolesOnly(area({ fill: C.black80 }), ISOM)).toEqual([null]);
+    expect(rolesOnly(area({ fill: C.black80 }), SPR)).toEqual([null]);
+    // Green 80 %: 20 points from both green 100 % and green 60 % → the earlier row.
+    expect(rolesOnly(area({ fill: C.green80 }))).toEqual(["green100-area"]);
+  });
+
   it("black screens go by percent, whatever the part", () => {
     expect(rolesOnly(area({ fill: C.black50 }))).toEqual(["black50-building"]);
     expect(rolesOnly(area({ fill: C.grey35 }))).toEqual(["black-area-screen"]);
@@ -223,6 +241,7 @@ describe("roleOfUse: the rule table (no match)", () => {
     expect(rolesOnly(track)).toEqual(["green-skio", null]);
     expect(rolesOnly(line({ main: { colour: C.skiOrange, widthUm: 360 } }))).toEqual(["orange-skio"]);
     expect(rolesOnly(line({ main: { colour: C.skiOrange, widthUm: 360 } }), SPR)).toEqual(["orange-skio"]);
+    expect(roles(line({ main: { colour: C.skiOrange, widthUm: 360 } }), "ISMTBOM2022")).toEqual([["main.colour", "orange-skio", "rule"]]);
   });
 
   it("a spec without a table gives no rule role", () => {

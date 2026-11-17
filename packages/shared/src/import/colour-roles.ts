@@ -75,7 +75,6 @@ export function colourUses(render: RenderSymbol): ColourUse[] {
   return renderColourPaths(render).map(({ path, colour }) => ({ colour, path, part: colourPartOf(render.type, path) }));
 }
 
-
 // ---- Roles -------------------------------------------------------------------
 
 /**
@@ -182,8 +181,8 @@ function nearest(cls: ColourClass, ids: readonly string[], palette: RolePalette)
   let bestOff = Infinity;
   for (const id of ids) {
     const c = palette.classes.get(id);
-    if (!palette.own.has(id) || !sameClass(c, cls)) continue;
-    const off = Math.abs(c!.percent - cls.percent);
+    if (!c || !palette.own.has(id) || !sameClass(c, cls)) continue;
+    const off = Math.abs(c.percent - cls.percent);
     if (off < bestOff) {
       best = id;
       bestOff = off;
@@ -212,10 +211,12 @@ function blackFullRole(use: ColourUse, infos: readonly RoleColourInfo[], render:
 }
 
 /**
- * The rule table (docs/map-symbols.md §9.3 "Rules"): a role from the
- * colour's class and percent, the symbol's kind and the part that draws.
- * Whites, purples, orange, red, registration and unclassified colours get
- * none; so does a spec without a table.
+ * Steps 2 and 3 of docs/map-symbols.md §9.3 "Roles": a colour §9.1
+ * identified as an ISSkiOM track colour keeps that row (on any spec);
+ * otherwise the rule table, a role from the colour's class and percent,
+ * the symbol's kind and the part that draws. Whites, purples, orange, red,
+ * registration and unclassified colours get none from the table; a spec
+ * without a table gives none beyond the ski step.
  */
 export function roleFromRule(use: ColourUse, infos: readonly RoleColourInfo[], symbol: RoleSymbol, palette: RolePalette): string | null {
   const info = infos[use.colour];

@@ -1506,6 +1506,7 @@ use with its role and `via` (`match`, `rule` or none). In order:
 2. **ISSkiOM's track colours.** A colour that §9.1 identified as
    `green-skio` or `orange-skio` takes that role for every use. The mask
    white `white-skio` does not: whites take a role from the hint only.
+   `colourRoles` reports this step as `via: "rule"`, on any spec.
    (Q2, decided overnight on the user's standing instruction, 2026-11-17, for review.)
 3. **The rule table.** By the colour's class (hue and percent), the
    symbol's kind and the part. "Area part" is `area-fill`, `area-hatch`
@@ -1562,13 +1563,17 @@ a symbol's parts draw in role order, not in the IR's order. An
 under-part whose role ranks above its over-part hides it: a black 100 %
 halo under a blue or yellow main, or a dark infill under a lighter main.
 I2 rules only the road case: an outline or halo round a brown-screen
-infill takes `black-road-outline`, which ranks under the infill. The
-general case is row I4's, fixed against the I1 harness.
+infill takes `black-road-outline`, which ranks under the infill. A road
+drawn as a brown-screen *main* with black side borders (no
+`backgroundColour`, no halo) is not that case: its borders are
+`black100`, above the brown, and the main is still drawn under them, so it
+is another candidate for I4 to check. The general case is row I4's, fixed
+against the I1 harness.
 
 | Test (`packages/shared/src/…`) | Covers |
 |---|---|
 | `render/__tests__/transform.test.ts` | `renderColourPaths` (every reference with its own path; one colour three times is three entries; area, line, text paths), `mapRenderColourRefs` (per-reference re-index; the identity; agrees with `remapRenderColours`) |
-| `import/__tests__/colour-roles.test.ts` | `colourUses` parts for every type; the rule table for both specs (one brown 50 % as paved area and road infill; one black as building outline, road outline, cultivated dots, stony-ground dots and a tick; screens by percent; ISSprOM's rows); whites and purples without a hint; the ski colours; rule roles within the spec's own palette on both editions; the hint in each match state, beating the rule, two parts with two roles, a class the entry lacks, whites and purples, an overlay entry, a two-id entry, `orange-skio` on iof2022; the library as oracle |
+| `import/__tests__/colour-roles.test.ts` | `colourUses` parts for every type; the rule table for both specs (one brown 50 % as paved area and road infill; one black as building outline, road outline, cultivated dots, stony-ground dots and a tick; a black outline over an infill that is no brown screen; screens by percent; a class out of every candidate's tolerance (yellow 75 % on a sprint map, black 80 %); a tie to the earlier row; ISSprOM's rows); whites and purples without a hint; the ski colours; rule roles within the spec's own palette on both editions; the hint in each match state, beating the rule, two parts with two roles, a class the entry lacks, whites and purples, an overlay entry, a two-id entry, `orange-skio` on iof2022; the library as oracle |
 
 ## 10. Pending in this chapter
 
