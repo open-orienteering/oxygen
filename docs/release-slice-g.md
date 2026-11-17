@@ -125,3 +125,23 @@ The DEM track (H9–H13) ships in this tag, but fetching stays off (§1). It
 gets its own check when the Geotorget account is saved in Settings →
 Height data. That step stands in for the separate DEM release (`SLICES.md` slice H,
 answer 10).
+
+### Club production, 2026-11-17
+
+v0.8.0 (`main` `f7bc8195`, PR #223):
+
+- **Backup**: on-demand backup `1794946501678` ("before v0.8.0 (slices G, H)").
+- **Deploy**: `./deploy.sh v0.8.0` applied the six migrations (execution
+  `oxygen-migrate-mw8r4`). Revision `oxygen-00055-mk8` serves 100 % of
+  traffic. DEM fetch is off: there is no `oxygen-geotorget-credentials`
+  secret and `MAP_DEM_PROVIDERS` is unset.
+- **Re-match**: the dry run listed 20 stale pins (4 club maps, 16 event
+  pins). The run re-matched all 20 with 0 failures, in 89.8 s, and derived
+  the height fields. Nackareservatet 2023-03-29 still gets no thumbnail:
+  it has 101 729 objects, over the 60 000 cap, as before.
+- **Logs**: the new revision logged no errors. It logged one
+  `[map-import] housekeeping: Connection terminated unexpectedly` (Cloud
+  SQL dropping an idle connection). It is not new: v0.6.1 and v0.7.0
+  revisions log it too.
+
+The G-gate and H-gate (§5) are the user's.
