@@ -1368,9 +1368,11 @@ resolves canonical entries through `paletteIndexOfStack(header.colours)`.
 
 ### 9.3 Canonical layers (slice I): decided with the user (2026-11-17)
 
-Not built yet: §9.2 above is what the importer does. This section
+Not wired yet: §9.2 above is what the importer does. This section
 records what slice I (`SLICES.md` rows I1–I7) builds and the user's
 answers to its three questions; each row writes its own part out here.
+Built so far: the roles (row I2, "Roles" below), which nothing in the
+importer reads yet.
 
 **The aim.** A document is drawn on the IOF colour order (§1, 03
 Appendix B) instead of the mapper's table, so the course layer and the
@@ -1451,10 +1453,133 @@ colour but the **use**: one colour reference of one symbol.
    before / after picture of the map in both orders, and answer 1's
    switch. Answer 2's overrides make the deviation rows editable (I7).
 
+#### Roles (row I2)
+
+Built in `packages/shared/src/import/colour-roles.ts`, pure. No importer
+step calls it yet; I3 builds the layers from it.
+
+**Uses.** `colourUses(render)` lists every colour reference of a
+symbol's `render` (the keys `colour`, `fill`, `backgroundColour`) as a
+use `{ colour, path, part }`, in the IR's key order. A colour referenced
+twice is two uses. The path is the reference's keys and array indices
+from the symbol's root (`renderColourPaths` in `render/transform.ts`,
+printed `borders.left.colour`, `glyph.parts[2].colour`).
+`mapRenderColourRefs` re-indexes per reference, for I3. The part comes
+from the symbol's `render.type` and the path:
+
+| Type | Path | Part |
+|---|---|---|
+| area | `fill` | `area-fill` |
+| area | `hatches[n].colour` | `area-hatch` |
+| area | `patterns[n].glyph.parts[m].colour` | `area-pattern` |
+| area | anything under `border` | `area-border` |
+| line | `main.colour` | `line-main` |
+| line | `main.halo.colour` | `line-halo` |
+| line | `borders.backgroundColour` | `line-infill` |
+| line | `borders.left` / `right` / `extraPairs[n].*` colour | `line-outline` |
+| line | `glyphs[n].glyph.parts[m].colour` | `line-glyph` |
+| point | `glyph.parts[n].colour` | `point-glyph` |
+| text | `colour`, `halo`, `shadow`, `frame` | `text`, `text-halo`, `text-shadow`, `text-frame` |
+
+The kind is `render.type`. `DocumentSymbol.kind` is not used, because
+`rectangle` and `unknown` mean nothing to the rules.
+
+**A role** is an id of `alignmentPalette(edition, spec)` (§1), or none.
+`roleOfUse(use, infos, symbol, palette)` takes the use, the source
+colours' `identifySourceColours` infos indexed by colour (a rule reads
+the classes of the symbol's other colours), the symbol's `render` and
+`match`, and a `RolePalette` built once per document
+(`rolePalette(spec, edition)`: the spec's own rows and the class of
+every alignment row). `colourRoles(symbol, infos, palette)` gives every
+use with its role and `via` (`match`, `rule` or none). In order:
+
+1. **The hint.** The library entry of `match.canonicalId`, in any match
+   state (`auto`, `suggested`, or an `unmatched` match that names an
+   entry, as H1's terrain classes read it, `map-terrain.md` §1.1). It
+   applies when the entry uses exactly one alignment-palette id whose
+   class is `sameClass` (§9.1, 20-point tolerance) with the source
+   colour's class. That id is the role. No canonical id, an unknown
+   entry, a class the entry lacks, or two ids of the class (ISSkiOM
+   808's `green-skio` and `green100-area`) → no hint. Overlay entries
+   hint like any other (`ISSkiOM2019:801.1` → `green-skio`,
+   `white-skio`). `alternatives[]` are not hints.
+2. **ISSkiOM's track colours.** A colour that §9.1 identified as
+   `green-skio` or `orange-skio` takes that role for every use. The mask
+   white `white-skio` does not: whites take a role from the hint only.
+   `colourRoles` reports this step as `via: "rule"`, on any spec.
+   (Q2, decided overnight on the user's standing instruction, 2026-11-17, for review.)
+3. **The rule table.** By the colour's class (hue and percent), the
+   symbol's kind and the part. "Area part" is `area-fill`, `area-hatch`
+   or `area-pattern`; "line part" is any `line-*`. Where a cell lists
+   several rows, the rule keeps the spec's own rows of the colour's class
+   and takes the nearest percent, ties to the earlier row. A spec without
+   a table (ISSkiOM, ISMTBOM as a document's spec) has no rule.
+
+   | Class | Use | ISOM 2017-2 | ISSprOM 2019-2 |
+   |---|---|---|---|
+   | black 100 % | line outline over a brown-screen infill (`borders.backgroundColour`); halo under a brown-screen main; area border round a brown-screen fill | `black-road-outline` | `black-road-outline` |
+   | black 100 % | area pattern of discs only, on an area whose fill is yellow (Q1, decided overnight, for review) | `black-cultivated` | `black-cultivated` |
+   | black 100 % | any other | `black100` | `black100` |
+   | black screen | any | nearest of `black50-building`, `black-area-screen`, `black20-canopy` | the same |
+   | brown 100 % | point glyph | `brown100-point` | `brown100` |
+   | brown 100 % | any other (text and area borders included) | `brown100-line` | `brown100` |
+   | brown screen | line part | `brown50-road` | nearest of `brown50-road`, `brown30-road` |
+   | brown screen | any other | `brown50-paved` | nearest of `brown50-paved`, `brown30-paved` |
+   | blue 100 % | area part | `blue100-area` | `blue100-area` |
+   | blue 100 % | point glyph | `blue100-point` | `blue100-pointline` |
+   | blue 100 % | any other (area border, line, text) | `blue100-line` | `blue100-pointline` |
+   | blue screen | any | nearest of `blue70-area`, `blue50-area` | nearest of `blue70-area`, `blue50-area`, `blue30-area` |
+   | green | area part | nearest of `green100-area`, `green60-area`, `green30-area` | the same |
+   | green | any other | nearest of `green100-point`, `green60-area`, `green30-area` | the same |
+   | dark green | area part | none (ISOM's only dark green is the hedge line, §9.1) | `darkgreen-area` |
+   | dark green | any other | `darkgreen-hedge` | `darkgreen-line` |
+   | yellow | any | nearest of `yellow100`, `yellow75`, `yellow50` | nearest of `yellow100`, `yellow50` |
+   | olive | any | `olive` | `olive` |
+   | white, purple (50 % included), orange, red, registration, unclassified | any | none | none |
+
+   Screens go by percent whatever the part: the palette has no line or
+   point screens, and a green 30 % halo is 508.d's runnability band. A
+   class no listed row is within tolerance of (a yellow 75 % on a sprint
+   map, a black 75–84 %) gets none. The rule does not read the colour's
+   name or §9.1's `paletteId` (the ski rows aside). Splitting a colour by
+   the part it draws is the point of roles, and the name is per colour.
+   Cultivated-land dots need the yellow fill, because the library draws
+   stony ground (208–212) as black 100 % dots, and `black-cultivated`
+   ranks under the greens: an unmatched stony ground would vanish.
+4. **Else no role.** I4 places such uses by the source order.
+
+**Checked against the library.** Every entry of both libraries,
+resolved on its own palette stack and classified from CMYK alone. With
+no match, the rule gives 203 of 249 ISOM uses and 183 of 226 ISSprOM
+uses the entry's own row, on both editions. The others are whites and
+purples (hint only) and six named uses: ISOM 101.b and 103.b ticks
+(point glyphs in `brown100-line`; the rule says `brown100-point`),
+ISSprOM 501.1 and 501.2 (`black-road-outline` as a main line), 520.b
+(`black-road-outline` round an olive fill) and 532 (brown 30 % paved as
+a line). With each entry as its own hint, every use gets its own row.
+
+**Not settled here: a symbol drawn inside out** (Q3, decided overnight on the user's standing instruction, 2026-11-17, for review). In layers,
+a symbol's parts draw in role order, not in the IR's order. An
+under-part whose role ranks above its over-part hides it: a black 100 %
+halo under a blue or yellow main, or a dark infill under a lighter main.
+I2 rules only the road case: an outline or halo round a brown-screen
+infill takes `black-road-outline`, which ranks under the infill. A road
+drawn as a brown-screen *main* with black side borders (no
+`backgroundColour`, no halo) is not that case: its borders are
+`black100`, above the brown, and the main is still drawn under them, so it
+is another candidate for I4 to check. The general case is row I4's, fixed
+against the I1 harness.
+
+| Test (`packages/shared/src/…`) | Covers |
+|---|---|
+| `render/__tests__/transform.test.ts` | `renderColourPaths` (every reference with its own path; one colour three times is three entries; area, line, text paths), `mapRenderColourRefs` (per-reference re-index; the identity; agrees with `remapRenderColours`) |
+| `import/__tests__/colour-roles.test.ts` | `colourUses` parts for every type; the rule table for both specs (one brown 50 % as paved area and road infill; one black as building outline, road outline, cultivated dots, stony-ground dots and a tick; a black outline over an infill that is no brown screen; screens by percent; a class out of every candidate's tolerance (yellow 75 % on a sprint map, black 80 %); a tie to the earlier row; ISSprOM's rows); whites and purples without a hint; the ski colours; rule roles within the spec's own palette on both editions; the hint in each match state, beating the rule, two parts with two roles, a class the entry lacks, whites and purples, an overlay entry, a two-id entry, `orange-skio` on iof2022; the library as oracle |
+
 ## 10. Pending in this chapter
 
-- **Canonical layers (§9.3)**: nothing of slice I is built. Rows I1–I7
-  in `SLICES.md`: the harness, the roles, the layered stack, the
+- **Canonical layers (§9.3)**: the roles are built (I2) and not yet
+  read by the importer. Rows I1, I3–I7 in `SLICES.md`: the harness, the
+  layered stack, the
   source-order exceptions and kept deviations, the importer wiring and
   bump, the per-map switch with the review page's colour panel, the
   per-map deviation overrides. Not in the slice: a club-wide default for
