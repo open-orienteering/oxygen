@@ -1428,7 +1428,10 @@ colour but the **use**: one colour reference of one symbol.
   colour's class.
 - **Acceptance** is the two-order raster diff over the corpus
   (`scripts/measure-colour-order.mjs`, row I1) with every remaining
-  difference classified, as B9 and C7 did for theirs.
+  difference classified, as B9 and C7 did for theirs. The tool, its
+  classes and the ten-map baseline (0.62 % of pixels change under a plain
+  permutation, 2.1 % of them unattributed) are in `map-rendering.md`
+  §6.5.
 
 **The user's answers.**
 
