@@ -18,8 +18,9 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { API_BASE } from "./helpers/api-base";
 import { reseed } from "./helpers/reseed";
-import { allControlsSheet, EDITOR_EVENT, editorReady, inflatedStreams, inkedAt, openEditor, paperToPageOf, plainMapAt, plainMapSpots, printed, sites, toPage, toPaper, toolShapes, trpcCall, viewSettled } from "./helpers/editor";
+import { allControlsSheet, EDITOR_EVENT, editorReady, inkedAt, openEditor, paperToPageOf, plainMapAt, plainMapSpots, printed, sites, toPage, toPaper, toolShapes, trpcCall, viewSettled } from "./helpers/editor";
 import { dropEventPatch, mapObjectsAt } from "./helpers/event-map-pin";
+import { pdfObjects } from "./helpers/print-pdf";
 import { trpcProcedures, waitForTrpc } from "./helpers/trpc";
 
 type Pt = { x: number; y: number };
@@ -443,14 +444,15 @@ const printedCounts = async (page: Page) => {
   return { strokes: p.strokes, curves: p.curves, curvedFills: p.curvedFills };
 };
 /**
- * The print's drawing: a hash of its inflated streams without the dates (the creation and modification dates sit in a
- * compressed object stream, so two prints a second apart differ there and nowhere else).
+ * The print's drawing: a hash of its objects (`pdfObjects`), without the `Info` dictionary and the cross-reference and
+ * object streams. Two prints a second apart differ in their dates, and so, a deflated byte more or less, in the
+ * cross-reference stream's offsets — and nowhere else (docs/bugfix-printed-drawing-hash.md).
  */
 const printedDrawing = async (page: Page): Promise<string> => {
   const res = await page.request.get(`/api/maps/${EDITOR_EVENT}/maps.pdf?allControls=1`);
   expect(res.ok()).toBe(true);
-  const streams = inflatedStreams(await res.body()).map((x) => x.replace(/\/(CreationDate|ModDate) \(D:[^)]*\)/g, ""));
-  return createHash("sha256").update(streams.join("\n")).digest("hex");
+  const { pages, objects } = await pdfObjects(await res.body());
+  return createHash("sha256").update(JSON.stringify([pages, [...objects]])).digest("hex");
 };
 
 test.describe("Map mode drawing (docs/course-editor.md §13 \"Drawing\", \"Symbol picker\")", () => {
