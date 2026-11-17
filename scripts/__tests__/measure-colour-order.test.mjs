@@ -26,8 +26,8 @@ describe("measure-colour-order.mjs", () => {
 
   it("draws the map in both orders, names the changes and fails while any is unclassified", () => {
     assert.equal(first.status, 1, first.stdout + first.stderr);
-    assert.ok(summary.changedPx > 0, "the experiment's permutation changes puit-de-laven");
-    assert.equal(summary.candidate, "permutation");
+    assert.ok(summary.changedPx > 0, "the layered stack changes puit-de-laven");
+    assert.equal(summary.candidate, "layers");
     assert.deepEqual(summary.settings, { tileMm: 60, pxPerMm: 6, tolerance: 16, window: null });
     assert.ok(summary.tiles > 0 && summary.tilesChanged > 0 && summary.tilesChanged <= summary.tiles);
     assert.ok(summary.changedPx < summary.inked && summary.inked <= summary.px);
@@ -36,8 +36,10 @@ describe("measure-colour-order.mjs", () => {
     assert.ok(summary.namedShare >= 0.95, `named share ${summary.namedShare}`);
     assert.equal(summary.unclassifiedPx, summary.changedPx); // no classification file
     assert.equal(summary.unclassifiedShare, 1);
-    const paletteName = /^[a-z0-9-]+(\+[a-z0-9-]+)*(#\d+)?$/;
+    // both orders are named in the layered stack's layers: one role each, so no multi-role name
+    const paletteName = /^[a-z0-9-]+(#\d+)?$/;
     assert.ok(summary.kinds.some((k) => paletteName.test(k.from) && paletteName.test(k.to)), "a change between two palette layers");
+    for (const k of summary.kinds) assert.ok(!k.from.includes("+") && !k.to.includes("+"), `${k.from} → ${k.to}`);
     assert.match(first.stdout, /^ {2}changed {4}[\d ]+ px of [\d ]+ \([\d.]+ %\), of ink [\d ]+ \([\d.]+ %\); named [\d.]+ %$/m);
     assert.match(first.stdout, /unclassified\s+[\d ]+ of [\d ]+ changed px \(100\.0 %\)\s+FAIL/);
   });
@@ -60,6 +62,24 @@ describe("measure-colour-order.mjs", () => {
     const names = [...readFileSync(map, "utf8").matchAll(/<color\b[^>]*\bname="([^"]+)"/g)].map((m) => m[1]);
     assert.ok(names.length > 30 && names.includes(c.unidentifiedList[0].name));
     for (const name of names) assert.ok(!first.stdout.includes(name), name);
+  });
+
+  it("reports the layered stack: rows, split colours, inserted rows", () => {
+    const l = summary.layers;
+    assert.ok(l.rows > summary.census.colours, "split colours add rows");
+    assert.ok(l.split.length > 0 && l.split.every((s) => s.includes("+")));
+    assert.ok(l.inserted.includes("purple-lower") && l.inserted.includes("purple-upper"));
+    assert.match(first.stdout, /^ {2}layers {5}rows \d+ {2}split \d+/m);
+  });
+
+  it("still runs the experiment's permutation as a candidate, naming a multi-role colour as one layer", () => {
+    const r = run(map, "--out", path.join(out, "permutation"), "--candidate", "permutation");
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    const p = JSON.parse(readFileSync(path.join(out, "permutation", "puit-de-laven", "summary.json"), "utf8"));
+    assert.equal(p.candidate, "permutation");
+    assert.equal(p.layers, null);
+    assert.ok(p.changedPx > 0 && p.kinds.some((k) => k.from.includes("+") || k.to.includes("+")));
+    assert.equal(p.kinds.reduce((t, k) => t + k.px, 0), p.changedPx);
   });
 
   it("passes on a window whose changes a classification file names", () => {
@@ -90,7 +110,7 @@ describe("measure-colour-order.mjs", () => {
     for (const args of [
       [],
       [map, "--out", path.join(dir, "elsewhere")],
-      [map, "--out", out, "--candidate", "layers"],
+      [map, "--out", out, "--candidate", "bogus"],
       [map, "--out", out, "--window", "1,2,0,4"],
       [map, "--out", out, "--tile-mm", "0"],
       [map, "--out", out, "--bogus"],

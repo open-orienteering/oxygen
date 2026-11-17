@@ -326,17 +326,7 @@ export function nameChanges(mask: Uint8Array, width: number, height: number, kin
 
 /** The stream without the passes drawn in `rows`: a paint image with those layers peeled off. */
 export function withoutRows(stream: render.PassStream, rows: ReadonlySet<number>): render.PassStream {
-  const keep: number[] = [];
-  stream.passes.forEach((p, i) => {
-    if (!rows.has(p.colour)) keep.push(i);
-  });
-  return {
-    ...stream,
-    passes: keep.map((i) => stream.passes[i]),
-    objectIdx: Uint32Array.from(keep, (i) => stream.objectIdx[i]),
-    symbolIdx: Uint32Array.from(keep, (i) => stream.symbolIdx[i]),
-    ...(stream.maskIdx ? { maskIdx: Int32Array.from(keep, (i) => stream.maskIdx![i]) } : {}),
-  };
+  return withoutPasses(stream, (p) => rows.has(p.colour));
 }
 
 /** How many shared top layers `namePeeled` peels off at most. */
@@ -550,6 +540,211 @@ export function permuteStack<D extends Pick<MapDocument, "header">>(doc: D, orde
 export function permutedRenderOptions(order: readonly number[]): Pick<mapDocument.DocumentRenderOptions, "proxyColours"> {
   const at = inverseOrder(order)[0] ?? 0;
   return { proxyColours: { line: at, area: at, point: at, text: at } };
+}
+
+// ---------------------------------------------------------------- the layered candidate
+
+/**
+ * The source colour table a matched document was aligned from: its rows
+ * with a `sourceNumber` (stage 7 inserts rows without one, and never
+ * reorders the source's), stripped of what alignment added. `fromAligned`
+ * maps each stack row to its source index, -1 for an inserted row.
+ */
+export function sourceTableOf(colours: readonly mapDocument.DocumentColour[]): { colours: mapDocument.DocumentColour[]; fromAligned: number[] } {
+  const out: mapDocument.DocumentColour[] = [];
+  const fromAligned = colours.map((c) => {
+    if (c.sourceNumber === undefined) return -1;
+    const entry: mapDocument.DocumentColour = { ...c };
+    delete entry.paletteIds;
+    delete entry.purpleRole;
+    out.push(entry);
+    return out.length - 1;
+  });
+  return { colours: out, fromAligned };
+}
+
+export interface LayeredCandidate<D> {
+  /** The document on the layered stack, every source symbol re-indexed per reference. */
+  doc: D;
+  layers: mapImport.ColourLayersResult;
+  /** Draws proxy objects (symbols without IR) in the row the source's row 0 became. */
+  renderOptions: Pick<mapDocument.DocumentRenderOptions, "proxyColours">;
+  /** The candidate's layers as the harness names them: one role per row. */
+  stackLayers: StackLayer[];
+  /** Per row of the source stack, the candidate row it becomes: a source colour's lowest row, an inserted row's palette id. */
+  rowOfAligned: number[];
+}
+
+/**
+ * The importer's layered stack (`map-symbols.md` §9.3 "Layers", row I3)
+ * for a document matched on the source order: the source table and source
+ * renders recovered from the aligned document (`sourceTableOf`, renders
+ * mapped back), roles read from each symbol's match as the importer will,
+ * `needed` from its applied matches, then `buildColourLayers`. Until I5
+ * wires it into stage 7 this is how the harness gets its candidate.
+ */
+export function layeredCandidate<D extends Pick<MapDocument, "header">>(
+  doc: D,
+  spec: symbolLibrary.SpecId,
+  perSymbol: readonly number[],
+  rank: ReadonlyMap<string, number>,
+): LayeredCandidate<D> {
+  const h = doc.header;
+  const src = sourceTableOf(h.colours);
+  const edition = mapImport.detectPaletteEdition(src.colours);
+  const back = h.colours.map((_, i) => src.fromAligned[i]);
+  const renders = h.symbols.map((s, i) => {
+    if (!s.render) return null;
+    for (const c of render.renderColourRefs(s.render)) if ((back[c] ?? -1) < 0) throw new Error(`symbol ${i} draws in an inserted row: not a stage 7 document`);
+    return render.remapRenderColours(s.render, back);
+  });
+  const infos = mapImport.identifySourceColours(src.colours, spec, edition);
+  const uses = mapImport.symbolColourUses(
+    h.symbols.map((s, i) => ({ render: renders[i], match: s.match ?? null, origin: s.origin })),
+    perSymbol,
+    infos,
+    mapImport.rolePalette(spec, edition),
+  );
+  const needed = new Set<string>();
+  for (const s of h.symbols) {
+    if (!mapDocument.isAppliedMatch(s.match)) continue;
+    const entry = symbolLibrary.getLibraryEntry(s.match.canonicalId);
+    if (entry) for (const id of symbolLibrary.colourRefs(entry.render)) needed.add(id);
+  }
+  const layers = mapImport.buildColourLayers({ colours: src.colours, infos, uses, needed, spec, edition });
+  const symbols = h.symbols.map((s, i) => (renders[i] ? { ...s, render: render.reindexRenderColours(renders[i]!, layers.reindex.symbols[i]!) } : s));
+  const candidate = { ...doc, header: { ...h, colours: layers.colours, symbols } } as D;
+
+  // Where each source row went: a source colour to its lowest row, an inserted row by the palette id it stands for.
+  const index = mapImport.paletteIndexOfStack(layers.colours);
+  const rowOfAligned = h.colours.map((c, i) => (src.fromAligned[i] >= 0 ? layers.reindex.colours[src.fromAligned[i]] : (index.get(c.paletteIds?.[0] ?? "") ?? 0)));
+  // The proxies draw in row 0 of the source: in the candidate, the row it became.
+  const proxy = rowOfAligned[0] ?? 0;
+
+  const candidateRenders = mapDocument.documentRenderInput(candidate as unknown as MapDocument, { only: [] }).symbols;
+  const plain = layers.colours.map((c) => {
+    const e = { ...c };
+    delete e.paletteIds;
+    return e;
+  });
+  const named = stackLayers(plain, h.symbols, candidateRenders, perSymbol, layers.report.rows.map((r) => r.role ?? undefined), rank);
+  return { doc: candidate, layers, renderOptions: { proxyColours: { line: proxy, area: proxy, point: proxy, text: proxy } }, stackLayers: named, rowOfAligned };
+}
+
+/**
+ * A document whose stack rows are the *pairs* (source row, candidate row)
+ * of the two documents' colour references — their symbols zipped reference
+ * by reference, canonical entries through the palette ids both stacks
+ * carry — so one pass stream of it says, per pass, which row draws it in
+ * either order. `pairs[j]` is joint row j; `proxy` the joint row to pass as
+ * `proxyColours` for the two sides' proxy rows.
+ */
+export function jointDocument<D extends Pick<MapDocument, "header">>(
+  source: D,
+  candidate: Pick<MapDocument, "header">,
+  proxies: { source: number; candidate: number },
+): { doc: D; pairs: [number, number][]; proxy: number } {
+  const pairs: [number, number][] = [];
+  const ids = new Map<string, number>();
+  const joint = (a: number, b: number) => {
+    const key = `${a}|${b}`;
+    let j = ids.get(key);
+    if (j === undefined) {
+      j = pairs.length;
+      ids.set(key, j);
+      pairs.push([a, b]);
+    }
+    return j;
+  };
+  const sh = source.header, ch = candidate.header;
+  if (sh.symbols.length !== ch.symbols.length) throw new Error("jointDocument: the documents' symbol tables differ");
+  const symbols = sh.symbols.map((s, i) => {
+    const c = ch.symbols[i];
+    if (!s.render || !c.render) return s;
+    const b = render.renderColourPaths(c.render).map((r) => r.colour);
+    const a = render.renderColourPaths(s.render);
+    if (a.length !== b.length) throw new Error(`jointDocument: symbol ${i}'s renders differ`);
+    return { ...s, render: render.reindexRenderColours(s.render, a.map((r, k) => joint(r.colour, b[k]))) };
+  });
+  const si = mapImport.paletteIndexOfStack(sh.colours), ci = mapImport.paletteIndexOfStack(ch.colours);
+  const carries = new Map<number, string[]>();
+  for (const [id, a] of si) {
+    const b = ci.get(id);
+    if (b === undefined) continue;
+    const j = joint(a, b);
+    carries.set(j, [...(carries.get(j) ?? []), id]);
+  }
+  const proxy = joint(proxies.source, proxies.candidate);
+  const colours = pairs.map(([a], j): mapDocument.DocumentColour => {
+    const e: mapDocument.DocumentColour = { id: `joint:${j}`, name: "", cmyk: [...(sh.colours[a]?.cmyk ?? [0, 0, 0, 1])] as mapDocument.DocumentColour["cmyk"] };
+    const carried = carries.get(j);
+    if (carried) e.paletteIds = carried;
+    return e;
+  });
+  return { doc: { ...source, header: { ...sh, colours, symbols } }, pairs, proxy };
+}
+
+/** The key of a paint by what draws it: (row, pass kind, symbol). */
+export const paintKey = (row: number, kind: render.PassKind, symbolIdx: number): string => `${row}/${kind}/${symbolIdx}`;
+
+/**
+ * From a joint stream (`jointDocument`): per source paint key the candidate
+ * row most of its passes draw in, and per candidate row the source row
+ * most of its passes come from (ties to the lowest row).
+ */
+export function paintCorrespondence(stream: render.PassStream, pairs: readonly (readonly [number, number])[]): { candidateRow: Map<string, number>; sourceRow: Map<number, number> } {
+  const toCand = new Map<string, Map<number, number>>();
+  const toSrc = new Map<number, Map<number, number>>();
+  const bump = <K>(m: Map<K, Map<number, number>>, k: K, v: number) => {
+    let c = m.get(k);
+    if (!c) m.set(k, (c = new Map()));
+    c.set(v, (c.get(v) ?? 0) + 1);
+  };
+  stream.passes.forEach((p, i) => {
+    const [a, b] = pairs[p.colour];
+    bump(toCand, paintKey(a, p.kind, stream.symbolIdx[i]), b);
+    bump(toSrc, b, a);
+  });
+  const best = (c: Map<number, number>) => [...c].sort((x, y) => y[1] - x[1] || x[0] - y[0])[0][0];
+  return {
+    candidateRow: new Map([...toCand].map(([k, c]) => [k, best(c)])),
+    sourceRow: new Map([...toSrc].map(([k, c]) => [k, best(c)])),
+  };
+}
+
+/**
+ * Names a source paint by the candidate layer it becomes (the layered
+ * candidate's vocabulary: one role per name), `graphic:`-prefixed as
+ * `paintNamer`; a paint the correspondence lacks by `fallback(row)`.
+ */
+export function correspondingNamer(
+  paints: readonly Paint[],
+  candidateRow: ReadonlyMap<string, number>,
+  layers: readonly Pick<StackLayer, "name">[],
+  docSymbols: readonly Pick<mapDocument.DocumentSymbol, "origin">[],
+  fallback: (row: number) => number,
+): (paint: number) => string {
+  return (id) => {
+    const p = paints[id];
+    const row = candidateRow.get(paintKey(p.row, p.kind, p.symbolIdx)) ?? fallback(p.row);
+    const layer = layers[row]?.name ?? `row${row}`;
+    return docSymbols[p.symbolIdx]?.origin === "graphic" ? GRAPHIC_PREFIX + layer : layer;
+  };
+}
+
+/** The stream without the passes `drop` names: a paint image with some layers peeled off. */
+export function withoutPasses(stream: render.PassStream, drop: (pass: render.Pass, symbolIdx: number) => boolean): render.PassStream {
+  const keep: number[] = [];
+  stream.passes.forEach((p, i) => {
+    if (!drop(p, stream.symbolIdx[i])) keep.push(i);
+  });
+  return {
+    ...stream,
+    passes: keep.map((i) => stream.passes[i]),
+    objectIdx: Uint32Array.from(keep, (i) => stream.objectIdx[i]),
+    symbolIdx: Uint32Array.from(keep, (i) => stream.symbolIdx[i]),
+    ...(stream.maskIdx ? { maskIdx: Int32Array.from(keep, (i) => stream.maskIdx![i]) } : {}),
+  };
 }
 
 // ---------------------------------------------------------------- census
