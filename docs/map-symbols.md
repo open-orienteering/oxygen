@@ -1371,8 +1371,9 @@ resolves canonical entries through `paletteIndexOfStack(header.colours)`.
 Not wired yet: §9.2 above is what the importer does. This section
 records what slice I (`SLICES.md` rows I1–I7) builds and the user's
 answers to its three questions; each row writes its own part out here.
-Built so far: the roles (row I2, "Roles" below), which nothing in the
-importer reads yet.
+Built so far: the roles (row I2, "Roles" below) and the layered stack
+built from them (row I3, "Layers" below), which nothing in the importer
+reads yet; the colour-order harness draws every map on the stack.
 
 **The aim.** A document is drawn on the IOF colour order (§1, 03
 Appendix B) instead of the mapper's table, so the course layer and the
@@ -1398,7 +1399,8 @@ colour but the **use**: one colour reference of one symbol.
   kind and the part that draws (area fill, pattern, border, a line's
   infill or outline, point, text); else no role.
 - **Layers.** `header.colours` holds one row per (source colour, role)
-  that objects use, in the palette's order; two source colours of one
+  that objects use (as built, I3: that any symbol references, "Layers"
+  below), in the palette's order; two source colours of one
   role keep their source order. A source colour that serves several
   roles becomes several rows with the same CMYK and `sourceNumber`. A
   row a match needs and no source colour gives takes the CMYK of a
@@ -1578,13 +1580,134 @@ against the I1 harness.
 | `render/__tests__/transform.test.ts` | `renderColourPaths` (every reference with its own path; one colour three times is three entries; area, line, text paths), `mapRenderColourRefs` (per-reference re-index; the identity; agrees with `remapRenderColours`) |
 | `import/__tests__/colour-roles.test.ts` | `colourUses` parts for every type; the rule table for both specs (one brown 50 % as paved area and road infill; one black as building outline, road outline, cultivated dots, stony-ground dots and a tick; a black outline over an infill that is no brown screen; screens by percent; a class out of every candidate's tolerance (yellow 75 % on a sprint map, black 80 %); a tie to the earlier row; ISSprOM's rows); whites and purples without a hint; the ski colours; rule roles within the spec's own palette on both editions; the hint in each match state, beating the rule, two parts with two roles, a class the entry lacks, whites and purples, an overlay entry, a two-id entry, `orange-skio` on iof2022; the library as oracle |
 
+#### Layers (row I3)
+
+Built in `packages/shared/src/import/colour-layers.ts`, pure. No importer
+step calls it yet (row I5 wires it into stage 7); the colour-order
+harness takes it as its candidate (`map-rendering.md` §6.5). The
+exceptions of row I4 (source order for masks, graphic objects' colours
+and uses with no role; deviations) are not in it yet.
+
+```ts
+symbolColourUses(symbols, objectsPerSymbol, infos, rolePalette(spec, edition))
+  → (LayerSymbolUses | null)[]        // per document symbol; null: no render
+buildColourLayers({ colours, infos, uses, needed, spec, edition })
+  → { colours, reindex: { symbols, colours }, report }
+```
+
+**Input.** `colours` is the source table in source order, as the reader
+gives it (before §9.2); `infos` its `identifySourceColours`; `uses` per
+document symbol the uses of its source `render` with their roles
+(`colourRoles`, every reference in `renderColourPaths` order), its
+object count (hidden symbols counted, as stage 7's `usage`), its
+`render.type` and its `origin`; `needed` the palette ids applied
+matches draw with (stage 7's `needed`).
+
+**Rows.**
+
+- One row per (source colour, role) that a symbol references — **zero-object
+  symbols included** (decided overnight on the user's standing
+  instruction, 2026-11-17, for review): Map mode draws with any document
+  symbol (§11.2) and a patch never changes the stack, so a symbol's place
+  must not depend on whether the map has objects of it yet. A row's
+  object count is reported; it decides nothing but which row carries a
+  palette id.
+- A use with **no role** is keyed by its *place* instead of a role:
+  `area` when its symbol's `render.type` is area, else `other`. A
+  no-role colour used by an area and a line is two rows.
+- A **source colour no symbol references** is kept once: with the palette
+  id §9.1 identified it as (course purples excepted: a candidate stands
+  for no id), else with no role, placed as an area when its name says so
+  (`nameKind`), else as `other`.
+- A **needed id no row has** (`needed`, both course purples, the overlay's
+  `OVERLAY_STACK_IDS`): *aliased* — a row of its own in the ink of the
+  most used source colour that §9.1 identified and whose class is
+  `sameClass` with the id's, ties to the lowest index, as §9.2 step 3 —
+  else *inserted* with the palette's CMYK. Purples and ISSkiOM's rows are
+  never aliased, in either direction. An alias row is a split of its
+  source colour: same name, CMYK, `sourceNumber`.
+
+**Order** (bottom first), by the alignment palette
+(`alignmentPalette(edition, spec)`, §9.2; the overlay's rows included):
+
+1. a row with a role at its role's place; rows of one role in source
+   order, an inserted row above them (the course purples over a source
+   purple a hint gave that role);
+2. a no-role `area` row directly under `white-skio`, which stays
+   directly under lower purple (§12.3) — the experiment's "top of the
+   area block" with the ski mask kept in its place (decided overnight,
+   for review); several in source order;
+3. a no-role `other` row directly under upper purple (the experiment's
+   rule); several in source order.
+
+So purple-upper is always the top row and the overlay's rows stand at
+their palette places on every stack: `white-skio` directly under lower
+purple, `orange-skio` directly under `green-skio`, both above black 100 %
+and under upper purple. On ISOM the contour brown is above lower purple;
+on ISSprOM, whose palette ranks `brown100` under it, below.
+
+**Palette ids.** Each id is on exactly one row (`paletteIds: [id]`): of
+the rows of that role, the one with the most objects, ties to the lowest
+source index (§9.2 step 2's rule). The other rows of the role carry no
+`paletteIds`; their role is in the report. `purpleRole` is on the row
+carrying a purple id. Canonical entries therefore resolve exactly as
+before (`paletteIndexOfStack`), and `courseColourStack` accepts the stack.
+
+**The course purples** are always inserted rows (`<edition>:purple-lower`,
+`<edition>:purple-upper`) at their palette places; C15's reuse of a
+source candidate applies to the *source* order only. Both take the ink of
+the map's most used course-purple candidate (§9.2 step 2, either role),
+ties to the highest index (C9, C15), else the palette's. A source purple
+is an ordinary colour: a hint may give it a role (an out-of-bounds area
+drawn in it, `purple-upper`), and then its row stands under the inserted
+row of that role; with none it is a no-role row. An inserted `purple50`
+(ISSprOM) keeps the palette's CMYK.
+
+**Ids.** A source colour's lowest row keeps the colour's id (`src:<n>`);
+its other rows are `src:<n>/<paletteId>`, a no-role row
+`src:<n>/none:area` or `src:<n>/none:other` (a palette id has no colon).
+Split and alias rows copy the colour's name, CMYK, `sourceNumber`, spot
+and overprint, so print sees one ink. Inserted rows are
+`<edition>:<paletteId>` with the palette's name, as today
+(`map-document-format.md` §2.1).
+
+**Output.** `colours` is the stack, index = draw order.
+`reindex.symbols[i]` gives symbol i's row per colour reference, in
+`renderColourPaths` order, for `reindexRenderColours(render, rows)`
+(`render/transform.ts`); `null` for a symbol without a render.
+`reindex.colours[c]` is source colour c's lowest row (for a caller that
+maps colours, not references: the render bridge's proxies).
+`report` — for I4, I5 and I6's panel:
+
+- `rows[]`: `{ row, source, role, place, origin, objects, symbols,
+  graphicObjects }`, `origin` one of `use`, `alias`, `insert`,
+  `unreferenced`; `graphicObjects` the objects of `origin: "graphic"`
+  symbols among `objects`;
+- `split[]`: source colours on several rows, `{ source, sourceNumber,
+  roles }` bottom first;
+- `noRole[]`: `{ row, source, sourceNumber, place, objects }`;
+- `inserted` (ids), `aliased` (`{ paletteId, viaPaletteId, sourceNumber }`,
+  the shape of `colourStack.aliased`), `purpleInk` (the source colour the
+  course purples take their ink from, or `null`).
+
+A symbol's fingerprint (§8.5) is unchanged: split rows keep the colour's
+name and CMYK, so `documentClassOf` gives every reference the class it
+had. The function is deterministic and does not change its input.
+
+**Measured** (the harness, `map-rendering.md` §6.5 "I3"): see the table
+there. NUMBERS_PLACEHOLDER
+
+| Test (`packages/shared/src/…`) | Covers |
+|---|---|
+| `import/__tests__/colour-layers.test.ts` | a badly ordered ISOM table: the whole stack bottom first; one brown 50 % split into paved area and road infill (same ink and number, ids `src:n` and `src:n/<id>`); one black as road outline, dots and black 100 %; the road outline over the paved brown and under the infill, buildings over the paved brown; each palette id on one row, every needed, purple and overlay id present; an alias (source ink, a row of its own) and an insert (palette ink); unreferenced colours (identified, and by name); a zero-object symbol's row; no-role areas under the mask row and others under upper purple, graphic objects counted; both course purples inserted in the map's ink, the source purple an ordinary row; the overlay's places; `courseColourStack`; the per-reference re-index (one black on two rows in one symbol), every reference on a row of its own colour, `reindex.colours`; `documentSymbolFingerprints` unchanged; two colours of one role (source order; the carrier by objects, ties to the lowest); a hinted source purple under the course row, the ink by use and by index, the palette's without a purple; both specs' order (the contour brown either side of lower purple; every row in palette order); a ski green as `green-skio`, never aliased; determinism; input unchanged; bad references and infos |
+| `render/__tests__/transform.test.ts` | `reindexRenderColours` (one row per reference, the identity, a count mismatch throws) |
+
 ## 10. Pending in this chapter
 
-- **Canonical layers (§9.3)**: the roles are built (I2) and not yet
-  read by the importer. Rows I1, I3–I7 in `SLICES.md`: the harness, the
-  layered stack, the
-  source-order exceptions and kept deviations, the importer wiring and
-  bump, the per-map switch with the review page's colour panel, the
+- **Canonical layers (§9.3)**: the roles (I2) and the layered stack (I3)
+  are built and not yet read by the importer. Rows I4–I7 in `SLICES.md`:
+  the source-order exceptions and kept deviations, the importer wiring
+  and bump, the per-map switch with the review page's colour panel, the
   per-map deviation overrides. Not in the slice: a club-wide default for
   which deviations are kept.
 - Mapper object queries as CRT sources (§8.6 `CRT_QUERY_UNSUPPORTED`)

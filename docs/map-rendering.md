@@ -3807,8 +3807,22 @@ through `documentRenderInput` → `symbolise` → the reference raster
 - *source* — the document as the importer built it (§9.2 of
   `map-symbols.md`: the mapper's table, purples placed by rule);
 - *candidate* — the same document on another stack. The candidate is a
-  parameter of the tool (`--candidate`). In I1 it is the 2026-11-14
-  experiment's **permutation** (`permutationOrder`): every row at its
+  parameter of the tool (`--candidate`): `layers` (the default, from I3)
+  or `permutation` (I1's baseline).
+
+  **`layers`** is the layered stack (`map-symbols.md` §9.3 "Layers",
+  `buildColourLayers`), built from the imported document until I5 builds
+  it in stage 7 (`layeredCandidate`): the source table is the stack's
+  rows with a `sourceNumber` (stage 7 inserts rows without one and never
+  reorders the source's; `sourceTableOf`), each source symbol's IR is
+  mapped back onto it, roles are read from the symbols' matches
+  (`symbolColourUses`), `needed` from the applied ones, and every source
+  symbol is re-indexed per reference (`reindexRenderColours`). Canonical
+  symbols follow their palette ids; proxy-drawn objects take the row
+  source row 0 became (`rowOfAligned`). No exceptions yet (I4).
+
+  **`permutation`** is the 2026-11-14
+  experiment's (`permutationOrder`): every row at its
   highest role's place in the alignment palette (`alignmentPalette`,
   `map-symbols.md` §9.2); a row with no role by the symbol kind drawing
   most objects in it — an area colour just under lower purple, anything
@@ -3819,12 +3833,12 @@ through `documentRenderInput` → `symbolise` → the reference raster
   in the row that row 0 moved to (`permutedRenderOptions`). The
   experiment missed that last part and recoloured them: Crop-B's
   frame bars, drawn by graphic objects without IR, came out yellow.
-  From I3 the candidate is the importer's layered stack.
 
 A row's *roles* are the palette ids it stands for (`paletteIds`, plus
 the id stage 7 identified for it, §9.2 step 2) that the alignment
 palette has. In the permutation a colour serving several roles stays one
-row, ranked by its highest role.
+row, ranked by its highest role. A layered row has one role (its
+report's), or none.
 
 **Tiles and the diff.** The map's bounds are cut into square tiles
 (`--tile-mm`, default 60 mm) drawn at `--px-per-mm` (default 6); a tile
@@ -3866,8 +3880,23 @@ puit-de-laven's changed pixels. In order, a pixel takes the first of:
 Kinds sum to the changed pixels; the *named share* is the part not
 `(unattributed)`.
 
+**Naming with `layers`.** A source row may become several layers, so
+both drawings are named in the *candidate's* layers. A *joint document*
+(`jointDocument`) has one stack row per pair (source row, candidate row)
+of the two documents' colour references, zipped symbol by symbol and
+reference by reference, canonical entries through the palette ids both
+stacks carry; drawn over the tile, each of its passes says where it
+draws in either order (`paintCorrespondence`). A source paint (row, pass
+kind, symbol) takes the name of the candidate layer most of its passes
+draw in (`correspondingNamer`; a paint the tile lacks, its row's lowest
+layer); a layer's place in the source drawing, for step 2, is the source
+row most of its passes come from; step 3 peels a source layer by its
+passes (`withoutPasses`), not by its row. With `permutation` each order
+names its own rows, as in I1.
+
 A layer's **name** is its roles joined by `+` in palette order
-(`brown50-paved+brown50-road`: a multi-role colour shows as one), else
+(`brown50-paved+brown50-road`: a multi-role colour shows as one in the
+permutation; a layered row has at most one), else
 `none:<colour class>:<kind>` (`none:white:area`, `none:purple40:area`);
 repeats in one stack get `#2`, `#3`… in stack order; a paint drawn by a
 graphic object's synthesised symbol (`origin: "graphic"`,
@@ -3921,7 +3950,7 @@ graphic), the rows of lower and upper purple.
 
 ```
 node scripts/measure-colour-order.mjs <file|dir>… [--maps <tsv>] [--out <dir>] [--classes <json>]
-     [--candidate permutation] [--tile-mm 60] [--px-per-mm 6] [--tolerance 16]
+     [--candidate layers|permutation] [--tile-mm 60] [--px-per-mm 6] [--tolerance 16]
      [--worst 3] [--worst-px-per-mm 12] [--window x0,y0,x1,y1]
 ```
 
@@ -3929,8 +3958,10 @@ node scripts/measure-colour-order.mjs <file|dir>… [--maps <tsv>] [--out <dir>]
 file name; blank lines and `#` comments skipped); labels name the output
 directories. `--out` must lie under a `.local/colour-order/` directory
 (default `<repo>/.local/colour-order/`); per map it writes
-`<label>/summary.json` (settings, census, measures, kinds with class and
-suggestion, the class totals, unused rules, the worst tiles),
+`<label>/summary.json` (settings, census, the layered stack's summary —
+rows, split colours by their roles, no-role and unreferenced rows,
+inserted and aliased ids — measures, kinds with class and suggestion,
+the class totals, unused rules, the worst tiles),
 `tiles.json` (per tile: paper bounds, pixels, changed, unattributed),
 `classes.suggested.json` and `worst-<n>-tile-<x>-<y>.png` — source |
 candidate | difference (red where changed, the source at a quarter of
@@ -3998,8 +4029,8 @@ Tests:
 
 | Test | Asserts |
 |---|---|
-| `packages/api/src/render/__tests__/colour-order-diff.test.ts` | the tolerance boundary and ink count; the side-by-side image; the tile grid, a window, ranking; paint ids rising with the sort key, the id colour round trip, crisp paint images on five contract fixtures (every pixel decodes, the reference raster's grid), an overlap of one ink named by the upper row; `viewKind`, `flipKind` (a thin line over a swapped pair, no flip, the paper and a missing layer taking no part), `sharedTop`, `withoutRows`, `namePeeled` (a swap under a shared top layer, one view per peel set, no layer peeled twice, the depth limit), `nameChanges` (neighbour vote, unattributed, counts); layers (roles, uses, kind, class, names, `#n`, `graphic:`); the permutation (palette rank, roleless areas and others, ties), `permuteStack` re-indexing, `inverseOrder`, the proxies' row (`permutedRenderOptions`) and its effect — an IR-less object on an encoded document drawn in the same colour in both orders, and not without the options; the census; `parseClassification`, `classify` (first match, map scope, `*`, a `graphic:*` prefix, unattributed never classified, unused rules, share), `suggestClass` |
-| `scripts/__tests__/measure-colour-order.test.mjs` (`pnpm test:scripts`) | on `docs/screenshots/fixtures/puit-de-laven.omap` from a `--maps` file: exit 1 with nothing classified, kinds summing to the changed pixels, named share ≥ 95 %, a change between two palette layers, the census, tiles, suggestions and worst images written, none of the map's colour names on standard output; a window over one tile classified by a file → exit 0; a window that meets no tile → exit 1, the reason on standard error; usage errors (no maps, `--out` outside `.local/colour-order/`, an unknown candidate, a bad window or tile size, an unknown option, a missing file, a bad rule) → exit 2 |
+| `packages/api/src/render/__tests__/colour-order-diff.test.ts` | the tolerance boundary and ink count; the side-by-side image; the tile grid, a window, ranking; paint ids rising with the sort key, the id colour round trip, crisp paint images on five contract fixtures (every pixel decodes, the reference raster's grid), an overlap of one ink named by the upper row; `viewKind`, `flipKind` (a thin line over a swapped pair, no flip, the paper and a missing layer taking no part), `sharedTop`, `withoutRows`, `namePeeled` (a swap under a shared top layer, one view per peel set, no layer peeled twice, the depth limit), `nameChanges` (neighbour vote, unattributed, counts); layers (roles, uses, kind, class, names, `#n`, `graphic:`); the permutation (palette rank, roleless areas and others, ties), `permuteStack` re-indexing, `inverseOrder`, the proxies' row (`permutedRenderOptions`) and its effect — an IR-less object on an encoded document drawn in the same colour in both orders, and not without the options; the census; `parseClassification`, `classify` (first match, map scope, `*`, a `graphic:*` prefix, unattributed never classified, unused rules, share), `suggestClass`; the layered candidate on an encoded stage 7 document — `sourceTableOf`, one brown split into paved area and road infill, the road re-indexed per reference, one role per layer name, `rowOfAligned` and the proxies' row, every object in the same ink in both orders, a symbol drawing in an inserted row rejected; `jointDocument` and `paintCorrespondence` (the brown's paints to the paved and the road layer, layers back to their source rows, mismatched symbol tables rejected), `correspondingNamer` (`graphic:` too), `withoutPasses` |
+| `scripts/__tests__/measure-colour-order.test.mjs` (`pnpm test:scripts`) | on `docs/screenshots/fixtures/puit-de-laven.omap` from a `--maps` file, candidate `layers` by default: exit 1 with nothing classified, kinds summing to the changed pixels, named share ≥ 95 %, a change between two palette layers, no `+`-joined name; the layered summary (more rows than colours, split colours, both course purples inserted) and its standard-output line; `--candidate permutation` still runs, with a multi-role name; the census, tiles, suggestions and worst images written, none of the map's colour names on standard output; a window over one tile classified by a file → exit 0; a window that meets no tile → exit 1, the reason on standard error; usage errors (no maps, `--out` outside `.local/colour-order/`, an unknown candidate, a bad window or tile size, an unknown option, a missing file, a bad rule) → exit 2 |
 
 ## 7. Where things live
 
