@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseRenderSymbol } from "../symbol.js";
-import { formatRenderPath, mapRenderColourRefs, remapRenderColours, renderColourPaths, renderColourRefs } from "../transform.js";
+import { formatColourPath, mapRenderColourRefs, remapRenderColours, renderColourPaths, renderColourRefs } from "../transform.js";
 
 const stroke = (colour: number) => ({ kind: "stroke" as const, colour, widthUm: 100, geometry: { coords: [0, 0, 100, 0] } });
 
@@ -26,7 +26,7 @@ const text = parseRenderSymbol({
 
 describe("renderColourPaths", () => {
   it("lists every reference with its own path, one colour used three times as three entries", () => {
-    const refs = renderColourPaths(road).map((r) => [formatRenderPath(r.path), r.colour]);
+    const refs = renderColourPaths(road).map((r) => [formatColourPath(r.path), r.colour]);
     expect(refs).toEqual([
       ["borders.left.colour", 0],
       ["borders.right.colour", 0],
@@ -38,7 +38,7 @@ describe("renderColourPaths", () => {
   });
 
   it("reaches area fills, pattern glyph parts, borders and halos", () => {
-    expect(renderColourPaths(paved).map((r) => formatRenderPath(r.path))).toEqual([
+    expect(renderColourPaths(paved).map((r) => formatColourPath(r.path))).toEqual([
       "fill",
       "patterns[0].glyph.parts[0].colour",
       "border.main.colour",
@@ -47,7 +47,7 @@ describe("renderColourPaths", () => {
   });
 
   it("reaches a text's colour, halo, shadow and frame", () => {
-    expect(renderColourPaths(text).map((r) => [formatRenderPath(r.path), r.colour])).toEqual([
+    expect(renderColourPaths(text).map((r) => [formatColourPath(r.path), r.colour])).toEqual([
       ["colour", 0],
       ["halo.colour", 7],
       ["shadow.colour", 2],

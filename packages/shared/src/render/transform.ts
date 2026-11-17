@@ -13,13 +13,13 @@ import { parseRenderSymbol, type RenderSymbol } from "./symbol.js";
 const COLOUR_KEYS = new Set(["colour", "fill", "backgroundColour"]);
 
 /** Keys and array indices from the symbol's root to a value: `["border", "borders", "left", "colour"]`, `["glyph", "parts", 2, "colour"]`. */
-export type RenderPath = readonly (string | number)[];
+export type ColourPath = readonly (string | number)[];
 
 /**
  * Rebuild a plain-data tree, letting `visit` replace each keyed value before
  * recursing into it. `path` ends with `key` and is only valid during the call.
  */
-function mapTree(node: unknown, visit: (key: string, value: unknown, path: RenderPath) => unknown, path: (string | number)[] = []): unknown {
+function mapTree(node: unknown, visit: (key: string, value: unknown, path: ColourPath) => unknown, path: (string | number)[] = []): unknown {
   if (Array.isArray(node)) {
     return node.map((n, i) => {
       path.push(i);
@@ -81,7 +81,7 @@ export function renderColourRefs(sym: RenderSymbol): number[] {
 
 /** One colour reference of a symbol: where it sits and which colour index it holds. */
 export interface RenderColourRef {
-  path: RenderPath;
+  path: ColourPath;
   colour: number;
 }
 
@@ -110,6 +110,6 @@ export function mapRenderColourRefs(sym: RenderSymbol, fn: (ref: RenderColourRef
 }
 
 /** Path as text, `border.borders.left.colour`, `glyph.parts[2].colour`. */
-export function formatRenderPath(path: RenderPath): string {
+export function formatColourPath(path: ColourPath): string {
   return path.map((p, i) => (typeof p === "number" ? `[${p}]` : i === 0 ? p : `.${p}`)).join("");
 }
