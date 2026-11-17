@@ -822,7 +822,7 @@ Per selected track (`ready`: its points loaded and projected, §5.1):
   track], putSymbols? }`, then `mapTrack.markConverted { marks: [{ id,
   opId: "add:<id>" }] }` (§1.2). One undo entry on the editor's stack.
 - **Two writes, not one transaction** (decided overnight on the user's
-  standing instruction (2026-11-13), for review; G26 planner's Q3): the
+  standing instruction (2026-11-13), confirmed by the user 2026-11-17; G26 planner's Q3): the
   patch first, then the marks, on do, undo and redo alike. The marks are
   a step of their own: a refused mark is shown and the entry kept, on undo
   and redo too (the line is there, or gone; the track's mark is merely
@@ -845,7 +845,7 @@ Per selected track (`ready`: its points loaded and projected, §5.1):
 
 A converted track (`convertedOp` set) is hidden from the layer by default
 and kept in the list with its mark. *Show converted* (decided overnight on
-the user's standing instruction (2026-11-13), for review; G26 planner's
+the user's standing instruction (2026-11-13), confirmed by the user 2026-11-17; G26 planner's
 Q2) is a checkbox in the panel, per device and per event (`localStorage`
 `oxygen:gps-tracks:<nameId>:show-converted`), shown while a listed track
 is converted: it makes the default *shown* for converted tracks. The
@@ -859,7 +859,7 @@ Remembered on the device, not per event (`localStorage`
 0.01 mm, both clamped to answer 3's ranges, *Snap ends* (`snapEnds`, G28,
 §6.7; absent or not `false` = on), and the symbol. **The symbol
 across maps** (decided overnight on the user's standing instruction
-(2026-11-13), for review; G26 planner's Q4): the picked item is
+(2026-11-13), confirmed by the user 2026-11-17; G26 planner's Q4): the picked item is
 remembered by its key with the document's hash, and by its library entry
 when it has one. On that document the item itself is chosen again (not a
 sibling document symbol matched to the same entry); on any other map the
@@ -873,7 +873,7 @@ another document's own symbol is never preselected.
 A converted line prints as any added object (`map-patches.md` §2; the
 reference track never does, §5.1). **The row's "in the PDF's page
 raster"** (decided overnight on the user's standing instruction
-(2026-11-13), for review; G26 planner's Q1, G9 question 2's precedent) is
+(2026-11-13), confirmed by the user 2026-11-17; G26 planner's Q1, G9 question 2's precedent) is
 proven in integration — `print-patch.test.ts` rasterises `maps.pdf`
 (`pdftocairo`) before and after a line with `ISSkiOM2019:801.1` and finds
 every changed pixel inside its box — since poppler is not on the E2E job
@@ -911,13 +911,13 @@ other or running past.
   own ski symbols). Not roads or paths (ISOM 501–508), nor anything matched
   to another entry, nor points and areas. An unreviewed suggestion is not
   an applied match, so a symbol that only has one counts by its code
-  (decided overnight on the user's standing instruction (2026-11-13), for review: the renderer draws it from its source too). Hidden
-  objects and hidden symbols are no targets (decided overnight on the user's standing instruction (2026-11-13), for review: as the snap
+  (decided overnight on the user's standing instruction (2026-11-13), confirmed by the user 2026-11-17: the renderer draws it from its source too). Hidden
+  objects and hidden symbols are no targets (decided overnight on the user's standing instruction (2026-11-13), confirmed by the user 2026-11-17: as the snap
   index). The line being snapped is never its own target.
 - **A batch** (answer 5): the tracks of one conversion are snapped in list
   order, each seeing the document's track lines and the lines already
   made in that batch. The batch's lines are targets only when the
-  conversion's symbol is itself a track symbol (decided overnight on the user's standing instruction (2026-11-13), for review: one rule
+  conversion's symbol is itself a track symbol (decided overnight on the user's standing instruction (2026-11-13), confirmed by the user 2026-11-17: one rule
   for what an end snaps onto, so a batch gives what converting the tracks
   one at a time would). On a tie the document's line wins, then the
   earlier line of the batch.
@@ -936,13 +936,13 @@ other or running past.
      stay within 1.5 mm of the target, the first segment that crosses it is
      cut there: the nodes past the crossing go and the crossing becomes the
      end. The rule "every point after the crossing within 1.5 mm" is
-     checked at the nodes of the cut-off tail (decided overnight on the user's standing instruction (2026-11-13), for review). With
+     checked at the nodes of the cut-off tail (decided overnight on the user's standing instruction (2026-11-13), confirmed by the user 2026-11-17). With
      several crossings on that segment the one nearest the end is taken
-     (decided overnight on the user's standing instruction (2026-11-13), for review: it removes the least of the recording). A tail
+     (decided overnight on the user's standing instruction (2026-11-13), confirmed by the user 2026-11-17: it removes the least of the recording). A tail
      that leaves reach before a crossing is not cut.
   3. **Short**: else the end node moves to the nearest point on the
      target: the last segment is extended straight onto it, with no node
-     added (decided overnight on the user's standing instruction (2026-11-13), for review, the G28 planner's question 1: "moved onto it" read
+     added (decided overnight on the user's standing instruction (2026-11-13), confirmed by the user 2026-11-17, the G28 planner's question 1: "moved onto it" read
      literally; on an oblique approach the last segment turns slightly
      rather than being prolonged along its own direction).
   An end already on the target — within half a unit's diagonal, as a

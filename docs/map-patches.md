@@ -157,7 +157,7 @@ interface PatchChange {
 and removes it, a `putUnresolved` key that is not its entry's
 (`unresolvedKey(from, op)`, §4.1), and a key both put and removed. The
 merge removes, then puts. `putUnresolved` is row G12b's undo of a drop
-and of an attach (decided overnight on the user's standing instruction (2026-11-13), for review). The result is a new patch (the input is not mutated) with
+and of an attach (decided overnight on the user's standing instruction (2026-11-13), confirmed by the user 2026-11-17). The result is a new patch (the input is not mutated) with
 `ops`, `symbols` and `unresolved` keys in sorted order (an empty
 `unresolved` omitted), so two merges reaching the same
 state also serialise to the same JSON. Merging the same change twice
@@ -701,13 +701,13 @@ place. `enabled` is kept.
     counterpart, or any `add` — takes the `symbol` the user picked (row
     G12b; user 2026-11-15, G9 question 1): a `{ doc }` index into `doc`'s
     table or a `{ patch: <library entry id> }` key, materialised for
-    `doc` (the argument's shape and the optional `sourceIndex`: decided overnight on the user's standing instruction (2026-11-13), for review).
+    `doc` (the argument's shape and the optional `sourceIndex`: decided overnight on the user's standing instruction (2026-11-13), confirmed by the user 2026-11-17).
     An add keeps its coordinates (rescaled) and takes no object; a
     resymbol's object is found as re-resolution finds it (§4.2: on the
     entry's source by `sourceIndex`, else by its anchor) unless
     `sourceIndex` is given. A `target` entry's `resymbol` may take a
     `symbol` too, which replaces its own (decided overnight on the
-    user's standing instruction (2026-11-13), for review).
+    user's standing instruction (2026-11-13), confirmed by the user 2026-11-17).
   - Refused (`{ ok: false, reason }`, the API's `PATCH_ATTACH_REFUSED:
     <reason>`): `no-entry`; `drop-only` — a `symbol` entry or an add
     without a `symbol` (what an older client sends, so it reads as
@@ -920,7 +920,8 @@ mutation, so a box forwards it, §3.4):
      version (`club_map_version_id`) of the same source whose patch is
      the document's → else `PATCH_NOT_CLUB_MAP` (promote is for a
      club-pinned map; slice G split);
-   - that version must be the series' latest → else `PATCH_NOT_LATEST`;
+   - that version must be the series' latest → else `PATCH_NOT_LATEST`
+     (G12a's question 1, confirmed by the user 2026-11-17);
    - `versionLayerOfPatch` null → `PATCH_NOTHING_TO_PROMOTE`;
    - the new `club_map_versions` row: `seq` = latest + 1, the label,
      the source, `uploaded_by` = the promoter, `patch` = the base
@@ -985,7 +986,8 @@ The patch travels with the document (answer 1):
 Dedup (`currentDocumentFor`) and the club pin compare the patch; a
 version is its file *and* its patch. The re-match pass has no "patch"
 staleness reason: a version is re-imported only for the technical and
-decision reasons of §6.9 (decision log, G12a).
+decision reasons of §6.9 (decision log, G12a's question 2, confirmed by
+the user 2026-11-17).
 
 ### 5.6 Delete of the latest promoted version
 
@@ -1028,13 +1030,13 @@ version n* with a confirm (row G12b).
   unit `snapshotPatchOf` test and the dump's `SELECT *`; `lease.test.ts`
   and `backup.test.ts` do not assert it.
 - **Promote on a venue box** (G12b, decided overnight on the user's
-  standing instruction (2026-11-13), for review): the API forwards
+  standing instruction (2026-11-13), confirmed by the user 2026-11-17): the API forwards
   `mapPatch.promote` (§5 defaults), but `promoteStatus` is served
   locally and the job runs in the cloud, so a box could not follow it
   after the hold; the editor does not offer it on a venue node ("open
   the event in the cloud"). Forwarding `promoteStatus` would lift it.
 - **A promote's running state in the E2E** (G12b; decided overnight on
-  the user's standing instruction (2026-11-13), for review): a real job
+  the user's standing instruction (2026-11-13), confirmed by the user 2026-11-17): a real job
   on the fixture finishes inside the 30 s hold, so the E2E answers
   `promoteStatus` as running through a routed response
   (`editor-map-promoting`, the button `running`, the toggle and the

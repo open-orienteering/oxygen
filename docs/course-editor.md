@@ -2093,7 +2093,7 @@ object, `{ added: id }` for one the patch adds.
     error line (translated per code, `PATCH_ATTACH_REFUSED` with its
     reason) with the metadata and the patch reloaded, as every Map-mode
     write. `editor-corrections-unresolved-error` is gone (the procedure
-    for the do and redo steps and the error line: decided overnight on the user's standing instruction (2026-11-13), for review). The block is
+    for the do and redo steps and the error line: decided overnight on the user's standing instruction (2026-11-13), confirmed by the user 2026-11-17). The block is
     presentational (`modes/map/Corrections.tsx`); its rows are
     `modes/map/unresolved.ts` `unresolvedRows` over the session's
     patch.
@@ -2338,7 +2338,7 @@ line, *Cut hole* and *Remove hole* on a selected area. The behaviour was
 decided with the user (2026-11-15, the G10 planner's questions 1–8, every
 recommendation; marked "answer n" below); the points marked "decided
 overnight" were decided on the user's standing instruction (2026-11-13),
-for review. The pure rules are `modes/map/shape-ops.ts`; the wiring is
+confirmed by the user 2026-11-17. The pure rules are `modes/map/shape-ops.ts`; the wiring is
 `MapMode.tsx`.
 
 **Buttons, no keys** (answer 7). They are buttons in the *Map object*
@@ -2628,7 +2628,7 @@ mode's `commit` (§13 "Ops").
   again on every control change; the reference tracks stay drawn over it.
   While the panel is open a move drag is off (the preview holds the draft);
   hide, revert and *Change symbol* still work (decided overnight on the
-  user's standing instruction (2026-11-13), for review; G26 planner's Q5:
+  user's standing instruction (2026-11-13), confirmed by the user 2026-11-17; G26 planner's Q5:
   the smallest restriction that keeps the one draft the preview's).
 - **The write.** *Convert*: one `mapPatch.applyChange { put: [one add per
   track], putSymbols? }` (the symbol on first use, `symbolPut`), then
@@ -2648,7 +2648,7 @@ mode's `commit` (§13 "Ops").
   promoted (§6 answer 1).
 - **Remembered on the device** (`localStorage` `oxygen:gps-track-convert`,
   not per event): both controls, *Snap ends* (`snapEnds`, absent = on;
-  decided overnight on the user's standing instruction (2026-11-13), for review, as every other panel control), and the symbol — on its own document the
+  decided overnight on the user's standing instruction (2026-11-13), confirmed by the user 2026-11-17, as every other panel control), and the symbol — on its own document the
   item picked (by key), elsewhere the first item offering its library
   entry (library, patch or a document symbol matched to it); an unmatched
   document symbol on its own document only; a symbol the map cannot draw is
@@ -2688,7 +2688,7 @@ track-symbol filter, `snapLineEnds`), the target search `nearestOnLines`
   as for the other operations ("Line and area operations", "Writes").
   Disabled with `data-reason` as they are: `encoding`, `multi-part`,
   `closed`, and `no-target` when no end would move. A document line gets
-  no button (decided overnight on the user's standing instruction (2026-11-13), for review: the row names "an added line").
+  no button (decided overnight on the user's standing instruction (2026-11-13), confirmed by the user 2026-11-17: the row names "an added line").
 
 ### Promote
 
@@ -2708,7 +2708,7 @@ the event's corrections that apply into the club map's next version
   — no `courses.edit` (answer 9); `venue` — a venue box ("open the event
   in the cloud": `promoteStatus` is served locally and the job runs in
   the cloud, so the box could not follow it; decided overnight on the
-  user's standing instruction (2026-11-13), for review); `running` — a
+  user's standing instruction (2026-11-13), confirmed by the user 2026-11-17); `running` — a
   promote is being sent or its job is queued or running; `off` — *Apply
   corrections* is off; `nothing` — no row of *Corrections* applies (every
   row has an issue, or there are none) (answer 5); `busy` — a Map-mode
@@ -2746,7 +2746,7 @@ the event's corrections that apply into the club map's next version
   write that races it is refused `PATCH_PROMOTING` (its text on the
   error line).
 - **Undo entries dropped** (answer 6; decided overnight on the user's
-  standing instruction (2026-11-13), for review): when this session sees
+  standing instruction (2026-11-13), confirmed by the user 2026-11-17): when this session sees
   a promote start — its own request accepted, or `promoteStatus` turning
   queued / running for a job it had not seen — the page's undo stack
   drops every entry Map mode's `commit` recorded (the patch's: gestures,
