@@ -41,7 +41,7 @@ load, the resymbol, its print and the revert take several seconds, so the
 "after" print usually lands in a later second.
 
 The writer's `deterministic` option (fixed dates) is for the composer's tests.
-The route prints with the real date, as it should (course-print.md §3.2, §8.3).
+The route prints with the real date, as it should (course-print.md §3.2).
 
 ## Fix
 
@@ -58,5 +58,7 @@ with it.
 
 ## Verification
 
-- The test under the same CPU load, `--repeat-each=20`: 20 of 20 passed.
-- One full `pnpm test:e2e` run.
+- The test under the same CPU load, `--repeat-each=20`: 20 of 20 passed
+  (before the fix: 7 of 15 failed).
+- One full `pnpm test:e2e` run: 4 shards, 459 passed, 2 skipped, none flaky;
+  the preview stack, 1 passed.
