@@ -191,7 +191,6 @@ export async function rasterisePaints(
 
 /** Names for the kinds a pixel can fall into besides two layers. */
 export const UNATTRIBUTED = "(unattributed)";
-export const UNNAMED = "(unnamed)";
 export const NOTHING_NAME = "(paper)";
 
 /** The key of a change kind: the layer on top in the source drawing, then in the candidate. */
@@ -201,38 +200,109 @@ export function splitKind(key: string): [string, string] {
   return at < 0 ? [key, key] : [key.slice(0, at), key.slice(at + 3)];
 }
 
+/** A pair of paint images (source, candidate) and how to name their paints. */
+export interface PaintView {
+  source: Int32Array;
+  candidate: Int32Array;
+  nameSource: (paint: number) => string;
+  nameCandidate: (paint: number) => string;
+}
+
 /**
- * Names every changed pixel by its kind `"<from> → <to>"`: the layer the
- * source paint image has on top, then the candidate's. A *fringe* pixel —
- * the same layer on top in both (an anti-aliased edge whose neighbour
- * changed) or an undecodable value — takes the most frequent kind among
- * its changed 8-neighbours that are not fringe (ties: the first in key
- * order), else `(unattributed)`. Counts sum to the changed pixels.
+ * The two layers a view has on top at pixel `i`, or null when it cannot
+ * tell the change apart: the same layer on top in both orders, or a value
+ * that is no paint.
  */
-export function nameChanges(
-  mask: Uint8Array,
+export function viewKind(v: PaintView, i: number): { from: string; to: string } | null {
+  const a = v.source[i], b = v.candidate[i];
+  if (a === UNDECODABLE || b === UNDECODABLE) return null;
+  const from = a === NOTHING ? NOTHING_NAME : v.nameSource(a);
+  const to = b === NOTHING ? NOTHING_NAME : v.nameCandidate(b);
+  return from === to ? null : { from, to };
+}
+
+/**
+ * The kind of a pixel the top layers cannot tell (the same layer on top in
+ * both orders, or nothing drawn at its centre): an anti-aliased pixel takes
+ * colour from the layers around it, so among the layers on top anywhere in
+ * its 3×3 neighbourhood (both images) it is the pair whose order differs
+ * between the two stacks — named by the one above in the source, then the
+ * one above in the candidate. Several flipped pairs: the one seen most
+ * often around the pixel, ties by key. `rowOf` gives a paint name's place
+ * in each stack (`graphic:` stripped); undefined when no pair flipped.
+ */
+export function flipKind(
+  v: PaintView,
+  i: number,
   width: number,
   height: number,
-  sourceIds: Int32Array,
-  candidateIds: Int32Array,
-  nameSource: (paint: number) => string,
-  nameCandidate: (paint: number) => string,
-): Map<string, number> {
+  rowOf: { source: (name: string) => number | undefined; candidate: (name: string) => number | undefined },
+): string | undefined {
+  const x = i % width, y = (i - x) / width;
+  const seen = new Map<string, number>();
+  const add = (id: number, name: (p: number) => string) => {
+    if (id < 0) return;
+    const n = name(id);
+    seen.set(n, (seen.get(n) ?? 0) + 1);
+  };
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      const xx = x + dx, yy = y + dy;
+      if (xx < 0 || yy < 0 || xx >= width || yy >= height) continue;
+      const j = yy * width + xx;
+      add(v.source[j], v.nameSource);
+      add(v.candidate[j], v.nameCandidate);
+    }
+  }
+  const names = [...seen.keys()].sort();
+  let best: { key: string; score: number } | undefined;
+  for (let a = 0; a < names.length; a++) {
+    for (let b = a + 1; b < names.length; b++) {
+      const p = names[a], q = names[b];
+      const sp = rowOf.source(p), sq = rowOf.source(q), cp = rowOf.candidate(p), cq = rowOf.candidate(q);
+      if (sp === undefined || sq === undefined || cp === undefined || cq === undefined || sp === sq || cp === cq) continue;
+      if (sp > sq === cp > cq) continue;
+      const key = sp > sq ? kindKey(p, q) : kindKey(q, p);
+      const score = seen.get(p)! + seen.get(q)!;
+      if (!best || score > best.score || (score === best.score && key < best.key)) best = { key, score };
+    }
+  }
+  return best?.key;
+}
+
+/** A pixel's kind from one paint view: `viewKind`, else `flipKind`; undefined when neither can tell. */
+export function viewKindOf(
+  v: PaintView,
+  width: number,
+  height: number,
+  rowOf: Parameters<typeof flipKind>[4],
+): (i: number) => string | undefined {
+  return (i) => {
+    const k = viewKind(v, i);
+    return k ? kindKey(k.from, k.to) : flipKind(v, i, width, height, rowOf);
+  };
+}
+
+/**
+ * Names every changed pixel by its kind `"<from> → <to>"`. `kindOf(i)`
+ * gives a pixel's kind when the paint images can tell it (`viewKind`, then
+ * `flipKind`); a pixel they cannot takes the most frequent kind among its
+ * changed 8-neighbours that have one (ties: the first in key order), else
+ * `(unattributed)`. Counts sum to the changed pixels.
+ */
+export function nameChanges(mask: Uint8Array, width: number, height: number, kindOf: (i: number) => string | undefined): Map<string, number> {
   const n = width * height;
-  if (mask.length !== n || sourceIds.length !== n || candidateIds.length !== n) throw new Error("nameChanges: size mismatch");
-  const name = (id: number, f: (p: number) => string) => (id === NOTHING ? NOTHING_NAME : id === UNDECODABLE ? UNNAMED : f(id));
+  if (mask.length !== n) throw new Error("nameChanges: size mismatch");
   const kinds = new Map<string, number>();
   const kindAt = new Array<string | undefined>(n);
   const fringe: number[] = [];
   for (let i = 0; i < n; i++) {
     if (!mask[i]) continue;
-    const from = name(sourceIds[i], nameSource);
-    const to = name(candidateIds[i], nameCandidate);
-    if (from === to || from === UNNAMED || to === UNNAMED) {
+    const k = kindOf(i);
+    if (k === undefined) {
       fringe.push(i);
       continue;
     }
-    const k = kindKey(from, to);
     kindAt[i] = k;
     kinds.set(k, (kinds.get(k) ?? 0) + 1);
   }
@@ -499,19 +569,18 @@ export interface ClassificationResult {
 
 /**
  * Classifies a map's change kinds: the first rule (file order) whose map,
- * `from` and `to` match. `(unattributed)` and `(unnamed)` are never
- * classified, so the gate cannot pass by leaving pixels unnamed.
+ * `from` and `to` match. `(unattributed)` is never classified, so the gate
+ * cannot pass by leaving pixels unnamed.
  */
 export function classify(kinds: ReadonlyMap<string, number>, c: Classification, mapLabel: string): ClassificationResult {
   const byClass = Object.fromEntries([...CHANGE_CLASSES, UNCLASSIFIED].map((k) => [k, 0])) as ClassificationResult["byClass"];
   const used = new Set<number>();
   const out: ClassifiedKind[] = [];
-  const unnamed = (n: string) => n === UNATTRIBUTED || n === UNNAMED;
   let changed = 0;
   for (const [key, px] of [...kinds].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))) {
     const [from, to] = splitKind(key);
     changed += px;
-    const rule = unnamed(from) || unnamed(to)
+    const rule = from === UNATTRIBUTED || to === UNATTRIBUTED
       ? -1
       : c.rules.findIndex((r) => (r.map === undefined || r.map === mapLabel) && (r.from === "*" || r.from === from) && (r.to === "*" || r.to === to));
     const cls = rule < 0 ? UNCLASSIFIED : c.rules[rule].class;

@@ -30,7 +30,10 @@ import {
   tileGrid,
   UNATTRIBUTED,
   UNDECODABLE,
-  UNNAMED,
+  viewKind,
+  viewKindOf,
+  flipKind,
+  type PaintView,
   type Rgba,
   type StackLayer,
 } from "../colour-order-diff.js";
@@ -141,35 +144,43 @@ describe("paints", () => {
   });
 });
 
-describe("nameChanges", () => {
+describe("naming changes", () => {
+  // Three layers; stack rows in the source and in the candidate (the candidate lifts brown50-paved over both blacks).
   const names = ["brown50-paved", "black50-building", "black100"];
   const named = (id: number) => names[id];
+  const source = new Map([["brown50-paved", 0], ["black50-building", 1], ["black100", 2]]);
+  const candidate = new Map([["black50-building", 0], ["black100", 1], ["brown50-paved", 2]]);
+  const rowOf = { source: (n: string) => source.get(n), candidate: (n: string) => candidate.get(n) };
+  const view = (src: number[], cand: number[]): PaintView => ({ source: Int32Array.from(src), candidate: Int32Array.from(cand), nameSource: named, nameCandidate: named });
 
-  it("names each changed pixel by the source's and the candidate's top layer", () => {
-    const mask = Uint8Array.from([1, 1, 0, 1]);
-    const src = Int32Array.from([1, 2, 0, NOTHING]);
-    const cand = Int32Array.from([0, 0, 1, NOTHING]);
-    const k = nameChanges(mask, 4, 1, src, cand, named, named);
-    expect(Object.fromEntries(k)).toEqual({ [kindKey("black50-building", "brown50-paved")]: 1, [kindKey("black100", "brown50-paved")]: 1, [UNATTRIBUTED]: 1 });
+  it("names a pixel by the layer on top in the source, then in the candidate", () => {
+    const v = view([1, 2, 0, NOTHING, UNDECODABLE], [0, 0, 0, 1, 0]);
+    expect(viewKind(v, 0)).toEqual({ from: "black50-building", to: "brown50-paved" });
+    expect(viewKind(v, 1)).toEqual({ from: "black100", to: "brown50-paved" });
+    expect(viewKind(v, 2)).toBeNull(); // the same layer on top in both
+    expect(viewKind(v, 3)).toEqual({ from: NOTHING_NAME, to: "black50-building" });
+    expect(viewKind(v, 4)).toBeNull(); // a blended value
   });
 
-  it("gives a fringe pixel (same layer on top in both, or undecodable) the majority kind of its changed neighbours", () => {
-    // 3×3; centre is fringe; two neighbours say A → B, one says C → B.
+  it("names a pixel with the same layer on top by the pair around it whose order flipped", () => {
+    // 3×1: a thin black100 line (centre) on top in both orders, the paved brown beside it now drawn above it.
+    const v = view([0, 2, 0], [0, 2, 0]);
+    expect(flipKind(v, 1, 3, 1, rowOf)).toBe(kindKey("black100", "brown50-paved"));
+    // black50-building and black100 keep their order: no pair flipped
+    expect(flipKind(view([1, 2, 1], [1, 2, 1]), 1, 3, 1, rowOf)).toBeUndefined();
+    // the paper takes no part; a layer one stack lacks takes no part
+    expect(flipKind(view([NOTHING, 2, NOTHING], [NOTHING, 2, NOTHING]), 1, 3, 1, rowOf)).toBeUndefined();
+    expect(flipKind(view([0, 2, 0], [0, 2, 0]), 1, 3, 1, { source: rowOf.source, candidate: (n) => (n === "brown50-paved" ? undefined : candidate.get(n)) })).toBeUndefined();
+  });
+
+  it("counts every changed pixel once; one no view can tell takes its neighbours' kind, else is unattributed", () => {
+    // 3×3; the centre has black100 on top in both and no flipped pair around; its named neighbours vote.
+    const v = view([1, 1, 2, 2, 2, 2, 2, 2, 2], [0, 0, 0, 2, 2, 2, 2, 2, 2]);
     const mask = Uint8Array.from([1, 1, 1, 0, 1, 0, 0, 0, 0]);
-    const src = Int32Array.from([1, 1, 2, 0, 0, 0, 0, 0, 0]);
-    const cand = Int32Array.from([0, 0, 0, 0, 0, 0, 0, 0, 0]);
-    const k = nameChanges(mask, 3, 3, src, cand, named, named);
+    const k = nameChanges(mask, 3, 3, viewKindOf(v, 3, 3, { source: () => undefined, candidate: () => undefined }));
     expect(Object.fromEntries(k)).toEqual({ [kindKey("black50-building", "brown50-paved")]: 3, [kindKey("black100", "brown50-paved")]: 1 });
-    const lone = nameChanges(Uint8Array.from([1]), 1, 1, Int32Array.from([UNDECODABLE]), Int32Array.from([0]), named, named);
-    expect(Object.fromEntries(lone)).toEqual({ [UNATTRIBUTED]: 1 });
-  });
-
-  it("counts sum to the changed pixels; the paper is named", () => {
-    const mask = Uint8Array.from([1, 1, 1]);
-    const k = nameChanges(mask, 3, 1, Int32Array.from([NOTHING, 0, 0]), Int32Array.from([1, 0, NOTHING]), named, named);
-    expect([...k.values()].reduce((a, b) => a + b, 0)).toBe(3);
-    // the middle pixel is fringe (row 0 on top in both); its two neighbours tie and the first kind in key order wins
-    expect(Object.fromEntries(k)).toEqual({ [kindKey(NOTHING_NAME, "black50-building")]: 2, [kindKey("brown50-paved", NOTHING_NAME)]: 1 });
+    expect(Object.fromEntries(nameChanges(Uint8Array.from([1, 0]), 2, 1, () => undefined))).toEqual({ [UNATTRIBUTED]: 1 });
+    expect(() => nameChanges(Uint8Array.from([1]), 2, 1, () => undefined)).toThrow(/size/);
     expect(splitKind(kindKey("a", "b"))).toEqual(["a", "b"]);
   });
 });
@@ -298,7 +309,7 @@ describe("classification", () => {
 
   it("never classifies unattributed or unnamed pixels, even under a catch-all rule", () => {
     const c = parseClassification({ version: 1, rules: [{ from: "*", to: "*", class: "no-role" }] });
-    const r = classify(new Map([[UNATTRIBUTED, 3], [kindKey(UNNAMED, "x"), 2], [kindKey("a", "b"), 5]]), c, "m");
+    const r = classify(new Map([[UNATTRIBUTED, 3], [kindKey(UNATTRIBUTED, "x"), 2], [kindKey("a", "b"), 5]]), c, "m");
     expect(r.byClass).toMatchObject({ "no-role": 5, unclassified: 5 });
     expect(classify(new Map(), c, "m").unclassifiedShare).toBe(0);
   });
