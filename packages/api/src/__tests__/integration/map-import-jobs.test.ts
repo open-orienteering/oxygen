@@ -131,6 +131,10 @@ describe("import jobs from applyEventMap", () => {
     expect(source).toEqual({ kind: "ocad", fileName: "test.ocd", uploadedBy: setter.id });
     const doc = await ctx.db.mapDocument.findUniqueOrThrow({ where: { hash: documentHash }, select: { report: true, lastReferencedAt: true } });
     expect(doc.report).toMatchObject({ importer: "ocad-19", source: { fileName: "test.ocd", fileHash: fixtureHash }, counts: { objects: expect.any(Number) }, matching: { library: { id: "ISOM2017-2" } }, colourStack: { source: expect.any(Number) } });
+    // Row I5: the worker imports in the IOF colour order; the report carries the layered stack's lists, the stored header summary the order.
+    expect(doc.report).toMatchObject({ colourStack: { order: "iof", layers: { rows: expect.any(Array), deviations: expect.any(Array) } } });
+    const summary = await ctx.db.mapDocument.findUniqueOrThrow({ where: { hash: documentHash }, select: { header: true } });
+    expect(summary.header).toMatchObject({ colourOrder: { order: "iof", kept: expect.any(Array) } });
   }, 60_000);
 
   // G21 (docs/map-symbols.md §12.3): the stored document's stack carries ISSkiOM's rows, so a ski track can be drawn on it.
