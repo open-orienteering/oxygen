@@ -153,7 +153,9 @@ describe("course request → the dynamic bucket", () => {
     const m = loaded(h, load({ source: { kind: "document", bytes, options: { unmatched: "proxy" } } }));
     expect(m.summary.courseLayer?.supported).toBe(true);
     const stack = m.summary.colourStack!;
-    const at = (id: string) => stack.findIndex((c) => c.paletteIds?.includes(id));
+    // The summary types the stack as a render stack; its rows still carry their palette ids.
+    const index = mapImport.paletteIndexOfStack(stack as readonly mapDocument.DocumentColour[]);
+    const at = (id: string) => index.get(id) ?? -1;
     expect(at("white-upper")).toBe(at("purple-upper") - 1);
     const r = ask(h, request());
     expect(r.colours).toEqual(stack);
