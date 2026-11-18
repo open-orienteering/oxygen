@@ -403,7 +403,8 @@ retries every 5 s. A failed import is **502**, remembered for 10 minutes
 per instance so the panel's retries start no new job; a queued or running
 job without a target for the same source, corrections and setting is
 waited for rather than doubled. The documents are decoded inside the
-render queue, after any import, so at most one is held per instance. Unlike
+render queue, after any import, so at most one picture's documents (the
+reviewed one and the other order's) are held per instance. Unlike
 the other previews the colour picture is not a pure function of its
 document: its other order is drawn as of the first request (the club
 decisions then).

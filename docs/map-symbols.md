@@ -2205,7 +2205,10 @@ the importer's default.
 
 - **Canonical layers (§9.3)**: the importer draws on them by default
   since I5, with the per-map switch and the colour panel since I6. Row I7
-  in `SLICES.md`: the per-map deviation overrides in the panel. Not in
+  in `SLICES.md`: the per-map deviation overrides in the panel. An E2E of
+  the colour panel on the event route (the switch with the event target,
+  the pictures scoped with `?event=`; integration covers the event
+  target, `e2e/map-review.spec.ts` only the club route). Not in
   the slice: a club-wide default
   for which deviations are kept; an inserted purple 50 % as a 50 % screen
   of the map's purple (both orders use it at full strength).

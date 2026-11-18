@@ -33,7 +33,7 @@ import { createTestEvent, disconnect, type TestEventContext } from "../helpers/t
 import { makeCaller } from "../helpers/caller.js";
 import { grantSystemGroup } from "../../permissions.js";
 import { applyEventMap } from "../../event-map.js";
-import { getImportJob, startImportJob } from "../../map-store/jobs.js";
+import { getImportJob, insertQueuedImportJob, startImportJob } from "../../map-store/jobs.js";
 import { planRematch, rematchItem } from "../../map-store/rematch.js";
 import { getBlob } from "../../map-store/blob-store.js";
 import { readPreview } from "../../map-store/previews.js";
@@ -369,6 +369,29 @@ describe("GET /api/map-documents/:hash/colour-order/:order.png", () => {
     }
     await expect.poll(async () => (await get(`/api/map-documents/${iofDoc}/colour-order/source.png`, signedIn())).statusCode, { timeout: 30_000 }).toBe(200);
   }, 60_000);
+
+  it("waits for a queued import of the same source and setting instead of starting another", async () => {
+    const fresh = await A.db.clubMap.create({ data: { name: `colour-wait-${suffix}` } });
+    const waitFile = Buffer.concat([readFileSync(FIXTURE), Buffer.from(`map-colour-wait-${suffix}`)]);
+    const waitSource = sha256(waitFile);
+    await A.db.mapSource.create({ data: { fileHash: waitSource, kind: "ocad", bytes: Uint8Array.from(waitFile), sizeBytes: waitFile.byteLength, fileName: "wait.ocd" } });
+    try {
+      await startImportJob(A.db, { sourceHash: waitSource, clubMapId: fresh.id });
+      const doc = (await clubVersion(fresh.id)).documentHash;
+      // A switch just pressed: a target-less job for the map's own order, queued and not yet run.
+      const queued = await insertQueuedImportJob(A.db, { sourceHash: waitSource, eventId: null, clubMapId: null, startedBy: setter.id, decisions: [], patch: [], colour: { order: "source", deviations: {} } });
+      const before = await A.db.mapImportJob.count({ where: { sourceHash: waitSource } });
+      const res = await get(`/api/map-documents/${doc}/colour-order/source.png`, signedIn());
+      expect(res.statusCode).toBe(200);
+      expect(await A.db.mapImportJob.count({ where: { sourceHash: waitSource } })).toBe(before);
+      expect((await getImportJob(A.db, queued.id))!.state).toBe("done");
+    } finally {
+      await A.db.mapImportJob.deleteMany({ where: { sourceHash: waitSource } });
+      await A.db.clubMap.delete({ where: { id: fresh.id } });
+      await A.db.mapDocument.deleteMany({ where: { sourceHash: waitSource } });
+      await A.db.mapSource.deleteMany({ where: { fileHash: waitSource } });
+    }
+  }, 90_000);
 
   it("answers 502 for an import that fails, and does not start it again for a while", async () => {
     // A document whose source bytes are not a map: the other order's import fails.
