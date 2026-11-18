@@ -261,7 +261,7 @@ export const alphaText: PassStreamJson = {
     {
       kind: "text", colour: 4, opacity: 0.5, fontId: 0, sizeUm: 4000,
       glyphs: [36, 37, 38], positions: [1500, 2500, 4300, 2500, 7000, 2500],
-      haloWidthUm: 500,
+      haloWidthUm: 250,
     },
     {
       kind: "text", colour: 5, opacity: 0.5, fontId: 0, sizeUm: 4000,

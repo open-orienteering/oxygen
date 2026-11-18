@@ -863,7 +863,10 @@ renderer.ts    arena programs + visible-set draw loop;            WebGL2
 Status: B2 — strips, arenas, buckets, visible set, mesh atlas, worker,
 screen-only LOD; B3 — MSDF text from the committed text atlas; B4 — the
 viewer drives it (§5.4). Not yet: `WEBGL_multi_draw` (§8). The per-pass path (`setStream` / `render`: one draw per pass,
-stencil fills) is kept unchanged as the backend's golden path
+stencil fills) is kept unchanged as the backend's golden path — it draws no
+alpha: `prepareStream` refuses a stream with an opacity or blend pass
+(`streamHasAlpha`, J3) rather than draw it opaque, and the fixture page
+sends such a scene to the arena path —
 (`MapGlFixturePage`, §6.2) and as the reference the arena path is
 compared with (`compare=1`, below). The S1 batch path (`batch.ts`,
 `setBatches` / `renderBatches`) is gone; its measurements are the
@@ -975,6 +978,18 @@ are contiguous, so a colour of a part is one span. `object` is the
 document's effective `objectIndex` ("Object identity and the patch"
 below); the course part's start at `COURSE_OBJECT_BASE`.
 
+**Alpha items (J3).** A pass with opacity below 1 or the Multiply blend
+(§3.9; `passAlphaState`: absent or ≥ 1 without blend is opaque, ≤ 0 is
+not prepared, Multiply alone is opacity 1) is prepared like any pass of
+its kind but kept **out of the range tables**: its triangles go into the
+part's arrays with an `AlphaItem` naming their span (fill, hatch,
+stroke), or the item carries its own instances in runs per size class or
+atlas page (glyph, text) and, for a pattern-clipped glyph pass, its
+area's triangles. `PreparedPart.alpha` lists the items in prepared
+order — `(source, pass)`, the stream's order within a source — and is
+present only when non-empty, so an opaque part is exactly as before.
+`partTransferables` carries their buffers.
+
 **Visible set (04 §6.8 point 2).** `buildVisibleSet(parts, hidden)`
 concatenates the drawn parts' spans per (colour, kind) into one index
 buffer per indexed kind (rebased onto each part's arena offset) and one
@@ -989,7 +1004,19 @@ objects and a filter's join them) are skipped entry by entry. With a filter (`bu
 regions" below) an entry goes to the draw of its mask: per colour the
 unmasked draw first, then one per mask, masks ascending — every kind in
 that order, which `VisibleSet.layers` lists as the draw loop's
-`(colour, mask)` steps.
+`(colour, mask)` steps. **Alpha layers (J3):** each alpha item in view
+(hidden objects skipped, its `(object, colour)` mask taken) is one
+`AlphaLayer` — one pass, not one object: a text pass over two atlas
+pages is one layer with two runs. Its indices or instances are appended
+to the visible set's buffers after the opaque draws' (clip areas to
+`clips`), and `layers` gets one step `{ colour, mask, alpha }` per layer,
+**after its colour's opaque steps**, in the order: the static parts'
+(cells and the large bucket, one stream) by `(source, pass)`, then each
+dynamic part's (negative bucket: course, edit, page) in parts order —
+the "course draws over the map's objects of that colour" rule.
+`VisibleSet.alpha` is present only when non-empty. Draws per alpha layer:
+3 (2 for a fill), per run for text and glyphs, + 2 for a clipped glyph
+pass, + 2 under a mask.
 
 **Clip groups.** Pattern-clipped glyph passes of one colour are merged
 into groups whose footprints (clip area ∪ instance extents) do not meet,
@@ -1201,7 +1228,8 @@ CLIP_BIT | REGION_BIT`), and clears the bit over the same triangles —
 two extra draws per masked step. Unmasked steps draw as before, without
 the stencil. Masked draws of a colour come after its unmasked draws of
 every kind; ink of one colour is opaque, so the order within a colour
-does not show.
+does not show — except for alpha layers (J3), which follow their colour's
+opaque steps in stream order (above).
 
 **Per-pass path.** `prepareStream` gives each prepared item of a masked
 pass the mask's regions as stencil fans (`Prepared.mask`, one
@@ -1419,6 +1447,31 @@ sorting happens here.
   reference raster draws (§5.1: `stroke-width = 2 · haloWidthUm`). The
   ramp is one screen pixel (analytic AA on top of MSAA, 04 §6.9). Text
   whose em is under `minTextPx` (4 px) collapses in the vertex shader.
+* **Alpha layers** (J3, §3.9) — one pass at a time, so it paints each
+  sample once. The arena fragment shaders end in `outA(colour, a)`:
+  `u_clear` (1 − opacity) and `u_multiply` are 0 on opaque draws, which
+  then write `(colour, a)` as before; an alpha layer writes `(colour,
+  a · opacity)`, or for Multiply `(mix(1, colour, a · opacity), 1)` under
+  `blendFuncSeparate(DST_COLOR, ZERO, ZERO, ONE)` (destination alpha
+  kept, so loupe and drape textures stay opaque) — `dst · (1 − α + α·c)`
+  per channel, across parts and across the map and page, which share
+  the framebuffer. **Stencil test-and-set:** `ALPHA_BIT` (0x08) with
+  `stencilFunc(EQUAL, 0, ALPHA_BIT [| REGION_BIT])`, `stencilOp(KEEP,
+  KEEP, INVERT)`, `stencilMask(ALPHA_BIT)`: a sample's first fragment
+  sets the bit and later fragments of the pass fail — a self-crossing
+  stroke, join wedges, overlapping instances and halo quads blend once,
+  keeping the shaders' own edge alpha (hairline floor, hatch ramp,
+  MSDF). Every kind but a fill draws **twice**: fragments of full
+  coverage first (`u_minCover` 0.999), then the fringe, so a quad's or
+  ribbon's faint edge cannot take a sample a neighbour covers fully; a
+  zero-coverage fragment is always discarded. Then the same geometry
+  with colour off and `ZERO` clears the bit. A clipped glyph pass marks
+  its area in `CLIP_BIT` first and tests `EQUAL, CLIP_BIT, CLIP_BIT |
+  ALPHA_BIT [| REGION_BIT]`, and clears the area after. Two alpha passes
+  that overlap blend twice, in order; a filled and stroked shape at 50 %
+  shows the stroke's inner half over the fill (per pass, not per group).
+  The `kinds` switch, the page-clip scissor and the screen-only rules
+  apply as to an opaque draw.
 * **Pattern clip** — per clip group: the areas into stencil bit 0
   (`REPLACE`, colour masked), the group's instances where the bit is
   set (`EQUAL`), the areas again with `ZERO`.
@@ -1626,6 +1679,9 @@ By default it draws through the per-pass path (supersampled 2×);
 worker handler (gate off, Latin text page) and draws through the arena
 path at the context's MSAA — the §6.2 MSDF text tier and the filter
 scenes' arena tier (a stream with masks brings its filter on `loaded`).
+A scene with an alpha pass always takes the arena path (J3; `data-path`
+says which), and the stats line names its alpha layers
+(`engine.visibleAlphaLayers`).
 
 `/dev/map-gl-doc?mode=source|pilot|envelope[&via=document|reader][&worker=0][&gate=0][&budget=<MB>][&lod=0][&kinds=…][&compare=1][&url=…][&bench=1]`
 (`pages/dev/MapGlDocPage.tsx`) runs the whole pipeline on an OCAD,
@@ -1692,6 +1748,8 @@ published on `window.__mapGlDoc` for Playwright.
 | `map-gl/__tests__/engine.test.ts` (filter regions) | a clip region masks the black line's draw, a hide region removes it, the reply's hidden ids join `setHidden`'s, `null` clears mask and hidden set |
 | `map-gl/__tests__/prepare.test.ts` (filter regions) | every item of a masked pass carries one fan per region, shared by the passes of one mask |
 | `map-gl/__tests__/worker-patch.test.ts` (G4) | object identity: range-table ids are the `objectIndex`, though the bridge drops an object of a hidden symbol; a load without a patch, with `null`, a disabled or an empty patch → the identity state and the same parts; hide → ids only, nothing touched; modify within a cell → that cell only, the object under its own id at its new place, the queue preparing the new content; a move across cells → both touched, the old cell out of the detail set; add → id N in its cell; add outside the grid → the large bucket, `null` once removed; resymbol to a patch symbol with a new glyph → the atlas grown, earlier meshes in place, the instance on the new mesh; hide + modify → hidden wins, nothing touched; a second change elsewhere → its cell only, the toggle off → parts deep-equal to the unpatched load's; detail only for the held cells; issues reported; transferables; a patch with the load drawn from the first frame; a request before the load → `error { patch }`; a request whose symbolisation throws → `error`, the next change diffed against the last reply; `worker-patch-failure.test.ts`: a request that throws while preparing puts the overlay, bytes and cut features back, the atlas it grew goes with the next reply; with a course layer: cut features skip a hidden boulder, course ids from `COURSE_OBJECT_BASE`, a hide region acts where a moved object is now and on an added one, clip regions over pinned and patch objects → the document's masks first, the patch's after, each with its own triangles |
+| `map-gl/__tests__/alpha.test.ts` (J3) | `passAlphaState`; alpha items out of the range tables (an opaque part has no `alpha` key), one per pass, clipped glyph with its area, two sources in order, buffers in the transfer list; visible set without alpha unchanged, alpha steps after the colour's opaque steps (static by stream order, then the dynamic part), indices rebased and appended, hidden skipped, mask per (object, colour), glyph and clip instances appended; `prepareStream` refuses alpha; the highlight drops opacity and blend |
+| `e2e/map-gl-golden.spec.ts` (alpha) | `alpha-passes`, `alpha-text`, `blend-multiply` through the arena path at the contract budget (§6.2 "Alpha arena tier"), sent there without `path=arena` |
 | `map-gl/__tests__/buckets.test.ts` (G4) | `prepareBucketPartFrom`: two streams merged by colour into one colour-major range table, the first source first within a colour, each source's own glyph meshes; left-out passes absent; one source = `prepareBucketPart`; `sourcesHaveLayer`; `assignToGrid`: the load's grid by centre, outside it or large → the large bucket |
 | `map-gl/__tests__/engine.test.ts` (G4) | `setPatch` before the load goes with it and the first frame hides the object; a change posts `patch`, never `load`, hide skips the object's ranges and the toggle off restores the same visible set; a touched cell's resident detail swapped in the same reply, a cell that left the detail set released and not asked for; a touched cell's detail in transit when the request went dropped and asked again (old part, then the new one); one request in flight, the latest next, a failed one rejecting only its callers; a worker `error` without a generation ends the request in flight and the waiting input is sent; a reply's atlas reaches the renderer, `L` replaced and cleared with its bytes; a reply re-posts the course |
 | `e2e/map-gl-golden.spec.ts` (filter regions) | the four `filter-*` scenes on the per-pass path at the contract budget, and through the arena path at `ARENA_FILTER_MAX_RATIO` with pixel probes on both sides of each region (§6.2) |
@@ -2400,9 +2458,10 @@ document itself. Three pieces, all in the viewer's worker and engine:
   unclipped by a page frame. Strokes, glyphs and text are redrawn as
   they are (text halos are left out); **a fill or hatch is drawn as a
   150 µm outline** (`HIGHLIGHT_OUTLINE_UM`) of its area, and a
-  pattern-clipped glyph pass as the outline of its clip — the stream has
-  no alpha (§8 "Alpha"), and a flooded area would hide what is selected
-  inside it (user decision 2026-11-14; deviation from 04 §7's "passes
+  pattern-clipped glyph pass as the outline of its clip — a flooded area
+  would hide what is selected inside it (a translucent flood is possible
+  since J3 and not built; `highlightPasses` drops the copies' opacity and
+  blend, so the highlight stays opaque) (user decision 2026-11-14; deviation from 04 §7's "passes
   redrawn in a highlight colour"). Selecting re-symbolises and
   re-prepares nothing static: the copies keep their tessellation input,
   the static parts are untouched.
@@ -3533,6 +3592,27 @@ arena image (a 5 × 5 px window, Σ|Δ| ≤ 90). Measured at introduction
 | `filter-moved` | 267 / 260 400 (0.103 %) | 1 875 / 260 400 (0.720 %) |
 | `filter-show-only` | 373 / 260 400 (0.143 %) | 2 723 / 260 400 (1.046 %) |
 
+**Alpha arena tier** (J3; planner answer 18: the arena path only, at
+most 1.5 %). J1's `alpha-passes`, `alpha-text` and `blend-multiply`
+(§6.3) are drawn through the arena path only — the per-pass path draws
+no alpha (§5.2) — against J1's goldens. They measure under the
+contract's budget, so the tier is held to it (**≤ 0.5 %**,
+`ALPHA_TIER_MAX_RATIO`); the reference raster composites each pass once,
+so the whole-image diff checks the once-per-pass rule, the second blend
+where two passes overlap and the Multiply products. The test also
+asserts that the page sends the scene to the arena path and draws alpha
+layers. Measured at introduction (headless Chromium, 2026-11-18):
+
+| Scene | Arena |
+|---|---|
+| `alpha-passes` | 201 / 83 200 (0.242 %) |
+| `alpha-text` | 20 / 18 000 (0.111 %) |
+| `blend-multiply` | 128 / 57 200 (0.224 %) |
+
+Not in J3: pixel probes of the blended values (the whole-image budget
+holds them to 16 levels everywhere but the ≤ 0.5 % of edge pixels) and a
+framebuffer-target run (loupe and drape call the same `renderDocument`).
+
 **PDF leg** (C3, `packages/api/src/render/__tests__/pdf-golden.test.ts`;
 the method and the full table are `docs/course-print.md` §9.2). Every
 golden scene is written as a one-page PDF covering its golden frame,
@@ -4338,7 +4418,7 @@ Tests:
 | `packages/web/src/map-gl/text-atlas.ts` | the MSDF text atlas: page ranges and selection, glyph lookup, glyph table, halo clamp (§5.2 "Text atlas") |
 | `packages/web/src/map-gl/text-atlas-build.ts`, `packages/web/scripts/generate-text-atlas.ts`, `packages/web/scripts/text-atlas/Dockerfile` | atlas generation (`pnpm text-atlas:generate`, §4.10) |
 | `packages/shared/fonts/msdf/` | the committed text atlas pages |
-| `packages/web/src/map-gl/buckets.ts` | cells, large bucket, per-part preparation and range table, visible set, clip groups, zoom gate, LRU |
+| `packages/web/src/map-gl/buckets.ts` | cells, large bucket, per-part preparation and range table, alpha items and layers (J3), visible set, clip groups, zoom gate, LRU |
 | `packages/web/src/map-gl/arena.ts` | vertex arenas: free list, growth by copy |
 | `packages/web/src/map-gl/worker.ts`, `worker-entry.ts` | the worker's message handler and its binding |
 | `packages/web/src/map-gl/engine.ts` | main-thread controller: worker transport, residency, visible-set rebuilds, the one course request in flight (F20), the document hit-test and the edit part (G5), the 3D frame (H6: `setTerrain`, `renderTerrain`, settling, the drape's budget) |
@@ -4371,8 +4451,16 @@ The shared module is exported as a namespace: `import { render } from
 ## 8. Pending in this chapter
 
 - **Alpha** (§3.9). The stream, the reference raster and the PDF carry
-  opacity and Multiply since J1; **WebGL2 draws alpha passes opaque** until
-  J3, and its golden spec does not list the three §3.9 fixtures. Not yet:
+  opacity and Multiply since J1, the WebGL2 arena path since J3 (§5.2
+  "Alpha layers", the §6.2 alpha tier); the per-pass path refuses them.
+  Known GL limits: within a colour row the alpha layers follow the row's
+  opaque draws, so an opaque pass later in the stream that overlaps a
+  Multiply pass of the same row draws under it on screen and over it in
+  the PDF; alpha layers are not merged (non-overlapping alpha passes of
+  one state could share a draw, as clip groups do — for J6's draw
+  counts); a halo wider than half the MSDF range is clamped and reads as
+  a half-coverage box at saturation (opaque or not; `alpha-text` keeps
+  its halo inside the field). Not yet:
   **group opacity** (a filled and stroked shape at 50 % as one group: PDF
   transparency groups for every kind, GL offscreen targets); a page-oracle
   path where a page-layer Multiply blends against the map layer (the two

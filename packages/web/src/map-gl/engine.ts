@@ -800,6 +800,13 @@ export class MapGlEngine {
   }
 
   /** Rebuilds the visible set if the drawn set changed (arrivals coalesced); true when it did. */
+  private alphaLayers = 0;
+
+  /** Alpha layers in the current visible set (J3, §5.2 "Alpha layers"); the fixture page's stats line. */
+  get visibleAlphaLayers(): number {
+    return this.alphaLayers;
+  }
+
   private rebuild(t0: number): boolean {
     // Arrivals are coalesced while more drawn detail is pending; the last one always rebuilds.
     const hold = this.dirty && this.arrivalOnly && !this.isComplete() && t0 - this.lastRebuildAt < ARRIVAL_REBUILD_MS;
@@ -832,6 +839,7 @@ export class MapGlEngine {
     const vs = buildVisibleSet(parts, hidden, f?.visible);
     this.st.lastBuildMs = performance.now() - t0;
     this.renderer.setVisibleSet(vs);
+    this.alphaLayers = vs.alpha?.length ?? 0;
     this.lru.fixedBytes = this.fixedBytes + this.renderer.documentBytes.visibleSet;
     this.dirty = false;
     this.arrivalOnly = false;

@@ -47,6 +47,14 @@ const FILTER_SCENES = ["filter-clip-brown", "filter-hide-505", "filter-moved", "
  */
 const ARENA_FILTER_MAX_RATIO = 0.015;
 
+/**
+ * Alpha arena tier (J3, map-rendering.md §6.2; planner answer 18): J1's alpha scenes through the
+ * arena path (the per-pass path draws no alpha), MSAA only, held to the contract's 0.5 % (measured at
+ * introduction, J3: alpha-passes 0.242 %, alpha-text 0.111 %, blend-multiply 0.224 %).
+ */
+const ALPHA_SCENES = ["alpha-passes", "alpha-text", "blend-multiply"] as const;
+const ALPHA_TIER_MAX_RATIO = 0.005;
+
 type Probe = { at: [number, number] | [number, number, number, number]; colour: string; drawn: boolean };
 const BROWN = "#bf4000", GREEN = "#33ff00", BLACK = "#000000";
 /** The straight 101 contour (2, 6) → (58, 30) mm at x mm. */
@@ -209,6 +217,18 @@ test.describe("WebGL2 map backend — filter regions (arena path)", () => {
         expect(probeDrawn(golden, probe), `golden: ${where}`).toBe(probe.drawn);
         expect(probeDrawn(actual, probe), `arena: ${where}`).toBe(probe.drawn);
       }
+    });
+  }
+});
+
+test.describe("WebGL2 map backend — alpha and Multiply (arena path)", () => {
+  for (const name of ALPHA_SCENES) {
+    test(`${name} through the arena path matches the reference raster within the alpha tier`, async ({ page }, testInfo) => {
+      await compareScene(page, testInfo, name, "arena", ALPHA_TIER_MAX_RATIO);
+      // The page sends an alpha scene to the arena path even without `path=arena`.
+      await page.goto(`/dev/map-gl?fixture=${name}`);
+      await expect(page.getByTestId("map-gl-canvas")).toHaveAttribute("data-path", "arena");
+      await expect(page.getByTestId("map-gl-stats")).toContainText(/[1-9]\d* alpha layers/);
     });
   }
 });

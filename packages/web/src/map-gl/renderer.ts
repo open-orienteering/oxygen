@@ -24,7 +24,7 @@ import { TerrainLines, type LineDrawStats, type TerrainLine } from "./terrain/li
 import { buildTextGlyphs, GLYPH_TABLE_TEXELS, GLYPH_TABLE_WIDTH, type TextAtlasPage } from "./text-atlas.js";
 import {
   FILL_VERTEX_BYTES, HATCH_VERTEX_BYTES, STROKE_VERTEX_BYTES,
-  type ClipGroup, type DrawLayer, type PreparedPart, type ResidentPart, type VisibleSet,
+  type AlphaLayer, type ClipGroup, type DrawLayer, type PreparedPart, type ResidentPart, type VisibleSet,
 } from "./buckets.js";
 
 export interface View {
@@ -188,6 +188,41 @@ void main() {
 
 // ---- arena path (B2): shaders -----------------------------------------------
 
+/**
+ * The arena fragment shaders' output (J3, §5.2 "Alpha layers"): `u_clear` = 1 − opacity and
+ * `u_multiply` are 0 on opaque draws (a uniform's default), so an opaque draw writes
+ * `(colour, a)` as before. An alpha layer folds its opacity into the coverage; Multiply writes
+ * `mix(1, colour, k)` for the `DST_COLOR, ZERO` blend. In an alpha layer a fragment below
+ * `u_minCover` (the interior phase) or with no coverage is discarded, so it does not take the
+ * pixel's stencil mark.
+ */
+const FS_A_OUT = `
+uniform float u_clear;
+uniform float u_multiply;
+uniform float u_minCover;
+out vec4 o;
+void outA(vec3 c, float a) {
+  if ((u_clear > 0.0 || u_multiply > 0.5) && (a <= 0.0 || a < u_minCover)) discard;
+  float k = a * (1.0 - u_clear);
+  o = u_multiply > 0.5 ? vec4(mix(vec3(1.0), c, k), 1.0) : vec4(c, k);
+}
+`;
+
+const FS_A_SOLID = `#version 300 es
+precision highp float;
+uniform vec3 u_colour;
+${FS_A_OUT}
+void main() { outA(u_colour, 1.0); }
+`;
+
+const FS_A_ALPHA = `#version 300 es
+precision highp float;
+uniform vec3 u_colour;
+in float v_alpha;
+${FS_A_OUT}
+void main() { outA(u_colour, v_alpha); }
+`;
+
 /** Positions are relative to the document origin; `u_view` is the model → clip matrix (view.ts, built in f64). */
 const VS_ARENA = `#version 300 es
 precision highp float;
@@ -225,11 +260,11 @@ uniform float u_tintPx;      // below this stripe spacing on screen, draw the co
 in float v_d;
 flat in float v_sp;
 flat in float v_hw;
-out vec4 o;
+${FS_A_OUT}
 void main() {
-  if (v_sp * u_pxPerUm < u_tintPx) { o = vec4(u_colour, clamp(2.0 * v_hw / v_sp, 0.0, 1.0)); return; }
+  if (v_sp * u_pxPerUm < u_tintPx) { outA(u_colour, clamp(2.0 * v_hw / v_sp, 0.0, 1.0)); return; }
   float m = v_d - v_sp * floor(v_d / v_sp + 0.5);
-  o = vec4(u_colour, clamp((v_hw - abs(m)) * u_pxPerUm + 0.5, 0.0, 1.0));
+  outA(u_colour, clamp((v_hw - abs(m)) * u_pxPerUm + 0.5, 0.0, 1.0));
 }
 `;
 
@@ -327,7 +362,7 @@ in vec2 v_uv;
 flat in float v_pxPerEm;
 flat in float v_range;
 flat in float v_halo;
-out vec4 o;
+${FS_A_OUT}
 void main() {
   vec4 t = texture(u_page, v_uv);
   float a;
@@ -339,7 +374,7 @@ void main() {
     a = clamp((m - 0.5) * v_range * v_pxPerEm + 0.5, 0.0, 1.0);
   }
   if (a <= 0.0) discard;
-  o = vec4(u_colour, a);
+  outA(u_colour, a);
 }
 `;
 
@@ -397,6 +432,8 @@ const CLIP_BIT = 0x01;
 const PARITY_BIT = 0x02;
 /** Filter masks (map-rendering §3.8): set inside the union of a mask's regions; masked draws need it clear. */
 const REGION_BIT = 0x04;
+/** Alpha layers (J3, §5.2 "Alpha layers"): set by a layer's first fragment per sample, so later ones fail; cleared after the layer. */
+const ALPHA_BIT = 0x08;
 
 const VS_BLIT = `#version 300 es
 precision highp float;
@@ -1048,12 +1085,12 @@ export class MapGlRenderer {
   }
 
   private arenaPrograms(): ArenaState["programs"] {
-    const common = ["u_view", "u_pxPerUm", "u_minPx", "u_colour"];
+    const common = ["u_view", "u_pxPerUm", "u_minPx", "u_colour", "u_clear", "u_multiply", "u_minCover"];
     this.arenaProgramCache ??= {
-      fill: this.link(VS_A_FILL, FS_SOLID, ["a_pos"], common),
+      fill: this.link(VS_A_FILL, FS_A_SOLID, ["a_pos"], common),
       hatch: this.link(VS_A_HATCH, FS_A_HATCH, ["a_pos", "a_n", "a_h"], [...common, "u_tintPx"]),
-      stroke: this.link(VS_A_STROKE, FS_ALPHA, ["a_pos", "a_off", "a_hw"], common),
-      inst: this.link(VS_A_INST, FS_ALPHA, ["a_i0", "a_i1"], [...common, "u_atlas", "u_minGlyphPx"]),
+      stroke: this.link(VS_A_STROKE, FS_A_ALPHA, ["a_pos", "a_off", "a_hw"], common),
+      inst: this.link(VS_A_INST, FS_A_ALPHA, ["a_i0", "a_i1"], [...common, "u_atlas", "u_minGlyphPx"]),
       text: this.link(VS_A_TEXT, FS_A_TEXT, ["a_i0", "a_i1"], [...common, "u_glyphs", "u_page", "u_minTextPx"]),
     };
     return this.arenaProgramCache;
@@ -1390,6 +1427,12 @@ export class MapGlRenderer {
         }
         const masked = l.mask >= 0 && vs.filter;
         if (masked) draws += this.markMask(a, vs.filter!.masks[l.mask], true);
+        if (l.alpha !== undefined) {
+          const al = vs.alpha![l.alpha];
+          if (on(al.kind)) draws += this.drawAlphaLayer(a, al, rgb, text?.textures);
+          if (masked) draws += this.markMask(a, vs.filter!.masks[l.mask], false);
+          continue;
+        }
         if (on("fill")) indexed("fill", l, rgb);
         if (on("hatch")) indexed("hatch", l, rgb);
         if (on("stroke")) indexed("stroke", l, rgb);
@@ -1442,6 +1485,92 @@ export class MapGlRenderer {
     gl.colorMask(true, true, true, true);
     gl.disable(gl.STENCIL_TEST);
     return 1;
+  }
+
+  /**
+   * One alpha layer (J3, §5.2 "Alpha layers"): the pass drawn with its opacity (and Multiply)
+   * in stencil test-and-set — a sample's first fragment sets `ALPHA_BIT`, later ones fail — so
+   * the pass paints each sample once; then the bit cleared by the same geometry with colour off.
+   * Every kind but a fill draws twice before the clear: full-coverage fragments first, then the
+   * fringe, so a quad's or ribbon's faint edge cannot take a sample a neighbour covers fully. A
+   * clipped glyph pass marks and clears its area (`CLIP_BIT`) around it. Under a mask the region
+   * bit must be clear, as for an opaque draw.
+   */
+  private drawAlphaLayer(a: ArenaState, al: AlphaLayer, rgb: [number, number, number], pages: WebGLTexture[] | undefined): number {
+    const gl = this.gl;
+    const P = a.programs;
+    const regionBit = al.mask >= 0 ? REGION_BIT : 0;
+    const clip = al.kind === "clip";
+    const prog = al.kind === "fill" || al.kind === "hatch" || al.kind === "stroke" ? P[al.kind] : al.kind === "text" ? P.text : P.inst;
+    let draws = 0;
+    const geometry = () => {
+      if (al.kind === "fill" || al.kind === "hatch" || al.kind === "stroke") {
+        gl.bindVertexArray(a.vaos[al.kind]);
+        gl.drawElements(gl.TRIANGLES, al.count, gl.UNSIGNED_INT, al.offset * 4);
+        draws++;
+        return;
+      }
+      if (al.kind === "text") {
+        gl.bindVertexArray(a.vaos.text);
+        gl.bindBuffer(gl.ARRAY_BUFFER, a.vsBuffers.text);
+        for (const r of al.runs) {
+          const page = pages?.[r.cls];
+          if (!page) continue;
+          gl.activeTexture(gl.TEXTURE2);
+          gl.bindTexture(gl.TEXTURE_2D, page);
+          gl.activeTexture(gl.TEXTURE0);
+          this.instancePointers(P.text, r.first * INSTANCE_FLOATS * 4);
+          gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, r.count);
+          draws++;
+        }
+        return;
+      }
+      gl.bindVertexArray(a.vaos.inst);
+      gl.bindBuffer(gl.ARRAY_BUFFER, clip ? a.vsBuffers.clipInst : a.vsBuffers.glyph);
+      for (const r of al.runs) {
+        this.instancePointers(P.inst, r.first * INSTANCE_FLOATS * 4);
+        gl.drawArraysInstanced(gl.TRIANGLES, 0, classVertices(r.cls), r.count);
+        draws++;
+      }
+    };
+    const area = (op: number) => {
+      gl.useProgram(P.fill.prog);
+      gl.bindVertexArray(a.vaos.clip);
+      gl.colorMask(false, false, false, false);
+      gl.stencilMask(CLIP_BIT);
+      gl.stencilFunc(gl.ALWAYS, CLIP_BIT, 0xff);
+      gl.stencilOp(op, op, op);
+      gl.drawElements(gl.TRIANGLES, al.count, gl.UNSIGNED_INT, al.offset * 4);
+      gl.colorMask(true, true, true, true);
+      draws++;
+    };
+    gl.enable(gl.STENCIL_TEST);
+    if (clip) area(gl.REPLACE);
+    gl.useProgram(prog.prog);
+    gl.uniform3f(prog.uniforms.u_colour, rgb[0], rgb[1], rgb[2]);
+    gl.uniform1f(prog.uniforms.u_clear, 1 - al.opacity);
+    gl.uniform1f(prog.uniforms.u_multiply, al.multiply ? 1 : 0);
+    if (al.multiply) gl.blendFuncSeparate(gl.DST_COLOR, gl.ZERO, gl.ZERO, gl.ONE);
+    gl.stencilMask(ALPHA_BIT);
+    gl.stencilFunc(gl.EQUAL, clip ? CLIP_BIT : 0, ALPHA_BIT | regionBit | (clip ? CLIP_BIT : 0));
+    gl.stencilOp(gl.KEEP, gl.KEEP, gl.INVERT);
+    for (const minCover of al.kind === "fill" ? [0] : [0.999, 0]) {
+      gl.uniform1f(prog.uniforms.u_minCover, minCover);
+      geometry();
+    }
+    // The clear: the same fragments (zero coverage still discarded), colour off, the bit zeroed.
+    gl.uniform1f(prog.uniforms.u_minCover, 0);
+    gl.colorMask(false, false, false, false);
+    gl.stencilFunc(gl.ALWAYS, 0, 0xff);
+    gl.stencilOp(gl.ZERO, gl.ZERO, gl.ZERO);
+    geometry();
+    gl.colorMask(true, true, true, true);
+    gl.uniform1f(prog.uniforms.u_clear, 0);
+    gl.uniform1f(prog.uniforms.u_multiply, 0);
+    if (al.multiply) gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    if (clip) area(gl.ZERO);
+    gl.disable(gl.STENCIL_TEST);
+    return draws;
   }
 
   /** A clip group: its areas into stencil bit 0, its instances where the bit is set (and `regionTest` clear), the areas cleared. Three draws. */

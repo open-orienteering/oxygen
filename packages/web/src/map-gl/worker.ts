@@ -1335,6 +1335,11 @@ export function highlightPasses(stream: render.PassStream, passes: readonly numb
         break;
     }
   }
+  // The highlight is an opaque outline (user 2026-11-14): copied passes lose opacity and blend (J3).
+  for (const p of out) {
+    delete p.opacity;
+    delete p.blend;
+  }
   // Unmasked: the highlight is never filtered (the masks' pass indices are the source stream's).
   return {
     stream: { glyphTable: stream.glyphTable, fontTable: stream.fontTable, passes: out, objectIdx: new Uint32Array(out.length).fill(object), symbolIdx: new Uint32Array(out.length) },
