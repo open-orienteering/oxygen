@@ -1174,8 +1174,18 @@ the panel knows the map's setting. In order:
   every one, the most objects first: *Kept* / *Dropped*, "*upper* over
   *lower*" by the palette's names, why (*by default*, *changed for this
   map*, *needed by a kept deviation*, *cannot be kept*), its default and
-  the objects on each side. Read-only: row I7 makes the rows switchable
-  (keep, drop, reset) through one more mutation over the same setting.
+  the objects on each side. With edit rights and a target (row I7, §9.3
+  "Overrides (row I7)") each row has *Keep* / *Drop* — the map's choice
+  pressed, its override else the default; pressing the choice the map
+  already has does nothing, so that button is disabled — and, on a row the
+  map overrides, *Reset to default* and a note *kept / dropped for this
+  map*. "Overridden" is read from the map's setting, not from the
+  document's report: an override that changes no bytes (keeping a pair the
+  palette already keeps by implication) leaves the report's *needed by a
+  kept deviation*, and the row still shows the override. Each click is one
+  `mapImport.setDeviation` and one rebuild, followed as the switch is; there
+  is no reset-all and no batching. Disabled as the switch is: without edit
+  rights, without a target, while a job runs.
 
 Role and palette names are the IOF palette's English names in both
 languages: there is no Swedish palette (decided overnight on the user's
@@ -1186,7 +1196,9 @@ ids: `review-colours` (`data-order`, `data-setting`),
 `-source` (`data-loaded`), `colour-layer-row` (`data-row`, `data-role`,
 `data-place`, `data-flags`), `colour-layers-none`,
 `colour-deviation` (`data-key`, `data-kept`, `data-default`,
-`data-why`), `colour-deviations-summary`, `colour-setting-differs`.
+`data-why`, row I7: `data-choice`, `data-overridden`), its
+`colour-deviation-keep` / `-drop` (`aria-pressed`), `-reset` and
+`-overridden`, `colour-deviations-summary`, `colour-setting-differs`.
 
 Tests: `packages/web/src/lib/__tests__/map-review.test.ts` (outcomes,
 row order and the unused group, the pending batch — later wins,
@@ -2107,11 +2119,13 @@ the worker passes it as `{ colourOrder, deviations }` into
 target is given one by its caller: `decide` and the CRT import the
 reviewed document's own (read from its report:
 `colourSettingsOfReport`), `setColourOrder` the new setting, the picture
-route the other order. Dedup reuses a stored document only when its
-report says it was built in that setting (`reportFollowsColour`: the same
-order, and in `iof` the same overrides among the deviations it lists; a
-document that fell back to `source` from `iof` is what `iof` gives); the
-setting stays in the store and the header records the outcome (I5).
+route the other order. Dedup reuses a stored document only when it
+follows that setting (`documentFollowsColour`): its report says it was
+built so (`reportFollowsColour`: the same order, and in `iof` the same
+overrides among the deviations it lists; a document that fell back to
+`source` from `iof` is what `iof` gives), or — row I7 — an import in that
+setting gave it (§9.3 "Overrides (row I7)"); the setting stays in the
+store and the header records the outcome (I5).
 
 **The switch** is `mapImport.setColourOrder { documentHash, order, target }`
 with `finalise`'s target and `decide`'s permission (`docs/map-import.md`
@@ -2143,16 +2157,80 @@ and not started again for 10 minutes per instance; a running one for the
 same source, corrections and setting (a switch just pressed) is waited
 for, not doubled.
 
-**Not in I6**: the deviation overrides' controls (row I7; the stored
-shape, the job snapshot, dedup and the panel's `key` / `default` / `why`
-are in place); the setting in the per-event dump and the checkout
-snapshot (`docs/map-storage.md` §9); a club-wide default list.
+**Not in I6**: the deviation overrides' controls (row I7, below); the
+setting in the per-event dump and the checkout snapshot
+(`docs/map-storage.md` §9); a club-wide default list.
 
 | Test | Covers |
 |---|---|
 | `packages/api/src/__tests__/map-colour-settings.test.ts` | parse (malformed → defaults), normalise, stage 7's options, the setting read from a report (`iof`, `source`, overrides, the fallback, pre-layers), `reportFollowsColour`; the panel's payload on both fixtures (13 layers, the split flag on the two brown 50 % rows and not on `test.ocd`'s identified white, `draws-nothing`, 9 deviations with defaults and why, none in `source`) |
 | `packages/api/src/__tests__/integration/map-colour-settings.test.ts` | `docs/map-storage.md` §10 |
 | `e2e/map-review.spec.ts` (I6 test), `packages/web/src/lib/__tests__/map-review-colours.test.ts` | §8.7 |
+
+#### Overrides (row I7)
+
+Answer 2 asked for the overridden defaults to be changeable "if it is not
+a lot of extra work"; row I7 makes the panel's deviation rows editable.
+
+**The mutation** is `mapImport.setDeviation { documentHash, key, choice,
+target }` (`docs/map-import.md` §2.2), with `setColourOrder`'s target,
+permission and errors: `choice` is `keep` or `drop` — a deviation the
+reviewed document lists, else `BAD_REQUEST` — or `default`, which removes
+the key whatever the document lists (a reset). It is `changeColourSettings`
+with the one choice changed (`withDeviationChoice`): the setting is
+normalised, so a choice equal to the default is no override, and the
+source is imported again in the new setting as the switch does — a job
+without a target, pinned nowhere until **Use this version**; a reset of
+every override finds the original document by dedup. A document in the
+map's own order lists no deviations and shows no rows, so overrides are
+edited in the IOF order; they are kept while the order is `source` and
+apply again on the way back (§9.3 "Per map (row I6)").
+
+**An override that changes no bytes** (carried from I6). Keeping a pair
+the palette already keeps by implication — on the fixture
+`black50-building>brown100-line`, implied by `brown50-paved>brown100-line`
+— gives the same `header.colourOrder.kept` and the same document hash.
+The document's report is written once, by its first import (the store
+skips a duplicate hash), so it still says *by default*; judged by the
+report alone, the pin was stale for `colour` on every re-match, dedup
+never hit and `review.current` stayed false. The user chose (2026-11-18)
+to record what gave a document: every finished import job writes the
+setting it was asked for to `map_document_colour_settings` (one row per
+document and normalised setting, `docs/map-storage.md` §2), and a document
+follows a setting when its report says so **or** a recorded setting
+matches — both sides compared on what can change the document: in
+`source` no overrides, in `iof` the overrides of deviations the document
+lists (`documentFollowsColour`, `map-store/colour-settings.ts`). It is
+read by dedup (`currentDocumentFor`), the re-match (§6.9) and
+`review.current`. Judging by the outcome (`kept`) alone was rejected: with
+two or more implied keeps, or a version first built under a no-op override
+and then reset, it stays stale; carrying the overrides in the header
+(different settings, different bytes) was rejected as reversing I5's
+"same bytes" rule. The table is cache-like: a lost row costs one
+re-import, which writes it again; a side table, not a column on
+`map_documents`, for the reason I6 gave for `map_colour_settings` (the
+venue snapshot carries `map_documents` and an older image refuses an
+unknown field).
+
+**The picture follows the overrides** (carried from I6). A `source`
+document lists no deviations, so its IOF picture — the document the switch
+back gives — was drawn at the defaults. The review now builds that URL
+with the map's overrides as `?deviations=upper>lower:keep,…` (normalised,
+keys sorted; only on a `source` document's IOF picture); the route imports
+the other order with them and stores the PNG under a key of its own
+(`iof-<digest>`, `docs/map-storage.md` §4.5), so a picture is never reused
+across different overrides. An `iof` document's pictures need no query:
+its own order is drawn from it, and the map's own order ignores overrides.
+
+**Not in I7**: a club-wide default list; batching several overrides into
+one rebuild.
+
+| Test | Covers |
+|---|---|
+| `packages/api/src/__tests__/map-colour-settings.test.ts` (I7 blocks) | the no-op override gives the same hash and is followed only through a recorded setting; the comparison on listed keys and in `source`; the setting key; `withDeviationChoice` (keep, drop, reset, a choice equal to the default, kept in `source`); `reportDeviationKeys`; the payload's `choice` / `overridden` (a no-op override shown overridden while `why` is `implied`); the picture URL's `deviations` query only on a `source` document's IOF picture; the query parsed and the picture key |
+| `packages/api/src/__tests__/integration/map-deviation-overrides.test.ts` | the recorded rows (written per job, checks, cascade); the no-op override: same document, `review.current`, no re-match item, dedup; keep a dropped one and drop a kept one (new documents, not pinned, the review's rows); resets back to the original by dedup; kept through `source` and back; bad key, unknown deviation, unknown target, signed out; an event's own upload (`courses.edit`, the re-match, a no-op on the event); a `source` document's IOF picture with the overrides under its own key and ETag, drawn from the override document |
+| `packages/web/src/lib/__tests__/map-review-colours.test.ts` | the row's controls: pressed choice, the pressed button disabled, reset only when overridden, all disabled without edit rights, while busy, without a target |
+| `e2e/map-review.spec.ts` (I7 tests) | club route: keep the paved-over-building pair (new hash, `data-why="override"`, the IOF picture differs), drop the road pair, reset each back to the original document in use, a no-op keep of the implied pair (same hash, overridden, still in use, not outdated); event route: the panel, both pictures scoped with `?event=` and loaded, an override and its reset, the switch and back with the event target |
 
 #### Measured (rows I3 and I4)
 
@@ -2204,12 +2282,9 @@ the importer's default.
 ## 10. Pending in this chapter
 
 - **Canonical layers (§9.3)**: the importer draws on them by default
-  since I5, with the per-map switch and the colour panel since I6. Row I7
-  in `SLICES.md`: the per-map deviation overrides in the panel. An E2E of
-  the colour panel on the event route (the switch with the event target,
-  the pictures scoped with `?event=`; integration covers the event
-  target, `e2e/map-review.spec.ts` only the club route). Not in
-  the slice: a club-wide default
+  since I5, with the per-map switch and the colour panel since I6 and the
+  per-map deviation overrides since I7. Not in the slice: batching several
+  overrides into one rebuild; a club-wide default
   for which deviations are kept; an inserted purple 50 % as a 50 % screen
   of the map's purple (both orders use it at full strength).
 - Mapper object queries as CRT sources (§8.6 `CRT_QUERY_UNSUPPORTED`)

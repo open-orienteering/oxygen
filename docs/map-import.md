@@ -158,6 +158,8 @@ mapImport.finalise { documentHash, target: {kind:"event"} | {kind:"club", clubMa
   → { documentHash, pinned, previous[] }
 mapImport.setColourOrder { documentHash, order: "iof" | "source", target }   mutation, finalise's target and permission
   → { settings: { order, deviations }, job }                job as mapImport.status returns it
+mapImport.setDeviation { documentHash, key: "upper>lower", choice: "keep" | "drop" | "default", target }   mutation, as setColourOrder
+  → { settings: { order, deviations }, job }                job as mapImport.status returns it
 
 type ReviewDecision = { symbolIdx; accept: canonicalId } | { symbolIdx; unmatch: true } | { symbolIdx; reset: true }
 ```
@@ -222,8 +224,17 @@ type ReviewDecision = { symbolIdx; accept: canonicalId } | { symbolIdx; unmatch:
   map is another file; `BAD_REQUEST` for another order, or an event
   target without an event. `decide` and `importCrt` import with the
   reviewed document's own colour setting.
+- `setDeviation` (row I7, `docs/map-symbols.md` §9.3 "Overrides (row I7)")
+  overrides one deviation on the same target, or resets it: `keep` or
+  `drop` a deviation the reviewed document lists (`BAD_REQUEST` for one
+  it does not list, or a malformed key), `default` to remove the key. The
+  setting keeps only choices that differ from the default; the order is
+  kept. Then the same rebuild, permission and errors as `setColourOrder`.
+  `review.colour.deviations[]` carries `choice` (the map's override, else
+  the default; `null` without a target) and `overridden` (the map's
+  setting holds the key), read from the setting rather than the report.
 - Authorisation (`docs/map-storage.md` §4.2): `review` is the document route's predicate exactly (not behind `authedProcedure`: a kiosk key with no user reads, as on the route).
-  `decide`, `finalise` and `setColourOrder` use it in edit mode (`EDIT_ACCESS`; an event target also needs `courses.edit`): the event
+  `decide`, `finalise`, `setColourOrder` and `setDeviation` use it in edit mode (`EDIT_ACCESS`; an event target also needs `courses.edit`): the event
   clause needs `courses.edit` and never takes the kiosk key; the club and
   own-job clauses read as for reading. Club map targets need a signed-in
   user, as the club library's own mutations.
