@@ -8,8 +8,10 @@
 
 import {
   COORD_FLAG,
+  type BlendMode,
   type FontRef,
   type Pass,
+  type PassAlpha,
   type PassStream,
   PassStreamBuilder,
   type RenderPath,
@@ -42,6 +44,23 @@ export interface RenderObject {
    * render bridge from the object type.
    */
   textLayout?: "box" | "path";
+  /**
+   * Opacity 0–1 of every pass this object emits (map-rendering §3.9).
+   * Absent, ≥ 1 or not finite = opaque; below 0 = 0. Set by the course
+   * and page layers from a user object; document objects never set it.
+   */
+  opacity?: number;
+  /** Blend of every pass this object emits; absent = normal (§3.9). */
+  blend?: BlendMode;
+}
+
+/** The canonical alpha fields of an object (§3.9): `opacity` only below 1, `blend` only when set. */
+export function objectAlpha(obj: { opacity?: number; blend?: BlendMode }): PassAlpha {
+  const out: PassAlpha = {};
+  const o = obj.opacity;
+  if (o !== undefined && Number.isFinite(o) && o < 1) out.opacity = Math.max(0, o);
+  if (obj.blend === "multiply") out.blend = "multiply";
+  return out;
 }
 
 export interface SymboliseInput {
@@ -78,6 +97,7 @@ class Stage {
   readonly warnings: SymboliseWarning[] = [];
   private objectIdx = 0;
   private symbolIdx = 0;
+  private alpha: PassAlpha = {};
   private readonly input: SymboliseInput;
 
   constructor(input: SymboliseInput) {
@@ -91,6 +111,7 @@ class Stage {
     this.input.objects.forEach((obj, i) => {
       this.objectIdx = i;
       this.symbolIdx = obj.symbolIdx;
+      this.alpha = objectAlpha(obj);
       const sym = this.input.symbols[obj.symbolIdx];
       if (!sym) {
         this.warn("UNKNOWN_SYMBOL", `object ${i} references symbol ${obj.symbolIdx}`);
@@ -129,7 +150,8 @@ class Stage {
   }
 
   private push(pass: Pass): void {
-    this.builder.push(pass, this.objectIdx, this.symbolIdx);
+    const a = this.alpha;
+    this.builder.push(a.opacity === undefined && a.blend === undefined ? pass : { ...pass, ...a }, this.objectIdx, this.symbolIdx);
   }
 
   // ---- glyph instances ---------------------------------------------------

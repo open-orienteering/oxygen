@@ -18,6 +18,7 @@ import {
   type RenderPath,
   type StrokeCap,
   type StrokeJoin,
+  passHasAlpha,
   sortPassStream,
 } from "./pass-stream.js";
 import {
@@ -54,6 +55,9 @@ export interface ReferenceSvgOptions {
    */
   glyphOutline?: (font: FontRef, glyphId: number) => GlyphOutline | undefined;
 }
+
+/** Opacity to the four decimals of the projection (§3.7). */
+const n4 = (v: number) => String(Math.round(v * 10000) / 10000);
 
 const n = (v: number) => {
   const r = Math.round(v * 1000) / 1000;
@@ -200,6 +204,15 @@ export function passStreamToSvg(stream: PassStream, opts: ReferenceSvgOptions): 
       const inner = body.splice(first).join("");
       const ids = maskClipIds(mask);
       body.push(ids.reduceRight((acc, cid, k) => `<g${k === 0 ? ` data-mask="${mask}"` : ""} clip-path="url(#${cid})">${acc}</g>`, inner));
+    }
+    // §3.9: opacity and blend on one group around the whole pass, outside its mask and clip groups —
+    // so the pass paints each pixel once and blends against everything under it (resvg isolates a
+    // clipped group, which would hide the backdrop from a blend inside it).
+    if (passHasAlpha(p) && body.length > first) {
+      const inner = body.splice(first).join("");
+      const op = p.opacity !== undefined ? ` opacity="${n4(p.opacity)}"` : "";
+      const bl = p.blend ? ` style="mix-blend-mode:${p.blend}"` : "";
+      body.push(`<g data-alpha="${passIndex}"${op}${bl}>${inner}</g>`);
     }
   });
 

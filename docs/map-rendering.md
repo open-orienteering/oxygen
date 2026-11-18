@@ -90,7 +90,8 @@ type Pass = FillPass | StrokePass | GlyphPass | HatchPass | TextPass;
 ```
 
 Every pass has `kind` and `colour` (an index into the document's colour
-stack; lower index is drawn first). The types are in
+stack; lower index is drawn first), and may carry `opacity` and `blend`
+(§3.9). The types are in
 `packages/shared/src/render/pass-stream.ts`; this section states the
 semantics the types cannot.
 
@@ -199,6 +200,10 @@ a line-text glyph's angle outside the 1e-4° comparison, B8). Parsing sorts.
 `masks` / `maskIdx` (§3.8) are projected together when present (an
 error when only one is, or an index points past `masks`) and compared:
 a mask present on one side only, or a region path that moved.
+`opacity` and `blend` (§3.9) are projected when present — `opacity` to 4
+decimals, `opacity: 1` parsing to absent, a value outside [0, 1] or an
+unknown blend refused — and compared: an opacity difference over 1e-4,
+any blend difference.
 
 ### 3.8 Filter masks
 
@@ -215,6 +220,37 @@ filter regions produce (§4.11); a stream without them omits both fields.
 function of (object, colour) by construction (§4.11), so a backend that
 draws per range-table entry can apply it there. Backends: §5.1
 (nested clip groups), §5.2 ("Filter regions"), §5.3 (`W* n`).
+
+### 3.9 Opacity and blend
+
+`opacity?: number`, `blend?: "multiply"` on every pass kind (`PassAlpha`;
+slice J, J1)
+
+A pass may be drawn with an **opacity** in [0, 1) and/or the **Multiply**
+blend; absent means opaque and normal, and a stream without either field
+draws exactly as before in every backend (the same SVG, operators and PDF
+bytes). `symbolise` sets both from its input object (`RenderObject.opacity`,
+`.blend`; `objectAlpha`): every pass the object emits carries them — main
+lines, borders, halos, frames, pattern glyphs, text and its halo alike.
+Opacity ≥ 1 or not finite is not stored; below 0 is 0; 0 stays in the
+stream (drawn as written, still hit-testable). Document objects never
+set one; the course and page layers do, from a user object (J4).
+
+- **Once per pass.** A pass paints each pixel once: a self-crossing
+  stroke, the joins of a polyline, overlapping glyph instances of one
+  pass and adjacent glyphs of one text or halo pass blend once, not twice.
+  Two passes blend twice in stream order — a shape filled and stroked at
+  50 % shows the stroke's inner half over the fill (per pass, not per
+  group; group opacity is Pending).
+- **Multiply** multiplies the pass's colour with everything beneath it —
+  every earlier pass and the paper — channel by channel; with opacity the
+  result is `mix(dst, dst × colour, opacity)`. Black stays black, white
+  shows the pass's colour.
+- **Order** is unchanged: the canonical sort (§3.6) does not look at the
+  fields; they travel with their pass.
+- **Backends**: the reference raster (§5.1) wraps the pass in one group;
+  the PDF (§5.3) draws it under an ExtGState, a glyph or text pass inside
+  a transparency group; WebGL2 (§5.2) draws alpha passes opaque until J3.
 
 ## 4. Symbolisation rules
 
@@ -736,7 +772,11 @@ caller-supplied glyph outlines or, without them, em boxes (debug only,
 never an oracle). A `pointed` stroke with a `taper` is the shared
 `strokeOutline()` (`render/geometry.ts`) filled non-zero, as the PDF
 backend draws it (§5.3; SVG has no tapered stroke). A masked pass (§3.8)
-is wrapped in one `<g clip-path>` per region of its mask, nested; each
+carries its opacity and blend (§3.9) on one outer `<g opacity
+style="mix-blend-mode:multiply">` around the whole pass — outside its
+mask and clip groups, because resvg isolates a clipped group and a blend
+inside it would lose its backdrop; one group per pass is what makes a
+pass paint once. A masked pass is wrapped in one `<g clip-path>` per region of its mask, nested; each
 `<clipPath>` is the image frame (the viewBox rectangle) with the region's
 rings, `clip-rule="evenodd"` — so the pass shows outside every region.
 A mask's clip paths are defined once.
@@ -3161,6 +3201,24 @@ stream order — the stream order *is* the painter's order (§3.6), so no
 reordering and no decision of the backend's own. `docs/course-print.md`
 owns everything around it: the writer, colour modes, fonts, the page.
 
+**Opacity and blend** (§3.9; J1). A fill, stroke, tapered outline or
+hatch with `opacity` or `blend` is written as `q /GS<n> gs … Q` — one
+painting operator, so each pixel blends once. A glyph or text pass (one
+`Do` per instance, one glyph per `Tj`; a form's fill and stroke
+composite separately) is drawn into an **isolated transparency-group
+form** (`OperatorResources.group`, `TG<n>`: `/Group << /S /Transparency
+/I true >>`, its own `/Resources`, content self-contained — its own
+colour, line style and `Tr`, a BBox of the pass's bounds plus
+`GROUP_BBOX_PAD_UM` in layer units) and the form is drawn `q /GS<n> gs
+/TG<n> Do Q`. The ExtGState (`OperatorResources.alpha`) is `<< /Type
+/ExtGState /ca a /CA a [/BM /Multiply] >>`, one per distinct (opacity to
+4 decimals, blend) per document, named in first-use order; the page that
+uses one gets `/Group << /Type /Group /S /Transparency /CS /DeviceCMYK >>`
+(`/DeviceRGB` in `rgb`), copied with `copyPage`. A pass that writes
+nothing (culled) asks for no resource; an alpha pass under a filter mask
+stays inside the mask's `W* n`. A writer without `alpha` (none in the
+tree) draws alpha passes opaque. Tests: `print/__tests__/alpha-pdf.test.ts`.
+
 **Units** (05 §5.2; C11 2026-10-24). Coordinates are the stream's paper
 µm minus `originUm`, written as **integers in a layer unit `u`**
 (`unitUm`; `passStreamOperators` defaults to 1 µm). `mapLayerOperators`
@@ -3537,6 +3595,14 @@ symbolisation, and every backend must draw all of them:
 | `hatch-area` | 45° hatch with offset, clipped to a pentagon |
 | `colour-order` | passes pushed out of order; the sort decides what covers what |
 | `text-with-halo` | halo pass under text pass, same positions, different colours |
+| `alpha-passes` | §3.9 opacity on fill, self-crossing stroke, dashed stroke, hatch, overlapping glyph instances (one clipped), over yellow and blue (J1) |
+| `alpha-text` | §3.9 text and its halo at 50 % over a fill: overlapping halo strokes blend once (J1) |
+| `blend-multiply` | §3.9 Multiply over yellow, blue and black, at 100 % and 50 %, a Multiply stroke over a Multiply fill (J1) |
+
+The three §3.9 fixtures are drawn by the reference raster and the PDF
+(goldens in `e2e/__golden__/map-gl/`, the PDF tier of §6.2 at its usual
+budgets); the WebGL2 backend's golden spec does not list them until J3
+draws alpha.
 
 The symbolisation rules of §4 are proven by the **pilot symbol family**
 (`packages/shared/src/render/__fixtures__/pilot-symbols.ts`, exported as
@@ -4300,12 +4366,18 @@ The shared module is exported as a namespace: `import { render } from
 
 ## 8. Pending in this chapter
 
-- **Alpha: a translucent corridor band** (`docs/course-layer.md` §10.2,
-  F2). `LegProps.corridor.whiteOpacity` is stored but drawn opaque: the
-  band is a clip region, which removes the map wholly. A band below 1
-  needs a fill with alpha over the same rings — a pass colour opacity the
-  stream, the three backends and the PDF (`ca` / an ExtGState) do not
-  carry yet — drawn above every map colour and below the course.
+- **Alpha** (§3.9). The stream, the reference raster and the PDF carry
+  opacity and Multiply since J1; **WebGL2 draws alpha passes opaque** until
+  J3, and its golden spec does not list the three §3.9 fixtures. Not yet:
+  **group opacity** (a filled and stroked shape at 50 % as one group: PDF
+  transparency groups for every kind, GL offscreen targets); a page-oracle
+  path where a page-layer Multiply blends against the map layer (the two
+  rasters are composited `over`, exact for opacity, not for Multiply —
+  with J4's page objects); the **translucent corridor band**
+  (`course-layer.md` §10.2, F26 → J13), which needs only a white fill with
+  alpha over the band's rings in a row above the map colours and below
+  the course. Multiply and `/ca` on the club's printer are unverified
+  until the print checkpoint after J5.
 
 - **§5.2 filter-region limits.** All masks share one stencil bit, so
   overlapping regions of different masks are fine (each masked step marks

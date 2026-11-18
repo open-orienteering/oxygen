@@ -50,10 +50,29 @@ export interface Slice {
   t1: number;
 }
 
+/** Blend modes a pass may ask for (map-rendering §3.9); absent = normal. */
+export type BlendMode = "multiply";
+
+/**
+ * Opacity and blend of a pass (map-rendering §3.9). Set by `symbolise`
+ * from its input object; document objects never set one. Absent means
+ * opaque and normal — a stream without them draws exactly as before.
+ * `opacity` is in [0, 1) when present: 1 is never stored.
+ */
+export interface PassAlpha {
+  opacity?: number;
+  blend?: BlendMode;
+}
+
+/** True when the pass carries an opacity below 1 or a blend. */
+export function passHasAlpha(pass: PassAlpha): boolean {
+  return pass.opacity !== undefined || pass.blend !== undefined;
+}
+
 export type StrokeCap = "butt" | "round" | "square" | "pointed";
 export type StrokeJoin = "miter" | "round" | "bevel";
 
-export interface FillPass {
+export interface FillPass extends PassAlpha {
   kind: "fill";
   /** Index into the document's colour stack. */
   colour: number;
@@ -66,7 +85,7 @@ export interface FillPass {
   rule: "evenodd";
 }
 
-export interface StrokePass {
+export interface StrokePass extends PassAlpha {
   kind: "stroke";
   colour: number;
   path: RenderPath;
@@ -79,7 +98,7 @@ export interface StrokePass {
   taper?: { startUm?: number; endUm?: number };
 }
 
-export interface GlyphPass {
+export interface GlyphPass extends PassAlpha {
   kind: "glyph";
   colour: number;
   glyphId: number;
@@ -91,7 +110,7 @@ export interface GlyphPass {
   clip?: RenderPath;
 }
 
-export interface HatchPass {
+export interface HatchPass extends PassAlpha {
   kind: "hatch";
   colour: number;
   path: RenderPath;
@@ -101,7 +120,7 @@ export interface HatchPass {
   angleDeg: number;
 }
 
-export interface TextPass {
+export interface TextPass extends PassAlpha {
   kind: "text";
   colour: number;
   fontId: number;

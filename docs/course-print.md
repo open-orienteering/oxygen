@@ -129,8 +129,14 @@ entry carries CMYK. A pass's `colour` indexes it.
 | `rgb` | `rg` / `RG` with the shared naive sRGB (`cmykToHex`, the screen's colour) | the hex as is | `k`, `K` |
 
 Components are written clamped to 0..1 with at most four decimals.
-No overprint, no transparency, no spot colours: the IOF layering is the
-colour stack's order (05 §5.4). `rgb` is for proofs and the golden
+No overprint, no spot colours: the IOF layering is the colour stack's
+order (05 §5.4). **Transparency only where a pass asks for it**
+(map-rendering.md §3.9, slice J): an ExtGState with `/ca` `/CA` and
+`/BM /Multiply`, glyph and text passes through isolated
+transparency-group forms, and a page `/Group` in the page's colour space
+on the pages that use one (map-rendering.md §5.3). A page without them
+is byte-identical to before (J1 checked the 69 golden and page-scene
+PDFs, both modes). `rgb` is for proofs and the golden
 comparison against the other backends (C3); `cmyk` for printing.
 
 Not in slice C (user decision 2026-10-23, decision log): `cmyk-offset`
@@ -1868,6 +1874,11 @@ The tool's own tests (`print-run.test.ts`, `measure-print.test.mjs`,
 
 ## Pending in this chapter
 
+- **Transparency on the club's printer** (slice J): `/ca`, `/BM
+  /Multiply` and transparency-group forms render correctly in poppler
+  (`pdftocairo`, the PDF tier) and pass `qpdf --check`; a real printer or
+  RIP is unverified until the manual print checkpoint after J5. A PDF/X
+  profile (Pending above) must allow or flatten them.
 - **PDF size** (rows C11, C13, done): Club-full A4 at 1:10 000 is
   917 kB and Sprint A3 654 kB (§11.5); 05 Appendix B's 0.25 / 0.5 MB
   assumed 6.7× / 1.5× fewer path points than the windows hold and the
