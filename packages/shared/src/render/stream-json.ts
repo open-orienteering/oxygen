@@ -104,7 +104,7 @@ const passJson = z.discriminatedUnion("kind", [
     graphicId: z.number().int(),
     /** The unit square's affine `[a, b, c, d, e, f]`, µm (§3.10). */
     quad: z.tuple([z.number(), z.number(), z.number(), z.number(), z.number(), z.number()]),
-    crop: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }).optional(),
+    crop: z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1), width: z.number().positive().max(1), height: z.number().positive().max(1) }).optional(),
   }),
 ]);
 

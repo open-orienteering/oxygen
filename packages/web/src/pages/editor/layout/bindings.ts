@@ -75,7 +75,6 @@ export interface LayoutBindingContext {
   /** 1 mm steps (08 §5.3 "Grid 1 mm"). */
   snapping: boolean;
   gesture: { current: LayoutGesture };
-  imageHref: (graphicId: number) => string;
   onPreview: (change: LayoutChange | null) => void;
   onCommit: (change: LayoutChange) => void;
   onSelect: (selection: LayoutSelection) => void;
@@ -142,25 +141,12 @@ const PATH_IDS = { outline: "editor-layout-selection", handle: "editor-layout-ha
 /** The handle tolerance in page mm at the current zoom. */
 const tolerance = (p: ToolPointer, g: SheetGeometry) => HANDLE_PX * p.mmPerPx * pagePerView(g);
 
-/** An image object's corners in paper mm, for the UI layer's raster. */
-function imageShape(o: Extract<CourseMapObject, { kind: "image" }>, g: SheetGeometry, href: string): ToolShape | null {
-  const b = courseMapObjectPageBounds(o);
-  return {
-    kind: "image", href, testId: "editor-layout-image", data: { objectId: o.id },
-    topLeft: toView({ x: b.x, y: b.y }, g), topRight: toView({ x: b.x + b.width, y: b.y }, g), bottomLeft: toView({ x: b.x, y: b.y + b.height }, g),
-  };
-}
-
 export function layoutBinding(c: LayoutBindingContext): EditorToolBinding {
   const g = c.geometry;
   const selected = c.selection?.kind === "object" ? c.editable.find((o) => o.id === (c.selection as { id: string }).id) ?? null : null;
 
+  // Images are drawn by the map engine with the page layer (J6), not on the UI layer.
   const shapes: ToolShape[] = [...sheetShapes(g, c.selection?.kind === "frame")];
-  for (const o of [...c.locked, ...c.editable]) {
-    if (o.kind !== "image") continue;
-    const s = imageShape(o, g, c.imageHref(o.graphicId));
-    if (s) shapes.push(s);
-  }
   if (selected?.kind === "path" && c.tool.kind !== "draw") {
     // The course editor's selected path (§7 "Editing geometry"): its outline along the curves, handles, grips.
     const inView = mapVertices(selected.points, (q) => toView(q, g));

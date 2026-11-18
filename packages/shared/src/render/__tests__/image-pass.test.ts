@@ -34,6 +34,9 @@ describe("§3.10 the image pass in the stream", () => {
     expect(j.passes[0]).toEqual({ kind: "image", colour: 3, graphicId: 7, quad: [20000, 0, 0, 10000, 10000, 5000], crop: { x: 0.25, y: 0, width: 0.5, height: 1 }, opacity: 0.5, blend: "multiply" });
     const back = passStreamFromJson(JSON.parse(JSON.stringify(j)));
     expect(diffPassStreams(a, back)).toEqual([]);
+    for (const bad of [{ x: 0, y: 0, width: 0, height: 1 }, { x: -0.1, y: 0, width: 0.5, height: 1 }, { x: 0, y: 0, width: 1, height: 1.5 }]) {
+      expect(() => passStreamFromJson(JSON.parse(JSON.stringify({ ...j, passes: [{ ...j.passes[0], crop: bad }] })))).toThrow();
+    }
     const what = (b: ImagePass) => diffPassStreams(stream([image()]), stream([b])).map((d) => d.what).join("; ");
     expect(what(image({ quad: [20000, 0, 0, 10000, 12000, 5000] }))).toMatch(/quad/);
     expect(what(image({ graphicId: 8 }))).toMatch(/graphic 7 vs 8/);

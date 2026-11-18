@@ -221,6 +221,28 @@ test.describe("WebGL2 map backend — filter regions (arena path)", () => {
   }
 });
 
+/**
+ * Image tier (J6, map-rendering.md §5.2 "Images", §6.2): `course-graphics` through the arena path
+ * (the per-pass path draws no images), MSAA only, held to the arena filter tier's 1.5 %: measured
+ * at introduction 0.974 %, the same MSAA coverage steps on hairlines as the filter scenes — the
+ * images' insides agree (textures sampled nearest when enlarged, as the oracle and the PDF sample). Probes, paper mm (scene y-up,
+ * frame origin at the stream's bounds): the lucka around 31 shows its opaque red band and the
+ * map's green through its transparent middle; the control circle draws over it.
+ */
+const IMAGE_TIER_MAX_RATIO = ARENA_FILTER_MAX_RATIO;
+
+test.describe("WebGL2 map backend — images (arena path)", () => {
+  test("course-graphics through the arena path matches the reference raster within the image tier", async ({ page }, testInfo) => {
+    const { actual, golden } = await compareScene(page, testInfo, "course-graphics", "arena", IMAGE_TIER_MAX_RATIO);
+    await expect(page.getByTestId("map-gl-canvas")).toHaveAttribute("data-path", "arena");
+    // Same pixels as the golden at the red band and the transparent middle (the golden is the oracle's).
+    const px = (img: PNG, x: number, y: number) => Array.from(img.data.subarray((y * img.width + x) * 4, (y * img.width + x) * 4 + 3));
+    const near = (a: number[], b: number[]) => a.every((v, i) => Math.abs(v - b[i]) <= 8);
+    // The golden frame: 10 px/mm; the lucka's box is 16 mm square round control 31.
+    for (const [x, y] of [[140, 280], [210, 262], [240, 178]] as const) expect(near(px(actual, x, y), px(golden, x, y)), `pixel ${x},${y}`).toBe(true);
+  });
+});
+
 test.describe("WebGL2 map backend — alpha and Multiply (arena path)", () => {
   for (const name of ALPHA_SCENES) {
     test(`${name} through the arena path matches the reference raster within the alpha tier`, async ({ page }, testInfo) => {

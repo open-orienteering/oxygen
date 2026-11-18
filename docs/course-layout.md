@@ -38,7 +38,7 @@ the grid; drags move in whole millimetres), `pageBounds`.
 | Layout objects (all page-anchored), the description block | the **page part**: `course.pageLayer` (extracted from `composePage`, the same stream) through `T_map⁻¹` into paper mm (`pageStreamInMap`), its colour indices offset past every map colour so it draws after the map — the PDF's page layer after the map layer | the page layer |
 | Map clip | the renderer scissors every map colour to the frame (`pageClip`) | the frame clip |
 | Paper edge, printable margin (dashed red), frame (purple, solid when selected), grey surround | UI layer (`editor-layout-paper` / `-printable` / `-frame`) | — |
-| Images (page objects; `image` course objects are not previewed, Pending "GL-drawn images") | UI layer (`editor-layout-image`, an SVG `<image>` of `/api/maps/<event>/graphics/<id>`) | embedded PNG |
+| Images (page objects and `image` course objects) | the page part and the dynamic bucket: image passes in `page:graphics` / `course:graphics` (J6, `map-rendering.md` §5.2 "Images"), crop, rotation, flips, opacity and Multiply as printed | embedded PNG |
 
 The label mode is the viewer's own rule (sequence numbers for one ordered
 course, codes for the all-controls sheet), which agrees with
@@ -51,8 +51,11 @@ composer's own stream, symbolised in the worker (`map-rendering.md` §5.2
 
 **What differs on screen** (recorded, decision log D7):
 
-- Images are UI layer: drawn over everything, uncropped (`crop` is
-  printed, not previewed).
+- Images (J6, superseding D7's UI-layer images): a texture at most 2048 px
+  on its longer side (a larger graphic is softer than its print when
+  zoomed in deep), an SVG rasterised at its placed size on the map
+  (smaller than it prints for a map-layer image on an enlarged sheet),
+  and an outline while it loads.
 - The screen-only rules of the GL view (hairline floor, glyph and text
   culling, `map-rendering.md` §5.2) apply; the print-preview toggle of
   05 §5.12 (print profile colours, `minLineWidthMm`) waits for print
@@ -834,4 +837,3 @@ of the event, course seq (the event's last), sort order, seq.
 - **Rectangles by outline?** Layout closed paths hit by outline (D16);
   rectangles, text and images still by bounds — flagged for the user
   (feedback 2026-11-04, "Flagged for the morning").
-- **GL-drawn images** with their crop (§1).

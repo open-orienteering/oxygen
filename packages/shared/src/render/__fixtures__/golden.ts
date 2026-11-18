@@ -18,7 +18,8 @@ import { fixtureColours, renderFixtures, type RenderFixtureName } from "./stream
 import { pilotColours, pilotSymbols } from "./pilot-symbols.js";
 import { pilotScene } from "./pilot-scene.js";
 import { type LibrarySceneName, isLibrarySceneName, libraryScene, librarySceneNames } from "./library/index.js";
-import { type CourseSceneName, courseScene, courseSceneNames, isCourseSceneName } from "./course/index.js";
+import { type CourseSceneName, SCENE_LUCKA, SCENE_STRIPES, courseScene, courseSceneNames, isCourseSceneName } from "./course/index.js";
+import { luckaPng, stripesPng } from "./png.js";
 import { type FilterSceneName, filterScene, filterSceneNames, isFilterSceneName } from "./filter/index.js";
 
 export type GoldenSceneName = RenderFixtureName | "pilot-scene" | LibrarySceneName | CourseSceneName | FilterSceneName;
@@ -30,6 +31,11 @@ export const goldenSceneNames: GoldenSceneName[] = [
   ...courseSceneNames,
   ...filterSceneNames,
 ];
+
+/** The PNG bytes a golden scene's image passes draw, by graphic id (empty for scenes without images; J6). */
+export function goldenSceneGraphics(name: GoldenSceneName): ReadonlyMap<number, Uint8Array> {
+  return name === "course-graphics" ? new Map([[SCENE_LUCKA, luckaPng(64)], [SCENE_STRIPES, stripesPng()]]) : new Map();
+}
 
 export const GOLDEN_PX_PER_MM = 10;
 export const GOLDEN_MARGIN_UM = 1000;

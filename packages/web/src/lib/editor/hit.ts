@@ -46,6 +46,27 @@ export interface UiArea {
 }
 
 /**
+ * An image course object's box as a ring (J6), paper mm y-up: its two stored corners' box turned
+ * `rotationDeg` clockwise as seen about the centre, as the layer draws it (course-layer.md §3.6
+ * "Images"). The editor hits an image by this outline only, like a closed area: its inside may be
+ * transparent (a lucka's middle shows the control under it), so a press there reaches what is
+ * drawn under it or pans (course-editor.md §5).
+ */
+export function imageRing(geometry: readonly Pt[], rotationDeg = 0): Pt[] {
+  const [p, q] = geometry;
+  const x0 = Math.min(p.x, q.x), x1 = Math.max(p.x, q.x), y0 = Math.min(p.y, q.y), y1 = Math.max(p.y, q.y);
+  const corners = [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }];
+  const deg = rotationDeg % 360;
+  if (!deg) return corners;
+  const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+  const r = (deg * Math.PI) / 180, cos = Math.cos(r), sin = Math.sin(r);
+  return corners.map((c) => {
+    const dx = c.x - cx, dy = c.y - cy;
+    return { x: cx + dx * cos + dy * sin, y: cy - dx * sin + dy * cos };
+  });
+}
+
+/**
  * A leg the layer draws no line for (`style: "none"`, or a corridor leg's
  * default line, course-layer.md §10.1–10.2 `legLine` — no object, so no
  * hit-index piece): its derived pieces, paper mm.

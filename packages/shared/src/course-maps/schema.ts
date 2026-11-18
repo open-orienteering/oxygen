@@ -159,7 +159,7 @@ export const mapImageObjectSchema = z.object({
   ...rectSchema.shape,
   /** Optional crop window; absent = full graphic. */
   crop: mapImageCropSchema.optional(),
-  /** Clockwise as seen, about the box centre, after the flips (J4; drawn from J5). */
+  /** Clockwise as seen, about the box centre, after the flips (J4). */
   rotationDeg: objectRotationSchema.optional(),
   flipH: z.boolean().optional(),
   flipV: z.boolean().optional(),

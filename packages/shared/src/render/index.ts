@@ -16,7 +16,7 @@ export { pilotSymbols, pilotColours, PILOT } from "./__fixtures__/pilot-symbols.
 export * from "./ocad-objects.js";
 export { stackProxyColours, type ProxyColours } from "./proxy-symbols.js";
 export { pilotScene } from "./__fixtures__/pilot-scene.js";
-export { goldenScene, goldenSceneNames, goldenFrame, GOLDEN_PX_PER_MM, GOLDEN_MARGIN_UM } from "./__fixtures__/golden.js";
+export { goldenScene, goldenSceneGraphics, goldenSceneNames, goldenFrame, GOLDEN_PX_PER_MM, GOLDEN_MARGIN_UM } from "./__fixtures__/golden.js";
 export type { GoldenSceneName, GoldenScene, GoldenFrame } from "./__fixtures__/golden.js";
 export * from "./symbol.js";
 export * from "./transform.js";

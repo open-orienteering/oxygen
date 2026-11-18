@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createMapGlWorker, type CourseReply, type WorkerReply } from "../../../map-gl/worker";
 import { documentBytes, fontBytes, latin, request } from "../../../map-gl/__tests__/course-fixture";
-import { editorHitAt, HIT_TOLERANCE_PX, uiLegsOf } from "../hit";
+import { editorHitAt, HIT_TOLERANCE_PX, imageRing, uiLegsOf } from "../hit";
 
 /** The fixture course (S 10,10 → 31 40,10 → 32 60,40 → F 10,40) through the real worker. */
 function hitIndex(over: Parameters<typeof request>[0] = {}): NonNullable<CourseReply["hit"]> {
@@ -130,6 +130,22 @@ describe("editorHitAt (docs/course-editor.md §5)", () => {
       // A line is still hit by its stroke.
       expect(at(80, 90.1)).toEqual({ kind: "object", id: 13 });
     });
+  });
+
+  it("an image (J6) is hit by its turned box's outline: a press inside reaches the control it frames, or the map", () => {
+    const geometry = [{ x: 32, y: 2 }, { x: 48, y: 18 }];
+    const withImage = hitIndex({ objects: [{ id: 21, kind: "image", geometry, props: { graphicId: 7 } }] });
+    const areas = [{ id: 21, ring: imageRing(geometry) }];
+    const at = (x: number, y: number) => editorHitAt(withImage, { x, y }, 0.5, [], areas);
+    expect(at(40, 10)).toEqual({ kind: "site", id: "31" });
+    expect(at(35, 15)).toBeNull();
+    expect(at(32.2, 15)).toEqual({ kind: "object", id: 21 });
+    // Without the ring the layer's quad answers the whole box (what the viewer avoids).
+    expect(editorHitAt(withImage, { x: 35, y: 15 }, 0.5)).toEqual({ kind: "object", id: 21 });
+    // Turned 45° clockwise about its centre: the bottom-left corner swings to the left, level with the centre.
+    const r = imageRing(geometry, 45);
+    expect(r[0].x).toBeCloseTo(40 - 8 * Math.SQRT2, 6);
+    expect(r[0].y).toBeCloseTo(10, 6);
   });
 
   it("UI-layer areas (filter regions, toner savers) hit along the outline only, below everything", () => {

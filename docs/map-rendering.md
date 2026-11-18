@@ -1536,6 +1536,38 @@ sorting happens here.
   shows the stroke's inner half over the fill (per pass, not per group).
   The `kinds` switch, the page-clip scissor and the screen-only rules
   apply as to an opaque draw.
+* **Images** (J6, §3.10) — every image pass is an alpha item (at opacity
+  1 when opaque: its texture's own alpha blends), so it draws as its own
+  step in its row's place, after the row's opaque draws; the graphics
+  rows hold only images, so that is stream order. One draw per image: the
+  unit square by vertex id (no buffer) through the pass's affine,
+  origin-relative like every vertex, `v` flipped and the crop applied to
+  the texture coordinate; the texel's straight alpha × opacity is the
+  coverage, blended as an alpha layer (Multiply under `DST_COLOR, ZERO`).
+  A quad covers each sample once, so no stencil test-and-set; under a
+  mask the region bit must be clear. Textures are RGBA8 from an
+  unpremultiplied, unconverted `ImageBitmap`, mipmapped; **magnified
+  nearest-neighbour**, as the oracle and the PDF sample (§3.10), so an
+  enlarged graphic shows the pixels it prints with; minified trilinear.
+  Without its texture an image draws its quad's outline (1 px, 60 % grey)
+  while it loads (`FrameStats.imagesPending`), and after a failure only
+  with `outlineMissingImages` (the editor); the viewer and kiosk draw
+  nothing for it. The loupe and the 3D drape draw through the same call.
+  **Graphic textures** (`lib/graphic-textures.ts`, one loader per
+  `VectorMapLayer`, `MapGlEngine.setGraphics`): bytes only from
+  `print.png` with the kiosk key — a graphic is asked without a box
+  first, a PNG answers as stored and an SVG answers 400, then is asked at
+  `svgRasterBox` of its placed size in stream µm (scale ratio 1: in
+  Layout a map-layer image is asked smaller than it prints) and again
+  250 ms after its size last changed, the old texture drawn stretched
+  meanwhile; on a network failure the offline print store's copy under
+  the same URL (an SVG only at a box it was stored at). Decoded at most
+  2048 px on the longer side; the textures (× 4/3 for mips) are held
+  under their own 64 MiB budget, outside the map's (`EngineStats.graphicBytes`,
+  `graphicsPending`): over it the largest is decoded again at half size
+  until the set fits; an image is never dropped. A replaced texture is
+  freed on the GPU (`releaseGraphic`). The canvas's `data-graphics` is
+  `pending` while an image draws as its loading outline, else `ready`.
 * **Pattern clip** — per clip group: the areas into stencil bit 0
   (`REPLACE`, colour masked), the group's instances where the bit is
   set (`EQUAL`), the areas again with `ZERO`.
@@ -2590,8 +2622,8 @@ and draws no description sheet.
 **Tools.** `MapViewerEditorProps.tool` (D5, `course-editor.md` §6): the
 viewer offers pointer-down to the active tool first, routes clicks of an
 exclusive tool to it, and draws its `ToolShape`s (paper mm → the rotated
-overlay) in `editor-tool-layer` — circles, lines, handles, text and (D7)
-`image`, a raster by its three corners; `draftObjects` replace stored course
+overlay) in `editor-tool-layer` — circles, lines, handles and text (D7's
+`image` raster left in J6: images are the map engine's); `draftObjects` replace stored course
 objects in the layer request, with `fastFilter` while a filter region is
 dragged (§4.11).
 
@@ -3437,7 +3469,9 @@ miss) and without moving any point that is written:
 | `stroke`, pointed + taper | the whole **outline**, bounds as is |
 | `glyph` | an **instance**: its position grown by the form's reach (the farthest corner of `glyphFormBBox` from the origin, strokes and mitres in) × the instance's scale — a turn cannot take the form farther. Turn classes are counted over all instances, so the form choice is the unculled one's; a pass with no instance left writes nothing, not even its colour |
 
-Not culled: `text` and `hatch` (a text is one pass of few glyphs; a
+Not culled: `text`, `hatch` and `image` (an image is one `Do`, but its
+XObject is embedded whether drawn or not: culling it pays only with the
+embedding culled too, Pending; a text is one pass of few glyphs; a
 hatch is clipped to its area, whose bounds would be the test — both left
 for a measurement that asks for them), clips and filter-mask frames. A
 page is unchanged but for its bytes: the golden tier and the corpus
@@ -3685,6 +3719,15 @@ layers. Measured at introduction (headless Chromium, 2026-11-18):
 | `alpha-text` | 20 / 18 000 (0.111 %) |
 | `blend-multiply` | 128 / 57 200 (0.224 %) |
 
+**Image tier** (J6). `course-graphics` (§6.3) is drawn through the arena
+path only (the per-pass path draws no images; `prepareStream` refuses
+them and the fixture page decodes the scene's PNGs,
+`goldenSceneGraphics`) and held to the filter arena tier's **≤ 1.5 %**:
+measured at introduction 2 127 / 218 400 (0.974 %, headless Chromium,
+2026-11-18), the hairline MSAA steps of its legs and lines — the images'
+insides agree, magnified nearest on both sides. Probes compare the
+lucka's red band, gold band and transparent middle with the golden.
+
 Not in J3: pixel probes of the blended values (the whole-image budget
 holds them to 16 levels everywhere but the ≤ 0.5 % of edge pixels) and a
 framebuffer-target run (loupe and drape call the same `renderDocument`).
@@ -3816,6 +3859,7 @@ WebGL2 per-pass path against the golden, measured at introduction
 | `course-all-controls` | ISOM 403, 304; all controls with a free-order course | every site drawn, codes, no legs, start north |
 | `course-leg-styles` | ISOM 401, 505, 516; S → 31 a bent 705, 31 → 32 a bent 707 marked route over the 516, 32 → F `style: "none"` with a stored gap (F1, `course-layer.md` §10.1) | the 705 piece runs through its bend; the route in upper purple, dashed, after black; nothing for the `none` leg, which keeps its pieces; numbers unchanged |
 | `course-corridor` | ISOM 401, 505, 101, 516; S → 31 → 32 one 60 m run (4 mm, h 2 < R 2.5) with its `edge` and a 3 mm band, bent at (36, 10); 32 → 33 a 150 m corridor without edge with a 2 mm band; 33 → F plain (F2, re-shaped in F19, `course-layer.md` §10.2) | the band one generated `clip` region: every base pass masked, no course pass; clear inside every corridor (at the bend, at the change of width at 32) and inside the mouths (31's circle across, the 701's back corner), the band round them, nothing behind the 701's base; at 33, the corridor's only terminal end, the band stops on the line through its centre with rounded corners and the map shows behind it (F22, `course-layer.md` §10.2 "Ends"); the edge lower purple `705/edge` along S → 31 → 32 only, over the 401; 31's circle opened towards both legs (two arcs), 32 and 33 whole (the wide corridor covers the junctions; h ≥ R), no cut in the derivation; no 705 along the three corridor legs, 33 → F the only leg line (F14). Drawn on the default GL path (the arena path's MSAA edge steps exceed `ARENA_FILTER_MAX_RATIO` on this many edges: 2.0 %, D3's filter scenes cover the arena masks) |
+| `course-graphics` | ISOM 406, 505, 106; S → 31 → 32 → F with three `image` course objects (J5, J6): the 64 px lucka PNG (opaque red band, half-opaque gold band, transparent middle) framing 31, the striped 32 × 16 px RGB graphic cropped to its middle half, flipped and turned 20°, a lucka at 80 % Multiply framing 32; graphics `goldenSceneGraphics` | one image pass each in `course:graphics` after every map colour and lower purple, before upper purple: the circles and numbers over the luckas, the map's green through the middle, the stripes over the brown line and the lucka under them; drawn on the arena path only (§6.2 "Image tier") |
 
 The **filter scenes** (D3, 04 §8 row "Filter regions", §4.11) draw one
 ISOM base map — a 407 area (0–60 × 0–40 mm), 101 contours (a straight
@@ -4546,6 +4590,13 @@ The shared module is exported as a namespace: `import { render } from
   alpha over the band's rings in a row above the map colours and below
   the course. Multiply and `/ca` on the club's printer are unverified
   until the print checkpoint after J5.
+
+- **Images** (§3.10). Outside the frame an image course object's PNG is
+  still embedded and its `Do` written (§5.3 "Frame culling"). One SVG
+  placed at two sizes on a page is rasterised once, at the last
+  placement's box (`course-pages.ts`; before J5 too), so the larger one
+  prints coarser under nearest-neighbour sampling. The per-pass path
+  draws no images (§5.2 "Dev pages").
 
 - **§5.2 filter-region limits.** All masks share one stencil bit, so
   overlapping regions of different masks are fine (each masked step marks

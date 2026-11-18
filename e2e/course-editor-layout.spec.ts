@@ -10,7 +10,7 @@
 import { readFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 import { reseed } from "./helpers/reseed";
-import { analysePdf, cleanup, clickMap, drag, editorReady, geometryOf, inkIn, nameIdOf, openEditor, pageToPaperOf, printed, probeTemplate, toPage, toPaper, trpcCall, viewCentre, viewSettled, statsRow, type Frame } from "./helpers/editor";
+import { analysePdf, canvasColourAt, cleanup, clickMap, drag, editorReady, geometryOf, inkIn, nameIdOf, openEditor, pageToPaperOf, printed, probeTemplate, toPage, toPaper, trpcCall, viewCentre, viewSettled, statsRow, type Frame } from "./helpers/editor";
 import { migrateLegacySheetObjects } from "./helpers/legacy-objects";
 import { waitForTrpc } from "./helpers/trpc";
 import { type Pt, desktopOnly, courseIdByName } from "./helpers/course-editor-spec";
@@ -179,6 +179,19 @@ test.describe("Course editor layout (docs/course-layout.md)", () => {
       const row = page.locator('[data-testid="editor-layout-object-row"][data-kind="image"]');
       await expect(row).toHaveCount(1);
       expect(await images()).toHaveLength(1);
+
+      // J6: drawn by the map engine with the page layer (no UI-layer image): the SVG's disc at the box centre,
+      // its transparent corner shows the sheet under it.
+      await expect(page.locator('[data-testid="editor-layout-image"]')).toHaveCount(0);
+      await expect(page.getByTestId("map-vector-layer")).toHaveAttribute("data-graphics", "ready");
+      const box = (await images())[0] as unknown as { x: number; y: number; width: number; height: number };
+      const centre = toPaperMm({ x: box.x + box.width / 2, y: box.y + box.height / 2 });
+      await expect.poll(async () => {
+        const c = await canvasColourAt(page, centre);
+        return c !== null && Math.abs(c[0] - 0x33) <= 12 && Math.abs(c[1] - 0x66) <= 12 && Math.abs(c[2] - 0x99) <= 12;
+      }).toBe(true);
+      const corner = await canvasColourAt(page, toPaperMm({ x: box.x + box.width * 0.04, y: box.y + box.height * 0.04 }));
+      expect(corner && Math.abs(corner[2] - 0x99) + Math.abs(corner[0] - 0x33) > 40, `corner ${corner}`).toBe(true);
 
       // Selected from the list and deleted: gone from the list and from the sheet.
       await row.click();

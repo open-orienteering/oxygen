@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import { mapToPage, mapWindowForFrame } from "../../course-maps/geometry.js";
 import type { CourseMapObject } from "../../course-maps/schema.js";
 import { hatchLines, pathBounds } from "../../render/path.js";
-import { makePath, type PassStream } from "../../render/pass-stream.js";
+import { imageQuadCorners, makePath, type PassStream } from "../../render/pass-stream.js";
 import { flipPageObject, frameInMap, frameRectUm, inverseMapLayerTransform, mapLayerTransform, mapPointToPage, pagePointToMap, transformPassStream } from "../page.js";
 
 const H = 297;
@@ -126,6 +126,20 @@ describe("transformPassStream", () => {
     expect(g.instances[2]).toBeCloseTo(Math.cos(a), 6);
     expect(g.instances[3]).toBeCloseTo(Math.sin(a), 6);
     expect(g.instances[4]).toBeCloseTo(k, 6);
+  });
+
+  it("an image (J5): its four corners land where T_map puts them, under rotation and scale; crop and alpha kept", () => {
+    const img: PassStream = { ...stream, objectIdx: new Uint32Array(1), symbolIdx: new Uint32Array(1), passes: [{ kind: "image", colour: 4, graphicId: 7, quad: [8000, 2000, -1000, 6000, 3000, -4000], crop: { x: 0.1, y: 0.2, width: 0.5, height: 0.6 }, opacity: 0.5, blend: "multiply" }] };
+    const p = transformPassStream(img, t).passes[0];
+    if (p.kind !== "image" || img.passes[0].kind !== "image") throw new Error("kind");
+    const src = imageQuadCorners(img.passes[0].quad), dst = imageQuadCorners(p.quad);
+    for (let i = 0; i < 4; i++) {
+      const [x, y] = mapPointToPage(t, src[i][0], src[i][1]);
+      expect(dst[i][0]).toBeCloseTo(x, 6);
+      expect(dst[i][1]).toBeCloseTo(y, 6);
+    }
+    expect(Math.hypot(p.quad[0], p.quad[1])).toBeCloseTo(Math.hypot(8000, 2000) * k, 6);
+    expect(p).toMatchObject({ graphicId: 7, crop: { x: 0.1, y: 0.2, width: 0.5, height: 0.6 }, opacity: 0.5, blend: "multiply" });
   });
 
   it("hatch lines land on the transformed lines of the original", () => {

@@ -25,7 +25,7 @@ function ctx(over: Partial<Omit<LayoutBindingContext, "onPreview" | "onCommit" |
   const fns = { onPreview: vi.fn(), onCommit: vi.fn(), onSelect: vi.fn(), onPlace: vi.fn() };
   const c: LayoutBindingContext = {
     geometry: g, editable: [box], locked: [logo], description: { visible: true, x: 140, y: 12, cellSizeMm: 6 }, block: { x: 140, y: 12, width: 48, height: 30 },
-    centre: { x: 0, y: 0 }, selection: null, tool: { kind: "select" }, snapping: false, gesture, imageHref: (id: number) => `/img/${id}`,
+    centre: { x: 0, y: 0 }, selection: null, tool: { kind: "select" }, snapping: false, gesture,
     ...fns,
     ...over,
   };
@@ -46,12 +46,11 @@ describe("Layout binding (docs/course-layout.md §2, §3; 08 §5.3 Layout column
     expect(b.onPointerDown!(at(120, 200))).toBe(false);
   });
 
-  it("draws the sheet and the page images on the UI layer", () => {
+  it("draws the sheet on the UI layer; page images are the map engine's (J6), not a UI shape", () => {
     const shapes = layoutBinding(ctx()).shapes!;
     const ids = shapes.flatMap((s) => ("testId" in s && s.testId ? [s.testId] : []));
-    expect(ids).toEqual(expect.arrayContaining(["editor-layout-paper", "editor-layout-printable", "editor-layout-frame", "editor-layout-image", "editor-layout-description"]));
-    const img = shapes.find((s) => s.kind === "image")!;
-    expect(img.kind === "image" && img.href).toBe("/img/9");
+    expect(ids).toEqual(expect.arrayContaining(["editor-layout-paper", "editor-layout-printable", "editor-layout-frame", "editor-layout-description"]));
+    expect(ids).not.toContain("editor-layout-image");
   });
 
   it("click on an object selects it; a drag moves it by the page offset and commits once", () => {

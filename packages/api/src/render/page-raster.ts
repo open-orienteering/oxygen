@@ -28,7 +28,7 @@ import {
   transformPassStream,
 } from "@oxygen/shared/print";
 import { glyphOutlineFrom } from "./fonts.js";
-import { goldenFonts } from "./golden.js";
+import { goldenFonts, graphicHrefs } from "./golden.js";
 import { encodePng, rasterisePassStream } from "./reference-raster.js";
 
 export interface PageRaster {
@@ -76,8 +76,7 @@ export async function rasterisePage(
   const fonts = await goldenFonts();
   const hex = page.colours.map((c) => render.cmykToHex(c.cmyk));
   const colour = opts.colour ?? ((i: number) => hex[i] ?? "#ff00ff");
-  const hrefs = new Map([...(opts.images ?? [])].map(([id, png]) => [id, `data:image/png;base64,${Buffer.from(png).toString("base64")}`]));
-  const imageHref = (id: number) => hrefs.get(id);
+  const imageHref = graphicHrefs(opts.images);
   const common = { colour, pxPerMm, background: "none", glyphOutline: glyphOutlineFrom(fonts), supersample: opts.supersample ?? 1, imageHref };
   const width = Math.round(page.paper.widthMm * pxPerMm);
   const height = Math.round(page.paper.heightMm * pxPerMm);

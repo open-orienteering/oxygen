@@ -16,7 +16,7 @@ import type { DocumentColour } from "../../../map-document/header.js";
 import { courseLayer, courseRenderInput } from "../../../course/layer.js";
 import type { CourseDocumentContext, CourseLayer, CourseLayerInput, CourseSite, CourseStructure } from "../../../course/types.js";
 
-export const courseSceneNames = ["course-legs", "course-cuts", "course-objects", "course-sprint", "course-all-controls", "course-leg-styles", "course-corridor", "course-exchange", "course-legs-curved"] as const;
+export const courseSceneNames = ["course-legs", "course-cuts", "course-objects", "course-sprint", "course-all-controls", "course-leg-styles", "course-corridor", "course-exchange", "course-legs-curved", "course-graphics"] as const;
 export type CourseSceneName = (typeof courseSceneNames)[number];
 
 export interface CourseScene {
@@ -242,6 +242,32 @@ function legsCurved(): CourseScene {
   return scene("course-legs-curved", base, { structure, sites, objects: [], appearance: {}, viewOptions: {} });
 }
 
+/** Graphic ids of `course-graphics` (bytes: `courseSceneGraphics`). */
+export const SCENE_LUCKA = 1;
+export const SCENE_STRIPES = 2;
+
+/**
+ * Image course objects (J5, J6): the lucka PNG (opaque red band, half-opaque gold band,
+ * transparent middle) framing control 31, the striped RGB graphic cropped to its middle half,
+ * flipped and turned 20°, and a lucka at 80 % Multiply framing control 32 — over green, a
+ * black and a brown line; upper purple draws over all three.
+ */
+function graphics(): CourseScene {
+  const base = new BaseMap("ISOM2017-2")
+    .add("406", area(0, 0, 50, 0, 50, 40, 0, 40))
+    .add("505", line(2, 16, 48, 24))
+    .add("106", line(4, 36, 46, 30));
+  const sites = [site("S", "start", 6, 6, "S1"), site("31", "control", 20, 20), site("32", "control", 38, 28), site("F", "finish", 42, 8, "F1")];
+  return scene("course-graphics", base, {
+    structure: ordered(["S", "31", "32", "F"]), sites, appearance: {}, viewOptions: {},
+    objects: [
+      { id: "lucka-31", kind: "image", geometry: [{ x: 12, y: 12 }, { x: 28, y: 28 }], props: { graphicId: SCENE_LUCKA } },
+      { id: "stripes", kind: "image", geometry: [{ x: 4, y: 24 }, { x: 18, y: 34 }], props: { graphicId: SCENE_STRIPES, crop: { x: 0.25, y: 0, width: 0.5, height: 1 }, rotationDeg: 20, flipH: true } },
+      { id: "lucka-32", kind: "image", geometry: [{ x: 32, y: 22 }, { x: 44, y: 34 }], props: { graphicId: SCENE_LUCKA, opacity: 0.8, blend: "multiply" } },
+    ],
+  });
+}
+
 const builders: Record<CourseSceneName, () => CourseScene> = {
   "course-legs": legs,
   "course-cuts": cuts,
@@ -252,6 +278,7 @@ const builders: Record<CourseSceneName, () => CourseScene> = {
   "course-corridor": corridor,
   "course-exchange": exchange,
   "course-legs-curved": legsCurved,
+  "course-graphics": graphics,
 };
 
 export function courseScene(name: CourseSceneName): CourseScene {

@@ -102,15 +102,15 @@ export interface PreparedStream {
 
 const DEFAULT_TOLERANCE_UM = 10;
 
-/** Whether a stream has a pass with opacity or blend (§3.9): the per-pass path does not draw those (J3). */
+/** Whether a stream has a pass with opacity or blend (§3.9), or an image (§3.10, J6): the per-pass path draws neither (J3). */
 export function streamHasAlpha(stream: render.PassStream): boolean {
-  return stream.passes.some((p) => render.passHasAlpha(p));
+  return stream.passes.some((p) => p.kind === "image" || render.passHasAlpha(p));
 }
 
 export function prepareStream(stream: render.PassStream, opts: PrepareOptions = {}): PreparedStream {
   // The per-pass (golden) path draws no alpha; an opaque picture of an alpha stream would be wrong
   // without a sign, so it refuses (J3, map-rendering.md §5.2). The arena path draws them.
-  if (streamHasAlpha(stream)) throw new Error("prepareStream: the stream has opacity or blend passes; draw it through the arena path");
+  if (streamHasAlpha(stream)) throw new Error("prepareStream: the stream has opacity, blend or image passes; draw it through the arena path");
   const tol = opts.toleranceUm ?? DEFAULT_TOLERANCE_UM;
   const meshes = new Map<string, GlyphMesh>();
   for (const m of stream.glyphTable) meshes.set(`${m.glyphId}/${m.partIdx}`, m);

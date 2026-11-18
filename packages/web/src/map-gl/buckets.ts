@@ -118,6 +118,11 @@ export function passBounds(pass: render.Pass, meshRadius: (glyphId: number, part
       }
       return b;
     }
+    case "image": {
+      let b: render.Bounds | undefined;
+      for (const [x, y] of render.imageQuadCorners(pass.quad)) b = union(b, x, y, x, y);
+      return b;
+    }
   }
 }
 
@@ -274,7 +279,19 @@ export interface ClipItem {
 export type PartLayer = "base" | "detail" | "all";
 
 /** The pass kinds an alpha item can be (J3; docs/map-rendering.md §5.2 "Alpha items"). */
-export type AlphaKind = "fill" | "hatch" | "stroke" | "glyph" | "text";
+export type AlphaKind = "fill" | "hatch" | "stroke" | "glyph" | "text" | "image";
+
+/**
+ * An image pass as the arena path draws it (J6, §5.2 "Images"): the unit square's affine with
+ * its translation origin-relative, the crop as `[x, y, width, height]` of the source (top-left
+ * origin), and its placed size in stream µm (the SVG raster box).
+ */
+export interface ImageDraw {
+  graphicId: number;
+  quad: [number, number, number, number, number, number];
+  crop: [number, number, number, number];
+  sizeUm: [number, number];
+}
 
 /**
  * A pass with opacity below 1 or the Multiply blend (§3.9), prepared but kept out of the
@@ -299,6 +316,8 @@ export interface AlphaItem {
   runs?: { cls: number; first: number; count: number }[];
   /** A pattern-clipped glyph pass: its area's triangles, x, y origin-relative. */
   clip?: { positions: Float32Array; indices: Uint32Array };
+  /** An image pass (J6): every image is an alpha item, opaque ones at opacity 1. */
+  image?: ImageDraw;
 }
 
 /** A pass's alpha state as the arena path draws it: null = opaque, "drop" = nothing to draw (opacity ≤ 0). */
@@ -356,7 +375,8 @@ export interface PrepareContext {
   textGlyph: Map<number, TextPassGlyphs>;
 }
 
-const BASE_KINDS = new Set<render.PassKind>(["fill", "hatch"]);
+/** Kinds drawn below the zoom gate too; an image is one quad, so it is never detail (J6). */
+const BASE_KINDS = new Set<render.PassKind>(["fill", "hatch", "image"]);
 
 /** Growable float32 / uint32 arrays: preparation appends without `number[]` boxing or a copy at the end. */
 class GrowF32 {
@@ -646,6 +666,21 @@ export function prepareBucketPartFrom(sources: readonly PartSource[], bucket: nu
         }
         break;
       }
+      case "image": {
+        // Always its own layer (J6): the texture's alpha blends, so it is drawn as an alpha item at opacity 1 when opaque.
+        const q = pass.quad;
+        const c = pass.crop ?? { x: 0, y: 0, width: 1, height: 1 };
+        alpha.push({
+          ...(al ?? { kind: "image" as const, colour: pass.colour, object, source: one ? 0 : merged!.source[k], pass: pi, opacity: 1, multiply: false }),
+          image: {
+            graphicId: pass.graphicId,
+            quad: [q[0], q[1], q[2], q[3], q[4] - ox, q[5] - oy],
+            crop: [c.x, c.y, c.width, c.height],
+            sizeUm: [Math.hypot(q[0], q[1]), Math.hypot(q[2], q[3])],
+          },
+        });
+        break;
+      }
     }
   }
 
@@ -862,6 +897,8 @@ export interface AlphaLayer {
   count: number;
   /** Glyph, text, clip: per class or page, first instance and count in the kind's instance buffer. */
   runs: { cls: number; first: number; count: number }[];
+  /** An image (J6): what to draw, its translation relative to the part's origin as every vertex. */
+  image?: ImageDraw;
 }
 
 export interface VisibleSet {
@@ -1080,6 +1117,10 @@ function alphaLayers(parts: ResidentPart[], hide: ReadonlySet<number> | undefine
   const out: AlphaLayer[] = [];
   for (const { p, a } of items) {
     const base = { colour: a.colour, mask: maskOf(a.object, a.colour), opacity: a.opacity, multiply: a.multiply };
+    if (a.image) {
+      out.push({ ...base, kind: "image", offset: 0, count: 0, runs: [], image: a.image });
+      continue;
+    }
     if (a.kind === "fill" || a.kind === "hatch" || a.kind === "stroke") {
       const k = p.part[a.kind]!;
       const add = p.base[a.kind];
@@ -1088,7 +1129,7 @@ function alphaLayers(parts: ResidentPart[], hide: ReadonlySet<number> | undefine
       out.push({ ...base, kind: a.kind, offset, count: a.count!, runs: [] });
       continue;
     }
-    const kind = a.clip ? "clip" : a.kind;
+    const kind = a.clip ? "clip" : (a.kind as "glyph" | "text");
     const first = at[kind];
     inst[kind].push(a.instances!);
     at[kind] += a.instances!.length / INSTANCE_FLOATS;

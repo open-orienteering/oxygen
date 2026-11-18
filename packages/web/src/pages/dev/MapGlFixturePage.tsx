@@ -56,7 +56,7 @@ export function MapGlFixturePage() {
         const fonts = await loadFonts();
         if (cancelled) return;
         const scene = render.goldenScene(name, fonts);
-        // An alpha scene (J3) always takes the arena path: the per-pass path draws no alpha.
+        // An alpha or image scene (J3, J6) always takes the arena path: the per-pass path draws neither.
         const arena = arenaParam || streamHasAlpha(scene.stream);
         setPath(arena ? "arena" : "pass");
         if (arena) {
@@ -83,8 +83,14 @@ export function MapGlFixturePage() {
             firstView: { kind: "view", view },
           });
           engine.setView(view);
+          // The scene's graphics (J6), decoded as the loader decodes them.
+          const bitmaps = new Map<number, ImageBitmap>();
+          for (const [id, png] of render.goldenSceneGraphics(name)) {
+            bitmaps.set(id, await createImageBitmap(new Blob([png.slice()], { type: "image/png" }), { premultiplyAlpha: "none", colorSpaceConversion: "none" }));
+          }
           await engine.whenComplete();
-          const frame = engine.render({ colour: (i) => hexToRgb(scene.colour(i)) });
+          if (cancelled) return;
+          const frame = engine.render({ colour: (i) => hexToRgb(scene.colour(i)), graphic: (img) => bitmaps.get(img.graphicId) ?? null });
           renderer.gl.finish();
           if (cancelled) return;
           setStats(`arena · ${summary.passes} passes · ${frame.drawCalls} draws · ${engine.visibleAlphaLayers} alpha layers · text ${summary.text.glyphs} glyphs (${summary.text.missing} missing) · ${(performance.now() - t0).toFixed(1)} ms`);

@@ -302,7 +302,6 @@ export interface CourseDerivation {
   courses: DerivedCourse[];
 }
 
-/** An `image` object: not in the pass stream, drawn by the page backends from its graphic's bytes. */
 /**
  * A graphic the layer draws (J5): what to fetch, not how to draw it — the
  * image itself is a render object in the `course:graphics` row (an
@@ -330,7 +329,7 @@ export interface CourseLayer {
   remap: number[] | null;
   symbols: RenderSymbol[];
   objects: CourseRenderObject[];
-  /** `image` course objects: not in the pass stream, drawn by the page backends. */
+  /** The graphics `image` course objects draw (J5): the fetch list; the images themselves are image passes. */
   images: CourseLayerImage[];
   derivation: CourseDerivation;
   warnings: CourseLayerWarning[];

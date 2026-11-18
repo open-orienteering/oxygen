@@ -286,7 +286,6 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
       // Align map stores a sheet's window; a template has none (its preview follows the course).
       selection: data?.scope === "template" && selection?.kind === "frame" ? null : selection,
       tool, snapping, gesture,
-      imageHref: (id) => `/api/maps/${encodeURIComponent(a.nameId)}/graphics/${id}`,
       onPreview: (c) => setDraft(c && stored ? apply(stored, c) : null),
       onCommit: change,
       onSelect: setSelection,
@@ -300,7 +299,7 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
         onCancel: () => setTool({ kind: "select" }),
       } : undefined,
     });
-  }, [a.enabled, a.nameId, geometry, snap, scoped, block, data?.scope, selection, tool, snapping, stored, apply, change, place, drawHover, finishPath, focusedVertex, onVertexFocus]);
+  }, [a.enabled, geometry, snap, scoped, block, data?.scope, selection, tool, snapping, stored, apply, change, place, drawHover, finishPath, focusedVertex, onVertexFocus]);
 
   const layoutRequest = useMemo(() => (a.enabled && data && snap && geometry ? layoutRequestOf(data, snap, geometry) : null), [a.enabled, data, snap, geometry]);
 

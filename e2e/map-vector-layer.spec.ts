@@ -377,6 +377,49 @@ test.describe("vector map layer", () => {
     }
   });
 
+  // J6 (docs/map-rendering.md §5.2 "Images"): a stored `image` course object reaches the viewer as the white-out
+  // does and is drawn by the map engine from the graphic's `print.png`.
+  test("a stored image course object is drawn on the canvas from its graphic", async ({ page }) => {
+    test.setTimeout(180_000);
+    await openEvent(page);
+    await viewerWithMap(page);
+    let { viewer, canvas } = await openCourses(page);
+    const fit = await snapshot(viewer, canvas);
+    const spot = findSpot(fit, isYellow, (p) =>
+      [-3, 0, 3].every((dx) => [-3, 0, 3].every((dy) => { const c = fit.rgb({ x: p.x + dx, y: p.y + dy }); return !!c && isYellow(c); })));
+    expect(spot, "open yellow ground").toBeDefined();
+
+    // An opaque 8 × 8 teal PNG, uploaded to the event, placed as a 2 mm image there.
+    const png = new PNG({ width: 8, height: 8 });
+    for (let i = 0; i < 64; i++) png.data.set([0, 160, 160, 255], i * 4);
+    const headers = { "content-type": "application/json", "x-event-id": "itest" };
+    const up = await page.request.post(`${API}/trpc/graphics.upload`, { headers, data: { name: `e2e-j6-${Date.now()}.png`, fileDataBase64: PNG.sync.write(png).toString("base64") } });
+    expect(up.ok(), await up.text()).toBe(true);
+    const graphicId = ((await up.json()) as { result: { data: { id: number } } }).result.data.id;
+    const res = await page.request.post(`${API}/trpc/courseObject.create`, {
+      headers,
+      data: { kind: "image", geometry: [{ x: spot!.x - 1, y: spot!.y - 1 }, { x: spot!.x + 1, y: spot!.y + 1 }], props: { graphicId }, scope: { all: true } },
+    });
+    expect(res.ok(), await res.text()).toBe(true);
+    const id = ((await res.json()) as { result: { data: { id: number } } }).result.data.id;
+    try {
+      await page.reload();
+      ({ viewer, canvas } = await openCourses(page));
+      await expect(viewer).toHaveAttribute("data-course-layer", "gl", { timeout: 30_000 });
+      await zoomOn(page, viewer, canvas, spot!);
+      await expect(canvas).toHaveAttribute("data-graphics", "ready", { timeout: 30_000 });
+      await expect.poll(async () => {
+        const c = (await snapshot(viewer, canvas)).rgb(spot!);
+        return !!c && Math.abs(c[0] - 0) <= 12 && Math.abs(c[1] - 160) <= 12 && Math.abs(c[2] - 160) <= 12;
+      }, { timeout: 30_000 }).toBe(true);
+      const beside = (await snapshot(viewer, canvas)).rgb({ x: spot!.x + 3, y: spot!.y });
+      expect(beside && isYellow(beside), `yellow beside the image: ${JSON.stringify(beside)}`).toBe(true);
+    } finally {
+      await page.request.post(`${API}/trpc/courseObject.delete`, { headers, data: { id } });
+      await page.request.post(`${API}/trpc/graphics.delete`, { headers, data: { id: graphicId } });
+    }
+  });
+
   // docs/course-layer.md §10.1 (F1) through the viewer plumbing (F2): course.list carries the stored leg whole,
   // MapPanel → MapViewer → courseLayerRequest put it on the item, the GL layer draws it.
   test("a stored marked-route leg draws 707's dashes on the canvas", async ({ page }) => {

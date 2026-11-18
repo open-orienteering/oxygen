@@ -98,7 +98,7 @@ import { dragLegShapes } from "../lib/editor/leg-length";
 import { outlinePoints, vertexRule } from "../lib/editor/geometry-edit";
 import type { CourseInfo } from "../map-gl/engine";
 import type { TerrainLine } from "../map-gl/terrain/lines";
-import { editorHitAt, HIT_TOLERANCE_PX, uiLegsOf, type EditorTarget } from "../lib/editor/hit";
+import { editorHitAt, HIT_TOLERANCE_PX, imageRing, uiLegsOf, type EditorTarget } from "../lib/editor/hit";
 import { showSelectionRing } from "../lib/editor/state";
 import { escapeCancels } from "../lib/editor/mouse-drag";
 import { COARSE_HIT_TOLERANCE_PX, HANDLE_LIFT_PX, IDLE as SITE_TOUCH_IDLE, LONG_PRESS_MS, LOUPE_DIAMETER_PX, LOUPE_SCALE, liftedPoint, loupePlacement, placementLoupe, siteTouch, type SiteTouch, type SiteTouchEvent } from "../lib/editor/touch";
@@ -402,9 +402,7 @@ export type ToolShape =
   | { kind: "handle"; x: number; y: number; active?: boolean; testId?: string; data?: Record<string, string> }
   /** A screen-size Bézier handle grip at `x`, `y` on a thin line from its vertex `from`. */
   | { kind: "grip"; x: number; y: number; from: { x: number; y: number }; testId?: string; data?: Record<string, string> }
-  | { kind: "text"; x: number; y: number; text: string; dxPx?: number; dyPx?: number; color?: string; testId?: string }
-  /** A raster on the UI layer (Layout mode's page images): its top-left, top-right and bottom-left corners, paper mm. */
-  | { kind: "image"; topLeft: { x: number; y: number }; topRight: { x: number; y: number }; bottomLeft: { x: number; y: number }; href: string; testId?: string; data?: Record<string, string> };
+  | { kind: "text"; x: number; y: number; text: string; dxPx?: number; dyPx?: number; color?: string; testId?: string };
 
 /**
  * An editor tool's hooks into the viewer (docs/course-editor.md §6). The
@@ -1170,9 +1168,14 @@ export function MapViewer({
   // ─── Editor hit-test on the shared stage (docs/course-editor.md §5) ──
   const sharedHit = !!editor && glCourse;
   // Closed course objects (oob_area, whiteout, toner_saver, filter_region) hit by their outline only: their
-  // interior is the map, so a press there pans (§5, §7; docs/bugfix-editor-area-press-pans.md).
+  // interior is the map, so a press there pans (§5, §7; docs/bugfix-editor-area-press-pans.md). An image
+  // likewise, by its turned box (J6): a lucka's transparent middle shows the control it frames.
   const uiAreas = useMemo(
-    () => (editor ? drawnObjects.filter((o) => vertexRule(o.kind).closed).map((o) => ({ id: o.id, ring: outlinePoints(o.geometry, true) })) : []),
+    () => (editor
+      ? drawnObjects.flatMap((o) => (o.kind === "image"
+        ? [{ id: o.id, ring: imageRing(o.geometry, o.props.rotationDeg) }]
+        : vertexRule(o.kind).closed ? [{ id: o.id, ring: outlinePoints(o.geometry, true) }] : []))
+      : []),
     [editor, drawnObjects],
   );
   // `style: "none"` legs have no layer object, so no hit piece: they hit from the derivation (§6.7).
@@ -3122,6 +3125,8 @@ export function MapViewer({
           onTerrainError={onTerrainLayerError}
           onMaxTextureSize={setMaxTextureSize}
           terrainLines={gpsRouteLines3d}
+          nameId={nameId ?? null}
+          outlineMissingImages={!!editor}
         />
       )}
       {/* 3D: the map's gestures go to the camera (§5.4 "3D mode" "Gestures") */}
@@ -3972,14 +3977,6 @@ function toolShapeNode(
       if (!p) return null;
       return <text key={key} x={p.x + (sh.dxPx ?? 0)} y={p.y + (sh.dyPx ?? 0)} fill={color} fontSize={12} fontWeight={600}
         paintOrder="stroke" stroke="#ffffff" strokeWidth={3} data-testid={sh.testId}>{sh.text}</text>;
-    }
-    case "image": {
-      // A unit image under the affine map of its three projected corners: scale, rotation and the y flip in one.
-      const o = project(sh.topLeft.x, sh.topLeft.y), u = project(sh.topRight.x, sh.topRight.y), v = project(sh.bottomLeft.x, sh.bottomLeft.y);
-      if (!o || !u || !v) return null;
-      const m = [u.x - o.x, u.y - o.y, v.x - o.x, v.y - o.y, o.x, o.y].map((n) => n.toFixed(3)).join(" ");
-      return <image key={key} href={sh.href} x={0} y={0} width={1} height={1} preserveAspectRatio="none" transform={`matrix(${m})`}
-        data-testid={sh.testId} {...data} />;
     }
   }
 }

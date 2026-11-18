@@ -97,7 +97,7 @@ export const courseObjectBodySchema = z.discriminatedUnion("kind", [
       crop: mapImageCropSchema.optional(),
       opacity: objectOpacitySchema.optional(),
       blend: objectBlendSchema.optional(),
-      /** Clockwise as seen, about the box centre, after the flips (J4; drawn from J5). */
+      /** Clockwise as seen, about the box centre, after the flips (J4). */
       rotationDeg: objectRotationSchema.optional(),
       flipH: z.boolean().optional(),
       flipV: z.boolean().optional(),

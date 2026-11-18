@@ -17,7 +17,7 @@ import type { CourseSite, CourseStructure } from "../../course/types.js";
 import { makePath, type RenderPath } from "../../render/pass-stream.js";
 import { BaseMap } from "../../render/__fixtures__/course/index.js";
 import type { PageInput } from "../page.js";
-import { encodeRgbaPng, luckaPng } from "./png.js";
+import { luckaPng, stripesPng } from "./png.js";
 
 export const pageSceneNames = ["page-sprint-a4", "page-ring", "page-rotated", "page-objects-alpha", "page-graphics"] as const;
 export type PageSceneName = (typeof pageSceneNames)[number];
@@ -190,15 +190,6 @@ function graphics(): PageInput {
 
 const LUCKA = 1;
 const STRIPES = 2;
-
-/** 32 × 16 px RGB: four vertical bands (blue, green, orange, black) over a white bottom row band, so a crop, a flip and a turn all show. */
-function stripesPng(): Uint8Array {
-  const w = 32, h = 16;
-  const px = new Uint8Array(w * h * 3);
-  const bands = [[31, 111, 178], [0, 150, 60], [240, 140, 0], [0, 0, 0]];
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) px.set(y >= 12 ? [255, 255, 255] : bands[Math.floor(x / 8)], (y * w + x) * 3);
-  return encodeRgbaPng(w, h, px, 3);
-}
 
 /** The PNG bytes a page scene's images draw, by graphic id (empty for scenes without images). */
 export function pageSceneGraphics(name: PageSceneName): ReadonlyMap<number, Uint8Array> {

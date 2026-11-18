@@ -102,7 +102,10 @@ boxes are estimated like the legacy placer's (0.65 em per character).
   over it (decided with the user). It holds images only; its CMYK
   (0/0/0/0) is never used and it matches no palette entry. Since every
   stack gains it, `remap` is set for every document (each colour at or
-  above upper purple moves up one more).
+  above upper purple moves up one more). A toner saver's white is the
+  layer's last row (P1), so it covers an image course object outside its
+  hull like any other course symbol there (before J5 a map image was
+  drawn after the whole map layer and showed through).
 - Course objects in their own hex colours (a `text` object's `color`, §8.3) get one row each, in
   first-use order, **on top of the stack** (`course-object:#rrggbb`,
   CMYK by the naive inverse of `cmykToHex`): legacy print draws them
@@ -2277,7 +2280,7 @@ label.
 | unit | `packages/shared/src/course/__tests__/objects.test.ts` | §8.1 each kind accepted (`hatch` included), short geometry / unknown props / an unknown `hatch` / bad filter props / Bézier region refused; §8.2 the scope truth table; §8.3 each kind onto its symbol (709 / 709.b / 709.c, the dangerous area and its boundaries for `hatch: "710"`, 708 / 711, 707, white-out), Bézier handles kept, text upper purple or own row and not divided by the enlargement, image corners, toner saver with and without a window and with Bézier handles (bezier flags in the hole ring only), `inset_frame` and `filter_region` draw nothing |
 | unit | `objects.test.ts` "opacity, blend, rotation, flip (J4)", `page-layer.test.ts` "pageLayer: opacity, blend, rotation (J4)", `print/__tests__/page.test.ts`, `print/__tests__/compose.test.ts` | §8.1 the J4 props accepted on `text` / `image` / `whiteout`, refused on the other kinds, out of range, an unknown blend, rotation on a white-out; §3.6 / §8.3 opacity and blend on the render objects only off their defaults (opacity 1 = the plain object), both passes of a filled and stroked rectangle, a 90° rectangle's turned corners in solid / white-out / 709 (the hatch upright), a 30° text's angle of −30 (course and page), 0 and 360 as absent; image fields carried in both layers with the streams unchanged; `flipPageObject` keeps the fields; `transformPassStream` keeps a pass's opacity and blend |
 | unit | `layer.test.ts` "a stored filter_region course object" | §8.3: the same region as the explicit one, after it; hides the document's 516 |
-| unit | `layer.test.ts` "course objects as F12 moved layout objects" | §3.6: white-out at upper white, 709 / 709.b / 709.c by border, a text's own row on top at paper mm (no division), the toner saver ring and its white row last (P1), `WINDOW_MISSING`, an image to `layer.images` as `{ graphicId, crop, rectUm }` |
+| unit | `layer.test.ts` "course objects as F12 moved layout objects" | §3.6: white-out at upper white, 709 / 709.b / 709.c by border, a text's own row on top at paper mm (no division), the toner saver ring and its white row last (P1), `WINDOW_MISSING`, an image as one render object in `course:graphics` and to `layer.images` as `{ graphicId, sizeUm, crop? }` (J5) |
 | pass-stream | `scenes.test.ts` "course-objects", `print/__tests__` page scenes "page-ring", "page-rotated" | §3.6: the fixtures' former map-anchored objects written as the course objects F12 makes; the stream snapshots unchanged byte for byte — the move draws the same |
 | integration | `course-objects-migration.test.ts` | §3.6 the F12 migration on a scratch database built to the migration before it: the guard refuses all eleven reasons of a live event (a solid fill, a black stroke and line, a stroked white-out, short areas and lines, an image without its graphic, a text without a size or over 100 mm at os 0.75, an unknown kind and fill), names each in the detail and changes nothing; after the runbook's fix-ups every kind maps (whiteout, legacy `whiteoutRect`, toner saver, 709 / .b / .c, 708 / 707 from purple lines and closed outlines, a template's own purple, text ÷ os with the latest map's scale and a sheet's print-scale override, image corners), scopes per row type (template, course / class / all-controls / setter sheets), `source = 'layout'`, `version 0`, `z` under a hand-drawn object, seq order; invisible objects removed; a soft-deleted event's refused object removed; club payloads stripped; page objects kept in order; every body parses; a second run changes nothing |
 | integration | `course-print.test.ts` "F12" | §3.6: a sheet's map-anchored white-out and text, migrated on the shared database, are `source = 'layout'` objects scoped to its course; the sheet keeps its page object; the composed page draws the white-out at upper white and the text at 4 mm on paper |
@@ -2438,9 +2441,7 @@ label.
   enlargement; the moved text takes the template's print scale) are not
   kept; a sheet's object now draws on every sheet of its course (a map
   exchange's other parts included) and a template's on every sheet of the
-  event; a moved `image` prints but is not previewed on the canvas (no
-  mode draws image course objects yet, `course-layout.md` Pending
-  "GL-drawn images"; Layout mode showed a map-anchored image). A
+  event (an `image` among them is drawn on the canvas since J6). A
   per-sheet scope is not planned.
 - **Upper white at import**: insert the row in stage-7 alignment
   (`colour-align.ts`) at the next importer bump, so `courseColourStack`

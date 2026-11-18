@@ -476,6 +476,9 @@ shared stage (04 §7; `map-rendering.md` §5.5), not SVG hit targets:
   inside an area hits as if the area were not there. `closedStrokeInterior`
   stays for the control circles. An area whose whole outline is
   off-screen is selected after zooming out (`F` fits the course).
+  An `image` course object (J6) is a `UiArea` too, by its box turned by
+  `rotationDeg` (`imageRing`): it hits along that outline, and a press
+  inside a lucka reaches the control it frames or pans the map.
   Imported extras do not hit.
 - A leg with **no line** — `style: "none"`, or a `line` leg with a
   corridor (F14): `course.legLine(leg) === null`, the layer's own

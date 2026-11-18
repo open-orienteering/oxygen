@@ -24,7 +24,7 @@ import { TerrainLines, type LineDrawStats, type TerrainLine } from "./terrain/li
 import { buildTextGlyphs, GLYPH_TABLE_TEXELS, GLYPH_TABLE_WIDTH, type TextAtlasPage } from "./text-atlas.js";
 import {
   FILL_VERTEX_BYTES, HATCH_VERTEX_BYTES, STROKE_VERTEX_BYTES,
-  type AlphaLayer, type ClipGroup, type DrawLayer, type PreparedPart, type ResidentPart, type VisibleSet,
+  type AlphaLayer, type ClipGroup, type ImageDraw, type DrawLayer, type PreparedPart, type ResidentPart, type VisibleSet,
 } from "./buckets.js";
 
 export interface View {
@@ -59,7 +59,15 @@ export interface DocumentRenderOptions {
    */
   viewMatrix?: Float32Array;
   /** Profiling (dev page `kinds=`): draw only these kinds. */
-  kinds?: ReadonlySet<"fill" | "hatch" | "stroke" | "glyph" | "clip" | "text">;
+  kinds?: ReadonlySet<"fill" | "hatch" | "stroke" | "glyph" | "clip" | "text" | "image">;
+  /**
+   * An image's texture (J6, §5.2 "Images"): `undefined` while it loads (drawn as an outline),
+   * `null` when it cannot be had (an outline with `outlineMissingImages`, else nothing). Without
+   * it every image is an outline.
+   */
+  graphic?: (image: ImageDraw) => TexImageSource | null | undefined;
+  /** Draw a failed image's outline too (the editor); the viewer and kiosk draw nothing. */
+  outlineMissingImages?: boolean;
   /**
    * Layout mode's page (docs/course-layout.md §1): colours below `fromColour` are the map layer,
    * drawn only inside the frame (`ringUm`, paper µm); the page layer above them is not clipped.
@@ -205,6 +213,47 @@ void outA(vec3 c, float a) {
   if ((u_clear > 0.0 || u_multiply > 0.5) && (a <= 0.0 || a < u_minCover)) discard;
   float k = a * (1.0 - u_clear);
   o = u_multiply > 0.5 ? vec4(mix(vec3(1.0), c, k), 1.0) : vec4(c, k);
+}
+`;
+
+/**
+ * Images (J6, §5.2 "Images"): the unit square (two triangles by vertex id; with u_outline its
+ * four corners as a line loop) through the pass's affine, origin-relative. The texture is
+ * straight alpha (decoded unpremultiplied): its alpha × opacity is the coverage, blended as
+ * the alpha layers blend (Multiply: mix(1, colour, k) under DST_COLOR, ZERO).
+ */
+const VS_A_IMAGE = `#version 300 es
+precision highp float;
+uniform mat4 u_view;
+uniform vec4 u_ab_cd;
+uniform vec2 u_ef;
+uniform vec4 u_crop;
+uniform float u_outline;
+out vec2 v_uv;
+void main() {
+  int i = gl_VertexID;
+  vec2 q = u_outline > 0.5 ? vec2(i == 1 || i == 2 ? 1.0 : 0.0, i >= 2 ? 1.0 : 0.0)
+    : vec2(i == 1 || i == 2 || i == 4 ? 1.0 : 0.0, i == 2 || i == 4 || i == 5 ? 1.0 : 0.0);
+  vec2 p = u_ef + q.x * u_ab_cd.xy + q.y * u_ab_cd.zw;
+  v_uv = vec2(u_crop.x + q.x * u_crop.z, u_crop.y + (1.0 - q.y) * u_crop.w);
+  gl_Position = u_view * vec4(p, 0.0, 1.0);
+}
+`;
+
+const FS_A_IMAGE = `#version 300 es
+precision highp float;
+uniform sampler2D u_tex;
+uniform float u_opacity;
+uniform float u_multiply;
+uniform float u_outline;
+in vec2 v_uv;
+out vec4 o;
+void main() {
+  if (u_outline > 0.5) { o = vec4(0.5, 0.5, 0.5, 0.6); return; }
+  vec4 t = texture(u_tex, v_uv);
+  float k = t.a * u_opacity;
+  if (k <= 0.0) discard;
+  o = u_multiply > 0.5 ? vec4(mix(vec3(1.0), t.rgb, k), 1.0) : vec4(t.rgb, k);
 }
 `;
 
@@ -415,6 +464,8 @@ export function drapeTextureBytes(w: number, h: number): number {
 
 export interface FrameStats {
   drawCalls: number;
+  /** Images in view drawn as an outline because their texture is not loaded (J6); absent when none. */
+  imagesPending?: number;
   /** JS time of the frame, ms. */
   cpuMs: number;
   gpuMs?: number;
@@ -615,6 +666,10 @@ export class MapGlRenderer {
 
   /** Frees every GL resource; the renderer is unusable afterwards. */
   dispose(): void {
+    for (const t of this.graphicTextures.values()) this.gl.deleteTexture(t.tex);
+    this.graphicTextures.clear();
+    if (this.imageVao) this.gl.deleteVertexArray(this.imageVao);
+    this.imageVao = undefined;
     this.disposeDocument();
     this.disposeTextAtlas();
     this.deleteOffscreen("supersample");
@@ -1306,6 +1361,7 @@ export class MapGlRenderer {
     gl.disable(gl.STENCIL_TEST);
 
     let draws = 0;
+    let imagesPending = 0;
     const vs = a.vs;
     if (vs) {
       this.bindArenaVaos(a);
@@ -1405,7 +1461,7 @@ export class MapGlRenderer {
           draws++;
         }
       };
-      const on = (k: "fill" | "hatch" | "stroke" | "glyph" | "clip" | "text") => !opts.kinds || opts.kinds.has(k);
+      const on = (k: "fill" | "hatch" | "stroke" | "glyph" | "clip" | "text" | "image") => !opts.kinds || opts.kinds.has(k);
       const pc = opts.pageClip;
       if (pc) {
         const [x, y, w, h] = scissorOfRing(m, pc.ringUm, a.originX, a.originY, t.width, t.height);
@@ -1421,7 +1477,13 @@ export class MapGlRenderer {
         if (masked) draws += this.markMask(a, vs.filter!.masks[l.mask], true);
         if (l.alpha !== undefined) {
           const al = vs.alpha![l.alpha];
-          if (on(al.kind)) draws += this.drawAlphaLayer(a, al, rgb, text?.textures);
+          if (al.kind === "image") {
+            if (on("image")) {
+              const d = this.drawImageLayer(m, al, opts);
+              draws += d.draws;
+              imagesPending += d.pending;
+            }
+          } else if (on(al.kind)) draws += this.drawAlphaLayer(a, al, rgb, text?.textures);
           if (masked) draws += this.markMask(a, vs.filter!.masks[l.mask], false);
           continue;
         }
@@ -1448,8 +1510,107 @@ export class MapGlRenderer {
     }
     this.frameCounter++;
     const stats: FrameStats = { drawCalls: draws, cpuMs: performance.now() - t0 };
+    if (imagesPending) stats.imagesPending = imagesPending;
     if (this.lastGpuMs !== undefined) stats.gpuMs = this.lastGpuMs;
     return stats;
+  }
+
+  private imageProgram?: Program;
+  private imageVao?: WebGLVertexArrayObject;
+  private graphicTextures = new Map<TexImageSource, { tex: WebGLTexture; bytes: number }>();
+
+  /** GPU bytes of the image textures (with their mip chains, 4/3), J6. */
+  get graphicBytes(): number {
+    let n = 0;
+    for (const t of this.graphicTextures.values()) n += t.bytes;
+    return n;
+  }
+
+  /** Deletes the texture made from `source` (the loader replaced or dropped it), J6. */
+  releaseGraphic(source: TexImageSource): void {
+    const t = this.graphicTextures.get(source);
+    if (!t) return;
+    this.gl.deleteTexture(t.tex);
+    this.graphicTextures.delete(source);
+  }
+
+  private graphicTexture(source: TexImageSource): WebGLTexture {
+    const hit = this.graphicTextures.get(source);
+    if (hit) return hit.tex;
+    const gl = this.gl;
+    const tex = gl.createTexture()!;
+    gl.activeTexture(gl.TEXTURE3);
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    // Straight alpha, as decoded (`premultiplyAlpha: "none"`): the shader folds the alpha in.
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, source);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    // Enlarged: nearest, as the PDF and the oracle sample (§3.10), so the canvas shows the print's pixels;
+    // reduced: trilinear, so a large graphic zoomed out does not alias.
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.activeTexture(gl.TEXTURE0);
+    const { width, height } = source as { width: number; height: number };
+    this.graphicTextures.set(source, { tex, bytes: Math.round((width * height * 4 * 4) / 3) });
+    return tex;
+  }
+
+  /**
+   * One image (J6, §5.2 "Images"): its texture through the quad, under the pass's opacity and
+   * blend; under a mask only where the region bit is clear. A quad covers each pixel once, so no
+   * stencil test-and-set is needed. Without its texture: the quad's outline (1 px, 60 % grey)
+   * while loading, or after a failure with `outlineMissingImages`.
+   */
+  private drawImageLayer(m: Float32Array, al: AlphaLayer, opts: DocumentRenderOptions): { draws: number; pending: number } {
+    const gl = this.gl;
+    const img = al.image!;
+    const source = opts.graphic ? opts.graphic(img) : undefined;
+    if (source === null && !opts.outlineMissingImages) return { draws: 0, pending: 0 };
+    this.imageProgram ??= this.link(VS_A_IMAGE, FS_A_IMAGE, [], ["u_view", "u_ab_cd", "u_ef", "u_crop", "u_outline", "u_tex", "u_opacity", "u_multiply"]);
+    this.imageVao ??= gl.createVertexArray()!;
+    const P = this.imageProgram;
+    gl.useProgram(P.prog);
+    gl.bindVertexArray(this.imageVao);
+    gl.uniformMatrix4fv(P.uniforms.u_view, false, m);
+    const q = img.quad;
+    gl.uniform4f(P.uniforms.u_ab_cd, q[0], q[1], q[2], q[3]);
+    gl.uniform2f(P.uniforms.u_ef, q[4], q[5]);
+    gl.uniform4f(P.uniforms.u_crop, img.crop[0], img.crop[1], img.crop[2], img.crop[3]);
+    if (al.mask >= 0) {
+      gl.enable(gl.STENCIL_TEST);
+      gl.stencilMask(0);
+      gl.stencilFunc(gl.EQUAL, 0, REGION_BIT);
+      gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
+    }
+    let pending = 0;
+    if (source) {
+      const tex = this.graphicTexture(source);
+      gl.activeTexture(gl.TEXTURE3);
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.uniform1i(P.uniforms.u_tex, 3);
+      gl.uniform1f(P.uniforms.u_outline, 0);
+      gl.uniform1f(P.uniforms.u_opacity, al.opacity);
+      gl.uniform1f(P.uniforms.u_multiply, al.multiply ? 1 : 0);
+      if (al.multiply) gl.blendFuncSeparate(gl.DST_COLOR, gl.ZERO, gl.ZERO, gl.ONE);
+      else gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ZERO, gl.ONE);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+    } else {
+      pending = source === undefined ? 1 : 0;
+      gl.uniform1f(P.uniforms.u_outline, 1);
+      gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ZERO, gl.ONE);
+      gl.drawArrays(gl.LINE_LOOP, 0, 4);
+    }
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    if (al.mask >= 0) {
+      gl.stencilMask(0xff);
+      gl.disable(gl.STENCIL_TEST);
+    }
+    return { draws: 1, pending };
   }
 
   private instancePointers(p: Program, offset: number): void {

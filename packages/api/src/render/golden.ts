@@ -23,6 +23,12 @@ export const GOLDEN_SUPERSAMPLE = 4;
 /** `e2e/__golden__/map-gl/` — Playwright's `snapshotPathTemplate` points here. */
 export const goldenDir = new URL("../../../../e2e/__golden__/map-gl/", import.meta.url);
 
+/** PNG bytes by graphic id → the reference raster's `imageHref` (data URIs; J5, J6). */
+export function graphicHrefs(images: ReadonlyMap<number, Uint8Array> | undefined): (id: number) => string | undefined {
+  const hrefs = new Map([...(images ?? [])].map(([id, png]) => [id, `data:image/png;base64,${Buffer.from(png).toString("base64")}`]));
+  return (id) => hrefs.get(id);
+}
+
 export async function goldenFonts(): Promise<render.TrueTypeFont[]> {
   return loadBundledFonts();
 }
@@ -37,6 +43,7 @@ export async function renderGoldenPng(name: render.GoldenSceneName): Promise<Buf
     pxPerMm: render.GOLDEN_PX_PER_MM,
     glyphOutline: glyphOutlineFrom(fonts),
     supersample: GOLDEN_SUPERSAMPLE,
+    imageHref: graphicHrefs(render.goldenSceneGraphics(name)),
   });
   return encodePng(img);
 }
