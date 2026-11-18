@@ -11,7 +11,7 @@ import type { DocumentColour } from "../../map-document/header.js";
 import { parseRenderSymbol, type RenderSymbol } from "../../render/symbol.js";
 import { reindexRenderColours, renderColourPaths } from "../../render/transform.js";
 import { type PaletteEdition, palettes, type SpecId } from "../../symbol-library/palette.js";
-import { alignmentPalette, identifySourceColours, OVERLAY_STACK_IDS, paletteIndexOfStack } from "../colour-align.js";
+import { alignColourStack, alignmentPalette, identifySourceColours, OVERLAY_STACK_IDS, paletteIndexOfStack } from "../colour-align.js";
 import { buildColourLayers, type ColourLayersResult, type DeviationChoice, deviationKey, KEPT_BY_DEFAULT, type LayerSymbol, symbolColourUses } from "../colour-layers.js";
 import { nackareservatet2023, toColours } from "./club-colour-tables.js";
 import { rolePalette } from "../colour-roles.js";
@@ -107,6 +107,7 @@ const EXPECTED = [
   "black-road-outline^@11",
   "black100^@11",
   "brown50-paved@12",
+  "white-over-green-brown@16",
   "blue100-area@18",
   "black100^@11",
   "black50-building@14",
@@ -120,6 +121,7 @@ const EXPECTED = [
   "blue100-line@18",
   "brown100-point@15",
   "none:area@19",
+  "black100@11",
   "orange-skio@+",
   "green-skio@+",
   "purple-upper@+",
@@ -157,7 +159,11 @@ describe("buildColourLayers: rows and order", () => {
   });
 
   it("keeps the colours of a split colour on their own rows: one black as road outline and, under fills it is drawn under, dots and edges", () => {
-    expect(r.report.split).toContainEqual({ source: 1, sourceNumber: 11, roles: ["black-road-outline", "black100", "black100", "black-road-outline"] });
+    // The last black100 is the zero-object row carrying the id §9.1 identified the black as (row I5: every black100 use moved).
+    expect(r.report.split).toContainEqual({ source: 1, sourceNumber: 11, roles: ["black-road-outline", "black100", "black100", "black-road-outline", "black100"] });
+    expect(r.report.rows.filter((x) => x.origin === "identified").map((x) => [x.role, x.source, x.objects])).toEqual([["white-over-green-brown", 6, 0], ["black100", 1, 0]]);
+    const identified = r.report.rows.find((x) => x.origin === "identified" && x.role === "black100")!.row;
+    expect(r.colours[identified]).toMatchObject({ id: "src:11/black100", paletteIds: ["black100"] });
     const [, dots, edge] = rowsOf(r, 0);
     expect(r.colours[edge].id).toBe("src:11");
     expect(r.colours[dots].id).toBe("src:11/black100/under1");
@@ -209,7 +215,7 @@ describe("buildColourLayers: the stack", () => {
   });
 
   it("places uses with no role, graphic objects' colours and unused roleless colours by the source order", () => {
-    const white = r.report.rows.find((x) => x.source === 6)!;
+    const white = r.report.rows.find((x) => x.source === 6 && x.origin === "use")!;
     expect(white).toMatchObject({ role: null, place: "area", objects: 1, sourceOrdered: "no-role" });
     // Between the layers its source neighbours stand on: over the contour brown (index 5), under the blue (index 8).
     expect(white.row).toBe(rowOfRole(r, "brown100-line") + 1);
@@ -273,7 +279,7 @@ describe("buildColourLayers: re-index", () => {
       r.reindex.symbols[i]!.forEach((row, k) => expect(r.report.rows[row].source).toBe(refs[k].colour));
     });
     isomColours.forEach((_, c) => {
-      const mine = r.report.rows.filter((x) => x.source === c).map((x) => x.row);
+      const mine = r.report.rows.filter((x) => x.source === c && x.origin !== "identified").map((x) => x.row);
       expect(r.reindex.colours[c]).toBe(Math.min(...mine));
     });
   });
@@ -392,11 +398,15 @@ describe("buildColourLayers: ids, aliases and inks", () => {
     expect(used.colours[rowOfRole(used, "blue100-area")]).toMatchObject({ id: "src:2", sourceNumber: 2, cmyk: colours[1].cmyk });
   });
 
-  it("gives an inserted purple 50 % the palette's ink, not the course purple's", () => {
+  it("gives an inserted purple 50 % the course purples' ink, as §9.2 does (row I5, carried from I3)", () => {
     const colours = [colour(1, "Violett", [0.1, 0.9, 0.1, 0]), colour(2, "Svart", [0, 0, 0, 1])];
     const r = build(colours, [{ objects: 1, render: sym({ type: "line", main: { colour: 1, widthUm: 100 } }) }], ["purple50"], "ISSprOM2019-2", "iof2024");
-    expect(r.colours[rowOfRole(r, "purple50")].cmyk).toEqual(ink("purple50", "iof2024"));
+    expect(r.colours[rowOfRole(r, "purple50")].cmyk).toEqual([0.1, 0.9, 0.1, 0]);
     expect(r.colours[rowOfRole(r, "purple-upper")].cmyk).toEqual([0.1, 0.9, 0.1, 0]);
+    expect(r.colours[rowOfRole(r, "purple50")].purpleRole).toBe("upper");
+    // With no purple in the map, the palette's.
+    const none = build([colour(2, "Svart", [0, 0, 0, 1])], [], ["purple50"], "ISSprOM2019-2", "iof2024");
+    expect(none.colours[rowOfRole(none, "purple50")].cmyk).toEqual(ink("purple50", "iof2024"));
   });
 
   it("copies spot and overprint to every row of a split colour", () => {
@@ -671,5 +681,59 @@ describe("buildColourLayers: which row carries a palette id", () => {
     expect([r.report.rows[a].role, r.report.rows[b].role]).toEqual(["black100", "black100"]);
     expect(r.colours[a].paletteIds).toEqual(["black100"]);
     expect(r.colours[b].paletteIds).toBeUndefined();
+  });
+});
+
+// ---- Row I5: what the importer needs of the stack ---------------------------------------------------------------
+
+describe("buildColourLayers: every palette id §9.2 identifies is carried (row I5)", () => {
+  it("carries an identified id whose colour draws only in another role, on a zero-object row of that colour at the palette place", () => {
+    const colours = [colour(1, "Blå", ink("blue100-line")), colour(2, "Svart", [0, 0, 0, 1])];
+    const r = build(colours, [area(0, 4), line(1, 2)]);
+    const at = r.colours.findIndex((c) => c.paletteIds?.includes("blue100-line"));
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(r.report.rows[at]).toMatchObject({ source: 0, role: "blue100-line", objects: 0, sourceOrdered: null, ownOrder: false });
+    expect(r.colours[at]).toMatchObject({ sourceNumber: 1, cmyk: colours[0].cmyk });
+    expect(r.colours[rowOfRole(r, "blue100-area")].paletteIds).toEqual(["blue100-area"]);
+  });
+
+  it("has every palette id the source order has, on the badly ordered table and on Club-full's", () => {
+    const cases: [DocumentColour[], Sym[]][] = [
+      [isomColours, isomSymbols],
+      [nacka, [line(nk(107), 30), area(nk(111), 8), area(nk(108), 5), line(nk(468), 20), area(nk(106), 2)]],
+    ];
+    for (const [colours, symbols] of cases) {
+      const infos = identifySourceColours(colours, "ISOM2017-2", "iof2022");
+      const usage = new Array<number>(colours.length).fill(0);
+      symbols.forEach((s) => { if (s.render) for (const c of new Set(renderColourPaths(s.render).map((x) => x.colour))) usage[c] += s.objects; });
+      const source = alignColourStack({ colours, infos, spec: "ISOM2017-2", edition: "iof2022", needed: new Set(), usage });
+      const layered = build(colours, symbols);
+      const ids = new Set(layered.colours.flatMap((c) => c.paletteIds ?? []));
+      for (const id of source.colours.flatMap((c) => c.paletteIds ?? [])) expect(ids, id).toContain(id);
+    }
+  });
+});
+
+describe("buildColourLayers: a library-drawn symbol counts on its entry's palette ids (row I5, carried from I4)", () => {
+  // ISOM 502 (a road) draws in black-road-outline and brown50-road. The source symbol here references only a brown 50 %
+  // main: the library road still draws its outline on the black carrier.
+  const colours = [colour(1, "Brun", ink("brown100-line")), colour(2, "Brun 50%", ink("brown50-paved")), colour(3, "Svart", [0, 0, 0, 1])];
+  const libraryRoad: Sym = { objects: 6, match: auto("ISOM2017-2:502"), render: sym({ type: "line", main: { colour: 1, widthUm: 500 } }) };
+  const symbols = [line(0, 20), libraryRoad, line(2, 3)];
+  const needed = ["black-road-outline", "brown50-road"];
+  const r = build(colours, symbols, needed);
+
+  it("counts its objects on the rows carrying the entry's ids, not on its own references' rows", () => {
+    const carrierOf = (id: string) => r.colours.findIndex((c) => c.paletteIds?.includes(id));
+    expect(r.report.rows[carrierOf("brown50-road")].objects).toBe(6);
+    expect(r.report.rows[carrierOf("black-road-outline")].objects).toBe(6);
+    expect(r.report.rows[carrierOf("black100")].objects).toBe(3);
+  });
+
+  it("makes the outline carrier a used row in the deviations: the road outline the black is drawn over by the table", () => {
+    // The table draws the contour brown under the black and the brown 50 %; the library road's outline counts on the black.
+    const keys = r.report.deviations.map((d) => deviationKey(d.upper, d.lower));
+    expect(keys).toContain("black-road-outline>brown100-line");
+    expect(r.report.deviations.find((d) => d.upper === "black-road-outline")).toMatchObject({ kept: true, byDefault: true, objects: { upper: 6, lower: 20 } });
   });
 });
