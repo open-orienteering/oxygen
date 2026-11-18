@@ -1686,9 +1686,10 @@ on three club maps — and with them every library entry Map mode could
 materialise there (ISOM 302, 509, 304–306 among them) and every patch
 symbol a re-match would re-resolve (G11). An identified id whose colour
 has no placeable row of that role gets a zero-object row of the colour
-at the id's palette place (origin `identified`, never the colour's
-lowest row, so its other rows keep their ids; the source-order gap does
-not count it). It draws nothing a map draws, so the harness numbers are
+at the id's palette place (origin `identified`). It never takes the
+colour's plain id and `reindex.colours` never points at it, so the
+colour's other rows keep their ids and its proxies their row; the
+source-order gap does not count it. It draws nothing a map draws, so the harness numbers are
 unchanged (2–3 such rows on five of the ten maps). The other rows of the
 role carry no `paletteIds`; their role is in the report. `purpleRole`
 is on the row carrying a purple id. Canonical entries therefore resolve
@@ -1919,8 +1920,11 @@ passes no colour options until I6's per-map setting, so every stored
   `remapRenderColours`).
 - **The header** records the outcome: `colourOrder: { order, kept? }`,
   `kept` the deviation keys drawn in the map's order, sorted
-  (`map-document-format.md` §2). A setting that changes nothing gives the
-  same bytes; the setting itself stays in the store (I6).
+  (`map-document-format.md` §2). A setting that changes nothing — an
+  override equal to the default — gives the same bytes (the deviation warnings'
+  messages are fixed per code and do not say why a deviation is kept;
+  the report's `layers.deviations[].byDefault` / `impliedBy` do); the
+  setting itself stays in the store (I6).
 - **The report's `colourStack`** keeps its fields in both orders
   (`source`, `inserted`, `aliased`, `unclassified`; `conflicts`,
   `areasAboveLowerPurple` and `purplesDisplaced` are `[]` in `iof`, where
@@ -1931,8 +1935,9 @@ passes no colour options until I6's per-map setting, so every stored
 - **Warnings** (`docs/map-import.md` §3.7, class `outcome`). Both orders:
   `COLOUR_UNCLASSIFIED`. `source` only: `COLOUR_ORDER_CONFLICT`,
   `COLOUR_AREA_ABOVE_LOWER_PURPLE` (§9.2 step 5). `iof` only, one count
-  per entry: `COLOUR_DEVIATION_KEPT` (kept by default, override or
-  implication — the message says which), `COLOUR_DEVIATION_DROPPED`,
+  per entry, the deviation codes each with one fixed message (the entries are in
+  `colourStack.layers`): `COLOUR_DEVIATION_KEPT` (kept by default,
+  override or implication), `COLOUR_DEVIATION_DROPPED`,
   `COLOUR_DEVIATION_BLOCKED` (wanted kept, could not hold:
   `blockedBy`), `COLOUR_NO_ROLE` (a roleless row that draws objects),
   `COLOUR_SOURCE_ORDERED_ABOVE_LOWER_PURPLE` (a source-ordered row above

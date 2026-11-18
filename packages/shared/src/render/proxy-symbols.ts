@@ -28,12 +28,13 @@ export function stackProxyColours(colours: readonly { cmyk: readonly number[] }[
     const [c, m, y, k] = colours[i].cmyk;
     return (1 - Math.min(1, k)) * (3 - Math.min(1, c) - Math.min(1, m) - Math.min(1, y));
   };
-  let dark = 0, light = 0;
-  for (let i = 1; i < colours.length; i++) {
+  // Areas: the lightest row that is not white (row 0 only when every row is white — a white row 0 must not win).
+  let dark = 0, light = -1;
+  for (let i = 0; i < colours.length; i++) {
     if (lum(i) < lum(dark)) dark = i;
-    if (lum(i) > lum(light) && lum(i) < 2.9) light = i;
+    if (lum(i) < 2.9 && (light < 0 || lum(i) > lum(light))) light = i;
   }
-  return { line: dark, area: light, point: dark, text: dark };
+  return { line: dark, area: Math.max(light, 0), point: dark, text: dark };
 }
 
 export function proxySymbols(colours: ProxyColours = {}): RenderSymbol[] {

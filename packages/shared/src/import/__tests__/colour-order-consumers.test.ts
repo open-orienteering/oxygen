@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import { courseColourStack } from "../../course/colour-stack.js";
 import { decodeMapDocument, encodeMapDocument, mapDocumentHash, type MapDocument } from "../../map-document/codec.js";
 import { OBJECT_TYPE } from "../../map-document/header.js";
-import { materialiseSymbol } from "../../map-document/materialise.js";
+import { mapPalette, materialiseSymbol } from "../../map-document/materialise.js";
 import { applyPatch, mapPatchSchema, mergePatch, patchOpId, type MapPatch, type PatchOp } from "../../map-document/patch.js";
 import { resolvePatch } from "../../map-document/patch-resolve.js";
 import { prepareDocument, resetPreparedDocuments } from "../../print/prepared-document.js";
@@ -51,6 +51,13 @@ describe("materialisation on the IOF layers", () => {
       }
     }
     expect(checked).toBeGreaterThan(100);
+  });
+
+  it("offers the same Map mode palette: every item enabled on the source order is enabled on the layers", () => {
+    const items = (d: MapDocument) => new Map(mapPalette(d).flatMap((g) => g.headings.flatMap((h) => h.entries)).map((i) => [`${i.source}:${i.canonicalId ?? i.code}`, i.enabled]));
+    const a = items(source), b = items(iof);
+    expect([...b.keys()].sort()).toEqual([...a.keys()].sort());
+    for (const [k, enabled] of a) if (enabled) expect(b.get(k), k).toBe(true);
   });
 
   it("draws a materialised symbol in the same inks in both orders", () => {

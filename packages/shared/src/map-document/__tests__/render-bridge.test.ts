@@ -83,6 +83,15 @@ describe("documentRenderInput: proxies by ink (row I5)", () => {
     expect(inkOf(bare(reordered), "area")).toEqual([0.35, 0.85, 0, 0]);
   });
 
+  it("never draws area proxies in white, a white row 0 included (both orders of a stack alike)", () => {
+    const white = header.colours[2];
+    const whiteFirst = [white, header.colours[0], header.colours[1], header.colours[3]];
+    expect(inkOf(bare(whiteFirst), "area")).toEqual([0.35, 0.85, 0, 0]);
+    expect(inkOf(bare([...whiteFirst].reverse()), "area")).toEqual([0.35, 0.85, 0, 0]);
+    // Only white: row 0.
+    expect(inkOf(bare([white, { ...white, id: "src:9", sourceNumber: 9 }]), "area")).toEqual([0, 0, 0, 0]);
+  });
+
   it("takes explicit proxy rows when given", () => {
     const d = bare(header.colours);
     const input = documentRenderInput(d, { proxyColours: { line: 1, area: 1 } });

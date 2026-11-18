@@ -170,7 +170,7 @@ export interface ColourLayerRow {
   /** For a row of uses with no role: the kind of symbol drawing them (`area` or `other`); part of its id. */
   place: NoRolePlace | null;
   origin: LayerOrigin;
-  /** Objects drawn in the row (a symbol counts once per row it references). */
+  /** Objects drawn in the row: source-drawn symbols referencing it (once each), and on a row carrying a palette id the library-drawn symbols whose entry draws with it (row I5). */
   objects: number;
   /** Symbols referencing the row. */
   symbols: number;

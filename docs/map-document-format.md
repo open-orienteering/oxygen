@@ -354,8 +354,9 @@ its kind agrees with the object type; otherwise a proxy per kind
 (`unmatched: "proxy"`, the S1 envelope) or nothing (`unmatched: "drop"`).
 The proxies draw in `proxyColours`' rows; by default (row I5) by ink
 (`render.stackProxyColours`): lines, points and text in the stack's
-darkest row, areas in its lightest row that is not white, ties to the
-lowest row — the viewer's rule since E3, now also print's and the
+darkest row, areas in its lightest row that is not white (row 0 when
+every row is white), ties to the lowest row — the viewer's rule since
+E3 (whose code let a white row 0 win for areas; fixed in I5), now also print's and the
 thumbnails', and the same ink on the layered stack and the source order
 (before I5 the default was row 0, a different colour on each).
 Hidden symbols' objects are skipped unless `includeHidden`. `only` (a

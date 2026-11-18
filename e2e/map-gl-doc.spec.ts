@@ -311,11 +311,13 @@ test.describe("WebGL2 map backend — whole document", () => {
     expect(load!.passes).toBeGreaterThan(0);
     expect(load!.document?.warnings ?? {}).not.toHaveProperty("SYMBOL_COLOUR_UNKNOWN");
     expect(load!.document?.warnings ?? {}).not.toHaveProperty("SYMBOL_EMPTY");
-    // Stages 6–7 ran: some fixture symbols are drawn from the ISOM library, the single
-    // purple was split into lower + upper, and the fixture's non-standard colour order is flagged.
+    // Stages 6–7 ran: some fixture symbols are drawn from the ISOM library, and the fixture's
+    // non-standard colour order is drawn on the IOF colour layers (the default since row I5): the
+    // pairs its table orders the other way round are listed as dropped deviations, not as §9.2 conflicts.
     expect(load!.document!.canonicalSymbols).toBeGreaterThan(0);
     expect(load!.document!.canonicalSymbols).toBeLessThan(load!.document!.symbols);
-    expect(load!.document!.warnings).toHaveProperty("COLOUR_ORDER_CONFLICT");
+    expect(load!.document!.warnings).toHaveProperty("COLOUR_DEVIATION_DROPPED");
+    expect(load!.document!.warnings).not.toHaveProperty("COLOUR_ORDER_CONFLICT");
     expect(load!.document!.warnings).not.toHaveProperty("SYMBOL_UNMATCHED");
     await expect(page.getByTestId("map-gl-doc-document")).toContainText("canonical");
     // Something was drawn: the canvas is not uniformly the paper colour.

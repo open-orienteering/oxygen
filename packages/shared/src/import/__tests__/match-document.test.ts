@@ -363,4 +363,37 @@ describe("matchDocument — colourOrder (row I5)", () => {
   it("is deterministic", () => {
     expect(encodeMapDocument(matchDocument(input(), { colourOrder: "iof" }).input)).toEqual(encodeMapDocument(iof.input));
   });
+
+  it("gives the same bytes for an override equal to the default (the warnings do not say why)", () => {
+    const def = matchDocument(withGreenOnTop(), { colourOrder: "iof" });
+    const overrides: Record<string, "keep" | "drop"> = {};
+    for (const d of def.colourStack.layers!.deviations) if (!d.impliedBy) overrides[deviationKey(d.upper, d.lower)] = d.kept ? "keep" : "drop";
+    expect(Object.keys(overrides).length).toBeGreaterThan(0);
+    const same = matchDocument(withGreenOnTop(), { colourOrder: "iof", deviations: overrides });
+    expect(same.colourStack.layers!.deviations.every((d) => d.impliedBy || !d.byDefault)).toBe(true);
+    expect(encodeMapDocument(same.input)).toEqual(encodeMapDocument(def.input));
+  });
+});
+
+describe("matchDocument — source-ordered rows above lower purple (row I5)", () => {
+  /** The fixture with one more colour on top of the table, drawn by one symbol of `render`. */
+  const withTop = (colour: { name: string; cmyk: [number, number, number, number] }, render: (c: number) => Record<string, unknown>, origin?: "graphic") => {
+    const base = input();
+    const n = base.header.colours.length;
+    const sym = { code: "990.0", name: "Top", kind: "area" as const, ...(origin ? { origin } : {}), render: { id: "src:990", code: "990", name: "Top", ...render(n) } };
+    return {
+      header: { ...base.header, colours: [...base.header.colours, { id: "src:9", sourceNumber: 9, ...colour }], symbols: [...base.header.symbols, sym as (typeof base.header.symbols)[number]] },
+      objects: [...base.objects, { symbolIdx: base.header.symbols.length, type: OBJECT_TYPE.area, sourceIndex: 30, coords: [0, 0, 100, 0, 100, 100], flags: [0, 0, 0] }],
+    };
+  };
+  const warned = (i: ReturnType<typeof withTop>) => matchDocument(i, { colourOrder: "iof" }).warnings.find((w) => w.code === "COLOUR_SOURCE_ORDERED_ABOVE_LOWER_PURPLE")?.count ?? 0;
+
+  it("warns a roleless area and a graphic object's colour the table draws on top", () => {
+    expect(warned(withTop({ name: "Logga", cmyk: [0.6, 0.6, 0, 0] }, (c) => ({ type: "area", fill: c })))).toBe(1);
+    expect(warned(withTop({ name: "Ram", cmyk: [0, 1, 1, 0] }, (c) => ({ type: "line", main: { colour: c, widthUm: 500 } }), "graphic"))).toBe(1);
+  });
+
+  it("does not warn a roleless line colour there: that is where line colours go", () => {
+    expect(warned(withTop({ name: "Röd linje", cmyk: [0, 1, 1, 0] }, (c) => ({ type: "line", main: { colour: c, widthUm: 300 } })))).toBe(0);
+  });
 });

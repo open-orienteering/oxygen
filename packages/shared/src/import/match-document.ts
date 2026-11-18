@@ -179,11 +179,13 @@ export function matchDocument(input: MapDocumentInput, opts: MatchDocumentOption
   if (layered) {
     const rep = layered.report;
     const name = (source: number) => `"${colours[source].name}"`;
+    // One fixed message per deviation code: which pairs, and why, are in the report (`layers.deviations`). A message
+    // saying "by default" or "by override" would put the override into the header's bytes, so an override equal to the
+    // default would not give the same document.
     for (const d of rep.deviations) {
-      const pair = `${d.upper} over ${d.lower} (${d.objects.upper} / ${d.objects.lower} objects)`;
-      if (d.blockedBy) warn("COLOUR_DEVIATION_BLOCKED", `${pair}: wanted in the map's order, drawn in the IOF order because of ${d.blockedBy.join(", ")}`);
-      else if (d.kept) warn("COLOUR_DEVIATION_KEPT", `${pair}: drawn in the map's order${d.impliedBy ? ` (implied by ${d.impliedBy.join(", ") || "the map's own order"})` : d.byDefault ? " by default" : " by override"}`);
-      else warn("COLOUR_DEVIATION_DROPPED", `${pair}: drawn in the IOF order${d.byDefault ? " by default" : " by override"}`);
+      if (d.blockedBy) warn("COLOUR_DEVIATION_BLOCKED", "a pair of IOF layers wanted in the map's own order could not be drawn so and is drawn in the IOF order");
+      else if (d.kept) warn("COLOUR_DEVIATION_KEPT", "a pair of IOF layers the map's colour table orders the other way round is drawn in the map's own order");
+      else warn("COLOUR_DEVIATION_DROPPED", "a pair of IOF layers the map's colour table orders the other way round is drawn in the IOF order");
     }
     for (const r of rep.noRole) if (r.objects > 0) warn("COLOUR_NO_ROLE", `${name(r.source)} (${r.place}) has no IOF layer and is drawn where the map's own order puts it`);
     for (const r of rep.sourceOrdered) {
