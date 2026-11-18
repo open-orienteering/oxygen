@@ -6,7 +6,7 @@
  * and flags, and every deviation kept or dropped with its default. The
  * deviation rows are read-only here (row I7 makes them switchable).
  */
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "@oxygen/api";
@@ -25,10 +25,6 @@ function Picture({ url, order, current }: { url: string; order: ColourOrder; cur
   const { t } = useTranslation("mapReview");
   const [attempt, setAttempt] = useState(0);
   const [state, setState] = useState<"loading" | "loaded" | "failed">("loading");
-  useEffect(() => {
-    setAttempt(0);
-    setState("loading");
-  }, [url]);
   const onError = () => {
     if (attempt >= PICTURE_RETRIES) {
       setState("failed");
@@ -147,7 +143,8 @@ export function ColourLayersPanel({
         <h3 className="font-medium text-slate-800 mb-1">{t("colours.picture.title")}</h3>
         <div className="flex flex-wrap gap-3">
           {ORDERS.map((o) => (
-            <Picture key={o} order={o} current={colour.order === o} url={scopePreviewUrl(colour.pictures[o], nameId) ?? colour.pictures[o]} />
+            // Keyed by the URL: a new document starts the picture over (its retry count and state).
+            <Picture key={colour.pictures[o]} order={o} current={colour.order === o} url={scopePreviewUrl(colour.pictures[o], nameId) ?? colour.pictures[o]} />
           ))}
         </div>
       </div>
