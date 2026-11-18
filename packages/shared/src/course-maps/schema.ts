@@ -52,9 +52,18 @@ export const mapFontFamilySchema = z.enum([
 ]);
 export type MapFontFamily = z.infer<typeof mapFontFamilySchema>;
 
+/** An object's opacity (J4, map-rendering.md §3.9): 0–1, 0 allowed; absent = 1. */
+export const objectOpacitySchema = z.number().finite().min(0).max(1);
+/** An object's blend (J4, §3.9): only Multiply; absent = normal. */
+export const objectBlendSchema = z.literal("multiply");
+/** An object's rotation (J4): degrees clockwise as seen, finite within ±360, not normalised. */
+export const objectRotationSchema = z.number().finite().min(-360).max(360);
+
 const objectBase = {
   id: z.string().min(1),
   anchor: objectAnchorSchema,
+  opacity: objectOpacitySchema.optional(),
+  blend: objectBlendSchema.optional(),
 };
 
 export const mapTextObjectSchema = z.object({
@@ -68,6 +77,8 @@ export const mapTextObjectSchema = z.object({
   fontFamily: mapFontFamilySchema.optional(),
   maxWidthMm: z.number().finite().positive().optional(),
   align: z.enum(["left", "center", "right"]).optional(),
+  /** Clockwise as seen, about the anchor point (user 2026-11-18, question 6). */
+  rotationDeg: objectRotationSchema.optional(),
 });
 
 /** Stroke pattern for lines, paths and rectangle borders. Absent = solid. */
@@ -125,6 +136,8 @@ export const mapRectangleObjectSchema = z.object({
   fill: z.string().regex(/^#[0-9a-f]{6}$/i).optional(),
   fillMode: mapFillModeSchema.default("none"),
   dash: mapStrokeDashSchema.optional(),
+  /** Clockwise as seen, about the box centre; the stored box is the unrotated one. */
+  rotationDeg: objectRotationSchema.optional(),
 });
 
 /** Uploaded SVG/PNG graphic (club logo, sponsor art …) placed on the page. */
@@ -146,6 +159,10 @@ export const mapImageObjectSchema = z.object({
   ...rectSchema.shape,
   /** Optional crop window; absent = full graphic. */
   crop: mapImageCropSchema.optional(),
+  /** Clockwise as seen, about the box centre, after the flips (J4; drawn from J5). */
+  rotationDeg: objectRotationSchema.optional(),
+  flipH: z.boolean().optional(),
+  flipV: z.boolean().optional(),
 });
 
 const courseMapObjectUnion = z.discriminatedUnion("kind", [

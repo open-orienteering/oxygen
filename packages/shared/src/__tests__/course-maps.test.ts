@@ -390,6 +390,51 @@ describe("course map validation and placeholders", () => {
   });
 });
 
+describe("layout objects: opacity, blend, rotation, flip (J4)", () => {
+  const text = { id: "t", anchor: "page", kind: "text", x: 100, y: 292, text: "Hello", fontSizeMm: 3, color: "#000000" } as const;
+  const rect = { id: "r", anchor: "page", kind: "rectangle", x: 100, y: 280, width: 40, height: 10, fillMode: "solid", fill: "#ffffff" } as const;
+  const image = { id: "i", anchor: "page", kind: "image", graphicId: 7, x: 100, y: 280, width: 40, height: 10 } as const;
+  const line = { id: "l", anchor: "page", kind: "line", x1: 10, y1: 10, x2: 20, y2: 20, stroke: "#000000", strokeWidthMm: 0.3 } as const;
+  const path = { id: "p", anchor: "page", kind: "path", points: [{ x: 10, y: 10 }, { x: 20, y: 20 }], closed: false, fillMode: "none" } as const;
+  const ok = (o: unknown) => courseMapObjectSchema.safeParse(o).success;
+
+  it("takes opacity and blend on every kind, rotation on text, rectangle and image, flips on image", () => {
+    for (const o of [text, rect, image, line, path]) {
+      expect(ok({ ...o, opacity: 0.5, blend: "multiply" }), o.kind).toBe(true);
+      expect(ok({ ...o, opacity: 0 }), o.kind).toBe(true);
+      expect(ok({ ...o, opacity: 1.01 }), o.kind).toBe(false);
+      expect(ok({ ...o, opacity: -0.01 }), o.kind).toBe(false);
+      expect(ok({ ...o, blend: "screen" }), o.kind).toBe(false);
+    }
+    for (const o of [text, rect, image]) {
+      expect(ok({ ...o, rotationDeg: -360 }), o.kind).toBe(true);
+      expect(ok({ ...o, rotationDeg: 361 }), o.kind).toBe(false);
+    }
+    expect(courseMapObjectSchema.parse({ ...image, flipH: true, flipV: false })).toMatchObject({ flipH: true, flipV: false });
+    // Lines and paths store no angle: an unknown key is stripped, as before.
+    expect(courseMapObjectSchema.parse({ ...line, rotationDeg: 30 })).not.toHaveProperty("rotationDeg");
+  });
+
+  it("objects without the fields parse to the same value as before", () => {
+    for (const o of [text, rect, image, line, path]) {
+      const parsed = courseMapObjectSchema.parse(o);
+      for (const k of ["opacity", "blend", "rotationDeg", "flipH", "flipV"]) expect(parsed, `${o.kind} ${k}`).not.toHaveProperty(k);
+    }
+  });
+
+  it("validation reads the rotated extent: a box that fits unrotated and leaves the margin turned 90° is reported", () => {
+    const check = (objects: CourseMapObject[]) => validateCourseMap({ document: { ...document, objects }, mapScale: 7500, variants: [] }).issues.map((i) => i.objectId);
+    expect(check([rect, image, text])).toEqual([]);
+    // About the box centre (120, 285): 115..125 × 265..305, past the 294 mm margin.
+    expect(check([{ ...rect, rotationDeg: 90 }])).toEqual(["r"]);
+    expect(check([{ ...image, rotationDeg: 90 }])).toEqual(["i"]);
+    // A text about its anchor (100, 292): the box swings down past the margin.
+    expect(check([{ ...text, rotationDeg: 90 }])).toEqual(["t"]);
+    // The stored box the editor hit-tests stays the unrotated one.
+    expect(courseMapObjectPageBounds({ ...rect, rotationDeg: 90 })).toEqual({ x: 100, y: 280, width: 40, height: 10 });
+  });
+});
+
 describe("rotated map windows", () => {
   const frame = document.mapFrame;
 

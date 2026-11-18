@@ -101,6 +101,25 @@ export function rotatePagePoint(
 }
 
 /**
+ * The axis-aligned box (page mm, y-down) around `rect` turned `deg`
+ * clockwise as seen about `pivot` (J4); the rect itself when `deg` is 0.
+ */
+export function rotatedRectBounds(rect: MapRect, deg: number, pivot: MapPoint): MapRect {
+  if (!deg || deg % 360 === 0) return rect;
+  const corners = [
+    { x: rect.x, y: rect.y },
+    { x: rect.x + rect.width, y: rect.y },
+    { x: rect.x + rect.width, y: rect.y + rect.height },
+    { x: rect.x, y: rect.y + rect.height },
+  ].map((p) => rotatePagePoint(p, pivot, deg));
+  const xs = corners.map((p) => p.x);
+  const ys = corners.map((p) => p.y);
+  const x = Math.min(...xs);
+  const y = Math.min(...ys);
+  return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y };
+}
+
+/**
  * Axis-aligned map-space window covering the rotated window. Used to crop
  * the base map SVG so that after rotation the whole frame is covered.
  */

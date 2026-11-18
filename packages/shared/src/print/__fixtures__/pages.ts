@@ -1,7 +1,8 @@
 /**
  * Page scenes (docs/course-print.md §7.5 tests; research 05 §7 tier 3): an
  * A4 sprint page with a description block, a white-out-outside ring
- * with page objects, and a rotated window — each a `PageInput` the
+ * with page objects, a rotated window, and objects with opacity,
+ * Multiply and rotation (J4) — each a `PageInput` the
  * composer turns into layers. The reference raster draws them now (the
  * page oracle in `packages/api/src/render/page-raster.ts`); the PDF tier
  * compares against the same images in C3.
@@ -17,7 +18,7 @@ import { makePath, type RenderPath } from "../../render/pass-stream.js";
 import { BaseMap } from "../../render/__fixtures__/course/index.js";
 import type { PageInput } from "../page.js";
 
-export const pageSceneNames = ["page-sprint-a4", "page-ring", "page-rotated"] as const;
+export const pageSceneNames = ["page-sprint-a4", "page-ring", "page-rotated", "page-objects-alpha"] as const;
 export type PageSceneName = (typeof pageSceneNames)[number];
 
 const mm = (v: number) => Math.round(v * 1000);
@@ -127,7 +128,39 @@ function rotated(): PageInput {
   });
 }
 
-const builders: Record<PageSceneName, () => PageInput> = { "page-sprint-a4": sprintA4, "page-ring": ring, "page-rotated": rotated };
+/**
+ * Opacity, Multiply and rotation on layout and course objects (J4), over
+ * `page-ring`'s map and course without its toner saver: a 50 % filled and
+ * stroked rectangle (the stroke's inner half shows over the fill), a
+ * Multiply rectangle over map and purple (the page layer multiplies the map
+ * layer: the cross-layer case), a 30° white-out at 60 %, a 20° text at
+ * 50 %, a 50 % page 709, and a 50 % white-out and a turned 60 % text as
+ * course objects.
+ */
+function objectsAlpha(): PageInput {
+  const base = ring();
+  const objects: CourseMapObject[] = [
+    { id: "glass", anchor: "page", kind: "rectangle", x: 16, y: 14, width: 24, height: 14, fillMode: "solid", fill: "#1f6fb2", stroke: "#000000", strokeWidthMm: 0.8, opacity: 0.5 },
+    { id: "lucka", anchor: "page", kind: "rectangle", x: 48, y: 31, width: 18, height: 15, fillMode: "solid", fill: "#ffd400", blend: "multiply" },
+    { id: "veil", anchor: "page", kind: "rectangle", x: 72, y: 16, width: 22, height: 12, fillMode: "whiteout", rotationDeg: 30, opacity: 0.6 },
+    { id: "label", anchor: "page", kind: "text", x: 18, y: 72, text: "Lucka 24", fontSizeMm: 5, color: "#000000", rotationDeg: 20, opacity: 0.5 },
+    { id: "keep-out", anchor: "page", kind: "rectangle", x: 80, y: 54, width: 20, height: 14, fillMode: "outOfBounds", opacity: 0.5 },
+  ];
+  return {
+    ...base,
+    course: {
+      ...base.course,
+      objects: [
+        { id: "mist", kind: "whiteout", geometry: [{ x: -46, y: -30 }, { x: -30, y: -30 }, { x: -30, y: -16 }, { x: -46, y: -16 }], props: { opacity: 0.5 } },
+        { id: "tag", kind: "text", geometry: [{ x: 8, y: -26 }], props: { text: "Lusse", fontSizeMm: 4, color: "#000000", rotationDeg: -15, opacity: 0.6 } },
+      ],
+    },
+    objects,
+    label: "Objects alpha",
+  };
+}
+
+const builders: Record<PageSceneName, () => PageInput> = { "page-sprint-a4": sprintA4, "page-ring": ring, "page-rotated": rotated, "page-objects-alpha": objectsAlpha };
 
 export function pageScene(name: PageSceneName): PageInput {
   return builders[name]();

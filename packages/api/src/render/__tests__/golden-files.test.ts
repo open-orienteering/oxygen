@@ -74,7 +74,7 @@ describe("golden PNGs", () => {
   }
 
   it("lists every page scene", () => {
-    expect([...pageSceneNames]).toEqual(["page-sprint-a4", "page-ring", "page-rotated"]);
+    expect([...pageSceneNames]).toEqual(["page-sprint-a4", "page-ring", "page-rotated", "page-objects-alpha"]);
   });
 
   for (const name of pageSceneNames) {

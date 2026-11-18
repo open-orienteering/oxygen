@@ -309,6 +309,16 @@ export interface CourseLayerImage {
   crop?: { x: number; y: number; width: number; height: number };
   /** Paper µm, y-up: lower-left corner and size. */
   rectUm: { x: number; y: number; width: number; height: number };
+  /** Opacity 0–1, only below 1 (J4; drawn from J5). */
+  opacity?: number;
+  /** Only Multiply (J4; drawn from J5). */
+  blend?: "multiply";
+  /** Clockwise as seen about the box centre, after the flips; only when not 0 (J4; drawn from J5). */
+  rotationDeg?: number;
+  /** Mirrored left–right, only when true (J4; drawn from J5). */
+  flipH?: boolean;
+  /** Mirrored top–bottom, only when true (J4; drawn from J5). */
+  flipV?: boolean;
 }
 
 export interface CourseLayerWarning {

@@ -431,6 +431,23 @@ which ship no file: `symbolise` warns `NO_FONT`, `map-rendering.md`
 §4.10; `{placeholders}` expanded; empty text skipped), images as page
 images.
 
+**Opacity, blend and rotation (J4).** A layout object's `opacity` (0–1)
+and `blend` (`"multiply"`) go onto **every** render object it emits —
+the fill and the stroke of a filled and stroked shape alike, so at 50 %
+the stroke's inner half shows over the fill (per pass, not per group;
+`map-rendering.md` §3.9) — in every fill mode, 709 and white-out outside
+included. A render object carries `opacity` only below 1 and `blend`
+only when Multiply (`objectAlpha`), so an object without the fields
+emits exactly today's stream. `rotationDeg` is clockwise as seen and the
+stored geometry stays the unrotated box: a rectangle is drawn as its four
+corners turned about the box centre, in any fill mode (a 709 hatch stays
+upright: the turned path carries no object angle); a text turns about its
+anchor (the baseline point `align` names), its render object taking
+`angleDeg = −rotationDeg` (symbolise's angles are counter-clockwise in
+y-up). Rotation 0, absent or a whole turn draws as unrotated. Lines and
+paths store no angle. An image's opacity, blend, rotation and flips are
+carried on its page image, drawn from J5 (`course-print.md` §6.3).
+
 **Migration (F12).** `packages/api/prisma/migrations/20261109120000_map_anchored_objects_to_course_objects`
 (the runbook: `docs/migrations/2026-f12-map-anchored-objects.md`). Every
 map-anchored object of `map_templates.objects` and `course_maps.objects`
@@ -1224,11 +1241,11 @@ issue message starting `OBJECT_GEOMETRY`.
 |---|---|---|---|
 | `oob_area` | ≥ 3 vertices, closed | `border?: "none" \| "solid" \| "dashed"` (default none); `hatch?: "709" \| "710"` (default 709) | 709; 709.b with a solid boundary, 709.c dashed; with `hatch: "710"` the dangerous area's cross-hatch (§3.1) with the same boundaries |
 | `oob_line` | ≥ 2 | `symbol?: "708" \| "711"` (default 708) | 708 out-of-bounds boundary or 711 out-of-bounds route |
-| `whiteout` | ≥ 3, closed | — | `course:whiteout` at upper white (§3.6) |
+| `whiteout` | ≥ 3, closed | `opacity?`, `blend?` (J4) | `course:whiteout` at upper white (§3.6), the opacity and blend on its render object |
 | `toner_saver` | ≥ 3: the hull — D13's editor generates the smooth offset hull of the course's sites, so its segments carry `hIn` / `hOut` and the hole ring below has Bézier flags (the hull's own straight edges stay straight) | `marginMm?` (how D5 / D13 generated it, 25 mm by default since D13; the drawn shape is the stored hull), `holeRadiusMm?` (reserved; the editor does not set it and builds no control holes) | white-out *outside* the hull in the toner saver white, the map layer's top row (§3.6, P1): the `viewOptions.window` ring with the hull as an even-odd hole; without a window (the viewer) not drawn, warning `WINDOW_MISSING` |
 | `marked_route` | ≥ 2 | — | 707 |
-| `text` | 1: the anchor | `text`, `fontSizeMm`, `fontFamily?`, `color?` (hex), `align?` | a text symbol: upper purple, or an own colour row for `color` (§1); `{placeholders}` expanded with `viewOptions.textValues` |
-| `image` | 2: opposite corners | `graphicId`, `crop?` | `layer.images` (a graphic of the event), drawn by the page backends |
+| `text` | 1: the anchor | `text`, `fontSizeMm`, `fontFamily?`, `color?` (hex), `align?`, `opacity?`, `blend?`, `rotationDeg?` (J4: clockwise as seen, about the anchor) | a text symbol: upper purple, or an own colour row for `color` (§1); `{placeholders}` expanded with `viewOptions.textValues`; `angleDeg = −rotationDeg` |
+| `image` | 2: opposite corners | `graphicId`, `crop?`, `opacity?`, `blend?`, `rotationDeg?` (about the box centre, after the flips), `flipH?`, `flipV?` (J4) | `layer.images` (a graphic of the event) with the fields off their defaults, drawn by the page backends (the new fields from J5) |
 | `filter_region` | ≥ 3 points, **no** Bézier handles (a polygon; one outer ring) | `{ mode: "clip" \| "hide", symbols: "all" \| idx[] \| { colours }, invert? }` — D3's region exactly | not an object: a `regions` entry (`map-rendering.md` §4.11) |
 | `inset_frame` | ≥ 2 | — | reserved for micro insets: typed, refused on write (`PRECONDITION_FAILED`), never drawn |
 
@@ -1237,8 +1254,12 @@ geometry and a text's `fontSizeMm` are not divided by the print
 enlargement (the page transform enlarges them with the map; F12 divided
 a moved text's page size once, §3.6). The 7xx kinds take the library's dimensions × the document
 factor × appearance (decision "Sizes"): 08 §4.5's per-object width,
-cross spacing, dash and white-out opacity are not stored (decision log,
-D2).
+cross spacing and dash are not stored (decision log, D2). `opacity`
+(0–1, absent = 1) and `blend` (`"multiply"`, absent = normal) are stored
+on `text`, `image` and `whiteout` only (J4, superseding D2 for white-out
+opacity); the 7xx kinds, `toner_saver`, `filter_region` and
+`inset_frame` refuse them (strict props), and `whiteout` refuses
+`rotationDeg` — a vertex path turns by its vertices (J11).
 
 ### 8.2 Scope
 
@@ -2232,6 +2253,7 @@ label.
 | golden | `e2e/__golden__/map-gl/course-*.png`, `packages/api/src/render/__tests__/golden-files.test.ts`, `e2e/map-gl-golden.spec.ts` | reference raster = committed golden; WebGL2 ≤ 0.5 % (`map-rendering.md` §6.2). The PDF tier joins in C3 |
 | unit (web) | `packages/web/src/lib/__tests__/course-layer-request.test.ts` | the §5 request rules (offsets only with the sheet or the editor; `autoCuts: false` only when off; F4: `overlayTypeOf`, crossing / map-issue sites never make the view all-controls, `setterMarks` and a leg's `crossing` passed through, `sheetCrossings`); the provisional visit (a control at a position, before the finish, past the end, repeats counted; start / finish replace or lead / end; a reused site adds no site, `provisionalDrawn` agrees with the site pushed (P4); the split leg loses its stored gaps; ignored without exactly one highlighted course); §8.2 scope by highlighted course over `inCourses`, all-controls = `all` only, parked nowhere; objects without scope / `z` / token / `inCourses` |
 | unit | `packages/shared/src/course/__tests__/objects.test.ts` | §8.1 each kind accepted (`hatch` included), short geometry / unknown props / an unknown `hatch` / bad filter props / Bézier region refused; §8.2 the scope truth table; §8.3 each kind onto its symbol (709 / 709.b / 709.c, the dangerous area and its boundaries for `hatch: "710"`, 708 / 711, 707, white-out), Bézier handles kept, text upper purple or own row and not divided by the enlargement, image corners, toner saver with and without a window and with Bézier handles (bezier flags in the hole ring only), `inset_frame` and `filter_region` draw nothing |
+| unit | `objects.test.ts` "opacity, blend, rotation, flip (J4)", `page-layer.test.ts` "pageLayer: opacity, blend, rotation (J4)", `print/__tests__/page.test.ts`, `print/__tests__/compose.test.ts` | §8.1 the J4 props accepted on `text` / `image` / `whiteout`, refused on the other kinds, out of range, an unknown blend, rotation on a white-out; §3.6 / §8.3 opacity and blend on the render objects only off their defaults (opacity 1 = the plain object), both passes of a filled and stroked rectangle, a 90° rectangle's turned corners in solid / white-out / 709 (the hatch upright), a 30° text's angle of −30 (course and page), 0 and 360 as absent; image fields carried in both layers with the streams unchanged; `flipPageObject` keeps the fields; `transformPassStream` keeps a pass's opacity and blend |
 | unit | `layer.test.ts` "a stored filter_region course object" | §8.3: the same region as the explicit one, after it; hides the document's 516 |
 | unit | `layer.test.ts` "course objects as F12 moved layout objects" | §3.6: white-out at upper white, 709 / 709.b / 709.c by border, a text's own row on top at paper mm (no division), the toner saver ring and its white row last (P1), `WINDOW_MISSING`, an image to `layer.images` as `{ graphicId, crop, rectUm }` |
 | pass-stream | `scenes.test.ts` "course-objects", `print/__tests__` page scenes "page-ring", "page-rotated" | §3.6: the fixtures' former map-anchored objects written as the course objects F12 makes; the stream snapshots unchanged byte for byte — the move draws the same |

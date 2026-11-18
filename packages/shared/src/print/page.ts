@@ -80,6 +80,12 @@ export interface PageImage {
   rectUm: { x: number; y: number; width: number; height: number };
   /** Visible part of the source as fractions, top-left origin (schema `crop`); absent = all. */
   crop?: { x: number; y: number; width: number; height: number };
+  /** The object's opacity, blend, rotation and flips (`CourseLayerImage`): carried from J4, drawn from J5. */
+  opacity?: number;
+  blend?: "multiply";
+  rotationDeg?: number;
+  flipH?: boolean;
+  flipV?: boolean;
 }
 
 export interface PageWarning {
@@ -190,6 +196,7 @@ export function flipPageObject(o: CourseMapObject, paperHeightMm: number): Cours
       return { ...o, y1: H - o.y1, y2: H - o.y2 };
     case "path":
       return { ...o, points: o.points.map(v) };
+    // The box flips about its own centre: `rotationDeg` (clockwise as seen) and the image flips are left as stored.
     case "rectangle":
     case "image":
       return { ...o, y: H - o.y - o.height };

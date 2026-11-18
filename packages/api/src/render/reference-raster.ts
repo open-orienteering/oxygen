@@ -22,6 +22,13 @@ export interface ReferenceRasterOptions {
   glyphOutline?: render.ReferenceSvgOptions["glyphOutline"];
   /** Render at this multiple of `pxPerMm` and box-filter down. Default 1. */
   supersample?: number;
+  /**
+   * An opaque image the stream draws onto, in place of the background:
+   * PNG bytes exactly the output's pixel size covering `bounds` (the page
+   * oracle's map layer under a page layer with Multiply, J4). Scaled by
+   * nearest neighbour when supersampling, so it boxes down to itself.
+   */
+  backdropPng?: Buffer;
 }
 
 export interface RasterImage {
@@ -42,7 +49,14 @@ export async function rasterisePassStream(stream: render.PassStream, opts: Refer
     : { minX: raw.minX - margin, minY: raw.minY - margin, maxX: raw.maxX + margin, maxY: raw.maxY + margin };
   const ss = Math.max(1, Math.round(opts.supersample ?? 1));
   const pxPerMm = opts.pxPerMm ?? 10;
-  const svg = render.passStreamToSvg(stream, { ...opts, bounds, marginUm: 0, pxPerMm });
+  let svg = render.passStreamToSvg(stream, { ...opts, bounds, marginUm: 0, pxPerMm });
+  if (opts.backdropPng) {
+    // The serialiser's first element is the background rect; the backdrop takes its place and size.
+    const rect = /<rect ([^>]*)\/>/.exec(svg);
+    if (!rect) throw new Error("reference raster: no background rect to replace");
+    const href = `data:image/png;base64,${opts.backdropPng.toString("base64")}`;
+    svg = svg.replace(rect[0], `<image ${rect[1].replace(/ fill="[^"]*"/, "")} preserveAspectRatio="none" image-rendering="optimizeSpeed" xlink:href="${href}"/>`);
+  }
   const { renderAsync } = await import("@resvg/resvg-js");
   // The SVG carries its own pixel size (width and height rounded
   // independently from the paper size) — the same formula the WebGL2

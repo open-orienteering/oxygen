@@ -560,6 +560,13 @@ text with placeholders, lines and paths (dashes as
 legacy print draws them), rectangles, `solid` fills, `whiteout`,
 `whiteoutInverted` (ring against the frame + 1 mm, §4.4), `outOfBounds` (709 / 709.b /
 709.c from the library), images (§6.3). Sizes are page mm as stored.
+Opacity and Multiply print per pass through the ExtGStates of §2 (J4):
+every object kind, every fill mode, the fill and the stroke of one shape
+each at the object's opacity. A rotated rectangle prints as its turned
+corners about the box centre and a rotated text at its anchor
+(`course-layer.md` §3.6); `flipPageObject` flips the box and leaves
+`rotationDeg` as stored, since clockwise as seen is the same on the
+y-down page and in y-up page mm.
 User colours print through the inverse
 naive conversion in `cmyk` and as the hex in `rgb` (§2).
 
@@ -597,7 +604,10 @@ embeds each distinct PNG once (`/Subtype /Image`, `Im<n>` in first-use
 order) and draws it `q [<rect> re W n] <w 0 0 h x y> cm /Imn Do Q`,
 stretched to the rectangle like the legacy `preserveAspectRatio="none"`,
 the crop's part filling it under a clip. An image without bytes is
-skipped with `IMAGE_MISSING`.
+skipped with `IMAGE_MISSING`. A `PageImage` also carries the object's
+`opacity`, `blend`, `rotationDeg`, `flipH` and `flipV` (J4; each only off
+its default, from `CourseLayerImage` for the map layer): **carried, not
+yet drawn** — `writePage` draws the image as above until J5's image pass.
 
 **SVG logos** are rasterised in the API at render time (05 §5.7 a), so
 `graphics` rows stay as uploaded: resvg at 600 dpi of the placed size
@@ -741,9 +751,9 @@ lines drawn by the library; images DeviceRGB in `cmyk`.
 
 | Test | Covers |
 |---|---|
-| `print/__tests__/page.test.ts` | `T_map` against `mapToPage` (0°, ±rotation), inverse, frame in map space, `flipPageObject`, `transformPassStream` (slices kept, widths / taper / glyph instances / text scaled and turned, hatch lines on the transformed lines) |
+| `print/__tests__/page.test.ts` | `T_map` against `mapToPage` (0°, ±rotation), inverse, frame in map space, `flipPageObject` (J4: rotation, flips, opacity and blend kept), `transformPassStream` (slices kept, widths / taper / glyph instances / text scaled and turned, hatch lines on the transformed lines, J4: each pass's opacity and blend kept) |
 | `print/__tests__/description.test.ts` | every `IOF_SYMBOLS` key converts; 2.4 one fill, 1.10 one disc, 0.3 two strokes + disc, Bézier flags; block size and position, border, thick / thin rules, header sizes and weight, F text 0.34 × cell, pictograms centred at 0.8 × cell, one symbol per key |
-| `print/__tests__/compose.test.ts` | one colour-sorted map stream with lower purple < black < upper purple; block text / rules / pictograms on appended colours; no block → empty page layer; map ring outer boundary = frame (+1 mm) through `T_map⁻¹` in the toner saver white, page ring = frame + 1 mm, page white-out at upper white; P1: with a 709 area and a course text outside a map toner saver, its ring is the map layer's last pass (the page layer still draws after); placeholders; rotated `T_map`; images in layer space; `CourseStackError`; auto cuts off = the stream without cut features (D17) |
+| `print/__tests__/compose.test.ts` | one colour-sorted map stream with lower purple < black < upper purple; block text / rules / pictograms on appended colours; no block → empty page layer; map ring outer boundary = frame (+1 mm) through `T_map⁻¹` in the toner saver white, page ring = frame + 1 mm, page white-out at upper white; P1: with a 709 area and a course text outside a map toner saver, its ring is the map layer's last pass (the page layer still draws after); placeholders; rotated `T_map`; images in layer space; J4: image opacity / blend / rotation / flips on the page images of both layers, streams unchanged; `CourseStackError`; auto cuts off = the stream without cut features (D17) |
 | `print/__tests__/writer.test.ts` (C8) | a bold text symbol and a regular one embed two font objects, `…+LiberationSans` and `…+LiberationSans-Bold` |
 | `print/__tests__/write-page.test.ts` | operator order (sheet, frame clip, `T_map` `cm`, page `cm`), no `rg` in `cmyk` / no `k` in `rgb`, rotated `cm`, two pages sharing font, glyph forms and image XObject, page labels and outlines, `/Measure /GEO` (SWEREF99 TM corners near 58.6° N 15° E, rotated corners), deterministic bytes, missing image warning, an object far outside the frame absent from the content stream (C13) |
 | `print/__tests__/isomorphic.test.ts` | no Node API, `Buffer`, `process`, `setImmediate`, `worker_threads`, sharp or resvg in any file the print module or the layout half (`course-maps/{resolve-layout,resolve-sheet,sheet-rows}.ts`) reaches, transitively; the package root reaches neither `print/writer.ts` nor `@cantoo/pdf-lib` (G13) |
@@ -755,7 +765,7 @@ lines drawn by the library; images DeviceRGB in `cmyk`.
 | `packages/api/src/__tests__/integration/course-maps.test.ts` "creates, duplicates and applies…", "resolveSheet: a template previewed…" (E6; E-pages read both through `resolveSheet`, `previewLayout` gone) | a course with no structure and no GeoJSON resolves start → controls → finish (the event's first start / finish) and its description rows; a template alone resolves centred on the map origin |
 | `packages/api/src/__tests__/integration/course-print.test.ts` | the E2E fixture map pinned on a `vector` event: legacy event → no print document; two sheets → one PDF of two A4 pages, `TrimBox`, labels, outlines, Type0 / CIDFontType2 shared, frame clip and `T_map`, no `rg`, PNG and rasterised SVG logos shared (600 dpi), `/Measure /GEO` of the fixture's georeference, deterministic bytes |
 | `packages/api/src/render/__tests__/page-raster.test.ts` | the page oracle: white outside the frame and the ring, map inside, page box on top; rotated building where `T_map` puts it; block position on A4 |
-| `packages/api/src/render/__tests__/golden-files.test.ts` | `page-sprint-a4`, `page-ring`, `page-rotated` match the page oracle; `descriptions-a4` matches the description-sheet oracle (F11) |
+| `packages/api/src/render/__tests__/golden-files.test.ts` | `page-sprint-a4`, `page-ring`, `page-rotated`, `page-objects-alpha` (J4: a 50 % filled and stroked rectangle, a Multiply rectangle over map and purple, a 30° white-out at 60 %, a 20° text at 50 %, a 50 % page 709, a 50 % course white-out and a turned course text) match the page oracle; `descriptions-a4` matches the description-sheet oracle (F11) |
 | `print/__tests__/description-sheet.test.ts` (F11) | §6.4: a 14-row block 4 × 3 / 3 × 2 / 3 × 2 per page at 5 / 6 / 7 mm; placement inside the margin; `count` (runners + vacancies, at least 1), a number, `fill`; 13 copies at 5 mm → two pages of one class; classes in order, never sharing a page; the gap only between blocks (0 / 20 / 30 mm); `DESCRIPTION_TOO_TALL`; the writer: one A4 page per tiled page labelled by class, one outline item each, the white sheet first, no `rg` in `cmyk` / no `k` in `rgb`, the XObject set the same for one page and three, deterministic bytes |
 
 The page goldens (`e2e/__golden__/map-gl/page-*.png`, 05 §7 tier 3) are
@@ -763,7 +773,11 @@ the page oracle (`render/page-raster.ts`): the map layer moved through
 `T_map` into page µm (`transformPassStream`) and rasterised over the
 frame alone — the frame clip is the raster's extent — composited with the
 page layer on white paper, at 10 px/mm, supersampled 2× (an A4 sheet at
-the scene goldens' 4× would be a ~400 MB intermediate). The
+the scene goldens' 4× would be a ~400 MB intermediate). A page layer with
+a Multiply pass is **layered** (J4): drawn by resvg onto the sheet so far
+(`backdropPng`, scaled nearest-neighbour) instead of composited over it,
+so it multiplies the map under it as the PDF's page does; pages without
+Multiply are composited as before, their goldens unchanged. The
 description-sheet golden (`descriptions-a4.png`, F11:
 `descriptionSheetScene()`, one class at 6 mm cells, `fill` → 3 × 4
 blocks) is the same oracle with no map layer
@@ -1543,10 +1557,14 @@ pixels beyond 16 levels; scenes not listed are 0.000 % in all columns):
 | `course-all-controls` | 0.478 | 0.000 | 0.398 |
 | `page-sprint-a4` | 0.073 | — | 0.062 |
 | `page-ring` | 0.057 | — | 0.045 |
+| `page-rotated` | 0.027 | — | 0.015 |
+| `page-objects-alpha` (J4) | 0.008 | — | 0.003 |
 
 J1 (2026-11-18; poppler 24.02): the alpha scenes `alpha-passes`,
 `alpha-text` and `blend-multiply` measure 0.000 % in all three columns;
 re-measured after J3 halved `alpha-text`'s halo (250 µm): still 0.000 %.
+J4 (2026-11-18, poppler 24.02): `page-objects-alpha` at introduction,
+with the layered page oracle (§7.5) for its Multiply rectangle.
 
 C11 (2026-10-24) re-measured `rgb` with the layer unit: every ratio
 within 0.014 pp of the µm encoding's (largest: `lib-text-layout`
@@ -1555,7 +1573,6 @@ text budget), outline runs ≤ 0.002 %; all 57 golden tests and
 `qpdf --check` pass. A 10 µm printed unit was rejected on this tier
 (`lib-borders` 0.84 %, `lib-hatch` 0.45 %, `hatch-area` 0.22 %:
 `map-rendering.md` §5.3 "Units").
-| `page-rotated` | 0.027 | — | 0.015 |
 
 Every outline run is 0.000 %: the residual of the embedded-font runs is
 the glyph renderer alone, largest on the small text of `lib-text` and
@@ -1887,6 +1904,8 @@ The tool's own tests (`print-run.test.ts`, `measure-print.test.mjs`,
   (`pdftocairo`, the PDF tier) and pass `qpdf --check`; a real printer or
   RIP is unverified until the manual print checkpoint after J5. A PDF/X
   profile (Pending above) must allow or flatten them.
+- **Image opacity, blend, rotation and flip** (J4 → J5): stored and
+  carried on `PageImage` (§6.3), drawn from J5's image pass.
 - **PDF size** (rows C11, C13, done): Club-full A4 at 1:10 000 is
   917 kB and Sprint A3 654 kB (§11.5); 05 Appendix B's 0.25 / 0.5 MB
   assumed 6.7× / 1.5× fewer path points than the windows hold and the

@@ -11,10 +11,11 @@
  */
 
 import { z } from "zod";
-import { type CourseMapObject, type MapPoint, type PathVertex, mapFontFamilySchema, mapImageCropSchema, pathVertexSchema, pointSchema } from "../course-maps/schema.js";
+import { type CourseMapObject, type MapPoint, type PathVertex, mapFontFamilySchema, mapImageCropSchema, objectBlendSchema, objectOpacitySchema, objectRotationSchema, pathVertexSchema, pointSchema } from "../course-maps/schema.js";
 import { expandMapText } from "../course-maps/text.js";
 import { COORD_FLAG, type RenderPath, makePath } from "../render/pass-stream.js";
 import { type RenderSymbol, parseRenderSymbol } from "../render/symbol.js";
+import { objectAlpha } from "../render/symbolise.js";
 import type { CourseSymbolSet } from "./symbols.js";
 import type { CourseFilterRegion, CourseLayerImage, CourseLayerWarning, CourseRenderObject, CourseViewOptions } from "./types.js";
 
@@ -61,7 +62,8 @@ export const courseObjectBodySchema = z.discriminatedUnion("kind", [
     /** 708 out-of-bounds boundary (default) or 711 out-of-bounds route. */
     props: z.strictObject({ symbol: z.enum(["708", "711"]).optional() }),
   }),
-  z.object({ kind: z.literal("whiteout"), geometry: vertices(3), props: z.strictObject({}) }),
+  /** Opacity and blend (J4); no rotation: a vertex path turns by its vertices. */
+  z.object({ kind: z.literal("whiteout"), geometry: vertices(3), props: z.strictObject({ opacity: objectOpacitySchema.optional(), blend: objectBlendSchema.optional() }) }),
   z.object({
     kind: z.literal("toner_saver"),
     /** The hull: white-out is drawn outside it, inside the map frame. */
@@ -81,12 +83,25 @@ export const courseObjectBodySchema = z.discriminatedUnion("kind", [
       /** Default: upper purple. */
       color: hexSchema.optional(),
       align: z.enum(["left", "center", "right"]).optional(),
+      opacity: objectOpacitySchema.optional(),
+      blend: objectBlendSchema.optional(),
+      /** Clockwise as seen, about the anchor point (J4). */
+      rotationDeg: objectRotationSchema.optional(),
     }),
   }),
   z.object({
     kind: z.literal("image"),
     geometry: vertices(2, 2),
-    props: z.strictObject({ graphicId: z.number().int().positive(), crop: mapImageCropSchema.optional() }),
+    props: z.strictObject({
+      graphicId: z.number().int().positive(),
+      crop: mapImageCropSchema.optional(),
+      opacity: objectOpacitySchema.optional(),
+      blend: objectBlendSchema.optional(),
+      /** Clockwise as seen, about the box centre, after the flips (J4; drawn from J5). */
+      rotationDeg: objectRotationSchema.optional(),
+      flipH: z.boolean().optional(),
+      flipV: z.boolean().optional(),
+    }),
   }),
   z.object({
     kind: z.literal("filter_region"),
@@ -206,9 +221,40 @@ function vertexPath(points: readonly PathVertex[], closed: boolean): { coords: n
   return { coords, flags };
 }
 
-const rectVertices = (o: { x: number; y: number; width: number; height: number }): PathVertex[] => [
-  { x: o.x, y: o.y }, { x: o.x + o.width, y: o.y }, { x: o.x + o.width, y: o.y + o.height }, { x: o.x, y: o.y + o.height },
-];
+/** A stored rotation as the builders read it: 0, absent and whole turns are no rotation. */
+const turnOf = (deg: number | undefined): number => (deg && deg % 360 !== 0 ? deg : 0);
+
+/**
+ * A rectangle's corners (y-up), turned `rotationDeg` clockwise as seen
+ * about the box centre (J4). The stored box stays the unrotated one.
+ */
+const rectVertices = (o: { x: number; y: number; width: number; height: number }, rotationDeg = 0): PathVertex[] => {
+  const corners = [
+    { x: o.x, y: o.y }, { x: o.x + o.width, y: o.y }, { x: o.x + o.width, y: o.y + o.height }, { x: o.x, y: o.y + o.height },
+  ];
+  const deg = turnOf(rotationDeg);
+  if (!deg) return corners;
+  const cx = o.x + o.width / 2, cy = o.y + o.height / 2;
+  const r = (deg * Math.PI) / 180, cos = Math.cos(r), sin = Math.sin(r);
+  // Clockwise in y-up: (dx, dy) → (dx cos + dy sin, −dx sin + dy cos).
+  return corners.map((p) => {
+    const dx = p.x - cx, dy = p.y - cy;
+    return { x: cx + dx * cos + dy * sin, y: cy - dx * sin + dy * cos };
+  });
+};
+
+/** A text's symbolise angle: counter-clockwise in y-up, so the stored clockwise rotation negated; absent at 0. */
+const textAngle = (rotationDeg: number | undefined): { angleDeg?: number } => {
+  const deg = turnOf(rotationDeg);
+  return deg ? { angleDeg: -deg } : {};
+};
+
+/** The fields an image carries past the builder (J4): only those off their defaults. */
+const imageStyle = (o: { opacity?: number; blend?: "multiply"; rotationDeg?: number; flipH?: boolean; flipV?: boolean }): ImageStyle => {
+  const deg = turnOf(o.rotationDeg);
+  return { ...objectAlpha(o), ...(deg ? { rotationDeg: deg } : {}), ...(o.flipH ? { flipH: true } : {}), ...(o.flipV ? { flipV: true } : {}) };
+};
+type ImageStyle = Pick<CourseLayerImage, "opacity" | "blend" | "rotationDeg" | "flipH" | "flipV">;
 
 /** Dashes as legacy print draws them: dash max(2, 5w), gap max(1, 2.5w), page mm. */
 const dashFor = (dashed: boolean, widthMm: number) =>
@@ -244,7 +290,7 @@ function objectBuilder(
     return i;
   };
   /** White-out outside `shape`: the ring (the map frame) with the shape as an even-odd hole. */
-  const whiteoutOutside = (shape: { coords: number[]; flags: number[] }, ref: CourseRenderObject["ref"], what: string) => {
+  const whiteoutOutside = (shape: { coords: number[]; flags: number[] }, ref: CourseRenderObject["ref"], what: string, alpha: ReturnType<typeof objectAlpha> = {}) => {
     if (!view.window || view.window.length < 3) {
       out.warnings.push({ code: "WINDOW_MISSING", ref, message: `${what} needs viewOptions.window; not drawn` });
       return;
@@ -253,12 +299,12 @@ function objectBuilder(
     const flags = [...new Array(view.window.length).fill(0), ...shape.flags];
     flags[view.window.length] |= COORD_FLAG.hole;
     const symbolIdx = tonerWhite === undefined ? set.idx.whiteout : symbol({ type: "area", fill: tonerWhite });
-    out.objects.push({ symbolIdx, path: makePath([...ring, ...shape.coords], flags, true), ref });
+    out.objects.push({ symbolIdx, path: makePath([...ring, ...shape.coords], flags, true), ref, ...alpha });
   };
   const textSymbol = (fontFamily: keyof typeof FONT | undefined, sizeUm: number, colour: number, align: "left" | "center" | "right" | undefined) =>
     symbol({ type: "text", fontFamily: FONT[fontFamily ?? "sans"], fontSizeUm: sizeUm, colour, align: align === "center" ? "centre" : (align ?? "left") });
-  const image = (graphicId: number, crop: CourseLayerImage["crop"], x: number, y: number, width: number, height: number) =>
-    out.images.push({ graphicId, ...(crop ? { crop } : {}), rectUm: { x: um(x), y: um(y), width: um(width), height: um(height) } });
+  const image = (graphicId: number, crop: CourseLayerImage["crop"], x: number, y: number, width: number, height: number, style: ImageStyle) =>
+    out.images.push({ graphicId, ...(crop ? { crop } : {}), rectUm: { x: um(x), y: um(y), width: um(width), height: um(height) }, ...style });
   return { out, symbol, whiteoutOutside, textSymbol, image };
 }
 
@@ -301,7 +347,7 @@ export function courseObjects(
         b.out.objects.push({ symbolIdx: set.idx.markedRoute, path: area(false).path, ref });
         break;
       case "whiteout":
-        b.out.objects.push({ symbolIdx: set.idx.whiteout, path: area(true).path, ref });
+        b.out.objects.push({ symbolIdx: set.idx.whiteout, path: area(true).path, ref, ...objectAlpha(o.props) });
         break;
       case "toner_saver":
         b.whiteoutOutside(area(true).shape, ref, `toner saver ${o.id}`);
@@ -311,12 +357,15 @@ export function courseObjects(
         if (!text) break;
         const colour = o.props.color ? colourOf(o.props.color) : upperPurple;
         const p = o.geometry[0];
-        b.out.objects.push({ symbolIdx: b.textSymbol(o.props.fontFamily, um(o.props.fontSizeMm), colour, o.props.align), path: makePath([um(p.x), um(p.y)]), text, ref });
+        b.out.objects.push({
+          symbolIdx: b.textSymbol(o.props.fontFamily, um(o.props.fontSizeMm), colour, o.props.align),
+          path: makePath([um(p.x), um(p.y)]), text, ref, ...textAngle(o.props.rotationDeg), ...objectAlpha(o.props),
+        });
         break;
       }
       case "image": {
         const [p, q] = o.geometry;
-        b.image(o.props.graphicId, o.props.crop, Math.min(p.x, q.x), Math.min(p.y, q.y), Math.abs(p.x - q.x), Math.abs(p.y - q.y));
+        b.image(o.props.graphicId, o.props.crop, Math.min(p.x, q.x), Math.min(p.y, q.y), Math.abs(p.x - q.x), Math.abs(p.y - q.y), imageStyle(o.props));
         break;
       }
       case "filter_region":
@@ -348,36 +397,42 @@ export function pageObjects(
   };
   for (const o of input) {
     const ref = { kind: "object" as const, id: o.id };
+    /** Opacity and blend go on every render object the page object emits: fill and stroke alike (J4). */
+    const alpha = objectAlpha(o);
     if (o.kind === "image") {
-      b.image(o.graphicId, o.crop, o.x, o.y, o.width, o.height);
+      b.image(o.graphicId, o.crop, o.x, o.y, o.width, o.height, imageStyle(o));
       continue;
     }
     if (o.kind === "text") {
       const text = expandMapText(o.text, view.textValues ?? {});
       if (!text) continue;
-      b.out.objects.push({ symbolIdx: b.textSymbol(o.fontFamily, um(o.fontSizeMm), colourOf(o.color), o.align), path: makePath([um(o.x), um(o.y)]), text, ref });
+      b.out.objects.push({
+        symbolIdx: b.textSymbol(o.fontFamily, um(o.fontSizeMm), colourOf(o.color), o.align),
+        path: makePath([um(o.x), um(o.y)]), text, ref, ...textAngle(o.rotationDeg), ...alpha,
+      });
       continue;
     }
     if (o.kind === "line") {
-      b.out.objects.push({ symbolIdx: strokeSymbol(o.stroke, o.strokeWidthMm, o.dash === "dashed"), path: makePath([um(o.x1), um(o.y1), um(o.x2), um(o.y2)]), ref });
+      b.out.objects.push({ symbolIdx: strokeSymbol(o.stroke, o.strokeWidthMm, o.dash === "dashed"), path: makePath([um(o.x1), um(o.y1), um(o.x2), um(o.y2)]), ref, ...alpha });
       continue;
     }
 
     const fillMode = o.fillMode ?? "none";
-    const vertices = o.kind === "rectangle" ? rectVertices(o) : o.points;
+    // A rotated rectangle is its turned corners in every fill mode; a 709 hatch stays upright (no object angle).
+    const vertices = o.kind === "rectangle" ? rectVertices(o, o.rotationDeg) : o.points;
     const closed = o.kind === "rectangle" || o.closed || fillMode === "whiteout" || fillMode === "whiteoutInverted" || fillMode === "outOfBounds";
     const shape = vertexPath(vertices, closed);
     const shapePath = makePath(shape.coords, shape.flags, closed);
     const hasStroke = !!o.stroke && o.strokeWidthMm !== undefined;
 
-    if (fillMode === "whiteout") b.out.objects.push({ symbolIdx: set.idx.whiteout, path: shapePath, ref });
-    else if (fillMode === "solid" && o.fill) b.out.objects.push({ symbolIdx: b.symbol({ type: "area", fill: colourOf(o.fill) }), path: shapePath, ref });
+    if (fillMode === "whiteout") b.out.objects.push({ symbolIdx: set.idx.whiteout, path: shapePath, ref, ...alpha });
+    else if (fillMode === "solid" && o.fill) b.out.objects.push({ symbolIdx: b.symbol({ type: "area", fill: colourOf(o.fill) }), path: shapePath, ref, ...alpha });
     else if (fillMode === "outOfBounds") {
       const idx = !hasStroke ? set.idx.oobArea : o.dash === "dashed" ? set.idx.oobAreaDashed : set.idx.oobAreaBorder;
-      b.out.objects.push({ symbolIdx: idx, path: shapePath, ref });
+      b.out.objects.push({ symbolIdx: idx, path: shapePath, ref, ...alpha });
       continue; // the library entry draws the boundary: stored colour and width are not read
-    } else if (fillMode === "whiteoutInverted") b.whiteoutOutside(shape, ref, `white-out outside ${o.id}`);
-    if (hasStroke) b.out.objects.push({ symbolIdx: strokeSymbol(o.stroke!, o.strokeWidthMm!, o.dash === "dashed"), path: shapePath, ref });
+    } else if (fillMode === "whiteoutInverted") b.whiteoutOutside(shape, ref, `white-out outside ${o.id}`, alpha);
+    if (hasStroke) b.out.objects.push({ symbolIdx: strokeSymbol(o.stroke!, o.strokeWidthMm!, o.dash === "dashed"), path: shapePath, ref, ...alpha });
   }
   return b.out;
 }

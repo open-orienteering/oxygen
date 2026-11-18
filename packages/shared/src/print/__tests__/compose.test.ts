@@ -143,6 +143,28 @@ describe("composePage", () => {
     ]);
   });
 
+  it("images carry opacity, blend, rotation and flips in both layers (J4); the page operators are unchanged until J5", () => {
+    const base = pageScene("page-ring");
+    const style = { opacity: 0.5, blend: "multiply" as const, rotationDeg: 30, flipH: true, flipV: true };
+    const mapLogo: CourseLayerObject = { id: "map-logo", kind: "image", geometry: [{ x: -5, y: -1 }, { x: 5, y: -5 }], props: { graphicId: 8, ...style } };
+    const withImages = (styled: boolean) => composePage(
+      {
+        ...base,
+        course: { ...base.course, objects: [...(base.course.objects ?? []), styled ? mapLogo : { ...mapLogo, props: { graphicId: 8 } }] },
+        objects: [...base.objects, { id: "logo", anchor: "page", kind: "image", graphicId: 7, x: 10, y: 10, width: 20, height: 10, ...(styled ? style : {}) }],
+      },
+      fonts(),
+    );
+    const page = withImages(true);
+    expect(page.images).toEqual([
+      { layer: "map", graphicId: 8, rectUm: { x: -5000, y: -5000, width: 10000, height: 4000 }, ...style },
+      { layer: "page", graphicId: 7, rectUm: { x: 10000, y: 70000, width: 20000, height: 10000 }, ...style },
+    ]);
+    const plain = withImages(false);
+    expect(page.mapLayer.stream).toEqual(plain.mapLayer.stream);
+    expect(page.pageLayer.stream).toEqual(plain.pageLayer.stream);
+  });
+
   it("the event's auto cuts off: no automatic slits or gaps in the map layer, the same stream as without cut features", () => {
     const base = pageScene("page-ring");
     // On 31's rim (R 2.5 mm at 1:10 000) and on the middle of leg 31–32.

@@ -49,6 +49,30 @@ describe("courseObjectBodySchema (§8.1)", () => {
   });
 });
 
+describe("courseObjectBodySchema: opacity, blend, rotation, flip (J4, §8.1)", () => {
+  const style = { opacity: 0.5, blend: "multiply" };
+  it("takes opacity and blend on text, image and white-out; rotation on text and image; flips on image", () => {
+    expect(issues({ kind: "text", geometry: [{ x: 1, y: 2 }], props: { text: "x", fontSizeMm: 3, ...style, rotationDeg: 30 } })).toEqual([]);
+    expect(issues({ kind: "image", geometry: SQUARE.slice(0, 2), props: { graphicId: 3, ...style, rotationDeg: -90, flipH: true, flipV: false } })).toEqual([]);
+    expect(issues({ kind: "whiteout", geometry: SQUARE, props: { opacity: 0 } })).toEqual([]);
+    expect(issues({ kind: "whiteout", geometry: SQUARE, props: style })).toEqual([]);
+  });
+
+  it("refuses them elsewhere, out of range, an unknown blend and rotation on a white-out", () => {
+    for (const [kind, geometry] of [["oob_area", SQUARE], ["oob_line", SQUARE], ["marked_route", SQUARE], ["toner_saver", SQUARE], ["inset_frame", SQUARE]] as const) {
+      expect(issues({ kind, geometry, props: { opacity: 0.5 } }), kind).not.toEqual([]);
+      expect(issues({ kind, geometry, props: { blend: "multiply" } }), kind).not.toEqual([]);
+    }
+    expect(issues({ kind: "filter_region", geometry: SQUARE, props: { mode: "hide", symbols: "all", opacity: 0.5 } })).not.toEqual([]);
+    expect(issues({ kind: "whiteout", geometry: SQUARE, props: { rotationDeg: 10 } })).not.toEqual([]);
+    expect(issues({ kind: "whiteout", geometry: SQUARE, props: { opacity: 1.5 } })).not.toEqual([]);
+    expect(issues({ kind: "whiteout", geometry: SQUARE, props: { opacity: -0.1 } })).not.toEqual([]);
+    expect(issues({ kind: "whiteout", geometry: SQUARE, props: { blend: "screen" } })).not.toEqual([]);
+    expect(issues({ kind: "text", geometry: [{ x: 1, y: 2 }], props: { text: "x", fontSizeMm: 3, rotationDeg: 400 } })).not.toEqual([]);
+    expect(issues({ kind: "image", geometry: SQUARE.slice(0, 2), props: { graphicId: 3, flipH: "yes" } })).not.toEqual([]);
+  });
+});
+
 describe("courseObjectInScope (§8.2)", () => {
   const scope = courseObjectScopeSchemaOf(z.number().int());
   it("parses both scope forms and nothing else", () => {
@@ -170,5 +194,34 @@ describe("course objects in the layer (§8.3)", () => {
     const region = draw([obj({ kind: "filter_region", geometry: SQUARE, props: { mode: "hide", symbols: "all" } })]);
     expect(region.own).toHaveLength(0);
     expect(region.layer.regions).toHaveLength(1);
+  });
+
+  it("opacity and blend reach a white-out's and a text's render object, only off their defaults (J4)", () => {
+    const w = draw([obj({ kind: "whiteout", geometry: SQUARE, props: { opacity: 0.5, blend: "multiply" } })]);
+    expect(w.own[0]).toMatchObject({ opacity: 0.5, blend: "multiply" });
+    const opaque = draw([obj({ kind: "whiteout", geometry: SQUARE, props: { opacity: 1 } })]);
+    expect("opacity" in opaque.own[0]).toBe(false);
+    expect("blend" in opaque.own[0]).toBe(false);
+    // Bit-identical to an object without the fields.
+    expect(opaque.own).toEqual(draw([obj({ kind: "whiteout", geometry: SQUARE, props: {} })]).own);
+    const t = draw([obj({ kind: "text", geometry: [{ x: 3, y: 4 }], props: { text: "x", fontSizeMm: 3, opacity: 0.25 } })]);
+    expect(t.own[0].opacity).toBe(0.25);
+  });
+
+  it("a rotated text turns about its anchor: angleDeg is the clockwise rotation negated; 0 and whole turns are none (J4)", () => {
+    const text = (rotationDeg?: number) =>
+      draw([obj({ kind: "text", geometry: [{ x: 3, y: 4 }], props: { text: "x", fontSizeMm: 3, ...(rotationDeg === undefined ? {} : { rotationDeg }) } })]).own[0];
+    expect(text(30).angleDeg).toBe(-30);
+    expect([...text(30).path.coords]).toEqual([3000, 4000]);
+    expect(text(0)).toEqual(text());
+    expect(text(360)).toEqual(text());
+    expect("angleDeg" in text()).toBe(false);
+  });
+
+  it("an image carries opacity, blend, rotation and flips past the layer, omitted at their defaults (J4; drawn from J5)", () => {
+    const styled = draw([obj({ kind: "image", geometry: [{ x: 10, y: 8 }, { x: 2, y: 4 }], props: { graphicId: 9, opacity: 0.4, blend: "multiply", rotationDeg: 15, flipH: true, flipV: true } })]);
+    expect(styled.layer.images).toEqual([{ graphicId: 9, rectUm: { x: 2000, y: 4000, width: 8000, height: 4000 }, opacity: 0.4, blend: "multiply", rotationDeg: 15, flipH: true, flipV: true }]);
+    const plain = draw([obj({ kind: "image", geometry: [{ x: 10, y: 8 }, { x: 2, y: 4 }], props: { graphicId: 9, opacity: 1, rotationDeg: 0, flipH: false } })]);
+    expect(plain.layer.images).toEqual([{ graphicId: 9, rectUm: { x: 2000, y: 4000, width: 8000, height: 4000 } }]);
   });
 });

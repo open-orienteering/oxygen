@@ -7,7 +7,9 @@
  * are drawn separately and composited: the map layer moved through
  * `T_map` into page µm (`transformPassStream`) and rasterised over the
  * frame alone — the frame clip is the raster's extent — and the page
- * layer over the whole sheet on transparent, both over white paper.
+ * layer over the whole sheet on transparent, both over white paper. A
+ * page layer with a Multiply pass is drawn onto the sheet so far instead
+ * (`backdropPng`, J4), so it multiplies the map under it as in the PDF.
  * Images are not drawn (no page scene carries one).
  */
 
@@ -78,11 +80,15 @@ export async function rasterisePage(
   over(pixels, width, height, map, Math.round((f.x / 1000) * pxPerMm), Math.round((page.paper.heightMm - (f.y + f.height) / 1000) * pxPerMm));
 
   if (page.pageLayer.stream.passes.length) {
-    const sheet = await rasterisePassStream(page.pageLayer.stream, {
-      ...common,
-      bounds: { minX: 0, minY: 0, maxX: page.paper.widthMm * 1000, maxY: page.paper.heightMm * 1000 },
-    });
-    over(pixels, width, height, sheet, 0, 0);
+    const bounds = { minX: 0, minY: 0, maxX: page.paper.widthMm * 1000, maxY: page.paper.heightMm * 1000 };
+    if (page.pageLayer.stream.passes.some((p) => p.blend === "multiply")) {
+      // Layered (J4): a Multiply page object blends with the map under it, as the PDF's page group does,
+      // so the page layer is drawn onto the sheet so far rather than composited over it afterwards.
+      const sheet = await rasterisePassStream(page.pageLayer.stream, { ...common, bounds, backdropPng: await encodePng({ width, height, pixels }) });
+      if (sheet.width !== width || sheet.height !== height) throw new Error(`page oracle: page layer ${sheet.width}×${sheet.height}, sheet ${width}×${height}`);
+      return { width, height, pixels: sheet.pixels };
+    }
+    over(pixels, width, height, await rasterisePassStream(page.pageLayer.stream, { ...common, bounds }), 0, 0);
   }
   return { width, height, pixels };
 }

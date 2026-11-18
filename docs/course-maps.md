@@ -99,6 +99,19 @@ PDF composer draws the rotated window under `T_map` (`course-print.md`
 `Class` carries the print override: `print_scale` and
 `sheet_template_id` (`ON DELETE SET NULL`). Layout data, not journaled.
 
+Every layout object takes `opacity?` (0–1 inclusive, 0 allowed, absent =
+1) and `blend?` (the literal `"multiply"`, absent = normal); text,
+rectangle and image take `rotationDeg?` (degrees **clockwise as seen**,
+finite within ±360, not normalised; 0 and absent alike); an image takes
+`flipH?` / `flipV?` (J4; `objectOpacitySchema`, `objectBlendSchema`,
+`objectRotationSchema` in `course-maps/schema.ts`). The stored box is
+always the unrotated one: a rectangle and an image turn about its
+centre, after the flips; a text about its anchor point (user 2026-11-18,
+question 6). Lines and paths store no angle (an unknown key is stripped,
+as for any layout key). Objects without the fields parse as before, so
+no migration; an older build strips the fields on parse (decision log,
+J4 rollback). How they are drawn: [`course-layer.md`](course-layer.md) §3.6.
+
 Both event-scoped tables use UUIDv7 plus per-event `seq`. Deleting an event
 cascades through all maps and templates. Deleting a course cascades through
 its maps; deleting a template leaves maps in place with `template_id = NULL`
@@ -133,6 +146,9 @@ Tests (J2): `packages/api/src/__tests__/course-map-graphics-upload.test.ts`
 `saveToClub`, `thumb.png` for PNG and SVG, the kiosk key on the three
 routes, a club graphic, and not across events); `integration/venue-print.test.ts`
 "a graphic over 4 MiB" (two `exportBlob` slices, imported with its size);
+`packages/shared/src/__tests__/course-maps.test.ts` "layout objects:
+opacity, blend, rotation, flip (J4)" (each field per kind, ranges, old
+objects unchanged, validation by the rotated extent);
 `packages/web/src/lib/__tests__/graphics-picker.test.ts`; E2E in
 `course-layout.md`'s test table ("graphics: upload an SVG…"). `event_id NULL` marks a
 club-library graphic shared across events; event rows cascade on event
@@ -375,7 +391,11 @@ The shared validator reports:
 
 - missing base-map scale
 - controls outside every map frame for their course
-- descriptions or page-anchored objects outside the paper
+- descriptions or page-anchored objects outside the paper — an object
+  by its rotated extent (`courseMapObjectPageExtent`, J4: a rectangle or
+  image's box turned about its centre, a text's estimated box about its
+  anchor); `courseMapObjectPageBounds` stays the stored, unrotated box
+  the editor hit-tests and resizes (`rotatedRectBounds` in `geometry.ts`)
 - missing template (added by the API list resolver)
 
 Course objects are not layout objects and are not checked: they follow
