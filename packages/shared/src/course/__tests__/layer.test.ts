@@ -24,6 +24,29 @@ const fonts = () => [liberation().sans];
 const colourId = (layer: ReturnType<typeof courseLayer>, i: number) => layer.colours[i].paletteIds?.[0] ?? layer.colours[i].id;
 
 describe("courseLayer + courseRenderInput → one symbolise call", () => {
+  it("J4: a 50 % white-out's fill pass and a 30° text's passes carry opacity; the text's glyphs turn −30°", () => {
+    const objects: CourseLayerObject[] = [
+      { id: 1, kind: "whiteout", geometry: [{ x: 5, y: 5 }, { x: 15, y: 5 }, { x: 15, y: 15 }, { x: 5, y: 15 }], props: { opacity: 0.5, blend: "multiply" } },
+      { id: 2, kind: "text", geometry: [{ x: 20, y: 20 }], props: { text: "Lucka", fontSizeMm: 3, opacity: 0.4, rotationDeg: 30 } },
+    ];
+    const layer = courseLayer(layerInput({ objects }));
+    const input = courseRenderInput(isomDocument(), layer);
+    const { stream } = symbolise({ ...input, fonts: fonts() });
+    const passesOf = (id: string) => {
+      const k = layer.objects.findIndex((o) => o.ref.id === id) + input.courseObjectOffset;
+      return stream.passes.filter((_, j) => stream.objectIdx[j] === k);
+    };
+    const white = passesOf("course-object:1");
+    expect(white.map((p) => p.kind)).toEqual(["fill"]);
+    expect(white[0]).toMatchObject({ opacity: 0.5, blend: "multiply" });
+    const text = passesOf("course-object:2");
+    expect(text.length).toBeGreaterThan(0);
+    for (const p of text) {
+      expect(p.opacity).toBe(0.4);
+      if (p.kind === "text") expect([...p.angles!].every((a) => Math.abs(a + 30) < 1e-4)).toBe(true);
+    }
+  });
+
   it("draws warning-free, lower purple under black, numbers upper purple (ISOM, user decision 2026-10-24)", () => {
     const layer = courseLayer(layerInput());
     const input = courseRenderInput(isomDocument(), layer);

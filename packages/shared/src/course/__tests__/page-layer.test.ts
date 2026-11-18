@@ -63,6 +63,16 @@ describe("pageLayer: opacity, blend, rotation (J4)", () => {
     for (const p of passes) expect(p).toMatchObject({ opacity: 0.5, blend: "multiply" });
   });
 
+  it("opacity reaches a white-out outside, a line and an open path (every kind, every fill mode)", () => {
+    const passes = draw([
+      rect({ fillMode: "whiteoutInverted", fill: undefined, stroke: undefined, strokeWidthMm: undefined, opacity: 0.5 }),
+      { id: "l", anchor: "page", kind: "line", x1: 10, y1: 40, x2: 40, y2: 40, stroke: "#000000", strokeWidthMm: 0.5, opacity: 0.5 },
+      { id: "p", anchor: "page", kind: "path", points: [{ x: 10, y: 50 }, { x: 30, y: 60 }, { x: 40, y: 50 }], closed: false, fillMode: "none", stroke: "#000000", strokeWidthMm: 0.5, opacity: 0.5 },
+    ]).stream.passes;
+    expect(passes.length).toBe(3);
+    for (const p of passes) expect(p.opacity).toBe(0.5);
+  });
+
   it("objects without the fields, or at opacity 1, give today's stream", () => {
     const plain = draw([rect()]).stream;
     expect(draw([rect({ opacity: 1, rotationDeg: 0 })]).stream).toEqual(plain);
@@ -77,6 +87,10 @@ describe("pageLayer: opacity, blend, rotation (J4)", () => {
       if (!("path" in fill)) continue;
       expect(bbox(fill.path.coords), fillMode).toEqual([15000, (H - 25) * 1000, 25000, (H - 5) * 1000]);
     }
+    // Clockwise as seen: the path's first corner, the stored bottom-left (10, 20) y-down, lands at (15, 5)
+    // (counter-clockwise would put it at (25, 25)).
+    const solid = draw([rect({ rotationDeg: 90 })]).stream.passes.find((p) => p.kind === "fill")!;
+    if ("path" in solid) expect([solid.path.coords[0], solid.path.coords[1]]).toEqual([15000, (H - 5) * 1000]);
     // A 709 hatch stays upright: the turned path carries no object angle.
     const hatch = draw([rect({ rotationDeg: 30, fillMode: "outOfBounds" })]).stream.passes.find((p) => p.kind === "hatch");
     const upright = draw([rect({ fillMode: "outOfBounds" })]).stream.passes.find((p) => p.kind === "hatch");

@@ -86,6 +86,8 @@ export async function rasterisePage(
       // so the page layer is drawn onto the sheet so far rather than composited over it afterwards.
       const sheet = await rasterisePassStream(page.pageLayer.stream, { ...common, bounds, backdropPng: await encodePng({ width, height, pixels }) });
       if (sheet.width !== width || sheet.height !== height) throw new Error(`page oracle: page layer ${sheet.width}×${sheet.height}, sheet ${width}×${height}`);
+      // The backdrop covers the sheet: a transparent pixel means it was letterboxed.
+      for (let i = 3; i < sheet.pixels.length; i += 4) if (sheet.pixels[i] !== 255) throw new Error("page oracle: the layered page layer left a transparent pixel");
       return { width, height, pixels: sheet.pixels };
     }
     over(pixels, width, height, await rasterisePassStream(page.pageLayer.stream, { ...common, bounds }), 0, 0);
