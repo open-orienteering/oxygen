@@ -98,9 +98,11 @@ describe("courseLayer + courseRenderInput → one symbolise call", () => {
     expect(Math.max(...halo.map(({ k }) => k))).toBeLessThan(Math.min(...text.filter(({ p }) => p.kind === "text" && !p.haloWidthUm).map(({ k }) => k)));
   });
 
-  it("sprint documents: 6 mm circles, numbers upper purple, stack unchanged", () => {
+  it("sprint documents: 6 mm circles, numbers upper purple, the stack gains only the graphics row (J5)", () => {
     const layer = courseLayer(layerInput({ document: sprintContext() }));
-    expect(layer.remap).toBeNull();
+    const upper = layer.colours.findIndex((c) => c.paletteIds?.includes("purple-upper"));
+    expect(layer.colours[upper - 1].id).toBe("course:graphics");
+    expect(layer.remap!.every((n, i) => n === (i < upper - 1 ? i : i + 1))).toBe(true);
     const circle = layer.objects.find((o) => o.ref.kind === "site" && o.ref.id === "32")!;
     expect(Math.max(...Array.from(circle.path.coords).filter((_, i) => i % 2 === 1))).toBe(40000 + 3000);
     const number = layer.symbols[layer.objects.find((o) => o.ref.kind === "number")!.symbolIdx];
@@ -489,11 +491,20 @@ describe("course objects as F12 moved layout objects (§3.6 retired, §8.3)", ()
     expect(courseLayer(layerInput({ objects: [saver] })).colours.some((c) => c.id === "course:toner-saver-white")).toBe(false);
   });
 
-  it("image objects are returned for the page backends, not as objects", () => {
-    const img: CourseLayerObject = { id: "img", kind: "image", geometry: [{ x: 4, y: 6 }, { x: 1, y: 2 }], props: { graphicId: 3, crop: { x: 0, y: 0.5, width: 1, height: 0.5 } } };
+  it("image objects draw in course:graphics — above upper white and the map, below upper purple — and are listed to fetch (J5)", () => {
+    const img: CourseLayerObject = { id: "img", kind: "image", geometry: [{ x: 4, y: 6 }, { x: 1, y: 2 }], props: { graphicId: 3, crop: { x: 0, y: 0.5, width: 1, height: 0.5 }, opacity: 0.5 } };
     const layer = courseLayer(layerInput({ objects: [img] }));
-    expect(layer.images).toEqual([{ graphicId: 3, crop: { x: 0, y: 0.5, width: 1, height: 0.5 }, rectUm: { x: 1000, y: 2000, width: 3000, height: 4000 } }]);
-    expect(layer.objects.some((o) => o.ref.kind === "object")).toBe(false);
+    expect(layer.images).toEqual([{ graphicId: 3, crop: { x: 0, y: 0.5, width: 1, height: 0.5 }, sizeUm: [3000, 4000] }]);
+    const input = courseRenderInput(isomDocument(), layer);
+    const { stream, warnings } = symbolise({ ...input, fonts: fonts() });
+    expect(warnings).toEqual([]);
+    const at = stream.passes.findIndex((p) => p.kind === "image");
+    expect(stream.passes[at]).toEqual({ kind: "image", colour: layer.colours.findIndex((c) => c.id === "course:graphics"), graphicId: 3, quad: [3000, 0, 0, 4000, 1000, 2000], crop: { x: 0, y: 0.5, width: 1, height: 0.5 }, opacity: 0.5 });
+    const ids = stream.passes.map((p) => colourId(layer, p.colour));
+    // Every map colour and upper white under it; upper purple (numbers, 7xx) over it.
+    expect(ids.slice(0, at).every((id) => id !== "purple-upper")).toBe(true);
+    expect(ids.slice(at + 1)).toContain("purple-upper");
+    expect(ids.slice(at + 1).every((id) => id !== "black100" && id !== "purple-lower")).toBe(true);
   });
 });
 

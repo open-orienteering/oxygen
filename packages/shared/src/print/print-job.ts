@@ -17,8 +17,13 @@ import type { ColourMode } from "./colour.js";
 import { type CoursePagesOptions, type CoursePagesResult, type PrintFonts, type PrintGraphic, type PrintSheet, renderCoursePages } from "./course-pages.js";
 import { type PrintPatch, prepareDocument } from "./prepared-document.js";
 
-/** The job format a host composes; another version is refused. 2 (G14): the document carries the event's patch. */
-export const PRINT_JOB_VERSION = 2;
+/**
+ * The job format a host composes; another version is refused. 2 (G14):
+ * the document carries the event's patch. 3 (J5): images are passes in
+ * graphics rows, under upper purple — a version-2 host would print them
+ * on top, so it must not compose a version-3 job.
+ */
+export const PRINT_JOB_VERSION = 3;
 
 export type PrintJobGraphicMime = "image/png" | "image/svg+xml";
 

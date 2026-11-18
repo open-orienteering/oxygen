@@ -55,23 +55,24 @@ function loaded(w: ReturnType<typeof harness>, req = load()): LoadedReply {
 }
 
 describe("course-layer load (docs/map-rendering.md §5.2 Dynamic bucket)", () => {
-  it("keys the static buckets on the course-completed stack: upper white below upper purple, rows above moved up one", () => {
+  it("keys the static buckets on the course-completed stack: upper white and the graphics row (J5) below upper purple, rows above moved up two", () => {
     const h = harness();
     const m = loaded(h);
     const doc = isomStack();
     const stack = m.summary.colourStack!;
-    expect(stack).toHaveLength(doc.length + 1);
+    expect(stack).toHaveLength(doc.length + 2);
     const upper = indexOf(stack, "purple-upper");
-    expect(stack[upper - 1].id).toBe("iof2024:white-upper");
+    expect(stack[upper - 2].id).toBe("iof2024:white-upper");
+    expect(stack[upper - 1].id).toBe("course:graphics");
     expect(m.summary.courseLayer).toEqual({ supported: true, cutFeatures: 0 });
-    // The black line keeps its index (below upper purple); the top-row line moved up one, same CMYK.
+    // The black line keeps its index (below upper purple); the top-row line moved up two, same CMYK.
     const black = indexOf(doc, "black100");
     const colours = new Set<number>();
     for (const p of [...m.base, ...(m.large ? [m.large] : [])]) for (const c of partColours(p)) colours.add(c);
     h.w.handle({ type: "prepare", ids: m.summary.detailCells });
     for (const s of h.sent.slice(1)) if (s.msg.type === "part") for (const c of partColours(s.msg.part)) colours.add(c);
-    expect(colours).toEqual(new Set([black, doc.length]));
-    expect(stack[doc.length].cmyk).toEqual(doc[doc.length - 1].cmyk);
+    expect(colours).toEqual(new Set([black, doc.length + 1]));
+    expect(stack[doc.length + 1].cmyk).toEqual(doc[doc.length - 1].cmyk);
     expect(stack[black].cmyk).toEqual(doc[black].cmyk);
   });
 
@@ -156,7 +157,7 @@ describe("course request → the dynamic bucket", () => {
     // The summary types the stack as a render stack; its rows still carry their palette ids.
     const index = mapImport.paletteIndexOfStack(stack as readonly mapDocument.DocumentColour[]);
     const at = (id: string) => index.get(id) ?? -1;
-    expect(at("white-upper")).toBe(at("purple-upper") - 1);
+    expect(at("white-upper")).toBe(at("purple-upper") - 2); // the graphics row (J5) between them
     const r = ask(h, request());
     expect(r.colours).toEqual(stack);
     const lower = at("purple-lower");
@@ -313,7 +314,7 @@ describe("course request → the dynamic bucket", () => {
     loaded(h);
     const r = ask(h, request({ objects: [{ id: "w1", kind: "whiteout", geometry: [{ x: 20, y: 5 }, { x: 30, y: 5 }, { x: 30, y: 15 }, { x: 20, y: 15 }], props: {} }] }));
     const fill = r.part!.fill!;
-    const white = indexOf(r.colours, "purple-upper") - 1;
+    const white = indexOf(r.colours, "purple-upper") - 2; // below the graphics row (J5)
     expect([...fill.ranges.colour]).toContain(white);
     expect(white).toBeGreaterThan(indexOf(r.colours, "black100"));
   });
@@ -358,7 +359,7 @@ describe("course request with a page → the page part (docs/course-layout.md §
     for (const c of partColours(part)) expect(c).toBeGreaterThanOrEqual(base);
     for (const c of partColours(r.part!)) expect(c).toBeLessThan(base);
     // The page white-out takes the stack's upper white, in the page's copy of the table.
-    const white = indexOf(r.colours, "purple-upper") - 1;
+    const white = indexOf(r.colours, "purple-upper") - 2; // below the graphics row (J5)
     expect(partColours(part)).toContain(base + white);
     expect(r.colours[base + white].cmyk).toEqual(r.colours[white].cmyk);
     expect(r.colours[base + white].id).not.toBe(r.colours[white].id);
@@ -395,7 +396,7 @@ describe("course request with a page → the page part (docs/course-layout.md §
     // Page mm (y-down) → paper mm: x − 75, 158.5 − y. The rectangle reaches 8 mm left of the frame (x = 10).
     const objects = [{ id: "wo", kind: "rectangle" as const, anchor: "page" as const, x: 2, y: 100, width: 60, height: 60, fillMode: "whiteoutInverted" as const }];
     const r = ask(h, request({ page: page({ objects }) }));
-    const white = r.page!.colourBase + indexOf(r.colours, "purple-upper") - 1;
+    const white = r.page!.colourBase + indexOf(r.colours, "purple-upper") - 2; // below the graphics row (J5)
     const at = (x: number, y: number) => fillCovers(r.pagePart!, white, (x - 75) * 1000, (158.5 - y) * 1000, m.summary);
     expect(at(40, 130)).toBe(false);
     expect(at(13, 103)).toBe(false);

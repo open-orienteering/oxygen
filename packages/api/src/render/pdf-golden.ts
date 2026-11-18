@@ -34,6 +34,7 @@ import {
   mapLayerOperators,
   rgbToCmykNaive,
   writeDescriptionPage,
+  pageSceneGraphics,
   writePage,
 } from "@oxygen/shared/print";
 import { bundledPdfFaces } from "./fonts.js";
@@ -107,7 +108,7 @@ export async function goldenScenePdf(
 export async function pageScenePdf(name: PageSceneName, mode: ColourMode, page?: ComposedPage): Promise<GoldenPdf> {
   const composed = page ?? (await composePageScene(name));
   const writer = await PdfWriter.create({ faces: await faces(), deterministic: true, info: { title: name } });
-  await writePage(writer, composed, { mode });
+  await writePage(writer, composed, { mode, images: pageSceneGraphics(name) });
   return {
     bytes: await writer.save(),
     width: Math.round(composed.paper.widthMm * render.GOLDEN_PX_PER_MM),
@@ -230,8 +231,8 @@ export async function goldenOracle(name: render.GoldenSceneName, colour: (i: num
 }
 
 /** The page oracle drawn in other colours. */
-export async function pageOracle(page: ComposedPage, colour: (i: number) => string): Promise<Pixels> {
-  return rasterisePage(page, { supersample: PAGE_GOLDEN_SUPERSAMPLE, colour });
+export async function pageOracle(page: ComposedPage, colour: (i: number) => string, images?: ReadonlyMap<number, Uint8Array>): Promise<Pixels> {
+  return rasterisePage(page, { supersample: PAGE_GOLDEN_SUPERSAMPLE, colour, images });
 }
 
 /** The description-sheet oracle drawn in other colours. */

@@ -7,7 +7,7 @@
  * input and print gets the screen's result by construction.
  */
 
-import { type FilterMask, type Pass, type PassStream, type RenderPath } from "./pass-stream.js";
+import { type FilterMask, type Pass, type PassStream, type RenderPath, imageQuadCorners, makePath } from "./pass-stream.js";
 import { type Bounds, pathBounds, unionBounds } from "./path.js";
 import { type FlatRing, flattenRings, pointInRings, polylinesCrossRings } from "./geometry.js";
 
@@ -185,6 +185,8 @@ export function passMeetsRegion(p: Pass, rings: FlatRing[]): boolean {
     case "text":
       for (let i = 0; i < p.positions.length; i += 2) if (pointInRings(rings, p.positions[i], p.positions[i + 1])) return true;
       return false;
+    case "image":
+      return pathMeets(makePath(imageQuadCorners(p.quad).flat().map(Math.round), undefined, true), true);
   }
 }
 

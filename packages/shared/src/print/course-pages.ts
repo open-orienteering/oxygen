@@ -166,7 +166,7 @@ export async function renderCoursePages(opts: CoursePagesOptions): Promise<Cours
       else if (g.mime === "image/svg+xml") {
         // Placed size on paper: page objects in page mm; image course objects enlarge with T_map.
         const k = img.layer === "map" ? page.mapLayer.transform.scaleRatio : 1;
-        const [w, h] = svgRasterBox((img.rectUm.width / 1000) * k, (img.rectUm.height / 1000) * k, img.crop);
+        const [w, h] = svgRasterBox((img.sizeUm[0] / 1000) * k, (img.sizeUm[1] / 1000) * k, img.crop);
         const key = `${img.graphicId}/${w}x${h}`;
         let png = pngCache.get(key);
         if (!png) {

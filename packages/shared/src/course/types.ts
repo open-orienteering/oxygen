@@ -303,22 +303,18 @@ export interface CourseDerivation {
 }
 
 /** An `image` object: not in the pass stream, drawn by the page backends from its graphic's bytes. */
+/**
+ * A graphic the layer draws (J5): what to fetch, not how to draw it — the
+ * image itself is a render object in the `course:graphics` row (an
+ * `image` render object, map-rendering §3.10), its opacity, blend,
+ * rotation and flips there. One entry per placement, in draw order.
+ */
 export interface CourseLayerImage {
   graphicId: number;
+  /** The placed size, paper µm (an SVG is rasterised at it, course-print.md §6.3). */
+  sizeUm: [number, number];
   /** Visible part of the source as fractions, top-left origin; absent = all. */
   crop?: { x: number; y: number; width: number; height: number };
-  /** Paper µm, y-up: lower-left corner and size. */
-  rectUm: { x: number; y: number; width: number; height: number };
-  /** Opacity 0–1, only below 1 (J4; drawn from J5). */
-  opacity?: number;
-  /** Only Multiply (J4; drawn from J5). */
-  blend?: "multiply";
-  /** Clockwise as seen about the box centre, after the flips; only when not 0 (J4; drawn from J5). */
-  rotationDeg?: number;
-  /** Mirrored left–right, only when true (J4; drawn from J5). */
-  flipH?: boolean;
-  /** Mirrored top–bottom, only when true (J4; drawn from J5). */
-  flipV?: boolean;
 }
 
 export interface CourseLayerWarning {

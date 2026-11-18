@@ -385,7 +385,7 @@ test.describe("auto templates (docs/course-layout.md §5–§7)", () => {
     expect(jobRes.ok()).toBe(true);
     type Job = { version: number; document: { hash: string; patch: { version: string; patch: { ops: Record<string, unknown> } } | null }; sheets: { copies?: number }[]; mode: string; filename: string };
     const job = (await jobRes.json()) as Job;
-    expect(job.version).toBe(2);
+    expect(job.version).toBe(3);
     expect(job.mode).toBe("cmyk");
     expect(job.document.hash).toMatch(/^[0-9a-f]{64}$/);
     expect(job.document.patch).toBeNull();

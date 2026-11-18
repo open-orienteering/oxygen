@@ -21,7 +21,7 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { render } from "@oxygen/shared";
-import { pageSceneNames } from "@oxygen/shared/print";
+import { pageSceneGraphics, pageSceneNames } from "@oxygen/shared/print";
 import { goldenDir } from "../golden.js";
 import { DESCRIPTION_GOLDEN, PAGE_GOLDEN_SUPERSAMPLE, composeDescriptionScene, composePageScene } from "../page-raster.js";
 import {
@@ -129,7 +129,7 @@ describe.skipIf(!tools && !required)("PDF golden tier", () => {
     it("cmyk: within budget of the page oracle in the rasteriser's CMYK conversion", async () => {
       const page = await composePageScene(name);
       const pdf = await pageScenePdf(name, "cmyk", page);
-      const oracle = await pageOracle(page, await cmykColour(pdf));
+      const oracle = await pageOracle(page, await cmykColour(pdf), pageSceneGraphics(name));
       await check(pdf, oracle, PAGE_GOLDEN_SUPERSAMPLE, MAX_DIFF_RATIO, `${name} cmyk`);
     }, 120_000);
   });

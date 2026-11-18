@@ -18,6 +18,7 @@ import {
   type RenderPath,
   type StrokeCap,
   type StrokeJoin,
+  imageQuadCorners,
   passHasAlpha,
   sortPassStream,
 } from "./pass-stream.js";
@@ -54,6 +55,12 @@ export interface ReferenceSvgOptions {
    * (debug output, never a golden oracle).
    */
   glyphOutline?: (font: FontRef, glyphId: number) => GlyphOutline | undefined;
+  /**
+   * An image pass's source as a URI (`data:image/png;base64,…`), by
+   * graphic id (J5); the caller encodes, so this module stays isomorphic.
+   * Without one, or when it answers undefined, the pass is left out.
+   */
+  imageHref?: (graphicId: number) => string | undefined;
 }
 
 /** Opacity to the four decimals of the projection (§3.7). */
@@ -140,6 +147,9 @@ export function passStreamBounds(stream: PassStream): Bounds | undefined {
           const x = p.positions[i], y = p.positions[i + 1];
           b = unionBounds(b, { minX: x, minY: y - 0.25 * p.sizeUm, maxX: x + p.sizeUm, maxY: y + p.sizeUm });
         }
+        break;
+      case "image":
+        for (const [x, y] of imageQuadCorners(p.quad)) b = unionBounds(b, { minX: x, minY: y, maxX: x, maxY: y });
         break;
     }
   }
@@ -305,6 +315,28 @@ export function passStreamToSvg(stream: PassStream, opts: ReferenceSvgOptions): 
           }
         }
         body.push(`<g ${tag} data-font="${p.fontId}" data-size="${n(p.sizeUm)}">${parts.join("")}</g>`);
+        break;
+      }
+      case "image": {
+        // §3.10: the unit square through the quad, then v flipped (an SVG image's first row is at the top);
+        // the crop's part fills the square: the whole source drawn larger and offset, clipped to the square.
+        // Sampled nearest-neighbour, as the PDF draws it (no /Interpolate): the oracle and print agree pixel for pixel.
+        const href = opts.imageHref?.(p.graphicId);
+        if (!href) break;
+        const cb = passStreamBounds({ ...s, passes: [p] });
+        if (cb && clippedAway(cb)) break;
+        const q = p.quad;
+        const n6 = (v: number) => String(Math.round(v * 1e6) / 1e6);
+        const c = p.crop ?? { x: 0, y: 0, width: 1, height: 1 };
+        const img = `<image x="${n6(-c.x / c.width)}" y="${n6(-c.y / c.height)}" width="${n6(1 / c.width)}" height="${n6(1 / c.height)}" preserveAspectRatio="none" image-rendering="optimizeSpeed" href="${href}"/>`;
+        const transform = `matrix(${n(q[0])} ${n(q[1])} ${n(q[2])} ${n(q[3])} ${n(q[4])} ${n(q[5])}) matrix(1 0 0 -1 0 1)`;
+        if (p.crop) {
+          const cid = nextId("clip");
+          defs.push(`<clipPath id="${cid}"><rect x="0" y="0" width="1" height="1"/></clipPath>`);
+          body.push(`<g ${tag} data-graphic="${p.graphicId}" transform="${transform}"><g clip-path="url(#${cid})">${img}</g></g>`);
+        } else {
+          body.push(`<g ${tag} data-graphic="${p.graphicId}" transform="${transform}">${img}</g>`);
+        }
         break;
       }
     }

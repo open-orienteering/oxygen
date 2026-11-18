@@ -2,7 +2,7 @@
  * Page scenes (docs/course-print.md §7.5 tests; research 05 §7 tier 3): an
  * A4 sprint page with a description block, a white-out-outside ring
  * with page objects, a rotated window, and objects with opacity,
- * Multiply and rotation (J4) — each a `PageInput` the
+ * Multiply and rotation (J4), and graphics (J5) — each a `PageInput` the
  * composer turns into layers. The reference raster draws them now (the
  * page oracle in `packages/api/src/render/page-raster.ts`); the PDF tier
  * compares against the same images in C3.
@@ -17,8 +17,9 @@ import type { CourseSite, CourseStructure } from "../../course/types.js";
 import { makePath, type RenderPath } from "../../render/pass-stream.js";
 import { BaseMap } from "../../render/__fixtures__/course/index.js";
 import type { PageInput } from "../page.js";
+import { encodeRgbaPng, luckaPng } from "./png.js";
 
-export const pageSceneNames = ["page-sprint-a4", "page-ring", "page-rotated", "page-objects-alpha"] as const;
+export const pageSceneNames = ["page-sprint-a4", "page-ring", "page-rotated", "page-objects-alpha", "page-graphics"] as const;
 export type PageSceneName = (typeof pageSceneNames)[number];
 
 const mm = (v: number) => Math.round(v * 1000);
@@ -160,7 +161,51 @@ function objectsAlpha(): PageInput {
   };
 }
 
-const builders: Record<PageSceneName, () => PageInput> = { "page-sprint-a4": sprintA4, "page-ring": ring, "page-rotated": rotated, "page-objects-alpha": objectsAlpha };
+/**
+ * Graphics (J5): the lucka PNG (opaque red band, half-opaque gold band,
+ * transparent middle) around control 31 as a course image, turned 15° at
+ * 70 % around control 32, as a Multiply page image over map and purple, and
+ * a striped RGB graphic cropped to its middle half, flipped and turned −20°
+ * on the page — over `page-ring`'s map without its toner saver.
+ */
+function graphics(): PageInput {
+  const base = ring();
+  const objects: CourseMapObject[] = [
+    { id: "stamp", anchor: "page", kind: "image", graphicId: LUCKA, x: 76, y: 12, width: 20, height: 20, blend: "multiply" },
+    { id: "badge", anchor: "page", kind: "image", graphicId: STRIPES, x: 14, y: 58, width: 24, height: 16, crop: { x: 0.25, y: 0, width: 0.5, height: 1 }, rotationDeg: -20, flipH: true },
+  ];
+  return {
+    ...base,
+    course: {
+      ...base.course,
+      objects: [
+        { id: "lucka-31", kind: "image", geometry: [{ x: -12, y: -2 }, { x: 4, y: 14 }], props: { graphicId: LUCKA } },
+        { id: "lucka-32", kind: "image", geometry: [{ x: 17, y: 12 }, { x: 33, y: 28 }], props: { graphicId: LUCKA, rotationDeg: 15, opacity: 0.7 } },
+      ],
+    },
+    objects,
+    label: "Graphics",
+  };
+}
+
+const LUCKA = 1;
+const STRIPES = 2;
+
+/** 32 × 16 px RGB: four vertical bands (blue, green, orange, black) over a white bottom row band, so a crop, a flip and a turn all show. */
+function stripesPng(): Uint8Array {
+  const w = 32, h = 16;
+  const px = new Uint8Array(w * h * 3);
+  const bands = [[31, 111, 178], [0, 150, 60], [240, 140, 0], [0, 0, 0]];
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) px.set(y >= 12 ? [255, 255, 255] : bands[Math.floor(x / 8)], (y * w + x) * 3);
+  return encodeRgbaPng(w, h, px, 3);
+}
+
+/** The PNG bytes a page scene's images draw, by graphic id (empty for scenes without images). */
+export function pageSceneGraphics(name: PageSceneName): ReadonlyMap<number, Uint8Array> {
+  return name === "page-graphics" ? new Map([[LUCKA, luckaPng(64)], [STRIPES, stripesPng()]]) : new Map();
+}
+
+const builders: Record<PageSceneName, () => PageInput> = { "page-sprint-a4": sprintA4, "page-ring": ring, "page-rotated": rotated, "page-objects-alpha": objectsAlpha, "page-graphics": graphics };
 
 export function pageScene(name: PageSceneName): PageInput {
   return builders[name]();

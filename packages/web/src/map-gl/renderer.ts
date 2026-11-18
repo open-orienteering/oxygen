@@ -378,14 +378,6 @@ void main() {
 }
 `;
 
-const FS_ALPHA = `#version 300 es
-precision highp float;
-uniform vec3 u_colour;
-in float v_alpha;
-out vec4 o;
-void main() { o = vec4(u_colour, v_alpha); }
-`;
-
 interface TimerExt {
   TIME_ELAPSED_EXT: number;
   GPU_DISJOINT_EXT: number;

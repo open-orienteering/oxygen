@@ -176,7 +176,7 @@ describe("GET /api/maps/:nameId/print-job (§8.5)", () => {
     expect(res.headers["cache-control"]).toBe("no-store");
     const job = res.json() as PrintJob;
     const pin = await vec.db.mapFile.findFirstOrThrow({ where: { eventId: vec.eventId } });
-    expect(job.version).toBe(2);
+    expect(job.version).toBe(3);
     expect(job.document).toEqual({ hash: pin.documentHash, rotationCorrectionDeg: pin.rotationCorrection ?? 0, patch: null });
     expect(job.mode).toBe("cmyk");
     expect(job.sheets.map((s) => s.label)).toEqual(["Blå", "Blå", "Alla"]);

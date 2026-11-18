@@ -249,12 +249,22 @@ const textAngle = (rotationDeg: number | undefined): { angleDeg?: number } => {
   return deg ? { angleDeg: -deg } : {};
 };
 
-/** The fields an image carries past the builder (J4): only those off their defaults. */
-const imageStyle = (o: { opacity?: number; blend?: "multiply"; rotationDeg?: number; flipH?: boolean; flipV?: boolean }): ImageStyle => {
-  const deg = turnOf(o.rotationDeg);
-  return { ...objectAlpha(o), ...(deg ? { rotationDeg: deg } : {}), ...(o.flipH ? { flipH: true } : {}), ...(o.flipV ? { flipV: true } : {}) };
-};
-type ImageStyle = Pick<CourseLayerImage, "opacity" | "blend" | "rotationDeg" | "flipH" | "flipV">;
+/** How an image is placed past its box (J4): opacity and blend, rotation clockwise as seen about the centre, after the flips. */
+interface ImageStyle { opacity?: number; blend?: "multiply"; rotationDeg?: number; flipH?: boolean; flipV?: boolean }
+
+/**
+ * An image's quad corners (y-up mm), in the order an image render object
+ * takes them (§3.10): the visible part's bottom-left, bottom-right,
+ * top-right, top-left — flipped in the box first, then the box turned.
+ */
+function imageCorners(box: { x: number; y: number; width: number; height: number }, style: ImageStyle): PathVertex[] {
+  const [bl, br, tr, tl] = rectVertices(box, style.rotationDeg);
+  const h = style.flipH, v = style.flipV;
+  if (h && v) return [tr, tl, bl, br];
+  if (h) return [br, bl, tl, tr];
+  if (v) return [tl, tr, br, bl];
+  return [bl, br, tr, tl];
+}
 
 /** Dashes as legacy print draws them: dash max(2, 5w), gap max(1, 2.5w), page mm. */
 const dashFor = (dashed: boolean, widthMm: number) =>
@@ -276,6 +286,8 @@ function objectBuilder(
   colourOf: (hex: string) => number,
   view: ObjectView,
   tonerWhite: number | undefined,
+  /** The graphics row images draw in (J5); absent = images are not drawn. */
+  graphicsRow: number | undefined,
 ) {
   const out: ObjectBuild = { objects: [], images: [], warnings: [] };
   const known = new Map<string, number>();
@@ -303,8 +315,19 @@ function objectBuilder(
   };
   const textSymbol = (fontFamily: keyof typeof FONT | undefined, sizeUm: number, colour: number, align: "left" | "center" | "right" | undefined) =>
     symbol({ type: "text", fontFamily: FONT[fontFamily ?? "sans"], fontSizeUm: sizeUm, colour, align: align === "center" ? "centre" : (align ?? "left") });
-  const image = (graphicId: number, crop: CourseLayerImage["crop"], x: number, y: number, width: number, height: number, style: ImageStyle) =>
-    out.images.push({ graphicId, ...(crop ? { crop } : {}), rectUm: { x: um(x), y: um(y), width: um(width), height: um(height) }, ...style });
+  /** An image (J5): one render object in the graphics row — its quad's corners and the graphic — and a fetch-list entry. */
+  const image = (graphicId: number, crop: CourseLayerImage["crop"], box: { x: number; y: number; width: number; height: number }, style: ImageStyle, ref: CourseRenderObject["ref"]) => {
+    if (graphicsRow === undefined) return;
+    const corners = imageCorners(box, style).flatMap((p) => [um(p.x), um(p.y)]);
+    out.objects.push({
+      symbolIdx: symbol({ type: "area", fill: graphicsRow }),
+      path: makePath(corners, undefined, true),
+      image: { graphicId, ...(crop ? { crop } : {}) },
+      ref,
+      ...objectAlpha(style),
+    });
+    out.images.push({ graphicId, sizeUm: [um(box.width), um(box.height)], ...(crop ? { crop } : {}) });
+  };
   return { out, symbol, whiteoutOutside, textSymbol, image };
 }
 
@@ -322,9 +345,11 @@ export function courseObjects(
   view: ObjectView,
   upperPurple: number,
   /** The colour a toner saver fills: the map layer's toner white row (the set's white-out when absent). */
-  tonerWhite?: number,
+  tonerWhite: number | undefined,
+  /** The `course:graphics` row `image` objects draw in (J5). */
+  graphicsRow: number | undefined,
 ): ObjectBuild {
-  const b = objectBuilder(set, symbols, colourOf, view, tonerWhite);
+  const b = objectBuilder(set, symbols, colourOf, view, tonerWhite, graphicsRow);
   for (const o of input) {
     const ref = { kind: "object" as const, id: courseObjectRefId(o.id) };
     const area = (closed: boolean) => {
@@ -365,7 +390,7 @@ export function courseObjects(
       }
       case "image": {
         const [p, q] = o.geometry;
-        b.image(o.props.graphicId, o.props.crop, Math.min(p.x, q.x), Math.min(p.y, q.y), Math.abs(p.x - q.x), Math.abs(p.y - q.y), imageStyle(o.props));
+        b.image(o.props.graphicId, o.props.crop, { x: Math.min(p.x, q.x), y: Math.min(p.y, q.y), width: Math.abs(p.x - q.x), height: Math.abs(p.y - q.y) }, o.props, ref);
         break;
       }
       case "filter_region":
@@ -389,8 +414,10 @@ export function pageObjects(
   symbols: RenderSymbol[],
   colourOf: (hex: string) => number,
   view: ObjectView,
+  /** The `page:graphics` row page images draw in (J5). */
+  graphicsRow?: number,
 ): ObjectBuild {
-  const b = objectBuilder(set, symbols, colourOf, view, undefined);
+  const b = objectBuilder(set, symbols, colourOf, view, undefined, graphicsRow);
   const strokeSymbol = (hex: string, widthMm: number, dashed: boolean) => {
     const dash = dashFor(dashed, widthMm);
     return b.symbol({ type: "line", main: { colour: colourOf(hex), widthUm: um(widthMm), ...(dash ? { dash } : {}) } });
@@ -400,7 +427,7 @@ export function pageObjects(
     /** Opacity and blend go on every render object the page object emits: fill and stroke alike (J4). */
     const alpha = objectAlpha(o);
     if (o.kind === "image") {
-      b.image(o.graphicId, o.crop, o.x, o.y, o.width, o.height, imageStyle(o));
+      b.image(o.graphicId, o.crop, o, o, ref);
       continue;
     }
     if (o.kind === "text") {

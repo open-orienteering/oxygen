@@ -10,6 +10,7 @@ import {
   COORD_FLAG,
   type BlendMode,
   type FontRef,
+  type ImagePass,
   type Pass,
   type PassAlpha,
   type PassStream,
@@ -52,6 +53,14 @@ export interface RenderObject {
   opacity?: number;
   /** Blend of every pass this object emits; absent = normal (§3.9). */
   blend?: BlendMode;
+  /**
+   * A placed graphic (§3.10, J5): the object draws one image pass instead
+   * of its symbol's passes, in the row of its symbol's fill (an area
+   * symbol; the course and page layers' graphics rows). `path` is the
+   * quad's four corners — the visible part's bottom-left, bottom-right,
+   * top-right, top-left — so rotation and flips are in the corner order.
+   */
+  image?: { graphicId: number; crop?: { x: number; y: number; width: number; height: number } };
 }
 
 /** The canonical alpha fields of an object (§3.9): `opacity` only below 1, `blend` only when set. */
@@ -78,7 +87,7 @@ export interface SymboliseInput {
 export interface SymboliseWarning {
   /** The object, or −1 for a filter-region warning (`region` says which). */
   objectIdx: number;
-  code: "UNKNOWN_SYMBOL" | "NO_FONT" | "EMPTY_GEOMETRY" | "TEXT_WITHOUT_TEXT" | "FILTER_EMPTY_REGION";
+  code: "UNKNOWN_SYMBOL" | "NO_FONT" | "EMPTY_GEOMETRY" | "TEXT_WITHOUT_TEXT" | "FILTER_EMPTY_REGION" | "IMAGE_WITHOUT_GRAPHIC";
   message: string;
   region?: number;
 }
@@ -120,6 +129,10 @@ class Stage {
       }
       if (obj.path.coords.length === 0) {
         this.warn("EMPTY_GEOMETRY", `object ${i} has no coordinates`);
+        return;
+      }
+      if (obj.image) {
+        this.image(obj, sym);
         return;
       }
       switch (sym.type) {
@@ -178,6 +191,20 @@ class Stage {
         ...(clip ? { clip } : {}),
       });
     });
+  }
+
+  // ---- image (§3.10) -----------------------------------------------------
+
+  private image(obj: RenderObject, sym: RenderSymbol): void {
+    const g = obj.image!;
+    const c = obj.path.coords;
+    const colour = sym.type === "area" ? sym.fill : undefined;
+    if (!(g.graphicId > 0) || c.length !== 8 || colour === undefined) {
+      this.warn("IMAGE_WITHOUT_GRAPHIC", `object ${this.objectIdx}: an image needs a graphic, four corners and an area symbol's fill row; not drawn`);
+      return;
+    }
+    const quad: ImagePass["quad"] = [c[2] - c[0], c[3] - c[1], c[6] - c[0], c[7] - c[1], c[0], c[1]];
+    this.push({ kind: "image", colour, graphicId: g.graphicId, quad, ...(g.crop ? { crop: { ...g.crop } } : {}) });
   }
 
   // ---- point -------------------------------------------------------------

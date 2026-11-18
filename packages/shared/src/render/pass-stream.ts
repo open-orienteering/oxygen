@@ -138,7 +138,25 @@ export interface TextPass extends PassAlpha {
   haloWidthUm?: number;
 }
 
-export type Pass = FillPass | StrokePass | GlyphPass | HatchPass | TextPass;
+/**
+ * A placed graphic (map-rendering §3.10, J5): the visible part of graphic
+ * `graphicId` drawn into a parallelogram. `quad` is the affine
+ * `[a, b, c, d, e, f]` taking the unit square onto it in stream µm, y-up —
+ * `(x, y) → (a·x + c·y + e, b·x + d·y + f)`, `(0, 0)` the visible part's
+ * bottom-left — which is PDF's own image space, so rotation and flips are
+ * in the matrix. `crop` (fractions of the source, top-left origin) is the
+ * part that fills the quad; absent = all of it. The bytes are the
+ * backend's to find by id.
+ */
+export interface ImagePass extends PassAlpha {
+  kind: "image";
+  colour: number;
+  graphicId: number;
+  quad: [number, number, number, number, number, number];
+  crop?: { x: number; y: number; width: number; height: number };
+}
+
+export type Pass = FillPass | StrokePass | GlyphPass | HatchPass | TextPass | ImagePass;
 export type PassKind = Pass["kind"];
 
 /**
@@ -152,7 +170,15 @@ export const PASS_KIND_ORDER: Record<PassKind, number> = {
   stroke: 2,
   glyph: 3,
   text: 4,
+  // Appended (J5): no existing sort key moves. Images sit in their own rows, so the slot rarely matters.
+  image: 5,
 };
+
+/** The four corners of an image pass's quad (stream µm): (0,0), (1,0), (1,1), (0,1) of the unit square. */
+export function imageQuadCorners(q: ImagePass["quad"]): [number, number][] {
+  const at = (u: number, v: number): [number, number] => [q[0] * u + q[2] * v + q[4], q[1] * u + q[3] * v + q[5]];
+  return [at(0, 0), at(1, 0), at(1, 1), at(0, 1)];
+}
 
 /** One colour part of a point/line/pattern glyph, geometry in glyph-local µm. */
 export interface GlyphMesh {

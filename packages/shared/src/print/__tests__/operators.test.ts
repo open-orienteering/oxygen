@@ -8,7 +8,7 @@ import { libraryScene, librarySceneNames } from "../../render/__fixtures__/libra
 import { liberation } from "../../render/__tests__/fonts.js";
 import { strokeOutline } from "../../render/geometry.js";
 import { pathBounds } from "../../render/path.js";
-import { type FontRef, type GlyphMesh, type PassStream, makePath } from "../../render/pass-stream.js";
+import { type FontRef, type GlyphMesh, type ImagePass, type Pass, type PassStream, makePath } from "../../render/pass-stream.js";
 import { passStreamFromJson } from "../../render/stream-json.js";
 import { passStreamBounds } from "../../render/reference-svg.js";
 import { symbolise } from "../../render/symbolise.js";
@@ -639,5 +639,39 @@ describe("frame culling (C13)", () => {
     expect(b.minX).toBeCloseTo(0, 6);
     expect(b.maxX).toBeCloseTo(10 / UM_TO_PT, 3);
     expect(b.minY).toBeCloseTo(-10 / UM_TO_PT, 3);
+  });
+});
+
+describe("image (§3.10, J5)", () => {
+  const img = (extra: Partial<ImagePass> = {}): ImagePass => ({ kind: "image", colour: 4, graphicId: 7, quad: [20000, 0, 0, 10000, 10000, 5000], ...extra });
+  const one = (passes: Pass[], opts: { images?: Map<number, string>; origin?: [number, number]; unit?: number; alpha?: boolean } = {}) => {
+    const r = resources().res;
+    const res: OperatorResources = opts.alpha ? { ...r, alpha: (o, b) => `GS${o ?? 1}${b ?? ""}` } : r;
+    const stream: PassStream = { objectIdx: new Uint32Array(passes.length), symbolIdx: new Uint32Array(passes.length), passes, glyphTable: [], fontTable: [] };
+    return passStreamOperators(stream, { colours: stack, mode: "cmyk", resources: res, images: opts.images ?? new Map([[7, "Im0"]]), originUm: opts.origin, unitUm: opts.unit });
+  };
+
+  it("the unit square through the quad, relative to the origin and in the layer unit", () => {
+    expect(one([img()])).toBe("q 20000 0 0 10000 10000 5000 cm /Im0 Do Q");
+    expect(one([img()], { origin: [10000, 5000], unit: 10 })).toBe("q 2000 0 0 1000 0 0 cm /Im0 Do Q");
+  });
+
+  it("rotation and flips are in the matrix; a crop clips the square and enlarges the source", () => {
+    expect(one([img({ quad: [0, -20000, 10000, 0, 0, 20000] })])).toBe("q 0 -20000 10000 0 0 20000 cm /Im0 Do Q");
+    expect(one([img({ quad: [-20000, 0, 0, 10000, 30000, 5000] })])).toBe("q -20000 0 0 10000 30000 5000 cm /Im0 Do Q");
+    // The right half of the source, its top 0.25 cut: width 2, height 4/3, offset (−1, 0).
+    expect(one([img({ crop: { x: 0.5, y: 0.25, width: 0.5, height: 0.75 } })])).toBe("q 20000 0 0 10000 10000 5000 cm 0 0 1 1 re W n 2 0 0 1.333333 -1 0 cm /Im0 Do Q");
+  });
+
+  it("opacity and Multiply through an ExtGState; nothing without bytes; in stream order between rows", () => {
+    expect(one([img({ opacity: 0.5, blend: "multiply" })], { alpha: true })).toBe("q\n/GS0.5multiply gs\nq 20000 0 0 10000 10000 5000 cm /Im0 Do Q\nQ");
+    expect(one([img()], { images: new Map() })).toBe("");
+    expect(one([img({ opacity: 0.5 })], { images: new Map(), alpha: true })).toBe("");
+    const fillOf = (colour: number): Pass => ({ kind: "fill", colour, rule: "evenodd", path: makePath([0, 0, 1000, 0, 1000, 1000], undefined, true) });
+    const out = lines(one([fillOf(3), img(), fillOf(5)]));
+    const at = out.indexOf("q 20000 0 0 10000 10000 5000 cm /Im0 Do Q");
+    expect(at).toBeGreaterThan(0);
+    expect(out.slice(0, at).some((l) => l.endsWith("f*"))).toBe(true);
+    expect(out.slice(at + 1).some((l) => l.endsWith("f*"))).toBe(true);
   });
 });

@@ -86,7 +86,7 @@ interface PassStream {
   masks?: FilterMask[];    // filter masks, §3.8
   maskIdx?: Int32Array;    // pass i → mask, −1 = none
 }
-type Pass = FillPass | StrokePass | GlyphPass | HatchPass | TextPass;
+type Pass = FillPass | StrokePass | GlyphPass | HatchPass | TextPass | ImagePass;
 ```
 
 Every pass has `kind` and `colour` (an index into the document's colour
@@ -179,7 +179,7 @@ is likewise its own pass (§4.9).
 
 Passes are sorted by `(colour, kind, symbolIdx)`, stable in insertion
 order for ties. Kind order within a colour is
-`fill < hatch < stroke < glyph < text`. `sortPassStream` is the single
+`fill < hatch < stroke < glyph < text < image` (image: J5, §3.10). `sortPassStream` is the single
 implementation; `PassStreamBuilder.build()` applies it. A stream handed to
 a backend is always sorted; backends iterate front to back and that *is*
 the painter's order. Because the sort is colour-major, "all passes of
@@ -203,7 +203,10 @@ a mask present on one side only, or a region path that moved.
 `opacity` and `blend` (§3.9) are projected when present — `opacity` to 4
 decimals, `opacity: 1` parsing to absent, a value outside [0, 1] or an
 unknown blend refused — and compared: an opacity difference over 1e-4,
-any blend difference.
+any blend difference. An image pass (§3.10) projects `graphicId`, its
+`quad` at 3 decimals (µm) and its `crop` at 6 (unitless); the comparator
+names a different graphic, a quad entry off by more than 1e-3 or a crop
+entry off by more than 1e-6.
 
 ### 3.8 Filter masks
 
@@ -251,6 +254,55 @@ set one; the course and page layers do, from a user object (J4).
 - **Backends**: the reference raster (§5.1) wraps the pass in one group;
   the PDF (§5.3) draws it under an ExtGState, a glyph or text pass inside
   a transparency group; WebGL2 (§5.2) draws alpha passes opaque until J3.
+
+### 3.10 Image
+
+`{ kind: "image", colour, graphicId, quad: [a, b, c, d, e, f], crop? }`
+(`ImagePass`; slice J, J5)
+
+A raster **graphic** (a PNG the course-map document's graphics library
+holds, `graphicId`) drawn onto the unit square mapped by the affine
+`quad`: the source's bottom-left corner lands at `(e, f)`, its
+bottom-right at `(a + e, b + f)`, its top-left at `(c + e, d + f)` — in
+stream µm, y-up. So the quad carries size, rotation and either flip, and
+the pass is a parallelogram in general (`imageQuadCorners` gives its four
+corners in the order bottom-left, bottom-right, top-right, top-left).
+
+- **`crop`** `{ x, y, width, height }` — the part of the source drawn, as
+  fractions of the source with (0, 0) at its top-left (image convention):
+  that part fills the unit square, the rest is not drawn. Absent: the
+  whole source.
+- **Pixels.** The graphic's own alpha is kept: a transparent pixel shows
+  what is under it, a half-opaque one blends once. Sampled
+  nearest-neighbour in the reference raster and the PDF (no
+  `/Interpolate`; J5): both draw the same source pixel at a point, which
+  is what holds the PDF tier at ≤ 0.5 % on a 64 px source enlarged 25×
+  (`page-graphics`, course-print.md §9.2). Sources are expected large
+  enough that a pixel is under the printer's dot.
+- **Opacity and blend** (§3.9) apply on top of the graphic's alpha.
+- **Order.** Last in its colour (§3.6). The pass's `colour` is a row of
+  the colour stack that holds images only (`course:graphics`,
+  `page:graphics`, course-layer.md §3.6): where graphics draw relative to
+  the map's and course's inks is set by where that row sits; the row's
+  own CMYK is not used.
+- **From symbolisation.** `symbolise` emits one image pass for a
+  `RenderObject` with `image: { graphicId, crop? }` whose symbol is an
+  area symbol with a fill row and whose path is the four corners
+  bottom-left, bottom-right, top-right, top-left (of the drawn part, as
+  seen): `quad = [x₁ − x₀, y₁ − y₀, x₃ − x₀, y₃ − y₀, x₀, y₀]`. No graphic
+  (`graphicId` 0), another corner count or a symbol without a fill row
+  warns `IMAGE_WITHOUT_GRAPHIC` and draws nothing. There is no image
+  symbol type: the object carries the graphic, the symbol only the row
+  (J5 decision log).
+- **Hit-test and filter regions** use the quad: a point inside it hits at
+  distance 0 (a transparent pixel too — the object is what is picked),
+  outside by its distance to the quad's edge; the pass meets a region when
+  its quad does.
+- **Backends.** The reference raster (§5.1) draws an SVG `<image>`
+  through the quad, the PDF (§5.3) an image XObject under `cm`, each from
+  the bytes its caller gives by graphic id; without bytes the pass is
+  left out (the PDF warns `IMAGE_MISSING`, course-print.md §4.4). WebGL2
+  (§5.2) does not draw image passes until J6.
 
 ## 4. Symbolisation rules
 
@@ -725,7 +777,8 @@ region when a vertex of its path lies inside the region (even-odd), an
 edge of its path crosses or touches a region edge, or — areas only
 (fills, hatches, a pattern pass's clip area) — a region vertex lies
 inside the area. A stroke counts by its centre line (not its width), a
-glyph pass by its instances' origins, a text pass by its glyph origins.
+glyph pass by its instances' origins, a text pass by its glyph origins,
+an image pass (§3.10) as the area its quad bounds.
 **The fast predicate** (`boundsMeetRegion`, 04 §7 "while dragging"):
 the object's symbolised bounds (`objectBounds`: control-point bounds
 grown by half a stroke width, glyphs by their mesh radius × scale, text
@@ -780,6 +833,14 @@ pass paint once. A masked pass is wrapped in one `<g clip-path>` per region of i
 `<clipPath>` is the image frame (the viewBox rectangle) with the region's
 rings, `clip-rule="evenodd"` — so the pass shows outside every region.
 A mask's clip paths are defined once.
+An image pass (§3.10, J5) is `<g transform="matrix(quad) matrix(1 0 0 −1
+0 1)">` around one `<image preserveAspectRatio="none"
+image-rendering="optimizeSpeed">` whose `href` the caller gives
+(`imageHref(graphicId)`, a data URI; none: the pass is left out); a crop
+draws the whole source enlarged (`1 / width` by `1 / height`) and offset
+under a `<clipPath>` of the unit square. `passStreamBounds` counts the
+quad's corners. The page oracle passes the scene's PNGs
+(`rasterisePage(page, { images })`, course-print.md §7.5).
 
 This is the **oracle** of the golden-image tier. It is slow and simple on
 purpose and is never used to draw a map for use. Its production jobs
@@ -3284,6 +3345,18 @@ nothing (culled) asks for no resource; an alpha pass under a filter mask
 stays inside the mask's `W* n`. A writer without `alpha` (none in the
 tree) draws alpha passes opaque; one with `alpha` but no `group` draws
 glyph and text alpha passes opaque (the others under their ExtGState). Tests: `print/__tests__/alpha-pdf.test.ts`.
+
+**Images** (§3.10; J5). An image pass is `q <quad> cm [0 0 1 1 re W n
+<crop> cm] /Im<n> Do Q`: the quad in the layer's unit, so the image
+XObject's unit square lands on it; a crop clips to the unit square and
+draws the whole source under `[1/w 0 0 1/h −x/w (y + h − 1)/h] cm` (the
+crop's y is from the top, PDF's v from the bottom). The XObject names come
+from the caller (`OperatorOptions.images`, graphic id → name); a pass
+whose graphic has no name is left out. An image with alpha is an RGB
+XObject with an `/SMask`; no `/Interpolate`, so it samples
+nearest-neighbour as the oracle does. Opacity and blend wrap the whole
+`q … Q` in the pass's ExtGState like any other pass. Tests:
+`print/__tests__/operators.test.ts` "image (§3.10, J5)".
 
 **Units** (05 §5.2; C11 2026-10-24). Coordinates are the stream's paper
 µm minus `originUm`, written as **integers in a layer unit `u`**

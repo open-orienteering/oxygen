@@ -10,7 +10,8 @@
  * layer over the whole sheet on transparent, both over white paper. A
  * page layer with a Multiply pass is drawn onto the sheet so far instead
  * (`backdropPng`, J4), so it multiplies the map under it as in the PDF.
- * Images are not drawn (no page scene carries one).
+ * Images are drawn from the PNG bytes given by graphic id (J5); one without
+ * bytes is left out, as the PDF leaves it out.
  */
 
 import { render } from "@oxygen/shared";
@@ -22,6 +23,7 @@ import {
   composePage,
   descriptionSheetScene,
   pageScene,
+  pageSceneGraphics,
   tileDescriptionSheets,
   transformPassStream,
 } from "@oxygen/shared/print";
@@ -61,13 +63,22 @@ export function over(dst: Uint8Array, dw: number, dh: number, src: { width: numb
 
 export async function rasterisePage(
   page: ComposedPage,
-  opts: { pxPerMm?: number; supersample?: number; /** Colour by stack index; default the naive conversion of the page's stack. */ colour?: (i: number) => string } = {},
+  opts: {
+    pxPerMm?: number;
+    supersample?: number;
+    /** Colour by stack index; default the naive conversion of the page's stack. */
+    colour?: (i: number) => string;
+    /** PNG bytes by graphic id, for the page's image passes (J5). */
+    images?: ReadonlyMap<number, Uint8Array>;
+  } = {},
 ): Promise<PageRaster> {
   const pxPerMm = opts.pxPerMm ?? render.GOLDEN_PX_PER_MM;
   const fonts = await goldenFonts();
   const hex = page.colours.map((c) => render.cmykToHex(c.cmyk));
   const colour = opts.colour ?? ((i: number) => hex[i] ?? "#ff00ff");
-  const common = { colour, pxPerMm, background: "none", glyphOutline: glyphOutlineFrom(fonts), supersample: opts.supersample ?? 1 };
+  const hrefs = new Map([...(opts.images ?? [])].map(([id, png]) => [id, `data:image/png;base64,${Buffer.from(png).toString("base64")}`]));
+  const imageHref = (id: number) => hrefs.get(id);
+  const common = { colour, pxPerMm, background: "none", glyphOutline: glyphOutlineFrom(fonts), supersample: opts.supersample ?? 1, imageHref };
   const width = Math.round(page.paper.widthMm * pxPerMm);
   const height = Math.round(page.paper.heightMm * pxPerMm);
   const pixels = new Uint8Array(width * height * 4).fill(255);
@@ -109,7 +120,7 @@ export async function composePageScene(name: PageSceneName): Promise<ComposedPag
 
 /** A page scene's golden (`e2e/__golden__/map-gl/page-*.png`): the page oracle at the golden density. */
 export async function renderPageGoldenPng(name: PageSceneName): Promise<Buffer> {
-  return encodePng(await rasterisePage(await composePageScene(name), { supersample: PAGE_GOLDEN_SUPERSAMPLE }));
+  return encodePng(await rasterisePage(await composePageScene(name), { supersample: PAGE_GOLDEN_SUPERSAMPLE, images: pageSceneGraphics(name) }));
 }
 
 // ---- description sheets (docs/course-print.md §6.4, §7.5) -------------------

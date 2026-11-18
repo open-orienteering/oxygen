@@ -161,8 +161,10 @@ describe("course objects in the layer (§8.3)", () => {
 
   it("image → layer.images from two corners; toner saver needs the window; inset_frame and filter_region draw no object", () => {
     const img = draw([obj({ kind: "image", geometry: [{ x: 10, y: 8 }, { x: 2, y: 4 }], props: { graphicId: 9 } })]);
-    expect(img.own).toHaveLength(0);
-    expect(img.layer.images).toEqual([{ graphicId: 9, rectUm: { x: 2000, y: 4000, width: 8000, height: 4000 } }]);
+    expect(img.own).toHaveLength(1);
+    expect(img.own[0].image).toEqual({ graphicId: 9 });
+    expect([...img.own[0].path.coords]).toEqual([2000, 4000, 10000, 4000, 10000, 8000, 2000, 8000]);
+    expect(img.layer.images).toEqual([{ graphicId: 9, sizeUm: [8000, 4000] }]);
 
     const toner = obj({ kind: "toner_saver", geometry: SQUARE, props: {} });
     expect(draw([toner]).own).toHaveLength(0);
@@ -218,10 +220,21 @@ describe("course objects in the layer (§8.3)", () => {
     expect("angleDeg" in text()).toBe(false);
   });
 
-  it("an image carries opacity, blend, rotation and flips past the layer, omitted at their defaults (J4; drawn from J5)", () => {
-    const styled = draw([obj({ kind: "image", geometry: [{ x: 10, y: 8 }, { x: 2, y: 4 }], props: { graphicId: 9, opacity: 0.4, blend: "multiply", rotationDeg: 15, flipH: true, flipV: true } })]);
-    expect(styled.layer.images).toEqual([{ graphicId: 9, rectUm: { x: 2000, y: 4000, width: 8000, height: 4000 }, opacity: 0.4, blend: "multiply", rotationDeg: 15, flipH: true, flipV: true }]);
-    const plain = draw([obj({ kind: "image", geometry: [{ x: 10, y: 8 }, { x: 2, y: 4 }], props: { graphicId: 9, opacity: 1, rotationDeg: 0, flipH: false } })]);
-    expect(plain.layer.images).toEqual([{ graphicId: 9, rectUm: { x: 2000, y: 4000, width: 8000, height: 4000 } }]);
+  it("an image's opacity and blend go on its render object, rotation and flips into its corner order (J4, J5)", () => {
+    const corners = (props: Record<string, unknown>) => {
+      const o = draw([obj({ kind: "image", geometry: [{ x: 0, y: 0 }, { x: 20, y: 10 }], props: { graphicId: 9, ...props } } as never)]).own[0];
+      return { o, pts: [...o.path.coords].map((v) => v / 1000) };
+    };
+    const { o } = corners({ opacity: 0.4, blend: "multiply" });
+    expect(o).toMatchObject({ opacity: 0.4, blend: "multiply" });
+    // Bottom-left, bottom-right, top-right, top-left of the visible part.
+    expect(corners({}).pts).toEqual([0, 0, 20, 0, 20, 10, 0, 10]);
+    expect(corners({ flipH: true }).pts).toEqual([20, 0, 0, 0, 0, 10, 20, 10]);
+    expect(corners({ flipV: true }).pts).toEqual([0, 10, 20, 10, 20, 0, 0, 0]);
+    expect(corners({ flipH: true, flipV: true }).pts).toEqual([20, 10, 0, 10, 0, 0, 20, 0]);
+    // 90° clockwise about the centre (10, 5): the image's bottom-left goes to the top-left corner of the turned box.
+    expect(corners({ rotationDeg: 90 }).pts).toEqual([5, 15, 5, -5, 15, -5, 15, 15]);
+    const plain = corners({ opacity: 1, rotationDeg: 0, flipH: false }).o;
+    expect("opacity" in plain || "blend" in plain).toBe(false);
   });
 });

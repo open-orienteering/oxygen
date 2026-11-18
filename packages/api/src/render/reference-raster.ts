@@ -20,6 +20,8 @@ export interface ReferenceRasterOptions {
   pxPerMm?: number;
   background?: string;
   glyphOutline?: render.ReferenceSvgOptions["glyphOutline"];
+  /** An image pass's source by graphic id (J5); without one the pass is left out. */
+  imageHref?: render.ReferenceSvgOptions["imageHref"];
   /** Render at this multiple of `pxPerMm` and box-filter down. Default 1. */
   supersample?: number;
   /**

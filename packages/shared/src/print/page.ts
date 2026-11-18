@@ -72,20 +72,17 @@ export interface MapLayerTransform {
   atUm: [number, number];
 }
 
-/** A raster graphic on the page (PNG bytes come from the caller, by `graphicId`). */
+/**
+ * A graphic a page draws (J5): the fetch list — the drawing is an image
+ * pass in a graphics row of its layer's stream. `sizeUm` is the placed
+ * size in the layer's space (paper µm for `map`, page µm for `page`).
+ */
 export interface PageImage {
   layer: "map" | "page";
   graphicId: number;
-  /** Lower-left corner and size in the layer's space (paper µm for `map`, page µm for `page`). */
-  rectUm: { x: number; y: number; width: number; height: number };
+  sizeUm: [number, number];
   /** Visible part of the source as fractions, top-left origin (schema `crop`); absent = all. */
   crop?: { x: number; y: number; width: number; height: number };
-  /** The object's opacity, blend, rotation and flips (`CourseLayerImage`): carried from J4, drawn from J5. */
-  opacity?: number;
-  blend?: "multiply";
-  rotationDeg?: number;
-  flipH?: boolean;
-  flipV?: boolean;
 }
 
 export interface PageWarning {
@@ -280,6 +277,13 @@ export function transformPassStream(stream: PassStream, t: MapLayerTransform): P
           ...(angles ? { angles } : {}),
           ...(p.haloWidthUm !== undefined ? { haloWidthUm: p.haloWidthUm * k } : {}),
         };
+      }
+      case "image": {
+        // T ∘ quad: the columns through T's linear part, the origin through T.
+        const [a, b, c, d, e, g] = p.quad;
+        const [ex, ey] = f(e, g);
+        const [ax, ay] = f(a, b), [cx, cy] = f(c, d);
+        return { ...p, quad: [ax - tx, ay - ty, cx - tx, cy - ty, ex, ey] };
       }
     }
   };

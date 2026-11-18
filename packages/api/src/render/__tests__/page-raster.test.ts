@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from "vitest";
 import { render } from "@oxygen/shared";
-import { mapPointToPage } from "@oxygen/shared/print";
+import { mapPointToPage, pageSceneGraphics } from "@oxygen/shared/print";
 import { composePageScene, over, rasterisePage, type PageRaster } from "../page-raster.js";
 import { encodePng, rasterisePassStream } from "../reference-raster.js";
 
@@ -63,6 +63,18 @@ describe("rasterisePage", () => {
     expect(Math.abs(under[1] - Math.round((green[1] * 212) / 255))).toBeLessThanOrEqual(2);
     expect(under[2]).toBeLessThanOrEqual(2); // × 0
     expect(at(img, 3, 3)).toEqual(white);
+  });
+
+  it("images (J5): the lucka around control 31 — opaque red band, gold over the map, the map through the middle; left out without bytes", async () => {
+    const page = await composePageScene("page-graphics");
+    const img = await rasterisePage(page, { pxPerMm: PX, images: pageSceneGraphics("page-graphics") });
+    // The course image's box: map (−12…4, −2…14) mm → page x 48…64, y (down) 31…47; bands 2 mm.
+    expect(at(img, 49, 39)).toEqual([200, 16, 46, 255]);
+    const green = at(img, 40, 60), gold = at(img, 50.5, 39), middle = at(img, 52.5, 35.5);
+    expect(middle).toEqual(green);
+    for (let c = 0; c < 3; c++) expect(Math.abs(gold[c] - Math.round((128 * [255, 196, 0][c] + 127 * green[c]) / 255))).toBeLessThanOrEqual(2);
+    const bare = await rasterisePage(page, { pxPerMm: PX });
+    expect(at(bare, 49, 39)).toEqual(green);
   });
 
   it("backdropPng: an empty stream at supersample 2 returns the backdrop byte for byte", async () => {

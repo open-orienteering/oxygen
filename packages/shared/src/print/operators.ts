@@ -89,6 +89,12 @@ export interface OperatorOptions {
    * (map-rendering.md §5.3 "Frame culling"). Unset = nothing is.
    */
   cull?: Bounds;
+  /**
+   * Image XObject names (without the slash) by graphic id, embedded by the
+   * caller before the operators are written (J5); an image pass whose
+   * graphic has none draws nothing.
+   */
+  images?: ReadonlyMap<number, string>;
 }
 
 /** A PDF number: fixed-point (never JS exponent notation, ISO 32000 §7.3.3), trailing zeros dropped. */
@@ -606,6 +612,19 @@ export function passStreamOperators(stream: PassStream, opts: OperatorOptions): 
             }
           }
         }
+        break;
+      }
+      case "image": {
+        // §3.10: `q <quad> cm 0 0 1 1 re W n <crop> cm /Imn Do Q` — the unit square through the quad (rotation and
+        // flips in the matrix), and the crop's part filling it: the whole image enlarged and offset under that clip.
+        const name = opts.images?.get(p.graphicId);
+        if (!name) break;
+        const q = p.quad;
+        const quad = cmOperator([q[0] * e.k, q[1] * e.k, q[2] * e.k, q[3] * e.k, (q[4] - e.ox) * e.k, (q[5] - e.oy) * e.k]);
+        const c = p.crop;
+        out.push(c
+          ? `q ${quad} 0 0 1 1 re W n ${cmOperator([1 / c.width, 0, 0, 1 / c.height, -c.x / c.width, (c.y + c.height - 1) / c.height])} /${name} Do Q`
+          : `q ${quad} /${name} Do Q`);
         break;
       }
     }

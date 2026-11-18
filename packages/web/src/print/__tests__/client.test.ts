@@ -132,7 +132,7 @@ describe("printMapsPdf (§8.6)", () => {
     const tooBig = deps({ job: big, device: { worker: true, deviceMemory: 4, coarsePointer: false } });
     expect((await printMapsPdf("ev", "", tooBig.d)).host).toBe("server");
     expect(tooBig.requests).toEqual(["/api/maps/ev/print-job", "/api/maps/ev/maps.pdf"]);
-    const v2 = deps({ job: { ...fixturePrintJob(), version: 1 } as unknown as PrintJob });
+    const v2 = deps({ job: { ...fixturePrintJob(), version: 2 } as unknown as PrintJob });
     expect((await printMapsPdf("ev", "", v2.d)).host).toBe("server");
     expect(v2.d.document).not.toHaveBeenCalled();
   });
@@ -230,6 +230,9 @@ describe("printMapsPdf offline (§8.6 \"Offline\", G17)", () => {
     const miss = deps({ caches, network: false });
     await expect(printMapsPdf("ev", "?courses=4", miss.d)).rejects.toMatchObject({ code: "notStored" });
     expect(miss.requests.filter((r) => r.includes("maps.pdf"))).toEqual([]);
+    // A job stored by the version-2 client (before J5) must be stored again.
+    await miss.d.store.putJob("ev", "?old=1", { ...fixturePrintJob(), version: 2 } as unknown as PrintJob, "t");
+    await expect(printMapsPdf("ev", "?old=1", miss.d)).rejects.toMatchObject({ code: "notStored" });
     const big = { ...fixturePrintJob(), sheets: Array.from({ length: 30 }, () => ({ ...fixturePrintJob().sheets[0], paper: { widthMm: 210, heightMm: 297 } })) };
     await miss.d.store.putJob("ev", "", big, "t");
     await expect(printMapsPdf("ev", "", deps({ caches, network: false, device: { worker: true, deviceMemory: 4, coarsePointer: false } }).d)).rejects.toMatchObject({ code: "tooLarge" });

@@ -102,7 +102,7 @@ describe("prepareOfflinePrint (§8.6 \"Offline\")", () => {
     const r = await prepareOfflinePrint("ev", {}, s.deps);
     expect(r.status).toBe("stored");
     // all, all controls, setter, the course.
-    expect(r.manifest).toMatchObject({ storedAt: "2026-11-14T10:00:00.000Z", jobVersion: 2, complete: true, skipped: [] });
+    expect(r.manifest).toMatchObject({ storedAt: "2026-11-14T10:00:00.000Z", jobVersion: 3, complete: true, skipped: [] });
     expect(r.manifest!.queries.sort()).toEqual(["", "?allControls=1", "?courses=3", "?setter=1"].sort());
     for (const q of r.manifest!.queries) expect((await s.store.getJob("ev", q))?.storedAt).toBe("2026-11-14T10:00:00.000Z");
     const paths = s.caches.get("offline-print").paths();

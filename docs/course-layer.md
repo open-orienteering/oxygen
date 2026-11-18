@@ -94,6 +94,15 @@ boxes are estimated like the legacy placer's (0.65 em per character).
   re-indexes the document's symbols with `remapRenderColours`. Done at
   layer-build time, not by import alignment, so no stored document
   changes hash (Pending: fold it into stage 7 at the next importer bump).
+- **Graphics** (`course:graphics`, `COURSE_GRAPHICS_ID`; J5) is always
+  inserted **directly below upper purple**, above upper white, whatever
+  the document holds: the row image course objects draw in
+  (`map-rendering.md` §3.10), so a graphic covers the map, lower purple
+  and white-outs and upper purple (control circles, numbers, 709) draws
+  over it (decided with the user). It holds images only; its CMYK
+  (0/0/0/0) is never used and it matches no palette entry. Since every
+  stack gains it, `remap` is set for every document (each colour at or
+  above upper purple moves up one more).
 - Course objects in their own hex colours (a `text` object's `color`, §8.3) get one row each, in
   first-use order, **on top of the stack** (`course-object:#rrggbb`,
   CMYK by the naive inverse of `cmykToHex`): legacy print draws them
@@ -128,9 +137,10 @@ symbols after the document's (re-indexed when `remap` is set) and its
 objects after the document's; `objects[courseObjectOffset + i]` is
 `layer.objects[i]`, whose `ref` (`site`, `leg`, `number`, `leader`,
 `extra`, `object` + id) says which input it came from — the viewer's
-per-object hide and hit-testing (04 §7). Map-anchored images are not in
-the stream: `layer.images` carries them with their paper rectangle for
-the page backends.
+per-object hide and hit-testing (04 §7). Image course objects are in
+the stream (J5): one image pass each in the graphics row; `layer.images`
+lists their graphics (`{ graphicId, sizeUm, crop? }`) so a page backend
+knows which bytes to fetch.
 
 For consumers: when `remap` is set, every document colour at or above
 upper purple moves up one index, so anything keyed on the document's
@@ -445,8 +455,20 @@ upright: the turned path carries no object angle); a text turns about its
 anchor (the baseline point `align` names), its render object taking
 `angleDeg = −rotationDeg` (symbolise's angles are counter-clockwise in
 y-up). Rotation 0, absent or a whole turn draws as unrotated. Lines and
-paths store no angle. An image's opacity, blend, rotation and flips are
-carried on its page image, drawn from J5 (`course-print.md` §6.3).
+paths store no angle.
+
+**Images (J5).** An `image` layout object or course object is one render
+object whose path is its box's four corners — bottom-left,
+bottom-right, top-right, top-left of the graphic as seen — and whose
+symbol is the area symbol `course:graphics` filling the graphics row,
+with `image: { graphicId, crop? }` (`imageCorners`): `flipH` swaps the
+left and right corners, `flipV` the top and bottom, then `rotationDeg`
+turns all four clockwise about the box centre; opacity and blend as
+above. `symbolise` turns it into one image pass. A layout image goes in
+the page layer's own graphics row (`page:graphics`, appended last to
+the page stack when the page has an image: on top of every page
+object); a course image in `course:graphics`. Both are listed in the
+fetch list (`layer.images`, `PageImage`, `course-print.md` §6.3).
 
 **Migration (F12).** `packages/api/prisma/migrations/20261109120000_map_anchored_objects_to_course_objects`
 (the runbook: `docs/migrations/2026-f12-map-anchored-objects.md`). Every
@@ -1245,7 +1267,7 @@ issue message starting `OBJECT_GEOMETRY`.
 | `toner_saver` | ≥ 3: the hull — D13's editor generates the smooth offset hull of the course's sites, so its segments carry `hIn` / `hOut` and the hole ring below has Bézier flags (the hull's own straight edges stay straight) | `marginMm?` (how D5 / D13 generated it, 25 mm by default since D13; the drawn shape is the stored hull), `holeRadiusMm?` (reserved; the editor does not set it and builds no control holes) | white-out *outside* the hull in the toner saver white, the map layer's top row (§3.6, P1): the `viewOptions.window` ring with the hull as an even-odd hole; without a window (the viewer) not drawn, warning `WINDOW_MISSING` |
 | `marked_route` | ≥ 2 | — | 707 |
 | `text` | 1: the anchor | `text`, `fontSizeMm`, `fontFamily?`, `color?` (hex), `align?`, `opacity?`, `blend?`, `rotationDeg?` (J4: clockwise as seen, about the anchor) | a text symbol: upper purple, or an own colour row for `color` (§1); `{placeholders}` expanded with `viewOptions.textValues`; `angleDeg = −rotationDeg` |
-| `image` | 2: opposite corners | `graphicId`, `crop?`, `opacity?`, `blend?`, `rotationDeg?` (about the box centre, after the flips), `flipH?`, `flipV?` (J4) | `layer.images` (a graphic of the event) with the fields off their defaults, drawn by the page backends (the new fields from J5) |
+| `image` | 2: opposite corners | `graphicId`, `crop?`, `opacity?`, `blend?`, `rotationDeg?` (about the box centre, after the flips), `flipH?`, `flipV?` (J4) | one image pass in `course:graphics` (§3.6 "Images", J5), its graphic listed in `layer.images`; drawn by the page backends, on screen from J6 |
 | `filter_region` | ≥ 3 points, **no** Bézier handles (a polygon; one outer ring) | `{ mode: "clip" \| "hide", symbols: "all" \| idx[] \| { colours }, invert? }` — D3's region exactly | not an object: a `regions` entry (`map-rendering.md` §4.11) |
 | `inset_frame` | ≥ 2 | — | reserved for micro insets: typed, refused on write (`PRECONDITION_FAILED`), never drawn |
 

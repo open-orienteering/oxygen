@@ -98,6 +98,14 @@ const passJson = z.discriminatedUnion("kind", [
     angles: z.array(z.number()).optional(),
     haloWidthUm: z.number().positive().optional(),
   }),
+  z.object({
+    kind: z.literal("image"), ...alphaJson,
+    colour: z.number().int(),
+    graphicId: z.number().int(),
+    /** The unit square's affine `[a, b, c, d, e, f]`, µm (§3.10). */
+    quad: z.tuple([z.number(), z.number(), z.number(), z.number(), z.number(), z.number()]),
+    crop: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }).optional(),
+  }),
 ]);
 
 const glyphMeshJson = z.object({
@@ -206,6 +214,8 @@ function passFromJson(p: z.output<typeof passJson>): Pass {
         ...(p.angles ? { angles: Float32Array.from(p.angles) } : {}),
         ...(p.haloWidthUm ? { haloWidthUm: p.haloWidthUm } : {}),
       };
+    case "image":
+      return { kind: "image", colour: p.colour, graphicId: p.graphicId, quad: [...p.quad], ...(p.crop ? { crop: { ...p.crop } } : {}) };
   }
 }
 
@@ -297,6 +307,14 @@ function passToJson(p: Pass): z.input<typeof passJson> {
         positions: Array.from(p.positions, (v) => q(v)),
         ...(p.angles ? { angles: Array.from(p.angles, (v) => q(v, 6)) } : {}),
         ...(p.haloWidthUm ? { haloWidthUm: q(p.haloWidthUm) } : {}),
+      };
+    case "image":
+      return {
+        kind: "image",
+        colour: p.colour,
+        graphicId: p.graphicId,
+        quad: p.quad.map((v) => q(v)) as [number, number, number, number, number, number],
+        ...(p.crop ? { crop: { x: q(p.crop.x, 6), y: q(p.crop.y, 6), width: q(p.crop.width, 6), height: q(p.crop.height, 6) } } : {}),
       };
   }
 
@@ -462,6 +480,15 @@ export function diffPassStreams(a: PassStream, b: PassStream, opts: DiffOptions 
           }
         }
         if ((p.haloWidthUm ?? 0) !== (t.haloWidthUm ?? 0)) where("haloWidthUm");
+        break;
+      }
+      case "image": {
+        const im = r as typeof p;
+        if (p.graphicId !== im.graphicId) where(`graphic ${p.graphicId} vs ${im.graphicId}`);
+        if (p.quad.some((v, k) => !near(v, im.quad[k]))) where(`quad [${p.quad.join(", ")}] vs [${im.quad.join(", ")}]`);
+        const crop = (c: typeof p.crop) => c ?? { x: 0, y: 0, width: 1, height: 1 };
+        const ca = crop(p.crop), cb = crop(im.crop);
+        if (!near(ca.x, cb.x, 1e-6) || !near(ca.y, cb.y, 1e-6) || !near(ca.width, cb.width, 1e-6) || !near(ca.height, cb.height, 1e-6)) where("crop");
         break;
       }
     }

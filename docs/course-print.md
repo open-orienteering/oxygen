@@ -300,8 +300,8 @@ to an event without corrections.
    §5.3).
 3. Emitted — the operators also get the frame, which they take back
    through `T_map⁻¹` and use to leave out what cannot paint inside it
-   (C13, `map-rendering.md` §5.3 "Frame culling") — as `q <frame> re W n  q <T_map> cm 4 M <passes> Q  [q <T_map>
-   cm <map images> Q]  Q`; coordinates integers in the layer unit
+   (C13, `map-rendering.md` §5.3 "Frame culling") — as `q <frame> re W n  q <T_map> cm 4 M <passes> Q  Q`, image course
+   objects among the passes (J5); coordinates integers in the layer unit
    (≤ 5 µm printed, a whole fraction of 10 µm; C11) relative to the
    window centre moved onto the 10 µm grid, each path under its own
    anchor, under a 9-decimal `cm` that folds both in (05 §5.2,
@@ -327,8 +327,8 @@ objects' `courseObjects`) with the frame, grown by the same 1 mm
 the map frame; the extra millimetre is white on the white sheet and keeps
 the ring's outer edge off the frame clip's edge, so no map ink seam shows
 there either), plus the description block
-(§6.2), in one `symbolise` call. Emitted as `q <µm → pt> cm 4 M <passes>
-[<page images>] Q` after the map layer, **unclipped**: 05 §5.1 clips the
+(§6.2), in one `symbolise` call. Emitted as `q <µm → pt> cm 4 M <passes> Q`
+(layout images among the passes, J5) after the map layer, **unclipped**: 05 §5.1 clips the
 page layer to the printable area, but legacy never clipped to
 `printMarginMm` (it only warns, `validate.ts`), and slice C keeps that.
 
@@ -336,7 +336,10 @@ page layer to the printable area, but legacy never clipped to
 course layer's completed stack (`layer.colours`, upper white included,
 ending with the toner saver white when the map layer draws one),
 then `#ffffff` and the block's ink when a block is drawn, then the hex
-colours of page objects in first-use order (`withObjectColours`). So a
+colours of page objects in first-use order (`withObjectColours`), then —
+only when a layout image is on the page — `page:graphics`, the row
+every layout image draws in (J5), so a layout graphic covers every other
+page object. So a
 page white-out prints in the stack's upper white, a page 709 in its upper
 purple at the size the map draws it (`documentFactor × scaleRatio`), and
 the block and page objects follow the map. Page-layer order is
@@ -597,17 +600,24 @@ formula for formula, as objects for the shared stage:
 
 ### 6.3 Graphics
 
-Image objects become `PageImage`s in their layer's space (an `image`
-course object: paper µm under `T_map`, so it turns with a rotated window;
-a page-anchored layout object: page µm). The composer takes PNG bytes per graphic id; `writePage`
-embeds each distinct PNG once (`/Subtype /Image`, `Im<n>` in first-use
-order) and draws it `q [<rect> re W n] <w 0 0 h x y> cm /Imn Do Q`,
-stretched to the rectangle like the legacy `preserveAspectRatio="none"`,
-the crop's part filling it under a clip. An image without bytes is
-skipped with `IMAGE_MISSING`. A `PageImage` also carries the object's
-`opacity`, `blend`, `rotationDeg`, `flipH` and `flipV` (J4; each only off
-its default, from `CourseLayerImage` for the map layer): **carried, not
-yet drawn** — `writePage` draws the image as above until J5's image pass.
+Image objects are **image passes** in their layer's stream (J5,
+`map-rendering.md` §3.10): an `image` course object in the map layer's
+`course:graphics` row (paper µm under `T_map`, so it turns with a rotated
+window; below upper purple, so control circles and numbers draw over
+it), a layout object in the page layer's `page:graphics` row (page µm,
+on top of the page objects). Its quad carries the box, the flips and the
+rotation; its pass the opacity and blend (course-layer.md §3.6
+"Images"). The composer also lists each placement as a `PageImage`
+`{ layer, graphicId, sizeUm, crop? }` — the fetch list: which graphics
+to load, and the placed size an SVG is rasterised to (`svgRasterBox`).
+`writePage` embeds each distinct PNG once, before either layer is
+written (`/Subtype /Image`, `Im<n>` in first-use order; RGB with an
+`/SMask` when the PNG has alpha), and hands the names to both layers'
+operators, which draw `q <quad> cm [0 0 1 1 re W n <crop> cm] /Imn Do
+Q` in stream order — stretched to the box like the legacy
+`preserveAspectRatio="none"`, the crop's part filling it. A placement
+without bytes is skipped with `IMAGE_MISSING` (one warning each); a page
+without images writes the same bytes as before J5 (a digest test).
 
 **SVG logos** are rasterised in the API at render time (05 §5.7 a), so
 `graphics` rows stay as uploaded: resvg at 600 dpi of the placed size
@@ -753,9 +763,9 @@ lines drawn by the library; images DeviceRGB in `cmyk`.
 |---|---|
 | `print/__tests__/page.test.ts` | `T_map` against `mapToPage` (0°, ±rotation), inverse, frame in map space, `flipPageObject` (J4: rotation, flips, opacity and blend kept), `transformPassStream` (slices kept, widths / taper / glyph instances / text scaled and turned, hatch lines on the transformed lines, J4: each pass's opacity and blend kept) |
 | `print/__tests__/description.test.ts` | every `IOF_SYMBOLS` key converts; 2.4 one fill, 1.10 one disc, 0.3 two strokes + disc, Bézier flags; block size and position, border, thick / thin rules, header sizes and weight, F text 0.34 × cell, pictograms centred at 0.8 × cell, one symbol per key |
-| `print/__tests__/compose.test.ts` | one colour-sorted map stream with lower purple < black < upper purple; block text / rules / pictograms on appended colours; no block → empty page layer; map ring outer boundary = frame (+1 mm) through `T_map⁻¹` in the toner saver white, page ring = frame + 1 mm, page white-out at upper white; P1: with a 709 area and a course text outside a map toner saver, its ring is the map layer's last pass (the page layer still draws after); placeholders; rotated `T_map`; images in layer space; J4: image opacity / blend / rotation / flips on the page images of both layers, streams unchanged; `CourseStackError`; auto cuts off = the stream without cut features (D17) |
+| `print/__tests__/compose.test.ts` | one colour-sorted map stream with lower purple < black < upper purple; block text / rules / pictograms on appended colours; no block → empty page layer; map ring outer boundary = frame (+1 mm) through `T_map⁻¹` in the toner saver white, page ring = frame + 1 mm, page white-out at upper white; P1: with a 709 area and a course text outside a map toner saver, its ring is the map layer's last pass (the page layer still draws after); placeholders; rotated `T_map`; images in layer space; J4: image opacity / blend / rotation / flips on the page images of both layers; J5: an image course object and a layout image as image passes (course:graphics below upper purple, page:graphics last), each listed as a `PageImage` with its `sizeUm`, no `page:graphics` row without a layout image; `CourseStackError`; auto cuts off = the stream without cut features (D17) |
 | `print/__tests__/writer.test.ts` (C8) | a bold text symbol and a regular one embed two font objects, `…+LiberationSans` and `…+LiberationSans-Bold` |
-| `print/__tests__/write-page.test.ts` | operator order (sheet, frame clip, `T_map` `cm`, page `cm`), no `rg` in `cmyk` / no `k` in `rgb`, rotated `cm`, two pages sharing font, glyph forms and image XObject, page labels and outlines, `/Measure /GEO` (SWEREF99 TM corners near 58.6° N 15° E, rotated corners), deterministic bytes, missing image warning, an object far outside the frame absent from the content stream (C13) |
+| `print/__tests__/write-page.test.ts` | operator order (sheet, frame clip, `T_map` `cm`, page `cm`), no `rg` in `cmyk` / no `k` in `rgb`, rotated `cm`, two pages sharing font, glyph forms and image XObject, page labels and outlines, `/Measure /GEO` (SWEREF99 TM corners near 58.6° N 15° E, rotated corners), deterministic bytes, missing image warning, an object far outside the frame absent from the content stream (C13); J5: the four image-less page scenes' bytes unchanged (sha256 in `rgb` and `cmyk`), an image drawn by its quad as the layer's last op, an alpha PNG with an `/SMask` |
 | `print/__tests__/isomorphic.test.ts` | no Node API, `Buffer`, `process`, `setImmediate`, `worker_threads`, sharp or resvg in any file the print module or the layout half (`course-maps/{resolve-layout,resolve-sheet,sheet-rows}.ts`) reaches, transitively; the package root reaches neither `print/writer.ts` nor `@cantoo/pdf-lib` (G13) |
 | `print/__tests__/course-pages.test.ts` (G13) | `renderCoursePages` with fonts as input: equal deterministic bytes, copies and `onPage`, `yieldToHost` once per composed sheet, a PNG embedded, an SVG through the injected rasteriser once per size, no rasteriser → `SVG_RASTER` and the PDF still written; `svgRasterBox`; `pageInputFor` |
 | `print/__tests__/prepared-document.test.ts` (G13) | `prepareDocument`: decode once per key, the last two kept, a concurrent decode shared, a failed one forgotten; `objectsNear` by extent plus margin |
@@ -765,7 +775,7 @@ lines drawn by the library; images DeviceRGB in `cmyk`.
 | `packages/api/src/__tests__/integration/course-maps.test.ts` "creates, duplicates and applies…", "resolveSheet: a template previewed…" (E6; E-pages read both through `resolveSheet`, `previewLayout` gone) | a course with no structure and no GeoJSON resolves start → controls → finish (the event's first start / finish) and its description rows; a template alone resolves centred on the map origin |
 | `packages/api/src/__tests__/integration/course-print.test.ts` | the E2E fixture map pinned on a `vector` event: legacy event → no print document; two sheets → one PDF of two A4 pages, `TrimBox`, labels, outlines, Type0 / CIDFontType2 shared, frame clip and `T_map`, no `rg`, PNG and rasterised SVG logos shared (600 dpi), `/Measure /GEO` of the fixture's georeference, deterministic bytes |
 | `packages/api/src/render/__tests__/page-raster.test.ts` | the page oracle: white outside the frame and the ring, map inside, page box on top; rotated building where `T_map` puts it; block position on A4; J4: the layered Multiply product at a probe pixel, `backdropPng` byte for byte at supersample 2 |
-| `packages/api/src/render/__tests__/golden-files.test.ts` | `page-sprint-a4`, `page-ring`, `page-rotated`, `page-objects-alpha` (J4: a 50 % filled and stroked rectangle, a Multiply rectangle over map and purple, a 30° white-out at 60 %, a 20° text at 50 %, a 50 % page 709, a 50 % course white-out and a turned course text) match the page oracle; `descriptions-a4` matches the description-sheet oracle (F11) |
+| `packages/api/src/render/__tests__/golden-files.test.ts` | `page-sprint-a4`, `page-ring`, `page-rotated`, `page-objects-alpha` (J4: a 50 % filled and stroked rectangle, a Multiply rectangle over map and purple, a 30° white-out at 60 %, a 20° text at 50 %, a 50 % page 709, a 50 % course white-out and a turned course text), `page-graphics` (J5: the lucka PNG around control 31 under its circle and number, turned 15° at 70 % around control 32, a Multiply page image over map and purple, a striped RGB graphic cropped, flipped and turned −20°) match the page oracle; `descriptions-a4` matches the description-sheet oracle (F11) |
 | `print/__tests__/description-sheet.test.ts` (F11) | §6.4: a 14-row block 4 × 3 / 3 × 2 / 3 × 2 per page at 5 / 6 / 7 mm; placement inside the margin; `count` (runners + vacancies, at least 1), a number, `fill`; 13 copies at 5 mm → two pages of one class; classes in order, never sharing a page; the gap only between blocks (0 / 20 / 30 mm); `DESCRIPTION_TOO_TALL`; the writer: one A4 page per tiled page labelled by class, one outline item each, the white sheet first, no `rg` in `cmyk` / no `k` in `rgb`, the XObject set the same for one page and three, deterministic bytes |
 
 The page goldens (`e2e/__golden__/map-gl/page-*.png`, 05 §7 tier 3) are
@@ -986,7 +996,7 @@ selection, order, copies and set of caps for both routes.
 
 ```ts
 interface PrintJob {
-  version: 2;                       // PRINT_JOB_VERSION; a host refuses another (1: G15, no patch)
+  version: 3;                       // PRINT_JOB_VERSION; a host refuses another (1: G15, no patch; 2: before J5's image passes)
   document: {
     hash: string;
     rotationCorrectionDeg: number;
@@ -1202,7 +1212,10 @@ downloads from the server already differ (§3.2).
 - *Patch* (G14): the job's own `document.patch` (§8.5), applied by the
   same `prepareDocument` the server's worker runs, so an event's
   corrections print the same on the device; the client composes job
-  version 2 (`DEVICE_PRINT_JOB_VERSION`).
+  version 3 (`DEVICE_PRINT_JOB_VERSION`; J5 raised it, since a device
+  built before image passes would print graphics without their
+  rotation, opacity or place under upper purple). A job stored offline
+  at version 2 reads as not stored and is prepared again.
 - *Writer*: `@cantoo/pdf-lib` with fflate's `zlibSync` — pure
   JavaScript, the same code in Node and the browser (§3.2).
 - *Sorting*: `compareLabels` (`course-maps/collate.ts`,
@@ -1559,12 +1572,18 @@ pixels beyond 16 levels; scenes not listed are 0.000 % in all columns):
 | `page-ring` | 0.057 | — | 0.045 |
 | `page-rotated` | 0.027 | — | 0.015 |
 | `page-objects-alpha` (J4) | 0.008 | — | 0.003 |
+| `page-graphics` (J5) | 0.025 | — | 0.014 |
 
 J1 (2026-11-18; poppler 24.02): the alpha scenes `alpha-passes`,
 `alpha-text` and `blend-multiply` measure 0.000 % in all three columns;
 re-measured after J3 halved `alpha-text`'s halo (250 µm): still 0.000 %.
 J4 (2026-11-18, poppler 24.02): `page-objects-alpha` at introduction,
 with the layered page oracle (§7.5) for its Multiply rectangle.
+J5 (2026-11-18, poppler 24.02): `page-graphics` at introduction. With
+resvg's default smooth sampling it measured 0.893 % / 0.879 % (every
+band edge of the 64 px lucka enlarged 25× differed); poppler draws an
+image without `/Interpolate` nearest-neighbour, so the oracle does too
+(`image-rendering="optimizeSpeed"`, `map-rendering.md` §5.1).
 
 C11 (2026-10-24) re-measured `rgb` with the layer unit: every ratio
 within 0.014 pp of the µm encoding's (largest: `lib-text-layout`
@@ -1904,8 +1923,6 @@ The tool's own tests (`print-run.test.ts`, `measure-print.test.mjs`,
   (`pdftocairo`, the PDF tier) and pass `qpdf --check`; a real printer or
   RIP is unverified until the manual print checkpoint after J5. A PDF/X
   profile (Pending above) must allow or flatten them.
-- **Image opacity, blend, rotation and flip** (J4 → J5): stored and
-  carried on `PageImage` (§6.3), drawn from J5's image pass.
 - **PDF size** (rows C11, C13, done): Club-full A4 at 1:10 000 is
   917 kB and Sprint A3 654 kB (§11.5); 05 Appendix B's 0.25 / 0.5 MB
   assumed 6.7× / 1.5× fewer path points than the windows hold and the

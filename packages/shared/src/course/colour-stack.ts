@@ -31,13 +31,35 @@ export function courseColourStack(colours: readonly DocumentColour[]): CourseCol
   if (upper === undefined || !index.has("purple-lower")) {
     throw new CourseStackError("document colour stack is not aligned (no lower / upper purple); re-match the document");
   }
-  if (index.has("white-upper")) return { colours: [...colours], remap: null, index };
-  const white = iof2024Palette.find((p) => p.id === "white-upper")!;
+  const hasWhite = index.has("white-upper");
+  const hasGraphics = colours.some((c) => c.id === COURSE_GRAPHICS_ID);
+  if (hasWhite && hasGraphics) return { colours: [...colours], remap: null, index };
+  // Directly below upper purple, in this order: upper white, then the graphics row (J5).
+  const added: DocumentColour[] = [];
+  if (!hasWhite) {
+    const white = iof2024Palette.find((p) => p.id === "white-upper")!;
+    added.push({ id: "iof2024:white-upper", name: white.name, cmyk: [...white.cmyk], paletteIds: ["white-upper"] });
+  }
+  if (!hasGraphics) added.push(courseGraphicsRow());
   const out = [...colours];
-  out.splice(upper, 0, { id: "iof2024:white-upper", name: white.name, cmyk: [...white.cmyk], paletteIds: ["white-upper"] });
-  const remap = colours.map((_, i) => (i < upper ? i : i + 1));
+  out.splice(upper, 0, ...added);
+  const remap = colours.map((_, i) => (i < upper ? i : i + added.length));
   return { colours: out, remap, index: paletteIndexOfStack(out) };
 }
+
+/**
+ * The course layer's graphics row (J5, user 2026-11-18 Q1 = A): `image`
+ * course objects draw here, above upper white and every map colour and
+ * below upper purple, so numbers, 7xx lines and object text print over a
+ * graphic. Always in the stack (an empty row draws nothing), so a course
+ * shown or not never moves a map colour's index (map-rendering §5.2).
+ * No palette id and CMYK 0/0/0/0: it is found by id and never inks.
+ */
+export const COURSE_GRAPHICS_ID = "course:graphics";
+export const courseGraphicsRow = (): DocumentColour => ({ id: COURSE_GRAPHICS_ID, name: "Course graphics", cmyk: [0, 0, 0, 0] });
+
+/** The page layer's graphics row (J5): appended last when a page draws an image, so page images sit on top. */
+export const PAGE_GRAPHICS_ID = "page:graphics";
 
 /** Naive sRGB → CMYK, the inverse of `cmykToHex` (03 §2.3). */
 export function hexToCmyk(hex: string): [number, number, number, number] {

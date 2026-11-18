@@ -13,6 +13,7 @@ import type { PaperFrame } from "../../geo/projection.js";
 import { liberation } from "../../render/__tests__/fonts.js";
 import { type Pass, makePath } from "../../render/pass-stream.js";
 import { pageScene } from "../__fixtures__/pages.js";
+import { encodeRgbaPng, luckaPng } from "../__fixtures__/png.js";
 import { composePage, writePage } from "../compose.js";
 import type { ColourMode } from "../colour.js";
 import type { PageInput } from "../page.js";
@@ -27,6 +28,18 @@ const fonts = () => [liberation().sans, liberation().narrow];
 /** A 1 × 1 PNG. */
 const PNG = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="), (c) => c.charCodeAt(0));
 const geo: PaperFrame = { unitsPerMm: 1000, mapScale: 10000, georeferencing: { crs: { authority: "EPSG", code: 3006, name: "SWEREF99 TM" }, paperOrigin: { x: 500000, y: 6500000 } } };
+
+/** SHA-256 (first 16 hex) of each image-less scene's deterministic PDF on the commit before J5. */
+const BASELINE_DIGESTS: Record<string, string> = {
+  "page-objects-alpha cmyk": "d78e3fbb79a3e7b1",
+  "page-objects-alpha rgb": "7fde054d52e0c823",
+  "page-ring cmyk": "ba0091325e18c231",
+  "page-ring rgb": "8a4fcd3eaa330017",
+  "page-rotated cmyk": "46f1fa4b6750e65a",
+  "page-rotated rgb": "b3afcf12d2dcb72c",
+  "page-sprint-a4 cmyk": "2a5980f0fead5319",
+  "page-sprint-a4 rgb": "d563c84c601df8b4",
+};
 
 async function build(inputs: PageInput[], mode: ColourMode = "cmyk"): Promise<Uint8Array> {
   const w = await PdfWriter.create({ faces, deterministic: true, info: { title: "Test · maps" } });
@@ -203,7 +216,11 @@ describe("writePage", () => {
     const im = xo[0].get(PDFName.of("Im0"));
     expect(lookup<PDFRawStream>(doc, im).dict.get(PDFName.of("Subtype"))).toEqual(PDFName.of("Image"));
     // Page µm under the page layer's cm: (10, 10) mm from the top-left, 20 × 10 mm → lower-left (10, 277) mm.
-    expect(content(doc, 0)).toContain("q 20000 0 0 10000 10000 277000 cm /Im0 Do Q");
+    // J5: an image pass in the page layer's last row, `page:graphics`, in the layer's 5 µm unit: (10, 10) mm from
+    // the top-left, 20 × 10 mm → lower-left (10, 277) mm; it is the layer's last painting operator.
+    const ops = content(doc, 0);
+    expect(ops).toContain("q 4000 0 0 2000 2000 55400 cm /Im0 Do Q");
+    expect(ops.trimEnd().split("\n").slice(-2)).toEqual(["q 4000 0 0 2000 2000 55400 cm /Im0 Do Q", "Q"]);
   });
 
   it("page labels and one outline item per page", async () => {
@@ -241,6 +258,35 @@ describe("writePage", () => {
     const a = await build([withLogo(pageScene("page-sprint-a4")), pageScene("page-rotated")]);
     const b = await build([withLogo(pageScene("page-sprint-a4")), pageScene("page-rotated")]);
     expect(Array.from(a).join(",")).toBe(Array.from(b).join(","));
+  });
+
+  it("image-less pages keep their bytes (J5 baseline, recorded before images became passes)", async () => {
+    const { createHash } = await import("node:crypto");
+    const digest = async (name: Parameters<typeof pageScene>[0], mode: ColourMode) => createHash("sha256").update(await build([pageScene(name)], mode) as unknown as string).digest("hex").slice(0, 16);
+    const got: Record<string, string> = {};
+    for (const name of ["page-sprint-a4", "page-ring", "page-rotated", "page-objects-alpha"] as const) {
+      for (const mode of ["rgb", "cmyk"] as const) got[`${name} ${mode}`] = await digest(name, mode);
+    }
+    expect(got).toEqual(BASELINE_DIGESTS);
+  });
+
+  it("J5: a PNG with alpha is embedded with an /SMask, an opaque one without; equal bytes are one XObject", async () => {
+    const w = await PdfWriter.create({ faces, deterministic: true });
+    const lucka = luckaPng(16);
+    const opaque = encodeRgbaPng(2, 2, new Uint8Array(12).fill(90), 3);
+    const input = { ...pageScene("page-ring"), objects: [
+      { id: "a", anchor: "page" as const, kind: "image" as const, graphicId: 1, x: 10, y: 10, width: 10, height: 10 },
+      { id: "b", anchor: "page" as const, kind: "image" as const, graphicId: 2, x: 30, y: 10, width: 10, height: 10 },
+      { id: "c", anchor: "page" as const, kind: "image" as const, graphicId: 3, x: 50, y: 10, width: 10, height: 10 },
+    ] };
+    await writePage(w, composePage(input, fonts()), { mode: "cmyk", images: new Map([[1, lucka], [2, opaque], [3, lucka]]) });
+    const doc = await PDFDocument.load(await w.save());
+    const xo = doc.getPage(0).node.Resources()!.lookup(PDFName.of("XObject"), PDFDict);
+    expect(xo.keys().map(String).filter((k) => k.startsWith("/Im")).sort()).toEqual(["/Im0", "/Im1"]);
+    const dict = (n: string) => lookup<PDFRawStream>(doc, xo.get(PDFName.of(n))).dict;
+    expect(dict("Im0").get(PDFName.of("SMask"))).toBeInstanceOf(PDFRef);
+    expect(dict("Im1").get(PDFName.of("SMask"))).toBeUndefined();
+    expect(content(doc, 0).match(/\/Im0 Do/g)).toHaveLength(2);
   });
 
   it("an image object without bytes is skipped with a warning", async () => {

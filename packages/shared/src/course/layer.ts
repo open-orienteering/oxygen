@@ -16,7 +16,7 @@ import { COORD_FLAG } from "../render/pass-stream.js";
 import { remapRenderColours } from "../render/transform.js";
 import { circleWithGaps } from "./arcs.js";
 import { corridorGeometry } from "./corridor.js";
-import { courseColourStack, withObjectColours, withTintColours } from "./colour-stack.js";
+import { COURSE_GRAPHICS_ID, courseColourStack, withObjectColours, withTintColours } from "./colour-stack.js";
 import { deriveCourse, structuresOf } from "./derive.js";
 import { TONER_WHITE_ID, courseObjects, filterRegionOf, hasTonerSaver, objectColours } from "./objects.js";
 import { CROSSING_BODY_MM, CROSSING_SECTION_MM, CROSSING_SECTION_OFFSET_MM, courseSymbols } from "./symbols.js";
@@ -115,7 +115,8 @@ export function courseLayer(input: CourseLayerInput): CourseLayer {
   const drawsToner = (input.viewOptions.window?.length ?? 0) >= 3 && hasTonerSaver(input.objects);
   const colours = drawsToner ? [...palette.colours, TONER_WHITE] : palette.colours;
   const tonerWhite = drawsToner ? colours.length - 1 : undefined;
-  const built = courseObjects(input.objects, set, symbols, palette.indexOf, input.viewOptions, stack.index.get("purple-upper")!, tonerWhite);
+  const graphicsRow = colours.findIndex((c) => c.id === COURSE_GRAPHICS_ID);
+  const built = courseObjects(input.objects, set, symbols, palette.indexOf, input.viewOptions, stack.index.get("purple-upper")!, tonerWhite, graphicsRow);
   objects.push(...built.objects);
   if (edgeObjects.length) {
     const edgeIdx = symbols.push(set.edge) - 1;
