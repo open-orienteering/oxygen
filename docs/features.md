@@ -109,7 +109,7 @@ at once, and its export menu prints all maps or the all-controls map.
 the map canvas exactly as it prints, with shared fill modes (none / solid /
 white-out / white-out outside for ink saving / ISOM 709 out-of-bounds hatch
 with a purple-locked 0.4 mm border), solid or dashed strokes and uploaded
-SVG/PNG graphics from a per-event or club library; both preview and PDF are
+SVG/PNG graphics from a per-event or club library (a picker with thumbnails and pixel sizes; uploads up to 16 MB, a PNG larger than 4096 px is scaled down to it, transparency kept); both preview and PDF are
 rotated so meridian lines stand vertical on the page. Course overprint
 follows ISOM: circles, numbers and lines enlarge with the map when the print
 scale is larger than the base map scale (1:15000 printed at 1:7500 → 2×).

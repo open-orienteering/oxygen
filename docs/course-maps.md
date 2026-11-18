@@ -104,9 +104,21 @@ cascades through all maps and templates. Deleting a course cascades through
 its maps; deleting a template leaves maps in place with `template_id = NULL`
 so the UI can report and repair the invalid assignment.
 
-`graphics` stores uploaded SVG or PNG images (BIGSERIAL id, 2 MB cap,
-mime-checked at upload; SVG content is parsed and rejected if it contains
-scripts, event handlers or external references). `event_id NULL` marks a
+`graphics` stores uploaded SVG or PNG images (BIGSERIAL id, mime-checked
+at upload; SVG content is parsed and rejected if it contains scripts,
+event handlers or external references). An upload may be up to 16 MiB
+and a stored row at most 8 MiB (J2): a PNG whose longer side is over
+4096 px is resampled to 4096 by `sharp` (aspect and alpha kept, metadata
+dropped); a PNG still over 8 MiB is resampled to 3072, then 2048 px, and
+refused only beyond that (user 2026-11-18, question 12); a PNG that fits
+is stored byte for byte; an SVG over 8 MiB is refused. A PNG over 64
+megapixels is refused before decoding. `width_px` / `height_px`
+(nullable) hold the pixel size: a PNG's own, an SVG's viewBox scaled so
+its longer side is 4096 px (question 14). Written at upload, copied by
+`saveToClub`, computed by the venue's snapshot import; the migration
+fills PNG rows from their IHDR and `graphics.list` fills any row still
+NULL the first time it reads it (`course-maps/graphics.ts`
+`prepareGraphicUpload`, `graphicPixelSize`). `event_id NULL` marks a
 club-library graphic shared across events; event rows cascade on event
 delete. An `image` layout object references a graphic by id; print
 embeds it in the page (PNG as is, SVG rasterised in the API at render
@@ -184,7 +196,9 @@ Event-scoped tRPC routers:
   §6); `saveLayout` and `update` take an optional `baseVersion` (a stale
   one is `CONFLICT` with the row now; omitted, last writer wins) and
   answer the new `version`
-- `graphics` — list (event + club), upload (base64), saveToClub, delete
+- `graphics` — list (event + club, each with `widthPx` / `heightPx`),
+  upload (base64, ≤ 16 MiB, prepared as in Data model), saveToClub,
+  delete
 
 REST:
 
@@ -202,7 +216,14 @@ GET /api/maps/:nameId/maps.pdf
 GET /api/maps/:nameId/print-job?<the maps.pdf query>   (the job maps.pdf composes, JSON; G15; version 2 carries the event's patch, G14)
 GET /api/maps/:nameId/graphics/:id
 GET /api/maps/:nameId/graphics/:id/print.png[?w=&h=]   (the PNG a print embeds; SVG needs w, h; G15)
+GET /api/maps/:nameId/graphics/:id/thumb.png            (≤ 256 px on the longer side, never enlarged; immutable cache; J2)
 ```
+
+The three graphic routes answer `courses.view`, and the event's kiosk key
+(header `x-kiosk-key` or `?k=`; J2, user 2026-11-18 Q2: the kiosk and
+viewer draw images). `thumb.png` resamples a PNG with `sharp` and
+rasterises an SVG with resvg in a print worker; stored bytes never
+change, so it is `Cache-Control: private, max-age=31536000, immutable`.
 
 All require `courses.view`. `print-job` has `maps.pdf`'s selection,
 order, caps and 400s; a host composes it with `renderPrintJob`

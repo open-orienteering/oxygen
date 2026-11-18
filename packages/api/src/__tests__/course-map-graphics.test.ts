@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { PrintSheet } from "@oxygen/shared/print";
 import {
   validateGraphicUpload,
-  MAX_GRAPHIC_BYTES,
+  MAX_GRAPHIC_UPLOAD_BYTES,
   parseRasterBox,
   sheetGraphicIds,
 } from "../course-maps/graphics.js";
@@ -17,7 +17,7 @@ describe("graphic upload validation", () => {
     expect(validateGraphicUpload(png)).toBe("image/png");
     expect(() => validateGraphicUpload(Buffer.alloc(0))).toThrow("empty");
     expect(() =>
-      validateGraphicUpload(Buffer.alloc(MAX_GRAPHIC_BYTES + 1)),
+      validateGraphicUpload(Buffer.alloc(MAX_GRAPHIC_UPLOAD_BYTES + 1)),
     ).toThrow("limited");
   });
 

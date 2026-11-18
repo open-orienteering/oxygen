@@ -138,7 +138,7 @@ test.describe("Course editor layout (docs/course-layout.md)", () => {
     }
   });
 
-  test("graphics: upload an SVG, place it on the sheet, it is listed and deleted", async ({ page }) => {
+  test("graphics: upload an SVG, its thumbnail and size show, place it, save it to the club, delete both", async ({ page }) => {
     await openEditor(page);
     const nameId = nameIdOf(page);
     const { sheet, drop } = await sheetFixture("Layout graphic");
@@ -158,7 +158,13 @@ test.describe("Course editor layout (docs/course-layout.md)", () => {
         buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="#336699"/></svg>'),
       });
       await uploaded;
-      const placeButton = page.locator('[data-testid^="editor-layout-graphic-place-"]').last();
+      // J2: the picker's tile shows the thumbnail and the SVG's size at 4096 px.
+      const tile = page.getByTestId("editor-layout-graphic-event").getByTestId("editor-layout-graphic-tile").filter({ hasText: "e2e-logo.svg" }).last();
+      await expect(tile).toHaveAttribute("data-club", "false");
+      const graphicId = Number(await tile.getAttribute("data-graphic-id"));
+      await expect(tile).toContainText("4096 × 4096 px");
+      await expect.poll(() => tile.getByTestId("editor-layout-graphic-thumb").evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth)).toBe(256);
+      const placeButton = page.getByTestId(`editor-layout-graphic-place-${graphicId}`);
       await expect(placeButton).toBeVisible();
       await placeButton.click();
       await expect(placeButton).toHaveAttribute("aria-pressed", "true");
@@ -180,6 +186,27 @@ test.describe("Course editor layout (docs/course-layout.md)", () => {
       await deleted;
       await expect(row).toHaveCount(0);
       await expect.poll(async () => (await images()).length).toBe(0);
+
+      // Saved to the club library: a club tile; deleted there with a second, confirming click.
+      const saved = waitForTrpc(page, "graphics.saveToClub");
+      await page.getByTestId(`editor-layout-graphic-save-club-${graphicId}`).click();
+      await saved;
+      const clubTile = page.getByTestId("editor-layout-graphic-club").getByTestId("editor-layout-graphic-tile").filter({ hasText: "e2e-logo.svg" });
+      await expect(clubTile).toHaveCount(1);
+      const clubId = Number(await clubTile.getAttribute("data-graphic-id"));
+      const del = page.getByTestId(`editor-layout-graphic-delete-${clubId}`);
+      await del.click();
+      await expect(clubTile).toHaveCount(1);
+      const removed = waitForTrpc(page, "graphics.delete");
+      await del.click();
+      await removed;
+      await expect(clubTile).toHaveCount(0);
+      const ownDelete = page.getByTestId(`editor-layout-graphic-delete-${graphicId}`);
+      await ownDelete.click();
+      const removedOwn = waitForTrpc(page, "graphics.delete");
+      await ownDelete.click();
+      await removedOwn;
+      await expect(page.locator(`[data-testid="editor-layout-graphic-tile"][data-graphic-id="${graphicId}"]`)).toHaveCount(0);
     } finally {
       await drop();
     }

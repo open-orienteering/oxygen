@@ -214,7 +214,13 @@ on the 1 mm page grid with it.
 colour, width), the scope's objects (`editor-layout-object-row`)
 with the validation issues (`editor-layout-issue`, `validate.ts`'s codes,
 computed live from the snapshot), the graphics library
-(`editor-layout-graphics`: place, upload); then the template's key (§5),
+(`editor-layout-graphics`, the `GraphicPicker`, J2: the event's graphics,
+then the club library's, as tiles `editor-layout-graphic-tile` with a
+`thumb.png` thumbnail, name, pixel size and bytes; the thumbnail is the
+Place button `editor-layout-graphic-place-<id>`; *Save to club*
+`…-save-club-<id>` on an event graphic; *Delete* `…-delete-<id>`, a
+second click confirming; upload `…-upload`, PNG or SVG up to 16 MiB,
+checked before the file is read); then the template's key (§5),
 the classes (§6) and **Club templates** (`editor-layout-club`, collapsed;
 E-pages): the club library's rows (`editor-layout-club-row-<id>`) with
 *Bring in* (`…-club-import-<id>`: `mapTemplate.loadFromClub` under a free
@@ -789,7 +795,7 @@ of the event, course seq (the event's last), sort order, seq.
 | unit (web) | `print/__tests__/imports.test.ts` "mapsPdfTarget", `print/__tests__/client.test.ts` | G16 (§7 "Where the PDF is made"): every map entry of Export ▾ goes to the device path with its query, descriptions / IOF XML / Purple Pen do not; the device path and each fallback (`course-print.md` §9.1) |
 | E2E | `e2e/course-maps.spec.ts` "the retired Maps and Map templates pages redirect…" | E-pages: `/maps?course=1` → `/courses?course=1`, `/map-templates` → Layout mode; neither tab is shown |
 | E2E | `e2e/course-editor-layout.spec.ts` "Course editor auto templates" | Export ▾ → this course creates the sheet and prints one page; the auto badge and the sheet key; a class scale makes a class sheet; Class view shows `1:15000`; this class exports; Create extra template moves the course, its row moves it back, undo moves it again |
-| E2E | `e2e/course-editor-layout.spec.ts` "Course editor layout" "graphics: upload an SVG…" | E3 (ported from `course-maps.spec.ts`'s legacy layout editor): the Graphics section uploads an SVG (`graphics.upload`), its Place button arms the image tool, a click on the page places it (one `saveLayout`, an `image` row in the list and in `courseMap.get`); selected from the list and deleted, gone from both |
+| E2E | `e2e/course-editor-layout.spec.ts` "Course editor layout" "graphics: upload an SVG…" | E3 (ported from `course-maps.spec.ts`'s legacy layout editor): the Graphics section uploads an SVG (`graphics.upload`), its Place button arms the image tool, a click on the page places it (one `saveLayout`, an `image` row in the list and in `courseMap.get`); selected from the list and deleted, gone from both; J2: the tile's thumbnail loads at 256 px and shows "4096 × 4096 px", *Save to club* adds a club tile, a confirmed delete removes each |
 | E2E | `e2e/course-editor-layout.spec.ts` "Course editor layout" "P draws a polygon…" | D16, F18: `P`, two Alt-clicks (corners), a click-drag and a plain click, closed on the first vertex → one `saveLayout`; `courseMap.get` has a closed path of 4 points whose dragged vertex has `hOut` down-right on the page and `hIn` opposite, the plain click's vertex smooth handles, the Alt-clicks' none; the path selected, `V` armed, 4 handles and 4 grips; a double-click on the top edge → 5 points and a focused handle, `Delete` → 4; `Escape` discards a polygon being drawn (no write, `V` armed), `Enter` closes one of three clicks (one write); the sheet's `maps.pdf?maps=` draws more `c` operators than before |
 | E2E | `e2e/course-editor-layout.spec.ts` "Course editor layout" | from the Courses page (the `/maps?course=` redirect, the row's *Edit layout* link into Layout mode) to the sheet; the sheet shapes; `H` places a header, the inspector makes it a long 10 mm text, and ink appears where the page layer draws it; the frame selected and dragged → `courseMap.get`'s centre moved by the drag; undo restores it; the `maps.pdf?maps=` route answers one A4 page; the template link opens template scope, an orientation change writes `mapTemplate.update`; an old `/map-templates?template=` link opens template scope |
 | E2E | `e2e/course-editor-placing.spec.ts` "P1: …" "Layout mode: a toner saver hides…" | P1: on a probe course sheet in Layout mode a 709 `oob_area` (`courseObject.create`) shows purple on the canvas (`inkIn`); with a `toner_saver` elsewhere on the map, no purple pixels are left inside the 709 square (638 purple pixels with the ring at upper white) |

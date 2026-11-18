@@ -412,6 +412,7 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
   const inspector = (
     <div className="shrink-0 flex flex-col">
     <LayoutInspector
+      nameId={a.nameId}
       loading={a.enabled && (sheets.isLoading || (!!input && query.isLoading))}
       data={data}
       snap={snap}

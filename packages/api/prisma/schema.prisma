@@ -1143,6 +1143,9 @@ model Graphic {
   mime      String
   data      Bytes
   sizeBytes Int      @map("size_bytes")
+  /// Pixel size (J2): a PNG's own; an SVG's viewBox scaled to 4096 px on its longer side. NULL until filled.
+  widthPx   Int?     @map("width_px")
+  heightPx  Int?     @map("height_px")
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 

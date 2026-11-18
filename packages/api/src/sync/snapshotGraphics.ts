@@ -16,6 +16,7 @@
 import { createHash } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import type { Prisma, PrismaClient } from "../generated/prisma/client.js";
+import { graphicPixelSize } from "../course-maps/graphics.js";
 import { sliceRanges } from "../map-store/source-routes.js";
 import {
   EXPORT_BLOB_MAX_BYTES,
@@ -259,6 +260,8 @@ export async function importSnapshotGraphics(
         mime: g.mime,
         data: Uint8Array.from(bytes),
         sizeBytes: g.sizeBytes,
+        // Computed here, not carried: the wire format stays as it is (J2).
+        ...(graphicPixelSize(bytes, g.mime) ?? {}),
         createdAt: new Date(g.createdAt),
         updatedAt: new Date(g.updatedAt),
       },

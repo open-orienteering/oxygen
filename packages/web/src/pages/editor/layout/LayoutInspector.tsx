@@ -7,12 +7,11 @@
  * library for the image tool.
  */
 
-import { useRef, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { CourseMapObject, MapFillMode, MapTemplateSettings } from "@oxygen/shared";
-import { trpc } from "../../../lib/trpc";
 import { fillModePatch } from "../../../lib/map-layout-editor";
-import { fileToBase64 } from "../../../lib/file-to-base64";
+import { GraphicPicker } from "../../../components/GraphicPicker";
 import type { SheetGeometry } from "../../../lib/editor/layout";
 import { InspectorSection } from "../Inspector";
 import type { LayoutSelection, LayoutTarget, LayoutTool } from "./bindings";
@@ -28,6 +27,8 @@ function objectLabel(o: CourseMapObject, t: T): string {
 }
 
 export function LayoutInspector(p: {
+  /** The event, for the graphics' thumbnails. */
+  nameId: string;
   loading: boolean;
   data: EditorSheet | null;
   snap: LayoutSnapshot | null;
@@ -195,7 +196,7 @@ export function LayoutInspector(p: {
           ))}
         </ul>
       </InspectorSection>
-      <GraphicsSection t={t} active={p.tool.kind === "place" && p.tool.what === "image" ? p.tool.graphicId ?? null : null} onPlace={p.onPlaceImage} />
+      <GraphicsSection t={t} nameId={p.nameId} canEdit={p.canEdit} active={p.tool.kind === "place" && p.tool.what === "image" ? p.tool.graphicId ?? null : null} onPlace={p.onPlaceImage} />
       <span hidden data-testid="editor-layout-state" data-centre={`${snap.centre.x},${snap.centre.y}`} data-print-scale={snap.printScale}
         data-description={JSON.stringify(snap.description)} />
     </>
@@ -246,33 +247,11 @@ function ObjectProperties({ o, t, purple, onPatch }: { o: CourseMapObject; t: T;
   );
 }
 
-function GraphicsSection({ t, active, onPlace }: { t: T; active: number | null; onPlace: (id: number) => void }) {
-  const utils = trpc.useUtils();
-  const graphics = trpc.graphics.list.useQuery();
-  const upload = trpc.graphics.upload.useMutation({ onSuccess: () => void utils.graphics.list.invalidate() });
-  const input = useRef<HTMLInputElement | null>(null);
+function GraphicsSection({ t, nameId, active, canEdit, onPlace }: { t: T; nameId: string; active: number | null; canEdit: boolean; onPlace: (id: number) => void }) {
   return (
     <InspectorSection title={t("layoutGraphics")} testId="editor-layout-graphics" defaultOpen={false}>
-      <div className="px-2.5 pb-2 space-y-1">
-        {(graphics.data ?? []).length === 0 && <p className="text-[11px] text-slate-400">{t("layoutNoGraphics")}</p>}
-        {(graphics.data ?? []).map((g) => (
-          <div key={g.id} className="flex items-center gap-1.5 text-[11px] text-slate-600">
-            <span className="truncate flex-1">{g.name}</span>
-            <button type="button" data-testid={`editor-layout-graphic-place-${g.id}`} aria-pressed={active === g.id} onClick={() => onPlace(g.id)}
-              className={`px-1.5 py-0.5 rounded border cursor-pointer ${active === g.id ? "border-purple-300 bg-purple-50 text-purple-700" : "border-slate-200 hover:bg-slate-50"}`}>
-              {t("layoutPlace")}
-            </button>
-          </div>
-        ))}
-        <input ref={input} type="file" accept=".svg,.png,image/svg+xml,image/png" className="hidden" data-testid="editor-layout-graphic-upload"
-          onChange={(e) => {
-            const file = e.target.files?.[0];
-            e.target.value = "";
-            if (!file) return;
-            void fileToBase64(file).then((fileDataBase64) => upload.mutateAsync({ name: file.name, scope: "event", fileDataBase64 }));
-          }} />
-        <button type="button" onClick={() => input.current?.click()} disabled={upload.isPending}
-          className="text-[11px] text-purple-700 hover:underline cursor-pointer disabled:opacity-50">{t("layoutUpload")}</button>
+      <div className="px-2.5 pb-2">
+        <GraphicPicker nameId={nameId} active={active} onPick={onPlace} canEdit={canEdit} testIdPrefix="editor-layout-graphic" />
       </div>
     </InspectorSection>
   );

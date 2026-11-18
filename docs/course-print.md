@@ -962,6 +962,9 @@ GET /api/maps/:nameId/print-job?<the maps.pdf query>
 GET /api/maps/:nameId/graphics/:id/print.png[?w=&h=]
 ```
 
+`print.png` answers the event's kiosk key as well as `courses.view` (J2,
+`course-maps.md` API).
+
 **`print-job`** takes `maps.pdf`'s query (§8, `course-maps.md` API)
 and answers through the same builder, `buildPrintJob`
 (`course-maps/routes.ts`), which `maps.pdf` composes from: one
