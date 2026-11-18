@@ -117,7 +117,7 @@
   },
   "colours": {
     "title": "Colour layers",
-    "hint": "The order the map's colours are drawn in, bottom to top. In the IOF order every colour use stands on its IOF layer, so the course and the library's symbols never depend on how the map's colour table is ordered.",
+    "hint": "The order the map's colours are drawn in, listed top first. In the IOF order every colour use stands on its IOF layer, so the course and the library's symbols never depend on how the map's colour table is ordered.",
     "order": {
       "label": "Draw the map in",
       "iof": "the IOF order",
@@ -180,7 +180,6 @@
         "blocked": "cannot be kept"
       },
       "objects": "{{upper}} / {{lower}} objects"
-    },
-    "switching": "Drawing the map in the other order…"
+    }
   }
 }

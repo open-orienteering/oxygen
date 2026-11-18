@@ -113,6 +113,19 @@ describe("the colour panel's picture (row I6)", () => {
     expect(w.maxY).toBeLessThanOrEqual(b.maxY);
   });
 
+  it("picks the tile with the most objects, ties to the lowest row then column", () => {
+    // 200 × 100 mm (units 1/100 mm): 3 × 2 tiles of 80 mm.
+    const fake = (centres: [number, number][]) => {
+      const bboxes = new Int32Array(centres.length * 4);
+      centres.forEach(([x, y], i) => bboxes.set([x - 10, y - 10, x + 10, y + 10], i * 4));
+      return { header: { printWindow: undefined, bounds: { minX: 0, minY: 0, maxX: 20000, maxY: 10000 }, unitsPerMm: 100, objects: { count: centres.length } }, bboxes } as unknown as mapDocument.MapDocument;
+    };
+    // Two objects in column 1, row 0; one in column 0, row 1.
+    expect(colourPictureWindow(fake([[9000, 1000], [10000, 2000], [1000, 9000]]))).toEqual({ minX: 80_000, minY: 0, maxX: 160_000, maxY: 80_000 });
+    // One each in (2, 0) and (0, 1): the lowest row wins; the last column is clipped to the map.
+    expect(colourPictureWindow(fake([[1000, 9000], [17000, 1000]]))).toEqual({ minX: 160_000, minY: 0, maxX: 200_000, maxY: 80_000 });
+  });
+
   it("shows the same place in both orders, each in its own stack: the paved brown over the building only in the map's order", async () => {
     const iof = await decoded({});
     const source = await decoded({ match: { colourOrder: "source" } });

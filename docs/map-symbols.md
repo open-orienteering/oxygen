@@ -1218,7 +1218,8 @@ two orders (`matchDocument`'s `colourOrder`, recorded in
 §9.2 as it stood until I5: the mapper's knock-out order wins for
 everything they drew, and alignment only *identifies*, *inserts* and
 *flags*. §9.1 is shared by both. The per-map switch between them is row
-I6's (the user's answer 1); until then every import is `iof`.
+I6's (the user's answer 1; §9.3 "Per map (row I6)"): every import follows
+its map's setting, `iof` when the map has none.
 
 ### 9.1 Colour classes
 
@@ -2085,13 +2086,17 @@ table, `map_colour_settings`, one row per **club map series** — kept
 across its versions, so a promote or any later version is built in the
 series' order — or per **event and source file** — an event's own upload,
 kept across a re-upload of the same file; another file starts at the
-defaults. No row = the defaults. A table rather than columns: a column on
+defaults. No row = the defaults. The event's row cascades with its source
+row, which the storage GC may remove once no pin, version, document or job
+refers to it (`docs/map-storage.md` §8.1): an event that moved to another
+file and comes back to this one after that starts at the defaults again. A table rather than columns: a column on
 `map_files` would travel in the venue snapshot and the per-event dump,
 where an older box image would refuse the unknown field, and one on
 `club_maps` alone would split the setting over two homes. `course.useClubMap`
 copies the series' row to (event, the version's source), as it copies
-the rotation correction and the corrections; after that the two are
-independent (copy-on-use).
+the rotation correction and the corrections — and removes the event's row
+for that source when the series has none, so the copy is exactly the
+series'; after that the two are independent (copy-on-use).
 
 **Read by every import.** `startImportJob` resolves the setting of the
 job's target — a club map's series' (a promote's too, which targets both),
@@ -2130,8 +2135,13 @@ order from it, the other order from the document the switch would give,
 imported on the first request when no such document exists yet — the
 picture is exactly what the switch gives (decided overnight, for review;
 the alternative of re-stacking the stored document in memory would be a
-second derivation of stage 7). Its other order uses today's club
-decisions, as the switch would.
+second derivation of stage 7). Its other order uses the club decisions
+as of that first request, as the switch would then; the PNG is stored
+once, so a later decision does not redraw it (the document is then *not
+up to date* anyway). A failed import of the other order is answered 502
+and not started again for 10 minutes per instance; a running one for the
+same source, corrections and setting (a switch just pressed) is waited
+for, not doubled.
 
 **Not in I6**: the deviation overrides' controls (row I7; the stored
 shape, the job snapshot, dedup and the panel's `key` / `default` / `why`

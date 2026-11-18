@@ -161,6 +161,22 @@ describe("the colour panel's payload", () => {
     expect(v.deviations.every((x) => !x.kept)).toBe(true);
   });
 
+  it("flags a colour split only by place on both rows and names them by place (carried from I3)", () => {
+    const row = (r: number, place: "area" | "other") => ({ row: r, source: 7, role: null, place, origin: "use", objects: 2, symbols: 1, graphicObjects: 0, sourceOrdered: "no-role", ownOrder: false });
+    const report = {
+      colourStack: {
+        order: "iof",
+        layers: { rows: [row(0, "area"), row(1, "other")], split: [{ source: 7, sourceNumber: 7, roles: [null, null] }], sourceOrdered: [], noRole: [], deviations: [], purpleInk: null },
+      },
+    };
+    const colours = [0, 1].map((i) => ({ id: i ? "src:7/none:other" : "src:7", name: "Red", cmyk: [0, 100, 100, 0] as [number, number, number, number], sourceNumber: 7 }));
+    const layers = buildColourReview(HASH, { colours }, report, null).layers!;
+    expect(layers.map((l) => [l.place, l.role, l.flags.includes("split"), l.flags.includes("no-role")])).toEqual([
+      ["area", null, true, true],
+      ["other", null, true, true],
+    ]);
+  });
+
   it("has no layers in the map's own order", async () => {
     const { header, report } = await imported("colour-layers.ocd", { colourOrder: "source" });
     const v = buildColourReview(HASH, header, report, { order: "source", deviations: {} });

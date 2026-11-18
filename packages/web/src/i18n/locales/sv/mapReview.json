@@ -117,7 +117,7 @@
   },
   "colours": {
     "title": "Färglager",
-    "hint": "Ordningen kartans färger ritas i, nerifrån och upp. I IOF-ordningen ligger varje färganvändning på sitt IOF-lager, så banan och bibliotekets symboler beror aldrig på hur kartans färgtabell är ordnad.",
+    "hint": "Ordningen kartans färger ritas i, överst först. I IOF-ordningen ligger varje färganvändning på sitt IOF-lager, så banan och bibliotekets symboler beror aldrig på hur kartans färgtabell är ordnad.",
     "order": {
       "label": "Rita kartan i",
       "iof": "IOF-ordningen",
@@ -180,7 +180,6 @@
         "blocked": "kan inte behållas"
       },
       "objects": "{{upper}} / {{lower}} objekt"
-    },
-    "switching": "Ritar kartan i den andra ordningen…"
+    }
   }
 }

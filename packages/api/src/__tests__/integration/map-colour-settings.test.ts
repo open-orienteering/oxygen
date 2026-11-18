@@ -37,6 +37,7 @@ import { getImportJob, startImportJob } from "../../map-store/jobs.js";
 import { planRematch, rematchItem } from "../../map-store/rematch.js";
 import { getBlob } from "../../map-store/blob-store.js";
 import { readPreview } from "../../map-store/previews.js";
+import { resetColourPictureFailures } from "../../map-store/colour-pictures.js";
 import { registerMapPreviewRoutes } from "../../map-store/preview-routes.js";
 import { MAP_DOCUMENT_CACHE_CONTROL, resetDocumentAccessCache } from "../../map-store/routes.js";
 import type { AuthUser } from "../../auth.js";
@@ -221,6 +222,16 @@ describe("setColourOrder on a club map", () => {
   }, 90_000);
 });
 
+describe("useClubMap of a series without a setting", () => {
+  it("removes the event's own row for that source", async () => {
+    // The other club map has no row; give event A a stray one for its source first.
+    await A.db.mapColourSetting.create({ data: { eventId: A.eventId, sourceHash: otherSource, order: "source" } });
+    await as(A, setter).course.useClubMap({ clubMapId: otherClubMapId });
+    expect(await setting({ eventId: A.eventId, sourceHash: otherSource })).toBeNull();
+    expect(await orderOf((await eventPin(A)).documentHash!)).toBe("iof");
+  }, 60_000);
+});
+
 describe("setColourOrder on an event's own upload", () => {
   let eventIof: string;
 
@@ -234,6 +245,11 @@ describe("setColourOrder on an event's own upload", () => {
     expect((await eventPin(E)).documentHash).toBe(eventIof);
     // The event's pin is stale for the re-match by its own setting.
     expect((await planRematch(A.db, { eventId: E.eventId }))).toEqual([expect.objectContaining({ kind: "event", reason: "colour", documentHash: eventIof })]);
+    // Run it: the event's pin moves to its own order; a second plan is empty.
+    const [item] = await planRematch(A.db, { eventId: E.eventId });
+    expect(await rematchItem(A.db, item, 60_000)).toMatchObject({ outcome: "done", newDocumentHash: own });
+    expect((await eventPin(E)).documentHash).toBe(own);
+    expect(await planRematch(A.db, { eventId: E.eventId })).toEqual([]);
     await as(E, setter).mapImport.finalise({ documentHash: own, target: { kind: "event" } });
     const again = await applyEventMap(E.db, E.eventId, "own.ocd", eventFile, { startedBy: setter.id });
     expect(again.documentHash).toBe(own);
@@ -337,13 +353,46 @@ describe("GET /api/map-documents/:hash/colour-order/:order.png", () => {
     }
   }, 90_000);
 
-  it("answers 503 with Retry-After while the other order is still importing", async () => {
-    const { colourPicture } = await import("../../map-store/colour-pictures.js");
-    // A wait of 0 ms cannot finish an import that has not started (the club map's IOF document has no `source` picture row yet).
+  it("answers 503 with Retry-After while the other order is still importing, then the picture", async () => {
+    // A wait of 0 ms cannot finish the work (the club map's IOF document has no `source` picture row yet).
     await A.db.mapPreview.deleteMany({ where: { documentHash: iofDoc, kind: "colour-order" } });
-    const r = await colourPicture(A.db, iofDoc, "source", { startedBy: setter.id, waitMs: 0 });
-    expect(r).toEqual({ pending: true });
-  });
+    resetColourPictureFailures();
+    const previous = process.env.MAP_COLOUR_PICTURE_WAIT_MS;
+    process.env.MAP_COLOUR_PICTURE_WAIT_MS = "0";
+    try {
+      const pending = await get(`/api/map-documents/${iofDoc}/colour-order/source.png`, signedIn());
+      expect(pending.statusCode).toBe(503);
+      expect(pending.headers["retry-after"]).toBe("5");
+    } finally {
+      if (previous === undefined) delete process.env.MAP_COLOUR_PICTURE_WAIT_MS;
+      else process.env.MAP_COLOUR_PICTURE_WAIT_MS = previous;
+    }
+    await expect.poll(async () => (await get(`/api/map-documents/${iofDoc}/colour-order/source.png`, signedIn())).statusCode, { timeout: 30_000 }).toBe(200);
+  }, 60_000);
+
+  it("answers 502 for an import that fails, and does not start it again for a while", async () => {
+    // A document whose source bytes are not a map: the other order's import fails.
+    const bad = Buffer.from(`not a map ${suffix}`);
+    const badSource = sha256(bad);
+    await A.db.mapSource.create({ data: { fileHash: badSource, kind: "ocad", bytes: Uint8Array.from(bad), sizeBytes: bad.byteLength, fileName: "bad.ocd" } });
+    const doc = await A.db.mapDocument.findUniqueOrThrow({ where: { hash: iofDoc }, select: { bytes: true, sizeBytes: true, formatVersion: true, importerVersion: true, libraryVersion: true, header: true, report: true } });
+    const fakeHash = sha256(Buffer.from(`fake-doc-${suffix}`));
+    await A.db.mapDocument.create({ data: { hash: fakeHash, sourceHash: badSource, ...doc, header: doc.header ?? {}, report: doc.report ?? {} } });
+    await A.db.mapImportJob.create({ data: { sourceHash: badSource, state: "done", documentHash: fakeHash, startedBy: setter.id } });
+    resetColourPictureFailures();
+    try {
+      const failed = await get(`/api/map-documents/${fakeHash}/colour-order/source.png`, signedIn());
+      expect(failed.statusCode).toBe(502);
+      const jobs = await A.db.mapImportJob.count({ where: { sourceHash: badSource } });
+      expect((await get(`/api/map-documents/${fakeHash}/colour-order/source.png`, signedIn())).statusCode).toBe(502);
+      expect(await A.db.mapImportJob.count({ where: { sourceHash: badSource } })).toBe(jobs);
+    } finally {
+      resetColourPictureFailures();
+      await A.db.mapImportJob.deleteMany({ where: { sourceHash: badSource } });
+      await A.db.mapDocument.deleteMany({ where: { sourceHash: badSource } });
+      await A.db.mapSource.deleteMany({ where: { fileHash: badSource } });
+    }
+  }, 60_000);
 });
 
 // Keep the shared import of `mapImport` used (the deviation key helper) for readers of this file.

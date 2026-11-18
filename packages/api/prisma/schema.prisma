@@ -1381,12 +1381,12 @@ model MapGpsTrack {
   @@schema("oxygen")
 }
 
-/// Derived rasters for a document (thumbnail, symbol previews). Pure cache.
+/// Derived rasters for a document (thumbnail, symbol previews, colour pictures). Cache.
 model MapPreview {
   documentHash String   @map("document_hash")
-  /// 'thumbnail' | 'symbol'
+  /// 'thumbnail' | 'symbol' | 'colour-order' (the colour panel's picture, row I6)
   kind         String
-  /// Symbol index for 'symbol', '' otherwise.
+  /// Symbol index for 'symbol', the order ('iof' | 'source') for 'colour-order', '' otherwise.
   key          String   @default("")
   png          Bytes
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)

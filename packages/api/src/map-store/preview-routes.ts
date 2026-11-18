@@ -70,12 +70,8 @@ export function registerMapPreviewRoutes(server: FastifyInstance): void {
     if (order === null) return reply.code(400).send({ error: "Invalid colour order" });
     if (!(await requireDocumentAccess(req, reply, hash))) return reply;
     const etag = previewEtag(hash, COLOUR_PICTURE_KIND, order);
-    let result;
-    try {
-      result = await colourPicture(prisma(), hash, order, { startedBy: (await identity(req)).user?.id ?? null });
-    } catch (err: unknown) {
-      return reply.code(502).send({ error: `No picture: ${err instanceof Error ? err.message : String(err)}` });
-    }
+    const result = await colourPicture(prisma(), hash, order, { startedBy: (await identity(req)).user?.id ?? null });
+    if ("failed" in result) return reply.code(502).send({ error: `No picture: ${result.failed}` });
     if ("pending" in result) return reply.code(503).header("Retry-After", "5").send({ error: "The picture is being drawn; ask again" });
     if ("missing" in result) return reply.code(404).send({ error: "Unknown document" });
     return sendPng(req, reply, result.png, etag, MAP_DOCUMENT_CACHE_CONTROL);

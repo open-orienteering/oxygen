@@ -46,7 +46,7 @@ v0.6.1; `docs/migrations/2026-vector-map-pipeline.md`), and
 |---|---|---|---|
 | `map_sources` | `file_hash CHAR(64)` | `kind` (`ocad`/`omap`), `bytes BYTEA`, `size_bytes`, `file_name`, `uploaded_by → users SET NULL`, `created_at` | the uploaded file; `bytes` is `STORAGE EXTERNAL` |
 | `map_documents` | `hash CHAR(64)` | `bytes BYTEA`, `size_bytes`, `format_version`, `importer_version`, `library_version`, `source_hash → map_sources RESTRICT`, `header JSONB`, `report JSONB`, `created_at`, `last_referenced_at`, `patch JSONB NULL` | the encoded document; `header` is the summary (§3), `report` the import report; `patch` the version patch it was baked with (`docs/map-patches.md` §5; null = none, never `[]`) |
-| `map_previews` | `(document_hash, kind, key)` | `png BYTEA`, `created_at` | `document_hash → map_documents CASCADE`; thumbnails and symbol swatches, pure cache (§4.5) |
+| `map_previews` | `(document_hash, kind, key)` | `png BYTEA`, `created_at` | `document_hash → map_documents CASCADE`; thumbnails, symbol swatches and the colour panel's pictures (`colour-order`, row I6), cache (§4.5) |
 | `map_heightfields` | `(document_hash, source, version)` | `bytes BYTEA` (`STORAGE EXTERNAL`), `size_bytes`, `header JSONB`, `report JSONB` — null together for a document without contours — `created_at` | `document_hash → map_documents CASCADE`; the terrain a document's contours imply and its report, and the DEM's two fields (`ground.<provider>`, `contours.<provider>`), pure cache (§4.7) |
 | `map_dem_jobs` | `(document_hash, provider, version)` | `state`, `reason`, `error`, `attempts`, `next_attempt_at`, `claimed_by`, `heartbeat_at`, `created_at`, `updated_at` | `document_hash → map_documents CASCADE`; the DEM job's state (§4.7 "The DEM") |
 | `club_maps` | `id UUID` | `name`, `colour_profile`, `colour_overrides JSONB`, `north_lines_below`, `rotation_correction`, `created_by`, timestamps | a club's map as a series (06 §8) |
@@ -336,7 +336,7 @@ GET /api/library/:libraryId/:version/:code.png             swatch of a canonical
 
 **Rows.** Document previews are `map_previews` rows keyed
 `(document_hash, kind, key)`: `('thumbnail', '')` and
-`('symbol', '<idx>')`. A row is written once with `createMany …
+`('symbol', '<idx>')` and since row I6 `('colour-order', 'iof' | 'source')`. A row is written once with `createMany …
 skipDuplicates` and never updated, like the blobs (§1); it cascades with
 its document and is pure cache — deleting rows only costs a re-render.
 Who writes them:
@@ -399,7 +399,14 @@ render goes through the thumbnails' one-at-a-time queue, the import does
 not (its derive stage renders a thumbnail through that queue). While the
 import runs past a 20 s wait (`MAP_COLOUR_PICTURE_WAIT_MS`) the route
 answers **503** with `Retry-After: 5` and the work goes on; the panel
-retries every 5 s. A failed import is **502**.
+retries every 5 s. A failed import is **502**, remembered for 10 minutes
+per instance so the panel's retries start no new job; a queued or running
+job without a target for the same source, corrections and setting is
+waited for rather than doubled. The documents are decoded inside the
+render queue, after any import, so at most one is held per instance. Unlike
+the other previews the colour picture is not a pure function of its
+document: its other order is drawn as of the first request (the club
+decisions then).
 
 **Library swatch.** The entry resolved in the library's own palette
 edition (`materialiseLibrary(id)`, `iof2024` today) through the same
