@@ -104,10 +104,15 @@ async function checkCompare(page: Page, pair: "use" | "order", hashes: [string |
   await page.mouse.up();
   await expect.poll(async () => Number(await swipe.getAttribute("data-divider"))).toBeLessThan(0.3);
   await expect(swipe).toHaveAttribute("data-showing", "split");
-  await view.getByTestId("compare-flip").click();
-  await expect(swipe).toHaveAttribute("data-showing", "a");
+  // Space flips whatever has focus (here the Swipe button, which it does not press again): the divider was left, so A whole.
   await page.keyboard.press("Space");
+  await expect(swipe).toHaveAttribute("data-showing", "a");
+  await expect(view).toHaveAttribute("data-mode", "swipe");
+  await view.getByTestId("compare-flip").click();
   await expect(swipe).toHaveAttribute("data-showing", "b");
+  await view.getByTestId("compare-fit").click();
+  await page.keyboard.press("Space");
+  await expect(swipe).toHaveAttribute("data-showing", "a");
 
   await page.keyboard.press("Escape");
   await expect(view).toHaveCount(0);
@@ -378,6 +383,14 @@ test.describe("map import review", () => {
     await expect(row(BUILDING).getByTestId("colour-deviation-overridden")).toBeVisible();
     await expect(page.getByTestId("review-in-use")).toBeVisible();
     await expect(page.getByTestId("review-outdated")).toHaveCount(0);
+    // Compare (row I8a): in use, so it opens on the orders; the `use` pair is one version, and says so.
+    await panel.getByTestId("colour-compare").click();
+    await expect(page.getByTestId("compare-view")).toHaveAttribute("data-pair", "order");
+    await page.getByTestId("compare-pair-use").click();
+    await expect(page.getByTestId("compare-view")).toHaveAttribute("data-pair", "use");
+    await expect(page.getByTestId("compare-same")).toBeVisible({ timeout: 30000 });
+    await page.getByTestId("compare-close").click();
+    await expect(page.getByTestId("compare-view")).toHaveCount(0);
     await change(BUILDING, "reset");
     await expect(row(BUILDING)).toHaveAttribute("data-overridden", "false", { timeout: 20000 });
     expect(hashOf(page.url())).toBe(original);

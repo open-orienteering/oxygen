@@ -40,16 +40,18 @@ const ORDER_RETRIES = 36;
 type SideHash = { status: "ready"; hash: string } | { status: "importing" } | { status: "failed" };
 
 /** The hash of one side: given, or asked of the other order's route. */
-function useSideHash(side: CompareSide, nameId: string | null): SideHash {
+function useSideHash(side: CompareSide, nameId: string | null): SideHash & { retry: () => void } {
+  const [attempt, setAttempt] = useState(0);
+  const retry = useCallback(() => setAttempt((n) => n + 1), []);
   const url = "url" in side ? scopePreviewUrl(side.url, nameId) ?? side.url : null;
   const given = "hash" in side ? side.hash : null;
   // The answer for the URL it was asked for: a new URL is importing until its own answer comes.
-  const [answer, setAnswer] = useState<{ url: string; state: SideHash } | null>(null);
+  const [answer, setAnswer] = useState<{ url: string; attempt: number; state: SideHash } | null>(null);
   useEffect(() => {
     if (given || !url) return;
     let cancelled = false;
     let timer: number | undefined;
-    const setState = (state: SideHash) => setAnswer({ url, state });
+    const setState = (state: SideHash) => setAnswer({ url, attempt, state });
     const ask = async (attempt: number): Promise<void> => {
       try {
         const res = await fetch(url, { credentials: "same-origin", headers: nameId ? { "x-event-id": nameId } : {} });
@@ -73,9 +75,9 @@ function useSideHash(side: CompareSide, nameId: string | null): SideHash {
       cancelled = true;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [given, url, nameId]);
-  if (given) return { status: "ready", hash: given };
-  return answer && answer.url === url ? answer.state : { status: "importing" };
+  }, [given, url, nameId, attempt]);
+  if (given) return { status: "ready", hash: given, retry };
+  return { ...(answer && answer.url === url && answer.attempt === attempt ? answer.state : { status: "importing" as const }), retry };
 }
 
 interface LoadedSide {
@@ -91,7 +93,7 @@ function useSide(side: CompareSide, nameId: string | null): LoadedSide {
   const h = useSideHash(side, nameId);
   const hash = h.status === "ready" ? h.hash : null;
   const { state, retry } = useMapDocument(hash, nameId);
-  return { side, hash, doc: state, importing: h.status === "importing", failed: h.status === "failed" || state.status === "error", retry };
+  return { side, hash, doc: state, importing: h.status === "importing", failed: h.status === "failed" || state.status === "error", retry: h.status === "failed" ? h.retry : retry };
 }
 
 /** The pane's size, CSS px. */
@@ -174,7 +176,7 @@ function SideLayer({ s, vp, w, h, zIndex }: { s: LoadedSide; vp: PaperViewport |
   const { t } = useTranslation("mapReview");
   const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
   const view = useMemo(() => (vp && w > 0 && h > 0 ? glView(vp, w, h, dpr, 0) : null), [vp, w, h, dpr]);
-  if (s.failed) return <MapLayerMessage message={t("colours.compare.failed")} onRetry={s.doc.status === "error" ? s.retry : undefined} retryLabel={t("colours.compare.retry")} />;
+  if (s.failed) return <MapLayerMessage message={t("colours.compare.failed")} onRetry={s.retry} retryLabel={t("colours.compare.retry")} />;
   if (s.doc.status !== "ready") {
     return (
       <div className="absolute inset-0 flex items-center justify-center text-sm text-slate-500" style={{ zIndex }}>
@@ -217,14 +219,16 @@ export function CompareView({
     setVp(compareFit(aDoc ? boundsMm(aDoc.header) : null, bDoc ? boundsMm(bDoc.header) : null, layout.paneW, layout.paneH));
   }, [aDoc, bDoc, layout.paneW, layout.paneH]);
 
-  // Opened (and on a new pair) fitted to the union of the two bounds, once both are known; then the camera is the user's.
+  // Opened (and on a new pair) fitted to the union of the two bounds, once both are known — or to the one, when the
+  // other has failed; then the camera is the user's.
   const fittedFor = useRef<string | null>(null);
   useEffect(() => {
     const key = `${pairKind}:${aDoc?.hash ?? ""}:${bDoc?.hash ?? ""}`;
-    if (!aDoc || !bDoc || layout.paneW <= 0 || fittedFor.current === key) return;
+    const known = (aDoc || a.failed) && (bDoc || b.failed) && (aDoc || bDoc);
+    if (!known || layout.paneW <= 0 || fittedFor.current === key) return;
     fittedFor.current = key;
     fit();
-  }, [pairKind, aDoc, bDoc, layout.paneW, fit]);
+  }, [pairKind, aDoc, bDoc, a.failed, b.failed, layout.paneW, fit]);
 
   const onGesture = useCallback(
     (g: PaneGesture) => setVp((v) => (v ? paneGesture(v, { w: layout.paneW, h: layout.paneH }, g) : v)),
@@ -236,13 +240,22 @@ export function CompareView({
       if (e.key === "Escape") {
         e.preventDefault();
         onChange(null);
-      } else if (e.key === " " && query.mode === "swipe" && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLButtonElement)) {
+      } else if (isFlipKey(e)) {
+        // Whatever has focus: a focused toolbar button's own Space activation is cancelled (keydown and keyup).
         e.preventDefault();
-        dispatch({ type: "flip" });
+        if (!e.repeat) dispatch({ type: "flip" });
       }
     };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (isFlipKey(e)) e.preventDefault();
+    };
+    const isFlipKey = (e: KeyboardEvent) => e.key === " " && query.mode === "swipe" && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement);
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keyup", onKeyUp);
+    };
   }, [onChange, query.mode]);
 
   const same = a.hash !== null && a.hash === b.hash;

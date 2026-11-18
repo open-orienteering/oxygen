@@ -15,8 +15,9 @@ import { mapDocument } from "@oxygen/shared";
 import type { PrismaClient } from "../generated/prisma/client.js";
 import { colourPictureWindow, renderColourPicturePng } from "../render/previews.js";
 import { getBlob } from "./blob-store.js";
-import { colourSettingsOfReport, DEVIATION_KEY, normaliseColourSettings, pictureDeviationsQuery, reportDeviationKeys, type ColourOrder, type DeviationChoice } from "./colour-settings.js";
-import { awaitImportJob, getImportJob, isTerminal, startImportJob, type ImportJobRow } from "./jobs.js";
+import { colourSettingsOfReport, DEVIATION_KEY, normaliseColourSettings, pictureDeviationsQuery, reportDeviationKeys, type ColourOrder, type DeviationChoice, type MapColourSettings } from "./colour-settings.js";
+import { loadClubDecisions } from "./decisions.js";
+import { awaitImportJob, currentDocumentFor, getImportJob, isTerminal, startImportJob, type ImportJobRow } from "./jobs.js";
 import { once, readPreview, serialised, writePreview } from "./previews.js";
 
 export const COLOUR_PICTURE_KIND = "colour-order" as const;
@@ -133,22 +134,47 @@ const ownOrderOf = (row: { header: unknown }): ColourOrder => (row.header as { c
  */
 async function importOtherOrder(db: PrismaClient, row: DocumentRow, order: ColourOrder, startedBy: string | null, asked: Record<string, DeviationChoice>): Promise<{ hash: string; asked: Record<string, DeviationChoice> }> {
   const patch = mapDocument.parseVersionPatch(row.patch);
-  const colour = { order, deviations: order === "iof" && Object.keys(asked).length ? asked : colourSettingsOfReport(row.report).deviations };
-  const running = await runningJobFor(db, row.sourceHash, patch, colour);
-  let job = running ?? (await startImportJob(db, { sourceHash: row.sourceHash, startedBy, patch, colour, holdMs: 0 }));
-  if (!isTerminal(job.state)) job = (await awaitImportJob(db, job.id)) ?? job;
-  if (job.state !== "done" || !job.documentHash) throw new Error(`the ${order} import of ${row.sourceHash} ${job.state === "failed" ? `failed: ${job.error ?? ""}` : `is still ${job.state}`}`);
-  // Waited for someone else's job: one of the requester's own (dedup, no worker), so they may read the document (§4.2).
-  if (running && (await db.mapImportJob.findUnique({ where: { id: running.id }, select: { startedBy: true } }))?.startedBy !== startedBy) {
-    await startImportJob(db, { sourceHash: row.sourceHash, startedBy, patch, colour, holdMs: 0 });
-  }
+  const colour: MapColourSettings = { order, deviations: order === "iof" && Object.keys(asked).length ? asked : colourSettingsOfReport(row.report).deviations };
+  const hash = (await readableCurrentDocument(db, row.sourceHash, patch, colour, startedBy)) ?? (await importForRequester(db, row.sourceHash, order, patch, colour, startedBy));
   let listed = asked;
   // The overrides that document lists: the picture's key never names one it does not (bounded keys, row I7).
   if (Object.keys(asked).length) {
-    const other = await db.mapDocument.findUnique({ where: { hash: job.documentHash }, select: { report: true } });
+    const other = await db.mapDocument.findUnique({ where: { hash }, select: { report: true } });
     listed = restrictTo(asked, reportDeviationKeys(other?.report));
   }
-  return { hash: job.documentHash, asked: listed };
+  return { hash, asked: listed };
+}
+
+/**
+ * The stored document of that source and setting, when the requester can already read it — a club version, or a
+ * job of their own (§4.2) — so asking again writes no job row (row I8a; bounded rows, decision I7 (7)).
+ */
+async function readableCurrentDocument(db: PrismaClient, sourceHash: string, patch: mapDocument.VersionPatch, colour: MapColourSettings, startedBy: string | null): Promise<string | null> {
+  const source = await db.mapSource.findUnique({ where: { fileHash: sourceHash }, select: { kind: true } });
+  const decisions = source ? await loadClubDecisions(db, source.kind) : [];
+  const existing = await currentDocumentFor(db, sourceHash, decisions, patch, colour);
+  if (!existing) return null;
+  if (startedBy === null) return existing.hash;
+  const own = await db.mapImportJob.findFirst({ where: { documentHash: existing.hash, startedBy, state: { not: "failed" } }, select: { id: true } });
+  if (own) return existing.hash;
+  const version = await db.clubMapVersion.findFirst({ where: { documentHash: existing.hash }, select: { id: true } });
+  return version ? existing.hash : null;
+}
+
+/**
+ * The import that gives it: a running job without a target in that setting waited for, else one started (dedup or
+ * the worker, `started_by` the requester). Waited for someone else's job: one of the requester's own after it (dedup,
+ * no worker), so they may read the document (§4.2). Throws when the import fails.
+ */
+async function importForRequester(db: PrismaClient, sourceHash: string, order: ColourOrder, patch: mapDocument.VersionPatch, colour: MapColourSettings, startedBy: string | null): Promise<string> {
+  const running = await runningJobFor(db, sourceHash, patch, colour);
+  let job = running ?? (await startImportJob(db, { sourceHash, startedBy, patch, colour, holdMs: 0 }));
+  if (!isTerminal(job.state)) job = (await awaitImportJob(db, job.id)) ?? job;
+  if (job.state !== "done" || !job.documentHash) throw new Error(`the ${order} import of ${sourceHash} ${job.state === "failed" ? `failed: ${job.error ?? ""}` : `is still ${job.state}`}`);
+  if (running && (await db.mapImportJob.findUnique({ where: { id: running.id }, select: { startedBy: true } }))?.startedBy !== startedBy) {
+    await startImportJob(db, { sourceHash, startedBy, patch, colour, holdMs: 0 });
+  }
+  return job.documentHash;
 }
 
 async function produce(db: PrismaClient, hash: string, order: ColourOrder, startedBy: string | null, asked: Record<string, DeviationChoice>): Promise<{ png: Buffer; key: string } | null> {

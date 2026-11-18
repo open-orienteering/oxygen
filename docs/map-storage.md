@@ -415,7 +415,9 @@ answers **503** with `Retry-After: 5` and the work goes on; the panel
 retries every 5 s. A failed import is **502**, remembered for 10 minutes
 per instance so the panel's retries start no new job; a queued or running
 job without a target for the same source, corrections and setting is
-waited for rather than doubled. The documents are decoded inside the
+waited for rather than doubled; when that job is someone else's, a done job
+row of the requester's own is added after it by dedup (row I8a, shared with
+the `.json` route below), so the requester may read the document. The documents are decoded inside the
 render queue, after any import, so at most one picture's documents (the
 reviewed one and the other order's) are held per instance. Unlike
 the other previews the colour picture is not a pure function of its
@@ -436,7 +438,10 @@ unknown document past authorisation is **404**. The document is then read
 through §4.2's document route, so the requester must be able to: when the
 answer came from someone else's job (a dedup hit, or a running job waited
 for), the route adds a done job row of the requester's own by dedup (no
-worker runs), which the own-job clause accepts. The remembered work is per
+worker runs), which the own-job clause accepts. A document the requester
+can already read — a club version, or one with a job of theirs that has
+not failed — is answered without a row, so asking again writes nothing
+(bounded rows, decision I7 (7)). The remembered work is per
 requester for that reason. `colourOrderDocument` in `colour-pictures.ts`;
 the picture's `produce` and it share `importOtherOrder`.
 

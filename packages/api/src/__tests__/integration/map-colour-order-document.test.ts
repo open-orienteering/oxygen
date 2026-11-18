@@ -131,9 +131,12 @@ describe("GET /api/map-documents/:hash/colour-order/:order.json on a club map", 
     expect(await orderOf(sourceDoc)).toBe("source");
     expect(await E.db.mapImportJob.count({ where: { sourceHash: clubSource, clubMapId: null, colour: { equals: { order: "source", deviations: {} } } } })).toBe(1);
     expect(await E.db.mapImportJob.count({ where: { sourceHash: clubSource } })).toBe(jobs + 1);
+    // Asked again (and back the other way): no more job rows — the requester can read both already.
     expect(await hashOf(docUrl(iofDoc, "source"), setter)).toBe(sourceDoc);
     expect(await hashOf(docUrl(sourceDoc, "iof"), setter)).toBe(iofDoc);
     expect(await hashOf(docUrl(sourceDoc, "source"), setter)).toBe(sourceDoc);
+    expect(await hashOf(docUrl(iofDoc, "source"), setter)).toBe(sourceDoc);
+    expect(await E.db.mapImportJob.count({ where: { sourceHash: clubSource } })).toBe(jobs + 1);
     // Nothing pinned, no setting written, nothing left running.
     expect((await E.db.clubMapVersion.findFirstOrThrow({ where: { clubMapId }, select: { documentHash: true } })).documentHash).toBe(iofDoc);
     expect(await E.db.mapColourSetting.count({ where: { clubMapId } })).toBe(0);
@@ -166,9 +169,15 @@ describe("GET /api/map-documents/:hash/colour-order/:order.json on a club map", 
     // A document no club version pins: readable only through a job of one's own (§4.2).
     expect((await get(`/api/map-documents/${theirs}`, setter)).statusCode).toBe(403);
     resetDocumentAccessCache();
+    const jobs = await E.db.mapImportJob.count({ where: { sourceHash: fresh.source } });
     const mine = await hashOf(docUrl(fresh.doc, "source"), setter);
     expect(mine).toBe(theirs);
     expect((await get(`/api/map-documents/${mine}`, setter)).statusCode).toBe(200);
+    // One row of the requester's own by dedup, and only the first time.
+    expect(await E.db.mapImportJob.count({ where: { sourceHash: fresh.source } })).toBe(jobs + 1);
+    await hashOf(docUrl(fresh.doc, "source"), setter);
+    await hashOf(docUrl(fresh.doc, "source"), other);
+    expect(await E.db.mapImportJob.count({ where: { sourceHash: fresh.source } })).toBe(jobs + 1);
   }, 120_000);
 
   it("validates, then authorises, then looks up", async () => {

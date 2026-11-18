@@ -404,7 +404,8 @@ function MapReview({ documentHash, target, pinnedHash, mapName, canEdit, backTo,
         onDeviation={(k, c) => void changeDeviation(k, c)}
         onCompare={() => setCompare({ pair: defaultComparePair({ documentHash, pinnedHash }), mode: compare?.mode ?? "side" })}
       />
-      {compare && (
+      {/* Not before the pin is known: `use` would fall back to `order` and ask for an import nobody wanted. */}
+      {compare && !(compare.pair === "use" && pinnedHash === undefined) && (
         <CompareView pairs={comparePairs({ documentHash, pinnedHash, colour: data.colour })} query={compare} nameId={nameId} onChange={setCompare} />
       )}
 
