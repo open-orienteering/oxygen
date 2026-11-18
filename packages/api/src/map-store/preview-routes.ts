@@ -3,6 +3,7 @@
  *
  *   GET /api/map-documents/:hash/thumbnail.png
  *   GET /api/map-documents/:hash/symbols/:idx.png
+ *   GET /api/map-documents/:hash/colour-order/:order.png   (the colour panel's picture, §4.5)
  *   GET /api/library/:libraryId/:version/:code.png
  *
  * Immutable like the document route: the URL names the content (a
@@ -27,7 +28,8 @@ import {
   previewEtag,
   stripPng,
 } from "./previews.js";
-import { MAP_DOCUMENT_CACHE_CONTROL, matchesEtag, parseDocumentHash, requireDocumentAccess } from "./routes.js";
+import { identity, MAP_DOCUMENT_CACHE_CONTROL, matchesEtag, parseDocumentHash, requireDocumentAccess } from "./routes.js";
+import { COLOUR_PICTURE_KIND, colourPicture, parseColourOrder } from "./colour-pictures.js";
 
 export const LIBRARY_PREVIEW_CACHE_CONTROL = "public, max-age=31536000, immutable";
 
@@ -57,6 +59,22 @@ export function registerMapPreviewRoutes(server: FastifyInstance): void {
     const png = await getOrRenderSymbolPreview(prisma(), hash, idx);
     if (!png) return reply.code(404).send({ error: "No such symbol preview" });
     return sendPng(req, reply, png, previewEtag(hash, "symbol", String(idx)), MAP_DOCUMENT_CACHE_CONTROL);
+  });
+
+  // The before / after picture (docs/map-symbols.md §8.7): the other order may need an import, so a slow one is a 503.
+  server.get<{ Params: { hash: string; file: string } }>("/api/map-documents/:hash/colour-order/:file", async (req, reply) => {
+    const hash = parseDocumentHash(req.params.hash);
+    if (!hash) return reply.code(400).send({ error: "Invalid document hash" });
+    const raw = stripPng(req.params.file);
+    const order = raw === null ? null : parseColourOrder(raw);
+    if (order === null) return reply.code(400).send({ error: "Invalid colour order" });
+    if (!(await requireDocumentAccess(req, reply, hash))) return reply;
+    const etag = previewEtag(hash, COLOUR_PICTURE_KIND, order);
+    const result = await colourPicture(prisma(), hash, order, { startedBy: (await identity(req)).user?.id ?? null });
+    if ("failed" in result) return reply.code(502).send({ error: `No picture: ${result.failed}` });
+    if ("pending" in result) return reply.code(503).header("Retry-After", "5").send({ error: "The picture is being drawn; ask again" });
+    if ("missing" in result) return reply.code(404).send({ error: "Unknown document" });
+    return sendPng(req, reply, result.png, etag, MAP_DOCUMENT_CACHE_CONTROL);
   });
 
   server.get<{ Params: { libraryId: string; version: string; file: string } }>(

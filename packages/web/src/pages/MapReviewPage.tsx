@@ -20,6 +20,7 @@ import { useCurrentUser } from "../context/CurrentUserContext";
 import { useCapabilities } from "../context/CapabilitiesContext";
 import { LanguageSelector } from "../components/LanguageSelector";
 import { UserChip } from "../components/UserChip";
+import { ColourLayersPanel } from "../components/map-review/ColourLayersPanel";
 import {
   candidateIsCurrent,
   isJobPending,
@@ -162,7 +163,9 @@ function MapReview({ documentHash, target, pinnedHash, mapName, canEdit, backTo,
   const navigate = useNavigate();
   const utils = trpc.useUtils();
   const nameId = target.kind === "event" ? target.nameId : null;
-  const review = trpc.mapImport.review.useQuery({ documentHash }, { retry: false });
+  const clubMapId = target.kind === "club" ? target.clubMapId : null;
+  // The map the review is for: its colour setting (docs/map-symbols.md §8.7); the event's comes from the header.
+  const review = trpc.mapImport.review.useQuery(clubMapId ? { documentHash, clubMapId } : { documentHash }, { retry: false });
   const [pending, setPendingMap] = useState<PendingDecisions>(new Map());
   const [jobId, setJobId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -208,6 +211,22 @@ function MapReview({ documentHash, target, pinnedHash, mapName, canEdit, backTo,
       setError(err instanceof Error ? err.message : String(err));
     }
   };
+  const setColourOrder = trpc.mapImport.setColourOrder.useMutation();
+  const hasTarget = target.kind === "event" || clubMapId !== null;
+  const switchOrder = async (order: "iof" | "source") => {
+    if (!hasTarget) return;
+    setError(null);
+    try {
+      const { job: switched } = await setColourOrder.mutateAsync({
+        documentHash,
+        order,
+        target: target.kind === "event" ? { kind: "event" } : { kind: "club", clubMapId: clubMapId! },
+      });
+      followJob(switched as Job);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
   const finalise = trpc.mapImport.finalise.useMutation({
     onSuccess: () => {
       setFinalisedNow(true);
@@ -221,7 +240,7 @@ function MapReview({ documentHash, target, pinnedHash, mapName, canEdit, backTo,
   const visible = (rows: ReviewRowData[]) =>
     onlyToReview ? rows.filter((r) => rowOutcome(r.match) === "suggested" || pending.has(r.symbolIdx)) : rows;
 
-  const busy = decide.isPending || jobId !== null;
+  const busy = decide.isPending || setColourOrder.isPending || jobId !== null;
   const decideOn = (row: ReviewRowData, decision: PendingDecision | null) => setPendingMap((p) => setPending(p, row, decision));
 
   const header = (
@@ -351,6 +370,8 @@ function MapReview({ documentHash, target, pinnedHash, mapName, canEdit, backTo,
           </div>
         </div>
       )}
+
+      <ColourLayersPanel colour={data.colour} nameId={nameId} canEdit={canEdit} busy={busy} hasTarget={hasTarget} onSwitch={(o) => void switchOrder(o)} />
 
       <CrtPanel documentHash={documentHash} canEdit={canEdit} busy={busy} onJob={followJob} onError={setError} rows={data.symbols} />
 

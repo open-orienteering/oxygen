@@ -210,6 +210,7 @@ model Event {
   courseMaps         CourseMap[]
   courseObjects      CourseObject[]
   mapPatch           MapPatch?
+  mapColourSettings  MapColourSetting[]
   mapGpsTracks       MapGpsTrack[]
   coursePresence     CoursePresence[]
   graphics           Graphic[]
@@ -286,6 +287,7 @@ model User {
   clubMapVersions      ClubMapVersion[]
   mapImportJobs        MapImportJob[]
   symbolDecisions      ClubSymbolDecision[]
+  mapColourSettings    MapColourSetting[]
 
   @@map("users")
   @@schema("oxygen")
@@ -1279,6 +1281,7 @@ model MapSource {
   versions  ClubMapVersion[]
   uploads   MapUpload[]
   jobs      MapImportJob[]
+  colourSettings MapColourSetting[]
 
   @@map("map_sources")
   @@schema("oxygen")
@@ -1378,12 +1381,12 @@ model MapGpsTrack {
   @@schema("oxygen")
 }
 
-/// Derived rasters for a document (thumbnail, symbol previews). Pure cache.
+/// Derived rasters for a document (thumbnail, symbol previews, colour pictures). Cache.
 model MapPreview {
   documentHash String   @map("document_hash")
-  /// 'thumbnail' | 'symbol'
+  /// 'thumbnail' | 'symbol' | 'colour-order' (the colour panel's picture, row I6)
   kind         String
-  /// Symbol index for 'symbol', '' otherwise.
+  /// Symbol index for 'symbol', the order ('iof' | 'source') for 'colour-order', '' otherwise.
   key          String   @default("")
   png          Bytes
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
@@ -1465,6 +1468,7 @@ model ClubMap {
   creator    User?            @relation(fields: [createdBy], references: [id], onDelete: SetNull)
   versions   ClubMapVersion[]
   importJobs MapImportJob[]
+  colourSetting MapColourSetting?
 
   @@map("club_maps")
   @@schema("oxygen")
@@ -1544,6 +1548,8 @@ model MapImportJob {
   decisions    Json      @default("[]")
   /// Snapshot of the version patch (layers) the store stage bakes (docs/map-patches.md §5, row G12a); `[]` = none.
   patch        Json      @default("[]")
+  /// Snapshot of the map's colour setting `{ order, deviations }` (docs/map-symbols.md §9.3, row I6); `{}` = the defaults.
+  colour       Json      @default("{}")
   /// queued | running | done | failed.
   state        String
   /// Import stage name while running.
@@ -1629,5 +1635,31 @@ model Route {
 
   @@index([eventId, runnerId])
   @@map("routes")
+  @@schema("oxygen")
+}
+
+/// A map's colour setting (docs/map-symbols.md §9.3, row I6; docs/map-storage.md §2): the order its document is
+/// drawn in and its per-deviation overrides. One row per club map series, or per event and source file.
+model MapColourSetting {
+  id         String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  clubMapId  String?  @unique @map("club_map_id") @db.Uuid
+  eventId    BigInt?  @map("event_id")
+  sourceHash String?  @map("source_hash")
+  /// `iof` | `source`.
+  order      String   @default("iof") @map("colour_order")
+  /// Record keyed by deviation key → `keep` | `drop`; only choices that differ from the default.
+  deviations Json     @default("{}")
+  updatedBy  String?  @map("updated_by") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  clubMap ClubMap?   @relation(fields: [clubMapId], references: [id], onDelete: Cascade)
+  event   Event?     @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  source  MapSource? @relation(fields: [sourceHash], references: [fileHash], onDelete: Cascade)
+  updater User?      @relation(fields: [updatedBy], references: [id], onDelete: SetNull)
+
+  @@unique([eventId, sourceHash])
+  @@index([sourceHash])
+  @@map("map_colour_settings")
   @@schema("oxygen")
 }

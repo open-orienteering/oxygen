@@ -17,7 +17,7 @@
   "finalised": "Kartan använder nu den här versionen.",
   "finaliseClub": "Ersätter klubbkartans nuvarande version. Tävlingar som redan använder kartan behåller sin kopia.",
   "finaliseEvent": "Ersätter tävlingens karta med den granskade versionen.",
-  "outdated": "Inte aktuell: nuvarande symbolbibliotek eller klubbens beslut skulle importera kartan annorlunda.",
+  "outdated": "Inte aktuell: nuvarande symbolbibliotek, klubbens beslut eller kartans färgordning skulle importera kartan annorlunda.",
   "clubWide": "Besluten gäller hela klubben: varje karta med samma symbol (samma nummer, samma utseende) följer dem vid nästa import, även tävlingskartor.",
   "readOnly": "Du kan se granskningen men inte ändra den.",
   "summary": {
@@ -114,5 +114,72 @@
     "none": "Terräng: kartan har inga höjdkurvor, så ingen 3D.",
     "over-cap": "Terräng: kartan är för stor för att den här servern ska kunna beräkna terrängen.",
     "pending": "Terräng: inte beräknad än."
+  },
+  "colours": {
+    "title": "Färglager",
+    "hint": "Ordningen kartans färger ritas i, överst först. I IOF-ordningen ligger varje färganvändning på sitt IOF-lager, så banan och bibliotekets symboler beror aldrig på hur kartans färgtabell är ordnad.",
+    "order": {
+      "label": "Rita kartan i",
+      "iof": "IOF-ordningen",
+      "source": "kartans egen ordning"
+    },
+    "orderHint": "Kartan minns valet vid nya importer. Välj ordning, titta på bilden och använd sedan den nya versionen.",
+    "orderClubOnly": "Öppna granskningen från klubbkartans kort för att ändra dess färgordning.",
+    "settingDiffers_iof": "Kartan är inställd på IOF-ordningen; den här versionen är ritad i kartans egen ordning.",
+    "settingDiffers_source": "Kartan är inställd på sin egen ordning; den här versionen är ritad i IOF-ordningen.",
+    "fallback": "IOF-lagren gick inte att bygga för den här kartan, så den ritas i sin egen ordning.",
+    "picture": {
+      "title": "Före och efter",
+      "iof": "IOF-ordningen",
+      "source": "Kartans egen ordning",
+      "current": "den här versionen",
+      "loading": "Ritar…",
+      "failed": "Ingen bild."
+    },
+    "layers": {
+      "title": "Lager, överst först",
+      "colour": "Färg",
+      "role": "IOF-lager",
+      "objects": "Objekt",
+      "flags": "Anmärkningar",
+      "noLayers": "I kartans egen ordning behåller färgerna kartans tabell och har inga IOF-lager. Byt till IOF-ordningen för att se dem.",
+      "place": {
+        "area": "Inget IOF-lager (ytor)",
+        "other": "Inget IOF-lager",
+        "graphic": "Layout (grafiska objekt)"
+      },
+      "inserted": "tillagd"
+    },
+    "flag": {
+      "split": "delad",
+      "source-ordered": "kartans ordning",
+      "no-role": "inget IOF-lager",
+      "own-order": "under en del av sin egen symbol",
+      "above-lower-purple": "över banans lila",
+      "deviation-kept": "avvikelse behållen",
+      "deviation-dropped": "avvikelse slopad",
+      "draws-nothing": "ritar inget"
+    },
+    "deviations": {
+      "title": "Avvikelser",
+      "summary_one": "{{count}} avvikelse, {{kept}} behållen",
+      "summary_other": "{{count}} avvikelser, {{kept}} behållna",
+      "hint": "Par av lager som kartans färgtabell ritar i omvänd ordning mot IOF-ordningen. Behållen: ritas som kartan ritar dem. Slopad: ritas i IOF-ordningen. Som standard ligger vägar och hårdgjorda ytor kvar över höjdkurvorna; alla andra par slopas.",
+      "none": "Kartans färgtabell stämmer med IOF-ordningen.",
+      "pair": "{{upper}} över {{lower}}",
+      "kept": "Behållen",
+      "dropped": "Slopad",
+      "default": {
+        "keep": "standard: behållen",
+        "drop": "standard: slopad"
+      },
+      "why": {
+        "default": "som standard",
+        "override": "ändrad för den här kartan",
+        "implied": "behövs av en behållen avvikelse",
+        "blocked": "kan inte behållas"
+      },
+      "objects": "{{upper}} / {{lower}} objekt"
+    }
   }
 }

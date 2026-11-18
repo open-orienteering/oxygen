@@ -54,6 +54,7 @@ import {
   applyMapRotationCorrection,
   type MapCalibrationPoint,
 } from "../event-map.js";
+import { copyClubColourSettings } from "../map-store/colour-settings.js";
 import { latestVersionOrRefuse } from "../club-map-library.js";
 import { cutRotationDeg, meridianStalenessFromDetection } from "../map-north.js";
 import { documentNorth, eventPin } from "../map-store/event-document.js";
@@ -1613,6 +1614,8 @@ export const courseRouter = router({
         select: { fileName: true },
       });
       const layers = mapDocument.parseVersionPatch(version.patch);
+      // The series' colour setting comes along (docs/map-storage.md §6.5): the import below reads the event's.
+      await copyClubColourSettings(ctx.db, input.clubMapId, ctx.event.id, version.sourceHash);
       const result = await applyEventMap(
         ctx.db,
         ctx.event.id,

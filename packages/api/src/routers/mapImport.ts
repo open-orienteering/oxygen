@@ -14,13 +14,15 @@ import { resolveEventCapabilities } from "../permissions.js";
 import { getImportJob, isClaimable, kickImportJobs, latestImportJobForEvent, type ImportJobRow } from "../map-store/jobs.js";
 import { DecisionInputError, MAX_REVIEW_DECISIONS, reviewDecisionSchema } from "../map-store/decisions.js";
 import { exportDocumentCrt, importDocumentCrt, MAX_CRT_BYTES } from "../map-store/crt.js";
-import { buildReview, decideOnDocument, finaliseDocument } from "../map-store/review.js";
+import { buildReview, changeColourSettings, decideOnDocument, finaliseDocument, type ReviewTarget } from "../map-store/review.js";
 import { checkDocumentAccess, EDIT_ACCESS, READ_ACCESS, type DocumentAccessMode } from "../map-store/routes.js";
 import type { Context } from "../trpc.js";
 import type { PrismaClient } from "../generated/prisma/client.js";
 
 const jobIdSchema = z.string().uuid();
 const documentHashSchema = z.string().regex(/^[0-9a-f]{64}$/, "a 64-digit lower-case hex document hash");
+/** A review round's target, as `finalise` takes it: the current event's map, or a club map series. */
+const targetSchema = z.discriminatedUnion("kind", [z.object({ kind: z.literal("event") }), z.object({ kind: z.literal("club"), clubMapId: z.string().uuid() })]);
 
 /** The document route's predicate (docs/map-storage.md §4.2) for a tRPC caller; the event is `x-event-id`. */
 async function requireDocument(ctx: Context, hash: string, mode: DocumentAccessMode): Promise<void> {
@@ -104,12 +106,17 @@ export const mapImportRouter = router({
    * import report. Readable by whoever may fetch the document (§4.2) —
    * the predicate itself, so a kiosk key without a user is admitted as on
    * the route; anonymous callers without one get UNAUTHORIZED from it.
+   * `clubMapId` (or else the current event) names the map the review is
+   * for: its colour setting is in `colour.setting` and in `current`.
    */
   review: publicProcedure
-    .input(z.object({ documentHash: documentHashSchema }))
+    .input(z.object({ documentHash: documentHashSchema, clubMapId: z.string().uuid().optional() }))
     .query(async ({ ctx, input }) => {
       await requireDocument(ctx, input.documentHash, READ_ACCESS);
-      const review = await buildReview(prisma(), input.documentHash);
+      const target: ReviewTarget | null = input.clubMapId
+        ? { kind: "club", clubMapId: input.clubMapId }
+        : ctx.event ? { kind: "event", eventId: ctx.event.id } : null;
+      const review = await buildReview(prisma(), input.documentHash, target);
       if (!review) throw new TRPCError({ code: "NOT_FOUND", message: "Map document not found" });
       return review;
     }),
@@ -134,6 +141,32 @@ export const mapImportRouter = router({
       }
       if (!result.ok) throw new TRPCError({ code: "NOT_FOUND", message: "Map document not found" });
       return { applied: result.applied, job: await present(db, result.job) };
+    }),
+
+  /**
+   * The map's colour order (docs/map-symbols.md §9.3 answer 1): `iof`, the
+   * IOF colour layers, or `source`, the map's own table. Stored on the
+   * target — the club map series (any signed-in user, as the library), or
+   * the current event's map of the document's source (`courses.edit`) —
+   * and read by every later import of it; the document's source is then
+   * imported again in it, as `decide` does: the job is returned as
+   * `status` would, and nothing is pinned until `finalise`.
+   */
+  setColourOrder: authedProcedure
+    .input(z.object({ documentHash: documentHashSchema, order: z.enum(["iof", "source"]), target: targetSchema }))
+    .mutation(async ({ ctx, input }) => {
+      const target: ReviewTarget = input.target.kind === "event"
+        ? { kind: "event", eventId: await requireEventCapability(ctx, "courses.edit") }
+        : { kind: "club", clubMapId: input.target.clubMapId };
+      await requireDocument(ctx, input.documentHash, EDIT_ACCESS);
+      const db = prisma();
+      const result = await changeColourSettings(db, { hash: input.documentHash, target, change: (s) => ({ ...s, order: input.order }), userId: ctx.user?.id ?? null });
+      if (!result.ok) {
+        if (result.reason === "not-found") throw new TRPCError({ code: "NOT_FOUND", message: "Map document not found" });
+        if (result.reason === "no-target") throw new TRPCError({ code: "NOT_FOUND", message: target.kind === "event" ? "The event has no map" : "Club map not found" });
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "The target's map is not this document's source file" });
+      }
+      return { settings: result.settings, job: await present(db, result.job) };
     }),
 
   /**
@@ -189,10 +222,7 @@ export const mapImportRouter = router({
    * version of that source (any signed-in user, as the club library).
    */
   finalise: authedProcedure
-    .input(z.object({
-      documentHash: documentHashSchema,
-      target: z.discriminatedUnion("kind", [z.object({ kind: z.literal("event") }), z.object({ kind: z.literal("club"), clubMapId: z.string().uuid() })]),
-    }))
+    .input(z.object({ documentHash: documentHashSchema, target: targetSchema }))
     .mutation(async ({ ctx, input }) => {
       const target = input.target.kind === "event"
         ? { kind: "event" as const, eventId: await requireEventCapability(ctx, "courses.edit") }

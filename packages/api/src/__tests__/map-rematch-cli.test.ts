@@ -36,6 +36,13 @@ describe("staleReason (docs/map-storage.md §6.9)", () => {
     expect(staleReason({ importerVersion: "omap-12", libraryVersion: CURRENT }, false)).toBe("decisions");
     expect(staleReason({ importerVersion: "ocad-19", libraryVersion: CURRENT }, true)).toBeNull();
   });
+
+  it("names the colour setting last (row I6)", () => {
+    expect(staleReason({ importerVersion: "ocad-19", libraryVersion: CURRENT }, true, false)).toBe("colour");
+    expect(staleReason({ importerVersion: "ocad-19", libraryVersion: CURRENT }, false, false)).toBe("decisions");
+    expect(staleReason({ importerVersion: "ocad-18", libraryVersion: CURRENT }, true, false)).toBe("importer");
+    expect(staleReason({ importerVersion: "ocad-19", libraryVersion: CURRENT }, true, true)).toBeNull();
+  });
 });
 
 describe("map-rematch CLI", () => {

@@ -1,6 +1,6 @@
 /**
  * Import review UI (docs/map-symbols.md §8.7; research 06 §5.1) against
- * `e2e/test.ocd`: its 850.1 "Frame" rectangle is suggested as a library
+ * `e2e/test.ocd` (the colour layers panel, row I6: `e2e/colour-layers.ocd`): its 850.1 "Frame" rectangle is suggested as a library
  * symbol by geometry alone and is the row a reviewer keeps as drawn; its
  * 702.0 control ring is suggested as ISOM 703.
  *
@@ -161,6 +161,83 @@ test.describe("map import review", () => {
     expect(back).toBe(original);
     await expect(page.getByTestId("review-row-850.1")).toHaveAttribute("data-outcome", "suggested");
     await finalise(page);
+  });
+
+  test("club map: the colour layers panel, the switch to the map's own order and back, the picture (row I6)", async ({
+    page,
+  }) => {
+    // e2e/colour-layers.ocd: a badly ordered table (docs/e2e-test-ocd-fixture.md), so the two orders differ.
+    await page.goto("/settings");
+    await expect(page.getByTestId("library-tab-maps")).toBeVisible({ timeout: 15000 });
+    await page.getByTestId("library-map-upload").setInputFiles("e2e/colour-layers.ocd");
+    const card = page.locator('[data-testid^="library-map-card-"]').filter({ hasText: "colour-layers" }).first();
+    await expect(card.getByTestId("club-map-preview")).toBeVisible({ timeout: 30000 });
+    const seriesId = (await card.getAttribute("data-testid"))!.replace("library-map-card-", "");
+    await card.getByTestId("library-map-review").click();
+    await expect(page).toHaveURL(new RegExp(`/settings/map-review/${HASH.source}\\?clubMap=${seriesId}$`));
+    const original = hashOf(page.url());
+    await expect(page.getByTestId("review-in-use")).toBeVisible({ timeout: 20000 });
+
+    // The panel: the layers top first, the split brown 50 %, every deviation with its default.
+    const panel = page.getByTestId("review-colours");
+    await expect(panel).toHaveAttribute("data-order", "iof");
+    await expect(panel).toHaveAttribute("data-setting", "iof");
+    const rows = panel.getByTestId("colour-layer-row");
+    await expect(rows).toHaveCount(13);
+    await expect(rows.first()).toHaveAttribute("data-role", "purple-upper");
+    const split = panel.locator('[data-testid="colour-layer-row"][data-flags~="split"]');
+    await expect(split).toHaveCount(2);
+    expect((await split.evaluateAll((els) => els.map((el) => el.getAttribute("data-role")))).sort()).toEqual([
+      "brown50-paved",
+      "brown50-road",
+    ]);
+    const deviations = panel.getByTestId("colour-deviation");
+    await expect(deviations).toHaveCount(9);
+    await expect(panel.locator('[data-testid="colour-deviation"][data-kept="true"]')).toHaveCount(3);
+    const road = panel.locator('[data-key="brown50-road>brown100-line"]');
+    await expect(road).toHaveAttribute("data-kept", "true");
+    await expect(road).toHaveAttribute("data-default", "keep");
+    const implied = panel.locator('[data-key="black50-building>brown100-line"]');
+    await expect(implied).toHaveAttribute("data-why", "implied");
+    await expect(implied).toHaveAttribute("data-default", "drop");
+    await expect(panel.locator('[data-key="brown50-paved>black50-building"]')).toHaveAttribute("data-kept", "false");
+
+    // The before / after picture: both orders over the same window, and they differ.
+    const iofPicture = panel.getByTestId("colour-picture-iof");
+    const sourcePicture = panel.getByTestId("colour-picture-source");
+    await expect(iofPicture).toHaveAttribute("src", `/api/map-documents/${original}/colour-order/iof.png`);
+    await expectLoaded(iofPicture);
+    await expectLoaded(sourcePicture);
+    const [a, b] = await Promise.all(
+      [iofPicture, sourcePicture].map(async (img) => (await page.request.get((await img.getAttribute("src"))!)).body()),
+    );
+    expect(a.equals(b)).toBe(false);
+
+    // The switch: the map's own order is a new document, not used until "Use this version".
+    await expect(panel.getByTestId("colour-order-iof")).toHaveAttribute("aria-pressed", "true");
+    const switched = waitForTrpc(page, "mapImport.setColourOrder", { timeout: 60000 });
+    await panel.getByTestId("colour-order-source").click();
+    await switched;
+    await expect(page).not.toHaveURL(new RegExp(original), { timeout: 60000 });
+    const own = hashOf(page.url());
+    await expect(page.getByTestId("review-colours")).toHaveAttribute("data-order", "source", { timeout: 20000 });
+    await expect(page.getByTestId("review-colours")).toHaveAttribute("data-setting", "source");
+    await expect(page.getByTestId("colour-order-source")).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByTestId("colour-layers-none")).toBeVisible();
+    await expect(page.getByTestId("review-not-in-use")).toBeVisible();
+    await expect(page.getByTestId("review-outdated")).toHaveCount(0);
+    await expectLoaded(page.getByTestId("colour-picture-source"));
+
+    // And back: the IOF order is the original document again (dedup), still the one in use.
+    const back = waitForTrpc(page, "mapImport.setColourOrder", { timeout: 60000 });
+    await page.getByTestId("colour-order-iof").click();
+    await back;
+    await expect(page).not.toHaveURL(new RegExp(own), { timeout: 60000 });
+    expect(hashOf(page.url())).toBe(original);
+    await expect(page.getByTestId("review-colours")).toHaveAttribute("data-order", "iof", { timeout: 20000 });
+    await expect(page.getByTestId("review-colours")).toHaveAttribute("data-setting", "iof");
+    await expect(page.getByTestId("review-in-use")).toBeVisible();
+    await expect(page.getByTestId("colour-layer-row")).toHaveCount(13);
   });
 
   test("event map: optional review from the course editor, previews scoped to the event", async ({

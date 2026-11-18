@@ -40,13 +40,13 @@ on `map_files` and `club_map_versions` for the GC and the source route),
 pipeline's storage, `20261107120000_vector_map_pipeline_drops` (E5,
 v0.6.1; `docs/migrations/2026-vector-map-pipeline.md`), and
 `20261113120000_map_patches` (row G3), `20261114120000_map_gps_tracks`
-(row G24), `20261114130000_map_heightfields` (row H4), `20261115120000_map_dem_jobs` (row H10), `20261115130000_map_patches_unresolved` (row G11) and `20261116120000_map_version_patches` (row G12a: the three `patch` columns, `docs/map-patches.md` §5.1). All in schema `oxygen`.
+(row G24), `20261114130000_map_heightfields` (row H4), `20261115120000_map_dem_jobs` (row H10), `20261115130000_map_patches_unresolved` (row G11) `20261116120000_map_version_patches` (row G12a: the three `patch` columns, `docs/map-patches.md` §5.1) and `20261118120000_map_colour_settings` (row I6: `map_colour_settings` and `map_import_jobs.colour`). All in schema `oxygen`.
 
 | Table | Key | Columns | Notes |
 |---|---|---|---|
 | `map_sources` | `file_hash CHAR(64)` | `kind` (`ocad`/`omap`), `bytes BYTEA`, `size_bytes`, `file_name`, `uploaded_by → users SET NULL`, `created_at` | the uploaded file; `bytes` is `STORAGE EXTERNAL` |
 | `map_documents` | `hash CHAR(64)` | `bytes BYTEA`, `size_bytes`, `format_version`, `importer_version`, `library_version`, `source_hash → map_sources RESTRICT`, `header JSONB`, `report JSONB`, `created_at`, `last_referenced_at`, `patch JSONB NULL` | the encoded document; `header` is the summary (§3), `report` the import report; `patch` the version patch it was baked with (`docs/map-patches.md` §5; null = none, never `[]`) |
-| `map_previews` | `(document_hash, kind, key)` | `png BYTEA`, `created_at` | `document_hash → map_documents CASCADE`; thumbnails and symbol swatches, pure cache (§4.5) |
+| `map_previews` | `(document_hash, kind, key)` | `png BYTEA`, `created_at` | `document_hash → map_documents CASCADE`; thumbnails, symbol swatches and the colour panel's pictures (`colour-order`, row I6), cache (§4.5) |
 | `map_heightfields` | `(document_hash, source, version)` | `bytes BYTEA` (`STORAGE EXTERNAL`), `size_bytes`, `header JSONB`, `report JSONB` — null together for a document without contours — `created_at` | `document_hash → map_documents CASCADE`; the terrain a document's contours imply and its report, and the DEM's two fields (`ground.<provider>`, `contours.<provider>`), pure cache (§4.7) |
 | `map_dem_jobs` | `(document_hash, provider, version)` | `state`, `reason`, `error`, `attempts`, `next_attempt_at`, `claimed_by`, `heartbeat_at`, `created_at`, `updated_at` | `document_hash → map_documents CASCADE`; the DEM job's state (§4.7 "The DEM") |
 | `club_maps` | `id UUID` | `name`, `colour_profile`, `colour_overrides JSONB`, `north_lines_below`, `rotation_correction`, `created_by`, timestamps | a club's map as a series (06 §8) |
@@ -57,7 +57,8 @@ v0.6.1; `docs/migrations/2026-vector-map-pipeline.md`), and
 | `club_symbol_decisions` | `(fingerprint, library_version)` | `canonical_id` (NULL = keep as source), `decided_by → users SET NULL`, `decided_at` | a reviewed symbol outcome reused across documents (`docs/map-symbols.md` §8.5); written only by `mapImport.decide` (§6.8), read when a job is inserted (§6.1); no event or series column — the instance is one club's |
 | `map_patches` | `id UUID` | `event_id → events CASCADE` (`UNIQUE`), `document_hash → map_documents RESTRICT`, `enabled`, `ops JSONB`, `symbols JSONB`, `version BIGINT`, timestamps | an event's corrections to its pinned document (`docs/map-patches.md` §3.1); a GC reference (§8.1) |
 | `map_gps_tracks` | `id UUID` | `event_id → events CASCADE`, `name`, `source_name`, `points JSONB`, `point_count`, `recorded_at`, `trim_start` / `trim_end`, `derived_from UUID[]`, `single_pass JSONB`, `converted_op`, `created_by → users SET NULL`, `created_at`, `version BIGINT` | an event's GPS tracks in WGS 84 (`docs/map-gps-tracks.md` §1.1); no blob reference |
-| `map_import_jobs` | `id UUID` | `event_id CASCADE` / `club_map_id CASCADE` (the target, either nullable), `source_hash → map_sources CASCADE`, `decisions JSONB` (the decision snapshot, §6.1), `patch JSONB NOT NULL DEFAULT '[]'` (the version patch snapshot, §6.1), `state`, `stage`, `progress REAL`, `claimed_by`, `heartbeat_at`, `document_hash → map_documents SET NULL`, `error`, `started_by → users SET NULL`, timestamps | one import run (§6); indexed on `(state, heartbeat_at)` for the claim query and on each target; `started_by` is the user whose request started it (null for the re-match and the retired backfill), read by §4.2 |
+| `map_colour_settings` | `id UUID` | `club_map_id → club_maps CASCADE` (`UNIQUE`) **or** `event_id → events CASCADE` with `source_hash → map_sources CASCADE` (`UNIQUE(event_id, source_hash)`; a `CHECK` allows exactly one target), `colour_order` (`iof` \| `source`, default `iof`), `deviations JSONB NOT NULL DEFAULT '{}'` (an object), `updated_by → users SET NULL`, timestamps | a map's colour setting (`docs/map-symbols.md` §9.3 "Per map (row I6)"): the order its document is drawn in and its per-deviation overrides, only those that differ from the default (row I7 writes them). One row per club map series (kept across its versions) or per event and source file; no row = the defaults. Read by every import of the map (§6.1); not a GC reference; not in the dump or the checkout snapshot (§9) |
+| `map_import_jobs` | `id UUID` | `event_id CASCADE` / `club_map_id CASCADE` (the target, either nullable), `source_hash → map_sources CASCADE`, `decisions JSONB` (the decision snapshot, §6.1), `patch JSONB NOT NULL DEFAULT '[]'` (the version patch snapshot, §6.1), `colour JSONB NOT NULL DEFAULT '{}'` (the colour setting snapshot `{ order, deviations }`, §6.1; `{}` = the defaults), `state`, `stage`, `progress REAL`, `claimed_by`, `heartbeat_at`, `document_hash → map_documents SET NULL`, `error`, `started_by → users SET NULL`, timestamps | one import run (§6); indexed on `(state, heartbeat_at)` for the claim query and on each target; `started_by` is the user whose request started it (null for the re-match and the retired backfill), read by §4.2 |
 
 The legacy library table `club_map_files` (linked to its series by
 `club_map_id`), the tile cache `map_tiles` and the rendered-map cache
@@ -69,7 +70,7 @@ the bytes (compact binary that gains little) so `substring(bytes FROM … FOR �
 reads only the chunks a range request needs instead of inflating the row.
 
 Prisma models: `MapSource`, `MapDocument`, `MapPreview`, `ClubMap`,
-`ClubMapVersion`, `MapUpload`, `MapUploadChunk`, `MapImportJob`, `ClubSymbolDecision`, `MapPatch`, `MapHeightfield`;
+`ClubMapVersion`, `MapUpload`, `MapUploadChunk`, `MapImportJob`, `ClubSymbolDecision`, `MapPatch`, `MapHeightfield`, `MapColourSetting`;
 `MapFile.sourceHash / documentHash / clubMapVersionId`; `ClubMapFile.clubMapId`.
 
 ## 3. Store stage (import stage 9)
@@ -329,12 +330,13 @@ review UI (`docs/map-symbols.md` §8.7) reads them. `packages/api/src/map-store/
 ```
 GET /api/map-documents/:hash/thumbnail.png                 the whole map, long edge 512 px
 GET /api/map-documents/:hash/symbols/:idx.png              swatch of header.symbols[idx].render
+GET /api/map-documents/:hash/colour-order/:order.png       the colour panel's picture, :order iof | source (row I6)
 GET /api/library/:libraryId/:version/:code.png             swatch of a canonical entry
 ```
 
 **Rows.** Document previews are `map_previews` rows keyed
 `(document_hash, kind, key)`: `('thumbnail', '')` and
-`('symbol', '<idx>')`. A row is written once with `createMany …
+`('symbol', '<idx>')` and since row I6 `('colour-order', 'iof' | 'source')`. A row is written once with `createMany …
 skipDuplicates` and never updated, like the blobs (§1); it cascades with
 its document and is pure cache — deleting rows only costs a re-render.
 Who writes them:
@@ -343,6 +345,7 @@ Who writes them:
 |---|---|
 | thumbnail | import stage 10 (`derive`, §6.1) after the document is stored, including the dedup short-cut of `startImportJob`; otherwise on the first request that finds no row (documents stored before stage 10 existed, a skipped or failed derive) |
 | symbol | the first request for that index |
+| colour-order (`key` the order) | the first request for that order (row I6) |
 
 Reading a preview is not a reference: it never bumps
 `last_referenced_at` (§3).
@@ -374,6 +377,38 @@ normalised to the library's reference scale. A symbol with
 `render: null` has no swatch (404); `graphic` and `hidden` symbols
 render like any other.
 
+**Colour picture** (row I6; the review page's colour panel,
+`docs/map-symbols.md` §8.7). The reviewed document over a capped window,
+drawn by the reference raster on white paper, in the IOF order and in the
+map's own order. The window is the thumbnail's area when it fits 80 mm
+square, else the 80 mm tile (on a grid from the area's lower left) with
+the most objects by the centre of their boxes, clipped to the area;
+objects within 5 mm of it are drawn; 6 px/mm, so at most 480 px a side
+(`colourPictureWindow`, `renderColourPicture` in `render/previews.ts`). The window is
+computed from the reviewed document's geometry, which both orders share,
+so the two pictures show the same place. The document's own order
+(`header.colourOrder.order`; none = `source`) is drawn from it. The other
+order is drawn from the document the switch would give — its source
+imported with the same corrections and overrides in the other order — found
+by dedup, else imported by an ordinary job without a target
+(`started_by` the requester) on the first request: a GET may start an
+import (decided overnight on the user's standing instruction,
+2026-11-17, for review). The row is the reviewed document's
+(`('colour-order', '<order>')`), written once like every preview; the
+render goes through the thumbnails' one-at-a-time queue, the import does
+not (its derive stage renders a thumbnail through that queue). While the
+import runs past a 20 s wait (`MAP_COLOUR_PICTURE_WAIT_MS`) the route
+answers **503** with `Retry-After: 5` and the work goes on; the panel
+retries every 5 s. A failed import is **502**, remembered for 10 minutes
+per instance so the panel's retries start no new job; a queued or running
+job without a target for the same source, corrections and setting is
+waited for rather than doubled. The documents are decoded inside the
+render queue, after any import, so at most one picture's documents (the
+reviewed one and the other order's) are held per instance. Unlike
+the other previews the colour picture is not a pure function of its
+document: its other order is drawn as of the first request (the club
+decisions then).
+
 **Library swatch.** The entry resolved in the library's own palette
 edition (`materialiseLibrary(id)`, `iof2024` today) through the same
 swatch scene, at reference scale. `:code` is the entry code with an
@@ -389,16 +424,17 @@ so a hash cannot be probed.
 
 | Condition | Status |
 |---|---|
-| `:hash` not 64 hex; `:idx` not a non-negative safe integer; `:libraryId` not a shipped library; `:code` not `\d{3}(\.\d{1,2})?(\.[a-z])?` | 400 `{error}` |
+| `:hash` not 64 hex; `:idx` not a non-negative safe integer; `:order` not `iof` / `source`; `:libraryId` not a shipped library; `:code` not `\d{3}(\.\d{1,2})?(\.[a-z])?` | 400 `{error}` |
 | document routes: §4.2 predicate fails | 401 anonymous / 403 signed in |
 | library route: auth on and no signed-in user | 401 |
 | no such document; `idx` ≥ symbol count or `render: null`; thumbnail over the object cap; `:version` ≠ current; no such entry | 404 `{error}` |
+| colour picture: the other order still importing after the wait / its import failed | 503 `Retry-After: 5` / 502 |
 | `If-None-Match` matches the `ETag` | 304 |
 | otherwise | 200 PNG |
 
 | Route | Headers on 2xx / 304 |
 |---|---|
-| document previews | `Content-Type: image/png`, `Cache-Control: private, max-age=31536000, immutable`, `ETag: "<hash>/thumbnail"` or `"<hash>/symbols/<idx>"` |
+| document previews | `Content-Type: image/png`, `Cache-Control: private, max-age=31536000, immutable`, `ETag: "<hash>/thumbnail"`, `"<hash>/symbols/<idx>"` or `"<hash>/colour-order/<order>"` |
 | library preview | `Content-Type: image/png`, `Cache-Control: public, max-age=31536000, immutable`, `ETag: "<libraryId>@<version>/<code>"` |
 
 No `Range`, no `Content-Encoding` (PNG is already deflated), no `Vary`.
@@ -864,13 +900,16 @@ instance loses nothing. `packages/api/src/map-store/jobs.ts`.
 ### 6.1 Lifecycle
 
 ```
-startImportJob(db, {sourceHash, eventId? | clubMapId?, startedBy?, patch?, holdMs?})
+startImportJob(db, {sourceHash, eventId? | clubMapId?, startedBy?, patch?, colour?, holdMs?})
   │
   ├─ decisions = club_symbol_decisions for the source's kind (docs/map-symbols.md §8.5)   → the row's `decisions`
   ├─ patch = the version patch to bake (docs/map-patches.md §5; default [])                → the row's `patch`
+  ├─ colour = the caller's, else the target's map_colour_settings row — a club map's       → the row's `colour`
+  │   series' (also for a promote), else the event's for this source — else the defaults
+  │   (docs/map-symbols.md §9.3 "Per map (row I6)")
   │
   ├─ a map_documents row exists for (sourceHash, importer ∈ {ocad-12, omap-6}, library *@<current SYMBOL_LIBRARY_VERSION>)
-  │   with the same patch (null ≡ []) that follows `decisions` (newest first)
+  │   with the same patch (null ≡ []) that follows `decisions` and `colour` (newest first)
   │     → touchDocument, insert state=done with that document_hash, applyJobResult, thumbnail (§4.5), return;
   │       the height field (§4.7) is started, not awaited                                   (06 §8 dedup, no import worker)
   │
@@ -907,6 +946,19 @@ version or the document being replaced (§5.5 there) and stored in
 `patch`, so a re-claimed job bakes the same layers; the stored document
 records it in `map_documents.patch`, and dedup reuses only a document of
 the same patch.
+The **colour snapshot** (row I6) is the map's colour setting
+`{ order, deviations }` (`map-store/colour-settings.ts`), normalised (an
+override equal to its default is dropped, keys sorted) and passed to stage
+7 as `{ colourOrder, deviations }` (`importMapToDocument(…, { match })`,
+`docs/map-import.md` §2.2). A job with a target reads its map's row; a job
+without one (`decide`, `setColourOrder`, the colour picture) is given the
+setting by its caller — `decide` and the CRT import pass the reviewed
+document's own (`colourSettingsOfReport`), so deciding on a document in
+the map's own order stays in it. `{}` (a row an older image inserted)
+reads as the defaults. Dedup reuses only a document whose report says it
+was built in that setting (`reportFollowsColour`: the same order, and in
+`iof` the same overrides among the deviations it lists; the header records
+only the outcome, `map-document-format.md` §2).
 The dedup short-cut uses the same list: a stored document is reused only
 if `documentFollowsDecisions` holds for it — re-importing it now would
 apply exactly the decisions it records — so a decision or a `reset`
@@ -1105,7 +1157,7 @@ card's thumbnail follows the latest import and nothing here caches it.
 | `remove {id}` | deletes the series: versions cascade, `map_files.club_map_version_id` of events that pinned one is set `NULL`, jobs cascade |
 | `removeVersion {id, versionId}` | deletes the latest version when it is a promoted one (`docs/map-patches.md` §5.6): its `uploaded_by` or an admin; `VERSION_NOT_LATEST`, `VERSION_NOT_PROMOTED`, `PATCH_PROMOTING` while its promote job runs; events on it keep their document with `club_map_version_id` set `NULL` |
 | `download {id}` | the latest version's `map_sources` bytes, named by the version label (else `map_sources.file_name`) — the original file also for a promoted version (`docs/map-patches.md` §5 answer 8), which is named by `map_sources.file_name` (row G12b: its label is free text, the event's name, with no file extension; decided overnight on the user's standing instruction (2026-11-13), confirmed by the user 2026-11-17) |
-| `course.useClubMap {clubMapId}` | the series' rotation correction and the latest version's source (by hash, no bytes copied) **and its patch** (the import bakes it; dedup finds the version's document); the event's map file named by the version label, a promoted version's by `map_sources.file_name` (row G12b, as `download`); then `map_files.club_map_version_id` = that version on the event's rows with its `source_hash` |
+| `course.useClubMap {clubMapId}` | the series' rotation correction and the latest version's source (by hash, no bytes copied) **and its patch** (the import bakes it; dedup finds the version's document) **and its colour setting** (row I6: the series' `map_colour_settings` row copied to (event, that source) before the import, or the event's row for it removed when the series has none; later changes on either side do not travel); the event's map file named by the version label, a promoted version's by `map_sources.file_name` (row G12b, as `download`); then `map_files.club_map_version_id` = that version on the event's rows with its `source_hash` |
 
 The base64 `clubMap.upload` went in E5 (the web uploads chunked, §5.2),
 and with `club_map_files` its write-through to every mutation above.
@@ -1188,7 +1240,9 @@ and accepting the defaults is a no-op (06 §5.1) — and the review round
 runs *after* it, on any stored document:
 
 ```
-mapImport.review   { documentHash }               rows + stack + report + terrain (docs/map-import.md §2.2; terrain §4.7)
+mapImport.review   { documentHash, clubMapId? }   rows + stack + report + terrain + colour (docs/map-import.md §2.2; terrain §4.7;
+                                                  colour: the panel, docs/map-symbols.md §8.7 — the map is clubMapId,
+                                                  else the event of x-event-id; `current` also needs its colour setting)
 mapImport.decide   { documentHash, decisions }    club_symbol_decisions writes (packages/api/src/map-store/decisions.ts)
                                                   → startImportJob { sourceHash, startedBy, patch } — no target;
                                                     patch = the reviewed document's (docs/map-patches.md §5.5)
@@ -1200,7 +1254,24 @@ mapImport.finalise { documentHash, target }       applyJobResult with that docum
                                                   `source-mismatch`
 mapImport.exportCrt / importCrt                   the decisions as a Mapper CRT and back; the import resolves
                                                   to decide's list and runs decideOnDocument (map-symbols §8.6)
+mapImport.setColourOrder { documentHash, order,   the map's colour order (row I6, docs/map-symbols.md §9.3): written on the
+                           target }               target's map_colour_settings row — the club series, or (event, the
+                                                  document's source) — then startImportJob { sourceHash, startedBy,
+                                                  patch, colour } — no target, as decide; finalise pins the result
 ```
+
+`decide` and `importCrt` pass the reviewed document's own colour setting
+(read from its report), so a decision on a document in the map's own
+order gives a document in that order. `setColourOrder` checks its target
+as `finalise` does (404 for no map or an unknown series, 412 when the
+target holds another source) and takes the same permission as `decide`
+and `finalise`: the document's `EDIT_ACCESS` and, for the event,
+`courses.edit`. The setting is written at once: a re-match moves a pin
+whose document is in another setting (§6.9) even if **Use this version**
+was never pressed (decided overnight on the user's standing instruction,
+2026-11-17, for review). The write and the job are one function
+(`changeColourSettings` in `review.ts`) that row I7's `setDeviation`
+reuses with another change.
 
 - A decide job is an ordinary row (§6.1) with `event_id` and
   `club_map_id` null: it holds the document for the decider (§4.2 own-job
@@ -1237,6 +1308,7 @@ row with a `source_hash` but no `document_hash` is an item with reason
 | `importer` — not a current importer (`ocad-3` … `ocad-6`, `omap-1` rows) | re-matched | re-matched |
 | `library` — not the current library release (`none` rows, an older release) | re-matched | re-matched |
 | `decisions` — does not follow the current club decisions | re-matched | **kept** |
+| `colour` — not in its map's colour setting (row I6): the series', or the event's for that source | re-matched | re-matched |
 | `unpinned` — a sourced row without any document (E5) | — | imported |
 
 The Demo Competition fixture relies on `unpinned`: its `map_files` row
@@ -1245,7 +1317,12 @@ runs `map-rematch --event demo_competition` after loading it
 (`docs/demo.md`, "How the fixture holds the map").
 
 A club edition's document is its file's latest import (§6.4), so all
-three move it. An event keeps the document it pinned when only the
+four move it. The colour setting is the map's own, judged per pin (all
+rows read once per run), last: a document stale for another reason is
+listed under that one. An event pin stale only by `decisions` and also in
+another colour setting is re-matched for `colour`, and the job applies the
+current decisions too (decided overnight on the user's standing
+instruction, 2026-11-17, for review). An event keeps the document it pinned when only the
 decisions changed (06 §6 copy-on-use): moving it is `finalise` or a new
 upload. Importer and library staleness is a format migration and moves
 event pins too (03 §6.5: a re-match keeps reviewed
@@ -1898,12 +1975,20 @@ versions (version, label, corrections, the original-file note, delete of
 the latest promoted version — row G12b; the API is §6.5 `removeVersion`
 and `list`'s `layers` / `corrections`); a venue box's copy of a promoted
 version (the snapshot carries `map_documents.patch` for the event's
-documents, not `club_map_versions`, as for any version). Each lands with its own section here and its own tests.
+documents, not `club_map_versions`, as for any version); a map's colour
+setting (`map_colour_settings`, row I6) in the per-event dump (§7.3) and
+the checkout snapshot (§7.2): neither carries it, so an event restored
+from a dump keeps its pinned document but goes back to the IOF order at
+the next re-match, and a box imports its own uploads in the IOF order
+(decided overnight on the user's standing instruction, 2026-11-17, for
+review). Each lands with its own section here and its own tests.
 
 ## 10. Tests
 
 | Level | File | Covers |
 |---|---|---|
+| Unit (api) | `packages/api/src/__tests__/map-colour-settings.test.ts`, `map-import-jobs.test.ts` (I6 part), `map-rematch-cli.test.ts` (I6 part), `map-previews.test.ts` (I6 part), `render/__tests__/previews.test.ts` (I6 part) | row I6: the colour setting parsed (malformed → defaults), normalised, read from a report (fallback, overrides, pre-layers), `reportFollowsColour`; the worker applies a job's setting as the inline import; `staleReason` `colour` last; `:order` parsing and ETag; the picture's window (a small map whole, a large one capped at the densest tile) and both orders over one window, differing |
+| Integration (api) | `packages/api/src/__tests__/integration/map-colour-settings.test.ts` | row I6: the table's checks, uniqueness and cascade; `map_import_jobs.colour` default `{}` and check; `setColourOrder` on a club map (the row, the job's snapshot, a `source` document pinned nowhere, `review.current` / `colour.setting`, back to `iof` = the original by dedup); the setting survives a re-match (reason `colour`, then nothing) and a promote (version 2 in the series' order); `useClubMap` copies it; an event's own upload keeps it across a re-upload of the same file, another file starts at the defaults; the permission (anonymous, stranger, `courses.view`, kiosk key; 404, 412, 400); decide on a `source` document stays `source`; the picture route (400 / 401 / 403, own order from the document, the other order imported once as a job without a target, row written once, 304, two different pictures; 503 while importing) |
 | Integration (api) | `packages/api/src/__tests__/integration/map-promote.test.ts` | G12a (`docs/map-patches.md` §5): the three `patch` columns; a promote job's pins (§6.4: the version onto the baked document, the event onto the version); dedup per patch (§6.1); `decide` / `finalise` per patch (§6.8); `useClubMap` on a promoted series and `removeVersion` (§6.5); the re-match of a promoted version and its event (§6.9); the GC keeps promoted documents (§8.1); the per-event dump with `map_documents.patch` restored (§7.3); G12b: the promoted version's download and list `fileName` are the source's (§6.5) — the full list in `docs/map-patches.md` "Tests" |
 | Unit (api) | `packages/api/src/__tests__/snapshot-maps.test.ts` (G12a part) | `snapshotDocumentPatch`: a promoted document's patch written on the box, none for null / `[]` / garbage (§7.2) |
 | Unit (api) | `packages/api/src/__tests__/map-document-route.test.ts` | `parseRangeHeader` (forms, clamping, suffix, multi → ignored, unsatisfiable), `negotiateEncoding` (q-values, wildcard, refusal), `authoriseDocumentAccess` matrix over stub queries (including the own-job clause), `documentHeaderSummary` |
@@ -1974,7 +2059,7 @@ documents, not `club_map_versions`, as for any version). Each lands with its own
 | `packages/api/src/map-store/routes.ts` | document route, range/encoding helpers, auth predicate, `requireDocumentAccess` |
 | `packages/api/src/map-store/previews.ts` | `map_previews` rows (read, render on miss, stage 10 derive), library preview cache |
 | `packages/api/src/map-store/preview-routes.ts` | thumbnail, symbol and library preview routes |
-| `packages/api/src/render/previews.ts` | swatch and thumbnail renderers (reference raster) |
+| `packages/api/src/render/previews.ts` | swatch, thumbnail and colour-picture renderers (reference raster) |
 | `packages/api/src/map-store/source-routes.ts` | source route: download predicate, slice planner, `streamBlob` |
 | `packages/api/src/map-store/gc.ts` | `runStorageGc`, daily schedule (`maybeStartStorageGc` / `stopStorageGc`), grace and due rules |
 | `packages/api/src/routers/mapStorage.ts` | `mapStorage.gcRun` |
@@ -1992,7 +2077,9 @@ documents, not `club_map_versions`, as for any version). Each lands with its own
 | `packages/api/src/map-store/import-worker.ts` | worker-thread body: `importMapToDocument` by kind + report |
 | `packages/api/prisma/migrations/20261019150000_club_symbol_decisions/` | `club_symbol_decisions` |
 | `packages/api/src/map-store/decisions.ts` | decision rows: load, plan and write `decide`'s changes, job snapshot schema, "does a stored document follow the decisions" |
-| `packages/api/src/map-store/review.ts` | review payload, `decideOnDocument`, `finaliseDocument`, `isDocumentCurrent` |
+| `packages/api/src/map-store/review.ts` | review payload, `decideOnDocument`, `finaliseDocument`, `isDocumentCurrent`, `changeColourSettings` (row I6) |
+| `packages/api/src/map-store/colour-settings.ts` | a map's colour setting: parse, normalise, read from a report, the rows (`map_colour_settings`), the job's setting, `useClubMap`'s copy (row I6) |
+| `packages/api/src/map-store/review-colours.ts`, `colour-pictures.ts` | the review's colour block; the before / after picture (row I6) |
 | `packages/api/src/map-store/crt.ts` | CRT export (rows → `mapImport.formatCrt`, file name) and import (`planCrtImport` → `decideOnDocument`) |
 | `packages/api/src/map-store/rematch.ts` | re-match plan and run (§6.9) |
 | `packages/api/src/cli/map-rematch.ts` (+ `-args.ts`) | `pnpm map:rematch` |

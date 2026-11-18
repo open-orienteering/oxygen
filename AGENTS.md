@@ -138,7 +138,9 @@ shaped the original layout was retired in May 2026
   (`map_uploads`, `map_import_jobs`) use UUIDs (`docs/map-storage.md` §2),
   as does an event's map patch (`map_patches`, one row per event,
   `docs/map-patches.md` §3.1) and its GPS tracks (`map_gps_tracks`,
-  client-mintable, `docs/map-gps-tracks.md` §1.1).
+  client-mintable, `docs/map-gps-tracks.md` §1.1) and a map's colour
+  setting (`map_colour_settings`, per club map series or per event and
+  source file, `docs/map-symbols.md` §9.3).
 - **Top-level entity** (`events`) uses `BIGSERIAL` — there is no offline-
   authored event.
 - **Global directories** (`runner_directory`, `club_directory`,
