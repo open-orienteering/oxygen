@@ -91,6 +91,17 @@ describe("map document codec", () => {
     expect(Array.from(doc.coords.subarray(doc.coordStart[t1] * 2, doc.coordStart[t1] * 2 + 2))).toEqual([8_388_607, -8_388_608]);
   });
 
+  it("round-trips the colour order and the kept deviations; a header without them encodes as before (row I5)", () => {
+    const plain = encodeMapDocument(sample());
+    expect(decodeMapDocument(plain).header.colourOrder).toBeUndefined();
+    const ordered = { ...sample(), header: { ...baseHeader, colourOrder: { order: "iof" as const, kept: ["brown50-road>brown100-line"] } } };
+    const bytes = encodeMapDocument(ordered);
+    expect(decodeMapDocument(bytes).header.colourOrder).toEqual({ order: "iof", kept: ["brown50-road>brown100-line"] });
+    expect(sameBytes(bytes, plain)).toBe(false);
+    expect(decodeMapDocument(encodeMapDocument({ ...sample(), header: { ...baseHeader, colourOrder: { order: "source" } } })).header.colourOrder).toEqual({ order: "source" });
+    expect(() => encodeMapDocument({ ...sample(), header: { ...baseHeader, colourOrder: { order: "mapper" as "iof" } } })).toThrow();
+  });
+
   it("writes fixed-width sections at 4-byte aligned offsets and the geometry per the directory", () => {
     const bytes = encodeMapDocument(sample());
     const { header, bodyOffset } = readMapDocumentHeader(bytes);

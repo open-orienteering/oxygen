@@ -154,6 +154,13 @@ export const mapDocumentHeaderSchema = z.object({
   exportRectangles: z.array(printWindowSchema.extend({ name: z.string() })).default([]),
   /** Colour stack: index = draw order, 0 drawn first. */
   colours: z.array(documentColourSchema),
+  /**
+   * The order stage 7 built `colours` in (docs/map-symbols.md §9.3 "In the importer", row I5): `iof`, the layered
+   * stack (the default), or `source`, the mapper's table (§9.2). `kept`: in `iof`, the deviation keys (`"upper>lower"`)
+   * drawn in the source's order, sorted — the outcome, by default, override or implication, not the overrides asked
+   * for. Absent: a document from before `ocad-19` / `omap-12`, built in the source order.
+   */
+  colourOrder: z.object({ order: z.enum(["iof", "source"]), kept: z.array(z.string()).optional() }).optional(),
   symbols: z.array(documentSymbolSchema),
   /** Texts; `attrs.stringIdx` is 1-based into this list (0 = none). */
   strings: z.array(z.string()),
