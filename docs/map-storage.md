@@ -333,6 +333,7 @@ GET /api/map-documents/:hash/thumbnail.png                 the whole map, long e
 GET /api/map-documents/:hash/symbols/:idx.png              swatch of header.symbols[idx].render
 GET /api/map-documents/:hash/colour-order/:order.png       the colour panel's picture, :order iof | source (row I6);
                                                            ?deviations=upper>lower:keep,… the map's overrides (row I7)
+GET /api/map-documents/:hash/colour-order/:order.json      the document that order gives, { documentHash } (row I8a)
 GET /api/library/:libraryId/:version/:code.png             swatch of a canonical entry
 ```
 
@@ -420,6 +421,24 @@ reviewed one and the other order's) are held per instance. Unlike
 the other previews the colour picture is not a pure function of its
 document: its other order is drawn as of the first request (the club
 decisions then).
+
+**The other order's document (row I8a).** `….json` answers the hash of
+the document the switch to `:order` gives — the picture's import without
+the picture — for the review page's compare view
+(`docs/map-symbols.md` §8.7 "Compare"): `{ "documentHash": "<hex>" }`,
+`Cache-Control: no-store`. The document's own order answers its own hash
+without a job. The other order is the picture's: the same validation
+(`:order`, `?deviations=`, 400 before 401 / 403), the same §4.2
+authorisation and `?event=` scoping, the same overrides and bounded keys,
+dedup or an ordinary job without a target, the same 20 s wait (**503**
+`Retry-After: 5`), and a failure remembered for 10 minutes (**502**); an
+unknown document past authorisation is **404**. The document is then read
+through §4.2's document route, so the requester must be able to: when the
+answer came from someone else's job (a dedup hit, or a running job waited
+for), the route adds a done job row of the requester's own by dedup (no
+worker runs), which the own-job clause accepts. The remembered work is per
+requester for that reason. `colourOrderDocument` in `colour-pictures.ts`;
+the picture's `produce` and it share `importOtherOrder`.
 
 **Library swatch.** The entry resolved in the library's own palette
 edition (`materialiseLibrary(id)`, `iof2024` today) through the same
@@ -2014,6 +2033,8 @@ review). Each lands with its own section here and its own tests.
 | Unit (api) | `packages/api/src/__tests__/map-colour-settings.test.ts`, `map-import-jobs.test.ts` (I6 part), `map-rematch-cli.test.ts` (I6 part), `map-previews.test.ts` (I6 part), `render/__tests__/previews.test.ts` (I6 part) | row I6: the colour setting parsed (malformed → defaults), normalised, read from a report (fallback, overrides, pre-layers), `reportFollowsColour`; the worker applies a job's setting as the inline import; `staleReason` `colour` last; `:order` parsing and ETag; the picture's window (a small map whole, a large one capped at the densest tile) and both orders over one window, differing |
 | Integration (api) | `packages/api/src/__tests__/integration/map-colour-settings.test.ts` | row I6: the table's checks, uniqueness and cascade; `map_import_jobs.colour` default `{}` and check; `setColourOrder` on a club map (the row, the job's snapshot, a `source` document pinned nowhere, `review.current` / `colour.setting`, back to `iof` = the original by dedup); the setting survives a re-match (reason `colour`, then nothing) and a promote (version 2 in the series' order); `useClubMap` copies it; an event's own upload keeps it across a re-upload of the same file, another file starts at the defaults; the permission (anonymous, stranger, `courses.view`, kiosk key; 404, 412, 400); decide on a `source` document stays `source`; the picture route (400 / 401 / 403, own order from the document, the other order imported once as a job without a target, row written once, 304, two different pictures; 503 while importing) |
 | Integration (api) | `packages/api/src/__tests__/integration/map-deviation-overrides.test.ts` | row I7: `map_document_colour_settings` (a row per finished job, the check, the cascade); an override that changes no bytes keeps the pin current (`review.current`, no re-match item, dedup); `setDeviation` on a club map (keep a dropped deviation, drop a kept one, resets back to the original by dedup, kept through `source` and back; 400 for an unlisted or malformed key, 404, 401) and on an event's own upload (`courses.edit`, the re-match); a `source` document's IOF picture with `?deviations=` under its own key and ETag |
+| Integration (api) | `packages/api/src/__tests__/integration/map-colour-order-document.test.ts` | row I8a: `GET …/colour-order/:order.json` — its own order is the document, no job; the other order imported once as a job without a target, then by dedup, and back; nothing pinned or written; the picture imports nothing more; a `source` document's IOF side with `?deviations=` (and the defaults' without); a second user gets the first user's document and may then fetch it; 400 / 401 / 403 / 404; 503 + `Retry-After`, then 200; 502 remembered, no new job; an event's own map through `?event=` for a `courses.view` reader |
+| Unit (api) | `packages/api/src/__tests__/map-colour-settings.test.ts` (I8a part) | row I8a: the colour-order route's file name, `.png` the picture, `.json` the document |
 | Integration (api) | `packages/api/src/__tests__/integration/map-promote.test.ts` | G12a (`docs/map-patches.md` §5): the three `patch` columns; a promote job's pins (§6.4: the version onto the baked document, the event onto the version); dedup per patch (§6.1); `decide` / `finalise` per patch (§6.8); `useClubMap` on a promoted series and `removeVersion` (§6.5); the re-match of a promoted version and its event (§6.9); the GC keeps promoted documents (§8.1); the per-event dump with `map_documents.patch` restored (§7.3); G12b: the promoted version's download and list `fileName` are the source's (§6.5) — the full list in `docs/map-patches.md` "Tests" |
 | Unit (api) | `packages/api/src/__tests__/snapshot-maps.test.ts` (G12a part) | `snapshotDocumentPatch`: a promoted document's patch written on the box, none for null / `[]` / garbage (§7.2) |
 | Unit (api) | `packages/api/src/__tests__/map-document-route.test.ts` | `parseRangeHeader` (forms, clamping, suffix, multi → ignored, unsatisfiable), `negotiateEncoding` (q-values, wildcard, refusal), `authoriseDocumentAccess` matrix over stub queries (including the own-job clause), `documentHeaderSummary` |
@@ -2104,7 +2125,7 @@ review). Each lands with its own section here and its own tests.
 | `packages/api/src/map-store/decisions.ts` | decision rows: load, plan and write `decide`'s changes, job snapshot schema, "does a stored document follow the decisions" |
 | `packages/api/src/map-store/review.ts` | review payload, `decideOnDocument` (row I7: with the map's setting when the document follows it), `finaliseDocument`, `isDocumentCurrent`, `changeColourSettings` (row I6; row I7: under a lock on the target), `changeDeviation` (row I7) |
 | `packages/api/src/map-store/colour-settings.ts` | a map's colour setting: parse, normalise, read from a report, the rows (`map_colour_settings`), the job's setting, `useClubMap`'s copy (row I6); one deviation's choice (`withDeviationChoice`), the recorded settings (`map_document_colour_settings`, `documentFollowsColour`), the picture's `deviations` query (row I7) |
-| `packages/api/src/map-store/review-colours.ts`, `colour-pictures.ts` | the review's colour block (row I7: each deviation's `choice` and `overridden`); the before / after picture (row I6; row I7: an IOF picture of a `source` document with the map's overrides, keys bounded to the deviations the IOF document lists) |
+| `packages/api/src/map-store/review-colours.ts`, `colour-pictures.ts` | the review's colour block (row I7: each deviation's `choice` and `overridden`); the before / after picture (row I6; row I7: an IOF picture of a `source` document with the map's overrides, keys bounded to the deviations the IOF document lists); the other order's document for the compare view (row I8a, `colourOrderDocument`) |
 | `packages/api/src/map-store/crt.ts` | CRT export (rows → `mapImport.formatCrt`, file name) and import (`planCrtImport` → `decideOnDocument`) |
 | `packages/api/src/map-store/rematch.ts` | re-match plan and run (§6.9) |
 | `packages/api/src/cli/map-rematch.ts` (+ `-args.ts`) | `pnpm map:rematch` |

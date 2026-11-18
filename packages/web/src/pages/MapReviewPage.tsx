@@ -8,7 +8,7 @@
  * (`/settings/map-review/:documentHash?clubMap=<series>`) and from an
  * event's course editor (`/:nameId/map-review/:documentHash`).
  */
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import type { inferRouterOutputs } from "@trpc/server";
@@ -21,6 +21,8 @@ import { useCapabilities } from "../context/CapabilitiesContext";
 import { LanguageSelector } from "../components/LanguageSelector";
 import { UserChip } from "../components/UserChip";
 import { ColourLayersPanel } from "../components/map-review/ColourLayersPanel";
+import { CompareView } from "../components/map-review/CompareView";
+import { comparePairs, defaultComparePair, parseCompareQuery, withCompareQuery, type CompareQuery } from "../lib/map-compare";
 import {
   candidateIsCurrent,
   isJobPending,
@@ -172,6 +174,10 @@ function MapReview({ documentHash, target, pinnedHash, mapName, canEdit, backTo,
   const [onlyToReview, setOnlyToReview] = useState(false);
   const [showUnused, setShowUnused] = useState(false);
   const [finalisedNow, setFinalisedNow] = useState(false);
+  // The compare view's state is in the query (row I8a, docs/map-symbols.md §8.7 "Compare").
+  const [searchParams, setSearchParams] = useSearchParams();
+  const compare = parseCompareQuery(searchParams);
+  const setCompare = useCallback((q: CompareQuery | null) => setSearchParams((p) => withCompareQuery(p, q), { replace: true }), [setSearchParams]);
 
   const job = trpc.mapImport.status.useQuery(
     { jobId: jobId ?? "" },
@@ -388,7 +394,19 @@ function MapReview({ documentHash, target, pinnedHash, mapName, canEdit, backTo,
         </div>
       )}
 
-      <ColourLayersPanel colour={data.colour} nameId={nameId} canEdit={canEdit} busy={busy} hasTarget={hasTarget} onSwitch={(o) => void switchOrder(o)} onDeviation={(k, c) => void changeDeviation(k, c)} />
+      <ColourLayersPanel
+        colour={data.colour}
+        nameId={nameId}
+        canEdit={canEdit}
+        busy={busy}
+        hasTarget={hasTarget}
+        onSwitch={(o) => void switchOrder(o)}
+        onDeviation={(k, c) => void changeDeviation(k, c)}
+        onCompare={() => setCompare({ pair: defaultComparePair({ documentHash, pinnedHash }), mode: compare?.mode ?? "side" })}
+      />
+      {compare && (
+        <CompareView pairs={comparePairs({ documentHash, pinnedHash, colour: data.colour })} query={compare} nameId={nameId} onChange={setCompare} />
+      )}
 
       <CrtPanel documentHash={documentHash} clubMapId={clubMapId} canEdit={canEdit} busy={busy} onJob={followJob} onError={setError} rows={data.symbols} />
 

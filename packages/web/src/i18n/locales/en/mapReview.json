@@ -136,6 +136,37 @@
       "loading": "Drawing…",
       "failed": "No picture."
     },
+    "compare": {
+      "open": "Compare",
+      "openHint": "Both versions as live maps: pan and zoom one and the other follows.",
+      "title": "Compare",
+      "close": "Close",
+      "fit": "Fit",
+      "flip": "Flip",
+      "flipHint": "Space flips between the two.",
+      "pair": {
+        "label": "Compare",
+        "use": "In use / this version",
+        "order": "IOF order / the map's own order"
+      },
+      "mode": {
+        "label": "View",
+        "side": "Side by side",
+        "swipe": "Swipe"
+      },
+      "side": {
+        "inUse": "In use",
+        "thisVersion": "This version",
+        "iof": "IOF order",
+        "source": "The map's own order"
+      },
+      "same": "Both sides are the same version: nothing differs.",
+      "loading": "Loading the map…",
+      "importing": "Importing this order…",
+      "failed": "This version could not be loaded.",
+      "divider": "Drag to move the divider",
+      "retry": "Try again"
+    },
     "layers": {
       "title": "Layers, top first",
       "colour": "Colour",

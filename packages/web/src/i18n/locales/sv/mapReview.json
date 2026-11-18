@@ -136,6 +136,37 @@
       "loading": "Ritar…",
       "failed": "Ingen bild."
     },
+    "compare": {
+      "open": "Jämför",
+      "openHint": "Båda versionerna som levande kartor: panorera och zooma i den ena så följer den andra med.",
+      "title": "Jämför",
+      "close": "Stäng",
+      "fit": "Anpassa",
+      "flip": "Växla",
+      "flipHint": "Mellanslag växlar mellan de två.",
+      "pair": {
+        "label": "Jämför",
+        "use": "Används / den här versionen",
+        "order": "IOF-ordningen / kartans egen ordning"
+      },
+      "mode": {
+        "label": "Visning",
+        "side": "Sida vid sida",
+        "swipe": "Svep"
+      },
+      "side": {
+        "inUse": "Används",
+        "thisVersion": "Den här versionen",
+        "iof": "IOF-ordningen",
+        "source": "Kartans egen ordning"
+      },
+      "same": "Båda sidorna är samma version: inget skiljer.",
+      "loading": "Laddar kartan…",
+      "importing": "Importerar den här ordningen…",
+      "failed": "Versionen kunde inte laddas.",
+      "divider": "Dra för att flytta delaren",
+      "retry": "Försök igen"
+    },
     "layers": {
       "title": "Lager, överst först",
       "colour": "Färg",
