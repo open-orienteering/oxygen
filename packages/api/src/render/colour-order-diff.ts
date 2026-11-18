@@ -615,7 +615,8 @@ export function sourceTableOf(colours: readonly mapDocument.DocumentColour[]): {
 export interface LayeredCandidate<D> {
   /** The document on the layered stack, every source symbol re-indexed per reference. */
   doc: D;
-  layers: mapImport.ColourLayersResult;
+  /** The layered stack's report (`buildColourLayers`, or the import's `colourStack` with I5). */
+  layers: { report: mapImport.ColourLayersReport };
   /** Draws proxy objects (symbols without IR) in the row the source's row 0 became. */
   renderOptions: Pick<mapDocument.DocumentRenderOptions, "proxyColours">;
   /** The candidate's layers as the harness names them: one role per row. */
@@ -630,7 +631,9 @@ export interface LayeredCandidate<D> {
  * renders recovered from the aligned document (`sourceTableOf`, renders
  * mapped back), roles read from each symbol's match as the importer will,
  * `needed` from its applied matches, then `buildColourLayers`. Until I5
- * wires it into stage 7 this is how the harness gets its candidate.
+ * wired it into stage 7 this was how the harness got its candidate; it
+ * stays for the unit tests' hand-made stage 7 documents, and since I5 the
+ * harness reads the importer's own (`importedCandidate`).
  */
 export function layeredCandidate<D extends Pick<MapDocument, "header">>(
   doc: D,
@@ -667,17 +670,51 @@ export function layeredCandidate<D extends Pick<MapDocument, "header">>(
   // Where each source row went: a source colour to its lowest row, an inserted row by the palette id it stands for.
   const index = mapImport.paletteIndexOfStack(layers.colours);
   const rowOfAligned = h.colours.map((c, i) => (src.fromAligned[i] >= 0 ? layers.reindex.colours[src.fromAligned[i]] : (index.get(c.paletteIds?.[0] ?? "") ?? 0)));
+  return namedCandidate(h, candidate, layers.report, rowOfAligned, perSymbol, rank);
+}
+
+/**
+ * The candidate as the importer builds it (row I5): the same file imported in the `iof` order (`candidate`, its
+ * report's `colourStack`), against the `source` order's document (`doc`). Rows correspond by colour id — a source
+ * colour keeps `src:<n>` on its lowest row of its own, an inserted row its `<edition>:<paletteId>` — else by the
+ * palette id a source row carries. The two documents must come from one file (the same symbols, in the same order).
+ */
+export function importedCandidate<D extends Pick<MapDocument, "header">>(
+  doc: D,
+  candidate: D,
+  colourStack: Pick<mapImport.ColourStackSummary, "layers" | "inserted" | "aliased">,
+  perSymbol: readonly number[],
+  rank: ReadonlyMap<string, number>,
+): LayeredCandidate<D> {
+  if (!colourStack.layers) throw new Error("the candidate was not imported in the iof order");
+  if (doc.header.symbols.length !== candidate.header.symbols.length) throw new Error("the two imports have different symbol tables");
+  const report: mapImport.ColourLayersReport = { ...colourStack.layers, inserted: colourStack.inserted, aliased: colourStack.aliased };
+  const byId = new Map(candidate.header.colours.map((c, i) => [c.id, i]));
+  const index = mapImport.paletteIndexOfStack(candidate.header.colours);
+  const rowOfAligned = doc.header.colours.map((c) => byId.get(c.id) ?? index.get(c.paletteIds?.[0] ?? "") ?? 0);
+  return namedCandidate(doc.header, candidate, report, rowOfAligned, perSymbol, rank);
+}
+
+/** The candidate's proxies (I1's rule: the row the source's row 0 became) and its layers as the harness names them. */
+function namedCandidate<D extends Pick<MapDocument, "header">>(
+  source: MapDocument["header"],
+  candidate: D,
+  report: mapImport.ColourLayersReport,
+  rowOfAligned: number[],
+  perSymbol: readonly number[],
+  rank: ReadonlyMap<string, number>,
+): LayeredCandidate<D> {
   // The proxies draw in row 0 of the source: in the candidate, the row it became.
   const proxy = rowOfAligned[0] ?? 0;
-
+  const colours = candidate.header.colours;
   const candidateRenders = mapDocument.documentRenderInput(candidate as unknown as MapDocument, { only: [] }).symbols;
-  const plain = layers.colours.map((c) => {
+  const plain = colours.map((c) => {
     const e = { ...c };
     delete e.paletteIds;
     return e;
   });
-  const named = stackLayers(plain, h.symbols, candidateRenders, perSymbol, layers.report.rows.map((r) => r.role ?? undefined), rank);
-  return { doc: candidate, layers, renderOptions: { proxyColours: { line: proxy, area: proxy, point: proxy, text: proxy } }, stackLayers: named, rowOfAligned };
+  const named = stackLayers(plain, source.symbols, candidateRenders, perSymbol, report.rows.map((r) => r.role ?? undefined), rank);
+  return { doc: candidate, layers: { report }, renderOptions: { proxyColours: { line: proxy, area: proxy, point: proxy, text: proxy } }, stackLayers: named, rowOfAligned };
 }
 
 /**
