@@ -232,7 +232,7 @@ draws exactly as before in every backend (the same SVG, operators and PDF
 bytes). `symbolise` sets both from its input object (`RenderObject.opacity`,
 `.blend`; `objectAlpha`): every pass the object emits carries them — main
 lines, borders, halos, frames, pattern glyphs, text and its halo alike.
-Opacity ≥ 1 or not finite is not stored; below 0 is 0; 0 stays in the
+Opacity that rounds to 1 at the projection's 4 decimals (≥ 0.99995), or is not finite, is not stored; below 0 is 0; 0 stays in the
 stream (drawn as written, still hit-testable). Document objects never
 set one; the course and page layers do, from a user object (J4).
 
@@ -771,10 +771,10 @@ per instance; hatches are generated lines under a `<clipPath>`; text uses
 caller-supplied glyph outlines or, without them, em boxes (debug only,
 never an oracle). A `pointed` stroke with a `taper` is the shared
 `strokeOutline()` (`render/geometry.ts`) filled non-zero, as the PDF
-backend draws it (§5.3; SVG has no tapered stroke). A masked pass (§3.8)
-carries its opacity and blend (§3.9) on one outer `<g opacity
-style="mix-blend-mode:multiply">` around the whole pass — outside its
-mask and clip groups, because resvg isolates a clipped group and a blend
+backend draws it (§5.3; SVG has no tapered stroke). A pass with opacity
+or blend (§3.9) carries them on one outer `<g opacity
+style="mix-blend-mode:multiply">` around the whole pass — outside a
+masked pass's (§3.8) mask and clip groups, because resvg isolates a clipped group and a blend
 inside it would lose its backdrop; one group per pass is what makes a
 pass paint once. A masked pass is wrapped in one `<g clip-path>` per region of its mask, nested; each
 `<clipPath>` is the image frame (the viewBox rectangle) with the region's
@@ -3208,8 +3208,11 @@ painting operator, so each pixel blends once. A glyph or text pass (one
 composite separately) is drawn into an **isolated transparency-group
 form** (`OperatorResources.group`, `TG<n>`: `/Group << /S /Transparency
 /I true >>`, its own `/Resources`, content self-contained — its own
-colour, line style and `Tr`, a BBox of the pass's bounds plus
-`GROUP_BBOX_PAD_UM` in layer units) and the form is drawn `q /GS<n> gs
+colour, line style and `Tr`, a BBox in layer units — for a glyph pass
+each instance's position ± the form's farthest corner (mitres in, as
+the cull computes it) times its scale, so a turn stays inside; for a
+text pass its bounds plus `sizeUm + 2 × haloWidthUm`; both plus
+`GROUP_BBOX_PAD_UM`, since the BBox clips) and the form is drawn `q /GS<n> gs
 /TG<n> Do Q`. The ExtGState (`OperatorResources.alpha`) is `<< /Type
 /ExtGState /ca a /CA a [/BM /Multiply] >>`, one per distinct (opacity to
 4 decimals, blend) per document, named in first-use order; the page that
@@ -3217,7 +3220,8 @@ uses one gets `/Group << /Type /Group /S /Transparency /CS /DeviceCMYK >>`
 (`/DeviceRGB` in `rgb`), copied with `copyPage`. A pass that writes
 nothing (culled) asks for no resource; an alpha pass under a filter mask
 stays inside the mask's `W* n`. A writer without `alpha` (none in the
-tree) draws alpha passes opaque. Tests: `print/__tests__/alpha-pdf.test.ts`.
+tree) draws alpha passes opaque; one with `alpha` but no `group` draws
+glyph and text alpha passes opaque (the others under their ExtGState). Tests: `print/__tests__/alpha-pdf.test.ts`.
 
 **Units** (05 §5.2; C11 2026-10-24). Coordinates are the stream's paper
 µm minus `originUm`, written as **integers in a layer unit `u`**

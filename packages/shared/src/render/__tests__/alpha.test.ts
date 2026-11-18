@@ -18,10 +18,13 @@ const fonts = () => [liberation().sans];
 const colour = () => "#000000";
 
 describe("§3.9 objectAlpha", () => {
-  it("keeps opacity only below 1, clamps below 0, drops non-finite; blend only when multiply", () => {
+  it("keeps opacity only below 1 at 4 decimals, clamps below 0, drops non-finite; blend only when multiply", () => {
     expect(objectAlpha({})).toEqual({});
     expect(objectAlpha({ opacity: 1 })).toEqual({});
     expect(objectAlpha({ opacity: 1.5 })).toEqual({});
+    // What rounds to 1 at the projection's 4 decimals is opaque (never stored as 1).
+    expect(objectAlpha({ opacity: 0.99996 })).toEqual({});
+    expect(objectAlpha({ opacity: 0.9999 })).toEqual({ opacity: 0.9999 });
     expect(objectAlpha({ opacity: Number.NaN })).toEqual({});
     expect(objectAlpha({ opacity: 0.4 })).toEqual({ opacity: 0.4 });
     expect(objectAlpha({ opacity: -0.2 })).toEqual({ opacity: 0 });

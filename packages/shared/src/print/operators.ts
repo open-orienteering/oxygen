@@ -615,8 +615,32 @@ export function passStreamOperators(stream: PassStream, opts: OperatorOptions): 
   // glyph: it is drawn into an isolated transparency-group form, and the form under the ExtGState.
   // A pass that writes nothing (culled) asks for no resource.
   const emitAlpha = (p: Pass) => {
-    if (p.kind === "glyph" || p.kind === "text") {
-      const b = passStreamBounds({ ...stream, passes: [p], objectIdx: new Uint32Array(1), symbolIdx: new Uint32Array(1) });
+    if ((p.kind === "glyph" || p.kind === "text") && !opts.resources.group) {
+      // A writer that can make ExtGStates but no forms: the pass draws opaque (§5.3).
+      emit(p);
+      return;
+    }
+    const group = opts.resources.group;
+    if ((p.kind === "glyph" || p.kind === "text") && group) {
+      let b: { minX: number; minY: number; maxX: number; maxY: number } | null | undefined;
+      if (p.kind === "glyph") {
+        // As the cull above: the form's farthest corner (mitres in) times the instance's scale, so a turn stays inside.
+        const mesh = meshes.get(`${p.glyphId}/${p.partIdx}`);
+        if (!mesh || p.instances.length === 0) return;
+        const [x0, y0, x1, y1] = glyphFormBBox(mesh);
+        const reach = Math.hypot(Math.max(Math.abs(x0), Math.abs(x1)), Math.max(Math.abs(y0), Math.abs(y1)));
+        b = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+        const inst = p.instances;
+        for (let i = 0; i < inst.length; i += 5) {
+          const r = reach * inst[i + 4];
+          b.minX = Math.min(b.minX, inst[i] - r);
+          b.minY = Math.min(b.minY, inst[i + 1] - r);
+          b.maxX = Math.max(b.maxX, inst[i] + r);
+          b.maxY = Math.max(b.maxY, inst[i + 1] + r);
+        }
+      } else {
+        b = passStreamBounds({ ...stream, passes: [p], objectIdx: new Uint32Array(1), symbolIdx: new Uint32Array(1) });
+      }
       if (!b) return;
       const pad = (p.kind === "text" ? p.sizeUm + 2 * (p.haloWidthUm ?? 0) : 0) + GROUP_BBOX_PAD_UM;
       const bbox: [number, number, number, number] = [
@@ -625,7 +649,7 @@ export function passStreamOperators(stream: PassStream, opts: OperatorOptions): 
         Math.ceil((b.maxX + pad - e.ox) * e.k),
         Math.ceil((b.maxY + pad - e.oy) * e.k),
       ];
-      const name = opts.resources.group?.(bbox, (inner) => {
+      const name = group(bbox, (inner) => {
         const saved = { out, gs, stack, res };
         out = [];
         gs = {};

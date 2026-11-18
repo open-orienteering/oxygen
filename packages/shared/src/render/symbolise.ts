@@ -58,7 +58,8 @@ export interface RenderObject {
 export function objectAlpha(obj: { opacity?: number; blend?: BlendMode }): PassAlpha {
   const out: PassAlpha = {};
   const o = obj.opacity;
-  if (o !== undefined && Number.isFinite(o) && o < 1) out.opacity = Math.max(0, o);
+  // Below 0.99995 only: what rounds to 1 at the projection's 4 decimals is opaque everywhere.
+  if (o !== undefined && Number.isFinite(o) && o < 0.99995) out.opacity = Math.max(0, o);
   if (obj.blend === "multiply") out.blend = "multiply";
   return out;
 }

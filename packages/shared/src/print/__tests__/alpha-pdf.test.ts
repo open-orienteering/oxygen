@@ -131,6 +131,37 @@ describe("§3.9 operators", () => {
     }
   });
 
+  it("a turned glyph's form box holds its farthest corner (the box is a hard clip)", () => {
+    // A 10 mm square at 45°: its corners reach 7.07 mm from the origin, past the mesh's 5 mm.
+    const turned = passStreamFromJson({
+      objectIdx: [0],
+      symbolIdx: [0],
+      passes: [{ kind: "glyph", colour: 0, opacity: 0.5, glyphId: 1, partIdx: 0, instances: [20000, 20000, Math.SQRT1_2, Math.SQRT1_2, 1.5] }],
+      glyphTable: [{ glyphId: 1, partIdx: 0, fills: [{ coords: [-5000, -5000, 5000, -5000, 5000, 5000, -5000, 5000], closed: true }], strokes: [] }],
+      fonts: [],
+    });
+    const { res, groups } = fakeResources();
+    ops(turned, res, "cmyk");
+    expect(groups).toHaveLength(1);
+    const reachUm = Math.hypot(5000, 5000) * 1.5;
+    // Without a layer matrix the operators write paper µm.
+    const k = 1;
+    const [x0, y0, x1, y1] = groups[0].bbox;
+    expect(x0).toBeLessThanOrEqual((20000 - reachUm) * k);
+    expect(y0).toBeLessThanOrEqual((20000 - reachUm) * k);
+    expect(x1).toBeGreaterThanOrEqual((20000 + reachUm) * k);
+    expect(y1).toBeGreaterThanOrEqual((20000 + reachUm) * k);
+  });
+
+  it("a writer with ExtGStates but no forms draws glyph and text alpha passes opaque, not nothing", () => {
+    const { res } = fakeResources();
+    const { group: _g, ...noForms } = res;
+    const o = ops(fixture("alpha-passes"), noForms);
+    expect(o).toContain("/G1 Do");
+    expect(o).not.toContain("TG");
+    expect(ops(fixture("alpha-text"), noForms)).toContain("Tj");
+  });
+
   it("without an alpha resource (an older writer) alpha passes draw opaque, as before", () => {
     const { res } = fakeResources();
     const { alpha: _a, group: _g, ...plain } = res;
