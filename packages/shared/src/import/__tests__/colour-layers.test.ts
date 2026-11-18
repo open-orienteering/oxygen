@@ -12,7 +12,8 @@ import { parseRenderSymbol, type RenderSymbol } from "../../render/symbol.js";
 import { reindexRenderColours, renderColourPaths } from "../../render/transform.js";
 import { type PaletteEdition, palettes, type SpecId } from "../../symbol-library/palette.js";
 import { alignmentPalette, identifySourceColours, OVERLAY_STACK_IDS, paletteIndexOfStack } from "../colour-align.js";
-import { buildColourLayers, type ColourLayersResult, type LayerSymbol, symbolColourUses } from "../colour-layers.js";
+import { buildColourLayers, type ColourLayersResult, type DeviationChoice, deviationKey, KEPT_BY_DEFAULT, type LayerSymbol, symbolColourUses } from "../colour-layers.js";
+import { nackareservatet2023, toColours } from "./club-colour-tables.js";
 import { rolePalette } from "../colour-roles.js";
 import { documentSymbolFingerprints } from "../decisions.js";
 
@@ -66,43 +67,75 @@ const isomSymbols: Sym[] = [
   { objects: 3 },
 ];
 
-function build(colours: DocumentColour[], symbols: Sym[], needed: string[] = [], spec: SpecId = "ISOM2017-2", edition: PaletteEdition = "iof2022"): ColourLayersResult {
+function build(
+  colours: DocumentColour[],
+  symbols: Sym[],
+  needed: string[] = [],
+  spec: SpecId = "ISOM2017-2",
+  edition: PaletteEdition = "iof2022",
+  deviations?: Record<string, DeviationChoice>,
+): ColourLayersResult {
   const infos = identifySourceColours(colours, spec, edition);
   const uses = symbolColourUses(symbols, symbols.map((s) => s.objects), infos, rolePalette(spec, edition));
-  return buildColourLayers({ colours, infos, uses, needed: new Set(needed), spec, edition });
+  return buildColourLayers({ colours, infos, uses, needed: new Set(needed), spec, edition, ...(deviations ? { deviations } : {}) });
 }
 
-/** Each row as `role` (or `none:<place>`) @ source number (or `+` for an inserted row). */
+/** Each row as `role` (or `none:<place>`, `graphic`) @ source number (or `+` for an inserted row); a moved part's row with `^`. */
 const describeRows = (r: ColourLayersResult) =>
-  r.report.rows.map((row) => `${row.role ?? `none:${row.place}`}@${row.source === null ? "+" : r.colours[row.row].sourceNumber}`);
+  r.report.rows.map((row) => `${row.role ?? (row.place ? `none:${row.place}` : "graphic")}${row.ownOrder ? "^" : ""}@${row.source === null ? "+" : r.colours[row.row].sourceNumber}`);
 
 const rowOfRole = (r: ColourLayersResult, role: string, source?: number) =>
   r.report.rows.find((row) => row.role === role && (source === undefined || row.source === source))!.row;
 
-/** The stack `build(isomColours, isomSymbols, …)` gives, bottom first. */
+/** The rows symbol `i` draws its references in, in `renderColourPaths` order. */
+const rowsOf = (r: ColourLayersResult, i: number) => r.reindex.symbols[i]!;
+
+/** The row of the colour with id `id`. */
+const rowOf = (r: ColourLayersResult, id: string) => r.colours.findIndex((c) => c.id === id);
+
+/**
+ * The stack `build(isomColours, isomSymbols, …)` gives, bottom first. The table draws its one black under everything,
+ * so the paved area's dots and edge and the building's edge stay under their fills (§9.3 "Own order"); the roleless
+ * white and the graphic red bar stand where the source has them, between the contour brown and the blue; the unused
+ * purple at the bottom and "Logga yta" (unused, area by name) at the top of the source.
+ */
 const EXPECTED = [
+  "none:other@10",
   "yellow100@13",
   "green60-area@+",
   "green100-area@+",
+  "black-road-outline^@11",
+  "black100^@11",
   "brown50-paved@12",
   "blue100-area@18",
+  "black100^@11",
   "black50-building@14",
   "black-road-outline@11",
   "brown50-road@12",
-  "none:area@16",
-  "none:area@19",
   "white-skio@+",
   "purple-lower@+",
   "brown100-line@15",
+  "none:area@16",
+  "graphic@17",
   "blue100-line@18",
   "brown100-point@15",
-  "black100@11",
+  "none:area@19",
   "orange-skio@+",
   "green-skio@+",
-  "none:other@10",
-  "none:other@17",
   "purple-upper@+",
 ];
+
+/** Every symbol drawn from source keeps its parts' source order: a colour above another in the table draws above it. */
+function expectOwnOrder(r: ColourLayersResult, colours: readonly DocumentColour[], symbols: readonly Sym[]) {
+  symbols.forEach((s, i) => {
+    if (!s.render || (s.match && (s.match.state === "auto" || s.match.reviewed))) return;
+    const refs = renderColourPaths(s.render).map((x) => x.colour);
+    const rows = rowsOf(r, i);
+    refs.forEach((a, k) => refs.forEach((b, m) => {
+      if (a < b) expect(rows[k], `symbol ${i}: colour ${colours[a].name} under ${colours[b].name}`).toBeLessThan(rows[m]);
+    }));
+  });
+}
 
 describe("buildColourLayers: rows and order", () => {
   const r = build(isomColours, isomSymbols, ["blue100-area", "green60-area", "brown100-line"]);
@@ -116,15 +149,26 @@ describe("buildColourLayers: rows and order", () => {
   });
 
   it("puts the road outline over the paved brown and under the infill, the buildings over the paved brown", () => {
+    const [left, , infill] = rowsOf(r, 1);
     expect(rowOfRole(r, "brown50-paved")).toBeLessThan(rowOfRole(r, "black50-building"));
-    expect(rowOfRole(r, "black50-building")).toBeLessThan(rowOfRole(r, "black-road-outline"));
-    expect(rowOfRole(r, "black-road-outline")).toBeLessThan(rowOfRole(r, "brown50-road"));
+    expect(rowOfRole(r, "black50-building")).toBeLessThan(left);
+    expect(left).toBeLessThan(infill);
+    expect(r.report.rows[infill].role).toBe("brown50-road");
   });
 
-  it("keeps the colours of a split colour on their own rows: one black as dots, road outline and black 100 %", () => {
-    expect(r.report.split).toContainEqual({ source: 1, sourceNumber: 11, roles: ["black-road-outline", "black100"] });
-    expect(r.colours[rowOfRole(r, "black-road-outline")].id).toBe("src:11");
-    expect(r.colours[rowOfRole(r, "black100")].id).toBe("src:11/black100");
+  it("keeps the colours of a split colour on their own rows: one black as road outline and, under fills it is drawn under, dots and edges", () => {
+    expect(r.report.split).toContainEqual({ source: 1, sourceNumber: 11, roles: ["black-road-outline", "black100", "black100", "black-road-outline"] });
+    const [, dots, edge] = rowsOf(r, 0);
+    expect(r.colours[edge].id).toBe("src:11");
+    expect(r.colours[dots].id).toBe("src:11/black100/under1");
+    expect(r.colours[rowsOf(r, 2)[1]].id).toBe("src:11/black100/under2");
+    expect(r.colours[rowsOf(r, 1)[0]].id).toBe("src:11/black-road-outline");
+    expect(new Set(r.colours.map((c) => c.id)).size).toBe(r.colours.length);
+  });
+
+  it("keeps every source-drawn symbol's parts in their source order", () => {
+    expectOwnOrder(r, isomColours, isomSymbols);
+    expect(r.report.rows.filter((x) => x.ownOrder).map((x) => x.role)).toEqual(["black-road-outline", "black100", "black100"]);
   });
 });
 
@@ -164,18 +208,24 @@ describe("buildColourLayers: the stack", () => {
     expect(r.report.rows.find((x) => x.role === "brown100-point")).toMatchObject({ source: 5, origin: "use", objects: 0, symbols: 1 });
   });
 
-  it("places uses with no role by kind: an area directly under the ski mask row, anything else directly under upper purple", () => {
+  it("places uses with no role, graphic objects' colours and unused roleless colours by the source order", () => {
     const white = r.report.rows.find((x) => x.source === 6)!;
-    expect(white).toMatchObject({ role: null, place: "area", objects: 1 });
-    // The no-role areas (the white, then the unused "Logga yta"), in source order, directly under the mask row.
-    expect(white.row + 2).toBe(rowOfRole(r, "white-skio"));
-    expect(rowOfRole(r, "white-skio") + 1).toBe(rowOfRole(r, "purple-lower"));
+    expect(white).toMatchObject({ role: null, place: "area", objects: 1, sourceOrdered: "no-role" });
+    // Between the layers its source neighbours stand on: over the contour brown (index 5), under the blue (index 8).
+    expect(white.row).toBe(rowOfRole(r, "brown100-line") + 1);
     const red = r.report.rows.find((x) => x.source === 7)!;
-    expect(red).toMatchObject({ role: null, place: "other", objects: 2, graphicObjects: 2 });
-    expect(r.report.noRole).toEqual([
-      { row: white.row, source: 6, sourceNumber: 16, place: "area", objects: 1 },
-      { row: red.row, source: 7, sourceNumber: 17, place: "other", objects: 2 },
+    expect(red).toMatchObject({ role: null, place: null, objects: 2, graphicObjects: 2, sourceOrdered: "graphic" });
+    expect(red.row).toBe(white.row + 1);
+    expect(red.row + 1).toBe(rowOfRole(r, "blue100-line"));
+    expect(r.colours[red.row].id).toBe("src:17");
+    expect(r.report.noRole).toEqual([{ row: white.row, source: 6, sourceNumber: 16, place: "area", objects: 1 }]);
+    expect(r.report.sourceOrdered.map((s) => [s.source, s.reason, s.aboveLowerPurple])).toEqual([
+      [0, "no-role", false],
+      [6, "no-role", true],
+      [7, "graphic", true],
+      [9, "no-role", true],
     ]);
+    expect(rowOfRole(r, "white-skio") + 1).toBe(rowOfRole(r, "purple-lower"));
     expect(rowOfRole(r, "purple-upper")).toBe(r.colours.length - 1);
   });
 
@@ -186,8 +236,8 @@ describe("buildColourLayers: the stack", () => {
     expect(upper).toMatchObject({ id: "iof2022:purple-upper", cmyk: [0.35, 0.85, 0, 0], purpleRole: "upper", paletteIds: ["purple-upper"] });
     expect(r.report.purpleInk).toBe(0);
     expect(r.colours.filter((c) => c.purpleRole)).toHaveLength(2);
-    // The unused "Violett" is kept once with no role (a course purple candidate stands for no id).
-    expect(r.report.rows.find((x) => x.source === 0)).toMatchObject({ role: null, place: "other", origin: "unreferenced" });
+    // The unused "Violett" is kept once with no role (a course purple candidate stands for no id), at the bottom where the source has it.
+    expect(r.report.rows.find((x) => x.source === 0)).toMatchObject({ row: 0, role: null, place: "other", origin: "unreferenced", sourceOrdered: "no-role" });
   });
 
   it("puts the overlay's rows at their palette places: the track inks above black 100 %, orange under green, under upper purple", () => {
@@ -206,11 +256,14 @@ describe("buildColourLayers: the stack", () => {
 describe("buildColourLayers: re-index", () => {
   const r = build(isomColours, isomSymbols, ["blue100-area"]);
 
-  it("re-indexes per reference: the paved area's black is a road outline at its border and black 100 % in its dots", () => {
+  it("re-indexes per reference: the paved area's black is a road outline at its border and black 100 % in its dots, both under its fill", () => {
     const paved = reindexRenderColours(isomSymbols[0].render!, r.reindex.symbols[0]!);
-    expect(renderColourPaths(paved).map((x) => x.colour)).toEqual([rowOfRole(r, "brown50-paved"), rowOfRole(r, "black100"), rowOfRole(r, "black-road-outline")]);
+    const pavedRow = rowOfRole(r, "brown50-paved");
+    expect(renderColourPaths(paved).map((x) => r.report.rows[x.colour].role)).toEqual(["brown50-paved", "black100", "black-road-outline"]);
+    expect(renderColourPaths(paved).map((x) => x.colour)).toEqual([pavedRow, pavedRow - 1, pavedRow - 2]);
     const road = reindexRenderColours(isomSymbols[1].render!, r.reindex.symbols[1]!);
-    expect(renderColourPaths(road).map((x) => x.colour)).toEqual([rowOfRole(r, "black-road-outline"), rowOfRole(r, "black-road-outline"), rowOfRole(r, "brown50-road")]);
+    const outline = rowOf(r, "src:11/black-road-outline");
+    expect(renderColourPaths(road).map((x) => x.colour)).toEqual([outline, outline, rowOfRole(r, "brown50-road")]);
   });
 
   it("maps every reference to a row of its own source colour, and each colour to its lowest row", () => {
@@ -361,5 +414,215 @@ describe("buildColourLayers: ids, aliases and inks", () => {
     const r = build(isomColours, isomSymbols);
     expect(r.colours[rowOfRole(r, "orange-skio")].id).toBe("iof2024:orange-skio");
     expect(r.colours[rowOfRole(r, "green-skio")].id).toBe("iof2022:green-skio");
+  });
+});
+
+// ---- Row I4: own order, deviations, source order -----------------------------------------------------------------
+
+/** A line drawn as OCAD draws a road: a brown 50 % main as wide as the black side borders' centres, the borders over it. */
+const ocadRoad = (main: number, border: number, objects: number, match: Sym["match"]): Sym => ({
+  objects,
+  match,
+  render: sym({ type: "line", main: { colour: main, widthUm: 500 }, borders: { left: { colour: border, widthUm: 140, shiftUm: 250 }, right: { colour: border, widthUm: 140, shiftUm: 250 } } }),
+});
+const line = (c: number, objects: number, extra: Partial<Sym> = {}): Sym => ({ objects, render: sym({ type: "line", main: { colour: c, widthUm: 140 } }), ...extra });
+const area = (c: number, objects: number, extra: Partial<Sym> = {}): Sym => ({ objects, render: sym({ type: "area", fill: c }), ...extra });
+const suggested = (canonicalId: string) => ({ canonicalId, state: "suggested" as const, reviewed: false });
+const auto = (canonicalId: string) => ({ canonicalId, state: "auto" as const, reviewed: false });
+
+describe("buildColourLayers: own order (a symbol drawn inside out)", () => {
+  // Contour brown, the road's brown 50 %, the black: the table draws the black over the brown 50 %.
+  const colours = [colour(1, "Brun", ink("brown100-line")), colour(2, "Brun 50%", ink("brown50-paved")), colour(3, "Svart", [0, 0, 0, 1])];
+  const symbols = [line(0, 20), ocadRoad(1, 2, 6, suggested("ISOM2017-2:502")), ocadRoad(1, 2, 4, auto("ISOM2017-2:502"))];
+  const r = build(colours, symbols);
+
+  it("keeps a source-drawn road's brown main under its black borders: the main goes to a row of its own under the road outline", () => {
+    const [main, left, right] = rowsOf(r, 1);
+    expect(r.report.rows[left]).toMatchObject({ role: "black-road-outline", ownOrder: false });
+    expect(right).toBe(left);
+    expect(r.report.rows[main]).toMatchObject({ role: "brown50-road", ownOrder: true, source: 1 });
+    expect(main).toBe(left - 1);
+    expect(r.colours[main].paletteIds).toBeUndefined();
+    expectOwnOrder(r, colours, symbols);
+  });
+
+  it("leaves a library-drawn symbol's parts at their palette places, and the palette id on that row", () => {
+    const [main, left] = rowsOf(r, 2);
+    expect(r.report.rows[main]).toMatchObject({ role: "brown50-road", ownOrder: false });
+    expect(main).toBeGreaterThan(left);
+    expect(r.colours[main].paletteIds).toEqual(["brown50-road"]);
+  });
+
+  it("counts the inside-out symbol in no deviation; the library-drawn road's infill under the table's black is one, dropped", () => {
+    // Upper: the outline row (the source-drawn road's 6 objects and the library road's 4); lower: the infill row, where
+    // only the library road draws — the source-drawn road's main moved under the outline.
+    expect(r.report.deviations.find((d) => deviationKey(d.upper, d.lower) === "black-road-outline>brown50-road")).toEqual({
+      upper: "black-road-outline",
+      lower: "brown50-road",
+      kept: false,
+      byDefault: true,
+      objects: { upper: 10, lower: 4 },
+    });
+  });
+});
+
+/** Club-full's colour table (club-colour-tables.ts), its colours found by source number. */
+const nacka = toColours(nackareservatet2023);
+const nk = (n: number) => nacka.findIndex((c) => c.sourceNumber === n);
+
+describe("buildColourLayers: deviations (Club-full's table: streets over the contours)", () => {
+  const street: Sym = { objects: 10, render: sym({ type: "line", borders: { left: { colour: nk(101), widthUm: 140, shiftUm: 290 }, right: { colour: nk(101), widthUm: 140, shiftUm: 290 }, backgroundColour: nk(99) } }) };
+  const symbols: Sym[] = [
+    line(nk(107), 30), // 0: contour
+    street, // 1: street outline and infill, both over the contour brown in the table
+    area(nk(111), 8), // 2: paved area, under the contour brown
+    area(nk(108), 5), // 3: lake, under the contour brown
+    line(nk(468), 20), // 4: black 100 %
+    area(nk(106), 2), // 5: a lake drawn in the line blue, over the contour brown
+  ];
+  const contour = (r: ColourLayersResult) => rowsOf(r, 0)[0];
+  const [outline, , infill] = [0, 1, 2];
+
+  it("lists every deviation with its object counts, the most objects first", () => {
+    const r = build(nacka, symbols);
+    const keys = r.report.deviations.map((d) => deviationKey(d.upper, d.lower));
+    expect(keys).toEqual(expect.arrayContaining(["brown50-road>brown100-line", "black-road-outline>brown100-line", "blue100-area>brown100-line"]));
+    expect(r.report.deviations.find((d) => d.upper === "brown50-road")).toEqual({ upper: "brown50-road", lower: "brown100-line", kept: true, byDefault: true, objects: { upper: 10, lower: 30 } });
+    const totals = r.report.deviations.map((d) => d.objects.upper + d.objects.lower);
+    expect(totals).toEqual([...totals].sort((a, b) => b - a));
+  });
+
+  it("keeps streets over the contours by default: the contour brown sinks under the road, never under the lakes and paved areas it was drawn over", () => {
+    const r = build(nacka, symbols);
+    const road = rowsOf(r, 1);
+    expect(contour(r)).toBeLessThan(road[outline]);
+    expect(contour(r)).toBeLessThan(road[infill]);
+    expect(contour(r)).toBeGreaterThan(rowsOf(r, 3)[0]);
+    expect(contour(r)).toBeGreaterThan(rowsOf(r, 2)[0]);
+    // On ISOM the contours then stand under lower purple; the road infill never goes above it.
+    expect(road[infill]).toBeLessThan(rowOfRole(r, "purple-lower"));
+    expect(contour(r)).toBeLessThan(rowOfRole(r, "purple-lower"));
+    expect(r.report.deviations.find((d) => d.upper === "black-road-outline" && d.lower === "brown100-line")).toMatchObject({ kept: true, byDefault: true });
+    expect([...KEPT_BY_DEFAULT]).toContain("brown50-paved>brown100-line");
+  });
+
+  it("drops a default deviation by override: the palette's order, the contour brown over the road and over lower purple", () => {
+    const r = build(nacka, symbols, [], "ISOM2017-2", "iof2022", { "brown50-road>brown100-line": "drop", "black-road-outline>brown100-line": "drop" });
+    const road = rowsOf(r, 1);
+    expect(contour(r)).toBeGreaterThan(road[infill]);
+    expect(contour(r)).toBeGreaterThan(road[outline]);
+    expect(contour(r)).toBeGreaterThan(rowOfRole(r, "purple-lower"));
+    expect(r.report.deviations.find((d) => d.upper === "brown50-road")).toMatchObject({ kept: false, byDefault: false });
+  });
+
+  it("drops any other deviation by default and keeps it by override (a lake the table draws over the contours)", () => {
+    const byDefault = build(nacka, symbols);
+    expect(rowsOf(byDefault, 5)[0]).toBeLessThan(contour(byDefault));
+    expect(byDefault.report.deviations.find((d) => d.upper === "blue100-area")).toMatchObject({ lower: "brown100-line", kept: false, byDefault: true, objects: { upper: 2, lower: 30 } });
+    const kept = build(nacka, symbols, [], "ISOM2017-2", "iof2022", { "blue100-area>brown100-line": "keep" });
+    expect(rowsOf(kept, 5)[0]).toBeGreaterThan(contour(kept));
+    expect(rowsOf(kept, 5)[0]).toBeLessThan(rowOfRole(kept, "purple-lower"));
+    expect(kept.report.deviations.find((d) => d.upper === "blue100-area")).toMatchObject({ kept: true, byDefault: false });
+  });
+});
+
+describe("buildColourLayers: kept deviations that cannot all hold", () => {
+  // Lake, contour brown, paved brown — the table draws the paved brown over both.
+  const colours = [colour(1, "Blå", ink("blue100-area")), colour(2, "Brun", ink("brown100-line")), colour(3, "Brun 50%", ink("brown50-paved"))];
+  const symbols = [area(0, 4), line(1, 9), area(2, 3)];
+
+  it("keeps a deviation dropped by default when a kept one needs it, and says which", () => {
+    const r = build(colours, symbols);
+    // Paved over contour is kept; lake under contour holds both ways; so paved over lake must hold too.
+    expect(rowsOf(r, 0)[0]).toBeLessThan(rowsOf(r, 1)[0]);
+    expect(rowsOf(r, 1)[0]).toBeLessThan(rowsOf(r, 2)[0]);
+    expect(r.report.deviations.find((d) => d.upper === "brown50-paved" && d.lower === "blue100-area")).toEqual({
+      upper: "brown50-paved",
+      lower: "blue100-area",
+      kept: true,
+      byDefault: true,
+      objects: { upper: 3, lower: 4 },
+      impliedBy: ["brown50-paved>brown100-line"],
+    });
+    expect(rowsOf(r, 2)[0]).toBeLessThan(rowOfRole(r, "purple-lower"));
+  });
+
+  it("drops a kept deviation that contradicts an explicit drop, and says what blocked it", () => {
+    const r = build(colours, symbols, [], "ISOM2017-2", "iof2022", { "brown50-paved>blue100-area": "drop" });
+    expect(rowsOf(r, 2)[0]).toBeLessThan(rowsOf(r, 0)[0]);
+    expect(rowsOf(r, 0)[0]).toBeLessThan(rowsOf(r, 1)[0]);
+    expect(r.report.deviations.find((d) => d.lower === "brown100-line")).toEqual({
+      upper: "brown50-paved",
+      lower: "brown100-line",
+      kept: false,
+      byDefault: true,
+      objects: { upper: 3, lower: 9 },
+      blockedBy: ["blue100-area"],
+    });
+  });
+
+  it("resolves the same way every time", () => {
+    const a = build(colours, symbols, [], "ISOM2017-2", "iof2022", { "brown50-paved>blue100-area": "drop" });
+    const b = build(colours.map((c) => ({ ...c })), symbols.map((s) => ({ ...s })), [], "ISOM2017-2", "iof2022", { "brown50-paved>blue100-area": "drop" });
+    expect(JSON.stringify(b)).toBe(JSON.stringify(a));
+  });
+});
+
+describe("buildColourLayers: source order (masks, graphic objects, no role)", () => {
+  // Yellow, its white, black, contour brown, then a white the mapper draws over everything to blank out a control description box.
+  const colours = [colour(1, "Gul", ink("yellow100")), colour(2, "Vit för gul", [0, 0, 0, 0]), colour(3, "Svart", [0, 0, 0, 1]), colour(4, "Brun", ink("brown100-line")), colour(5, "Vit mask", [0, 0, 0, 0])];
+  const symbols: Sym[] = [
+    area(0, 6), // 0: open land
+    area(1, 2, { match: suggested("ISOM2017-2:402") }), // 1: the white of semi-open land, by hint white-over-yellow
+    line(2, 12), // 2: black 100 %
+    line(3, 9), // 3: contour
+    area(4, 1, { match: suggested("ISOM2017-2:405") }), // 4: the mask, by hint white-over-green-brown
+    line(2, 3, { origin: "graphic" }), // 5: a black frame bar of a graphic object
+  ];
+  const r = build(colours, symbols);
+
+  it("places a white the source draws over layers the palette ranks above its role by the source order: a mask", () => {
+    const mask = r.report.rows[rowsOf(r, 4)[0]];
+    expect(mask).toMatchObject({ role: "white-over-green-brown", sourceOrdered: "mask" });
+    expect(mask.row).toBeGreaterThan(rowOfRole(r, "black100"));
+    expect(mask.row).toBeLessThan(rowOfRole(r, "purple-upper"));
+    expect(r.colours[mask.row].paletteIds).toBeUndefined();
+    expect(r.report.sourceOrdered).toContainEqual({ row: mask.row, source: 4, sourceNumber: 5, reason: "mask", role: "white-over-green-brown", objects: 1, aboveLowerPurple: true });
+  });
+
+  it("leaves a white the source draws where the palette has it at its palette place", () => {
+    expect(r.report.rows[rowsOf(r, 1)[0]]).toMatchObject({ role: "white-over-yellow", sourceOrdered: null });
+    expect(rowsOf(r, 1)[0]).toBe(rowsOf(r, 0)[0] + 1);
+  });
+
+  it("puts a graphic object's colour on a row of its own at the source's place: the frame bar over the yellow and white, under the contour brown", () => {
+    const bar = rowsOf(r, 5)[0];
+    expect(r.report.rows[bar]).toMatchObject({ source: 2, role: null, place: null, sourceOrdered: "graphic", objects: 3, graphicObjects: 3 });
+    // The black's lowest row keeps its id; its black 100 % row is the split.
+    expect(r.colours[bar].id).toBe("src:3");
+    expect(r.colours[rowOfRole(r, "black100")].id).toBe("src:3/black100");
+    expect(bar).toBeGreaterThan(rowsOf(r, 1)[0]);
+    expect(bar).toBeLessThan(rowsOf(r, 3)[0]);
+  });
+
+  it("keeps an inserted white-upper over the roleless colours the source has on top (ISSprOM)", () => {
+    const sprint = [colour(1, "Svart", [0, 0, 0, 1]), colour(2, "Röd", [0, 1, 1, 0])];
+    const s = build(sprint, [line(0, 5), line(1, 2)], ["white-upper"], "ISSprOM2019-2", "iof2024");
+    const red = rowsOf(s, 1)[0];
+    expect(s.report.rows[red]).toMatchObject({ role: null, sourceOrdered: "no-role" });
+    expect(red).toBeGreaterThan(rowOfRole(s, "black100"));
+    expect(red).toBeLessThan(rowOfRole(s, "white-upper"));
+  });
+});
+
+describe("buildColourLayers: which row carries a palette id", () => {
+  it("is the row of the colour §9.2 step 2 takes for the id (the most used colour), not the row with the most objects", () => {
+    const colours = [colour(1, "Gul", ink("yellow100")), colour(2, "Svart A", [0, 0, 0, 1]), colour(3, "Svart B", [0, 0, 0, 1])];
+    const cultivated: Sym = { objects: 10, render: sym({ type: "area", fill: 0, patterns: [{ glyph: { parts: [disc(1)], rotatable: false }, cellWidthUm: 500, cellHeightUm: 500 }] }) };
+    const r = build(colours, [cultivated, line(1, 1), line(2, 5)]);
+    const a = rowsOf(r, 1)[0], b = rowsOf(r, 2)[0];
+    expect([r.report.rows[a].role, r.report.rows[b].role]).toEqual(["black100", "black100"]);
+    expect(r.colours[a].paletteIds).toEqual(["black100"]);
+    expect(r.colours[b].paletteIds).toBeUndefined();
   });
 });

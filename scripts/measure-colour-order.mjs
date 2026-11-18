@@ -314,7 +314,8 @@ async function main() {
         tiles.push({ x: t.x, y: t.y, boundsMm: [t.bounds.minX, t.bounds.minY, t.bounds.maxX, t.bounds.maxY].map((v) => v / 1000), px: a.width * a.height, changed: d.changed, unattributed });
       }
 
-      const result = co.classify(kinds, classification, label);
+      // `reported` rules read the layered candidate's own report (§6.5 "Classes"); the permutation has none.
+      const result = co.classify(kinds, classification, label, layered ? co.reportedClasses(layered.stackLayers, layered.layers.report) : undefined);
       const layerOf = (name) => byName.get(layerName(name));
       const kindRows = result.kinds.map((r) => ({ ...r, suggested: co.suggestClass(r.from, r.to, layerOf, rank) }));
       const unattributed = kinds.get(co.UNATTRIBUTED) ?? 0;
@@ -392,10 +393,21 @@ async function main() {
 /** What the layered stack did, by palette id and number only (standard output may quote it). */
 function layersSummary(report) {
   const count = (pred) => report.rows.filter(pred).length;
+  const reasons = (pred) => Object.fromEntries(["no-role", "graphic", "mask"].map((why) => [why, report.sourceOrdered.filter((s) => s.reason === why && pred(s)).length]));
+  const dev = (d) => `${d.upper}>${d.lower}`;
   return {
     rows: report.rows.length,
     split: report.split.map((s) => s.roles.map((r) => r ?? "none").join("+")),
     noRole: { area: count((r) => r.origin === "use" && !r.role && r.place === "area"), other: count((r) => r.origin === "use" && !r.role && r.place === "other") },
+    sourceOrdered: reasons(() => true),
+    sourceOrderedAboveLowerPurple: reasons((s) => s.aboveLowerPurple),
+    ownOrder: count((r) => r.ownOrder),
+    deviations: {
+      kept: report.deviations.filter((d) => d.kept && !d.impliedBy).map(dev),
+      implied: report.deviations.filter((d) => d.impliedBy).map(dev),
+      blocked: report.deviations.filter((d) => d.blockedBy).map(dev),
+      dropped: report.deviations.filter((d) => !d.kept).length,
+    },
     unreferenced: count((r) => r.origin === "unreferenced"),
     inserted: report.inserted,
     aliased: report.aliased.map((a) => a.paletteId),
@@ -412,6 +424,9 @@ function printMap(m) {
   if (m.layers) {
     const l = m.layers;
     console.log(`  layers     rows ${l.rows}  split ${l.split.length}${l.split.length ? ` (${l.split.join(", ")})` : ""}  no role: area ${l.noRole.area} / other ${l.noRole.other}  unreferenced ${l.unreferenced}`);
+    const so = (r) => Object.entries(r).map(([k, v]) => `${k} ${v}`).join(" / ");
+    console.log(`             source order: ${so(l.sourceOrdered)} (above lower purple: ${so(l.sourceOrderedAboveLowerPurple)})  own order ${l.ownOrder}`);
+    console.log(`             deviations kept ${l.deviations.kept.join(", ") || "—"}  implied ${l.deviations.implied.length}  blocked ${l.deviations.blocked.join(", ") || "—"}  dropped ${l.deviations.dropped}`);
     console.log(`             inserted ${l.inserted.join(", ") || "—"}  aliased ${l.aliased.join(", ") || "—"}  course purple ink ${l.purpleInk ? "the map's" : "the palette's"}`);
   }
   console.log(`  tiles      ${m.tiles} of ${m.settings.tileMm} mm at ${m.settings.pxPerMm} px/mm; changed in ${m.tilesChanged}, over 1 % in ${m.tilesOver1pct}`);

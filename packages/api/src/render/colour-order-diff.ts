@@ -811,6 +811,11 @@ const ruleSchema = z.object({
   from: z.string().min(1),
   to: z.string().min(1),
   class: z.enum(CHANGE_CLASSES),
+  /**
+   * Matches only where the candidate's own report gives the kind this class (`reportedClasses`): a dropped deviation
+   * the report lists for the two layers' rows, a row it placed by the source order for that reason.
+   */
+  reported: z.boolean().optional(),
   note: z.string().optional(),
 });
 const classificationSchema = z.object({ version: z.literal(1), rules: z.array(ruleSchema) });
@@ -852,12 +857,45 @@ export interface ClassificationResult {
   unusedRules: number[];
 }
 
+/** What the candidate's report says a kind is (`reportedClasses`); without one, no `reported` rule matches. */
+export type ReportedClasses = (from: string, to: string) => ReadonlySet<ChangeClass>;
+
+/**
+ * The classes the layered candidate's own report gives a change kind
+ * (`map-rendering.md` §6.5 "Classes"), by the rows its two layers name:
+ * `layout`, `mask` or `no-role` when either row was placed by the source
+ * order for that reason (`sourceOrdered`); `deviation-dropped` when both are
+ * palette-placed rows of two roles the report lists as a dropped deviation
+ * with the source's upper on top in the source (`from` from the higher source
+ * colour). A name that is no layer of the stack gives nothing.
+ */
+export function reportedClasses(
+  layers: readonly Pick<StackLayer, "name" | "row">[],
+  report: Pick<mapImport.ColourLayersReport, "rows" | "deviations">,
+): ReportedClasses {
+  const rowOf = new Map(layers.map((l) => [l.name, l.row]));
+  const dropped = new Set(report.deviations.filter((d) => !d.kept).map((d) => mapImport.deviationKey(d.upper, d.lower)));
+  const BY_REASON: Record<mapImport.SourceOrderReason, ChangeClass> = { graphic: "layout", mask: "mask", "no-role": "no-role" };
+  const strip = (n: string) => (n.startsWith(GRAPHIC_PREFIX) ? n.slice(GRAPHIC_PREFIX.length) : n);
+  return (from, to) => {
+    const out = new Set<ChangeClass>();
+    const a = report.rows[rowOf.get(strip(from)) ?? -1], b = report.rows[rowOf.get(strip(to)) ?? -1];
+    if (!a || !b) return out;
+    for (const r of [a, b]) if (r.sourceOrdered) out.add(BY_REASON[r.sourceOrdered]);
+    if (!a.sourceOrdered && !b.sourceOrdered && a.role && b.role && a.source !== null && b.source !== null && a.source > b.source && dropped.has(mapImport.deviationKey(a.role, b.role))) {
+      out.add("deviation-dropped");
+    }
+    return out;
+  };
+}
+
 /**
  * Classifies a map's change kinds: the first rule (file order) whose map,
- * `from` and `to` match. `(unattributed)` is never classified, so the gate
- * cannot pass by leaving pixels unnamed.
+ * `from` and `to` match — a `reported` rule only where `reported` confirms
+ * its class. `(unattributed)` is never classified, so the gate cannot pass
+ * by leaving pixels unnamed.
  */
-export function classify(kinds: ReadonlyMap<string, number>, c: Classification, mapLabel: string): ClassificationResult {
+export function classify(kinds: ReadonlyMap<string, number>, c: Classification, mapLabel: string, reported?: ReportedClasses): ClassificationResult {
   const byClass = Object.fromEntries([...CHANGE_CLASSES, UNCLASSIFIED].map((k) => [k, 0])) as ClassificationResult["byClass"];
   const used = new Set<number>();
   const out: ClassifiedKind[] = [];
@@ -867,7 +905,13 @@ export function classify(kinds: ReadonlyMap<string, number>, c: Classification, 
     changed += px;
     const rule = from === UNATTRIBUTED || to === UNATTRIBUTED
       ? -1
-      : c.rules.findIndex((r) => (r.map === undefined || r.map === mapLabel) && namePatternMatches(r.from, from) && namePatternMatches(r.to, to));
+      : c.rules.findIndex(
+          (r) =>
+            (r.map === undefined || r.map === mapLabel) &&
+            namePatternMatches(r.from, from) &&
+            namePatternMatches(r.to, to) &&
+            (!r.reported || (reported?.(from, to).has(r.class) ?? false)),
+        );
     const cls = rule < 0 ? UNCLASSIFIED : c.rules[rule].class;
     if (rule >= 0) used.add(rule);
     byClass[cls] += px;
