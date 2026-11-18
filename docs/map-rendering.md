@@ -3816,10 +3816,13 @@ through `documentRenderInput` → `symbolise` → the reference raster
   rows with a `sourceNumber` (stage 7 inserts rows without one and never
   reorders the source's; `sourceTableOf`), each source symbol's IR is
   mapped back onto it, roles are read from the symbols' matches
-  (`symbolColourUses`), `needed` from the applied ones, and every source
+  (`symbolColourUses`, with `library` from each symbol's match state),
+  `needed` from the applied ones, and every source
   symbol is re-indexed per reference (`reindexRenderColours`). Canonical
   symbols follow their palette ids; proxy-drawn objects take the row
-  source row 0 became (`rowOfAligned`). No exceptions yet (I4).
+  source row 0 became (`rowOfAligned`). From I4 the stack has its
+  exceptions (own order, deviations at their defaults, source order;
+  `map-symbols.md` §9.3); the harness passes no overrides.
 
   **`permutation`** is the 2026-11-14
   experiment's (`permutationOrder`): every row at its
@@ -3874,7 +3877,14 @@ puit-de-laven's changed pixels. In order, a pixel takes the first of:
    layers deep: a change under a black
    area that covers all but a sliver of the pixel (Club-2026: the road
    outline and the paved brown swapped under a building);
-4. the most frequent kind of its changed 8-neighbours (ties by name),
+4. (I4) steps 1–2 on the full paint images drawn at `FINE_FACTOR` (3) ×
+   the resolution, drawn only for a tile with a pixel left: the most
+   frequent kind among the sub-pixels of the pixel's block and a margin
+   of one sub-pixel round it, ties by name (`fineKindOf`) — a change
+   under a pixel no layer covers the centre of, a hairline or a sliver
+   of an edge (the crisp paint image at 6 px/mm showed one layer over
+   the paper there, in both orders);
+5. the most frequent kind of its changed 8-neighbours (ties by name),
    else `(unattributed)`.
 
 Kinds sum to the changed pixels; the *named share* is the part not
@@ -3910,24 +3920,53 @@ roles, one place), `mask` (a white that is no palette white),
 `layout` (logos, frame bars: graphic objects), `deviation-kept`,
 `deviation-dropped` (a pair of roles the source orders against the
 palette, kept or dropped by the candidate, `map-symbols.md` §9.3),
-`no-role` — or `unclassified`. The classification is a JSON file
+`no-role`, `residue` (I4: unattributed pixels, below) — or
+`unclassified`. The classification is a JSON file
 (`--classes`, `parseClassification`):
 
 ```json
 { "version": 1, "rules": [
   { "map": "sprint", "from": "black50-building", "to": "brown30-paved+brown30-road", "class": "multi-role", "note": "…" },
-  { "from": "*", "to": "graphic:*", "class": "layout" } ] }
+  { "from": "*", "to": "graphic:*", "class": "layout" },
+  { "from": "*", "to": "*", "class": "deviation-dropped", "reported": true },
+  { "map": "nacka", "from": "(unattributed)", "to": "(unattributed)", "class": "residue", "maxPx": 46, "note": "…" } ] }
 ```
 
 — rules in file order, the first whose `map` (absent: every map),
-`from` and `to` match decides (`classify`); `from` and `to` are a layer
+`from`, `to` and `maxPx` (absent: any size; else the kind's pixels on
+the map at most) match decides (`classify`); `from` and `to` are a layer
 name, `*` (any layer) or a prefix ending in `*` (`graphic:*`: every
 graphic object's paint) (`namePatternMatches`).
+
+**Reported rules** (I4; decided overnight on the user's standing
+instruction, 2026-11-17, for review). A rule with `"reported": true` matches only
+where the layered candidate's own report gives the kind that class
+(`reportedClasses`, from the stack's layers and its report): `layout`,
+`mask` or `no-role` when either layer's row stands by the source order
+for that reason (`sourceOrdered`); `deviation-dropped` when both are
+palette-placed rows of two roles the report lists as a dropped
+deviation — by default, or blocked — and the kind's `from` row is the
+higher source colour, so the source drew it on top. No report (the
+permutation) matches no reported rule. A kept deviation has no reported
+class: its rows draw in the source's order, so a change between them
+fails the gate.
+
+**Residue** (I4; decided overnight on the user's standing instruction,
+2026-11-17, for review). `(unattributed)` is classified only by a `residue`
+rule, which must name the map, `(unattributed)` as `from` and `to`, and
+a `maxPx` (the schema rejects anything else); no pattern classifies it.
+A map's residue over its cap fails the gate, so it can only be what was
+looked at.
+
 The corpus's file is committed as `scripts/colour-order-classes.json`
 by I4 (decided overnight on the user's standing instruction, 2026-11-17,
-for review: maps by their spec labels, layers by palette id).
-`(unattributed)` is never classified, so the gate cannot be passed by
-leaving pixels unnamed. Rules that classified nothing on a map are
+for review: maps by their spec labels, layers by palette id): the four
+reported rules (`layout`, `mask`, `no-role`, `deviation-dropped`) and a
+`residue` rule per map with unattributed pixels, capped at the I4
+measurement (the table below). The labels are the spec's: `sprint`,
+`club-full`, `club-2026`, `crop-a`, `crop-b`, `mortsjon`, `erstavik`,
+`puit-de-laven`, `ski-o`, `nacka` (the `--maps` file that gives them
+paths stays in `.local/`). Rules that classified nothing on a map are
 listed (a stale or mistyped rule). The run prints per map the kinds with
 their class and the **unclassified share** (unclassified ÷ changed
 pixels) — the gate I4 and I5 close (0 on the ten maps).
@@ -3938,7 +3977,9 @@ counted (`suggestClass`): `layout` when a `graphic:` paint is involved,
 without a role, `no-role` for another layer without one,
 `deviation-dropped` when both have one role and the palette puts the
 candidate's layer above the source's. A person reads the images and
-writes the classification; the suggestion is where to start.
+writes the classification — from I4 the reported rules, which the
+stack's report confirms kind by kind, and a residue rule per map for
+what was looked at; the suggestion is where to start.
 
 **Census** per map (`colourCensus`): colours, used colours, used
 colours without a palette entry and the objects drawn in them, rows
@@ -3960,7 +4001,9 @@ directories. `--out` must lie under a `.local/colour-order/` directory
 (default `<repo>/.local/colour-order/`); per map it writes
 `<label>/summary.json` (settings, census, the layered stack's summary —
 rows, split colours by their roles, no-role and unreferenced rows,
-inserted and aliased ids — measures, kinds with class and suggestion,
+inserted and aliased ids, and from I4 the source-ordered rows by reason
+(and how many stand above lower purple), the moved parts' rows, the
+deviations kept, implied, blocked and dropped — measures, kinds with class and suggestion,
 the class totals, unused rules, the worst tiles),
 `tiles.json` (per tile: paper bounds, pixels, changed, unattributed),
 `classes.suggested.json` and `worst-<n>-tile-<x>-<y>.png` — source |
@@ -4078,16 +4121,86 @@ Exit 1, nothing classified. Reading the table:
 
 The run took 20 min (Club-full and the Nacka map 7.5 and 6.5 min).
 
-A run of the ten maps takes 19 min on the development machine
-(Club-full and the Nacka map, 460 tiles each, 8 and 6 min); paint
-images and peeling are drawn only for tiles that changed.
+**I4: own order, deviations, source order (2026-11-18).** The same ten
+maps, importers and settings, candidate `layers` with I4's exceptions
+(`map-symbols.md` §9.3 "Own order", "Deviations", "Source order"; the
+deviations at their defaults), classified by the committed
+`scripts/colour-order-classes.json`, labels as there. **The gate holds:
+0 of 64 014 changed pixels unclassified, exit 0.**
+
+| Map | Tiles: changed / > 1 % | Changed px (I3 → I4) | ÷ pixels | ÷ ink | Named | Classes: deviation-dropped / mask / no-role / layout / residue | Unclassified |
+|---|---|---|---|---|---|---|---|
+| Sprint | 56: 26 / 0 | 19 759 → 1 044 | 0.014 % | 0.049 % | 99.4 % | 1 038 / 0 / 0 / 0 / 6 | 0 |
+| Club-full | 460: 88 / 4 | 224 660 → 17 684 | 0.030 % | 0.188 % | 99.8 % | 16 002 / 1 590 / 63 / 1 / 28 | 0 |
+| Club-2026 | 48: 36 / 0 | 79 516 → 821 | 0.013 % | 0.026 % | 99.9 % | 814 / 0 / 6 / 0 / 1 | 0 |
+| Crop-A | 6: 5 / 0 | 4 142 → 416 | 0.053 % | 0.114 % | 99.8 % | 415 / 0 / 0 / 0 / 1 | 0 |
+| Crop-B | 9: 5 / 0 | 1 977 → 214 | 0.018 % | 0.080 % | 99.5 % | 213 / 0 / 0 / 0 / 1 | 0 |
+| Mörtsjön | 45: 15 / 0 | 27 009 → 75 | 0.001 % | 0.005 % | 100.0 % | 75 / 0 / 0 / 0 / 0 | 0 |
+| Erstavik crop | 42: 21 / 0 | 25 707 → 1 677 | 0.031 % | 0.112 % | 99.7 % | 1 672 / 0 / 0 / 0 / 5 | 0 |
+| puit-de-laven (Mapper, CC0) | 16: 13 / 0 | 2 293 → 2 288 | 0.110 % | 0.179 % | 100.0 % | 2 288 / 0 / 0 / 0 / 0 | 0 |
+| ski-O map (Mapper) | 20: 15 / 5 | 90 544 → 12 826 | 0.495 % | 1.686 % | 100.0 % | 12 826 / 0 / 0 / 0 / 0 | 0 |
+| Nacka exercise map (Mapper) | 460: 94 / 5 | 234 966 → 26 969 | 0.045 % | 0.287 % | 99.8 % | 25 270 / 1 590 / 63 / 0 / 46 | 0 |
+
+| Map | Layers: rows / split colours | Source order: no-role / graphic / mask (above lower purple) | Own-order rows | Deviations: kept / implied / blocked / dropped | Kept by default |
+|---|---|---|---|---|---|
+| Sprint | 67 / 17 | 8 / 0 / 1 (7) | 3 | 2 / 1 / 0 / 43 | `black-road-outline>brown100`, `brown30-road>brown100` |
+| Club-full | 110 / 16 | 22 / 3 / 1 (10) | 3 | 3 / 14 / 0 / 180 | `brown50-road`, `black-road-outline`, `brown50-paved` `>brown100-line` |
+| Club-2026 | 90 / 14 | 15 / 0 / 0 (8) | 4 | 3 / 5 / 0 / 138 | the same three |
+| Crop-A | 175 / 11 | 21 / 0 / 1 (13) | 2 | 2 / 1 / 0 / 59 | `black-road-outline`, `brown50-road` `>brown100-line` |
+| Crop-B | 145 / 13 | 16 / 1 / 1 (9) | 2 | 2 / 1 / 0 / 45 | the same two |
+| Mörtsjön | 74 / 14 | 8 / 0 / 0 (4) | 2 | 3 / 6 / 0 / 41 | the same three as Club-full |
+| Erstavik crop | 144 / 12 | 16 / 0 / 1 (7) | 2 | 2 / 2 / 0 / 71 | the same two as Crop-A |
+| puit-de-laven | 57 / 10 | 3 / 0 / 0 (2) | 4 | 0 / 0 / 0 / 25 | — |
+| ski-O map | 92 / 20 | 16 / 0 / 3 (9) | 4 | 0 / 0 / 0 / 67 | — |
+| Nacka exercise map | 111 / 16 | 19 / 0 / 1 (5) | 3 | 3 / 11 / 0 / 184 | the same three as Club-full |
+
+Over the ten maps 64 014 pixels change (I3: 710 573; 0.043 % of all,
+0.22 % of ink): deviation-dropped 60 613, mask 3 180, no-role 132,
+layout 1, residue 88 (0.14 % of the change; I3 left 2.6 % unattributed),
+unclassified 0. Reading the tables:
+
+- **The road outlines are gone** (own order): Mörtsjön 27 009 → 75 px,
+  Club-2026 79 516 → 821, Erstavik 25 707 → 1 677. What remains on the
+  OCAD club maps is small dropped deviations: the contour brown and
+  green points over each other, a black screen or yellow area the table
+  draws over black.
+- **What is left is the palette's order where the table had another**
+  (deviation-dropped, every kind a deviation the report lists): on
+  Club-full and the Nacka map yellow areas the table draws over
+  cultivated-land dots, the black screen and a lake (about 6 000 px
+  each); on the ski-O map the ski green over contours and black
+  (7 736 and 4 586 px), which §12.3 puts there on purpose; on
+  puit-de-laven its second blue under the contours (1 682 px).
+- **The ski-O map's mask holds** (90 544 → 12 826 px): its white,
+  by hint `white-over-green-brown`, stands by the source order over its
+  black, contours and ski green. Club-full's and the Nacka map's `mask`
+  kind (1 590 px each) is a white at the bottom of their table that the
+  source draws over a one-object lake: the gap that fits the source
+  best puts it under that lake.
+- **Residue**: 88 isolated pixels no paint image names even at 3× —
+  a feature finer than a third of a pixel, or a change at a tile's edge
+  caused just outside it (probed on Sprint, Erstavik and Club-2026).
+  Each map's residue rule is capped at its count here.
+- puit-de-laven is unchanged in size: its change is dropped deviations
+  that I3 already showed; its library-drawn points and cultivated dots,
+  which the source stack draws in another colour, now carry their
+  colour's place (the carrier rule, `map-symbols.md` §9.3 "Palette ids")
+  and so are named as the deviations they are.
+
+The run took 8 min (Club-full and the Nacka map 2.6 and 3.2 min: fewer
+tiles change, so fewer paint images).
+
+A run of the ten maps takes 8 to 20 min on the development machine,
+by how much changes (Club-full and the Nacka map, 460 tiles each, the
+longest); paint images, peeling and the 3× fine view are drawn only for
+tiles that changed, the fine view only for a tile with a pixel left.
 
 Tests:
 
 | Test | Asserts |
 |---|---|
-| `packages/api/src/render/__tests__/colour-order-diff.test.ts` | the tolerance boundary and ink count; the side-by-side image; the tile grid, a window, ranking; paint ids rising with the sort key, the id colour round trip, crisp paint images on five contract fixtures (every pixel decodes, the reference raster's grid), an overlap of one ink named by the upper row; `viewKind`, `flipKind` (a thin line over a swapped pair, no flip, the paper and a missing layer taking no part), `sharedTop`, `withoutRows`, `namePeeled` (a swap under a shared top layer, one view per peel set, no layer peeled twice, the depth limit), `nameChanges` (neighbour vote, unattributed, counts); layers (roles, uses, kind, class, names, `#n`, `graphic:`); the permutation (palette rank, roleless areas and others, ties), `permuteStack` re-indexing, `inverseOrder`, the proxies' row (`permutedRenderOptions`) and its effect — an IR-less object on an encoded document drawn in the same colour in both orders, and not without the options; the census; `parseClassification`, `classify` (first match, map scope, `*`, a `graphic:*` prefix, unattributed never classified, unused rules, share), `suggestClass`; the layered candidate on an encoded stage 7 document — `sourceTableOf`, one brown split into paved area and road infill, the road re-indexed per reference, one role per layer name, `rowOfAligned` and the proxies' row, every object in the same ink in both orders, a symbol drawing in an inserted row rejected; `jointDocument` and `paintCorrespondence` (the brown's paints to the paved and the road layer, layers back to their source rows, mismatched symbol tables rejected), `correspondingNamer` (`graphic:` too), `withoutPasses` |
-| `scripts/__tests__/measure-colour-order.test.mjs` (`pnpm test:scripts`) | on `docs/screenshots/fixtures/puit-de-laven.omap` from a `--maps` file, candidate `layers` by default: exit 1 with nothing classified, kinds summing to the changed pixels, named share ≥ 95 %, a change between two palette layers, no `+`-joined name; the layered summary (more rows than colours, split colours, both course purples inserted) and its standard-output line; `--candidate permutation` still runs, with a multi-role name; the census, tiles, suggestions and worst images written, none of the map's colour names on standard output; a window over one tile classified by a file → exit 0; a window that meets no tile → exit 1, the reason on standard error; usage errors (no maps, `--out` outside `.local/colour-order/`, an unknown candidate, a bad window or tile size, an unknown option, a missing file, a bad rule) → exit 2 |
+| `packages/api/src/render/__tests__/colour-order-diff.test.ts` | the tolerance boundary and ink count; the side-by-side image; the tile grid, a window, ranking; paint ids rising with the sort key, the id colour round trip, crisp paint images on five contract fixtures (every pixel decodes, the reference raster's grid), an overlap of one ink named by the upper row; `viewKind`, `flipKind` (a thin line over a swapped pair, no flip, the paper and a missing layer taking no part), `sharedTop`, `withoutRows`, `namePeeled` (a swap under a shared top layer, one view per peel set, no layer peeled twice, the depth limit), `nameChanges` (neighbour vote, unattributed, counts); layers (roles, uses, kind, class, names, `#n`, `graphic:`); the permutation (palette rank, roleless areas and others, ties), `permuteStack` re-indexing, `inverseOrder`, the proxies' row (`permutedRenderOptions`) and its effect — an IR-less object on an encoded document drawn in the same colour in both orders, and not without the options; the census; `parseClassification`, `classify` (first match, map scope, `*`, a `graphic:*` prefix, unattributed never classified, unused rules, share), `suggestClass`; the layered candidate on an encoded stage 7 document — `sourceTableOf`, one brown split into paved area and road infill, the road re-indexed per reference, one role per layer name, `rowOfAligned` and the proxies' row, every object in the same ink in both orders, a symbol drawing in an inserted row rejected; `jointDocument` and `paintCorrespondence` (the brown's paints to the paved and the road layer, layers back to their source rows, mismatched symbol tables rejected), `correspondingNamer` (`graphic:` too), `withoutPasses`; I4: `namePeeled`'s fine view (a pixel no view tells named by its sub-pixels, the fine view drawn only when a pixel is left, a fine view of the wrong size rejected), `fineKindOf` (block and margin, ties by key); `classify` with `residue` (only `(unattributed)`, only by a rule naming the map and `maxPx`, over the cap or on another map unclassified, never a named kind; the schema's refusals), `maxPx`, `reported` rules and `reportedClasses` (a dropped deviation in the source's direction only, not a kept one, a mask, a graphic row, an unknown layer, no report) |
+| `scripts/__tests__/measure-colour-order.test.mjs` (`pnpm test:scripts`) | on `docs/screenshots/fixtures/puit-de-laven.omap` from a `--maps` file, candidate `layers` by default: exit 1 with nothing classified, kinds summing to the changed pixels, named share ≥ 95 %, a change between two palette layers, no `+`-joined name; the layered summary (more rows than colours, split colours, both course purples inserted) and its standard-output line; `--candidate permutation` still runs, with a multi-role name; the census, tiles, suggestions and worst images written, none of the map's colour names on standard output; a window over one tile classified by a file → exit 0; I4: the layered summary's source-order, own-order and deviation counts and their standard-output lines; the committed `scripts/colour-order-classes.json` classifies every change on the CC0 map from the candidate's report → exit 0; a window that meets no tile → exit 1, the reason on standard error; usage errors (no maps, `--out` outside `.local/colour-order/`, an unknown candidate, a bad window or tile size, an unknown option, a missing file, a bad rule) → exit 2 |
 
 ## 7. Where things live
 
@@ -4158,10 +4271,10 @@ The shared module is exported as a namespace: `import { render } from
 ## 8. Pending in this chapter
 
 - **Colour-order parity (§6.5)**: the layered candidate built by stage 7
-  itself instead of from the imported document (I5); the
-  classification of the ten maps' changes and the gate at 0 unclassified
-  (I4, I5), in a committed `scripts/colour-order-classes.json` (decided
-  overnight 2026-11-17, for review; layer names carry no club data).
+  itself instead of from the imported document, and the gate at 0
+  unclassified kept on the ten maps after the importer bump (I5). I4
+  closed it on the stack built from the imported document, with the
+  committed `scripts/colour-order-classes.json`.
 - **Alpha: a translucent corridor band** (`docs/course-layer.md` §10.2,
   F2). `LegProps.corridor.whiteOpacity` is stored but drawn opaque: the
   band is a clip region, which removes the map wholly. A band below 1

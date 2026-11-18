@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mapDocument, render } from "@oxygen/shared";
+import { type mapImport, mapDocument, render } from "@oxygen/shared";
 import { glyphOutlineFrom, loadBundledFonts } from "../fonts.js";
 import { rasterisePassStream } from "../reference-raster.js";
 import {
@@ -23,6 +23,8 @@ import {
   permuteStack,
   permutedRenderOptions,
   namePeeled,
+  fineKindOf,
+  reportedClasses,
   namePatternMatches,
   rankTiles,
   rasterisePaints,
@@ -232,6 +234,32 @@ describe("naming changes", () => {
     expect(Object.fromEntries(deep)).toEqual({ [UNATTRIBUTED]: 1 });
   });
 
+  it("names a pixel no view can tell by the supersampled view's sub-pixels, and asks for that view only then", async () => {
+    // 2×1 tile: pixel 0 is told by the full view; pixel 1 shows black100 over the paper in both (a hairline under it).
+    // At 2× the hairline covers sub-pixels of pixel 1: the paved brown, drawn above the building grey in the candidate.
+    const coarse = view([1, 2], [0, 2]);
+    const fineIds = (a: number, b: number) => Int32Array.from([1, 1, 2, a, 1, 1, 2, b]);
+    let asked = 0;
+    const fine = async () => {
+      asked++;
+      return { ...view([...fineIds(1, 1)], [...fineIds(0, 0)]), width: 4, height: 2, factor: 2 };
+    };
+    const k = await namePeeled(Uint8Array.from([1, 1]), 2, 1, async () => coarse, { source: () => undefined, candidate: () => undefined }, 0, fine);
+    expect(Object.fromEntries(k)).toEqual({ [kindKey("black50-building", "brown50-paved")]: 2 });
+    expect(asked).toBe(1);
+    // Nothing left to name: the fine view is not drawn.
+    await namePeeled(Uint8Array.from([1, 0]), 2, 1, async () => coarse, { source: () => undefined, candidate: () => undefined }, 0, fine);
+    expect(asked).toBe(1);
+    // A fine view of the wrong size is an error, not a guess.
+    await expect(namePeeled(Uint8Array.from([0, 1]), 2, 1, async () => coarse, { source: () => undefined, candidate: () => undefined }, 0, async () => ({ ...coarse, width: 3, height: 2, factor: 2 }))).rejects.toThrow(/fine view/);
+  });
+
+  it("names a pixel from a fine view by the most frequent kind in its block and a one-sub-pixel margin, ties by key", () => {
+    // 1×1 tile at 2×: sub-pixels (0,0) and (1,1) tell two kinds once each → the first by key.
+    const v = { ...view([1, 2, 2, 0], [0, 2, 2, 2]), width: 2, height: 2, factor: 2 };
+    expect(fineKindOf(v, 1, { source: () => undefined, candidate: () => undefined })(0)).toBe(kindKey("black50-building", "brown50-paved"));
+  });
+
   it("counts every changed pixel once; one no view can tell takes its neighbours' kind, else is unattributed", () => {
     // 3×3; the centre has black100 on top in both and no flipped pair around; its named neighbours vote.
     const v = view([1, 1, 2, 2, 2, 2, 2, 2, 2], [0, 0, 0, 2, 2, 2, 2, 2, 2]);
@@ -422,6 +450,54 @@ describe("classification", () => {
   it("rejects an unknown class or a malformed file, naming the rule", () => {
     expect(() => parseClassification({ version: 1, rules: [{ from: "a", to: "b", class: "layout" }, { from: "a", to: "b", class: "pretty" }] })).toThrow(/rule 1/);
     expect(() => parseClassification({ rules: [] })).toThrow(/classification/);
+  });
+
+  it("classifies unattributed pixels only as residue, by a rule naming the map and a cap", () => {
+    const c = parseClassification({ version: 1, rules: [{ map: "m", from: UNATTRIBUTED, to: UNATTRIBUTED, class: "residue", maxPx: 3, note: "isolated sub-pixel changes" }] });
+    expect(classify(new Map([[UNATTRIBUTED, 3]]), c, "m").byClass).toMatchObject({ residue: 3, unclassified: 0 });
+    // over the cap, or on another map: unclassified
+    expect(classify(new Map([[UNATTRIBUTED, 4]]), c, "m").byClass).toMatchObject({ residue: 0, unclassified: 4 });
+    expect(classify(new Map([[UNATTRIBUTED, 1]]), c, "n").byClass).toMatchObject({ unclassified: 1 });
+    // a residue rule never classifies a named kind
+    expect(classify(new Map([[kindKey("a", "b"), 1]]), c, "m").byClass).toMatchObject({ unclassified: 1 });
+    expect(() => parseClassification({ version: 1, rules: [{ from: "*", to: "*", class: "residue", map: "m", maxPx: 9 }] })).toThrow(/residue rule names \(unattributed\)/);
+    expect(() => parseClassification({ version: 1, rules: [{ from: UNATTRIBUTED, to: UNATTRIBUTED, class: "residue", maxPx: 9 }] })).toThrow(/map and maxPx/);
+    expect(() => parseClassification({ version: 1, rules: [{ map: "m", from: UNATTRIBUTED, to: UNATTRIBUTED, class: "residue" }] })).toThrow(/map and maxPx/);
+  });
+
+  it("matches a rule with maxPx only on a kind within it", () => {
+    const c = parseClassification({ version: 1, rules: [{ from: "black50-building", to: "*", class: "deviation-dropped", maxPx: 49 }, { from: "black50-building", to: "*", class: "multi-role" }] });
+    expect(classify(kinds, c, "sprint").byClass).toMatchObject({ "multi-role": 50, "deviation-dropped": 0 });
+  });
+
+  it("matches a reported rule only where the candidate's report gives the kind that class", () => {
+    // Layers: a dropped deviation's two rows, a pair of rows the report lists as nothing, a mask and a graphic row.
+    const layers = ["brown50-road", "brown100-line", "blue100-area", "white-over-green-brown", "none:black:line"].map((name, row) => ({ name, row }));
+    const rows = [
+      { row: 0, source: 5, role: "brown50-road", sourceOrdered: null },
+      { row: 1, source: 2, role: "brown100-line", sourceOrdered: null },
+      { row: 2, source: 1, role: "blue100-area", sourceOrdered: null },
+      { row: 3, source: 9, role: "white-over-green-brown", sourceOrdered: "mask" },
+      { row: 4, source: 3, role: null, sourceOrdered: "graphic" },
+    ] as unknown as mapImport.ColourLayersReport["rows"];
+    const deviations = [
+      { upper: "brown50-road", lower: "brown100-line", kept: false, byDefault: false, objects: { upper: 1, lower: 1 } },
+      { upper: "brown100-line", lower: "blue100-area", kept: true, byDefault: true, objects: { upper: 1, lower: 1 } },
+    ];
+    const reported = reportedClasses(layers, { rows, deviations });
+    expect([...reported("brown50-road", "brown100-line")]).toEqual(["deviation-dropped"]);
+    // the other way round the source has them in the palette's order: not the deviation
+    expect([...reported("brown100-line", "brown50-road")]).toEqual([]);
+    // a kept deviation is no dropped one
+    expect([...reported("brown100-line", "blue100-area")]).toEqual([]);
+    expect([...reported("white-over-green-brown", "brown100-line")]).toEqual(["mask"]);
+    expect([...reported("graphic:none:black:line", "blue100-area")]).toEqual(["layout"]);
+    expect([...reported("no-such-layer", "blue100-area")]).toEqual([]);
+    const c = parseClassification({ version: 1, rules: [{ from: "*", to: "*", class: "mask", reported: true }, { from: "*", to: "*", class: "deviation-dropped", reported: true }] });
+    const r = classify(new Map([[kindKey("brown50-road", "brown100-line"), 4], [kindKey("brown100-line", "brown50-road"), 2], [kindKey("white-over-green-brown", "blue100-area"), 1]]), c, "m", reported);
+    expect(r.byClass).toMatchObject({ "deviation-dropped": 4, mask: 1, unclassified: 2 });
+    // without a report, no reported rule matches
+    expect(classify(new Map([[kindKey("brown50-road", "brown100-line"), 4]]), c, "m").byClass).toMatchObject({ unclassified: 4 });
   });
 
   it("suggests a class from the two layers, as a hint", () => {

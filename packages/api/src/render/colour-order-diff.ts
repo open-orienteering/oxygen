@@ -332,13 +332,48 @@ export function withoutRows(stream: render.PassStream, rows: ReadonlySet<number>
 /** How many shared top layers `namePeeled` peels off at most. */
 export const PEEL_DEPTH = 3;
 
+/** The supersampling of `namePeeled`'s fine view: paint images at this many times the tile's px/mm. */
+export const FINE_FACTOR = 3;
+
+/** A paint view at `factor` × the tile's resolution (`width` × `height` sub-pixels). */
+export interface FinePaintView extends PaintView {
+  width: number;
+  height: number;
+  factor: number;
+}
+
+/**
+ * The kind of a pixel from a fine view: the most frequent kind (`viewKindOf`
+ * on the fine images) among the sub-pixels of its block and a margin of one
+ * sub-pixel round it, ties by key; undefined when none tells.
+ */
+export function fineKindOf(v: FinePaintView, width: number, rowOf: Parameters<typeof flipKind>[4]): (i: number) => string | undefined {
+  const kindOf = viewKindOf(v, v.width, v.height, rowOf);
+  const f = v.factor;
+  return (i) => {
+    const x = i % width, y = (i - x) / width;
+    const votes = new Map<string, number>();
+    for (let sy = y * f - 1; sy <= y * f + f; sy++) {
+      for (let sx = x * f - 1; sx <= x * f + f; sx++) {
+        if (sx < 0 || sy < 0 || sx >= v.width || sy >= v.height) continue;
+        const k = kindOf(sy * v.width + sx);
+        if (k) votes.set(k, (votes.get(k) ?? 0) + 1);
+      }
+    }
+    return [...votes].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))[0]?.[0];
+  };
+}
+
 /**
  * Names a tile's changed pixels (docs/map-rendering.md §6.5 "Naming"):
  * `view([])` gives the full paint images; where a pixel's kind cannot be
  * told (`viewKindOf`) and both orders have the same layer on top, it is
  * looked for again on `view(peeled)` — the images without that layer —
- * up to `depth` layers deep, one view per distinct peel set; what remains
- * goes to `nameChanges`' neighbour vote.
+ * up to `depth` layers deep, one view per distinct peel set; a pixel still
+ * unnamed is looked for on `fine()`, the full paint images supersampled
+ * (`fineKindOf`: a change under a pixel no layer covers the centre of —
+ * a hairline, a sliver of an edge); what remains goes to `nameChanges`'
+ * neighbour vote.
  */
 export async function namePeeled(
   mask: Uint8Array,
@@ -347,6 +382,7 @@ export async function namePeeled(
   view: (peel: readonly string[]) => Promise<PaintView>,
   rowOf: Parameters<typeof flipKind>[4],
   depth = PEEL_DEPTH,
+  fine?: () => Promise<FinePaintView>,
 ): Promise<Map<string, number>> {
   const kindAt = new Map<number, string>();
   let pending = new Map<string, { peel: string[]; pixels: number[] }>([["", { peel: [], pixels: [] }]]);
@@ -369,6 +405,19 @@ export async function namePeeled(
         const key = [...next].sort().join("\n");
         if (!pending.has(key)) pending.set(key, { peel: next, pixels: [] });
         pending.get(key)!.pixels.push(i);
+      }
+    }
+  }
+  if (fine) {
+    const left: number[] = [];
+    for (let i = 0; i < mask.length; i++) if (mask[i] && !kindAt.has(i)) left.push(i);
+    if (left.length) {
+      const v = await fine();
+      if (v.width !== width * v.factor || v.height !== height * v.factor) throw new Error(`namePeeled: a ${v.width}x${v.height} fine view of a ${width}x${height} tile at ${v.factor}x`);
+      const kindOf = fineKindOf(v, width, rowOf);
+      for (const i of left) {
+        const k = kindOf(i);
+        if (k) kindAt.set(i, k);
       }
     }
   }
@@ -800,19 +849,34 @@ export function colourCensus(doc: Pick<MapDocument, "header">, layers: readonly 
 // ---------------------------------------------------------------- classification
 
 /** What a change is (SLICES I1): every remaining difference must be one of these. */
-export const CHANGE_CLASSES = ["multi-role", "mask", "layout", "deviation-kept", "deviation-dropped", "no-role"] as const;
+export const CHANGE_CLASSES = ["multi-role", "mask", "layout", "deviation-kept", "deviation-dropped", "no-role", "residue"] as const;
 export type ChangeClass = (typeof CHANGE_CLASSES)[number];
 export const UNCLASSIFIED = "unclassified";
 
-const ruleSchema = z.object({
+const ruleSchema = z
+  .object({
   /** A map label; absent: every map. */
   map: z.string().min(1).optional(),
   /** Layer names (as printed), `*`, or a prefix ending in `*`. Directional: the source's on top, then the candidate's. */
   from: z.string().min(1),
   to: z.string().min(1),
   class: z.enum(CHANGE_CLASSES),
+  /**
+   * Matches only where the candidate's own report gives the kind this class (`reportedClasses`): a dropped deviation
+   * the report lists for the two layers' rows, a row it placed by the source order for that reason.
+   */
+  reported: z.boolean().optional(),
+  /** Matches only a kind of at most this many pixels on the map. */
+  maxPx: z.number().int().nonnegative().optional(),
   note: z.string().optional(),
-});
+  })
+  .superRefine((r, ctx) => {
+    // `(unattributed)` is classified only as residue, by a rule that names its map and a cap: never by a pattern.
+    if (r.class !== "residue") return;
+    if (r.from !== UNATTRIBUTED || r.to !== UNATTRIBUTED) ctx.addIssue({ code: "custom", message: `a residue rule names ${UNATTRIBUTED} as from and to` });
+    if (r.map === undefined || r.maxPx === undefined) ctx.addIssue({ code: "custom", message: "a residue rule names its map and maxPx" });
+    if (r.reported) ctx.addIssue({ code: "custom", message: "a residue rule is not reported" });
+  });
 const classificationSchema = z.object({ version: z.literal(1), rules: z.array(ruleSchema) });
 export type ClassRule = z.output<typeof ruleSchema>;
 export type Classification = z.output<typeof classificationSchema>;
@@ -852,12 +916,46 @@ export interface ClassificationResult {
   unusedRules: number[];
 }
 
+/** What the candidate's report says a kind is (`reportedClasses`); without one, no `reported` rule matches. */
+export type ReportedClasses = (from: string, to: string) => ReadonlySet<ChangeClass>;
+
+/**
+ * The classes the layered candidate's own report gives a change kind
+ * (`map-rendering.md` §6.5 "Classes"), by the rows its two layers name:
+ * `layout`, `mask` or `no-role` when either row was placed by the source
+ * order for that reason (`sourceOrdered`); `deviation-dropped` when both are
+ * palette-placed rows of two roles the report lists as a dropped deviation
+ * with the source's upper on top in the source (`from` from the higher source
+ * colour). A name that is no layer of the stack gives nothing.
+ */
+export function reportedClasses(
+  layers: readonly Pick<StackLayer, "name" | "row">[],
+  report: Pick<mapImport.ColourLayersReport, "rows" | "deviations">,
+): ReportedClasses {
+  const rowOf = new Map(layers.map((l) => [l.name, l.row]));
+  const dropped = new Set(report.deviations.filter((d) => !d.kept).map((d) => mapImport.deviationKey(d.upper, d.lower)));
+  const BY_REASON: Record<mapImport.SourceOrderReason, ChangeClass> = { graphic: "layout", mask: "mask", "no-role": "no-role" };
+  const strip = (n: string) => (n.startsWith(GRAPHIC_PREFIX) ? n.slice(GRAPHIC_PREFIX.length) : n);
+  return (from, to) => {
+    const out = new Set<ChangeClass>();
+    const a = report.rows[rowOf.get(strip(from)) ?? -1], b = report.rows[rowOf.get(strip(to)) ?? -1];
+    if (!a || !b) return out;
+    for (const r of [a, b]) if (r.sourceOrdered) out.add(BY_REASON[r.sourceOrdered]);
+    if (!a.sourceOrdered && !b.sourceOrdered && a.role && b.role && a.source !== null && b.source !== null && a.source > b.source && dropped.has(mapImport.deviationKey(a.role, b.role))) {
+      out.add("deviation-dropped");
+    }
+    return out;
+  };
+}
+
 /**
  * Classifies a map's change kinds: the first rule (file order) whose map,
- * `from` and `to` match. `(unattributed)` is never classified, so the gate
- * cannot pass by leaving pixels unnamed.
+ * `from`, `to` and `maxPx` match — a `reported` rule only where `reported`
+ * confirms its class. `(unattributed)` is classified only by a `residue`
+ * rule of that map within its `maxPx` (the schema requires both), never by
+ * a pattern, so the gate cannot pass by leaving pixels unnamed.
  */
-export function classify(kinds: ReadonlyMap<string, number>, c: Classification, mapLabel: string): ClassificationResult {
+export function classify(kinds: ReadonlyMap<string, number>, c: Classification, mapLabel: string, reported?: ReportedClasses): ClassificationResult {
   const byClass = Object.fromEntries([...CHANGE_CLASSES, UNCLASSIFIED].map((k) => [k, 0])) as ClassificationResult["byClass"];
   const used = new Set<number>();
   const out: ClassifiedKind[] = [];
@@ -865,9 +963,15 @@ export function classify(kinds: ReadonlyMap<string, number>, c: Classification, 
   for (const [key, px] of [...kinds].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))) {
     const [from, to] = splitKind(key);
     changed += px;
-    const rule = from === UNATTRIBUTED || to === UNATTRIBUTED
-      ? -1
-      : c.rules.findIndex((r) => (r.map === undefined || r.map === mapLabel) && namePatternMatches(r.from, from) && namePatternMatches(r.to, to));
+    const unattributed = from === UNATTRIBUTED || to === UNATTRIBUTED;
+    const rule = c.rules.findIndex(
+      (r) =>
+        (r.map === undefined || r.map === mapLabel) &&
+        (r.maxPx === undefined || px <= r.maxPx) &&
+        (unattributed
+          ? r.class === "residue"
+          : r.class !== "residue" && namePatternMatches(r.from, from) && namePatternMatches(r.to, to) && (!r.reported || (reported?.(from, to).has(r.class) ?? false))),
+    );
     const cls = rule < 0 ? UNCLASSIFIED : c.rules[rule].class;
     if (rule >= 0) used.add(rule);
     byClass[cls] += px;

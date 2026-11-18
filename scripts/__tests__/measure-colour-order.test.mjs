@@ -70,6 +70,22 @@ describe("measure-colour-order.mjs", () => {
     assert.ok(l.split.length > 0 && l.split.every((s) => s.includes("+")));
     assert.ok(l.inserted.includes("purple-lower") && l.inserted.includes("purple-upper"));
     assert.match(first.stdout, /^ {2}layers {5}rows \d+ {2}split \d+/m);
+    // I4: rows placed by the source order by reason, parts kept in their symbol's order, the deviations
+    assert.deepEqual(Object.keys(l.sourceOrdered), ["no-role", "graphic", "mask"]);
+    assert.ok(l.ownOrder > 0, "puit-de-laven has symbols the layers would draw inside out");
+    assert.ok(l.deviations.dropped > 0 && Array.isArray(l.deviations.kept));
+    assert.match(first.stdout, /^ {13}source order: no-role \d+ \/ graphic \d+ \/ mask \d+ \(above lower purple: .*\) {2}own order \d+$/m);
+    assert.match(first.stdout, /^ {13}deviations kept .* {2}implied \d+ {2}blocked .* {2}dropped \d+$/m);
+  });
+
+  it("classifies every change on the CC0 map by the committed classification file, from the candidate's own report", () => {
+    const r = run(map, "--out", path.join(out, "committed"), "--classes", path.join(root, "scripts", "colour-order-classes.json"));
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    const s = JSON.parse(readFileSync(path.join(out, "committed", "puit-de-laven", "summary.json"), "utf8"));
+    assert.equal(s.unclassifiedPx, 0);
+    assert.ok(s.byClass["deviation-dropped"] > 0);
+    assert.equal(s.kinds.reduce((t, k) => t + k.px, 0), s.changedPx);
+    assert.match(r.stdout, /unclassified\s+0 of [\d ]+ changed px \(0\.0 %\)\s+pass/);
   });
 
   it("still runs the experiment's permutation as a candidate, naming a multi-role colour as one layer", () => {
