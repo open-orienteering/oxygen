@@ -1316,6 +1316,7 @@ model MapDocument {
   versions ClubMapVersion[]
   jobs     MapImportJob[]
   patches  MapPatch[]
+  colourSettings MapDocumentColourSetting[]
 
   @@index([sourceHash])
   @@map("map_documents")
@@ -1661,5 +1662,23 @@ model MapColourSetting {
   @@unique([eventId, sourceHash])
   @@index([sourceHash])
   @@map("map_colour_settings")
+  @@schema("oxygen")
+}
+
+/// The colour settings known to give a stored document (row I7; docs/map-storage.md §2, §6.9): every finished
+/// import job records the setting it imported with, so a setting that changes no bytes still finds its document.
+/// Cache-like; not a GC reference, not in the dump or the checkout snapshot.
+model MapDocumentColourSetting {
+  documentHash String   @map("document_hash")
+  /// The normalised setting as canonical JSON: the row's identity.
+  colourKey    String   @map("colour_key")
+  /// `{ order, deviations }`, normalised.
+  colour       Json
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  document MapDocument @relation(fields: [documentHash], references: [hash], onDelete: Cascade)
+
+  @@id([documentHash, colourKey])
+  @@map("map_document_colour_settings")
   @@schema("oxygen")
 }

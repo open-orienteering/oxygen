@@ -30,7 +30,7 @@ import { loadClubDecisions, storedDocumentFollowsDecisions } from "./decisions.j
 import { eventDocumentHash } from "./event-document.js";
 import { awaitImportJob, startImportJob, type ImportJobRow } from "./jobs.js";
 import { reresolveEventPatch } from "./patches.js";
-import { colourTargetKey, DEFAULT_COLOUR_SETTINGS, loadAllColourSettings, reportFollowsColour, type ColourTarget } from "./colour-settings.js";
+import { colourTargetKey, DEFAULT_COLOUR_SETTINGS, documentFollowsColour, loadAllColourSettings, loadRecordedColours, type ColourTarget } from "./colour-settings.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -126,7 +126,9 @@ export async function planRematch(db: Db, opts: Pick<RematchOptions, "eventId" |
   const reportOf = new Map(docs.map((d) => [d.hash, d.report]));
   const settings = await loadAllColourSettings(db);
   const colourOf = (target: ColourTarget) => settings.get(colourTargetKey(target)) ?? DEFAULT_COLOUR_SETTINGS;
-  const followsColour = (hash: string, target: ColourTarget) => reportFollowsColour(reportOf.get(hash), colourOf(target));
+  // A document follows a setting by its report or by a setting recorded for it (row I7: an override that changes no bytes).
+  const recorded = await loadRecordedColours(db, docs.map((d) => d.hash));
+  const followsColour = (hash: string, target: ColourTarget) => documentFollowsColour({ report: reportOf.get(hash), recorded: recorded.get(hash) }, colourOf(target));
 
   const items: RematchItem[] = [];
   for (const v of versions) {

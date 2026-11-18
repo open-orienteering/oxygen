@@ -12,7 +12,7 @@ import { applyJobResult, startImportJob, type ImportJobRow } from "./jobs.js";
 import { readDocumentHead, readObjectsPerSymbol } from "./previews.js";
 import { staleReason } from "./rematch.js";
 import { terrainReview, type TerrainReview } from "./heightfield.js";
-import { colourSettingsOfReport, loadColourSettings, reportFollowsColour, writeColourSettings, type ColourTarget, type MapColourSettings } from "./colour-settings.js";
+import { colourSettingsOfReport, documentFollowsColour, loadColourSettings, loadRecordedColours, reportDeviationKeys, withDeviationChoice, writeColourSettings, type DeviationChoiceInput, type ColourTarget, type MapColourSettings } from "./colour-settings.js";
 import { buildColourReview, type ColourReview } from "./review-colours.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -50,7 +50,7 @@ export interface ReviewPayload {
  */
 export async function isDocumentCurrent(db: Db, doc: { hash: string; importerVersion: string; libraryVersion: string; report: Prisma.JsonValue }, kind: string, header?: mapDocument.MapDocumentHeader, colour?: MapColourSettings | null): Promise<boolean> {
   if (staleReason(doc, true)) return false;
-  if (colour && !reportFollowsColour(doc.report, colour)) return false;
+  if (colour && !documentFollowsColour({ report: doc.report, recorded: (await loadRecordedColours(db, [doc.hash])).get(doc.hash) }, colour)) return false;
   return storedDocumentFollowsDecisions(db, doc, await loadClubDecisions(db, kind), header);
 }
 
@@ -129,6 +129,25 @@ export async function changeColourSettings(
   const settings = await writeColourSettings(db, colourTarget, input.change(await loadColourSettings(db, colourTarget)), input.userId);
   const job = await startImportJob(db, { sourceHash: doc.sourceHash, startedBy: input.userId, holdMs: input.holdMs, patch: mapDocument.parseVersionPatch(doc.patch), colour: settings });
   return { ok: true, settings, job };
+}
+
+export type DeviationChangeResult = ColourChangeResult | { ok: false; reason: "unknown-deviation" };
+
+/**
+ * Override one deviation of a map, or reset it (row I7; docs/map-symbols.md
+ * §9.3 "Overrides (row I7)"): `changeColourSettings` with the one choice
+ * changed. `keep` and `drop` name a deviation the reviewed document lists;
+ * `default` removes the key whatever the document lists.
+ */
+export async function changeDeviation(
+  db: PrismaClient,
+  input: { hash: string; target: ReviewTarget; key: string; choice: DeviationChoiceInput; userId: string | null; holdMs?: number },
+): Promise<DeviationChangeResult> {
+  const doc = await db.mapDocument.findUnique({ where: { hash: input.hash }, select: { report: true } });
+  if (!doc) return { ok: false, reason: "not-found" };
+  if (input.choice !== "default" && !reportDeviationKeys(doc.report).includes(input.key)) return { ok: false, reason: "unknown-deviation" };
+  const { key, choice, ...rest } = input;
+  return changeColourSettings(db, { ...rest, change: (s) => withDeviationChoice(s, key, choice) });
 }
 
 export type DecideResult =
