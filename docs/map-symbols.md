@@ -1694,8 +1694,20 @@ A symbol's fingerprint (§8.5) is unchanged: split rows keep the colour's
 name and CMYK, so `documentClassOf` gives every reference the class it
 had. The function is deterministic and does not change its input.
 
-**Measured** (the harness, `map-rendering.md` §6.5 "I3"): see the table
-there. NUMBERS_PLACEHOLDER
+**Measured** on the ten maps by the harness (`map-rendering.md` §6.5,
+"I3", the table per map): 710 573 pixels change against the source
+order (0.472 % of all pixels; the permutation, I1: 932 429). The
+multi-role class is gone — Sprint's buildings and canopy buried under
+the paved brown 10 103 → 63 px — and what remains is named: road infill
+and paved brown under the contours and other dropped deviations, the
+ski-O map's mask white, uses with no role (I4), and on eight of the ten
+maps chiefly the **road outlines**: roads drawn inside out (Q3 above), a
+brown 50 % main as wide as the side borders' centres under black
+borders, whose `brown50-road` ranks above the borders'
+`black-road-outline` and covers half of each border (Mörtsjön, with no
+multi-role colour, rises 3 398 → 27 009 px by it). Row I4 fixes that
+case against the harness; until then the layered stack is not fit to be
+the importer's default.
 
 | Test (`packages/shared/src/…`) | Covers |
 |---|---|

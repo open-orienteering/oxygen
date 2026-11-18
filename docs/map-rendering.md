@@ -4021,6 +4021,63 @@ design. Reading the table:
   turned yellow), the ski-O map 94 009 → 91 175, the Nacka map 267 473 →
   260 927; Club-full gains 195.
 
+**I3: the layered stack (2026-11-18).** The same ten maps, importers
+and settings, candidate `layers` (`map-symbols.md` §9.3 "Layers": no
+source-order exceptions or deviations yet, a use with no role placed by
+kind), nothing classified. Kinds are named in the layered stack's layers
+(one role each), so the permutation's `multi-role` suggestion cannot
+occur. "Road outline" is the share of changed pixels in kinds from
+`black-road-outline` (any `#n`) to a brown road or paved layer.
+
+| Map | Tiles: changed / > 1 % | Changed px (I1 → I3) | ÷ pixels | ÷ ink | Named | Suggested: deviation-dropped / mask / no-role / layout / multi-role / none / unattributed | Road outline | Layers: rows / split colours / no-role rows / unreferenced |
+|---|---|---|---|---|---|---|---|---|
+| Sprint | 56: 27 / 5 | 176 218 → 19 759 | 0.272 % | 0.937 % | 90.4 % | 87.4 / 0.2 / 2.8 / 0.0 / 0.0 / 0.0 / 9.6 % | 78.1 % | 66 / 16 / 7 / 3 |
+| Club-full | 460: 114 / 57 | 275 747 → 224 660 | 0.377 % | 2.390 % | 97.2 % | 94.5 / 0.4 / 2.2 / 0.0 / 0.0 / 0.0 / 2.8 % | 75.4 % | 103 / 14 / 22 / 0 |
+| Club-2026 | 48: 45 / 19 | 86 100 → 79 516 | 1.278 % | 2.541 % | 97.6 % | 94.2 / 0.2 / 3.2 / 0.0 / 0.0 / 0.0 / 2.4 % | 81.7 % | 87 / 13 / 15 / 0 |
+| Crop-A | 6: 6 / 2 | 5 061 → 4 142 | 0.533 % | 1.137 % | 97.4 % | 97.4 / 0.0 / 0.0 / 0.0 / 0.0 / 0.0 / 2.6 % | 76.9 % | 171 / 10 / 7 / 116 |
+| Crop-B | 9: 5 / 0 | 2 678 → 1 977 | 0.169 % | 0.742 % | 97.9 % | 97.9 / 0.0 / 0.0 / 0.0 / 0.0 / 0.0 / 2.1 % | 70.7 % | 141 / 12 / 8 / 85 |
+| Mörtsjön | 45: 24 / 5 | 3 398 → 27 009 | 0.463 % | 1.790 % | 97.4 % | 81.3 / 16.1 / 0.0 / 0.0 / 0.0 / 0.0 / 2.6 % | 80.9 % | 72 / 12 / 6 / 14 |
+| Erstavik crop | 42: 24 / 7 | 30 168 → 25 707 | 0.472 % | 1.716 % | 98.2 % | 96.2 / 2.0 / 0.0 / 0.0 / 0.0 / 0.0 / 1.8 % | 78.1 % | 140 / 11 / 7 / 85 |
+| puit-de-laven (Mapper, CC0) | 16: 13 / 0 | 957 → 2 293 | 0.111 % | 0.179 % | 99.9 % | 99.7 / 0.0 / 0.2 / 0.0 / 0.0 / 0.0 / 0.1 % | 0.0 % | 54 / 9 / 3 / 2 |
+| ski-O map (Mapper) | 20: 16 / 12 | 91 175 → 90 544 | 3.493 % | 11.901 % | 99.1 % | 91.5 / 1.9 / 5.8 / 0.0 / 0.0 / 0.0 / 0.9 % | 0.3 % | 89 / 19 / 15 / 7 |
+| Nacka exercise map (Mapper) | 460: 114 / 60 | 260 927 → 234 966 | 0.394 % | 2.501 % | 97.3 % | 95.3 / 0.1 / 1.9 / 0.0 / 0.0 / 0.0 / 2.7 % | 72.9 % | 107 / 14 / 17 / 9 |
+
+Over the ten maps 710 573 pixels change (I1: 932 429; 0.472 % of all,
+2.39 % of ink), 2.6 % of them unattributed (18 711 px; I1: 19 605).
+Exit 1, nothing classified. Reading the table:
+
+- **The multi-role class is gone.** Every split colour is drawn on one
+  layer per role. The buildings and canopy that the permutation buried
+  under the paved brown come back: kinds from `black50-building` or
+  `black20-canopy` to another layer, Sprint 10 103 → 63 px (Club-2026
+  36 → 40, Club-full and the Nacka map 0 in both).
+- **The road outlines are the largest kind left** (71–82 % of the change
+  on eight of the ten maps), now for another reason: the
+  roads there are drawn *inside out* (§9.3 "Roles", Q3). Their symbol is
+  a brown 50 % *main* line as wide as the distance between the black side
+  borders' centres, with the borders over it; the source draws the black
+  row above the brown, and on the layers the main's `brown50-road` ranks
+  above the borders' `black-road-outline` and covers the inner half of
+  each border. The permutation buried the same outlines under the whole
+  multi-role brown. On Mörtsjön, which has no multi-role colour, the
+  permutation kept its black on top and the layers do not: its change
+  rises 3 398 → 27 009 px, 81 % of it road outlines. Row I4's (the
+  general inside-out case, fixed against this harness).
+- **Deviations the layers drop** are the rest of the named change:
+  road infill and paved brown under the contours (answer 2 keeps them,
+  I4), and pairs the permutation hid by ranking a split colour at its
+  highest role — puit-de-laven's second blue serving lakes, now under
+  the contour brown (957 → 2 293 px), its cultivated-land black under
+  the contours and the greens.
+- **The ski-O map** is unchanged in size (91 175 → 90 544): its mask
+  white, §9.1's `white-over-green-brown`, sinks to that row's place
+  (`white-over-green-brown#4 → blue100-area#3` and the contours, black
+  and track rows) — I4's source-order rule for masks.
+- Sprint's named share falls to 90.4 % only because its change shrank:
+  1 895 unattributed pixels against 4 091 in I1.
+
+The run took 20 min (Club-full and the Nacka map 7.5 and 6.5 min).
+
 A run of the ten maps takes 19 min on the development machine
 (Club-full and the Nacka map, 460 tiles each, 8 and 6 min); paint
 images and peeling are drawn only for tiles that changed.
