@@ -317,3 +317,49 @@ describe("buildColourLayers: ties, purples, specs, determinism", () => {
     expect(() => buildColourLayers({ colours: isomColours.slice(1), infos, uses: [], needed: new Set(), spec: "ISOM2017-2", edition: "iof2022" })).toThrow(/infos/);
   });
 });
+
+describe("buildColourLayers: ids, aliases and inks", () => {
+  it("splits a no-role colour drawn by an area and a line into two rows, ids src:n and src:n/none:other", () => {
+    const colours = [colour(1, "Röd", [0, 1, 1, 0])];
+    const r = build(colours, [
+      { objects: 1, render: sym({ type: "area", fill: 0 }) },
+      { objects: 2, render: sym({ type: "line", main: { colour: 0, widthUm: 300 } }) },
+    ]);
+    const mine = r.report.rows.filter((x) => x.source === 0);
+    expect(mine.map((x) => [x.place, r.colours[x.row].id])).toEqual([["area", "src:1"], ["other", "src:1/none:other"]]);
+    expect(r.report.split).toEqual([{ source: 0, sourceNumber: 1, roles: [null, null] }]);
+  });
+
+  it("aliases to the most used identified colour of the class, ties to the lowest index", () => {
+    const colours = [colour(1, "Blå A", ink("blue100-line")), colour(2, "Blå B", ink("blue100-line"))];
+    const tie = build(colours, [], ["blue100-area"]);
+    expect(tie.report.aliased).toEqual([{ paletteId: "blue100-area", viaPaletteId: "blue100-line", sourceNumber: 1 }]);
+    const used = build(colours, [{ objects: 3, render: sym({ type: "line", main: { colour: 1, widthUm: 180 } }) }], ["blue100-area"]);
+    expect(used.report.aliased).toEqual([{ paletteId: "blue100-area", viaPaletteId: "blue100-line", sourceNumber: 2 }]);
+    expect(used.colours[rowOfRole(used, "blue100-area")]).toMatchObject({ id: "src:2", sourceNumber: 2, cmyk: colours[1].cmyk });
+  });
+
+  it("gives an inserted purple 50 % the palette's ink, not the course purple's", () => {
+    const colours = [colour(1, "Violett", [0.1, 0.9, 0.1, 0]), colour(2, "Svart", [0, 0, 0, 1])];
+    const r = build(colours, [{ objects: 1, render: sym({ type: "line", main: { colour: 1, widthUm: 100 } }) }], ["purple50"], "ISSprOM2019-2", "iof2024");
+    expect(r.colours[rowOfRole(r, "purple50")].cmyk).toEqual(ink("purple50", "iof2024"));
+    expect(r.colours[rowOfRole(r, "purple-upper")].cmyk).toEqual([0.1, 0.9, 0.1, 0]);
+  });
+
+  it("copies spot and overprint to every row of a split colour", () => {
+    const colours = [{ ...colour(12, "Brun 50%", ink("brown50-paved")), spot: { name: "Brown", knockout: true }, overprint: true as const }];
+    const r = build(colours, [
+      { objects: 1, render: sym({ type: "area", fill: 0 }) },
+      { objects: 1, render: sym({ type: "line", main: { colour: 0, widthUm: 400 } }) },
+    ]);
+    const rows = r.report.rows.filter((x) => x.source === 0).map((x) => r.colours[x.row]);
+    expect(rows).toHaveLength(2);
+    for (const c of rows) expect(c).toMatchObject({ spot: { name: "Brown", knockout: true }, overprint: true, sourceNumber: 12 });
+  });
+
+  it("names an inserted row the edition lacks by the 2024 edition", () => {
+    const r = build(isomColours, isomSymbols);
+    expect(r.colours[rowOfRole(r, "orange-skio")].id).toBe("iof2024:orange-skio");
+    expect(r.colours[rowOfRole(r, "green-skio")].id).toBe("iof2022:green-skio");
+  });
+});

@@ -85,6 +85,7 @@ colour's id (`src:12`); each other row is `<id>/<paletteId>`
 `sourceNumber`, `spot` and `overprint`: one ink, several layers. Each
 palette id is on exactly one row's `paletteIds`. Ids are unique in a
 stack.
+
 `cmyk` is 0–1. RGB is never stored; the screen conversion is
 `render.cmykToHex`.
 

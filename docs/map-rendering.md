@@ -4118,7 +4118,7 @@ Tests:
 | `packages/api/src/render/fonts.ts` | bundled-font loader for the server backends |
 | `packages/api/src/render/golden.ts`, `scripts/render-golden.ts` | golden PNG generation (`pnpm --filter @oxygen/api golden:render`) |
 | — | corpus parity against the legacy tiles (§6.4; `render/parity.ts` and `scripts/measure-parity.mjs` went in E4a) |
-| `packages/api/src/render/colour-order-diff.ts`, `scripts/measure-colour-order.mjs` | colour-order parity (§6.5): paint images, naming, layers, the permutation candidate, census, classification; the corpus run |
+| `packages/api/src/render/colour-order-diff.ts`, `scripts/measure-colour-order.mjs` | colour-order parity (§6.5): paint images, naming, layers, the layered candidate (`layeredCandidate`, the joint document) and the permutation, census, classification; the corpus run |
 | `packages/shared/src/render/ocad-objects.ts` | dev-only: `ocad2geojson` objects → `RenderObject`s (pilot / envelope modes); `ocadFlags` for the importers |
 | `packages/web/src/map-gl/prepare.ts` | WebGL2 backend, geometry builders: flattening, indexed strips, even-odd earcut; the per-pass fan path |
 | `packages/web/src/map-gl/mesh-atlas.ts` | glyph meshes in one float texture (vertex pulling) |
@@ -4157,8 +4157,8 @@ The shared module is exported as a namespace: `import { render } from
 
 ## 8. Pending in this chapter
 
-- **Colour-order parity (§6.5)**: the candidate becomes the importer's
-  layered stack (`SLICES.md` I3, `map-symbols.md` §9.3); the
+- **Colour-order parity (§6.5)**: the layered candidate built by stage 7
+  itself instead of from the imported document (I5); the
   classification of the ten maps' changes and the gate at 0 unclassified
   (I4, I5), in a committed `scripts/colour-order-classes.json` (decided
   overnight 2026-11-17, for review; layer names carry no club data).
