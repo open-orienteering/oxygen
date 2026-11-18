@@ -58,3 +58,25 @@ export function retryUrl(url: string, attempt: number): string {
 export function deviationSummary(deviations: readonly { kept: boolean }[]): { count: number; kept: number } {
   return { count: deviations.length, kept: deviations.filter((d) => d.kept).length };
 }
+
+export type DeviationChoice = "keep" | "drop";
+
+/**
+ * A deviation row's controls (row I7; docs/map-symbols.md §8.7): *Keep* and
+ * *Drop*, the map's choice pressed (its override, else the default), and
+ * *Reset to default* on an overridden row. Pressing the choice the map
+ * already has does nothing, so that button is disabled; everything is
+ * disabled as the switch is (edit rights, a target, no job running).
+ */
+export function deviationControls(
+  d: { choice: DeviationChoice | null; overridden: boolean; default: DeviationChoice },
+  opts: { canEdit: boolean; busy: boolean; hasTarget: boolean },
+): { keep: { pressed: boolean; disabled: boolean }; drop: { pressed: boolean; disabled: boolean }; reset: { shown: boolean; disabled: boolean } } {
+  const enabled = canSwitchOrder(opts) && d.choice !== null;
+  const choice = d.choice ?? d.default;
+  return {
+    keep: { pressed: choice === "keep", disabled: !enabled || choice === "keep" },
+    drop: { pressed: choice === "drop", disabled: !enabled || choice === "drop" },
+    reset: { shown: d.overridden, disabled: !enabled },
+  };
+}

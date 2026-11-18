@@ -164,7 +164,7 @@
       "title": "Avvikelser",
       "summary_one": "{{count}} avvikelse, {{kept}} behållen",
       "summary_other": "{{count}} avvikelser, {{kept}} behållna",
-      "hint": "Par av lager som kartans färgtabell ritar i omvänd ordning mot IOF-ordningen. Behållen: ritas som kartan ritar dem. Slopad: ritas i IOF-ordningen. Som standard ligger vägar och hårdgjorda ytor kvar över höjdkurvorna; alla andra par slopas.",
+      "hint": "Par av lager som kartans färgtabell ritar i omvänd ordning mot IOF-ordningen. Behållen: ritas som kartan ritar dem. Slopad: ritas i IOF-ordningen. Som standard ligger vägar och hårdgjorda ytor kvar över höjdkurvorna; alla andra par slopas. Behåll eller slopa ett par för den här kartan, eller återställ det till standard; varje ändring bygger om kartan.",
       "none": "Kartans färgtabell stämmer med IOF-ordningen.",
       "pair": "{{upper}} över {{lower}}",
       "kept": "Behållen",
@@ -179,7 +179,15 @@
         "implied": "behövs av en behållen avvikelse",
         "blocked": "kan inte behållas"
       },
-      "objects": "{{upper}} / {{lower}} objekt"
+      "objects": "{{upper}} / {{lower}} objekt",
+      "keep": "Behåll",
+      "drop": "Slopa",
+      "reset": "Återställ till standard",
+      "choose": "Behåll eller slopa {{upper}} över {{lower}} för den här kartan",
+      "overridden": {
+        "keep": "behållen för den här kartan",
+        "drop": "slopad för den här kartan"
+      }
     }
   }
 }

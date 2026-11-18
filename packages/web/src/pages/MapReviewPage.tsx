@@ -227,6 +227,22 @@ function MapReview({ documentHash, target, pinnedHash, mapName, canEdit, backTo,
       setError(err instanceof Error ? err.message : String(err));
     }
   };
+  const setDeviation = trpc.mapImport.setDeviation.useMutation();
+  const changeDeviation = async (key: string, choice: "keep" | "drop" | "default") => {
+    if (!hasTarget) return;
+    setError(null);
+    try {
+      const { job: changed } = await setDeviation.mutateAsync({
+        documentHash,
+        key,
+        choice,
+        target: target.kind === "event" ? { kind: "event" } : { kind: "club", clubMapId: clubMapId! },
+      });
+      followJob(changed as Job);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
   const finalise = trpc.mapImport.finalise.useMutation({
     onSuccess: () => {
       setFinalisedNow(true);
@@ -240,7 +256,7 @@ function MapReview({ documentHash, target, pinnedHash, mapName, canEdit, backTo,
   const visible = (rows: ReviewRowData[]) =>
     onlyToReview ? rows.filter((r) => rowOutcome(r.match) === "suggested" || pending.has(r.symbolIdx)) : rows;
 
-  const busy = decide.isPending || setColourOrder.isPending || jobId !== null;
+  const busy = decide.isPending || setColourOrder.isPending || setDeviation.isPending || jobId !== null;
   const decideOn = (row: ReviewRowData, decision: PendingDecision | null) => setPendingMap((p) => setPending(p, row, decision));
 
   const header = (
@@ -371,7 +387,7 @@ function MapReview({ documentHash, target, pinnedHash, mapName, canEdit, backTo,
         </div>
       )}
 
-      <ColourLayersPanel colour={data.colour} nameId={nameId} canEdit={canEdit} busy={busy} hasTarget={hasTarget} onSwitch={(o) => void switchOrder(o)} />
+      <ColourLayersPanel colour={data.colour} nameId={nameId} canEdit={canEdit} busy={busy} hasTarget={hasTarget} onSwitch={(o) => void switchOrder(o)} onDeviation={(k, c) => void changeDeviation(k, c)} />
 
       <CrtPanel documentHash={documentHash} canEdit={canEdit} busy={busy} onJob={followJob} onError={setError} rows={data.symbols} />
 
