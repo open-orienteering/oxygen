@@ -5,6 +5,8 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  buildColourLayersOcad,
+  COLOUR_LAYERS_OCAD,
   buildE2eTestOcad,
   buildSymbolTypesOcad,
   buildStaleBorderOcad,
@@ -24,6 +26,17 @@ describe("OCAD fixtures", () => {
     const generated = buildE2eTestOcad();
     assert.equal(generated.length, committed.length);
     assert.ok(committed.equals(generated), "generated e2e/test.ocd must match the committed file");
+  });
+
+  it("rebuilds e2e/colour-layers.ocd byte-identically, and the reader sees its badly ordered table (row I5)", async () => {
+    const committed = readFileSync(path.join(ROOT, "e2e/colour-layers.ocd"));
+    assert.ok(committed.equals(buildColourLayersOcad()), "generated e2e/colour-layers.ocd must match the committed file");
+    const { readOcad } = require("ocad2geojson");
+    const ocad = await readOcad(committed, { quietWarnings: true });
+    assert.deepEqual(ocad.colors.map((c) => c.name), ["Yellow", "Black", "Brown 50%", "Black 50%", "Brown", "White"]);
+    const syms = new Set(ocad.symbols.map((s) => s.symNum));
+    for (const k of ["paved", "building", "contour", "street", "yellow", "path"]) assert.ok(syms.has(COLOUR_LAYERS_OCAD[k].symNum), k);
+    assert.equal(ocad.objects.length, 6);
   });
 
   it("builds the stale-border fixture: the reader sees a border symbol that is the area itself, and one that is missing", async () => {

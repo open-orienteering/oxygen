@@ -64,9 +64,11 @@ describe("measure-import.mjs", () => {
   });
 
   // bugfix-lower-purple-under-areas: where lower purple sits, what is drawn over it, how many conflicts.
-  it("reports lower purple's place in the aligned stack per map", () => {
+  it("reports lower purple's place in the aligned stack per map (the source order, §9.2)", () => {
     const out = path.join(dir, "purple.json");
-    const r = run(ocd, xmap, "--out", out);
+    const r = run(ocd, xmap, "--out", out, "--colour-order", "source");
+    assert.match(r.stdout, /^ {2}order {6}source /m);
+    assert.doesNotMatch(r.stdout, /^ {2}layers /m);
     // G21: green 100 % and the track mask below lower purple, the track inks above it (docs/map-symbols.md §12.3).
     // C15: both course purples placed by rule; each fixture's own upper purple is on top and reused, nothing displaced.
     assert.match(r.stdout, /^ {2}purple {5}lower at 5 of 10 \(inserted\) {2}upper at 9 \(source\) {2}areas above 0 {2}conflicts \d+$/m);
@@ -75,6 +77,22 @@ describe("measure-import.mjs", () => {
     assert.deepEqual(maps["test.ocd"].lowerPurple, { index: 5, colours: 10, inserted: true, displaced: [], areasAbove: [], conflicts: maps["test.ocd"].lowerPurple.conflicts });
     assert.deepEqual(maps["test.ocd"].upperPurple, { index: 9, inserted: false, displaced: [] });
     assert.ok(maps["test.ocd"].lowerPurple.conflicts > 0); // the fixture's blue line colour sits under its yellow
+  });
+
+  // Row I5 (docs/map-symbols.md §9.3 "In the importer"): the default order is the layered stack, and what it did is printed.
+  it("reports the IOF colour layers by default: both course purples inserted, no conflicts, the layers and deviations", () => {
+    const out = path.join(dir, "layers.json");
+    const r = run(ocd, "--out", out);
+    assert.match(r.stdout, /^ {2}order {6}iof /m);
+    assert.match(r.stdout, /^ {2}purple {5}lower at \d+ of \d+ \(inserted\) {2}upper at \d+ \(inserted\) {2}areas above 0 {2}conflicts 0$/m);
+    assert.match(r.stdout, /^ {2}layers {5}rows \d+ {2}split \d+/m);
+    assert.match(r.stdout, /^ {13}deviations kept .* {2}implied \d+ {2}blocked .* {2}dropped \d+$/m);
+    const map = JSON.parse(readFileSync(out, "utf8")).maps["test.ocd"];
+    assert.equal(map.colourOrder, "iof");
+    assert.equal(map.layers.rows, map.lowerPurple.colours);
+    assert.equal(map.upperPurple.index, map.lowerPurple.colours - 1);
+    assert.equal(map.warnings.COLOUR_DEVIATION_DROPPED, map.layers.deviations.dropped);
+    assert.equal(run(ocd, "--colour-order", "mapper").status, 2);
   });
 
   // G21 (docs/map-symbols.md §12.3): the overlay's palette rows in every stack, and where each comes from.

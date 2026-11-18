@@ -34,17 +34,8 @@ export function documentColours(colours: render.ColourStack): (idx: number) => [
 
 /** Proxy colours for unmatched symbols: lines / points / text in the stack's darkest colour, areas in its lightest non-white one. */
 export function documentProxyColours(colours: render.ColourStack): { line: number; area: number; point: number; text: number } {
-  if (!colours.length) return { line: 0, area: 0, point: 0, text: 0 };
-  const lum = (i: number) => {
-    const [c, m, y, k] = colours[i].cmyk;
-    return (1 - Math.min(1, k)) * (3 - Math.min(1, c) - Math.min(1, m) - Math.min(1, y));
-  };
-  let dark = 0, light = 0;
-  for (let i = 1; i < colours.length; i++) {
-    if (lum(i) < lum(dark)) dark = i;
-    if (lum(i) > lum(light) && lum(i) < 2.9) light = i;
-  }
-  return { line: dark, area: light, point: dark, text: dark };
+  // The render bridge's default since row I5 (print and thumbnails draw proxies as the viewer does).
+  return render.stackProxyColours(colours);
 }
 
 export type MapBudget = "event" | "club";

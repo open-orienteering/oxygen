@@ -8,7 +8,7 @@
  * object is drawn; the S1 "envelope") or nothing (the object is dropped).
  */
 
-import { proxySymbols } from "../render/proxy-symbols.js";
+import { proxySymbols, stackProxyColours } from "../render/proxy-symbols.js";
 import type { RenderSymbol, TextSymbol } from "../render/symbol.js";
 import type { RenderObject } from "../render/symbolise.js";
 import { scaleRenderSymbol } from "../render/transform.js";
@@ -23,6 +23,7 @@ import type { EffectiveDocument } from "./patch.js";
 export interface DocumentRenderOptions {
   /** What to do with objects whose symbol has no `render`: draw a proxy, or drop. Default `proxy`. */
   unmatched?: "proxy" | "drop";
+  /** The proxies' rows; default by ink (`stackProxyColours`: darkest for lines, points, text; lightest non-white for areas). */
   proxyColours?: { line?: number; area?: number; point?: number; text?: number };
   /** Draw objects of hidden symbols too. Default false. */
   includeHidden?: boolean;
@@ -122,7 +123,7 @@ export function documentRenderInput(doc: EffectiveDocument, opts: DocumentRender
   const unitUm = 1000 / doc.header.unitsPerMm;
   const symbols: RenderSymbol[] = [];
   const proxyIdx: Partial<Record<RenderSymbol["type"], number>> = {};
-  const proxies = proxySymbols(opts.proxyColours);
+  const proxies = proxySymbols(opts.proxyColours ?? stackProxyColours(doc.header.colours));
   const stats = { total: doc.header.objects.count, rendered: 0, proxied: 0, hidden: 0, patchHidden: 0, dropped: 0, coordinates: 0, canonicalSymbols: 0, canonicalMissing: 0 };
   // Symbol i of the document maps to symbols[i]; placeholders keep indices aligned.
   const placeholder = proxies[0];

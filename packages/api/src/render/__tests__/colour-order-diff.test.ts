@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import { type mapImport, mapDocument, render } from "@oxygen/shared";
 import { glyphOutlineFrom, loadBundledFonts } from "../fonts.js";
 import { rasterisePassStream } from "../reference-raster.js";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { importMapToDocument } from "../../import/ocad.js";
 import {
   changedMask,
   classify,
@@ -43,6 +46,7 @@ import {
   correspondingNamer,
   jointDocument,
   layeredCandidate,
+  importedCandidate,
   objectsPerSymbol,
   paintCorrespondence,
   paintKey,
@@ -374,11 +378,13 @@ describe("the permutation keeps proxy-drawn objects' colour", () => {
       const { stream } = render.symbolise({ objects: input.objects, symbols: input.symbols, fonts: [] });
       return stream.passes.map((p, i) => [input.symbols[stream.symbolIdx[i]].code, d.header.colours[p.colour].name]).sort();
     };
-    const source = inks(doc);
+    // I1's rule pins the proxies to row 0 (the bridge's default goes by ink since row I5).
+    const source = inks(doc, ROW0);
     expect(source).toEqual([["401", "Yellow"], ["proxy-area", "Black"]]);
     const permuted = permuteStack(doc, order);
     expect(inks(permuted, permutedRenderOptions(order))).toEqual(source);
-    expect(inks(permuted)).not.toEqual(source); // without the options the proxy takes the yellow now at row 0
+    expect(inks(permuted, ROW0)).not.toEqual(source); // row 0 is the yellow now
+    expect(inks(permuted)).toEqual(inks(doc)); // by ink (the bridge's default), the same in both orders
   });
 });
 
@@ -557,6 +563,8 @@ function alignedDoc(): mapDocument.MapDocument {
 }
 
 const rank22 = paletteRank("iof2022", "ISOM2017-2");
+/** I1's proxy rule: the source order's proxies in row 0 (the harness passes it; the bridge's default goes by ink since I5). */
+const ROW0: mapDocument.DocumentRenderOptions = { proxyColours: { line: 0, area: 0, point: 0, text: 0 } };
 const streamOfDoc = (d: mapDocument.MapDocument, opts: mapDocument.DocumentRenderOptions = {}) => {
   const input = mapDocument.documentRenderInput(d, opts);
   return render.symbolise({ objects: input.objects, symbols: input.symbols, fonts: [] }).stream;
@@ -594,8 +602,9 @@ describe("the layered candidate", () => {
       const s = streamOfDoc(d, opts);
       return s.passes.map((p, i) => `${s.symbolIdx[i]}:${p.kind}:${d.header.colours[p.colour].cmyk.join(",")}`).sort();
     };
-    expect(inks(lc.doc, lc.renderOptions)).toEqual(inks(doc));
-    expect(inks(lc.doc)).not.toEqual(inks(doc)); // without the options the proxy takes whatever is row 0 now
+    expect(inks(lc.doc, lc.renderOptions)).toEqual(inks(doc, ROW0));
+    expect(inks(lc.doc, ROW0)).not.toEqual(inks(doc, ROW0)); // row 0 is another colour now
+    expect(inks(lc.doc)).toEqual(inks(doc)); // by ink (the bridge's default, row I5), the same in both orders
   });
 
   it("rejects a document whose source symbols draw in an inserted row", () => {
@@ -611,7 +620,7 @@ describe("the layered candidate", () => {
     const p = joint.proxy;
     const corr = paintCorrespondence(streamOfDoc(joint.doc, { proxyColours: { line: p, area: p, point: p, text: p } }), joint.pairs);
     const names = lc.stackLayers.map((l) => l.name);
-    const source = streamOfDoc(doc);
+    const source = streamOfDoc(doc, ROW0);
     // the brown's paints: the paved row for the area, the road row for the road
     const brown = source.passes.flatMap((x, i) => (x.colour === 1 ? [{ key: paintKey(1, x.kind, source.symbolIdx[i]), sym: source.symbolIdx[i] }] : []));
     expect(new Set(brown.map((b) => b.sym))).toEqual(new Set([0, 1]));
@@ -629,6 +638,23 @@ describe("the layered candidate", () => {
     const paints = [{ row: 1, kind: "fill" as const, symbolIdx: 0 }, { row: 1, kind: "fill" as const, symbolIdx: 1 }, { row: 0, kind: "fill" as const, symbolIdx: 2 }];
     const name = correspondingNamer(paints, candidateRow, lc.stackLayers, doc.header.symbols, (r) => lc.rowOfAligned[r]);
     expect([name(0), name(1), name(2)]).toEqual(["brown50-paved", "brown50-road", `${GRAPHIC_PREFIX}black-road-outline`]);
+  });
+
+  it("is, from the importer itself (row I5), the stack the harness built at I4 from the source order's document", async () => {
+    const file = readFileSync(fileURLToPath(new URL("../../../../../e2e/test.ocd", import.meta.url)));
+    const src = await importMapToDocument(file, "test.ocd", "ocad", { match: { decisions: [], colourOrder: "source" } });
+    const iof = await importMapToDocument(file, "test.ocd", "ocad", { match: { decisions: [] } });
+    const doc = mapDocument.decodeMapDocument(src.bytes);
+    const cand = mapDocument.decodeMapDocument(iof.bytes);
+    const perSymbol = objectsPerSymbol(doc);
+    const built = layeredCandidate(doc, "ISOM2017-2", perSymbol, rank22);
+    const imported = importedCandidate(doc, cand, iof.colourStack, perSymbol, rank22);
+    expect(imported.doc.header.colours).toEqual(built.doc.header.colours);
+    expect(imported.doc.header.symbols.map((s) => s.render)).toEqual(built.doc.header.symbols.map((s) => s.render));
+    expect(imported.rowOfAligned).toEqual(built.rowOfAligned);
+    expect(imported.stackLayers.map((l) => l.name)).toEqual(built.stackLayers.map((l) => l.name));
+    expect(imported.layers.report).toEqual(built.layers.report);
+    expect(() => importedCandidate(doc, doc, src.colourStack, perSymbol, rank22)).toThrow(/iof order/);
   });
 
   it("peels passes by what draws them (withoutPasses)", () => {

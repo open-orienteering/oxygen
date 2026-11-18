@@ -14,13 +14,15 @@
  * against the palette, kept or dropped) and a symbol's own parts kept in
  * their source order (§9.3 "Own order").
  *
- * Pure. Nothing in the importer calls it yet (row I5); the colour-order
- * harness takes it as its candidate.
+ * Row I5 wires it into import stage 7 (`match-document.ts`, `colourOrder:
+ * "iof"`, the default). Pure.
  */
 
 import type { DocumentColour, DocumentSymbol, SymbolMatch } from "../map-document/header.js";
 import type { RenderSymbol } from "../render/symbol.js";
+import { getLibraryEntry } from "../symbol-library/index.js";
 import { type PaletteEdition, palettes, type SpecId } from "../symbol-library/palette.js";
+import { colourRefs } from "../symbol-library/schema.js";
 import { alignmentPalette, OVERLAY_STACK_IDS, type SourceColourInfo } from "./colour-align.js";
 import { nameKind, paletteClass, sameClass, SKI_PALETTE_IDS } from "./colour-class.js";
 import { colourRoles, type RoleColourInfo, type RolePalette } from "./colour-roles.js";
@@ -41,6 +43,12 @@ export interface LayerSymbolUses {
    * parts' order is the library's, so §9.3 "Own order" leaves it alone. Absent: drawn from source.
    */
   library?: boolean;
+  /**
+   * For a library-drawn symbol: the palette ids its entry draws with (`colourRefs(entry.render)`, as stage 7's
+   * `needed`). Its objects count on the rows carrying them, not on its own references' rows (§9.3 "Deviations",
+   * row I5). Absent: the roles of `uses`.
+   */
+  libraryIds?: readonly string[];
   /** Every colour reference of the render in `renderColourPaths` order, with its role (`colourRoles`). */
   uses: readonly { colour: number; role: string | null }[];
 }
@@ -74,9 +82,25 @@ export function symbolColourUses(
       return { colour, role };
     });
     const out: LayerSymbolUses = { objects: objectsPerSymbol[i] ?? 0, type: s.render.type, origin: s.origin ?? "source", uses };
-    if (applied(s.match)) out.library = true;
+    if (applied(s.match)) {
+      out.library = true;
+      const entry = getLibraryEntry(s.match!.canonicalId!);
+      if (entry) out.libraryIds = [...new Set(colourRefs(entry.render))].sort();
+    }
     return out;
   });
+}
+
+/**
+ * The layered stack cannot be built for this map (an order whose constraints cannot be resolved). Stage 7 falls back
+ * to the source order with `COLOUR_LAYERS_FAILED` (row I5); a bad input (a reference outside the table) is a plain
+ * `Error`, not this.
+ */
+export class ColourLayersError extends Error {
+  constructor(message: string) {
+    super(`buildColourLayers: ${message}`);
+    this.name = "ColourLayersError";
+  }
 }
 
 /** What a deviation is set to (`ColourLayersInput.deviations`). */
@@ -119,7 +143,13 @@ export type LayerOrigin =
   /** A palette id no source colour gives: the palette's ink, or for the course purples the map's purple (§9.2 step 4). */
   | "insert"
   /** A source colour no symbol references, kept once. */
-  | "unreferenced";
+  | "unreferenced"
+  /**
+   * A palette id §9.1 identified a source colour as, carried on a zero-object row of that colour at the id's palette
+   * place because none of the colour's rows can carry it (row I5): §9.2 carries every identified id, so must the
+   * layers. Nothing references it; it is never the colour's lowest row.
+   */
+  | "identified";
 
 /** Why a row stands where the source order puts it rather than at a palette place (§9.3 "Source order"). */
 export type SourceOrderReason =
@@ -140,7 +170,7 @@ export interface ColourLayerRow {
   /** For a row of uses with no role: the kind of symbol drawing them (`area` or `other`); part of its id. */
   place: NoRolePlace | null;
   origin: LayerOrigin;
-  /** Objects drawn in the row (a symbol counts once per row it references). */
+  /** Objects drawn in the row: source-drawn symbols referencing it (once each), and on a row carrying a palette id the library-drawn symbols whose entry draws with it (row I5). */
   objects: number;
   /** Symbols referencing the row. */
   symbols: number;
@@ -224,6 +254,8 @@ interface Draft {
   ownOrder: boolean;
   /** The row's id suffix after the colour's id (`brown50-road`, `none:area`, `graphic`, `brown50-road/under1`). */
   suffix: string;
+  /** A row made only to carry an identified palette id (row I5): nothing references it, and the source-order gap does not count it. */
+  idOnly?: boolean;
 }
 
 /**
@@ -396,7 +428,10 @@ export function buildColourLayers(input: ColourLayersInput): ColourLayersResult 
     }
     return via;
   };
-  const wanted = new Set<string>([...input.needed, ...COURSE_PURPLES, ...OVERLAY_STACK_IDS]);
+  // Every id §9.2 step 2 identifies is carried too (row I5), as on the source order: Map mode and a patch re-resolved
+  // onto this stack find the same palette ids (§11, map-patches §4.2), on a zero-object row of the colour if need be.
+  const required = new Set<string>([...input.needed, ...COURSE_PURPLES, ...OVERLAY_STACK_IDS]);
+  const wanted = new Set<string>([...required, ...identifiedAs.keys()]);
   const placeable = (d: Draft | undefined) => d && d.base && !d.ownOrder;
   const carrier = new Map<string, Draft>();
   const aliased: ColourLayersReport["aliased"] = [];
@@ -413,7 +448,10 @@ export function buildColourLayers(input: ColourLayersInput): ColourLayersResult 
     if (colour !== undefined && wanted.has(id)) {
       // A colour whose own row of this role went elsewhere (a mask, a moved part) gets a second one at the palette place.
       const key = own ? `${colour}|${id}|alias` : `${colour}|${id}`;
-      carrier.set(id, draft(key, { source: colour, role: id, place: null, origin: "alias", base: placeKey(id), sourceOrdered: null, suffix: own ? `${id}/alias` : id }));
+      const idOnly = !required.has(id);
+      const d = draft(key, { source: colour, role: id, place: null, origin: idOnly ? "identified" : "alias", base: placeKey(id), sourceOrdered: null, suffix: own ? `${id}/alias` : id });
+      if (idOnly) d.idOnly = true;
+      carrier.set(id, d);
       if (step2 === undefined) aliased.push({ paletteId: id, viaPaletteId: infos[colour].paletteId!, ...(colours[colour].sourceNumber !== undefined ? { sourceNumber: colours[colour].sourceNumber } : {}) });
       continue;
     }
@@ -428,12 +466,13 @@ export function buildColourLayers(input: ColourLayersInput): ColourLayersResult 
   for (const id of COURSE_PURPLES) carrier.set(id, draft(`insert|${id}`, { source: null, role: id, place: null, origin: "insert", base: placeKey(id), sourceOrdered: null, suffix: id }));
 
   // What each row draws: the objects of source-drawn symbols referencing it, and on the row carrying a palette id the
-  // objects of library-drawn symbols using that id (their own references draw nothing).
+  // objects of library-drawn symbols whose entry draws with that id (their own references draw nothing; row I5).
   const drawn = new Map(drawnBySource);
+  const libraryIdsOf = (s: LayerSymbolUses): Set<string> => new Set(s.libraryIds ?? s.uses.flatMap((u) => (u.role ? [u.role] : [])));
   const libraryByRole = new Map<string, number>();
   for (const s of input.uses) {
     if (!s?.library) continue;
-    for (const role of new Set(s.uses.map((u) => u.role))) if (role) libraryByRole.set(role, (libraryByRole.get(role) ?? 0) + s.objects);
+    for (const role of libraryIdsOf(s)) libraryByRole.set(role, (libraryByRole.get(role) ?? 0) + s.objects);
   }
   for (const [role, n] of libraryByRole) {
     const c = carrier.get(role);
@@ -509,7 +548,7 @@ export function buildColourLayers(input: ColourLayersInput): ColourLayersResult 
   for (let guard = 0; ; guard++) {
     const cycle = findCycle(placed, edges.out);
     if (!cycle) break;
-    if (guard >= guardLimit) throw new Error("buildColourLayers: deviations that cannot be resolved");
+    if (guard >= guardLimit) throw new ColourLayersError("deviations that cannot be resolved");
     const inCycle = new Set<string>();
     const roles = new Set<string>();
     cycle.forEach((d, k) => {
@@ -541,7 +580,7 @@ export function buildColourLayers(input: ColourLayersInput): ColourLayersResult 
       implied.clear();
     } else {
       const forced = lightest(droppedHere);
-      if (!forced) throw new Error("buildColourLayers: a cycle without a deviation");
+      if (!forced) throw new ColourLayersError("a cycle without a deviation");
       keep.add(forced);
       implied.set(forced, new Set(keptHere));
       blocked.delete(forced);
@@ -578,7 +617,7 @@ export function buildColourLayers(input: ColourLayersInput): ColourLayersResult 
     let best = -1, bestObj = Infinity, bestRows = Infinity;
     let obj = 0, rows = 0;
     for (const d of order) {
-      if (d.source !== null && d.source !== r.source && d.source < r.source!) {
+      if (d.source !== null && !d.idOnly && d.source !== r.source && d.source < r.source!) {
         obj += drawnObjects(d);
         rows++;
       }
@@ -590,7 +629,7 @@ export function buildColourLayers(input: ColourLayersInput): ColourLayersResult 
         bestRows = rows;
       }
       const d = order[g];
-      if (!d || d.source === null || d.source === r.source) continue;
+      if (!d || d.source === null || d.idOnly || d.source === r.source) continue;
       if (d.source < r.source!) {
         obj -= drawnObjects(d);
         rows--;
@@ -633,9 +672,9 @@ export function buildColourLayers(input: ColourLayersInput): ColourLayersResult 
       if (lowest && (!ceiling || stack.indexOf(lowest) < stack.indexOf(ceiling))) ceiling = lowest;
     }
   });
-  // Counts follow the references; a use row left with no reference and no palette id is dropped.
+  // Counts follow the references, objects what is drawn (row I5): a library-drawn symbol's objects on the rows carrying
+  // its entry's ids, not on its own references' rows. A use row left with no reference and no palette id is dropped.
   for (const d of drafts.values()) {
-    if (d.origin !== "use") continue;
     d.symbols = new Set();
     d.objects = 0;
     d.graphicObjects = 0;
@@ -645,8 +684,15 @@ export function buildColourLayers(input: ColourLayersInput): ColourLayersResult 
     if (!mine || !s) return;
     for (const d of new Set(mine)) {
       d.symbols.add(symbolIdx);
+      if (s.library) continue;
       d.objects += s.objects;
       if (s.origin === "graphic") d.graphicObjects += s.objects;
+    }
+    if (s.library) {
+      for (const id of libraryIdsOf(s)) {
+        const c = carrier.get(id);
+        if (c) c.objects += s.objects;
+      }
     }
   });
   const isCarrier = (d: Draft) => d.role !== null && carrier.get(d.role) === d;
@@ -676,7 +722,9 @@ export function buildColourLayers(input: ColourLayersInput): ColourLayersResult 
   const out: DocumentColour[] = ordered.map((d) => {
     if (d.source === null) {
       const p = paletteById.get(d.role!)!;
-      const cmyk = isCoursePurple(p.id) && purpleInk !== null ? colours[purpleInk].cmyk : p.cmyk;
+      // Every inserted purple of a course role (the course purples, ISSprOM's purple 50 %) takes the map's purple ink, as
+      // §9.2 step 4 does (row I5, carried from I3), so a library symbol has one ink in both orders.
+      const cmyk = p.purpleRole && purpleInk !== null ? colours[purpleInk].cmyk : p.cmyk;
       const entry: DocumentColour = { id: `${rowEdition(edition, p.id)}:${p.id}`, name: p.name, cmyk: [...cmyk] as DocumentColour["cmyk"], paletteIds: [p.id] };
       if (p.purpleRole) entry.purpleRole = p.purpleRole;
       return entry;
@@ -685,8 +733,9 @@ export function buildColourLayers(input: ColourLayersInput): ColourLayersResult 
     const entry: DocumentColour = { ...src, cmyk: [...src.cmyk] as DocumentColour["cmyk"] };
     delete entry.paletteIds;
     delete entry.purpleRole;
-    if (seenSource.has(d.source)) entry.id = `${src.id}/${suffixOf.get(d)}`;
-    seenSource.add(d.source);
+    // An id-only row is never the one keeping the colour's id: the colour's own rows keep their I4 ids.
+    if (d.idOnly || seenSource.has(d.source)) entry.id = `${src.id}/${suffixOf.get(d)}`;
+    if (!d.idOnly) seenSource.add(d.source);
     if (isCarrier(d)) {
       entry.paletteIds = [d.role!];
       const role = paletteById.get(d.role!)?.purpleRole;
@@ -697,7 +746,7 @@ export function buildColourLayers(input: ColourLayersInput): ColourLayersResult 
 
   const firstRow = new Array<number>(colours.length).fill(-1);
   ordered.forEach((d, i) => {
-    if (d.source !== null && firstRow[d.source] < 0) firstRow[d.source] = i;
+    if (d.source !== null && !d.idOnly && firstRow[d.source] < 0) firstRow[d.source] = i;
   });
   const symbols = refs.map((mine) => (mine ? mine.map((d) => rowOf.get(d)!) : null));
 
@@ -806,6 +855,6 @@ function sortByEdges<T>(nodes: readonly T[], edges: ReadonlyMap<T, ReadonlySet<T
       if (indeg.get(m) === 0) ready.push(m);
     }
   }
-  if (out.length !== nodes.length) throw new Error("buildColourLayers: the order's constraints have a cycle");
+  if (out.length !== nodes.length) throw new ColourLayersError("the order's constraints have a cycle");
   return out;
 }

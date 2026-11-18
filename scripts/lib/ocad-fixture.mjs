@@ -551,6 +551,76 @@ export function buildRotatedPointsOcad() {
 // ─── E2E course-setting fixture ──────────────────────────────────────────────
 
 /** The fixture's text and rectangle symbols: a spot-height value framed in white, and a plain frame. */
+// ─── Colour-layers fixture (docs/map-symbols.md §9.3, row I5) ────────────────
+
+/**
+ * `e2e/colour-layers.ocd`: a map whose colour table is badly ordered, so
+ * the IOF colour layers draw it differently from the table — and one
+ * brown 50 % serving two IOF layers (paved area and street infill). In
+ * OCAD's order, top first: the yellow over everything, the black, the
+ * brown 50 %, the building grey under it, the contour brown, the white.
+ * Paper mm (×100 in the file), y up:
+ *
+ *   - a paved area 0..30 × 0..30 with a building 10..20 × 10..20 on it
+ *     (the table draws the paved brown over the building; the layers
+ *     put the building on top);
+ *   - a contour along y = 50 from x = −20 to 60, and a 0.6 mm street in
+ *     the same brown 50 % along x = 20 from y = 35 to 70 across it (the
+ *     table draws the street over the contour, a deviation kept by
+ *     default: roads over contours);
+ *   - open land (full yellow) 40..90 × 0..20, which the table draws over
+ *     the course's lower purple; on the layers a leg across it is purple;
+ *   - a black path along y = −10.
+ *
+ * Positions are load-bearing for `e2e/map-vector-layer.spec.ts` and the
+ * importer test in `packages/api/src/__tests__/import-ocad.test.ts`.
+ */
+export const COLOUR_LAYERS_OCAD = {
+  scale: 10000,
+  easting: 510000,
+  northing: 6510000,
+  paved: { symNum: 501000, x0: 0, y0: 0, x1: 30, y1: 30 },
+  building: { symNum: 521000, x0: 10, y0: 10, x1: 20, y1: 20 },
+  contour: { symNum: 101000, y: 50, x0: -20, x1: 60 },
+  street: { symNum: 599000, x: 20, y0: 35, y1: 70, widthMm: 0.6 },
+  yellow: { symNum: 401000, x0: 40, y0: 0, x1: 90, y1: 20 },
+  path: { symNum: 505000, y: -10, x0: -20, x1: 90 },
+};
+
+export function buildColourLayersOcad() {
+  const t = COLOUR_LAYERS_OCAD;
+  // OCAD's colour table lists the top colour first.
+  const strings = [
+    { recType: 9, text: "Yellow\tn0\tc0.0\tm27.0\ty79.0\tk0.0" },
+    { recType: 9, text: "Black\tn1\tc0.0\tm0.0\ty0.0\tk100.0" },
+    { recType: 9, text: "Brown 50%\tn2\tc0.0\tm28.0\ty50.0\tk9.0" },
+    { recType: 9, text: "Black 50%\tn3\tc0.0\tm0.0\ty0.0\tk50.0" },
+    { recType: 9, text: "Brown\tn4\tc0.0\tm56.0\ty100.0\tk18.0" },
+    { recType: 9, text: "White\tn5\tc0.0\tm0.0\ty0.0\tk0.0" },
+    { recType: 1039, text: georeferenceString({ gridId: 13002, scale: t.scale, easting: t.easting, northing: t.northing }) },
+  ];
+  const YELLOW = 0, BLACK = 1, BROWN50 = 2, GREY = 3, BROWN = 4;
+  const symbols = [
+    lineSymbol({ symNum: t.contour.symNum, extent: 7, colorIdx: BROWN, description: "Contour", lineWidth: 14 }),
+    areaSymbol({ symNum: t.paved.symNum, extent: 0, colorIdx: BROWN50, description: "Paved area" }),
+    areaSymbol({ symNum: t.building.symNum, extent: 0, colorIdx: GREY, description: "Building" }),
+    lineSymbol({ symNum: t.street.symNum, extent: 30, colorIdx: BROWN50, description: "Street", lineWidth: Math.round(t.street.widthMm * 100) }),
+    areaSymbol({ symNum: t.yellow.symNum, extent: 0, colorIdx: YELLOW, description: "Open land" }),
+    lineSymbol({ symNum: t.path.symNum, extent: 13, colorIdx: BLACK, description: "Path", lineWidth: 25 }),
+  ];
+  const mm = (v) => Math.round(v * 100);
+  const box = ({ x0, y0, x1, y1 }) => [[mm(x0), mm(y0)], [mm(x1), mm(y0)], [mm(x1), mm(y1)], [mm(x0), mm(y1)]];
+  const objects = [
+    { sym: t.paved.symNum, otp: 3, coords: box(t.paved) },
+    { sym: t.building.symNum, otp: 3, coords: box(t.building) },
+    { sym: t.contour.symNum, otp: 2, coords: [[mm(t.contour.x0), mm(t.contour.y)], [mm(t.contour.x1), mm(t.contour.y)]] },
+    { sym: t.street.symNum, otp: 2, coords: [[mm(t.street.x), mm(t.street.y0)], [mm(t.street.x), mm(t.street.y1)]] },
+    { sym: t.yellow.symNum, otp: 3, coords: box(t.yellow) },
+    { sym: t.path.symNum, otp: 2, coords: [[mm(t.path.x0), mm(t.path.y)], [mm(t.path.x1), mm(t.path.y)]] },
+  ];
+  return assembleOcad({ fileType: 0, strings, symbols, objects });
+}
+
 export const E2E_TEXT_SYMBOLS = {
   spotHeight: { symNum: 603000, description: "Spot height, value", fontColor: 1, fontSize: 43, frMode: 2, frColor: 4, frWidth: 10 },
   frame: { symNum: 850001, description: "Frame", lineColor: 1, lineWidth: 25 },

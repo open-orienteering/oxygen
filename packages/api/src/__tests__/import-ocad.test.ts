@@ -1,14 +1,14 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { mapDocument, render, symbolLibrary } from "@oxygen/shared";
+import { mapDocument, mapImport, render, symbolLibrary } from "@oxygen/shared";
 import { importOcadToDocument, sha256Hex } from "../import/ocad.js";
 import { buildImportReport } from "../map-store/documents.js";
 import { mapFileMetadataFor } from "../map-store/map-file-metadata.js";
 import { parseOcadMapMetadata } from "./helpers/ocad-oracle.js";
 import { goldenFonts } from "../render/golden.js";
 // @ts-expect-error — plain .mjs fixture writer without types
-import { buildSymbolTypesOcad } from "../../../../scripts/lib/ocad-fixture.mjs";
+import { buildColourLayersOcad, buildSymbolTypesOcad } from "../../../../scripts/lib/ocad-fixture.mjs";
 import { computeDeclination, computeMeridianStalenessDeg, detectMapNorth, probeMeridianLines, type OcadNorthSource } from "../map-north.js";
 
 const fixture = readFileSync(fileURLToPath(new URL("../../../../e2e/test.ocd", import.meta.url)));
@@ -28,7 +28,10 @@ describe("importOcadToDocument", () => {
     expect(doc.header.unitsPerMm).toBe(100);
     expect(doc.header.objects.count).toBe(a.counts.objects);
     expect(doc.header.symbols.length).toBe(a.counts.symbols);
-    expect(doc.header.colours.length).toBe(a.counts.colours + a.colourStack.inserted.length);
+    // The IOF colour layers (row I5): one row per layer the report lists.
+    expect(doc.header.colourOrder?.order).toBe("iof");
+    expect(doc.header.colours.length).toBe(a.colourStack.layers!.rows.length);
+    expect(doc.header.colours.length).toBeGreaterThanOrEqual(a.counts.colours + a.colourStack.inserted.length);
     // Every object's bbox encloses its coordinates.
     for (let i = 0; i < doc.header.objects.count; i++) {
       for (let k = doc.coordStart[i]; k < doc.coordStart[i + 1]; k++) {
@@ -105,8 +108,29 @@ describe("importOcadToDocument", () => {
     expect(main.angles![main.glyphs.length - 1]).toBeLessThan(0);
   });
 
-  it("matches the fixture's symbols against ISOM 2017-2 and aligns its colour stack (stages 6–7)", async () => {
+  it("draws the fixture on the IOF colour layers by default (stage 7, row I5)", async () => {
     const result = await importOcadToDocument(fixture, "test.ocd");
+    const doc = mapDocument.decodeMapDocument(result.bytes);
+    expect(doc.header.colourOrder).toMatchObject({ order: "iof" });
+    expect(result.colourStack).toMatchObject({ order: "iof", conflicts: [], areasAboveLowerPurple: [], purplesDisplaced: [] });
+    expect(result.warnings.map((w) => w.code)).not.toContain("COLOUR_ORDER_CONFLICT");
+    const index = mapImport.paletteIndexOfStack(doc.header.colours);
+    // The table draws its blue under the yellow; on the layers the blue line colour is above lower purple, the yellow under it.
+    const lower = index.get("purple-lower")!;
+    expect(index.get("blue100-line")!).toBeGreaterThan(lower);
+    expect(doc.header.colours.findIndex((c) => c.name === "Yellow")).toBeLessThan(lower);
+    expect(doc.header.colours[index.get("purple-upper")!]).toMatchObject({ purpleRole: "upper" });
+    expect(index.get("purple-upper")).toBe(doc.header.colours.length - 1);
+    const input = mapDocument.documentRenderInput(doc);
+    expect(input.stats.canonicalSymbols).toBe(result.matching.symbols.auto);
+    expect(input.stats.canonicalMissing).toBe(0);
+    // Every palette id of the source order is on the layers.
+    const source = mapDocument.decodeMapDocument((await importOcadToDocument(fixture, "test.ocd", { match: { colourOrder: "source" } })).bytes);
+    for (const id of source.header.colours.flatMap((c) => c.paletteIds ?? [])) expect(index.has(id), id).toBe(true);
+  });
+
+  it("matches the fixture's symbols against ISOM 2017-2 and aligns its colour stack in the source order (stages 6–7, §9.2)", async () => {
+    const result = await importOcadToDocument(fixture, "test.ocd", { match: { colourOrder: "source" } });
     expect(result.libraryVersion).toBe(`ISOM2017-2@${symbolLibrary.SYMBOL_LIBRARY_VERSION}`);
     expect(result.timings.match).toBeGreaterThanOrEqual(0);
     const doc = mapDocument.decodeMapDocument(result.bytes);
@@ -149,6 +173,43 @@ describe("importOcadToDocument", () => {
     expect(ids.slice(-3)).toEqual(["orange-skio", "green-skio", "purple-upper"]);
     expect(result.colourStack.conflicts).toContainEqual({ colour: "blue100-line", reason: 'source places "Blue" below purple-lower; the palette has the reverse order' });
     expect(result.warnings.map((w) => w.code)).toContain("COLOUR_ORDER_CONFLICT");
+  });
+
+  // e2e/colour-layers.ocd (row I5): the premise of the E2E in map-vector-layer.spec.ts.
+  it("draws the badly ordered colour-layers fixture on the IOF layers: building over paved, street over contour, yellow under lower purple", async () => {
+    const file = readFileSync(fileURLToPath(new URL("../../../../e2e/colour-layers.ocd", import.meta.url)));
+    expect(file.equals(buildColourLayersOcad())).toBe(true);
+    const iof = await importOcadToDocument(file, "colour-layers.ocd");
+    const doc = mapDocument.decodeMapDocument(iof.bytes);
+    const h = doc.header;
+    const layers = iof.colourStack.layers!;
+    const rowOf = (code: string, ref = 0) => render.renderColourPaths(h.symbols.find((s) => s.code === code)!.render!)[ref].colour;
+    const lower = mapImport.paletteIndexOfStack(h.colours).get("purple-lower")!;
+    // One brown 50 % on two layers: the paved area and the street infill, same ink.
+    expect(layers.split).toEqual([{ source: expect.any(Number), sourceNumber: 2, roles: ["brown50-paved", "brown50-road"] }]);
+    expect(h.colours[rowOf("501.0")].cmyk).toEqual(h.colours[rowOf("599.0")].cmyk);
+    // The building over its paved area; the street over the contour (kept by default); the yellow under lower purple.
+    expect(rowOf("521.0")).toBeGreaterThan(rowOf("501.0"));
+    expect(rowOf("599.0")).toBeGreaterThan(rowOf("101.0"));
+    expect(rowOf("401.0")).toBeLessThan(lower);
+    expect(rowOf("501.0")).toBeLessThan(lower);
+    expect(rowOf("505.0")).toBeGreaterThan(lower);
+    const dev = (k: string) => layers.deviations.find((d) => `${d.upper}>${d.lower}` === k);
+    expect(dev("brown50-road>brown100-line")).toMatchObject({ kept: true, byDefault: true });
+    expect(dev("brown50-paved>black50-building")).toMatchObject({ kept: false, byDefault: true });
+    expect(h.colourOrder?.kept).toContain("brown50-road>brown100-line");
+    expect(iof.warnings.map((w) => w.code)).toEqual(expect.arrayContaining(["COLOUR_DEVIATION_KEPT", "COLOUR_DEVIATION_DROPPED"]));
+
+    // The map's own order (§9.2): the paved brown over the building; lower purple over the top yellow and so over
+    // the black path the table has under it, reported as a conflict.
+    const src = await importOcadToDocument(file, "colour-layers.ocd", { match: { colourOrder: "source" } });
+    const s = mapDocument.decodeMapDocument(src.bytes).header;
+    const sRow = (code: string) => render.renderColourPaths(s.symbols.find((x) => x.code === code)!.render!)[0].colour;
+    const sLower = mapImport.paletteIndexOfStack(s.colours).get("purple-lower")!;
+    expect(sRow("501.0")).toBeGreaterThan(sRow("521.0"));
+    expect(sRow("401.0")).toBeLessThan(sLower);
+    expect(sRow("505.0")).toBeLessThan(sLower);
+    expect(src.colourStack.conflicts.map((c) => c.colour)).toContain("black100");
   });
 
   it("honours the renderFor hook (renders stated against the source colour table)", async () => {

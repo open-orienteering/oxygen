@@ -25,6 +25,11 @@ Implementation: `packages/shared/src/map-document/` (`header.ts` schema,
   correction, event crops and north-line options stay in `map_files`
   (and the club series settings), never in the document. One document can
   be shared by a club library entry and every event that adopted it.
+  The colour order is the one exception, and only as an outcome: the
+  document records the order its stack was built in and the deviations
+  kept (`colourOrder`, §2; row I5), because the stack *is* that order.
+  The per-map setting that chose it stays in the store (row I6), so the
+  same file and setting always give the same bytes.
 - Dropped at import, recorded as warnings (§2.6): templates, OCAD layout
   objects, editor state (zoom, bookmarks, GPS adjustment, display and view
   parameters), collaboration metadata, symbol icon bitmaps, course-setting
@@ -53,6 +58,7 @@ complete. Field order below is the schema's.
 | `printWindow` | `{ scale?, left, bottom, right, top } \| null` | OCAD PrintPar, paper mm, y-up |
 | `exportRectangles` | `[{ name, left, bottom, right, top }]` | OCAD PrintAndExportRectangleList |
 | `colours` | §2.1 | Colour stack, index = draw order |
+| `colourOrder` | `{ order: "iof" \| "source", kept?: string[] }`, optional | The order stage 7 built `colours` in (`docs/map-symbols.md` §9.3 "In the importer", row I5): `iof`, the IOF colour layers (the default), or `source`, the mapper's table (§9.2). `kept` (`iof` only): the deviations drawn in the map's own order, as keys `"<upper>><lower>"` (`"brown50-road>brown100-line"`), sorted — the outcome, whether by default, override or implication; the overrides asked for are not recorded. Absent: a document from before `ocad-19` / `omap-12`, in the source order. An optional field: `format.version` stays 1 (§6) |
 | `symbols` | §2.2 | Symbol table |
 | `strings` | string[] | Texts; `attrs.stringIdx` is **1-based** into this list, 0 = none; deduplicated |
 | `warnings` | `[{ code, count, message? }]` | §2.6 |
@@ -77,14 +83,28 @@ through it. Palette entries inserted by colour alignment have
 `id: "<edition>:<paletteId>"`, the palette CMYK and no `sourceNumber`.
 
 On the layered stack (`docs/map-symbols.md` §9.3 "Layers"; built in
-slice I row I3, written by the importer from row I5) one source colour
-may be several rows, one per role it serves. Its lowest row keeps the
-colour's id (`src:12`); each other row is `<id>/<paletteId>`
-(`src:12/brown50-road`), a row of uses with no role `<id>/none:area` or
-`<id>/none:other`. All of them carry the colour's name, CMYK,
-`sourceNumber`, `spot` and `overprint`: one ink, several layers. Each
-palette id is on exactly one row's `paletteIds`. Ids are unique in a
-stack.
+slice I rows I3–I4, written by the importer since row I5,
+`colourOrder.order: "iof"`) one source colour may be several rows, one
+per role it serves. Its lowest row keeps the colour's id (`src:12`),
+unless that row only carries an identified palette id (below); each
+other row is one of:
+
+| Id | Row |
+|---|---|
+| `<id>/<paletteId>` (`src:12/brown50-road`) | the colour in another role |
+| `<id>/none:area`, `<id>/none:other` | uses with no role, by the kind of symbol drawing them (I3) |
+| `<id>/graphic` | the colour's uses by graphic objects' symbols, placed by the source order (I4) |
+| `<id>/<paletteId>/under<k>`, `<id>/none:<place>/under<k>` | a part moved under a part of its own symbol that the source draws over it, numbered per colour and suffix bottom first (I4, "Own order") |
+| `<id>/<paletteId>/alias` | a second row of a palette id for a colour whose own row of that id went to the source order (a mask white) or was moved (I4) |
+| `<id>/<paletteId>` with no reference | a palette id §9.1 identified the colour as, carried on a zero-object row because none of the colour's rows can carry it (I5, origin `identified`; never the colour's lowest row) |
+
+All of them carry the colour's name, CMYK, `sourceNumber`, `spot` and
+`overprint`: one ink, several layers. Inserted rows are
+`<edition>:<paletteId>`; an inserted row with a `purpleRole` (the
+course purples, ISSprOM's purple 50 %) takes the map's course-purple
+ink. Each palette id is on exactly one row's `paletteIds`, every id the
+`source` order carries included. Ids are unique in a stack. A palette
+id has no colon and no slash, so the forms never collide.
 
 `cmyk` is 0–1. RGB is never stored; the screen conversion is
 `render.cmykToHex`.
@@ -332,6 +352,13 @@ entry resolved through the stack's `paletteIds` and scaled by
 symbol from source); otherwise the symbol's `render` when it exists and
 its kind agrees with the object type; otherwise a proxy per kind
 (`unmatched: "proxy"`, the S1 envelope) or nothing (`unmatched: "drop"`).
+The proxies draw in `proxyColours`' rows; by default (row I5) by ink
+(`render.stackProxyColours`): lines, points and text in the stack's
+darkest row, areas in its lightest row that is not white (row 0 when
+every row is white), ties to the lowest row — the viewer's rule since
+E3 (whose code let a white row 0 win for areas; fixed in I5), now also print's and the
+thumbnails', and the same ink on the layered stack and the source order
+(before I5 the default was row 0, a different colour on each).
 Hidden symbols' objects are skipped unless `includeHidden`. `only` (a
 list of document object indices, any order) symbolises just those objects,
 in document order — the editor's eyedropper symbolises the few under a

@@ -1,8 +1,8 @@
 /**
  * Colour-order parity (docs/map-rendering.md §6.5; SLICES I1): draws every
  * given map with the reference raster in two colour orders — the
- * document's stack as the importer built it (the *source*) and a
- * *candidate* — and names every pixel that changes by the two layers on
+ * document imported in the `source` colour order (the mapper's table,
+ * `map-symbols.md` §9.2) and a *candidate* — and names every pixel that changes by the two layers on
  * top, one in each order ("black50-building → brown30-paved"). The oracle
  * of slice I's canonical colour layers (`map-symbols.md` §9.3), as B9 and
  * C7 were for theirs.
@@ -21,9 +21,9 @@
  *                 difference), and `run.json` for the run
  *   --classes     the classification file (§6.5): `{ version: 1, rules: [{ map?,
  *                 from, to, class, note? }] }`, first match wins
- *   --candidate   the candidate order: `layers` (default; I3's layered stack,
- *                 `buildColourLayers`) or `permutation` (the 2026-11-14
- *                 experiment's, I1's baseline)
+ *   --candidate   the candidate order: `layers` (default; the same file imported
+ *                 in the importer's `iof` order, the layered stack — row I5) or
+ *                 `permutation` (the 2026-11-14 experiment's, I1's baseline)
  *   --tolerance   a pixel changes when a channel differs by more (§6.2's 16;
  *                 the experiment used 24)
  *   --window      paper mm, y-up: only the tiles that meet it
@@ -41,12 +41,15 @@ import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "n
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { register } from "tsx/esm/api";
+import { layersLines, layersSummary } from "./lib/colour-layers-summary.mjs";
 
 const MAP_EXT = /\.(ocd|omap|xmap)$/i;
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CANDIDATES = ["layers", "permutation"];
 /** Objects whose bounding box comes this close to a tile are drawn into it (line widths, glyphs). */
 const TILE_MARGIN_UM = 5000;
+/** I1's proxy rule: the source order draws objects without IR in row 0, the candidate in the row row 0 became (the bridge's own default goes by ink since I5). */
+const ROW0_PROXIES = { proxyColours: { line: 0, area: 0, point: 0, text: 0 } };
 
 function usage(message) {
   if (message) console.error(message);
@@ -166,7 +169,7 @@ async function main() {
   const glyphOutline = glyphOutlineFrom(fonts);
 
   /** The pass stream of `doc`'s objects near `bounds` (µm). */
-  function streamOf(doc, bounds, renderOptions = {}) {
+  function streamOf(doc, bounds, renderOptions = ROW0_PROXIES) {
     const H = doc.header;
     const k = H.unitsPerMm / 1000;
     const b = { minX: (bounds.minX - TILE_MARGIN_UM) * k, minY: (bounds.minY - TILE_MARGIN_UM) * k, maxX: (bounds.maxX + TILE_MARGIN_UM) * k, maxY: (bounds.maxY + TILE_MARGIN_UM) * k };
@@ -261,18 +264,18 @@ async function main() {
     let m;
     try {
       // As the import worker does on a first import: no club decisions.
-      const imported = await importMapToDocument(file, label, kind, { match: { decisions: [] } });
+      const imported = await importMapToDocument(file, label, kind, { match: { decisions: [], colourOrder: "source" } });
       const doc = mapDocument.decodeMapDocument(new Uint8Array(imported.bytes));
       const H = doc.header;
       const libId = H.library?.id ?? mapImport.chooseLibrary(H.mapScale);
       const spec = symbolLibrary.getSymbolLibrary(libId).spec;
-      const edition = mapImport.detectPaletteEdition(H.colours);
+      const edition = imported.matching.edition;
       const rank = co.paletteRank(edition, spec);
       const identified = mapImport.identifySourceColours(H.colours, spec, edition).map((i) => i.paletteId);
       const perSymbol = co.objectsPerSymbol(doc);
       const sourceLayers = co.stackLayers(H.colours, H.symbols, mapDocument.documentRenderInput(doc).symbols, perSymbol, identified, rank);
 
-      // The candidate: I3's layered stack (default), or the experiment's permutation (I1's baseline).
+      // The candidate: the importer's layered stack (default), or the experiment's permutation (I1's baseline).
       let candidateDoc, candidateOptions, candidateLayers, sideFor, layered = null;
       if (opts.candidate === "permutation") {
         const order = co.permutationOrder(sourceLayers, rank);
@@ -281,7 +284,10 @@ async function main() {
         candidateLayers = order.map((old, row) => ({ ...sourceLayers[old], row }));
         sideFor = permutationSide(sourceLayers, candidateLayers, H.symbols);
       } else {
-        layered = co.layeredCandidate(doc, spec, perSymbol, rank);
+        // The importer's own layered stack (row I5): the same file imported in the iof order.
+        const iof = await importMapToDocument(file, label, kind, { match: { decisions: [], colourOrder: "iof" } });
+        if (iof.colourStack.order !== "iof") throw new Error("the iof import fell back to the source order (COLOUR_LAYERS_FAILED)");
+        layered = co.importedCandidate(doc, mapDocument.decodeMapDocument(new Uint8Array(iof.bytes)), iof.colourStack, perSymbol, rank);
         candidateDoc = layered.doc;
         candidateOptions = layered.renderOptions;
         candidateLayers = layered.stackLayers;
@@ -392,45 +398,13 @@ async function main() {
   process.exit(errors || unclassifiedAll ? 1 : 0);
 }
 
-/** What the layered stack did, by palette id and number only (standard output may quote it). */
-function layersSummary(report) {
-  const count = (pred) => report.rows.filter(pred).length;
-  const reasons = (pred) => Object.fromEntries(["no-role", "graphic", "mask"].map((why) => [why, report.sourceOrdered.filter((s) => s.reason === why && pred(s)).length]));
-  const dev = (d) => `${d.upper}>${d.lower}`;
-  return {
-    rows: report.rows.length,
-    split: report.split.map((s) => s.roles.map((r) => r ?? "none").join("+")),
-    noRole: { area: count((r) => r.origin === "use" && !r.role && r.place === "area"), other: count((r) => r.origin === "use" && !r.role && r.place === "other") },
-    sourceOrdered: reasons(() => true),
-    sourceOrderedAboveLowerPurple: reasons((s) => s.aboveLowerPurple),
-    ownOrder: count((r) => r.ownOrder),
-    deviations: {
-      kept: report.deviations.filter((d) => d.kept && !d.impliedBy).map(dev),
-      implied: report.deviations.filter((d) => d.impliedBy).map(dev),
-      blocked: report.deviations.filter((d) => d.blockedBy).map(dev),
-      dropped: report.deviations.filter((d) => !d.kept).length,
-    },
-    unreferenced: count((r) => r.origin === "unreferenced"),
-    inserted: report.inserted,
-    aliased: report.aliased.map((a) => a.paletteId),
-    purpleInk: report.purpleInk !== null,
-  };
-}
-
 function printMap(m) {
   const c = m.census;
   const s = c.symbols;
   console.log(`  map        ${m.library} ${m.edition}, importer ${m.importer}, candidate ${m.candidate}`);
   console.log(`  census     colours ${c.colours}  used ${c.used}  no palette entry ${c.unidentified} (${c.unidentifiedUses} of ${c.uses} uses)  multi-role ${c.multi.length}${c.multi.length ? ` (${c.multi.map((x) => `${x.roles.join("+")} ${x.uses}`).join(", ")})` : ""}`);
   console.log(`             symbols used ${s.used}: auto ${s.auto} / suggested ${s.suggested} / unmatched ${s.unmatched} / none ${s.none} (reviewed ${s.reviewed}, graphic ${s.graphic})  lower purple at ${c.lowerAt}  upper at ${c.upperAt}`);
-  if (m.layers) {
-    const l = m.layers;
-    console.log(`  layers     rows ${l.rows}  split ${l.split.length}${l.split.length ? ` (${l.split.join(", ")})` : ""}  no role: area ${l.noRole.area} / other ${l.noRole.other}  unreferenced ${l.unreferenced}`);
-    const so = (r) => Object.entries(r).map(([k, v]) => `${k} ${v}`).join(" / ");
-    console.log(`             source order: ${so(l.sourceOrdered)} (above lower purple: ${so(l.sourceOrderedAboveLowerPurple)})  own order ${l.ownOrder}`);
-    console.log(`             deviations kept ${l.deviations.kept.join(", ") || "—"}  implied ${l.deviations.implied.length}  blocked ${l.deviations.blocked.join(", ") || "—"}  dropped ${l.deviations.dropped}`);
-    console.log(`             inserted ${l.inserted.join(", ") || "—"}  aliased ${l.aliased.join(", ") || "—"}  course purple ink ${l.purpleInk ? "the map's" : "the palette's"}`);
-  }
+  if (m.layers) layersLines(m.layers).forEach((line, i) => console.log(`  ${i ? "           " : "layers     "}${line}`));
   console.log(`  tiles      ${m.tiles} of ${m.settings.tileMm} mm at ${m.settings.pxPerMm} px/mm; changed in ${m.tilesChanged}, over 1 % in ${m.tilesOver1pct}`);
   console.log(`  changed    ${int(m.changedPx)} px of ${int(m.px)} (${pct(m.changedPx, m.px)}), of ink ${int(m.inked)} (${pct(m.changedPx, m.inked)}); named ${pct(m.namedPx, m.changedPx, 1)}`);
   for (const k of m.kinds.slice(0, 20)) console.log(`  ${String(k.px).padStart(9)}  ${k.from} → ${k.to}  [${k.class}${k.suggested ? `; suggested ${k.suggested}` : ""}]`);

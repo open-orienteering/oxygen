@@ -13,7 +13,12 @@
  * `north` report fields (docs/map-import.md §3.8).
  *
  *   node scripts/measure-import.mjs <dir|file>… [--previous <json>] [--out <json>] [--hashes <json>]
+ *        [--colour-order iof|source]
  *
+ *   --colour-order  stage 7's colour order (docs/map-symbols.md §9.3 "In the
+ *               importer", row I5): `iof` (default, as the import worker) or
+ *               `source` (§9.2, the per-map switch back); the `order` and
+ *               `layers` lines say what the stack did
  *   --previous  a JSON written by --out or --hashes (this or another machine);
  *               each map gets `sameAsPrevious`, matched by source file hash
  *               first and by file name second (to report a changed source)
@@ -39,23 +44,28 @@ import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { basename, join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { register } from "tsx/esm/api";
+import { layersLines, layersSummary } from "./lib/colour-layers-summary.mjs";
 
 const MAP_EXT = /\.(ocd|omap|xmap)$/i;
 
 function usage(message) {
   if (message) console.error(message);
-  console.error("usage: node scripts/measure-import.mjs <dir|file>… [--previous <json>] [--out <json>] [--hashes <json>]");
+  console.error("usage: node scripts/measure-import.mjs <dir|file>… [--previous <json>] [--out <json>] [--hashes <json>] [--colour-order iof|source]");
   process.exit(2);
 }
 
 function parseArgs(argv) {
-  const opts = { paths: [], previous: null, out: null, hashes: null };
+  const opts = { paths: [], previous: null, out: null, hashes: null, colourOrder: "iof" };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--previous" || a === "--out" || a === "--hashes") {
       const v = argv[++i];
       if (!v) usage(`${a} needs a file`);
       opts[a.slice(2)] = v;
+    } else if (a === "--colour-order") {
+      const v = argv[++i];
+      if (v !== "iof" && v !== "source") usage("--colour-order: iof or source");
+      opts.colourOrder = v;
     } else if (a.startsWith("--")) usage(`unknown option ${a}`);
     else opts.paths.push(a);
   }
@@ -164,6 +174,8 @@ function printMap(m) {
   // C15: a placed row is the source's own purple or inserted; candidates it displaced are named.
   const how = (x) => `${x.inserted ? "inserted" : "source"}${x.displaced.length ? `, displaced: ${x.displaced.map((n) => `"${n}"`).join(", ")}` : ""}`;
   console.log(`  purple     lower at ${p.index} of ${p.colours} (${how(p)})  upper at ${u.index} (${how(u)})  areas above ${p.areasAbove.length}${p.areasAbove.length ? ` (${p.areasAbove.map((a) => `"${a}"`).join(", ")})` : ""}  conflicts ${p.conflicts}`);
+  console.log(`  order      ${m.colourOrder === "iof" ? "iof (the layered stack, docs/map-symbols.md §9.3)" : "source (the map's own table, §9.2)"}`);
+  if (m.layers) layersLines(m.layers).forEach((line, i) => console.log(`  ${i ? "           " : "layers     "}${line}`));
   if (m.skiO) console.log(`  ski-o      ${Object.entries(m.skiO).map(([id, s]) => `${id} ${s.how} at ${s.index}`).join("  ")}`);
   const hist = Object.entries(m.warnings);
   console.log(`  warnings   ${hist.length ? hist.map(([k, v]) => `${k} ${v}`).join(", ") : "none"}`);
@@ -211,7 +223,7 @@ async function main() {
     else {
       try {
         // As import-worker.ts: no club decisions on a first import.
-        const result = await importMapToDocument(file, name, kind, { match: { decisions: [] } });
+        const result = await importMapToDocument(file, name, kind, { match: { decisions: [], colourOrder: opts.colourOrder } });
         const { header } = mapDocument.readMapDocumentHeader(result.bytes);
         const report = buildImportReport(result, header, name);
         m = {
@@ -256,6 +268,9 @@ async function main() {
                 : c ? `source "${c.name}"` : "missing";
             return [id, { index: at, how }];
           })),
+          // Row I5: the order the stack was built in, and in `iof` what the layered stack did (palette ids and numbers only).
+          colourOrder: header.colourOrder?.order ?? "source",
+          layers: report.colourStack?.layers ? layersSummary({ ...report.colourStack.layers, inserted: report.colourStack.inserted, aliased: report.colourStack.aliased }) : null,
           georeference: report.georeference ?? null,
           north: report.north ?? null,
           timings: result.timings,

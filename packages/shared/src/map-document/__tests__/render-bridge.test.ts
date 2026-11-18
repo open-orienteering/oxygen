@@ -58,6 +58,48 @@ const doc = () =>
     }),
   );
 
+describe("documentRenderInput: proxies by ink (row I5)", () => {
+  // A symbol without IR: its objects are drawn by the bridge's proxies.
+  const bare = (colours: MapDocumentInput["header"]["colours"]) =>
+    decodeMapDocument(
+      encodeMapDocument({
+        header: { ...header, colours, symbols: [{ code: "999.0", name: "No IR", kind: "line", render: null }, { code: "998.0", name: "No IR area", kind: "area", render: null }] },
+        objects: [obj({ sourceIndex: 0, coords: [0, 0, 1000, 0] }), obj({ sourceIndex: 1, symbolIdx: 1, type: OBJECT_TYPE.area, coords: [0, 0, 1000, 0, 1000, 1000] })],
+      }),
+    );
+  const inkOf = (d: ReturnType<typeof bare>, kind: "line" | "area") => {
+    const input = documentRenderInput(d);
+    const sym = input.symbols[input.objects[kind === "line" ? 0 : 1].symbolIdx];
+    const row = sym.type === "line" ? sym.main!.colour : sym.type === "area" ? sym.fill! : -1;
+    return d.header.colours[row].cmyk;
+  };
+
+  it("draws lines in the darkest row and areas in the lightest non-white one, whatever row 0 is", () => {
+    expect(inkOf(bare(header.colours), "line")).toEqual([0, 0, 0, 1]);
+    expect(inkOf(bare(header.colours), "area")).toEqual([0.35, 0.85, 0, 0]);
+    // The same colours in another order (a layered stack): the same inks.
+    const reordered = [header.colours[3], header.colours[2], header.colours[1], header.colours[0]];
+    expect(inkOf(bare(reordered), "line")).toEqual([0, 0, 0, 1]);
+    expect(inkOf(bare(reordered), "area")).toEqual([0.35, 0.85, 0, 0]);
+  });
+
+  it("never draws area proxies in white, a white row 0 included (both orders of a stack alike)", () => {
+    const white = header.colours[2];
+    const whiteFirst = [white, header.colours[0], header.colours[1], header.colours[3]];
+    expect(inkOf(bare(whiteFirst), "area")).toEqual([0.35, 0.85, 0, 0]);
+    expect(inkOf(bare([...whiteFirst].reverse()), "area")).toEqual([0.35, 0.85, 0, 0]);
+    // Only white: row 0.
+    expect(inkOf(bare([white, { ...white, id: "src:9", sourceNumber: 9 }]), "area")).toEqual([0, 0, 0, 0]);
+  });
+
+  it("takes explicit proxy rows when given", () => {
+    const d = bare(header.colours);
+    const input = documentRenderInput(d, { proxyColours: { line: 1, area: 1 } });
+    const sym = input.symbols[input.objects[0].symbolIdx];
+    expect(sym.type === "line" && sym.main!.colour).toBe(1);
+  });
+});
+
 describe("documentRenderInput → symbolise (every B1 field through a document)", () => {
   it("symbolises warning-free, with the new fields visible in the stream", () => {
     const input = documentRenderInput(doc(), { unmatched: "drop" });

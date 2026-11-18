@@ -25,13 +25,16 @@ describe("staleReason (docs/map-storage.md §6.9)", () => {
     expect(staleReason({ importerVersion: "omap-6", libraryVersion: CURRENT }, false)).toBe("importer");
     // ocad-14 drew north-oriented point symbols north-up where their objects carry an angle (C10).
     expect(staleReason({ importerVersion: "ocad-14", libraryVersion: CURRENT }, true)).toBe("importer");
+    // ocad-18 / omap-11 drew in the source order (§9.2); ocad-19 / omap-12 on the IOF colour layers (I5).
+    expect(staleReason({ importerVersion: "ocad-18", libraryVersion: CURRENT }, true)).toBe("importer");
+    expect(staleReason({ importerVersion: "omap-11", libraryVersion: CURRENT }, false)).toBe("importer");
     // ocad-16 / omap-9 and library 2026.10.4 had no ISSkiOM overlay rows or matches (G21): every pre-G21 document is stale.
     expect(staleReason({ importerVersion: "ocad-16", libraryVersion: "ISOM2017-2@2026.10.4" }, true)).toBe("importer");
-    expect(staleReason({ importerVersion: "ocad-18", libraryVersion: "ISOM2017-2@2026.10.4" }, true)).toBe("library");
-    expect(staleReason({ importerVersion: "ocad-18", libraryVersion: "none" }, true)).toBe("library");
-    expect(staleReason({ importerVersion: "ocad-18", libraryVersion: "ISOM2017-2@2026.10.1" }, true)).toBe("library");
-    expect(staleReason({ importerVersion: "omap-11", libraryVersion: CURRENT }, false)).toBe("decisions");
-    expect(staleReason({ importerVersion: "ocad-18", libraryVersion: CURRENT }, true)).toBeNull();
+    expect(staleReason({ importerVersion: "ocad-19", libraryVersion: "ISOM2017-2@2026.10.4" }, true)).toBe("library");
+    expect(staleReason({ importerVersion: "ocad-19", libraryVersion: "none" }, true)).toBe("library");
+    expect(staleReason({ importerVersion: "ocad-19", libraryVersion: "ISOM2017-2@2026.10.1" }, true)).toBe("library");
+    expect(staleReason({ importerVersion: "omap-12", libraryVersion: CURRENT }, false)).toBe("decisions");
+    expect(staleReason({ importerVersion: "ocad-19", libraryVersion: CURRENT }, true)).toBeNull();
   });
 });
 
