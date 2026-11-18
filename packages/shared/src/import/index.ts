@@ -9,6 +9,8 @@ export * from "./analyse.js";
 export * from "./report.js";
 export * from "./colour-class.js";
 export * from "./colour-align.js";
+export * from "./colour-roles.js";
+export * from "./colour-layers.js";
 export * from "./fingerprint.js";
 export * from "./matcher.js";
 export * from "./match-document.js";

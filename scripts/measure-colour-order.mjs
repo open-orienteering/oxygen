@@ -8,7 +8,7 @@
  * C7 were for theirs.
  *
  *   node scripts/measure-colour-order.mjs <file|dir>… [--maps <tsv>] [--out <dir>]
- *        [--classes <json>] [--candidate permutation] [--tile-mm 60] [--px-per-mm 6]
+ *        [--classes <json>] [--candidate layers|permutation] [--tile-mm 60] [--px-per-mm 6]
  *        [--tolerance 16] [--worst 3] [--worst-px-per-mm 12] [--window x0,y0,x1,y1]
  *
  *   --maps        a list file: one map per line, `<label>\t<path>` (or a bare
@@ -21,8 +21,9 @@
  *                 difference), and `run.json` for the run
  *   --classes     the classification file (§6.5): `{ version: 1, rules: [{ map?,
  *                 from, to, class, note? }] }`, first match wins
- *   --candidate   the candidate order; `permutation` (the 2026-11-14
- *                 experiment's) is the only one until I3
+ *   --candidate   the candidate order: `layers` (default; I3's layered stack,
+ *                 `buildColourLayers`) or `permutation` (the 2026-11-14
+ *                 experiment's, I1's baseline)
  *   --tolerance   a pixel changes when a channel differs by more (§6.2's 16;
  *                 the experiment used 24)
  *   --window      paper mm, y-up: only the tiles that meet it
@@ -43,14 +44,14 @@ import { register } from "tsx/esm/api";
 
 const MAP_EXT = /\.(ocd|omap|xmap)$/i;
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const CANDIDATES = ["permutation"];
+const CANDIDATES = ["layers", "permutation"];
 /** Objects whose bounding box comes this close to a tile are drawn into it (line widths, glyphs). */
 const TILE_MARGIN_UM = 5000;
 
 function usage(message) {
   if (message) console.error(message);
   console.error(
-    "usage: node scripts/measure-colour-order.mjs <file|dir>… [--maps <tsv>] [--out <dir>] [--classes <json>] [--candidate permutation]\n" +
+    "usage: node scripts/measure-colour-order.mjs <file|dir>… [--maps <tsv>] [--out <dir>] [--classes <json>] [--candidate layers|permutation]\n" +
       "       [--tile-mm 60] [--px-per-mm 6] [--tolerance 16] [--worst 3] [--worst-px-per-mm 12] [--window x0,y0,x1,y1]",
   );
   process.exit(2);
@@ -59,7 +60,7 @@ function usage(message) {
 const NUMERIC = { "--tile-mm": "tileMm", "--px-per-mm": "pxPerMm", "--tolerance": "tolerance", "--worst": "worst", "--worst-px-per-mm": "worstPxPerMm" };
 
 function parseArgs(argv) {
-  const opts = { paths: [], maps: null, out: join(ROOT, ".local", "colour-order"), classes: null, candidate: "permutation", tileMm: 60, pxPerMm: 6, tolerance: 16, worst: 3, worstPxPerMm: 12, window: null };
+  const opts = { paths: [], maps: null, out: join(ROOT, ".local", "colour-order"), classes: null, candidate: "layers", tileMm: 60, pxPerMm: 6, tolerance: 16, worst: 3, worstPxPerMm: 12, window: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const [flag, inline] = a.startsWith("--") && a.includes("=") ? [a.slice(0, a.indexOf("=")), a.slice(a.indexOf("=") + 1)] : [a, undefined];
@@ -184,21 +185,63 @@ async function main() {
     return rasterisePassStream(stream, { colour: (i) => hex[i] ?? "#ff00ff", bounds, pxPerMm, background: "#ffffff", glyphOutline });
   }
 
-  /** Names the changed pixels of one tile (§6.5 "Naming"; `namePeeled`). */
-  function nameTile(mask, width, height, streams, side) {
+  /**
+   * Names the changed pixels of one tile (§6.5 "Naming"; `namePeeled`). `side` says how each order's paints are named
+   * and peeled: by its own rows (the permutation), or both in the candidate's layers (the layered stack).
+   */
+  function nameTile(mask, width, height, streams, bounds, side) {
     const view = async (peel) => {
-      const rows = (layers) => new Set(layers.filter((l) => peel.includes(l.name)).map((l) => l.row));
-      const [sa, sb] = peel.length ? [co.withoutRows(streams[0], rows(side.sourceLayers)), co.withoutRows(streams[1], rows(side.candidateLayers))] : streams;
-      const pa = await co.rasterisePaints(sa, { bounds: side.bounds, pxPerMm: opts.pxPerMm, glyphOutline });
-      const pb = await co.rasterisePaints(sb, { bounds: side.bounds, pxPerMm: opts.pxPerMm, glyphOutline });
-      return {
-        source: pa.ids,
-        candidate: pb.ids,
-        nameSource: co.paintNamer(pa.paints, side.sourceLayers, side.symbols),
-        nameCandidate: co.paintNamer(pb.paints, side.candidateLayers, side.symbols),
-      };
+      const [sa, sb] = peel.length ? [side.peelSource(streams[0], peel), side.peelCandidate(streams[1], peel)] : streams;
+      const pa = await co.rasterisePaints(sa, { bounds, pxPerMm: opts.pxPerMm, glyphOutline });
+      const pb = await co.rasterisePaints(sb, { bounds, pxPerMm: opts.pxPerMm, glyphOutline });
+      return { source: pa.ids, candidate: pb.ids, nameSource: side.nameSource(pa.paints), nameCandidate: side.nameCandidate(pb.paints) };
     };
     return co.namePeeled(mask, width, height, view, side.rowOf);
+  }
+
+  const layerName = (paint) => (paint.startsWith(co.GRAPHIC_PREFIX) ? paint.slice(co.GRAPHIC_PREFIX.length) : paint);
+  const rowsOf = (layers) => new Map(layers.map((l) => [l.name, l.row]));
+  const rowsNamed = (layers, peel) => new Set(layers.filter((l) => peel.includes(l.name)).map((l) => l.row));
+
+  /** The permutation: each order names its paints by its own rows; a source row and its candidate row share a name. */
+  function permutationSide(sourceLayers, candidateLayers, symbols) {
+    const sourceRows = rowsOf(sourceLayers), candidateRows = rowsOf(candidateLayers);
+    return () => ({
+      nameSource: (paints) => co.paintNamer(paints, sourceLayers, symbols),
+      nameCandidate: (paints) => co.paintNamer(paints, candidateLayers, symbols),
+      peelSource: (stream, peel) => co.withoutRows(stream, rowsNamed(sourceLayers, peel)),
+      peelCandidate: (stream, peel) => co.withoutRows(stream, rowsNamed(candidateLayers, peel)),
+      rowOf: { source: (n) => sourceRows.get(layerName(n)), candidate: (n) => candidateRows.get(layerName(n)) },
+    });
+  }
+
+  /**
+   * The layered stack: a source row may become several layers, so both orders are named in the candidate's layers —
+   * a source paint by the candidate row its passes draw in (`jointDocument`, `paintCorrespondence`, per tile).
+   */
+  function layeredSide(doc, lc, symbols) {
+    const layers = lc.stackLayers;
+    const candidateRows = rowsOf(layers);
+    const joint = co.jointDocument(doc, lc.doc, { source: 0, candidate: lc.renderOptions.proxyColours.line });
+    const jointOptions = { proxyColours: { line: joint.proxy, area: joint.proxy, point: joint.proxy, text: joint.proxy } };
+    return (bounds) => {
+      const corr = co.paintCorrespondence(streamOf(joint.doc, bounds, jointOptions), joint.pairs);
+      const fallback = (row) => lc.rowOfAligned[row] ?? 0;
+      const nameOfPass = (p, symbolIdx) => layers[corr.candidateRow.get(co.paintKey(p.colour, p.kind, symbolIdx)) ?? fallback(p.colour)]?.name;
+      return {
+        nameSource: (paints) => co.correspondingNamer(paints, corr.candidateRow, layers, symbols, fallback),
+        nameCandidate: (paints) => co.paintNamer(paints, layers, symbols),
+        peelSource: (stream, peel) => co.withoutPasses(stream, (p, symbolIdx) => peel.includes(nameOfPass(p, symbolIdx))),
+        peelCandidate: (stream, peel) => co.withoutRows(stream, rowsNamed(layers, peel)),
+        rowOf: {
+          source: (n) => {
+            const b = candidateRows.get(layerName(n));
+            return b === undefined ? undefined : corr.sourceRow.get(b);
+          },
+          candidate: (n) => candidateRows.get(layerName(n)),
+        },
+      };
+    };
   }
 
   mkdirSync(opts.out, { recursive: true });
@@ -227,17 +270,24 @@ async function main() {
       const perSymbol = co.objectsPerSymbol(doc);
       const sourceLayers = co.stackLayers(H.colours, H.symbols, mapDocument.documentRenderInput(doc).symbols, perSymbol, identified, rank);
 
-      // The candidate (I1: the experiment's permutation; from I3 on the importer's layers).
-      const order = co.permutationOrder(sourceLayers, rank);
-      const candidateDoc = co.permuteStack(doc, order);
-      const candidateOptions = co.permutedRenderOptions(order);
-      const candidateLayers = order.map((old, row) => ({ ...sourceLayers[old], row }));
+      // The candidate: I3's layered stack (default), or the experiment's permutation (I1's baseline).
+      let candidateDoc, candidateOptions, candidateLayers, sideFor, layered = null;
+      if (opts.candidate === "permutation") {
+        const order = co.permutationOrder(sourceLayers, rank);
+        candidateDoc = co.permuteStack(doc, order);
+        candidateOptions = co.permutedRenderOptions(order);
+        candidateLayers = order.map((old, row) => ({ ...sourceLayers[old], row }));
+        sideFor = permutationSide(sourceLayers, candidateLayers, H.symbols);
+      } else {
+        layered = co.layeredCandidate(doc, spec, perSymbol, rank);
+        candidateDoc = layered.doc;
+        candidateOptions = layered.renderOptions;
+        candidateLayers = layered.stackLayers;
+        sideFor = layeredSide(doc, layered, H.symbols);
+      }
       const census = co.colourCensus(doc, sourceLayers, perSymbol);
-      const byName = new Map(sourceLayers.map((l) => [l.name, l]));
-      const layerName = (paint) => (paint.startsWith(co.GRAPHIC_PREFIX) ? paint.slice(co.GRAPHIC_PREFIX.length) : paint);
-      const rowsOf = (layers) => new Map(layers.map((l) => [l.name, l.row]));
-      const sourceRows = rowsOf(sourceLayers), candidateRows = rowsOf(candidateLayers);
-      const rowOf = { source: (n) => sourceRows.get(layerName(n)), candidate: (n) => candidateRows.get(layerName(n)) };
+      // Suggestions read the layers kinds are named by: the source's for the permutation, the candidate's for the layers.
+      const byName = new Map((layered ? candidateLayers : sourceLayers).map((l) => [l.name, l]));
 
       const k = 1000 / H.unitsPerMm;
       const full = { minX: H.bounds.minX * k, minY: H.bounds.minY * k, maxX: H.bounds.maxX * k, maxY: H.bounds.maxY * k };
@@ -257,7 +307,7 @@ async function main() {
         let unattributed = 0;
         if (d.changed) {
           // The paint images are drawn only where something changed.
-          const named = await nameTile(d.mask, a.width, a.height, [sa, sb], { bounds: t.bounds, sourceLayers, candidateLayers, symbols: H.symbols, rowOf });
+          const named = await nameTile(d.mask, a.width, a.height, [sa, sb], t.bounds, sideFor(t.bounds));
           for (const [key, n] of named) kinds.set(key, (kinds.get(key) ?? 0) + n);
           unattributed = named.get(co.UNATTRIBUTED) ?? 0;
         }
@@ -292,6 +342,7 @@ async function main() {
         edition,
         candidate: opts.candidate,
         settings: { tileMm: opts.tileMm, pxPerMm: opts.pxPerMm, tolerance: opts.tolerance, window: opts.window },
+        layers: layered ? layersSummary(layered.layers.report) : null,
         census: {
           ...census,
           unidentifiedList: sourceLayers.filter((l) => l.uses > 0 && l.roles.length === 0).map((l) => ({ row: l.row, name: H.colours[l.row].name, layer: l.name, uses: l.uses })),
@@ -338,12 +389,31 @@ async function main() {
   process.exit(errors || unclassifiedAll ? 1 : 0);
 }
 
+/** What the layered stack did, by palette id and number only (standard output may quote it). */
+function layersSummary(report) {
+  const count = (pred) => report.rows.filter(pred).length;
+  return {
+    rows: report.rows.length,
+    split: report.split.map((s) => s.roles.map((r) => r ?? "none").join("+")),
+    noRole: { area: count((r) => r.origin === "use" && !r.role && r.place === "area"), other: count((r) => r.origin === "use" && !r.role && r.place === "other") },
+    unreferenced: count((r) => r.origin === "unreferenced"),
+    inserted: report.inserted,
+    aliased: report.aliased.map((a) => a.paletteId),
+    purpleInk: report.purpleInk !== null,
+  };
+}
+
 function printMap(m) {
   const c = m.census;
   const s = c.symbols;
   console.log(`  map        ${m.library} ${m.edition}, importer ${m.importer}, candidate ${m.candidate}`);
   console.log(`  census     colours ${c.colours}  used ${c.used}  no palette entry ${c.unidentified} (${c.unidentifiedUses} of ${c.uses} uses)  multi-role ${c.multi.length}${c.multi.length ? ` (${c.multi.map((x) => `${x.roles.join("+")} ${x.uses}`).join(", ")})` : ""}`);
   console.log(`             symbols used ${s.used}: auto ${s.auto} / suggested ${s.suggested} / unmatched ${s.unmatched} / none ${s.none} (reviewed ${s.reviewed}, graphic ${s.graphic})  lower purple at ${c.lowerAt}  upper at ${c.upperAt}`);
+  if (m.layers) {
+    const l = m.layers;
+    console.log(`  layers     rows ${l.rows}  split ${l.split.length}${l.split.length ? ` (${l.split.join(", ")})` : ""}  no role: area ${l.noRole.area} / other ${l.noRole.other}  unreferenced ${l.unreferenced}`);
+    console.log(`             inserted ${l.inserted.join(", ") || "—"}  aliased ${l.aliased.join(", ") || "—"}  course purple ink ${l.purpleInk ? "the map's" : "the palette's"}`);
+  }
   console.log(`  tiles      ${m.tiles} of ${m.settings.tileMm} mm at ${m.settings.pxPerMm} px/mm; changed in ${m.tilesChanged}, over 1 % in ${m.tilesOver1pct}`);
   console.log(`  changed    ${int(m.changedPx)} px of ${int(m.px)} (${pct(m.changedPx, m.px)}), of ink ${int(m.inked)} (${pct(m.changedPx, m.inked)}); named ${pct(m.namedPx, m.changedPx, 1)}`);
   for (const k of m.kinds.slice(0, 20)) console.log(`  ${String(k.px).padStart(9)}  ${k.from} → ${k.to}  [${k.class}${k.suggested ? `; suggested ${k.suggested}` : ""}]`);

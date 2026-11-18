@@ -75,6 +75,17 @@ palette entries this stack entry stands for (03 §6.3 steps 2–3,
 `docs/map-symbols.md` §9); canonical library entries resolve their colours
 through it. Palette entries inserted by colour alignment have
 `id: "<edition>:<paletteId>"`, the palette CMYK and no `sourceNumber`.
+
+On the layered stack (`docs/map-symbols.md` §9.3 "Layers"; built in
+slice I row I3, written by the importer from row I5) one source colour
+may be several rows, one per role it serves. Its lowest row keeps the
+colour's id (`src:12`); each other row is `<id>/<paletteId>`
+(`src:12/brown50-road`), a row of uses with no role `<id>/none:area` or
+`<id>/none:other`. All of them carry the colour's name, CMYK,
+`sourceNumber`, `spot` and `overprint`: one ink, several layers. Each
+palette id is on exactly one row's `paletteIds`. Ids are unique in a
+stack.
+
 `cmyk` is 0–1. RGB is never stored; the screen conversion is
 `render.cmykToHex`.
 

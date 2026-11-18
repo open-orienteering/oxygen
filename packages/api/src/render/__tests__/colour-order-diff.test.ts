@@ -38,6 +38,14 @@ import {
   withoutRows,
   viewKindOf,
   flipKind,
+  correspondingNamer,
+  jointDocument,
+  layeredCandidate,
+  objectsPerSymbol,
+  paintCorrespondence,
+  paintKey,
+  sourceTableOf,
+  withoutPasses,
   type PaintView,
   type Rgba,
   type StackLayer,
@@ -431,5 +439,127 @@ describe("classification", () => {
     expect(suggestClass("brown50-paved", "brown100-line", of, rank)).toBe("deviation-dropped");
     expect(suggestClass("brown100-line", "brown50-paved", of, rank)).toBeNull();
     expect(suggestClass("nope", "yellow100", of, rank)).toBeNull();
+  });
+});
+
+/**
+ * A stage 7 document (source order) whose one brown 50 % serves a paved
+ * area and a road's infill: black, brown, then the two inserted purples; a
+ * graphic object without IR (drawn by the proxies in row 0).
+ */
+function alignedDoc(): mapDocument.MapDocument {
+  const header: mapDocument.MapDocumentInput["header"] = {
+    format: { version: 1, importer: "test-1" },
+    source: { kind: "ocad", version: "2018.8.3", hash: "00".repeat(32), bytes: 1 },
+    unitsPerMm: 100,
+    mapScale: 15000,
+    georeferencing: { crs: null, paperOrigin: { x: 0, y: 0 }, gridRotationDeg: 0 },
+    colours: [
+      { id: "src:7", name: "Black", cmyk: [0, 0, 0, 1], sourceNumber: 7, paletteIds: ["black100"] },
+      { id: "src:8", name: "Brown 50%", cmyk: [0, 0.28, 0.5, 0], sourceNumber: 8, paletteIds: ["brown50-paved"] },
+      { id: "iof2022:purple-lower", name: "Purple", cmyk: [0.35, 0.85, 0, 0], paletteIds: ["purple-lower"], purpleRole: "lower" },
+      { id: "iof2022:purple-upper", name: "Purple", cmyk: [0.35, 0.85, 0, 0], paletteIds: ["purple-upper"], purpleRole: "upper" },
+    ],
+    symbols: [
+      { code: "501", name: "Paved", kind: "area", render: { type: "area", id: "s:501", code: "501", name: "Paved", fill: 1 } },
+      {
+        code: "503", name: "Road", kind: "line",
+        render: { type: "line", id: "s:503", code: "503", name: "Road", borders: { left: { colour: 0, widthUm: 140, shiftUm: 290 }, right: { colour: 0, widthUm: 140, shiftUm: 290 }, backgroundColour: 1 } },
+      },
+      { code: "graphic", name: "Frame bar", kind: "area", origin: "graphic", render: null },
+    ],
+  };
+  const ring = [0, 0, 1000, 0, 1000, 1000, 0, 1000, 0, 0];
+  return mapDocument.decodeMapDocument(mapDocument.encodeMapDocument({
+    header,
+    objects: [
+      { symbolIdx: 0, type: mapDocument.OBJECT_TYPE.area, sourceIndex: 0, coords: ring, flags: new Array(5).fill(0) },
+      { symbolIdx: 1, type: mapDocument.OBJECT_TYPE.line, sourceIndex: 1, coords: [0, 500, 1000, 500], flags: [0, 0] },
+      { symbolIdx: 2, type: mapDocument.OBJECT_TYPE.area, sourceIndex: 2, coords: ring, flags: new Array(5).fill(0) },
+    ],
+  }));
+}
+
+const rank22 = paletteRank("iof2022", "ISOM2017-2");
+const streamOfDoc = (d: mapDocument.MapDocument, opts: mapDocument.DocumentRenderOptions = {}) => {
+  const input = mapDocument.documentRenderInput(d, opts);
+  return render.symbolise({ objects: input.objects, symbols: input.symbols, fonts: [] }).stream;
+};
+
+describe("the layered candidate", () => {
+  it("recovers the source table from a stage 7 stack", () => {
+    const t = sourceTableOf(alignedDoc().header.colours);
+    expect(t.fromAligned).toEqual([0, 1, -1, -1]);
+    expect(t.colours.map((c) => c.id)).toEqual(["src:7", "src:8"]);
+    expect(t.colours.every((c) => c.paletteIds === undefined && c.purpleRole === undefined)).toBe(true);
+  });
+
+  it("splits the brown into the paved area and the road infill, re-indexes the road per reference and names one role per layer", () => {
+    const doc = alignedDoc();
+    const lc = layeredCandidate(doc, "ISOM2017-2", objectsPerSymbol(doc), rank22);
+    expect(lc.layers.report.split).toContainEqual({ source: 1, sourceNumber: 8, roles: ["brown50-paved", "brown50-road"] });
+    const names = lc.stackLayers.map((l) => l.name);
+    for (const n of ["brown50-paved", "black-road-outline", "brown50-road", "purple-lower", "purple-upper"]) expect(names).toContain(n);
+    expect(names.some((n) => n.includes("+"))).toBe(false);
+    const row = (n: string) => names.indexOf(n);
+    const road = lc.doc.header.symbols[1].render!;
+    expect(render.renderColourPaths(road).map((r) => r.colour)).toEqual([row("black-road-outline"), row("black-road-outline"), row("brown50-road")]);
+    expect(render.renderColourRefs(lc.doc.header.symbols[0].render!)).toEqual([row("brown50-paved")]);
+    // the source's row 0 (the black) became its lowest row: the proxies draw there
+    expect(lc.rowOfAligned).toEqual([row("black-road-outline"), row("brown50-paved"), row("purple-lower"), row("purple-upper")]);
+    const at = row("black-road-outline");
+    expect(lc.renderOptions.proxyColours).toEqual({ line: at, area: at, point: at, text: at });
+  });
+
+  it("draws every object in the same ink in both orders (the proxy-drawn graphic object included)", () => {
+    const doc = alignedDoc();
+    const lc = layeredCandidate(doc, "ISOM2017-2", objectsPerSymbol(doc), rank22);
+    const inks = (d: mapDocument.MapDocument, opts: mapDocument.DocumentRenderOptions = {}) => {
+      const s = streamOfDoc(d, opts);
+      return s.passes.map((p, i) => `${s.symbolIdx[i]}:${p.kind}:${d.header.colours[p.colour].cmyk.join(",")}`).sort();
+    };
+    expect(inks(lc.doc, lc.renderOptions)).toEqual(inks(doc));
+    expect(inks(lc.doc)).not.toEqual(inks(doc)); // without the options the proxy takes whatever is row 0 now
+  });
+
+  it("rejects a document whose source symbols draw in an inserted row", () => {
+    const doc = alignedDoc();
+    const bad = { ...doc, header: { ...doc.header, symbols: [{ ...doc.header.symbols[0], render: render.parseRenderSymbol({ type: "area", id: "x", code: "x", name: "x", fill: 2 }) }, ...doc.header.symbols.slice(1)] } };
+    expect(() => layeredCandidate(bad, "ISOM2017-2", objectsPerSymbol(doc), rank22)).toThrow(/inserted row/);
+  });
+
+  it("pairs each pass with its row in either order (jointDocument, paintCorrespondence)", () => {
+    const doc = alignedDoc();
+    const lc = layeredCandidate(doc, "ISOM2017-2", objectsPerSymbol(doc), rank22);
+    const joint = jointDocument(doc, lc.doc, { source: 0, candidate: lc.renderOptions.proxyColours!.line! });
+    const p = joint.proxy;
+    const corr = paintCorrespondence(streamOfDoc(joint.doc, { proxyColours: { line: p, area: p, point: p, text: p } }), joint.pairs);
+    const names = lc.stackLayers.map((l) => l.name);
+    const source = streamOfDoc(doc);
+    // the brown's paints: the paved row for the area, the road row for the road
+    const brown = source.passes.flatMap((x, i) => (x.colour === 1 ? [{ key: paintKey(1, x.kind, source.symbolIdx[i]), sym: source.symbolIdx[i] }] : []));
+    expect(new Set(brown.map((b) => b.sym))).toEqual(new Set([0, 1]));
+    for (const b of brown) expect(names[corr.candidateRow.get(b.key)!]).toBe(b.sym === 0 ? "brown50-paved" : "brown50-road");
+    expect(corr.sourceRow.get(names.indexOf("brown50-road"))).toBe(1);
+    expect(corr.sourceRow.get(names.indexOf("black-road-outline"))).toBe(0);
+    expect(() => jointDocument(doc, { header: { ...lc.doc.header, symbols: [] } }, { source: 0, candidate: 0 })).toThrow(/symbol tables/);
+  });
+
+  it("names a source paint by the candidate layer it becomes, graphic: for a graphic object's", () => {
+    const doc = alignedDoc();
+    const lc = layeredCandidate(doc, "ISOM2017-2", objectsPerSymbol(doc), rank22);
+    const names = lc.stackLayers.map((l) => l.name);
+    const candidateRow = new Map([[paintKey(1, "fill", 0), names.indexOf("brown50-paved")], [paintKey(1, "fill", 1), names.indexOf("brown50-road")]]);
+    const paints = [{ row: 1, kind: "fill" as const, symbolIdx: 0 }, { row: 1, kind: "fill" as const, symbolIdx: 1 }, { row: 0, kind: "fill" as const, symbolIdx: 2 }];
+    const name = correspondingNamer(paints, candidateRow, lc.stackLayers, doc.header.symbols, (r) => lc.rowOfAligned[r]);
+    expect([name(0), name(1), name(2)]).toEqual(["brown50-paved", "brown50-road", `${GRAPHIC_PREFIX}black-road-outline`]);
+  });
+
+  it("peels passes by what draws them (withoutPasses)", () => {
+    const s = streamOfDoc(alignedDoc());
+    const kept = withoutPasses(s, (_, symbolIdx) => symbolIdx === 1);
+    expect(kept.passes.length).toBe(s.passes.length - [...s.symbolIdx].filter((x) => x === 1).length);
+    expect([...kept.symbolIdx].includes(1)).toBe(false);
+    expect(kept.objectIdx.length).toBe(kept.passes.length);
   });
 });
