@@ -10,10 +10,13 @@ import { decodeMapDocument, encodeMapDocument } from "../../map-document/codec.j
 import { OBJECT_TYPE } from "../../map-document/header.js";
 import { canonicalRender, documentRenderInput, isAppliedMatch } from "../../map-document/render-bridge.js";
 import { type LineSymbol, parseRenderSymbol } from "../../render/symbol.js";
-import { renderColourRefs } from "../../render/transform.js";
+import { renderColourPaths, renderColourRefs } from "../../render/transform.js";
 import { getLibraryEntry, SYMBOL_LIBRARY_VERSION } from "../../symbol-library/index.js";
-import { resolveEntry } from "../../symbol-library/schema.js";
-import { OVERLAY_STACK_IDS, paletteIndexOfStack } from "../colour-align.js";
+import { colourRefs, resolveEntry } from "../../symbol-library/schema.js";
+import { identifySourceColours, OVERLAY_STACK_IDS, paletteIndexOfStack } from "../colour-align.js";
+import { buildColourLayers, deviationKey, symbolColourUses } from "../colour-layers.js";
+import { rolePalette } from "../colour-roles.js";
+import { documentSymbolFingerprints } from "../decisions.js";
 import { matchDocument } from "../match-document.js";
 import { BLACK, colours, input } from "./match-fixture.js";
 
@@ -248,5 +251,113 @@ describe("matchDocument on a ski map (docs/map-symbols.md §8.2, §12)", () => {
 
   it("every stack carries the overlay's four rows, once", () => {
     for (const id of OVERLAY_STACK_IDS) expect(matchDocument(input()).input.header.colours.filter((c) => c.paletteIds?.includes(id)), id).toHaveLength(1);
+  });
+});
+
+// ---- Row I5: stage 7 in the IOF order (docs/map-symbols.md §9.3 "In the importer") ----------------------------------
+
+/** The fixture with a green 30 % area the table draws over everything. */
+function withGreenOnTop() {
+  const base = input();
+  const green = { id: "src:6", name: "Grön 30% - Ytobjekt", cmyk: [0.24, 0, 0.27, 0] as [number, number, number, number], sourceNumber: 6 };
+  return {
+    header: { ...base.header, colours: [...base.header.colours, green], symbols: [...base.header.symbols, { code: "406.0", name: "Grön", kind: "area" as const, render: { type: "area" as const, id: "src:406", code: "406", name: "Grön", fill: base.header.colours.length } }] },
+    objects: [...base.objects, { symbolIdx: base.header.symbols.length, type: OBJECT_TYPE.area, sourceIndex: 9, coords: [0, 0, 100, 0, 100, 100], flags: [0, 0, 0] }],
+  };
+}
+
+describe("matchDocument — colourOrder (row I5)", () => {
+  const source = matchDocument(input(), { colourOrder: "source" });
+  const iof = matchDocument(input(), { colourOrder: "iof" });
+  const h = iof.input.header;
+  // The library road (ISOM 502) draws its outline on the black carrier, which the table has over both browns: roads over
+  // the contours kept by default, the outline over the road infill implied by it.
+  const KEPT = ["black-road-outline>brown100-line", "black-road-outline>brown50-road"];
+
+  it("builds the layered stack: buildColourLayers' for the source table, every reference re-indexed onto its own colour", () => {
+    const src = input().header.symbols;
+    const infos = identifySourceColours(colours, "ISOM2017-2", "iof2022");
+    const perSymbol = src.map((_, i) => input().objects.filter((o) => o.symbolIdx === i).length);
+    const uses = symbolColourUses(source.input.header.symbols.map((s, i) => ({ render: src[i].render ? parseRenderSymbol(src[i].render!) : null, match: s.match ?? null, origin: s.origin })), perSymbol, infos, rolePalette("ISOM2017-2", "iof2022"));
+    const needed = new Set<string>();
+    for (const s of source.input.header.symbols) if (s.match?.state === "auto" && s.match.canonicalId) for (const id of colourRefs(getLibraryEntry(s.match.canonicalId)!.render)) needed.add(id);
+    const direct = buildColourLayers({ colours, infos, uses, needed, spec: "ISOM2017-2", edition: "iof2022" });
+    expect(h.colours).toEqual(direct.colours);
+    src.forEach((s, i) => {
+      if (!s.render) return;
+      const before = renderColourPaths(parseRenderSymbol(s.render)).map((p) => colours[p.colour].sourceNumber);
+      const after = renderColourPaths(parseRenderSymbol(h.symbols[i].render!)).map((p) => h.colours[p.colour].sourceNumber);
+      expect(after, s.code).toEqual(before);
+    });
+  });
+
+  it("records the order in the header and the report; the source order is §9.2 as before", () => {
+    expect(h.colourOrder).toEqual({ order: "iof", kept: KEPT });
+    expect(KEPT).toEqual(iof.colourStack.layers!.deviations.filter((d) => d.kept).map((d) => deviationKey(d.upper, d.lower)).sort());
+    expect(source.input.header.colourOrder).toEqual({ order: "source" });
+    expect(iof.colourStack).toMatchObject({ order: "iof", conflicts: [], areasAboveLowerPurple: [], purplesDisplaced: [] });
+    expect(iof.colourStack.layers?.rows).toHaveLength(h.colours.length);
+    expect(iof.colourStack.inserted).toEqual(expect.arrayContaining(["purple-lower", "purple-upper"]));
+    expect(source.colourStack.order).toBe("source");
+    expect(source.colourStack.layers).toBeUndefined();
+  });
+
+  it("leaves matching, objects and every symbol's fingerprint alone", () => {
+    expect(iof.matching).toEqual(source.matching);
+    expect(iof.input.objects).toHaveLength(source.input.objects.length);
+    expect(documentSymbolFingerprints(iof.input.header)).toEqual(documentSymbolFingerprints(source.input.header));
+  });
+
+  it("carries every palette id the source order carries, so library symbols, Map mode and patches resolve on both", () => {
+    const ids = new Set(h.colours.flatMap((c) => c.paletteIds ?? []));
+    for (const id of source.input.header.colours.flatMap((c) => c.paletteIds ?? [])) expect(ids, id).toContain(id);
+  });
+
+  it("warns by deviations, roleless colours and source-ordered areas above lower purple — never §9.2's step 5", () => {
+    const src = matchDocument(withGreenOnTop(), { colourOrder: "source" });
+    expect(src.warnings.map((w) => w.code)).toContain("COLOUR_AREA_ABOVE_LOWER_PURPLE");
+    const r = matchDocument(withGreenOnTop(), { colourOrder: "iof" });
+    const codes = r.warnings.map((w) => w.code);
+    expect(codes).not.toContain("COLOUR_AREA_ABOVE_LOWER_PURPLE");
+    expect(codes).not.toContain("COLOUR_ORDER_CONFLICT");
+    // The green the table draws over the black and the browns is a deviation, dropped by default.
+    const dropped = r.colourStack.layers!.deviations.filter((d) => !d.kept);
+    expect(dropped.map((d) => d.upper)).toContain("green30-area");
+    expect(r.warnings.find((w) => w.code === "COLOUR_DEVIATION_DROPPED")).toMatchObject({ count: dropped.length });
+    // The metro colour (no IOF class) is a roleless row with an object.
+    expect(r.warnings.find((w) => w.code === "COLOUR_NO_ROLE")).toMatchObject({ count: 1 });
+    expect(r.warnings.find((w) => w.code === "COLOUR_UNCLASSIFIED")).toMatchObject({ count: 1 });
+    // The green sinks under lower purple.
+    const index = paletteIndexOfStack(r.input.header.colours);
+    const greenRow = r.input.header.colours.findIndex((c) => c.sourceNumber === 6);
+    expect(greenRow).toBeLessThan(index.get("purple-lower")!);
+  });
+
+  it("takes deviation overrides: a dropped one kept is in the header's kept list and warned as kept", () => {
+    const def = matchDocument(withGreenOnTop(), { colourOrder: "iof" });
+    const dev = def.colourStack.layers!.deviations.find((d) => d.upper === "green30-area" && !d.kept)!;
+    const k = deviationKey(dev.upper, dev.lower);
+    const r = matchDocument(withGreenOnTop(), { colourOrder: "iof", deviations: { [k]: "keep" } });
+    expect(r.input.header.colourOrder?.kept).toContain(k);
+    expect(r.colourStack.layers!.deviations.find((d) => deviationKey(d.upper, d.lower) === k)).toMatchObject({ kept: true, byDefault: false });
+    expect(r.warnings.find((w) => w.code === "COLOUR_DEVIATION_KEPT")?.count).toBeGreaterThanOrEqual(1);
+    // Overrides do nothing in the source order.
+    expect(matchDocument(withGreenOnTop(), { colourOrder: "source", deviations: { [k]: "keep" } }).input.header.colours).toEqual(src(withGreenOnTop()));
+  });
+  const src = (i: ReturnType<typeof withGreenOnTop>) => matchDocument(i, { colourOrder: "source" }).input.header.colours;
+
+  it("survives the codec and draws its symbols in the same inks as the source order", () => {
+    const a = decodeMapDocument(encodeMapDocument(iof.input));
+    const b = decodeMapDocument(encodeMapDocument(source.input));
+    expect(a.header.colourOrder).toEqual({ order: "iof", kept: KEPT });
+    const ra = documentRenderInput(a), rb = documentRenderInput(b);
+    expect(ra.stats.canonicalMissing).toBe(0);
+    expect(ra.stats.canonicalSymbols).toBe(rb.stats.canonicalSymbols);
+    const inks = (doc: typeof a, r: typeof ra) => r.symbols.slice(0, doc.header.symbols.length).map((s) => renderColourRefs(s).map((c) => doc.header.colours[c].cmyk.join(",")));
+    expect(inks(a, ra)).toEqual(inks(b, rb));
+  });
+
+  it("is deterministic", () => {
+    expect(encodeMapDocument(matchDocument(input(), { colourOrder: "iof" }).input)).toEqual(encodeMapDocument(iof.input));
   });
 });

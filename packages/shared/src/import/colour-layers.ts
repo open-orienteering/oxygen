@@ -91,6 +91,18 @@ export function symbolColourUses(
   });
 }
 
+/**
+ * The layered stack cannot be built for this map (an order whose constraints cannot be resolved). Stage 7 falls back
+ * to the source order with `COLOUR_LAYERS_FAILED` (row I5); a bad input (a reference outside the table) is a plain
+ * `Error`, not this.
+ */
+export class ColourLayersError extends Error {
+  constructor(message: string) {
+    super(`buildColourLayers: ${message}`);
+    this.name = "ColourLayersError";
+  }
+}
+
 /** What a deviation is set to (`ColourLayersInput.deviations`). */
 export type DeviationChoice = "keep" | "drop";
 
@@ -536,7 +548,7 @@ export function buildColourLayers(input: ColourLayersInput): ColourLayersResult 
   for (let guard = 0; ; guard++) {
     const cycle = findCycle(placed, edges.out);
     if (!cycle) break;
-    if (guard >= guardLimit) throw new Error("buildColourLayers: deviations that cannot be resolved");
+    if (guard >= guardLimit) throw new ColourLayersError("deviations that cannot be resolved");
     const inCycle = new Set<string>();
     const roles = new Set<string>();
     cycle.forEach((d, k) => {
@@ -568,7 +580,7 @@ export function buildColourLayers(input: ColourLayersInput): ColourLayersResult 
       implied.clear();
     } else {
       const forced = lightest(droppedHere);
-      if (!forced) throw new Error("buildColourLayers: a cycle without a deviation");
+      if (!forced) throw new ColourLayersError("a cycle without a deviation");
       keep.add(forced);
       implied.set(forced, new Set(keptHere));
       blocked.delete(forced);
@@ -843,6 +855,6 @@ function sortByEdges<T>(nodes: readonly T[], edges: ReadonlyMap<T, ReadonlySet<T
       if (indeg.get(m) === 0) ready.push(m);
     }
   }
-  if (out.length !== nodes.length) throw new Error("buildColourLayers: the order's constraints have a cycle");
+  if (out.length !== nodes.length) throw new ColourLayersError("the order's constraints have a cycle");
   return out;
 }
