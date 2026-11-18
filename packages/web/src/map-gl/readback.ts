@@ -30,7 +30,12 @@ export interface FrameReadOptions {
    * Default `true`: as the layer draws.
    */
   lod?: boolean;
+  /** Aborted before the read starts: it rejects without drawing (a superseded overlay read). */
+  signal?: AbortSignal;
 }
+
+/** A read that waits longer than this for its detail rejects (a worker that failed never completes). */
+export const READ_TIMEOUT_MS = 60_000;
 
 export type FrameReader = (view: ViewRect, opts?: FrameReadOptions) => Promise<Frame>;
 
@@ -62,6 +67,8 @@ export function offscreenTarget(gl: WebGL2RenderingContext, w: number, h: number
     else gl.renderbufferStorage(gl.RENDERBUFFER, format, w, h);
     return r;
   };
+  const max = gl.getParameter(gl.MAX_RENDERBUFFER_SIZE) as number;
+  if (w > max || h > max) throw new Error(`offscreen target ${w} × ${h} is over the GPU's ${max}`);
   const colour = rb(gl.RGBA8, true), depth = rb(gl.DEPTH24_STENCIL8, true), resolved = rb(gl.RGBA8, false);
   const msaa = gl.createFramebuffer()!;
   gl.bindFramebuffer(gl.FRAMEBUFFER, msaa);
@@ -70,7 +77,17 @@ export function offscreenTarget(gl: WebGL2RenderingContext, w: number, h: number
   const single = gl.createFramebuffer()!;
   gl.bindFramebuffer(gl.FRAMEBUFFER, single);
   gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, resolved);
+  const complete = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, msaa);
+  const msaaComplete = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  if (!complete || !msaaComplete) {
+    // An incomplete target reads zeros: two of them would compare as "nothing changed".
+    gl.deleteFramebuffer(msaa);
+    gl.deleteFramebuffer(single);
+    for (const r of [colour, depth, resolved]) gl.deleteRenderbuffer(r);
+    throw new Error(`offscreen target ${w} × ${h} is incomplete`);
+  }
   return {
     target: { framebuffer: msaa, width: w, height: h },
     resolve: () => {
@@ -124,11 +141,15 @@ export function createFrameReader(input: {
   restoreView: () => ViewRect | null;
   /** A read finished: the layer draws what it skipped. */
   onIdle: () => void;
+  /** Default `READ_TIMEOUT_MS`. */
+  timeoutMs?: number;
 }): FrameReaderHandle {
   const targets = new Map<string, OffscreenTarget>();
   let chain: Promise<unknown> = Promise.resolve();
   let pending = 0;
   let disposed = false;
+  // Settles the read waiting for its detail when the reader goes: the engine's own waiters do not on dispose.
+  let stop: ((err: Error) => void) | null = null;
   const targetFor = (w: number, h: number): OffscreenTarget => {
     const key = `${w}x${h}`;
     let t = targets.get(key);
@@ -149,15 +170,25 @@ export function createFrameReader(input: {
   const gone = () => new Error("frame reader disposed");
   const once = async (view: ViewRect, opts: FrameReadOptions): Promise<Frame> => {
     if (disposed) throw gone();
+    if (opts.signal?.aborted) throw new DOMException("frame read aborted", "AbortError");
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       input.engine.setView(view);
-      await input.engine.whenComplete();
+      await Promise.race([
+        input.engine.whenComplete(),
+        new Promise<never>((_, reject) => {
+          stop = reject;
+          timer = setTimeout(() => reject(new Error("frame read timed out waiting for the map's detail")), input.timeoutMs ?? READ_TIMEOUT_MS);
+        }),
+      ]);
       if (disposed) throw gone();
       const t = targetFor(view.widthPx, view.heightPx);
       input.engine.render(opts.lod === false ? { ...input.renderOptions(), ...NO_LOD } : input.renderOptions(), t.target);
       t.resolve();
       return { width: view.widthPx, height: view.heightPx, data: flipRows(t.read(), view.widthPx, view.heightPx) };
     } finally {
+      stop = null;
+      clearTimeout(timer);
       if (!disposed) {
         const back = input.restoreView();
         if (back) input.engine.setView(back);
@@ -182,6 +213,7 @@ export function createFrameReader(input: {
     busy: () => pending > 0,
     dispose: () => {
       disposed = true;
+      stop?.(gone());
       for (const t of targets.values()) t.dispose();
       targets.clear();
     },

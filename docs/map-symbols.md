@@ -1255,13 +1255,19 @@ at 6 px/mm they would hide a difference confined to small symbols or text;
 user 2026-11-18); changed pixels binned into 5 mm cells from the bounds'
 top-left corner; 8-connected cells a region; regions ordered by most
 changed pixels, ties topmost then leftmost. A tile waits until the camera
-has been still 150 ms, so the scan yields to panning; while a read runs
-the layer's own frames wait. A step fits the region with one cell of
+has been still 150 ms (any change of it: a gesture, **Fit**, a step, a
+resize), so the scan yields to panning; while a read runs the layer's own
+frames wait, and two animation frames pass between tiles so the layers
+draw the frame they skipped. A superseded overlay read (the camera moved
+again) is dropped before it draws. A step fits the region with one cell of
 margin, at most 16 CSS px/mm, and wraps — the first *Next* to region 1,
 the first *Previous* to the last. The status reads "n of N", "Finding
 differences… x of y" while scanning, and "No differences" with both
-buttons disabled at N = 0; a reader that goes mid-scan (a mode switch, a
-reload) starts the scan over when both are back. The engine has no diff
+buttons disabled at N = 0; a scan stopped part way (a mode switch, a
+reader that goes) is dropped and starts over when both readers are back; a
+failed one says so, with *Try again*, and an overlay that cannot be drawn
+says so in the pane. The first document's canvas is hidden, its loading,
+import and failure messages are not. The engine has no diff
 pass: the comparison is CPU, over two WebGL contexts. On
 `e2e/colour-layers.ocd` both E2E scans, with the rest of the I7 test,
 finish within 8 s; a club map's tile time is still to be measured at the
@@ -1269,8 +1275,10 @@ I-gate. Code: `lib/map-compare-diff.ts`, `CompareView.tsx`'s
 `DiffPane` / `useDiffScan`. Test ids: `compare-mode-diff`,
 `compare-diff-overlay` (`data-state` `hidden` / `computing` / `ready` /
 `failed`, `data-changed`), `compare-diff-status` (`data-scan` `waiting` /
-`scanning` / `done`, `data-regions`, `data-region`), `compare-diff-prev`,
-`compare-diff-next`, `compare-diff-none`. Tests:
+`scanning` / `done` / `failed`, `data-regions`, `data-region`),
+`compare-diff-prev`, `compare-diff-next`, `compare-diff-none`,
+`compare-diff-retry`, `compare-diff-failed`; the overlay's `data-for-view`
+is the camera it was computed for. Tests:
 `packages/web/src/lib/__tests__/map-compare-diff.test.ts` (the mask at and
 above the tolerance, size mismatch, overlay pixels, the scan resolution
 and its tile cap, the tile grid, cells → regions → order, the step's

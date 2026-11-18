@@ -173,7 +173,10 @@
         "waiting": "Loading…",
         "scanning": "Finding differences… {{done}} of {{total}}",
         "none": "No differences",
-        "position": "{{n}} of {{count}}"
+        "position": "{{n}} of {{count}}",
+        "failed": "The difference could not be drawn here.",
+        "scanFailed": "Finding differences failed.",
+        "retry": "Try again"
       }
     },
     "layers": {

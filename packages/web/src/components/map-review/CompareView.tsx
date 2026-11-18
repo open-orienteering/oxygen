@@ -174,7 +174,7 @@ function usePaneGestures(ref: React.RefObject<HTMLDivElement | null>, onGesture:
 const viewAttr = (vp: PaperViewport | null) => (vp ? `${vp.centreX.toFixed(1)},${vp.centreY.toFixed(1)},${vp.pxPerUm.toPrecision(6)}` : "");
 
 /** One side's layer, or what stands in its place while it loads. */
-function SideLayer({ s, vp, w, h, zIndex, onFrameReader, maxDpr }: { s: LoadedSide; vp: PaperViewport | null; w: number; h: number; zIndex?: number; onFrameReader?: (read: FrameReader | null) => void; maxDpr?: number }) {
+function SideLayer({ s, vp, w, h, zIndex, onFrameReader, maxDpr, hidden }: { s: LoadedSide; vp: PaperViewport | null; w: number; h: number; zIndex?: number; onFrameReader?: (read: FrameReader | null) => void; maxDpr?: number; hidden?: boolean }) {
   const { t } = useTranslation("mapReview");
   const dpr = Math.min(typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1, maxDpr ?? Infinity);
   const view = useMemo(() => (vp && w > 0 && h > 0 ? glView(vp, w, h, dpr, 0) : null), [vp, w, h, dpr]);
@@ -186,7 +186,7 @@ function SideLayer({ s, vp, w, h, zIndex, onFrameReader, maxDpr }: { s: LoadedSi
       </div>
     );
   }
-  return <VectorMapLayer doc={s.doc.doc} view={view} width={w} height={h} budget="club" zIndex={zIndex} onFrameReader={onFrameReader} />;
+  return <VectorMapLayer doc={s.doc.doc} view={view} width={w} height={h} budget="club" zIndex={zIndex} onFrameReader={onFrameReader} hidden={hidden} />;
 }
 
 export function CompareView({
@@ -236,7 +236,11 @@ export function CompareView({
   const [readers, setReaders] = useState<{ a: FrameReader | null; b: FrameReader | null }>({ a: null, b: null });
   const union = useMemo(() => unionBounds(aDoc ? boundsMm(aDoc.header) : null, bDoc ? boundsMm(bDoc.header) : null), [aDoc, bDoc]);
   const moved = useRef(0);
-  const scan = useDiffScan(query.mode === "diff" && a.hash && b.hash ? `${a.hash}:${b.hash}` : null, readers, union, moved);
+  const { scan, retry: retryScan } = useDiffScan(query.mode === "diff" && a.hash && b.hash ? `${a.hash}:${b.hash}` : null, readers, union, moved);
+  // Any camera change counts as movement for the scan's stillness (gestures, Fit, a step, a resize).
+  useEffect(() => {
+    moved.current = Date.now();
+  }, [vp, layout.paneW, layout.paneH]);
   const [region, setRegion] = useState<{ key: string; index: number } | null>(null);
   const regionIndex = region && scan && region.key === scan.key ? region.index : null;
   const step = (dir: 1 | -1) => {
@@ -329,7 +333,7 @@ export function CompareView({
             {t("colours.compare.flip")}
           </button>
         )}
-        {query.mode === "diff" && <DiffSteps scan={scan} region={regionIndex} onStep={step} />}
+        {query.mode === "diff" && <DiffSteps scan={scan} region={regionIndex} onStep={step} onRetry={retryScan} />}
         <button type="button" data-testid="compare-fit" className="rounded border border-slate-300 px-3 py-1 cursor-pointer hover:bg-slate-50" onClick={fit}>
           {t("colours.compare.fit")}
         </button>
@@ -454,52 +458,76 @@ const sleep = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms))
 
 type DiffScan =
   | { key: string; state: "scanning"; done: number; total: number }
-  | { key: string; state: "done"; regions: DiffRegion[] };
+  | { key: string; state: "done"; regions: DiffRegion[] }
+  | { key: string; state: "failed" };
+
+/** Two animation frames: the layers draw the frame a read made them skip before the next tile starts. */
+const yieldFrames = () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
 
 /**
  * The whole-map scan of a pair, once on first entry (§8.7 "Compare — diff"): both documents read over the union
  * bounds in tiles, without the screen-only skips (user 2026-11-18), changed pixels binned into cells, the regions.
- * A tile waits for the camera to be still. A reader that goes (a mode switch, a reload) stops the scan; it starts
- * again when both are back. Kept per pair across modes.
+ * A tile waits until the camera has been still 150 ms, and the layers get their own frames between tiles. A scan
+ * that stops part way (a mode switch, a reader that goes) is dropped and starts over when both readers are back; a
+ * failed one says so and is tried again on `retry`. Kept per pair across modes.
  */
-function useDiffScan(key: string | null, readers: { a: FrameReader | null; b: FrameReader | null }, bounds: Bounds | null, moved: React.RefObject<number>): DiffScan | null {
+function useDiffScan(key: string | null, readers: { a: FrameReader | null; b: FrameReader | null }, bounds: Bounds | null, moved: React.RefObject<number>): { scan: DiffScan | null; retry: () => void } {
   const [scans, setScans] = useState<Record<string, DiffScan>>({});
   const { a, b } = readers;
   const current = key ? scans[key] : undefined;
-  const needed = !!key && !!a && !!b && !!bounds && current?.state !== "done";
+  const needed = !!key && !!a && !!b && !!bounds && current?.state !== "done" && current?.state !== "failed";
   useEffect(() => {
     if (!needed || !key || !a || !b || !bounds) return;
     let cancelled = false;
+    let finished = false;
     const grid = scanGrid(bounds);
     const cells: CellCounts = new Map();
+    const put = (scan: DiffScan) => setScans((m) => ({ ...m, [key]: scan }));
     void (async () => {
-      setScans((m) => ({ ...m, [key]: { key, state: "scanning", done: 0, total: grid.tiles.length } }));
+      put({ key, state: "scanning", done: 0, total: grid.tiles.length });
       for (const [i, tile] of grid.tiles.entries()) {
         while (!cancelled && Date.now() - moved.current < STILL_MS) await sleep(STILL_MS);
         if (cancelled) return;
         const [fa, fb] = await Promise.all([a(tile.view, { lod: false }), b(tile.view, { lod: false })]);
         if (cancelled) return;
         const m = changedMask(fa, fb);
-        if (m) binCells(cells, m.mask, fa.width, tile, grid.pxPerMm, bounds);
-        setScans((s) => ({ ...s, [key]: { key, state: "scanning", done: i + 1, total: grid.tiles.length } }));
+        if (!m) throw new Error(`scan tile ${tile.col},${tile.row}: frames of different sizes`);
+        binCells(cells, m.mask, fa.width, tile, grid.pxPerMm, bounds);
+        put({ key, state: "scanning", done: i + 1, total: grid.tiles.length });
+        await yieldFrames();
       }
-      if (!cancelled) setScans((s) => ({ ...s, [key]: { key, state: "done", regions: regionsOf(cells) } }));
-    })().catch(() => {
-      // A reader went mid-scan: it starts over when both are back.
-      if (!cancelled) setScans((s) => {
-        const next = { ...s };
-        delete next[key];
-        return next;
-      });
+      if (cancelled) return;
+      finished = true;
+      put({ key, state: "done", regions: regionsOf(cells) });
+    })().catch((err: unknown) => {
+      if (cancelled) return;
+      console.warn("[compare] difference scan failed:", err);
+      finished = true;
+      put({ key, state: "failed" });
     });
     return () => {
       cancelled = true;
+      // Stopped part way: no "scanning" row is left behind; the next entry scans again.
+      if (!finished) setScans((m) => {
+        if (m[key]?.state !== "scanning") return m;
+        const next = { ...m };
+        delete next[key];
+        return next;
+      });
     };
   }, [needed, key, a, b, bounds, moved]);
-  return current ?? null;
+  const retry = useCallback(() => {
+    if (!key) return;
+    setScans((m) => {
+      const next = { ...m };
+      delete next[key];
+      return next;
+    });
+  }, [key]);
+  return { scan: current ?? null, retry };
 }
 
-function DiffSteps({ scan, region, onStep }: { scan: DiffScan | null; region: number | null; onStep: (dir: 1 | -1) => void }) {
+function DiffSteps({ scan, region, onStep, onRetry }: { scan: DiffScan | null; region: number | null; onStep: (dir: 1 | -1) => void; onRetry: () => void }) {
   const { t } = useTranslation("mapReview");
   const n = scan?.state === "done" ? scan.regions.length : 0;
   const enabled = scan?.state === "done" && n > 0;
@@ -520,6 +548,15 @@ function DiffSteps({ scan, region, onStep }: { scan: DiffScan | null; region: nu
       >
         {!scan
           ? t("colours.compare.diff.waiting")
+          : scan.state === "failed"
+            ? (
+              <span className="text-red-700">
+                {t("colours.compare.diff.scanFailed")}{" "}
+                <button type="button" data-testid="compare-diff-retry" className="underline cursor-pointer" onClick={onRetry}>
+                  {t("colours.compare.diff.retry")}
+                </button>
+              </span>
+            )
           : scan.state === "scanning"
             ? t("colours.compare.diff.scanning", { done: scan.done, total: scan.total })
             : n === 0
@@ -536,6 +573,7 @@ function DiffSteps({ scan, region, onStep }: { scan: DiffScan | null; region: nu
  * hidden while it moves.
  */
 function DiffPane({ a, b, vp, w, h, onGesture, onReaders, label }: { a: LoadedSide; b: LoadedSide; vp: PaperViewport | null; w: number; h: number; onGesture: (g: PaneGesture) => void; onReaders: (r: { a: FrameReader | null; b: FrameReader | null }) => void; label: string }) {
+  const { t } = useTranslation("mapReview");
   const ref = useRef<HTMLDivElement>(null);
   usePaneGestures(ref, onGesture);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -544,7 +582,7 @@ function DiffPane({ a, b, vp, w, h, onGesture, onReaders, label }: { a: LoadedSi
   // A reader is a function: kept as the state itself, not called as an updater.
   const takeA = useCallback((r: FrameReader | null) => setRa(() => r), []);
   const takeB = useCallback((r: FrameReader | null) => setRb(() => r), []);
-  const [overlay, setOverlay] = useState<{ state: "hidden" | "computing" | "ready" | "failed"; changed: number | null }>({ state: "hidden", changed: null });
+  const [overlay, setOverlay] = useState<{ state: "hidden" | "computing" | "ready" | "failed"; changed: number | null; view: string }>({ state: "hidden", changed: null, view: "" });
   useEffect(() => {
     onReaders({ a: ra, b: rb });
   }, [ra, rb, onReaders]);
@@ -555,52 +593,65 @@ function DiffPane({ a, b, vp, w, h, onGesture, onReaders, label }: { a: LoadedSi
     let cancelled = false;
     const dpr = Math.min(window.devicePixelRatio || 1, DIFF_MAX_DPR);
     const view = glView(vp, w, h, dpr, 0);
+    const forView = viewAttr(vp);
+    // A superseded read (the camera moved again) is dropped before it draws.
+    const ac = new AbortController();
     const timer = window.setTimeout(() => {
       setOverlay((o) => ({ ...o, state: "computing" }));
-      Promise.all([ra(view), rb(view)]).then(
+      Promise.all([ra(view, { signal: ac.signal }), rb(view, { signal: ac.signal })]).then(
         ([fa, fb]) => {
           if (cancelled) return;
           const m = changedMask(fa, fb);
           const c = canvasRef.current;
           if (!m || !c) {
-            setOverlay({ state: "failed", changed: null });
+            setOverlay({ state: "failed", changed: null, view: forView });
             return;
           }
           c.width = fa.width;
           c.height = fa.height;
           c.getContext("2d")?.putImageData(new ImageData(overlayPixels(m.mask), fa.width, fa.height), 0, 0);
-          setOverlay({ state: "ready", changed: m.changed });
+          setOverlay({ state: "ready", changed: m.changed, view: forView });
         },
-        () => {
-          if (!cancelled) setOverlay({ state: "failed", changed: null });
+        (err: unknown) => {
+          if (cancelled) return;
+          console.warn("[compare] diff read failed:", err);
+          setOverlay({ state: "failed", changed: null, view: forView });
         },
       );
     }, STILL_MS);
     return () => {
       cancelled = true;
+      ac.abort();
       window.clearTimeout(timer);
       // The camera moves (or the pane goes): the overlay hides until the next still.
-      setOverlay((o) => (o.state === "hidden" ? o : { state: "hidden", changed: o.changed }));
+      setOverlay((o) => (o.state === "hidden" ? o : { ...o, state: "hidden" }));
     };
   }, [vp, ra, rb, w, h]);
 
   return (
     <div ref={ref} data-testid="compare-pane" data-side="diff" data-view={viewAttr(vp)} className="relative overflow-hidden bg-white cursor-grab" style={{ width: w, height: h, touchAction: "none" }}>
-      <div data-testid="compare-layer-a" data-document-hash={a.hash ?? ""} className="absolute inset-0" style={{ zIndex: 1, opacity: 0 }}>
-        <SideLayer s={a} vp={vp} w={w} h={h} onFrameReader={takeA} maxDpr={DIFF_MAX_DPR} />
-      </div>
-      <div data-testid="compare-layer-b" data-document-hash={b.hash ?? ""} className="absolute inset-0" style={{ zIndex: 2 }}>
+      <div data-testid="compare-layer-b" data-document-hash={b.hash ?? ""} className="absolute inset-0" style={{ zIndex: 1 }}>
         <SideLayer s={b} vp={vp} w={w} h={h} onFrameReader={takeB} maxDpr={DIFF_MAX_DPR} />
+      </div>
+      {/* A is read, not shown: its canvas is hidden, its loading, import and failure messages are not. */}
+      <div data-testid="compare-layer-a" data-document-hash={a.hash ?? ""} className="absolute inset-0 pointer-events-none" style={{ zIndex: 2 }}>
+        <SideLayer s={a} vp={vp} w={w} h={h} onFrameReader={takeA} maxDpr={DIFF_MAX_DPR} hidden />
       </div>
       <canvas
         ref={canvasRef}
         data-testid="compare-diff-overlay"
         data-state={overlay.state}
         data-changed={overlay.changed ?? ""}
+        data-for-view={overlay.view}
         className="absolute left-0 top-0 pointer-events-none"
         style={{ zIndex: 3, width: w, height: h, visibility: overlay.state === "ready" ? "visible" : "hidden" }}
       />
       <span className="absolute left-2 top-2 z-10 rounded bg-white/90 px-2 py-0.5 text-xs font-medium text-slate-800 shadow pointer-events-none">{label}</span>
+      {overlay.state === "failed" && (
+        <span data-testid="compare-diff-failed" className="absolute bottom-2 left-2 z-10 rounded bg-white/95 px-2 py-1 text-xs text-red-700 shadow pointer-events-none">
+          {t("colours.compare.diff.failed")}
+        </span>
+      )}
     </div>
   );
 }

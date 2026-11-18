@@ -1804,7 +1804,12 @@ again. `lod: false` turns the screen-only skips off (`minGlyphPx`,
 serialised per layer; while one is in flight the layer's own frames are
 skipped and the read's end asks for the frame again. A layer keeps at most
 two targets (one per size). Reads are 2D only (they reject while `terrain`
-is set) and reject once the layer's engine has gone. The compare view's
+is set) and reject once the layer's engine has gone, a read waiting for its
+detail included. A read whose detail has not come after 60 s rejects (a
+worker that failed never completes), a read whose `signal` was aborted
+before it started rejects without moving the view, and an offscreen target
+that is over the GPU's renderbuffer size or incomplete throws rather than
+reading zeros; each of these ends the read, so the layer's frames resume. The compare view's
 diff reads both of its layers (`docs/map-symbols.md` §8.7 "Compare —
 diff"). Tests: `map-gl/__tests__/readback.test.ts` (the row flip; the
 read's order, the skips off, serialisation and one idle call, the target

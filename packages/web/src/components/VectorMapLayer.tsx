@@ -133,9 +133,11 @@ interface Props {
    * back, top row first; `null` on a reload, a remount and unmount. 2D only (it rejects while `terrain` is set).
    */
   onFrameReader?: ((read: FrameReader | null) => void) | null;
+  /** Drawn but not shown (the compare view's diff reads it, row I8b); its messages still show. */
+  hidden?: boolean;
 }
 
-export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, course = null, onCourse, onCourseSupport, loupe = null, patch = null, patchVersion = "0", mapObjects = null, heightField = null, terrain = null, onTerrain, onTerrainError, onMaxTextureSize, terrainLines = null, onFrameReader = null }: Props) {
+export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, course = null, onCourse, onCourseSupport, loupe = null, patch = null, patchVersion = "0", mapObjects = null, heightField = null, terrain = null, onTerrain, onTerrainError, onMaxTextureSize, terrainLines = null, onFrameReader = null, hidden = false }: Props) {
   const { t } = useTranslation("dashboard");
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<MapGlEngine | null>(null);
@@ -497,7 +499,7 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
         data-mode={mode}
         data-terrain-ready={mode === "3d" && terrainReady ? "true" : undefined}
         data-terrain-lines={mode === "3d" ? drawnLines : undefined}
-        style={{ position: "absolute", left: 0, top: 0, width, height, zIndex, pointerEvents: "none" }}
+        style={{ position: "absolute", left: 0, top: 0, width, height, zIndex, pointerEvents: "none", opacity: hidden ? 0 : undefined }}
       />
       {(status === "error" || status === "webgl") && (
         <MapLayerMessage

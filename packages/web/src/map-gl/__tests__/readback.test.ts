@@ -47,14 +47,18 @@ function harness() {
     };
   };
   let idle = 0;
-  const reader = createFrameReader({ engine, makeTarget, renderOptions: () => ({ colour: () => [0, 0, 0] }), restoreView: () => view(100, 50, 7), onIdle: () => idle++ });
+  const reader = createFrameReader({ engine, makeTarget, renderOptions: () => ({ colour: () => [0, 0, 0] }), restoreView: () => view(100, 50, 7), onIdle: () => idle++, timeoutMs: 50 });
   const settle = async () => {
     for (let i = 0; i < 20; i++) {
       await Promise.resolve();
       while (waiters.length) waiters.shift()!();
     }
   };
-  return { log, reader, settle, made: () => made, disposed, idle: () => idle };
+  /** Lets microtasks run without completing the engine. */
+  const flush = async () => {
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+  };
+  return { log, reader, settle, flush, made: () => made, disposed, idle: () => idle };
 }
 
 describe("createFrameReader", () => {
@@ -110,5 +114,32 @@ describe("createFrameReader", () => {
     await expect(p).rejects.toThrow(/disposed/);
     expect(h.log).not.toContain("render 2x2 minGlyphPx=-");
     await expect(h.reader.read(view(2, 2))).rejects.toThrow(/disposed/);
+  });
+
+  it("rejects a read parked on its detail when disposed, without drawing", async () => {
+    const h = harness();
+    const p = h.reader.read(view(2, 2));
+    await h.flush();
+    expect(h.log).toContain("whenComplete");
+    h.reader.dispose();
+    await expect(p).rejects.toThrow(/disposed/);
+    expect(h.log.some((l) => l.startsWith("render"))).toBe(false);
+  });
+
+  it("times out a read whose detail never comes, sets the view back and goes idle", async () => {
+    const h = harness();
+    const p = h.reader.read(view(2, 2));
+    await expect(p).rejects.toThrow(/timed out/);
+    expect(h.log.at(-1)).toBe("setView 100x50@7");
+    expect(h.reader.busy()).toBe(false);
+    expect(h.idle()).toBe(1);
+  });
+
+  it("rejects an aborted read before it moves the view", async () => {
+    const h = harness();
+    const ac = new AbortController();
+    ac.abort();
+    await expect(h.reader.read(view(2, 2), { signal: ac.signal })).rejects.toThrow(/aborted/);
+    expect(h.log).toEqual([]);
   });
 });

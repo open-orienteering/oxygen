@@ -173,7 +173,10 @@
         "waiting": "Laddar…",
         "scanning": "Letar skillnader… {{done}} av {{total}}",
         "none": "Inga skillnader",
-        "position": "{{n}} av {{count}}"
+        "position": "{{n}} av {{count}}",
+        "failed": "Skillnaden kunde inte ritas här.",
+        "scanFailed": "Det gick inte att leta skillnader.",
+        "retry": "Försök igen"
       }
     },
     "layers": {

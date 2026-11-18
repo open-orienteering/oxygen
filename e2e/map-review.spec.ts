@@ -144,7 +144,9 @@ async function checkDiff(page: Page, changes: boolean): Promise<void> {
     await next.click();
     await expect(status).toHaveAttribute("data-region", "1");
     await expect(pane).not.toHaveAttribute("data-view", before!);
-    // Over the region, once still: changed pixels in the overlay.
+    // Over the region, once still: the overlay recomputed for that view, with changed pixels.
+    const stepped = (await pane.getAttribute("data-view"))!;
+    await expect(overlay).toHaveAttribute("data-for-view", stepped, { timeout: 60000 });
     await expect(overlay).toHaveAttribute("data-state", "ready", { timeout: 60000 });
     expect(Number(await overlay.getAttribute("data-changed"))).toBeGreaterThan(0);
   } else {
