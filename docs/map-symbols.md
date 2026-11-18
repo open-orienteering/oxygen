@@ -1146,9 +1146,15 @@ with `?event=`, nothing to finalise on the matcher's output).
 
 ## 9. Colour stack alignment (03 §6.3)
 
-Import stage 7. Code: `packages/shared/src/import/{colour-class,colour-align}.ts`.
-The source order is the mapper's knock-out order and wins for everything
-they drew; alignment only *identifies*, *inserts* and *flags*.
+Import stage 7. Code: `packages/shared/src/import/{colour-class,colour-align,colour-roles,colour-layers,match-document}.ts`.
+Since `ocad-19` / `omap-12` (row I5) stage 7 builds the stack in one of
+two orders (`matchDocument`'s `colourOrder`, recorded in
+`header.colourOrder`): **`iof`, the default** — the IOF colour layers of
+§9.3, where each colour *use* takes its palette place — or **`source`**,
+§9.2 as it stood until I5: the mapper's knock-out order wins for
+everything they drew, and alignment only *identifies*, *inserts* and
+*flags*. §9.1 is shared by both. The per-map switch between them is row
+I6's (the user's answer 1); until then every import is `iof`.
 
 ### 9.1 Colour classes
 
@@ -1368,14 +1374,16 @@ resolves canonical entries through `paletteIndexOfStack(header.colours)`.
 
 ### 9.3 Canonical layers (slice I): decided with the user (2026-11-17)
 
-Not wired yet: §9.2 above is what the importer does. This section
-records what slice I (`SLICES.md` rows I1–I7) builds and the user's
-answers to its three questions; each row writes its own part out here.
-Built so far: the roles (row I2, "Roles" below), the layered stack
-built from them (row I3, "Layers") and its exceptions (row I4: "Own
-order", "Deviations", "Source order"), which nothing in the importer
-reads yet; the colour-order harness draws every map on the stack and
-classifies every change ("Measured").
+**The importer's default since row I5** (`ocad-19` / `omap-12`); §9.2
+above is the `source` order of answer 1. This section records what slice
+I (`SLICES.md` rows I1–I7) builds and the user's answers to its three
+questions; each row writes its own part out here. Built: the roles (row
+I2, "Roles" below), the layered stack built from them (row I3, "Layers"),
+its exceptions (row I4: "Own order", "Deviations", "Source order") and
+the importer drawing on it (row I5, "In the importer"); the colour-order
+harness draws every map in both orders and classifies every change
+("Measured"). Still to come: the per-map switch and the colour panel
+(I6), per-map deviation overrides in the panel (I7).
 
 **The aim.** A document is drawn on the IOF colour order (§1, 03
 Appendix B) instead of the mapper's table, so the course layer and the
@@ -1464,8 +1472,8 @@ colour but the **use**: one colour reference of one symbol.
 
 #### Roles (row I2)
 
-Built in `packages/shared/src/import/colour-roles.ts`, pure. No importer
-step calls it yet; I3 builds the layers from it.
+Built in `packages/shared/src/import/colour-roles.ts`, pure. I3 builds
+the layers from it; since I5 stage 7 calls it in the `iof` order.
 
 **Uses.** `colourUses(render)` lists every colour reference of a
 symbol's `render` (the keys `colour`, `fill`, `backgroundColour`) as a
@@ -1587,9 +1595,10 @@ a hint makes `black-road-outline`.
 
 #### Layers (row I3)
 
-Built in `packages/shared/src/import/colour-layers.ts`, pure. No importer
-step calls it yet (row I5 wires it into stage 7); the colour-order
-harness takes it as its candidate (`map-rendering.md` §6.5). Row I4's
+Built in `packages/shared/src/import/colour-layers.ts`, pure. Since row
+I5 stage 7 builds the default stack with it ("In the importer" below),
+and the colour-order harness reads the importer's own (`map-rendering.md`
+§6.5). Row I4's
 exceptions are written out after this section ("Own order",
 "Deviations", "Source order"); what this section says of the order is
 the base they start from.
@@ -1666,7 +1675,21 @@ in `aliased` only for step 3). An id with no such colour is carried by
 its row with the most objects, ties to the lowest source index; a needed
 one with no row at all is *inserted* with the palette's CMYK. (I3 took
 the row with the most objects first; I4 changed it so that library
-symbols keep their colour; decided overnight on the user's standing instruction, 2026-11-17, for review.) The other rows of the
+symbols keep their colour; decided overnight on the user's standing instruction, 2026-11-17, for review.)
+**Every id §9.1 identifies is carried, as on the source order** (row I5;
+decided overnight on the user's standing instruction, 2026-11-17, for
+review): until I5 only ids in use and needed ids had a carrier, so the
+layers lost ids the source order has — `white-over-green-brown` on
+`e2e/test.ocd`, `blue100-line` on `e2e/test.xmap` (a blue identified as
+the line blue that draws only areas), `blue50-area` and `white-railway`
+on three club maps — and with them every library entry Map mode could
+materialise there (ISOM 302, 509, 304–306 among them) and every patch
+symbol a re-match would re-resolve (G11). An identified id whose colour
+has no placeable row of that role gets a zero-object row of the colour
+at the id's palette place (origin `identified`, never the colour's
+lowest row, so its other rows keep their ids; the source-order gap does
+not count it). It draws nothing a map draws, so the harness numbers are
+unchanged (2–3 such rows on five of the ten maps). The other rows of the
 role carry no `paletteIds`; their role is in the report. `purpleRole`
 is on the row carrying a purple id. Canonical entries therefore resolve
 exactly as before (`paletteIndexOfStack`), and `courseColourStack`
@@ -1680,7 +1703,13 @@ ties to the highest index (C9, C15), else the palette's. A source purple
 is an ordinary colour: a hint may give it a role (an out-of-bounds area
 drawn in it, `purple-upper`), and then its row stands under the inserted
 row of that role; with none it is a no-role row. An inserted `purple50`
-(ISSprOM) keeps the palette's CMYK.
+(ISSprOM, `purpleRole: "upper"`) takes the same ink as the course purples
+(row I5, carried from I3, which left it with the palette's; decided
+overnight on the user's standing instruction, 2026-11-17, for review):
+§9.2 step 4 gives every inserted row with a purple role the map's purple,
+so a library symbol drawn in it has one ink in both orders. Full
+strength, as §9.2: a 50 % screen of the map's ink would be truer, and
+would be changed in both orders at once.
 
 **Ids.** A source colour's lowest row keeps the colour's id (`src:<n>`);
 its other rows are `src:<n>/<paletteId>`, a no-role row
@@ -1689,12 +1718,12 @@ and since I4 a graphic row `src:<n>/graphic`, a moved part's row
 `src:<n>/<paletteId | none:<place>>/under<k>` (numbered per colour and
 suffix bottom first), a second row of a palette id in a colour whose own
 row of that id went to the source order (a mask)
-`src:<n>/<paletteId>/alias`.
+`src:<n>/<paletteId>/alias`, and since I5 an identified id's row
+`src:<n>/<paletteId>` (or `…/alias`), never the colour's plain id.
 Split and alias rows copy the colour's name, CMYK, `sourceNumber`, spot
 and overprint, so print sees one ink. Inserted rows are
 `<edition>:<paletteId>` with the palette's name, as today
-(`map-document-format.md` §2.1, which lists I3's forms; I5, which writes
-the stack, adds I4's there).
+(`map-document-format.md` §2.1 lists every form).
 
 **Output.** `colours` is the stack, index = draw order.
 `reindex.symbols[i]` gives symbol i's row per colour reference, in
@@ -1706,7 +1735,12 @@ maps colours, not references: the render bridge's proxies).
 
 - `rows[]`: `{ row, source, role, place, origin, objects, symbols,
   graphicObjects, sourceOrdered, ownOrder }`, `origin` one of `use`,
-  `alias`, `insert`, `unreferenced`; `graphicObjects` the objects of
+  `alias`, `insert`, `unreferenced`, `identified` (I5); `objects` what
+  is drawn in the row — the objects of source-drawn symbols referencing
+  it, and on a row carrying a palette id those of library-drawn symbols
+  whose entry draws with it (I5; until I5 a library-drawn symbol counted
+  on its own references' rows, which draw nothing); `symbols` the
+  symbols referencing it; `graphicObjects` the objects of
   `origin: "graphic"` symbols among `objects`; `sourceOrdered` the reason
   a row stands by the source order (`no-role`, `graphic`, `mask`) or
   `null`; `ownOrder` a moved part's row (I4);
@@ -1765,8 +1799,14 @@ source draws them.
 
 **A deviation** is a pair of roles (`upper`, `lower`) with rows that
 something is drawn in — objects of source-drawn symbols referencing the
-row, or library-drawn objects on the row that carries the palette id of
-their reference's role — where the source draws a row of `upper` over a
+row, or library-drawn objects on the row that carries a palette id
+**their library entry draws with** (row I5, carried from I4's review;
+decided overnight on the user's standing instruction, 2026-11-17, for
+review: until I5 the carriers of their source references' roles, which
+differ when the entry uses two ids of one class — a library road whose
+source symbol has no black reference made no outline row "used", and a
+kept road-over-contour deviation did not hold for it; the report's row
+counts and the deviation counts use the same rule) — where the source draws a row of `upper` over a
 row of `lower` (a higher source colour) while the palette ranks `lower`
 above `upper` and the base order (the palette's, with pass 1's moves)
 puts it under too. Its `objects` are the objects drawn in the rows of
@@ -1859,6 +1899,105 @@ I3's placement by kind and settles the carried-over `white-upper`: an
 inserted `white-upper` has no source position, and a roleless row the
 source has on top goes to the lowest gap that fits, under it.
 
+#### In the importer (row I5)
+
+Stage 7 (`matchDocument`, `packages/shared/src/import/match-document.ts`)
+takes `colourOrder: "iof" | "source"` (`DEFAULT_COLOUR_ORDER`, `iof`) and
+`deviations` (keep or drop by key, the I7 mechanism; ignored in `source`).
+Importer bump `ocad-19` / `omap-12`: every pin is re-matched at the
+release (`map:rematch`, `docs/map-import.md` §5). The import worker
+passes no colour options until I6's per-map setting, so every stored
+`ocad-19` / `omap-12` document is `iof` at the defaults.
+
+- **`iof`**: `symbolColourUses` over the matched symbols (their match
+  steers the roles, an applied one makes them `library`), then
+  `buildColourLayers` with stage 7's `needed` (the entries of `auto`
+  matches; an accepted review decision is `auto`), then every symbol's
+  `render` re-indexed per reference (`reindexRenderColours`). Objects,
+  matching and every symbol's fingerprint are as in the `source` order.
+- **`source`**: §9.2 exactly as it stood (`alignColourStack`,
+  `remapRenderColours`).
+- **The header** records the outcome: `colourOrder: { order, kept? }`,
+  `kept` the deviation keys drawn in the map's order, sorted
+  (`map-document-format.md` §2). A setting that changes nothing gives the
+  same bytes; the setting itself stays in the store (I6).
+- **The report's `colourStack`** keeps its fields in both orders
+  (`source`, `inserted`, `aliased`, `unclassified`; `conflicts`,
+  `areasAboveLowerPurple` and `purplesDisplaced` are `[]` in `iof`, where
+  nothing is reused or flagged by §9.2's step 5) and adds `order` and, in
+  `iof`, `layers` — the layered stack's report less `inserted` and
+  `aliased`: `rows`, `split`, `sourceOrdered`, `noRole`, `deviations`,
+  `purpleInk` (`mapImport.review` → `stack.alignment`, for I6's panel).
+- **Warnings** (`docs/map-import.md` §3.7, class `outcome`). Both orders:
+  `COLOUR_UNCLASSIFIED`. `source` only: `COLOUR_ORDER_CONFLICT`,
+  `COLOUR_AREA_ABOVE_LOWER_PURPLE` (§9.2 step 5). `iof` only, one count
+  per entry: `COLOUR_DEVIATION_KEPT` (kept by default, override or
+  implication — the message says which), `COLOUR_DEVIATION_DROPPED`,
+  `COLOUR_DEVIATION_BLOCKED` (wanted kept, could not hold:
+  `blockedBy`), `COLOUR_NO_ROLE` (a roleless row that draws objects),
+  `COLOUR_SOURCE_ORDERED_ABOVE_LOWER_PURPLE` (a source-ordered row above
+  lower purple that draws objects and may hide the course: a mask, a
+  graphic object's colour, a roleless area — a roleless line colour there
+  is where line colours go and is not warned). Decided overnight on the
+  user's standing instruction (2026-11-17), for review.
+- **Never a failed import**: a map whose layers cannot be resolved
+  (`ColourLayersError`: an order whose constraints have a cycle) is built
+  in the `source` order with `COLOUR_LAYERS_FAILED` and
+  `colourOrder.order: "source"`; any other error (a reference outside the
+  table) still throws. Not seen on the ten maps (decided overnight, for
+  review).
+- **Proxies** (objects whose symbol has no IR) draw by ink in the render
+  bridge's default (`render.stackProxyColours`, `map-document-format.md`
+  §8): row 0, the old default, is another colour on the layers — 173
+  objects of the Nacka map would have printed magenta instead of grey.
+  The viewer already drew them so; print and thumbnails now do too, in
+  both orders (decided overnight, for review).
+
+**The consumers do not change**, each tested on an `iof` document
+against the same file in the `source` order: the render bridge (every
+applied match drawn, `canonicalMissing` 0, the same inks per symbol);
+`courseColourStack` (upper white directly under upper purple, lower
+purple over every area row); `materialiseSymbol` / `mapPalette` (every
+entry materialisable on the `source` order is on the layers, in the same
+inks); a patch re-resolved across a pin that moves onto the layers (G11:
+every op kept, its patch symbols materialised again; also through
+`runRematch` from a stored `ocad-18` pin); print (every pass in the ink
+it has in the `source` order, one ink for a split colour); the GL worker
+(the course-completed stack and the course part on a layered document);
+the editor's hit test (a building drawn over its paved area is picked,
+in its ink). The `measure-parity` (B9) and `measure-print` (C7) tools
+the row names were retired with the legacy renderers in E4a
+(`map-rendering.md` §6.4, `course-print.md` §11); the colour-order
+harness through the importer, `measure-import` twice and the print and
+consumer tests above stand in for them (a deviation, decision log).
+
+**Acceptance on the corpus** (ten maps, `map-rendering.md` §6.5 "I5"):
+the harness now imports each map twice through the importer — `source`
+and `iof` — instead of building the layers itself. **64 014 pixels change,
+0 unclassified**: per map and per class exactly I4's numbers
+(deviation-dropped 60 613, mask 3 180, no-role 132, residue 88, layout
+1), so the importer builds the stack the harness built at I4, and the
+rows I5 adds (identified ids, 2–3 on five maps) draw nothing. Roads over
+contours are kept on the eight maps whose tables draw them so, none
+blocked; implied keeps 1–14. `measure-import` over the ten maps: 0
+import errors, every document identical in a second process (10 / 10),
+no `COLOUR_LAYERS_FAILED`, stage 6–7 in 18–72 ms per map; the eight
+unsupported-primitive warnings it reports come from the normaliser
+(stages 3–4) and are the same in either order. **The verdict stands:
+the layered stack is fit to be the importer's default.**
+
+| Test | Covers |
+|---|---|
+| `packages/shared/src/import/__tests__/colour-layers.test.ts` (I5) | every identified id carried, on a zero-object `identified` row of its colour; every palette id of the `source` order present (the badly ordered table, Club-full's); a library-drawn symbol's objects on the rows carrying its entry's ids, its outline carrier a used row in the deviations; an inserted purple 50 % in the course purples' ink, the palette's without a map purple |
+| `packages/shared/src/import/__tests__/match-document.test.ts` (I5) | the §9.2 cases pinned to `source`; in `iof`: the stack is `buildColourLayers`' for the source table, every reference re-indexed onto its own colour, `header.colourOrder` with the kept keys, the report's `order` / `layers`, matching and fingerprints unchanged, every `source` palette id carried, the warnings (deviations, no role, never step 5), an override kept and recorded, overrides ignored in `source`, codec round trip with the same inks per symbol, determinism |
+| `packages/shared/src/import/__tests__/match-document-fallback.test.ts` | `ColourLayersError` → the `source` order with `COLOUR_LAYERS_FAILED`; another error throws |
+| `packages/shared/src/import/__tests__/colour-order-consumers.test.ts` | `courseColourStack`, materialisation of every library entry, a G11 re-resolve onto the layers, print's inks |
+| `packages/shared/src/import/__tests__/report.test.ts`, `map-document/__tests__/codec.test.ts`, `render-bridge.test.ts` | the report's `order` / `layers` and the new codes; `header.colourOrder` round trip; proxies by ink |
+| `packages/api/src/__tests__/import-ocad.test.ts`, `render/__tests__/colour-order-diff.test.ts` | the two OCAD fixtures on the layers (`e2e/colour-layers.ocd`: split brown, building over paved, street over contour, the black path over lower purple); the importer's candidate equal to I4's harness-built one on `e2e/test.ocd` |
+| `packages/api/src/__tests__/integration/{map-import-jobs,map-review,map-rematch}.test.ts` | the stored header's order and the report's layers; `review`'s `stack.alignment`; an `ocad-18` source-order pin re-matched onto the layers with its patch kept and its symbol re-materialised |
+| `packages/web/src/lib/editor/__tests__/symbol-pick.test.ts`, `map-gl/__tests__/worker-course.test.ts` | hit test and GL worker on a layered document |
+| `e2e/map-vector-layer.spec.ts` "on the IOF colour layers" | on `e2e/colour-layers.ocd`: a building over its paved area, the street over the contour, a leg over the open land and under the black path |
+
 #### Measured (rows I3 and I4)
 
 **At I4** (`map-rendering.md` §6.5 "I4", the tables per map and the
@@ -1908,14 +2047,13 @@ the importer's default.
 
 ## 10. Pending in this chapter
 
-- **Canonical layers (§9.3)**: the roles (I2), the layered stack (I3)
-  and its exceptions — own order, deviations, source order (I4) — are
-  built and not yet read by the importer. Rows I5–I7 in `SLICES.md`:
-  the importer wiring and bump (with `map-document-format.md` §2.1's
-  ids for I4's rows, and warnings for `aboveLowerPurple`, kept and
-  blocked deviations), the per-map switch with the review page's colour
-  panel, the per-map deviation overrides. Not in the slice: a club-wide
-  default for which deviations are kept.
+- **Canonical layers (§9.3)**: the importer draws on them by default
+  since I5. Rows I6–I7 in `SLICES.md`: the per-map switch to the
+  `source` order with the review page's colour panel (the setting stored
+  per map and passed to `matchDocument` by every import and re-match),
+  the per-map deviation overrides. Not in the slice: a club-wide default
+  for which deviations are kept; an inserted purple 50 % as a 50 % screen
+  of the map's purple (both orders use it at full strength).
 - Mapper object queries as CRT sources (§8.6 `CRT_QUERY_UNSUPPORTED`)
   and a variant table to Mapper's sub-numbers, if a club needs either.
 - Library variants for the OCAD template conventions (§8.4) if the auto

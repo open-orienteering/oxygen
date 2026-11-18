@@ -68,9 +68,11 @@ const { input, counts, warnings, warningDetails, analysis } = mapImport.ocadToDo
 // warningDetails: one entry per warning emission, for the import report (§3.6); not part of the document
 const matched = mapImport.matchDocument(input, {       // stages 6–7
   library?, edition?, factor?, decisions?,             // overrides; see docs/map-symbols.md §8
+  colourOrder?: "iof" | "source",                      // stage 7; default "iof" (§9.3 "In the importer")
+  deviations?: Record<"upper>lower", "keep" | "drop">, // iof only: per-map overrides (§9.3 "Deviations")
 });
-// matched.input (header.symbols[i].match, header.colours aligned, header.library,
-// header.documentFactor), matched.matching, matched.colourStack, matched.warnings
+// matched.input (header.symbols[i].match, header.colours on the layers or aligned, header.colourOrder,
+// header.library, header.documentFactor), matched.matching, matched.colourStack, matched.warnings
 const bytes = mapDocument.encodeMapDocument(matched.input); // stage 8
 const hash = await mapDocument.mapDocumentHash(bytes);
 ```

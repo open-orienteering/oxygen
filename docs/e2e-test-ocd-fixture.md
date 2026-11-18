@@ -26,6 +26,29 @@ none of that.
 | Text and rectangle | A spot-height value (`603.0`, black 4.3 pt, white line framing 0.1 mm — a fifth colour, `White`) at 62 / −49 mm and a rectangle frame (`850.1`, black 0.25 mm) spanning −73…−61 / −49.5…−46.5 mm, both below the yellow area and the bottom control row. The text auto-matches ISOM 603.b and the frame gets a geometry suggestion, so the fixture still has no unmatched symbol; `import-ocad.test.ts` asserts the halo and the outline (`docs/map-import.md` §3.3). Line text and formatted (box) text are left out to keep the file's consumers unchanged — `buildSymbolTypesOcad()` covers them (a justified, rectangle-framed formatted text with a tab stop, and a line text; `import-ocad.test.ts` runs both through reader → document → stage, B8) |
 | Overprint-cut targets | Two more boulders placed relative to the jittered control layout: one exactly 2.5 mm north of control 79 (on its circle rim) and one exactly on the midpoint of the 79→80 leg — the course-editor E2E builds a course through 79 and 80 and asserts the automatic circle slit and leg gap render |
 
+### `e2e/colour-layers.ocd` (row I5)
+
+The same script also writes `e2e/colour-layers.ocd`
+(`buildColourLayersOcad`, `COLOUR_LAYERS_OCAD` in `scripts/lib/ocad-fixture.mjs`):
+an OCAD 2018 map file (file type "map", 1:10 000, grid 13002 at easting
+510000 / northing 6510000) whose colour table is deliberately badly
+ordered, for the IOF colour layers (`docs/map-symbols.md` §9.3). Top
+first: Yellow, Black, Brown 50 %, Black 50 %, Brown, White. Paper mm:
+
+| Object | Symbol | Where | What it shows |
+|---|---|---|---|
+| Paved area | `501.0`, Brown 50 % fill | 0..30 × 0..30 | under the building on the layers, over it in the table |
+| Building | `521.0`, Black 50 % fill | 10..20 × 10..20 | |
+| Contour | `101.0`, Brown 0.14 mm | y = 50, x −20..60 | |
+| Street | `599.0`, Brown 50 % 0.6 mm (unmatched; the rule gives `brown50-road`) | x = 20, y 35..70 | the brown 50 % split into paved area and street infill; the street over the contour (kept by default) |
+| Open land | `401.0`, Yellow fill | 40..90 × 0..20 | the top of the table; under lower purple on the layers |
+| Path | `505.0`, Black 0.25 mm | y = −10, x −20..90 | under lower purple in the table's order, over it on the layers |
+
+`e2e/map-vector-layer.spec.ts` ("on the IOF colour layers") samples
+those places; `packages/api/src/__tests__/import-ocad.test.ts` pins the
+stack the importer builds from it in both orders. Move an object and
+both follow.
+
 ## Consumers that constrain the format
 
 - `packages/api/src/ocd-course-parser.ts` — Oxygen's own binary parser

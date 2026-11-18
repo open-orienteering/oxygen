@@ -101,7 +101,11 @@ storeImportedDocument(db, { source: { bytes, fileHash, kind, fileName, uploadedB
   factor, symbol / object counts per state, `byMethod`, `scaleAnomalies`)
   and `colourStack` (source count, inserted, aliased, conflicts,
   unclassified; `areasAboveLowerPurple` since `ocad-16` / `omap-9`;
-  `purplesDisplaced` since `ocad-18` / `omap-11`) — `docs/map-symbols.md` §8–§9; since stage 5 (`ocad-5` /
+  `purplesDisplaced` since `ocad-18` / `omap-11`; `order` and, in the `iof`
+  order, `layers` — rows, split, sourceOrdered, noRole, deviations,
+  purpleInk — since `ocad-19` / `omap-12`, §9.3 "In the importer") —
+  `docs/map-symbols.md` §8–§9; the stored `header` summary carries
+  `colourOrder` from then; since stage 5 (`ocad-5` /
   `omap-2`) `georeference` and `north` (field list in
   `docs/map-import.md` §3.8; `north` is the legacy `NorthDetection` with
   the WMM fields at the import date, `asOf`); since `ocad-7`

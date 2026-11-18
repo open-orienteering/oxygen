@@ -1773,7 +1773,9 @@ session) and the text atlas pages the document's strings need (§5.2
 `engine.load` with the document bytes (a copy: the
 original stays with the cache), `{ unmatched: "proxy", proxyColours }`
 (the stack's darkest colour for lines, points and text, its lightest
-non-white for areas), the event's patch (`patch` prop, §5.2 "Object
+non-white for areas — `render.stackProxyColours`, since I5 also the
+render bridge's default, so print and thumbnails draw proxies alike,
+`map-document-format.md` §8), the event's patch (`patch` prop, §5.2 "Object
 identity and the patch") and the current view as `firstView`. A change of
 `patch` goes to `engine.setPatch` without remounting the canvas or
 reloading the document. Every view
@@ -3804,15 +3806,26 @@ first import (`importMapToDocument`, no decisions) and drawn twice
 through `documentRenderInput` → `symbolise` → the reference raster
 (§5.1):
 
-- *source* — the document as the importer built it (§9.2 of
-  `map-symbols.md`: the mapper's table, purples placed by rule);
-- *candidate* — the same document on another stack. The candidate is a
+- *source* — the document imported in the `source` colour order (§9.2 of
+  `map-symbols.md`: the mapper's table, purples placed by rule; since
+  I5, `colourOrder: "source"`, which is no longer the importer's
+  default);
+- *candidate* — the same map on another stack. The candidate is a
   parameter of the tool (`--candidate`): `layers` (the default, from I3)
   or `permutation` (I1's baseline).
 
   **`layers`** is the layered stack (`map-symbols.md` §9.3 "Layers",
-  `buildColourLayers`), built from the imported document until I5 builds
-  it in stage 7 (`layeredCandidate`): the source table is the stack's
+  `buildColourLayers`). **Since I5 it is the importer's own**: the same
+  file imported a second time in the default `iof` order
+  (`importedCandidate`): rows correspond by colour id (a source colour
+  keeps `src:<n>` on its lowest row of its own, an inserted row its
+  `<edition>:<paletteId>`), else by the palette id a source row carries,
+  and the layers are named from the import report's `colourStack.layers`.
+  A map whose `iof` import falls back to the source order
+  (`COLOUR_LAYERS_FAILED`) is a map error. Until I5 the harness built the
+  stack from the imported document itself (`layeredCandidate`, kept for
+  the unit tests' hand-made stage 7 documents, and shown equal to the
+  importer's on `e2e/test.ocd`): the source table is the stack's
   rows with a `sourceNumber` (stage 7 inserts rows without one and never
   reorders the source's; `sourceTableOf`), each source symbol's IR is
   mapped back onto it, roles are read from the symbols' matches
@@ -3820,7 +3833,9 @@ through `documentRenderInput` → `symbolise` → the reference raster
   `needed` from the applied ones, and every source
   symbol is re-indexed per reference (`reindexRenderColours`). Canonical
   symbols follow their palette ids; proxy-drawn objects take the row
-  source row 0 became (`rowOfAligned`). From I4 the stack has its
+  source row 0 became (`rowOfAligned`; the source drawing passes its
+  proxies row 0 explicitly, I1's rule, since the bridge's own default
+  goes by ink from I5, `map-document-format.md` §8). From I4 the stack has its
   exceptions (own order, deviations at their defaults, source order;
   `map-symbols.md` §9.3); the harness passes no overrides.
 
@@ -4190,6 +4205,21 @@ unclassified 0. Reading the tables:
 The run took 8 min (Club-full and the Nacka map 2.6 and 3.2 min: fewer
 tiles change, so fewer paint images).
 
+**I5: the importer builds the stack (2026-11-18).** The same ten maps
+and settings, `ocad-19` / `omap-12`, the candidate the importer's own
+`iof` import (`importedCandidate`), the source the `source` import,
+`scripts/colour-order-classes.json` unchanged. **The gate holds: 0 of
+64 014 changed pixels unclassified, exit 0** — and every map's changed
+pixels and classes are I4's to the pixel (the first table above), so
+the importer builds exactly the stack the harness built at I4. What I5
+adds to the stack draws nothing a map draws: rows carrying identified
+palette ids (`map-symbols.md` §9.3 "Palette ids"; Sprint 67 → 69 rows,
+Club-full 110 → 113, Club-2026 90 → 93, ski-O map 92 → 94, Nacka map
+111 → 114, the others unchanged); and a library-drawn symbol now counts
+on its entry's palette ids, which leaves every map's kept, implied,
+blocked and dropped deviations as in the second table. The run took
+7 min.
+
 A run of the ten maps takes 8 to 20 min on the development machine,
 by how much changes (Club-full and the Nacka map, 460 tiles each, the
 longest); paint images, peeling and the 3× fine view are drawn only for
@@ -4270,11 +4300,6 @@ The shared module is exported as a namespace: `import { render } from
 
 ## 8. Pending in this chapter
 
-- **Colour-order parity (§6.5)**: the layered candidate built by stage 7
-  itself instead of from the imported document, and the gate at 0
-  unclassified kept on the ten maps after the importer bump (I5). I4
-  closed it on the stack built from the imported document, with the
-  committed `scripts/colour-order-classes.json`.
 - **Alpha: a translucent corridor band** (`docs/course-layer.md` §10.2,
   F2). `LegProps.corridor.whiteOpacity` is stored but drawn opaque: the
   band is a clip region, which removes the map wholly. A band below 1
