@@ -4,6 +4,7 @@
  *   GET /api/map-documents/:hash/thumbnail.png
  *   GET /api/map-documents/:hash/symbols/:idx.png
  *   GET /api/map-documents/:hash/colour-order/:order.png   (the colour panel's picture, §4.5)
+ *   GET /api/map-documents/:hash/colour-order/:order.json  (that order's document, for the compare view, §4.5)
  *   GET /api/library/:libraryId/:version/:code.png
  *
  * Immutable like the document route: the URL names the content (a
@@ -29,7 +30,8 @@ import {
   stripPng,
 } from "./previews.js";
 import { identity, MAP_DOCUMENT_CACHE_CONTROL, matchesEtag, parseDocumentHash, requireDocumentAccess } from "./routes.js";
-import { COLOUR_PICTURE_KIND, colourPicture, parseColourOrder, parsePictureDeviations } from "./colour-pictures.js";
+import type { ColourOrder } from "./colour-settings.js";
+import { COLOUR_PICTURE_KIND, colourOrderDocument, colourPicture, parseColourOrderFile, parsePictureDeviations } from "./colour-pictures.js";
 
 export const LIBRARY_PREVIEW_CACHE_CONTROL = "public, max-age=31536000, immutable";
 
@@ -37,6 +39,18 @@ function sendPng(req: FastifyRequest, reply: FastifyReply, png: Buffer, etag: st
   void reply.header("Content-Type", "image/png").header("Cache-Control", cacheControl).header("ETag", etag);
   if (matchesEtag(req.headers["if-none-match"], etag)) return reply.code(304).send();
   return reply.header("Content-Length", String(png.byteLength)).send(png);
+}
+
+async function colourOrderDocumentRoute(req: FastifyRequest<{ Querystring: { deviations?: string } }>, reply: FastifyReply, hash: string, order: ColourOrder): Promise<FastifyReply> {
+  const deviations = parsePictureDeviations(typeof req.query.deviations === "string" ? req.query.deviations : undefined);
+  if (deviations === null) return reply.code(400).send({ error: "Invalid deviations" });
+  if (!(await requireDocumentAccess(req, reply, hash))) return reply;
+  const result = await colourOrderDocument(prisma(), hash, order, { startedBy: (await identity(req)).user?.id ?? null, deviations });
+  void reply.header("Cache-Control", "no-store");
+  if ("failed" in result) return reply.code(502).send({ error: `No document: ${result.failed}` });
+  if ("pending" in result) return reply.code(503).header("Retry-After", "5").send({ error: "The document is being imported; ask again" });
+  if ("missing" in result) return reply.code(404).send({ error: "Unknown document" });
+  return reply.send({ documentHash: result.documentHash });
 }
 
 export function registerMapPreviewRoutes(server: FastifyInstance): void {
@@ -63,12 +77,15 @@ export function registerMapPreviewRoutes(server: FastifyInstance): void {
 
   // The before / after picture (docs/map-symbols.md §8.7): the other order may need an import, so a slow one is a 503.
   // `?deviations=` (row I7): the map's overrides for a `source` document's IOF picture, part of the picture's key.
+  // `.json` (row I8a): the document that order gives — `{ documentHash }`, never cached (an import may change the answer's
+  // availability, and the requester's job row is part of it).
   server.get<{ Params: { hash: string; file: string }; Querystring: { deviations?: string } }>("/api/map-documents/:hash/colour-order/:file", async (req, reply) => {
     const hash = parseDocumentHash(req.params.hash);
     if (!hash) return reply.code(400).send({ error: "Invalid document hash" });
-    const raw = stripPng(req.params.file);
-    const order = raw === null ? null : parseColourOrder(raw);
-    if (order === null) return reply.code(400).send({ error: "Invalid colour order" });
+    const file = parseColourOrderFile(req.params.file);
+    if (file === null) return reply.code(400).send({ error: "Invalid colour order" });
+    if (file.format === "json") return colourOrderDocumentRoute(req, reply, hash, file.order);
+    const { order } = file;
     const deviations = parsePictureDeviations(typeof req.query.deviations === "string" ? req.query.deviations : undefined);
     if (deviations === null) return reply.code(400).send({ error: "Invalid deviations" });
     if (!(await requireDocumentAccess(req, reply, hash))) return reply;

@@ -24,7 +24,7 @@ import {
   sameColourSettings,
   withDeviationChoice,
 } from "../map-store/colour-settings.js";
-import { colourPictureKey, parsePictureDeviations } from "../map-store/colour-pictures.js";
+import { colourPictureKey, parseColourOrderFile, parsePictureDeviations } from "../map-store/colour-pictures.js";
 import { buildColourReview, colourPictureUrl, roleName } from "../map-store/review-colours.js";
 
 const fixture = (name: string) => readFileSync(fileURLToPath(new URL(`../../../../e2e/${name}`, import.meta.url)));
@@ -182,6 +182,12 @@ describe("the panel's overrides and the picture's key (row I7)", () => {
     });
     expect(buildColourReview(HASH, source.header, source.report, { order: "source", deviations: {} }).pictures.iof).toBe(`/api/map-documents/${HASH}/colour-order/iof.png`);
     expect(buildColourReview(HASH, iof.header, iof.report, { order: "iof", deviations: { [ROAD]: "drop" } }).pictures.iof).toBe(`/api/map-documents/${HASH}/colour-order/iof.png`);
+  });
+
+  it("parses the colour-order route's file name: the picture or the document (row I8a)", () => {
+    expect(parseColourOrderFile("iof.png")).toEqual({ order: "iof", format: "png" });
+    expect(parseColourOrderFile("source.json")).toEqual({ order: "source", format: "json" });
+    for (const bad of ["iof", "mapper.json", "iof.jpg", ".json", "iof.png.json", "IOF.png"]) expect(parseColourOrderFile(bad)).toBeNull();
   });
 
   it("parses the picture's deviations query and keys the picture by it", () => {

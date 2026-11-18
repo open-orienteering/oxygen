@@ -35,6 +35,13 @@ export function parseColourOrder(raw: string): ColourOrder | null {
   return raw === "iof" || raw === "source" ? raw : null;
 }
 
+/** The colour-order route's file name (§4.5): `iof.png` / `source.png` the picture, `.json` the document (row I8a). */
+export function parseColourOrderFile(file: string): { order: ColourOrder; format: "png" | "json" } | null {
+  const m = /^(.*)\.(png|json)$/.exec(file);
+  const order = m ? parseColourOrder(m[1]!) : null;
+  return order && m ? { order, format: m[2] as "png" | "json" } : null;
+}
+
 /**
  * The overrides a picture is drawn with, as the `deviations` query carries
  * them (row I7): `upper>lower:keep,upper>lower:drop`, normalised (choices
@@ -117,7 +124,7 @@ const ownOrderOf = (row: { header: unknown }): ColourOrder => (row.header as { c
 
 /**
  * The document the switch to `order` gives for a stored document (§4.5;
- * row I8's compare view): the same source, corrections and overrides, the
+ * row I8a's compare view): the same source, corrections and overrides, the
  * other order — a `source` document lists no deviations, so its IOF side
  * takes `asked` (the map's overrides, row I7). Found by dedup, by waiting
  * for a running job without a target in that setting, or imported by one
@@ -203,40 +210,39 @@ export async function colourPicture(db: PrismaClient, hash: string, order: Colou
   }
 }
 
-export type OtherOrderResult =
-  | { state: "ready"; documentHash: string; order: ColourOrder }
-  | { state: "pending" }
-  | { state: "failed"; message: string }
-  | { state: "missing" };
+export type ColourOrderDocumentResult = { documentHash: string } | { pending: true } | { missing: true } | { failed: string };
 
 /**
- * The document the colour switch gives for document `hash` — its other
- * order, with `deviations` (the map's overrides) on a `source` document's
- * IOF side — for row I8's compare view: the picture's import without the
- * picture (§4.5). The same failure memory and wait as the picture: a
- * failed import is not started again for a while; past `waitMs` the work
- * goes on and `{ pending }` says to ask again.
+ * The document the colour switch to `order` gives for document `hash`
+ * (docs/map-storage.md §4.5 "The other order's document"; row I8a's
+ * compare view): the picture's import without the picture. Its own order
+ * is the document itself, no job. The other order: with `deviations` (the
+ * map's overrides) on a `source` document's IOF side, found by dedup or
+ * imported (`started_by` the requester). The same failure memory and wait
+ * as the picture: a failed import is not started again for a while; past
+ * `waitMs` the work goes on and `{ pending }` says to ask again.
  */
-export async function otherOrderDocument(db: PrismaClient, hash: string, opts: { startedBy: string | null; waitMs?: number; deviations?: Record<string, DeviationChoice> }): Promise<OtherOrderResult> {
+export async function colourOrderDocument(db: PrismaClient, hash: string, order: ColourOrder, opts: { startedBy: string | null; waitMs?: number; deviations?: Record<string, DeviationChoice> }): Promise<ColourOrderDocumentResult> {
   const row = await db.mapDocument.findUnique({ where: { hash }, select: { sourceHash: true, patch: true, report: true, header: true } });
-  if (!row) return { state: "missing" };
-  const order: ColourOrder = ownOrderOf(row) === "iof" ? "source" : "iof";
+  if (!row) return { missing: true };
+  if (ownOrderOf(row) === order) return { documentHash: hash };
   const asked = await pictureOverrides(db, row, order, opts.deviations);
-  const id = `${hash}/other/${colourPictureKey(order, asked)}/${opts.startedBy ?? ""}`;
+  // Per requester: the work ends with a job row of theirs (§4.2's own-job clause).
+  const id = `${hash}/document/${colourPictureKey(order, asked)}/${opts.startedBy ?? ""}`;
   const failed = failures.get(id);
-  if (failed && Date.now() - failed.at < COLOUR_PICTURE_FAILURE_TTL_MS) return { state: "failed", message: failed.message };
+  if (failed && Date.now() - failed.at < COLOUR_PICTURE_FAILURE_TTL_MS) return { failed: failed.message };
   const work = once<string>(id, async () => (await importOtherOrder(db, row, order, opts.startedBy, asked)).hash);
   const settled = work.then(
-    (documentHash): OtherOrderResult => (documentHash ? { state: "ready", documentHash, order } : { state: "missing" }),
-    (err: unknown): OtherOrderResult => {
+    (documentHash): ColourOrderDocumentResult => (documentHash ? { documentHash } : { missing: true }),
+    (err: unknown): ColourOrderDocumentResult => {
       const message = err instanceof Error ? err.message : String(err);
       failures.set(id, { at: Date.now(), message });
-      console.error(`[map-previews] other order of ${hash}:`, message);
-      return { state: "failed", message };
+      console.error(`[map-previews] ${order} document of ${hash}:`, message);
+      return { failed: message };
     },
   );
   let timer: NodeJS.Timeout | undefined;
-  const timeout = new Promise<OtherOrderResult>((resolve) => { timer = setTimeout(() => resolve({ state: "pending" }), opts.waitMs ?? colourPictureWaitMs()); });
+  const timeout = new Promise<ColourOrderDocumentResult>((resolve) => { timer = setTimeout(() => resolve({ pending: true }), opts.waitMs ?? colourPictureWaitMs()); });
   try {
     return await Promise.race([settled, timeout]);
   } finally {
