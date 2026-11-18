@@ -15,7 +15,8 @@ implemented and marks what is still pending.
  4 normalise    source model → objects, symbols, colours, georef, warnings shared     done (OCAD §3; OMAP §4; symbol IR §3.3 / §4.3)
  5 analyse      bounds, north, fonts, feature usage                       shared     bounds, georeference, north (§3.8); fonts and feature usage pending
  6 match        03 §6.5 staged matcher → SymbolMatch[]                    shared     done (docs/map-symbols.md §8); club decisions as stage 1 (§8.5); ISSkiOM overlay candidates on every document (§8.2, §12)
- 7 align        colour stack alignment (03 §6.3)                          shared     done (docs/map-symbols.md §9); ISSkiOM's palette rows in every stack (§9.2 step 4, §12.3)
+ 7 align        colour stack: the IOF colour layers (default) or the     shared     done (docs/map-symbols.md §9.3 "In the importer", I5; §9.2 the `source` order); ISSkiOM's palette rows in every stack (§12.3)
+                mapper's table (`colourOrder`, 03 §6.3)
  8 encode       a club version's patch baked (G12a), then the 02 codec    shared     done (bake: docs/map-patches.md §5.2)
                 → bytes; sha256 → documentHash
  9 store        map_sources + map_documents rows, event pin, report      api        done, as an import job in a worker thread (docs/map-storage.md §3, §6)
@@ -162,7 +163,11 @@ type ReviewDecision = { symbolIdx; accept: canonicalId } | { symbolIdx; unmatch:
   document (current importer, current library release, current
   decisions); `stack.colours` is the header's colour stack and
   `stack.alignment` the report's `colourStack` summary (since `ocad-18` /
-  `omap-11` with `purplesDisplaced`, `docs/map-symbols.md` §9.2 step 4).
+  `omap-11` with `purplesDisplaced`, `docs/map-symbols.md` §9.2 step 4;
+  since `ocad-19` / `omap-12` with `order` and, in the `iof` order,
+  `layers` — the layered stack's rows, splits, source-ordered and roleless
+  rows, deviations and purple ink, §9.3 "In the importer"; the review
+  page's colour panel is row I6).
 - `decide` validates every decision against the document (index exists,
   a source symbol with a render, an accepted id is an entry of the
   document's library or of an overlay library — `mapImport.isDocumentEntryId`,
@@ -542,9 +547,15 @@ entry per code with a count:
 | `SYMBOL_UNMATCHED` | source symbols with a render but no canonical match (state `unmatched`, method `none`); drawn from their own definition. Template `variant`s and render-less symbols are not counted. |
 | `SYMBOL_SCALE_ANOMALY` | an exact-code line fits its entry only at a different enlargement than the document's factor (`matching.scaleAnomalies`) |
 | `DECISION_UNKNOWN_ENTRY` | a `SymbolDecision` names a library entry id that does not exist |
-| `COLOUR_ORDER_CONFLICT` | the source stacks two palette colours in the opposite order to the palette, or a used colour on the wrong side of the placed lower purple (`colourStack.conflicts`, `docs/map-symbols.md` §9.2 step 5); the source order is kept. A source purple displaced by the placed course purples (C15, `colourStack.purplesDisplaced`) takes no side and is never named |
-| `COLOUR_AREA_ABOVE_LOWER_PURPLE` | a used area colour is drawn above the placed lower purple and hides course circles and lines under it (`colourStack.areasAboveLowerPurple`, `docs/map-symbols.md` §9.2 step 5); the source order is kept. Since lower purple is placed by rule on every import (C15) it remains only where no gap in the source order is clean |
-| `COLOUR_UNCLASSIFIED` | a colour used by symbols is not an IOF colour (`colourStack.unclassified`); its symbols stay as drawn |
+| `COLOUR_ORDER_CONFLICT` | `source` order only: the source stacks two palette colours in the opposite order to the palette, or a used colour on the wrong side of the placed lower purple (`colourStack.conflicts`, `docs/map-symbols.md` §9.2 step 5); the source order is kept. A source purple displaced by the placed course purples (C15, `colourStack.purplesDisplaced`) takes no side and is never named |
+| `COLOUR_AREA_ABOVE_LOWER_PURPLE` | `source` order only: a used area colour is drawn above the placed lower purple and hides course circles and lines under it (`colourStack.areasAboveLowerPurple`, `docs/map-symbols.md` §9.2 step 5); the source order is kept. Since lower purple is placed by rule on every import (C15) it remains only where no gap in the source order is clean |
+| `COLOUR_UNCLASSIFIED` | both orders: a colour used by symbols is not an IOF colour (`colourStack.unclassified`); its symbols stay as drawn |
+| `COLOUR_DEVIATION_KEPT` | `iof` order (the default, row I5): one per deviation drawn in the map's own order — by default (roads over contours), by override, or implied by another kept one (`colourStack.layers.deviations`, `docs/map-symbols.md` §9.3 "Deviations"); the message names the pair and why |
+| `COLOUR_DEVIATION_DROPPED` | `iof`: one per deviation drawn in the IOF order, by default or by override |
+| `COLOUR_DEVIATION_BLOCKED` | `iof`: one per deviation wanted kept that cannot hold with the order of the roles the message lists (`blockedBy`); drawn in the IOF order |
+| `COLOUR_NO_ROLE` | `iof`: one per row of uses with no IOF layer that draws objects (`colourStack.layers.noRole`); placed by the map's own order |
+| `COLOUR_SOURCE_ORDERED_ABOVE_LOWER_PURPLE` | `iof`: one per row placed by the map's own order above lower purple that draws objects and may hide the course — a mask white, a graphic object's colour, an area with no role (`colourStack.layers.sourceOrdered[].aboveLowerPurple`, §9.3 "Source order"); a roleless line colour there is where the palette puts line colours and is not warned |
+| `COLOUR_LAYERS_FAILED` | `iof`: the layered stack could not be built for this map (an order whose constraints cannot be resolved); the document is built in the `source` order instead (`header.colourOrder.order: "source"`) and the import does not fail. Not seen on the corpus |
 
 One more, added at stage 8 by the bake to the import report only (not
 the header; `mapImport.patchIssueWarnings`, class `outcome`):
@@ -830,7 +841,7 @@ non-contiguous priorities). The rest are shared with §3.6–3.7.
 
 ## 5. Header provenance
 
-`format.importer` is `"ocad-18"` for OCAD sources (`OCAD_IMPORTER_VERSION`;
+`format.importer` is `"ocad-19"` for OCAD sources (`OCAD_IMPORTER_VERSION`;
 `ocad-1` had `render: null` for every source symbol, `ocad-2` carried the
 upload name in the header, `ocad-3` had no matcher, `ocad-4` stored
 ScalePar `d` as `declinationDeg`, ignored `e` and had no
@@ -847,12 +858,12 @@ reference as `SYMBOL_FEATURE_DROPPED` and kept no per-symbol warning detail
 — §3.3, §3.6, A14, `ocad-10` dropped text shadows, vertical text alignment,
 rectangle corner radii and framing lines narrower than the main line,
 shortened pointed lines instead of tapering them and reported a rectangle
-grid as `SYMBOL_FEATURE_DROPPED`, `ocad-11` is the A13 importer that reads them — §3.3, A13; `ocad-11` also fingerprinted Mapper's inverted railway as unmatched, `ocad-12` reads it as 509's construction — `docs/map-symbols.md` §8.1, A15; `ocad-12` had no tab stops or rectangle frame and warned line text, `ocad-13` is the B8 importer — §3.3; `ocad-14` fingerprints the main stroke's cap / join — `docs/map-symbols.md` §8.1, C9; `ocad-14` drew north-oriented point symbols north-up even where their objects carry an angle, `ocad-15` turns them — §3.3, C10; `ocad-15` anchored an inserted lower purple under the first line or point colour, so one dark-green colour at the bottom of the area block put it under every area, and mapped an "area"-named dark green to the hedge line colour — `docs/map-symbols.md` §9, C14; `ocad-16` had no ISSkiOM overlay — no overlay candidates in stage 6, none of the overlay's palette rows inserted in stage 7 — `docs/map-symbols.md` §8.2, §9.2, §12, G21; `ocad-17` took a source purple as the course purple wherever it stood — a lower candidate under the area block hid circles and legs under yellow and green, an upper one at the bottom of the table put the control numbers under the map — `ocad-18` places both by rule and leaves such a purple in place as an ordinary colour, `docs/map-symbols.md` §9.2 step 4, C15) and `"omap-11"`
+grid as `SYMBOL_FEATURE_DROPPED`, `ocad-11` is the A13 importer that reads them — §3.3, A13; `ocad-11` also fingerprinted Mapper's inverted railway as unmatched, `ocad-12` reads it as 509's construction — `docs/map-symbols.md` §8.1, A15; `ocad-12` had no tab stops or rectangle frame and warned line text, `ocad-13` is the B8 importer — §3.3; `ocad-14` fingerprints the main stroke's cap / join — `docs/map-symbols.md` §8.1, C9; `ocad-14` drew north-oriented point symbols north-up even where their objects carry an angle, `ocad-15` turns them — §3.3, C10; `ocad-15` anchored an inserted lower purple under the first line or point colour, so one dark-green colour at the bottom of the area block put it under every area, and mapped an "area"-named dark green to the hedge line colour — `docs/map-symbols.md` §9, C14; `ocad-16` had no ISSkiOM overlay — no overlay candidates in stage 6, none of the overlay's palette rows inserted in stage 7 — `docs/map-symbols.md` §8.2, §9.2, §12, G21; `ocad-17` took a source purple as the course purple wherever it stood — a lower candidate under the area block hid circles and legs under yellow and green, an upper one at the bottom of the table put the control numbers under the map — `ocad-18` places both by rule and leaves such a purple in place as an ordinary colour, `docs/map-symbols.md` §9.2 step 4, C15; `ocad-18` drew every map in its own colour order, `ocad-19` draws it on the IOF colour layers by default and records the order in `header.colourOrder` — `docs/map-symbols.md` §9.3 "In the importer", I5) and `"omap-12"`
 for Mapper sources (`OMAP_IMPORTER_VERSION`; `omap-1` stored `paperOrigin`
 unrounded, `omap-2` is `ocad-7`'s matcher, `omap-3` reported stale
 combined-part references as `SYMBOL_FEATURE_DROPPED` and kept no
 per-symbol detail, `omap-4` drew pointed caps untapered and dropped shadow
-framing and a combined symbol's second border pair — §4.3, A13, `omap-5` is the A13 importer, `omap-6` is `ocad-12`'s matcher, A15; `omap-6` kept a box text's anchor only and had no tab stops, `omap-7` is the B8 importer — §4.2, §4.3; `omap-8` is `ocad-14`'s matcher, C9; `omap-9` is `ocad-16`'s colour alignment, C14; `omap-10` is `ocad-17`'s matcher and alignment, G21; `omap-11` is `ocad-18`'s colour alignment, C15). A header `warnings` change alone bumps the
+framing and a combined symbol's second border pair — §4.3, A13, `omap-5` is the A13 importer, `omap-6` is `ocad-12`'s matcher, A15; `omap-6` kept a box text's anchor only and had no tab stops, `omap-7` is the B8 importer — §4.2, §4.3; `omap-8` is `ocad-14`'s matcher, C9; `omap-9` is `ocad-16`'s colour alignment, C14; `omap-10` is `ocad-17`'s matcher and alignment, G21; `omap-11` is `ocad-18`'s colour alignment, C15; `omap-12` is `ocad-19`'s colour layers, I5). A header `warnings` change alone bumps the
 version — `ocad-6` did — while the report-only `warningDetails` would not.
 Documents of either earlier version have no `georeference` / `north` in
 their report; the dedup only reuses current-version documents, so the
@@ -924,7 +935,9 @@ document hash is identical on two machines.
 | Unit + integration + E2E (api) | see `docs/map-storage.md` §10 (height-field rows) | stage 10: height-field row written by the job and by the dedup short-cut, a row without bytes without contours, non-fatal failure, cap |
 | Script (scripts) | `scripts/__tests__/ocad-fixture.test.mjs` (`pnpm test:scripts`) | the OCAD fixture writer: `e2e/test.ocd` byte-identical on regeneration, its framed text and rectangle read back by the reader; the symbol-types file (`buildSymbolTypesOcad`, also the fork's `test/data/symbol-types.ocd`) read back field by field — text framing, line text, rectangles with radius and grid; the stale-border file (`buildStaleBorderOcad`: an area whose border is itself, one whose border is missing) read back; the rotated-points file (`buildRotatedPointsOcad`, C10): each symbol's rotatable flag and each object's angle read back — the same file is drawn against the legacy in `packages/api/src/render/__tests__/parity.test.ts` (`docs/map-rendering.md` §6.4) |
 | Reader (fork) | `open-orienteering/ocad2geojson` `test/reader.test.js`, `test/svg.test.js` (`npm test`) | text framing on the real `fences.ocd` (902.1: mode 2, colour 12, width 10) and every new field on `symbol-types.ocd`; `ocadToSvg` reads but does not draw line-text and rectangle objects |
-| Script (scripts) | `scripts/__tests__/measure-import.test.mjs` (`pnpm test:scripts`) | `scripts/measure-import.mjs` over the two fixtures: hashes written and found again in a second process, a changed hash fails as a determinism failure, the Mapper fixture's four unsupported-primitive codes fail the run and print their per-emission detail, a stale area-border reference is reported per symbol (`~`) without failing the run, lower and upper purple's place per map (`source` / `inserted`, with the displaced source purples — C15), the `ski-o` line (the four overlay rows inserted into `test.ocd`, the mask directly below lower purple, the track inks directly below upper purple), usage errors exit 2 |
+| Script (scripts) | `scripts/__tests__/measure-import.test.mjs` (`pnpm test:scripts`) | `scripts/measure-import.mjs` over the two fixtures: hashes written and found again in a second process, a changed hash fails as a determinism failure, the Mapper fixture's four unsupported-primitive codes fail the run and print their per-emission detail, a stale area-border reference is reported per symbol (`~`) without failing the run, lower and upper purple's place per map (`source` / `inserted`, with the displaced source purples — C15), the `ski-o` line (the four overlay rows inserted into `test.ocd`, the mask directly below lower purple, the track inks directly below upper purple), usage errors exit 2; row I5: the `order` line, the `layers` lines and both course purples inserted with no conflicts in the default `iof` order, `--colour-order source` for §9.2's lines, a bad order exits 2 |
+| Unit (shared) | `packages/shared/src/import/__tests__/match-document.test.ts`, `match-document-fallback.test.ts`, `colour-order-consumers.test.ts` | row I5: stage 7 in the `iof` order — the stack is `buildColourLayers`' for the source table, every reference re-indexed onto its own colour, `header.colourOrder` and the report's `order` / `layers`, matching and fingerprints unchanged, every palette id of the `source` order carried, the `iof` warnings (deviations, no role) and never §9.2's step 5, overrides, codec round trip and the same inks per symbol in both orders, determinism; the fallback to the `source` order with `COLOUR_LAYERS_FAILED`; the consumers (course stack, materialisation, a patch re-resolved onto the layers, print's inks) |
+| Unit (api) | `packages/api/src/__tests__/import-ocad.test.ts` (row I5) | `e2e/test.ocd` on the layers by default (no conflicts, the blue line colour above lower purple, the yellow under it, every source-order palette id present); `e2e/colour-layers.ocd` (byte-identical to `buildColourLayersOcad`): the brown 50 % split into paved area and street infill, building over paved, street over contour (kept by default), yellow and paved under lower purple, the black path over it; in the `source` order the paved brown over the building and lower purple over the black path (a conflict) |
 
 **S0 corpus check** (09 §7: the whole corpus and every OMAP construct in
 the sample set, deterministically). `scripts/measure-import.mjs` runs
@@ -933,7 +946,14 @@ import worker's path (`importMapToDocument` with no decisions, then
 `buildImportReport`) and prints per map the document hash,
 `format.importer`, library version, counts, the warning-code histogram,
 symbol and object matching outcomes, where lower purple sits in the
-aligned stack (`purple` line, `docs/map-symbols.md` §9.2), where each of
+aligned stack (`purple` line, `docs/map-symbols.md` §9.2), the colour
+order the stack was built in (`order` line; `--colour-order iof|source`,
+default `iof` as the import worker, row I5) and in the `iof` order what
+the layered stack did (`layers` lines: rows, split colours, roleless and
+unreferenced rows, source-ordered rows by reason and above lower purple,
+own-order rows, deviations kept / implied / blocked / dropped, inserted
+and aliased ids; palette ids and numbers only, `scripts/lib/colour-layers-summary.mjs`,
+shared with the colour-order harness), where each of
 the ISSkiOM overlay's palette rows comes from (`ski-o` line: `inserted`,
 `aliased` or the source's own colour, with its index; §12.3) and the
 report's `georeference` / `north` fields (§3.8). It exits non-zero on an import error, on any
@@ -952,7 +972,7 @@ run; the unsupported ones are listed the same way (`!` lines).
 | `by-design` | `TEMPLATES_DROPPED`, `LAYOUT_OBJECTS_DROPPED`, `OBJECT_TAGS_DROPPED`, `PARTS_MERGED`, `HELPER_SYMBOLS_HIDDEN`, `RECTANGLE_GRID_DROPPED` | dropped on purpose |
 | `source-error` | `SYMBOL_REFERENCE_INVALID`, `MISSING_SYMBOL`, `DUPLICATE_SYMBOL_NUMBER`, `SYMBOL_COLOUR_UNKNOWN`, `SYMBOL_EMPTY`, `EMPTY_GEOMETRY_DROPPED`, `EMPTY_TEXT_DROPPED`, `MAP_SCALE_MISSING`, `CRS_UNRESOLVED` | the file is inconsistent; nothing is missing from the document that the file defines |
 | `substitution` | `FONT_SUBSTITUTED` | a font was replaced |
-| `outcome` | `SYMBOL_UNMATCHED`, `SYMBOL_SCALE_ANOMALY`, `DECISION_UNKNOWN_ENTRY`, `COLOUR_ORDER_CONFLICT`, `COLOUR_AREA_ABOVE_LOWER_PURPLE`, `COLOUR_UNCLASSIFIED`, the `CRT_*` codes | a matching, colour-stack, decision or CRT result |
+| `outcome` | `SYMBOL_UNMATCHED`, `SYMBOL_SCALE_ANOMALY`, `DECISION_UNKNOWN_ENTRY`, `COLOUR_ORDER_CONFLICT`, `COLOUR_AREA_ABOVE_LOWER_PURPLE`, `COLOUR_UNCLASSIFIED`, `COLOUR_DEVIATION_KEPT`, `COLOUR_DEVIATION_DROPPED`, `COLOUR_DEVIATION_BLOCKED`, `COLOUR_NO_ROLE`, `COLOUR_SOURCE_ORDERED_ABOVE_LOWER_PURPLE`, `COLOUR_LAYERS_FAILED`, the `CRT_*` codes | a matching, colour-stack, decision or CRT result |
 | `reader` | `READER_WARNING` | reader noise (texts in `readerWarnings`) |
 
 A new warning code gets a row in this table and an entry in `WARNING_CLASS`

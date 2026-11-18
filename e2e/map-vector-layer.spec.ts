@@ -607,3 +607,79 @@ test.describe("vector map layer", () => {
     }
   });
 });
+
+// docs/map-symbols.md §9.3 "In the importer" (row I5): a map whose colour table is badly ordered is drawn on the
+// IOF colour layers. `e2e/colour-layers.ocd` (scripts/lib/ocad-fixture.mjs, COLOUR_LAYERS_OCAD) draws, in its own
+// order, the paved brown over the building, the yellow on top and the black path under lower purple; one brown 50 %
+// is both the paved area and a street drawn over the contour. Paper mm, y up.
+test.describe("vector map layer on the IOF colour layers", () => {
+  test.describe.configure({ mode: "serial" });
+
+  const isGrey = ([r, g, b]: Rgb) => Math.max(r, g, b) - Math.min(r, g, b) < 24 && r > 95 && r < 165;
+  const isPaved = ([r, g, b]: Rgb) => r > 200 && g > 140 && g < 195 && b > 85 && b < 150;
+  const isContour = ([r, g, b]: Rgb) => r > 165 && g > 55 && g < 130 && b < 45;
+  const isOpenLand = ([r, g, b]: Rgb) => r > 220 && g > 160 && g < 215 && b < 85;
+
+  test.beforeAll(async () => {
+    await reseed();
+  });
+  // The seed event leaves with no map of its own again, for the specs after this one.
+  test.afterAll(async () => {
+    await reseed();
+  });
+
+  async function openLayeredMap(page: Page) {
+    await openEvent(page);
+    const viewer = page.getByTestId("map-viewer").first();
+    const upload = page.getByTestId("map-panel").first().getByRole("button", { name: "Upload map" });
+    await expect(viewer.or(upload)).toBeVisible({ timeout: 60_000 });
+    if (!(await viewer.isVisible())) await uploadEventMap(page, "e2e/colour-layers.ocd");
+    await expect(viewer).toBeVisible({ timeout: 60_000 });
+    return openCourses(page);
+  }
+
+  /** The canvas colour at a paper point, after zooming in on `at` from the fitted view. */
+  async function colourNear(page: Page, viewer: Locator, canvas: Locator, at: Pt) {
+    await zoomOn(page, viewer, canvas, at);
+    const shot = await snapshot(viewer, canvas);
+    return (p: Pt) => shot.rgb(p);
+  }
+
+  test("draws a building over its paved area", async ({ page }) => {
+    test.setTimeout(180_000);
+    const { viewer, canvas } = await openLayeredMap(page);
+    const near = await colourNear(page, viewer, canvas, { x: 12, y: 12 });
+    // The building (10..20 mm) in its grey on top of the paved area (0..30 mm), the paved brown around it.
+    const building = near({ x: 15, y: 15 });
+    expect(building && isGrey(building), `building grey over the paved area: ${JSON.stringify(building)}`).toBe(true);
+    const paved = near({ x: 6, y: 6 });
+    expect(paved && isPaved(paved), `paved brown beside the building: ${JSON.stringify(paved)}`).toBe(true);
+  });
+
+  test("draws the street over the contour (roads over contours, kept by default)", async ({ page }) => {
+    test.setTimeout(180_000);
+    const { viewer, canvas } = await openLayeredMap(page);
+    // The street (x = 20 mm, 0.6 mm) crosses the contour (y = 50 mm): the street's brown at the crossing, the contour's 3 mm along.
+    const near = await colourNear(page, viewer, canvas, { x: 21, y: 50 });
+    const crossing = [-0.05, 0, 0.05].map((dy) => near({ x: 20, y: 50 + dy }));
+    expect(crossing.every((c) => c && isPaved(c)), `street brown over the contour: ${JSON.stringify(crossing)}`).toBe(true);
+    const contour = [-0.05, 0, 0.05].map((dy) => near({ x: 23, y: 50 + dy }));
+    expect(contour.some((c) => c && isContour(c)), `contour brown beside the street: ${JSON.stringify(contour)}`).toBe(true);
+  });
+
+  test("draws a leg over the open land and under the black path the table has under everything", async ({ page }) => {
+    test.setTimeout(180_000);
+    const { viewer, canvas } = await openLayeredMap(page);
+    // Course L: a leg along x = 65 mm from the white paper below the black path (y = -10) into the yellow (0..20).
+    await showCourse(page, viewer, canvas, "L", [["291", { x: 65, y: -25 }], ["292", { x: 65, y: 16 }]]);
+    const near = await colourNear(page, viewer, canvas, { x: 65, y: -3 });
+    const over = [-0.1, 0, 0.1].map((dx) => near({ x: 65 + dx, y: 4 }));
+    expect(over.some((c) => c && isPurple(c)), `purple leg over the open land: ${JSON.stringify(over)}`).toBe(true);
+    const beside = near({ x: 67, y: 4 });
+    expect(beside && isOpenLand(beside), `open land beside the leg: ${JSON.stringify(beside)}`).toBe(true);
+    const crossing = [-0.1, 0, 0.1].map((dy) => near({ x: 65, y: -10 + dy }));
+    expect(crossing.some((c) => c && isDark(c)), `the black path over the leg: ${JSON.stringify(crossing)}`).toBe(true);
+    const below = near({ x: 65, y: -13 });
+    expect(below && isPurple(below), `purple leg on the paper below the path: ${JSON.stringify(below)}`).toBe(true);
+  });
+});
