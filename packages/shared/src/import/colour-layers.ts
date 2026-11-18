@@ -244,22 +244,25 @@ interface Draft {
  * - uses with no role, graphic objects' colours and mask whites in the gap
  *   of the placed rows the source order fits best;
  * - each palette id on exactly one row at its palette place (`paletteIds`):
- *   of its rows the one with the most objects, ties to the lowest source
- *   index; a needed id no such row has is aliased to the most used
- *   identified source colour of its class (a row of its own), else inserted
- *   with the palette's CMYK; purples and ISSkiOM's rows never alias;
+ *   the row of the colour §9.2 gives it (identified, else for a needed id
+ *   aliased to the most used identified colour of its class; a row of its
+ *   own if that colour has none), else its row with the most objects, ties
+ *   to the lowest source index, else for a needed id inserted with the
+ *   palette's CMYK; purples and ISSkiOM's rows never alias;
  * - lower and upper purple always inserted at their palette places, in the
  *   ink of the map's most used course-purple candidate (ties to the highest
  *   index), else the palette's; the overlay's rows (`OVERLAY_STACK_IDS`)
  *   always present, `white-skio` directly under lower purple and
- *   `orange-skio` directly under `green-skio` when nothing of the map is drawn in them;
+ *   `orange-skio` directly under `green-skio` when nothing of the map is
+ *   drawn in them;
  * - a source colour no symbol references kept once, at the place of the
  *   palette id §9.1 identified it as (course purples excepted), else by the
  *   source order;
  * - ids: a source colour's lowest row keeps its id, its other rows are
- *   `<id>/<suffix>` (`<paletteId>`, `none:<place>`, `graphic`, a moved
- *   part's `<paletteId|none:<place>|graphic>/under<n>`); inserted rows `<edition>:<paletteId>`. Split rows keep
- *   the colour's name, CMYK, `sourceNumber`, spot and overprint.
+ *   `<id>/<suffix>` (`<paletteId>`, `none:<place>`, `graphic`; a moved
+ *   part's `<suffix>/under<n>`; a second row of an id `<paletteId>/alias`);
+ *   inserted rows `<edition>:<paletteId>`. Split rows keep the colour's
+ *   name, CMYK, `sourceNumber`, spot and overprint.
  */
 export function buildColourLayers(input: ColourLayersInput): ColourLayersResult {
   const { colours, infos, edition, spec } = input;
@@ -371,45 +374,58 @@ export function buildColourLayers(input: ColourLayersInput): ColourLayersResult 
   }
 
   // ---- palette ids: carriers, aliases, inserts ------------------------------------------------------------------------
-  // Which row carries each palette id, of the rows at the id's palette place: the row of the colour §9.2 step 2 takes
-  // for the id (identified as it; the most used, ties to the lowest index), so library symbols draw in the same ink as
-  // on the source order; else the most objects, ties to the lowest source index.
-  const carrier = new Map<string, Draft>();
-  const identified = (d: Draft) => infos[d.source!]?.paletteId === d.role;
-  const better = (a: Draft, b: Draft) => {
-    if (identified(a) !== identified(b)) return identified(a);
-    if (identified(a)) return usage[a.source!] > usage[b.source!] || (usage[a.source!] === usage[b.source!] && a.source! < b.source!);
-    return a.objects > b.objects || (a.objects === b.objects && a.source! < b.source!);
-  };
-  for (const d of drafts.values()) {
-    if (!d.role || isCoursePurple(d.role) || !d.base || d.ownOrder) continue;
-    const cur = carrier.get(d.role);
-    if (!cur || better(d, cur)) carrier.set(d.role, d);
+  // Which row carries each palette id (library symbols draw there): the row, at the id's palette place, of the colour
+  // §9.2 gives the id — step 2, the colour identified as it (the most used, ties to the lowest index); for a needed id
+  // with none, step 3's alias, the most used identified colour of its class — so a library symbol keeps the ink it has
+  // on the source order. A needed id whose colour has no such row gets one (an `alias` row); an id with no such colour
+  // is carried by its row with the most objects (ties to the lowest index), a needed one with no row at all inserted.
+  const better = (a: number, b: number) => usage[a] > usage[b] || (usage[a] === usage[b] && a < b);
+  const identifiedAs = new Map<string, number>();
+  for (const info of infos) {
+    if (!info.paletteId || isCoursePurple(info.paletteId)) continue;
+    const cur = identifiedAs.get(info.paletteId);
+    if (cur === undefined || better(info.index, cur)) identifiedAs.set(info.paletteId, info.index);
   }
-  // Needed ids no row carries: alias to a same-class identified source colour, else insert (§9.2 steps 3–4).
-  const aliased: ColourLayersReport["aliased"] = [];
-  const wanted = new Set<string>([...input.needed, ...COURSE_PURPLES, ...OVERLAY_STACK_IDS]);
-  const byRank = [...wanted].filter((id) => rank.has(id)).sort((a, b) => rank.get(a)! - rank.get(b)!);
-  for (const id of byRank) {
-    if (carrier.has(id)) continue;
+  const aliasColour = (id: string): number | undefined => {
     const cls = paletteClass(id, rowEdition(edition, id));
+    if (!cls || cls.hue === "purple" || SKI_PALETTE_IDS.has(id)) return undefined;
     let via: number | undefined;
-    if (cls && cls.hue !== "purple" && !SKI_PALETTE_IDS.has(id)) {
-      for (const info of infos) {
-        if (!info.paletteId || SKI_PALETTE_IDS.has(info.paletteId) || !sameClass(info.class, cls)) continue;
-        if (via === undefined || usage[info.index] > usage[via] || (usage[info.index] === usage[via] && info.index < via)) via = info.index;
-      }
+    for (const info of infos) {
+      if (!info.paletteId || SKI_PALETTE_IDS.has(info.paletteId) || !sameClass(info.class, cls)) continue;
+      if (via === undefined || better(info.index, via)) via = info.index;
     }
-    // A colour whose own row of this role went to the source order (a mask) gets a second one at the palette place.
-    const key = via === undefined ? `insert|${id}` : drafts.has(`${via}|${id}`) ? `${via}|${id}|alias` : `${via}|${id}`;
-    const d = draft(key, { source: via ?? null, role: id, place: null, origin: via === undefined ? "insert" : "alias", base: placeKey(id), sourceOrdered: null, suffix: via !== undefined && key.endsWith("|alias") ? `${id}/alias` : id });
-    carrier.set(id, d);
-    if (via !== undefined) {
-      const e: ColourLayersReport["aliased"][number] = { paletteId: id, viaPaletteId: infos[via].paletteId! };
-      if (colours[via].sourceNumber !== undefined) e.sourceNumber = colours[via].sourceNumber;
-      aliased.push(e);
+    return via;
+  };
+  const wanted = new Set<string>([...input.needed, ...COURSE_PURPLES, ...OVERLAY_STACK_IDS]);
+  const placeable = (d: Draft | undefined) => d && d.base && !d.ownOrder;
+  const carrier = new Map<string, Draft>();
+  const aliased: ColourLayersReport["aliased"] = [];
+  const roles = new Set([...drafts.values()].flatMap((d) => (d.role && placeable(d) ? [d.role] : [])));
+  const ids = [...new Set([...roles, ...wanted])].filter((id) => rank.has(id) && !isCoursePurple(id)).sort((a, b) => rank.get(a)! - rank.get(b)!);
+  for (const id of ids) {
+    const step2 = identifiedAs.get(id);
+    const colour = step2 ?? (wanted.has(id) ? aliasColour(id) : undefined);
+    const own = colour === undefined ? undefined : drafts.get(`${colour}|${id}`);
+    if (colour !== undefined && placeable(own)) {
+      carrier.set(id, own!);
+      continue;
     }
+    if (colour !== undefined && wanted.has(id)) {
+      // A colour whose own row of this role went elsewhere (a mask, a moved part) gets a second one at the palette place.
+      const key = own ? `${colour}|${id}|alias` : `${colour}|${id}`;
+      carrier.set(id, draft(key, { source: colour, role: id, place: null, origin: "alias", base: placeKey(id), sourceOrdered: null, suffix: own ? `${id}/alias` : id }));
+      if (step2 === undefined) aliased.push({ paletteId: id, viaPaletteId: infos[colour].paletteId!, ...(colours[colour].sourceNumber !== undefined ? { sourceNumber: colours[colour].sourceNumber } : {}) });
+      continue;
+    }
+    let best: Draft | undefined;
+    for (const d of drafts.values()) {
+      if (d.role !== id || !placeable(d)) continue;
+      if (!best || d.objects > best.objects || (d.objects === best.objects && d.source! < best.source!)) best = d;
+    }
+    if (best) carrier.set(id, best);
+    else if (wanted.has(id)) carrier.set(id, draft(`insert|${id}`, { source: null, role: id, place: null, origin: "insert", base: placeKey(id), sourceOrdered: null, suffix: id }));
   }
+  for (const id of COURSE_PURPLES) carrier.set(id, draft(`insert|${id}`, { source: null, role: id, place: null, origin: "insert", base: placeKey(id), sourceOrdered: null, suffix: id }));
 
   // What each row draws: the objects of source-drawn symbols referencing it, and on the row carrying a palette id the
   // objects of library-drawn symbols using that id (their own references draw nothing).

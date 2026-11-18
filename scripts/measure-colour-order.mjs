@@ -190,13 +190,15 @@ async function main() {
    * and peeled: by its own rows (the permutation), or both in the candidate's layers (the layered stack).
    */
   function nameTile(mask, width, height, streams, bounds, side) {
-    const view = async (peel) => {
-      const [sa, sb] = peel.length ? [side.peelSource(streams[0], peel), side.peelCandidate(streams[1], peel)] : streams;
-      const pa = await co.rasterisePaints(sa, { bounds, pxPerMm: opts.pxPerMm, glyphOutline });
-      const pb = await co.rasterisePaints(sb, { bounds, pxPerMm: opts.pxPerMm, glyphOutline });
-      return { source: pa.ids, candidate: pb.ids, nameSource: side.nameSource(pa.paints), nameCandidate: side.nameCandidate(pb.paints) };
+    const paints = async ([sa, sb], pxPerMm) => {
+      const pa = await co.rasterisePaints(sa, { bounds, pxPerMm, glyphOutline });
+      const pb = await co.rasterisePaints(sb, { bounds, pxPerMm, glyphOutline });
+      return { source: pa.ids, candidate: pb.ids, nameSource: side.nameSource(pa.paints), nameCandidate: side.nameCandidate(pb.paints), width: pa.width, height: pa.height };
     };
-    return co.namePeeled(mask, width, height, view, side.rowOf);
+    const view = (peel) => paints(peel.length ? [side.peelSource(streams[0], peel), side.peelCandidate(streams[1], peel)] : streams, opts.pxPerMm);
+    // Pixels no view names: the full paint images at FINE_FACTOR × the resolution (a hairline, a sliver of an edge).
+    const fine = async () => ({ ...(await paints(streams, opts.pxPerMm * co.FINE_FACTOR)), factor: co.FINE_FACTOR });
+    return co.namePeeled(mask, width, height, view, side.rowOf, co.PEEL_DEPTH, fine);
   }
 
   const layerName = (paint) => (paint.startsWith(co.GRAPHIC_PREFIX) ? paint.slice(co.GRAPHIC_PREFIX.length) : paint);

@@ -1,0 +1,89 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "from": "*",
+      "to": "*",
+      "class": "layout",
+      "reported": true,
+      "note": "A graphic object's colour (logos, frame bars), placed by the source order: map-symbols.md §9.3 'Source order'."
+    },
+    {
+      "from": "*",
+      "to": "*",
+      "class": "mask",
+      "reported": true,
+      "note": "A white the source draws over layers the palette ranks above its role, placed by the source order; the gap that fits the source best does not fit every layer."
+    },
+    {
+      "from": "*",
+      "to": "*",
+      "class": "no-role",
+      "reported": true,
+      "note": "Uses with no role, placed by the source order; the gap that fits the source best does not fit every layer."
+    },
+    {
+      "from": "*",
+      "to": "*",
+      "class": "deviation-dropped",
+      "reported": true,
+      "note": "A pair of roles the source orders against the palette, drawn in the palette's order (dropped by default, or blocked by an order that cannot change): map-symbols.md §9.3 'Deviations'."
+    },
+    {
+      "map": "sprint",
+      "from": "(unattributed)",
+      "to": "(unattributed)",
+      "class": "residue",
+      "maxPx": 6,
+      "note": "Isolated changed pixels no paint image names, not even at 3x: a feature finer than a third of a pixel, or a change at a tile's edge caused just outside it (map-rendering.md §6.5, I4)."
+    },
+    {
+      "map": "club-full",
+      "from": "(unattributed)",
+      "to": "(unattributed)",
+      "class": "residue",
+      "maxPx": 28,
+      "note": "As sprint's."
+    },
+    {
+      "map": "club-2026",
+      "from": "(unattributed)",
+      "to": "(unattributed)",
+      "class": "residue",
+      "maxPx": 1,
+      "note": "As sprint's."
+    },
+    {
+      "map": "crop-a",
+      "from": "(unattributed)",
+      "to": "(unattributed)",
+      "class": "residue",
+      "maxPx": 1,
+      "note": "As sprint's."
+    },
+    {
+      "map": "crop-b",
+      "from": "(unattributed)",
+      "to": "(unattributed)",
+      "class": "residue",
+      "maxPx": 1,
+      "note": "As sprint's."
+    },
+    {
+      "map": "erstavik",
+      "from": "(unattributed)",
+      "to": "(unattributed)",
+      "class": "residue",
+      "maxPx": 5,
+      "note": "As sprint's."
+    },
+    {
+      "map": "nacka",
+      "from": "(unattributed)",
+      "to": "(unattributed)",
+      "class": "residue",
+      "maxPx": 46,
+      "note": "As sprint's."
+    }
+  ]
+}
