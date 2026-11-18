@@ -20,8 +20,11 @@ import { documentSymbolFingerprints } from "../decisions.js";
 import { matchDocument } from "../match-document.js";
 import { BLACK, colours, input } from "./match-fixture.js";
 
+/** §9.2, the `source` order, which these tests pin; the default `iof` order is tested below (row I5). */
+const SOURCE_ORDER = { colourOrder: "source" } as const;
+
 describe("matchDocument", () => {
-  const res = matchDocument(input());
+  const res = matchDocument(input(), SOURCE_ORDER);
   const h = res.input.header;
 
   it("picks the library from the scale and records it with the factor in the header", () => {
@@ -81,7 +84,7 @@ describe("matchDocument", () => {
       header: { ...base.header, colours: [...base.header.colours, green], symbols: [...base.header.symbols, { code: "406.0", name: "Grön", kind: "area", render: { type: "area", id: "src:406", code: "406", name: "Grön", fill: 5 } }] },
       objects: [...base.objects, { symbolIdx: base.header.symbols.length, type: OBJECT_TYPE.area, sourceIndex: 9, coords: [0, 0, 100, 0, 100, 100], flags: [0, 0, 0] }],
     };
-    const r = matchDocument(withArea);
+    const r = matchDocument(withArea, SOURCE_ORDER);
     expect(r.colourStack.areasAboveLowerPurple).toEqual([{ name: "Grön 30% - Ytobjekt", sourceNumber: 6, paletteId: "green30-area" }]);
     expect(r.warnings.find((w) => w.code === "COLOUR_AREA_ABOVE_LOWER_PURPLE")).toMatchObject({ count: 1 });
     // One stray area on top does not pull lower purple above black and brown.
@@ -112,7 +115,7 @@ describe("matchDocument", () => {
         { symbolIdx: sym + 1, type: OBJECT_TYPE.area, sourceIndex: 10, coords: [0, 0, 100, 0, 100, 100], flags: [0, 0, 0] },
       ],
     };
-    const r = matchDocument(withPurple);
+    const r = matchDocument(withPurple, SOURCE_ORDER);
     const hc = r.input.header.colours;
     expect(r.colourStack.purplesDisplaced).toEqual([{ name: "Övre violett för banpåtryck", sourceNumber: 7, role: "upper", why: "position" }]);
     expect(r.colourStack.inserted).toEqual(expect.arrayContaining(["purple-lower", "purple-upper"]));
@@ -140,7 +143,7 @@ describe("matchDocument", () => {
   });
 
   it("is deterministic", () => {
-    const again = matchDocument(input());
+    const again = matchDocument(input(), SOURCE_ORDER);
     expect(encodeMapDocument(again.input)).toEqual(encodeMapDocument(res.input));
   });
 });
@@ -166,7 +169,7 @@ describe("matchDocument — options", () => {
 });
 
 describe("codec + render bridge", () => {
-  const res = matchDocument(input());
+  const res = matchDocument(input(), SOURCE_ORDER);
   const doc = decodeMapDocument(encodeMapDocument(res.input));
 
   it("round-trips matches and palette ids through the document format", () => {

@@ -38,7 +38,7 @@ export interface MatchDocumentOptions {
 
 /** The two colour orders of stage 7 (§9.3 answer 1). */
 export type ColourOrder = "iof" | "source";
-export const DEFAULT_COLOUR_ORDER: ColourOrder = "source";
+export const DEFAULT_COLOUR_ORDER: ColourOrder = "iof";
 
 export interface MatchingSummary {
   library: { id: string; version: string };

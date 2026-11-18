@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { mapDocument, render, symbolLibrary } from "@oxygen/shared";
+import { mapDocument, mapImport, render, symbolLibrary } from "@oxygen/shared";
 import { importOcadToDocument, sha256Hex } from "../import/ocad.js";
 import { buildImportReport } from "../map-store/documents.js";
 import { mapFileMetadataFor } from "../map-store/map-file-metadata.js";
@@ -28,7 +28,10 @@ describe("importOcadToDocument", () => {
     expect(doc.header.unitsPerMm).toBe(100);
     expect(doc.header.objects.count).toBe(a.counts.objects);
     expect(doc.header.symbols.length).toBe(a.counts.symbols);
-    expect(doc.header.colours.length).toBe(a.counts.colours + a.colourStack.inserted.length);
+    // The IOF colour layers (row I5): one row per layer the report lists.
+    expect(doc.header.colourOrder?.order).toBe("iof");
+    expect(doc.header.colours.length).toBe(a.colourStack.layers!.rows.length);
+    expect(doc.header.colours.length).toBeGreaterThanOrEqual(a.counts.colours + a.colourStack.inserted.length);
     // Every object's bbox encloses its coordinates.
     for (let i = 0; i < doc.header.objects.count; i++) {
       for (let k = doc.coordStart[i]; k < doc.coordStart[i + 1]; k++) {
@@ -105,8 +108,29 @@ describe("importOcadToDocument", () => {
     expect(main.angles![main.glyphs.length - 1]).toBeLessThan(0);
   });
 
-  it("matches the fixture's symbols against ISOM 2017-2 and aligns its colour stack (stages 6–7)", async () => {
+  it("draws the fixture on the IOF colour layers by default (stage 7, row I5)", async () => {
     const result = await importOcadToDocument(fixture, "test.ocd");
+    const doc = mapDocument.decodeMapDocument(result.bytes);
+    expect(doc.header.colourOrder).toMatchObject({ order: "iof" });
+    expect(result.colourStack).toMatchObject({ order: "iof", conflicts: [], areasAboveLowerPurple: [], purplesDisplaced: [] });
+    expect(result.warnings.map((w) => w.code)).not.toContain("COLOUR_ORDER_CONFLICT");
+    const index = mapImport.paletteIndexOfStack(doc.header.colours);
+    // The table draws its blue under the yellow; on the layers the blue line colour is above lower purple, the yellow under it.
+    const lower = index.get("purple-lower")!;
+    expect(index.get("blue100-line")!).toBeGreaterThan(lower);
+    expect(doc.header.colours.findIndex((c) => c.name === "Yellow")).toBeLessThan(lower);
+    expect(doc.header.colours[index.get("purple-upper")!]).toMatchObject({ purpleRole: "upper" });
+    expect(index.get("purple-upper")).toBe(doc.header.colours.length - 1);
+    const input = mapDocument.documentRenderInput(doc);
+    expect(input.stats.canonicalSymbols).toBe(result.matching.symbols.auto);
+    expect(input.stats.canonicalMissing).toBe(0);
+    // Every palette id of the source order is on the layers.
+    const source = mapDocument.decodeMapDocument((await importOcadToDocument(fixture, "test.ocd", { match: { colourOrder: "source" } })).bytes);
+    for (const id of source.header.colours.flatMap((c) => c.paletteIds ?? [])) expect(index.has(id), id).toBe(true);
+  });
+
+  it("matches the fixture's symbols against ISOM 2017-2 and aligns its colour stack in the source order (stages 6–7, §9.2)", async () => {
+    const result = await importOcadToDocument(fixture, "test.ocd", { match: { colourOrder: "source" } });
     expect(result.libraryVersion).toBe(`ISOM2017-2@${symbolLibrary.SYMBOL_LIBRARY_VERSION}`);
     expect(result.timings.match).toBeGreaterThanOrEqual(0);
     const doc = mapDocument.decodeMapDocument(result.bytes);
