@@ -14,8 +14,9 @@ import { resolveEventCapabilities } from "../permissions.js";
 import { getImportJob, isClaimable, kickImportJobs, latestImportJobForEvent, type ImportJobRow } from "../map-store/jobs.js";
 import { DecisionInputError, MAX_REVIEW_DECISIONS, reviewDecisionSchema } from "../map-store/decisions.js";
 import { exportDocumentCrt, importDocumentCrt, MAX_CRT_BYTES } from "../map-store/crt.js";
-import { buildReview, changeColourSettings, changeDeviation, decideOnDocument, finaliseDocument, type DeviationChangeResult, type ReviewTarget } from "../map-store/review.js";
-import { DEVIATION_KEY } from "../map-store/colour-settings.js";
+import { buildReview, changeColourSettings, changeDeviation, colourTargetOf, decideOnDocument, finaliseDocument, type DeviationChangeResult, type ReviewTarget } from "../map-store/review.js";
+import { DEVIATION_KEY, loadColourSettings } from "../map-store/colour-settings.js";
+import { otherOrderDocument } from "../map-store/colour-pictures.js";
 import { checkDocumentAccess, EDIT_ACCESS, READ_ACCESS, type DocumentAccessMode } from "../map-store/routes.js";
 import type { Context } from "../trpc.js";
 import type { PrismaClient } from "../generated/prisma/client.js";
@@ -197,6 +198,31 @@ export const mapImportRouter = router({
       const result = await changeDeviation(db, { hash: input.documentHash, target, key: input.key, choice: input.choice, userId: ctx.user?.id ?? null });
       if (!result.ok) throw colourChangeError(result, target);
       return { settings: result.settings, job: await present(db, result.job) };
+    }),
+
+  /**
+   * The document the colour switch gives for a stored document — its other
+   * order, with the map's overrides on a `source` document's IOF side —
+   * for the review page's compare view (docs/map-symbols.md §8.7 "Compare
+   * (row I8)"): the before / after picture's import without the picture
+   * (docs/map-storage.md §4.5). Readable as `review` is; it may start an
+   * import (a job without a target, `started_by` the caller), so it is a
+   * mutation. `clubMapId` (else the current event) names the map whose
+   * overrides apply. `pending`: ask again; `failed`: remembered for a while.
+   */
+  otherOrderDocument: publicProcedure
+    .input(z.object({ documentHash: documentHashSchema, clubMapId: z.string().uuid().optional() }))
+    .mutation(async ({ ctx, input }) => {
+      await requireDocument(ctx, input.documentHash, READ_ACCESS);
+      const db = prisma();
+      const doc = await db.mapDocument.findUnique({ where: { hash: input.documentHash }, select: { sourceHash: true } });
+      if (!doc) throw new TRPCError({ code: "NOT_FOUND", message: "Map document not found" });
+      const target = reviewTargetOf(ctx, input.clubMapId);
+      const colourTarget = target ? await colourTargetOf(db, target, doc.sourceHash) : null;
+      const deviations = colourTarget ? (await loadColourSettings(db, colourTarget)).deviations : undefined;
+      const result = await otherOrderDocument(db, input.documentHash, { startedBy: ctx.user?.id ?? null, deviations });
+      if (result.state === "missing") throw new TRPCError({ code: "NOT_FOUND", message: "Map document not found" });
+      return result;
     }),
 
   /**
