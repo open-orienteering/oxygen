@@ -1451,9 +1451,10 @@ sorting happens here.
   sample once. The arena fragment shaders end in `outA(colour, a)`:
   `u_clear` (1 − opacity) and `u_multiply` are 0 on opaque draws, which
   then write `(colour, a)` as before; an alpha layer writes `(colour,
-  a · opacity)`, or for Multiply `(mix(1, colour, a · opacity), 1)` under
-  `blendFuncSeparate(DST_COLOR, ZERO, ZERO, ONE)` (destination alpha
-  kept, so loupe and drape textures stay opaque) — `dst · (1 − α + α·c)`
+  a · opacity)` under `blendFuncSeparate(SRC_ALPHA, ONE_MINUS_SRC_ALPHA,
+  ZERO, ONE)`, or for Multiply `(mix(1, colour, a · opacity), 1)` under
+  `blendFuncSeparate(DST_COLOR, ZERO, ZERO, ONE)` — destination alpha
+  kept in both, so loupe and drape textures stay opaque — `dst · (1 − α + α·c)`
   per channel, across parts and across the map and page, which share
   the framebuffer. **Stencil test-and-set:** `ALPHA_BIT` (0x08) with
   `stencilFunc(EQUAL, 0, ALPHA_BIT [| REGION_BIT])`, `stencilOp(KEEP,
@@ -1464,7 +1465,9 @@ sorting happens here.
   MSDF). Every kind but a fill draws **twice**: fragments of full
   coverage first (`u_minCover` 0.999), then the fringe, so a quad's or
   ribbon's faint edge cannot take a sample a neighbour covers fully; a
-  zero-coverage fragment is always discarded. Then the same geometry
+  zero-coverage fragment is always discarded. An alpha fill, hatch or
+  stroke's indices sit after every opaque index of its kind in the part
+  (review J3), so a colour's opaque span never takes one in. Then the same geometry
   with colour off and `ZERO` clears the bit. A clipped glyph pass marks
   its area in `CLIP_BIT` first and tests `EQUAL, CLIP_BIT, CLIP_BIT |
   ALPHA_BIT [| REGION_BIT]`, and clears the area after. Two alpha passes
@@ -1712,7 +1715,7 @@ residency budget (MB, default 150), `lod=0` turns off the glyph skip,
 the text skip and the hatch tint, `kinds=fill,stroke,…` draws only those kinds; `compare=1`
 also draws the same stream through the per-pass golden path into a
 second canvas at a zoom where every stroke is ≥ 1.5 px and publishes
-the fraction of pixels differing by more than 16 levels (§6.2's channel tolerance); `pick=1` (G5)
+the fraction of pixels differing by more than 16 levels (§6.2's channel tolerance) — unavailable for a stream with an alpha pass, which the per-pass path does not draw (the page says so, J3); `pick=1` (G5)
 makes a click hit-test the document (`hitDocument`, 6 CSS px) and select the top hit through the
 edit part, publishing the hits and the edit state as `__mapGlDoc.pick` once the frame that draws it
 is drawn (the canvas's `data-pick`), and `window.__mapGlDocLines()` lists every line object's first

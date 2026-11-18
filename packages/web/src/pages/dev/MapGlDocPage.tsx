@@ -31,7 +31,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Buffer } from "buffer";
 import { mapDocument, mapImport, render } from "@oxygen/shared";
-import { prepareStream } from "../../map-gl/prepare";
+import { prepareStream, streamHasAlpha } from "../../map-gl/prepare";
 import { MapGlRenderer, hexToRgb, type FrameStats, type View } from "../../map-gl/renderer";
 import { DRAPE_SETTLE_MS, MapGlEngine, inlineTransport, workerTransport, type EditInfo, type EngineStats, type TerrainStats, type Transport } from "../../map-gl/engine";
 import { distanceForPxPerUm, type TerrainCamera } from "../../map-gl/terrain/camera";
@@ -580,6 +580,8 @@ export function MapGlDocPage() {
             objs = { objects: bridge.objects, symbols: bridge.symbols, stats: readerInput?.stats ?? report.objects };
           }
           const s = render.symbolise({ objects: objs!.objects, symbols: objs!.symbols, fonts }).stream;
+          // The per-pass path draws no alpha (§5.2 "Dev pages"): say so rather than fail inside prepareStream.
+          if (streamHasAlpha(s)) throw new Error("compare=1 is unavailable: the document has passes with opacity or Multiply, which only the arena path draws");
           const fit = fitRef.current!;
           // Zoomed so a 0.14 mm line is ≥ 1.5 px: the two paths' hairline floors (§5.2) do not differ there.
           const view: View = { ...fit, pxPerUm: Math.max(fit.pxPerUm, 1.5 / 140) };

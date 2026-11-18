@@ -1550,7 +1550,9 @@ export class MapGlRenderer {
     gl.uniform3f(prog.uniforms.u_colour, rgb[0], rgb[1], rgb[2]);
     gl.uniform1f(prog.uniforms.u_clear, 1 - al.opacity);
     gl.uniform1f(prog.uniforms.u_multiply, al.multiply ? 1 : 0);
+    // Destination alpha is kept in both modes (review J3), so a framebuffer read as RGBA stays opaque.
     if (al.multiply) gl.blendFuncSeparate(gl.DST_COLOR, gl.ZERO, gl.ZERO, gl.ONE);
+    else gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ZERO, gl.ONE);
     gl.stencilMask(ALPHA_BIT);
     gl.stencilFunc(gl.EQUAL, clip ? CLIP_BIT : 0, ALPHA_BIT | regionBit | (clip ? CLIP_BIT : 0));
     gl.stencilOp(gl.KEEP, gl.KEEP, gl.INVERT);
@@ -1567,7 +1569,7 @@ export class MapGlRenderer {
     gl.colorMask(true, true, true, true);
     gl.uniform1f(prog.uniforms.u_clear, 0);
     gl.uniform1f(prog.uniforms.u_multiply, 0);
-    if (al.multiply) gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     if (clip) area(gl.ZERO);
     gl.disable(gl.STENCIL_TEST);
     return draws;

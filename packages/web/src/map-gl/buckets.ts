@@ -502,6 +502,18 @@ export function prepareBucketPartFrom(sources: readonly PartSource[], bucket: nu
   const inst = { glyph: new Map<string, { colour: number; cls: number; data: number[]; objects: { object: number; count: number }[] }>(), text: new Map<string, { colour: number; cls: number; data: number[]; objects: { object: number; count: number }[] }>() };
   const clips: ClipItem[] = [];
   const alpha: AlphaItem[] = [];
+  /**
+   * An alpha fill / hatch / stroke's indices, held back and appended after
+   * every opaque index of the kind (review J3): the no-hide fast path draws
+   * one span per colour, so an alpha pass between two opaque ones of the
+   * same colour must not sit inside it.
+   */
+  const deferred = { fill: [] as { item: AlphaItem; idx: Uint32Array }[], hatch: [] as { item: AlphaItem; idx: Uint32Array }[], stroke: [] as { item: AlphaItem; idx: Uint32Array }[] };
+  const defer = (kind: keyof typeof deferred, buf: GrowU32, start: number, item: AlphaItem) => {
+    deferred[kind].push({ item, idx: buf.a.slice(start, buf.n) });
+    buf.n = start;
+    alpha.push(item);
+  };
 
   const addInstances = (kind: "glyph" | "text", colour: number, cls: number, object: number, data: number[]) => {
     if (!data.length) return;
@@ -534,7 +546,7 @@ export function prepareBucketPartFrom(sources: readonly PartSource[], bucket: nu
         const start = fillIdx.n;
         fillIdx.reserve(indices.length);
         for (let i = 0; i < indices.length; i++) fillIdx.a[fillIdx.n++] = indices[i] + base;
-        if (al) alpha.push({ ...al, start, count: indices.length });
+        if (al) defer("fill", fillIdx, start, { ...al, start, count: indices.length });
         else fillR.add(pass.colour, 0, object, start, indices.length);
         break;
       }
@@ -555,7 +567,7 @@ export function prepareBucketPartFrom(sources: readonly PartSource[], bucket: nu
         const start = hatchIdx.n;
         hatchIdx.reserve(indices.length);
         for (let i = 0; i < indices.length; i++) hatchIdx.a[hatchIdx.n++] = indices[i] + base;
-        if (al) alpha.push({ ...al, start, count: indices.length });
+        if (al) defer("hatch", hatchIdx, start, { ...al, start, count: indices.length });
         else hatchR.add(pass.colour, 0, object, start, indices.length);
         break;
       }
@@ -563,7 +575,7 @@ export function prepareBucketPartFrom(sources: readonly PartSource[], bucket: nu
         stroke.hw2 = Math.min(65535, Math.round(pass.widthUm));
         const start = stroke.indices.n;
         strokeStrip(pass, tol, stroke);
-        if (al) alpha.push({ ...al, start, count: stroke.indices.n - start });
+        if (al) defer("stroke", stroke.indices, start, { ...al, start, count: stroke.indices.n - start });
         else strokeR.add(pass.colour, 0, object, start, stroke.indices.n - start);
         break;
       }
@@ -634,6 +646,16 @@ export function prepareBucketPartFrom(sources: readonly PartSource[], bucket: nu
         }
         break;
       }
+    }
+  }
+
+  for (const [kind, buf] of [["fill", fillIdx], ["hatch", hatchIdx], ["stroke", stroke.indices]] as const) {
+    for (const { item, idx } of deferred[kind]) {
+      if (!("start" in item)) continue;
+      item.start = buf.n;
+      buf.reserve(idx.length);
+      buf.a.set(idx, buf.n);
+      buf.n += idx.length;
     }
   }
 

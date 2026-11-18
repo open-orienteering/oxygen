@@ -1545,7 +1545,8 @@ pixels beyond 16 levels; scenes not listed are 0.000 % in all columns):
 | `page-ring` | 0.057 | — | 0.045 |
 
 J1 (2026-11-18; poppler 24.02): the alpha scenes `alpha-passes`,
-`alpha-text` and `blend-multiply` measure 0.000 % in all three columns.
+`alpha-text` and `blend-multiply` measure 0.000 % in all three columns;
+re-measured after J3 halved `alpha-text`'s halo (250 µm): still 0.000 %.
 
 C11 (2026-10-24) re-measured `rgb` with the layer unit: every ratio
 within 0.014 pp of the µm encoding's (largest: `lib-text-layout`

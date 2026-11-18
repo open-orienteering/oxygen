@@ -68,6 +68,27 @@ describe("prepare: alpha items (§5.2)", () => {
     expect(bufs).toContain(part.alpha![2].instances!.buffer);
   });
 
+  it("an alpha fill or stroke between two opaque ones of its colour stays out of the opaque span (review J3)", () => {
+    const s = build([
+      [fill(1, 0, 1000), 0], [fill(1, 2000, 1000, { opacity: 0.5 }), 1], [fill(1, 4000, 1000), 2],
+      [stroke(2), 3], [stroke(2, { opacity: 0.5 }), 4], [stroke(2), 5],
+    ]);
+    const part = prepareBucketPart(s, 0, [0, 1, 2, 3, 4, 5], "all", ctx(s));
+    const all = buildVisibleSet([resident(part)]);
+    const hiding = buildVisibleSet([resident(part)], new Set([99]));
+    for (const kind of ["fill", "stroke"] as const) {
+      const r = part[kind]!.ranges;
+      const opaque = r.count[0] + r.count[1];
+      const drawn = (vs: typeof all) => vs[kind].draws.reduce((n, d) => n + d.count, 0);
+      expect(drawn(all), kind).toBe(opaque);
+      expect(drawn(hiding), kind).toBe(opaque);
+      // The alpha indices come after every opaque one of the kind.
+      const item = part.alpha!.find((a) => a.kind === kind)!;
+      expect(item.start, kind).toBe(r.start[1] + r.count[1]);
+      expect(item.start! + item.count!, kind).toBe(part[kind]!.indices.length);
+    }
+  });
+
   it("a clipped glyph pass is an alpha item with its area", () => {
     const s = build([[glyph(3, { opacity: 0.5 }, square(-100, -100, 900)), 0]]);
     const part = prepareBucketPart(s, 0, [0], "all", ctx(s));
