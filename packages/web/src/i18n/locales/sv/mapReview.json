@@ -152,7 +152,8 @@
       "mode": {
         "label": "Visning",
         "side": "Sida vid sida",
-        "swipe": "Svep"
+        "swipe": "Svep",
+        "diff": "Skillnader"
       },
       "side": {
         "inUse": "Används",
@@ -165,7 +166,15 @@
       "importing": "Importerar den här ordningen…",
       "failed": "Versionen kunde inte laddas.",
       "divider": "Dra för att flytta delaren",
-      "retry": "Försök igen"
+      "retry": "Försök igen",
+      "diff": {
+        "previous": "Föregående skillnad",
+        "next": "Nästa skillnad",
+        "waiting": "Laddar…",
+        "scanning": "Letar skillnader… {{done}} av {{total}}",
+        "none": "Inga skillnader",
+        "position": "{{n}} av {{count}}"
+      }
     },
     "layers": {
       "title": "Lager, överst först",

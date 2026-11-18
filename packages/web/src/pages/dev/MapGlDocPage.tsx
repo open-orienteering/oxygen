@@ -31,6 +31,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Buffer } from "buffer";
 import { mapDocument, mapImport, render } from "@oxygen/shared";
+import { offscreenTarget } from "../../map-gl/readback";
 import { prepareStream } from "../../map-gl/prepare";
 import { MapGlRenderer, hexToRgb, type FrameStats, type View } from "../../map-gl/renderer";
 import { DRAPE_SETTLE_MS, MapGlEngine, inlineTransport, workerTransport, type EditInfo, type EngineStats, type TerrainStats, type Transport } from "../../map-gl/engine";
@@ -250,51 +251,6 @@ function summarise(xs: number[]): Summary {
 }
 const r = (x: number) => Math.round(x * 100) / 100;
 const nextFrame = () => new Promise<void>((res) => requestAnimationFrame(() => res()));
-
-/**
- * An offscreen render target as the canvas has it: 4× MSAA colour + depth/stencil (pattern clips need
- * the stencil), resolved into a single-sampled framebuffer for readback.
- */
-function offscreenTarget(gl: WebGL2RenderingContext, w: number, h: number) {
-  const samples = Math.min(4, gl.getParameter(gl.MAX_SAMPLES) as number);
-  const rb = (format: number, ms: boolean) => {
-    const r = gl.createRenderbuffer()!;
-    gl.bindRenderbuffer(gl.RENDERBUFFER, r);
-    if (ms) gl.renderbufferStorageMultisample(gl.RENDERBUFFER, samples, format, w, h);
-    else gl.renderbufferStorage(gl.RENDERBUFFER, format, w, h);
-    return r;
-  };
-  const colour = rb(gl.RGBA8, true), depth = rb(gl.DEPTH24_STENCIL8, true), resolved = rb(gl.RGBA8, false);
-  const msaa = gl.createFramebuffer()!;
-  gl.bindFramebuffer(gl.FRAMEBUFFER, msaa);
-  gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, colour);
-  gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_STENCIL_ATTACHMENT, gl.RENDERBUFFER, depth);
-  const single = gl.createFramebuffer()!;
-  gl.bindFramebuffer(gl.FRAMEBUFFER, single);
-  gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, resolved);
-  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-  return {
-    target: { framebuffer: msaa, width: w, height: h },
-    resolve: () => {
-      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, msaa);
-      gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, single);
-      gl.blitFramebuffer(0, 0, w, h, 0, 0, w, h, gl.COLOR_BUFFER_BIT, gl.NEAREST);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    },
-    read: () => {
-      const px = new Uint8Array(w * h * 4);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, single);
-      gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-      return px;
-    },
-    dispose: () => {
-      gl.deleteFramebuffer(msaa);
-      gl.deleteFramebuffer(single);
-      for (const r of [colour, depth, resolved]) gl.deleteRenderbuffer(r);
-    },
-  };
-}
 
 export function MapGlDocPage() {
   const [params] = useSearchParams();

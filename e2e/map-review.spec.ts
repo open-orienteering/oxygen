@@ -120,6 +120,44 @@ async function checkCompare(page: Page, pair: "use" | "order", hashes: [string |
   return [got[0]!, got[1]!];
 }
 
+/**
+ * The compare view's diff (row I8b, §8.7 "Compare — diff") on the `use` pair: the overlay over the fitted view, the
+ * whole-map scan's regions, *next*. `changes`: the two documents differ (else nothing changed, no regions).
+ */
+async function checkDiff(page: Page, changes: boolean): Promise<void> {
+  await page.getByTestId("review-colours").getByTestId("colour-compare").click();
+  const view = page.getByTestId("compare-view");
+  await view.getByTestId("compare-pair-use").click();
+  await view.getByTestId("compare-mode-diff").click();
+  await expect(page).toHaveURL(/[?&]mode=diff/);
+  const pane = view.locator('[data-testid="compare-pane"][data-side="diff"]');
+  await expect(pane.locator('[data-testid="map-vector-layer"][data-ready="true"]')).toHaveCount(2, { timeout: 90000 });
+  const overlay = pane.getByTestId("compare-diff-overlay");
+  await expect(overlay).toHaveAttribute("data-state", "ready", { timeout: 60000 });
+  const status = view.getByTestId("compare-diff-status");
+  await expect(status).toHaveAttribute("data-scan", "done", { timeout: 120000 });
+  const next = view.getByTestId("compare-diff-next");
+  if (changes) {
+    expect(Number(await overlay.getAttribute("data-changed"))).toBeGreaterThan(0);
+    expect(Number(await status.getAttribute("data-regions"))).toBeGreaterThanOrEqual(1);
+    const before = await pane.getAttribute("data-view");
+    await next.click();
+    await expect(status).toHaveAttribute("data-region", "1");
+    await expect(pane).not.toHaveAttribute("data-view", before!);
+    // Over the region, once still: changed pixels in the overlay.
+    await expect(overlay).toHaveAttribute("data-state", "ready", { timeout: 60000 });
+    expect(Number(await overlay.getAttribute("data-changed"))).toBeGreaterThan(0);
+  } else {
+    await expect(overlay).toHaveAttribute("data-changed", "0");
+    await expect(status).toHaveAttribute("data-regions", "0");
+    await expect(view.getByTestId("compare-diff-none")).toBeVisible();
+    await expect(next).toBeDisabled();
+    await expect(view.getByTestId("compare-diff-prev")).toBeDisabled();
+  }
+  await view.getByTestId("compare-close").click();
+  await expect(view).toHaveCount(0);
+}
+
 test.describe("map import review", () => {
   test.beforeAll(reseed);
   test.afterAll(reseed);
@@ -317,6 +355,8 @@ test.describe("map import review", () => {
   test("club map: deviation overrides — keep a dropped one, drop a kept one, a no-op keep, reset (row I7)", async ({
     page,
   }) => {
+    // The compare view's diff scans the whole map twice (rows I8a / I8b).
+    test.setTimeout(240_000);
     // The series the I6 test made, back in the IOF order with no overrides.
     await page.goto("/settings");
     await expect(page.getByTestId("library-tab-maps")).toBeVisible({ timeout: 15000 });
@@ -357,6 +397,8 @@ test.describe("map import review", () => {
     expect((await (await page.request.get((await keptPicture.getAttribute("src"))!)).body()).equals(defaultsPicture)).toBe(false);
     // Compare (row I8a): opens on the version in use against this one.
     await checkCompare(page, "use", [original, kept]);
+    // Diff (row I8b): the paved areas now under the buildings differ.
+    await checkDiff(page, true);
 
     // Drop a deviation kept by default, on top.
     await change(ROAD, "drop");
@@ -391,6 +433,8 @@ test.describe("map import review", () => {
     await expect(page.getByTestId("compare-same")).toBeVisible({ timeout: 30000 });
     await page.getByTestId("compare-close").click();
     await expect(page.getByTestId("compare-view")).toHaveCount(0);
+    // Diff (row I8b): one version against itself, read in two contexts — nothing changed.
+    await checkDiff(page, false);
     await change(BUILDING, "reset");
     await expect(row(BUILDING)).toHaveAttribute("data-overridden", "false", { timeout: 20000 });
     expect(hashOf(page.url())).toBe(original);
