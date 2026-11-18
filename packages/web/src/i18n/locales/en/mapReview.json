@@ -17,7 +17,7 @@
   "finalised": "The map now uses this version.",
   "finaliseClub": "Replaces the club map's current version in place. Events that already use the map keep their copy.",
   "finaliseEvent": "Replaces this event's map with the reviewed version.",
-  "outdated": "Not up to date: the current symbol library or club decisions would import this map differently.",
+  "outdated": "Not up to date: the current symbol library, club decisions or this map's colour order would import this map differently.",
   "clubWide": "Decisions apply club-wide: every map with the same symbol (same number, same drawing) follows them on its next import, including event maps.",
   "readOnly": "You can look at the review but not change it.",
   "summary": {
@@ -114,5 +114,73 @@
     "none": "Terrain: the map has no contours, so no 3D.",
     "over-cap": "Terrain: the map is too large for this server to derive its terrain.",
     "pending": "Terrain: not derived yet."
+  },
+  "colours": {
+    "title": "Colour layers",
+    "hint": "The order the map's colours are drawn in, bottom to top. In the IOF order every colour use stands on its IOF layer, so the course and the library's symbols never depend on how the map's colour table is ordered.",
+    "order": {
+      "label": "Draw the map in",
+      "iof": "the IOF order",
+      "source": "the map's own order"
+    },
+    "orderHint": "Remembered for this map across new imports. Pick the order, check the picture, then use the new version.",
+    "orderClubOnly": "Open the review from the club map's card to change its colour order.",
+    "settingDiffers_iof": "This map is set to the IOF order; this version is drawn in the map's own order.",
+    "settingDiffers_source": "This map is set to its own order; this version is drawn in the IOF order.",
+    "fallback": "The IOF layers could not be built for this map, so it is drawn in its own order.",
+    "picture": {
+      "title": "Before and after",
+      "iof": "IOF order",
+      "source": "The map's own order",
+      "current": "this version",
+      "loading": "Drawing…",
+      "failed": "No picture."
+    },
+    "layers": {
+      "title": "Layers, top first",
+      "colour": "Colour",
+      "role": "IOF layer",
+      "objects": "Objects",
+      "flags": "Notes",
+      "noLayers": "In the map's own order the colours keep the map's table and have no IOF layers. Switch to the IOF order to see them.",
+      "place": {
+        "area": "No IOF layer (areas)",
+        "other": "No IOF layer",
+        "graphic": "Layout (graphic objects)"
+      },
+      "inserted": "added"
+    },
+    "flag": {
+      "split": "split",
+      "source-ordered": "map's order",
+      "no-role": "no IOF layer",
+      "own-order": "under its own symbol's part",
+      "above-lower-purple": "above the course purple",
+      "deviation-kept": "deviation kept",
+      "deviation-dropped": "deviation dropped",
+      "draws-nothing": "draws nothing"
+    },
+    "deviations": {
+      "title": "Deviations",
+      "summary_one": "{{count}} deviation, {{kept}} kept",
+      "summary_other": "{{count}} deviations, {{kept}} kept",
+      "hint": "Pairs of layers the map's colour table draws the other way round from the IOF order. Kept: drawn as the map draws them. Dropped: drawn in the IOF order. By default roads and paved areas stay over the contours; every other pair is dropped.",
+      "none": "The map's colour table agrees with the IOF order.",
+      "pair": "{{upper}} over {{lower}}",
+      "kept": "Kept",
+      "dropped": "Dropped",
+      "default": {
+        "keep": "default: kept",
+        "drop": "default: dropped"
+      },
+      "why": {
+        "default": "by default",
+        "override": "changed for this map",
+        "implied": "needed by a kept deviation",
+        "blocked": "cannot be kept"
+      },
+      "objects": "{{upper}} / {{lower}} objects"
+    },
+    "switching": "Drawing the map in the other order…"
   }
 }
