@@ -357,6 +357,8 @@ export interface SIPunch {
   controlCode: number;
   /** Seconds since midnight */
   time: number;
+  /** Fraction of the second in 1/256 s, when the reader reports it (Reader BT) */
+  subSecond?: number;
 }
 
 /**
@@ -467,8 +469,8 @@ export interface SICardOwnerData {
   country?: string;
 }
 
-/** Field order in the semicolon-separated personal data area */
-const PERSONAL_FIELDS = [
+/** Field order in the semicolon-separated personal data area (also the Reader BT owner-data order) */
+export const PERSONAL_FIELDS = [
   "firstName",
   "lastName",
   "sex",

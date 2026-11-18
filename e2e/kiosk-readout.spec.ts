@@ -14,6 +14,7 @@
 
 import { test, expect, type Page, type BrowserContext } from "@playwright/test";
 import { getMockWebSerialScript } from "./helpers/mock-webserial";
+import { connectMockSerialReader } from "./helpers/reader";
 import { waitForTrpc } from "./helpers/trpc";
 import { KIOSK_TAB_READY_TIMEOUT, openKioskTab } from "./helpers/kiosk";
 import { API_BASE } from "./helpers/api-base";
@@ -98,10 +99,7 @@ async function setupAdminAndKiosk(context: BrowserContext) {
   const kioskPage = await openKioskTab(context, nameId);
 
   // Connect the mock SI reader on admin page
-  await adminPage.getByTestId("connect-reader").click();
-  await expect(adminPage.getByTestId("reader-status")).toBeVisible({
-    timeout: 5000,
-  });
+  await connectMockSerialReader(adminPage, 5000);
 
   return { adminPage, kioskPage, nameId };
 }
@@ -363,8 +361,7 @@ test.describe("Standalone mode: re-read after idle", () => {
     });
 
     // Connect the mock SI reader on the kiosk page itself
-    await kioskPage.getByTestId("connect-reader").click();
-    await expect(kioskPage.getByTestId("reader-status")).toBeVisible({ timeout: 5000 });
+    await connectMockSerialReader(kioskPage, 5000);
 
     return kioskPage;
   }

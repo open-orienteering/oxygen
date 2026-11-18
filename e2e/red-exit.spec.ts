@@ -15,6 +15,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { getMockWebSerialScript } from "./helpers/mock-webserial";
 import { waitForTrpc } from "./helpers/trpc";
 import { openKioskTab } from "./helpers/kiosk";
+import { connectMockSerialReader } from "./helpers/reader";
 
 declare global {
   interface Window {
@@ -91,8 +92,7 @@ test("a run of another variant is MP on the kiosk and accepted at the desk (F6c)
     await adminPage.addInitScript(getMockWebSerialScript());
     await selectCompetition(adminPage);
     const kioskPage = await openKioskTab(context, "itest");
-    await adminPage.getByTestId("connect-reader").click();
-    await expect(adminPage.getByTestId("reader-status")).toBeVisible({ timeout: 5000 });
+    await connectMockSerialReader(adminPage);
 
     const readoutPromise = waitForTrpc(adminPage, "cardReadout.readout");
     const applyPromise = waitForTrpc(adminPage, "cardReadout.applyResult");

@@ -1064,7 +1064,7 @@ function ProgrammingPanel({
   onClose: () => void;
 }) {
   const { t } = useTranslation("controls");
-  const { readerStatus, getReaderConnection, connectReader } = useDeviceManager();
+  const { serialStatus: readerStatus, getReaderConnection, connectReader } = useDeviceManager();
   const [busy, setBusy] = useState(false);
   const [results, setResults] = useState<ProgramResult[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -1530,7 +1530,7 @@ function ReadoutPanel({
   onClose: () => void;
 }) {
   const { t } = useTranslation("controls");
-  const { readerStatus, getReaderConnection, connectReader } = useDeviceManager();
+  const { serialStatus: readerStatus, getReaderConnection, connectReader } = useDeviceManager();
   const [busy, setBusy] = useState(false);
   const [results, setResults] = useState<ReadoutResult[]>([]);
   const [error, setError] = useState<string | null>(null);
