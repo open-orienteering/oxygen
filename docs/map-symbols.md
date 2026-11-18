@@ -1187,6 +1187,15 @@ the panel knows the map's setting. In order:
   is no reset-all and no batching. Disabled as the switch is: without edit
   rights, without a target, while a job runs.
 
+**Compare (row I8, pending).** Asked by the user on 2026-11-18 during the
+I-gate review: the before / after picture is one fixed window, too small to
+judge a whole map. A **Compare** view shows two documents of the map's
+source as live vector maps sharing one camera — *this version* against the
+version in use, or the IOF order against the map's own order (with the
+map's overrides) — side by side, as a swipe, as a blink, or as a diff that
+highlights the pixels that differ. Read-only. Specified by row I8's plan;
+until then this paragraph is the user's request, not the behaviour.
+
 Role and palette names are the IOF palette's English names in both
 languages: there is no Swedish palette (decided overnight on the user's
 standing instruction, 2026-11-17, for review). Strings under
@@ -2291,7 +2300,8 @@ the importer's default.
 
 - **Canonical layers (§9.3)**: the importer draws on them by default
   since I5, with the per-map switch and the colour panel since I6 and the
-  per-map deviation overrides since I7. Not in the slice: batching several
+  per-map deviation overrides since I7. Row I8 in `SLICES.md`: the
+  linked compare view (§8.7 "Compare (row I8)"). Not in the slice: batching several
   overrides into one rebuild; a club-wide default
   for which deviations are kept; an inserted purple 50 % as a 50 % screen
   of the map's purple (both orders use it at full strength).
