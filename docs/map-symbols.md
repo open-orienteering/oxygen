@@ -1132,6 +1132,62 @@ line with its `CRT_*` code and detail, and the warnings; **Record
 decisions** sends the same text without `dryRun` and follows the job as
 `decide`'s. A file with nothing applicable offers no confirm.
 
+**Colour layers** (row I6; §9.3 answers 1–3, "Per map (row I6)"). A
+panel between the header and the CRT panel, from `review.colour`
+(`docs/map-import.md` §2.2), component
+`packages/web/src/components/map-review/ColourLayersPanel.tsx`, helpers
+`packages/web/src/lib/map-review-colours.ts`. The review query passes the
+club route's `clubMap` (the event route's map comes from the header), so
+the panel knows the map's setting. In order:
+
+- **The switch**: *Draw the map in* **the IOF order** / **the map's own
+  order**, the map's setting pressed (else the document's order). Pressing
+  the other calls `mapImport.setColourOrder` with the page's target and
+  follows the job as `decide`'s: the page moves to the document in that
+  order, *not used yet*, and **Use this version** pins it. The pressed
+  order stays pressable while the document on the page is drawn in the
+  other one (it builds the document in the setting). Disabled without
+  edit rights, while a job runs, and on a club URL without `?clubMap=`
+  (no map to remember it for: a note says so). A line says when the map's
+  setting and the document's order differ, and when the IOF layers could
+  not be built (`COLOUR_LAYERS_FAILED`).
+- **Before and after**: the map in the IOF order and in its own order, side
+  by side, the document's own marked *this version* — the `colour-order`
+  previews (`docs/map-storage.md` §4.5) of the reviewed document, scoped
+  with `?event=` on the event route. A picture whose other order is still
+  importing answers 503; the image retries every 5 s (36 times).
+- **Layers, top first** (the API lists draw order, bottom first; a colour
+  table reads top first): per row a swatch of its ink, the map's colour
+  name with its number (*added* for an inserted row), its IOF layer by
+  the palette's name — a row with no role by its place (*No IOF layer
+  (areas)*, *No IOF layer*, *Layout (graphic objects)*), so a colour split
+  only by place (`roles: [null, null]`, carried from I3) reads by place —
+  the objects drawn in it and flags: *split* (the colour draws on several
+  rows; a zero-object `identified` row does not count, carried from I5),
+  *deviation kept* / *deviation dropped* (the row's role is in one and
+  something is drawn in it), *map's order* (`sourceOrdered`), *no IOF
+  layer*, *under its own symbol's part* (`ownOrder`), *above the course
+  purple*, *draws nothing* (`objects: 0`, `symbols > 0`: a library-drawn
+  symbol's own reference, carried from I5). In the map's own order there
+  are no layers: a note says so.
+- **Deviations** (with the layers only): *N deviations, M kept*, then
+  every one, the most objects first: *Kept* / *Dropped*, "*upper* over
+  *lower*" by the palette's names, why (*by default*, *changed for this
+  map*, *needed by a kept deviation*, *cannot be kept*), its default and
+  the objects on each side. Read-only: row I7 makes the rows switchable
+  (keep, drop, reset) through one more mutation over the same setting.
+
+Role and palette names are the IOF palette's English names in both
+languages: there is no Swedish palette (decided overnight on the user's
+standing instruction, 2026-11-17, for review). Strings under
+`mapReview.colours.*`; `outdated` now names the colour order too. Test
+ids: `review-colours` (`data-order`, `data-setting`),
+`colour-order-iof` / `-source` (`aria-pressed`), `colour-picture-iof` /
+`-source` (`data-loaded`), `colour-layer-row` (`data-row`, `data-role`,
+`data-place`, `data-flags`), `colour-layers-none`,
+`colour-deviation` (`data-key`, `data-kept`, `data-default`,
+`data-why`), `colour-deviations-summary`, `colour-setting-differs`.
+
 Tests: `packages/web/src/lib/__tests__/map-review.test.ts` (outcomes,
 row order and the unused group, the pending batch — later wins,
 restatements dropped, reset only on decided rows, symbol order — swatch
@@ -1142,7 +1198,15 @@ swatches load, keep 850.1 as drawn, apply, finalise moves the card
 thumbnail, CRT download carries `# keep 850.1`, CRT upload previews and
 records `703 702.0`, resetting both rows returns the matcher's own
 document hash; event map: entry from the course editor, swatches scoped
-with `?event=`, nothing to finalise on the matcher's output).
+with `?event=`, nothing to finalise on the matcher's output; row I6, on
+`e2e/colour-layers.ocd`: the panel's 13 layers top first with the split
+brown 50 % on two rows, 9 deviations with 3 kept — road and paved area
+over the contour by default, the building over the contour implied — both
+pictures loaded and different, the switch to the map's own order (a new
+document, not used yet, no layers) and back (the original document, in
+use)); `packages/web/src/lib/__tests__/map-review-colours.test.ts` (top
+first, a layer named by role or place, flags, the switch's state, the
+picture's retry URL, the summary).
 
 ## 9. Colour stack alignment (03 §6.3)
 
@@ -1382,8 +1446,9 @@ I2, "Roles" below), the layered stack built from them (row I3, "Layers"),
 its exceptions (row I4: "Own order", "Deviations", "Source order") and
 the importer drawing on it (row I5, "In the importer"); the colour-order
 harness draws every map in both orders and classifies every change
-("Measured"). Still to come: the per-map switch and the colour panel
-(I6), per-map deviation overrides in the panel (I7).
+("Measured"), and the per-map switch with the review page's colour panel
+(row I6, "Per map (row I6)" below, §8.7 "Colour layers"). Still to come:
+per-map deviation overrides in the panel (I7).
 
 **The aim.** A document is drawn on the IOF colour order (§1, 03
 Appendix B) instead of the mapper's table, so the course layer and the
@@ -1906,9 +1971,9 @@ Stage 7 (`matchDocument`, `packages/shared/src/import/match-document.ts`)
 takes `colourOrder: "iof" | "source"` (`DEFAULT_COLOUR_ORDER`, `iof`) and
 `deviations` (keep or drop by key, the I7 mechanism; ignored in `source`).
 Importer bump `ocad-19` / `omap-12`: every pin is re-matched at the
-release (`map:rematch`, `docs/map-import.md` §5). The import worker
-passes no colour options until I6's per-map setting, so every stored
-`ocad-19` / `omap-12` document is `iof` at the defaults.
+release (`map:rematch`, `docs/map-import.md` §5). Since row I6 the import
+worker passes the map's colour setting ("Per map (row I6)" below); until
+it, every stored `ocad-19` / `omap-12` document was `iof` at the defaults.
 
 - **`iof`**: `symbolColourUses` over the matched symbols (their match
   steers the roles, an applied one makes them `library`), then
@@ -2003,6 +2068,82 @@ the layered stack is fit to be the importer's default.**
 | `packages/web/src/lib/editor/__tests__/symbol-pick.test.ts`, `map-gl/__tests__/worker-course.test.ts` | hit test and GL worker on a layered document |
 | `e2e/map-vector-layer.spec.ts` "on the IOF colour layers" | on `e2e/colour-layers.ocd`: a building over its paved area, the street over the contour, a leg over the open land and under the black path |
 
+#### Per map (row I6)
+
+**The setting.** A map's colour setting is `{ order, deviations }`:
+`order` `iof` (the default) or `source` (answer 1's switch back), and
+`deviations` the per-deviation overrides by key (`"upper>lower"` →
+`keep` | `drop`), holding only choices that differ from the default
+(`KEPT_BY_DEFAULT`), keys sorted — so equal settings are equal bytes, a
+reset is removing a key, and an override equal to the default never
+reaches stage 7. The overrides are kept while the order is `source` and
+apply again on the way back. Code: `packages/api/src/map-store/colour-settings.ts`.
+
+**Where it is stored** (decided overnight on the user's standing
+instruction, 2026-11-17, for review; `docs/map-storage.md` §2): one
+table, `map_colour_settings`, one row per **club map series** — kept
+across its versions, so a promote or any later version is built in the
+series' order — or per **event and source file** — an event's own upload,
+kept across a re-upload of the same file; another file starts at the
+defaults. No row = the defaults. A table rather than columns: a column on
+`map_files` would travel in the venue snapshot and the per-event dump,
+where an older box image would refuse the unknown field, and one on
+`club_maps` alone would split the setting over two homes. `course.useClubMap`
+copies the series' row to (event, the version's source), as it copies
+the rotation correction and the corrections; after that the two are
+independent (copy-on-use).
+
+**Read by every import.** `startImportJob` resolves the setting of the
+job's target — a club map's series' (a promote's too, which targets both),
+else the event's for the source — and snapshots it on the job row
+(`map_import_jobs.colour`), so a re-claimed job builds the same document;
+the worker passes it as `{ colourOrder, deviations }` into
+`importMapToDocument(…, { match })` (carried from I5). A job without a
+target is given one by its caller: `decide` and the CRT import the
+reviewed document's own (read from its report:
+`colourSettingsOfReport`), `setColourOrder` the new setting, the picture
+route the other order. Dedup reuses a stored document only when its
+report says it was built in that setting (`reportFollowsColour`: the same
+order, and in `iof` the same overrides among the deviations it lists; a
+document that fell back to `source` from `iof` is what `iof` gives); the
+setting stays in the store and the header records the outcome (I5).
+
+**The switch** is `mapImport.setColourOrder { documentHash, order, target }`
+with `finalise`'s target and `decide`'s permission (`docs/map-import.md`
+§2.2): it writes the order on the target's row and rebuilds as `decide`
+does — a job without a target, the document stored and pinned nowhere
+until **Use this version**. Flipping back finds the original document by
+dedup. The setting is written at once, so a pin whose document is in
+another setting is stale for the re-match (reason `colour`,
+`docs/map-storage.md` §6.9) — for club versions and, the setting being
+the event's own, for event pins too — and `review.current` is false for it
+(decided overnight on the user's standing instruction, 2026-11-17, for
+review: the alternative, writing the setting only at **Use this
+version**, would leave a flipped-but-unused switch remembered nowhere).
+The write and the rebuild are one function (`changeColourSettings`,
+`map-store/review.ts`) taking the change as a callback: row I7's
+`setDeviation` only adds a mutation and the panel's controls.
+
+**The picture** is drawn from stored documents by the reference raster
+over a capped window (`docs/map-storage.md` §4.5): the document's own
+order from it, the other order from the document the switch would give,
+imported on the first request when no such document exists yet — the
+picture is exactly what the switch gives (decided overnight, for review;
+the alternative of re-stacking the stored document in memory would be a
+second derivation of stage 7). Its other order uses today's club
+decisions, as the switch would.
+
+**Not in I6**: the deviation overrides' controls (row I7; the stored
+shape, the job snapshot, dedup and the panel's `key` / `default` / `why`
+are in place); the setting in the per-event dump and the checkout
+snapshot (`docs/map-storage.md` §9); a club-wide default list.
+
+| Test | Covers |
+|---|---|
+| `packages/api/src/__tests__/map-colour-settings.test.ts` | parse (malformed → defaults), normalise, stage 7's options, the setting read from a report (`iof`, `source`, overrides, the fallback, pre-layers), `reportFollowsColour`; the panel's payload on both fixtures (13 layers, the split flag on the two brown 50 % rows and not on `test.ocd`'s identified white, `draws-nothing`, 9 deviations with defaults and why, none in `source`) |
+| `packages/api/src/__tests__/integration/map-colour-settings.test.ts` | `docs/map-storage.md` §10 |
+| `e2e/map-review.spec.ts` (I6 test), `packages/web/src/lib/__tests__/map-review-colours.test.ts` | §8.7 |
+
 #### Measured (rows I3 and I4)
 
 **At I4** (`map-rendering.md` §6.5 "I4", the tables per map and the
@@ -2053,10 +2194,9 @@ the importer's default.
 ## 10. Pending in this chapter
 
 - **Canonical layers (§9.3)**: the importer draws on them by default
-  since I5. Rows I6–I7 in `SLICES.md`: the per-map switch to the
-  `source` order with the review page's colour panel (the setting stored
-  per map and passed to `matchDocument` by every import and re-match),
-  the per-map deviation overrides. Not in the slice: a club-wide default
+  since I5, with the per-map switch and the colour panel since I6. Row I7
+  in `SLICES.md`: the per-map deviation overrides in the panel. Not in
+  the slice: a club-wide default
   for which deviations are kept; an inserted purple 50 % as a 50 % screen
   of the map's purple (both orders use it at full strength).
 - Mapper object queries as CRT sources (§8.6 `CRT_QUERY_UNSUPPORTED`)

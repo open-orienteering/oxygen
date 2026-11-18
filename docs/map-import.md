@@ -140,17 +140,24 @@ its only fallback.
 the job's decision snapshot (`map_import_jobs.decisions`,
 `docs/map-storage.md` §6.1) into `match.decisions`, so stage 6 applies the
 club symbol decisions (`docs/map-symbols.md` §8.5) exactly as the job
-row recorded them when it was inserted.
+row recorded them when it was inserted. Since row I6 it carries the
+job's colour setting snapshot (`map_import_jobs.colour`, the map's
+`{ order, deviations }`) the same way, as `match.colourOrder` and
+`match.deviations` (`matchColourOptions`; no `deviations` key at the
+defaults): every import and re-match of a map is drawn in its map's
+setting (`docs/map-symbols.md` §9.3 "Per map (row I6)").
 
 **Review round** (06 §5.1, §5.3; `docs/map-storage.md` §6.8):
 
 ```
-mapImport.review   { documentHash }                          query, map-storage §4.2 predicate (courses.view, kiosk key)
-  → { documentHash, current, library, symbols: ReviewRow[], stack: { colours, alignment }, report }
+mapImport.review   { documentHash, clubMapId? }              query, map-storage §4.2 predicate (courses.view, kiosk key)
+  → { documentHash, current, library, symbols: ReviewRow[], stack: { colours, alignment }, report, terrain, colour }
 mapImport.decide   { documentHash, decisions: ReviewDecision[] }   mutation, the same predicate in edit mode
   → { applied, job }                                         job as mapImport.status returns it
 mapImport.finalise { documentHash, target: {kind:"event"} | {kind:"club", clubMapId} }   mutation
   → { documentHash, pinned, previous[] }
+mapImport.setColourOrder { documentHash, order: "iof" | "source", target }   mutation, finalise's target and permission
+  → { settings: { order, deviations }, job }                job as mapImport.status returns it
 
 type ReviewDecision = { symbolIdx; accept: canonicalId } | { symbolIdx; unmatch: true } | { symbolIdx; reset: true }
 ```
@@ -168,8 +175,20 @@ type ReviewDecision = { symbolIdx; accept: canonicalId } | { symbolIdx; unmatch:
   `omap-11` with `purplesDisplaced`, `docs/map-symbols.md` §9.2 step 4;
   since `ocad-19` / `omap-12` with `order` and, in the `iof` order,
   `layers` — the layered stack's rows, splits, source-ordered and roleless
-  rows, deviations and purple ink, §9.3 "In the importer"; the review
-  page's colour panel is row I6).
+  rows, deviations and purple ink, §9.3 "In the importer"). `colour`
+  (row I6) is the review page's colour panel (`docs/map-symbols.md` §8.7
+  "Colour layers"): the document's `order`, `fallback`
+  (`COLOUR_LAYERS_FAILED`), `built` (the setting it was built with, from
+  its report), `setting` — the colour setting of the map the review is
+  for: the club map `clubMapId`, else the request's event's map of the
+  document's source; `null` without one — `layers` (each stack row in
+  draw order: `row`, `id`, `name`, `hex`, `sourceNumber`, `role`,
+  `roleName`, `place`, `origin`, `objects`, `symbols`, `sourceOrdered`,
+  `flags`; `null` in the `source` order), `deviations` (every one: `key`,
+  `upper`, `lower` and their names, `kept`, `default`, `why`, `objects`,
+  `impliedBy?`, `blockedBy?`) and `pictures` (`{ iof, source }`, the
+  `colour-order` preview URLs, `docs/map-storage.md` §4.5). With a map,
+  `current` also needs the document to be in its colour setting.
 - `decide` validates every decision against the document (index exists,
   a source symbol with a render, an accepted id is an entry of the
   document's library or of an overlay library — `mapImport.isDocumentEntryId`,
@@ -193,8 +212,18 @@ type ReviewDecision = { symbolIdx; accept: canonicalId } | { symbolIdx; unmatch:
   `NOT_FOUND` for an unknown document, an event without a map or an
   unknown club map. Finalising the matcher's own output is a no-op
   (06 §5.1); `previous` lists the hashes that were pinned before.
+- `setColourOrder` (row I6) writes the map's colour order on the target
+  — the club map series, or the event's map of the document's source —
+  keeping its deviation overrides, and imports the document's source
+  again in it as `decide` does: a job without a target with the
+  document's corrections and the new setting, the result pinned nowhere
+  until `finalise`. `NOT_FOUND` for an unknown document, an event without
+  a map or an unknown club map; `PRECONDITION_FAILED` when the target's
+  map is another file; `BAD_REQUEST` for another order, or an event
+  target without an event. `decide` and `importCrt` import with the
+  reviewed document's own colour setting.
 - Authorisation (`docs/map-storage.md` §4.2): `review` is the document route's predicate exactly (not behind `authedProcedure`: a kiosk key with no user reads, as on the route).
-  `decide` and `finalise` use it in edit mode (`EDIT_ACCESS`): the event
+  `decide`, `finalise` and `setColourOrder` use it in edit mode (`EDIT_ACCESS`; an event target also needs `courses.edit`): the event
   clause needs `courses.edit` and never takes the kiosk key; the club and
   own-job clauses read as for reading. Club map targets need a signed-in
   user, as the club library's own mutations.
@@ -909,6 +938,7 @@ document hash is identical on two machines.
 
 | Level | File | Covers |
 |---|---|---|
+| Unit / integration (api) | `packages/api/src/__tests__/map-import-jobs.test.ts` (I6 part), `integration/map-colour-settings.test.ts`, `integration/map-review.test.ts` (I6 part) | row I6: the worker applies a job's colour setting as the inline import (`source`, an override, a setting equal to the defaults = the default document); `setColourOrder` and `review.colour` end to end (`docs/map-storage.md` §10) |
 | Unit (shared) | `packages/shared/src/map-document/__tests__/patch-bake.test.ts` | stage 8's bake (G12a, `docs/map-patches.md` §5.2): what the event drew, determinism, no layers = today's bytes, layers, issues, units — the full list in `map-patches.md` "Tests"; `report.test.ts` scans `patch-warnings.ts` for `PATCH_ISSUE` |
 | Integration (api) | `packages/api/src/__tests__/integration/map-promote.test.ts` | a worker import that bakes a version patch: another document hash, `map_documents.patch` and `report.corrections` recorded, the job `done` |
 | Unit (shared) | `packages/shared/src/import/__tests__/report.test.ts` | `WARNING_CLASS` classifies every code the importers, matcher and CRT parser emit and names none that nothing emits (source scan), the `unsupported` set is exactly the five codes of §7, `SYMBOL_REFERENCE_INVALID` is a `source-error`; `importReportSchema` accepts / rejects `warningDetails` |
