@@ -12,7 +12,7 @@ import { applyJobResult, startImportJob, type ImportJobRow } from "./jobs.js";
 import { readDocumentHead, readObjectsPerSymbol } from "./previews.js";
 import { staleReason } from "./rematch.js";
 import { terrainReview, type TerrainReview } from "./heightfield.js";
-import { colourSettingsOfReport, documentFollowsColour, loadColourSettings, loadRecordedColours, reportDeviationKeys, withDeviationChoice, writeColourSettings, type DeviationChoiceInput, type ColourTarget, type MapColourSettings } from "./colour-settings.js";
+import { colourSettingsOfReport, colourTargetKey, documentFollowsColour, loadColourSettings, loadRecordedColours, reportDeviationKeys, withDeviationChoice, writeColourSettings, type DeviationChoiceInput, type ColourTarget, type MapColourSettings } from "./colour-settings.js";
 import { buildColourReview, type ColourReview } from "./review-colours.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -126,7 +126,12 @@ export async function changeColourSettings(
   }
   const colourTarget = await colourTargetOf(db, input.target, doc.sourceHash);
   if (!colourTarget) return { ok: false, reason: "source-mismatch" };
-  const settings = await writeColourSettings(db, colourTarget, input.change(await loadColourSettings(db, colourTarget)), input.userId);
+  // Read, change and write under a lock on the target: a deviation change depends on the stored setting (row I7),
+  // so two changes at once must not lose one.
+  const settings = await db.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`map-colour:${colourTargetKey(colourTarget)}`}))`;
+    return writeColourSettings(tx, colourTarget, input.change(await loadColourSettings(tx, colourTarget)), input.userId);
+  });
   const job = await startImportJob(db, { sourceHash: doc.sourceHash, startedBy: input.userId, holdMs: input.holdMs, patch: mapDocument.parseVersionPatch(doc.patch), colour: settings });
   return { ok: true, settings, job };
 }
@@ -150,6 +155,21 @@ export async function changeDeviation(
   return changeColourSettings(db, { ...rest, change: (s) => withDeviationChoice(s, key, choice) });
 }
 
+/**
+ * The colour setting a decision on a reviewed document imports with: the
+ * map's (the review's target) when the document follows it — so a no-op
+ * override the report cannot show is kept (row I7) — else the document's
+ * own, read from its report.
+ */
+async function reviewedColourSettings(db: Db, doc: { hash: string; sourceHash: string; report: Prisma.JsonValue }, target: ReviewTarget | null): Promise<MapColourSettings> {
+  const own = colourSettingsOfReport(doc.report);
+  const colourTarget = target ? await colourTargetOf(db, target, doc.sourceHash) : null;
+  if (!colourTarget) return own;
+  const setting = await loadColourSettings(db, colourTarget);
+  const recorded = (await loadRecordedColours(db, [doc.hash])).get(doc.hash);
+  return documentFollowsColour({ report: doc.report, recorded }, setting) ? setting : own;
+}
+
 export type DecideResult =
   | { ok: true; job: ImportJobRow; applied: number }
   | { ok: false; reason: "not-found" };
@@ -160,7 +180,7 @@ export type DecideResult =
  * decider (§4.2 own-job clause) but pinned nowhere until `finalise`.
  * Throws `DecisionInputError` for a list that does not fit the document.
  */
-export async function decideOnDocument(db: PrismaClient, input: { hash: string; decisions: readonly ReviewDecision[]; userId: string | null; holdMs?: number }): Promise<DecideResult> {
+export async function decideOnDocument(db: PrismaClient, input: { hash: string; decisions: readonly ReviewDecision[]; userId: string | null; holdMs?: number; target?: ReviewTarget | null }): Promise<DecideResult> {
   const doc = await db.mapDocument.findUnique({ where: { hash: input.hash }, select: { sourceHash: true, patch: true, report: true } });
   const header = doc ? (await readDocumentHead(db, input.hash))?.header : null;
   if (!doc || !header) return { ok: false, reason: "not-found" };
@@ -168,7 +188,7 @@ export async function decideOnDocument(db: PrismaClient, input: { hash: string; 
   await writeDecisions(db, writes, input.userId);
   // The reviewed document's corrections and colour setting come along (docs/map-patches.md §5 answer 1;
   // docs/map-symbols.md §9.3 "Per map (row I6)"): a job without a target has no map to read the setting from.
-  const job = await startImportJob(db, { sourceHash: doc.sourceHash, startedBy: input.userId, holdMs: input.holdMs, patch: mapDocument.parseVersionPatch(doc.patch), colour: colourSettingsOfReport(doc.report) });
+  const job = await startImportJob(db, { sourceHash: doc.sourceHash, startedBy: input.userId, holdMs: input.holdMs, patch: mapDocument.parseVersionPatch(doc.patch), colour: await reviewedColourSettings(db, { hash: input.hash, ...doc }, input.target ?? null) });
   return { ok: true, job, applied: writes.length };
 }
 

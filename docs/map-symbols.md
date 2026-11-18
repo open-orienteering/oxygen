@@ -2202,7 +2202,14 @@ matches — both sides compared on what can change the document: in
 `source` no overrides, in `iof` the overrides of deviations the document
 lists (`documentFollowsColour`, `map-store/colour-settings.ts`). It is
 read by dedup (`currentDocumentFor`), the re-match (§6.9) and
-`review.current`. Judging by the outcome (`kept`) alone was rejected: with
+`review.current`. A symbol decision or a CRT import on the review page
+imports in the map's setting (`decide` and `importCrt` take the review's
+`clubMapId`, else the current event, as `review` does) when the reviewed
+document follows it, else in the document's own setting read from its
+report — so a decision on a map holding a no-op override gives a document
+recorded under that override, current and not re-matched. Two changes of
+one map's setting at once do not lose one: `changeColourSettings` reads,
+changes and writes under a lock on the target. Judging by the outcome (`kept`) alone was rejected: with
 two or more implied keeps, or a version first built under a no-op override
 and then reset, it stays stale; carrying the overrides in the header
 (different settings, different bytes) was rejected as reversing I5's
@@ -2219,7 +2226,8 @@ with the map's overrides as `?deviations=upper>lower:keep,…` (normalised,
 keys sorted; only on a `source` document's IOF picture); the route imports
 the other order with them and stores the PNG under a key of its own
 (`iof-<digest>`, `docs/map-storage.md` §4.5), so a picture is never reused
-across different overrides. An `iof` document's pictures need no query:
+across different overrides; only overrides of deviations the IOF document
+lists count, so the stored keys stay bounded whatever a reader asks for. An `iof` document's pictures need no query:
 its own order is drawn from it, and the map's own order ignores overrides.
 
 **Not in I7**: a club-wide default list; batching several overrides into

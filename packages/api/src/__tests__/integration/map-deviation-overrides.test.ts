@@ -26,7 +26,7 @@ import { createTestEvent, disconnect, type TestEventContext } from "../helpers/t
 import { makeCaller } from "../helpers/caller.js";
 import { grantSystemGroup } from "../../permissions.js";
 import { applyEventMap } from "../../event-map.js";
-import { currentDocumentFor, startImportJob } from "../../map-store/jobs.js";
+import { currentDocumentFor, getImportJob, startImportJob } from "../../map-store/jobs.js";
 import { planRematch } from "../../map-store/rematch.js";
 import { getBlob } from "../../map-store/blob-store.js";
 import { loadClubDecisions } from "../../map-store/decisions.js";
@@ -113,11 +113,18 @@ afterAll(async () => {
 }, 60_000);
 
 describe("the recorded settings", () => {
-  it("records the setting every finished import was asked for, and cascades with the document", async () => {
+  it("records the setting every finished import was asked for, checked, and cascades with the document", async () => {
     expect(await E.db.mapDocumentColourSetting.findMany({ where: { documentHash: plainDoc }, select: { colourKey: true, colour: true } }))
       .toEqual([{ colourKey: '{"order":"iof","deviations":{}}', colour: { order: "iof", deviations: {} } }]);
     await expect(E.db.$executeRawUnsafe(`INSERT INTO oxygen.map_document_colour_settings (document_hash, colour_key, colour) VALUES ('${plainDoc}', 'x', '[]')`)).rejects.toThrow(/map_document_colour_settings_colour_check/);
     await expect(E.db.$executeRawUnsafe(`INSERT INTO oxygen.map_document_colour_settings (document_hash, colour_key, colour) VALUES ('${"0".repeat(64)}', 'x', '{}')`)).rejects.toThrow(/foreign key/);
+    // The rows go with their document.
+    const doc = await E.db.mapDocument.findUniqueOrThrow({ where: { hash: plainDoc }, select: { bytes: true, sizeBytes: true, formatVersion: true, importerVersion: true, libraryVersion: true, header: true, report: true } });
+    const fake = sha256(Buffer.from(`fake-${suffix}`));
+    await E.db.mapDocument.create({ data: { hash: fake, sourceHash: clubSource, ...doc, header: doc.header ?? {}, report: doc.report ?? {} } });
+    await E.db.mapDocumentColourSetting.create({ data: { documentHash: fake, colourKey: "k", colour: {} } });
+    await E.db.mapDocument.delete({ where: { hash: fake } });
+    expect(await E.db.mapDocumentColourSetting.count({ where: { documentHash: fake } })).toBe(0);
   });
 });
 
@@ -140,6 +147,25 @@ describe("an override that changes no bytes (carried from I6)", () => {
     await setDeviation(plainDoc, BUILDING, "default");
     expect(await setting({ clubMapId })).toEqual({ order: "iof", deviations: {} });
   }, 60_000);
+
+  it("is kept by a symbol decision on the map: the decided document is current and needs no re-match", async () => {
+    await setDeviation(plainDoc, BUILDING, "keep");
+    const r = await as(null, setter).mapImport.review({ documentHash: plainDoc, clubMapId });
+    const row = r.symbols.find((x) => x.match?.state === "auto")!;
+    try {
+      const res = await as(null, setter).mapImport.decide({ documentHash: plainDoc, decisions: [{ symbolIdx: row.symbolIdx, unmatch: true }], clubMapId });
+      const decided = res.job.documentHash!;
+      expect(decided).not.toBe(plainDoc);
+      expect((await getImportJob(E.db, res.job.id))!.colour).toEqual({ order: "iof", deviations: { [BUILDING]: "keep" } });
+      expect((await as(null, setter).mapImport.review({ documentHash: decided, clubMapId })).current).toBe(true);
+      await as(null, setter).mapImport.finalise({ documentHash: decided, target: club() });
+      expect((await planRematch(E.db)).filter((i) => i.sourceHash === clubSource)).toEqual([]);
+    } finally {
+      await E.db.clubSymbolDecision.deleteMany({ where: { fingerprint: row.fingerprint } });
+      await as(null, setter).mapImport.finalise({ documentHash: plainDoc, target: club() });
+      await setDeviation(plainDoc, BUILDING, "default");
+    }
+  }, 90_000);
 });
 
 describe("setDeviation on a club map", () => {
@@ -240,5 +266,14 @@ describe("the picture of a source document in the IOF order", () => {
     // The overrides picture is drawn from the document the switch back gives.
     const jobs = await E.db.mapImportJob.findMany({ where: { sourceHash: clubSource, clubMapId: null, colour: { equals: { order: "iof", deviations: { [PAVED_BUILDING]: "keep" } } } }, select: { documentHash: true } });
     expect(new Set(jobs.map((j) => j.documentHash))).toEqual(new Set([keptDoc]));
+    // Keys stay bounded: unlisted overrides are the defaults' picture, and an IOF document ignores the query.
+    const unlisted = await get(`/api/map-documents/${sourceDoc}/colour-order/iof.png?deviations=${encodeURIComponent("black100>blue100-line:keep")}`);
+    expect(unlisted.headers.etag).toBe(`"${sourceDoc}/colour-order/iof"`);
+    const mixed = await get(`/api/map-documents/${sourceDoc}/colour-order/iof.png?deviations=${encodeURIComponent(`black100>blue100-line:keep,${PAVED_BUILDING}:keep`)}`);
+    expect(mixed.headers.etag).toBe(`"${sourceDoc}/colour-order/${key}"`);
+    const onIof = await get(`/api/map-documents/${keptDoc}/colour-order/iof.png?deviations=${query}`);
+    expect(onIof.statusCode).toBe(200);
+    expect(onIof.headers.etag).toBe(`"${keptDoc}/colour-order/iof"`);
+    expect(await E.db.mapPreview.count({ where: { documentHash: { in: [sourceDoc, keptDoc] }, kind: "colour-order" } })).toBe(3);
   }, 90_000);
 });

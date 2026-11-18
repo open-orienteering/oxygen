@@ -401,7 +401,12 @@ import (decided overnight on the user's standing instruction,
 picture's URL the map's overrides as `?deviations=` (normalised, keys
 sorted; row I7): the other order is imported with them, and the row's key
 and the ETag carry their digest, so a picture is never reused across
-overrides (a malformed query is **400**). The
+overrides (a malformed query is **400**). The keys stay bounded: the
+query counts only on a `source` document's IOF picture (any other picture
+is keyed by its order alone), and only for deviations a stored IOF document
+of that source and corrections lists — the import's result narrows them
+again — so overrides the map does not have give the defaults' picture.
+The
 render goes through the thumbnails' one-at-a-time queue, the import does
 not (its derive stage renders a thumbnail through that queue). While the
 import runs past a 20 s wait (`MAP_COLOUR_PICTURE_WAIT_MS`) the route
@@ -2097,9 +2102,9 @@ review). Each lands with its own section here and its own tests.
 | `packages/api/src/map-store/import-worker.ts` | worker-thread body: `importMapToDocument` by kind + report |
 | `packages/api/prisma/migrations/20261019150000_club_symbol_decisions/` | `club_symbol_decisions` |
 | `packages/api/src/map-store/decisions.ts` | decision rows: load, plan and write `decide`'s changes, job snapshot schema, "does a stored document follow the decisions" |
-| `packages/api/src/map-store/review.ts` | review payload, `decideOnDocument`, `finaliseDocument`, `isDocumentCurrent`, `changeColourSettings` (row I6) |
-| `packages/api/src/map-store/colour-settings.ts` | a map's colour setting: parse, normalise, read from a report, the rows (`map_colour_settings`), the job's setting, `useClubMap`'s copy (row I6) |
-| `packages/api/src/map-store/review-colours.ts`, `colour-pictures.ts` | the review's colour block; the before / after picture (row I6) |
+| `packages/api/src/map-store/review.ts` | review payload, `decideOnDocument` (row I7: with the map's setting when the document follows it), `finaliseDocument`, `isDocumentCurrent`, `changeColourSettings` (row I6; row I7: under a lock on the target), `changeDeviation` (row I7) |
+| `packages/api/src/map-store/colour-settings.ts` | a map's colour setting: parse, normalise, read from a report, the rows (`map_colour_settings`), the job's setting, `useClubMap`'s copy (row I6); one deviation's choice (`withDeviationChoice`), the recorded settings (`map_document_colour_settings`, `documentFollowsColour`), the picture's `deviations` query (row I7) |
+| `packages/api/src/map-store/review-colours.ts`, `colour-pictures.ts` | the review's colour block (row I7: each deviation's `choice` and `overridden`); the before / after picture (row I6; row I7: an IOF picture of a `source` document with the map's overrides, keys bounded to the deviations the IOF document lists) |
 | `packages/api/src/map-store/crt.ts` | CRT export (rows → `mapImport.formatCrt`, file name) and import (`planCrtImport` → `decideOnDocument`) |
 | `packages/api/src/map-store/rematch.ts` | re-match plan and run (§6.9) |
 | `packages/api/src/cli/map-rematch.ts` (+ `-args.ts`) | `pnpm map:rematch` |

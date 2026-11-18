@@ -62,6 +62,11 @@ async function present(db: PrismaClient, row: ImportJobRow) {
   };
 }
 
+/** The map a review round is for, as `review` reads it: the club map series, else the current event's map. */
+function reviewTargetOf(ctx: Context, clubMapId: string | undefined): ReviewTarget | null {
+  return clubMapId ? { kind: "club", clubMapId } : ctx.event ? { kind: "event", eventId: ctx.event.id } : null;
+}
+
 /** A colour change's target (`setColourOrder`, `setDeviation`): the event's needs `courses.edit`, a club map's a signed-in user. */
 async function colourChangeTarget(ctx: Context, target: z.infer<typeof targetSchema>): Promise<ReviewTarget> {
   return target.kind === "event" ? { kind: "event", eventId: await requireEventCapability(ctx, "courses.edit") } : { kind: "club", clubMapId: target.clubMapId };
@@ -127,10 +132,7 @@ export const mapImportRouter = router({
     .input(z.object({ documentHash: documentHashSchema, clubMapId: z.string().uuid().optional() }))
     .query(async ({ ctx, input }) => {
       await requireDocument(ctx, input.documentHash, READ_ACCESS);
-      const target: ReviewTarget | null = input.clubMapId
-        ? { kind: "club", clubMapId: input.clubMapId }
-        : ctx.event ? { kind: "event", eventId: ctx.event.id } : null;
-      const review = await buildReview(prisma(), input.documentHash, target);
+      const review = await buildReview(prisma(), input.documentHash, reviewTargetOf(ctx, input.clubMapId));
       if (!review) throw new TRPCError({ code: "NOT_FOUND", message: "Map document not found" });
       return review;
     }),
@@ -142,13 +144,13 @@ export const mapImportRouter = router({
    * would, so a large map is polled like an upload.
    */
   decide: authedProcedure
-    .input(z.object({ documentHash: documentHashSchema, decisions: z.array(reviewDecisionSchema).min(1).max(MAX_REVIEW_DECISIONS) }))
+    .input(z.object({ documentHash: documentHashSchema, decisions: z.array(reviewDecisionSchema).min(1).max(MAX_REVIEW_DECISIONS), clubMapId: z.string().uuid().optional() }))
     .mutation(async ({ ctx, input }) => {
       await requireDocument(ctx, input.documentHash, EDIT_ACCESS);
       const db = prisma();
       let result;
       try {
-        result = await decideOnDocument(db, { hash: input.documentHash, decisions: input.decisions, userId: ctx.user?.id ?? null });
+        result = await decideOnDocument(db, { hash: input.documentHash, decisions: input.decisions, userId: ctx.user?.id ?? null, target: reviewTargetOf(ctx, input.clubMapId) });
       } catch (err: unknown) {
         if (err instanceof DecisionInputError) throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
         throw err;
@@ -222,13 +224,14 @@ export const mapImportRouter = router({
       documentHash: documentHashSchema,
       crt: z.string().refine((s) => Buffer.byteLength(s, "utf8") <= MAX_CRT_BYTES, "a CRT of at most 1 MiB"),
       dryRun: z.boolean().optional(),
+      clubMapId: z.string().uuid().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       await requireDocument(ctx, input.documentHash, EDIT_ACCESS);
       const db = prisma();
       let result;
       try {
-        result = await importDocumentCrt(db, { hash: input.documentHash, crt: input.crt, userId: ctx.user?.id ?? null, dryRun: input.dryRun });
+        result = await importDocumentCrt(db, { hash: input.documentHash, crt: input.crt, userId: ctx.user?.id ?? null, dryRun: input.dryRun, target: reviewTargetOf(ctx, input.clubMapId) });
       } catch (err: unknown) {
         if (err instanceof DecisionInputError) throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
         throw err;

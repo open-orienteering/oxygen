@@ -152,7 +152,7 @@ setting (`docs/map-symbols.md` §9.3 "Per map (row I6)").
 ```
 mapImport.review   { documentHash, clubMapId? }              query, map-storage §4.2 predicate (courses.view, kiosk key)
   → { documentHash, current, library, symbols: ReviewRow[], stack: { colours, alignment }, report, terrain, colour }
-mapImport.decide   { documentHash, decisions: ReviewDecision[] }   mutation, the same predicate in edit mode
+mapImport.decide   { documentHash, decisions: ReviewDecision[], clubMapId? }   mutation, the same predicate in edit mode
   → { applied, job }                                         job as mapImport.status returns it
 mapImport.finalise { documentHash, target: {kind:"event"} | {kind:"club", clubMapId} }   mutation
   → { documentHash, pinned, previous[] }
@@ -233,6 +233,10 @@ type ReviewDecision = { symbolIdx; accept: canonicalId } | { symbolIdx; unmatch:
   `review.colour.deviations[]` carries `choice` (the map's override, else
   the default; `null` without a target) and `overridden` (the map's
   setting holds the key), read from the setting rather than the report.
+- `decide` and `importCrt` take an optional `clubMapId` (else the current
+  event), the map the review is for (row I7): they import in its colour
+  setting when the reviewed document follows it, else in the document's
+  own.
 - Authorisation (`docs/map-storage.md` §4.2): `review` is the document route's predicate exactly (not behind `authedProcedure`: a kiosk key with no user reads, as on the route).
   `decide`, `finalise`, `setColourOrder` and `setDeviation` use it in edit mode (`EDIT_ACCESS`; an event target also needs `courses.edit`): the event
   clause needs `courses.edit` and never takes the kiosk key; the club and
