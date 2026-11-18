@@ -117,8 +117,24 @@ megapixels is refused before decoding. `width_px` / `height_px`
 its longer side is 4096 px (question 14). Written at upload, copied by
 `saveToClub`, computed by the venue's snapshot import; the migration
 fills PNG rows from their IHDR and `graphics.list` fills any row still
-NULL the first time it reads it (`course-maps/graphics.ts`
-`prepareGraphicUpload`, `graphicPixelSize`). `event_id NULL` marks a
+NULL the first time it reads it — so that query writes, once per row: the
+size, or 0 × 0 for bytes that cannot be sized (answered as no size), so
+they are not read again (`course-maps/graphics.ts`
+`prepareGraphicUpload`, `graphicPixelSize`). Upload preparation runs
+under the print gate. Deleting a graphic that sheets still place leaves
+those image objects pointing at a missing graphic: the editor and print
+report it as before J2 (`IMAGE_MISSING`); the picker does not check use.
+
+Tests (J2): `packages/api/src/__tests__/course-map-graphics-upload.test.ts`
+(pixel size, the 4096 resample with alpha, the 3072/2048 fallbacks, the
+2048 refusal, 64 MP and SVG over 8 MiB refused, `thumbBox`);
+`integration/graphics.test.ts` (upload sizes, the list's backfill and its
+0 × 0 mark, the migration's IHDR SQL, `version` after a byte change,
+`saveToClub`, `thumb.png` for PNG and SVG, the kiosk key on the three
+routes, a club graphic, and not across events); `integration/venue-print.test.ts`
+"a graphic over 4 MiB" (two `exportBlob` slices, imported with its size);
+`packages/web/src/lib/__tests__/graphics-picker.test.ts`; E2E in
+`course-layout.md`'s test table ("graphics: upload an SVG…"). `event_id NULL` marks a
 club-library graphic shared across events; event rows cascade on event
 delete. An `image` layout object references a graphic by id; print
 embeds it in the page (PNG as is, SVG rasterised in the API at render
@@ -196,7 +212,8 @@ Event-scoped tRPC routers:
   §6); `saveLayout` and `update` take an optional `baseVersion` (a stale
   one is `CONFLICT` with the row now; omitted, last writer wins) and
   answer the new `version`
-- `graphics` — list (event + club, each with `widthPx` / `heightPx`),
+- `graphics` — list (event + club, each with `widthPx` / `heightPx` and
+  `version`, the bytes' version for content-keyed URLs),
   upload (base64, ≤ 16 MiB, prepared as in Data model), saveToClub,
   delete
 
@@ -216,16 +233,22 @@ GET /api/maps/:nameId/maps.pdf
 GET /api/maps/:nameId/print-job?<the maps.pdf query>   (the job maps.pdf composes, JSON; G15; version 2 carries the event's patch, G14)
 GET /api/maps/:nameId/graphics/:id
 GET /api/maps/:nameId/graphics/:id/print.png[?w=&h=]   (the PNG a print embeds; SVG needs w, h; G15)
-GET /api/maps/:nameId/graphics/:id/thumb.png            (≤ 256 px on the longer side, never enlarged; immutable cache; J2)
+GET /api/maps/:nameId/graphics/:id/thumb.png[?v=]       (≤ 256 px on the longer side, never enlarged; immutable cache; J2)
 ```
 
 The three graphic routes answer `courses.view`, and the event's kiosk key
 (header `x-kiosk-key` or `?k=`; J2, user 2026-11-18 Q2: the kiosk and
-viewer draw images). `thumb.png` resamples a PNG with `sharp` and
-rasterises an SVG with resvg in a print worker; stored bytes never
-change, so it is `Cache-Control: private, max-age=31536000, immutable`.
+viewer draw images; the key reads the event's own graphics and any club
+graphic by id, answer 15). `thumb.png` resamples a PNG with `sharp`
+(at most 64 MP decoded) and rasterises an SVG with resvg in a print
+worker, both under the print gate. An id's bytes can be replaced (a
+checkout's import replaces the row under the cloud's id; an id can be
+reused after deletes), so the picker asks `thumb.png?v=<version>` from
+`graphics.list` (`<sizeBytes>-<updated_at ms>`; the row's trigger stamps
+`updated_at` on any write) and the answer is `Cache-Control: private,
+max-age=31536000, immutable` per URL; the route ignores `v`.
 
-All require `courses.view`. `print-job` has `maps.pdf`'s selection,
+The other routes require `courses.view` (the kiosk key where stated). `print-job` has `maps.pdf`'s selection,
 order, caps and 400s; a host composes it with `renderPrintJob`
 (`@oxygen/shared/print`) to `maps.pdf`'s bytes (`course-print.md` §8.5). The web app's exports call `print-job` and compose
 on the device whenever it can, falling back to `maps.pdf`

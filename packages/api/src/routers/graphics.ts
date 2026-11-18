@@ -5,6 +5,7 @@ import {
   graphicPixelSize,
   prepareGraphicUpload,
 } from "../course-maps/graphics.js";
+import { printGate } from "../course-maps/print-worker-host.js";
 import {
   coursesEditProcedure,
   coursesViewProcedure,
@@ -21,6 +22,11 @@ export interface GraphicListItem {
   heightPx: number | null;
   /** True for club-library graphics shared across events. */
   club: boolean;
+  /**
+   * The bytes' version for content-keyed URLs (`thumb.png?v=`): an id's bytes can be replaced
+   * (a checkout's import, an id reused after deletes), so a cached thumbnail is keyed by this.
+   */
+  version: string;
 }
 
 const listSelect = {
@@ -31,6 +37,7 @@ const listSelect = {
   widthPx: true,
   heightPx: true,
   eventId: true,
+  updatedAt: true,
 } as const;
 
 function listItem(row: {
@@ -41,15 +48,18 @@ function listItem(row: {
   widthPx: number | null;
   heightPx: number | null;
   eventId: bigint | null;
+  updatedAt: Date;
 }): GraphicListItem {
   return {
     id: Number(row.id),
     name: row.name,
     mime: row.mime,
     sizeBytes: row.sizeBytes,
-    widthPx: row.widthPx,
-    heightPx: row.heightPx,
+    // 0 marks a row the backfill could not size: no size.
+    widthPx: row.widthPx || null,
+    heightPx: row.heightPx || null,
     club: row.eventId === null,
+    version: `${row.sizeBytes}-${row.updatedAt.getTime()}`,
   };
 }
 
@@ -61,14 +71,16 @@ export const graphicsRouter = router({
       orderBy: [{ eventId: { sort: "desc", nulls: "last" } }, { name: "asc" }],
       select: listSelect,
     });
-    // The backfill of rows the migration could not size (SVGs, J2): read
-    // once, written back, so a later list reads the columns only.
+    // The backfill of rows the migration could not size (SVGs, J2): this query writes, once per
+    // row — the size, or 0 × 0 for bytes that cannot be sized, so they are not read again.
     for (const row of rows) {
       if (row.widthPx !== null && row.heightPx !== null) continue;
       const held = await ctx.db.graphic.findUnique({ where: { id: row.id }, select: { data: true } });
-      const size = held ? graphicPixelSize(held.data, row.mime) : null;
-      if (!size) continue;
-      await ctx.db.graphic.update({ where: { id: row.id }, data: size, select: { id: true } });
+      if (!held) continue;
+      const size = graphicPixelSize(held.data, row.mime) ?? { widthPx: 0, heightPx: 0 };
+      // The row's trigger stamps `updated_at`, so the version moves once: one thumbnail refetch.
+      const stamped = await ctx.db.graphic.update({ where: { id: row.id }, data: size, select: { updatedAt: true } });
+      row.updatedAt = stamped.updatedAt;
       row.widthPx = size.widthPx;
       row.heightPx = size.heightPx;
     }
@@ -91,7 +103,8 @@ export const graphicsRouter = router({
     .mutation(async ({ ctx, input }) => {
       let prepared: Awaited<ReturnType<typeof prepareGraphicUpload>>;
       try {
-        prepared = await prepareGraphicUpload(Buffer.from(input.fileDataBase64, "base64"));
+        // Decoding up to 64 MP, up to three times: through the print gate, as other image work.
+        prepared = await printGate(() => prepareGraphicUpload(Buffer.from(input.fileDataBase64, "base64")));
       } catch (error) {
         throw new TRPCError({
           code: "BAD_REQUEST",

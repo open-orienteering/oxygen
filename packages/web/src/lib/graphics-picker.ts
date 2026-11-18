@@ -16,6 +16,8 @@ export interface PickerGraphic {
   widthPx: number | null;
   heightPx: number | null;
   club: boolean;
+  /** `graphics.list`'s content version: the thumbnail URL is keyed by it (its cache is immutable). */
+  version: string;
 }
 
 /** Event graphics, then club graphics, each in the server's (name) order. */
@@ -28,8 +30,19 @@ export function graphicSizeLabel(g: Pick<PickerGraphic, "widthPx" | "heightPx">)
   return g.widthPx && g.heightPx ? `${g.widthPx} × ${g.heightPx} px` : null;
 }
 
-export function graphicThumbUrl(nameId: string, id: number): string {
-  return `/api/maps/${encodeURIComponent(nameId)}/graphics/${id}/thumb.png`;
+/** The thumbnail, keyed by the bytes' version: an id's bytes can be replaced, and the answer is cached as immutable. */
+export function graphicThumbUrl(nameId: string, id: number, version: string): string {
+  return `/api/maps/${encodeURIComponent(nameId)}/graphics/${id}/thumb.png?v=${encodeURIComponent(version)}`;
+}
+
+/** The picker's message key for an upload the server refused (its messages are English), or null for the generic one. */
+export function uploadErrorKey(message: string): "graphicsTooManyPixels" | "graphicsTooLargeResampled" | "graphicsSvgTooLarge" | "graphicsTooLarge" | "graphicsUnsafeSvg" | null {
+  if (/megapixels/i.test(message)) return "graphicsTooManyPixels";
+  if (/even at \d+ px/i.test(message)) return "graphicsTooLargeResampled";
+  if (/SVG graphic is limited/i.test(message)) return "graphicsSvgTooLarge";
+  if (/Graphics are limited to/i.test(message)) return "graphicsTooLarge";
+  if (/The SVG (must not|needs|file|viewBox)/i.test(message)) return "graphicsUnsafeSvg";
+  return null;
 }
 
 /** Why a file cannot be uploaded, or null: PNG or SVG by name or type, at most 16 MiB. */

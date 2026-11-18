@@ -144,6 +144,8 @@ test.describe("Course editor layout (docs/course-layout.md)", () => {
     const { sheet, drop } = await sheetFixture("Layout graphic");
     const images = async () =>
       (await trpcCall<{ objects: { kind: string; graphicId?: number }[] }>("courseMap.get", { seq: sheet.seq }, false)).objects.filter((o) => o.kind === "image");
+    // A unique name: the club copy is global, and a failed run must not break the next one.
+    const logoName = `e2e-logo-${Date.now()}.svg`;
     try {
       await page.goto(`/${nameId}/course-editor?mode=layout&sheet=${sheet.seq}`);
       await editorReady(page);
@@ -153,13 +155,13 @@ test.describe("Course editor layout (docs/course-layout.md)", () => {
       await page.getByTestId("editor-layout-graphics-toggle").click();
       const uploaded = waitForTrpc(page, "graphics.upload");
       await page.getByTestId("editor-layout-graphic-upload").setInputFiles({
-        name: "e2e-logo.svg",
+        name: logoName,
         mimeType: "image/svg+xml",
         buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="#336699"/></svg>'),
       });
       await uploaded;
       // J2: the picker's tile shows the thumbnail and the SVG's size at 4096 px.
-      const tile = page.getByTestId("editor-layout-graphic-event").getByTestId("editor-layout-graphic-tile").filter({ hasText: "e2e-logo.svg" }).last();
+      const tile = page.getByTestId("editor-layout-graphic-event").getByTestId("editor-layout-graphic-tile").filter({ hasText: logoName }).last();
       await expect(tile).toHaveAttribute("data-club", "false");
       const graphicId = Number(await tile.getAttribute("data-graphic-id"));
       await expect(tile).toContainText("4096 × 4096 px");
@@ -191,7 +193,7 @@ test.describe("Course editor layout (docs/course-layout.md)", () => {
       const saved = waitForTrpc(page, "graphics.saveToClub");
       await page.getByTestId(`editor-layout-graphic-save-club-${graphicId}`).click();
       await saved;
-      const clubTile = page.getByTestId("editor-layout-graphic-club").getByTestId("editor-layout-graphic-tile").filter({ hasText: "e2e-logo.svg" });
+      const clubTile = page.getByTestId("editor-layout-graphic-club").getByTestId("editor-layout-graphic-tile").filter({ hasText: logoName });
       await expect(clubTile).toHaveCount(1);
       const clubId = Number(await clubTile.getAttribute("data-graphic-id"));
       const del = page.getByTestId(`editor-layout-graphic-delete-${clubId}`);
@@ -208,6 +210,8 @@ test.describe("Course editor layout (docs/course-layout.md)", () => {
       await removedOwn;
       await expect(page.locator(`[data-testid="editor-layout-graphic-tile"][data-graphic-id="${graphicId}"]`)).toHaveCount(0);
     } finally {
+      const left = await trpcCall<{ id: number; name: string }[]>("graphics.list", undefined, false).catch(() => []);
+      for (const g of left.filter((x) => x.name === logoName)) await cleanup("graphics.delete", { id: g.id });
       await drop();
     }
   });

@@ -8,6 +8,8 @@
  *   - the three graphic routes answer the event's kiosk key (user 2026-11-18, Q2)
  */
 import { randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
 import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -81,6 +83,35 @@ describe("graphics library sizes (J2)", () => {
     expect([held.widthPx, held.heightPx]).toEqual([4096, 2048]);
   });
 
+  it("marks bytes that cannot be sized 0 × 0 once and answers no size; the version is stable after", async () => {
+    const id = (await ctx.db.graphic.create({ data: { eventId: ctx.eventId, name: "broken.png", mime: "image/png", data: Buffer.from("not a png"), sizeBytes: 9 } })).id;
+    const listed = (await caller.graphics.list()).find((g) => g.id === Number(id));
+    expect([listed?.widthPx, listed?.heightPx]).toEqual([null, null]);
+    const held = await ctx.db.graphic.findUniqueOrThrow({ where: { id } });
+    expect([held.widthPx, held.heightPx]).toEqual([0, 0]);
+    const again = (await caller.graphics.list()).find((g) => g.id === Number(id));
+    expect(again?.version).toBe(listed?.version);
+  });
+
+  it("the migration's SQL backfill sizes a PNG from its IHDR", async () => {
+    const data = await png(37, 11);
+    const id = (await ctx.db.graphic.create({ data: { eventId: ctx.eventId, name: "old.png", mime: "image/png", data, sizeBytes: data.length } })).id;
+    const sql = readFileSync(resolve(__dirname, "../../../prisma/migrations/20261119120000_graphics_pixel_size/migration.sql"), "utf8");
+    const update = sql.slice(sql.indexOf("UPDATE")).trim().replace(/;$/, "");
+    await ctx.db.$executeRawUnsafe(`${update} AND "id" = ${id}`);
+    const held = await ctx.db.graphic.findUniqueOrThrow({ where: { id } });
+    expect([held.widthPx, held.heightPx]).toEqual([37, 11]);
+  });
+
+  it("answers a content version that changes when an id's bytes are replaced", async () => {
+    const row = await upload("replaced", await png(8, 8));
+    const before = (await caller.graphics.list()).find((g) => g.id === row.id)!.version;
+    const other = await png(9, 9);
+    await ctx.db.graphic.update({ where: { id: BigInt(row.id) }, data: { data: other, sizeBytes: other.length } });
+    const after = (await caller.graphics.list()).find((g) => g.id === row.id)!.version;
+    expect(after).not.toBe(before);
+  });
+
   it("copies the size into the club library", async () => {
     const row = await upload("door2", await png(30, 60));
     const copy = await caller.graphics.saveToClub({ id: row.id });
@@ -132,6 +163,22 @@ describe("the event's kiosk key reads graphics (Q2)", () => {
         expect((await get(`${url}?k=${KIOSK}`)).statusCode).toBe(200);
         expect((await get(url)).statusCode).toBe(401);
         expect((await get(url, { "x-kiosk-key": "wrong" })).statusCode).toBe(401);
+      }
+      // A club graphic too (answer 15: the key reads any club graphic by id).
+      const club = await caller.graphics.saveToClub({ id: row.id });
+      clubIds.push(BigInt(club.id));
+      expect((await get(`/api/maps/${ctx.nameId}/graphics/${club.id}/thumb.png`, { "x-kiosk-key": KIOSK })).statusCode).toBe(200);
+      // Another event's key does not read this event's graphic, nor this key the other's.
+      const other = await createTestEvent("graphics_other");
+      try {
+        const OTHER = `kiosk-other-${suffix}`;
+        await other.db.event.update({ where: { id: other.eventId }, data: { kioskKey: OTHER } });
+        const theirs = (await other.db.graphic.create({ data: { eventId: other.eventId, name: "theirs.png", mime: "image/png", data: await png(4, 4), sizeBytes: 1 } })).id;
+        expect((await get(`/api/maps/${ctx.nameId}/graphics/${row.id}`, { "x-kiosk-key": OTHER })).statusCode).toBe(401);
+        expect((await get(`/api/maps/${other.nameId}/graphics/${row.id}`, { "x-kiosk-key": OTHER })).statusCode).toBe(404);
+        expect((await get(`/api/maps/${ctx.nameId}/graphics/${theirs}`, { "x-kiosk-key": KIOSK })).statusCode).toBe(404);
+      } finally {
+        await other.cleanup();
       }
     } finally {
       if (previousAuthMode === undefined) delete process.env.AUTH_MODE;

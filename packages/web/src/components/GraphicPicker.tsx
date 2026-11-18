@@ -15,7 +15,7 @@ import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import { fileToBase64 } from "../lib/file-to-base64";
 import { formatBytes } from "../lib/editor/map-info";
-import { graphicGroups, graphicSizeLabel, graphicThumbUrl, uploadProblem, type PickerGraphic } from "../lib/graphics-picker";
+import { graphicGroups, graphicSizeLabel, graphicThumbUrl, uploadErrorKey, uploadProblem, type PickerGraphic } from "../lib/graphics-picker";
 
 export function GraphicPicker(p: {
   nameId: string;
@@ -49,7 +49,9 @@ export function GraphicPicker(p: {
       const fileDataBase64 = await fileToBase64(file);
       await upload.mutateAsync({ name: file.name, scope: "event", fileDataBase64 });
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const message = e instanceof Error ? e.message : String(e);
+      const key = uploadErrorKey(message);
+      setError(key ? t(key) : t("graphicsUploadFailed", { detail: message }));
     }
   };
 
@@ -61,7 +63,7 @@ export function GraphicPicker(p: {
         className={`flex items-center gap-2 rounded border p-1 ${armed ? "border-purple-300 bg-purple-50" : "border-slate-200"}`}>
         <button type="button" data-testid={`${prefix}-place-${g.id}`} aria-pressed={armed} title={t("layoutPlace")} onClick={() => p.onPick(g.id)}
           className="shrink-0 w-12 h-12 rounded bg-[repeating-conic-gradient(#e2e8f0_0%_25%,#fff_0%_50%)] bg-[length:8px_8px] flex items-center justify-center overflow-hidden cursor-pointer">
-          <img src={graphicThumbUrl(p.nameId, g.id)} alt="" loading="lazy" className="max-w-full max-h-full object-contain" data-testid={`${prefix}-thumb`} />
+          <img src={graphicThumbUrl(p.nameId, g.id, g.version)} alt="" loading="lazy" className="max-w-full max-h-full object-contain" data-testid={`${prefix}-thumb`} />
         </button>
         <div className="min-w-0 flex-1 text-[11px] leading-tight">
           <div className="truncate text-slate-700" title={g.name}>{g.name}</div>
@@ -70,7 +72,7 @@ export function GraphicPicker(p: {
             <div className="flex gap-2 mt-0.5">
               {!g.club && (
                 <button type="button" data-testid={`${prefix}-save-club-${g.id}`} disabled={saveToClub.isPending}
-                  onClick={() => void saveToClub.mutateAsync({ id: g.id }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))}
+                  onClick={() => void saveToClub.mutateAsync({ id: g.id }).catch((e: unknown) => setError(t("graphicsActionFailed", { detail: e instanceof Error ? e.message : String(e) })))}
                   className="text-purple-700 hover:underline cursor-pointer disabled:opacity-50">{t("graphicsSaveToClub")}</button>
               )}
               <button type="button" data-testid={`${prefix}-delete-${g.id}`} disabled={remove.isPending}
@@ -80,7 +82,7 @@ export function GraphicPicker(p: {
                     return;
                   }
                   setConfirmDelete(null);
-                  void remove.mutateAsync({ id: g.id }).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+                  void remove.mutateAsync({ id: g.id }).catch((e: unknown) => setError(t("graphicsActionFailed", { detail: e instanceof Error ? e.message : String(e) })));
                 }}
                 className={`hover:underline cursor-pointer disabled:opacity-50 ${confirmDelete === g.id ? "text-red-700 font-medium" : "text-slate-500"}`}>
                 {confirmDelete === g.id ? t(g.club ? "graphicsDeleteClubConfirm" : "graphicsDeleteConfirm") : t("graphicsDelete")}

@@ -7,7 +7,7 @@ import { renderGate } from "../map-render-limits.js";
 import { type PinnedPrintSource, pinnedPrintSource } from "./pdf-page.js";
 import { PRINT_JOB_VERSION, type PrintGraphic, type PrintJob, type PrintJobGraphicMime, type PrintSheet } from "@oxygen/shared/print";
 import { printGate, rasteriseSvgInWorker, renderCoursePagesInWorker, resetPrintWorkers } from "./print-worker-host.js";
-import { GRAPHIC_THUMB_PX, graphicPixelSize, parseRasterBox, sheetGraphicIds, thumbBox } from "./graphics.js";
+import { GRAPHIC_MAX_INPUT_PIXELS, GRAPHIC_THUMB_PX, graphicPixelSize, parseRasterBox, sheetGraphicIds, thumbBox } from "./graphics.js";
 import { classesByCourse, loadCourseObjects } from "../course-objects.js";
 
 type Db = ReturnType<typeof prisma>;
@@ -566,8 +566,9 @@ export function registerCourseMapRoutes(
 
   // A graphic's thumbnail (J2, docs/course-maps.md "API"): a PNG at most
   // `GRAPHIC_THUMB_PX` on its longer side, aspect kept, never enlarged. A
-  // PNG is resampled by sharp, an SVG rasterised by resvg in a print worker.
-  // Stored bytes never change, so the answer is immutable.
+  // PNG is resampled by sharp, an SVG rasterised by resvg in a print worker,
+  // both under the print gate. The picker asks it as `thumb.png?v=<version>`
+  // (`graphics.list`), so a URL names one content and the answer is immutable.
   server.get<{
     Params: { nameId: string; id: string };
   }>("/api/maps/:nameId/graphics/:id/thumb.png", async (req, reply) => {
@@ -597,7 +598,9 @@ export function registerCourseMapRoutes(
         png = await printGate(() => rasteriseSvgInWorker(new Uint8Array(graphic.data), w, h));
       } else {
         const sharp = (await import("sharp")).default;
-        png = await sharp(Buffer.from(graphic.data)).resize({ width: w, height: h, fit: "fill" }).png().toBuffer();
+        png = await printGate(() =>
+          sharp(Buffer.from(graphic.data), { limitInputPixels: GRAPHIC_MAX_INPUT_PIXELS }).resize({ width: w, height: h, fit: "fill" }).png().toBuffer(),
+        );
       }
     } catch (error) {
       req.log.error(error);

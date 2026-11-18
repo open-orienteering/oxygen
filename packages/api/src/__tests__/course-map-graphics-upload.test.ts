@@ -68,6 +68,16 @@ describe("prepareGraphicUpload", () => {
     await expect(prepareGraphicUpload(await png(2048, 1500, { noise: true }))).rejects.toThrow("2048 px");
   }, 60_000);
 
+  it("refuses a PNG over 64 megapixels before decoding it", async () => {
+    const huge = await sharp({ create: { width: 8200, height: 8200, channels: 3, background: "#fff" } }).png().toBuffer();
+    await expect(prepareGraphicUpload(huge)).rejects.toThrow("64 megapixels");
+  }, 60_000);
+
+  it("refuses an SVG over the 8 MiB stored cap", async () => {
+    const svg = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1">${" ".repeat(MAX_GRAPHIC_STORED_BYTES)}</svg>`);
+    await expect(prepareGraphicUpload(svg)).rejects.toThrow("SVG graphic is limited");
+  });
+
   it("stores an SVG as uploaded with its viewBox size", async () => {
     const svg = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4"/></svg>`);
     const out = await prepareGraphicUpload(svg);

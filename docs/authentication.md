@@ -207,7 +207,10 @@ course map: the read-only course/map procedures (`course.list`,
 `mapMetadata`, `mapFileInfo`, `controlCoordinates`,
 `controlCompletionStatus`, `getOverprintCuts`, `class.list`) sit on
 `kioskOr*` procedures, and the map document fetch sends `x-kiosk-key`
-itself (`lib/map-document-cache.ts`). Mutations never accept the key.
+itself (`lib/map-document-cache.ts`). The graphic routes
+(`/api/maps/:nameId/graphics/:id`, `…/print.png`, `…/thumb.png`) accept it
+too (J2): the event's own graphics and any club graphic by id
+([course-maps.md](course-maps.md) API). Mutations never accept the key.
 
 ### REST protection
 
@@ -216,6 +219,7 @@ itself (`lib/map-document-cache.ts`). Mutations never accept the key.
 | `/api/backup/*` | `event.manage`; **instance admin** if the event's current map was copied from the club library (the dump contains the OCAD blob) |
 | `/api/export/course-data` | `courses.view` |
 | `/api/map-sources/:hash` | `event.manage` on an event whose map is that source (`?event=` / `x-event-id`), **instance admin** if it was copied from the club library; or the uploader of a club map version with that source, or an instance admin. Never the kiosk key. See [map-storage.md](map-storage.md) §4.4 |
+| `/api/maps/:nameId/graphics/:id[/print.png\|/thumb.png]` | `courses.view`, or the event's kiosk key (J2) |
 | `/health`, `/api/version`, `/api/club-logo/*` | open |
 
 `course.downloadMap` requires `event.manage`, and instance admin when

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { GRAPHIC_UPLOAD_MAX_BYTES, graphicGroups, graphicSizeLabel, graphicThumbUrl, uploadProblem } from "../graphics-picker";
+import { GRAPHIC_UPLOAD_MAX_BYTES, graphicGroups, graphicSizeLabel, graphicThumbUrl, uploadErrorKey, uploadProblem } from "../graphics-picker";
 
-const g = (id: number, club: boolean) => ({ id, name: `g${id}`, mime: "image/png", sizeBytes: 1, widthPx: 4, heightPx: 2, club });
+const g = (id: number, club: boolean) => ({ id, name: `g${id}`, mime: "image/png", sizeBytes: 1, widthPx: 4, heightPx: 2, club, version: "1-0" });
 
 describe("graphics picker helpers (J2)", () => {
   it("groups event graphics before club graphics, keeping order", () => {
@@ -13,8 +13,17 @@ describe("graphics picker helpers (J2)", () => {
     expect(graphicSizeLabel({ widthPx: null, heightPx: null })).toBeNull();
   });
 
-  it("builds the thumbnail URL with the event encoded", () => {
-    expect(graphicThumbUrl("lusse 2026", 7)).toBe("/api/maps/lusse%202026/graphics/7/thumb.png");
+  it("builds the thumbnail URL with the event encoded, keyed by the content version", () => {
+    expect(graphicThumbUrl("lusse 2026", 7, "120-1700000000000")).toBe("/api/maps/lusse%202026/graphics/7/thumb.png?v=120-1700000000000");
+  });
+
+  it("maps the server's refusals to message keys", () => {
+    expect(uploadErrorKey("The PNG has more than 64 megapixels")).toBe("graphicsTooManyPixels");
+    expect(uploadErrorKey("The PNG is over 8 MB even at 2048 px; save it smaller or as SVG")).toBe("graphicsTooLargeResampled");
+    expect(uploadErrorKey("An SVG graphic is limited to 8 MB")).toBe("graphicsSvgTooLarge");
+    expect(uploadErrorKey("Graphics are limited to 16 MB")).toBe("graphicsTooLarge");
+    expect(uploadErrorKey("The SVG must not contain script elements")).toBe("graphicsUnsafeSvg");
+    expect(uploadErrorKey("network down")).toBeNull();
   });
 
   it("checks type and the 16 MiB cap before reading", () => {
