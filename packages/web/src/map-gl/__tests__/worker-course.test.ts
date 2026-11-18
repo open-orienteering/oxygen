@@ -4,7 +4,7 @@ import { describe, it, expect } from "vitest";
 import { COURSE_BUCKET, PAGE_BUCKET, createMapGlWorker, type CourseLayerRequest, type CourseReply, type LoadedReply, type LoadRequest, type WorkerReply } from "../worker";
 import { buildVisibleSet, type PreparedPart, type ResidentPart } from "../buckets";
 import { INSTANCE_FLOATS } from "../mesh-atlas";
-import { render } from "@oxygen/shared";
+import { mapDocument, mapImport, render } from "@oxygen/shared";
 
 import { documentBytes, fontBytes, indexOf, isomStack, latin, request } from "./course-fixture";
 
@@ -115,6 +115,54 @@ describe("course request → the dynamic bucket", () => {
     expect(r.msg.type).toBe("course");
     return r.msg as CourseReply;
   };
+
+  it("on a document drawn on the IOF colour layers (row I5): the course stack completes it, the legs' purple over every area row", () => {
+    // A table that draws a yellow area over its black and its paved brown: on the layers both areas sink under lower purple.
+    const cmyk = (c: number, m: number, y: number, k: number) => [c, m, y, k] as [number, number, number, number];
+    const area = (code: string, fill: number) => ({ code, name: code, kind: "area" as const, render: { type: "area" as const, id: code, code, name: code, fill } });
+    const square = (symbolIdx: number, sourceIndex: number, x0: number, y0: number, side: number) =>
+      ({ symbolIdx, type: mapDocument.OBJECT_TYPE.area, sourceIndex, coords: [x0, y0, x0 + side, y0, x0 + side, y0 + side, x0, y0 + side], flags: [0, 0, 0, 0] });
+    const matched = mapImport.matchDocument({
+      header: {
+        format: { version: 1, importer: "test-1" },
+        source: { kind: "ocad", version: "2018.8.3", hash: "00".repeat(32), bytes: 1 },
+        unitsPerMm: 100,
+        mapScale: 15000,
+        georeferencing: { crs: null, paperOrigin: null },
+        colours: [
+          { id: "src:1", name: "Black", cmyk: cmyk(0, 0, 0, 1), sourceNumber: 1 },
+          { id: "src:2", name: "Brown 50%", cmyk: cmyk(0, 0.28, 0.5, 0.09), sourceNumber: 2 },
+          { id: "src:3", name: "Yellow", cmyk: cmyk(0, 0.27, 0.79, 0), sourceNumber: 3 },
+        ],
+        symbols: [
+          { code: "516.0", name: "Black line", kind: "line", render: { type: "line", id: "l", code: "516", name: "l", main: { colour: 0, widthUm: 300 } } },
+          area("501.0", 1),
+          area("401.0", 2),
+        ],
+      },
+      objects: [
+        { symbolIdx: 0, type: mapDocument.OBJECT_TYPE.line, sourceIndex: 0, coords: [2500, 0, 2500, 2000], flags: [0, 0] },
+        square(1, 1, 0, 0, 3000),
+        square(2, 2, 3000, 0, 4000),
+      ],
+    });
+    expect(matched.colourStack.order).toBe("iof");
+    const u8 = mapDocument.encodeMapDocument(matched.input);
+    const bytes = u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength) as ArrayBuffer;
+    const h = harness();
+    const m = loaded(h, load({ source: { kind: "document", bytes, options: { unmatched: "proxy" } } }));
+    expect(m.summary.courseLayer?.supported).toBe(true);
+    const stack = m.summary.colourStack!;
+    const at = (id: string) => stack.findIndex((c) => c.paletteIds?.includes(id));
+    expect(at("white-upper")).toBe(at("purple-upper") - 1);
+    const r = ask(h, request());
+    expect(r.colours).toEqual(stack);
+    const lower = at("purple-lower");
+    for (const id of ["yellow100", "brown50-paved"]) expect(at(id), id).toBeLessThan(lower);
+    expect(at("black100")).toBeGreaterThan(lower);
+    // The legs draw in lower purple.
+    expect(partColours(r.part!).has(lower)).toBe(true);
+  });
 
   it("one `all` part on the completed stack, object ids after the document's, glyph meshes appended to the atlas", () => {
     const h = harness();
