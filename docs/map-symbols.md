@@ -1371,9 +1371,11 @@ resolves canonical entries through `paletteIndexOfStack(header.colours)`.
 Not wired yet: §9.2 above is what the importer does. This section
 records what slice I (`SLICES.md` rows I1–I7) builds and the user's
 answers to its three questions; each row writes its own part out here.
-Built so far: the roles (row I2, "Roles" below) and the layered stack
-built from them (row I3, "Layers" below), which nothing in the importer
-reads yet; the colour-order harness draws every map on the stack.
+Built so far: the roles (row I2, "Roles" below), the layered stack
+built from them (row I3, "Layers") and its exceptions (row I4: "Own
+order", "Deviations", "Source order"), which nothing in the importer
+reads yet; the colour-order harness draws every map on the stack and
+classifies every change ("Measured").
 
 **The aim.** A document is drawn on the IOF colour order (§1, 03
 Appendix B) instead of the mapper's table, so the course layer and the
@@ -1418,13 +1420,15 @@ colour but the **use**: one colour reference of one symbol.
   objects' synthesised symbols (`origin: "graphic"`, `map-import.md`
   §3.2: logos, frame bars) and colours with no role. Each is placed
   relative to the layers its source position stood between; the exact
-  rule is row I4's, fixed against the corpus diff.
+  rule is row I4's, fixed against the corpus diff ("Source order"
+  below).
 - **A deviation** is a pair of used roles whose source order contradicts
   the palette's. Kept = the pair is drawn in the source order; dropped =
   in the palette's. Which row moves, and how far, is row I4's, fixed
   against the corpus, under one constraint: a kept deviation never puts
   an area or infill colour above lower purple (the course stays on top
-  of it). Every deviation is reported, kept or dropped.
+  of it). Every deviation is reported, kept or dropped ("Deviations"
+  below).
 - **Identity.** The importer versions bump; the release re-matches every
   pin. A symbol's fingerprint (§8.5) is unchanged: split rows keep their
   colour's class.
@@ -1563,17 +1567,18 @@ ISSprOM 501.1 and 501.2 (`black-road-outline` as a main line), 520.b
 (`black-road-outline` round an olive fill) and 532 (brown 30 % paved as
 a line). With each entry as its own hint, every use gets its own row.
 
-**Not settled here: a symbol drawn inside out** (Q3, decided overnight on the user's standing instruction, 2026-11-17, for review). In layers,
-a symbol's parts draw in role order, not in the IR's order. An
+**A symbol drawn inside out** (Q3, decided overnight on the user's
+standing instruction, 2026-11-17, for review; settled by row I4). In
+layers, a symbol's parts draw in role order, not in the IR's order. An
 under-part whose role ranks above its over-part hides it: a black 100 %
 halo under a blue or yellow main, or a dark infill under a lighter main.
 I2 rules only the road case: an outline or halo round a brown-screen
-infill takes `black-road-outline`, which ranks under the infill. A road
-drawn as a brown-screen *main* with black side borders (no
-`backgroundColour`, no halo) is not that case: its borders are
-`black100`, above the brown, and the main is still drawn under them, so it
-is another candidate for I4 to check. The general case is row I4's, fixed
-against the I1 harness.
+infill takes `black-road-outline`, which ranks under the infill. The
+general case is not a role: row I4 keeps every source-drawn symbol's
+parts in their source order ("Own order" below). The harness found it on
+eight of the ten maps, on roads drawn as a brown-screen *main* as wide as
+the black side borders' centres with the borders over it, whose borders
+a hint makes `black-road-outline`.
 
 | Test (`packages/shared/src/…`) | Covers |
 |---|---|
@@ -1584,14 +1589,15 @@ against the I1 harness.
 
 Built in `packages/shared/src/import/colour-layers.ts`, pure. No importer
 step calls it yet (row I5 wires it into stage 7); the colour-order
-harness takes it as its candidate (`map-rendering.md` §6.5). The
-exceptions of row I4 (source order for masks, graphic objects' colours
-and uses with no role; deviations) are not in it yet.
+harness takes it as its candidate (`map-rendering.md` §6.5). Row I4's
+exceptions are written out after this section ("Own order",
+"Deviations", "Source order"); what this section says of the order is
+the base they start from.
 
 ```ts
 symbolColourUses(symbols, objectsPerSymbol, infos, rolePalette(spec, edition))
   → (LayerSymbolUses | null)[]        // per document symbol; null: no render
-buildColourLayers({ colours, infos, uses, needed, spec, edition })
+buildColourLayers({ colours, infos, uses, needed, spec, edition, deviations? })
   → { colours, reindex: { symbols, colours }, report }
 ```
 
@@ -1600,8 +1606,11 @@ gives it (before §9.2); `infos` its `identifySourceColours`; `uses` per
 document symbol the uses of its source `render` with their roles
 (`colourRoles`, every reference in `renderColourPaths` order), its
 object count (hidden symbols counted, as stage 7's `usage`), its
-`render.type` and its `origin`; `needed` the palette ids applied
-matches draw with (stage 7's `needed`).
+`render.type`, its `origin` and `library` — the symbol is drawn from its
+library entry (`isAppliedMatch`: automatic, or confirmed by review), so
+its own references draw nothing; `needed` the palette ids applied
+matches draw with (stage 7's `needed`); `deviations` (I4) the per-map
+overrides, keep or drop by deviation key.
 
 **Rows.**
 
@@ -1612,46 +1621,56 @@ matches draw with (stage 7's `needed`).
   must not depend on whether the map has objects of it yet. A row's
   object count is reported; it decides nothing but which row carries a
   palette id.
-- A use with **no role** is keyed by its *place* instead of a role:
-  `area` when its symbol's `render.type` is area, else `other`. A
-  no-role colour used by an area and a line is two rows.
+- A use with **no role** is keyed by the kind of its symbol instead of
+  a role: `area` when its symbol's `render.type` is area, else `other`. A
+  no-role colour used by an area and a line is two rows. Since I4 both
+  are placed by the source order; the key only keeps I3's ids.
+- The uses of a **graphic object's** symbol (`origin: "graphic"`) are
+  one row per colour, whatever their roles (I4, "Source order").
+- A part of a source-drawn symbol that its own order moves is a row of
+  its own (I4, "Own order").
 - A **source colour no symbol references** is kept once: with the palette
   id §9.1 identified it as (course purples excepted: a candidate stands
-  for no id), else with no role, placed as an area when its name says so
-  (`nameKind`), else as `other`.
-- A **needed id no row has** (`needed`, both course purples, the overlay's
-  `OVERLAY_STACK_IDS`): *aliased* — a row of its own in the ink of the
-  most used source colour that §9.1 identified and whose class is
-  `sameClass` with the id's, ties to the lowest index, as §9.2 step 3 —
-  else *inserted* with the palette's CMYK. Purples and ISSkiOM's rows are
-  never aliased, in either direction. An alias row is a split of its
-  source colour: same name, CMYK, `sourceNumber`.
+  for no id), else with no role, by the source order (I3: placed as an
+  area when its name says so, `nameKind`, else as `other`; the key and
+  id still follow the name).
 
 **Order** (bottom first), by the alignment palette
 (`alignmentPalette(edition, spec)`, §9.2; the overlay's rows included):
-
-1. a row with a role at its role's place; rows of one role in source
-   order, an inserted row above them (the course purples over a source
-   purple a hint gave that role);
-2. a no-role `area` row directly under `white-skio`, which stays
-   directly under lower purple (§12.3) — the experiment's "top of the
-   area block" with the ski mask kept in its place (decided overnight,
-   for review); several in source order;
-3. a no-role `other` row directly under upper purple (the experiment's
-   rule); several in source order.
+a row with a role at its role's place; rows of one role in source order,
+an inserted row above them (the course purples over a source purple a
+hint gave that role). Row I4 then moves what "Own order" and
+"Deviations" say and places the rest by "Source order". (I3 placed a
+use with no role by kind: an area directly under `white-skio`, anything
+else directly under upper purple. I4 replaced that.)
 
 So purple-upper is always the top row and the overlay's rows stand at
 their palette places on every stack: `white-skio` directly under lower
-purple, `orange-skio` directly under `green-skio`, both above black 100 %
-and under upper purple. On ISOM the contour brown is above lower purple;
-on ISSprOM, whose palette ranks `brown100` under it, below.
+purple and `orange-skio` directly under `green-skio` wherever nothing of
+the map is drawn in them (I4 keeps them there after its moves, and no
+source-ordered row goes between), both ski inks above black 100 % and
+under upper purple. On ISOM the contour brown is above lower purple;
+on ISSprOM, whose palette ranks `brown100` under it, below — unless a
+kept deviation sinks it ("Deviations").
 
-**Palette ids.** Each id is on exactly one row (`paletteIds: [id]`): of
-the rows of that role, the one with the most objects, ties to the lowest
-source index (§9.2 step 2's rule). The other rows of the role carry no
-`paletteIds`; their role is in the report. `purpleRole` is on the row
-carrying a purple id. Canonical entries therefore resolve exactly as
-before (`paletteIndexOfStack`), and `courseColourStack` accepts the stack.
+**Palette ids.** Each id is on exactly one row (`paletteIds: [id]`), a
+row at the id's palette place (never a source-ordered or moved row):
+the row of the colour §9.2 gives the id — step 2, the colour §9.1
+identified as it, the most used, ties to the lowest index; for a needed
+id with none, step 3's alias, the most used identified colour of its
+class (purples and ISSkiOM's rows never aliased, in either direction).
+A library symbol therefore draws in the ink it has on the source order.
+When that colour has no row of the role, a needed id gets one (origin
+`alias`, a split of the colour: same name, CMYK, `sourceNumber`; listed
+in `aliased` only for step 3). An id with no such colour is carried by
+its row with the most objects, ties to the lowest source index; a needed
+one with no row at all is *inserted* with the palette's CMYK. (I3 took
+the row with the most objects first; I4 changed it so that library
+symbols keep their colour, decided in the row.) The other rows of the
+role carry no `paletteIds`; their role is in the report. `purpleRole`
+is on the row carrying a purple id. Canonical entries therefore resolve
+exactly as before (`paletteIndexOfStack`), and `courseColourStack`
+accepts the stack.
 
 **The course purples** are always inserted rows (`<edition>:purple-lower`,
 `<edition>:purple-upper`) at their palette places; C15's reuse of a
@@ -1665,11 +1684,17 @@ row of that role; with none it is a no-role row. An inserted `purple50`
 
 **Ids.** A source colour's lowest row keeps the colour's id (`src:<n>`);
 its other rows are `src:<n>/<paletteId>`, a no-role row
-`src:<n>/none:area` or `src:<n>/none:other` (a palette id has no colon).
+`src:<n>/none:area` or `src:<n>/none:other` (a palette id has no colon),
+and since I4 a graphic row `src:<n>/graphic`, a moved part's row
+`src:<n>/<paletteId | none:<place> | graphic>/under<k>` (numbered per
+colour and suffix bottom first), a second row of a palette id in a
+colour whose own row of that id was moved or source-ordered
+`src:<n>/<paletteId>/alias`.
 Split and alias rows copy the colour's name, CMYK, `sourceNumber`, spot
 and overprint, so print sees one ink. Inserted rows are
 `<edition>:<paletteId>` with the palette's name, as today
-(`map-document-format.md` §2.1).
+(`map-document-format.md` §2.1, which lists I3's forms; I5, which writes
+the stack, adds I4's there).
 
 **Output.** `colours` is the stack, index = draw order.
 `reindex.symbols[i]` gives symbol i's row per colour reference, in
@@ -1680,12 +1705,20 @@ maps colours, not references: the render bridge's proxies).
 `report` — for I4, I5 and I6's panel:
 
 - `rows[]`: `{ row, source, role, place, origin, objects, symbols,
-  graphicObjects }`, `origin` one of `use`, `alias`, `insert`,
-  `unreferenced`; `graphicObjects` the objects of `origin: "graphic"`
-  symbols among `objects`;
+  graphicObjects, sourceOrdered, ownOrder }`, `origin` one of `use`,
+  `alias`, `insert`, `unreferenced`; `graphicObjects` the objects of
+  `origin: "graphic"` symbols among `objects`; `sourceOrdered` the reason
+  a row stands by the source order (`no-role`, `graphic`, `mask`) or
+  `null`; `ownOrder` a moved part's row (I4);
 - `split[]`: source colours on several rows, `{ source, sourceNumber,
   roles }` bottom first;
-- `noRole[]`: `{ row, source, sourceNumber, place, objects }`;
+- `sourceOrdered[]` (I4): `{ row, source, sourceNumber, reason, role,
+  objects, aboveLowerPurple }` bottom first;
+- `noRole[]`: `{ row, source, sourceNumber, place, objects }` (uses with
+  no role; graphic rows are in `sourceOrdered` only);
+- `deviations[]` (I4): `{ upper, lower, kept, byDefault, objects: {
+  upper, lower }, impliedBy?, blockedBy? }`, the most objects first
+  ("Deviations");
 - `inserted` (ids), `aliased` (`{ paletteId, viaPaletteId, sourceNumber }`,
   the shape of `colourStack.aliased`), `purpleInk` (the source colour the
   course purples take their ink from, or `null`).
@@ -1694,7 +1727,157 @@ A symbol's fingerprint (§8.5) is unchanged: split rows keep the colour's
 name and CMYK, so `documentClassOf` gives every reference the class it
 had. The function is deterministic and does not change its input.
 
-**Measured** on the ten maps by the harness (`map-rendering.md` §6.5,
+#### Own order (row I4)
+
+**A source-drawn symbol's parts keep their source order relative to each
+other** (Q3 above, the general case). The parts are the symbol's colour
+references; a part *over* another is one whose source colour stands
+higher in the table. Two references to one source colour have no order
+between them (the source draws them in one row).
+
+*Pass 1*, before the order: per symbol, top-down over its source
+colours, a part with a role whose place (the role's palette rank, or a
+place pass 1 already gave a part over it) is not under every role part
+over it goes to a row of its own **just under the lowest of them**: the
+same colour and role, ranked under every row of that place
+(`ownOrder: true`, id `…/under<k>`, never carrying a palette id). On
+the eight maps the harness found it, that is the road drawn as a brown
+50 % main as wide as the black side borders' centres with the borders
+over it: the main's `brown50-road` goes just under the borders'
+`black-road-outline`, and the road looks as the mapper drew it. A row
+moved this way takes part in "Deviations" like any other.
+
+*Pass 2*, after "Source order": the same walk over the final stack, for
+parts with no role, graphic parts and anything the deviations moved; a
+part above a part over it goes to a row of its own **directly under
+that part's row**.
+
+Moving the under-part down, never the over-part up, keeps every row's
+side of lower purple or lowers it: no area or infill goes above lower
+purple by this rule. Not moved: symbols drawn from their library entry
+(`library`: their parts are the library's, in palette order) and the
+parts of a graphic object's symbol (one row per colour, placed by the
+source order as a whole). In a table that draws its black under its
+brown, a paved area's black edge and dots stay under its brown, as the
+source draws them.
+
+#### Deviations (row I4)
+
+**A deviation** is a pair of roles (`upper`, `lower`) with rows that
+something is drawn in — objects of source-drawn symbols referencing the
+row, or library-drawn objects on the row that carries their palette id —
+where the source draws a row of `upper` over a row of `lower` (a higher
+source colour) and the base order (the palette's, with pass 1's moves)
+puts it under. Its `objects` are the objects drawn in the rows of each
+side that so contradict. A pair from one source colour is none. Every
+deviation is reported, kept or dropped, the most objects first.
+Generalises §9.2 step 5(b).
+
+**Kept or dropped.** `KEPT_BY_DEFAULT` (the user's answer 2: roads over
+contours) — `brown50-road`, `brown30-road`, `brown50-paved`,
+`brown30-paved` and `black-road-outline` over `brown100-line`
+(ISOM) or `brown100` (ISSprOM). The road outline is in the list because
+the road is its infill and its outline: with the infill alone the
+contours would cut every road edge the source draws over them (decided
+overnight on the user's standing instruction, 2026-11-17, for review;
+the row named the browns only). Every other deviation is dropped by
+default. `deviations: Record<"upper>lower", "keep" | "drop">` overrides
+the default per pair (the mechanism; I7 is the UI); `byDefault` is true
+when no override decided it.
+
+**The order.** Between rows that something is drawn in, from different
+source colours, the relation is fixed: a kept deviation's rows in the
+source's order, every other pair in the base order. The stack is the
+order closest to the base that keeps every relation: bottom-up, the
+next row is the one whose lowest base place among itself and everything
+that must stand over it is lowest. So the lower side of a kept
+deviation **sinks to just under the upper rows the source draws over
+it**, carrying what must stand under it, and nothing rises: no area or
+infill row ever goes above lower purple by a deviation, and a row is
+never sunk under a row it is drawn over in both orders — the contour
+brown stays over the lakes and buildings it was drawn over. On ISOM a
+kept road-over-contour deviation puts the contour brown under lower
+purple, between the road rows the source has under and over it; rows
+nothing is drawn in keep their palette places.
+
+**Keeps that cannot all hold** are a cycle among those relations; it
+always runs through a kept deviation. Broken one at a time,
+deterministically: a deviation in the cycle that is dropped *by default*
+is kept instead — **implied** (`impliedBy`: the kept deviations in the
+cycle), since keeping it costs only the palette's order on rows the
+source already orders that way; with none, the kept deviation in the
+cycle with the fewest objects (ties by key) is dropped — **blocked**
+(`blockedBy`: the other roles of the cycle; `kept: false`). A deviation
+an override dropped is never implied (decided overnight on the user's
+standing instruction, 2026-11-17, for review). On Club-full a contour
+colour with two objects at the bottom of the table, under the paved
+brown, implies most of its implied deviations; on Sprint the paved brown
+the table draws over the contours implies paved over buildings, as the
+table draws it.
+
+#### Source order (row I4)
+
+**What the palette cannot place stands where the source order puts
+it**: rows of uses with no role (`no-role`), a graphic object's colour
+(`graphic`, one row per colour: logos, frame bars) and **mask whites**
+(`mask`): a white role row, drawn by a source-drawn symbol, whose source
+colour the table draws over a used row the base order puts above it — a
+white drawn over something is there to hide it (the ski-O map's white
+under its course overprint, by hint `white-over-green-brown`, over its
+black, contours and ski green). `white-skio` is never a mask (§12.3).
+Such a row carries no palette id; a needed id whose colour's row became
+a mask gets a second row at the palette place.
+
+**The gap.** After the deviations, each such row goes into the gap of
+the palette-placed rows that fits the source best: the fewest placed
+rows on the wrong side — under it but over it in the source, or over it
+but under it in the source — counted by what is drawn in them, then by
+rows (rows of its own colour and inserted rows do not count), ties to
+the lowest gap; never above the inserted upper purple, and never between
+`white-skio` and lower purple or between `orange-skio` and `green-skio`.
+Several in one gap stand in source order; rows measured against the
+same placed rows this way never cross each other's source order. The
+gap is an approximation: where no gap fits every placed row, the
+harness shows the rest as `mask`, `no-role` or `layout`.
+
+The source order may put such a row above lower purple (the ski-O map's
+mask, Club-full's purple area drawn over its black):
+`sourceOrdered[].aboveLowerPurple` says so, for I5's warning and I6's
+panel (decided overnight on the user's standing instruction, 2026-11-17,
+for review: pure source order, flagged, rather than capping no-role
+areas under lower purple, which would sink the mask). This replaces
+I3's placement by kind and settles the carried-over `white-upper`: an
+inserted `white-upper` has no source position, and a roleless row the
+source has on top goes to the lowest gap that fits, under it.
+
+#### Measured (rows I3 and I4)
+
+**At I4** (`map-rendering.md` §6.5 "I4", the tables per map and the
+reading): over the ten maps **64 014 pixels change** against the source
+order (I3: 710 573; 0.043 % of all pixels, 0.22 % of ink), and **every
+one is classified — the gate holds, 0 unclassified**:
+
+| Class | Pixels | Share | What it is |
+|---|---|---|---|
+| deviation-dropped | 60 613 | 94.7 % | a deviation the report lists, drawn in the palette's order: yellow areas the table draws over cultivated dots, the black screen or a lake (Club-full, the Nacka map); the ski green over contours and black (ski-O map, §12.3); a second blue under the contours (puit-de-laven); contours and green points (the club maps) |
+| mask | 3 180 | 5.0 % | Club-full and the Nacka map: a white at the bottom of the table that the source draws over a one-object lake; the source-order gap puts it under |
+| no-role | 132 | 0.2 % | roleless rows (a purple area, a red line) where the gap fits not every layer |
+| layout | 1 | 0.0 % | a graphic object's colour (Club-full) |
+| residue | 88 | 0.14 % | isolated pixels no paint image names even at 3× (a sub-pixel feature, a tile's edge); capped per map in the classification file |
+| deviation-kept, multi-role, unclassified | 0 | — | |
+
+Per map, I3 → I4: Sprint 19 759 → 1 044, Club-full 224 660 → 17 684,
+Club-2026 79 516 → 821, Crop-A 4 142 → 416, Crop-B 1 977 → 214,
+Mörtsjön 27 009 → 75, Erstavik crop 25 707 → 1 677, puit-de-laven
+2 293 → 2 288, ski-O map 90 544 → 12 826, Nacka exercise map
+234 966 → 26 969. Roads over contours are kept by default on the eight
+maps whose tables draw them so (none blocked); implied
+keeps run from 1 (Crop-A, Crop-B) to 14 (Club-full). With the road
+outlines fixed and every remaining difference a listed deviation, a
+mask, a roleless colour or a capped residue, **the layered stack is fit
+to be the importer's default** (row I5).
+
+**At I3** on the ten maps by the harness (`map-rendering.md` §6.5,
 "I3", the table per map): 710 573 pixels change against the source
 order (0.472 % of all pixels; the permutation, I1: 932 429). The
 multi-role class is gone — Sprint's buildings and canopy buried under
@@ -1706,22 +1889,24 @@ brown 50 % main as wide as the side borders' centres under black
 borders, whose `brown50-road` ranks above the borders'
 `black-road-outline` and covers half of each border (Mörtsjön, with no
 multi-role colour, rises 3 398 → 27 009 px by it). Row I4 fixes that
-case against the harness; until then the layered stack is not fit to be
+case against the harness; until then (at I3) the layered stack was not fit to be
 the importer's default.
 
 | Test (`packages/shared/src/…`) | Covers |
 |---|---|
-| `import/__tests__/colour-layers.test.ts` | a badly ordered ISOM table: the whole stack bottom first; one brown 50 % split into paved area and road infill (same ink and number, ids `src:n` and `src:n/<id>`); one black as road outline, dots and black 100 %; the road outline over the paved brown and under the infill, buildings over the paved brown; each palette id on one row, every needed, purple and overlay id present; an alias (source ink, a row of its own) and an insert (palette ink); unreferenced colours (identified, and by name); a zero-object symbol's row; no-role areas under the mask row and others under upper purple, graphic objects counted; both course purples inserted in the map's ink, the source purple an ordinary row; the overlay's places; `courseColourStack`; the per-reference re-index (one black on two rows in one symbol), every reference on a row of its own colour, `reindex.colours`; `documentSymbolFingerprints` unchanged; two colours of one role (source order; the carrier by objects, ties to the lowest); a hinted source purple under the course row, the ink by use and by index, the palette's without a purple; both specs' order (the contour brown either side of lower purple; every row in palette order); a ski green as `green-skio`, never aliased; a no-role colour drawn by an area and a line (two rows, `src:n` and `src:n/none:other`); the alias by use, ties to the lowest index; an inserted `purple50` in the palette's ink; spot and overprint on split rows; an inserted row the edition lacks named `iof2024:`; determinism; input unchanged; bad references and infos |
+| `import/__tests__/colour-layers.test.ts` | a badly ordered ISOM table: the whole stack bottom first (the paved area's and the building's black edge and dots kept under their fills, own order); one brown 50 % split into paved area and road infill (same ink and number, ids `src:n` and `src:n/<id>`); one black as road outline and, moved under fills, dots and edges (ids `…/under<k>`, unique); the road outline over the paved brown and under the infill, buildings over the paved brown; every source-drawn symbol's parts in source order; each palette id on one row, every needed, purple and overlay id present; an alias (source ink, a row of its own) and an insert (palette ink); unreferenced colours (identified, and by name); a zero-object symbol's row; no-role rows, the graphic row and unused roleless colours by the source order (between the contour brown and the blue; `sourceOrdered` with `aboveLowerPurple`); both course purples inserted in the map's ink, the source purple an ordinary row at the bottom; the overlay's places; `courseColourStack`; the per-reference re-index, every reference on a row of its own colour, `reindex.colours`; `documentSymbolFingerprints` unchanged; two colours of one role (source order; the carrier by use, ties to the lowest); a hinted source purple under the course row, the ink by use and by index, the palette's without a purple; both specs' order (the contour brown either side of lower purple; every row in palette order); a ski green as `green-skio`, never aliased; a no-role colour drawn by an area and a line (two rows, `src:n` and `src:n/none:other`); the alias by use, ties to the lowest index; an inserted `purple50` in the palette's ink; spot and overprint on split rows; an inserted row the edition lacks named `iof2024:`; determinism; input unchanged; bad references and infos. I4: an OCAD road drawn inside out (brown main under black borders, suggested match) — the main on a row of its own just under the outline, no palette id; the same road drawn from the library at the palette places, carrying the ids; its infill under the table's black a dropped deviation with the library road's objects; Club-full's table (`club-colour-tables.ts`): every deviation listed with object counts, most first; streets (infill and outline) over the contours kept by default — the contour brown under the road, over the lakes and paved areas it was drawn over, under lower purple, the infill under lower purple; both dropped by override (the contour brown over the road and lower purple); a lake over the contours dropped by default and kept by override (under lower purple); keeps that cannot all hold: a default-dropped pair implied (`impliedBy`), blocked by an explicit drop (`blockedBy`), deterministic; a mask white (hint `white-over-green-brown`) over the black by the source order, no palette id, `aboveLowerPurple`; a white the source has at its palette place stays there; a graphic frame bar's black on a row of its own at its source place; an inserted `white-upper` over a roleless colour the table has on top (ISSprOM); the carrier is §9.2's colour (most used), not the row with the most objects |
 | `render/__tests__/transform.test.ts` | `reindexRenderColours` (one row per reference, the identity, a count mismatch throws) |
 
 ## 10. Pending in this chapter
 
-- **Canonical layers (§9.3)**: the roles (I2) and the layered stack (I3)
-  are built and not yet read by the importer. Rows I4–I7 in `SLICES.md`:
-  the source-order exceptions and kept deviations, the importer wiring
-  and bump, the per-map switch with the review page's colour panel, the
-  per-map deviation overrides. Not in the slice: a club-wide default for
-  which deviations are kept.
+- **Canonical layers (§9.3)**: the roles (I2), the layered stack (I3)
+  and its exceptions — own order, deviations, source order (I4) — are
+  built and not yet read by the importer. Rows I5–I7 in `SLICES.md`:
+  the importer wiring and bump (with `map-document-format.md` §2.1's
+  ids for I4's rows, and warnings for `aboveLowerPurple`, kept and
+  blocked deviations), the per-map switch with the review page's colour
+  panel, the per-map deviation overrides. Not in the slice: a club-wide
+  default for which deviations are kept.
 - Mapper object queries as CRT sources (§8.6 `CRT_QUERY_UNSUPPORTED`)
   and a variant table to Mapper's sub-numbers, if a club needs either.
 - Library variants for the OCAD template conventions (§8.4) if the auto
