@@ -3938,7 +3938,8 @@ the map at most) match decides (`classify`); `from` and `to` are a layer
 name, `*` (any layer) or a prefix ending in `*` (`graphic:*`: every
 graphic object's paint) (`namePatternMatches`).
 
-**Reported rules** (I4). A rule with `"reported": true` matches only
+**Reported rules** (I4; decided overnight on the user's standing
+instruction, 2026-11-17, for review). A rule with `"reported": true` matches only
 where the layered candidate's own report gives the kind that class
 (`reportedClasses`, from the stack's layers and its report): `layout`,
 `mask` or `no-role` when either layer's row stands by the source order
@@ -3950,7 +3951,8 @@ permutation) matches no reported rule. A kept deviation has no reported
 class: its rows draw in the source's order, so a change between them
 fails the gate.
 
-**Residue** (I4). `(unattributed)` is classified only by a `residue`
+**Residue** (I4; decided overnight on the user's standing instruction,
+2026-11-17, for review). `(unattributed)` is classified only by a `residue`
 rule, which must name the map, `(unattributed)` as `from` and `to`, and
 a `maxPx` (the schema rejects anything else); no pattern classifies it.
 A map's residue over its cap fails the gate, so it can only be what was
@@ -3975,7 +3977,9 @@ counted (`suggestClass`): `layout` when a `graphic:` paint is involved,
 without a role, `no-role` for another layer without one,
 `deviation-dropped` when both have one role and the palette puts the
 candidate's layer above the source's. A person reads the images and
-writes the classification; the suggestion is where to start.
+writes the classification — from I4 the reported rules, which the
+stack's report confirms kind by kind, and a residue rule per map for
+what was looked at; the suggestion is where to start.
 
 **Census** per map (`colourCensus`): colours, used colours, used
 colours without a palette entry and the objects drawn in them, rows
@@ -4139,8 +4143,8 @@ deviations at their defaults), classified by the committed
 
 | Map | Layers: rows / split colours | Source order: no-role / graphic / mask (above lower purple) | Own-order rows | Deviations: kept / implied / blocked / dropped | Kept by default |
 |---|---|---|---|---|---|
-| Sprint | 67 / 17 | 8 / 0 / 1 (7) | 3 | 2 / 3 / 0 / 43 | `black-road-outline>brown100`, `brown30-road>brown100` |
-| Club-full | 110 / 16 | 22 / 3 / 1 (10) | 3 | 3 / 14 / 0 / 181 | `brown50-road`, `black-road-outline`, `brown50-paved` `>brown100-line` |
+| Sprint | 67 / 17 | 8 / 0 / 1 (7) | 3 | 2 / 1 / 0 / 43 | `black-road-outline>brown100`, `brown30-road>brown100` |
+| Club-full | 110 / 16 | 22 / 3 / 1 (10) | 3 | 3 / 14 / 0 / 180 | `brown50-road`, `black-road-outline`, `brown50-paved` `>brown100-line` |
 | Club-2026 | 90 / 14 | 15 / 0 / 0 (8) | 4 | 3 / 5 / 0 / 138 | the same three |
 | Crop-A | 175 / 11 | 21 / 0 / 1 (13) | 2 | 2 / 1 / 0 / 59 | `black-road-outline`, `brown50-road` `>brown100-line` |
 | Crop-B | 145 / 13 | 16 / 1 / 1 (9) | 2 | 2 / 1 / 0 / 45 | the same two |
@@ -4148,7 +4152,7 @@ deviations at their defaults), classified by the committed
 | Erstavik crop | 144 / 12 | 16 / 0 / 1 (7) | 2 | 2 / 2 / 0 / 71 | the same two as Crop-A |
 | puit-de-laven | 57 / 10 | 3 / 0 / 0 (2) | 4 | 0 / 0 / 0 / 25 | — |
 | ski-O map | 92 / 20 | 16 / 0 / 3 (9) | 4 | 0 / 0 / 0 / 67 | — |
-| Nacka exercise map | 111 / 16 | 19 / 0 / 1 (5) | 3 | 3 / 11 / 0 / 185 | the same three as Club-full |
+| Nacka exercise map | 111 / 16 | 19 / 0 / 1 (5) | 3 | 3 / 11 / 0 / 184 | the same three as Club-full |
 
 Over the ten maps 64 014 pixels change (I3: 710 573; 0.043 % of all,
 0.22 % of ink): deviation-dropped 60 613, mask 3 180, no-role 132,

@@ -1666,7 +1666,7 @@ in `aliased` only for step 3). An id with no such colour is carried by
 its row with the most objects, ties to the lowest source index; a needed
 one with no row at all is *inserted* with the palette's CMYK. (I3 took
 the row with the most objects first; I4 changed it so that library
-symbols keep their colour, decided in the row.) The other rows of the
+symbols keep their colour; decided overnight on the user's standing instruction, 2026-11-17, for review.) The other rows of the
 role carry no `paletteIds`; their role is in the report. `purpleRole`
 is on the row carrying a purple id. Canonical entries therefore resolve
 exactly as before (`paletteIndexOfStack`), and `courseColourStack`
@@ -1686,9 +1686,9 @@ row of that role; with none it is a no-role row. An inserted `purple50`
 its other rows are `src:<n>/<paletteId>`, a no-role row
 `src:<n>/none:area` or `src:<n>/none:other` (a palette id has no colon),
 and since I4 a graphic row `src:<n>/graphic`, a moved part's row
-`src:<n>/<paletteId | none:<place> | graphic>/under<k>` (numbered per
-colour and suffix bottom first), a second row of a palette id in a
-colour whose own row of that id was moved or source-ordered
+`src:<n>/<paletteId | none:<place>>/under<k>` (numbered per colour and
+suffix bottom first), a second row of a palette id in a colour whose own
+row of that id went to the source order (a mask)
 `src:<n>/<paletteId>/alias`.
 Split and alias rows copy the colour's name, CMYK, `sourceNumber`, spot
 and overprint, so print sees one ink. Inserted rows are
@@ -1748,9 +1748,9 @@ over it: the main's `brown50-road` goes just under the borders'
 moved this way takes part in "Deviations" like any other.
 
 *Pass 2*, after "Source order": the same walk over the final stack, for
-parts with no role, graphic parts and anything the deviations moved; a
-part above a part over it goes to a row of its own **directly under
-that part's row**.
+parts with no role and anything the deviations moved; a part above a
+part over it goes to a row of its own **directly under that part's
+row**.
 
 Moving the under-part down, never the over-part up, keeps every row's
 side of lower purple or lowers it: no area or infill goes above lower
@@ -1765,12 +1765,17 @@ source draws them.
 
 **A deviation** is a pair of roles (`upper`, `lower`) with rows that
 something is drawn in — objects of source-drawn symbols referencing the
-row, or library-drawn objects on the row that carries their palette id —
-where the source draws a row of `upper` over a row of `lower` (a higher
-source colour) and the base order (the palette's, with pass 1's moves)
-puts it under. Its `objects` are the objects drawn in the rows of each
-side that so contradict. A pair from one source colour is none. Every
-deviation is reported, kept or dropped, the most objects first.
+row, or library-drawn objects on the row that carries the palette id of
+their reference's role — where the source draws a row of `upper` over a
+row of `lower` (a higher source colour) while the palette ranks `lower`
+above `upper` and the base order (the palette's, with pass 1's moves)
+puts it under too. Its `objects` are the objects drawn in the rows of
+each side that so contradict. A pair from one source colour is none, and
+so is a pair of one role (rows of one role keep the source order), a
+pair whose order pass 1 set (the source's, against the palette) and a
+pair where the source agrees with the palette but pass 1's move does not
+(a moved part against another colour's row of its over-part's role).
+Every deviation is reported, kept or dropped, the most objects first.
 Generalises §9.2 step 5(b).
 
 **Kept or dropped.** `KEPT_BY_DEFAULT` (the user's answer 2: roads over
@@ -1786,8 +1791,9 @@ the default per pair (the mechanism; I7 is the UI); `byDefault` is true
 when no override decided it.
 
 **The order.** Between rows that something is drawn in, from different
-source colours, the relation is fixed: a kept deviation's rows in the
-source's order, every other pair in the base order. The stack is the
+source colours, the relation is fixed: a dropped deviation's rows in the
+base order (the palette's), every other pair — a kept deviation's, and
+every pair that is no deviation — in the source's order. The stack is the
 order closest to the base that keeps every relation: bottom-up, the
 next row is the one whose lowest base place among itself and everything
 that must stand over it is lowest. So the lower side of a kept
@@ -1800,20 +1806,23 @@ kept road-over-contour deviation puts the contour brown under lower
 purple, between the road rows the source has under and over it; rows
 nothing is drawn in keep their palette places.
 
-**Keeps that cannot all hold** are a cycle among those relations; it
-always runs through a kept deviation. Broken one at a time,
-deterministically: a deviation in the cycle that is dropped *by default*
-is kept instead — **implied** (`impliedBy`: the kept deviations in the
-cycle), since keeping it costs only the palette's order on rows the
-source already orders that way; with none, the kept deviation in the
-cycle with the fewest objects (ties by key) is dropped — **blocked**
-(`blockedBy`: the other roles of the cycle; `kept: false`). A deviation
-an override dropped is never implied (decided overnight on the user's
-standing instruction, 2026-11-17, for review). On Club-full a contour
-colour with two objects at the bottom of the table, under the paved
-brown, implies most of its implied deviations; on Sprint the paved brown
-the table draws over the contours implies paved over buildings, as the
-table draws it.
+**Keeps that cannot all hold** are a cycle among those relations; since
+only a dropped deviation goes against the source, it always runs
+through one. Broken one at a time, deterministically: a deviation in the
+cycle that is dropped *by default* is kept instead — **implied**
+(`impliedBy`: the kept deviations in the cycle), since keeping it costs
+only the palette's order on rows the source already orders that way;
+with none, the kept deviation with the fewest objects (ties by key)
+among those in the cycle and those its implied deviations were implied
+by is dropped — **blocked** (`blockedBy`: the other roles of the cycle;
+`kept: false`) — and the keeps are resolved again from the start, so
+nothing stays implied by a deviation that no longer holds. A deviation
+an override dropped is implied only where nothing kept is left to block
+(then `impliedBy` names the kept deviations of the cycle, possibly none:
+the order a symbol's own parts or the agreed pairs force) (decided
+overnight on the user's standing instruction, 2026-11-17, for review).
+On Club-full a contour colour with two objects at the bottom of the
+table, under the paved brown, implies most of its implied deviations.
 
 #### Source order (row I4)
 
@@ -1894,7 +1903,7 @@ the importer's default.
 
 | Test (`packages/shared/src/…`) | Covers |
 |---|---|
-| `import/__tests__/colour-layers.test.ts` | a badly ordered ISOM table: the whole stack bottom first (the paved area's and the building's black edge and dots kept under their fills, own order); one brown 50 % split into paved area and road infill (same ink and number, ids `src:n` and `src:n/<id>`); one black as road outline and, moved under fills, dots and edges (ids `…/under<k>`, unique); the road outline over the paved brown and under the infill, buildings over the paved brown; every source-drawn symbol's parts in source order; each palette id on one row, every needed, purple and overlay id present; an alias (source ink, a row of its own) and an insert (palette ink); unreferenced colours (identified, and by name); a zero-object symbol's row; no-role rows, the graphic row and unused roleless colours by the source order (between the contour brown and the blue; `sourceOrdered` with `aboveLowerPurple`); both course purples inserted in the map's ink, the source purple an ordinary row at the bottom; the overlay's places; `courseColourStack`; the per-reference re-index, every reference on a row of its own colour, `reindex.colours`; `documentSymbolFingerprints` unchanged; two colours of one role (source order; the carrier by use, ties to the lowest); a hinted source purple under the course row, the ink by use and by index, the palette's without a purple; both specs' order (the contour brown either side of lower purple; every row in palette order); a ski green as `green-skio`, never aliased; a no-role colour drawn by an area and a line (two rows, `src:n` and `src:n/none:other`); the alias by use, ties to the lowest index; an inserted `purple50` in the palette's ink; spot and overprint on split rows; an inserted row the edition lacks named `iof2024:`; determinism; input unchanged; bad references and infos. I4: an OCAD road drawn inside out (brown main under black borders, suggested match) — the main on a row of its own just under the outline, no palette id; the same road drawn from the library at the palette places, carrying the ids; its infill under the table's black a dropped deviation with the library road's objects; Club-full's table (`club-colour-tables.ts`): every deviation listed with object counts, most first; streets (infill and outline) over the contours kept by default — the contour brown under the road, over the lakes and paved areas it was drawn over, under lower purple, the infill under lower purple; both dropped by override (the contour brown over the road and lower purple); a lake over the contours dropped by default and kept by override (under lower purple); keeps that cannot all hold: a default-dropped pair implied (`impliedBy`), blocked by an explicit drop (`blockedBy`), deterministic; a mask white (hint `white-over-green-brown`) over the black by the source order, no palette id, `aboveLowerPurple`; a white the source has at its palette place stays there; a graphic frame bar's black on a row of its own at its source place; an inserted `white-upper` over a roleless colour the table has on top (ISSprOM); the carrier is §9.2's colour (most used), not the row with the most objects |
+| `import/__tests__/colour-layers.test.ts` | a badly ordered ISOM table: the whole stack bottom first (the paved area's and the building's black edge and dots kept under their fills, own order); one brown 50 % split into paved area and road infill (same ink and number, ids `src:n` and `src:n/<id>`); one black as road outline and, moved under fills, dots and edges (ids `…/under<k>`, unique); the road outline over the paved brown and under the infill, buildings over the paved brown; every source-drawn symbol's parts in source order; each palette id on one row, every needed, purple and overlay id present; an alias (source ink, a row of its own) and an insert (palette ink); unreferenced colours (identified, and by name); a zero-object symbol's row; no-role rows, the graphic row and unused roleless colours by the source order (between the contour brown and the blue; `sourceOrdered` with `aboveLowerPurple`); both course purples inserted in the map's ink, the source purple an ordinary row at the bottom; the overlay's places; `courseColourStack`; the per-reference re-index, every reference on a row of its own colour, `reindex.colours`; `documentSymbolFingerprints` unchanged; two colours of one role (source order; the carrier by use, ties to the lowest); a hinted source purple under the course row, the ink by use and by index, the palette's without a purple; both specs' order (the contour brown either side of lower purple; every row in palette order); a ski green as `green-skio`, never aliased; a no-role colour drawn by an area and a line (two rows, `src:n` and `src:n/none:other`); the alias by use, ties to the lowest index; an inserted `purple50` in the palette's ink; spot and overprint on split rows; an inserted row the edition lacks named `iof2024:`; determinism; input unchanged; bad references and infos. I4: an OCAD road drawn inside out (brown main under black borders, suggested match) — the main on a row of its own just under the outline, no palette id; the same road drawn from the library at the palette places, carrying the ids; its infill under the table's black a dropped deviation with the library road's objects; Club-full's table (`club-colour-tables.ts`): every deviation listed with object counts, most first; streets (infill and outline) over the contours kept by default — the contour brown under the road, over the lakes and paved areas it was drawn over, under lower purple, the infill under lower purple; both dropped by override (the contour brown over the road and lower purple); a lake over the contours dropped by default and kept by override (under lower purple); keeps that cannot all hold: a default-dropped pair implied (`impliedBy`), blocked by an explicit drop (`blockedBy`), deterministic; a mask white (hint `white-over-green-brown`) over the black by the source order, no palette id, `aboveLowerPurple`; a white the source has at its palette place stays there; a graphic frame bar's black on a row of its own at its source place; an inserted `white-upper` over a roleless colour the table has on top (ISSprOM); the carrier is §9.2's colour (most used), not the row with the most objects; a moved part against another colour's outline the source draws under it (kept under it, no pair of one role a deviation); pass 2 (a roleless part the gap put over its symbol's black, moved directly under it); nothing left implied by a deviation that is then blocked |
 | `render/__tests__/transform.test.ts` | `reindexRenderColours` (one row per reference, the identity, a count mismatch throws) |
 
 ## 10. Pending in this chapter

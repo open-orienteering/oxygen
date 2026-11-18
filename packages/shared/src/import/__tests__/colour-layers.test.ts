@@ -430,6 +430,42 @@ const area = (c: number, objects: number, extra: Partial<Sym> = {}): Sym => ({ o
 const suggested = (canonicalId: string) => ({ canonicalId, state: "suggested" as const, reviewed: false });
 const auto = (canonicalId: string) => ({ canonicalId, state: "auto" as const, reviewed: false });
 
+describe("buildColourLayers: own order against other symbols, and pass 2", () => {
+  it("moves a part under its own over-part only: another colour's outline the source draws under it stays under it, and no pair of one role is a deviation", () => {
+    // Black A, brown 50 %, black B: a cased road (outline A under its infill) and an inside-out road (brown main, borders B).
+    const colours = [colour(1, "Svart A", [0, 0, 0, 1]), colour(2, "Brun 50%", ink("brown50-paved")), colour(3, "Svart B", [0, 0, 0, 1])];
+    const cased: Sym = { objects: 5, match: suggested("ISOM2017-2:502"), render: sym({ type: "line", borders: { left: { colour: 0, widthUm: 140, shiftUm: 290 }, right: { colour: 0, widthUm: 140, shiftUm: 290 }, backgroundColour: 1 } }) };
+    const symbols = [cased, ocadRoad(1, 2, 6, suggested("ISOM2017-2:502"))];
+    const r = build(colours, symbols);
+    const [main, borderB] = rowsOf(r, 1);
+    const [outlineA, , infill] = rowsOf(r, 0);
+    expect(outlineA).toBeLessThan(main); // the source draws the brown over black A, and so does the palette
+    expect(main).toBeLessThan(borderB);
+    expect(outlineA).toBeLessThan(infill);
+    expectOwnOrder(r, colours, symbols);
+    expect(r.report.deviations.filter((d) => d.upper === d.lower)).toEqual([]);
+    expect(r.report.deviations.map((d) => deviationKey(d.upper, d.lower))).not.toContain("brown50-road>black-road-outline");
+  });
+
+  it("moves a roleless part the source order put over a part drawn over it to a row directly under that part (pass 2)", () => {
+    // Ski green (a role over black 100 %), red (no role), black. The red goes over the ski green by the source order, so
+    // over the black; a point drawing a red disc under a black one keeps its red under the black.
+    const colours = [colour(1, "Grön skidspår", [0.91, 0, 0.83, 0]), colour(2, "Röd", [0, 1, 1, 0]), colour(3, "Svart", [0, 0, 0, 1])];
+    const point: Sym = { objects: 1, render: sym({ type: "point", glyph: { parts: [disc(1), disc(2)], rotatable: false } }) };
+    const symbols = [line(0, 10), line(1, 3), line(2, 1), point];
+    const r = build(colours, symbols);
+    const red = rowsOf(r, 1)[0];
+    expect(red).toBeGreaterThan(rowOfRole(r, "black100"));
+    const [redPart, blackPart] = rowsOf(r, 3);
+    expect(r.report.rows[redPart]).toMatchObject({ source: 1, role: null, ownOrder: true, sourceOrdered: "no-role" });
+    expect(redPart).toBe(blackPart - 1);
+    // the moved part is the colour's lowest row, so it keeps the id; the row the gap gave is the split
+    expect(r.colours[redPart].id).toBe("src:2");
+    expect(r.colours[red].id).toBe("src:2/none:other");
+    expectOwnOrder(r, colours, symbols);
+  });
+});
+
 describe("buildColourLayers: own order (a symbol drawn inside out)", () => {
   // Contour brown, the road's brown 50 %, the black: the table draws the black over the brown 50 %.
   const colours = [colour(1, "Brun", ink("brown100-line")), colour(2, "Brun 50%", ink("brown50-paved")), colour(3, "Svart", [0, 0, 0, 1])];
@@ -559,6 +595,17 @@ describe("buildColourLayers: kept deviations that cannot all hold", () => {
       objects: { upper: 3, lower: 9 },
       blockedBy: ["blue100-area"],
     });
+  });
+
+  it("leaves nothing implied by a deviation that is then blocked", () => {
+    // Building, lake, contour, paved brown on top; the paved brown over the building dropped by override.
+    const four = [colour(1, "Svart 50%", ink("black50-building")), ...colours.map((c) => ({ ...c, sourceNumber: c.sourceNumber! + 1, id: `src:${c.sourceNumber! + 1}` }))];
+    const r = build(four, [area(0, 2), area(1, 4), line(2, 9), area(3, 3)], [], "ISOM2017-2", "iof2022", { "brown50-paved>black50-building": "drop" });
+    const dev = (u: string, l: string) => r.report.deviations.find((d) => d.upper === u && d.lower === l);
+    expect(dev("brown50-paved", "brown100-line")).toMatchObject({ kept: false, blockedBy: expect.any(Array) });
+    expect(dev("brown50-paved", "blue100-area")).toMatchObject({ kept: false, byDefault: true });
+    expect(dev("brown50-paved", "blue100-area")!.impliedBy).toBeUndefined();
+    for (const d of r.report.deviations) if (d.impliedBy) expect(d.impliedBy.every((k) => r.report.deviations.some((x) => deviationKey(x.upper, x.lower) === k && x.kept))).toBe(true);
   });
 
   it("resolves the same way every time", () => {

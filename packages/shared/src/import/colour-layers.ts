@@ -452,11 +452,16 @@ export function buildColourLayers(input: ColourLayersInput): ColourLayersResult 
 
   interface DevAcc { upper: string; lower: string; upperRows: Set<Draft>; lowerRows: Set<Draft> }
   const devs = new Map<string, DevAcc>();
-  /** The deviation key a pair of used rows contradicts (the source's order against the base order), if any. */
+  /**
+   * The deviation a pair of used rows makes, if any: the source draws one over the other while both the palette (by
+   * role; rows of one role go by the source) and the base order put it under. Where the source agrees with the palette
+   * (a part pass 1 moved, against another colour's row) or with the base order (pass 1's own move), it is no deviation.
+   */
   const contradiction = (a: Draft, b: Draft): string | null => {
     if (a.source === b.source) return null;
     const [hi, lo] = a.source! > b.source! ? [a, b] : [b, a];
-    return pos.get(hi)! < pos.get(lo)! ? deviationKey(hi.role!, lo.role!) : null;
+    const paletteAgrees = rank.get(hi.role!)! >= rank.get(lo.role!)!;
+    return !paletteAgrees && pos.get(hi)! < pos.get(lo)! ? deviationKey(hi.role!, lo.role!) : null;
   };
   for (let i = 0; i < used.length; i++) {
     for (let j = i + 1; j < used.length; j++) {
@@ -470,14 +475,15 @@ export function buildColourLayers(input: ColourLayersInput): ColourLayersResult 
     }
   }
   const override = input.deviations ?? {};
-  const keep = new Set<string>();
-  for (const key of devs.keys()) if ((override[key] ?? (KEPT_BY_DEFAULT.has(key) ? "keep" : "drop")) === "keep") keep.add(key);
+  const wantKept = (key: string) => (override[key] ?? (KEPT_BY_DEFAULT.has(key) ? "keep" : "drop")) === "keep";
+  const keep = new Set<string>([...devs.keys()].filter(wantKept));
   const implied = new Map<string, Set<string>>();
   const blocked = new Map<string, Set<string>>();
   const sumObjects = (rows: Set<Draft>) => [...rows].reduce((t, d) => t + drawnObjects(d), 0);
   const weight = (key: string) => sumObjects(devs.get(key)!.upperRows) + sumObjects(devs.get(key)!.lowerRows);
+  const lightest = (keys: string[]) => keys.sort((a, b) => weight(a) - weight(b) || (a < b ? -1 : 1))[0];
 
-  /** Edges "a under b" among the used rows: the source's order for a kept deviation, the base order otherwise. */
+  /** Edges "a under b" among the used rows: the base order for a dropped deviation, the source's order otherwise. */
   const buildEdges = () => {
     const out = new Map<Draft, Set<Draft>>(placed.map((d) => [d, new Set()]));
     const why = new Map<string, string | null>();
@@ -486,20 +492,24 @@ export function buildColourLayers(input: ColourLayersInput): ColourLayersResult 
         const a = used[i], b = used[j];
         if (a.source === b.source) continue;
         const dev = contradiction(a, b);
-        const bySource = dev !== null && keep.has(dev);
-        const [lo, hi] = bySource ? (a.source! < b.source! ? [a, b] : [b, a]) : pos.get(a)! < pos.get(b)! ? [a, b] : [b, a];
+        const byBase = dev !== null && !keep.has(dev);
+        const [lo, hi] = byBase ? (pos.get(a)! < pos.get(b)! ? [a, b] : [b, a]) : a.source! < b.source! ? [a, b] : [b, a];
         out.get(lo)!.add(hi);
         why.set(`${lo.key}\n${hi.key}`, dev);
       }
     }
     return { out, why };
   };
-  // Kept deviations that cannot all hold make a cycle. Break each: keep a deviation dropped by default that the cycle
-  // runs through (it is implied), else drop the kept deviation in it with the fewest objects (it is blocked).
+  // Every relation is the source's but a dropped deviation's, so a cycle runs through a dropped one. Break each: keep a
+  // deviation in it dropped by default (implied); else drop the kept deviation in it with the fewest objects (blocked)
+  // and resolve again from the wanted keeps, so nothing stays implied by a deviation that no longer holds; else keep
+  // a deviation an override dropped, as the only order that can be drawn (implied by nothing kept).
   let edges = buildEdges();
-  for (let guard = 0; guard < 4 * devs.size + 4; guard++) {
+  const guardLimit = (devs.size + 2) ** 2;
+  for (let guard = 0; ; guard++) {
     const cycle = findCycle(placed, edges.out);
     if (!cycle) break;
+    if (guard >= guardLimit) throw new Error("buildColourLayers: deviations that cannot be resolved");
     const inCycle = new Set<string>();
     const roles = new Set<string>();
     cycle.forEach((d, k) => {
@@ -509,17 +519,32 @@ export function buildColourLayers(input: ColourLayersInput): ColourLayersResult 
       if (dev) inCycle.add(dev);
     });
     const keptHere = [...inCycle].filter((k) => keep.has(k));
-    const flip = [...inCycle].filter((k) => !keep.has(k) && !override[k] && !blocked.has(k)).sort((a, b) => weight(a) - weight(b) || (a < b ? -1 : 1))[0];
+    const droppedHere = [...inCycle].filter((k) => !keep.has(k));
+    const flip = lightest(droppedHere.filter((k) => !override[k] && !blocked.has(k)));
+    // A kept deviation in the cycle, or the kept one that an implied deviation in it was implied by.
+    const roots = new Set<string>();
+    const rootOf = (k: string, seen: Set<string>) => {
+      if (seen.has(k)) return;
+      seen.add(k);
+      if (!implied.has(k)) roots.add(k);
+      else for (const by of implied.get(k)!) rootOf(by, seen);
+    };
+    for (const k of keptHere) rootOf(k, new Set());
+    const drop = lightest([...roots].filter((k) => keep.has(k)));
     if (flip) {
       keep.add(flip);
       implied.set(flip, new Set(keptHere));
+    } else if (drop) {
+      blocked.set(drop, new Set([...roles].filter((r) => r !== devs.get(drop)!.upper && r !== devs.get(drop)!.lower)));
+      keep.clear();
+      for (const k of devs.keys()) if (wantKept(k) && !blocked.has(k)) keep.add(k);
+      implied.clear();
     } else {
-      const drop = keptHere.sort((a, b) => weight(a) - weight(b) || (a < b ? -1 : 1))[0];
-      if (!drop) throw new Error("buildColourLayers: a cycle without a kept deviation");
-      keep.delete(drop);
-      const by = new Set([...roles].filter((r) => r !== devs.get(drop)!.upper && r !== devs.get(drop)!.lower));
-      blocked.set(drop, by);
-      implied.delete(drop);
+      const forced = lightest(droppedHere);
+      if (!forced) throw new Error("buildColourLayers: a cycle without a deviation");
+      keep.add(forced);
+      implied.set(forced, new Set(keptHere));
+      blocked.delete(forced);
     }
     edges = buildEdges();
   }
@@ -582,11 +607,11 @@ export function buildColourLayers(input: ColourLayersInput): ColourLayersResult 
     if (g < order.length) stack.push(order[g]);
   }
 
-  // ---- own order, pass 2: parts with no role, graphic parts and anything the deviations moved ------------------------
+  // ---- own order, pass 2: parts with no role and anything the deviations moved (graphic objects as a whole) ----------
   const refs = useKeys.map((keys) => (keys ? keys.map((k) => drafts.get(k)!) : null));
   input.uses.forEach((s, symbolIdx) => {
     const mine = refs[symbolIdx];
-    if (!s || !mine || s.library) return;
+    if (!s || !mine || s.library || s.origin === "graphic") return;
     const colourOrder = [...new Set(s.uses.map((u) => u.colour))].sort((a, b) => b - a);
     let ceiling: Draft | null = null;
     for (const c of colourOrder) {
