@@ -10,7 +10,8 @@ import sharp from "sharp";
 import { render, symbolLibrary } from "@oxygen/shared";
 import { importOcadToDocument } from "../../import/ocad.js";
 import { type RasterImage, sampleAt } from "../reference-raster.js";
-import { THUMBNAIL_LONG_EDGE_PX, renderSwatch, renderSwatchPng, renderThumbnailPng, stackColour } from "../previews.js";
+import { COLOUR_PICTURE_MAX_MM, COLOUR_PICTURE_PX_PER_MM, THUMBNAIL_LONG_EDGE_PX, colourPictureWindow, renderColourPicture, renderColourPicturePng, renderSwatch, renderSwatchPng, renderThumbnailPng, stackColour, thumbnailBounds } from "../previews.js";
+import { mapDocument } from "@oxygen/shared";
 
 const { PILOT, pilotColours, pilotSymbols, SWATCH } = render;
 const colour = (i: number) => pilotColours[i]?.hex ?? "#ff00ff";
@@ -93,3 +94,40 @@ describe("renderThumbnailPng", () => {
     expect(result).toMatchObject({ skipped: "too-many-objects" });
   });
 });
+
+describe("the colour panel's picture (row I6)", () => {
+  const layersFixture = readFileSync(fileURLToPath(new URL("../../../../../e2e/colour-layers.ocd", import.meta.url)));
+  const decoded = async (match: Parameters<typeof importOcadToDocument>[2]) => mapDocument.decodeMapDocument((await importOcadToDocument(layersFixture, "colour-layers.ocd", match)).bytes);
+
+  it("takes a small map's bounds and caps a large one at the tile with the most objects", async () => {
+    const doc = await decoded({});
+    // 50 × 40 mm (units 1/100 mm), no print window: the whole map.
+    const small = { ...doc, header: { ...doc.header, printWindow: undefined, bounds: { minX: 0, minY: 0, maxX: 5000, maxY: 4000 } } };
+    expect(colourPictureWindow(small)).toEqual({ minX: 0, minY: 0, maxX: 50_000, maxY: 40_000 });
+    const big = mapDocument.decodeMapDocument((await importOcadToDocument(fixture, "test.ocd")).bytes);
+    const w = colourPictureWindow(big);
+    const b = thumbnailBounds(big.header);
+    expect(w.maxX - w.minX).toBeLessThanOrEqual(COLOUR_PICTURE_MAX_MM * 1000);
+    expect(w.maxY - w.minY).toBeLessThanOrEqual(COLOUR_PICTURE_MAX_MM * 1000);
+    expect(w.minX).toBeGreaterThanOrEqual(b.minX);
+    expect(w.maxY).toBeLessThanOrEqual(b.maxY);
+  });
+
+  it("shows the same place in both orders, each in its own stack: the paved brown over the building only in the map's order", async () => {
+    const iof = await decoded({});
+    const source = await decoded({ match: { colourOrder: "source" } });
+    const window = colourPictureWindow(iof);
+    expect(colourPictureWindow(source)).toEqual(window);
+    const [a, b] = await Promise.all([renderColourPicture(iof, window), renderColourPicture(source, window)]);
+    expect([a.width, a.height]).toEqual([b.width, b.height]);
+    expect(a.width).toBe(Math.round(((window.maxX - window.minX) / 1000) * COLOUR_PICTURE_PX_PER_MM));
+    // Somewhere the two orders differ (the fixture's table is badly ordered).
+    let differ = 0;
+    for (let i = 0; i < a.pixels.length; i += 4) if (a.pixels[i] !== b.pixels[i] || a.pixels[i + 1] !== b.pixels[i + 1] || a.pixels[i + 2] !== b.pixels[i + 2]) differ++;
+    expect(differ).toBeGreaterThan(0);
+    const png = await renderColourPicturePng(iof, window);
+    const back = await decodePng(png);
+    expect([back.width, back.height]).toEqual([a.width, a.height]);
+  });
+});
+

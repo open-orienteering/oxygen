@@ -24,6 +24,7 @@ import { writePinnedMapFileColumns } from "./event-document.js";
 import { abandonPromote, completePromote, reresolveAfterPin } from "./patches.js";
 import { synchronizePositionedControlCoordinates } from "../event-crs.js";
 import type { ImportWorkerData, ImportWorkerMessage } from "./import-worker.js";
+import { colourSettingsForJob, colourSettingsJson, parseColourSettings, reportFollowsColour, DEFAULT_COLOUR_SETTINGS, type MapColourSettings } from "./colour-settings.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -61,6 +62,8 @@ export interface ImportJobRow {
   decisions: mapImport.SymbolDecision[];
   /** The club version's patch the store stage bakes, snapshotted at insert (docs/map-patches.md §5); `[]` = none. */
   patch: mapDocument.VersionPatch;
+  /** The map's colour setting stage 7 applies, snapshotted at insert (docs/map-symbols.md §9.3 "Per map (row I6)"). */
+  colour: MapColourSettings;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -104,9 +107,9 @@ export interface WorkerResult {
 export function runImportInWorker(
   bytes: Uint8Array,
   fileName: string,
-  opts: { kind?: MapSourceKind; decisions?: mapImport.SymbolDecision[]; patch?: mapDocument.VersionPatch; onStage?: (stage: ImportStage) => void; timeoutMs?: number } = {},
+  opts: { kind?: MapSourceKind; decisions?: mapImport.SymbolDecision[]; patch?: mapDocument.VersionPatch; colour?: MapColourSettings; onStage?: (stage: ImportStage) => void; timeoutMs?: number } = {},
 ): Promise<WorkerResult> {
-  const workerData: ImportWorkerData = { bytes, fileName, kind: opts.kind ?? "ocad", decisions: opts.decisions ?? [], patch: opts.patch ?? [] };
+  const workerData: ImportWorkerData = { bytes, fileName, kind: opts.kind ?? "ocad", decisions: opts.decisions ?? [], patch: opts.patch ?? [], colour: opts.colour ?? DEFAULT_COLOUR_SETTINGS };
   return new Promise<WorkerResult>((resolve, reject) => {
     const worker = new Worker(workerBootstrap(new URL("./import-worker", import.meta.url), import.meta.url), { eval: true, workerData });
     let settled = false;
@@ -135,11 +138,11 @@ export function runImportInWorker(
 
 const JOB_SELECT = {
   id: true, state: true, stage: true, progress: true, sourceHash: true, documentHash: true, error: true,
-  eventId: true, clubMapId: true, claimedBy: true, heartbeatAt: true, decisions: true, patch: true, createdAt: true, updatedAt: true,
+  eventId: true, clubMapId: true, claimedBy: true, heartbeatAt: true, decisions: true, patch: true, colour: true, createdAt: true, updatedAt: true,
 } as const;
 
-function asRow(r: { state: string; decisions: Prisma.JsonValue; patch: Prisma.JsonValue } & Omit<ImportJobRow, "state" | "decisions" | "patch">): ImportJobRow {
-  return { ...r, state: r.state as JobState, decisions: parseDecisionSnapshot(r.decisions), patch: mapDocument.parseVersionPatch(r.patch) };
+function asRow(r: { state: string; decisions: Prisma.JsonValue; patch: Prisma.JsonValue; colour: Prisma.JsonValue } & Omit<ImportJobRow, "state" | "decisions" | "patch" | "colour">): ImportJobRow {
+  return { ...r, state: r.state as JobState, decisions: parseDecisionSnapshot(r.decisions), patch: mapDocument.parseVersionPatch(r.patch), colour: parseColourSettings(r.colour) };
 }
 
 /** A version patch as a JSON column value. */
@@ -228,7 +231,7 @@ async function execute(db: Db, job: ImportJobRow): Promise<void> {
     if (!source) throw new Error(`source ${job.sourceHash} not found`);
     if (source.kind !== "ocad" && source.kind !== "omap") throw new Error(`UNSUPPORTED_FORMAT: ${source.kind} import is not available`);
 
-    const result = await runImportInWorker(source.bytes, source.fileName, { kind: source.kind, decisions: job.decisions, patch: job.patch, onStage: (stage) => void progress(db, job.id, stage) });
+    const result = await runImportInWorker(source.bytes, source.fileName, { kind: source.kind, decisions: job.decisions, patch: job.patch, colour: job.colour, onStage: (stage) => void progress(db, job.id, stage) });
     await progress(db, job.id, "store");
     const stored = await storeImportedDocument(db, {
       source: { bytes: source.bytes, fileHash: job.sourceHash, kind: source.kind, fileName: source.fileName, uploadedBy: source.uploadedBy },
@@ -341,13 +344,16 @@ export interface InsertImportJobInput {
   startedBy: string | null;
   decisions: mapImport.SymbolDecision[];
   patch: mapDocument.VersionPatch;
+  /** Default: the target's setting (`colourSettingsForJob`). */
+  colour?: MapColourSettings;
 }
 
 /** A queued job row, in the caller's transaction (promote inserts its version and job together, §5); run it with `holdImportJob`. */
 export async function insertQueuedImportJob(db: Db, input: InsertImportJobInput): Promise<ImportJobRow> {
-  const { decisions, patch, ...target } = input;
+  const { decisions, patch, colour, ...target } = input;
+  const settings = colour ?? (await colourSettingsForJob(db, target));
   return asRow(await db.mapImportJob.create({
-    data: { ...target, decisions: decisions.map((d) => ({ ...d })) as Prisma.InputJsonArray, patch: patchJson(patch), state: "queued" },
+    data: { ...target, decisions: decisions.map((d) => ({ ...d })) as Prisma.InputJsonArray, patch: patchJson(patch), colour: colourSettingsJson(settings), state: "queued" },
     select: JOB_SELECT,
   }));
 }
@@ -370,6 +376,11 @@ export interface StartImportJobInput {
   startedBy?: string | null;
   /** The club version's patch to bake (docs/map-patches.md §5); default none. */
   patch?: mapDocument.VersionPatch;
+  /**
+   * The colour setting to import with (docs/map-symbols.md §9.3 "Per map (row I6)"); default the target's — a club
+   * map's series', else the event's for this source — and the defaults for a job without a target.
+   */
+  colour?: MapColourSettings;
   /** Wait this long for the job to finish before returning (0 = return at once). */
   holdMs?: number;
 }
@@ -378,9 +389,10 @@ export interface StartImportJobInput {
  * A stored document of the source that importing it now would reproduce:
  * current importer (a source hash has one kind, so the current version of
  * either importer), current library release (the library id follows the
- * map scale) and the same decisions applied (docs/map-symbols.md §8.5).
+ * map scale), the same decisions applied (docs/map-symbols.md §8.5), the
+ * same corrections baked and the same colour setting (§9.3, row I6).
  */
-export async function currentDocumentFor(db: Db, sourceHash: string, decisions: readonly mapImport.SymbolDecision[], patch: mapDocument.VersionPatch = []): Promise<{ hash: string } | null> {
+export async function currentDocumentFor(db: Db, sourceHash: string, decisions: readonly mapImport.SymbolDecision[], patch: mapDocument.VersionPatch = [], colour: MapColourSettings = DEFAULT_COLOUR_SETTINGS): Promise<{ hash: string } | null> {
   const candidates = await db.mapDocument.findMany({
     where: { sourceHash, importerVersion: { in: [...IMPORTER_VERSIONS] }, libraryVersion: { endsWith: `@${symbolLibrary.SYMBOL_LIBRARY_VERSION}` } },
     orderBy: { createdAt: "desc" },
@@ -389,14 +401,16 @@ export async function currentDocumentFor(db: Db, sourceHash: string, decisions: 
   for (const c of candidates) {
     // The same version patch baked (docs/map-patches.md §5 answer 1); null and [] are none.
     if (!mapDocument.sameVersionPatch(c.patch, patch)) continue;
+    if (!reportFollowsColour(c.report, colour)) continue;
     if (await storedDocumentFollowsDecisions(db, c, decisions)) return { hash: c.hash };
   }
   return null;
 }
 
 /**
- * Insert the job and run it. The club decisions for the source's kind are
- * snapshotted into the row, so a re-claim imports with the same input. A
+ * Insert the job and run it. The club decisions for the source's kind and
+ * the map's colour setting are snapshotted into the row, so a re-claim
+ * imports with the same input. A
  * source whose current document already exists skips the worker entirely
  * (06 §8 dedup): the job is recorded as done against the existing
  * document and the pins applied.
@@ -408,12 +422,14 @@ export async function startImportJob(db: Db, input: StartImportJobInput): Promis
   // Plain JSON for the column; optional fields that are absent stay absent.
   const snapshot = decisions.map((d) => ({ ...d })) as Prisma.InputJsonArray;
   const patch = input.patch ?? [];
-  const existing = await currentDocumentFor(db, input.sourceHash, decisions, patch);
+  const colour = input.colour ?? (await colourSettingsForJob(db, { ...target, sourceHash: input.sourceHash }));
+  const colourJson = colourSettingsJson(colour);
+  const existing = await currentDocumentFor(db, input.sourceHash, decisions, patch, colour);
   if (existing) {
     // Touch before the job row references it, so a GC run racing this insert skips the document (§8.2).
     await touchDocument(db, existing.hash);
     const row = asRow(await db.mapImportJob.create({
-      data: { ...target, sourceHash: input.sourceHash, decisions: snapshot, patch: patchJson(patch), state: "done", stage: "done", progress: 1, documentHash: existing.hash, claimedBy: INSTANCE_ID, heartbeatAt: new Date() },
+      data: { ...target, sourceHash: input.sourceHash, decisions: snapshot, patch: patchJson(patch), colour: colourJson, state: "done", stage: "done", progress: 1, documentHash: existing.hash, claimedBy: INSTANCE_ID, heartbeatAt: new Date() },
       select: JOB_SELECT,
     }));
     await applyJobResult(db, row);
@@ -425,7 +441,7 @@ export async function startImportJob(db: Db, input: StartImportJobInput): Promis
     return row;
   }
 
-  const row = asRow(await db.mapImportJob.create({ data: { ...target, sourceHash: input.sourceHash, decisions: snapshot, patch: patchJson(patch), state: "queued" }, select: JOB_SELECT }));
+  const row = asRow(await db.mapImportJob.create({ data: { ...target, sourceHash: input.sourceHash, decisions: snapshot, patch: patchJson(patch), colour: colourJson, state: "queued" }, select: JOB_SELECT }));
   const holdMs = input.holdMs ?? DEFAULT_HOLD_MS;
   const finished = waitFor(row.id, holdMs);
   void kickImportJobs(db);
