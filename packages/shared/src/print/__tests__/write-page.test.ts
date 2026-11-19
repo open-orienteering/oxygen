@@ -320,6 +320,12 @@ describe("writePage", () => {
     expect(cut).toMatch(/W\* n\nq [^\n]* cm \/Im0 Do Q\nQ\n(?:[^\n]*\n)*?q [^\n]* cm \/Im1 Do Q/);
     const plain = await ops(false);
     expect(plain).not.toMatch(/W\* n\nq [^\n]* cm \/Im0/);
+    // A translucent overlay is cut the same way: its ExtGState and Do both inside the clip block.
+    const w = await PdfWriter.create({ faces, deterministic: true });
+    const translucent = { ...page(true), objects: page(true).objects.map((o) => (o.id === "overlay" ? { ...o, opacity: 0.5 } : o)) };
+    await writePage(w, composePage(translucent, fonts()), { mode: "cmyk", images: new Map([[1, opaque], [2, lucka]]) });
+    const alpha = content(await PDFDocument.load(await w.save()), 0);
+    expect(alpha).toMatch(/W\* n\n(?:q\n)?\/GS\d+ gs\nq [^\n]* cm \/Im0 Do Q\nQ\n(?:Q\n)?q [^\n]* cm \/Im1 Do Q/);
   });
 
   it("an image object without bytes is skipped with a warning", async () => {

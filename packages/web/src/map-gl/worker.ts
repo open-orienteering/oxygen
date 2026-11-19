@@ -1079,12 +1079,12 @@ function dropObjects(f: FilterReply, objects: ReadonlySet<number> | undefined): 
   return { ...f, entries: Uint32Array.from(keep) };
 }
 
-/** Two filter replies as one: the second's masks after the first's. */
-/** A filter that hides and masks nothing (the base the course and page parts' masks join). */
+/** A filter with nothing hidden or masked: the seed when only the course or page parts carry masks (J15). */
 function emptyFilter(): FilterReply {
   return { hidden: new Uint32Array(0), entries: new Uint32Array(0), positions: new Float32Array(0), indices: new Uint32Array(0), masks: [] };
 }
 
+/** Two filter replies as one: the second's masks after the first's. */
 function concatFilters(a: FilterReply, b: FilterReply): FilterReply {
   const entries = new Uint32Array(a.entries.length + b.entries.length);
   entries.set(a.entries);

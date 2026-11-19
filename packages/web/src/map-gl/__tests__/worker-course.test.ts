@@ -477,11 +477,11 @@ describe("course request → knockout images (J15, docs/map-rendering.md §4.11 
     const colour = r.colours.findIndex((c) => /graphics/.test(c.id));
     return [COURSE_OBJECT_BASE + i, colour];
   };
-  const alphaMasks = (r: CourseReply) => {
+  const alphaMasks = (r: CourseReply, part = r.part!) => {
     const entryMask = new Map<number, number>();
     const e = r.filter!.entries;
     for (let i = 0; i < e.length; i += 3) entryMask.set(e[i] * 65536 + e[i + 1], e[i + 2]);
-    const vs = buildVisibleSet([{ part: r.part!, base: { fill: 0, hatch: 0, stroke: 0 } }], undefined, { entryMask, positions: r.filter!.positions, indices: r.filter!.indices, masks: r.filter!.masks });
+    const vs = buildVisibleSet([{ part, base: { fill: 0, hatch: 0, stroke: 0 } }], undefined, { entryMask, positions: r.filter!.positions, indices: r.filter!.indices, masks: r.filter!.masks });
     return (vs.alpha ?? []).map((a) => ({ graphicId: a.image?.graphicId, mask: a.mask }));
   };
 
@@ -514,7 +514,7 @@ describe("course request → knockout images (J15, docs/map-rendering.md §4.11 
 
   it("a knockout page image masks the page image below it on the page part, in page colours", () => {
     const h = harness();
-    loaded(h);
+    const m = loaded(h);
     const frame = { x: 10, y: 10, width: 190, height: 277 };
     const window = { minX: 30 - 95, minY: 10 - 138.5, width: 190, height: 277 };
     const objects = [
@@ -526,5 +526,13 @@ describe("course request → knockout images (J15, docs/map-rendering.md §4.11 
     expect(e).toHaveLength(3);
     expect(e[1]).toBeGreaterThanOrEqual(r.page!.colourBase);
     expect(r.colours[e[1]].id).toMatch(/^page:.*graphics/);
+    // The footprint in map paper µm through T_map⁻¹ (page mm x − 75, 158.5 − y): page 40..60 mm inset 0.05 mm.
+    const pos = Array.from(r.filter!.positions);
+    const xs = pos.filter((_, i) => i % 2 === 0).map((x) => x + m.summary.originX), ys = pos.filter((_, i) => i % 2 === 1).map((y) => y + m.summary.originY);
+    expect(Math.min(...xs)).toBeCloseTo(-34_950, -1);
+    expect(Math.max(...xs)).toBeCloseTo(-15_050, -1);
+    expect(Math.min(...ys)).toBeCloseTo(98_550, -1);
+    expect(Math.max(...ys)).toBeCloseTo(118_450, -1);
+    expect(alphaMasks(r, r.pagePart!)).toEqual([{ graphicId: 1, mask: 0 }, { graphicId: 2, mask: -1 }]);
   });
 });

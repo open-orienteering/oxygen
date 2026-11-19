@@ -221,7 +221,7 @@ export interface PassStream {
   passes: Pass[];
   glyphTable: GlyphMesh[];
   fontTable: FontRef[];
-  /** Filter masks (clip-mode filter regions, §4.11); absent = none. */
+  /** Filter masks (clip-mode filter regions and knockout images, §4.11); absent = none. */
   masks?: FilterMask[];
   /** Per pass → index into `masks`, −1 = unmasked. Absent = no pass is masked. */
   maskIdx?: Int32Array;

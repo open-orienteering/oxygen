@@ -490,6 +490,10 @@ graphics below", course-editor.md §7) also sets `RenderObject.knockout`.
 - An attached image cuts where it is drawn (§8.1). One whose control is
   not drawn in a course is left out of that course's layer and cuts
   nothing there.
+- The cut is made from the box when the layer is symbolised, before the
+  graphic's bytes are known. A knockout whose graphic is missing in print
+  (`IMAGE_MISSING`) or still loading on screen still cuts: the box shows
+  the map with no hatch over it.
 - Images only: the course object's `props.knockout` and the page image's
   `knockout` (`course-maps.md`); other kinds refuse the field (course
   objects) or ignore it.
