@@ -8,7 +8,7 @@
  * and one undo entry; the page writes.
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { vertexRule } from "../../../lib/editor/geometry-edit";
 import { TONER_MARGIN_MM } from "../tools/toner-saver";
@@ -27,8 +27,13 @@ export interface ObjectSectionProps {
   courses: { id: number; name: string }[];
   classes: { id: number; name: string }[];
   onProps: (props: Props) => void;
-  /** Props and geometry in one write (J7: an image's size or crop). */
-  onStyle?: (next: { props: Props; geometry?: Obj["geometry"] }) => void;
+  /**
+   * A style field's write (J7): props (style), geometry (size) or both (crop); `shownProps` are the props the
+   * inspector showed (an optimistic edit included), the undo's "before".
+   */
+  onStyle?: (next: { props?: Props; geometry?: Obj["geometry"]; shownProps: Props }) => void;
+  /** Bumped when a write failed: the inspector drops its optimistic values. */
+  resetKey?: number;
   /** The image size lock (editor state). */
   aspectLock?: boolean;
   onAspectLock?: () => void;
@@ -53,6 +58,7 @@ export function ObjectSection(props: ObjectSectionProps) {
   const { t } = useTranslation("editor");
   // Optimistic: the inspector shows an edit at once; the stored object (its token) takes over when it arrives.
   const [pending, setPending] = useState<{ version: string; props?: Props; scope?: Obj["scope"] } | null>(null);
+  useEffect(() => { setPending(null); }, [props.resetKey]);
   const live = pending && pending.version === props.object.version ? pending : null;
   const o = { ...props.object, ...(live?.props ? { props: live.props } : {}), ...(live?.scope ? { scope: live.scope } : {}) } as Obj;
   const p: ObjectSectionProps = {
@@ -72,9 +78,9 @@ export function ObjectSection(props: ObjectSectionProps) {
       </div>
       <KindProps {...p} />
       <Style {...p} onStyle={(next) => {
-        setPending({ version: props.object.version, scope: live?.scope, props: next.props });
+        if (next.props) setPending({ version: props.object.version, scope: live?.scope, props: next.props });
         if (props.onStyle) props.onStyle(next);
-        else props.onProps(next.props);
+        else if (next.props) props.onProps(next.props);
       }} />
       {vertexRule(o.kind).curves && <p data-testid="editor-geometry-hint" className="text-[10px] text-slate-400">{t("geometryHint")}</p>}
       <ScopeEditor scope={o.scope} courses={p.courses} classes={p.classes} onScope={p.onScope} />
@@ -94,7 +100,7 @@ function Style(p: ObjectSectionProps & { onStyle: NonNullable<ObjectSectionProps
       show={{ blend: o.kind !== "whiteout", rotation: o.kind !== "whiteout", flip: image, size: image, crop: image }}
       aspectLock={p.aspectLock ?? true}
       onAspectLock={() => p.onAspectLock?.()}
-      onChange={(next) => p.onStyle({ props: next.props as Props, ...(next.geometry ? { geometry: next.geometry } : {}) })}
+      onChange={(next) => p.onStyle({ ...(next.props ? { props: next.props as Props } : {}), ...(next.geometry ? { geometry: next.geometry } : {}), shownProps: o.props })}
     />
   );
 }

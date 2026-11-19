@@ -70,23 +70,29 @@ export function sizeChange(geometry: readonly Pt[], which: "width" | "height", m
  */
 export function cropChange(geometry: readonly Pt[], style: Pick<StyleValue, "rotationDeg" | "flipH" | "flipV">, oldCrop: Crop | undefined, typed: Crop): { geometry: [Pt, Pt]; crop: Crop } {
   const old = oldCrop ?? FULL_CROP;
-  const crop = clampCrop(typed);
   const b = imageBox(geometry);
   // mm per source fraction, horizontally and vertically.
   const sx = old.width > 0 ? b.w / old.width : 0, sy = old.height > 0 ? b.h / old.height : 0;
+  // The crop, not the box, keeps a side at least `IMAGE_MIN_MM`: the scale then holds, so Reset gives the box back.
+  const crop = clampCrop(typed, sx > 0 ? IMAGE_MIN_MM / sx : 0.01, sy > 0 ? IMAGE_MIN_MM / sy : 0.01);
   const du = crop.x + crop.width / 2 - (old.x + old.width / 2);
   const dv = crop.y + crop.height / 2 - (old.y + old.height / 2);
   // Source u runs right, v down; the local frame is y-up; a flip mirrors its axis about the centre.
   const local = { x: du * sx * (style.flipH ? -1 : 1), y: -dv * sy * (style.flipV ? -1 : 1) };
   const off = turn(local, style.rotationDeg ?? 0);
-  const w = Math.max(IMAGE_MIN_MM, crop.width * sx), h = Math.max(IMAGE_MIN_MM, crop.height * sy);
+  const w = crop.width * sx, h = crop.height * sy;
   return { geometry: boxAbout({ x: b.cx + off.x, y: b.cy + off.y }, w, h), crop };
 }
 
-/** A crop in the graphic: x, y in [0, 0.99], width, height at least 0.01, x + width and y + height at most 1. */
-export function clampCrop(c: Crop): Crop {
+/**
+ * A crop in the graphic, in whole per cent: width and height at least 1 % and at least `minW` / `minH` (the
+ * fractions that are `IMAGE_MIN_MM` at the image's scale), x + width and y + height at most 1.
+ */
+export function clampCrop(c: Crop, minW = 0.01, minH = 0.01): Crop {
   const r = (v: number) => Math.round(v * 100) / 100;
-  const x = Math.max(0, Math.min(0.99, r(c.x))), y = Math.max(0, Math.min(0.99, r(c.y)));
-  const width = Math.max(0.01, Math.min(1 - x, r(c.width))), height = Math.max(0.01, Math.min(1 - y, r(c.height)));
-  return { x, y, width: r(width), height: r(height) };
+  const up = (v: number) => Math.min(1, Math.ceil(Math.max(0.01, v) * 100 - 1e-9) / 100);
+  const mw = up(minW), mh = up(minH);
+  const width = Math.max(mw, Math.min(1, r(c.width))), height = Math.max(mh, Math.min(1, r(c.height)));
+  const x = Math.max(0, Math.min(r(1 - width), r(c.x))), y = Math.max(0, Math.min(r(1 - height), r(c.y)));
+  return { x, y, width: Math.min(width, r(1 - x)), height: Math.min(height, r(1 - y)) };
 }

@@ -71,6 +71,7 @@ export {
   type StoredScope,
   courseObjectRefId,
   filterRegionOf,
+  imageCorners,
   type CourseLayerObject,
   type CourseObject,
   type CourseObjectBody,

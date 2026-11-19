@@ -813,6 +813,39 @@ test.describe("I: image tool and style fields", () => {
       await page.getByTestId("editor-style-width").blur();
       await page.keyboard.press("Control+z");
       await expect.poll(async () => { const g = await geometryOf(row); return Math.abs(g[1].x - g[0].x); }, { timeout: 15000 }).toBeCloseTo(Math.abs(before[1].x - before[0].x), 1);
+
+      // A crop writes geometry and props in one update: half the width shows half the graphic at the same scale;
+      // one Ctrl+Z restores both.
+      const uncropped = await geometryOf(row);
+      const cropped = waitForTrpc(page, "courseObject.update");
+      await page.getByTestId("editor-style-crop-w").fill("50");
+      await page.getByTestId("editor-style-crop-w").press("Enter");
+      await cropped;
+      await expect.poll(async () => JSON.parse((await row.getAttribute("data-props")) ?? "{}").crop?.width, { timeout: 15000 }).toBe(0.5);
+      const half = await geometryOf(row);
+      expect(Math.abs(half[1].x - half[0].x)).toBeCloseTo(Math.abs(uncropped[1].x - uncropped[0].x) / 2, 1);
+      await page.getByTestId("editor-style-crop-w").blur();
+      await page.keyboard.press("Control+z");
+      await expect.poll(async () => JSON.parse((await row.getAttribute("data-props")) ?? "{}").crop, { timeout: 15000 }).toBeUndefined();
+      const restored = await geometryOf(row);
+      expect(Math.abs(restored[1].x - restored[0].x)).toBeCloseTo(Math.abs(uncropped[1].x - uncropped[0].x), 1);
+
+      // A control inside an image is still the control's (answer 1).
+      await page.keyboard.press("Escape");
+      const [code] = await regularCodes(page, 1);
+      const control = await site(page, code);
+      const around = await trpcCall<{ id: number }>("courseObject.create", {
+        kind: "image", geometry: [{ x: control.mm.x - 8, y: control.mm.y - 8 }, { x: control.mm.x + 8, y: control.mm.y + 8 }], props: { graphicId }, scope: { all: true },
+      });
+      try {
+        await page.reload();
+        await editorReady(page);
+        await expect(objectRow(page, around.id)).toBeAttached({ timeout: 15000 });
+        await select(page, control.code);
+        await expect(page.getByTestId("editor-object")).toHaveCount(0);
+      } finally {
+        await cleanup("courseObject.delete", { id: around.id });
+      }
     } finally {
       if (objectId) await cleanup("courseObject.delete", { id: Number(objectId) });
       await cleanup("graphics.delete", { id: graphicId });

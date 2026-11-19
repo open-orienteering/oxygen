@@ -927,7 +927,14 @@ export function EditorPage() {
   const selectedObject = state.selectedObjectId !== null ? objects.find((o) => o.id === state.selectedObjectId) ?? null : null;
   /** Geometry being dragged (vertex or body) or drawn, drawn instead of the stored one until the list catches up. */
   const [drafts, setDrafts] = useState<Map<number, CourseObject["geometry"]>>(new Map());
-  useEffect(() => { setDrafts((d) => (d.size ? new Map() : d)); }, [objectList.data]);
+  /** Props shown with a geometry draft (J7: a crop writes both, so the canvas draws the new crop in the new box). */
+  const [propDrafts, setPropDrafts] = useState<Map<number, CourseObject["props"]>>(new Map());
+  /** Bumped when an inspector write failed: its optimistic values go (`ObjectSection.resetKey`). */
+  const [styleReset, setStyleReset] = useState(0);
+  useEffect(() => {
+    setDrafts((d) => (d.size ? new Map() : d));
+    setPropDrafts((d) => (d.size ? new Map() : d));
+  }, [objectList.data]);
   /** The selected object's focused vertex (a click on its handle): `Delete` removes it (§7 "Editing geometry"). */
   // Keyed by the object it belongs to, so a selection change drops it.
   const [focus, setFocus] = useState<{ objectId: number; index: number } | null>(null);
@@ -957,12 +964,12 @@ export function EditorPage() {
     return made.id;
   }, [run, writes, record]);
 
-  const updateObject = useCallback((o: CourseObject, patch: { geometry?: CourseObject["geometry"]; props?: CourseObject["props"]; scope?: CourseObject["scope"] }) => {
+  const updateObject = useCallback((o: CourseObject, patch: { geometry?: CourseObject["geometry"]; props?: CourseObject["props"]; scope?: CourseObject["scope"] }, onFail?: () => void) => {
     const prev = { geometry: o.geometry, props: o.props, scope: o.scope };
     const before = Object.fromEntries(Object.keys(patch).map((k) => [k, prev[k as keyof typeof prev]]));
     void (async () => {
       const redo = () => writes.updateObject({ id: o.id, ...patch });
-      if ((await run(redo)) === undefined) return;
+      if ((await run(redo)) === undefined) return onFail?.();
       record(() => writes.updateObject({ id: o.id, ...before }), redo);
     })();
   }, [writes, run, record]);
@@ -1403,14 +1410,14 @@ export function EditorPage() {
 
   // Drafts: objects being dragged (a region's drag is live, 08 §5.3). A region being drawn picks nothing yet (§6.4).
   const draftObjects = useMemo(() => {
-    if (drafts.size === 0) return NO_DRAFTS;
+    if (drafts.size === 0 && propDrafts.size === 0) return NO_DRAFTS;
     const out: CourseObject[] = [];
-    for (const [id, geometry] of drafts) {
+    for (const id of new Set([...drafts.keys(), ...propDrafts.keys()])) {
       const o = objects.find((x) => x.id === id);
-      if (o) out.push({ ...o, geometry } as CourseObject);
+      if (o) out.push({ ...o, geometry: drafts.get(id) ?? o.geometry, props: propDrafts.get(id) ?? o.props } as CourseObject);
     }
     return out;
-  }, [drafts, objects]);
+  }, [drafts, propDrafts, objects]);
   const draftFast = [...drafts.keys()].some((id) => objects.find((o) => o.id === id)?.kind === "filter_region");
 
   const [viewRequest, setViewRequest] = useState<MapViewerEditorProps["viewRequest"]>(null);
@@ -2109,11 +2116,19 @@ export function EditorPage() {
       courses={courseOptions}
       classes={(classes.data ?? []).map((c) => ({ id: c.id, name: c.name }))}
       onProps={(props) => updateObject(selectedObject, { props })}
-      onStyle={({ props, geometry }) => {
-        // Size and crop (J7) write geometry and props together; the canvas shows the box at once.
-        const shown = { ...selectedObject, geometry: drafts.get(selectedObject.id) ?? selectedObject.geometry } as CourseObject;
-        if (geometry) setDraft(shown.id, geometry);
-        updateObject(shown, geometry ? { props, geometry } : { props });
+      resetKey={styleReset}
+      onStyle={({ props, geometry, shownProps }) => {
+        // J7: a style field writes props, a size field geometry, a crop both; the canvas shows it at once, and undo
+        // restores what the inspector showed. A failed write drops the drafts and the inspector's optimistic values.
+        const id = selectedObject.id;
+        const shown = { ...selectedObject, geometry: drafts.get(id) ?? selectedObject.geometry, props: shownProps } as CourseObject;
+        if (geometry) setDraft(id, geometry);
+        if (geometry && props) setPropDrafts((d) => new Map(d).set(id, props));
+        updateObject(shown, { ...(props ? { props } : {}), ...(geometry ? { geometry } : {}) }, () => {
+          setDraft(id, null);
+          setPropDrafts((d) => { const n = new Map(d); n.delete(id); return n; });
+          setStyleReset((k) => k + 1);
+        });
       }}
       aspectLock={state.aspectLock}
       onAspectLock={() => dispatch({ type: "toggle-aspect-lock" })}

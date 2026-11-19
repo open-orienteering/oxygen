@@ -21,8 +21,8 @@ export interface StyleFieldsProps<P extends StyleValue> {
   show: { blend?: boolean; rotation?: boolean; flip?: boolean; size?: boolean; crop?: boolean };
   aspectLock: boolean;
   onAspectLock: () => void;
-  /** The next props, and with size or crop the next geometry, in one write. */
-  onChange: (next: { props: P; geometry?: [Pt, Pt] }) => void;
+  /** One write: the next props (style), the next geometry (size), or both (crop). */
+  onChange: (next: { props?: P; geometry?: [Pt, Pt] }) => void;
   testIdPrefix?: string;
 }
 
@@ -66,9 +66,9 @@ export function StyleFields<P extends StyleValue>(p: StyleFieldsProps<P>) {
       {p.show.size && box && p.geometry && (
         <>
           <NumberField label={t("styleWidth")} value={round(box.w)} min={1} max={1000} step={0.5} testId={id("width")}
-            onCommit={(n) => p.onChange({ props: v, geometry: sizeChange(p.geometry!, "width", n, p.aspectLock) })} />
+            onCommit={(n) => p.onChange({ geometry: sizeChange(p.geometry!, "width", n, p.aspectLock) })} />
           <NumberField label={t("styleHeight")} value={round(box.h)} min={1} max={1000} step={0.5} testId={id("height")}
-            onCommit={(n) => p.onChange({ props: v, geometry: sizeChange(p.geometry!, "height", n, p.aspectLock) })} />
+            onCommit={(n) => p.onChange({ geometry: sizeChange(p.geometry!, "height", n, p.aspectLock) })} />
           <label className="flex items-center gap-1 text-[11px] text-slate-600">
             <input type="checkbox" data-testid={id("lock")} checked={p.aspectLock} onChange={p.onAspectLock} />{t("styleAspectLock")}
           </label>

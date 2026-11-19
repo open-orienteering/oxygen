@@ -250,14 +250,14 @@ const textAngle = (rotationDeg: number | undefined): { angleDeg?: number } => {
 };
 
 /** How an image is placed past its box (J4): opacity and blend, rotation clockwise as seen about the centre, after the flips. */
-interface ImageStyle { opacity?: number; blend?: "multiply"; rotationDeg?: number; flipH?: boolean; flipV?: boolean }
+export interface ImageStyle { opacity?: number; blend?: "multiply"; rotationDeg?: number; flipH?: boolean; flipV?: boolean }
 
 /**
  * An image's quad corners (y-up mm), in the order an image render object
  * takes them (§3.10): the visible part's bottom-left, bottom-right,
  * top-right, top-left — flipped in the box first, then the box turned.
  */
-function imageCorners(box: { x: number; y: number; width: number; height: number }, style: ImageStyle): PathVertex[] {
+export function imageCorners(box: { x: number; y: number; width: number; height: number }, style: ImageStyle): PathVertex[] {
   const [bl, br, tr, tl] = rectVertices(box, style.rotationDeg);
   const h = style.flipH, v = style.flipV;
   if (h && v) return [tr, tl, bl, br];
