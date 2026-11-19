@@ -13,6 +13,7 @@
  * which the server's `print.png` serves.
  */
 
+import type { ImageWindow } from "../render/image-window.js";
 import type { ColourMode } from "./colour.js";
 import { type CoursePagesOptions, type CoursePagesResult, type PrintFonts, type PrintGraphic, type PrintSheet, renderCoursePages } from "./course-pages.js";
 import { type PrintPatch, prepareDocument } from "./prepared-document.js";
@@ -23,9 +24,12 @@ import { type PrintPatch, prepareDocument } from "./prepared-document.js";
  * graphics rows, under upper purple — a version-2 host would print them
  * on top, so it must not compose a version-3 job. 4 (J13): a corridor band
  * below opacity 1 is a translucent fill — a version-3 host would print it as
- * the opaque clip.
+ * the opaque clip. 5 (SVG windows, 2026-11-19): a cropped SVG is asked over
+ * its crops' window (`print.png?…&crop=`) — an offline store prepared for
+ * version 4 holds the whole-graphic rasters only, so it must be prepared
+ * again rather than print without the logo.
  */
-export const PRINT_JOB_VERSION = 4;
+export const PRINT_JOB_VERSION = 5;
 
 export type PrintJobGraphicMime = "image/png" | "image/svg+xml";
 
@@ -54,8 +58,8 @@ export interface PrintJobHost {
   document(hash: string): Promise<Uint8Array> | Uint8Array;
   /** The bundled faces in the order regular, narrow, bold (§8.5). */
   fonts: PrintFonts;
-  /** A graphic's PNG: as stored for a PNG (no box), rasterised at `box` for an SVG (`print.png?w=&h=`). */
-  graphic(id: number, box?: [widthPx: number, heightPx: number]): Promise<Uint8Array>;
+  /** A graphic's PNG: as stored for a PNG (no box), rasterised at `box` for an SVG (`print.png?w=&h=`), over `window` of it when given (`&crop=`, §6.3). */
+  graphic(id: number, box?: [widthPx: number, heightPx: number], window?: ImageWindow): Promise<Uint8Array>;
   deterministic?: boolean;
   yieldToHost?: CoursePagesOptions["yieldToHost"];
   onPage?: CoursePagesOptions["onPage"];
@@ -96,7 +100,7 @@ export async function renderPrintJob(job: PrintJob, host: PrintJobHost): Promise
     mode: job.mode,
     deterministic: host.deterministic,
     info: job.info,
-    rasteriseSvg: (_svg, w, h, id) => host.graphic(id, [w, h]),
+    rasteriseSvg: (_svg, w, h, id, window) => (window ? host.graphic(id, [w, h], window) : host.graphic(id, [w, h])),
     yieldToHost: host.yieldToHost,
     onPage: host.onPage,
   });

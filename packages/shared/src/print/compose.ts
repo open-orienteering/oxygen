@@ -18,6 +18,7 @@
 
 import { courseLayer, courseRenderInput } from "../course/layer.js";
 import { RING_BLEED_UM, mapLayerWindow, pageLayer } from "../course/page-layer.js";
+import type { ImageWindow } from "../render/image-window.js";
 import type { FontMetrics } from "../render/truetype.js";
 import { symbolise } from "../render/symbolise.js";
 import { type ColourMode, colourOperator, pageColour } from "./colour.js";
@@ -80,6 +81,8 @@ export interface WritePageOptions {
   mode: ColourMode;
   /** PNG bytes per graphic id; images without bytes are skipped (and reported). */
   images?: ReadonlyMap<number, Uint8Array>;
+  /** The part of the graphic a PNG shows, by graphic id (an SVG rasterised over its crops' window, §6.3); absent = all. */
+  windows?: ReadonlyMap<number, ImageWindow>;
 }
 
 /**
@@ -122,9 +125,9 @@ export async function writePage(writer: PdfWriter, page: ComposedPage, opts: Wri
     `${colourOperator(pageColour("#ffffff", opts.mode), "fill")} 0 0 ${fmtMm(W)} ${fmtMm(Hp)} re f`,
     "q",
     `${pt(f.x)} ${pt(f.y)} ${pt(f.width)} ${pt(f.height)} re W n`,
-    mapLayerOperators(page.mapLayer.stream, { colours: page.colours, mode: opts.mode, resources: wp.resources, images: names, originUm: t.originUm, matrix: tMap, frame: { x: f.x * UM_TO_PT, y: f.y * UM_TO_PT, width: f.width * UM_TO_PT, height: f.height * UM_TO_PT } }),
+    mapLayerOperators(page.mapLayer.stream, { colours: page.colours, mode: opts.mode, resources: wp.resources, images: names, imageWindows: opts.windows, originUm: t.originUm, matrix: tMap, frame: { x: f.x * UM_TO_PT, y: f.y * UM_TO_PT, width: f.width * UM_TO_PT, height: f.height * UM_TO_PT } }),
     "Q",
-    mapLayerOperators(page.pageLayer.stream, { colours: page.colours, mode: opts.mode, resources: wp.resources, images: names, matrix: pageMatrix }),
+    mapLayerOperators(page.pageLayer.stream, { colours: page.colours, mode: opts.mode, resources: wp.resources, images: names, imageWindows: opts.windows, matrix: pageMatrix }),
   ];
   wp.addContent(ops.join("\n"));
   if (page.geo) wp.setGeoViewports([page.geo]);

@@ -38,9 +38,11 @@ import type { PrintFace, PrintWorkerNeed, PrintWorkerRequest, PrintWorkerRespons
  * patch, which the worker's `renderPrintJob` applies as the server does.
  * 3 (J5): images as passes; a job stored offline at version 2 is
  * `notStored` and must be stored again. 4 (J13): translucent corridor bands;
- * a version-3 job stored offline is `notStored` likewise.
+ * a version-3 job stored offline is `notStored` likewise. 5 (SVG windows):
+ * a cropped SVG is asked over its window; a version-4 store lacks those
+ * rasters, so it is `notStored` and stored again.
  */
-export const DEVICE_PRINT_JOB_VERSION = 4;
+export const DEVICE_PRINT_JOB_VERSION = 5;
 /** An idle print worker is terminated after this long (its decoded document is large). */
 export const PRINT_WORKER_IDLE_MS = 60_000;
 /**
@@ -198,7 +200,7 @@ async function composeOnDevice(nameId: string, job: PrintJob, deps: PrintClientD
       };
       const answer = async (need: PrintWorkerNeed): Promise<ArrayBuffer> => {
         if (need.what === "document") return (await deps.document(need.hash, nameId)).slice(0);
-        return graphic(graphicUrl(nameId, need.graphicId, need.box));
+        return graphic(graphicUrl(nameId, need.graphicId, need.box, need.window));
       };
       w.onerror = (e) => {
         e.preventDefault?.();

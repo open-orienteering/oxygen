@@ -5,7 +5,8 @@
  * embed them (docs/course-print.md §6.3).
  */
 
-import { SVG_RASTER_MAX_PX, type PrintSheet } from "@oxygen/shared/print";
+import { type ImageWindow, SVG_RASTER_MAX_PX, type PrintSheet } from "@oxygen/shared/print";
+import { trimSvgInWorker } from "./print-worker-host.js";
 
 /** The largest upload accepted (J2, docs/course-maps.md "Data model"). */
 export const MAX_GRAPHIC_UPLOAD_BYTES = 16 * 1024 * 1024;
@@ -60,7 +61,10 @@ function parseSvgGraphic(data: Buffer): ParsedSvgGraphic {
   const text = sanitizeSvgMarkup(data.toString("utf8"));
   const rootStart = text.search(/<svg[\s>]/i);
   if (rootStart < 0) throw new Error("The SVG file has no <svg> root element");
-  const rootEnd = text.indexOf(">", rootStart);
+  // The start tag's end, past `>` inside quoted attribute values.
+  const tag = /<svg(?:\s+[^\s=>/]+\s*=\s*(?:"[^"]*"|'[^']*'))*\s*\/?>/y;
+  tag.lastIndex = rootStart;
+  const rootEnd = tag.exec(text) ? tag.lastIndex - 1 : text.indexOf(">", rootStart);
   const closing = text.lastIndexOf("</svg>");
   if (rootEnd < 0 || closing <= rootEnd) {
     throw new Error("The SVG file is malformed");
@@ -148,14 +152,25 @@ export interface PreparedGraphic {
  * side is over `GRAPHIC_MAX_PX` is resampled to it with `sharp` (aspect and
  * alpha kept, metadata stripped); a PNG still over `MAX_GRAPHIC_STORED_BYTES`
  * is resampled to 3072, then 2048 px and refused only beyond that. A PNG
- * that fits is stored byte for byte. An SVG over the stored cap is refused.
+ * that fits is stored byte for byte. An SVG over the stored cap is refused;
+ * one whose canvas is much larger than its drawing is stored trimmed to it
+ * (`trimSvgUpload`, user 2026-11-19), else byte for byte.
  */
 export async function prepareGraphicUpload(input: Buffer): Promise<PreparedGraphic> {
   const mime = validateGraphicUpload(input);
   if (mime === "image/svg+xml") {
     if (input.byteLength > MAX_GRAPHIC_STORED_BYTES) throw new Error(`An SVG graphic is limited to ${MAX_GRAPHIC_STORED_BYTES / MIB} MB`);
-    const size = graphicPixelSize(input, mime);
-    return { mime, data: input, widthPx: size?.widthPx ?? null, heightPx: size?.heightPx ?? null };
+    // Bounds much larger than the drawing are trimmed to it (user 2026-11-19), in a print worker (callers hold
+    // `printGate`); an SVG resvg cannot read, or a trim that would not render, is stored as validated.
+    let data = input;
+    try {
+      const trimmed = await trimSvgInWorker(input);
+      if (trimmed && trimmed.byteLength <= MAX_GRAPHIC_STORED_BYTES) data = trimmed;
+    } catch {
+      // Not readable by resvg: kept as uploaded (its print reports SVG_RASTER, as before).
+    }
+    const size = graphicPixelSize(data, mime);
+    return { mime, data, widthPx: size?.widthPx ?? null, heightPx: size?.heightPx ?? null };
   }
   const sharp = (await import("sharp")).default;
   let meta: { width?: number; height?: number };
@@ -203,6 +218,24 @@ export function parseRasterBox(w: string | undefined, h: string | undefined): [n
     return `w and h must be integers 1–${SVG_RASTER_MAX_PX} for an SVG graphic`;
   }
   return box;
+}
+
+/**
+ * `print.png`'s `crop` (docs/course-print.md §8.5): the window of an SVG to
+ * rasterise, `x,y,w,h` as fractions of its canvas (top-left origin), inside
+ * 0…1 with a positive size. Absent = the whole graphic. The window, or the
+ * 400 message.
+ */
+export function parseRasterWindow(raw: string | undefined): ImageWindow | undefined | string {
+  if (raw === undefined || raw === "") return undefined;
+  const parts = raw.split(",");
+  const v = parts.map((p) => (/^\d+(?:\.\d+)?$/.test(p.trim()) ? Number(p) : NaN));
+  const bad = "crop must be x,y,w,h: fractions of the graphic, inside 0–1 with a positive size";
+  if (v.length !== 4 || v.some((n) => !Number.isFinite(n))) return bad;
+  const [x, y, w, h] = v;
+  const eps = 1e-9;
+  if (!(w > 0) || !(h > 0) || x + w > 1 + eps || y + h > 1 + eps) return bad;
+  return { x, y, width: w, height: h };
 }
 
 /**

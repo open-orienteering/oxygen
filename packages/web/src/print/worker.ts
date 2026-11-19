@@ -47,7 +47,7 @@ export function createPrintWorker(post: Post) {
         fonts,
         deterministic: msg.deterministic,
         document: (hash) => ask({ type: "need", id, what: "document", hash }),
-        graphic: (graphicId, box) => ask(box ? { type: "need", id, what: "graphic", graphicId, box } : { type: "need", id, what: "graphic", graphicId }),
+        graphic: (graphicId, box, window) => ask(box ? { type: "need", id, what: "graphic", graphicId, box, ...(window ? { window } : {}) } : { type: "need", id, what: "graphic", graphicId }),
         onPage: (p) => post({ type: "page", id, index: p.index, label: p.label, warnings: p.warnings }),
       });
       const bytes = ownBuffer(out.bytes);

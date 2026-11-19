@@ -22,3 +22,4 @@ export * from "./course-pages.js";
 export * from "./print-job.js";
 export { pageScene, pageSceneGraphics, pageSceneNames, type PageSceneName } from "./__fixtures__/pages.js";
 export { descriptionSheetBlock, descriptionSheetScene } from "./__fixtures__/description-sheets.js";
+export * from "../render/image-window.js";

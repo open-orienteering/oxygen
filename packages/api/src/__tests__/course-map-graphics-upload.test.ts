@@ -5,7 +5,7 @@
  */
 import { randomBytes } from "node:crypto";
 import sharp from "sharp";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import {
   GRAPHIC_MAX_PX,
   MAX_GRAPHIC_STORED_BYTES,
@@ -13,6 +13,10 @@ import {
   prepareGraphicUpload,
   thumbBox,
 } from "../course-maps/graphics.js";
+import { rasteriseSvgGraphic } from "../course-maps/pdf-page.js";
+import { resetPrintWorkers } from "../course-maps/print-worker-host.js";
+
+afterAll(() => resetPrintWorkers());
 
 async function png(w: number, h: number, opts: { noise?: boolean } = {}): Promise<Buffer> {
   const raw = opts.noise ? randomBytes(w * h * 4) : Buffer.alloc(w * h * 4, 0x80);
@@ -78,11 +82,41 @@ describe("prepareGraphicUpload", () => {
     await expect(prepareGraphicUpload(svg)).rejects.toThrow("SVG graphic is limited");
   });
 
-  it("stores an SVG as uploaded with its viewBox size", async () => {
-    const svg = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4"/></svg>`);
+  it("stores an SVG that draws to its bounds as uploaded with its viewBox size", async () => {
+    const svg = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><circle cx="5" cy="5" r="5"/></svg>`);
     const out = await prepareGraphicUpload(svg);
     expect(out.data).toBe(svg);
     expect(out).toMatchObject({ mime: "image/svg+xml", widthPx: 4096, heightPx: 4096 });
+  });
+});
+
+describe("SVG upload trim (user 2026-11-19)", () => {
+  it("stores an SVG whose bounds are much larger than its drawing trimmed to it, sized from the trimmed bounds", async () => {
+    const svg = Buffer.from(`<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 500"><rect x="100" y="100" width="200" height="100" fill="red"/></svg>`);
+    const out = await prepareGraphicUpload(svg);
+    expect(out.data).not.toBe(svg);
+    // 200 × 100 drawn; antialiased edge pixels and one probe pixel (1000/2048) of margin each side: 2:1 within a few probe pixels.
+    expect(out.widthPx).toBe(4096);
+    expect(Math.abs(out.heightPx! - 2048)).toBeLessThanOrEqual(20);
+    const raw = await sharp(await rasteriseSvgGraphic(out.data, 200, 100)).ensureAlpha().raw().toBuffer();
+    // Red, opaque at the centre and almost to the edges.
+    for (const [x, y] of [[100, 50], [3, 3], [196, 96]]) expect([...raw.subarray((y * 200 + x) * 4, (y * 200 + x) * 4 + 4)]).toEqual([255, 0, 0, 255]);
+  });
+
+  it("keeps a DOCTYPE's entities (an Illustrator export) and a `>` in a root attribute: the trimmed bytes render", async () => {
+    const svg = Buffer.from(
+      `<?xml version="1.0"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd" [<!ENTITY ns_svg "http://www.w3.org/2000/svg">]>` +
+        `<svg xmlns="&ns_svg;" data-note="a > b" viewBox="0 0 1000 500"><rect x="100" y="100" width="200" height="100" fill="red"/></svg>`,
+    );
+    const out = await prepareGraphicUpload(svg);
+    expect(out.data).not.toBe(svg);
+    const raw = await sharp(await rasteriseSvgGraphic(out.data, 200, 100)).ensureAlpha().raw().toBuffer();
+    expect([...raw.subarray((50 * 200 + 100) * 4, (50 * 200 + 100) * 4 + 4)]).toEqual([255, 0, 0, 255]);
+  });
+
+  it("stores an SVG that draws nothing as uploaded", async () => {
+    const svg = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"></svg>`);
+    expect((await prepareGraphicUpload(svg)).data).toBe(svg);
   });
 });
 

@@ -418,7 +418,7 @@ export class MapGlEngine {
       ...opts,
       colour: (i) => (i === HIGHLIGHT_COLOUR ? hl : colour(i)),
       ...(this.pageClip ? { pageClip: this.pageClip } : {}),
-      ...(g && !opts.graphic ? { graphic: (img: ImageDraw) => g.get(img) } : {}),
+      ...(g && !opts.graphic ? { graphic: (img: ImageDraw, pxPerUm: number) => g.get(img, pxPerUm) } : {}),
     };
   }
 

@@ -15,6 +15,7 @@
  */
 
 import type { PrintJob } from "@oxygen/shared/print";
+import { type ImageWindow, isWholeWindow, windowParam } from "@oxygen/shared/src/render/image-window.js";
 
 export const OFFLINE_PRINT_CACHE = "offline-print";
 /** The events kept: storing a sixth deletes the one stored longest ago. */
@@ -74,10 +75,11 @@ export const jobKey = (nameId: string, query: string): string => `${eventPrefix(
 
 export const manifestKey = (nameId: string): string => `/offline-print/${encodeURIComponent(nameId)}`;
 
-/** `print.png` of a graphic, at `box` for an SVG (§8.5): the request the client makes and its store key. */
-export function graphicUrl(nameId: string, id: number, box?: readonly [number, number]): string {
+/** `print.png` of a graphic, at `box` for an SVG and over `window` of it when given (§8.5): the request the client makes and its store key. */
+export function graphicUrl(nameId: string, id: number, box?: readonly [number, number], window?: ImageWindow): string {
   const base = `${eventPrefix(nameId)}graphics/${id}/print.png`;
-  return box ? `${base}?w=${box[0]}&h=${box[1]}` : base;
+  if (!box) return base;
+  return `${base}?w=${box[0]}&h=${box[1]}${window && !isWholeWindow(window) ? `&crop=${windowParam(window)}` : ""}`;
 }
 
 /** The path (and query) of a cache key as `keys()` reports it (absolute in a browser). */

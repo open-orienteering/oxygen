@@ -124,9 +124,22 @@ and a stored row at most 8 MiB (J2): a PNG whose longer side is over
 4096 px is resampled to 4096 by `sharp` (aspect and alpha kept, metadata
 dropped); a PNG still over 8 MiB is resampled to 3072, then 2048 px, and
 refused only beyond that (user 2026-11-18, question 12); a PNG that fits
-is stored byte for byte; an SVG over 8 MiB is refused. A PNG over 64
+is stored byte for byte; an SVG over 8 MiB is refused. An SVG whose
+canvas is much larger than what it draws is stored **trimmed** to the
+drawing (user 2026-11-19, "Trim new uploads"; `trimSvgUpload` in
+`course-maps/svg-window.ts`, run in a print worker, `trimSvgInWorker`, so
+resvg stays off the event loop): rendered by resvg at 2048 px on its longer
+side, the pixels with any alpha bound the drawing, plus one probe pixel
+each side; when that leaves more than 5 % of the canvas width or height
+empty, the original root is wrapped in an outer `<svg>` whose `viewBox`
+is those bounds (the original's own viewBox, styles and fonts keep their
+meaning; the prolog, a DOCTYPE's entities included, stays in front). The
+wrapped SVG is rendered once more and kept only if resvg reads it and it
+still draws. Otherwise, or when it draws nothing or resvg cannot read it,
+the SVG is stored byte for byte. Graphics stored before are not
+changed. A PNG over 64
 megapixels is refused before decoding. `width_px` / `height_px`
-(nullable) hold the pixel size: a PNG's own, an SVG's viewBox scaled so
+(nullable) hold the pixel size: a PNG's own, an SVG's (trimmed) viewBox scaled so
 its longer side is 4096 px (question 14). Written at upload, copied by
 `saveToClub`, computed by the venue's snapshot import; the migration
 fills PNG rows from their IHDR and `graphics.list` fills any row still
@@ -140,7 +153,8 @@ report it as before J2 (`IMAGE_MISSING`); the picker does not check use.
 
 Tests (J2): `packages/api/src/__tests__/course-map-graphics-upload.test.ts`
 (pixel size, the 4096 resample with alpha, the 3072/2048 fallbacks, the
-2048 refusal, 64 MP and SVG over 8 MiB refused, `thumbBox`);
+2048 refusal, 64 MP and SVG over 8 MiB refused, an SVG trimmed to its
+drawing (in a print worker; an Illustrator-style DOCTYPE's entities kept so the stored bytes render) and one that draws nothing kept, `thumbBox`);
 `integration/graphics.test.ts` (upload sizes, the list's backfill and its
 0 × 0 mark, the migration's IHDR SQL, `version` after a byte change,
 `saveToClub`, `thumb.png` for PNG and SVG, the kiosk key on the three
@@ -248,7 +262,7 @@ GET /api/maps/:nameId/maps.pdf
 
 GET /api/maps/:nameId/print-job?<the maps.pdf query>   (the job maps.pdf composes, JSON; G15; version 2 carries the event's patch, G14)
 GET /api/maps/:nameId/graphics/:id
-GET /api/maps/:nameId/graphics/:id/print.png[?w=&h=]   (the PNG a print embeds; SVG needs w, h; G15)
+GET /api/maps/:nameId/graphics/:id/print.png[?w=&h=[&crop=]]   (the PNG a print embeds; SVG needs w, h, crop = its window; G15)
 GET /api/maps/:nameId/graphics/:id/thumb.png[?v=]       (≤ 256 px on the longer side, never enlarged; immutable cache; J2)
 ```
 

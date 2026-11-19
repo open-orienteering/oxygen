@@ -31,6 +31,7 @@ import { STROKE_MITRE_LIMIT, strokeOutline } from "../render/geometry.js";
 import { type GlyphOutline, passStreamBounds } from "../render/reference-svg.js";
 import { COORD_FLAG } from "../render/pass-stream.js";
 import type { ColourStack } from "../render/symbol.js";
+import { type ImageWindow, cropInWindow } from "../render/image-window.js";
 import { type ColourMode, type PdfColour, colourOperator, stackColour } from "./colour.js";
 import { glyphHex } from "./fonts.js";
 
@@ -95,6 +96,8 @@ export interface OperatorOptions {
    * graphic has none draws nothing.
    */
   images?: ReadonlyMap<number, string>;
+  /** The part of the graphic each image XObject shows (an SVG window, course-print.md §6.3); a crop is drawn relative to it. Absent = all. */
+  imageWindows?: ReadonlyMap<number, ImageWindow>;
 }
 
 /** A PDF number: fixed-point (never JS exponent notation, ISO 32000 §7.3.3), trailing zeros dropped. */
@@ -621,7 +624,7 @@ export function passStreamOperators(stream: PassStream, opts: OperatorOptions): 
         if (!name) break;
         const q = p.quad;
         const quad = cmOperator([q[0] * e.k, q[1] * e.k, q[2] * e.k, q[3] * e.k, (q[4] - e.ox) * e.k, (q[5] - e.oy) * e.k]);
-        const c = p.crop;
+        const c = cropInWindow(p.crop, opts.imageWindows?.get(p.graphicId));
         out.push(c
           ? `q ${quad} 0 0 1 1 re W n ${cmOperator([1 / c.width, 0, 0, 1 / c.height, -c.x / c.width, (c.y + c.height - 1) / c.height])} /${name} Do Q`
           : `q ${quad} /${name} Do Q`);

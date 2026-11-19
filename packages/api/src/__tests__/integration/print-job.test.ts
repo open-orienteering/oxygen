@@ -15,7 +15,7 @@ import sharp from "sharp";
 import { PDFDocument } from "pdf-lib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { SYSTEM_GROUP_IDS, defaultMapAppearance } from "@oxygen/shared";
-import { type PrintJob, printFontsFromFaces, renderPrintJob, svgRasterBox } from "@oxygen/shared/print";
+import { type PrintJob, printFontsFromFaces, renderPrintJob, svgRasterBox, windowParam } from "@oxygen/shared/print";
 import { buildPrintJob, registerCourseMapRoutes, MAX_COMPOSED_PAGES } from "../../course-maps/routes.js";
 import { rasteriseSvgGraphic } from "../../course-maps/pdf-page.js";
 import { renderCoursePagesInWorker } from "../../course-maps/print-worker-host.js";
@@ -72,8 +72,8 @@ async function composeOverHttp(nameId: string, job: PrintJob) {
         expect(res.statusCode).toBe(200);
         return new Uint8Array(res.rawPayload);
       },
-      graphic: async (id, box) => {
-        const url = `/api/maps/${nameId}/graphics/${id}/print.png${box ? `?w=${box[0]}&h=${box[1]}` : ""}`;
+      graphic: async (id, box, window) => {
+        const url = `/api/maps/${nameId}/graphics/${id}/print.png${box ? `?w=${box[0]}&h=${box[1]}${window ? `&crop=${windowParam(window)}` : ""}` : ""}`;
         fetched.push(url);
         const res = await get(url);
         if (res.statusCode !== 200) throw new Error(`print.png ${res.statusCode}`);
@@ -176,7 +176,7 @@ describe("GET /api/maps/:nameId/print-job (§8.5)", () => {
     expect(res.headers["cache-control"]).toBe("no-store");
     const job = res.json() as PrintJob;
     const pin = await vec.db.mapFile.findFirstOrThrow({ where: { eventId: vec.eventId } });
-    expect(job.version).toBe(4);
+    expect(job.version).toBe(5);
     expect(job.document).toEqual({ hash: pin.documentHash, rotationCorrectionDeg: pin.rotationCorrection ?? 0, patch: null });
     expect(job.mode).toBe("cmyk");
     expect(job.sheets.map((s) => s.label)).toEqual(["Blå", "Blå", "Alla"]);
@@ -213,7 +213,8 @@ describe("GET /api/maps/:nameId/print-job (§8.5)", () => {
     const [w, h] = svgRasterBox(20, 10);
     expect(fetched).toContain(`/api/maps/${vec.nameId}/graphics/${svgId}/print.png?w=${w}&h=${h}`);
     expect(fetched).toContain(`/api/maps/${vec.nameId}/graphics/${pngId}/print.png`);
-    expect(fetched.some((u) => u.startsWith(`/api/maps/${vec.nameId}/graphics/${objectSvgId}/print.png?w=`))).toBe(true);
+    // The course object's SVG is cropped: asked over its crop's window (§6.3).
+    expect(fetched.some((u) => u.startsWith(`/api/maps/${vec.nameId}/graphics/${objectSvgId}/print.png?w=`) && u.endsWith("&crop=0.25,0,0.5,1"))).toBe(true);
   }, 120_000);
 
   it("the same selection, order and copies as maps.pdf, byte for byte, for one sheet and for copies=runners&spare", async () => {
@@ -334,6 +335,22 @@ describe("GET /api/maps/:nameId/graphics/:id/print.png (§8.5)", () => {
       expect(res.json().error).toBe("w and h must be integers 1–4096 for an SVG graphic");
     }
     expect((await get(`/api/maps/${vec.nameId}/graphics/${svgId}/print.png?w=4096&h=1`)).statusCode).toBe(200);
+  });
+
+  it("an SVG with `crop` is resvg over that window at w × h (§6.3); a bad crop is 400; a PNG ignores it", async () => {
+    const window = { x: 0.25, y: 0, width: 0.5, height: 1 };
+    const res = await get(`/api/maps/${vec.nameId}/graphics/${svgId}/print.png?w=200&h=100&crop=0.25,0,0.5,1`);
+    expect(res.statusCode).toBe(200);
+    expect(res.rawPayload.equals(Buffer.from(await rasteriseSvgGraphic(SVG, 200, 100, window)))).toBe(true);
+    expect(res.rawPayload.equals(Buffer.from(await rasteriseSvgGraphic(SVG, 200, 100)))).toBe(false);
+    for (const q of ["0,0,0,1", "0.5,0,0.6,1", "x"]) {
+      const bad = await get(`/api/maps/${vec.nameId}/graphics/${svgId}/print.png?w=200&h=100&crop=${q}`);
+      expect(bad.statusCode, q).toBe(400);
+      expect(bad.json().error).toMatch(/^crop must be/);
+    }
+    const stored = await vec.db.graphic.findUniqueOrThrow({ where: { id: BigInt(pngId) } });
+    const png = await get(`/api/maps/${vec.nameId}/graphics/${pngId}/print.png?crop=bad`);
+    expect(png.rawPayload.equals(Buffer.from(stored.data))).toBe(true);
   });
 
   it("a club graphic is served; another event's and an unknown one are 404; a bad id 400", async () => {

@@ -6,7 +6,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import { svgRasterBox as printSvgRasterBox } from "@oxygen/shared/print";
-import { EVICT_FRAMES, GraphicTextures, svgRasterBox } from "../graphic-textures";
+import { EVICT_FRAMES, GraphicTextures, svgDrawBox, svgRasterBox } from "../graphic-textures";
 
 interface FakeBitmap { width: number; height: number; closed: boolean; close(): void; opts: ImageBitmapOptions }
 const bitmap = (width: number, height: number, opts: ImageBitmapOptions): FakeBitmap => ({ width, height, closed: false, opts, close() { this.closed = true; } });
@@ -59,22 +59,77 @@ describe("GraphicTextures", () => {
     expect(t.g.bytes).toBe(Math.round((400 * 200 * 16) / 3));
   });
 
-  it("an SVG: 400 without a box, then asked at the raster box of its placed size and crop; a new size after a delay, the old texture kept until then", async () => {
-    const box = svgRasterBox(20, 10, { width: 0.5, height: 1 });
-    const box2 = svgRasterBox(40, 20, { width: 0.5, height: 1 });
-    const t = setup({ [`${base}/9/print.png`]: 400, [`${base}/9/print.png?w=${box[0]}&h=${box[1]}`]: box, [`${base}/9/print.png?w=${box2[0]}&h=${box2[1]}`]: box2 });
+  it("an SVG: 400 without a box, then asked over its crop's window at the raster box of the window; a new size after a delay, the old texture kept until then", async () => {
+    // The window is the crop: the raster box is the placed size's, not the whole graphic's (no crop fraction).
+    const box = svgRasterBox(20, 10), box2 = svgRasterBox(40, 20);
+    const q = "&crop=0.25,0,0.5,1";
+    const t = setup({ [`${base}/9/print.png`]: 400, [`${base}/9/print.png?w=${box[0]}&h=${box[1]}${q}`]: box, [`${base}/9/print.png?w=${box2[0]}&h=${box2[1]}${q}`]: box2 });
     t.g.get(img(9, [20000, 10000], [0.25, 0, 0.5, 1]));
     await settle();
     t.g.get(img(9, [20000, 10000], [0.25, 0, 0.5, 1]));
     await settle();
-    const first = t.g.get(img(9, [20000, 10000], [0.25, 0, 0.5, 1])) as unknown as FakeBitmap;
-    expect([first.width, first.height]).toEqual(box);
-    expect(t.g.get(img(9, [40000, 20000], [0.25, 0, 0.5, 1]))).toBe(first);
+    const first = t.g.get(img(9, [20000, 10000], [0.25, 0, 0.5, 1])) as unknown as { source: FakeBitmap; window: number[] };
+    expect([first.source.width, first.source.height]).toEqual(box);
+    expect(first.window).toEqual([0.25, 0, 0.5, 1]);
+    expect((t.g.get(img(9, [40000, 20000], [0.25, 0, 0.5, 1])) as unknown as { source: FakeBitmap }).source).toBe(first.source);
     await settle();
-    const second = t.g.get(img(9, [40000, 20000], [0.25, 0, 0.5, 1])) as unknown as FakeBitmap;
-    expect([second.width, second.height]).toEqual(box2);
-    expect(t.released).toEqual([first]);
-    expect(first.closed).toBe(true);
+    const second = t.g.get(img(9, [40000, 20000], [0.25, 0, 0.5, 1])) as unknown as { source: FakeBitmap };
+    expect([second.source.width, second.source.height]).toEqual(box2);
+    expect(t.released).toEqual([first.source]);
+    expect(first.source.closed).toBe(true);
+  });
+
+  it("an SVG on screen: the window's screen size rounded up to a power of two when larger than the print's box, capped at 4096, decoded at up to 4096; zooming out asks nothing", async () => {
+    // 20 × 10 mm at 0.2 px/µm is 4000 × 2000 px on screen → 4096 × 2048; the print's is 472 × 236.
+    expect(svgDrawBox({ sizeUm: [20000, 10000], crop: [0, 0, 1, 1] }, undefined, 0.2)).toEqual([4096, 2048]);
+    expect(svgDrawBox({ sizeUm: [20000, 10000], crop: [0, 0, 1, 1] }, undefined, 0.001)).toEqual(svgRasterBox(20, 10));
+    expect(svgDrawBox({ sizeUm: [20000, 10000], crop: [0, 0, 1, 1] }, undefined, 1)).toEqual([4096, 2048]);
+    // A square window is held to 8 MP, so its texture fits the 64 MiB budget without being halved.
+    expect(svgDrawBox({ sizeUm: [20000, 20000], crop: [0, 0, 1, 1] }, undefined, 1)).toEqual([2896, 2896]);
+    // 1000 × 500 px → 1024 × 512.
+    const t = setup({ [`${base}/9/print.png`]: 400, [`${base}/9/print.png?w=1024&h=512`]: [1024, 512], [`${base}/9/print.png?w=4096&h=2048`]: [4096, 2048] });
+    t.g.get(img(9), 0.05);
+    await settle();
+    t.g.get(img(9), 0.05);
+    await settle();
+    expect((t.g.get(img(9), 0.05) as unknown as FakeBitmap).width).toBe(1024);
+    t.g.get(img(9), 0.2);
+    await settle();
+    const big = t.g.get(img(9), 0.2) as unknown as FakeBitmap;
+    expect([big.width, big.height]).toEqual([4096, 2048]);
+    t.g.get(img(9), 0.01);
+    await settle();
+    expect(t.g.get(img(9), 0.01)).toBe(big);
+    expect(t.calls.map((c) => c.url)).toEqual([`${base}/9/print.png`, `${base}/9/print.png?w=1024&h=512`, `${base}/9/print.png?w=4096&h=2048`]);
+  });
+
+  it("an SVG at two crops in a frame: one texture over the union window, each crop drawn relative to it", async () => {
+    const t = setup({ [`${base}/9/print.png`]: 400 });
+    const frame = () => {
+      t.g.get(img(9, [20000, 10000], [0, 0, 0.25, 0.5]));
+      t.g.get(img(9, [20000, 10000], [0.5, 0.5, 0.25, 0.5]));
+    };
+    frame();
+    await settle();
+    frame();
+    await settle();
+    const asked = t.calls.map((c) => c.url).at(-1)!;
+    // Union [0, 0, 0.75, 1]; each crop is 1/3 of the window wide and 1/2 high → 3 × 2 × the placed size.
+    const box = svgRasterBox(20 * 3, 10 * 2);
+    expect(asked).toBe(`${base}/9/print.png?w=${box[0]}&h=${box[1]}&crop=0,0,0.75,1`);
+  });
+
+  it("offline: an SVG box not stored falls back to the print's box of the window", async () => {
+    const box = svgRasterBox(20, 10);
+    const stored = `${base}/9/print.png?w=${box[0]}&h=${box[1]}`;
+    const t = setup({ [`${base}/9/print.png`]: 400 }, { store: { [stored]: await new Blob([JSON.stringify(box)]).arrayBuffer() } });
+    t.g.get(img(9), 0.05);
+    await settle();
+    t.g.get(img(9), 0.05);
+    await settle();
+    expect(t.calls.map((c) => c.url).at(-1)).toBe(`${base}/9/print.png?w=1024&h=512`);
+    expect((t.g.get(img(9), 0.05) as unknown as FakeBitmap).width).toBe(box[0]);
+    expect(t.store.getGraphic).toHaveBeenCalledWith(stored);
   });
 
   it("offline: the store's copy under the same URL; nothing stored and no network is a failure", async () => {

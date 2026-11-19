@@ -7,14 +7,23 @@
  * - **Bytes** come only from `print.png` (docs/course-print.md §8.5): the
  *   browser never rasterises SVG. A graphic is first asked without a box;
  *   a PNG answers as stored, an SVG answers 400 (it needs `w` / `h`) and is
- *   then asked at the print's raster box of its placed size
- *   (`svgRasterBox`, course-print.md §6.3). The answer is remembered per
- *   graphic for the loader's life.
+ *   then asked over its **window** (the union of the crops drawn this frame,
+ *   `unionWindow`; none for an uncropped placement) at the larger of the
+ *   print's raster box of the window (`svgRasterBox`, course-print.md §6.3)
+ *   and the window's size on screen rounded up to a power of two, at most
+ *   `SVG_RASTER_MAX_PX` (4096) on the longer side and 8 MP in all
+ *   (`SVG_WINDOW_MAX_PIXELS`, so one fits the budget) — so a crop of a large
+ *   drawing, or a logo zoomed in, stays sharp. The box only grows while the
+ *   window is unchanged (zooming out asks nothing). The answer is
+ *   remembered per graphic for the loader's life.
  * - **Offline** (course-print.md §8.6): a request the network refuses is
  *   read from the offline print store under the same URL (never written
- *   here; storing stays with `prepareOfflinePrint`).
+ *   here; storing stays with `prepareOfflinePrint`). An SVG box not stored
+ *   falls back to the print's own box of the window, which the offline
+ *   prepare stored.
  * - **Decoded** unpremultiplied and without colour conversion, as the text
- *   atlas is, and at most `maxPx` (2048) on the longer side.
+ *   atlas is, and at most `maxPx` (2048) on the longer side for a PNG,
+ *   `svgMaxPx` (4096) for an SVG's window.
  * - **Budget**: the decoded bytes with mip chains (× 4/3) are held under
  *   `budgetBytes` (64 MiB), apart from the map's budget: over it, the
  *   largest texture is decoded again at half size until the set fits. An
@@ -36,19 +45,50 @@
  * refused request, an undecodable answer), else the bitmap.
  */
 
+import { type ImageWindow, cropInWindow, unionWindow, windowParam } from "@oxygen/shared/src/render/image-window.js";
 import type { ImageDraw } from "../map-gl/buckets";
+import type { WindowedTexture } from "../map-gl/renderer";
 import { graphicUrl, type OfflinePrintStore } from "../print/offline-store";
 
 /** `svgRasterBox` (shared/print, course-print.md §6.3) — the web may not import the print module at runtime; a test keeps the two equal. */
 export const SVG_RASTER_DPI = 600;
 export const SVG_RASTER_MAX_PX = 4096;
 export function svgRasterBox(widthMm: number, heightMm: number, crop?: { width: number; height: number }): [number, number] {
-  const px = (mm: number, frac: number) => Math.max(1, Math.round(((mm / frac) / 25.4) * SVG_RASTER_DPI));
-  let w = px(widthMm, crop?.width ?? 1), h = px(heightMm, crop?.height ?? 1);
+  return capBox(Math.max(1, Math.round(((widthMm / (crop?.width ?? 1)) / 25.4) * SVG_RASTER_DPI)), Math.max(1, Math.round(((heightMm / (crop?.height ?? 1)) / 25.4) * SVG_RASTER_DPI)));
+}
+
+/** A box with its longer side at most `SVG_RASTER_MAX_PX`, aspect kept (`svgRasterBox`'s cap). */
+function capBox(w: number, h: number): [number, number] {
   const k = Math.min(1, SVG_RASTER_MAX_PX / Math.max(w, h));
-  w = Math.max(1, Math.round(w * k));
-  h = Math.max(1, Math.round(h * k));
-  return [w, h];
+  return [Math.max(1, Math.round(w * k)), Math.max(1, Math.round(h * k))];
+}
+
+/** The box an SVG placement wants over `window`: the print's box, or its size on screen rounded up to a power of two, whichever is larger, capped. */
+export function svgDrawBox(img: Pick<ImageDraw, "sizeUm" | "crop">, window: ImageWindow | undefined, pxPerUm: number | undefined): [number, number] {
+  const crop = cropInWindow({ x: img.crop[0], y: img.crop[1], width: img.crop[2], height: img.crop[3] }, window)!;
+  const print = svgRasterBox(img.sizeUm[0] / 1000, img.sizeUm[1] / 1000, crop);
+  if (!pxPerUm || !(pxPerUm > 0)) return print;
+  const sw = (img.sizeUm[0] * pxPerUm) / crop.width, sh = (img.sizeUm[1] * pxPerUm) / crop.height;
+  const longer = Math.max(sw, sh);
+  if (!(longer > 0) || !Number.isFinite(longer)) return print;
+  const k = 2 ** Math.ceil(Math.log2(longer)) / longer;
+  const screen = capBox(Math.max(1, Math.round(sw * k)), Math.max(1, Math.round(sh * k)));
+  return capArea(screen[0] * screen[1] > print[0] * print[1] ? screen : print);
+}
+
+/** The most pixels an SVG window texture is asked at: 8 MP (≈ 45 MiB with mips), so one fits the 64 MiB budget undivided. */
+export const SVG_WINDOW_MAX_PIXELS = 4096 * 2048;
+
+function capArea([w, h]: [number, number]): [number, number] {
+  if (w * h <= SVG_WINDOW_MAX_PIXELS) return [w, h];
+  const k = Math.sqrt(SVG_WINDOW_MAX_PIXELS / (w * h));
+  return [Math.max(1, Math.floor(w * k)), Math.max(1, Math.floor(h * k))];
+}
+
+/** The print's own box (the offline fallback): `svgRasterBox` of the window, uncapped by area. */
+function svgPrintBox(img: Pick<ImageDraw, "sizeUm" | "crop">, window: ImageWindow | undefined): [number, number] {
+  const crop = cropInWindow({ x: img.crop[0], y: img.crop[1], width: img.crop[2], height: img.crop[3] }, window)!;
+  return svgRasterBox(img.sizeUm[0] / 1000, img.sizeUm[1] / 1000, crop);
 }
 
 export const GRAPHIC_TEXTURE_MAX_PX = 2048;
@@ -69,6 +109,8 @@ export interface GraphicTextureDeps {
   kioskKey?: string | null;
   budgetBytes?: number;
   maxPx?: number;
+  /** The longer side an SVG window texture is decoded at, at most (default `SVG_RASTER_MAX_PX`). */
+  svgMaxPx?: number;
   resizeDelayMs?: number;
   /** Retry backoff base, ms (tests). */
   retryBaseMs?: number;
@@ -91,13 +133,18 @@ interface Entry {
   probing?: Promise<void>;
   /** PNG: the one texture; SVG: the texture of `box`. */
   tex?: Texture | null;
-  /** SVG: the box `tex` was rasterised at, the box asked now, and the delayed request. */
+  /** SVG: the request `tex` answers (`boxKey`), the request asked now, and the delayed request. */
   box?: string;
   want?: string;
+  /** SVG: the window and box of `tex` (absent window = the whole graphic). */
+  texWindow?: ImageWindow;
+  texBox?: [number, number];
+  /** SVG: the request of `want`. */
+  wantReq?: SvgRequest;
   timer?: ReturnType<typeof setTimeout>;
   loading?: boolean;
-  /** SVG: the largest box asked in this frame. */
-  asked?: string;
+  /** SVG: the placements drawn in this frame (their window and box are worked out after it). */
+  asked?: { img: Pick<ImageDraw, "sizeUm" | "crop">; pxPerUm?: number }[];
   /** The frame this graphic was last asked in. */
   seen: number;
   /** Transient failures in a row, and when it may be asked again. */
@@ -108,8 +155,17 @@ interface Entry {
   noShrink?: boolean;
 }
 
+interface SvgRequest {
+  box: [number, number];
+  window?: ImageWindow;
+  /** The print's own box of the window: read from the offline store when `box` is not there. */
+  printBox: [number, number];
+}
+
 const textureBytes = (w: number, h: number) => Math.round((w * h * 4 * 4) / 3);
-const boxArea = (box: string) => box.split("x").map(Number).reduce((a, b) => a * b, 1);
+const boxKey = (box: readonly [number, number], window: ImageWindow | undefined) => `${box[0]}x${box[1]}${window ? `@${windowParam(window)}` : ""}`;
+const sameWindow = (a: ImageWindow | undefined, b: ImageWindow | undefined) =>
+  a === b || (!!a && !!b && a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height);
 /** A failure worth asking again: no network and nothing stored, a server error, a timeout, a rate limit. */
 const transient = (status: number) => status === 0 || status >= 500 || status === 408 || status === 429;
 
@@ -121,6 +177,7 @@ export class GraphicTextures {
   private readonly entries = new Map<number, Entry>();
   private readonly budget: number;
   private readonly maxPx: number;
+  private readonly svgMaxPx: number;
   private readonly delay: number;
   private readonly retryBase: number;
   private readonly nameId: string;
@@ -135,6 +192,7 @@ export class GraphicTextures {
     this.deps = deps;
     this.budget = deps.budgetBytes ?? GRAPHIC_BUDGET_BYTES;
     this.maxPx = deps.maxPx ?? GRAPHIC_TEXTURE_MAX_PX;
+    this.svgMaxPx = deps.svgMaxPx ?? SVG_RASTER_MAX_PX;
     this.delay = deps.resizeDelayMs ?? 250;
     this.retryBase = deps.retryBaseMs ?? RETRY_BASE_MS;
   }
@@ -153,8 +211,11 @@ export class GraphicTextures {
     return n;
   }
 
-  /** The texture an image draws with; starts or updates its load. */
-  get(img: Pick<ImageDraw, "graphicId" | "sizeUm" | "crop">): ImageBitmap | null | undefined {
+  /**
+   * The texture an image draws with (an SVG's with its window); starts or
+   * updates its load. `pxPerUm` is the density it is drawn at (the screen's).
+   */
+  get(img: Pick<ImageDraw, "graphicId" | "sizeUm" | "crop">, pxPerUm?: number): ImageBitmap | WindowedTexture | null | undefined {
     if (this.disposed) return null;
     let e = this.entries.get(img.graphicId);
     if (!e) {
@@ -166,13 +227,11 @@ export class GraphicTextures {
     this.queueFlush();
     if (!e.kind && !e.probing && Date.now() >= (e.retryAt ?? 0)) this.probe(img.graphicId, e);
     if (e.kind === "failed") return null;
-    if (e.kind === "svg") {
-      const [w, h] = svgRasterBox(img.sizeUm[0] / 1000, img.sizeUm[1] / 1000, { width: img.crop[2], height: img.crop[3] });
-      const box = `${w}x${h}`;
-      if (!e.asked || boxArea(box) > boxArea(e.asked)) e.asked = box;
-    }
+    if (e.kind === "svg") (e.asked ??= []).push({ img: { sizeUm: img.sizeUm, crop: img.crop }, pxPerUm });
     if (e.tex === null) return null;
-    return e.tex?.bitmap;
+    if (!e.tex) return undefined;
+    const w = e.texWindow;
+    return w ? { source: e.tex.bitmap, window: [w.x, w.y, w.width, w.height] } : e.tex.bitmap;
   }
 
   dispose(): void {
@@ -198,7 +257,7 @@ export class GraphicTextures {
       if (this.disposed) return;
       for (const [id, e] of this.entries) {
         if (e.asked) {
-          this.wantBox(id, e, e.asked);
+          this.wantBox(id, e, this.svgRequest(e, e.asked));
           e.asked = undefined;
         }
         if (this.frame - e.seen >= EVICT_FRAMES && !e.probing && !e.loading) {
@@ -214,14 +273,15 @@ export class GraphicTextures {
     return this.deps.kioskKey ? { "x-kiosk-key": this.deps.kioskKey } : {};
   }
 
-  /** The answer for `url`: the network's, else the offline store's on a network failure; status 0 when neither has it. */
-  private async bytesOf(url: string): Promise<{ status: number; blob?: Blob }> {
+  /** The answer for `url`: the network's, else the offline store's (at `url`, then `storedUrl`) on a network failure; status 0 when neither has it. */
+  private async bytesOf(url: string, storedUrl?: string): Promise<{ status: number; blob?: Blob }> {
     try {
       const res = await this.deps.fetch(url, { headers: this.headers() });
       if (!res.ok) return { status: res.status };
       return { status: 200, blob: await res.blob() };
     } catch {
-      const stored = await this.deps.store?.getGraphic(url).catch(() => null);
+      const read = (u: string) => this.deps.store?.getGraphic(u).catch(() => null) ?? Promise.resolve(null);
+      const stored = (await read(url)) ?? (storedUrl ? await read(storedUrl) : null);
       return stored ? { status: 200, blob: new Blob([stored], { type: "image/png" }) } : { status: 0 };
     }
   }
@@ -273,27 +333,50 @@ export class GraphicTextures {
     });
   }
 
-  private wantBox(id: number, e: Entry, box: string): void {
+  /**
+   * The request for an SVG's placements of a frame: the union window of their
+   * crops, at the largest box one of them wants. While the window is the one
+   * held (or asked), a box no larger than that one keeps it: zooming out asks
+   * nothing.
+   */
+  private svgRequest(e: Entry, placed: NonNullable<Entry["asked"]>): SvgRequest {
+    const window = unionWindow(placed.map(({ img }) => ({ x: img.crop[0], y: img.crop[1], width: img.crop[2], height: img.crop[3] })));
+    let box: [number, number] = [0, 0], printBox: [number, number] = [0, 0];
+    for (const p of placed) {
+      const b = svgDrawBox(p.img, window, p.pxPerUm);
+      if (b[0] * b[1] > box[0] * box[1]) box = b;
+      const pb = svgPrintBox(p.img, window);
+      if (pb[0] * pb[1] > printBox[0] * printBox[1]) printBox = pb;
+    }
+    const held = e.wantReq ?? (e.texBox ? { box: e.texBox, window: e.texWindow, printBox: e.texBox } : undefined);
+    if (held && sameWindow(held.window, window) && held.box[0] >= box[0] && held.box[1] >= box[1]) return held;
+    return { box, window, printBox };
+  }
+
+  private wantBox(id: number, e: Entry, req: SvgRequest): void {
+    const box = boxKey(req.box, req.window);
     if (e.want === box || (!e.want && e.box === box)) return;
     if (Date.now() < (e.retryAt ?? 0)) return;
     e.want = box;
+    e.wantReq = req;
     if (e.timer) clearTimeout(e.timer);
     // The first box is asked at once; a change waits for the size to settle.
     const delay = e.tex === undefined && !e.loading ? 0 : this.delay;
     e.timer = setTimeout(() => {
       e.timer = undefined;
-      void this.loadBox(id, e, box);
+      void this.loadBox(id, e, box, req);
     }, delay);
   }
 
-  private async loadBox(id: number, e: Entry, box: string): Promise<void> {
+  private async loadBox(id: number, e: Entry, box: string, req: SvgRequest): Promise<void> {
     e.loading = true;
-    const [w, h] = box.split("x").map(Number);
     try {
-      const r = await this.bytesOf(graphicUrl(this.nameId, id, [w, h]));
+      const printUrl = req.printBox[0] !== req.box[0] || req.printBox[1] !== req.box[1] ? graphicUrl(this.nameId, id, req.printBox, req.window) : undefined;
+      const r = await this.bytesOf(graphicUrl(this.nameId, id, req.box, req.window), printUrl);
       if (this.disposed || e.want !== box) return;
       if (!r.blob && transient(r.status)) {
         e.want = undefined;
+        e.wantReq = undefined;
         if (e.tentative) {
           // Offline and stored at neither URL: maybe a PNG; start again from the probe.
           e.kind = undefined;
@@ -302,7 +385,7 @@ export class GraphicTextures {
         this.retryLater(e);
         return;
       }
-      const tex = r.blob ? await this.decode(r.blob) : null;
+      const tex = r.blob ? await this.decode(r.blob, undefined, this.svgMaxPx) : null;
       if (this.disposed || e.want !== box) {
         if (tex) tex.bitmap.close();
         return;
@@ -311,7 +394,10 @@ export class GraphicTextures {
       if (e.tex) this.release(e.tex);
       e.tex = tex;
       e.box = box;
+      e.texWindow = req.window;
+      e.texBox = req.box;
       e.want = undefined;
+      e.wantReq = undefined;
       e.failures = 0;
       e.tentative = false;
     } catch (err) {
@@ -320,7 +406,10 @@ export class GraphicTextures {
         if (e.tex) this.release(e.tex);
         e.tex = null;
         e.box = box;
+        e.texWindow = req.window;
+        e.texBox = req.box;
         e.want = undefined;
+        e.wantReq = undefined;
       }
     } finally {
       e.loading = false;

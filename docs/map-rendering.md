@@ -1556,18 +1556,32 @@ sorting happens here.
   **Graphic textures** (`lib/graphic-textures.ts`, one loader per
   `VectorMapLayer`, `MapGlEngine.setGraphics`): bytes only from
   `print.png` with the kiosk key — a graphic is asked without a box
-  first, a PNG answers as stored and an SVG answers 400, then is asked at
-  `svgRasterBox` of its placed size in stream µm (scale ratio 1: in
-  Layout a map-layer image is asked smaller than it prints) and again
-  250 ms after its size last changed, the old texture drawn stretched
-  meanwhile; on a network failure the offline print store's copy under
-  the same URL (an SVG only at a box it was stored at). Decoded at most
-  2048 px on the longer side; the textures (× 4/3 for mips) are held
+  first, a PNG answers as stored and an SVG answers 400, then is asked
+  over its **window** — the union of the crops drawn in the frame
+  (`unionWindow`, course-print.md §6.3; none when one is uncropped), as
+  `print.png?w=&h=&crop=` — at the larger of `svgRasterBox` of the
+  window for its placed size in stream µm (scale ratio 1: in Layout a
+  map-layer image is asked smaller than it prints) and the window's size
+  on screen (`pxPerUm`, which the renderer passes to its `graphic`
+  option) rounded up to a power of two, at most 4096 px on the longer
+  side and 8 MP in all (`SVG_WINDOW_MAX_PIXELS`, so one window fits the
+  64 MiB budget undivided) (`svgDrawBox`; SVG sharpness fix, 2026-11-19: before, the whole
+  graphic was asked at the print box and decoded at most 2048 px, so a
+  crop or a zoom showed few pixels). It is asked again 250 ms after the
+  box grows or the window changes, the old texture drawn meanwhile with
+  its own window (when a crop grows past it, the part outside samples the
+  texture's edge until the new raster arrives); a smaller box on the same window asks nothing, so zooming
+  out keeps the sharper texture. The texture comes with its window
+  (`WindowedTexture`) and the renderer draws the crop relative to it. On
+  a network failure the offline print store's copy under the same URL,
+  else under the print's own box of the window (what
+  `prepareOfflinePrint` stored). Decoded at most 2048 px on the longer
+  side for a PNG and 4096 px for an SVG window; the textures (× 4/3 for mips) are held
   under their own 64 MiB budget, outside the map's (`EngineStats.graphicBytes`,
   `graphicsPending`): over it the largest is decoded again at half size
   until the set fits; an image is never dropped for the budget. An SVG
-  drawn at several sizes in one frame is asked once, at the largest box
-  (by area). A graphic no frame has asked for in 120 frames that drew
+  drawn at several sizes or crops in one frame is asked once, over the
+  union window at the largest box (by area). A graphic no frame has asked for in 120 frames that drew
   images (a deleted object, a switched course) is dropped; a replaced or
   dropped texture is freed on the GPU (`releaseGraphic`) and marks the
   drape stale, as an arrival does. Only definitive answers are
@@ -1575,9 +1589,10 @@ sorting happens here.
   stored, a 5xx, 408 or 429 is asked again after a backoff (2 s doubling
   to 60 s) and draws as loading until then; offline a graphic not stored
   unboxed is taken for an SVG for its box request, and a miss there too
-  starts again from the probe. Offline an SVG is found only at a box
-  `prepareOfflinePrint` stored, so an image placed at a scale ratio other
-  than 1 (a page image through `T_map⁻¹` too) draws as loading offline.
+  starts again from the probe. Offline an SVG is found only at a box and
+  window `prepareOfflinePrint` stored, so an image placed at a scale
+  ratio other than 1 (a page image through `T_map⁻¹` too) draws as
+  loading offline.
   The canvas's `data-graphics` is `pending` while an image draws as its
   loading outline (2D) or the loader has requests in flight (3D,
   `TerrainFrameStats.imagesPending`), else `ready`.

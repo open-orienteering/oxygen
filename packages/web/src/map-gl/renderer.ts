@@ -41,6 +41,12 @@ export interface View {
 }
 
 /** Options of the arena path (`renderDocument`); the screen-only rules of 04 §6.11. */
+/** A texture of a window of its graphic (`[x, y, width, height]`, fractions, top-left origin; §5.2 "Images"). */
+export interface WindowedTexture {
+  source: TexImageSource;
+  window: [number, number, number, number];
+}
+
 export interface DocumentRenderOptions {
   colour: (idx: number) => [number, number, number];
   background?: [number, number, number];
@@ -63,9 +69,10 @@ export interface DocumentRenderOptions {
   /**
    * An image's texture (J6, §5.2 "Images"): `undefined` while it loads (drawn as an outline),
    * `null` when it cannot be had (an outline with `outlineMissingImages`, else nothing). Without
-   * it every image is an outline.
+   * it every image is an outline. A texture of part of the graphic (an SVG's window) comes with
+   * that `window`, and the crop is drawn relative to it. `pxPerUm` is the target's density.
    */
-  graphic?: (image: ImageDraw) => TexImageSource | null | undefined;
+  graphic?: (image: ImageDraw, pxPerUm: number) => TexImageSource | WindowedTexture | null | undefined;
   /** Draw a failed image's outline too (the editor); the viewer and kiosk draw nothing. */
   outlineMissingImages?: boolean;
   /**
@@ -1479,7 +1486,7 @@ export class MapGlRenderer {
           const al = vs.alpha![l.alpha];
           if (al.kind === "image") {
             if (on("image")) {
-              const d = this.drawImageLayer(m, al, opts);
+              const d = this.drawImageLayer(m, al, opts, view.pxPerUm);
               draws += d.draws;
               imagesPending += d.pending;
             }
@@ -1565,10 +1572,15 @@ export class MapGlRenderer {
    * stencil test-and-set is needed. Without its texture: the quad's outline (1 px, 60 % grey)
    * while loading, or after a failure with `outlineMissingImages`.
    */
-  private drawImageLayer(m: Float32Array, al: AlphaLayer, opts: DocumentRenderOptions): { draws: number; pending: number } {
+  private drawImageLayer(m: Float32Array, al: AlphaLayer, opts: DocumentRenderOptions, pxPerUm: number): { draws: number; pending: number } {
     const gl = this.gl;
     const img = al.image!;
-    const source = opts.graphic ? opts.graphic(img) : undefined;
+    const got = opts.graphic ? opts.graphic(img, pxPerUm) : undefined;
+    const windowed = got && typeof got === "object" && "window" in got ? got : undefined;
+    const source = windowed ? windowed.source : (got as TexImageSource | null | undefined);
+    // The crop relative to the texture's window (the whole graphic when it has none).
+    const [wx, wy, ww, wh] = windowed?.window ?? [0, 0, 1, 1];
+    const crop = [(img.crop[0] - wx) / ww, (img.crop[1] - wy) / wh, img.crop[2] / ww, img.crop[3] / wh];
     if (source === null && !opts.outlineMissingImages) return { draws: 0, pending: 0 };
     this.imageProgram ??= this.link(VS_A_IMAGE, FS_A_IMAGE, [], ["u_view", "u_ab_cd", "u_ef", "u_crop", "u_outline", "u_tex", "u_opacity", "u_multiply"]);
     this.imageVao ??= gl.createVertexArray()!;
@@ -1579,7 +1591,7 @@ export class MapGlRenderer {
     const q = img.quad;
     gl.uniform4f(P.uniforms.u_ab_cd, q[0], q[1], q[2], q[3]);
     gl.uniform2f(P.uniforms.u_ef, q[4], q[5]);
-    gl.uniform4f(P.uniforms.u_crop, img.crop[0], img.crop[1], img.crop[2], img.crop[3]);
+    gl.uniform4f(P.uniforms.u_crop, crop[0], crop[1], crop[2], crop[3]);
     if (al.mask >= 0) {
       gl.enable(gl.STENCIL_TEST);
       gl.stencilMask(0);
