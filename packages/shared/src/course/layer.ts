@@ -139,10 +139,10 @@ export function courseLayer(input: CourseLayerInput): CourseLayer {
   return { colours, remap: stack.remap, symbols, objects, images: built.images, derivation, warnings: built.warnings, regions };
 }
 
-/** The corridors' band opacity (§10.2, J13): the minimum `whiteOpacity` over the legs with a white band. */
+/** The corridors' band opacity (§10.2, J13): the minimum `whiteOpacity` over the legs with a white band (two points or more, as `corridorGeometry`'s runs). */
 export function bandOpacity(courses: readonly DerivedCourse[]): number {
   let min = 1;
-  for (const c of courses) for (const l of c.legs) if (l.corridor && l.corridor.whiteMm > 0) min = Math.min(min, l.corridor.whiteOpacity ?? 1);
+  for (const c of courses) for (const l of c.legs) if (l.corridor && l.corridor.whiteMm > 0 && l.points.length >= 2) min = Math.min(min, l.corridor.whiteOpacity ?? 1);
   return min;
 }
 

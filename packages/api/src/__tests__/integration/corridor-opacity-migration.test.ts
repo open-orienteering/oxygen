@@ -58,6 +58,8 @@ const structures = {
   },
   opaque: { version: 1, id: "c3", orderMode: "ordered", items: [{ siteId: S }, { siteId: A, leg: { corridor: corridor(1) } }] },
   plain: { version: 1, id: "c4", orderMode: "ordered", items: [{ siteId: S }, { siteId: A, leg: { style: "none" } }] },
+  // Shapes the API never writes: a non-object corridor and a string opacity are left alone; a negative one is reset.
+  odd: { version: 1, id: "c5", orderMode: "ordered", items: [{ siteId: S, leg: { corridor: "x" } }, { siteId: A, leg: { corridor: { ...corridor(1), whiteOpacity: "0.5" } } }, { siteId: F, leg: { corridor: corridor(-0.2) } }, []] },
 };
 const rows: Record<string, string> = {};
 
@@ -99,6 +101,11 @@ describe("J13 migration: corridor white opacity reset to 1", () => {
     expect(await structureOf("opaque")).toEqual(structures.opaque);
     expect(await structureOf("plain")).toEqual(structures.plain);
     expect(await structureOf("none")).toBeNull();
+    const odd = await structureOf("odd");
+    expect(odd.items[0].leg.corridor).toBe("x");
+    expect(odd.items[1].leg.corridor.whiteOpacity).toBe("0.5");
+    expect(odd.items[2].leg.corridor).toEqual(corridor(1));
+    expect(odd.items[3]).toEqual([]);
     // Rows with nothing to reset are not rewritten.
     expect(await updatedAt("opaque")).toEqual(untouched.opaque);
     expect(await updatedAt("plain")).toEqual(untouched.plain);

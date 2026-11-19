@@ -21,9 +21,11 @@ import { type PrintPatch, prepareDocument } from "./prepared-document.js";
  * The job format a host composes; another version is refused. 2 (G14):
  * the document carries the event's patch. 3 (J5): images are passes in
  * graphics rows, under upper purple — a version-2 host would print them
- * on top, so it must not compose a version-3 job.
+ * on top, so it must not compose a version-3 job. 4 (J13): a corridor band
+ * below opacity 1 is a translucent fill — a version-3 host would print it as
+ * the opaque clip.
  */
-export const PRINT_JOB_VERSION = 3;
+export const PRINT_JOB_VERSION = 4;
 
 export type PrintJobGraphicMime = "image/png" | "image/svg+xml";
 

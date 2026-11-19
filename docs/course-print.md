@@ -535,7 +535,8 @@ with `sheet` = `PageInput` minus `map` and `geo`.
   draw shifts nothing), an empty gap list meaning the automatic cuts. A
   `marked_route` leg prints 707's dashes as one subpath per dash
   (§4.3); a corridor's band is a clip region over the map passes (a
-  `W*` clip, §4.3), its edge a lower-purple 705 stroke. Every course gets legs and
+  `W*` clip, §4.3) at opacity 1, below 1 a white fill under an ExtGState
+  `/ca` in a page `/Group` (J13, `course-layer.md` §10.2), its edge a lower-purple 705 stroke. Every course gets legs and
   automatic cuts from the course layer, with cut features from the
   pinned document (`cutFeaturesOfDocument`, §3.4 there) — unless the
   event's **Auto cuts** toggle is off: then the sheet carries
@@ -1212,10 +1213,12 @@ downloads from the server already differ (§3.2).
 - *Patch* (G14): the job's own `document.patch` (§8.5), applied by the
   same `prepareDocument` the server's worker runs, so an event's
   corrections print the same on the device; the client composes job
-  version 3 (`DEVICE_PRINT_JOB_VERSION`; J5 raised it, since a device
-  built before image passes would print graphics without their
-  rotation, opacity or place under upper purple). A job stored offline
-  at version 2 reads as not stored and is prepared again.
+  version 4 (`DEVICE_PRINT_JOB_VERSION`; J5 raised it to 3, since a
+  device built before image passes would print graphics without their
+  rotation, opacity or place under upper purple; J13 to 4, since a device
+  built before it would print a translucent corridor band as the opaque
+  clip). A job stored offline at an older version reads as not stored and
+  is prepared again.
 - *Writer*: `@cantoo/pdf-lib` with fflate's `zlibSync` — pure
   JavaScript, the same code in Node and the browser (§3.2).
 - *Sorting*: `compareLabels` (`course-maps/collate.ts`,
@@ -1950,7 +1953,7 @@ The tool's own tests (`print-run.test.ts`, `measure-print.test.mjs`,
   ⊕ course in one stream in colour-stack order (legs under the line art
   above areas, `stack-order`), so the base map is not one XObject but
   two halves split at lower purple, and a variant's corridors clip the
-  map passes per page (`W*`, §4.3) — a composer restructuring, not a
+  map passes per page (`W*`, §4.3; a translucent band is a fill, J13) — a composer restructuring, not a
   resource flag. By §11.5 (917 kB per Club-full A4 page, nearly all of
   it the map stream) a four-variant course is about 3.7 MB against about
   1.1 MB shared, acceptable for a download; identical **copies** of a

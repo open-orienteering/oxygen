@@ -309,10 +309,12 @@ describe("corridors (§10.2, F2)", () => {
   });
 
   it("J13: bandOpacity is the minimum over legs with a white band; a leg without one does not count", () => {
-    const leg = (whiteOpacity: number, whiteMm = 3) => ({ from: "a", to: "b", points: [], style: "line" as const, gaps: [], pieces: [], corridor: { widthMm: 4, whiteMm, edge: true, ...(whiteOpacity < 1 ? { whiteOpacity } : {}) } });
+    const leg = (whiteOpacity: number, whiteMm = 3, points = [{ x: 0, y: 0 }, { x: 10, y: 0 }]) => ({ from: "a", to: "b", points, style: "line" as const, gaps: [], pieces: [], corridor: { widthMm: 4, whiteMm, edge: true, ...(whiteOpacity < 1 ? { whiteOpacity } : {}) } });
     const course = (legs: ReturnType<typeof leg>[]) => ({ id: "c", orderMode: "ordered" as const, sequence: [], legs });
     expect(bandOpacity([course([leg(1), leg(0.6)]), course([leg(0.5)])])).toBe(0.5);
     expect(bandOpacity([course([leg(1), leg(0.2, 0)])])).toBe(1);
+    // A leg of one point makes no band run: it does not count either.
+    expect(bandOpacity([course([leg(1), leg(0.2, 3, [{ x: 0, y: 0 }])])])).toBe(1);
     expect(bandOpacity([])).toBe(1);
   });
 

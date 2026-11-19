@@ -166,6 +166,16 @@ describe("editorHitAt (docs/course-editor.md §5)", () => {
       .toEqual({ kind: "site", id: "31" });
   });
 
+  it("a translucent corridor band (J13) is no target: a point in it hits nothing, a control inside it still hits", () => {
+    const corridor = { widthM: 60, edge: true, whiteMm: 3, whiteOpacity: 0.5 };
+    const structure = { version: 1 as const, id: "c1", orderMode: "ordered" as const, items: [{ siteId: "S" }, { siteId: "31", leg: { corridor } }, { siteId: "32" }, { siteId: "F" }] };
+    const reply = courseReply({ structure });
+    expect(reply.hit!.refs.some((r) => r.kind === "corridor" && r.id === "band")).toBe(true);
+    // The band at y = 13.5 (the edge at 12, the band to 15), beside the leg.
+    expect(editorHitAt(reply.hit!, { x: 20, y: 13.5 }, 0.5)).toBeNull();
+    expect(editorHitAt(reply.hit!, { x: 42.5, y: 10 }, 0.1)).toEqual({ kind: "site", id: "31" });
+  });
+
   it("a circle with a stored gap is open arcs: its centre hits only through the UI-layer circle (§5)", () => {
     const base = request();
     const gapped = hitIndex({ sites: base.sites.map((x) => (x.id === "31" ? { ...x, circleGaps: [{ start: 40, end: 100 }] } : x)) });

@@ -975,7 +975,7 @@ split the same day — see "Slice H" below; its first rows run beside G.
 
 Waiting on later slices, not G: print profiles and the test sheet
 (`cmyk-offset`, 05 §5.5 — decision (2), 2026-10-23; with them the print
-profile in the snapshot, 07 §9.2), the translucent corridor band (F26),
+profile in the snapshot, 07 §9.2), the translucent corridor band (F26; landed as J13),
 micro insets, climb from contours and OCAD course export (08 phase 4),
 Map mode on touch, text creation, symbol editing, a patched thumbnail,
 the documents-only dump (07 §10), terrain (topic 10); recording a GPS

@@ -37,9 +37,10 @@ import type { PrintFace, PrintWorkerNeed, PrintWorkerRequest, PrintWorkerRespons
  * `client.test.ts` keeps them equal). 2 (G14): the job carries the event's
  * patch, which the worker's `renderPrintJob` applies as the server does.
  * 3 (J5): images as passes; a job stored offline at version 2 is
- * `notStored` and must be stored again.
+ * `notStored` and must be stored again. 4 (J13): translucent corridor bands;
+ * a version-3 job stored offline is `notStored` likewise.
  */
-export const DEVICE_PRINT_JOB_VERSION = 3;
+export const DEVICE_PRINT_JOB_VERSION = 4;
 /** An idle print worker is terminated after this long (its decoded document is large). */
 export const PRINT_WORKER_IDLE_MS = 60_000;
 /**

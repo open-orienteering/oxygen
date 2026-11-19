@@ -1127,6 +1127,20 @@ admin, synchronous, all events) filled `structure` where it was `NULL`
 The club run is the coordinator's after merge (the dev database is off
 limits from a worktree, as for §4.4); its numbers go into this table.
 
+**J13 reset** (user answer 11; migration
+`20261119140000_corridor_white_opacity_reset`). Until J13 a corridor's
+`whiteOpacity` was stored but drawn opaque, so stored values below 1 were
+reset to 1 when J13 made them draw translucent: old maps print as before.
+Data only, on `courses.structure` — top-level legs and legs inside a
+variation's alternatives (a recursive walk over every `corridor` key), the
+variant child rows included (they are ordinary course rows); every other
+key is kept, rows with nothing below 1 are not rewritten, and a second
+run changes nothing. It writes no journal entry and no version token (it
+is not a user edit); the courses' `updated_at` trigger does mark the reset rows. Journal payloads (`course.upserted` carries the
+whole row), checkout snapshots and dumps are **not** rewritten: replaying
+an old entry or importing an old snapshot brings the old value back, and
+it then draws translucent.
+
 ## 7. Concurrency
 
 Gate G1, decided by the user 2026-10-31 (decision log): **optimistic
@@ -1240,19 +1254,6 @@ stored, scoped kind of a sheet's map-anchored layout objects, which F12
 moved into them (§3.6).
 
 
-**J13 reset** (user answer 11; migration
-`20261119140000_corridor_white_opacity_reset`). Until J13 a corridor's
-`whiteOpacity` was stored but drawn opaque, so stored values below 1 were
-reset to 1 when J13 made them draw translucent: old maps print as before.
-Data only, on `courses.structure` — top-level legs and legs inside a
-variation's alternatives (a recursive walk over every `corridor` key), the
-variant child rows included (they are ordinary course rows); every other
-key is kept, rows with nothing below 1 are not rewritten, and a second
-run changes nothing. It writes no journal entry and no version token (it
-is not a user edit). Journal payloads (`course.upserted` carries the
-whole row), checkout snapshots and dumps are **not** rewritten: replaying
-an old entry or importing an old snapshot brings the old value back, and
-it then draws translucent.
 ### 8.1 Table and kinds
 
 `oxygen.course_objects` (migration `20261101120000_course_objects`):
@@ -2466,7 +2467,9 @@ label.
   translucent band is veiled; a band pulled back by half a line width
   round its own edges and mouths would keep it whole (a row of its own if
   the gate print shows it matters). A band at 99 % veils, at 100 % clips
-  — the two read differently on the map. The J13 reset rewrote
+  — the two read differently on the map, and a stored 0.996 (written by
+  the API or an import; the field writes whole percents) shows as 100 %
+  but veils. The J13 reset rewrote
   `courses.structure` only (§6.4).
 - **Per-request cost on corridor courses** (§10.2). A control drag on a
   corridor course re-derives the corridors on every request (one request
