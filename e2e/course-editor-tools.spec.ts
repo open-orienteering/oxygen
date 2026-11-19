@@ -9,7 +9,7 @@
 import { expect, test } from "@playwright/test";
 import { PNG } from "pngjs";
 import { reseed } from "./helpers/reseed";
-import { allControlsSheet, arm, cleanup, clickMap, controlRows, coveredBy, drag, dragMm, editorReady, emptyPoint, geometryOf, inkIn, legMidpoint, legPieces, nameIdOf, objectRow, openEditor, place, pressInside, pressOnEdge, printed, probeTemplate, regularCodes, select, selectedCode, siteCuts, site, sitePoint, sites, toolShapes, toPage, toPaper, trpcCall, newCourse, mapScale, type Site } from "./helpers/editor";
+import { allControlsSheet, arm, cleanup, clickMap, controlRows, coveredBy, drag, dragHold, dragMm, editorReady, emptyPoint, geometryOf, inkIn, legMidpoint, legPieces, nameIdOf, objectRow, openEditor, place, pressInside, pressOnEdge, printed, probeTemplate, regularCodes, select, selectedCode, siteCuts, site, sitePoint, sites, toolShapes, toPage, toPaper, trpcCall, newCourse, mapScale, type Site } from "./helpers/editor";
 import { waitForTrpc } from "./helpers/trpc";
 import { type Pt, desktopOnly, dropSelection, dragTarget } from "./helpers/course-editor-spec";
 
@@ -954,7 +954,16 @@ test.describe("J10: attach to a control", () => {
       await expect.poll(async () => JSON.parse((await row.getAttribute("data-attach")) || "null")?.controlId, { timeout: 15000 }).toBe(Number(control.id));
 
       // Detach: one write; it stays where it is drawn.
-      await clickMap(page, await toPage(page, { x: c1.x - 5, y: c1.y }));
+      // The edge midpoint clearest of every other site and drawn number (they are hit targets and win).
+      await page.keyboard.press("Escape");
+      const others = [
+        ...(await sites(page)).filter((x) => x.id !== control.id).map((x) => x.mm),
+        ...(await page.getByTestId("course-label").evaluateAll((els) => els.map((el) => ({ x: Number(el.getAttribute("data-x")), y: Number(el.getAttribute("data-y")) })))),
+      ];
+      const clearest = [{ x: c1.x - 5, y: c1.y }, { x: c1.x + 5, y: c1.y }, { x: c1.x, y: c1.y - 5 }, { x: c1.x, y: c1.y + 5 }]
+        .map((q) => ({ q, d: Math.min(Infinity, ...others.map((t) => Math.hypot(t.x - q.x, t.y - q.y))) }))
+        .sort((a, b) => b.d - a.d)[0].q;
+      await clickMap(page, await toPage(page, clearest));
       await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-id", String(made.id), { timeout: 10000 });
       const drawnBefore = await row.getAttribute("data-drawn");
       const detached = waitForTrpc(page, "courseObject.update");
@@ -966,6 +975,113 @@ test.describe("J10: attach to a control", () => {
       await cleanup("courseObject.delete", { id: made.id });
       await drop();
       await trpcCall("control.update", { id: Number(control.id), xpos: control.mm.x, ypos: control.mm.y }).catch(() => undefined);
+    }
+  });
+});
+
+// docs/course-editor.md §7 "Transform handles" (J11): the knob, crop mode and the turn / flip buttons in Course mode.
+test.describe("J11: transform handles in Course mode", () => {
+  desktopOnly();
+
+  test("the image knob turns it (Escape cancels), crop mode crops by an edge, a white-out turns and flips from the inspector", async ({ page }) => {
+    test.setTimeout(180_000);
+    const png = new PNG({ width: 16, height: 8 });
+    for (let i = 0; i < 128; i++) png.data.set([250, 210, 0, 255], i * 4);
+    const { id: graphicId } = await trpcCall<{ id: number }>("graphics.upload", { name: `e2e-j11-${Date.now()}.png`, scope: "event", fileDataBase64: PNG.sync.write(png).toString("base64") });
+    const made: number[] = [];
+    let updates = 0;
+    page.on("request", (r) => { if (/courseObject\.update/.test(r.url())) updates++; });
+    try {
+      await openEditor(page);
+      const sheetToggle = page.getByTestId("map-toggle-descriptions");
+      if (/hide/i.test((await sheetToggle.textContent()) ?? "")) await sheetToggle.click();
+      // A 20 × 10 mm image and a 10 mm white-out on clear spots.
+      const f = await toPaper(page, await emptyPoint(page, 110));
+      const img = await trpcCall<{ id: number }>("courseObject.create", { kind: "image", geometry: [{ x: f.x - 10, y: f.y - 5 }, { x: f.x + 10, y: f.y + 5 }], props: { graphicId }, scope: { all: true } });
+      made.push(img.id);
+      const w = await toPaper(page, await emptyPoint(page, 90, [await toPage(page, f)]));
+      const whiteSquare = [{ x: w.x - 5, y: w.y - 5 }, { x: w.x + 5, y: w.y - 5 }, { x: w.x + 5, y: w.y + 5 }, { x: w.x - 5, y: w.y + 5 }];
+      const white = await trpcCall<{ id: number }>("courseObject.create", { kind: "whiteout", geometry: whiteSquare, props: {}, scope: { all: true } });
+      made.push(white.id);
+      await page.reload();
+      await editorReady(page);
+      if (/hide/i.test((await sheetToggle.textContent()) ?? "")) await sheetToggle.click();
+      const row = objectRow(page, img.id);
+      await expect(row).toBeAttached({ timeout: 15000 });
+      const props = async () => JSON.parse((await row.getAttribute("data-props")) || "{}") as { rotationDeg?: number; crop?: { width: number } };
+      const layer = page.getByTestId("editor-tool-layer");
+      const centreOf = async (id: string, n = 0) => { const b = (await layer.getByTestId(id).nth(n).boundingBox())!; return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; };
+      const centre = await toPage(page, f);
+      await clickMap(page, centre);
+      await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-id", String(img.id), { timeout: 10000 });
+
+      // The knob dragged from above the centre to its right: a quarter turn clockwise, one write; undo restores.
+      await expect(layer.getByTestId("editor-object-rotate")).toHaveCount(1);
+      let knob = await centreOf("editor-object-rotate");
+      const r = Math.hypot(knob.x - centre.x, knob.y - centre.y);
+      let before = updates;
+      const turned = waitForTrpc(page, "courseObject.update");
+      await drag(page, knob, { x: centre.x + r, y: centre.y });
+      await turned;
+      await expect.poll(async () => Math.abs(((await props()).rotationDeg ?? 0) - 90), { timeout: 15000 }).toBeLessThan(3);
+      expect(updates - before).toBe(1);
+      await page.keyboard.press("Control+z");
+      await expect.poll(async () => "rotationDeg" in (await props()), { timeout: 15000 }).toBe(false);
+
+      // Escape mid-drag (§3, F24): the drag is cancelled with nothing written, then the cascade clears the selection.
+      knob = await centreOf("editor-object-rotate");
+      before = updates;
+      await dragHold(page, knob, { x: centre.x + r, y: centre.y });
+      await page.keyboard.press("Escape");
+      await page.mouse.up();
+      await page.waitForTimeout(300);
+      expect(updates).toBe(before);
+      expect("rotationDeg" in (await props())).toBe(false);
+      await clickMap(page, centre);
+      await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-id", String(img.id), { timeout: 10000 });
+
+      // Crop mode: a double-click shows the edges; the right edge a quarter in crops and narrows the box in one write.
+      await page.mouse.dblclick(centre.x, centre.y);
+      await expect(layer.getByTestId("editor-object-crop-edge")).toHaveCount(4);
+      await expect(layer.getByTestId("editor-object-rotate")).toHaveCount(0);
+      await expect(page.getByTestId("editor-style-crop-mode")).toHaveAttribute("aria-pressed", "true");
+      const right = await centreOf("editor-object-crop-edge", 1);
+      const left = await centreOf("editor-object-crop-edge", 0);
+      before = updates;
+      const cropped = waitForTrpc(page, "courseObject.update");
+      await drag(page, right, { x: right.x - (right.x - left.x) / 4, y: right.y });
+      await cropped;
+      await expect.poll(async () => (await props()).crop?.width, { timeout: 15000 }).toBeCloseTo(0.75, 1);
+      const g = await geometryOf(row);
+      expect(Math.abs(g[1].x - g[0].x)).toBeCloseTo(20 * (await props()).crop!.width, 3);
+      expect(updates - before).toBe(1);
+      await page.keyboard.press("Control+z");
+      await expect.poll(async () => "crop" in (await props()), { timeout: 15000 }).toBe(false);
+      // Escape leaves crop mode; the image stays selected.
+      await page.keyboard.press("Escape");
+      await expect(layer.getByTestId("editor-object-crop-edge")).toHaveCount(0);
+      await expect(layer.getByTestId("editor-object-rotate")).toHaveCount(1);
+      await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-id", String(img.id));
+
+      // A white-out: Turn 90° and Flip ↔ from the inspector, each one write, baked into the vertices.
+      await page.keyboard.press("Escape");
+      const whiteRow = objectRow(page, white.id);
+      await clickMap(page, await toPage(page, { x: w.x - 5, y: w.y }));
+      await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-id", String(white.id), { timeout: 10000 });
+      before = updates;
+      const quarter = waitForTrpc(page, "courseObject.update");
+      await page.getByTestId("editor-object-transform-rotate90").click();
+      await quarter;
+      // A quarter turn clockwise about the centre: the first corner (−5, −5) goes to (−5, +5).
+      await expect.poll(async () => { const q = (await geometryOf(whiteRow))[0]; return [Math.round((q.x - w.x) * 100) / 100, Math.round((q.y - w.y) * 100) / 100]; }, { timeout: 15000 }).toEqual([-5, 5]);
+      const flipped = waitForTrpc(page, "courseObject.update");
+      await page.getByTestId("editor-object-transform-flip-h").click();
+      await flipped;
+      await expect.poll(async () => { const q = (await geometryOf(whiteRow))[0]; return [Math.round((q.x - w.x) * 100) / 100, Math.round((q.y - w.y) * 100) / 100]; }, { timeout: 15000 }).toEqual([5, 5]);
+      expect(updates - before).toBe(2);
+    } finally {
+      for (const id of made) await cleanup("courseObject.delete", { id });
+      await cleanup("graphics.delete", { id: graphicId });
     }
   });
 });

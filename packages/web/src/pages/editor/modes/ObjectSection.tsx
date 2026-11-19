@@ -8,6 +8,7 @@
  * and one undo entry; the page writes.
  */
 
+import { TransformButtons, type TransformOp } from "../TransformButtons";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { vertexRule } from "../../../lib/editor/geometry-edit";
@@ -52,6 +53,10 @@ export interface ObjectSectionProps {
     onCentre: () => void;
     onDetach: () => void;
   };
+  /** Crop mode on the selected image (J11): the button beside the crop fields; absent on a coarse pointer. */
+  cropMode?: { on: boolean; onToggle: () => void };
+  /** Turn and flip baked into the vertices of a line or area (J11); absent for the other kinds. */
+  onTransform?: (op: TransformOp) => void;
   onRegenerate?: () => void;
   onDelete: () => void;
   /** A filter region's grouped symbol list and eyedropper (§6.4, §7); absent until the document is loaded. */
@@ -96,6 +101,7 @@ export function ObjectSection(props: ObjectSectionProps) {
         if (props.onStyle) props.onStyle(next);
         else if (next.props) props.onProps(next.props);
       }} />
+      {p.onTransform && <TransformButtons testIdPrefix="editor-object-transform" onTransform={p.onTransform} />}
       {p.attach && <AttachBlock a={p.attach} />}
       {vertexRule(o.kind).curves && <p data-testid="editor-geometry-hint" className="text-[10px] text-slate-400">{t("geometryHint")}</p>}
       <ScopeEditor scope={o.scope} courses={p.courses} classes={p.classes} onScope={p.onScope} />
@@ -135,6 +141,7 @@ function Style(p: ObjectSectionProps & { onStyle: NonNullable<ObjectSectionProps
       show={{ blend: o.kind !== "whiteout", rotation: o.kind !== "whiteout", flip: image, size: image, crop: image }}
       aspectLock={p.aspectLock ?? true}
       onAspectLock={() => p.onAspectLock?.()}
+      {...(image && p.cropMode ? { cropMode: p.cropMode } : {})}
       onChange={(next) => p.onStyle({ ...(next.props ? { props: next.props as Props } : {}), ...(next.geometry ? { geometry: next.geometry } : {}), shownProps: o.props })}
     />
   );

@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { course } from "@oxygen/shared";
 import { imageRing } from "../hit";
 import {
-  boxRing, cropEdge, edgeHandles, flipVertices, normaliseDeg, resizeBox, rotateKnob, rotateVertices, rotationAt, uncroppedRing,
+  anchorKnob, boxRing, cropEdge, edgeHandles, flipVertices, normaliseDeg, resizeBox, rotateKnob, rotateVertices, rotationAt,
+  transformVertices, uncroppedRing,
 } from "../transform-gestures";
 
 type Pt = { x: number; y: number };
@@ -117,5 +118,22 @@ describe("transform gestures (J9, docs/course-layout.md §3 \"Transform handles\
     close(f[0], { x: 10, y: 0 });
     close(f[0].hOut!, { x: -2, y: 1 });
     flipVertices(flipVertices(path, "v", about), "v", about).forEach((v, i) => close(v, path[i]));
+  });
+
+  it("anchorKnob: straight up from a text's anchor at 0°, turned with it (J11)", () => {
+    close(anchorKnob({ x: 3, y: 4 }, 0, 5), { x: 3, y: 9 });
+    close(anchorKnob({ x: 3, y: 4 }, 90, 5), { x: 8, y: 4 });
+  });
+
+  it("transformVertices: a turn with its handles, both flips, a whole turn is null (J11)", () => {
+    const tri = [{ x: 0, y: 0, hOut: { x: 1, y: 0 } }, { x: 4, y: 0 }, { x: 2, y: 2 }];
+    const about = { x: 2, y: 1 };
+    const q = transformVertices(tri, { kind: "rotate", deg: 90 }, about)!;
+    q.forEach((v, i) => close(v, rotateVertices(tri, 90, about)[i]));
+    close(q[0].hOut!, { x: 0, y: -1 });
+    close(transformVertices(tri, { kind: "flip", axis: "h" }, about)![1], { x: 0, y: 0 });
+    close(transformVertices(tri, { kind: "flip", axis: "v" }, about)![2], { x: 2, y: 0 });
+    expect(transformVertices(tri, { kind: "rotate", deg: 360 }, about)).toBeNull();
+    expect(transformVertices(tri, { kind: "rotate", deg: -720 }, about)).toBeNull();
   });
 });

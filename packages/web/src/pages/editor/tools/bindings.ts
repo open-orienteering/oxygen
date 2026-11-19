@@ -10,7 +10,10 @@ import type { course } from "@oxygen/shared";
 import type { EditorToolBinding, ToolPointer, ToolShape } from "../../../components/MapViewer";
 import { imageRing, type EditorTarget } from "../../../lib/editor/hit";
 import { IMAGE_MIN_MM } from "../../../lib/editor/image-box";
-import { resizeBox } from "../../../lib/editor/transform-gestures";
+import {
+  anchorKnob, cropEdge, edgeHandles, knobBase, resizeBox, rotationAt, ROTATE_STEM_PX, uncroppedRing, type BoxEdge,
+} from "../../../lib/editor/transform-gestures";
+import { stylePatch } from "../../../lib/editor/style-fields";
 import { circleGapAt, circleGapFromDrag, compassDeg, legFraction, legGapAt, legGapFromDrag, type AngularGap, type FractionGap } from "./gaps";
 import { dragBendGrip, legPolyline, moveBend, polylineDistance, polylineSlice, toggleBendSmooth, type Bend } from "../../../lib/editor/bends";
 import { legLengthShape } from "../../../lib/editor/leg-length";
@@ -35,7 +38,11 @@ export type Gesture =
   /** Object `id`'s geometry dragged: the whole path, a vertex, or a handle grip (§7 "Editing geometry", `geometry-gestures.ts`). */
   | ({ id: number } & GeometryDrag)
   /** A corner (`imageRing` index) of the selected image dragged from `press` (J7): the opposite corner stays put. */
-  | { kind: "image-corner"; id: number; corner: number; base: course.CourseObject["geometry"]; rotationDeg: number; press: Pt; mmPerPx: number; moved: boolean }
+  | { kind: "image-corner"; id: number; corner: number; base: course.CourseObject["geometry"]; rotationDeg: number; press: Pt; mmPerPx: number; moved: boolean; shift: boolean }
+  /** The rotate knob of the selected image or text (J11): the pointer's turn about `pivot` since `press`; Shift snaps to 15°. */
+  | { kind: "rotate"; id: number; base: StyledObject; pivot: Pt; press: Pt; to: Pt; shift: boolean; mmPerPx: number; moved: boolean }
+  /** A crop edge of the selected image in crop mode (J11): that crop side follows the pointer. */
+  | { kind: "crop"; id: number; edge: BoxEdge; base: Extract<course.CourseObject, { kind: "image" }>; to: Pt; mmPerPx: number; moved: boolean }
   /** Two fingers on a selected object's handle ring (§10): scale `base` about its centroid. */
   | { kind: "pinch"; id: number; base: course.CourseObject["geometry"]; centre: Pt; scale: number }
   | { kind: "poly-vertex"; index: number }
@@ -49,6 +56,35 @@ export type Gesture =
   | null;
 
 export interface GestureRef { current: Gesture }
+
+/** The kinds the canvas turns by a knob (J11): an image about its centre, a text about its anchor. */
+type StyledObject = Extract<course.CourseObject, { kind: "image" | "text" }>;
+/** What a knob or crop drag changes: props, and with a crop the box. */
+export type StyleChange = { geometry?: course.CourseObject["geometry"]; props?: course.CourseObject["props"] };
+
+/** The knob's tip for `o` at `mmPerPx` (J11): above an image's top edge, or along a text's own up from its anchor. */
+export function knobOf(o: StyledObject, mmPerPx: number): { from: Pt; at: Pt } {
+  const stem = ROTATE_STEM_PX * mmPerPx;
+  if (o.kind === "text") return { from: o.geometry[0], at: anchorKnob(o.geometry[0], o.props.rotationDeg ?? 0, stem) };
+  const k = knobBase(imageRing(o.geometry, o.props.rotationDeg));
+  return { from: k.at, at: { x: k.at.x + k.normal.x * stem, y: k.at.y + k.normal.y * stem } };
+}
+
+/** The pivot a knob turns about: an image's centre, a text's anchor. */
+function pivotOf(o: StyledObject): Pt {
+  if (o.kind === "text") return o.geometry[0];
+  return { x: (o.geometry[0].x + o.geometry[1].x) / 2, y: (o.geometry[0].y + o.geometry[1].y) / 2 };
+}
+
+/** The change a knob or crop drag leaves (J11; the props through `stylePatch`, so 0° and the full crop drop their keys). */
+export function styleChangeOf(g: Extract<NonNullable<Gesture>, { kind: "rotate" | "crop" }>): StyleChange {
+  if (g.kind === "rotate") {
+    const deg = rotationAt(g.base.props.rotationDeg ?? 0, g.pivot, g.press, g.to, g.shift);
+    return { props: stylePatch(g.base.props, { rotationDeg: deg }) };
+  }
+  const r = cropEdge(g.base.geometry, g.base.props, g.edge, g.to);
+  return { geometry: r.geometry, props: stylePatch(g.base.props, { crop: r.crop }) };
+}
 
 /** Re-render the page: a gesture in `GestureRef` changed what the tool draws. */
 export type Redraw = () => void;
@@ -74,20 +110,36 @@ export function scaleAbout(g: readonly course.CourseObject["geometry"][number][]
  * with each curve sampled (§7 "Editing geometry"); when selected, a handle per vertex (`focused` drawn active) and
  * a grip per Bézier handle.
  */
-export function objectOutline(o: course.CourseObject, selected: boolean, focused: number | null = null): ToolShape[] {
+export function objectOutline(o: course.CourseObject, selected: boolean, focused: number | null = null, cropMode = false): ToolShape[] {
   if (o.kind === "image") {
     // The box as drawn, turned (J7): the stored diagonal is not where a turned image's corners are; a corner handle each.
     const ring = imageRing(o.geometry, o.props.rotationDeg);
+    const outline: ToolShape = { kind: "line", points: ring, closed: true, dashed: !selected, color: selected ? BLUE : PURPLE, testId: "editor-object-outline", data: { "object-id": String(o.id), "object-kind": o.kind } };
+    if (!selected) return [outline];
+    if (cropMode) {
+      // Crop mode (J11): the whole graphic dashed, an edge handle per side; no corners, no knob.
+      return [
+        { kind: "line", points: uncroppedRing(o.geometry, o.props), closed: true, dashed: true, color: "#94a3b8", widthPx: 1, testId: "editor-object-crop-full" },
+        outline,
+        ...edgeHandles(ring).map((h): ToolShape => ({ kind: "handle", x: h.at.x, y: h.at.y, active: false, testId: "editor-object-crop-edge", data: { edge: h.edge } })),
+      ];
+    }
+    const k = knobBase(ring);
     return [
-      { kind: "line", points: ring, closed: true, dashed: !selected, color: selected ? BLUE : PURPLE, testId: "editor-object-outline", data: { "object-id": String(o.id), "object-kind": o.kind } },
-      ...(selected ? ring.map((c, i): ToolShape => ({ kind: "handle", x: c.x, y: c.y, active: false, testId: "editor-object-handle", data: { index: String(i), corner: String(i) } })) : []),
+      outline,
+      ...ring.map((c, i): ToolShape => ({ kind: "handle", x: c.x, y: c.y, active: false, testId: "editor-object-handle", data: { index: String(i), corner: String(i) } })),
+      // The knob a fixed screen distance above the top edge (J11): `lengthPx` along the box's own up.
+      { kind: "grip", from: k.at, x: k.at.x + k.normal.x, y: k.at.y + k.normal.y, lengthPx: ROTATE_STEM_PX, testId: "editor-object-rotate" },
     ];
   }
   if (o.kind === "text") {
     const at = o.geometry[0];
+    const up = anchorKnob(at, o.props.rotationDeg ?? 0, 1);
     return [
       { kind: "circle", x: at.x, y: at.y, rMm: 0.6, color: selected ? BLUE : PURPLE, testId: "editor-object-outline", data: { "object-id": String(o.id) } },
       ...(selected ? geometryHandles(o.geometry, focused, OBJECT_IDS) : []),
+      // The knob on a stem from the anchor along the text's own up (J11; it turns about the anchor, user answer 6).
+      ...(selected ? [{ kind: "grip", from: at, x: up.x, y: up.y, lengthPx: ROTATE_STEM_PX, testId: "editor-object-rotate" } as ToolShape] : []),
     ];
   }
   return geometryShapes(o.geometry, vertexRule(o.kind).closed, { selected, focused, ids: OBJECT_IDS, data: { "object-id": String(o.id), "object-kind": o.kind } });
@@ -145,8 +197,15 @@ export interface SelectOptions {
   redraw: Redraw;
   /** The selected leg (its phantom) with its bends, desktop and tablet (§6.7): handles to drag and focus. */
   leg?: LegBends | null;
-  /** A selected image's corner drag keeps the box's ratio (J7; the inspector's lock). */
+  /** A selected image's corner drag keeps the box's ratio (J7; the inspector's lock); Shift inverts it, live (J11). */
   aspectLock?: boolean;
+  /** The selected image is in crop mode (J11): its edges crop; its corners and knob are hidden. */
+  cropMode?: boolean;
+  onCropMode?: (on: boolean) => void;
+  /** Live props (and a crop's box) while a knob or crop edge is dragged (J11); null drops it. */
+  onObjectStyleDraft?: (id: number, change: StyleChange | null) => void;
+  /** A knob or crop drag's one write (J11). */
+  onObjectStyled?: (id: number, change: StyleChange) => void;
 }
 
 /** The selected leg's bends as `V` edits them (docs/course-editor.md §6.7). */
@@ -194,7 +253,7 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
   for (const obj of o.objects) {
     const selected = obj.id === o.selected?.id;
     // The layer draws neither regions nor toner savers on screen: the UI layer outlines them always.
-    if (selected || obj.kind === "filter_region" || obj.kind === "toner_saver") shapes.push(...objectOutline(obj, selected, selected ? o.focusedVertex ?? null : null));
+    if (selected || obj.kind === "filter_region" || obj.kind === "toner_saver") shapes.push(...objectOutline(obj, selected, selected ? o.focusedVertex ?? null : null, selected && !!o.cropMode));
   }
   const byId = new Map(o.sites.map((s) => [s.id, s] as const));
   for (const id of o.multi) {
@@ -237,13 +296,30 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
       // A finger elsewhere is the viewer's: its targets, a pan, the tap that selects an object (§10).
       if (p.touch) return false;
       const sel = shown(o);
-      if (sel?.kind === "image") {
+      // The knob first (J11): it sits outside the box, a fixed screen distance from it, and wins over what is under it.
+      if ((sel?.kind === "image" && !o.cropMode) || sel?.kind === "text") {
+        if (near(knobOf(sel, p.mmPerPx).at, p.pt, reach)) {
+          g.current = { kind: "rotate", id: sel.id, base: sel, pivot: pivotOf(sel), press: p.pt, to: p.pt, shift: !!p.shift, mmPerPx: p.mmPerPx, moved: false };
+          return true;
+        }
+      }
+      if (sel?.kind === "image" && o.cropMode) {
+        // Crop mode (J11): the edges; the body still moves below.
+        const e = edgeHandles(imageRing(sel.geometry, sel.props.rotationDeg)).find((h) => near(h.at, p.pt, reach));
+        if (e) {
+          g.current = { kind: "crop", id: sel.id, edge: e.edge, base: sel, to: p.pt, mmPerPx: p.mmPerPx, moved: false };
+          return true;
+        }
+        if (p.target?.kind === "object" && p.target.id === sel.id) {
+          g.current = { kind: "object", id: sel.id, from: p.pt, to: p.pt, moved: false, vertex: null, base: sel.geometry };
+          return true;
+        }
+      } else if (sel?.kind === "image") {
         // A selected image (J7): a corner of its turned box resizes, a press inside it (the hit-test's target) moves.
         // Its corners are not focusable, so `Delete` deletes the image.
-        const reach = HANDLE_PX * p.mmPerPx;
         const corner = imageRing(sel.geometry, sel.props.rotationDeg).findIndex((c) => near(c, p.pt, reach));
         if (corner >= 0) {
-          g.current = { kind: "image-corner", id: sel.id, corner, base: sel.geometry, rotationDeg: sel.props.rotationDeg ?? 0, press: p.pt, mmPerPx: p.mmPerPx, moved: false };
+          g.current = { kind: "image-corner", id: sel.id, corner, base: sel.geometry, rotationDeg: sel.props.rotationDeg ?? 0, press: p.pt, mmPerPx: p.mmPerPx, moved: false, shift: !!p.shift };
           return true;
         }
         if (p.target?.kind === "object" && p.target.id === sel.id) {
@@ -304,7 +380,16 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
       } else if (cur?.kind === "image-corner") {
         if (!cur.moved && near(cur.press, pt, 3 * cur.mmPerPx)) return;
         cur.moved = true;
-        o.onObjectDraft(cur.id, resizeBox(cur.base, cur.rotationDeg, cur.corner, pt, o.aspectLock ?? true, IMAGE_MIN_MM));
+        // Shift inverts the lock, read live (J11): pressed or let go mid-drag, the ratio follows.
+        if (mods) cur.shift = mods.shift;
+        o.onObjectDraft(cur.id, cornerResized(cur, pt, o.aspectLock ?? true));
+      } else if (cur?.kind === "rotate" || cur?.kind === "crop") {
+        const from = cur.kind === "rotate" ? cur.press : cur.to;
+        if (!cur.moved && near(from, pt, 3 * cur.mmPerPx)) return;
+        cur.moved = true;
+        cur.to = pt;
+        if (cur.kind === "rotate" && mods) cur.shift = mods.shift;
+        o.onObjectStyleDraft?.(cur.id, styleChangeOf(cur));
       } else if (cur?.kind === "object" || cur?.kind === "grip") {
         const geometry = dragGeometry(cur, pt, mods);
         if (geometry) o.onObjectDraft(cur.id, geometry);
@@ -342,7 +427,15 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
         // A drag writes once; a cancelled one drops its draft; a click on a corner does nothing.
         if (!cur.moved) return;
         if (!pt) return o.onObjectDraft(cur.id, null);
-        return o.onObjectMoved(cur.id, resizeBox(cur.base, cur.rotationDeg, cur.corner, pt, o.aspectLock ?? true, IMAGE_MIN_MM));
+        return o.onObjectMoved(cur.id, cornerResized(cur, pt, o.aspectLock ?? true));
+      }
+      if (cur.kind === "rotate" || cur.kind === "crop") {
+        // A drag writes once (geometry only with a crop); a cancelled one drops its draft; a click does nothing.
+        o.redraw();
+        if (!cur.moved) return;
+        if (!pt) return o.onObjectStyleDraft?.(cur.id, null);
+        cur.to = pt;
+        return o.onObjectStyled?.(cur.id, styleChangeOf(cur));
       }
       if (cur.kind === "shift-click") {
         if (pt) o.onToggleMulti(cur.id);
@@ -363,6 +456,8 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
       if (leg && (bendAt(leg, p.pt, HANDLE_PX * p.mmPerPx) >= 0 || bendGripAt(leg, p.pt, HANDLE_PX * p.mmPerPx))) return;
       // On the selected object's edge, off its vertices: a smooth vertex there, Alt a corner (§7 "Editing geometry").
       const sel = shown(o);
+      // On the selected image itself (not a leg or control inside it): crop mode (J11).
+      if (sel?.kind === "image" && !o.cropMode && p.target?.kind === "object" && p.target.id === sel.id) return o.onCropMode?.(true);
       const inserted = sel && sel.kind !== "image" ? insertAtEdge(sel.geometry, vertexRule(sel.kind), p.pt, HANDLE_PX * p.mmPerPx, !!p.alt) : null;
       if (sel && inserted) {
         o.onVertexFocus?.(inserted.index);
@@ -410,6 +505,11 @@ function gripDragged(d: Extract<Gesture, { kind: "bend-grip" }>, pt: Pt, mods?: 
   const h = (d.which === "out" ? b.hOut : b.hIn) ?? { x: 0, y: 0 };
   const vec = { x: h.x + pt.x - d.press.x, y: h.y + pt.y - d.press.y };
   return dragBendGrip(d.base, d.index, d.which, vec, mods?.alt ?? false, mods?.shift ?? false);
+}
+
+/** A corner drag's box: the lock XOR Shift (J11), at least 1 mm a side, the opposite corner fixed. */
+function cornerResized(d: Extract<Gesture, { kind: "image-corner" }>, pt: Pt, lock: boolean): course.CourseObject["geometry"] {
+  return resizeBox(d.base, d.rotationDeg, d.corner, pt, lock !== d.shift, IMAGE_MIN_MM);
 }
 
 /** The selected object as the page shows it (a draft from the last gesture until the list catches up). */

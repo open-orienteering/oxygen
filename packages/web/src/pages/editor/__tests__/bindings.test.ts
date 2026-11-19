@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { course } from "@oxygen/shared";
 import type { ToolPointer, ToolShape } from "../../../components/MapViewer";
-import { areaBinding, crossingGhost, gapBinding, imageBinding, pickSymbolBinding, placeBinding, scaleAbout, selectBinding, textBinding, withCorridorGuides, type GestureRef } from "../tools/bindings";
+import { areaBinding, crossingGhost, gapBinding, imageBinding, knobOf, pickSymbolBinding, placeBinding, scaleAbout, selectBinding, textBinding, withCorridorGuides, type GestureRef } from "../tools/bindings";
+import { cropEdge, edgeHandles } from "../../../lib/editor/transform-gestures";
 import { imageBoxAt } from "../../../lib/editor/image-box";
 import { imageRing } from "../../../lib/editor/hit";
 import { railKeyOf } from "../tools/rail";
@@ -1068,3 +1069,126 @@ describe("I binding (J7, docs/course-editor.md §6, §7 \"Create\")", () => {
     expect(railKeyOf({ kind: "image", graphicId: null })).toBe("I");
   });
 });
+
+describe("V transform handles (J11, docs/course-editor.md §7 \"Transform handles\")", () => {
+  const image = (props: Record<string, unknown> = {}): course.CourseObject =>
+    ({ id: 9, kind: "image", geometry: [{ x: 0, y: 0 }, { x: 20, y: 10 }], props: { graphicId: 3, ...props }, scope: { all: true }, z: 0, version: "1", inCourses: null }) as course.CourseObject;
+  const text = (rotationDeg?: number): course.CourseObject =>
+    ({ id: 7, kind: "text", geometry: [{ x: 5, y: 5 }], props: { text: "Hi", fontSizeMm: 3, ...(rotationDeg ? { rotationDeg } : {}) }, scope: { all: true }, z: 0, version: "1", inCourses: null }) as course.CourseObject;
+  const styled = (over: Partial<Parameters<typeof selectBinding>[0]>) => selectOpts({ onObjectStyleDraft: vi.fn(), onObjectStyled: vi.fn(), onCropMode: vi.fn(), ...over });
+  const lastStyled = (o: ReturnType<typeof styled>) => (o.onObjectStyled as ReturnType<typeof vi.fn>).mock.calls.at(-1)!;
+
+  it("the knob sits above the image's top edge, turned with it; a text's on a stem from its anchor; none on a white-out or line", () => {
+    for (const deg of [0, 30]) {
+      const img = image(deg ? { rotationDeg: deg } : {});
+      const knob = selectBinding(styled({ objects: [img], selected: img })).shapes!.find((x) => x.testId === "editor-object-rotate") as Extract<ToolShape, { kind: "grip" }>;
+      expect(knob.lengthPx).toBe(24);
+      const k = knobOf(img as never, 1 / 24);
+      // `from` the top edge's middle; the tip one unit along the box's own up.
+      expect(Math.hypot(knob.x - knob.from.x, knob.y - knob.from.y)).toBeCloseTo(1, 6);
+      expect(knob.from.x).toBeCloseTo(k.from.x, 6);
+      expect(k.at.x - k.from.x).toBeCloseTo(knob.x - knob.from.x, 6);
+    }
+    expect(knobOf(text() as never, 0.1).at).toEqual({ x: 5, y: 7.4 });
+    expect(selectBinding(styled({ objects: [text()], selected: text() })).shapes!.some((x) => x.testId === "editor-object-rotate")).toBe(true);
+    for (const kind of ["whiteout", "oob_line"] as const) {
+      const sq = square(4, kind);
+      expect(selectBinding(styled({ objects: [sq], selected: sq })).shapes!.some((x) => x.testId === "editor-object-rotate")).toBe(false);
+    }
+  });
+
+  it("a quarter-turn knob drag sets 90°, a draft per move, one write; Shift mid-drag snaps; back to 0 drops the key", () => {
+    const img = image();
+    const o = styled({ objects: [img], selected: img });
+    const b = selectBinding(o);
+    // Knob at (10, 12.4) (mmPerPx 0.1); the centre (10, 5).
+    expect(b.onPointerDown!(ptr(10, 12.4))).toBe(true);
+    b.onPointerDrag!({ x: 14, y: 9 }, { shift: false, alt: false });
+    b.onPointerDrag!({ x: 17.4, y: 5 }, { shift: false, alt: false });
+    b.onPointerUp!({ x: 17.4, y: 5 });
+    expect(o.onObjectStyleDraft).toHaveBeenCalledTimes(2);
+    expect(o.onObjectStyled).toHaveBeenCalledTimes(1);
+    expect(lastStyled(o)).toEqual([9, { props: { graphicId: 3, rotationDeg: 90 } }]);
+    expect(o.onObjectMoved).not.toHaveBeenCalled();
+    const snap = styled({ objects: [img], selected: img });
+    const bs = selectBinding(snap);
+    bs.onPointerDown!(ptr(10, 12.4));
+    bs.onPointerDrag!({ x: 13, y: 12 }, { shift: true, alt: false });
+    bs.onPointerUp!({ x: 13, y: 12 });
+    expect((lastStyled(snap)[1].props as { rotationDeg?: number }).rotationDeg! % 15).toBe(0);
+    const turned = image({ rotationDeg: 90 });
+    const back = styled({ objects: [turned], selected: turned });
+    const bb = selectBinding(back);
+    const k = knobOf(turned as never, 0.1).at;
+    expect(bb.onPointerDown!(ptr(k.x, k.y))).toBe(true);
+    bb.onPointerDrag!({ x: 10, y: 12.4 }, { shift: false, alt: false });
+    bb.onPointerUp!({ x: 10, y: 12.4 });
+    expect(lastStyled(back)).toEqual([9, { props: { graphicId: 3 } }]);
+  });
+
+  it("a text turns about its anchor (the geometry untouched); a cancelled knob drag drops its draft; a finger is declined", () => {
+    const t = text();
+    const o = styled({ objects: [t], selected: t });
+    const b = selectBinding(o);
+    expect(b.onPointerDown!(ptr(5, 7.4))).toBe(true);
+    b.onPointerDrag!({ x: 7.4, y: 5 }, { shift: false, alt: false });
+    b.onPointerUp!({ x: 7.4, y: 5 });
+    expect(lastStyled(o)).toEqual([7, { props: { text: "Hi", fontSizeMm: 3, rotationDeg: 90 } }]);
+    const c = styled({ objects: [t], selected: t });
+    const bc = selectBinding(c);
+    bc.onPointerDown!(ptr(5, 7.4));
+    bc.onPointerDrag!({ x: 7.4, y: 5 }, { shift: false, alt: false });
+    bc.onPointerUp!(null);
+    expect(c.onObjectStyled).not.toHaveBeenCalled();
+    expect(c.onObjectStyleDraft).toHaveBeenLastCalledWith(7, null);
+    expect(selectBinding(styled({ objects: [t], selected: t })).onPointerDown!(ptr(5, 7.4, { touch: true }))).toBe(false);
+  });
+
+  it("Shift inverts the aspect lock on a corner drag, read live", () => {
+    const img = image();
+    const drag = (lock: boolean, shift: boolean) => {
+      const o = styled({ objects: [img], selected: img, aspectLock: lock });
+      const b = selectBinding(o);
+      b.onPointerDown!(ptr(20, 10));
+      b.onPointerDrag!({ x: 30, y: 30 }, { shift, alt: false });
+      b.onPointerUp!({ x: 30, y: 30 });
+      const g = (o.onObjectMoved as ReturnType<typeof vi.fn>).mock.calls[0][1] as { x: number; y: number }[];
+      return Math.abs(g[1].x - g[0].x) / Math.abs(g[1].y - g[0].y);
+    };
+    expect(drag(true, false)).toBeCloseTo(2, 6);
+    expect(drag(true, true)).toBeCloseTo(1, 6);
+    expect(drag(false, true)).toBeCloseTo(2, 6);
+  });
+
+  it("crop mode: the whole graphic dashed and four edges, no corners or knob; an edge drag writes geometry and crop once; the body still moves", () => {
+    const img = image({ rotationDeg: 30, flipH: true });
+    const o = styled({ objects: [img], selected: img, cropMode: true });
+    const b = selectBinding(o);
+    const shapes = b.shapes!;
+    expect(shapes.filter((x) => x.testId === "editor-object-crop-edge")).toHaveLength(4);
+    expect(shapes.some((x) => x.testId === "editor-object-crop-full")).toBe(true);
+    expect(shapes.some((x) => x.testId === "editor-object-handle" || x.testId === "editor-object-rotate")).toBe(false);
+    const right = edgeHandles(imageRing(img.geometry, 30)).find((h) => h.edge === "right")!.at;
+    const to = { x: right.x - 3, y: right.y };
+    expect(b.onPointerDown!(ptr(right.x, right.y))).toBe(true);
+    b.onPointerDrag!(to);
+    b.onPointerUp!(to);
+    expect(o.onObjectStyled).toHaveBeenCalledTimes(1);
+    const r = cropEdge(img.geometry, img.props as never, "right", to);
+    expect(lastStyled(o)).toEqual([9, { geometry: r.geometry, props: { graphicId: 3, rotationDeg: 30, flipH: true, crop: r.crop } }]);
+    const body = styled({ objects: [img], selected: img, cropMode: true });
+    expect(selectBinding(body).onPointerDown!(ptr(10, 5, { target: { kind: "object", id: 9 } }))).toBe(true);
+  });
+
+  it("a double-click on the selected image enters crop mode; on a leg inside it, it is the leg's", () => {
+    const img = image();
+    const o = styled({ objects: [img], selected: img });
+    selectBinding(o).onDoubleClick!(ptr(10, 5, { target: { kind: "object", id: 9 } }));
+    expect(o.onCropMode).toHaveBeenCalledWith(true);
+    const leg = styled({ objects: [img], selected: img });
+    selectBinding(leg).onDoubleClick!(ptr(10, 5, { target: { kind: "leg", courseId: "A", index: 1 } }));
+    expect(leg.onCropMode).not.toHaveBeenCalled();
+    expect(leg.onLegDoubleClick).toHaveBeenCalled();
+  });
+});
+

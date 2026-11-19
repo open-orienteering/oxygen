@@ -37,6 +37,7 @@ import { PresenceChips } from "./PresenceChips";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { PLACEMENT_LOUPE_KEY } from "../../lib/editor/touch";
+import { transformVertices } from "../../lib/editor/transform-gestures";
 import { nearestSite, objectCentre, shownObject, shownObjects, attachPatch, centrePatch, detachPatch } from "../../lib/editor/attach";
 import { useOnlineStatus } from "../../hooks/useOnlineStatus";
 import { useCapabilities } from "../../context/CapabilitiesContext";
@@ -101,6 +102,9 @@ type Structure = course.WireCourseStructure;
 type CourseObject = course.CourseObject;
 
 const NO_DRAFTS: CourseObject[] = [];
+
+/** The kinds the inspector turns and flips (J11; user answer 4, "lines and areas"): not the toner saver, whose shape is the course's hull. */
+const TURNABLE_PATH_KINDS: ReadonlySet<string> = new Set(["oob_area", "oob_line", "whiteout", "marked_route", "filter_region"]);
 /** New map text: size on paper (§7). */
 const TEXT_SIZE_MM = 4;
 
@@ -973,6 +977,16 @@ export function EditorPage() {
     setFocus(index === null || selectedObjectId === null ? null : { objectId: selectedObjectId, index });
   /** Per object, the geometry shown when the gesture in progress drew its first draft (`onObjectDraft`). */
   const gestureBefore = useRef(new Map<number, CourseObject["geometry"]>());
+  /** Per object, what a knob or crop drag started from (J11): the undo's "before" for props and the box. */
+  const styleBefore = useRef(new Map<number, CourseObject>());
+  /**
+   * Crop mode (J11, §7 "Transform handles"): the selected image's edges crop. Page state, not an undo step; it holds
+   * only while that image stays selected in Course mode with `V`, and is never offered on a coarse pointer.
+   */
+  const coarsePointer = useMediaQuery("(pointer: coarse)");
+  const [cropModeId, setCropModeId] = useState<number | null>(null);
+  const cropMode = cropModeId !== null && cropModeId === state.selectedObjectId && state.mode === "course" && state.tool.kind === "select" && !coarsePointer;
+  useEffect(() => { if (cropModeId !== null && !cropMode) setCropModeId(null); }, [cropModeId, cropMode]);
   const setDraft = useCallback((id: number, geometry: CourseObject["geometry"] | null) => {
     setDrafts((prev) => {
       const next = new Map(prev);
@@ -1423,8 +1437,41 @@ export function EditorPage() {
         }) : null;
       case "select":
         return selectBinding({
-          gesture, redraw, selected: selectedObject, focusedVertex, onVertexFocus: setFocusedVertex, objects: objectsInView.map((o) => (drafts.has(o.id) ? { ...o, geometry: drafts.get(o.id)! } : o)),
+          gesture, redraw, selected: selectedObject, focusedVertex, onVertexFocus: setFocusedVertex,
+          objects: objectsInView.map((o) => (drafts.has(o.id) || propDrafts.has(o.id) ? { ...o, geometry: drafts.get(o.id) ?? o.geometry, props: propDrafts.get(o.id) ?? o.props } as CourseObject : o)),
           sites: sitesForTools, multi: state.multi, ringMm: courseInfo?.metrics?.circleRadiusMm ?? 2.5, aspectLock: state.aspectLock,
+          cropMode: cropMode && selectedObject?.kind === "image",
+          onCropMode: (on) => setCropModeId(on ? selectedObjectId : null),
+          onObjectStyleDraft: (id, change) => {
+            // J11: the first draft keeps what was shown before the drag (drafts over the shown object): the undo's "before".
+            const o = shownById(id);
+            if (change && o && !styleBefore.current.has(id)) {
+              styleBefore.current.set(id, { ...o, geometry: drafts.get(id) ?? o.geometry, props: propDrafts.get(id) ?? o.props } as CourseObject);
+            }
+            if (!change) {
+              const before = styleBefore.current.get(id);
+              styleBefore.current.delete(id);
+              setDraft(id, before && drafts.has(id) ? before.geometry : null);
+              setPropDrafts((d) => { const n = new Map(d); if (before && d.has(id)) n.set(id, before.props); else n.delete(id); return n; });
+              return;
+            }
+            if (change.geometry) setDraft(id, change.geometry);
+            if (change.props) setPropDrafts((d) => new Map(d).set(id, change.props!));
+          },
+          onObjectStyled: (id, change) => {
+            const o = shownById(id);
+            const before = styleBefore.current.get(id) ?? (o ? { ...o, geometry: drafts.get(id) ?? o.geometry, props: propDrafts.get(id) ?? o.props } as CourseObject : undefined);
+            styleBefore.current.delete(id);
+            if (!before) return;
+            if (change.geometry) setDraft(id, change.geometry);
+            if (change.props) setPropDrafts((d) => new Map(d).set(id, change.props!));
+            // One write, one undo entry; a props-only change (the knob) sends no geometry, so no `attach` (J10's rule).
+            updateObject(before, change, () => {
+              setDraft(id, null);
+              setPropDrafts((d) => { const n = new Map(d); n.delete(id); return n; });
+              setStyleReset((k) => k + 1);
+            });
+          },
           onToggleMulti: (id) => dispatch({ type: "toggle-multi", id }),
           onLasso: (ids) => dispatch({ type: "set-multi", ids }),
           onSelectObject: (id) => dispatch({ type: "select-object", id }),
@@ -1767,6 +1814,8 @@ export function EditorPage() {
         runRedo();
       } else if (e.key === "Escape") {
         setAreaOpen(false);
+        // Crop mode is the cascade's first step (J11): the image stays selected.
+        if (cropMode) { setCropModeId(null); return; }
         // A bend or grip drag in flight ends here (§6.7): its draft drops, the release then writes nothing.
         if (gesture.current?.kind === "bend" || gesture.current?.kind === "bend-grip") {
           gesture.current = null;
@@ -1857,7 +1906,7 @@ export function EditorPage() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [descControlId, runUndo, runRedo, undoStack, state, handleDelete, deleteControls, deleteObject, selectedObject, focusedVertex, drafts, setDraft, updateObject, setChain, exitTool, finishArea,
+  }, [descControlId, runUndo, runRedo, undoStack, state, handleDelete, deleteControls, deleteObject, selectedObject, focusedVertex, drafts, setDraft, cropMode, updateObject, setChain, exitTool, finishArea,
     stepSelection, armPlace, setTool, canGap, fitView, areaOpen, canTonerSaver, startArea, layoutKey, mapKey, selectedLeg, focusedBend, legEditable, writeLeg, addCorridor, selectionGroup, redraw, togglePlacementLoupe]);
 
   // ─── The URL (docs/course-editor.md §1 "URL"; F31) ─────────
@@ -2172,7 +2221,20 @@ export function EditorPage() {
       onDelete={() => deleteControls(state.multi)} onAddToCourse={bulkAddToCourse} onRadio={bulkRadio} />
   ) : selectedObject ? (
     <ObjectSection
-      object={drafts.has(selectedObject.id) ? { ...selectedObject, geometry: drafts.get(selectedObject.id)! } as CourseObject : selectedObject}
+      object={drafts.has(selectedObject.id) || propDrafts.has(selectedObject.id)
+        ? { ...selectedObject, geometry: drafts.get(selectedObject.id) ?? selectedObject.geometry, props: propDrafts.get(selectedObject.id) ?? selectedObject.props } as CourseObject
+        : selectedObject}
+      cropMode={selectedObject.kind === "image" && !coarsePointer ? { on: cropMode, onToggle: () => setCropModeId(cropMode ? null : selectedObject.id) } : undefined}
+      onTransform={TURNABLE_PATH_KINDS.has(selectedObject.kind) ? (op) => {
+        // J11: a line's or area's turn or flip bakes into its vertices, about the centre of their bounds (as *Centre
+        // on control*); one write, one undo entry; a whole turn writes nothing.
+        const id = selectedObject.id;
+        const shownNow = { ...selectedObject, geometry: drafts.get(id) ?? selectedObject.geometry } as CourseObject;
+        const geometry = transformVertices(shownNow.geometry, op, objectCentre(shownNow));
+        if (!geometry) return;
+        setDraft(id, geometry);
+        updateObject(shownNow, { geometry }, () => setDraft(id, null));
+      } : undefined}
       document={mapDoc?.header ?? null}
       courses={courseOptions}
       classes={(classes.data ?? []).map((c) => ({ id: c.id, name: c.name }))}

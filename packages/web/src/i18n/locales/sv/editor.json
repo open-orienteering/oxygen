@@ -648,7 +648,7 @@
   "styleCropW": "Bredd",
   "styleCropH": "Höjd",
   "styleCropReset": "Återställ beskärning",
-  "styleCropMode": "Beskär på sidan",
+  "styleCropMode": "Beskär med kanterna",
   "styleCropDone": "Klar med beskärning",
   "transformAngle": "Vrid °",
   "transformRotate": "Vrid",

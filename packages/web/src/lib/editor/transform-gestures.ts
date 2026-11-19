@@ -166,3 +166,20 @@ export function flipVertices<V extends Vertex>(vertices: readonly V[], axis: "h"
     return { ...v, x: p.x, y: p.y, ...(v.hIn ? { hIn: m(v.hIn) } : {}), ...(v.hOut ? { hOut: m(v.hOut) } : {}) };
   });
 }
+
+/**
+ * A text's rotate knob (J11; docs/course-editor.md §7 "Transform handles"): `stem` units from its anchor along the
+ * text's own up, turned `rotationDeg` clockwise as seen (y-up). A course text stores no box, so the knob is all it
+ * gets: it turns about the anchor (user answer 6).
+ */
+export function anchorKnob(anchor: Pt, rotationDeg: number, stem: number): Pt {
+  return add(anchor, turn({ x: 0, y: stem }, rotationDeg));
+}
+
+/** An inspector turn or flip of a line's or path's vertices about `about` (J11); null for a whole turn (no write). */
+export function transformVertices<V extends Vertex>(
+  vertices: readonly V[], op: { kind: "rotate"; deg: number } | { kind: "flip"; axis: "h" | "v" }, about: Pt,
+): V[] | null {
+  if (op.kind === "rotate") return op.deg % 360 === 0 ? null : rotateVertices(vertices, op.deg, about);
+  return flipVertices(vertices, op.axis, about);
+}

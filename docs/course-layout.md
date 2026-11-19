@@ -351,7 +351,7 @@ validation reads it), so at the margin the page wins over the crop's
 (`fillModePatch`). The aspect lock is Layout's own (on by default), not
 shared with Course mode's.
 
-**Transform handles** (J9; `lib/editor/transform-gestures.ts`, the
+**Transform handles** (J9; Course mode uses the same module in paper mm since J11, `course-editor.md` §7 "Transform handles"; `lib/editor/transform-gestures.ts`, the
 shared module Course mode's images use too, `course-editor.md` §7; mouse
 only — Layout's binding is exclusive, so a finger never reaches them,
 user answer 5). A selected text, rectangle or image is outlined by its
@@ -374,7 +374,7 @@ corner off the page (`object_outside_page`). Lines and paths get no knob
 (user answer 4): see "Rotate and flip a line or path".
 
 **Crop mode** (J9): a double-click on the selected image, or the
-inspector's *Crop on the page* (`editor-layout-style-crop-mode`, not
+inspector's *Crop by its edges* (J11: renamed from *Crop on the page*, the label is shared with Course mode) (`editor-layout-style-crop-mode`, not
 shown on a coarse pointer), shows the whole graphic's outline dashed
 (`editor-layout-crop-full`) and a handle on the middle of each edge
 (`editor-layout-crop-edge`, `data-edge`); the corners and the knob are

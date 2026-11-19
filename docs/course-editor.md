@@ -253,7 +253,8 @@ which at 1280 × 720 hid the Leg section's *Crossing section* box under
 **Selection** (`lib/editor/state.ts`): the legacy reducer
 (`lib/course-editor.ts` — selected course, selected control, phantom with
 an optional insert position) plus mode, view and *hide other controls*.
-Escape steps back: phantom → control → course; with nothing left it
+Escape steps back: an image's crop mode (J11, §7 "Transform handles";
+the image stays selected) → phantom → control → course; with nothing left it
 leaves fullscreen. A mouse drag in flight is cancelled first (F24; user
 answer 2026-11-11): the viewer ends it before the cascade — a control or
 a number snaps back and nothing is written (no `control.update`, no
@@ -1258,7 +1259,8 @@ any other, with `source = 'layout'` that the wire does not carry.
   (7 px) resizes it in its own frame, the opposite corner fixed where it
   is drawn, keeping the box's current ratio while the aspect lock is on
   (`EditorState.aspectLock`, on by default; the inspector's checkbox),
-  at least 1 mm a side (`resizeBox`, `lib/editor/transform-gestures.ts`, shared with Layout mode since J9); a press inside it (its hit) moves
+  at least 1 mm a side (`resizeBox`, `lib/editor/transform-gestures.ts`, shared with Layout mode since J9); Shift
+  inverts the lock, read live during the drag (J11); a press inside it (its hit) moves
   it; a corner is never focused, so `Delete` deletes the image. A press
   on a control inside the selected image is the control's. While dragging, the page hands
   the viewer the object as a **draft** (`draftObjects`, drawn instead of
@@ -1285,7 +1287,8 @@ any other, with `source = 'layout'` that the wire does not carry.
   | out-of-bounds area | hatch: *Out of bounds (709, stripes)* / *Dangerous area (710, cross-hatched)* (`course-layer.md` §3.1; the name first — in ISOM 2017-2, 710 is the crossing point); border none / solid / dashed |
   | out-of-bounds line | 708 / 711 |
   | map text | text, size (paper mm); opacity (%), blend (Normal / Multiply), rotation (°, about the anchor, J4) |
-  | image (J7) | opacity (%), blend, rotation (°, about the centre), flip H / V, width and height (mm, about the centre; the aspect lock), crop (whole %: left, top, width, height, each side ≥ 1 %, kept inside the graphic) and *Reset crop* |
+  | image (J7) | opacity (%), blend, rotation (°, about the centre), flip H / V, width and height (mm, about the centre; the aspect lock), crop (whole %: left, top, width, height, each side ≥ 1 %, kept inside the graphic), *Reset crop* and *Crop by its edges* (J11, crop mode; not on a coarse pointer) |
+  | line or area other than the toner saver (J11) | *Turn by °*, *Turn 90°*, *Flip ↔*, *Flip ↕* (§7 "Transform handles") |
   | toner saver | margin; *Regenerate from the course* |
   | filter region | mode (hide / clip); symbols: all, **picked symbols** or **picked colours** (the document's colour rows, a CMYK swatch and the name); **invert** ("show only these inside"); the **eyedropper** (§6.4). Picked symbols are listed **one entry per heading** (`lib/editor/symbol-groups.ts`, feedback 2026-11-06 item 5): a symbol's heading is the library code of its applied match (`isAppliedMatch`: automatic or reviewed — `601` for a match to `601.b`), else its source code's base (`101.1` → `101`; a non-numeric code such as `graphic` stays whole), so a heading's variants, minimum-size and tag-line versions and duplicates are one entry (`editor-filter-symbol-<heading>`, `data-members` the member indices) that toggles all its members: checked when all are picked, indeterminate when some are (an older region), and a toggle completes a partial group. Named from the library heading in the UI language when a member's match is applied, else by its first member's source name; a swatch (`editor-filter-swatch`): the library preview of the most used member's applied entry, else the server's preview of the most used member's own drawing (`/api/map-documents/:hash/symbols/:idx.png`, event-scoped). **Not listed**: hidden symbols (OCAD's hidden status, OMAP helpers), symbols no object uses, and symbols drawn through a proxy (`missing` ones, and those with neither a drawing nor an applied match — a region selects by the drawn symbol, never the proxy). Headings of the document's library come first in code order; headings outside it (club codes, frames, legends), `graphic` entries and rectangles fold under **Other** (`editor-filter-other`, collapsed). The search matches the heading, its library names in both languages and the members' source codes and names, and opens Other. Presentation only: the stored `symbols` stay document symbol indices (`course-layer.md` §8), nothing changes at import |
   | white-out | opacity (%) (no blend: a white Multiply leaves the map unchanged; the stored field stays legal) |
@@ -1365,6 +1368,57 @@ the selection when its control stops being drawn (user answer 8).
   object; the API reads it as detached where it was drawn
   (`course-layer.md` §8.4), so it stays in place and *Detach* is gone;
   undo of the delete (`control.restore`) attaches it again.
+
+### Transform handles
+
+Row J11 (`course-layout.md` §3 "Transform handles"; user answers 4–6).
+Course mode uses Layout mode's module, `lib/editor/transform-gestures.ts`,
+directly in paper mm (y-up; no adapter, no printable-area clamp: Course
+mode has no page). Mouse only.
+
+- **Rotate knob** (`editor-object-rotate`): a selected image's sits 24
+  screen px above its top edge along the box's own up; a selected map
+  text's on a 24 px stem from its anchor along its own up (a text stores
+  no box: no corners, resize or crop on the canvas; its size stays the
+  font-size field). Dragging it sets `rotationDeg` from the pointer's turn
+  about the pivot since the press — an image's centre, a text's anchor
+  (user answer 6) — so it never jumps; Shift snaps to 15°, read live;
+  0° drops the key; the value is in (−180°, 180°] in 0.1° steps
+  (`rotationAt`). One `courseObject.update { props }` (no geometry, so no
+  `attach`), one undo entry; during the drag the canvas and the inspector
+  show a props draft.
+- **Pressing order** on a selected image or text: the knob (it wins over
+  what lies under it, as a corner does), a corner or a crop edge, the
+  body.
+- **Crop mode** (an image): a double-click on the selected image itself
+  (not on a leg or control inside it, which keep their double-click), or
+  the inspector's *Crop by its edges* (`editor-style-crop-mode`,
+  `aria-pressed`; *Done cropping* leaves). The whole graphic shows dashed
+  (`editor-object-crop-full`) with an edge handle per side
+  (`editor-object-crop-edge`, `data-edge`); the corners and the knob are
+  hidden and the body still moves. An edge drag moves that crop side (a
+  flip mirrors which source side it is), the opposite side stays, and the
+  visible pixels keep their scale and place (`cropEdge` through
+  `cropChange`: whole per cent, inside the graphic, at least 1 % and 1 mm
+  a side). One `courseObject.update { geometry, props }`, one undo entry.
+  It is page state, not an undo step; Escape (the cascade's first step,
+  §3), *Done cropping*, another selection, another tool or mode leaves
+  it; it is not offered on a coarse pointer.
+- **Turn and flip** of a line or area (`oob_area`, `oob_line`,
+  `whiteout`, `marked_route`, `filter_region`; not the toner saver, whose
+  shape is the course's hull — user answer 4, "lines and areas"): the
+  inspector's *Turn by °* (15° by default, clockwise as seen), *Turn 90°*,
+  *Flip ↔* and *Flip ↕* (`editor-object-transform-*`, the shared
+  `TransformButtons`) bake the change into the vertices and their Bézier
+  handles (`transformVertices`) about the centre of the vertices' bounds
+  — the centre *Centre on control* puts on its control, so a centred
+  attached object turns about its control. One `courseObject.update
+  { geometry }`; a whole turn writes nothing. An image's flips stay the
+  inspector's checkboxes (J7).
+- **Attached objects**: all of it acts on the shown object (§7 "Attached
+  objects"); the crop and the turn send geometry and so `attach`.
+- Escape during a knob or crop drag cancels it as any drag (§3, F24):
+  nothing written, then the cascade.
 
 ### Editing geometry
 
@@ -3046,6 +3100,8 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | unit (web) | `lib/editor/__tests__/state.test.ts`, `pages/editor/__tests__/bindings.test.ts` "the eyedropper binding" | §6.4: `pick-symbol` dropped by Escape first (the object stays selected) and by any mode change; the binding is exclusive with a crosshair, a click picks with 6 px × `mmPerPx`, right-click exits, no shapes; `railKeyOf` lights no rail button |
 | unit | `lib/editor/__tests__/attach.test.ts` | §7 "Attached objects" (J10): `shownObject` moves an attached object to its control's drawn position with `at` that position, hides it without its control; attach keeps the drawn place, centre moves the centre onto the control, detach keeps the drawn place without `attach`; a text centres by its anchor; the nearest site |
 | E2E | `e2e/course-editor-tools.spec.ts` "J10: attach to a control" (`chromium`) | §7 "Attached objects": a 10 mm `oob_area` on a clear spot selected by its edge; *Attach to a control I click* armed (`aria-pressed`), a click on a control → one `courseObject.update`, the object selected again, `data-attach` that control, `data-attached` its code; the control dragged 6 mm → `data-drawn` moved by the control's offset, the stored geometry unchanged and no object write; the all-controls `maps.pdf` still draws its 709 hatch; a click on its moved edge selects it; that edge dragged 3 mm up → drawn exactly 3 mm higher and no further east, `at` the control's position now; *Centre on control* → one update, its centre on the control; the control deleted → no object write, `data-attach` empty and still drawn; `Ctrl+Z` (`control.restore`) attaches it again; *Detach* → one update, drawn where it was |
+| unit | `lib/editor/__tests__/transform-gestures.test.ts` (J11 cases), `pages/editor/__tests__/bindings.test.ts` "V transform handles (J11)" | §7 "Transform handles": `anchorKnob` up from the anchor and turned; `transformVertices` turns with the handles, both flips, a whole turn null; the knob on a 0° and a 30° image and a text, none on a white-out or line; a quarter-turn knob drag → `rotationDeg` 90, a draft per move, one write, no geometry; Shift mid-drag snaps; back to 0 drops the key; a text turns about its anchor; a cancelled drag drops its draft; a finger is declined; Shift inverts the lock both ways; crop mode's shapes (four edges, the whole graphic, no corners or knob), an edge drag on a turned flipped image writes `cropEdge`'s geometry and crop once, the body still moves; a double-click on the image enters crop mode, on a leg it is the leg's |
+| E2E | `e2e/course-editor-tools.spec.ts` "J11: transform handles in Course mode" (`chromium`) | §7 "Transform handles": a 20 × 10 mm image and a 10 mm white-out on clear spots; the image selected; its knob dragged a quarter turn → one update, `rotationDeg` ≈ 90, `Ctrl+Z` removes it; held and `Escape` → no write; a double-click → four `editor-object-crop-edge`, no knob, *Crop by its edges* pressed; the right edge a quarter in → one update, crop width 0.75, the box 15 mm wide; `Ctrl+Z` restores; `Escape` leaves crop mode with the image selected; the white-out's *Turn 90°* and *Flip ↔* → one update each, its first corner at (−5, 5) then (5, 5) from its centre |
 | E2E | `e2e/course-editor-tools.spec.ts` "filter symbol picker" (`chromium`) | §6.4 / §7 (P3): a filter region over the 505 path, *picked symbols*: `editor-filter-symbol-505` with `data-members="3"` and "Path", `601` named "Magnetic north line" (601.0 matched to 601.b), no entry with a source code (`.`), the 505 swatch image loaded, the 850 frame only under Other, the search "path" → one entry; the eyedropper armed (`aria-pressed`, `V` not lit, no `editor-selection-ring`), a click on the path → one `courseObject.update`, `"symbols":[3]`, the 505 box checked, the note "505 Path", the band's ink below a third; still armed, a second click on the path → note `already`, `Esc` → `V` with the region still selected |
 | integration | `packages/api/src/__tests__/integration/course-print.test.ts` "course objects on the page" | §7 print: the row's "reference-raster pixel probe" of a printed course object is this test's page raster, not the E2E's — no HTTP route rasterises a composed page, and poppler is on the runner for the unit / integration jobs, not the E2E job (coordinator 2026-11-01) |
 | unit (web) | `packages/web/src/lib/editor/__tests__/checks.test.ts` | §8: sites and the explicit structure as `courseChecks` takes them, two controls 20 m apart, the server's `DESCRIPTION_STALE` merged in order, markers (rings, a leg cross, unpositioned skipped), length from the leg polylines, locate |
@@ -3227,8 +3283,10 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 - **Course objects**: draw order (`courseObject.reorder`) has no control
   in the editor; `inset_frame` is slice F's. **Images** (J7): no entry in
   the phone's `+` menu (the picker is desktop chrome; the `I` key works
-  with a keyboard); no rotate handle, crop mode or Shift-inverts-lock on
-  the canvas (J9 / J11); no one-finger image drag on touch.
+  with a keyboard); no one-finger image drag on touch. **Transform
+  handles on touch** (J11): the knob, the corners and crop mode answer
+  the mouse only (user answer 5); a finger pans or selects as before, and
+  crop mode is not offered on a coarse pointer.
 - **Derived instruction rows**: 13.3 / 13.4 derive from the legs'
   crossing points since F4 and replace a hand-placed row of the same kind
   at the same anchor (`control-descriptions-and-editor-geometry.md`

@@ -648,7 +648,7 @@
   "styleCropW": "Width",
   "styleCropH": "Height",
   "styleCropReset": "Reset crop",
-  "styleCropMode": "Crop on the page",
+  "styleCropMode": "Crop by its edges",
   "styleCropDone": "Done cropping",
   "transformAngle": "Turn by °",
   "transformRotate": "Turn",
