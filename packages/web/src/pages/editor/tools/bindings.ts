@@ -13,7 +13,7 @@ import { IMAGE_MIN_MM } from "../../../lib/editor/image-box";
 import {
   anchorKnob, cropEdge, edgeHandles, knobBase, resizeBox, rotationAt, ROTATE_STEM_PX, uncroppedRing, type BoxEdge,
 } from "../../../lib/editor/transform-gestures";
-import { stylePatch } from "../../../lib/editor/style-fields";
+import type { Crop } from "../../../lib/editor/style-fields";
 import { circleGapAt, circleGapFromDrag, compassDeg, legFraction, legGapAt, legGapFromDrag, type AngularGap, type FractionGap } from "./gaps";
 import { dragBendGrip, legPolyline, moveBend, polylineDistance, polylineSlice, toggleBendSmooth, type Bend } from "../../../lib/editor/bends";
 import { legLengthShape } from "../../../lib/editor/leg-length";
@@ -59,8 +59,11 @@ export interface GestureRef { current: Gesture }
 
 /** The kinds the canvas turns by a knob (J11): an image about its centre, a text about its anchor. */
 type StyledObject = Extract<course.CourseObject, { kind: "image" | "text" }>;
-/** What a knob or crop drag changes: props, and with a crop the box. */
-export type StyleChange = { geometry?: course.CourseObject["geometry"]; props?: course.CourseObject["props"] };
+/**
+ * What a knob or crop drag changes, and only that (J11 review): the rotation, or the crop with the box. The page
+ * applies it to the props it shows at that moment, so an inspector edit committed during the press is kept.
+ */
+export type StyleChange = { patch: { rotationDeg?: number; crop?: Crop }; geometry?: course.CourseObject["geometry"] };
 
 /** The knob's tip for `o` at `mmPerPx` (J11): above an image's top edge, or along a text's own up from its anchor. */
 export function knobOf(o: StyledObject, mmPerPx: number): { from: Pt; at: Pt } {
@@ -76,14 +79,11 @@ function pivotOf(o: StyledObject): Pt {
   return { x: (o.geometry[0].x + o.geometry[1].x) / 2, y: (o.geometry[0].y + o.geometry[1].y) / 2 };
 }
 
-/** The change a knob or crop drag leaves (J11; the props through `stylePatch`, so 0° and the full crop drop their keys). */
+/** The change a knob or crop drag leaves (J11; the page puts it through `stylePatch`, so 0° and the full crop drop their keys). */
 export function styleChangeOf(g: Extract<NonNullable<Gesture>, { kind: "rotate" | "crop" }>): StyleChange {
-  if (g.kind === "rotate") {
-    const deg = rotationAt(g.base.props.rotationDeg ?? 0, g.pivot, g.press, g.to, g.shift);
-    return { props: stylePatch(g.base.props, { rotationDeg: deg }) };
-  }
+  if (g.kind === "rotate") return { patch: { rotationDeg: rotationAt(g.base.props.rotationDeg ?? 0, g.pivot, g.press, g.to, g.shift) } };
   const r = cropEdge(g.base.geometry, g.base.props, g.edge, g.to);
-  return { geometry: r.geometry, props: stylePatch(g.base.props, { crop: r.crop }) };
+  return { geometry: r.geometry, patch: { crop: r.crop } };
 }
 
 /** Re-render the page: a gesture in `GestureRef` changed what the tool draws. */
@@ -457,7 +457,9 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
       // On the selected object's edge, off its vertices: a smooth vertex there, Alt a corner (§7 "Editing geometry").
       const sel = shown(o);
       // On the selected image itself (not a leg or control inside it): crop mode (J11).
-      if (sel?.kind === "image" && !o.cropMode && p.target?.kind === "object" && p.target.id === sel.id) return o.onCropMode?.(true);
+      // A finger never (mouse only), and not on a corner handle (J11 review).
+      if (sel?.kind === "image" && !o.cropMode && !p.touch && p.target?.kind === "object" && p.target.id === sel.id
+        && !imageRing(sel.geometry, sel.props.rotationDeg).some((c) => near(c, p.pt, HANDLE_PX * p.mmPerPx))) return o.onCropMode?.(true);
       const inserted = sel && sel.kind !== "image" ? insertAtEdge(sel.geometry, vertexRule(sel.kind), p.pt, HANDLE_PX * p.mmPerPx, !!p.alt) : null;
       if (sel && inserted) {
         o.onVertexFocus?.(inserted.index);

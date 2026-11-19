@@ -1108,14 +1108,14 @@ describe("V transform handles (J11, docs/course-editor.md §7 \"Transform handle
     b.onPointerUp!({ x: 17.4, y: 5 });
     expect(o.onObjectStyleDraft).toHaveBeenCalledTimes(2);
     expect(o.onObjectStyled).toHaveBeenCalledTimes(1);
-    expect(lastStyled(o)).toEqual([9, { props: { graphicId: 3, rotationDeg: 90 } }]);
+    expect(lastStyled(o)).toEqual([9, { patch: { rotationDeg: 90 } }]);
     expect(o.onObjectMoved).not.toHaveBeenCalled();
     const snap = styled({ objects: [img], selected: img });
     const bs = selectBinding(snap);
     bs.onPointerDown!(ptr(10, 12.4));
     bs.onPointerDrag!({ x: 13, y: 12 }, { shift: true, alt: false });
     bs.onPointerUp!({ x: 13, y: 12 });
-    expect((lastStyled(snap)[1].props as { rotationDeg?: number }).rotationDeg! % 15).toBe(0);
+    expect((lastStyled(snap)[1].patch as { rotationDeg: number }).rotationDeg % 15).toBe(0);
     const turned = image({ rotationDeg: 90 });
     const back = styled({ objects: [turned], selected: turned });
     const bb = selectBinding(back);
@@ -1123,7 +1123,7 @@ describe("V transform handles (J11, docs/course-editor.md §7 \"Transform handle
     expect(bb.onPointerDown!(ptr(k.x, k.y))).toBe(true);
     bb.onPointerDrag!({ x: 10, y: 12.4 }, { shift: false, alt: false });
     bb.onPointerUp!({ x: 10, y: 12.4 });
-    expect(lastStyled(back)).toEqual([9, { props: { graphicId: 3 } }]);
+    expect(lastStyled(back)).toEqual([9, { patch: { rotationDeg: 0 } }]);
   });
 
   it("a text turns about its anchor (the geometry untouched); a cancelled knob drag drops its draft; a finger is declined", () => {
@@ -1133,7 +1133,7 @@ describe("V transform handles (J11, docs/course-editor.md §7 \"Transform handle
     expect(b.onPointerDown!(ptr(5, 7.4))).toBe(true);
     b.onPointerDrag!({ x: 7.4, y: 5 }, { shift: false, alt: false });
     b.onPointerUp!({ x: 7.4, y: 5 });
-    expect(lastStyled(o)).toEqual([7, { props: { text: "Hi", fontSizeMm: 3, rotationDeg: 90 } }]);
+    expect(lastStyled(o)).toEqual([7, { patch: { rotationDeg: 90 } }]);
     const c = styled({ objects: [t], selected: t });
     const bc = selectBinding(c);
     bc.onPointerDown!(ptr(5, 7.4));
@@ -1142,6 +1142,18 @@ describe("V transform handles (J11, docs/course-editor.md §7 \"Transform handle
     expect(c.onObjectStyled).not.toHaveBeenCalled();
     expect(c.onObjectStyleDraft).toHaveBeenLastCalledWith(7, null);
     expect(selectBinding(styled({ objects: [t], selected: t })).onPointerDown!(ptr(5, 7.4, { touch: true }))).toBe(false);
+  });
+
+  it("the knob wins over a control or leg under it", () => {
+    const img = image();
+    for (const target of [{ kind: "site" as const, id: "31" }, { kind: "leg" as const, courseId: "A", index: 1 }]) {
+      const o = styled({ objects: [img], selected: img });
+      const b = selectBinding(o);
+      expect(b.onPointerDown!(ptr(10, 12.4, { target }))).toBe(true);
+      b.onPointerDrag!({ x: 17.4, y: 5 }, { shift: false, alt: false });
+      b.onPointerUp!({ x: 17.4, y: 5 });
+      expect(o.onObjectStyled).toHaveBeenCalledTimes(1);
+    }
   });
 
   it("Shift inverts the aspect lock on a corner drag, read live", () => {
@@ -1175,7 +1187,7 @@ describe("V transform handles (J11, docs/course-editor.md §7 \"Transform handle
     b.onPointerUp!(to);
     expect(o.onObjectStyled).toHaveBeenCalledTimes(1);
     const r = cropEdge(img.geometry, img.props as never, "right", to);
-    expect(lastStyled(o)).toEqual([9, { geometry: r.geometry, props: { graphicId: 3, rotationDeg: 30, flipH: true, crop: r.crop } }]);
+    expect(lastStyled(o)).toEqual([9, { geometry: r.geometry, patch: { crop: r.crop } }]);
     const body = styled({ objects: [img], selected: img, cropMode: true });
     expect(selectBinding(body).onPointerDown!(ptr(10, 5, { target: { kind: "object", id: 9 } }))).toBe(true);
   });
@@ -1185,6 +1197,13 @@ describe("V transform handles (J11, docs/course-editor.md §7 \"Transform handle
     const o = styled({ objects: [img], selected: img });
     selectBinding(o).onDoubleClick!(ptr(10, 5, { target: { kind: "object", id: 9 } }));
     expect(o.onCropMode).toHaveBeenCalledWith(true);
+    // Not on a corner handle, not with a finger.
+    const corner = styled({ objects: [img], selected: img });
+    selectBinding(corner).onDoubleClick!(ptr(20, 10, { target: { kind: "object", id: 9 } }));
+    const finger = styled({ objects: [img], selected: img });
+    selectBinding(finger).onDoubleClick!(ptr(10, 5, { target: { kind: "object", id: 9 }, touch: true }));
+    expect(corner.onCropMode).not.toHaveBeenCalled();
+    expect(finger.onCropMode).not.toHaveBeenCalled();
     const leg = styled({ objects: [img], selected: img });
     selectBinding(leg).onDoubleClick!(ptr(10, 5, { target: { kind: "leg", courseId: "A", index: 1 } }));
     expect(leg.onCropMode).not.toHaveBeenCalled();

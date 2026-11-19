@@ -995,13 +995,23 @@ test.describe("J11: transform handles in Course mode", () => {
       await openEditor(page);
       const sheetToggle = page.getByTestId("map-toggle-descriptions");
       if (/hide/i.test((await sheetToggle.textContent()) ?? "")) await sheetToggle.click();
-      // A 20 × 10 mm image and a 10 mm white-out on clear spots.
+      // A 20 × 10 mm image and a 10 mm white-out on clear spots, both attached to a control as if it had moved
+      // 1 mm since they were written (J10): drawn 1 mm from where they are stored, so every write must send the drawn
+      // geometry with the control's position now as `at` (J11 review (3)).
+      const [code] = await regularCodes(page, 1);
+      const control = await site(page, code);
+      const c = control.mm;
       const f = await toPaper(page, await emptyPoint(page, 110));
-      const img = await trpcCall<{ id: number }>("courseObject.create", { kind: "image", geometry: [{ x: f.x - 10, y: f.y - 5 }, { x: f.x + 10, y: f.y + 5 }], props: { graphicId }, scope: { all: true } });
+      const img = await trpcCall<{ id: number }>("courseObject.create", {
+        kind: "image", geometry: [{ x: f.x - 11, y: f.y - 5 }, { x: f.x + 9, y: f.y + 5 }], props: { graphicId }, scope: { all: true },
+        attach: { controlId: Number(control.id), at: { x: c.x - 1, y: c.y } },
+      });
       made.push(img.id);
       const w = await toPaper(page, await emptyPoint(page, 90, [await toPage(page, f)]));
-      const whiteSquare = [{ x: w.x - 5, y: w.y - 5 }, { x: w.x + 5, y: w.y - 5 }, { x: w.x + 5, y: w.y + 5 }, { x: w.x - 5, y: w.y + 5 }];
-      const white = await trpcCall<{ id: number }>("courseObject.create", { kind: "whiteout", geometry: whiteSquare, props: {}, scope: { all: true } });
+      const whiteSquare = [{ x: w.x - 5, y: w.y - 6 }, { x: w.x + 5, y: w.y - 6 }, { x: w.x + 5, y: w.y + 4 }, { x: w.x - 5, y: w.y + 4 }];
+      const white = await trpcCall<{ id: number }>("courseObject.create", {
+        kind: "whiteout", geometry: whiteSquare, props: {}, scope: { all: true }, attach: { controlId: Number(control.id), at: { x: c.x, y: c.y - 1 } },
+      });
       made.push(white.id);
       await page.reload();
       await editorReady(page);
@@ -1009,6 +1019,8 @@ test.describe("J11: transform handles in Course mode", () => {
       const row = objectRow(page, img.id);
       await expect(row).toBeAttached({ timeout: 15000 });
       const props = async () => JSON.parse((await row.getAttribute("data-props")) || "{}") as { rotationDeg?: number; crop?: { width: number } };
+      const drawn = async (r = row) => ((await r.getAttribute("data-drawn")) ?? "").split(" ").filter(Boolean).map((q) => ({ x: Number(q.split(",")[0]), y: Number(q.split(",")[1]) }));
+      const at = async (r = row) => (JSON.parse((await r.getAttribute("data-attach")) || "null") as { at: { x: number; y: number } } | null)?.at;
       const layer = page.getByTestId("editor-tool-layer");
       const centreOf = async (id: string, n = 0) => { const b = (await layer.getByTestId(id).nth(n).boundingBox())!; return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; };
       const centre = await toPage(page, f);
@@ -1055,19 +1067,28 @@ test.describe("J11: transform handles in Course mode", () => {
       const g = await geometryOf(row);
       expect(Math.abs(g[1].x - g[0].x)).toBeCloseTo(20 * (await props()).crop!.width, 3);
       expect(updates - before).toBe(1);
+      // Attached: the left edge stays where it was drawn, `at` now the control's position.
+      await expect.poll(async () => Math.abs((await drawn())[0].x - (f.x - 10)) < 0.01, { timeout: 15000 }).toBe(true);
+      expect((await at())!.x).toBeCloseTo(c.x, 6);
       await page.keyboard.press("Control+z");
       await expect.poll(async () => "crop" in (await props()), { timeout: 15000 }).toBe(false);
+      await expect.poll(async () => Math.abs((await drawn())[1].x - (f.x + 10)) < 0.01, { timeout: 15000 }).toBe(true);
       // Escape leaves crop mode; the image stays selected.
       await page.keyboard.press("Escape");
       await expect(layer.getByTestId("editor-object-crop-edge")).toHaveCount(0);
       await expect(layer.getByTestId("editor-object-rotate")).toHaveCount(1);
       await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-id", String(img.id));
 
-      // A white-out: Turn 90° and Flip ↔ from the inspector, each one write, baked into the vertices.
-      await page.keyboard.press("Escape");
+      // Crop mode again; selecting another object leaves it.
+      await page.mouse.dblclick(centre.x, centre.y);
+      await expect(layer.getByTestId("editor-object-crop-edge")).toHaveCount(4);
       const whiteRow = objectRow(page, white.id);
       await clickMap(page, await toPage(page, { x: w.x - 5, y: w.y }));
       await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-id", String(white.id), { timeout: 10000 });
+      await expect(layer.getByTestId("editor-object-crop-edge")).toHaveCount(0);
+
+      // The white-out (drawn on w, attached): Turn 90° and Flip ↔ from the inspector, each one write, baked into the
+      // vertices about its drawn centre, `at` the control's position.
       before = updates;
       const quarter = waitForTrpc(page, "courseObject.update");
       await page.getByTestId("editor-object-transform-rotate90").click();
@@ -1079,6 +1100,9 @@ test.describe("J11: transform handles in Course mode", () => {
       await flipped;
       await expect.poll(async () => { const q = (await geometryOf(whiteRow))[0]; return [Math.round((q.x - w.x) * 100) / 100, Math.round((q.y - w.y) * 100) / 100]; }, { timeout: 15000 }).toEqual([5, 5]);
       expect(updates - before).toBe(2);
+      // The drawn place is what the geometry shows: stored and drawn agree now that `at` is the control's position.
+      expect((await at(whiteRow))!.y).toBeCloseTo(c.y, 6);
+      expect((await drawn(whiteRow))[0].x).toBeCloseTo(w.x + 5, 2);
     } finally {
       for (const id of made) await cleanup("courseObject.delete", { id });
       await cleanup("graphics.delete", { id: graphicId });

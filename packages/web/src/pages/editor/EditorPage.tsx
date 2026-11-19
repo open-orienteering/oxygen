@@ -38,6 +38,7 @@ import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { PLACEMENT_LOUPE_KEY } from "../../lib/editor/touch";
 import { transformVertices } from "../../lib/editor/transform-gestures";
+import { stylePatch, type StyleValue } from "../../lib/editor/style-fields";
 import { nearestSite, objectCentre, shownObject, shownObjects, attachPatch, centrePatch, detachPatch } from "../../lib/editor/attach";
 import { useOnlineStatus } from "../../hooks/useOnlineStatus";
 import { useCapabilities } from "../../context/CapabilitiesContext";
@@ -967,6 +968,7 @@ export function EditorPage() {
   useEffect(() => {
     setDrafts((d) => (d.size ? new Map() : d));
     setPropDrafts((d) => (d.size ? new Map() : d));
+    sentProps.current.clear();
   }, [objectList.data]);
   /** The selected object's focused vertex (a click on its handle): `Delete` removes it (§7 "Editing geometry"). */
   // Keyed by the object it belongs to, so a selection change drops it.
@@ -977,8 +979,16 @@ export function EditorPage() {
     setFocus(index === null || selectedObjectId === null ? null : { objectId: selectedObjectId, index });
   /** Per object, the geometry shown when the gesture in progress drew its first draft (`onObjectDraft`). */
   const gestureBefore = useRef(new Map<number, CourseObject["geometry"]>());
-  /** Per object, what a knob or crop drag started from (J11): the undo's "before" for props and the box. */
-  const styleBefore = useRef(new Map<number, CourseObject>());
+  /**
+   * Per object, the drafts a knob or crop drag found (J11): a cancel puts back only drafts that were there before it
+   * (an earlier gesture's, still waiting for the list), never its own (J11 review (2)).
+   */
+  const styleBefore = useRef(new Map<number, { geometry?: CourseObject["geometry"]; props?: CourseObject["props"] }>());
+  /**
+   * Per object, the props of the last write sent (an inspector edit committed on blur, during a canvas press included),
+   * until the list catches up: a knob or crop drag applies its change to these, so it never sends older props (J11 review (1)).
+   */
+  const sentProps = useRef(new Map<number, CourseObject["props"]>());
   /**
    * Crop mode (J11, §7 "Transform handles"): the selected image's edges crop. Page state, not an undo step; it holds
    * only while that image stays selected in Course mode with `V`, and is never offered on a coarse pointer.
@@ -1010,6 +1020,7 @@ export function EditorPage() {
   const updateObject = useCallback((o: CourseObject, given: { geometry?: CourseObject["geometry"]; props?: CourseObject["props"]; scope?: CourseObject["scope"]; attach?: CourseObject["attach"] | null }, onFail?: () => void) => {
     // J10: geometry is where the object is drawn, so an attached one sends the drawn `at` with it (`o` is shown).
     const patch = given.geometry && o.attach && !("attach" in given) ? { ...given, attach: o.attach } : given;
+    if (patch.props) sentProps.current.set(o.id, patch.props);
     const prev = { geometry: o.geometry, props: o.props, scope: o.scope, attach: o.attach ?? null };
     const before = Object.fromEntries(Object.keys(patch).map((k) => [k, prev[k as keyof typeof prev]]));
     void (async () => {
@@ -1443,30 +1454,36 @@ export function EditorPage() {
           cropMode: cropMode && selectedObject?.kind === "image",
           onCropMode: (on) => setCropModeId(on ? selectedObjectId : null),
           onObjectStyleDraft: (id, change) => {
-            // J11: the first draft keeps what was shown before the drag (drafts over the shown object): the undo's "before".
             const o = shownById(id);
-            if (change && o && !styleBefore.current.has(id)) {
-              styleBefore.current.set(id, { ...o, geometry: drafts.get(id) ?? o.geometry, props: propDrafts.get(id) ?? o.props } as CourseObject);
-            }
+            if (!o) return;
             if (!change) {
-              const before = styleBefore.current.get(id);
+              // A cancel: back to the drafts found at the first draft, or none.
+              const found = styleBefore.current.get(id);
               styleBefore.current.delete(id);
-              setDraft(id, before && drafts.has(id) ? before.geometry : null);
-              setPropDrafts((d) => { const n = new Map(d); if (before && d.has(id)) n.set(id, before.props); else n.delete(id); return n; });
+              setDraft(id, found?.geometry ?? null);
+              setPropDrafts((d) => { const n = new Map(d); if (found?.props) n.set(id, found.props); else n.delete(id); return n; });
               return;
             }
+            if (!styleBefore.current.has(id)) styleBefore.current.set(id, { geometry: drafts.get(id), props: propDrafts.get(id) });
+            const found = styleBefore.current.get(id)!;
+            const base = found.props ?? sentProps.current.get(id) ?? o.props;
             if (change.geometry) setDraft(id, change.geometry);
-            if (change.props) setPropDrafts((d) => new Map(d).set(id, change.props!));
+            setPropDrafts((d) => new Map(d).set(id, stylePatch(base as StyleValue, change.patch) as CourseObject["props"]));
           },
           onObjectStyled: (id, change) => {
             const o = shownById(id);
-            const before = styleBefore.current.get(id) ?? (o ? { ...o, geometry: drafts.get(id) ?? o.geometry, props: propDrafts.get(id) ?? o.props } as CourseObject : undefined);
+            const found = styleBefore.current.get(id);
             styleBefore.current.delete(id);
-            if (!before) return;
+            if (!o) return;
+            // What is shown now (an earlier gesture's draft, else the props last sent, else the list's): the undo's
+            // "before" and the base the change applies to.
+            const before = { ...o, geometry: found?.geometry ?? o.geometry, props: found?.props ?? sentProps.current.get(id) ?? o.props } as CourseObject;
+            const props = stylePatch(before.props as StyleValue, change.patch) as CourseObject["props"];
+            const given = { props, ...(change.geometry ? { geometry: change.geometry } : {}) };
             if (change.geometry) setDraft(id, change.geometry);
-            if (change.props) setPropDrafts((d) => new Map(d).set(id, change.props!));
+            setPropDrafts((d) => new Map(d).set(id, props));
             // One write, one undo entry; a props-only change (the knob) sends no geometry, so no `attach` (J10's rule).
-            updateObject(before, change, () => {
+            updateObject(before, given, () => {
               setDraft(id, null);
               setPropDrafts((d) => { const n = new Map(d); n.delete(id); return n; });
               setStyleReset((k) => k + 1);
