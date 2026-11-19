@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { defaultMapAppearance } from "@oxygen/shared";
-import { FILL_MODES, geometryOf, layoutRequestOf, nextSheetName, pathObject, templateWriteOf, placeObject, scopeObjects, sheetKeyOf, snapshotOf, withEditable, type EditorSheet } from "../layout/model";
+import { cropChange } from "../../../lib/editor/style-fields";
+import { FILL_MODES, geometryOf, rectOfStyleGeometry, styleChangeOf, styleGeometryOf, styleShowOf, layoutRequestOf, nextSheetName, pathObject, templateWriteOf, placeObject, scopeObjects, sheetKeyOf, snapshotOf, withEditable, type EditorSheet } from "../layout/model";
 
 const settings = { printMarginMm: 3, mapFrame: { x: 10, y: 10, width: 190, height: 277 }, description: { visible: false, x: 150, y: 12, cellSizeMm: 6 }, appearance: defaultMapAppearance };
 const sheetText = { id: "s", kind: "text" as const, anchor: "page" as const, x: 20, y: 30, text: "{course}", fontSizeMm: 4, color: "#000000" };
@@ -116,5 +117,42 @@ describe("nextSheetName (E-pages: Add a sheet)", () => {
     expect(nextSheetName("Blue", ["Blue", "Blue 2"])).toBe("Blue 3");
     expect(nextSheetName("Blue", ["Blue", "Blue 3"])).toBe("Blue 4");
     expect(nextSheetName("Blue", [])).toBe("Blue 2");
+  });
+});
+
+describe("page objects' style fields (J8, docs/course-layout.md §3 \"Style fields\")", () => {
+  const printable = { x: 3, y: 3, width: 204, height: 291 };
+  const img = { id: "i", kind: "image" as const, anchor: "page" as const, graphicId: 1, x: 50, y: 50, width: 40, height: 20 };
+  const rect = { id: "r", kind: "rectangle" as const, anchor: "page" as const, x: 10, y: 10, width: 20, height: 10, fillMode: "whiteout" as const };
+  const text = { id: "t", kind: "text" as const, anchor: "page" as const, x: 10, y: 10, text: "A", fontSizeMm: 4, color: "#000000" };
+  const line = { id: "l", kind: "line" as const, anchor: "page" as const, x1: 0, y1: 0, x2: 5, y2: 5, stroke: "#000000", strokeWidthMm: 0.3 };
+
+  it("which fields each kind shows", () => {
+    expect(styleShowOf(img)).toEqual({ blend: true, rotation: true, flip: true, size: true, crop: true, lock: true });
+    expect(styleShowOf(rect)).toEqual({ blend: false, rotation: true, flip: false, size: true, crop: false, lock: false });
+    expect(styleShowOf({ ...rect, fillMode: "solid" as const })).toMatchObject({ blend: true });
+    expect(styleShowOf(text)).toMatchObject({ blend: true, rotation: true, size: false });
+    expect(styleShowOf(line)).toMatchObject({ blend: true, rotation: false, size: false });
+  });
+
+  it("the y-up adapter round-trips a page box", () => {
+    expect(styleGeometryOf(img)).toEqual([{ x: 50, y: -70 }, { x: 90, y: -50 }]);
+    expect(rectOfStyleGeometry(styleGeometryOf(img)!)).toEqual({ x: 50, y: 50, width: 40, height: 20 });
+    expect(styleGeometryOf(text)).toBeUndefined();
+  });
+
+  it("a commit is the whole next object: a removed key stays removed; a box applied and kept on the page", () => {
+    const withOpacity = { ...img, opacity: 0.5 };
+    const { opacity: _o, ...plain } = withOpacity;
+    expect(styleChangeOf(withOpacity, { props: plain }, printable)).toEqual(img);
+    expect(styleChangeOf(img, { geometry: [{ x: 60, y: -65 }, { x: 80, y: -55 }] }, printable)).toMatchObject({ x: 60, y: 55, width: 20, height: 10 });
+    expect(styleChangeOf(img, { geometry: [{ x: -10, y: -65 }, { x: 10, y: -55 }] }, printable)).toMatchObject({ x: 3, width: 20 });
+  });
+
+  it("a crop on a page image in y-down page mm: left 25 % and top 50 % keep the visible pixels in place", () => {
+    const left = cropChange(styleGeometryOf(img)!, {}, undefined, { x: 0.25, y: 0, width: 0.75, height: 1 });
+    expect(rectOfStyleGeometry(left.geometry)).toEqual({ x: 60, y: 50, width: 30, height: 20 });
+    const top = cropChange(styleGeometryOf(img)!, {}, undefined, { x: 0, y: 0.5, width: 1, height: 0.5 });
+    expect(rectOfStyleGeometry(top.geometry)).toEqual({ x: 50, y: 60, width: 40, height: 10 });
   });
 });

@@ -27,14 +27,22 @@ export type PlaceableMapObjectKind =
   | "rectangle"
   | "path";
 
-/** Uploaded graphic placed at `point`, clamped inside the printable area. */
+/**
+ * Uploaded graphic placed at `point` (J8): at its pixel size's aspect, 30 mm on the longer side (a 30 mm square
+ * when the size is unknown), shrunk proportionally to fit the printable area and clamped inside it.
+ */
 export function createImageObjectAt(
   graphicId: number,
   point: MapPoint,
   printable: MapRect,
+  size?: { widthPx: number | null; heightPx: number | null } | null,
 ): CourseMapObject {
-  const width = Math.min(30, printable.width);
-  const height = Math.min(30, printable.height);
+  const wPx = size?.widthPx ?? 0, hPx = size?.heightPx ?? 0;
+  const k0 = wPx > 0 && hPx > 0 ? 30 / Math.max(wPx, hPx) : 0;
+  let width = k0 ? wPx * k0 : 30, height = k0 ? hPx * k0 : 30;
+  const fit = Math.min(1, printable.width / width, printable.height / height);
+  width *= fit;
+  height *= fit;
   const x = Math.max(
     printable.x,
     Math.min(printable.x + printable.width - width, point.x - width / 2),
@@ -458,6 +466,8 @@ export function fillModePatch(
     patch.stroke = purple;
     patch.strokeWidthMm = OUT_OF_BOUNDS_BORDER_MM;
   }
+  // J8: a white-out has no blend field (a white Multiply would leave the map unchanged), so the switch drops it.
+  if ((fillMode === "whiteout" || fillMode === "whiteoutInverted") && "blend" in object) patch.blend = undefined;
   return patch as Partial<FillableObject>;
 }
 

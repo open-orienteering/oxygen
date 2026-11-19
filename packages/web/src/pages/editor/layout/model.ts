@@ -9,6 +9,7 @@
 import {
   course,
   getPaperDimensions,
+  isWhiteoutObject,
   type CourseMapObject,
   type DescriptionBlockSettings,
   type MapFillMode,
@@ -18,7 +19,7 @@ import {
 } from "@oxygen/shared";
 import type { LayoutRequest } from "../../../lib/course-layer-request";
 import { sheetWindow, windowCentre, type SheetGeometry } from "../../../lib/editor/layout";
-import { createImageObjectAt, createObjectAt } from "../../../lib/map-layout-editor";
+import { constrainMapObject, createImageObjectAt, createObjectAt } from "../../../lib/map-layout-editor";
 import type { PlaceKind } from "./bindings";
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "@oxygen/api";
@@ -167,7 +168,10 @@ export function pathObject(points: PathVertex[], printable: MapRect): Extract<Co
  * clamped to the printable area by `lib/map-layout-editor.ts`'s creators.
  * The block is not an object: the rail's `D` shows it (`description`).
  */
-export function placeObject(what: Exclude<PlaceKind, "description" | "path">, at: Pt, printable: MapRect, graphicId?: number): CourseMapObject | null {
+export function placeObject(
+  what: Exclude<PlaceKind, "description" | "path">, at: Pt, printable: MapRect, graphicId?: number,
+  size?: { widthPx: number | null; heightPx: number | null } | null,
+): CourseMapObject | null {
   switch (what) {
     case "header": {
       const o = createObjectAt("text", at, printable);
@@ -176,7 +180,7 @@ export function placeObject(what: Exclude<PlaceKind, "description" | "path">, at
     case "text":
       return createObjectAt("text", at, printable);
     case "image":
-      return graphicId === undefined ? null : createImageObjectAt(graphicId, at, printable);
+      return graphicId === undefined ? null : createImageObjectAt(graphicId, at, printable, size);
     case "whiteout": {
       const o = createObjectAt("rectangle", at, printable);
       if (o.kind !== "rectangle") return o;
@@ -188,4 +192,45 @@ export function placeObject(what: Exclude<PlaceKind, "description" | "path">, at
     case "rectangle":
       return createObjectAt(what, at, printable);
   }
+}
+
+// ─── Style fields (J8; docs/course-layout.md §3 "Style fields") ───
+
+/** Which style fields a page object shows: opacity always; blend off white-outs; rotation on text, rectangle, image; flip and crop on image; size on rectangle and image, the lock on image. */
+export function styleShowOf(o: CourseMapObject): { blend: boolean; rotation: boolean; flip: boolean; size: boolean; crop: boolean; lock: boolean } {
+  const image = o.kind === "image";
+  return {
+    blend: !isWhiteoutObject(o),
+    rotation: o.kind === "text" || o.kind === "rectangle" || image,
+    flip: image,
+    size: image || o.kind === "rectangle",
+    crop: image,
+    lock: image,
+  };
+}
+
+/**
+ * A rectangle's or image's box as the shared style fields take it: two corners, y-up (`lib/editor/style-fields.ts`
+ * works in a course object's y-up paper mm). Page mm are y-down, so y is negated; `rotationDeg` is clockwise as
+ * seen in both spaces.
+ */
+export function styleGeometryOf(o: CourseMapObject): [Pt, Pt] | undefined {
+  if (o.kind !== "rectangle" && o.kind !== "image") return undefined;
+  return [{ x: o.x, y: -(o.y + o.height) }, { x: o.x + o.width, y: -o.y }];
+}
+
+/** The page box (y-down, top-left) of a style-field geometry. */
+export function rectOfStyleGeometry(g: readonly Pt[]): MapRect {
+  const x0 = Math.min(g[0].x, g[1].x), x1 = Math.max(g[0].x, g[1].x), y0 = Math.min(g[0].y, g[1].y), y1 = Math.max(g[0].y, g[1].y);
+  return { x: x0, y: -y1, width: x1 - x0, height: y1 - y0 };
+}
+
+/**
+ * A style field's commit on page object `o` as the whole next object (default values removed, not merged), its box
+ * from `geometry` when a size or crop changed it, kept on the printable area as a move would be.
+ */
+export function styleChangeOf(o: CourseMapObject, next: { props?: CourseMapObject; geometry?: readonly Pt[] }, printable: MapRect): CourseMapObject {
+  let out = next.props ?? o;
+  if (next.geometry && (out.kind === "rectangle" || out.kind === "image")) out = { ...out, ...rectOfStyleGeometry(next.geometry) };
+  return constrainMapObject(out, printable);
 }

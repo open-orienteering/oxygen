@@ -311,3 +311,22 @@ describe("V on a selected path: the course editor's geometry gestures (D16, docs
   });
 
 });
+
+describe("an image corner drag and the lock (J8, docs/course-layout.md §3)", () => {
+  const img: CourseMapObject = { id: "img", kind: "image", anchor: "page", graphicId: 9, x: 50, y: 50, width: 40, height: 20 };
+  const dragCorner = (lock: boolean | undefined, shift: boolean) => {
+    const c = ctx({ editable: [img], selection: { kind: "object", id: "img" }, aspectLock: lock });
+    const b = layoutBinding(c);
+    expect(b.onPointerDown!(at(90, 70, { shift }))).toBe(true);
+    b.onPointerDrag!(view(100, 90));
+    b.onPointerUp!(view(100, 90));
+    const o = c.onCommit.mock.calls[0][0].objects[0] as Extract<CourseMapObject, { kind: "image" }>;
+    return o.width / o.height;
+  };
+  it("locked keeps the ratio and Shift frees it; unlocked is free and Shift keeps it", () => {
+    expect(dragCorner(true, false)).toBeCloseTo(2, 6);
+    expect(dragCorner(true, true)).not.toBeCloseTo(2, 2);
+    expect(dragCorner(false, false)).not.toBeCloseTo(2, 2);
+    expect(dragCorner(false, true)).toBeCloseTo(2, 6);
+  });
+});

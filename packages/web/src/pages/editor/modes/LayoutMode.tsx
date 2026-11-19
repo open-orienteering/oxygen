@@ -41,7 +41,7 @@ import { ClassOverridesSection, ClubTemplatesSection, TemplateKeySection } from 
 import { NoSheetActions, SheetActions, TemplateActions } from "../layout/SheetActions";
 import { SetterSection } from "../layout/SetterSection";
 import { useCapabilities } from "../../../context/CapabilitiesContext";
-import { geometryOf, layoutRequestOf, pathObject, placeObject, scopeObjects, sheetKeyOf, snapshotOf, templateWriteOf, withEditable, type EditorSheet, type LayoutSnapshot } from "../layout/model";
+import { geometryOf, layoutRequestOf, pathObject, placeObject, scopeObjects, sheetKeyOf, snapshotOf, styleChangeOf, templateWriteOf, withEditable, type EditorSheet, type LayoutSnapshot } from "../layout/model";
 
 type Pt = { x: number; y: number };
 
@@ -164,6 +164,10 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
   const [focus, setFocus] = useState<{ id: string; index: number } | null>(null);
   const [tool, setTool] = useState<LayoutTool>({ kind: "select" });
   const [snapping, setSnapping] = useState(false);
+  /** The image size lock (J8): the style fields' size and an image corner drag (Shift inverts); Layout's own, on by default. */
+  const [aspectLock, setAspectLock] = useState(true);
+  // The graphics' pixel sizes, for a placed image's aspect (the picker's query, cached).
+  const graphicsList = trpc.graphics.list.useQuery(undefined, { enabled: a.enabled });
   const gesture = useRef<LayoutGesture>(null);
   /** `P`'s drawing (the course editor's area flow): its gesture and hover, paper mm. */
   const drawGesture = useRef<Gesture>(null);
@@ -250,6 +254,8 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
   const purple = snap?.settings.appearance.purple ?? "#a626ff";
   const place = useCallback((what: Exclude<PlaceKind, "path">, at: Pt, graphicId?: number) => {
     if (!stored || !geometry || !data) return;
+    // `I` before a graphic is picked: the click places nothing and the tool stays (J8).
+    if (what === "image" && graphicId === undefined) return;
     const page = gridSnap(at, snapping);
     setTool({ kind: "select" });
     if (what === "description") {
@@ -258,11 +264,12 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
       setSelection({ kind: "description" });
       return;
     }
-    const o = placeObject(what, page, geometry.printable, graphicId);
+    const size = graphicId !== undefined ? graphicsList.data?.find((x) => x.id === graphicId) ?? null : null;
+    const o = placeObject(what, page, geometry.printable, graphicId, size);
     if (!o) return;
     change({ objects: [...scopeObjects(data, stored).editable, o] });
     setSelection({ kind: "object", id: o.id });
-  }, [stored, geometry, data, change, snapping]);
+  }, [stored, geometry, data, change, snapping, graphicsList.data]);
   /** `P` closed: one closed page path, one write, selected (docs/course-layout.md §3). */
   const finishPath = useCallback((points: Vertex[]) => {
     setTool({ kind: "select" });
@@ -285,7 +292,7 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
       geometry, editable: scoped.editable, locked: scoped.locked, description: snap.description, block, centre: snap.centre,
       // Align map stores a sheet's window; a template has none (its preview follows the course).
       selection: data?.scope === "template" && selection?.kind === "frame" ? null : selection,
-      tool, snapping, gesture,
+      tool, snapping, gesture, aspectLock,
       onPreview: (c) => setDraft(c && stored ? apply(stored, c) : null),
       onCommit: change,
       onSelect: setSelection,
@@ -299,7 +306,7 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
         onCancel: () => setTool({ kind: "select" }),
       } : undefined,
     });
-  }, [a.enabled, geometry, snap, scoped, block, data?.scope, selection, tool, snapping, stored, apply, change, place, drawHover, finishPath, focusedVertex, onVertexFocus]);
+  }, [a.enabled, geometry, snap, scoped, block, data?.scope, selection, tool, snapping, aspectLock, stored, apply, change, place, drawHover, finishPath, focusedVertex, onVertexFocus]);
 
   const layoutRequest = useMemo(() => (a.enabled && data && snap && geometry ? layoutRequestOf(data, snap, geometry) : null), [a.enabled, data, snap, geometry]);
 
@@ -309,6 +316,11 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
     if (!data || !stored) return;
     change({ objects: scopeObjects(data, stored).editable.map((o) => (o.id === id ? ({ ...o, ...patch } as CourseMapObject) : o)) });
   }, [data, stored, change]);
+  /** A style field's commit (J8): the whole next object (default values removed), one write, one undo entry. */
+  const styleObject = useCallback((id: string, next: { props?: CourseMapObject; geometry?: readonly Pt[] }) => {
+    if (!data || !stored || !geometry) return;
+    change({ objects: scopeObjects(data, stored).editable.map((o) => (o.id === id ? styleChangeOf(o, next, geometry.printable) : o)) });
+  }, [data, stored, geometry, change]);
   const deleteSelected = useCallback(() => {
     if (!data || !stored) return;
     if (selection?.kind === "object") change({ objects: scopeObjects(data, stored).editable.filter((o) => o.id !== selection.id) });
@@ -319,7 +331,6 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
   const onTool = useCallback((what: PlaceKind | "select", graphicId?: number) => {
     if (what === "select") { setTool({ kind: "select" }); return; }
     if (what === "description" && snap?.description.visible) { setTool({ kind: "select" }); setSelection({ kind: "description" }); return; }
-    if (what === "image" && graphicId === undefined) return;
     if (what === "path") {
       // A fresh drawing: no gesture or hover left from an earlier one.
       drawGesture.current = null;
@@ -369,8 +380,6 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
     if (key === "F") { fit(); return true; }
     const what = LAYOUT_KEYS[key];
     if (what) {
-      // `I` arms the image tool only with a graphic picked in the Graphics section.
-      if (what === "image") return true;
       onTool(what);
       return true;
     }
@@ -403,7 +412,8 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
 
   const open = useCallback((next: LayoutTarget | null) => setTarget(next), []);
 
-  const rail = <LayoutRail tool={tool} onTool={(w) => onTool(w)} canImage={false} snapping={snapping} onSnapping={() => setSnapping((v) => !v)} />;
+  const rail = <LayoutRail tool={tool} onTool={(w) => onTool(w)} snapping={snapping} onSnapping={() => setSnapping((v) => !v)}
+    imagePicker={a.nameId ? { nameId: a.nameId, canEdit, onPick: (id) => onTool("image", id) } : null} />;
 
   const siblings = (sheets.data ?? []).filter((r) => (data?.sheet ? r.courseId === data.sheet.courseSeq && r.kind === data.sheet.kind && (r.class?.seq ?? null) === data.sheet.classSeq : false));
 
@@ -411,7 +421,6 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
   const inspector = (
     <div className="shrink-0 flex flex-col">
     <LayoutInspector
-      nameId={a.nameId}
       loading={a.enabled && (sheets.isLoading || (!!input && query.isLoading))}
       data={data}
       snap={snap}
@@ -430,8 +439,10 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
       onSelect={setSelection}
       onPatch={patchSnapshot}
       onObject={updateObject}
+      onStyle={styleObject}
+      aspectLock={aspectLock}
+      onAspectLock={() => setAspectLock((v) => !v)}
       onDelete={deleteSelected}
-      onPlaceImage={(id) => onTool("image", id)}
       canEdit={canEdit}
       templateActions={data ? <TemplateActions template={data.template} canEdit={canEdit} run={run} onOpen={open} /> : null}
       noSheet={<NoSheetActions view={a.view} course={a.course} canEdit={canEdit} run={run} onOpen={open} />}

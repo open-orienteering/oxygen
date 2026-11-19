@@ -197,7 +197,8 @@ token-guarded row writes).
 
 **Keys** (08 §5.3 Layout column): `V` select, `H` header, `T` text, `D`
 description block, `W` white-out, `L` line, `R` rectangle, `P` polygon
-(`I` image is armed from the Graphics section; there is no key for
+`I` image (opens the graphics picker beside the rail, J8; a click on
+the page before a graphic is picked places nothing; there is no key for
 white-out outside, see §3),
 `F` fit page, `Tab` / `Shift+Tab` next / previous object, `Delete` the
 selected path's focused vertex (§3), else the selected object (or hides
@@ -216,8 +217,11 @@ on the 1 mm page grid with it.
 (`editor-layout-selected`: text, size, align, colour; fill mode, line
 colour, width), the scope's objects (`editor-layout-object-row`)
 with the validation issues (`editor-layout-issue`, `validate.ts`'s codes,
-computed live from the snapshot), the graphics library
-(`editor-layout-graphics`, the `GraphicPicker`, J2: the event's graphics,
+computed live from the snapshot), the selection's style fields
+(`editor-layout-style-*`, J8, §3 "Style fields"); the graphics library
+is the `I` picker beside the rail (`editor-layout-graphics`, with the
+hint `editor-layout-image-hint`; J8 moved it there from J2's inspector
+section; the `GraphicPicker`, J2: the event's graphics,
 then the club library's, as tiles `editor-layout-graphic-tile` with a
 `thumb.png` thumbnail, name, pixel size and bytes; the thumbnail is the
 Place button `editor-layout-graphic-place-<id>`; *Save to club*
@@ -251,7 +255,7 @@ exception: it draws (below).
 |---|---|---|
 | `H` | header text `{course}`, 6 mm | `createObjectAt("text")` |
 | `T` | text `{course}`, 4 mm | `createObjectAt("text")` |
-| `I` | the picked graphic, 30 mm | `createImageObjectAt` |
+| `I` | the picked graphic at its aspect, 30 mm on the longer side (a square when its pixel size is unknown), fitted and clamped to the printable area (J8) | `createImageObjectAt` |
 | `D` | shows the block at the click (selects it when shown) | `constrainDescription` |
 | `W` | white-out rectangle, no border | `createObjectAt("rectangle")` |
 | `L` / `R` | line, rectangle | `createObjectAt` |
@@ -317,9 +321,27 @@ object under it, else selects the frame or pans. A drag moves the object
 (`translateMapObject`, kept on the printable area by
 `constrainMapObject`); a rectangle's, text's or image's corner handles
 and a line object's ends resize (`resizeMapObject` with the printable
-clamps; Shift keeps an image's proportions); the block moves by its own
+clamps; with the aspect lock on — the default, the Style fields' checkbox — an image keeps its proportions, and Shift inverts the lock for that drag, J8); the block moves by its own
 drag. A click on nothing inside the frame selects the frame; elsewhere
 it deselects.
+
+**Style fields** (J8; `layout/model.ts` `styleShowOf`, `styleChangeOf`):
+the inspector reuses Course mode's style fields (`StyleFields`,
+`course-editor.md` §7 "Inspector") under the ids `editor-layout-style-*`.
+Every page object has opacity and, unless it is a white-out, blend
+(Normal / Multiply); text, rectangles and images add rotation (text
+about its anchor, a box about its centre); an image adds flips, width /
+height with the aspect lock and the crop; a rectangle adds width and
+height without the lock. Page objects are page
+mm, y down, so the fields edit them through a y-negating adapter
+(`styleGeometryOf`, `rectOfStyleGeometry`) and the same pure rules as
+Course mode (`lib/editor/style-fields.ts`: a default value removes its
+key, a size is typed about the centre, a crop moves the box so the
+visible pixels stay put). Each commit replaces the whole object, kept on
+the printable area by `constrainMapObject`: one `saveLayout`, one undo
+entry. Turning a fill to white-out (or white-out outside) drops a blend
+(`fillModePatch`). The aspect lock is Layout's own (on by default), not
+shared with Course mode's.
 
 **A selected path** (closed or open — `L` lines are open paths) takes
 the course editor's geometry gestures (`course-editor.md` §7 "Editing
@@ -798,7 +820,9 @@ of the event, course seq (the event's last), sort order, seq.
 | unit (web) | `print/__tests__/imports.test.ts` "mapsPdfTarget", `print/__tests__/client.test.ts` | G16 (§7 "Where the PDF is made"): every map entry of Export ▾ goes to the device path with its query, descriptions / IOF XML / Purple Pen do not; the device path and each fallback (`course-print.md` §9.1) |
 | E2E | `e2e/course-maps.spec.ts` "the retired Maps and Map templates pages redirect…" | E-pages: `/maps?course=1` → `/courses?course=1`, `/map-templates` → Layout mode; neither tab is shown |
 | E2E | `e2e/course-editor-layout.spec.ts` "Course editor auto templates" | Export ▾ → this course creates the sheet and prints one page; the auto badge and the sheet key; a class scale makes a class sheet; Class view shows `1:15000`; this class exports; Create extra template moves the course, its row moves it back, undo moves it again |
-| E2E | `e2e/course-editor-layout.spec.ts` "Course editor layout" "graphics: upload an SVG…" | E3 (ported from `course-maps.spec.ts`'s legacy layout editor): the Graphics section uploads an SVG (`graphics.upload`), its Place button arms the image tool, a click on the page places it (one `saveLayout`, an `image` row in the list and in `courseMap.get`); selected from the list and deleted, gone from both; J2: the tile's thumbnail loads at 256 px and shows "4096 × 4096 px", *Save to club* adds a club tile, a confirmed delete removes each |
+| E2E | `e2e/course-editor-layout.spec.ts` "Course editor layout" "graphics: upload an SVG…" | E3 (ported from `course-maps.spec.ts`'s legacy layout editor): the Graphics section uploads an SVG (`graphics.upload`), its Place button arms the image tool, a click on the page places it (one `saveLayout`, an `image` row in the list and in `courseMap.get`); selected from the list and deleted, gone from both; J2: the tile's thumbnail loads at 256 px and shows "4096 × 4096 px", *Save to club* adds a club tile, a confirmed delete removes each; J8: the picker opens from `editor-layout-tool-I` |
+| Unit | `lib/__tests__/map-layout-editor.test.ts`, `pages/editor/layout/__tests__/layout-model.test.ts`, `layout-bindings.test.ts` | J8: `createImageObjectAt` at the graphic's aspect; a white-out fill drops blend; `styleShowOf` per kind; the y-down adapter round trip; `styleChangeOf` size, crop and rotation as whole-object writes kept on the printable area; the lock XOR Shift on an image's corner |
+| E2E | `e2e/course-editor-layout.spec.ts` "J8: style fields on page objects…" | J8: an image placed from the `I` picker at its aspect; opacity, blend, rotation, flip, width with the lock and a crop each one `saveLayout` and one undo; a rectangle's width without the lock; a text's rotation |
 | E2E | `e2e/course-editor-layout.spec.ts` "Course editor layout" "P draws a polygon…" | D16, F18: `P`, two Alt-clicks (corners), a click-drag and a plain click, closed on the first vertex → one `saveLayout`; `courseMap.get` has a closed path of 4 points whose dragged vertex has `hOut` down-right on the page and `hIn` opposite, the plain click's vertex smooth handles, the Alt-clicks' none; the path selected, `V` armed, 4 handles and 4 grips; a double-click on the top edge → 5 points and a focused handle, `Delete` → 4; `Escape` discards a polygon being drawn (no write, `V` armed), `Enter` closes one of three clicks (one write); the sheet's `maps.pdf?maps=` draws more `c` operators than before |
 | E2E | `e2e/course-editor-layout.spec.ts` "Course editor layout" | from the Courses page (the `/maps?course=` redirect, the row's *Edit layout* link into Layout mode) to the sheet; the sheet shapes; `H` places a header, the inspector makes it a long 10 mm text, and ink appears where the page layer draws it; the frame selected and dragged → `courseMap.get`'s centre moved by the drag; undo restores it; the `maps.pdf?maps=` route answers one A4 page; the template link opens template scope, an orientation change writes `mapTemplate.update`; an old `/map-templates?template=` link opens template scope |
 | E2E | `e2e/course-editor-placing.spec.ts` "P1: …" "Layout mode: a toner saver hides…" | P1: on a probe course sheet in Layout mode a 709 `oob_area` (`courseObject.create`) shows purple on the canvas (`inkIn`); with a `toner_saver` elsewhere on the map, no purple pixels are left inside the 709 square (638 purple pixels with the ring at upper white) |
@@ -833,7 +857,8 @@ of the event, course seq (the event's last), sort order, seq.
   in the split); ClassesPage shows no override fields.
 - **Print-preview toggle** (05 §5.12): waits for print profiles.
 - **Canvas editing beyond move / resize and the path gestures**:
-  multi-select, frame handles, edge snapping, rotation (§3).
+  multi-select, frame handles, edge snapping; rotation is a field only
+  (§3 "Style fields") — its handles and a turned selection box are J9.
 - **Rectangles by outline?** Layout closed paths hit by outline (D16);
   rectangles, text and images still by bounds — flagged for the user
   (feedback 2026-11-04, "Flagged for the morning").

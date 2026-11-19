@@ -8,6 +8,7 @@
 // next reseed, controls / objects / sheets it creates are deleted in `finally` (`cleanup`).
 
 import { readFile } from "node:fs/promises";
+import { PNG } from "pngjs";
 import { expect, test } from "@playwright/test";
 import { reseed } from "./helpers/reseed";
 import { analysePdf, canvasColourAt, cleanup, clickMap, drag, editorReady, geometryOf, inkIn, nameIdOf, openEditor, pageToPaperOf, printed, probeTemplate, toPage, toPaper, trpcCall, viewCentre, viewSettled, statsRow, type Frame } from "./helpers/editor";
@@ -151,8 +152,9 @@ test.describe("Course editor layout (docs/course-layout.md)", () => {
       await editorReady(page);
       await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-sheet", String(sheet.seq));
 
-      // Upload into the Graphics section; its Place button arms the image tool.
-      await page.getByTestId("editor-layout-graphics-toggle").click();
+      // J8: `I` opens the picker beside the rail; upload there; a tile's Place button arms the click.
+      await page.getByTestId("editor-layout-tool-I").click();
+      await expect(page.getByTestId("editor-layout-image-hint")).toBeVisible();
       const uploaded = waitForTrpc(page, "graphics.upload");
       await page.getByTestId("editor-layout-graphic-upload").setInputFiles({
         name: logoName,
@@ -202,7 +204,8 @@ test.describe("Course editor layout (docs/course-layout.md)", () => {
       await expect(row).toHaveCount(0);
       await expect.poll(async () => (await images()).length).toBe(0);
 
-      // Saved to the club library: a club tile; deleted there with a second, confirming click.
+      // Saved to the club library: a club tile; deleted there with a second, confirming click (the picker again).
+      await page.getByTestId("editor-layout-tool-I").click();
       const saved = waitForTrpc(page, "graphics.saveToClub");
       await page.getByTestId(`editor-layout-graphic-save-club-${graphicId}`).click();
       await saved;
@@ -226,6 +229,82 @@ test.describe("Course editor layout (docs/course-layout.md)", () => {
       const left = await trpcCall<{ id: number; name: string }[]>("graphics.list", undefined, false).catch(() => []);
       for (const g of left.filter((x) => x.name === logoName)) await cleanup("graphics.delete", { id: g.id });
       await drop();
+    }
+  });
+
+  test("J8: style fields on page objects — an image at its aspect, opacity, Multiply, rotation, size with the lock, undo; no blend on a white-out", async ({ page }) => {
+    await openEditor(page);
+    const nameId = nameIdOf(page);
+    const { sheet, drop } = await sheetFixture("Layout style");
+    const objects = async () => (await trpcCall<{ objects: Record<string, unknown>[] }>("courseMap.get", { seq: sheet.seq }, false)).objects;
+    const png = new PNG({ width: 16, height: 8 });
+    for (let i = 0; i < 128; i++) png.data.set([250, 210, 0, 255], i * 4);
+    const { id: graphicId } = await trpcCall<{ id: number }>("graphics.upload", { name: `e2e-j8-${Date.now()}.png`, scope: "event", fileDataBase64: PNG.sync.write(png).toString("base64") });
+    try {
+      await page.goto(`/${nameId}/course-editor?mode=layout&sheet=${sheet.seq}`);
+      await editorReady(page);
+      await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-sheet", String(sheet.seq));
+      const toPaperMm = await pageToPaperOf(page, frame);
+
+      // I without a graphic: a click places nothing and the tool stays.
+      await page.keyboard.press("i");
+      await expect(page.getByTestId("editor-layout-tool-I")).toHaveAttribute("aria-pressed", "true");
+      await clickMap(page, await toPage(page, toPaperMm({ x: 150, y: 20 })));
+      await expect(page.getByTestId("editor-layout-tool-I")).toHaveAttribute("aria-pressed", "true");
+      expect((await objects()).filter((o) => o.kind === "image")).toHaveLength(0);
+      await page.getByTestId(`editor-layout-graphic-place-${graphicId}`).click();
+      const placed = waitForTrpc(page, "courseMap.saveLayout");
+      await clickMap(page, await toPage(page, toPaperMm({ x: 150, y: 20 })));
+      await placed;
+      const image = async () => (await objects()).find((o) => o.kind === "image") as Record<string, number | string | undefined>;
+      await expect.poll(async () => (await image())?.width).toBe(30);
+      expect((await image()).height).toBe(15);
+      await expect(page.getByTestId("editor-layout-selected")).toHaveAttribute("data-kind", "object");
+      await expect(page.getByTestId("editor-layout-style-blend")).toBeVisible();
+
+      // Drawn yellow; opacity 0 shows the page under it; 100 removes the key.
+      const centre = toPaperMm({ x: 150, y: 20 });
+      await expect.poll(async () => { const c = await canvasColourAt(page, centre); return !!c && c[0] > 220 && c[1] > 180 && c[2] < 60; }, { timeout: 30000 }).toBe(true);
+      const commit = async (testId: string, value: string) => {
+        const w = waitForTrpc(page, "courseMap.saveLayout");
+        await page.getByTestId(testId).fill(value);
+        await page.getByTestId(testId).press("Enter");
+        await w;
+      };
+      await commit("editor-layout-style-opacity", "0");
+      await expect.poll(async () => (await image()).opacity).toBe(0);
+      await expect.poll(async () => { const c = await canvasColourAt(page, centre); return !!c && c[2] > 200; }, { timeout: 30000 }).toBe(true);
+      await commit("editor-layout-style-opacity", "100");
+      await expect.poll(async () => "opacity" in (await image())).toBe(false);
+
+      // Multiply and Normal; rotation 30; width 20 with the lock → height 10; one Ctrl+Z restores the width.
+      const blended = waitForTrpc(page, "courseMap.saveLayout");
+      await page.getByTestId("editor-layout-style-blend").selectOption("multiply");
+      await blended;
+      await expect.poll(async () => (await image()).blend).toBe("multiply");
+      const normal = waitForTrpc(page, "courseMap.saveLayout");
+      await page.getByTestId("editor-layout-style-blend").selectOption("normal");
+      await normal;
+      await expect.poll(async () => "blend" in (await image())).toBe(false);
+      await commit("editor-layout-style-rotation", "30");
+      await expect.poll(async () => (await image()).rotationDeg).toBe(30);
+      await commit("editor-layout-style-width", "20");
+      await expect.poll(async () => (await image()).width).toBe(20);
+      expect((await image()).height).toBeCloseTo(10, 6);
+      await page.getByTestId("editor-layout-style-width").blur();
+      await page.keyboard.press("Control+z");
+      await expect.poll(async () => (await image()).width).toBe(30);
+
+      // A white-out: opacity, no blend.
+      await page.keyboard.press("w");
+      const white = waitForTrpc(page, "courseMap.saveLayout");
+      await clickMap(page, await toPage(page, toPaperMm({ x: 60, y: 20 })));
+      await white;
+      await expect(page.getByTestId("editor-layout-style-opacity")).toBeVisible();
+      await expect(page.getByTestId("editor-layout-style-blend")).toHaveCount(0);
+    } finally {
+      await drop();
+      await cleanup("graphics.delete", { id: graphicId });
     }
   });
 

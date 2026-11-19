@@ -74,6 +74,8 @@ export interface LayoutBindingContext {
   tool: LayoutTool;
   /** 1 mm steps (08 §5.3 "Grid 1 mm"). */
   snapping: boolean;
+  /** An image corner drag keeps the ratio while on; Shift inverts it (J8). */
+  aspectLock?: boolean;
   gesture: { current: LayoutGesture };
   onPreview: (change: LayoutChange | null) => void;
   onCommit: (change: LayoutChange) => void;
@@ -178,7 +180,7 @@ export function layoutBinding(c: LayoutBindingContext): EditorToolBinding {
       } else if (selected) {
         const h = handleAt(page, objectHandles(selected), tol);
         if (h) {
-          c.gesture.current = { kind: "resize", id: selected.id, handle: h, from: p.pt, base: selected, moved: false, proportional: p.shift };
+          c.gesture.current = { kind: "resize", id: selected.id, handle: h, from: p.pt, base: selected, moved: false, proportional: (c.aspectLock ?? false) !== p.shift };
           return true;
         }
       }

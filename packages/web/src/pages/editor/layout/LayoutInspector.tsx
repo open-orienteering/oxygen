@@ -3,19 +3,19 @@
  * Layout mode the template/sheet properties"): the sheet or template
  * (picker, the template link, print scale, block, page and appearance in
  * template scope), the selection's properties, the scope's objects with
- * the sheet's validation issues (`validate.ts` codes), the graphics
- * library for the image tool.
+ * the sheet's validation issues (`validate.ts` codes). The graphics
+ * library opens beside the rail's `I` (J8, `LayoutRail`).
  */
 
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { CourseMapObject, MapFillMode, MapTemplateSettings } from "@oxygen/shared";
 import { fillModePatch } from "../../../lib/map-layout-editor";
-import { GraphicPicker } from "../../../components/GraphicPicker";
+import { StyleFields } from "../StyleFields";
 import type { SheetGeometry } from "../../../lib/editor/layout";
 import { InspectorSection } from "../Inspector";
 import type { LayoutSelection, LayoutTarget, LayoutTool } from "./bindings";
-import { FILL_MODES, type EditorSheet, type LayoutSnapshot } from "./model";
+import { FILL_MODES, styleGeometryOf, styleShowOf, type EditorSheet, type LayoutSnapshot } from "./model";
 import { NumberField, TextField } from "./fields";
 
 type T = ReturnType<typeof useTranslation<"editor">>["t"];
@@ -27,8 +27,6 @@ function objectLabel(o: CourseMapObject, t: T): string {
 }
 
 export function LayoutInspector(p: {
-  /** The event, for the graphics' thumbnails. */
-  nameId: string;
   loading: boolean;
   data: EditorSheet | null;
   snap: LayoutSnapshot | null;
@@ -47,8 +45,11 @@ export function LayoutInspector(p: {
   onSelect: (s: LayoutSelection) => void;
   onPatch: (p: Partial<LayoutSnapshot>) => void;
   onObject: (id: string, patch: Partial<CourseMapObject>) => void;
+  /** A style field's commit (J8): the whole next object's style keys, and the box when a size or crop changed it. */
+  onStyle: (id: string, next: { props?: CourseMapObject; geometry?: readonly { x: number; y: number }[] }) => void;
+  aspectLock: boolean;
+  onAspectLock: () => void;
   onDelete: () => void;
-  onPlaceImage: (graphicId: number) => void;
   /** No sheet to show: what creates one (`NoSheetActions`). */
   noSheet: ReactNode;
   /** Sheet scope: rename / add / delete (`SheetActions`). */
@@ -169,6 +170,20 @@ export function LayoutInspector(p: {
           {p.selection?.kind === "description" && <p className="text-[11px] text-slate-500">{t("layoutDescription")}</p>}
           {!p.selection && <p className="text-[11px] text-slate-400">{t("nothingSelected")}</p>}
           {o && <ObjectProperties o={o} t={t} purple={p.purple} onPatch={(patch) => p.onObject(o.id, patch)} />}
+          {o && (() => {
+            const show = styleShowOf(o);
+            return (
+              <StyleFields
+                props={o as never}
+                geometry={styleGeometryOf(o)}
+                show={show}
+                aspectLock={show.lock ? p.aspectLock : false}
+                onAspectLock={p.onAspectLock}
+                onChange={(next) => p.onStyle(o.id, { ...(next.props ? { props: next.props as unknown as CourseMapObject } : {}), ...(next.geometry ? { geometry: next.geometry } : {}) })}
+                testIdPrefix="editor-layout-style"
+              />
+            );
+          })()}
           {(o || p.selection?.kind === "description") && (
             <button type="button" data-testid="editor-layout-delete" onClick={p.onDelete} className="text-[11px] text-red-600 hover:underline cursor-pointer">
               {o ? t("layoutDelete") : t("layoutHideDescription")}
@@ -196,7 +211,6 @@ export function LayoutInspector(p: {
           ))}
         </ul>
       </InspectorSection>
-      <GraphicsSection t={t} nameId={p.nameId} canEdit={p.canEdit} active={p.tool.kind === "place" && p.tool.what === "image" ? p.tool.graphicId ?? null : null} onPlace={p.onPlaceImage} />
       <span hidden data-testid="editor-layout-state" data-centre={`${snap.centre.x},${snap.centre.y}`} data-print-scale={snap.printScale}
         data-description={JSON.stringify(snap.description)} />
     </>
@@ -246,14 +260,3 @@ function ObjectProperties({ o, t, purple, onPatch }: { o: CourseMapObject; t: T;
     </div>
   );
 }
-
-function GraphicsSection({ t, nameId, active, canEdit, onPlace }: { t: T; nameId: string; active: number | null; canEdit: boolean; onPlace: (id: number) => void }) {
-  return (
-    <InspectorSection title={t("layoutGraphics")} testId="editor-layout-graphics" defaultOpen={false}>
-      <div className="px-2.5 pb-2">
-        <GraphicPicker nameId={nameId} active={active} onPick={onPlace} canEdit={canEdit} testIdPrefix="editor-layout-graphic" />
-      </div>
-    </InspectorSection>
-  );
-}
-

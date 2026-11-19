@@ -18,7 +18,8 @@ export interface StyleFieldsProps<P extends StyleValue> {
   props: P;
   /** The box (image): size and crop edit it. */
   geometry?: readonly Pt[];
-  show: { blend?: boolean; rotation?: boolean; flip?: boolean; size?: boolean; crop?: boolean };
+  /** `lock`: the aspect-lock checkbox with the size fields (default shown; Layout's rectangle has none, J8). */
+  show: { blend?: boolean; rotation?: boolean; flip?: boolean; size?: boolean; crop?: boolean; lock?: boolean };
   aspectLock: boolean;
   onAspectLock: () => void;
   /** One write: the next props (style), the next geometry (size), or both (crop). */
@@ -69,9 +70,11 @@ export function StyleFields<P extends StyleValue>(p: StyleFieldsProps<P>) {
             onCommit={(n) => p.onChange({ geometry: sizeChange(p.geometry!, "width", n, p.aspectLock) })} />
           <NumberField label={t("styleHeight")} value={round(box.h)} min={1} max={1000} step={0.5} testId={id("height")}
             onCommit={(n) => p.onChange({ geometry: sizeChange(p.geometry!, "height", n, p.aspectLock) })} />
-          <label className="flex items-center gap-1 text-[11px] text-slate-600">
-            <input type="checkbox" data-testid={id("lock")} checked={p.aspectLock} onChange={p.onAspectLock} />{t("styleAspectLock")}
-          </label>
+          {(p.show.lock ?? true) && (
+            <label className="flex items-center gap-1 text-[11px] text-slate-600">
+              <input type="checkbox" data-testid={id("lock")} checked={p.aspectLock} onChange={p.onAspectLock} />{t("styleAspectLock")}
+            </label>
+          )}
         </>
       )}
       {p.show.crop && p.geometry && (

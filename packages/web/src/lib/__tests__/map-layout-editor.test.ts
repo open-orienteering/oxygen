@@ -160,6 +160,20 @@ describe("map layout editor geometry", () => {
     expect(clamped).toMatchObject({ x: 3, y: 3 });
   });
 
+  it("places an image at its graphic's aspect, 30 mm on the longer side; fits a small printable area (J8)", () => {
+    expect(createImageObjectAt(4, { x: 100, y: 150 }, printable, { widthPx: 16, heightPx: 8 })).toMatchObject({ x: 85, y: 142.5, width: 30, height: 15 });
+    expect(createImageObjectAt(4, { x: 100, y: 150 }, printable, { widthPx: 100, heightPx: 300 })).toMatchObject({ x: 95, y: 135, width: 10, height: 30 });
+    expect(createImageObjectAt(4, { x: 100, y: 150 }, printable, { widthPx: null, heightPx: null })).toMatchObject({ width: 30, height: 30 });
+    const small = createImageObjectAt(4, { x: 0, y: 0 }, { x: 0, y: 0, width: 15, height: 40 }, { widthPx: 16, heightPx: 8 });
+    expect(small).toMatchObject({ x: 0, y: 0, width: 15, height: 7.5 });
+  });
+
+  it("a switch to a white-out fill drops a blend (J8)", () => {
+    const rect = { id: "r", kind: "rectangle" as const, anchor: "page" as const, x: 0, y: 0, width: 10, height: 10, fillMode: "solid" as const, fill: "#000000", blend: "multiply" as const };
+    expect(fillModePatch(rect, "whiteout", "#a626ff")).toEqual({ fillMode: "whiteout", blend: undefined });
+    expect(fillModePatch(rect, "none", "#a626ff")).toEqual({ fillMode: "none" });
+  });
+
   it("clamps resize so a dragged edge cannot grow out the opposite side", () => {
     const resized = resizeMapObject(
       {
