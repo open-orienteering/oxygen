@@ -40,9 +40,10 @@ import type { PrintFace, PrintWorkerNeed, PrintWorkerRequest, PrintWorkerRespons
  * `notStored` and must be stored again. 4 (J13): translucent corridor bands;
  * a version-3 job stored offline is `notStored` likewise. 5 (SVG windows):
  * a cropped SVG is asked over its window; a version-4 store lacks those
- * rasters, so it is `notStored` and stored again.
+ * rasters, so it is `notStored` and stored again. 6 (J15): knockout images
+ * cut the images below them; a version-5 job is `notStored` likewise.
  */
-export const DEVICE_PRINT_JOB_VERSION = 5;
+export const DEVICE_PRINT_JOB_VERSION = 6;
 /** An idle print worker is terminated after this long (its decoded document is large). */
 export const PRINT_WORKER_IDLE_MS = 60_000;
 /**

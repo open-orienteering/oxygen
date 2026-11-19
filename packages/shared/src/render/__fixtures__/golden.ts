@@ -34,7 +34,7 @@ export const goldenSceneNames: GoldenSceneName[] = [
 
 /** The PNG bytes a golden scene's image passes draw, by graphic id (empty for scenes without images; J6). */
 export function goldenSceneGraphics(name: GoldenSceneName): ReadonlyMap<number, Uint8Array> {
-  return name === "course-graphics" ? new Map([[SCENE_LUCKA, luckaPng(64)], [SCENE_STRIPES, stripesPng()]]) : new Map();
+  return name === "course-graphics" || name === "course-knockout" ? new Map([[SCENE_LUCKA, luckaPng(64)], [SCENE_STRIPES, stripesPng()]]) : new Map();
 }
 
 export const GOLDEN_PX_PER_MM = 10;

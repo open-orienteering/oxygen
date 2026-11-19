@@ -303,6 +303,25 @@ describe("writePage", () => {
     expect(content(doc, 0).match(/\/Im0 Do/g)).toHaveLength(2);
   });
 
+  it("J15: a knockout page image cuts the page image below by a W* clip; its own Do is outside the clip; without it no clip", async () => {
+    const opaque = encodeRgbaPng(2, 2, new Uint8Array(12).fill(90), 3);
+    const lucka = luckaPng(16);
+    const page = (knockout?: boolean) => ({ ...pageScene("page-ring"), objects: [
+      { id: "overlay", anchor: "page" as const, kind: "image" as const, graphicId: 1, x: 0, y: 0, width: 100, height: 100 },
+      { id: "lucka", anchor: "page" as const, kind: "image" as const, graphicId: 2, x: 40, y: 40, width: 20, height: 20, ...(knockout ? { knockout } : {}) },
+    ] });
+    const ops = async (knockout?: boolean) => {
+      const w = await PdfWriter.create({ faces, deterministic: true });
+      await writePage(w, composePage(page(knockout), fonts()), { mode: "cmyk", images: new Map([[1, opaque], [2, lucka]]) });
+      return content(await PDFDocument.load(await w.save()), 0);
+    };
+    const cut = await ops(true);
+    // The overlay (Im0) inside `q … W* n … Q`, the lucka (Im1) after the clip is restored.
+    expect(cut).toMatch(/W\* n\nq [^\n]* cm \/Im0 Do Q\nQ\n(?:[^\n]*\n)*?q [^\n]* cm \/Im1 Do Q/);
+    const plain = await ops(false);
+    expect(plain).not.toMatch(/W\* n\nq [^\n]* cm \/Im0/);
+  });
+
   it("an image object without bytes is skipped with a warning", async () => {
     const w = await PdfWriter.create({ faces, deterministic: true });
     const page = composePage({ ...pageScene("page-ring"), objects: [{ id: "x", anchor: "page", kind: "image", graphicId: 99, x: 0, y: 0, width: 5, height: 5 }] }, fonts());

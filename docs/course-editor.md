@@ -1293,7 +1293,7 @@ any other, with `source = 'layout'` that the wire does not carry.
   | out-of-bounds area | hatch: *Out of bounds (709, stripes)* / *Dangerous area (710, cross-hatched)* (`course-layer.md` §3.1; the name first — in ISOM 2017-2, 710 is the crossing point); border none / solid / dashed |
   | out-of-bounds line | 708 / 711 |
   | map text | text, size (paper mm); opacity (%), blend (Normal / Multiply), rotation (°, about the anchor, J4) |
-  | image (J7) | opacity (%), blend, rotation (°, about the centre), flip H / V, width and height (mm, about the centre; the aspect lock), crop (whole %: left, top, width, height, each side ≥ 1 %, kept inside the graphic), *Reset crop* and *Crop by its edges* (J11, crop mode; not on a coarse pointer) |
+  | image (J7) | opacity (%), blend, rotation (°, about the centre), flip H / V, width and height (mm, about the centre; the aspect lock), crop (whole %: left, top, width, height, each side ≥ 1 %, kept inside the graphic), *Reset crop* and *Crop by its edges* (J11, crop mode; not on a coarse pointer), *Cut out graphics below* (J15, `editor-style-knockout`) |
   | line or area other than the toner saver (J11) | *Turn by °*, *Turn 90°*, *Flip ↔*, *Flip ↕* (§7 "Transform handles") |
   | toner saver | margin; *Regenerate from the course* |
   | filter region | mode (hide / clip); symbols: all, **picked symbols** or **picked colours** (the document's colour rows, a CMYK swatch and the name); **invert** ("show only these inside"); the **eyedropper** (§6.4). Picked symbols are listed **one entry per heading** (`lib/editor/symbol-groups.ts`, feedback 2026-11-06 item 5): a symbol's heading is the library code of its applied match (`isAppliedMatch`: automatic or reviewed — `601` for a match to `601.b`), else its source code's base (`101.1` → `101`; a non-numeric code such as `graphic` stays whole), so a heading's variants, minimum-size and tag-line versions and duplicates are one entry (`editor-filter-symbol-<heading>`, `data-members` the member indices) that toggles all its members: checked when all are picked, indeterminate when some are (an older region), and a toggle completes a partial group. Named from the library heading in the UI language when a member's match is applied, else by its first member's source name; a swatch (`editor-filter-swatch`): the library preview of the most used member's applied entry, else the server's preview of the most used member's own drawing (`/api/map-documents/:hash/symbols/:idx.png`, event-scoped). **Not listed**: hidden symbols (OCAD's hidden status, OMAP helpers), symbols no object uses, and symbols drawn through a proxy (`missing` ones, and those with neither a drawing nor an applied match — a region selects by the drawn symbol, never the proxy). Headings of the document's library come first in code order; headings outside it (club codes, frames, legends), `graphic` entries and rectangles fold under **Other** (`editor-filter-other`, collapsed). The search matches the heading, its library names in both languages and the members' source codes and names, and opens Other. Presentation only: the stored `symbols` stay document symbol indices (`course-layer.md` §8), nothing changes at import |
@@ -1303,7 +1303,14 @@ any other, with `source = 'layout'` that the wire does not carry.
   The style fields are `StyleFields.tsx` (shared with Layout mode from
   J8), their writes `lib/editor/style-fields.ts`: opacity is stored 0–1
   and shown in %; a default value (100 %, Normal, 0°, flip off, the full
-  crop) removes its key, so an untouched object's props stay as before. A
+  crop, *Cut out graphics below* off) removes its key, so an untouched
+  object's props stay as before. **Cut out graphics below** (J15, user
+  2026-11-19) writes `props.knockout: true`: the image cuts the images
+  below it in the course layer by its box (course-layer.md §3.6
+  "Knockout images"), so hatches placed over a whole-map overlay show the
+  map through their openings, and moving a hatch moves the hole. Its
+  hint (`styleKnockoutHint`) says so. Duplicate, copy and paste carry the
+  flag with the rest of the props. A
   size or crop edit writes geometry and props in one update. A **crop
   edit keeps the visible pixels' scale and place**: the box shrinks or
   grows by the crop and its centre moves with the crop's centre, through

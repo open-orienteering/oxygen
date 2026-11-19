@@ -57,6 +57,7 @@ describe("golden PNGs", () => {
       "course-exchange",
       "course-legs-curved",
       "course-graphics",
+      "course-knockout",
       "filter-clip-brown",
       "filter-hide-505",
       "filter-moved",

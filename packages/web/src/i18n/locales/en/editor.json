@@ -640,6 +640,8 @@
   "styleRotation": "Rotation (°)",
   "styleFlipH": "Flip horizontally",
   "styleFlipV": "Flip vertically",
+  "styleKnockout": "Cut out graphics below",
+  "styleKnockoutHint": "Where this image is, the images below it in the same layer are not drawn: place hatches over a full-map overlay.",
   "styleWidth": "Width (mm)",
   "styleHeight": "Height (mm)",
   "styleAspectLock": "Keep aspect ratio",

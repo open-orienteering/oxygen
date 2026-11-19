@@ -640,6 +640,8 @@
   "styleRotation": "Rotation (°)",
   "styleFlipH": "Spegla vågrätt",
   "styleFlipV": "Spegla lodrätt",
+  "styleKnockout": "Skär ut grafik under",
+  "styleKnockoutHint": "Där bilden ligger ritas inte bilderna under den i samma lager: lägg luckor över en heltäckande bild.",
   "styleWidth": "Bredd (mm)",
   "styleHeight": "Höjd (mm)",
   "styleAspectLock": "Behåll proportioner",

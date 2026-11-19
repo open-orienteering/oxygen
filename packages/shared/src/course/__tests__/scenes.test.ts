@@ -196,6 +196,19 @@ describe("course scenes", () => {
     expect(flattenRings(scene.layer.objects.find((o) => o.ref.kind === "corridor" && o.ref.id === "band")!.path)).toEqual(flattenRings(opaque.scene.layer.regions[0].path));
   });
 
+  it("course-knockout (J15): the overlay alone is masked, by lucka 31's footprint only; the luckas and the map are not", () => {
+    const { scene, stream } = run("course-knockout");
+    const images = coursePasses(scene, stream).filter((x) => x.p.kind === "image");
+    expect(images.map((x) => x.ref)).toEqual(["object:course-object:overlay", "object:course-object:lucka-31", "object:course-object:lucka-32"]);
+    const mask = (k: number) => stream.maskIdx?.[k] ?? -1;
+    expect(mask(images[0].k)).toBeGreaterThanOrEqual(0);
+    expect(mask(images[1].k)).toBe(-1);
+    expect(mask(images[2].k)).toBe(-1);
+    for (let k = 0; k < stream.passes.length; k++) if (k !== images[0].k) expect(mask(k), `pass ${k}`).toBe(-1);
+    const m = stream.masks![mask(images[0].k)];
+    expect(m.regions).toHaveLength(1);
+  });
+
   it("course-corridor: one clip region, the map masked in the band and clear inside the corridors and the mouths, the course never masked", () => {
     const { scene, stream } = run("course-corridor");
     expect(scene.layer.regions.map((r) => [r.mode, r.symbols])).toEqual([["clip", "all"]]);

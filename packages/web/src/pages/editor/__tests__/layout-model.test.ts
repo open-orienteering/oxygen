@@ -128,8 +128,8 @@ describe("page objects' style fields (J8, docs/course-layout.md §3 \"Style fiel
   const line = { id: "l", kind: "line" as const, anchor: "page" as const, x1: 0, y1: 0, x2: 5, y2: 5, stroke: "#000000", strokeWidthMm: 0.3 };
 
   it("which fields each kind shows", () => {
-    expect(styleShowOf(img)).toEqual({ blend: true, rotation: true, flip: true, size: true, crop: true, lock: true });
-    expect(styleShowOf(rect)).toEqual({ blend: false, rotation: true, flip: false, size: true, crop: false, lock: false });
+    expect(styleShowOf(img)).toEqual({ blend: true, rotation: true, flip: true, size: true, crop: true, lock: true, knockout: true });
+    expect(styleShowOf(rect)).toEqual({ blend: false, rotation: true, flip: false, size: true, crop: false, lock: false, knockout: false });
     expect(styleShowOf({ ...rect, fillMode: "solid" as const })).toMatchObject({ blend: true });
     expect(styleShowOf(text)).toMatchObject({ blend: true, rotation: true, size: false });
     expect(styleShowOf(line)).toMatchObject({ blend: true, rotation: false, size: false });
@@ -235,6 +235,12 @@ describe("duplicate and paste of a page object (J12, docs/course-layout.md §2 \
     expect([d.x, d.y]).toEqual([23, 33]);
     const edge = duplicatePageObject({ ...rect, x: 200, y: 290 } as CourseMapObject, printable) as typeof rect & { x: number; y: number; width: number };
     expect(edge.x + edge.width).toBeLessThanOrEqual(207 + 1e-9);
+  });
+
+  it("a knockout page image (J15) keeps its flag through duplicate and paste", () => {
+    const img = { id: "i", anchor: "page", kind: "image", graphicId: 1, x: 20, y: 30, width: 10, height: 6, knockout: true } as CourseMapObject;
+    expect(duplicatePageObject(img, printable)).toMatchObject({ knockout: true });
+    expect(pastePageObject(img, { x: 100, y: 100 }, printable)).toMatchObject({ knockout: true });
   });
 
   it("paste: centred on the point, a new id, kept on the printable area", () => {

@@ -802,6 +802,15 @@ test.describe("I: image tool and style fields", () => {
       await page.getByTestId("editor-style-blend").selectOption("multiply");
       await blended;
       await expect.poll(async () => JSON.parse((await row.getAttribute("data-props")) ?? "{}").blend, { timeout: 15000 }).toBe("multiply");
+      // J15: "Cut out graphics below" writes `knockout: true`; unchecked, the key is removed.
+      const knocked = waitForTrpc(page, "courseObject.update");
+      await page.getByTestId("editor-style-knockout").check();
+      await knocked;
+      await expect.poll(async () => JSON.parse((await row.getAttribute("data-props")) ?? "{}").knockout, { timeout: 15000 }).toBe(true);
+      const unknocked = waitForTrpc(page, "courseObject.update");
+      await page.getByTestId("editor-style-knockout").uncheck();
+      await unknocked;
+      await expect.poll(async () => "knockout" in JSON.parse((await row.getAttribute("data-props")) ?? "{}"), { timeout: 15000 }).toBe(false);
       await commit("editor-style-rotation", "30");
       await expect.poll(async () => JSON.parse((await row.getAttribute("data-props")) ?? "{}").rotationDeg, { timeout: 15000 }).toBe(30);
       const before = await geometryOf(row);

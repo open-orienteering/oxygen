@@ -27,9 +27,11 @@ import { type PrintPatch, prepareDocument } from "./prepared-document.js";
  * the opaque clip. 5 (SVG windows, 2026-11-19): a cropped SVG is asked over
  * its crops' window (`print.png?…&crop=`) — an offline store prepared for
  * version 4 holds the whole-graphic rasters only, so it must be prepared
- * again rather than print without the logo.
+ * again rather than print without the logo. 6 (J15): an image may cut out
+ * the images below it (`knockout`) — a version-5 host would print the
+ * overlay whole over the hatches' openings.
  */
-export const PRINT_JOB_VERSION = 5;
+export const PRINT_JOB_VERSION = 6;
 
 export type PrintJobGraphicMime = "image/png" | "image/svg+xml";
 

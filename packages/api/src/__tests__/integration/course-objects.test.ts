@@ -77,7 +77,7 @@ describe("courseObject CRUD", () => {
       { kind: "toner_saver", geometry: SQUARE, props: { marginMm: 5 } },
       { kind: "marked_route", geometry: [{ x: 0, y: 0, hOut: { x: 1, y: 1 } }, { x: 5, y: 5 }], props: {} },
       { kind: "text", geometry: [{ x: 1, y: 2 }], props: { text: "Ingen passage", fontSizeMm: 3 } },
-      { kind: "image", geometry: [{ x: 0, y: 0 }, { x: 10, y: 5 }], props: { graphicId: 3 } },
+      { kind: "image", geometry: [{ x: 0, y: 0 }, { x: 10, y: 5 }], props: { graphicId: 3, knockout: true } },
       { kind: "filter_region", geometry: SQUARE, props: { mode: "hide", symbols: [4, 5], invert: true } },
     ];
     const made: course.CourseObject[] = [];
@@ -94,6 +94,8 @@ describe("courseObject CRUD", () => {
 
     const list = await caller.courseObject.list();
     expect(list.map((o) => o.kind)).toEqual([...bodies.map((b) => b.kind)].reverse());
+    // J15: the knockout flag is stored and listed.
+    expect(list.find((o) => o.kind === "image")).toMatchObject({ props: { graphicId: 3, knockout: true } });
     expect(list.find((o) => o.kind === "filter_region")).toMatchObject({ geometry: SQUARE, props: { mode: "hide", symbols: [4, 5], invert: true } });
   });
 

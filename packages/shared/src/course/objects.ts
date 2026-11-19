@@ -101,6 +101,8 @@ export const courseObjectBodySchema = z.discriminatedUnion("kind", [
       rotationDeg: objectRotationSchema.optional(),
       flipH: z.boolean().optional(),
       flipV: z.boolean().optional(),
+      /** Cut out graphics below (J15): the box masks the images under it. */
+      knockout: z.boolean().optional(),
     }),
   }),
   z.object({
@@ -286,7 +288,7 @@ const textAngle = (rotationDeg: number | undefined): { angleDeg?: number } => {
 };
 
 /** How an image is placed past its box (J4): opacity and blend, rotation clockwise as seen about the centre, after the flips. */
-export interface ImageStyle { opacity?: number; blend?: "multiply"; rotationDeg?: number; flipH?: boolean; flipV?: boolean }
+export interface ImageStyle { opacity?: number; blend?: "multiply"; rotationDeg?: number; flipH?: boolean; flipV?: boolean; knockout?: boolean }
 
 /**
  * An image's quad corners (y-up mm), in the order an image render object
@@ -361,6 +363,7 @@ function objectBuilder(
       image: { graphicId, ...(crop ? { crop } : {}) },
       ref,
       ...objectAlpha(style),
+      ...(style.knockout ? { knockout: true } : {}),
     });
     out.images.push({ graphicId, sizeUm: [um(box.width), um(box.height)], ...(crop ? { crop } : {}) });
   };

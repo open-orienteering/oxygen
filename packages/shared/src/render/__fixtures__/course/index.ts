@@ -16,7 +16,7 @@ import type { DocumentColour } from "../../../map-document/header.js";
 import { courseLayer, courseRenderInput } from "../../../course/layer.js";
 import type { CourseDocumentContext, CourseLayer, CourseLayerInput, CourseSite, CourseStructure } from "../../../course/types.js";
 
-export const courseSceneNames = ["course-legs", "course-cuts", "course-objects", "course-sprint", "course-all-controls", "course-leg-styles", "course-corridor", "course-corridor-translucent", "course-exchange", "course-legs-curved", "course-graphics"] as const;
+export const courseSceneNames = ["course-legs", "course-cuts", "course-objects", "course-sprint", "course-all-controls", "course-leg-styles", "course-corridor", "course-corridor-translucent", "course-exchange", "course-legs-curved", "course-graphics", "course-knockout"] as const;
 export type CourseSceneName = (typeof courseSceneNames)[number];
 
 export interface CourseScene {
@@ -256,7 +256,7 @@ function legsCurved(): CourseScene {
   return scene("course-legs-curved", base, { structure, sites, objects: [], appearance: {}, viewOptions: {} });
 }
 
-/** Graphic ids of `course-graphics` (bytes: `courseSceneGraphics`). */
+/** Graphic ids of `course-graphics` and `course-knockout` (bytes: `courseSceneGraphics`). */
 export const SCENE_LUCKA = 1;
 export const SCENE_STRIPES = 2;
 
@@ -282,6 +282,28 @@ function graphics(): CourseScene {
   });
 }
 
+/**
+ * Knockout images (J15, course-layer.md §3.6): the opaque striped graphic over the whole map as
+ * an "advent calendar" overlay, a lucka marked "Cut out graphics below" round control 31 (its
+ * transparent middle shows the map, not the overlay), and a plain lucka round control 32 (its
+ * middle shows the overlay). Upper purple draws over all of them.
+ */
+function knockout(): CourseScene {
+  const base = new BaseMap("ISOM2017-2")
+    .add("406", area(0, 0, 50, 0, 50, 40, 0, 40))
+    .add("505", line(2, 16, 48, 24))
+    .add("106", line(4, 36, 46, 30));
+  const sites = [site("S", "start", 6, 6, "S1"), site("31", "control", 20, 20), site("32", "control", 38, 28), site("F", "finish", 42, 8, "F1")];
+  return scene("course-knockout", base, {
+    structure: ordered(["S", "31", "32", "F"]), sites, appearance: {}, viewOptions: {},
+    objects: [
+      { id: "overlay", kind: "image", geometry: [{ x: 0, y: 0 }, { x: 50, y: 40 }], props: { graphicId: SCENE_STRIPES } },
+      { id: "lucka-31", kind: "image", geometry: [{ x: 12, y: 12 }, { x: 28, y: 28 }], props: { graphicId: SCENE_LUCKA, knockout: true } },
+      { id: "lucka-32", kind: "image", geometry: [{ x: 32, y: 22 }, { x: 44, y: 34 }], props: { graphicId: SCENE_LUCKA } },
+    ],
+  });
+}
+
 const builders: Record<CourseSceneName, () => CourseScene> = {
   "course-legs": legs,
   "course-cuts": cuts,
@@ -294,6 +316,7 @@ const builders: Record<CourseSceneName, () => CourseScene> = {
   "course-exchange": exchange,
   "course-legs-curved": legsCurved,
   "course-graphics": graphics,
+  "course-knockout": knockout,
 };
 
 export function courseScene(name: CourseSceneName): CourseScene {

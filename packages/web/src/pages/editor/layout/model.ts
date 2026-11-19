@@ -198,8 +198,8 @@ export function placeObject(
 
 // ─── Style fields (J8; docs/course-layout.md §3 "Style fields") ───
 
-/** Which style fields a page object shows: opacity always; blend off white-outs; rotation on text, rectangle, image; flip and crop on image; size on rectangle and image, the lock on image. */
-export function styleShowOf(o: CourseMapObject): { blend: boolean; rotation: boolean; flip: boolean; size: boolean; crop: boolean; lock: boolean } {
+/** Which style fields a page object shows: opacity always; blend off white-outs; rotation on text, rectangle, image; flip, crop and knockout (J15) on image; size on rectangle and image, the lock on image. */
+export function styleShowOf(o: CourseMapObject): { blend: boolean; rotation: boolean; flip: boolean; size: boolean; crop: boolean; lock: boolean; knockout: boolean } {
   const image = o.kind === "image";
   return {
     blend: !isWhiteoutObject(o),
@@ -208,6 +208,7 @@ export function styleShowOf(o: CourseMapObject): { blend: boolean; rotation: boo
     size: image || o.kind === "rectangle",
     crop: image,
     lock: image,
+    knockout: image,
   };
 }
 

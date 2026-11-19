@@ -7,7 +7,7 @@
  * input and print gets the screen's result by construction.
  */
 
-import { type FilterMask, type Pass, type PassStream, type RenderPath, imageQuadCorners, makePath } from "./pass-stream.js";
+import { type FilterMask, type ImagePass, type Pass, type PassStream, type RenderPath, imageQuadCorners, makePath } from "./pass-stream.js";
 import { type Bounds, pathBounds, unionBounds } from "./path.js";
 import { type FlatRing, flattenRings, pointInRings, polylinesCrossRings } from "./geometry.js";
 
@@ -302,4 +302,77 @@ export function applyFilterRegions(
     }
   }
   return { stream: out, hidden: r.hidden, warnings: r.warnings };
+}
+
+/** A knockout image's footprint is its quad inset by this much per side, stream µm (J15): its own edge overlaps the cut, so no hairline shows. */
+export const KNOCKOUT_INSET_UM = 50;
+
+/** A knockout image's footprint (`KNOCKOUT_INSET_UM` inside its quad, in the quad's own frame), or null for a quad under twice the inset on a side. */
+export function knockoutFootprint(q: ImagePass["quad"]): RenderPath | null {
+  const lu = Math.hypot(q[0], q[1]), lv = Math.hypot(q[2], q[3]);
+  if (!(lu > 2 * KNOCKOUT_INSET_UM) || !(lv > 2 * KNOCKOUT_INSET_UM)) return null;
+  const du = KNOCKOUT_INSET_UM / lu, dv = KNOCKOUT_INSET_UM / lv;
+  const at = (u: number, v: number) => [q[0] * u + q[2] * v + q[4], q[1] * u + q[3] * v + q[5]];
+  return makePath([...at(du, dv), ...at(1 - du, dv), ...at(1 - du, 1 - dv), ...at(du, 1 - dv)].map(Math.round), undefined, true);
+}
+
+const quadBounds = (q: ImagePass["quad"]): Bounds => {
+  const c = imageQuadCorners(q);
+  return { minX: Math.min(...c.map((p) => p[0])), minY: Math.min(...c.map((p) => p[1])), maxX: Math.max(...c.map((p) => p[0])), maxY: Math.max(...c.map((p) => p[1])) };
+};
+const meets = (a: Bounds, b: Bounds) => a.minX <= b.maxX && b.minX <= a.maxX && a.minY <= b.maxY && b.minY <= a.maxY;
+
+/**
+ * Knockout images (J15; docs/map-rendering.md §4.11 "Knockout footprints"):
+ * each image pass whose object `knockout` names masks every **image** pass
+ * before it in the stream (below it) whose quad bounds meet its footprint
+ * (`knockoutFootprint`). Other kinds are never masked. A pass already
+ * masked by filter regions keeps those regions and gains the footprints.
+ * Masks are deduplicated by region set and numbered in stream order.
+ * Returns the stream unchanged when nothing is cut.
+ */
+export function applyKnockouts(stream: PassStream, knockout: (objectIdx: number) => boolean): PassStream {
+  const n = stream.passes.length;
+  const footprints: { path: RenderPath; bounds: Bounds }[] = [];
+  // Per pass: the footprint ids above it that cut it (filled walking from the top of the stream down).
+  const cutBy: (number[] | undefined)[] = new Array(n);
+  let any = false;
+  for (let i = n - 1; i >= 0; i--) {
+    const p = stream.passes[i];
+    if (p.kind !== "image") continue;
+    const b = quadBounds(p.quad);
+    const ids: number[] = [];
+    for (let f = 0; f < footprints.length; f++) if (meets(b, footprints[f].bounds)) ids.push(f);
+    if (ids.length) {
+      cutBy[i] = ids;
+      any = true;
+    }
+    if (knockout(stream.objectIdx[i])) {
+      const path = knockoutFootprint(p.quad);
+      if (path) footprints.push({ path, bounds: pathBounds(path) });
+    }
+  }
+  if (!any) return stream;
+  const masks: FilterMask[] = [];
+  const byKey = new Map<string, number>();
+  const maskIdx = new Int32Array(n);
+  for (let i = 0; i < n; i++) {
+    const old = stream.maskIdx?.[i] ?? -1;
+    const ids = cutBy[i];
+    if (!ids) {
+      if (old < 0) {
+        maskIdx[i] = -1;
+        continue;
+      }
+    }
+    const key = `${old}|${ids ? ids.join(",") : ""}`;
+    let m = byKey.get(key);
+    if (m === undefined) {
+      m = masks.length;
+      byKey.set(key, m);
+      masks.push({ regions: [...(old >= 0 ? stream.masks![old].regions : []), ...(ids ?? []).map((f) => footprints[f].path)] });
+    }
+    maskIdx[i] = m;
+  }
+  return { ...stream, maskIdx, masks };
 }

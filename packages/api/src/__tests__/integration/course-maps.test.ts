@@ -755,9 +755,13 @@ describe("graphics library", () => {
           y: 10,
           width: 30,
           height: 30,
+          knockout: true,
         },
       ],
     });
+    // J15: the knockout flag is stored on the page object.
+    const stored = await ctx.db.courseMap.findUniqueOrThrow({ where: { id: map.id } });
+    expect(stored.objects).toEqual([expect.objectContaining({ id: "logo", knockout: true })]);
     const response = await server.inject({
       method: "GET",
       url: `/api/maps/${ctx.nameId}/maps.pdf?maps=${map.seq}`,

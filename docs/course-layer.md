@@ -473,6 +473,27 @@ the page stack when the page has an image: on top of every page
 object); a course image in `course:graphics`. Both are listed in the
 fetch list (`layer.images`, `PageImage`, `course-print.md` §6.3).
 
+**Knockout images (J15).** An image with `knockout: true` ("Cut out
+graphics below", course-editor.md §7) also sets `RenderObject.knockout`.
+`symbolise` then cuts the images below it in the same layer by its box
+(map-rendering.md §4.11 "Knockout footprints"). The rules (user
+2026-11-19, the advent-calendar overlay):
+
+- The footprint is the image's box after crop, flips and rotation, not
+  its pixels, inset 0.05 mm.
+- It cuts only **images** below it in the **same layer**: a course image
+  cuts course images, a page image cuts page images. Order is the layer's
+  own (course objects by z, page objects by their order).
+- White-outs, the course's purple and the map are never cut. An opaque
+  overlay therefore hides the map and the lower-purple circles and legs
+  everywhere but under a knockout. Upper-purple numbers draw over it.
+- An attached image cuts where it is drawn (§8.1). One whose control is
+  not drawn in a course is left out of that course's layer and cuts
+  nothing there.
+- Images only: the course object's `props.knockout` and the page image's
+  `knockout` (`course-maps.md`); other kinds refuse the field (course
+  objects) or ignore it.
+
 **Migration (F12).** `packages/api/prisma/migrations/20261109120000_map_anchored_objects_to_course_objects`
 (the runbook: `docs/migrations/2026-f12-map-anchored-objects.md`). Every
 map-anchored object of `map_templates.objects` and `course_maps.objects`
@@ -1286,7 +1307,7 @@ issue message starting `OBJECT_GEOMETRY`.
 | `toner_saver` | ≥ 3: the hull — D13's editor generates the smooth offset hull of the course's sites, so its segments carry `hIn` / `hOut` and the hole ring below has Bézier flags (the hull's own straight edges stay straight) | `marginMm?` (how D5 / D13 generated it, 25 mm by default since D13; the drawn shape is the stored hull), `holeRadiusMm?` (reserved; the editor does not set it and builds no control holes) | white-out *outside* the hull in the toner saver white, the map layer's top row (§3.6, P1): the `viewOptions.window` ring with the hull as an even-odd hole; without a window (the viewer) not drawn, warning `WINDOW_MISSING` |
 | `marked_route` | ≥ 2 | — | 707 |
 | `text` | 1: the anchor | `text`, `fontSizeMm`, `fontFamily?`, `color?` (hex), `align?`, `opacity?`, `blend?`, `rotationDeg?` (J4: clockwise as seen, about the anchor) | a text symbol: upper purple, or an own colour row for `color` (§1); `{placeholders}` expanded with `viewOptions.textValues`; `angleDeg = −rotationDeg` |
-| `image` | 2: opposite corners | `graphicId`, `crop?`, `opacity?`, `blend?`, `rotationDeg?` (about the box centre, after the flips), `flipH?`, `flipV?` (J4) | one image pass in `course:graphics` (§3.6 "Images", J5), its graphic listed in `layer.images`; drawn by the page backends, on screen from J6 |
+| `image` | 2: opposite corners | `graphicId`, `crop?`, `opacity?`, `blend?`, `rotationDeg?` (about the box centre, after the flips), `flipH?`, `flipV?` (J4), `knockout?` (J15: cut out the images below, §3.6 "Knockout images") | one image pass in `course:graphics` (§3.6 "Images", J5), its graphic listed in `layer.images`; drawn by the page backends, on screen from J6 |
 | `filter_region` | ≥ 3 points, **no** Bézier handles (a polygon; one outer ring) | `{ mode: "clip" \| "hide", symbols: "all" \| idx[] \| { colours }, invert? }` — D3's region exactly | not an object: a `regions` entry (`map-rendering.md` §4.11) |
 | `inset_frame` | ≥ 2 | — | reserved for micro insets: typed, refused on write (`PRECONDITION_FAILED`), never drawn |
 
@@ -2354,6 +2375,8 @@ label.
 | unit | `objects.test.ts` "opacity, blend, rotation, flip (J4)", `page-layer.test.ts` "pageLayer: opacity, blend, rotation (J4)", `print/__tests__/page.test.ts`, `print/__tests__/compose.test.ts` | §8.1 the J4 props accepted on `text` / `image` / `whiteout`, refused on the other kinds, out of range, an unknown blend, rotation on a white-out; §3.6 / §8.3 opacity and blend on the render objects only off their defaults (opacity 1 = the plain object), both passes of a filled and stroked rectangle, a 90° rectangle's turned corners in solid / white-out / 709 (the hatch upright), a 30° text's angle of −30 (course and page), 0 and 360 as absent; image fields carried in both layers with the streams unchanged; `flipPageObject` keeps the fields; `transformPassStream` keeps a pass's opacity and blend |
 | unit | `layer.test.ts` "a stored filter_region course object" | §8.3: the same region as the explicit one, after it; hides the document's 516 |
 | unit | `layer.test.ts` "course objects as F12 moved layout objects" | §3.6: white-out at upper white, 709 / 709.b / 709.c by border, a text's own row on top at paper mm (no division), the toner saver ring and its white row last (P1), `WINDOW_MISSING`, an image as one render object in `course:graphics` and to `layer.images` as `{ graphicId, sizeUm, crop? }` (J5) |
+| unit | `layer.test.ts` "knockout images (J15…)" | §3.6 "Knockout images": the overlay below a knockout image masked by its footprint, not a white-out or the purple; an attached knockout cuts where it is drawn, one not drawn cuts nothing; the schema takes `knockout` on images only |
+| unit | `scenes.test.ts` `course-knockout` | the overlay's pass alone is masked, by lucka 31's footprint; its stream snapshot |
 | pass-stream | `scenes.test.ts` "course-objects", `print/__tests__` page scenes "page-ring", "page-rotated" | §3.6: the fixtures' former map-anchored objects written as the course objects F12 makes; the stream snapshots unchanged byte for byte — the move draws the same |
 | integration | `course-objects-migration.test.ts` | §3.6 the F12 migration on a scratch database built to the migration before it: the guard refuses all eleven reasons of a live event (a solid fill, a black stroke and line, a stroked white-out, short areas and lines, an image without its graphic, a text without a size or over 100 mm at os 0.75, an unknown kind and fill), names each in the detail and changes nothing; after the runbook's fix-ups every kind maps (whiteout, legacy `whiteoutRect`, toner saver, 709 / .b / .c, 708 / 707 from purple lines and closed outlines, a template's own purple, text ÷ os with the latest map's scale and a sheet's print-scale override, image corners), scopes per row type (template, course / class / all-controls / setter sheets), `source = 'layout'`, `version 0`, `z` under a hand-drawn object, seq order; invisible objects removed; a soft-deleted event's refused object removed; club payloads stripped; page objects kept in order; every body parses; a second run changes nothing |
 | integration | `course-print.test.ts` "F12" | §3.6: a sheet's map-anchored white-out and text, migrated on the shared database, are `source = 'layout'` objects scoped to its course; the sheet keeps its page object; the composed page draws the white-out at upper white and the text at 4 mm on paper |

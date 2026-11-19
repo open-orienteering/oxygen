@@ -68,6 +68,18 @@ describe("the editor clipboard (J12, docs/course-editor.md §7 \"Duplicate, copy
     expect("attach" in duplicateBody(square())).toBe(false);
   });
 
+  it("a knockout image (J15) keeps its flag through duplicate, copy and both pastes", () => {
+    const img = square({ kind: "image", geometry: [{ x: 0, y: 0 }, { x: 4, y: 2 }], props: { graphicId: 3, knockout: true } as never });
+    const entry = courseEntry(img, "itest").object;
+    for (const body of [duplicateBody(img), pasteAt(entry, { x: 50, y: 50 }), pasteOnSite(entry, { id: 32, x: 20, y: 30 })]) {
+      expect(body.props).toMatchObject({ graphicId: 3, knockout: true });
+    }
+    const s = store();
+    writeClipboard(courseEntry(img, "itest"), s);
+    clearClipboardMemory();
+    expect((readClipboard(s) as CourseEntry).object.props).toMatchObject({ knockout: true });
+  });
+
   it("paste at a point centres the object there, free; onto a control at the copied offset or centred, attached", () => {
     const attached = courseEntry(square({ attach: { controlId: 31, at: { x: 10, y: 10 } } }), "itest").object;
     const free = courseEntry(square(), "itest").object;

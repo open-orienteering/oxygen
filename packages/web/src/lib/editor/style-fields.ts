@@ -1,8 +1,9 @@
 /**
  * The style fields' pure part (J7; docs/course-editor.md §7 "Inspector"):
- * what a change to opacity, blend, rotation, flip, size or crop writes on a
- * course object (and, from J8, a page object). A default value removes its
- * key (100 %, Normal, 0°, no flip, the full crop), so an untouched object's
+ * what a change to opacity, blend, rotation, flip, size, crop or knockout
+ * (J15) writes on a course object (and, from J8, a page object). A default
+ * value removes its key (100 %, Normal, 0°, no flip, the full crop, no
+ * knockout), so an untouched object's
  * props stay as they were (J4 (5)).
  */
 
@@ -17,13 +18,15 @@ export interface StyleValue {
   flipH?: boolean;
   flipV?: boolean;
   crop?: Crop;
+  /** Cut out graphics below (J15, docs/course-editor.md §7): images only. */
+  knockout?: boolean;
 }
 export interface Crop { x: number; y: number; width: number; height: number }
 
 export const FULL_CROP: Crop = { x: 0, y: 0, width: 1, height: 1 };
 
 /** A field's edit as the next props: `patch` over `props`, a default value removing its key. */
-export function stylePatch<P extends StyleValue>(props: P, patch: { opacityPct?: number; blend?: "normal" | "multiply"; rotationDeg?: number; flipH?: boolean; flipV?: boolean; crop?: Crop | null }): P {
+export function stylePatch<P extends StyleValue>(props: P, patch: { opacityPct?: number; blend?: "normal" | "multiply"; rotationDeg?: number; flipH?: boolean; flipV?: boolean; crop?: Crop | null; knockout?: boolean }): P {
   const next = { ...props } as Record<string, unknown>;
   const set = (key: string, value: unknown, isDefault: boolean) => {
     if (isDefault) delete next[key];
@@ -40,6 +43,7 @@ export function stylePatch<P extends StyleValue>(props: P, patch: { opacityPct?:
   }
   if (patch.flipH !== undefined) set("flipH", true, !patch.flipH);
   if (patch.flipV !== undefined) set("flipV", true, !patch.flipV);
+  if (patch.knockout !== undefined) set("knockout", true, !patch.knockout);
   if (patch.crop !== undefined) {
     const c = patch.crop;
     set("crop", c, !c || (c.x === 0 && c.y === 0 && c.width === 1 && c.height === 1));

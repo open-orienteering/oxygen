@@ -1,6 +1,7 @@
 /**
  * Style fields (J7; docs/course-editor.md §7 "Inspector"): opacity, blend,
- * rotation, flips, size with the aspect lock, and crop, for the object
+ * rotation, flips, size with the aspect lock, crop and "Cut out graphics
+ * below" (J15), for the object
  * kinds that have them (`show`). Each commit is one change (`onChange`,
  * the next props; size and crop also give the geometry), so one write and
  * one undo entry. The writes' rules are `lib/editor/style-fields.ts`.
@@ -19,7 +20,7 @@ export interface StyleFieldsProps<P extends StyleValue> {
   /** The box (image): size and crop edit it. */
   geometry?: readonly Pt[];
   /** `lock`: the aspect-lock checkbox with the size fields (default shown; Layout's rectangle has none, J8). */
-  show: { blend?: boolean; rotation?: boolean; flip?: boolean; size?: boolean; crop?: boolean; lock?: boolean };
+  show: { blend?: boolean; rotation?: boolean; flip?: boolean; size?: boolean; crop?: boolean; lock?: boolean; knockout?: boolean };
   aspectLock: boolean;
   onAspectLock: () => void;
   /** One write: the next props (style), the next geometry (size), or both (crop). */
@@ -65,6 +66,11 @@ export function StyleFields<P extends StyleValue>(p: StyleFieldsProps<P>) {
           <label className="flex items-center gap-1"><input type="checkbox" data-testid={id("flip-h")} checked={!!v.flipH} onChange={(e) => set({ flipH: e.target.checked })} />{t("styleFlipH")}</label>
           <label className="flex items-center gap-1"><input type="checkbox" data-testid={id("flip-v")} checked={!!v.flipV} onChange={(e) => set({ flipV: e.target.checked })} />{t("styleFlipV")}</label>
         </div>
+      )}
+      {p.show.knockout && (
+        <label className="flex items-center gap-1 text-[11px] text-slate-600" title={t("styleKnockoutHint")}>
+          <input type="checkbox" data-testid={id("knockout")} checked={!!v.knockout} onChange={(e) => set({ knockout: e.target.checked })} />{t("styleKnockout")}
+        </label>
       )}
       {p.show.size && box && p.geometry && (
         <>

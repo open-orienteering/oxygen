@@ -129,7 +129,7 @@ function AttachBlock({ a }: { a: NonNullable<ObjectSectionProps["attach"]> }) {
   );
 }
 
-/** Opacity on an image, a map text and a white-out; blend and rotation on the first two; flip, size, crop on an image (J7). */
+/** Opacity on an image, a map text and a white-out; blend and rotation on the first two; flip, size, crop on an image (J7); knockout on an image (J15). */
 function Style(p: ObjectSectionProps & { onStyle: NonNullable<ObjectSectionProps["onStyle"]> }) {
   const o = p.object;
   if (o.kind !== "image" && o.kind !== "text" && o.kind !== "whiteout") return null;
@@ -138,7 +138,7 @@ function Style(p: ObjectSectionProps & { onStyle: NonNullable<ObjectSectionProps
     <StyleFields
       props={o.props}
       geometry={image ? o.geometry : undefined}
-      show={{ blend: o.kind !== "whiteout", rotation: o.kind !== "whiteout", flip: image, size: image, crop: image }}
+      show={{ blend: o.kind !== "whiteout", rotation: o.kind !== "whiteout", flip: image, size: image, crop: image, knockout: image }}
       aspectLock={p.aspectLock ?? true}
       onAspectLock={() => p.onAspectLock?.()}
       {...(image && p.cropMode ? { cropMode: p.cropMode } : {})}

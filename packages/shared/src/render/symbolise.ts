@@ -24,7 +24,7 @@ import { flattenRings, offsetPolyline, roundCorners } from "./geometry.js";
 import { GlyphRegistry, type RegisteredGlyph, mapCap, mapJoin } from "./glyph-table.js";
 import { PathMeasure, gapIntervals, pathSections, subtractIntervals, wrapIntervals } from "./measure.js";
 import { patternInstances } from "./pattern.js";
-import { type FilterRegion, applyFilterRegions } from "./filter-region.js";
+import { type FilterRegion, applyFilterRegions, applyKnockouts } from "./filter-region.js";
 import { placeGlyphs } from "./placement.js";
 import type { AreaSymbol, BorderSpec, LineSymbolBody, PointSymbol, RenderSymbol, StrokeSpec, TextSymbol } from "./symbol.js";
 import { type ShapedText, shapeText, shapeTextAlongPath } from "./text.js";
@@ -61,6 +61,11 @@ export interface RenderObject {
    * top-right, top-left — so rotation and flips are in the corner order.
    */
   image?: { graphicId: number; crop?: { x: number; y: number; width: number; height: number } };
+  /**
+   * With `image`: the image cuts every image below it in this stream out
+   * where it lies (J15, §4.11 "Knockout footprints"); ignored otherwise.
+   */
+  knockout?: boolean;
 }
 
 /** The canonical alpha fields of an object (§3.9): `opacity` only below 1, `blend` only when set. */
@@ -151,12 +156,15 @@ class Stage {
       }
     });
     this.builder.glyphTable.push(...this.glyphs.table);
-    const stream = this.builder.build();
+    const built = this.builder.build();
+    const objects = this.input.objects;
+    const knock = objects.some((o) => o.knockout && o.image) ? (i: number) => !!(objects[i]?.knockout && objects[i]?.image) : null;
     const regions = this.input.regions;
-    if (!regions?.length) return { stream, warnings: this.warnings, hidden: [] };
-    const filtered = applyFilterRegions(stream, regions, { objectLimit: this.input.regionObjectLimit });
+    if (!regions?.length) return { stream: knock ? applyKnockouts(built, knock) : built, warnings: this.warnings, hidden: [] };
+    const filtered = applyFilterRegions(built, regions, { objectLimit: this.input.regionObjectLimit });
     for (const w of filtered.warnings) this.warnings.push({ objectIdx: -1, code: w.code, message: w.message, region: w.region });
-    return { stream: filtered.stream, warnings: this.warnings, hidden: filtered.hidden };
+    // After the regions: `applyFilterRegions` rebuilds the masks.
+    return { stream: knock ? applyKnockouts(filtered.stream, knock) : filtered.stream, warnings: this.warnings, hidden: filtered.hidden };
   }
 
   private warn(code: SymboliseWarning["code"], message: string): void {

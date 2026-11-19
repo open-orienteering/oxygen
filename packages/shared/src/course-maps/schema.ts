@@ -163,6 +163,8 @@ export const mapImageObjectSchema = z.object({
   rotationDeg: objectRotationSchema.optional(),
   flipH: z.boolean().optional(),
   flipV: z.boolean().optional(),
+  /** Cut out graphics below (J15): the box masks the page images under it. */
+  knockout: z.boolean().optional(),
 });
 
 const courseMapObjectUnion = z.discriminatedUnion("kind", [

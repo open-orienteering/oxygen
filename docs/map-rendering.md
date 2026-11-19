@@ -218,7 +218,8 @@ region's hole ring is outside the region), and the mask is the
 intersection of their outsides. The stream carries no frame — what
 "outside" is bounded by is each backend's own (the image frame, the PDF
 window, the stencil buffer's clear value). Masks are what clip-mode
-filter regions produce (§4.11); a stream without them omits both fields.
+filter regions and knockout images produce (§4.11); a stream without them
+omits both fields.
 `sortPassStream` permutes `maskIdx` with the passes; `maskIdx` is a
 function of (object, colour) by construction (§4.11), so a backend that
 draws per range-table entry can apply it there. Backends: §5.1
@@ -298,6 +299,11 @@ corners in the order bottom-left, bottom-right, top-right, top-left).
   distance 0 (a transparent pixel too — the object is what is picked),
   outside by its distance to the quad's edge; the pass meets a region when
   its quad does.
+- **Knockout** (J15). An image whose object is marked `knockout`
+  (`RenderObject.knockout`, "Cut out graphics below") masks the image
+  passes below it in the same stream by its footprint: the quad inset
+  0.05 mm, not its pixels (§4.11 "Knockout footprints"). The pass stays
+  an ordinary image pass; the cut is a mask (§3.8) on the passes below.
 - **Backends.** The reference raster (§5.1) draws an SVG `<image>`
   through the quad, the PDF (§5.3) an image XObject under `cm`, each from
   the bytes its caller gives by graphic id; without bytes the pass is
@@ -810,6 +816,42 @@ print route carry them as objects. A corridor's white band is a
 (`docs/course-layer.md` §10.2): `clip`, `symbols: "all"`, the band's
 rings — the map cut away there, the course drawn over it.
 
+#### Knockout footprints (J15)
+
+An advent-calendar map is one overlay graphic over the whole map with
+hatches (luckor) placed on top that show the map through their opening.
+Without a cut the overlay would have to be split around every hatch.
+With **"Cut out graphics below"** on a hatch, the overlay is cut where
+the hatch is. Moving the hatch moves the cut. `applyKnockouts(stream,
+knockout)` in `render/filter-region.ts`, run by `symbolise` after the
+filter regions (which rebuild the masks):
+
+- **The footprint** is the knockout image's quad inset by
+  `KNOCKOUT_INSET_UM` (50 µm) on each side, in the quad's own frame
+  (`knockoutFootprint`). Crop, rotation and flips are already in the
+  quad. The image's pixels play no part: a transparent opening cuts like
+  an opaque band. That is the point, because the map shows through the
+  opening. The inset keeps the hatch's own edge over the cut, so no
+  hairline of paper shows at the boundary. A quad with a side of 0.1 mm
+  or less has no footprint.
+- **What is cut**: only **image** passes **below** the knockout in the
+  stream (earlier, i.e. lower z or seq within the colour row), and only
+  where their quad bounds meet the footprint's bounds. That keeps masks
+  off far-away images. Fills, strokes, glyphs and text are never cut, so
+  white-outs and the course's purple are not cut. A knockout image can be
+  cut by a knockout image above it. Stacked hatches then nest.
+- **Same layer only.** The course layer and the page layer are symbolised
+  separately (course-layer.md §3.6), so a course image never cuts a page
+  image or the other way round. Document objects carry no images.
+- **Masks.** A cut image pass gets a mask (§3.8) whose regions are the
+  footprints above it that meet it, plus its filter-region regions if it
+  already had a mask. Masks are deduplicated by that set and numbered in
+  stream order. `maskIdx` stays a function of (object, colour), because
+  an object has one image pass. A stream with no cut is returned as it
+  was, so streams without knockouts are byte-identical to before.
+- **Attached objects** cut where they are drawn. One whose control is not
+  drawn in a course is not in the stream and cuts nothing.
+
 ## 5. Backends
 
 ### 5.1 Reference raster (api: tests and previews)
@@ -1260,7 +1302,13 @@ loaded, whose results for the objects a patch changed are dropped, and
 the patch's own stream ("Object identity and the patch"), the two
 replies concatenated (the patch's masks after the document's) — so a
 moved object is filtered where it is now and an added one is filtered
-too. The course part is never filtered. The objects' symbolised bounds
+too. The course part is never filtered by regions; its images and the
+page part's are masked by knockout images (J15, §4.11 "Knockout
+footprints"). Their masks, from the course and page streams' own
+`maskIdx`, are appended to the document filter's (`concatFilters`):
+the document's masks first, then the course part's, then the page part's. Course entries carry
+`COURSE_OBJECT_BASE` ids and page entries the page colours, so the
+`(object, colour)` keys never collide. The objects' symbolised bounds
 are computed once per stream on the first filter request and kept. The reply's `filter` (`FilterReply`)
 carries the hidden object ids, the masked range-table entries as
 `(object, colour, mask)` triples (a mask is a function of the pair,
@@ -3767,6 +3815,10 @@ lucka's red band, gold band and transparent middle, the cropped stripes
 and the Multiply lucka with the golden, and check the band is opaque red
 and the middle the map's green.
 
+`course-knockout` (J15) is held to the same tier. It probes lucka 31's
+middle for the map's green (the overlay cut), lucka 32's middle for the
+overlay's orange (not cut) and the overlay outside both.
+
 Not in J3: pixel probes of the blended values (the whole-image budget
 holds them to 16 levels everywhere but the ≤ 0.5 % of edge pixels) and a
 framebuffer-target run (loupe and drape call the same `renderDocument`).
@@ -3900,6 +3952,7 @@ WebGL2 per-pass path against the golden, measured at introduction
 | `course-corridor` | ISOM 401, 505, 101, 516; S → 31 → 32 one 60 m run (4 mm, h 2 < R 2.5) with its `edge` and a 3 mm band, bent at (36, 10); 32 → 33 a 150 m corridor without edge with a 2 mm band; 33 → F plain (F2, re-shaped in F19, `course-layer.md` §10.2) | the band one generated `clip` region: every base pass masked, no course pass; clear inside every corridor (at the bend, at the change of width at 32) and inside the mouths (31's circle across, the 701's back corner), the band round them, nothing behind the 701's base; at 33, the corridor's only terminal end, the band stops on the line through its centre with rounded corners and the map shows behind it (F22, `course-layer.md` §10.2 "Ends"); the edge lower purple `705/edge` along S → 31 → 32 only, over the 401; 31's circle opened towards both legs (two arcs), 32 and 33 whole (the wide corridor covers the junctions; h ≥ R), no cut in the derivation; no 705 along the three corridor legs, 33 → F the only leg line (F14). Drawn on the default GL path (the arena path's MSAA edge steps exceed `ARENA_FILTER_MAX_RATIO` on this many edges: 2.0 %, D3's filter scenes cover the arena masks) |
 | `course-corridor-translucent` | `course-corridor`'s map and course with translucent bands: the narrow run at 0.6, the wide leg at 0.5 (J13, `course-layer.md` §10.2) | no region and no mask; one white-out fill (`white-upper`) at the minimum 50 %, its rings the opaque scene's clip region, above every map pass and lower purple, below upper purple; WebGL2 through the arena path (an alpha pass) held to the arena tier's 1.5 % (`e2e/map-gl-golden.spec.ts` "translucent corridor band"); `course-corridor` itself stays opaque (its wide leg's stored 0.5 is now 1, as the migration) and bit-identical |
 | `course-graphics` | ISOM 406, 505, 106; S → 31 → 32 → F with three `image` course objects (J5, J6): the 64 px lucka PNG (opaque red band, half-opaque gold band, transparent middle) framing 31, the striped 32 × 16 px RGB graphic cropped to its middle half, flipped and turned 20°, a lucka at 80 % Multiply framing 32; graphics `goldenSceneGraphics` | one image pass each in `course:graphics` after every map colour and lower purple, before upper purple: the circles and numbers over the luckas, the map's green through the middle, the stripes over the brown line and the lucka under them; drawn on the arena path only (§6.2 "Image tier") |
+| `course-knockout` | the `course-graphics` map and course; three `image` course objects (J15): the opaque striped graphic over the whole map (the overlay), a lucka marked `knockout` framing 31, a plain lucka framing 32; graphics `goldenSceneGraphics` | the overlay's pass alone is masked, by lucka 31's footprint (§4.11 "Knockout footprints"); the map's green and the lower-purple circle and legs show through lucka 31's middle, the overlay through lucka 32's; outside the luckas the opaque overlay hides the map and the lower-purple course, upper-purple numbers draw over it; arena path only (§6.2 "Image tier") |
 
 The **filter scenes** (D3, 04 §8 row "Filter regions", §4.11) draw one
 ISOM base map — a 407 area (0–60 × 0–40 mm), 101 contours (a straight
@@ -4636,7 +4689,11 @@ The shared module is exported as a namespace: `import { render } from
   placed at two sizes on a page is rasterised once, at the last
   placement's box (`course-pages.ts`; before J5 too), so the larger one
   prints coarser under nearest-neighbour sampling. The per-pass path
-  draws no images (§5.2 "Dev pages").
+  draws no images (§5.2 "Dev pages"). A knockout (J15, §4.11 "Knockout
+  footprints") cuts by the image's box, not its pixels: a round hatch
+  cuts a square, and a cut by the graphic's alpha is not planned. A
+  knockout cuts images only; cutting the map's or the course's ink is
+  what a white-out does.
 
 - **§5.2 filter-region limits.** All masks share one stencil bit, so
   overlapping regions of different masks are fine (each masked step marks

@@ -32,6 +32,11 @@ describe("style fields (J7)", () => {
     expect(stylePatch({ flipH: true, flipV: true }, { flipH: false })).toEqual({ flipV: true });
   });
 
+  it("knockout (J15): on writes true, off removes the key", () => {
+    expect(stylePatch({ opacity: 0.5 }, { knockout: true })).toEqual({ opacity: 0.5, knockout: true });
+    expect(stylePatch({ knockout: true, flipH: true }, { knockout: false })).toEqual({ flipH: true });
+  });
+
   it("size: about the centre; a locked width change scales the height", () => {
     expect(sizeChange(box, "width", 40, true)).toEqual([{ x: -10, y: -5 }, { x: 30, y: 15 }]);
     expect(sizeChange(box, "height", 20, false)).toEqual([{ x: 0, y: -5 }, { x: 20, y: 15 }]);

@@ -300,6 +300,11 @@ test.describe("Course editor layout (docs/course-layout.md)", () => {
       await page.getByTestId("editor-layout-style-flip-h").check();
       await flipped;
       await expect.poll(async () => (await image()).flipH).toBe(true);
+      // J15: "Cut out graphics below" on the page image.
+      const knocked = waitForTrpc(page, "courseMap.saveLayout");
+      await page.getByTestId("editor-layout-style-knockout").check();
+      await knocked;
+      await expect.poll(async () => (await image()).knockout).toBe(true);
       await commit("editor-layout-style-crop-w", "50");
       await expect.poll(async () => (await image()).width).toBeCloseTo(15, 6);
       expect((await image()).crop).toEqual({ x: 0, y: 0, width: 0.5, height: 1 });
@@ -316,6 +321,7 @@ test.describe("Course editor layout (docs/course-layout.md)", () => {
       await expect(page.getByTestId("editor-layout-style-opacity")).toBeVisible();
       await expect(page.getByTestId("editor-layout-style-blend")).toHaveCount(0);
       await expect(page.getByTestId("editor-layout-style-lock")).toHaveCount(0);
+      await expect(page.getByTestId("editor-layout-style-knockout")).toHaveCount(0);
       const rectangle = async () => (await objects()).find((o) => o.kind === "rectangle") as Record<string, number | undefined>;
       const rectHeight = (await rectangle()).height;
       await commit("editor-layout-style-width", "40");

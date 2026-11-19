@@ -104,7 +104,9 @@ Every layout object takes `opacity?` (0–1 inclusive, 0 allowed, absent =
 rectangle and image take `rotationDeg?` (degrees **clockwise as seen**,
 finite within ±360, not normalised; 0 and absent alike); an image takes
 `flipH?` / `flipV?` (J4; `objectOpacitySchema`, `objectBlendSchema`,
-`objectRotationSchema` in `course-maps/schema.ts`). The stored box is
+`objectRotationSchema` in `course-maps/schema.ts`) and `knockout?` (J15:
+cut out the page images below it, course-layer.md §3.6 "Knockout
+images"; absent = off). The stored box is
 always the unrotated one: a rectangle and an image turn about its
 centre, after the flips; a text about its anchor point (user 2026-11-18,
 question 6). Lines and paths store no angle (an unknown key is stripped,

@@ -608,7 +608,11 @@ window; below upper purple, so control circles and numbers draw over
 it), a layout object in the page layer's `page:graphics` row (page µm,
 on top of the page objects). Its quad carries the box, the flips and the
 rotation; its pass the opacity and blend (course-layer.md §3.6
-"Images"). The composer also lists each placement as a `PageImage`
+"Images"). A knockout image (J15, course-layer.md §3.6 "Knockout
+images") cuts the images below it in its layer: in the PDF each cut
+image's `Do` is drawn inside a `W* n` clip of its mask (the page outside
+the footprints, map-rendering.md §5.3), the knockout's own `Do` after it
+unclipped. No extra XObject is written; a job without knockouts writes the same bytes as before. The composer also lists each placement as a `PageImage`
 `{ layer, graphicId, sizeUm, crop? }` — the fetch list: which graphics
 to load, and the placed size an SVG is rasterised to (`svgRasterBox`).
 `writePage` embeds each distinct PNG once, before either layer is
@@ -1015,7 +1019,7 @@ selection, order, copies and set of caps for both routes.
 
 ```ts
 interface PrintJob {
-  version: 5;                       // PRINT_JOB_VERSION; a host refuses another (1: G15, no patch; 2: before J5's image passes; 3: before J13's translucent band; 4: before the SVG windows)
+  version: 6;                       // PRINT_JOB_VERSION; a host refuses another (1: G15, no patch; 2: before J5's image passes; 3: before J13's translucent band; 4: before the SVG windows; 5: before J15's knockout images)
   document: {
     hash: string;
     rotationCorrectionDeg: number;
@@ -1243,13 +1247,15 @@ downloads from the server already differ (§3.2).
 - *Patch* (G14): the job's own `document.patch` (§8.5), applied by the
   same `prepareDocument` the server's worker runs, so an event's
   corrections print the same on the device; the client composes job
-  version 5 (`DEVICE_PRINT_JOB_VERSION`; J5 raised it to 3, since a
+  version 6 (`DEVICE_PRINT_JOB_VERSION`; J5 raised it to 3, since a
   device built before image passes would print graphics without their
   rotation, opacity or place under upper purple; J13 to 4, since a device
   built before it would print a translucent corridor band as the opaque
   clip; the SVG windows (2026-11-19) to 5, since a store prepared at 4
   holds a cropped SVG only as the whole-graphic raster, which the
-  composer no longer asks, so it would print without the logo). A job stored offline at an older version reads as not stored and
+  composer no longer asks, so it would print without the logo; J15 to 6,
+  since a device built before knockout images would print the overlay
+  whole over the hatches' openings). A job stored offline at an older version reads as not stored and
   is prepared again.
 - *Writer*: `@cantoo/pdf-lib` with fflate's `zlibSync` — pure
   JavaScript, the same code in Node and the browser (§3.2).

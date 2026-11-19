@@ -2,6 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 import { bandOpacity, courseLayer, courseRenderInput, legLine } from "../layer.js";
+import { courseObjectBodySchema } from "../objects.js";
 import { courseDocumentContext } from "../context.js";
 import { SITES, layerInput, linear, site, sprintContext } from "./helpers.js";
 import { materialiseLibrary } from "../../symbol-library/index.js";
@@ -534,6 +535,44 @@ describe("course objects as F12 moved layout objects (§3.6 retired, §8.3)", ()
     expect(ids.slice(0, at).every((id) => id !== "purple-upper")).toBe(true);
     expect(ids.slice(at + 1)).toContain("purple-upper");
     expect(ids.slice(at + 1).every((id) => id !== "black100" && id !== "purple-lower")).toBe(true);
+  });
+});
+
+describe("knockout images (J15, docs/course-layer.md §3.6)", () => {
+  const overlay: CourseLayerObject = { id: "ov", kind: "image", geometry: [{ x: 0, y: 0 }, { x: 80, y: 60 }], props: { graphicId: 1 } };
+  const lucka = (over: Partial<CourseLayerObject> = {}): CourseLayerObject =>
+    ({ id: "lu", kind: "image", geometry: [{ x: 35, y: 5 }, { x: 45, y: 15 }], props: { graphicId: 2, knockout: true }, ...over }) as CourseLayerObject;
+  const streamOf = (objects: CourseLayerObject[]) => {
+    const layer = courseLayer(layerInput({ objects }));
+    return { layer, stream: symbolise({ ...courseRenderInput(isomDocument(), layer), fonts: fonts() }).stream };
+  };
+  const maskOf = (s: ReturnType<typeof streamOf>["stream"], graphicId: number) => {
+    const i = s.passes.findIndex((p) => p.kind === "image" && p.graphicId === graphicId);
+    return i < 0 ? undefined : (s.maskIdx?.[i] ?? -1);
+  };
+
+  it("cuts the overlay below it by its box; nothing else of the course or the map is masked", () => {
+    const { stream } = streamOf([overlay, lucka()]);
+    expect(maskOf(stream, 1)).toBe(0);
+    expect(maskOf(stream, 2)).toBe(-1);
+    // The footprint: the box (35…45, 5…15 mm) inset 50 µm.
+    expect(Array.from(stream.masks![0].regions[0].coords)).toEqual([35050, 5050, 44950, 5050, 44950, 14950, 35050, 14950]);
+    stream.passes.forEach((p, i) => {
+      if (p.kind !== "image") expect(stream.maskIdx![i]).toBe(-1);
+    });
+    expect(streamOf([overlay, lucka({ props: { graphicId: 2 } } as Partial<CourseLayerObject>)]).stream.maskIdx).toBeUndefined();
+  });
+
+  it("an attached knockout cuts where it is drawn; one whose control is not drawn cuts nothing", () => {
+    // Control 31 is at (40, 10); attached when it was at (30, 0): drawn 10 mm right and up.
+    const { stream } = streamOf([overlay, lucka({ geometry: [{ x: 25, y: -5 }, { x: 35, y: 5 }], attach: { controlId: "31", at: { x: 30, y: 0 } } } as Partial<CourseLayerObject>)]);
+    expect(Array.from(stream.masks![0].regions[0].coords)).toEqual([35050, 5050, 44950, 5050, 44950, 14950, 35050, 14950]);
+    expect(streamOf([overlay, lucka({ attach: { controlId: "99", at: { x: 40, y: 10 } } } as Partial<CourseLayerObject>)]).stream.maskIdx).toBeUndefined();
+  });
+
+  it("is a strict image prop: other kinds refuse it", () => {
+    expect(courseObjectBodySchema.safeParse({ kind: "image", geometry: [{ x: 0, y: 0 }, { x: 1, y: 1 }], props: { graphicId: 1, knockout: true } }).success).toBe(true);
+    expect(courseObjectBodySchema.safeParse({ kind: "whiteout", geometry: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0, y: 1 }], props: { knockout: true } }).success).toBe(false);
   });
 });
 

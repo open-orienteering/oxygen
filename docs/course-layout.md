@@ -344,8 +344,10 @@ the inspector reuses Course mode's style fields (`StyleFields`,
 Every page object has opacity and, unless it is a white-out, blend
 (Normal / Multiply); text, rectangles and images add rotation (text
 about its anchor, a box about its centre); an image adds flips, width /
-height with the aspect lock and the crop; a rectangle adds width and
-height without the lock. Page objects are page
+height with the aspect lock, the crop and *Cut out graphics below* (J15,
+`knockout`: the image cuts the page images below it, course-layer.md
+§3.6 "Knockout images"); a rectangle adds width and height without the
+lock. Page objects are page
 mm, y down, so the fields edit them through a y-negating adapter
 (`styleGeometryOf`, `rectOfStyleGeometry`) and the same pure rules as
 Course mode (`lib/editor/style-fields.ts`: a default value removes its

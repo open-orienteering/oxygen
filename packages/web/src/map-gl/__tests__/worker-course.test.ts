@@ -1,7 +1,7 @@
 /** The dynamic bucket through the worker (docs/map-rendering.md §5.2 "Dynamic bucket"). */
 
 import { describe, it, expect } from "vitest";
-import { COURSE_BUCKET, PAGE_BUCKET, createMapGlWorker, type CourseLayerRequest, type CourseReply, type LoadedReply, type LoadRequest, type WorkerReply } from "../worker";
+import { COURSE_BUCKET, COURSE_OBJECT_BASE, PAGE_BUCKET, createMapGlWorker, type CourseLayerRequest, type CourseReply, type LoadedReply, type LoadRequest, type WorkerReply } from "../worker";
 import { buildVisibleSet, type PreparedPart, type ResidentPart } from "../buckets";
 import { INSTANCE_FLOATS } from "../mesh-atlas";
 import { mapDocument, mapImport, render } from "@oxygen/shared";
@@ -460,5 +460,71 @@ describe("course request → filter regions over the static buckets (§5.2 Filte
     loaded(h);
     expect(ask(h, request()).filter).toBeNull();
     expect(ask(h, null, 2).filter).toBeNull();
+  });
+});
+
+describe("course request → knockout images (J15, docs/map-rendering.md §4.11 Knockout footprints)", () => {
+  const ask = (h: ReturnType<typeof harness>, input: CourseLayerRequest | null, generation = 1): CourseReply => {
+    h.w.handle({ type: "course", generation, input });
+    return h.sent[h.sent.length - 1].msg as CourseReply;
+  };
+  const overlay = { id: "ov", kind: "image", geometry: [{ x: 0, y: 0 }, { x: 80, y: 60 }], props: { graphicId: 1 } } as CourseLayerRequest["objects"][number];
+  const lucka = (knockout: boolean) => ({ id: "lu", kind: "image", geometry: [{ x: 35, y: 5 }, { x: 45, y: 15 }], props: { graphicId: 2, ...(knockout ? { knockout } : {}) } }) as CourseLayerRequest["objects"][number];
+  /** The overlay's (object id, colour): its index among the layer's objects, the graphics row. */
+  const overlayEntry = (r: CourseReply): [number, number] => {
+    const i = r.hit!.refs.findIndex((ref) => ref.id.endsWith(":ov"));
+    expect(i).toBeGreaterThanOrEqual(0);
+    const colour = r.colours.findIndex((c) => /graphics/.test(c.id));
+    return [COURSE_OBJECT_BASE + i, colour];
+  };
+  const alphaMasks = (r: CourseReply) => {
+    const entryMask = new Map<number, number>();
+    const e = r.filter!.entries;
+    for (let i = 0; i < e.length; i += 3) entryMask.set(e[i] * 65536 + e[i + 1], e[i + 2]);
+    const vs = buildVisibleSet([{ part: r.part!, base: { fill: 0, hatch: 0, stroke: 0 } }], undefined, { entryMask, positions: r.filter!.positions, indices: r.filter!.indices, masks: r.filter!.masks });
+    return (vs.alpha ?? []).map((a) => ({ graphicId: a.image?.graphicId, mask: a.mask }));
+  };
+
+  it("the overlay under a knockout image gets a mask entry on the course part; the knockout itself draws unmasked", () => {
+    const h = harness();
+    const m = loaded(h);
+    const r = ask(h, request({ objects: [overlay, lucka(true)] }));
+    expect(r.filter).not.toBeNull();
+    const [obj, colour] = overlayEntry(r);
+    expect(Array.from(r.filter!.entries)).toEqual([obj, colour, 0]);
+    // The footprint (10 mm square inset 0.05 mm) in origin-relative µm.
+    const xs = Array.from(r.filter!.positions).filter((_, i) => i % 2 === 0).map((x) => x + m.summary.originX);
+    expect(Math.min(...xs)).toBeCloseTo(35_050, 0);
+    expect(Math.max(...xs)).toBeCloseTo(44_950, 0);
+    expect(alphaMasks(r)).toEqual([{ graphicId: 1, mask: 0 }, { graphicId: 2, mask: -1 }]);
+  });
+
+  it("without a knockout no filter; with a document region both masks are kept, the course one after", () => {
+    const h = harness();
+    loaded(h);
+    expect(ask(h, request({ objects: [overlay, lucka(false)] })).filter).toBeNull();
+    const black = indexOf(isomStack(), "black100");
+    const square = [{ x: 20, y: 5 }, { x: 30, y: 5 }, { x: 30, y: 15 }, { x: 20, y: 15 }];
+    const r = ask(h, request({ objects: [overlay, lucka(true)], regions: [{ rings: [square], mode: "clip", symbols: { colours: [black] } }] }), 2);
+    const [obj, colour] = overlayEntry(r);
+    expect(Array.from(r.filter!.entries)).toEqual([0, black, 0, obj, colour, 1]);
+    expect(r.filter!.masks).toHaveLength(2);
+    expect(alphaMasks(r)[0]).toEqual({ graphicId: 1, mask: 1 });
+  });
+
+  it("a knockout page image masks the page image below it on the page part, in page colours", () => {
+    const h = harness();
+    loaded(h);
+    const frame = { x: 10, y: 10, width: 190, height: 277 };
+    const window = { minX: 30 - 95, minY: 10 - 138.5, width: 190, height: 277 };
+    const objects = [
+      { id: "o", anchor: "page" as const, kind: "image" as const, graphicId: 1, x: 0, y: 0, width: 100, height: 100 },
+      { id: "k", anchor: "page" as const, kind: "image" as const, graphicId: 2, x: 40, y: 40, width: 20, height: 20, knockout: true },
+    ];
+    const r = ask(h, request({ page: { paper: { heightMm: 297 }, frame, window, objects, description: null } }));
+    const e = Array.from(r.filter!.entries);
+    expect(e).toHaveLength(3);
+    expect(e[1]).toBeGreaterThanOrEqual(r.page!.colourBase);
+    expect(r.colours[e[1]].id).toMatch(/^page:.*graphics/);
   });
 });

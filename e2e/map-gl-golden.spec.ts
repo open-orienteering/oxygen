@@ -249,6 +249,24 @@ test.describe("WebGL2 map backend — images (arena path)", () => {
 });
 
 /**
+ * Knockout images (J15, map-rendering.md §4.11 "Knockout footprints"): `course-knockout` through the arena path, held
+ * to the image tier. An opaque overlay over the whole map; lucka 31 cuts it out ("Cut out graphics below"), lucka 32
+ * does not. Probes, golden frame px: lucka 31's transparent middle shows the map's light green (the overlay is cut
+ * there), lucka 32's middle shows the overlay's orange band, outside both the overlay's blue band.
+ */
+test.describe("WebGL2 map backend — knockout images (arena path)", () => {
+  test("course-knockout through the arena path matches the reference raster; the overlay is cut under lucka 31 only", async ({ page }, testInfo) => {
+    const { actual, golden } = await compareScene(page, testInfo, "course-knockout", "arena", IMAGE_TIER_MAX_RATIO);
+    await expect(page.getByTestId("map-gl-canvas")).toHaveAttribute("data-path", "arena");
+    const px = (img: PNG, x: number, y: number) => Array.from(img.data.subarray((y * img.width + x) * 4, (y * img.width + x) * 4 + 3));
+    const near = (a: number[], b: number[]) => a.every((v, i) => Math.abs(v - b[i]) <= 8);
+    for (const [x, y] of [[180, 178], [372, 140], [60, 150], [140, 280]] as const) expect(near(px(actual, x, y), px(golden, x, y)), `pixel ${x},${y}`).toBe(true);
+    expect(near(px(actual, 180, 178), [194, 255, 179]), "the map through lucka 31").toBe(true);
+    expect(near(px(actual, 372, 140), [240, 140, 0]), "the overlay through lucka 32").toBe(true);
+  });
+});
+
+/**
  * Translucent corridor band (J13, course-layer.md §10.2): `course-corridor-translucent` through the arena path (its
  * band is an alpha pass), held to the arena tier's 1.5 % as `course-graphics` is — a course scene with hairline legs.
  */

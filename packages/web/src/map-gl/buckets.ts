@@ -861,7 +861,7 @@ export interface ClipGroup {
  * stream's masks, so a mask is a function of (object, colour).
  */
 export interface VisibleFilter {
-  /** `filterEntryKey(object, colour)` → mask index. Entries not listed are unmasked (the course part never is). */
+  /** `filterEntryKey(object, colour)` → mask index. Entries not listed are unmasked (the course and page parts only by knockout images, J15). */
   entryMask: ReadonlyMap<number, number>;
   /** Region triangles of every mask, x, y relative to the document origin (even-odd triangulated; a mask's regions overlap freely). */
   positions: Float32Array;
