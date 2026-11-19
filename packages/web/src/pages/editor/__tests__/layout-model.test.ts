@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { defaultMapAppearance } from "@oxygen/shared";
-import { cropChange } from "../../../lib/editor/style-fields";
+import { course, defaultMapAppearance, type CourseMapObject } from "@oxygen/shared";
+import { cropChange, sizeChange } from "../../../lib/editor/style-fields";
 import { FILL_MODES, geometryOf, rectOfStyleGeometry, styleChangeOf, styleGeometryOf, styleShowOf, layoutRequestOf, nextSheetName, pathObject, templateWriteOf, placeObject, scopeObjects, sheetKeyOf, snapshotOf, withEditable, type EditorSheet } from "../layout/model";
 
 const settings = { printMarginMm: 3, mapFrame: { x: 10, y: 10, width: 190, height: 277 }, description: { visible: false, x: 150, y: 12, cellSizeMm: 6 }, appearance: defaultMapAppearance };
@@ -135,7 +135,7 @@ describe("page objects' style fields (J8, docs/course-layout.md §3 \"Style fiel
     expect(styleShowOf(line)).toMatchObject({ blend: true, rotation: false, size: false });
   });
 
-  it("the y-up adapter round-trips a page box", () => {
+  it("the y-down adapter round-trips a page box", () => {
     expect(styleGeometryOf(img)).toEqual([{ x: 50, y: -70 }, { x: 90, y: -50 }]);
     expect(rectOfStyleGeometry(styleGeometryOf(img)!)).toEqual({ x: 50, y: 50, width: 40, height: 20 });
     expect(styleGeometryOf(text)).toBeUndefined();
@@ -148,6 +148,44 @@ describe("page objects' style fields (J8, docs/course-layout.md §3 \"Style fiel
     expect(styleChangeOf(img, { geometry: [{ x: 60, y: -65 }, { x: 80, y: -55 }] }, printable)).toMatchObject({ x: 60, y: 55, width: 20, height: 10 });
     expect(styleChangeOf(img, { geometry: [{ x: -10, y: -65 }, { x: 10, y: -55 }] }, printable)).toMatchObject({ x: 3, width: 20 });
   });
+
+  it("a rotation is kept on the page by the turned box; opacity alone moves nothing; a size is at most the printable area", () => {
+    const edge = { ...img, x: 165, y: 5 };
+    const turned = styleChangeOf(edge, { props: { ...edge, rotationDeg: 90 } }, printable) as typeof img;
+    // 40 × 20 turned 90° is 20 wide, 40 tall about its centre (185, 15): pushed down to the top margin.
+    expect(turned.y + turned.height / 2 - 20).toBeCloseTo(3, 6);
+    expect(turned.x).toBe(165);
+    const header = { ...text, x: 200, text: "A long header text" };
+    expect(styleChangeOf(header, { props: { ...header, opacity: 0.5 } }, printable)).toMatchObject({ x: 200 });
+    const big = styleChangeOf(img, { geometry: sizeChange(styleGeometryOf(img)!, "width", 1000, true) }, printable) as typeof img;
+    expect(big.width).toBeCloseTo(204, 6);
+    expect(big.height).toBeCloseTo(102, 6);
+    expect(big.x).toBeCloseTo(3, 6);
+    const wide = styleChangeOf({ ...rect, fillMode: "solid" as const }, { geometry: sizeChange(styleGeometryOf(rect)!, "width", 500, false) }, printable) as typeof rect;
+    expect([wide.x, wide.width, wide.height]).toEqual([3, 204, 10]);
+  });
+
+  // The renderer's rule: the page box flipped to y-up (`flipPageObject`), turned by `course.imageCorners`, the source
+  // (u, v) placed bilinearly in the crop; back to page mm y-down.
+  const H = 297;
+  function place(o: CourseMapObject & { kind: "image" }, u: number, v: number) {
+    const crop = o.crop ?? { x: 0, y: 0, width: 1, height: 1 };
+    const [bl, br, tr, tl] = course.imageCorners({ x: o.x, y: H - o.y - o.height, width: o.width, height: o.height }, o);
+    const s = (u - crop.x) / crop.width, t = (v - crop.y) / crop.height;
+    const top = { x: tl.x + (tr.x - tl.x) * s, y: tl.y + (tr.y - tl.y) * s };
+    const bot = { x: bl.x + (br.x - bl.x) * s, y: bl.y + (br.y - bl.y) * s };
+    return { x: top.x + (bot.x - top.x) * t, y: H - (top.y + (bot.y - top.y) * t) };
+  }
+  for (const style of [{ rotationDeg: 30, flipH: true }, { rotationDeg: -70, flipV: true }, { rotationDeg: 90, flipH: true, flipV: true, crop: { x: 0.1, y: 0.2, width: 0.6, height: 0.5 } }]) {
+    it(`a crop through the adapter keeps a source pixel in place on the page: ${JSON.stringify(style)}`, () => {
+      const o = { ...img, x: 80, y: 100, ...style } as CourseMapObject & { kind: "image" };
+      const r = cropChange(styleGeometryOf(o)!, o, o.crop, { x: 0.25, y: 0.3, width: 0.4, height: 0.3 });
+      const n = styleChangeOf(o, { props: { ...o, crop: r.crop }, geometry: r.geometry }, printable) as typeof o;
+      const a = place(o, 0.4, 0.45), b = place(n, 0.4, 0.45);
+      expect(b.x).toBeCloseTo(a.x, 6);
+      expect(b.y).toBeCloseTo(a.y, 6);
+    });
+  }
 
   it("a crop on a page image in y-down page mm: left 25 % and top 50 % keep the visible pixels in place", () => {
     const left = cropChange(styleGeometryOf(img)!, {}, undefined, { x: 0.25, y: 0, width: 0.75, height: 1 });

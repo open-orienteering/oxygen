@@ -1,5 +1,6 @@
 import {
   courseMapObjectPageBounds,
+  courseMapObjectPageExtent,
   rectInside,
   OUT_OF_BOUNDS_BORDER_MM,
   type CourseMapObject,
@@ -405,6 +406,19 @@ export function constrainMapObject(
     dy = printable.y + printable.height - (bounds.y + bounds.height);
   }
   return translateMapObject(object, dx, dy);
+}
+
+/**
+ * As `constrainMapObject`, by the object's drawn extent (`courseMapObjectPageExtent`: a rotated box's or text's
+ * turned bounds, as validation reads it), so a turned object is moved back onto the printable area (J8 style
+ * fields). An extent larger than the area is placed at its top-left corner.
+ */
+export function constrainMapObjectExtent(object: CourseMapObject, printable: MapRect): CourseMapObject {
+  const e = courseMapObjectPageExtent(object);
+  if (rectInside(e, printable)) return object;
+  const fit = (lo: number, size: number, plo: number, psize: number) =>
+    size >= psize ? plo - lo : lo < plo ? plo - lo : lo + size > plo + psize ? plo + psize - (lo + size) : 0;
+  return translateMapObject(object, fit(e.x, e.width, printable.x, printable.width), fit(e.y, e.height, printable.y, printable.height));
 }
 
 export function constrainDescription(

@@ -19,7 +19,7 @@ import {
 } from "@oxygen/shared";
 import type { LayoutRequest } from "../../../lib/course-layer-request";
 import { sheetWindow, windowCentre, type SheetGeometry } from "../../../lib/editor/layout";
-import { constrainMapObject, createImageObjectAt, createObjectAt } from "../../../lib/map-layout-editor";
+import { constrainMapObjectExtent, createImageObjectAt, createObjectAt } from "../../../lib/map-layout-editor";
 import type { PlaceKind } from "./bindings";
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "@oxygen/api";
@@ -226,11 +226,29 @@ export function rectOfStyleGeometry(g: readonly Pt[]): MapRect {
 }
 
 /**
- * A style field's commit on page object `o` as the whole next object (default values removed, not merged), its box
- * from `geometry` when a size or crop changed it, kept on the printable area as a move would be.
+ * A style field's commit on page object `o` as the whole next object (default values removed, not merged). A size
+ * or crop sets the box from `geometry`, no larger than the printable area (an image scaled down whole, so it keeps
+ * its ratio). A change of box or rotation is then kept on the printable area by its drawn extent; opacity, blend and
+ * flips move nothing (docs/course-layout.md §3 "Style fields").
  */
 export function styleChangeOf(o: CourseMapObject, next: { props?: CourseMapObject; geometry?: readonly Pt[] }, printable: MapRect): CourseMapObject {
   let out = next.props ?? o;
-  if (next.geometry && (out.kind === "rectangle" || out.kind === "image")) out = { ...out, ...rectOfStyleGeometry(next.geometry) };
-  return constrainMapObject(out, printable);
+  let boxChanged = false;
+  if (next.geometry && (out.kind === "rectangle" || out.kind === "image")) {
+    const r = rectOfStyleGeometry(next.geometry);
+    const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+    let { width, height } = r;
+    if (out.kind === "image") {
+      const k = Math.min(1, printable.width / width, printable.height / height);
+      width *= k;
+      height *= k;
+    } else {
+      width = Math.min(width, printable.width);
+      height = Math.min(height, printable.height);
+    }
+    out = { ...out, x: cx - width / 2, y: cy - height / 2, width, height };
+    boxChanged = true;
+  }
+  const turned = "rotationDeg" in out && (out.rotationDeg ?? 0) !== ("rotationDeg" in o ? (o.rotationDeg ?? 0) : 0);
+  return boxChanged || turned ? constrainMapObjectExtent(out, printable) : out;
 }

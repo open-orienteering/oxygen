@@ -232,7 +232,7 @@ test.describe("Course editor layout (docs/course-layout.md)", () => {
     }
   });
 
-  test("J8: style fields on page objects — an image at its aspect, opacity, Multiply, rotation, size with the lock, undo; no blend on a white-out", async ({ page }) => {
+  test("J8: style fields on page objects — an image at its aspect, opacity, Multiply, rotation, size with the lock, flip, crop, undo; a white-out without blend or lock; a text's rotation", async ({ page }) => {
     await openEditor(page);
     const nameId = nameIdOf(page);
     const { sheet, drop } = await sheetFixture("Layout style");
@@ -295,13 +295,42 @@ test.describe("Course editor layout (docs/course-layout.md)", () => {
       await page.keyboard.press("Control+z");
       await expect.poll(async () => (await image()).width).toBe(30);
 
-      // A white-out: opacity, no blend.
+      // Flip H; a crop to the left half halves the box in one write, and one Ctrl+Z restores box and crop.
+      const flipped = waitForTrpc(page, "courseMap.saveLayout");
+      await page.getByTestId("editor-layout-style-flip-h").check();
+      await flipped;
+      await expect.poll(async () => (await image()).flipH).toBe(true);
+      await commit("editor-layout-style-crop-w", "50");
+      await expect.poll(async () => (await image()).width).toBeCloseTo(15, 6);
+      expect((await image()).crop).toEqual({ x: 0, y: 0, width: 0.5, height: 1 });
+      await page.getByTestId("editor-layout-style-crop-w").blur();
+      await page.keyboard.press("Control+z");
+      await expect.poll(async () => (await image()).width).toBe(30);
+      expect("crop" in (await image())).toBe(false);
+
+      // A white-out: opacity, no blend; its width without a lock.
       await page.keyboard.press("w");
       const white = waitForTrpc(page, "courseMap.saveLayout");
       await clickMap(page, await toPage(page, toPaperMm({ x: 60, y: 20 })));
       await white;
       await expect(page.getByTestId("editor-layout-style-opacity")).toBeVisible();
       await expect(page.getByTestId("editor-layout-style-blend")).toHaveCount(0);
+      await expect(page.getByTestId("editor-layout-style-lock")).toHaveCount(0);
+      const rectangle = async () => (await objects()).find((o) => o.kind === "rectangle") as Record<string, number | undefined>;
+      const rectHeight = (await rectangle()).height;
+      await commit("editor-layout-style-width", "40");
+      await expect.poll(async () => (await rectangle()).width).toBe(40);
+      expect((await rectangle()).height).toBe(rectHeight);
+
+      // A text turns by its rotation field.
+      await page.getByTestId("editor-layout-style-width").blur();
+      await page.keyboard.press("t");
+      const texted = waitForTrpc(page, "courseMap.saveLayout");
+      await clickMap(page, await toPage(page, toPaperMm({ x: 100, y: 120 })));
+      await texted;
+      await expect(page.getByTestId("editor-layout-style-flip-h")).toHaveCount(0);
+      await commit("editor-layout-style-rotation", "15");
+      await expect.poll(async () => ((await objects()).find((o) => o.kind === "text") as { rotationDeg?: number }).rotationDeg).toBe(15);
     } finally {
       await drop();
       await cleanup("graphics.delete", { id: graphicId });

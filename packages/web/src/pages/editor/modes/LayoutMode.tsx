@@ -338,7 +338,11 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
       setTool({ kind: "draw", poly: { kind: "layout_path", vertices: [] } });
       return;
     }
-    setTool({ kind: "place", what, ...(graphicId !== undefined ? { graphicId } : {}) });
+    // `I` (key or rail) again while a graphic is armed keeps it; a pick arms the picked one.
+    setTool((prev) => {
+      const id = graphicId ?? (what === "image" && prev.kind === "place" && prev.what === "image" ? prev.graphicId : undefined);
+      return { kind: "place", what, ...(id !== undefined ? { graphicId: id } : {}) };
+    });
   }, [snap]);
 
   const onKey = useCallback((e: KeyboardEvent): boolean => {
@@ -380,11 +384,13 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
     if (key === "F") { fit(); return true; }
     const what = LAYOUT_KEYS[key];
     if (what) {
+      // No picker without an event (the rail's button is disabled then): `I` does nothing.
+      if (what === "image" && !a.nameId) return false;
       onTool(what);
       return true;
     }
     return false;
-  }, [tool, selection, deleteSelected, scoped, fit, onTool, geometry, finishPath, selectedPath, focusedVertex, updateObject]);
+  }, [tool, selection, deleteSelected, scoped, fit, onTool, geometry, finishPath, selectedPath, focusedVertex, updateObject, a.nameId]);
 
   // ─── Validation (validate.ts, unchanged codes) ───────────
   const issues = useMemo(() => {
