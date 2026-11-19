@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { CourseMapObject } from "@oxygen/shared";
 import type { ToolPointer } from "../../../components/MapViewer";
-import { sheetWindow, toView, type SheetGeometry } from "../../../lib/editor/layout";
+import { sheetWindow, toView, upOf, type SheetGeometry } from "../../../lib/editor/layout";
+import { rotationAt } from "../../../lib/editor/transform-gestures";
 import { LAYOUT_KEYS, layoutBinding, type LayoutBindingContext, type LayoutGesture } from "../layout/bindings";
 import type { GestureRef } from "../tools/bindings";
 import type { PolygonState } from "../tools/polygon";
@@ -382,7 +383,8 @@ describe("transform handles (J9, docs/course-layout.md §3 \"Transform handles\"
     b.onPointerUp!(view(120, 100));
     const o = c.onCommit.mock.calls[0][0].objects[0] as Extract<CourseMapObject, { kind: "text" }>;
     expect([o.x, o.y]).toEqual([100, 100]);
-    expect(o.rotationDeg).not.toBe(undefined);
+    // The angle about the anchor, not about the box's centre.
+    expect(o.rotationDeg).toBeCloseTo(rotationAt(0, upOf({ x: 100, y: 100 }), upOf(kPage), upOf({ x: 120, y: 100 }), false), 6);
   });
 
   it("a corner of a turned image keeps its opposite drawn corner; Shift pressed mid-drag frees the lock", () => {
@@ -401,6 +403,50 @@ describe("transform handles (J9, docs/course-layout.md §3 \"Transform handles\"
     expect(nwAfter.x).toBeCloseTo(nwPage.x, 6);
     expect(nwAfter.y).toBeCloseTo(nwPage.y, 6);
     expect(o.width / o.height).not.toBeCloseTo(2, 2);
+  });
+
+  it("an unturned locked corner stays on the printable area, the ratio kept (J9 review (1))", () => {
+    const low = { ...img, y: 274 } as CourseMapObject;
+    const c = sel(low, { aspectLock: true });
+    const b = layoutBinding(c);
+    expect(b.onPointerDown!(at(90, 294))).toBe(true);
+    b.onPointerDrag!(view(150, 294));
+    b.onPointerUp!(view(150, 294));
+    const o = committed(c);
+    expect(o.y + o.height).toBeLessThanOrEqual(294 + 1e-9);
+    expect([o.x, o.y]).toEqual([50, 274]);
+    expect(o.width / o.height).toBeCloseTo(2, 6);
+  });
+
+  it("a move keeps a turned box on the page as drawn, without a jump (J9 review (3))", () => {
+    // 100 × 10 at 90°: drawn x 5..15, y 55..155 (on the page by its turned extent).
+    const tall: CourseMapObject = { id: "tall", kind: "rectangle", anchor: "page", x: -40, y: 100, width: 100, height: 10, fillMode: "none", rotationDeg: 90 };
+    const c = sel(tall);
+    const b = layoutBinding(c);
+    expect(b.onPointerDown!(at(10, 100))).toBe(true);
+    b.onPointerDrag!(view(10, 101));
+    b.onPointerUp!(view(10, 101));
+    expect(committed(c)).toMatchObject({ x: -40, y: 101 });
+    const up = sel(tall);
+    const bu = layoutBinding(up);
+    bu.onPointerDown!(at(10, 100));
+    bu.onPointerDrag!(view(10, 20));
+    bu.onPointerUp!(view(10, 20));
+    // Its drawn top (centre y − 50) stops at the top margin.
+    expect(committed(up).y + 5 - 50).toBeCloseTo(3, 6);
+  });
+
+  it("a turned text's corner drag is taken into its frame: down the page widens a 90° text", () => {
+    const text: CourseMapObject = { id: "t", kind: "text", anchor: "page", x: 100, y: 100, text: "Header", fontSizeMm: 5, color: "#000000", rotationDeg: 90 };
+    const c = sel(text);
+    const b = layoutBinding(c);
+    const handles = b.shapes!.filter((s) => "testId" in s && s.testId === "editor-layout-handle") as unknown as { x: number; y: number; data: { handle: string } }[];
+    const ne = toPageOf(handles.find((h) => h.data.handle === "ne")!);
+    expect(b.onPointerDown!(at(ne.x, ne.y))).toBe(true);
+    b.onPointerDrag!(view(ne.x, ne.y + 5));
+    b.onPointerUp!(view(ne.x, ne.y + 5));
+    const o = c.onCommit.mock.calls[0][0].objects[0] as Extract<CourseMapObject, { kind: "text" }>;
+    expect(o.maxWidthMm! - 5 * 6 * 0.55).toBeCloseTo(5, 6);
   });
 
   it("a rectangle keeps its ratio only with Shift", () => {

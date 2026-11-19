@@ -421,6 +421,14 @@ test.describe("Course editor layout (docs/course-layout.md)", () => {
       await page.keyboard.press("Escape");
       await expect(layer.getByTestId("editor-layout-crop-edge")).toHaveCount(0);
       await expect(page.getByTestId("editor-layout-selected")).toHaveAttribute("data-kind", "object");
+      // Another selection leaves crop mode for good: reselected, the image shows its corners and knob, no edges.
+      await page.mouse.dblclick(centre.x, centre.y);
+      await expect(layer.getByTestId("editor-layout-crop-edge")).toHaveCount(4);
+      await clickMap(page, await screen(150, 200));
+      await expect(page.getByTestId("editor-layout-selected")).not.toHaveAttribute("data-object-id", String((await image()).id));
+      await clickMap(page, centre);
+      await expect(layer.getByTestId("editor-layout-handle")).toHaveCount(4);
+      await expect(layer.getByTestId("editor-layout-crop-edge")).toHaveCount(0);
 
       // A line: Turn 90° and Flip ↔ each one write, baked into its points.
       await page.keyboard.press("Escape");

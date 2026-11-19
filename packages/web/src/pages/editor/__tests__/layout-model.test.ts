@@ -217,6 +217,10 @@ describe("a line's or path's turn and flip (J9, docs/course-layout.md §3 \"Rota
     const edge = { ...line, x1: 4, y1: 10, x2: 44, y2: 10 };
     const turned = transformPathOf(edge, { kind: "rotate", deg: 90 }, printable) as typeof line;
     expect(Math.min(turned.y1, turned.y2)).toBeCloseTo(3, 6);
+    const long = { ...line, x1: 100, y1: 20, x2: 100, y2: 270 };
+    const across = transformPathOf(long, { kind: "rotate", deg: 90 }, printable) as typeof line;
+    expect(Math.min(across.x1, across.x2)).toBeCloseTo(3, 6);
+    expect(transformPathOf(path, { kind: "rotate", deg: 360 }, printable)).toBeNull();
     expect(transformPathOf({ id: "t", kind: "text", anchor: "page", x: 1, y: 1, text: "A", fontSizeMm: 4, color: "#000000" }, { kind: "rotate", deg: 90 }, printable)).toBeNull();
   });
 });

@@ -20,7 +20,7 @@ import {
 } from "@oxygen/shared";
 import type { LayoutRequest } from "../../../lib/course-layer-request";
 import { sheetWindow, windowCentre, type SheetGeometry } from "../../../lib/editor/layout";
-import { constrainMapObject, constrainMapObjectExtent, createImageObjectAt, createObjectAt } from "../../../lib/map-layout-editor";
+import { constrainMapObjectExtent, createImageObjectAt, createObjectAt } from "../../../lib/map-layout-editor";
 import { flipVertices, rotateVertices } from "../../../lib/editor/transform-gestures";
 import type { PlaceKind } from "./bindings";
 import type { inferRouterOutputs } from "@trpc/server";
@@ -260,11 +260,14 @@ export type PathTransform = { kind: "rotate"; deg: number } | { kind: "flip"; ax
 
 /**
  * A line or path transformed about the centre of its bounds, baked into its vertices and Bézier handles (lines and
- * paths store no angle, docs/course-layout.md §3 "Rotate and flip a line or path"), kept on the printable area as a
- * move is. Null for any other kind (those turn by their field and knob).
+ * paths store no angle, docs/course-layout.md §3 "Rotate and flip a line or path"), kept on the printable area
+ * (`constrainMapObjectExtent`: one larger than the area is pinned at its top-left). Null for any other kind (those
+ * turn by their field and knob) and for a whole turn.
  */
 export function transformPathOf(o: CourseMapObject, op: PathTransform, printable: MapRect): CourseMapObject | null {
   if (o.kind !== "path" && o.kind !== "line") return null;
+  // A whole turn changes nothing: no write, no empty undo entry.
+  if (op.kind === "rotate" && op.deg % 360 === 0) return null;
   const b = courseMapObjectPageBoundsOf(o);
   const about = { x: b.x + b.width / 2, y: -(b.y + b.height / 2) };
   // Page mm are y-down: the shared maths turn and mirror in y-up, so y (and each handle's y) is negated round it.
@@ -275,7 +278,7 @@ export function transformPathOf(o: CourseMapObject, op: PathTransform, printable
     (op.kind === "rotate" ? rotateVertices(vs.map(up), op.deg, about) : flipVertices(vs.map(up), op.axis, about)).map(up);
   if (o.kind === "line") {
     const [a, c] = apply([{ x: o.x1, y: o.y1 }, { x: o.x2, y: o.y2 }]);
-    return constrainMapObject({ ...o, x1: a.x, y1: a.y, x2: c.x, y2: c.y }, printable);
+    return constrainMapObjectExtent({ ...o, x1: a.x, y1: a.y, x2: c.x, y2: c.y }, printable);
   }
-  return constrainMapObject({ ...o, points: apply(o.points) }, printable);
+  return constrainMapObjectExtent({ ...o, points: apply(o.points) }, printable);
 }

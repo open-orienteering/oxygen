@@ -169,6 +169,8 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
   /** The image in crop mode (J9), keyed by its id: a selection or tool change ends it. Page state, not an undo step. */
   const [cropModeOf, setCropMode] = useState<string | null>(null);
   const cropMode = cropModeOf !== null && selection?.kind === "object" && selection.id === cropModeOf && tool.kind === "select" ? cropModeOf : null;
+  // Another selection, a tool or a delete leaves crop mode for good (J9 review (2)), not until the image is reselected.
+  useEffect(() => { if (cropModeOf !== null && cropMode === null) setCropMode(null); }, [cropModeOf, cropMode]);
   // The graphics' pixel sizes, for a placed image's aspect (the picker's query, cached).
   const graphicsList = trpc.graphics.list.useQuery(undefined, { enabled: a.enabled });
   const gesture = useRef<LayoutGesture>(null);

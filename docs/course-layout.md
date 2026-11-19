@@ -321,10 +321,11 @@ included, so a press **inside** a closed path is not on it (D16, the
 course editor's area rule, `course-editor.md` §5 / D12): it reaches the
 object under it, else selects the frame or pans. Text, rectangles and
 images are hit by their box **as drawn**, turned (J9). A drag moves the
-object (`translateMapObject`, kept on the printable area by
-`constrainMapObject`); a line object's ends and a text's corners resize
-(`resizeMapObject` with the printable clamps; a turned text's drag is
-taken into its own frame), a rectangle's or image's corners resize as
+object (`translateMapObject`, kept on the printable area as drawn by
+`constrainMapObjectExtent`: a turned box by its turned extent); a line
+object's ends and a text's corners resize (`resizeMapObject` with the
+printable clamps; a turned text's drag is taken into its own frame and,
+as a turned box's, not clamped), a rectangle's or image's corners resize as
 "Transform handles" below; the block moves by its own drag. A click on nothing inside the frame selects the frame; elsewhere
 it deselects.
 
@@ -365,8 +366,10 @@ or image's corner resizes in the box's own frame with the opposite drawn
 corner fixed (`resizeBox`, 2 mm a side at least): an image keeps its
 ratio while the aspect lock is on (the default) and a rectangle while
 Shift is held — Shift inverts the lock, read live during the drag. An
-unturned box's corner stays on the printable area and on the 1 mm grid
-as before; a turned box's resize is not clamped — validation lists a
+unturned box stays on the printable area with its opposite corner fixed
+(a locked one scaled back whole, keeping its ratio) and an unlocked
+corner on the 1 mm grid as before (a locked corner is on the diagonal,
+not the grid); a turned box's resize is not clamped — validation lists a
 corner off the page (`object_outside_page`). Lines and paths get no knob
 (user answer 4): see "Rotate and flip a line or path".
 
@@ -390,7 +393,9 @@ so the inspector's buttons (`pages/editor/TransformButtons.tsx`, ids
 Bézier handles about the centre of the path's bounds
 (`transformPathOf`): *Turn* by the angle field (`…-angle`, 15° by
 default, clockwise as seen), *Turn 90°*, *Flip ↔* and *Flip ↕*; the
-result is kept on the printable area as a move is. One write each.
+result is kept on the printable area by `constrainMapObjectExtent` (one
+larger than the area is pinned at its top-left). One write each; a whole
+turn writes nothing.
 
 **A selected path** (closed or open — `L` lines are open paths) takes
 the course editor's geometry gestures (`course-editor.md` §7 "Editing
@@ -872,8 +877,8 @@ of the event, course seq (the event's last), sort order, seq.
 | E2E | `e2e/course-editor-layout.spec.ts` "Course editor layout" "graphics: upload an SVG…" | E3 (ported from `course-maps.spec.ts`'s legacy layout editor): the graphics picker uploads an SVG (`graphics.upload`), its Place button arms the image tool, a click on the page places it (one `saveLayout`, an `image` row in the list and in `courseMap.get`); selected from the list and deleted, gone from both; J2: the tile's thumbnail loads at 256 px and shows "4096 × 4096 px", *Save to club* adds a club tile, a confirmed delete removes each; J8: the picker opens from `editor-layout-tool-I` |
 | Unit | `lib/__tests__/map-layout-editor.test.ts`, `pages/editor/__tests__/layout-model.test.ts`, `layout-bindings.test.ts` | J8: `createImageObjectAt` at the graphic's aspect; a white-out fill drops blend; `styleShowOf` per kind; the y-down adapter round trip; `styleChangeOf` as a whole-object write (a removed key stays removed), a box kept on the page, a rotation kept on the page by its turned box, opacity moving nothing, a typed size capped to the printable area; a crop of a rotated, flipped (and already cropped) page image keeping a source pixel in place through `course.imageCorners`; the lock XOR Shift on an image's corner |
 | E2E | `e2e/course-editor-layout.spec.ts` "J8: style fields on page objects…" | J8: `I` without a graphic places nothing; an image placed from the picker at its aspect, drawn in its colour; opacity 0 shows the page and 100 removes the key; Multiply and Normal; rotation; width with the lock and one undo; flip H; a crop to the left half and one undo restoring box and crop (each one `saveLayout`); a white-out without blend or lock, its width alone; a text's rotation |
-| Unit | `lib/editor/__tests__/transform-gestures.test.ts`, `lib/editor/__tests__/layout.test.ts`, `pages/editor/__tests__/layout-bindings.test.ts`, `layout-model.test.ts` | J9: `boxRing` as `imageRing` and about a pivot; the knob above the top edge, turned; `resizeBox` keeping the opposite corner at 0° and 30°, the lock, the minimum; `rotationAt` (a quarter turn is +90, no jump at the press, 15° steps, normalised); `cropEdge` moving one side and keeping the pixels in place through `course.imageCorners` at 0°, 30°, flipped; its stops; `rotateVertices` / `flipVertices` with handles; a turned rectangle hit as drawn, handles on its turned corners, a text turned about its anchor; the binding's knob drag (90°, Shift steps, a cancel writes nothing), a turned image's corner keeping its opposite with Shift live, a rectangle's ratio only with Shift, crop mode by double-click with edges only and one write; `transformPathOf` on a curved path, a flip, the legacy line, kept on the page, boxes refused |
-| E2E | `e2e/course-editor-layout.spec.ts` "J9: transform handles on page objects…" | J9: the knob dragged a quarter turn (one `saveLayout`, undo), Shift in 15° steps, Escape mid-drag writes nothing; a double-click shows four crop edges and hides the knob, the right edge dragged a quarter in crops and shrinks the box in one write, undo restores box and crop, Escape leaves crop mode with the image selected; an `L` line's *Turn 90°* and *Flip ↔* each one write |
+| Unit | `lib/editor/__tests__/transform-gestures.test.ts`, `lib/editor/__tests__/layout.test.ts`, `pages/editor/__tests__/layout-bindings.test.ts`, `layout-model.test.ts` | J9: `boxRing` as `imageRing` and about a pivot; the knob above the top edge, turned; `resizeBox` keeping the opposite corner at 0° and 30°, the lock, the minimum; `rotationAt` (a quarter turn is +90, no jump at the press, 15° steps, normalised); `cropEdge` moving one side and keeping the pixels in place through `course.imageCorners` at 0°, 30°, flipped; its stops; `rotateVertices` / `flipVertices` with handles; a turned rectangle hit as drawn, handles on its turned corners, a text turned about its anchor; the binding's knob drag (90°, Shift steps, a cancel writes nothing), a turned image's corner keeping its opposite with Shift live, a rectangle's ratio only with Shift, crop mode by double-click with edges only and one write; a locked unturned corner kept on the page with its ratio; a move of a turned box kept on the page as drawn without a jump; a turned text's corner taken into its frame; `cropEdge` on top, bottom and left under both flips on a cropped, turned image; `transformPathOf` on a curved path, a flip, the legacy line, kept on the page, boxes refused |
+| E2E | `e2e/course-editor-layout.spec.ts` "J9: transform handles on page objects…" | J9: the knob dragged a quarter turn (one `saveLayout`, undo), Shift in 15° steps, Escape mid-drag writes nothing; a double-click shows four crop edges and hides the knob, the right edge dragged a quarter in crops and shrinks the box in one write, undo restores box and crop, Escape leaves crop mode with the image selected; another selection leaves crop mode for good (reselected, corners and no edges); an `L` line's *Turn 90°* and *Flip ↔* each one write |
 | E2E | `e2e/course-editor-layout.spec.ts` "Course editor layout" "P draws a polygon…" | D16, F18: `P`, two Alt-clicks (corners), a click-drag and a plain click, closed on the first vertex → one `saveLayout`; `courseMap.get` has a closed path of 4 points whose dragged vertex has `hOut` down-right on the page and `hIn` opposite, the plain click's vertex smooth handles, the Alt-clicks' none; the path selected, `V` armed, 4 handles and 4 grips; a double-click on the top edge → 5 points and a focused handle, `Delete` → 4; `Escape` discards a polygon being drawn (no write, `V` armed), `Enter` closes one of three clicks (one write); the sheet's `maps.pdf?maps=` draws more `c` operators than before |
 | E2E | `e2e/course-editor-layout.spec.ts` "Course editor layout" | from the Courses page (the `/maps?course=` redirect, the row's *Edit layout* link into Layout mode) to the sheet; the sheet shapes; `H` places a header, the inspector makes it a long 10 mm text, and ink appears where the page layer draws it; the frame selected and dragged → `courseMap.get`'s centre moved by the drag; undo restores it; the `maps.pdf?maps=` route answers one A4 page; the template link opens template scope, an orientation change writes `mapTemplate.update`; an old `/map-templates?template=` link opens template scope |
 | E2E | `e2e/course-editor-placing.spec.ts` "P1: …" "Layout mode: a toner saver hides…" | P1: on a probe course sheet in Layout mode a 709 `oob_area` (`courseObject.create`) shows purple on the canvas (`inkIn`); with a `toner_saver` elsewhere on the map, no purple pixels are left inside the 709 square (638 purple pixels with the ring at upper white) |

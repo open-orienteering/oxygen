@@ -77,6 +77,22 @@ describe("transform gestures (J9, docs/course-layout.md §3 \"Transform handles\
     });
   }
 
+  it("cropEdge on top and bottom under flipV, on an already cropped and turned image, keeps the pixels", () => {
+    const style = { rotationDeg: -130, flipV: true, flipH: true, crop: { x: 0.1, y: 0.2, width: 0.6, height: 0.6 } };
+    for (const edge of ["top", "bottom", "left"] as const) {
+      const ring = boxRing(g, style.rotationDeg);
+      const h = edgeHandles(ring).find((e) => e.edge === edge)!.at;
+      const c = { x: 20, y: 10 };
+      const to = { x: h.x + (c.x - h.x) * 0.3, y: h.y + (c.y - h.y) * 0.3 };
+      const r = cropEdge(g, style, edge, to);
+      const next = { ...style, crop: r.crop };
+      // A pixel near the middle stays; the crop shrank by about 30 % of the half on that axis.
+      close(place(r.geometry, next, 0.4, 0.5), place(g, style, 0.4, 0.5));
+      if (edge === "left") expect(r.crop.width).toBeLessThan(0.6);
+      else expect(r.crop.height).toBeLessThan(0.6);
+    }
+  });
+
   it("cropEdge stops at the whole graphic and at 1 %; uncroppedRing is the full graphic", () => {
     const cropped = cropEdge(g, {}, "top", { x: 20, y: 10 });
     expect(cropped.crop).toEqual({ x: 0, y: 0.5, width: 1, height: 0.5 });

@@ -22,7 +22,7 @@ import {
 } from "../../../lib/editor/transform-gestures";
 import { stylePatch } from "../../../lib/editor/style-fields";
 import { rectOfStyleGeometry, styleChangeOf, styleGeometryOf } from "./model";
-import { clampPagePoint, constrainDescription, constrainMapObject, resizeMapObject, translateMapObject, type ResizeHandle } from "../../../lib/map-layout-editor";
+import { clampPagePoint, constrainDescription, constrainMapObjectExtent, resizeMapObject, translateMapObject, type ResizeHandle } from "../../../lib/map-layout-editor";
 import {
   draggedGeometry, dragGeometry, geometryShapes, insertAtEdge, pressGeometry, releaseGeometry, type GeometryDrag,
 } from "../../../lib/editor/geometry-gestures";
@@ -130,9 +130,12 @@ export function gestureChange(c: Pick<LayoutBindingContext, "geometry" | "editab
     const b = c.block;
     return { description: constrainDescription({ ...g.base, x: g.base.x + d.x, y: g.base.y + d.y }, b?.width ?? 0, b?.height ?? 0, printable) };
   }
+  // A move keeps the object on the page as drawn (a turned box by its turned extent, J9 review (3)); a turned
+  // text's corner is taken into its frame and, as a turned box's, not clamped.
+  const turnedText = g.base.kind === "text" && !!(g.base.rotationDeg ?? 0);
   const next = g.kind === "move"
-    ? constrainMapObject(translateMapObject(g.base, d.x, d.y), printable)
-    : resizeMapObject(g.base, g.handle, ...turnedDelta(g.base, d), { printable });
+    ? constrainMapObjectExtent(translateMapObject(g.base, d.x, d.y), printable)
+    : resizeMapObject(g.base, g.handle, ...turnedDelta(g.base, d), turnedText ? {} : { printable });
   return { objects: c.editable.map((o) => (o.id === g.id ? next : o)) };
 }
 
@@ -167,9 +170,33 @@ function transformed(c: Pick<LayoutBindingContext, "geometry" | "snapping">, g: 
   const deg = g.base.rotationDeg ?? 0;
   // An unturned box: the corner on the printable area and the 1 mm grid, as before. A turned one is not clamped
   // (validation flags a corner off the page, `object_outside_page`).
+  const lock = g.lock !== g.shift;
   const pt = deg ? g.to : gridSnap(clampPagePoint(g.to, printable), c.snapping);
-  const box = resizeBox(styleGeometryOf(g.base)!, deg, g.corner, upOf(pt), g.lock !== g.shift, MIN_BOX_MM);
-  return { ...g.base, ...rectOfStyleGeometry(box) };
+  const r = rectOfStyleGeometry(resizeBox(styleGeometryOf(g.base)!, deg, g.corner, upOf(pt), lock, MIN_BOX_MM));
+  return { ...g.base, ...(deg ? r : keptOnPage(r, g.corner, lock, printable)) };
+}
+
+/**
+ * An unturned box resized from corner `corner` kept on the printable area, its opposite corner fixed: a locked
+ * resize projects the pointer onto the diagonal, so the corner can pass the margin though the pointer did not; the
+ * box is scaled back whole (the ratio kept), an unlocked one side by side (J9 review (1)).
+ */
+function keptOnPage(r: MapRect, corner: number, lock: boolean, printable: MapRect): MapRect {
+  // `boxRing`'s page corners: sw 0, se 1, ne 2, nw 3; the dragged side's direction on the page.
+  const right = corner === 1 || corner === 2, down = corner === 0 || corner === 1;
+  const fx = right ? r.x : r.x + r.width, fy = down ? r.y : r.y + r.height;
+  const maxW = right ? printable.x + printable.width - fx : fx - printable.x;
+  const maxH = down ? printable.y + printable.height - fy : fy - printable.y;
+  let w = r.width, h = r.height;
+  if (lock) {
+    const k = Math.min(1, maxW / w, maxH / h);
+    w *= k;
+    h *= k;
+  } else {
+    w = Math.min(w, maxW);
+    h = Math.min(h, maxH);
+  }
+  return { x: right ? fx : fx - w, y: down ? fy : fy - h, width: w, height: h };
 }
 
 /**
