@@ -12,6 +12,7 @@ import { useTranslation } from "react-i18next";
 import type { CourseMapObject, MapFillMode, MapTemplateSettings } from "@oxygen/shared";
 import { fillModePatch } from "../../../lib/map-layout-editor";
 import { StyleFields } from "../StyleFields";
+import { TransformButtons, type TransformOp } from "../TransformButtons";
 import type { SheetGeometry } from "../../../lib/editor/layout";
 import { InspectorSection } from "../Inspector";
 import type { LayoutSelection, LayoutTarget, LayoutTool } from "./bindings";
@@ -49,6 +50,11 @@ export function LayoutInspector(p: {
   onStyle: (id: string, next: { props?: CourseMapObject; geometry?: readonly { x: number; y: number }[] }) => void;
   aspectLock: boolean;
   onAspectLock: () => void;
+  /** The image in crop mode on the page (J9); its button is not shown on a coarse pointer (handles are mouse only). */
+  cropMode: string | null;
+  onCropMode: (id: string | null) => void;
+  /** A line's or path's turn or flip (J9). */
+  onTransform: (id: string, op: TransformOp) => void;
   onDelete: () => void;
   /** No sheet to show: what creates one (`NoSheetActions`). */
   noSheet: ReactNode;
@@ -181,9 +187,13 @@ export function LayoutInspector(p: {
                 onAspectLock={p.onAspectLock}
                 onChange={(next) => p.onStyle(o.id, { ...(next.props ? { props: next.props as unknown as CourseMapObject } : {}), ...(next.geometry ? { geometry: next.geometry } : {}) })}
                 testIdPrefix="editor-layout-style"
+                {...(o.kind === "image" && !p.coarse ? { cropMode: { on: p.cropMode === o.id, onToggle: () => p.onCropMode(p.cropMode === o.id ? null : o.id) } } : {})}
               />
             );
           })()}
+          {o && (o.kind === "line" || o.kind === "path") && (
+            <TransformButtons testIdPrefix="editor-layout-transform" onTransform={(op) => p.onTransform(o.id, op)} />
+          )}
           {(o || p.selection?.kind === "description") && (
             <button type="button" data-testid="editor-layout-delete" onClick={p.onDelete} className="text-[11px] text-red-600 hover:underline cursor-pointer">
               {o ? t("layoutDelete") : t("layoutHideDescription")}

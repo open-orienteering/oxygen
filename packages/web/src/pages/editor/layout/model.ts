@@ -8,6 +8,7 @@
 
 import {
   course,
+  courseMapObjectPageBounds as courseMapObjectPageBoundsOf,
   getPaperDimensions,
   isWhiteoutObject,
   type CourseMapObject,
@@ -19,7 +20,8 @@ import {
 } from "@oxygen/shared";
 import type { LayoutRequest } from "../../../lib/course-layer-request";
 import { sheetWindow, windowCentre, type SheetGeometry } from "../../../lib/editor/layout";
-import { constrainMapObjectExtent, createImageObjectAt, createObjectAt } from "../../../lib/map-layout-editor";
+import { constrainMapObject, constrainMapObjectExtent, createImageObjectAt, createObjectAt } from "../../../lib/map-layout-editor";
+import { flipVertices, rotateVertices } from "../../../lib/editor/transform-gestures";
 import type { PlaceKind } from "./bindings";
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "@oxygen/api";
@@ -251,4 +253,29 @@ export function styleChangeOf(o: CourseMapObject, next: { props?: CourseMapObjec
   }
   const turned = "rotationDeg" in out && (out.rotationDeg ?? 0) !== ("rotationDeg" in o ? (o.rotationDeg ?? 0) : 0);
   return boxChanged || turned ? constrainMapObjectExtent(out, printable) : out;
+}
+
+/** A line's or path's inspector transform (J9): turn by `deg` clockwise as seen, or mirror across H / V. */
+export type PathTransform = { kind: "rotate"; deg: number } | { kind: "flip"; axis: "h" | "v" };
+
+/**
+ * A line or path transformed about the centre of its bounds, baked into its vertices and Bézier handles (lines and
+ * paths store no angle, docs/course-layout.md §3 "Rotate and flip a line or path"), kept on the printable area as a
+ * move is. Null for any other kind (those turn by their field and knob).
+ */
+export function transformPathOf(o: CourseMapObject, op: PathTransform, printable: MapRect): CourseMapObject | null {
+  if (o.kind !== "path" && o.kind !== "line") return null;
+  const b = courseMapObjectPageBoundsOf(o);
+  const about = { x: b.x + b.width / 2, y: -(b.y + b.height / 2) };
+  // Page mm are y-down: the shared maths turn and mirror in y-up, so y (and each handle's y) is negated round it.
+  const up = <V extends { x: number; y: number; hIn?: Pt; hOut?: Pt }>(v: V): V => ({
+    ...v, y: -v.y, ...(v.hIn ? { hIn: { x: v.hIn.x, y: -v.hIn.y } } : {}), ...(v.hOut ? { hOut: { x: v.hOut.x, y: -v.hOut.y } } : {}),
+  });
+  const apply = <V extends { x: number; y: number; hIn?: Pt; hOut?: Pt }>(vs: readonly V[]): V[] =>
+    (op.kind === "rotate" ? rotateVertices(vs.map(up), op.deg, about) : flipVertices(vs.map(up), op.axis, about)).map(up);
+  if (o.kind === "line") {
+    const [a, c] = apply([{ x: o.x1, y: o.y1 }, { x: o.x2, y: o.y2 }]);
+    return constrainMapObject({ ...o, x1: a.x, y1: a.y, x2: c.x, y2: c.y }, printable);
+  }
+  return constrainMapObject({ ...o, points: apply(o.points) }, printable);
 }

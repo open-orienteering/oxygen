@@ -330,3 +330,112 @@ describe("an image corner drag and the lock (J8, docs/course-layout.md §3)", ()
     expect(dragCorner(false, true)).toBeCloseTo(2, 6);
   });
 });
+
+describe("transform handles (J9, docs/course-layout.md §3 \"Transform handles\")", () => {
+  const img: CourseMapObject = { id: "img", kind: "image", anchor: "page", graphicId: 9, x: 50, y: 50, width: 40, height: 20 };
+  const sel = (o: CourseMapObject, over: Partial<LayoutBindingContext> = {}) => ctx({ editable: [o], selection: { kind: "object", id: o.id }, ...over });
+  const committed = (c: ReturnType<typeof ctx>) => c.onCommit.mock.calls[0][0].objects[0] as Extract<CourseMapObject, { kind: "image" | "rectangle" }>;
+  // The knob: 24 px above the top edge's middle at 0.1 mm/px (pagePerView 1) → 2.4 mm above (70, 50).
+  const knob = { x: 70, y: 50 - 2.4 };
+
+  it("draws the turned box, its corners and the knob; a path gets no knob", () => {
+    const ids = layoutBinding(sel({ ...img, rotationDeg: 30 })).shapes!.flatMap((s) => ("testId" in s && s.testId ? [s.testId] : []));
+    expect(ids.filter((i) => i === "editor-layout-handle")).toHaveLength(4);
+    expect(ids).toContain("editor-layout-rotate");
+    const path: CourseMapObject = { id: "p", kind: "path", anchor: "page", closed: true, points: [{ x: 10, y: 10 }, { x: 30, y: 10 }, { x: 20, y: 30 }], fillMode: "none" };
+    const pathIds = layoutBinding(sel(path)).shapes!.flatMap((s) => ("testId" in s && s.testId ? [s.testId] : []));
+    expect(pathIds).not.toContain("editor-layout-rotate");
+  });
+
+  it("a knob drag turns about the centre by the pointer's angle, Shift in 15° steps; a cancel writes nothing", () => {
+    const c = sel(img);
+    const b = layoutBinding(c);
+    expect(b.onPointerDown!(at(knob.x, knob.y))).toBe(true);
+    // From straight above the centre (70, 60) to straight right of it: a quarter turn clockwise.
+    b.onPointerDrag!(view(90, 60));
+    b.onPointerUp!(view(90, 60));
+    expect(committed(c).rotationDeg).toBeCloseTo(90, 6);
+    const s = sel(img);
+    const bs = layoutBinding(s);
+    bs.onPointerDown!(at(knob.x, knob.y));
+    bs.onPointerDrag!(view(80, 50), { shift: true, alt: false });
+    bs.onPointerUp!(view(80, 50));
+    expect((committed(s).rotationDeg ?? 0) % 15).toBe(0);
+    const n = sel(img);
+    const bn = layoutBinding(n);
+    bn.onPointerDown!(at(knob.x, knob.y));
+    bn.onPointerDrag!(view(90, 60));
+    bn.onPointerUp!(null);
+    expect(n.onCommit).not.toHaveBeenCalled();
+    expect(n.onPreview).toHaveBeenLastCalledWith(null);
+  });
+
+  it("a text turns about its anchor", () => {
+    const text: CourseMapObject = { id: "t", kind: "text", anchor: "page", x: 100, y: 100, text: "Header", fontSizeMm: 5, color: "#000000" };
+    const c = sel(text);
+    const b = layoutBinding(c);
+    const k = (b.shapes!.find((s) => "testId" in s && s.testId === "editor-layout-rotate") as { from: { x: number; y: number } }).from;
+    const kPage = { x: toPageOf(k).x, y: toPageOf(k).y - 2.4 };
+    expect(b.onPointerDown!(at(kPage.x, kPage.y))).toBe(true);
+    // The anchor is the pivot: a pointer straight right of the anchor from straight above it is +90.
+    b.onPointerDrag!(view(100 + 20, 100));
+    b.onPointerUp!(view(120, 100));
+    const o = c.onCommit.mock.calls[0][0].objects[0] as Extract<CourseMapObject, { kind: "text" }>;
+    expect([o.x, o.y]).toEqual([100, 100]);
+    expect(o.rotationDeg).not.toBe(undefined);
+  });
+
+  it("a corner of a turned image keeps its opposite drawn corner; Shift pressed mid-drag frees the lock", () => {
+    const turned = { ...img, rotationDeg: 30 } as CourseMapObject;
+    const c = sel(turned, { aspectLock: true });
+    const b = layoutBinding(c);
+    const handles = b.shapes!.filter((s) => "testId" in s && s.testId === "editor-layout-handle") as unknown as { x: number; y: number; data: { handle: string } }[];
+    const se = handles.find((h) => h.data.handle === "se")!, nw = handles.find((h) => h.data.handle === "nw")!;
+    const sePage = toPageOf(se), nwPage = toPageOf(nw);
+    expect(b.onPointerDown!(at(sePage.x, sePage.y))).toBe(true);
+    b.onPointerDrag!(view(sePage.x + 2, sePage.y + 12), { shift: true, alt: false });
+    b.onPointerUp!(view(sePage.x + 2, sePage.y + 12));
+    const o = committed(c);
+    const after = layoutBinding(sel(o)).shapes!.filter((s) => "testId" in s && s.testId === "editor-layout-handle") as unknown as { x: number; y: number; data: { handle: string } }[];
+    const nwAfter = toPageOf(after.find((h) => h.data.handle === "nw")!);
+    expect(nwAfter.x).toBeCloseTo(nwPage.x, 6);
+    expect(nwAfter.y).toBeCloseTo(nwPage.y, 6);
+    expect(o.width / o.height).not.toBeCloseTo(2, 2);
+  });
+
+  it("a rectangle keeps its ratio only with Shift", () => {
+    const c = sel(box);
+    const b = layoutBinding(c);
+    b.onPointerDown!(at(80, 70, { shift: true }));
+    b.onPointerDrag!(view(110, 75));
+    b.onPointerUp!(view(110, 75));
+    expect(committed(c).width / committed(c).height).toBeCloseTo(1.5, 6);
+  });
+
+  it("crop mode: a double-click on the selected image enters it; only its edges take a press; an edge drag is one write of box and crop", () => {
+    const onCropMode = vi.fn();
+    const enter = layoutBinding(sel(img, { onCropMode }));
+    enter.onDoubleClick!(at(60, 60));
+    expect(onCropMode).toHaveBeenCalledWith("img");
+    const c = sel(img, { cropMode: "img", onCropMode });
+    const b = layoutBinding(c);
+    const ids = b.shapes!.flatMap((s) => ("testId" in s && s.testId ? [s.testId] : []));
+    expect(ids.filter((i) => i === "editor-layout-crop-edge")).toHaveLength(4);
+    expect(ids).not.toContain("editor-layout-rotate");
+    expect(ids).not.toContain("editor-layout-handle");
+    // The right edge's middle (90, 60) dragged to 80: three quarters kept.
+    expect(b.onPointerDown!(at(90, 60))).toBe(true);
+    b.onPointerDrag!(view(80, 60));
+    b.onPointerUp!(view(80, 60));
+    expect(c.onCommit).toHaveBeenCalledTimes(1);
+    const o = committed(c) as Extract<CourseMapObject, { kind: "image" }>;
+    expect(o.crop).toEqual({ x: 0, y: 0, width: 0.75, height: 1 });
+    expect([o.x, o.width]).toEqual([50, 30]);
+  });
+});
+
+function toPageOf(p: { x: number; y: number }) {
+  // The test geometry's page ↔ view is a translation (1 page mm = 1 paper mm, y flipped about the page centre).
+  const o = toView({ x: 0, y: 0 }, g), one = toView({ x: 1, y: 1 }, g);
+  return { x: (p.x - o.x) / (one.x - o.x), y: (p.y - o.y) / (one.y - o.y) };
+}

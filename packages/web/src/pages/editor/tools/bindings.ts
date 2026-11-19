@@ -9,7 +9,8 @@
 import type { course } from "@oxygen/shared";
 import type { EditorToolBinding, ToolPointer, ToolShape } from "../../../components/MapViewer";
 import { imageRing, type EditorTarget } from "../../../lib/editor/hit";
-import { resizeImage } from "../../../lib/editor/image-box";
+import { IMAGE_MIN_MM } from "../../../lib/editor/image-box";
+import { resizeBox } from "../../../lib/editor/transform-gestures";
 import { circleGapAt, circleGapFromDrag, compassDeg, legFraction, legGapAt, legGapFromDrag, type AngularGap, type FractionGap } from "./gaps";
 import { dragBendGrip, legPolyline, moveBend, polylineDistance, polylineSlice, toggleBendSmooth, type Bend } from "../../../lib/editor/bends";
 import { legLengthShape } from "../../../lib/editor/leg-length";
@@ -303,7 +304,7 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
       } else if (cur?.kind === "image-corner") {
         if (!cur.moved && near(cur.press, pt, 3 * cur.mmPerPx)) return;
         cur.moved = true;
-        o.onObjectDraft(cur.id, resizeImage(cur.base, cur.rotationDeg, cur.corner, pt, o.aspectLock ?? true));
+        o.onObjectDraft(cur.id, resizeBox(cur.base, cur.rotationDeg, cur.corner, pt, o.aspectLock ?? true, IMAGE_MIN_MM));
       } else if (cur?.kind === "object" || cur?.kind === "grip") {
         const geometry = dragGeometry(cur, pt, mods);
         if (geometry) o.onObjectDraft(cur.id, geometry);
@@ -341,7 +342,7 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
         // A drag writes once; a cancelled one drops its draft; a click on a corner does nothing.
         if (!cur.moved) return;
         if (!pt) return o.onObjectDraft(cur.id, null);
-        return o.onObjectMoved(cur.id, resizeImage(cur.base, cur.rotationDeg, cur.corner, pt, o.aspectLock ?? true));
+        return o.onObjectMoved(cur.id, resizeBox(cur.base, cur.rotationDeg, cur.corner, pt, o.aspectLock ?? true, IMAGE_MIN_MM));
       }
       if (cur.kind === "shift-click") {
         if (pt) o.onToggleMulti(cur.id);

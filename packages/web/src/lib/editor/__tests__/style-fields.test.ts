@@ -5,7 +5,8 @@
 import { describe, expect, it } from "vitest";
 import { clampCrop, cropChange, FULL_CROP, sizeChange, stylePatch, type StyleValue } from "../style-fields";
 import { course } from "@oxygen/shared";
-import { imageBox, imageBoxAt, imageAt, resizeImage } from "../image-box";
+import { imageBox, imageBoxAt, imageAt, IMAGE_MIN_MM } from "../image-box";
+import { resizeBox } from "../transform-gestures";
 import { imageRing } from "../hit";
 
 const box = [{ x: 0, y: 0 }, { x: 20, y: 10 }];
@@ -90,21 +91,21 @@ describe("image box (J7)", () => {
     expect(imageAt([turned], { x: -3, y: 10 })?.id).toBe(4);
   });
 
-  it("resizeImage: every corner keeps its opposite; at least 1 mm a side", () => {
+  it("resizeBox (an image, J7; moved in J9): every corner keeps its opposite; at least 1 mm a side", () => {
     const g = imageBoxAt({ x: 0, y: 0 }, 2, 1, 20);
     for (const corner of [0, 1, 3]) {
       const ring = imageRing(g, 30);
       const to = { x: ring[corner].x + 3, y: ring[corner].y - 2 };
-      const out = imageRing(resizeImage(g, 30, corner, to, false), 30);
+      const out = imageRing(resizeBox(g, 30, corner, to, false, IMAGE_MIN_MM), 30);
       expect(out[(corner + 2) % 4].x).toBeCloseTo(ring[(corner + 2) % 4].x, 6);
       expect(out[(corner + 2) % 4].y).toBeCloseTo(ring[(corner + 2) % 4].y, 6);
       expect(out[corner].x).toBeCloseTo(to.x, 6);
       expect(out[corner].y).toBeCloseTo(to.y, 6);
     }
-    const tiny = resizeImage(g, 0, 2, { x: -100, y: -100 }, false);
+    const tiny = resizeBox(g, 0, 2, { x: -100, y: -100 }, false, IMAGE_MIN_MM);
     expect(tiny[1].x - tiny[0].x).toBeCloseTo(1, 6);
     expect(tiny[1].y - tiny[0].y).toBeCloseTo(1, 6);
-    const locked = resizeImage(g, 0, 2, { x: -100, y: -100 }, true);
+    const locked = resizeBox(g, 0, 2, { x: -100, y: -100 }, true, IMAGE_MIN_MM);
     expect(locked[1].y - locked[0].y).toBeCloseTo(1, 6);
     expect(locked[1].x - locked[0].x).toBeCloseTo(2, 6);
   });

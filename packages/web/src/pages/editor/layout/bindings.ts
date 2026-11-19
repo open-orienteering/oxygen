@@ -14,9 +14,14 @@
 import type { CourseMapObject, DescriptionBlockSettings, MapRect } from "@oxygen/shared";
 import type { EditorToolBinding, ToolPointer, ToolShape } from "../../../components/MapViewer";
 import {
-  alignedCentre, gridSnap, handleAt, layoutObjectAt, objectHandles, pageDelta, pagePerView, pathFromView, pathRule, rectInView,
-  selectionShapes, sheetShapes, toPage, toView, type SheetGeometry,
+  alignedCentre, gridSnap, handleAt, isTurnable, layoutObjectAt, objectHandles, objectPivot, objectRing, pageDelta, pagePerView, pathFromView,
+  pathRule, rectInView, ringShapes, selectionShapes, sheetShapes, toPage, toView, upOf, type SheetGeometry, type TurnedObject,
 } from "../../../lib/editor/layout";
+import {
+  cropEdge, edgeHandles, knobBase, resizeBox, rotationAt, ROTATE_STEM_PX, uncroppedRing, type BoxEdge,
+} from "../../../lib/editor/transform-gestures";
+import { stylePatch } from "../../../lib/editor/style-fields";
+import { rectOfStyleGeometry, styleChangeOf, styleGeometryOf } from "./model";
 import { clampPagePoint, constrainDescription, constrainMapObject, resizeMapObject, translateMapObject, type ResizeHandle } from "../../../lib/map-layout-editor";
 import {
   draggedGeometry, dragGeometry, geometryShapes, insertAtEdge, pressGeometry, releaseGeometry, type GeometryDrag,
@@ -46,7 +51,13 @@ export type LayoutTarget = { sheet: number } | { template: number };
 
 export type LayoutGesture =
   | { kind: "move"; id: string; from: Pt; base: CourseMapObject; moved: boolean }
-  | { kind: "resize"; id: string; handle: ResizeHandle; from: Pt; base: CourseMapObject; moved: boolean; proportional: boolean }
+  | { kind: "resize"; id: string; handle: ResizeHandle; from: Pt; base: CourseMapObject; moved: boolean }
+  /** A rectangle's or image's corner in its own frame (J9): the opposite drawn corner fixed; `lock` the press's, Shift live. */
+  | { kind: "box"; id: string; corner: number; base: Extract<CourseMapObject, { kind: "rectangle" | "image" }>; lock: boolean; shift: boolean; to: Pt; moved: boolean }
+  /** The rotate knob (J9): the pointer's turn about the pivot from `press` (page mm), Shift snapping to 15°. */
+  | { kind: "rotate"; id: string; base: TurnedObject; press: Pt; shift: boolean; to: Pt; moved: boolean }
+  /** A crop edge of the image in crop mode (J9). */
+  | { kind: "crop"; id: string; edge: BoxEdge; base: Extract<CourseMapObject, { kind: "image" }>; to: Pt; moved: boolean }
   | { kind: "description"; from: Pt; base: DescriptionBlockSettings; moved: boolean }
   | { kind: "align"; from: Pt; base: Pt; moved: boolean }
   /** A vertex or a handle grip of the selected path, in page mm (`geometry-gestures.ts`). */
@@ -74,8 +85,11 @@ export interface LayoutBindingContext {
   tool: LayoutTool;
   /** 1 mm steps (08 §5.3 "Grid 1 mm"). */
   snapping: boolean;
-  /** An image corner drag keeps the ratio while on; Shift inverts it (J8). */
+  /** An image corner drag keeps the ratio while on; Shift inverts it (J8; live during the drag, J9). */
   aspectLock?: boolean;
+  /** The image in crop mode (J9): its edges crop, its corners and knob are hidden. */
+  cropMode?: string | null;
+  onCropMode?: (id: string | null) => void;
   gesture: { current: LayoutGesture };
   onPreview: (change: LayoutChange | null) => void;
   onCommit: (change: LayoutChange) => void;
@@ -107,6 +121,10 @@ export function gestureChange(c: Pick<LayoutBindingContext, "geometry" | "editab
   if (g.kind === "align") return { centre: alignedCentre(g.base, g.from, to) };
   // The drag's own state (`dragGeometry` updates it with the keys held); `to` is already in it.
   if (g.kind === "geometry") return g.drag.moved ? pathChange(c, g.base, draggedGeometry(g.drag), movedVertex(g.drag)) : {};
+  if (g.kind === "box" || g.kind === "rotate" || g.kind === "crop") {
+    const next = transformed(c, g);
+    return { objects: c.editable.map((o) => (o.id === g.id ? next : o)) };
+  }
   const d = step(pageDelta(g.from, to, c.geometry), c.snapping);
   if (g.kind === "description") {
     const b = c.block;
@@ -114,8 +132,44 @@ export function gestureChange(c: Pick<LayoutBindingContext, "geometry" | "editab
   }
   const next = g.kind === "move"
     ? constrainMapObject(translateMapObject(g.base, d.x, d.y), printable)
-    : resizeMapObject(g.base, g.handle, d.x, d.y, { printable, imageMode: g.proportional ? "proportional" : "free" });
+    : resizeMapObject(g.base, g.handle, ...turnedDelta(g.base, d), { printable });
   return { objects: c.editable.map((o) => (o.id === g.id ? next : o)) };
+}
+
+/** A drag's page offset in a turned text's own frame (its handles sit on the turned corners, J9). */
+function turnedDelta(o: CourseMapObject, d: Pt): [number, number] {
+  const deg = o.kind === "text" ? o.rotationDeg ?? 0 : 0;
+  if (!deg) return [d.x, d.y];
+  const r = (-deg * Math.PI) / 180, cos = Math.cos(r), sin = Math.sin(r);
+  // y-up turn by −deg (the inverse of the drawn turn), back to y-down.
+  const u = upOf(d);
+  return [u.x * cos + u.y * sin, -(-u.x * sin + u.y * cos)];
+}
+
+/** The box ring's corner index (`boxRing`: sw, se, ne, nw on the page) of a resize handle. */
+const CORNER: Partial<Record<ResizeHandle, number>> = { sw: 0, se: 1, ne: 2, nw: 3 };
+
+/** Layout's smallest box side, page mm (as `resizeMapObject`'s). */
+const MIN_BOX_MM = 2;
+
+/** The object a box, rotate or crop drag leaves (J9, docs/course-layout.md §3 "Transform handles"). */
+function transformed(c: Pick<LayoutBindingContext, "geometry" | "snapping">, g: Extract<NonNullable<LayoutGesture>, { kind: "box" | "rotate" | "crop" }>): CourseMapObject {
+  const { printable } = c.geometry;
+  if (g.kind === "rotate") {
+    const deg = rotationAt(g.base.rotationDeg ?? 0, upOf(objectPivot(g.base)), upOf(g.press), upOf(g.to), g.shift);
+    // Kept on the printable area by the drawn extent, as the rotation field (J8 review (1)).
+    return styleChangeOf(g.base, { props: stylePatch(g.base, { rotationDeg: deg }) }, printable);
+  }
+  if (g.kind === "crop") {
+    const r = cropEdge(styleGeometryOf(g.base)!, g.base, g.edge, upOf(g.to));
+    return styleChangeOf(g.base, { props: stylePatch(g.base, { crop: r.crop }), geometry: r.geometry }, printable);
+  }
+  const deg = g.base.rotationDeg ?? 0;
+  // An unturned box: the corner on the printable area and the 1 mm grid, as before. A turned one is not clamped
+  // (validation flags a corner off the page, `object_outside_page`).
+  const pt = deg ? g.to : gridSnap(clampPagePoint(g.to, printable), c.snapping);
+  const box = resizeBox(styleGeometryOf(g.base)!, deg, g.corner, upOf(pt), g.lock !== g.shift, MIN_BOX_MM);
+  return { ...g.base, ...rectOfStyleGeometry(box) };
 }
 
 /**
@@ -153,6 +207,22 @@ export function layoutBinding(c: LayoutBindingContext): EditorToolBinding {
     // The course editor's selected path (§7 "Editing geometry"): its outline along the curves, handles, grips.
     const inView = mapVertices(selected.points, (q) => toView(q, g));
     shapes.push(...geometryShapes(inView, selected.closed, { selected: true, focused: c.focusedVertex ?? null, ids: PATH_IDS }));
+  } else if (selected && isTurnable(selected) && c.tool.kind !== "draw") {
+    // The drawn (turned) box, its corners and the rotate knob (J9); in crop mode the edges and the whole graphic.
+    const ring = objectRing(selected);
+    if (selected.kind === "image" && c.cropMode === selected.id) {
+      const full = uncroppedRing(styleGeometryOf(selected)!, selected).map(upOf);
+      shapes.push({ kind: "line", points: full.map((q) => toView(q, g)), closed: true, color: "#94a3b8", dashed: true, widthPx: 1, testId: "editor-layout-crop-full" });
+      shapes.push(...ringShapes(ring, [], g, "editor-layout-selection"));
+      for (const h of edgeHandles(ring.map(upOf))) shapes.push({ kind: "handle", ...toView(upOf(h.at), g), testId: "editor-layout-crop-edge", data: { edge: h.edge } });
+    } else {
+      shapes.push(...ringShapes(ring, objectHandles(selected), g, "editor-layout-selection"));
+      const k = knobBase(ring.map(upOf));
+      shapes.push({
+        kind: "grip", from: toView(upOf(k.at), g), ...toView(upOf({ x: k.at.x + k.normal.x, y: k.at.y + k.normal.y }), g),
+        lengthPx: ROTATE_STEM_PX, testId: "editor-layout-rotate",
+      });
+    }
   } else if (selected && c.tool.kind !== "draw") {
     shapes.push(...selectionShapes(courseMapObjectPageBounds(selected), objectHandles(selected), g, "editor-layout-selection"));
   }
@@ -177,10 +247,36 @@ export function layoutBinding(c: LayoutBindingContext): EditorToolBinding {
           c.gesture.current = { kind: "geometry", id: selected.id, base: selected, drag: d };
           return true;
         }
+      } else if (selected && selected.kind === "image" && c.cropMode === selected.id) {
+        // Crop mode (J9): the edges only; the body still moves below.
+        const ring = objectRing(selected).map(upOf);
+        const up = upOf(page);
+        const e = edgeHandles(ring).find((h) => Math.hypot(h.at.x - up.x, h.at.y - up.y) <= tol);
+        if (e) {
+          c.gesture.current = { kind: "crop", id: selected.id, edge: e.edge, base: selected, to: page, moved: false };
+          return true;
+        }
       } else if (selected) {
+        if (isTurnable(selected)) {
+          // The knob first: it sits outside the box, a fixed screen distance above its top edge.
+          const k = knobBase(objectRing(selected).map(upOf));
+          const stem = ROTATE_STEM_PX * p.mmPerPx * pagePerView(g);
+          const knob = upOf({ x: k.at.x + k.normal.x * stem, y: k.at.y + k.normal.y * stem });
+          if (Math.hypot(knob.x - page.x, knob.y - page.y) <= tol) {
+            c.gesture.current = { kind: "rotate", id: selected.id, base: selected, press: page, shift: !!p.shift, to: page, moved: false };
+            return true;
+          }
+        }
         const h = handleAt(page, objectHandles(selected), tol);
         if (h) {
-          c.gesture.current = { kind: "resize", id: selected.id, handle: h, from: p.pt, base: selected, moved: false, proportional: (c.aspectLock ?? false) !== p.shift };
+          const corner = CORNER[h];
+          if ((selected.kind === "rectangle" || selected.kind === "image") && corner !== undefined) {
+            // The aspect lock is the image's (on by default); a rectangle has none, so Shift alone keeps its ratio.
+            const lock = selected.kind === "image" ? c.aspectLock ?? false : false;
+            c.gesture.current = { kind: "box", id: selected.id, corner, base: selected, lock, shift: !!p.shift, to: page, moved: false };
+          } else {
+            c.gesture.current = { kind: "resize", id: selected.id, handle: h, from: p.pt, base: selected, moved: false };
+          }
           return true;
         }
       }
@@ -211,6 +307,11 @@ export function layoutBinding(c: LayoutBindingContext): EditorToolBinding {
         return;
       }
       gst.moved = true;
+      if (gst.kind === "box" || gst.kind === "rotate" || gst.kind === "crop") {
+        gst.to = toPage(pt, g);
+        // Shift is read live (J9): pressed or let go mid-drag, the lock or the snap follows.
+        if (mods && gst.kind !== "crop") gst.shift = mods.shift;
+      }
       c.onPreview(gestureChange(c, gst, pt));
     },
     onPointerUp: (pt) => {
@@ -224,13 +325,22 @@ export function layoutBinding(c: LayoutBindingContext): EditorToolBinding {
         else if (r?.kind === "focus") c.onVertexFocus?.(r.index);
         return;
       }
-      if (gst && pt && gst.moved) c.onCommit(gestureChange(c, gst, pt));
+      if (gst && pt && gst.moved) {
+        if (gst.kind === "box" || gst.kind === "rotate" || gst.kind === "crop") gst.to = toPage(pt, g);
+        c.onCommit(gestureChange(c, gst, pt));
+      }
       // A click anywhere else unfocuses the vertex.
       else if (pt) c.onVertexFocus?.(null);
     },
     onDoubleClick: (p) => {
+      if (placing) return;
+      // On the selected image: crop mode (J9).
+      if (selected?.kind === "image" && c.cropMode !== selected.id && layoutObjectAt(toPage(p.pt, g), [selected], 0) === 0) {
+        c.onCropMode?.(selected.id);
+        return;
+      }
       // On the selected path's edge, off its vertices: a smooth vertex there (Alt: a corner), focused.
-      if (selected?.kind !== "path" || placing) return;
+      if (selected?.kind !== "path") return;
       const inserted = insertAtEdge(selected.points, pathRule(selected), toPage(p.pt, g), tolerance(p, g), !!p.alt);
       if (!inserted) return;
       c.onVertexFocus?.(inserted.index);

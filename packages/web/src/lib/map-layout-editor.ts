@@ -222,12 +222,8 @@ export function clampPagePoint(point: MapPoint, printable: MapRect): MapPoint {
   };
 }
 
-export type ImageResizeMode = "proportional" | "free" | "crop";
-
 export interface ResizeMapObjectOptions {
   printable?: MapRect;
-  /** Image-only: default free; Ctrl/Cmd = proportional; Shift = crop. */
-  imageMode?: ImageResizeMode;
 }
 
 /**
@@ -241,7 +237,7 @@ export function resizeMapObject(
   pageDy: number,
   options: ResizeMapObjectOptions = {},
 ): CourseMapObject {
-  const { printable, imageMode = "free" } = options;
+  const { printable } = options;
 
   if (object.kind === "line") {
     let moved =
@@ -284,109 +280,11 @@ export function resizeMapObject(
     };
   }
 
-  if (object.kind === "image" && imageMode === "crop") {
-    return cropImageObject(object, bounds, handle, pageDx, pageDy, printable);
-  }
-
-  let next = resizedBounds(bounds, handle, pageDx, pageDy, printable);
-  if (object.kind === "image" && imageMode === "proportional") {
-    next = proportionalBounds(bounds, next, handle, printable);
-  }
+  // A rectangle's or image's corner in Layout mode is `transform-gestures.ts`'s `resizeBox` (J9); this stays the
+  // unturned bounds resize.
+  const next = resizedBounds(bounds, handle, pageDx, pageDy, printable);
 
   return { ...object, x: next.x, y: next.y, width: next.width, height: next.height };
-}
-
-/** Keep aspect ratio while clamping the result inside `printable`. */
-function proportionalBounds(
-  original: MapRect,
-  proposed: MapRect,
-  handle: ResizeHandle,
-  printable?: MapRect,
-): MapRect {
-  const aspect = original.width / Math.max(original.height, 0.001);
-  let width = proposed.width;
-  let height = proposed.height;
-  // Prefer the dominant axis of the drag.
-  if (Math.abs(proposed.width - original.width) >= Math.abs(proposed.height - original.height)) {
-    height = width / aspect;
-  } else {
-    width = height * aspect;
-  }
-  width = Math.max(MIN_SIZE_MM, width);
-  height = Math.max(MIN_SIZE_MM, height);
-
-  let x = original.x;
-  let y = original.y;
-  if (handle.includes("w")) x = original.x + original.width - width;
-  else if (!handle.includes("e")) x = original.x + (original.width - width) / 2;
-  if (handle.includes("n")) y = original.y + original.height - height;
-  else if (!handle.includes("s")) y = original.y + (original.height - height) / 2;
-
-  if (printable) {
-    if (x < printable.x) x = printable.x;
-    if (y < printable.y) y = printable.y;
-    if (x + width > printable.x + printable.width) {
-      width = printable.x + printable.width - x;
-      height = width / aspect;
-    }
-    if (y + height > printable.y + printable.height) {
-      height = printable.y + printable.height - y;
-      width = height * aspect;
-    }
-    width = Math.max(MIN_SIZE_MM, width);
-    height = Math.max(MIN_SIZE_MM, height);
-    if (handle.includes("w")) x = original.x + original.width - width;
-    if (handle.includes("n")) y = original.y + original.height - height;
-  }
-  return { x, y, width, height };
-}
-
-/**
- * Shift-drag: move the frame edge and shrink the crop window so the visible
- * content stays put relative to the page.
- */
-function cropImageObject(
-  object: Extract<CourseMapObject, { kind: "image" }>,
-  bounds: MapRect,
-  handle: ResizeHandle,
-  pageDx: number,
-  pageDy: number,
-  printable?: MapRect,
-): CourseMapObject {
-  const crop = object.crop ?? { x: 0, y: 0, width: 1, height: 1 };
-  const next = resizedBounds(bounds, handle, pageDx, pageDy, printable);
-  const dxFrac = (next.x - bounds.x) / Math.max(bounds.width, 0.001);
-  const dyFrac = (next.y - bounds.y) / Math.max(bounds.height, 0.001);
-  const dwFrac = (next.width - bounds.width) / Math.max(bounds.width, 0.001);
-  const dhFrac = (next.height - bounds.height) / Math.max(bounds.height, 0.001);
-
-  let cropX = crop.x;
-  let cropY = crop.y;
-  let cropW = crop.width;
-  let cropH = crop.height;
-  if (handle.includes("w")) {
-    cropX = clamp(crop.x + dxFrac * crop.width, 0, crop.x + crop.width - 0.05);
-    cropW = crop.x + crop.width - cropX;
-  }
-  if (handle.includes("e")) {
-    cropW = clamp(crop.width + dwFrac * crop.width, 0.05, 1 - crop.x);
-  }
-  if (handle.includes("n")) {
-    cropY = clamp(crop.y + dyFrac * crop.height, 0, crop.y + crop.height - 0.05);
-    cropH = crop.y + crop.height - cropY;
-  }
-  if (handle.includes("s")) {
-    cropH = clamp(crop.height + dhFrac * crop.height, 0.05, 1 - crop.y);
-  }
-
-  return {
-    ...object,
-    x: next.x,
-    y: next.y,
-    width: next.width,
-    height: next.height,
-    crop: { x: cropX, y: cropY, width: cropW, height: cropH },
-  };
 }
 
 export function constrainMapObject(

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { course, defaultMapAppearance, type CourseMapObject } from "@oxygen/shared";
 import { cropChange, sizeChange } from "../../../lib/editor/style-fields";
-import { FILL_MODES, geometryOf, rectOfStyleGeometry, styleChangeOf, styleGeometryOf, styleShowOf, layoutRequestOf, nextSheetName, pathObject, templateWriteOf, placeObject, scopeObjects, sheetKeyOf, snapshotOf, withEditable, type EditorSheet } from "../layout/model";
+import { FILL_MODES, geometryOf, rectOfStyleGeometry, transformPathOf, styleChangeOf, styleGeometryOf, styleShowOf, layoutRequestOf, nextSheetName, pathObject, templateWriteOf, placeObject, scopeObjects, sheetKeyOf, snapshotOf, withEditable, type EditorSheet } from "../layout/model";
 
 const settings = { printMarginMm: 3, mapFrame: { x: 10, y: 10, width: 190, height: 277 }, description: { visible: false, x: 150, y: 12, cellSizeMm: 6 }, appearance: defaultMapAppearance };
 const sheetText = { id: "s", kind: "text" as const, anchor: "page" as const, x: 20, y: 30, text: "{course}", fontSizeMm: 4, color: "#000000" };
@@ -192,5 +192,31 @@ describe("page objects' style fields (J8, docs/course-layout.md §3 \"Style fiel
     expect(rectOfStyleGeometry(left.geometry)).toEqual({ x: 60, y: 50, width: 30, height: 20 });
     const top = cropChange(styleGeometryOf(img)!, {}, undefined, { x: 0, y: 0.5, width: 1, height: 0.5 });
     expect(rectOfStyleGeometry(top.geometry)).toEqual({ x: 50, y: 60, width: 40, height: 10 });
+  });
+});
+
+describe("a line's or path's turn and flip (J9, docs/course-layout.md §3 \"Rotate and flip a line or path\")", () => {
+  const printable = { x: 3, y: 3, width: 204, height: 291 };
+  const path = { id: "p", kind: "path" as const, anchor: "page" as const, closed: true, fillMode: "none" as const,
+    points: [{ x: 50, y: 50, hOut: { x: 5, y: 0 } }, { x: 70, y: 50 }, { x: 70, y: 60 }, { x: 50, y: 60 }] };
+  it("a quarter turn clockwise as seen on the page turns vertices and handles about the bounds' centre", () => {
+    const r = transformPathOf(path, { kind: "rotate", deg: 90 }, printable) as typeof path;
+    // Centre (60, 55); the top-left vertex goes to the top-right, its rightward handle points down the page.
+    expect(r.points[0].x).toBeCloseTo(65, 6);
+    expect(r.points[0].y).toBeCloseTo(45, 6);
+    expect(r.points[0].hOut!.x).toBeCloseTo(0, 6);
+    expect(r.points[0].hOut!.y).toBeCloseTo(5, 6);
+    expect(r.closed).toBe(true);
+  });
+  it("a flip mirrors about the centre and keeps the bounds; the legacy line kind; kept on the page; boxes refused", () => {
+    const f = transformPathOf(path, { kind: "flip", axis: "h" }, printable) as typeof path;
+    expect(f.points.map((p) => p.x)).toEqual([70, 50, 50, 70]);
+    expect(f.points[0].hOut).toEqual({ x: -5, y: 0 });
+    const line = { id: "l", kind: "line" as const, anchor: "page" as const, x1: 10, y1: 10, x2: 30, y2: 20, stroke: "#000000", strokeWidthMm: 0.3 };
+    expect(transformPathOf(line, { kind: "flip", axis: "v" }, printable)).toMatchObject({ x1: 10, y1: 20, x2: 30, y2: 10 });
+    const edge = { ...line, x1: 4, y1: 10, x2: 44, y2: 10 };
+    const turned = transformPathOf(edge, { kind: "rotate", deg: 90 }, printable) as typeof line;
+    expect(Math.min(turned.y1, turned.y2)).toBeCloseTo(3, 6);
+    expect(transformPathOf({ id: "t", kind: "text", anchor: "page", x: 1, y: 1, text: "A", fontSizeMm: 4, color: "#000000" }, { kind: "rotate", deg: 90 }, printable)).toBeNull();
   });
 });

@@ -400,8 +400,11 @@ export type ToolShape =
   | { kind: "line"; points: readonly { x: number; y: number }[]; closed?: boolean; dashed?: boolean; color?: string; fill?: string; widthPx?: number; testId?: string; data?: Record<string, string> }
   /** A screen-size square handle. */
   | { kind: "handle"; x: number; y: number; active?: boolean; testId?: string; data?: Record<string, string> }
-  /** A screen-size Bézier handle grip at `x`, `y` on a thin line from its vertex `from`. */
-  | { kind: "grip"; x: number; y: number; from: { x: number; y: number }; testId?: string; data?: Record<string, string> }
+  /**
+   * A screen-size Bézier handle grip at `x`, `y` on a thin line from its vertex `from`. With `lengthPx` the grip is
+   * drawn that many screen px from `from` towards `x`, `y` (a rotate knob's fixed stem, J9).
+   */
+  | { kind: "grip"; x: number; y: number; from: { x: number; y: number }; lengthPx?: number; testId?: string; data?: Record<string, string> }
   | { kind: "text"; x: number; y: number; text: string; dxPx?: number; dyPx?: number; color?: string; testId?: string };
 
 /**
@@ -3963,8 +3966,13 @@ function toolShapeNode(
         strokeWidth={1.5} data-testid={sh.testId} data-x={sh.x} data-y={sh.y} {...data} />;
     }
     case "grip": {
-      const p = project(sh.x, sh.y), q = project(sh.from.x, sh.from.y);
+      let p = project(sh.x, sh.y);
+      const q = project(sh.from.x, sh.from.y);
       if (!p || !q) return null;
+      if (sh.lengthPx !== undefined) {
+        const len = Math.hypot(p.x - q.x, p.y - q.y) || 1;
+        p = { x: q.x + ((p.x - q.x) / len) * sh.lengthPx, y: q.y + ((p.y - q.y) / len) * sh.lengthPx };
+      }
       return (
         <g key={key}>
           <line x1={q.x} y1={q.y} x2={p.x} y2={p.y} stroke="#7c3aed" strokeWidth={1} />

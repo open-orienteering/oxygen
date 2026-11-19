@@ -647,5 +647,12 @@
   "styleCropY": "Överkant",
   "styleCropW": "Bredd",
   "styleCropH": "Höjd",
-  "styleCropReset": "Återställ beskärning"
+  "styleCropReset": "Återställ beskärning",
+  "styleCropMode": "Beskär på sidan",
+  "styleCropDone": "Klar med beskärning",
+  "transformAngle": "Vrid °",
+  "transformRotate": "Vrid",
+  "transformRotate90": "Vrid 90°",
+  "transformFlipH": "Spegla ↔",
+  "transformFlipV": "Spegla ↕"
 }

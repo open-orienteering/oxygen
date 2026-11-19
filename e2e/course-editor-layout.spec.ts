@@ -11,7 +11,7 @@ import { readFile } from "node:fs/promises";
 import { PNG } from "pngjs";
 import { expect, test } from "@playwright/test";
 import { reseed } from "./helpers/reseed";
-import { analysePdf, canvasColourAt, cleanup, clickMap, drag, editorReady, geometryOf, inkIn, nameIdOf, openEditor, pageToPaperOf, printed, probeTemplate, toPage, toPaper, trpcCall, viewCentre, viewSettled, statsRow, type Frame } from "./helpers/editor";
+import { analysePdf, canvasColourAt, cleanup, clickMap, drag, dragHold, editorReady, geometryOf, inkIn, nameIdOf, openEditor, pageToPaperOf, printed, probeTemplate, toPage, toPaper, trpcCall, viewCentre, viewSettled, statsRow, type Frame } from "./helpers/editor";
 import { migrateLegacySheetObjects } from "./helpers/legacy-objects";
 import { waitForTrpc } from "./helpers/trpc";
 import { type Pt, desktopOnly, courseIdByName } from "./helpers/course-editor-spec";
@@ -331,6 +331,116 @@ test.describe("Course editor layout (docs/course-layout.md)", () => {
       await expect(page.getByTestId("editor-layout-style-flip-h")).toHaveCount(0);
       await commit("editor-layout-style-rotation", "15");
       await expect.poll(async () => ((await objects()).find((o) => o.kind === "text") as { rotationDeg?: number }).rotationDeg).toBe(15);
+    } finally {
+      await drop();
+      await cleanup("graphics.delete", { id: graphicId });
+    }
+  });
+
+  test("J9: transform handles on page objects — the knob turns (Shift in 15° steps, Escape cancels), crop mode crops by an edge, a line turns and flips", async ({ page }) => {
+    await openEditor(page);
+    const nameId = nameIdOf(page);
+    const { sheet, drop } = await sheetFixture("Layout transform");
+    const objects = async () => (await trpcCall<{ objects: Record<string, unknown>[] }>("courseMap.get", { seq: sheet.seq }, false)).objects;
+    const png = new PNG({ width: 16, height: 8 });
+    for (let i = 0; i < 128; i++) png.data.set([250, 210, 0, 255], i * 4);
+    const { id: graphicId } = await trpcCall<{ id: number }>("graphics.upload", { name: `e2e-j9-${Date.now()}.png`, scope: "event", fileDataBase64: PNG.sync.write(png).toString("base64") });
+    let saves = 0;
+    page.on("request", (r) => { if (r.url().includes("courseMap.saveLayout")) saves++; });
+    try {
+      await page.goto(`/${nameId}/course-editor?mode=layout&sheet=${sheet.seq}`);
+      await editorReady(page);
+      await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-sheet", String(sheet.seq));
+      const toPaperMm = await pageToPaperOf(page, frame);
+      const screen = async (x: number, y: number) => toPage(page, toPaperMm({ x, y }));
+
+      await page.keyboard.press("i");
+      await page.getByTestId(`editor-layout-graphic-place-${graphicId}`).click();
+      const placed = waitForTrpc(page, "courseMap.saveLayout");
+      await clickMap(page, await screen(100, 120));
+      await placed;
+      const image = async () => (await objects()).find((o) => o.kind === "image") as Record<string, unknown> & { width: number; height: number; rotationDeg?: number; crop?: { width: number } };
+      await expect.poll(async () => (await image())?.width).toBe(30);
+      const layer = page.getByTestId("editor-tool-layer");
+      const centreOf = async (id: string, n = 0) => { const b = (await layer.getByTestId(id).nth(n).boundingBox())!; return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; };
+      const centre = await screen(100, 120);
+
+      // The knob dragged from above the centre to its right: a quarter turn clockwise, one write; undo restores.
+      await expect(layer.getByTestId("editor-layout-rotate")).toHaveCount(1);
+      let knob = await centreOf("editor-layout-rotate");
+      const r = Math.hypot(knob.x - centre.x, knob.y - centre.y);
+      let before = saves;
+      const turned = waitForTrpc(page, "courseMap.saveLayout");
+      await drag(page, knob, { x: centre.x + r, y: centre.y });
+      await turned;
+      // Within a few degrees: the press lands on the knob's pixel, not its exact centre.
+      await expect.poll(async () => Math.abs(((await image()).rotationDeg ?? 0) - 90)).toBeLessThan(3);
+      expect(saves - before).toBe(1);
+      await page.keyboard.press("Control+z");
+      await expect.poll(async () => "rotationDeg" in (await image())).toBe(false);
+
+      // Shift snaps to 15°.
+      knob = await centreOf("editor-layout-rotate");
+      const snapped = waitForTrpc(page, "courseMap.saveLayout");
+      await page.keyboard.down("Shift");
+      await drag(page, knob, { x: centre.x + r * Math.sin(0.65), y: centre.y - r * Math.cos(0.65) });
+      await page.keyboard.up("Shift");
+      await snapped;
+      await expect.poll(async () => (await image()).rotationDeg).toBeDefined();
+      expect(((await image()).rotationDeg as number) % 15).toBe(0);
+      await page.keyboard.press("Control+z");
+      await expect.poll(async () => "rotationDeg" in (await image())).toBe(false);
+
+      // Escape mid-drag: nothing written, the image still unturned and selected.
+      knob = await centreOf("editor-layout-rotate");
+      before = saves;
+      await dragHold(page, knob, { x: centre.x + r, y: centre.y });
+      await page.keyboard.press("Escape");
+      await page.mouse.up();
+      await page.waitForTimeout(300);
+      expect(saves).toBe(before);
+      expect("rotationDeg" in (await image())).toBe(false);
+
+      // Crop mode: a double-click shows the four edges; the right edge dragged a quarter in crops and shrinks the box in one write.
+      await page.mouse.dblclick(centre.x, centre.y);
+      await expect(layer.getByTestId("editor-layout-crop-edge")).toHaveCount(4);
+      await expect(layer.getByTestId("editor-layout-rotate")).toHaveCount(0);
+      const right = await centreOf("editor-layout-crop-edge", 1);
+      const left = await centreOf("editor-layout-crop-edge", 0);
+      before = saves;
+      const cropped = waitForTrpc(page, "courseMap.saveLayout");
+      await drag(page, right, { x: right.x - (right.x - left.x) / 4, y: right.y });
+      await cropped;
+      await expect.poll(async () => (await image()).crop?.width).toBeCloseTo(0.75, 1);
+      expect((await image()).width).toBeCloseTo(30 * (await image()).crop!.width, 6);
+      expect(saves - before).toBe(1);
+      await page.keyboard.press("Control+z");
+      await expect.poll(async () => "crop" in (await image())).toBe(false);
+      expect((await image()).width).toBe(30);
+      // Escape leaves crop mode; the image stays selected.
+      await page.keyboard.press("Escape");
+      await expect(layer.getByTestId("editor-layout-crop-edge")).toHaveCount(0);
+      await expect(page.getByTestId("editor-layout-selected")).toHaveAttribute("data-kind", "object");
+
+      // A line: Turn 90° and Flip ↔ each one write, baked into its points.
+      await page.keyboard.press("Escape");
+      await page.keyboard.press("l");
+      const lined = waitForTrpc(page, "courseMap.saveLayout");
+      await clickMap(page, await screen(60, 200));
+      await lined;
+      const line = async () => (await objects()).find((o) => o.kind === "path" || o.kind === "line") as Record<string, unknown>;
+      await expect.poll(async () => (await line()) !== undefined).toBe(true);
+      await expect(page.getByTestId("editor-layout-transform-rotate90")).toBeVisible();
+      const shape0 = JSON.stringify(await line());
+      const rot = waitForTrpc(page, "courseMap.saveLayout");
+      await page.getByTestId("editor-layout-transform-rotate90").click();
+      await rot;
+      await expect.poll(async () => JSON.stringify(await line())).not.toBe(shape0);
+      const shape1 = JSON.stringify(await line());
+      const flip = waitForTrpc(page, "courseMap.saveLayout");
+      await page.getByTestId("editor-layout-transform-flip-h").click();
+      await flip;
+      await expect.poll(async () => JSON.stringify(await line())).not.toBe(shape1);
     } finally {
       await drop();
       await cleanup("graphics.delete", { id: graphicId });

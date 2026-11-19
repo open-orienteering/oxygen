@@ -41,7 +41,7 @@ import { ClassOverridesSection, ClubTemplatesSection, TemplateKeySection } from 
 import { NoSheetActions, SheetActions, TemplateActions } from "../layout/SheetActions";
 import { SetterSection } from "../layout/SetterSection";
 import { useCapabilities } from "../../../context/CapabilitiesContext";
-import { geometryOf, layoutRequestOf, pathObject, placeObject, scopeObjects, sheetKeyOf, snapshotOf, styleChangeOf, templateWriteOf, withEditable, type EditorSheet, type LayoutSnapshot } from "../layout/model";
+import { geometryOf, layoutRequestOf, pathObject, placeObject, scopeObjects, sheetKeyOf, snapshotOf, styleChangeOf, templateWriteOf, transformPathOf, withEditable, type EditorSheet, type PathTransform, type LayoutSnapshot } from "../layout/model";
 
 type Pt = { x: number; y: number };
 
@@ -166,6 +166,9 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
   const [snapping, setSnapping] = useState(false);
   /** The image size lock (J8): the style fields' size and an image corner drag (Shift inverts); Layout's own, on by default. */
   const [aspectLock, setAspectLock] = useState(true);
+  /** The image in crop mode (J9), keyed by its id: a selection or tool change ends it. Page state, not an undo step. */
+  const [cropModeOf, setCropMode] = useState<string | null>(null);
+  const cropMode = cropModeOf !== null && selection?.kind === "object" && selection.id === cropModeOf && tool.kind === "select" ? cropModeOf : null;
   // The graphics' pixel sizes, for a placed image's aspect (the picker's query, cached).
   const graphicsList = trpc.graphics.list.useQuery(undefined, { enabled: a.enabled });
   const gesture = useRef<LayoutGesture>(null);
@@ -292,7 +295,7 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
       geometry, editable: scoped.editable, locked: scoped.locked, description: snap.description, block, centre: snap.centre,
       // Align map stores a sheet's window; a template has none (its preview follows the course).
       selection: data?.scope === "template" && selection?.kind === "frame" ? null : selection,
-      tool, snapping, gesture, aspectLock,
+      tool, snapping, gesture, aspectLock, cropMode, onCropMode: setCropMode,
       onPreview: (c) => setDraft(c && stored ? apply(stored, c) : null),
       onCommit: change,
       onSelect: setSelection,
@@ -306,7 +309,7 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
         onCancel: () => setTool({ kind: "select" }),
       } : undefined,
     });
-  }, [a.enabled, geometry, snap, scoped, block, data?.scope, selection, tool, snapping, aspectLock, stored, apply, change, place, drawHover, finishPath, focusedVertex, onVertexFocus]);
+  }, [a.enabled, geometry, snap, scoped, block, data?.scope, selection, tool, snapping, aspectLock, cropMode, stored, apply, change, place, drawHover, finishPath, focusedVertex, onVertexFocus]);
 
   const layoutRequest = useMemo(() => (a.enabled && data && snap && geometry ? layoutRequestOf(data, snap, geometry) : null), [a.enabled, data, snap, geometry]);
 
@@ -316,6 +319,14 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
     if (!data || !stored) return;
     change({ objects: scopeObjects(data, stored).editable.map((o) => (o.id === id ? ({ ...o, ...patch } as CourseMapObject) : o)) });
   }, [data, stored, change]);
+  /** A line's or path's turn or flip from the inspector (J9): baked into its vertices, one write. */
+  const transformObject = useCallback((id: string, op: PathTransform) => {
+    if (!data || !stored || !geometry) return;
+    const editable = scopeObjects(data, stored).editable;
+    const o = editable.find((x) => x.id === id);
+    const next = o ? transformPathOf(o, op, geometry.printable) : null;
+    if (next) change({ objects: editable.map((x) => (x.id === id ? next : x)) });
+  }, [data, stored, geometry, change]);
   /** A style field's commit (J8): the whole next object (default values removed), one write, one undo entry. */
   const styleObject = useCallback((id: string, next: { props?: CourseMapObject; geometry?: readonly Pt[] }) => {
     if (!data || !stored || !geometry) return;
@@ -349,6 +360,8 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
     const key = e.key.length === 1 ? e.key.toUpperCase() : e.key;
     const plain = !e.ctrlKey && !e.metaKey && !e.altKey;
     if (e.key === "Escape") {
+      // A drag in flight is the viewer's (it cancels first); then crop mode, the tool, the selection.
+      if (cropMode) { setCropMode(null); return true; }
       if (tool.kind !== "select") { setTool({ kind: "select" }); return true; }
       if (selection) { setSelection(null); return true; }
       return false;
@@ -390,7 +403,7 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
       return true;
     }
     return false;
-  }, [tool, selection, deleteSelected, scoped, fit, onTool, geometry, finishPath, selectedPath, focusedVertex, updateObject, a.nameId]);
+  }, [tool, selection, cropMode, deleteSelected, scoped, fit, onTool, geometry, finishPath, selectedPath, focusedVertex, updateObject, a.nameId]);
 
   // ─── Validation (validate.ts, unchanged codes) ───────────
   const issues = useMemo(() => {
@@ -448,6 +461,9 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
       onStyle={styleObject}
       aspectLock={aspectLock}
       onAspectLock={() => setAspectLock((v) => !v)}
+      cropMode={cropMode}
+      onCropMode={setCropMode}
+      onTransform={transformObject}
       onDelete={deleteSelected}
       canEdit={canEdit}
       templateActions={data ? <TemplateActions template={data.template} canEdit={canEdit} run={run} onOpen={open} /> : null}

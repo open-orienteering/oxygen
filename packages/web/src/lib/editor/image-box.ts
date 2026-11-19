@@ -7,8 +7,7 @@
  *
  * - `imageBoxAt`: the box `I` places, centred on the click, at the
  *   graphic's aspect, `longerMm` on its longer side.
- * - `resizeImage`: a corner dragged in the object's own frame, the opposite
- *   corner fixed where it is drawn; with the lock the box keeps its ratio.
+ * - The corner resize is `transform-gestures.ts`'s `resizeBox` (J9).
  * - `imageAt`: the topmost image whose turned box holds a point (the
  *   click that selects an image, §5).
  */
@@ -45,37 +44,8 @@ export function turn(v: Pt, deg: number): Pt {
   return { x: v.x * c + v.y * s, y: -v.x * s + v.y * c };
 }
 
-/** The inverse of `turn`. */
-const unturn = (v: Pt, deg: number): Pt => turn(v, -deg);
-
 /** The box centred on `c`, `w` × `h`, as two stored corners. */
 export const boxAbout = (c: Pt, w: number, h: number): [Pt, Pt] => [{ x: c.x - w / 2, y: c.y - h / 2 }, { x: c.x + w / 2, y: c.y + h / 2 }];
-
-/**
- * Corner `corner` (the index into `imageRing`'s ring: x0y0, x1y0, x1y1, x0y1) dragged to `pt`: the opposite
- * corner stays where it is drawn, the size is the pointer's offset in the object's frame (with `lock`, projected
- * onto the box's diagonal so the ratio is kept), at least `IMAGE_MIN_MM` a side.
- */
-export function resizeImage(geometry: readonly Pt[], rotationDeg: number, corner: number, pt: Pt, lock: boolean): [Pt, Pt] {
-  const b = imageBox(geometry);
-  const ring = imageRing(geometry, rotationDeg);
-  const opposite = ring[(corner + 2) % 4];
-  const sx = corner === 1 || corner === 2 ? 1 : -1;
-  const sy = corner === 2 || corner === 3 ? 1 : -1;
-  const d = unturn({ x: pt.x - opposite.x, y: pt.y - opposite.y }, rotationDeg);
-  let w: number, h: number;
-  if (lock && b.w > 0 && b.h > 0) {
-    const t = (d.x * sx * b.w + d.y * sy * b.h) / (b.w * b.w + b.h * b.h);
-    const k = Math.max(t, IMAGE_MIN_MM / b.w, IMAGE_MIN_MM / b.h);
-    w = b.w * k;
-    h = b.h * k;
-  } else {
-    w = Math.max(IMAGE_MIN_MM, d.x * sx);
-    h = Math.max(IMAGE_MIN_MM, d.y * sy);
-  }
-  const off = turn({ x: (sx * w) / 2, y: (sy * h) / 2 }, rotationDeg);
-  return boxAbout({ x: opposite.x + off.x, y: opposite.y + off.y }, w, h);
-}
 
 /** The topmost (last drawn) image whose turned box holds `pt`; null when none. */
 export function imageAt(objects: readonly course.CourseObject[], pt: Pt): ImageObject | null {

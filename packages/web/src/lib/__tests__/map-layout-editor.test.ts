@@ -201,7 +201,7 @@ describe("map layout editor geometry", () => {
     });
   });
 
-  it("resizes images freely by default, proportionally and crops on modifiers", () => {
+  it("resizes an image's unturned bounds freely (the lock and the crop are J9's transform gestures)", () => {
     const image = {
       id: "logo",
       kind: "image" as const,
@@ -217,32 +217,5 @@ describe("map layout editor geometry", () => {
       printable,
     });
     expect(free).toMatchObject({ width: 60, height: 20 });
-    const proportional = resizeMapObject(
-      image,
-      "se",
-      20,
-      0,
-      { printable, imageMode: "proportional" },
-    );
-    expect(proportional).toMatchObject({
-      width: 60,
-      height: 30,
-    });
-    const cropped = resizeMapObject(
-      image,
-      "se",
-      -10,
-      0,
-      { printable, imageMode: "crop" },
-    );
-    expect(cropped).toMatchObject({
-      kind: "image",
-      width: 30,
-      crop: expect.objectContaining({
-        width: expect.any(Number),
-      }),
-    });
-    if (cropped.kind !== "image" || !cropped.crop) throw new Error("crop");
-    expect(cropped.crop.width).toBeLessThan(1);
   });
 });

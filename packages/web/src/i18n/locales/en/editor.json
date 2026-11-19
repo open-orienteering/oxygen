@@ -647,5 +647,12 @@
   "styleCropY": "Top",
   "styleCropW": "Width",
   "styleCropH": "Height",
-  "styleCropReset": "Reset crop"
+  "styleCropReset": "Reset crop",
+  "styleCropMode": "Crop on the page",
+  "styleCropDone": "Done cropping",
+  "transformAngle": "Turn by °",
+  "transformRotate": "Turn",
+  "transformRotate90": "Turn 90°",
+  "transformFlipH": "Flip ↔",
+  "transformFlipV": "Flip ↕"
 }

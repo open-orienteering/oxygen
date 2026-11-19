@@ -25,6 +25,8 @@ export interface StyleFieldsProps<P extends StyleValue> {
   /** One write: the next props (style), the next geometry (size), or both (crop). */
   onChange: (next: { props?: P; geometry?: [Pt, Pt] }) => void;
   testIdPrefix?: string;
+  /** Crop mode on the page (J9, Layout): the button that enters and leaves it; left out where there is none (touch, Course mode until J11). */
+  cropMode?: { on: boolean; onToggle: () => void };
 }
 
 const round = (v: number, d = 2) => Math.round(v * 10 ** d) / 10 ** d;
@@ -84,6 +86,10 @@ export function StyleFields<P extends StyleValue>(p: StyleFieldsProps<P>) {
           <NumberField label={t("styleCropY")} value={pct(crop.y)} min={0} max={99} testId={id("crop-y")} onCommit={(n) => setCrop({ ...crop, y: n / 100 })} />
           <NumberField label={t("styleCropW")} value={pct(crop.width)} min={1} max={100} testId={id("crop-w")} onCommit={(n) => setCrop({ ...crop, width: n / 100 })} />
           <NumberField label={t("styleCropH")} value={pct(crop.height)} min={1} max={100} testId={id("crop-h")} onCommit={(n) => setCrop({ ...crop, height: n / 100 })} />
+          {p.cropMode && (
+            <button type="button" data-testid={id("crop-mode")} aria-pressed={p.cropMode.on} onClick={p.cropMode.onToggle}
+              className="mr-2 text-[11px] text-purple-700 hover:underline cursor-pointer">{p.cropMode.on ? t("styleCropDone") : t("styleCropMode")}</button>
+          )}
           {v.crop && (
             <button type="button" data-testid={id("crop-reset")} onClick={() => setCrop(FULL_CROP)}
               className="text-[11px] text-purple-700 hover:underline cursor-pointer">{t("styleCropReset")}</button>

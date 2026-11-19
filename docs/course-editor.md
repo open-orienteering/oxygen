@@ -1258,7 +1258,7 @@ any other, with `source = 'layout'` that the wire does not carry.
   (7 px) resizes it in its own frame, the opposite corner fixed where it
   is drawn, keeping the box's current ratio while the aspect lock is on
   (`EditorState.aspectLock`, on by default; the inspector's checkbox),
-  at least 1 mm a side (`resizeImage`); a press inside it (its hit) moves
+  at least 1 mm a side (`resizeBox`, `lib/editor/transform-gestures.ts`, shared with Layout mode since J9); a press inside it (its hit) moves
   it; a corner is never focused, so `Delete` deletes the image. A press
   on a control inside the selected image is the control's. While dragging, the page hands
   the viewer the object as a **draft** (`draftObjects`, drawn instead of
