@@ -38,6 +38,7 @@ import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { PLACEMENT_LOUPE_KEY } from "../../lib/editor/touch";
 import { transformVertices } from "../../lib/editor/transform-gestures";
+import { courseEntry, duplicateBody, pasteAt, pasteOnSite, pasteScope, readClipboard, refusal, writeClipboard, type Refusal } from "../../lib/editor/clipboard";
 import { stylePatch, type StyleValue } from "../../lib/editor/style-fields";
 import { nearestSite, objectCentre, shownObject, shownObjects, attachPatch, centrePatch, detachPatch } from "../../lib/editor/attach";
 import { useOnlineStatus } from "../../hooks/useOnlineStatus";
@@ -103,6 +104,13 @@ type Structure = course.WireCourseStructure;
 type CourseObject = course.CourseObject;
 
 const NO_DRAFTS: CourseObject[] = [];
+
+/** The viewer's centre in paper mm (its published `data-centre-x/y`, µm), where a paste lands with the pointer off the map. */
+function viewCentreMm(): Pt | null {
+  const el = document.querySelector('[data-testid="map-viewer"]');
+  const x = Number(el?.getAttribute("data-centre-x")), y = Number(el?.getAttribute("data-centre-y"));
+  return el && Number.isFinite(x) && Number.isFinite(y) ? { x: x / 1000, y: y / 1000 } : null;
+}
 
 /** The kinds the inspector turns and flips (J11; user answer 4, "lines and areas"): not the toner saver, whose shape is the course's hull. */
 const TURNABLE_PATH_KINDS: ReadonlySet<string> = new Set(["oob_area", "oob_line", "whiteout", "marked_route", "filter_region"]);
@@ -374,6 +382,7 @@ export function EditorPage() {
     );
   }, [outbox.entries, notice, client]);
 
+  const layoutNotify = useCallback((why: Refusal | "clipboardWrongTypePage") => setErrorMsg(t(why)), [t]);
   const layoutMode = useLayoutMode({
     enabled: state.mode === "layout",
     nameId: nameId ?? "",
@@ -383,6 +392,8 @@ export function EditorPage() {
     variantKey: sheetVariant,
     run,
     record,
+    notify: layoutNotify,
+    viewCentre: viewCentreMm,
   });
   // Map mode (§13): the event's map corrections, course edits locked — its own props, rail, inspector and keys.
   /** Drops undo entries (a promote drops Map mode's patch entries, §13 "Promote"). */
@@ -1055,6 +1066,54 @@ export function EditorPage() {
     dispatch({ type: "select-object", id: attachPick });
   }, [attachPick, state.selectedControlId, state.selectedObjectId, state.mode, state.tool.kind, objects, drawnSites, sitePos, updateObject]);
 
+  // ─── Duplicate, copy, cut, paste (J12, §7 "Duplicate, copy, cut, paste") ──
+  const hoverPt = useRef<Pt | null>(null);
+  /** The graphics a pasted image may name (`graphics.list`: the event's and the club's), fetched when needed. */
+  const graphicIdsNow = useCallback(async (): Promise<Set<number>> => {
+    const list = await utils.graphics.list.fetch().catch(() => []);
+    return new Set(list.map((g) => g.id));
+  }, [utils]);
+
+  /** `Ctrl+D`: a copy 3 mm down-right (an attachment kept), selected; one create, one undo entry. */
+  const duplicateObject = useCallback(async (o: CourseObject) => {
+    const body = duplicateBody(o);
+    const id = await createObject({ ...body, scope: o.scope });
+    if (id !== null) dispatch({ type: "select-object", id });
+  }, [createObject]);
+
+  /** `Ctrl+V`: the clipboard's object at the pointer (or the view centre), or onto each selected drawn control. */
+  const pasteObject = useCallback(async () => {
+    const entry = readClipboard();
+    if (!entry || !nameId) return;
+    const controlIds = state.multi.length > 0 ? state.multi : state.selectedControlId !== null ? [state.selectedControlId] : [];
+    const why = refusal(entry, { event: nameId, mode: "course", graphicIds: entry.type === "course" && entry.object.kind === "image" ? await graphicIdsNow() : null, onControls: controlIds.length > 0 });
+    if (why) return setErrorMsg(t(why));
+    if (entry.type !== "course") return;
+    const scope = pasteScope(entry, {
+      event: nameId,
+      drawnCourseIds: (courses.data ?? []).filter((c) => highlighted.has(c.name)).map((c) => c.id),
+      currentCourseId: state.view !== "all" && selectedCourse ? selectedCourse.id : null,
+    });
+    if (controlIds.length > 0) {
+      const targets = controlIds.flatMap((id) => drawnSites.find((d) => d.id === id) ?? []);
+      if (targets.length === 0) return setErrorMsg(t("clipboardNoDrawnControl"));
+      // One copy per control, attached; one undo entry for the batch (a failure rolls the made ones back).
+      const bodies = targets.map((site) => ({ ...pasteOnSite(entry.object, site), scope }));
+      const made = await run(() => writes.createObjects(bodies));
+      if (!made) return;
+      const box = { ids: made.map((o) => o.id) };
+      record(
+        async () => { for (const id of box.ids) await writes.deleteObject(id); },
+        async () => { box.ids = (await writes.createObjects(bodies)).map((o) => o.id); },
+      );
+      return;
+    }
+    const pt = hoverPt.current ?? viewCentreMm();
+    if (!pt) return;
+    const id = await createObject({ ...pasteAt(entry.object, pt), scope });
+    if (id !== null) dispatch({ type: "select-object", id });
+  }, [nameId, state.multi, state.selectedControlId, state.view, graphicIdsNow, t, courses.data, highlighted, selectedCourse, drawnSites, run, writes, record, createObject]);
+
   const deleteObject = useCallback((o: CourseObject) => {
     const body = { kind: o.kind, geometry: o.geometry, props: o.props, scope: o.scope, ...(o.attach ? { attach: o.attach } : {}) } as Pick<CourseObject, "kind" | "geometry" | "props" | "scope"> & { attach?: CourseObject["attach"] };
     const box = { id: o.id };
@@ -1528,7 +1587,12 @@ export function EditorPage() {
       l.corridor && l.points.length >= 2 && !(outlinedLegAt !== null && insertIndexForLeg(rows, index) === outlinedLegAt)
         ? [{ course: derived!.id, index, points: l.points }] : []);
   }, [state.mode, state.view, selectedCourse, courseView, courseInfo, rows, outlinedLegAt]);
-  const shownBinding = withCorridorGuides(toolBinding, corridorGuides);
+  // J12: the pointer's last paper point over the map (null off it), where a paste lands; kept in a ref, no re-render.
+  const corridorBinding = withCorridorGuides(toolBinding, corridorGuides);
+  const shownBinding = corridorBinding ? {
+    ...corridorBinding,
+    onHover: (p: ToolPointer | null) => { hoverPt.current = p?.pt ?? null; corridorBinding.onHover?.(p); },
+  } : null;
 
   // Drafts: objects being dragged (a region's drag is live, 08 §5.3). A region being drawn picks nothing yet (§6.4).
   const draftObjects = useMemo(() => {
@@ -1829,6 +1893,20 @@ export function EditorPage() {
       } else if (mod && (e.key === "y" || e.key === "Y")) {
         e.preventDefault();
         runRedo();
+      } else if (mod && !e.shiftKey && !e.altKey && ["D", "C", "X", "V"].includes(key) && state.mode === "course" && canEdit && state.tool.kind === "select") {
+        // J12: the app clipboard (§7 "Duplicate, copy, cut, paste"). Copy and cut leave a text selection to the browser.
+        const o = selectedObject ? { ...selectedObject, geometry: drafts.get(selectedObject.id) ?? selectedObject.geometry } as CourseObject : null;
+        if (key === "D") {
+          e.preventDefault();
+          if (o) void duplicateObject(o);
+        } else if (key === "V") {
+          e.preventDefault();
+          void pasteObject();
+        } else if (o && !window.getSelection()?.toString()) {
+          e.preventDefault();
+          writeClipboard(courseEntry(o, nameId ?? ""));
+          if (key === "X") deleteObject(o);
+        }
       } else if (e.key === "Escape") {
         setAreaOpen(false);
         // Crop mode is the cascade's first step (J11): the image stays selected.
@@ -1923,7 +2001,7 @@ export function EditorPage() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [descControlId, runUndo, runRedo, undoStack, state, handleDelete, deleteControls, deleteObject, selectedObject, focusedVertex, drafts, setDraft, cropMode, updateObject, setChain, exitTool, finishArea,
+  }, [descControlId, runUndo, runRedo, undoStack, state, handleDelete, deleteControls, deleteObject, duplicateObject, pasteObject, canEdit, nameId, selectedObject, focusedVertex, drafts, setDraft, cropMode, updateObject, setChain, exitTool, finishArea,
     stepSelection, armPlace, setTool, canGap, fitView, areaOpen, canTonerSaver, startArea, layoutKey, mapKey, selectedLeg, focusedBend, legEditable, writeLeg, addCorridor, selectionGroup, redraw, togglePlacementLoupe]);
 
   // ─── The URL (docs/course-editor.md §1 "URL"; F31) ─────────

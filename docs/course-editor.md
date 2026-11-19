@@ -882,6 +882,10 @@ than three hull points).
   leg's **focused bend** (§6.7), else the selected object's **focused
   vertex** (§7 "Editing geometry"), else the selected object, else the
   selected control.
+- **`Ctrl+D`** duplicates the selected object, **`Ctrl+C`** / **`Ctrl+X`**
+  copy / cut it, **`Ctrl+V`** pastes (J12, §7 "Duplicate, copy, cut,
+  paste"); with `V`, in Course mode, for a setter who may edit. `Cmd` on a
+  Mac.
 
 ### 6.6 Site fields
 
@@ -1424,6 +1428,54 @@ mode has no page). Mouse only.
   objects"); the crop and the turn send geometry and so `attach`.
 - Escape during a knob or crop drag cancels it as any drag (§3, F24):
   nothing written, then the cascade.
+
+### Duplicate, copy, cut, paste
+
+Row J12 (user answers 9 and 10). One app clipboard, not the system's:
+`lib/editor/clipboard.ts` holds **one** object — a course object in Course
+mode, a page object in Layout mode (`course-layout.md` §2 "Keys") — in
+memory and in `localStorage` (`oxygen.editor.clipboard`, `v: 1`), so it
+crosses sheets, templates, events, reloads and tabs. It is read at paste
+time; an unreadable or older entry is empty; a blocked or full storage
+keeps the memory copy (this tab still pastes). The keys work with `V`, in
+Course mode, for a setter who may edit, on `keydown` only (no context-menu
+item yet). Copy and cut leave a text selection on the page to the browser.
+
+- **`Ctrl+D`**: a copy of the selected object **as shown** (an attached
+  object at its drawn place, a drag's draft included), 3 mm right and
+  3 mm down on paper (`duplicateBody`), the same scope; an attached object
+  stays attached to the same control with its `at` kept. One
+  `courseObject.create`, one undo entry, the copy selected.
+- **`Ctrl+C`**: the shown object's kind, geometry, props, scope, the
+  courses that scope resolved to (`inCourses`) and its attachment, with
+  the event it was copied in (`courseEntry`). **`Ctrl+X`**: copy, then the
+  object's delete (one undo entry, as `Delete`).
+- **`Ctrl+V`** with no control selected: the copy's centre (the centre of
+  its vertices' bounds, `objectCentre`) on the pointer's last place on the
+  map, or on the view's centre when the pointer is off it; **free** — a
+  pointer paste never attaches (`pasteAt`). One create, one undo entry,
+  the copy selected.
+- **`Ctrl+V` with controls selected** (one, or a multi-selection; user
+  answer 10): one copy on each selected control that is drawn here,
+  attached to it — at the copied offset when the original was attached
+  (its geometry moved by the control's position minus the original `at`),
+  else centred on it (`pasteOnSite`). The copies are created in turn
+  (`createObjects`; a failure deletes the ones made) and are **one** undo
+  entry; the controls stay selected. None of them drawn here: *None of the
+  selected controls is drawn in this view.* (`clipboardNoDrawnControl`).
+- **Scope** (user answer 9, `pasteScope`): the original's, when it was
+  copied in this event and would be drawn in this view (`all`, or a course
+  it resolved to is drawn); else the current course (`{ courses: [id] }`),
+  or `all` in view All. A duplicate keeps its scope.
+- **Refused**, the reason on the page's error line (`editor-error`), nothing
+  written: a page object's entry (`clipboardWrongType`); an image whose
+  graphic is neither this event's nor the club's (`graphics.list`,
+  `clipboardGraphicMissing`); a filter region that picks symbols or
+  colours, copied in another event (its ids are that map's,
+  `clipboardRegionForeign`; one that hides *all* pastes); a toner saver
+  onto controls (it cannot attach, `clipboardUnattachable`).
+- Sizes are copied as paper mm verbatim: an object copied from a map of
+  another scale keeps its paper size (Pending).
 
 ### Editing geometry
 
@@ -3107,6 +3159,8 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | E2E | `e2e/course-editor-tools.spec.ts` "J10: attach to a control" (`chromium`) | §7 "Attached objects": a 10 mm `oob_area` on a clear spot selected by its edge; *Attach to a control I click* armed (`aria-pressed`), a click on a control → one `courseObject.update`, the object selected again, `data-attach` that control, `data-attached` its code; the control dragged 6 mm → `data-drawn` moved by the control's offset, the stored geometry unchanged and no object write; the all-controls `maps.pdf` still draws its 709 hatch; a click on its moved edge selects it; that edge dragged 3 mm up → drawn exactly 3 mm higher and no further east, `at` the control's position now; *Centre on control* → one update, its centre on the control; the control deleted → no object write, `data-attach` empty and still drawn; `Ctrl+Z` (`control.restore`) attaches it again; *Detach* → one update, drawn where it was |
 | unit | `lib/editor/__tests__/transform-gestures.test.ts` (J11 cases), `pages/editor/__tests__/bindings.test.ts` "V transform handles (J11)" | §7 "Transform handles": `anchorKnob` up from the anchor and turned; `transformVertices` turns with the handles, both flips, a whole turn null; the knob on a 0° and a 30° image and a text, none on a white-out or line; a quarter-turn knob drag → `rotationDeg` 90, a draft per move, one write, no geometry; Shift mid-drag snaps; back to 0 drops the key; a text turns about its anchor; a cancelled drag drops its draft; a finger is declined; Shift inverts the lock both ways; crop mode's shapes (four edges, the whole graphic, no corners or knob), an edge drag on a turned flipped image writes `cropEdge`'s geometry and crop once, the body still moves; a double-click on the image enters crop mode, on a leg it is the leg's |
 | E2E | `e2e/course-editor-tools.spec.ts` "J11: transform handles in Course mode" (`chromium`) | §7 "Transform handles": a 20 × 10 mm image and a 10 mm white-out on clear spots; the image selected; its knob dragged a quarter turn → one update, `rotationDeg` ≈ 90, `Ctrl+Z` removes it; held and `Escape` → no write; a double-click → four `editor-object-crop-edge`, no knob, *Crop by its edges* pressed; the right edge a quarter in → one update, crop width 0.75, the box 15 mm wide; `Ctrl+Z` restores; `Escape` leaves crop mode with the image selected; crop mode again, a click on the white-out's edge selects it and leaves crop mode; the white-out's *Turn 90°* and *Flip ↔* → one update each, its first corner at (−5, 5) then (5, 5) from its centre. Both objects are attached to a control as if it had moved 1 mm since they were written: the crop keeps the drawn left edge with `at` the control's position and undo puts the drawn box back; the turn writes the drawn vertices with `at` the control's position |
+| unit | `lib/editor/__tests__/clipboard.test.ts`, `lib/editor/__tests__/write-client.test.ts` (`createObjects`) | §7 "Duplicate, copy, cut, paste": the entry round-trips through storage, a corrupt or older one reads empty, a throwing storage keeps the memory copy; the duplicate 3 mm right and down with its attachment; a paste at a point centred and free, onto a control at the copied offset or centred and attached; the scope rules of answer 9 (same event drawn, not drawn, view All, another event, `all`, an unscoped object); the four refusals; a batch create in order, rolled back on a failure |
+| E2E | `e2e/course-editor-tools.spec.ts` "J12: duplicate, copy, cut, paste" (`chromium`) | §7 "Duplicate, copy, cut, paste": a 10 mm area selected; `Ctrl+D` → one create, the copy selected 3 mm right and down, scope `all`; `Ctrl+C`, the pointer on a clear spot, `Ctrl+V` → the copy centred there and selected; `Ctrl+X` takes it out; two controls Shift-selected, `Ctrl+V` → two copies attached, each centred on its control, one `Ctrl+Z` removes both; after a reload `Ctrl+V` still pastes; an image entry naming an unknown graphic → `editor-error`, nothing created |
 | E2E | `e2e/course-editor-tools.spec.ts` "filter symbol picker" (`chromium`) | §6.4 / §7 (P3): a filter region over the 505 path, *picked symbols*: `editor-filter-symbol-505` with `data-members="3"` and "Path", `601` named "Magnetic north line" (601.0 matched to 601.b), no entry with a source code (`.`), the 505 swatch image loaded, the 850 frame only under Other, the search "path" → one entry; the eyedropper armed (`aria-pressed`, `V` not lit, no `editor-selection-ring`), a click on the path → one `courseObject.update`, `"symbols":[3]`, the 505 box checked, the note "505 Path", the band's ink below a third; still armed, a second click on the path → note `already`, `Esc` → `V` with the region still selected |
 | integration | `packages/api/src/__tests__/integration/course-print.test.ts` "course objects on the page" | §7 print: the row's "reference-raster pixel probe" of a printed course object is this test's page raster, not the E2E's — no HTTP route rasterises a composed page, and poppler is on the runner for the unit / integration jobs, not the E2E job (coordinator 2026-11-01) |
 | unit (web) | `packages/web/src/lib/editor/__tests__/checks.test.ts` | §8: sites and the explicit structure as `courseChecks` takes them, two controls 20 m apart, the server's `DESCRIPTION_STALE` merged in order, markers (rings, a leg cross, unpositioned skipped), length from the leg polylines, locate |
@@ -3181,6 +3235,11 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
   reload. During a control drag the UI-layer outline of a selected
   attached object follows only when the drag lands (the layer's derivation
   reports then).
+- **The clipboard** (§7 "Duplicate, copy, cut, paste", J12): one
+  object, keys only (no context-menu or phone item); sizes are copied as
+  paper mm verbatim across maps of different scales (no rescale); the
+  system clipboard is not used, so nothing pastes between
+  browsers.
 - **Undo across a removed control** (§7 "Attached objects", J10): the
   wire shows an object of a removed control without `attach`, so a
   delete of that object, or an *Attach* / *Centre* on it, records an

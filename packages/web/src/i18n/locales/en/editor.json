@@ -661,5 +661,11 @@
   "attachPick": "Attach to a control I click",
   "attachPicking": "Click a control… (click again to cancel)",
   "attachCentre": "Centre on control",
-  "attachDetach": "Detach"
+  "attachDetach": "Detach",
+  "clipboardWrongType": "The clipboard holds a page object: paste it in Layout mode.",
+  "clipboardWrongTypePage": "The clipboard holds a course object: paste it in Course mode.",
+  "clipboardGraphicMissing": "The copied image's graphic is not in this event's or the club's library.",
+  "clipboardRegionForeign": "A filter region with picked symbols or colours belongs to its own event's map: it is not pasted here.",
+  "clipboardUnattachable": "A toner saver cannot follow a control: deselect the controls to paste it.",
+  "clipboardNoDrawnControl": "None of the selected controls is drawn in this view."
 }

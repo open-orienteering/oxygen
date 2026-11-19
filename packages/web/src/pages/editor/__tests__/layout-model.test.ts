@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { course, defaultMapAppearance, type CourseMapObject } from "@oxygen/shared";
 import { cropChange, sizeChange } from "../../../lib/editor/style-fields";
-import { FILL_MODES, geometryOf, rectOfStyleGeometry, transformPathOf, styleChangeOf, styleGeometryOf, styleShowOf, layoutRequestOf, nextSheetName, pathObject, templateWriteOf, placeObject, scopeObjects, sheetKeyOf, snapshotOf, withEditable, type EditorSheet } from "../layout/model";
+import { duplicatePageObject, pastePageObject, FILL_MODES, geometryOf, rectOfStyleGeometry, transformPathOf, styleChangeOf, styleGeometryOf, styleShowOf, layoutRequestOf, nextSheetName, pathObject, templateWriteOf, placeObject, scopeObjects, sheetKeyOf, snapshotOf, withEditable, type EditorSheet } from "../layout/model";
 
 const settings = { printMarginMm: 3, mapFrame: { x: 10, y: 10, width: 190, height: 277 }, description: { visible: false, x: 150, y: 12, cellSizeMm: 6 }, appearance: defaultMapAppearance };
 const sheetText = { id: "s", kind: "text" as const, anchor: "page" as const, x: 20, y: 30, text: "{course}", fontSizeMm: 4, color: "#000000" };
@@ -224,3 +224,25 @@ describe("a line's or path's turn and flip (J9, docs/course-layout.md §3 \"Rota
     expect(transformPathOf({ id: "t", kind: "text", anchor: "page", x: 1, y: 1, text: "A", fontSizeMm: 4, color: "#000000" }, { kind: "rotate", deg: 90 }, printable)).toBeNull();
   });
 });
+
+describe("duplicate and paste of a page object (J12, docs/course-layout.md §2 \"Keys\")", () => {
+  const printable = { x: 3, y: 3, width: 204, height: 291 };
+  const rect = { id: "r", anchor: "page", kind: "rectangle", x: 20, y: 30, width: 10, height: 6 } as CourseMapObject;
+
+  it("duplicate: 3 mm down-right on the page with a new id; kept on the printable area", () => {
+    const d = duplicatePageObject(rect, printable) as typeof rect & { x: number; y: number };
+    expect(d.id).not.toBe("r");
+    expect([d.x, d.y]).toEqual([23, 33]);
+    const edge = duplicatePageObject({ ...rect, x: 200, y: 290 } as CourseMapObject, printable) as typeof rect & { x: number; y: number; width: number };
+    expect(edge.x + edge.width).toBeLessThanOrEqual(207 + 1e-9);
+  });
+
+  it("paste: centred on the point, a new id, kept on the printable area", () => {
+    const p = pastePageObject(rect, { x: 100, y: 100 }, printable) as typeof rect & { x: number; y: number };
+    expect([p.x, p.y]).toEqual([95, 97]);
+    expect(p.id).not.toBe("r");
+    const out = pastePageObject(rect, { x: 0, y: 0 }, printable) as typeof rect & { x: number; y: number };
+    expect([out.x, out.y]).toEqual([3, 3]);
+  });
+});
+

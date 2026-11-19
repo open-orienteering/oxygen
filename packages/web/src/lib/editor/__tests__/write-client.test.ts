@@ -238,6 +238,20 @@ describe("EditorWrites (docs/course-editor.md §3)", () => {
     expect(w.versions.get("object", 9)).toBe("50");
   });
 
+  it("createObjects creates in order; a failure deletes the ones made and rethrows (J12)", async () => {
+    const f = fakeClient();
+    const w = new EditorWrites(f.client);
+    const body = { kind: "whiteout" as const, geometry: [], props: {}, scope: { all: true as const } };
+    f.ok({ id: 1, version: "1" });
+    f.ok({ id: 2, version: "2" });
+    expect((await w.createObjects([body, body])).map((o) => o.id)).toEqual([1, 2]);
+    f.ok({ id: 3, version: "3" });
+    f.fail(new Error("boom"));
+    f.ok({});
+    await expect(w.createObjects([body, body])).rejects.toThrow("boom");
+    expect(f.calls.at(-1)).toMatchObject({ proc: "objDelete", input: { id: 3, baseVersion: "3" } });
+  });
+
   it("check-off sends no token and seeds the control's from the result (§9)", async () => {
     const f = fakeClient();
     const w = new EditorWrites(f.client);

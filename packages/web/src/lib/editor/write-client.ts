@@ -264,6 +264,21 @@ export class EditorWrites {
     return res;
   }
 
+  /**
+   * Several creates as one gesture (J12: a paste onto selected controls), in order so their `seq` follow it. A failure
+   * deletes the ones already made (best effort) and rethrows, so the batch is all or nothing for its undo entry.
+   */
+  async createObjects(inputs: readonly ObjectCreateInput[]): Promise<course.CourseObject[]> {
+    const made: course.CourseObject[] = [];
+    try {
+      for (const input of inputs) made.push(await this.createObject(input));
+    } catch (e) {
+      for (const o of made.reverse()) await this.deleteObject(o.id).catch(() => undefined);
+      throw e;
+    }
+    return made;
+  }
+
   /** `courseObject.update` with the object's token; a conflict is always a refresh (§8.4: no base to diff). */
   updateObject(input: ObjectUpdateInput): Promise<course.CourseObject> {
     const fields = Object.keys(input).filter((k) => k !== "id");

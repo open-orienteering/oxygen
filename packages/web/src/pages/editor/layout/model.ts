@@ -20,7 +20,7 @@ import {
 } from "@oxygen/shared";
 import type { LayoutRequest } from "../../../lib/course-layer-request";
 import { sheetWindow, windowCentre, type SheetGeometry } from "../../../lib/editor/layout";
-import { constrainMapObjectExtent, createImageObjectAt, createObjectAt } from "../../../lib/map-layout-editor";
+import { constrainMapObjectExtent, createImageObjectAt, createObjectAt, translateMapObject } from "../../../lib/map-layout-editor";
 import { flipVertices, rotateVertices } from "../../../lib/editor/transform-gestures";
 import type { PlaceKind } from "./bindings";
 import type { inferRouterOutputs } from "@trpc/server";
@@ -281,4 +281,16 @@ export function transformPathOf(o: CourseMapObject, op: PathTransform, printable
     return constrainMapObjectExtent({ ...o, x1: a.x, y1: a.y, x2: c.x, y2: c.y }, printable);
   }
   return constrainMapObjectExtent({ ...o, points: apply(o.points) }, printable);
+}
+
+/** `Ctrl+D` on a page object (J12; docs/course-layout.md §2 "Keys"): a copy 3 mm down-right on the page, a new id, kept on the printable area. */
+export function duplicatePageObject(o: CourseMapObject, printable: MapRect): CourseMapObject {
+  return constrainMapObjectExtent({ ...translateMapObject(o, 3, 3), id: crypto.randomUUID() } as CourseMapObject, printable);
+}
+
+/** `Ctrl+V` of a page object (J12): its page bounds' centre on `at` (page mm), a new id, kept on the printable area. */
+export function pastePageObject(o: CourseMapObject, at: Pt, printable: MapRect): CourseMapObject {
+  const b = courseMapObjectPageBoundsOf(o);
+  const moved = translateMapObject(o, at.x - (b.x + b.width / 2), at.y - (b.y + b.height / 2));
+  return constrainMapObjectExtent({ ...moved, id: crypto.randomUUID() } as CourseMapObject, printable);
 }

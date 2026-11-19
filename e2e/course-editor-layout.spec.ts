@@ -455,6 +455,65 @@ test.describe("Course editor layout (docs/course-layout.md)", () => {
     }
   });
 
+  test("J12: Ctrl+D duplicates a page object 3 mm down-right; copy, paste at the pointer, cut; a course object's entry is refused", async ({ page }) => {
+    await openEditor(page);
+    const nameId = nameIdOf(page);
+    const courses = await trpcCall<{ id: number }[]>("course.list", undefined, false);
+    const template = await probeTemplate("Layout clipboard", frame, 5);
+    const sheet = await trpcCall<{ seq: number }>("courseMap.create", {
+      kind: "course", courseId: courses[0].id, templateId: template.seq, overrides: {},
+      objects: [{ id: "j12-r", anchor: "page", kind: "rectangle", x: 120, y: 10, width: 20, height: 10, fillMode: "whiteout" }],
+    });
+    const drop = async () => { await cleanup("courseMap.delete", { id: sheet.seq }); await cleanup("mapTemplate.delete", { id: template.seq }); };
+    const objects = async () => (await trpcCall<{ objects: Record<string, number | string>[] }>("courseMap.get", { seq: sheet.seq }, false)).objects;
+    try {
+      await page.goto(`/${nameId}/course-editor?mode=layout&sheet=${sheet.seq}`);
+      await editorReady(page);
+      await expect(page.getByTestId("editor-layout-scope")).toHaveAttribute("data-sheet", String(sheet.seq));
+      const toPaperMm = await pageToPaperOf(page, frame);
+      await expect.poll(async () => (await objects()).length).toBe(1);
+      await clickMap(page, await toPage(page, toPaperMm({ x: 130, y: 15 })));
+      await expect(page.getByTestId("editor-layout-selected")).toHaveAttribute("data-kind", "object");
+
+      // Ctrl+D: one write, a copy 3 mm right and down on the page with its own id.
+      const dup = waitForTrpc(page, "courseMap.saveLayout");
+      await page.keyboard.press("Control+d");
+      await dup;
+      await expect.poll(async () => (await objects()).length).toBe(2);
+      const copy = (await objects()).find((o) => o.id !== "j12-r")!;
+      expect(copy.x).toBeCloseTo(123, 6);
+      expect(copy.y).toBeCloseTo(13, 6);
+      expect(copy.width).toBe(20);
+
+      // Ctrl+C, the pointer at (60, 20) on the page, Ctrl+V: a third, centred there; Ctrl+X takes it out again.
+      await page.keyboard.press("Control+c");
+      const there = await toPage(page, toPaperMm({ x: 60, y: 20 }));
+      await page.mouse.move(there.x - 1, there.y);
+      await page.mouse.move(there.x, there.y);
+      const pasted = waitForTrpc(page, "courseMap.saveLayout");
+      await page.keyboard.press("Control+v");
+      await pasted;
+      await expect.poll(async () => (await objects()).length).toBe(3);
+      const third = (await objects()).find((o) => o.id !== "j12-r" && o.id !== copy.id)!;
+      expect(Math.abs(Number(third.x) + 10 - 60)).toBeLessThan(0.5);
+      expect(Math.abs(Number(third.y) + 5 - 20)).toBeLessThan(0.5);
+      const cut = waitForTrpc(page, "courseMap.saveLayout");
+      await page.keyboard.press("Control+x");
+      await cut;
+      await expect.poll(async () => (await objects()).map((o) => o.id).sort()).toEqual([copy.id, "j12-r"].sort());
+
+      // A course object on the clipboard does not paste in Layout mode: the reason shows, nothing is written.
+      await page.evaluate(() => localStorage.setItem("oxygen.editor.clipboard", JSON.stringify({
+        v: 1, type: "course", event: "x", object: { kind: "oob_area", geometry: [{ x: 0, y: 0 }, { x: 4, y: 0 }, { x: 4, y: 2 }], props: {}, scope: { all: true }, inCourses: null },
+      })));
+      await page.keyboard.press("Control+v");
+      await expect(page.getByTestId("editor-error")).toBeVisible({ timeout: 10000 });
+      expect((await objects()).length).toBe(2);
+    } finally {
+      await drop();
+    }
+  });
+
   test("P draws a polygon in clicks and a click-drag; its edge takes a vertex by double-click, Delete takes it out; the print has its curve", async ({ page }) => {
     await openEditor(page);
     const nameId = nameIdOf(page);

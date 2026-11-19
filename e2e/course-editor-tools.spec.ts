@@ -979,6 +979,121 @@ test.describe("J10: attach to a control", () => {
   });
 });
 
+// docs/course-editor.md §7 "Duplicate, copy, cut, paste" (J12): the app clipboard in Course mode.
+test.describe("J12: duplicate, copy, cut, paste", () => {
+  desktopOnly();
+
+  test("Ctrl+D duplicates 3 mm down-right; copy and paste at the pointer; cut; a paste onto two controls is one undo; the clipboard survives a reload; a foreign graphic is refused", async ({ page }) => {
+    test.setTimeout(180_000);
+    await openEditor(page);
+    const sheetToggle = page.getByTestId("map-toggle-descriptions");
+    if (/hide/i.test((await sheetToggle.textContent()) ?? "")) await sheetToggle.click();
+    const f = await toPaper(page, await emptyPoint(page, 90));
+    const square = [{ x: f.x - 5, y: f.y - 5 }, { x: f.x + 5, y: f.y - 5 }, { x: f.x + 5, y: f.y + 5 }, { x: f.x - 5, y: f.y + 5 }];
+    const made = await trpcCall<{ id: number }>("courseObject.create", { kind: "oob_area", geometry: square, props: {}, scope: { all: true } });
+    const ids = async () => (await page.getByTestId("editor-object-row").evaluateAll((els) => els.map((el) => Number(el.getAttribute("data-object-id")))));
+    const centreOf = async (id: number) => { const g = await geometryOf(objectRow(page, id)); return { x: (Math.min(...g.map((v) => v.x)) + Math.max(...g.map((v) => v.x))) / 2, y: (Math.min(...g.map((v) => v.y)) + Math.max(...g.map((v) => v.y))) / 2 }; };
+    const created: number[] = [];
+    const newIds = async (before: number[], n: number) => {
+      let fresh: number[] = [];
+      await expect.poll(async () => { fresh = (await ids()).filter((id) => !before.includes(id)); return fresh.length; }, { timeout: 15000 }).toBe(n);
+      created.push(...fresh);
+      return fresh;
+    };
+    try {
+      await page.reload();
+      await editorReady(page);
+      if (/hide/i.test((await sheetToggle.textContent()) ?? "")) await sheetToggle.click();
+      await expect(objectRow(page, made.id)).toBeAttached({ timeout: 15000 });
+      await clickMap(page, await toPage(page, { x: f.x - 5, y: f.y }));
+      await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-id", String(made.id), { timeout: 10000 });
+
+      // Ctrl+D: a copy 3 mm right and 3 mm down (paper y-up), selected; one create.
+      let before = await ids();
+      const dup = waitForTrpc(page, "courseObject.create");
+      await page.keyboard.press("Control+d");
+      await dup;
+      const [d] = await newIds(before, 1);
+      await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-id", String(d), { timeout: 10000 });
+      const g = await geometryOf(objectRow(page, d));
+      expect(g[0].x).toBeCloseTo(square[0].x + 3, 3);
+      expect(g[0].y).toBeCloseTo(square[0].y - 3, 3);
+      expect(JSON.parse((await objectRow(page, d).getAttribute("data-scope"))!)).toEqual({ all: true });
+
+      // Ctrl+C, then Ctrl+V with the pointer on another clear spot: the copy's centre there, selected.
+      await page.keyboard.press("Control+c");
+      const there = await emptyPoint(page, 60, [await toPage(page, f)]);
+      await page.mouse.move(there.x, there.y);
+      await page.mouse.move(there.x + 1, there.y);
+      const thereMm = await toPaper(page, { x: there.x + 1, y: there.y });
+      before = await ids();
+      const pasted = waitForTrpc(page, "courseObject.create");
+      await page.keyboard.press("Control+v");
+      await pasted;
+      const [p] = await newIds(before, 1);
+      await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-id", String(p), { timeout: 10000 });
+      const c = await centreOf(p);
+      expect(Math.hypot(c.x - thereMm.x, c.y - thereMm.y)).toBeLessThan(0.5);
+
+      // Ctrl+X: the pasted copy goes (copied first).
+      const cut = waitForTrpc(page, "courseObject.delete");
+      await page.keyboard.press("Control+x");
+      await cut;
+      await expect(objectRow(page, p)).toHaveCount(0, { timeout: 15000 });
+
+      // Two controls selected, Ctrl+V: one copy on each, attached and centred (the original was free); one undo removes both.
+      await page.keyboard.press("Escape");
+      const [a, ...rest] = await regularCodes(page, 6);
+      await select(page, a);
+      let second: string | null = null;
+      for (const code of rest) {
+        const q = await sitePoint(page, code);
+        if (await coveredBy(page, q)) continue;
+        await page.keyboard.down("Shift");
+        try { await clickMap(page, q); } finally { await page.keyboard.up("Shift"); }
+        second = code;
+        break;
+      }
+      expect(second, "a Shift-clickable second control").not.toBeNull();
+      await expect(page.getByTestId("editor-multi")).toHaveAttribute("data-count", "2", { timeout: 10000 });
+      before = await ids();
+      await page.keyboard.press("Control+v");
+      const both = await newIds(before, 2);
+      const controls = [await site(page, a), await site(page, second!)];
+      for (const id of both) {
+        const at = JSON.parse((await objectRow(page, id).getAttribute("data-attach")) || "null");
+        const on = controls.find((k) => Number(k.id) === at?.controlId);
+        expect(on, "attached to a selected control").toBeTruthy();
+        const cc = await centreOf(id);
+        expect(Math.hypot(cc.x - on!.mm.x, cc.y - on!.mm.y)).toBeLessThan(0.05);
+      }
+      await page.keyboard.press("Control+z");
+      await expect.poll(async () => (await ids()).filter((id) => both.includes(id)).length, { timeout: 15000 }).toBe(0);
+
+      // The clipboard is in localStorage: a reload keeps it.
+      await page.reload();
+      await editorReady(page);
+      await page.mouse.move(there.x, there.y);
+      await page.mouse.move(there.x + 1, there.y);
+      before = await ids();
+      await page.keyboard.press("Control+v");
+      await newIds(before, 1);
+
+      // An image whose graphic is neither the event's nor the club's is refused, with the reason on the error line.
+      await page.evaluate(() => localStorage.setItem("oxygen.editor.clipboard", JSON.stringify({
+        v: 1, type: "course", event: "elsewhere",
+        object: { kind: "image", geometry: [{ x: 0, y: 0 }, { x: 10, y: 10 }], props: { graphicId: 987654321 }, scope: { all: true }, inCourses: null },
+      })));
+      before = await ids();
+      await page.keyboard.press("Control+v");
+      await expect(page.getByTestId("editor-error")).toBeVisible({ timeout: 10000 });
+      expect((await ids()).length).toBe(before.length);
+    } finally {
+      for (const id of [made.id, ...created]) await cleanup("courseObject.delete", { id });
+    }
+  });
+});
+
 // docs/course-editor.md §7 "Transform handles" (J11): the knob, crop mode and the turn / flip buttons in Course mode.
 test.describe("J11: transform handles in Course mode", () => {
   desktopOnly();

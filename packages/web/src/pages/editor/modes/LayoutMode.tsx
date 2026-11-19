@@ -26,7 +26,8 @@ import { trpc } from "../../../lib/trpc";
 import { VersionBook, versionConflictOfError } from "../../../lib/version-book";
 import { EditorConflict } from "../../../lib/editor/write-client";
 import type { MapViewerEditorProps, ToolPointer } from "../../../components/MapViewer";
-import { descriptionRect, gridSnap, pageBounds, pathFromView, pathRule, type SheetGeometry } from "../../../lib/editor/layout";
+import { descriptionRect, gridSnap, pageBounds, pathFromView, pathRule, toPage, type SheetGeometry } from "../../../lib/editor/layout";
+import { readClipboard, refusal, writeClipboard, type Refusal } from "../../../lib/editor/clipboard";
 import { deleteVertex, type Vertex } from "../../../lib/editor/geometry-edit";
 import type { Gesture } from "../tools/bindings";
 import { step as polygonStep } from "../tools/polygon";
@@ -41,7 +42,7 @@ import { ClassOverridesSection, ClubTemplatesSection, TemplateKeySection } from 
 import { NoSheetActions, SheetActions, TemplateActions } from "../layout/SheetActions";
 import { SetterSection } from "../layout/SetterSection";
 import { useCapabilities } from "../../../context/CapabilitiesContext";
-import { geometryOf, layoutRequestOf, pathObject, placeObject, scopeObjects, sheetKeyOf, snapshotOf, styleChangeOf, templateWriteOf, transformPathOf, withEditable, type EditorSheet, type PathTransform, type LayoutSnapshot } from "../layout/model";
+import { duplicatePageObject, geometryOf, layoutRequestOf, pastePageObject, pathObject, placeObject, scopeObjects, sheetKeyOf, snapshotOf, styleChangeOf, templateWriteOf, transformPathOf, withEditable, type EditorSheet, type PathTransform, type LayoutSnapshot } from "../layout/model";
 
 type Pt = { x: number; y: number };
 
@@ -58,6 +59,10 @@ export interface LayoutModeArgs {
   /** One write, through the page's pending count and error line; `undefined` when it failed. */
   run: <T>(op: () => Promise<T>) => Promise<T | undefined>;
   record: (undo: () => Promise<unknown>, redo: () => Promise<unknown>) => unknown;
+  /** Why a paste was refused (J12), shown on the page's error line; a course object's entry is `clipboardWrongTypePage`. */
+  notify?: (why: Refusal | "clipboardWrongTypePage") => void;
+  /** The viewer's centre in paper mm, where a paste lands with the pointer off the map (J12). */
+  viewCentre?: () => Pt | null;
 }
 
 export interface LayoutMode {
@@ -341,6 +346,31 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
     setSelection(null);
   }, [data, stored, selection, change]);
 
+  // ─── J12: duplicate, copy, cut, paste (docs/course-layout.md §2 "Keys") ──
+  /** The pointer's last place on the map (paper mm), where a paste lands; null off the map. */
+  const hoverPt = useRef<Pt | null>(null);
+  const duplicateObject = useCallback((o: CourseMapObject) => {
+    if (!data || !stored || !geometry) return;
+    const copy = duplicatePageObject(o, geometry.printable);
+    change({ objects: [...scopeObjects(data, stored).editable, copy] });
+    setSelection({ kind: "object", id: copy.id });
+  }, [data, stored, geometry, change]);
+  const pasteObject = useCallback(() => {
+    if (!data || !stored || !geometry) return;
+    const entry = readClipboard();
+    if (!entry) return;
+    const graphicIds = graphicsList.data ? new Set(graphicsList.data.map((g) => g.id)) : null;
+    const why = refusal(entry, { event: a.nameId, mode: "page", graphicIds });
+    if (why) { a.notify?.(why === "clipboardWrongType" ? "clipboardWrongTypePage" : why); return; }
+    if (entry.type !== "page") return;
+    const pt = hoverPt.current ?? a.viewCentre?.() ?? null;
+    const b = geometry.printable;
+    const at = pt ? toPage(pt, geometry) : { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+    const copy = pastePageObject(entry.object, at, geometry.printable);
+    change({ objects: [...scopeObjects(data, stored).editable, copy] });
+    setSelection({ kind: "object", id: copy.id });
+  }, [data, stored, geometry, change, graphicsList.data, a.nameId, a.notify, a.viewCentre]);
+
   const onTool = useCallback((what: PlaceKind | "select", graphicId?: number) => {
     if (what === "select") { setTool({ kind: "select" }); return; }
     if (what === "description" && snap?.description.visible) { setTool({ kind: "select" }); setSelection({ kind: "description" }); return; }
@@ -395,6 +425,17 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
       setSelection({ kind: "object", id: next.id });
       return true;
     }
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && ["D", "C", "X", "V"].includes(key) && canEdit && tool.kind === "select") {
+      // J12: the app clipboard (docs/course-layout.md §2 "Keys"); copy and cut leave a text selection to the browser.
+      if (key === "V") { e.preventDefault(); pasteObject(); return true; }
+      if (!selectedObject) { if (key === "D") e.preventDefault(); return key === "D"; }
+      if (key === "D") { e.preventDefault(); duplicateObject(selectedObject); return true; }
+      if (window.getSelection()?.toString()) return false;
+      e.preventDefault();
+      writeClipboard({ v: 1, type: "page", event: a.nameId, object: selectedObject });
+      if (key === "X") deleteSelected();
+      return true;
+    }
     if (!plain) return false;
     if (key === "F") { fit(); return true; }
     const what = LAYOUT_KEYS[key];
@@ -405,7 +446,7 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
       return true;
     }
     return false;
-  }, [tool, selection, cropMode, deleteSelected, scoped, fit, onTool, geometry, finishPath, selectedPath, focusedVertex, updateObject, a.nameId]);
+  }, [tool, selection, cropMode, deleteSelected, scoped, fit, onTool, geometry, finishPath, selectedPath, focusedVertex, updateObject, a.nameId, canEdit, selectedObject, duplicateObject, pasteObject]);
 
   // ─── Validation (validate.ts, unchanged codes) ───────────
   const issues = useMemo(() => {
@@ -425,7 +466,7 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
   const editor: MapViewerEditorProps = useMemo(() => ({
     actionLayout: "bar",
     contextActions: [],
-    tool: binding,
+    tool: binding ? { ...binding, onHover: (p: ToolPointer | null) => { hoverPt.current = p?.pt ?? null; binding.onHover?.(p); } } : null,
     layout: layoutRequest,
     viewRequest,
     onDismiss: () => setSelection(null),
