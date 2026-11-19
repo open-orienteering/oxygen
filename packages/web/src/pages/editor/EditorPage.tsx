@@ -382,7 +382,7 @@ export function EditorPage() {
     );
   }, [outbox.entries, notice, client]);
 
-  const layoutNotify = useCallback((why: Refusal | "clipboardWrongTypePage") => setErrorMsg(t(why)), [t]);
+  const layoutNotify = useCallback((why: Refusal | "clipboardWrongTypePage" | "clipboardGraphicsUnknown") => setErrorMsg(t(why)), [t]);
   const layoutMode = useLayoutMode({
     enabled: state.mode === "layout",
     nameId: nameId ?? "",
@@ -1068,10 +1068,10 @@ export function EditorPage() {
 
   // ─── Duplicate, copy, cut, paste (J12, §7 "Duplicate, copy, cut, paste") ──
   const hoverPt = useRef<Pt | null>(null);
-  /** The graphics a pasted image may name (`graphics.list`: the event's and the club's), fetched when needed. */
-  const graphicIdsNow = useCallback(async (): Promise<Set<number>> => {
-    const list = await utils.graphics.list.fetch().catch(() => []);
-    return new Set(list.map((g) => g.id));
+  /** The graphics a pasted image may name (`graphics.list`: the event's and the club's), fetched when needed; null when it failed. */
+  const graphicIdsNow = useCallback(async (): Promise<Set<number> | null> => {
+    const list = await utils.graphics.list.fetch().catch(() => null);
+    return list ? new Set(list.map((g) => g.id)) : null;
   }, [utils]);
 
   /** `Ctrl+D`: a copy 3 mm down-right (an attachment kept), selected; one create, one undo entry. */
@@ -1086,7 +1086,13 @@ export function EditorPage() {
     const entry = readClipboard();
     if (!entry || !nameId) return;
     const controlIds = state.multi.length > 0 ? state.multi : state.selectedControlId !== null ? [state.selectedControlId] : [];
-    const why = refusal(entry, { event: nameId, mode: "course", graphicIds: entry.type === "course" && entry.object.kind === "image" ? await graphicIdsNow() : null, onControls: controlIds.length > 0 });
+    let graphicIds: Set<number> | null = null;
+    if (entry.type === "course" && entry.object.kind === "image") {
+      // Unknown graphics refuse nothing in `refusal`: a failed list is said, not let through or blamed on the graphic.
+      graphicIds = await graphicIdsNow();
+      if (!graphicIds) return setErrorMsg(t("clipboardGraphicsUnknown"));
+    }
+    const why = refusal(entry, { event: nameId, mode: "course", graphicIds, onControls: controlIds.length > 0 });
     if (why) return setErrorMsg(t(why));
     if (entry.type !== "course") return;
     const scope = pasteScope(entry, {
@@ -1895,7 +1901,14 @@ export function EditorPage() {
         runRedo();
       } else if (mod && !e.shiftKey && !e.altKey && ["D", "C", "X", "V"].includes(key) && state.mode === "course" && canEdit && state.tool.kind === "select") {
         // J12: the app clipboard (§7 "Duplicate, copy, cut, paste"). Copy and cut leave a text selection to the browser.
-        const o = selectedObject ? { ...selectedObject, geometry: drafts.get(selectedObject.id) ?? selectedObject.geometry } as CourseObject : null;
+        // As shown: a drag's geometry or props draft, else the props last sent (J11's window before the refetch).
+        const o = selectedObject ? {
+          ...selectedObject,
+          geometry: drafts.get(selectedObject.id) ?? selectedObject.geometry,
+          props: propDrafts.get(selectedObject.id) ?? sentProps.current.get(selectedObject.id) ?? selectedObject.props,
+        } as CourseObject : null;
+        // A held key does not repeat a create.
+        if (e.repeat && (key === "D" || key === "V")) { e.preventDefault(); return; }
         if (key === "D") {
           e.preventDefault();
           if (o) void duplicateObject(o);
@@ -2001,7 +2014,7 @@ export function EditorPage() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [descControlId, runUndo, runRedo, undoStack, state, handleDelete, deleteControls, deleteObject, duplicateObject, pasteObject, canEdit, nameId, selectedObject, focusedVertex, drafts, setDraft, cropMode, updateObject, setChain, exitTool, finishArea,
+  }, [descControlId, runUndo, runRedo, undoStack, state, handleDelete, deleteControls, deleteObject, duplicateObject, pasteObject, canEdit, nameId, propDrafts, selectedObject, focusedVertex, drafts, setDraft, cropMode, updateObject, setChain, exitTool, finishArea,
     stepSelection, armPlace, setTool, canGap, fitView, areaOpen, canTonerSaver, startArea, layoutKey, mapKey, selectedLeg, focusedBend, legEditable, writeLeg, addCorridor, selectionGroup, redraw, togglePlacementLoupe]);
 
   // ─── The URL (docs/course-editor.md §1 "URL"; F31) ─────────

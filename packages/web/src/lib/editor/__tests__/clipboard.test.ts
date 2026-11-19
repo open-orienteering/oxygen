@@ -30,6 +30,36 @@ describe("the editor clipboard (J12, docs/course-editor.md §7 \"Duplicate, copy
     expect(readClipboard(null)).toEqual(e);
   });
 
+  it("a full storage pastes the memory copy, not the older stored entry, until a write succeeds", () => {
+    const s = store();
+    const older = courseEntry(square({ kind: "whiteout" }), "itest");
+    writeClipboard(older, s);
+    const full: ClipboardStore = { getItem: s.getItem, setItem: () => { throw new Error("quota"); } };
+    const newer = courseEntry(square(), "itest");
+    writeClipboard(newer, full);
+    expect(readClipboard(full)).toEqual(newer);
+    writeClipboard(older, s);
+    expect(readClipboard(s)).toEqual(older);
+  });
+
+  it("an entry a paste could not read is empty: no scope, bad points, a page object that is not one", () => {
+    const s = store();
+    const e = courseEntry(square(), "itest");
+    const { scope: _scope, ...noScope } = e.object;
+    for (const bad of [
+      { ...e, object: noScope },
+      { ...e, object: { ...e.object, geometry: [{ x: "a", y: 0 }] } },
+      { ...e, object: { ...e.object, attach: { controlId: "x" } } },
+      { v: 1, type: "page", event: "itest", object: { kind: "text" } },
+    ]) {
+      s.data.set(CLIPBOARD_KEY, JSON.stringify(bad));
+      expect(readClipboard(s)).toBeNull();
+    }
+    const page = { id: "p", anchor: "page", kind: "text", x: 1, y: 1, text: "Hi", fontSizeMm: 3, color: "#000000" };
+    s.data.set(CLIPBOARD_KEY, JSON.stringify({ v: 1, type: "page", event: "itest", object: page }));
+    expect(readClipboard(s)?.type).toBe("page");
+  });
+
   it("duplicate: 3 mm down-right on paper, an attachment kept", () => {
     const attach = { controlId: 31, at: { x: 1, y: 1 } };
     const d = duplicateBody(square({ attach }));

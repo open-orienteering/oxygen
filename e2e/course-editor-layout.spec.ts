@@ -509,6 +509,13 @@ test.describe("Course editor layout (docs/course-layout.md)", () => {
       await page.keyboard.press("Control+v");
       await expect(page.getByTestId("editor-error")).toBeVisible({ timeout: 10000 });
       expect((await objects()).length).toBe(2);
+      // A page image whose graphic is neither the event's nor the club's is refused too.
+      await page.evaluate(() => localStorage.setItem("oxygen.editor.clipboard", JSON.stringify({
+        v: 1, type: "page", event: "x", object: { id: "img", anchor: "page", kind: "image", graphicId: 987654321, x: 20, y: 20, width: 10, height: 10 },
+      })));
+      await page.keyboard.press("Control+v");
+      await expect(page.getByTestId("editor-error")).toContainText(/graphic/i, { timeout: 10000 });
+      expect((await objects()).length).toBe(2);
     } finally {
       await drop();
     }

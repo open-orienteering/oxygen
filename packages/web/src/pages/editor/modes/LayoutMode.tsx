@@ -60,7 +60,7 @@ export interface LayoutModeArgs {
   run: <T>(op: () => Promise<T>) => Promise<T | undefined>;
   record: (undo: () => Promise<unknown>, redo: () => Promise<unknown>) => unknown;
   /** Why a paste was refused (J12), shown on the page's error line; a course object's entry is `clipboardWrongTypePage`. */
-  notify?: (why: Refusal | "clipboardWrongTypePage") => void;
+  notify?: (why: Refusal | "clipboardWrongTypePage" | "clipboardGraphicsUnknown") => void;
   /** The viewer's centre in paper mm, where a paste lands with the pointer off the map (J12). */
   viewCentre?: () => Pt | null;
 }
@@ -355,11 +355,17 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
     change({ objects: [...scopeObjects(data, stored).editable, copy] });
     setSelection({ kind: "object", id: copy.id });
   }, [data, stored, geometry, change]);
-  const pasteObject = useCallback(() => {
+  const pasteObject = useCallback(async () => {
     if (!data || !stored || !geometry) return;
     const entry = readClipboard();
     if (!entry) return;
-    const graphicIds = graphicsList.data ? new Set(graphicsList.data.map((g) => g.id)) : null;
+    let graphicIds: Set<number> | null = null;
+    if (entry.type === "page" && entry.object.kind === "image") {
+      // Fetched (cached) at paste time: a list not loaded yet must not let a foreign graphic through.
+      const list = await utils.graphics.list.fetch().catch(() => null);
+      if (!list) { a.notify?.("clipboardGraphicsUnknown"); return; }
+      graphicIds = new Set(list.map((g) => g.id));
+    }
     const why = refusal(entry, { event: a.nameId, mode: "page", graphicIds });
     if (why) { a.notify?.(why === "clipboardWrongType" ? "clipboardWrongTypePage" : why); return; }
     if (entry.type !== "page") return;
@@ -369,7 +375,7 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
     const copy = pastePageObject(entry.object, at, geometry.printable);
     change({ objects: [...scopeObjects(data, stored).editable, copy] });
     setSelection({ kind: "object", id: copy.id });
-  }, [data, stored, geometry, change, graphicsList.data, a.nameId, a.notify, a.viewCentre]);
+  }, [data, stored, geometry, change, utils, a.nameId, a.notify, a.viewCentre]);
 
   const onTool = useCallback((what: PlaceKind | "select", graphicId?: number) => {
     if (what === "select") { setTool({ kind: "select" }); return; }
@@ -427,7 +433,9 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
     }
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && ["D", "C", "X", "V"].includes(key) && canEdit && tool.kind === "select") {
       // J12: the app clipboard (docs/course-layout.md §2 "Keys"); copy and cut leave a text selection to the browser.
-      if (key === "V") { e.preventDefault(); pasteObject(); return true; }
+      // A held key does not repeat a create.
+      if (e.repeat && (key === "D" || key === "V")) { e.preventDefault(); return true; }
+      if (key === "V") { e.preventDefault(); void pasteObject(); return true; }
       if (!selectedObject) { if (key === "D") e.preventDefault(); return key === "D"; }
       if (key === "D") { e.preventDefault(); duplicateObject(selectedObject); return true; }
       if (window.getSelection()?.toString()) return false;

@@ -667,5 +667,6 @@
   "clipboardGraphicMissing": "The copied image's graphic is not in this event's or the club's library.",
   "clipboardRegionForeign": "A filter region with picked symbols or colours belongs to its own event's map: it is not pasted here.",
   "clipboardUnattachable": "A toner saver cannot follow a control: deselect the controls to paste it.",
-  "clipboardNoDrawnControl": "None of the selected controls is drawn in this view."
+  "clipboardNoDrawnControl": "None of the selected controls is drawn in this view.",
+  "clipboardGraphicsUnknown": "The graphics list could not be loaded: try the paste again."
 }

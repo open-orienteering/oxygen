@@ -667,5 +667,6 @@
   "clipboardGraphicMissing": "Den kopierade bildens grafik finns inte i tävlingens eller klubbens bibliotek.",
   "clipboardRegionForeign": "Ett filterområde med valda symboler eller färger hör till sin egen tävlings karta: det klistras inte in här.",
   "clipboardUnattachable": "En tonersparare kan inte följa en kontroll: avmarkera kontrollerna för att klistra in den.",
-  "clipboardNoDrawnControl": "Ingen av de markerade kontrollerna ritas i den här vyn."
+  "clipboardNoDrawnControl": "Ingen av de markerade kontrollerna ritas i den här vyn.",
+  "clipboardGraphicsUnknown": "Bildlistan kunde inte laddas: försök klistra in igen."
 }

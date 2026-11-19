@@ -1040,6 +1040,12 @@ test.describe("J12: duplicate, copy, cut, paste", () => {
       await page.keyboard.press("Control+x");
       await cut;
       await expect(objectRow(page, p)).toHaveCount(0, { timeout: 15000 });
+      // Undo of the cut brings it back (a new id), centred where it was.
+      before = await ids();
+      await page.keyboard.press("Control+z");
+      const [back] = await newIds(before, 1);
+      const cb = await centreOf(back);
+      expect(Math.hypot(cb.x - thereMm.x, cb.y - thereMm.y)).toBeLessThan(0.5);
 
       // Two controls selected, Ctrl+V: one copy on each, attached and centred (the original was free); one undo removes both.
       await page.keyboard.press("Escape");
@@ -1069,6 +1075,10 @@ test.describe("J12: duplicate, copy, cut, paste", () => {
       }
       await page.keyboard.press("Control+z");
       await expect.poll(async () => (await ids()).filter((id) => both.includes(id)).length, { timeout: 15000 }).toBe(0);
+      // Redo makes both again (new ids), still one entry.
+      before = await ids();
+      await page.keyboard.press("Control+y");
+      await newIds(before, 2);
 
       // The clipboard is in localStorage: a reload keeps it.
       await page.reload();
@@ -1088,6 +1098,83 @@ test.describe("J12: duplicate, copy, cut, paste", () => {
       await page.keyboard.press("Control+v");
       await expect(page.getByTestId("editor-error")).toBeVisible({ timeout: 10000 });
       expect((await ids()).length).toBe(before.length);
+    } finally {
+      for (const id of [made.id, ...created]) await cleanup("courseObject.delete", { id });
+    }
+  });
+
+  test("an attached object whose control moved: Ctrl+D keeps it on its control as drawn; pasted onto another control at the copied offset; undo and redo", async ({ page }) => {
+    test.setTimeout(180_000);
+    await openEditor(page);
+    const sheetToggle = page.getByTestId("map-toggle-descriptions");
+    if (/hide/i.test((await sheetToggle.textContent()) ?? "")) await sheetToggle.click();
+    const [codeA, ...rest] = await regularCodes(page, 6);
+    const A = await site(page, codeA);
+    const c = A.mm;
+    // Stored 8 mm right of A with `at` 1 mm left of it: drawn 9 mm right (as if A had moved 1 mm since).
+    const sq = [{ x: c.x + 3, y: c.y - 5 }, { x: c.x + 13, y: c.y - 5 }, { x: c.x + 13, y: c.y + 5 }, { x: c.x + 3, y: c.y + 5 }];
+    const made = await trpcCall<{ id: number }>("courseObject.create", { kind: "oob_area", geometry: sq, props: {}, scope: { all: true }, attach: { controlId: Number(A.id), at: { x: c.x - 1, y: c.y } } });
+    const ids = async () => (await page.getByTestId("editor-object-row").evaluateAll((els) => els.map((el) => Number(el.getAttribute("data-object-id")))));
+    const drawn = async (id: number) => (await objectRow(page, id).getAttribute("data-drawn"))!.split(" ").map((q) => { const [x, y] = q.split(",").map(Number); return { x, y }; });
+    const attachOf = async (id: number) => JSON.parse((await objectRow(page, id).getAttribute("data-attach")) || "null");
+    const created: number[] = [];
+    const newIds = async (before: number[], n: number) => {
+      let fresh: number[] = [];
+      await expect.poll(async () => { fresh = (await ids()).filter((id) => !before.includes(id)); return fresh.length; }, { timeout: 15000 }).toBe(n);
+      created.push(...fresh);
+      return fresh;
+    };
+    try {
+      await page.reload();
+      await editorReady(page);
+      if (/hide/i.test((await sheetToggle.textContent()) ?? "")) await sheetToggle.click();
+      await expect(objectRow(page, made.id)).toBeAttached({ timeout: 15000 });
+      // Its drawn edge midpoint clearest of every other site and number.
+      const others = [
+        ...(await sites(page)).filter((x) => x.id !== A.id).map((x) => x.mm),
+        ...(await page.getByTestId("course-label").evaluateAll((els) => els.map((el) => ({ x: Number(el.getAttribute("data-x")), y: Number(el.getAttribute("data-y")) })))),
+      ];
+      const edge = [{ x: c.x + 4, y: c.y }, { x: c.x + 14, y: c.y }, { x: c.x + 9, y: c.y - 5 }, { x: c.x + 9, y: c.y + 5 }]
+        .map((q) => ({ q, d: Math.min(Infinity, ...others.map((t) => Math.hypot(t.x - q.x, t.y - q.y))) }))
+        .sort((a, b) => b.d - a.d)[0].q;
+      await clickMap(page, await toPage(page, edge));
+      await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-id", String(made.id), { timeout: 10000 });
+      const d0 = (await drawn(made.id))[0];
+      expect(d0.x).toBeCloseTo(c.x + 4, 3);
+
+      // Ctrl+D: the copy 3 mm right and down of where it is drawn, attached to A with `at` A's position.
+      let before = await ids();
+      await page.keyboard.press("Control+d");
+      const [dup] = await newIds(before, 1);
+      await expect.poll(async () => (await attachOf(dup))?.controlId, { timeout: 15000 }).toBe(Number(A.id));
+      const at = (await attachOf(dup)).at;
+      expect(at.x).toBeCloseTo(c.x, 3);
+      expect(at.y).toBeCloseTo(c.y, 3);
+      const dd = (await drawn(dup))[0];
+      expect(dd.x).toBeCloseTo(d0.x + 3, 3);
+      expect(dd.y).toBeCloseTo(d0.y - 3, 3);
+
+      // Ctrl+C the copy, select another control, Ctrl+V: one copy attached to it at the same offset; undo, redo.
+      await page.keyboard.press("Control+c");
+      await page.keyboard.press("Escape");
+      let codeB: string | null = null;
+      for (const code of rest) { if (!(await coveredBy(page, await sitePoint(page, code)))) { codeB = code; break; } }
+      expect(codeB).not.toBeNull();
+      const B = await site(page, codeB!);
+      await select(page, codeB!);
+      before = await ids();
+      await page.keyboard.press("Control+v");
+      const [onB] = await newIds(before, 1);
+      await expect.poll(async () => (await attachOf(onB))?.controlId, { timeout: 15000 }).toBe(Number(B.id));
+      const pb = (await drawn(onB))[0];
+      expect(pb.x - B.mm.x).toBeCloseTo(dd.x - c.x, 3);
+      expect(pb.y - B.mm.y).toBeCloseTo(dd.y - c.y, 3);
+      await page.keyboard.press("Control+z");
+      await expect(objectRow(page, onB)).toHaveCount(0, { timeout: 15000 });
+      before = await ids();
+      await page.keyboard.press("Control+y");
+      const [again] = await newIds(before, 1);
+      await expect.poll(async () => (await attachOf(again))?.controlId, { timeout: 15000 }).toBe(Number(B.id));
     } finally {
       for (const id of [made.id, ...created]) await cleanup("courseObject.delete", { id });
     }

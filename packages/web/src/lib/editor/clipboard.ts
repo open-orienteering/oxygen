@@ -6,7 +6,7 @@
  * the system clipboard. Pure apart from the storage it is handed.
  */
 
-import { course, type CourseMapObject } from "@oxygen/shared";
+import { course, courseMapObjectSchema, type CourseMapObject } from "@oxygen/shared";
 import { centrePatch, objectCentre } from "./attach";
 
 type Pt = { x: number; y: number };
@@ -37,6 +37,8 @@ export type ClipboardEntry = CourseEntry | PageEntry;
 export interface ClipboardStore { getItem(key: string): string | null; setItem(key: string, value: string): void }
 
 let memory: ClipboardEntry | null = null;
+/** The last write did not reach storage (full or blocked): the memory copy wins until one does (storage may hold an older entry). */
+let unsaved = false;
 
 function storage(): ClipboardStore | null {
   try {
@@ -51,13 +53,16 @@ export function writeClipboard(entry: ClipboardEntry, store: ClipboardStore | nu
   memory = entry;
   try {
     store?.setItem(CLIPBOARD_KEY, JSON.stringify(entry));
+    unsaved = false;
   } catch {
-    // A full or blocked storage keeps the memory copy: this tab still pastes.
+    // A full or blocked storage keeps the memory copy: this tab still pastes it, not the older stored entry.
+    unsaved = true;
   }
 }
 
 /** The clipboard's entry, read at paste time so another tab's copy counts; an unreadable one is empty. */
 export function readClipboard(store: ClipboardStore | null = storage()): ClipboardEntry | null {
+  if (unsaved) return memory;
   let raw: string | null = null;
   try {
     raw = store?.getItem(CLIPBOARD_KEY) ?? null;
@@ -66,18 +71,34 @@ export function readClipboard(store: ClipboardStore | null = storage()): Clipboa
   }
   if (raw === null) return memory;
   try {
-    const parsed = JSON.parse(raw) as Partial<ClipboardEntry>;
-    if (parsed?.v !== 1 || (parsed.type !== "course" && parsed.type !== "page") || typeof parsed.event !== "string" || !parsed.object || typeof parsed.object !== "object") return null;
-    if (parsed.type === "course" && !Array.isArray((parsed.object as CourseEntry["object"]).geometry)) return null;
-    return parsed as ClipboardEntry;
+    return entryOf(JSON.parse(raw));
   } catch {
     return null;
   }
 }
 
+const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+
+/** A stored entry checked as far as a paste reads it; anything else (another version, a hand-edited one) is empty. */
+function entryOf(parsed: unknown): ClipboardEntry | null {
+  if (!isObj(parsed) || parsed.v !== 1 || typeof parsed.event !== "string" || !isObj(parsed.object)) return null;
+  if (parsed.type === "page") {
+    const r = courseMapObjectSchema.safeParse(parsed.object);
+    return r.success ? { v: 1, type: "page", event: parsed.event, object: r.data } : null;
+  }
+  if (parsed.type !== "course") return null;
+  const o = parsed.object;
+  const pts = Array.isArray(o.geometry) && o.geometry.length > 0 && o.geometry.every((p) => isObj(p) && Number.isFinite(p.x) && Number.isFinite(p.y));
+  const scope = isObj(o.scope) && (o.scope.all === true || (Array.isArray(o.scope.courses) && Array.isArray(o.scope.classes)));
+  const attach = o.attach === undefined || (isObj(o.attach) && typeof o.attach.controlId === "number" && isObj(o.attach.at) && Number.isFinite(o.attach.at.x) && Number.isFinite(o.attach.at.y));
+  if (typeof o.kind !== "string" || !pts || !isObj(o.props) || !scope || !attach || (o.inCourses !== null && !Array.isArray(o.inCourses))) return null;
+  return parsed as unknown as CourseEntry;
+}
+
 /** Forget the memory copy (tests). */
 export function clearClipboardMemory(): void {
   memory = null;
+  unsaved = false;
 }
 
 /** The entry for a shown course object. */

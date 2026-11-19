@@ -1439,10 +1439,10 @@ crosses sheets, templates, events, reloads and tabs. It is read at paste
 time; an unreadable or older entry is empty; a blocked or full storage
 keeps the memory copy (this tab still pastes). The keys work with `V`, in
 Course mode, for a setter who may edit, on `keydown` only (no context-menu
-item yet). Copy and cut leave a text selection on the page to the browser.
+item yet); a held key does not repeat. Copy and cut leave a text selection on the page to the browser. A stored entry a paste could not read (a course entry without valid points, props or scope, a page entry that does not parse) is empty.
 
 - **`Ctrl+D`**: a copy of the selected object **as shown** (an attached
-  object at its drawn place, a drag's draft included), 3 mm right and
+  object at its drawn place, a drag's geometry or props draft included, else the props last sent), 3 mm right and
   3 mm down on paper (`duplicateBody`), the same scope; an attached object
   stays attached to the same control with its `at` kept. One
   `courseObject.create`, one undo entry, the copy selected.
@@ -1469,7 +1469,8 @@ item yet). Copy and cut leave a text selection on the page to the browser.
   or `all` in view All. A duplicate keeps its scope.
 - **Refused**, the reason on the page's error line (`editor-error`), nothing
   written: a page object's entry (`clipboardWrongType`); an image whose
-  graphic is neither this event's nor the club's (`graphics.list`,
+  graphic is neither this event's nor the club's (`graphics.list`, fetched at
+  paste time; a failed fetch says so, `clipboardGraphicsUnknown`;
   `clipboardGraphicMissing`); a filter region that picks symbols or
   colours, copied in another event (its ids are that map's,
   `clipboardRegionForeign`; one that hides *all* pastes); a toner saver
@@ -3239,7 +3240,11 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
   object, keys only (no context-menu or phone item); sizes are copied as
   paper mm verbatim across maps of different scales (no rescale); the
   system clipboard is not used, so nothing pastes between
-  browsers.
+  browsers. The paste point is the pointer's last place on the map: after
+  a fit or a view request without a mouse move it may be off screen. To
+  keep it the select tool has a hover callback, so the viewer resolves a
+  hover target on each mouse move (not measured; a point-only callback
+  would be cheaper).
 - **Undo across a removed control** (§7 "Attached objects", J10): the
   wire shows an object of a removed control without `attach`, so a
   delete of that object, or an *Attach* / *Centre* on it, records an
