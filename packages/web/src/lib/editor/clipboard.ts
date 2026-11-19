@@ -63,7 +63,7 @@ export function writeClipboard(entry: ClipboardEntry, store: ClipboardStore | nu
 /** The clipboard's entry, read at paste time so another tab's copy counts; an unreadable one is empty. */
 export function readClipboard(store: ClipboardStore | null = storage()): ClipboardEntry | null {
   if (unsaved) return memory;
-  let raw: string | null = null;
+  let raw: string | null;
   try {
     raw = store?.getItem(CLIPBOARD_KEY) ?? null;
   } catch {
