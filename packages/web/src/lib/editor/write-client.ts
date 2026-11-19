@@ -35,9 +35,11 @@ export interface ObjectUpdateInput {
   geometry?: course.CourseObject["geometry"];
   props?: course.CourseObject["props"];
   scope?: course.CourseObject["scope"];
+  /** J10: the control it follows and where it was (`null` detaches; absent keeps). */
+  attach?: course.CourseObjectAttach<number> | null;
 }
 
-export type ObjectCreateInput = Pick<course.CourseObject, "kind" | "geometry" | "props" | "scope">;
+export type ObjectCreateInput = Pick<course.CourseObject, "kind" | "geometry" | "props" | "scope"> & { attach?: course.CourseObjectAttach<number> | null };
 
 /** What a `mapPatch.` write answers (docs/map-patches.md §3.2): the row's version and the delivered patch. */
 export interface PatchWriteResult {

@@ -18,7 +18,7 @@ import { circleWithGaps } from "./arcs.js";
 import { corridorGeometry } from "./corridor.js";
 import { COURSE_GRAPHICS_ID, courseColourStack, withObjectColours, withTintColours } from "./colour-stack.js";
 import { deriveCourse, structuresOf } from "./derive.js";
-import { TONER_WHITE_ID, courseObjects, filterRegionOf, hasTonerSaver, objectColours } from "./objects.js";
+import { TONER_WHITE_ID, courseObjects, filterRegionOf, hasTonerSaver, objectColours, resolveAttached } from "./objects.js";
 import { CROSSING_BODY_MM, CROSSING_SECTION_MM, CROSSING_SECTION_OFFSET_MM, courseSymbols } from "./symbols.js";
 import type { CourseFilterRegion, CourseLayer, CourseLayerInput, CourseRenderObject } from "./types.js";
 import type { MapPoint } from "../course-maps/schema.js";
@@ -53,9 +53,11 @@ export function courseLayer(input: CourseLayerInput): CourseLayer {
   });
   const { idx } = set;
   const objects: CourseRenderObject[] = [];
+  // §8.3, J10: an attached object follows its control, and is drawn only where its control is.
+  const inputObjects = resolveAttached(input.objects, derivation.sites);
 
   // §12.7: the All-variations view's tints — rows on top of the stack, tinted copies of 705 and 703.
-  const palette0 = withObjectColours(stack.colours, objectColours(input.objects));
+  const palette0 = withObjectColours(stack.colours, objectColours(inputObjects));
   const tinting = variationTints(input, set, palette0.colours);
   const palette = { ...palette0, colours: tinting.colours };
 
@@ -112,11 +114,11 @@ export function courseLayer(input: CourseLayerInput): CourseLayer {
 
   const symbols: RenderSymbol[] = [...set.symbols, ...tinting.symbols];
   // A toner saver covers everything the map layer draws: its white is the top row (objects.ts, P1).
-  const drawsToner = (input.viewOptions.window?.length ?? 0) >= 3 && hasTonerSaver(input.objects);
+  const drawsToner = (input.viewOptions.window?.length ?? 0) >= 3 && hasTonerSaver(inputObjects);
   const colours = drawsToner ? [...palette.colours, TONER_WHITE] : palette.colours;
   const tonerWhite = drawsToner ? colours.length - 1 : undefined;
   const graphicsRow = colours.findIndex((c) => c.id === COURSE_GRAPHICS_ID);
-  const built = courseObjects(input.objects, set, symbols, palette.indexOf, input.viewOptions, stack.index.get("purple-upper")!, tonerWhite, graphicsRow);
+  const built = courseObjects(inputObjects, set, symbols, palette.indexOf, input.viewOptions, stack.index.get("purple-upper")!, tonerWhite, graphicsRow);
   objects.push(...built.objects);
   if (edgeObjects.length) {
     const edgeIdx = symbols.push(set.edge) - 1;
@@ -124,7 +126,7 @@ export function courseLayer(input: CourseLayerInput): CourseLayer {
   }
 
   // Stored filter regions (§8.3) follow the explicit ones.
-  const stored = input.objects.flatMap((o) => (o.kind === "filter_region" ? [filterRegionOf(o)] : []));
+  const stored = inputObjects.flatMap((o) => (o.kind === "filter_region" ? [filterRegionOf(o)] : []));
   const regions = [...(input.regions ?? []), ...stored].map((r) => filterRegion(r, stack.remap));
   // §10.2: the corridors' white band cuts every map colour away; the course is never filtered.
   if (corridors?.band) regions.push({ path: ringsPath(corridors.band), mode: "clip", symbols: "all" });

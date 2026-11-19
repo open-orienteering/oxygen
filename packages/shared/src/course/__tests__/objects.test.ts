@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 import { courseLayer } from "../layer.js";
-import { courseObjectBodySchema, courseObjectInScope, courseObjectScopeSchemaOf, objectsInScope, type CourseLayerObject, type StoredCourseObject } from "../objects.js";
+import { courseObjectAttachSchemaOf, courseObjectBodySchema, courseObjectInScope, courseObjectScopeSchemaOf, objectsInScope, resolveAttached, type CourseLayerObject, type StoredCourseObject } from "../objects.js";
 import { COORD_FLAG } from "../../render/pass-stream.js";
 import { layerInput } from "./helpers.js";
 import { z } from "zod";
@@ -236,5 +236,24 @@ describe("course objects in the layer (§8.3)", () => {
     expect(corners({ rotationDeg: 90 }).pts).toEqual([5, 15, 5, -5, 15, -5, 15, 15]);
     const plain = corners({ opacity: 1, rotationDeg: 0, flipH: false }).o;
     expect("opacity" in plain || "blend" in plain).toBe(false);
+  });
+});
+
+describe("attachment (J10, docs/course-layer.md §8.1)", () => {
+  const o = { id: 1, kind: "oob_line" as const, geometry: [{ x: 0, y: 0, hOut: { x: 1, y: 2 } }, { x: 5, y: 0 }], props: {} };
+  it("the schema takes a control and the position it was at", () => {
+    const s = courseObjectAttachSchemaOf(z.number().int());
+    expect(s.safeParse({ controlId: 31, at: { x: 1, y: 2 } }).success).toBe(true);
+    expect(s.safeParse({ controlId: 31 }).success).toBe(false);
+    expect(s.safeParse({ controlId: 31, at: { x: 1, y: 2 }, extra: 1 }).success).toBe(false);
+  });
+  it("resolveAttached translates by site − at keeping handles, drops one whose site is not drawn, returns an unattached list itself", () => {
+    const sites = [{ id: "31", x: 10, y: 20 }];
+    const [moved] = resolveAttached([{ ...o, attach: { controlId: 31, at: { x: 7, y: 17 } } }], sites);
+    expect(moved.geometry).toEqual([{ x: 3, y: 3, hOut: { x: 1, y: 2 } }, { x: 8, y: 3 }]);
+    expect("attach" in moved).toBe(false);
+    expect(resolveAttached([{ ...o, attach: { controlId: 32, at: { x: 0, y: 0 } } }], sites)).toEqual([]);
+    const list = [o];
+    expect(resolveAttached(list, sites)).toBe(list);
   });
 });

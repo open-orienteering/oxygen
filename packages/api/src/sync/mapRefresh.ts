@@ -22,7 +22,7 @@
 import { TRPCError } from "@trpc/server";
 import { Prisma, type PrismaClient } from "../generated/prisma/client.js";
 import type { EventRef } from "../db.js";
-import { getActiveLease, NULLABLE_JSON_SHEET_FIELDS, TOKEN_TABLES, type LeasePeer, type TokenTable } from "./lease.js";
+import { getActiveLease, NULLABLE_JSON_OBJECT_FIELDS, NULLABLE_JSON_SHEET_FIELDS, TOKEN_TABLES, type LeasePeer, type TokenTable } from "./lease.js";
 import { nodeId } from "./nodeIdentity.js";
 import { withoutDroppedFields } from "./dropped-columns.js";
 import {
@@ -414,7 +414,7 @@ export async function applyMapRows(
     "courseObject",
     cloudObjects,
     planMirror(await layoutDelegate(tx, "courseObject").findMany({ where: { eventId } }), cloudObjects),
-    (r) => r,
+    (r) => withDbNulls(r, NULLABLE_JSON_OBJECT_FIELDS),
   );
 
   return {

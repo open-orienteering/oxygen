@@ -636,6 +636,9 @@ model CourseObject {
   geometry  Json
   props     Json     @default("{}")
   scope     Json
+  /// J10: { controlId (controls.id), at { x, y } } — the control it follows and where that control was when the
+  /// geometry was written; NULL unattached. No foreign key (docs/course-layer.md §8.1 "Attachment").
+  attach    Json?
   z         Int      @default(0)
   version   BigInt   @default(0)
   /// 'import': written by the importers / backfill (replaced on re-import); 'layout': moved from a

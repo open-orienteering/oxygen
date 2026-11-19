@@ -12,7 +12,7 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { course } from "@oxygen/shared";
-import type { Prisma } from "../generated/prisma/client.js";
+import { Prisma } from "../generated/prisma/client.js";
 import { coursesEditProcedure, kioskOrCoursesViewProcedure, router } from "../trpc.js";
 import { baseVersionSchema, lockCourseObjectVersion, versionConflict } from "../version-conflict.js";
 import {
@@ -21,6 +21,7 @@ import {
   loadWireContext,
   nextObjectVersion,
   storedObjectOf,
+  storedAttach,
   storedScope,
   toWire,
   writeCourseObject,
@@ -30,6 +31,7 @@ import {
 
 const scopeWireSchema = course.courseObjectScopeSchemaOf(z.number().int());
 const zSchema = z.number().int().min(-1_000_000).max(1_000_000);
+const attachWireSchema = course.courseObjectAttachSchemaOf(z.number().int());
 const json = (v: unknown) => v as Prisma.InputJsonValue;
 
 type Db = Parameters<typeof loadCourseObjects>[0];
@@ -58,11 +60,15 @@ export const courseObjectRouter = router({
   }),
 
   create: coursesEditProcedure
-    .input(course.courseObjectBodySchema.and(z.object({ scope: scopeWireSchema, z: zSchema.optional() })))
+    .input(course.courseObjectBodySchema.and(z.object({ scope: scopeWireSchema, z: zSchema.optional(), attach: attachWireSchema.nullable().optional() })))
     .mutation(async ({ ctx, input }): Promise<course.CourseObject> => {
-      const { scope, z: zIndex, ...body } = input;
+      const { scope, z: zIndex, attach, ...body } = input;
       const w = await loadWireContext(ctx.db, ctx.event.id);
-      const o = await writeCourseObject(ctx.db, ctx.event.id, { body: body as course.CourseObjectBody, scope: storedScope(scope, w.ids), z: zIndex });
+      const kind = (body as course.CourseObjectBody).kind;
+      const o = await writeCourseObject(ctx.db, ctx.event.id, {
+        body: body as course.CourseObjectBody, scope: storedScope(scope, w.ids), z: zIndex,
+        ...(attach ? { attach: storedAttach(kind, attach, w) } : {}),
+      });
       return toWire(o, w);
     }),
 
@@ -76,6 +82,8 @@ export const courseObjectRouter = router({
         props: z.unknown().optional(),
         scope: scopeWireSchema.optional(),
         z: zSchema.optional(),
+        /** J10: the control it follows and where it was (absent keeps, `null` detaches). */
+        attach: attachWireSchema.nullable().optional(),
       }),
     )
     .mutation(async ({ ctx, input }): Promise<course.CourseObject> => {
@@ -93,6 +101,17 @@ export const courseObjectRouter = router({
           throw new TRPCError({ code: "BAD_REQUEST", message: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ") });
         }
         assertWritableKind(parsed.data.kind);
+        // J10: absent keeps the stored attachment; `null` detaches. Geometry sent for an object whose control is
+        // deleted (drawn detached, so the client sends the drawn place) sets `at` to that control's position, so
+        // restoring the control does not move it twice.
+        let attach: Prisma.InputJsonValue | typeof Prisma.DbNull | undefined;
+        if (input.attach === null) attach = Prisma.DbNull;
+        else if (input.attach) attach = storedAttach(parsed.data.kind, input.attach, w) as unknown as Prisma.InputJsonValue;
+        else if (input.geometry !== undefined && o.attach) {
+          const c = w.controls.get(o.attach.controlId);
+          if (!c) attach = Prisma.DbNull;
+          else if (c.removed) attach = { controlId: c.id, at: { x: c.x, y: c.y } };
+        }
         const row = await tx.courseObject.update({
           where: { id: o.id },
           data: {
@@ -100,6 +119,7 @@ export const courseObjectRouter = router({
             props: json(parsed.data.props),
             ...(input.scope ? { scope: json(storedScope(input.scope, w.ids)) } : {}),
             ...(input.z !== undefined ? { z: input.z } : {}),
+            ...(attach !== undefined ? { attach } : {}),
             version: nextObjectVersion(),
           },
         });

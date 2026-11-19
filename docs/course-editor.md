@@ -1317,7 +1317,51 @@ any other, with `source = 'layout'` that the wire does not carry.
   one is `CONFLICT { kind: "object" }` → the refresh notice of §3.
 - Tests read the objects from a hidden mirror, `editor-object-row`
   (`data-object-id`, `-kind`, `-geometry` — `x,y` pairs, `-geometry-json`
-  — the stored vertices with their handles, `-props`, `-scope`).
+  — the stored vertices with their handles, `-props`, `-scope`;
+  `data-attach` — the wire `attach` as JSON, empty when free — and
+  `data-drawn` — the `x,y` pairs where it is drawn, empty when its
+  control is not drawn, J10).
+
+### Attached objects
+
+Row J10 (`course-layer.md` §8.1 "Attachment"). Any object but a toner
+saver may follow a control: moving the control moves the object and
+writes nothing to it. The editor works on the object **where it is
+drawn** (`lib/editor/attach.ts` `shownObject`): its geometry moved by
+the control's drawn position minus `at`, and `at` that position, so the
+layer draws it at the same place. The drawn positions are the layer's
+derivation's sites (`courseInfo.derivation.sites`; before the layer
+reports, the stored coordinates), so a dragged control's object follows
+the drag's result, not a stale row. Selection, the hit-test (the
+viewer's closed-area rings resolve the same way), every gesture, the
+inspector and drafts use the shown object; an object whose control is
+not drawn in the view is not shown or selectable (user answer 8).
+
+- **Writes.** Every write that sends geometry sends `attach` with it
+  (the shown one), so undo puts back the shape and the offset together.
+- **Inspector** (`editor-object-attach`, `data-attached` the control's
+  code, empty when free): *Attached to <code>* or *Not attached*, then
+  - *Attach to nearest* (`editor-object-attach-nearest`): the drawn site
+    nearest the object's centre (`objectCentre`: a text's anchor, else
+    its vertices' bounds' centre; `nearestSite`); it stays where it is
+    drawn (`attachPatch`).
+  - *Attach to a control I click* (`editor-object-attach-pick`,
+    `aria-pressed` while armed): the next control selected becomes the
+    one it follows, and the object is selected again. The button again,
+    or selecting another object, cancels it (Escape is not part of it:
+    it clears the selection as usual, §3).
+  - *Centre on control* (`editor-object-centre`): moved so its centre is
+    on its control (the nearest when free) and attached to it
+    (`centrePatch`).
+  - *Detach* (`editor-object-detach`, attached only): free, kept where it
+    is drawn (`detachPatch`).
+
+  Each is one `courseObject.update { geometry, attach }` and one undo
+  entry. Disabled when no control is drawn.
+- **A deleted control** (user answer 7): nothing is written to the
+  object; the API reads it as detached where it was drawn
+  (`course-layer.md` §8.4), so it stays in place and *Detach* is gone;
+  undo of the delete (`control.restore`) attaches it again.
 
 ### Editing geometry
 
@@ -2997,6 +3041,8 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | unit (web) | `lib/editor/__tests__/symbol-pick.test.ts` | §5 / §6.4 the eyedropper's pick over an encoded document: objects per symbol, an area inside it with its pass colour, a line over the area within the tolerance (topmost wins), the area beyond half width + tolerance, a hidden symbol never, a text by its box, a proxy-drawn point by its disc, empty map null |
 | unit (shared) | `packages/shared/src/map-document/__tests__/render-bridge.test.ts` "a subset of objects" | `map-document-format.md` §8: `docIdx` maps each render object to its document object; `only` symbolises the listed objects and keeps the symbol table aligned |
 | unit (web) | `lib/editor/__tests__/state.test.ts`, `pages/editor/__tests__/bindings.test.ts` "the eyedropper binding" | §6.4: `pick-symbol` dropped by Escape first (the object stays selected) and by any mode change; the binding is exclusive with a crosshair, a click picks with 6 px × `mmPerPx`, right-click exits, no shapes; `railKeyOf` lights no rail button |
+| unit | `lib/editor/__tests__/attach.test.ts` | §7 "Attached objects" (J10): `shownObject` moves an attached object to its control's drawn position with `at` that position, hides it without its control; attach keeps the drawn place, centre moves the centre onto the control, detach keeps the drawn place without `attach`; a text centres by its anchor; the nearest site |
+| E2E | `e2e/course-editor-tools.spec.ts` "J10: attach to a control" (`chromium`) | §7 "Attached objects": a 10 mm `oob_area` on a clear spot selected by its edge; *Attach to a control I click* armed (`aria-pressed`), a click on a control → one `courseObject.update`, the object selected again, `data-attach` that control, `data-attached` its code; the control dragged 6 mm → `data-drawn` moved by the control's offset, the stored geometry unchanged and no object write; the all-controls `maps.pdf` still draws its 709 hatch; a click on its moved edge selects it; *Centre on control* → one update, its centre on the control; the control deleted → no object write, `data-attach` empty and still drawn; `Ctrl+Z` (`control.restore`) attaches it again; *Detach* → one update, drawn where it was |
 | E2E | `e2e/course-editor-tools.spec.ts` "filter symbol picker" (`chromium`) | §6.4 / §7 (P3): a filter region over the 505 path, *picked symbols*: `editor-filter-symbol-505` with `data-members="3"` and "Path", `601` named "Magnetic north line" (601.0 matched to 601.b), no entry with a source code (`.`), the 505 swatch image loaded, the 850 frame only under Other, the search "path" → one entry; the eyedropper armed (`aria-pressed`, `V` not lit, no `editor-selection-ring`), a click on the path → one `courseObject.update`, `"symbols":[3]`, the 505 box checked, the note "505 Path", the band's ink below a third; still armed, a second click on the path → note `already`, `Esc` → `V` with the region still selected |
 | integration | `packages/api/src/__tests__/integration/course-print.test.ts` "course objects on the page" | §7 print: the row's "reference-raster pixel probe" of a printed course object is this test's page raster, not the E2E's — no HTTP route rasterises a composed page, and poppler is on the runner for the unit / integration jobs, not the E2E job (coordinator 2026-11-01) |
 | unit (web) | `packages/web/src/lib/editor/__tests__/checks.test.ts` | §8: sites and the explicit structure as `courseChecks` takes them, two controls 20 m apart, the server's `DESCRIPTION_STALE` merged in order, markers (rings, a leg cross, unpositioned skipped), length from the leg polylines, locate |
@@ -3063,6 +3109,14 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | E2E | `e2e/course-editor.spec.ts` "F7: variations and loops" (`chromium`), "F7 on a phone" (`mobile`) | §12: a leg → *Create variation here* → one block with tabs A (pressed) and B, `course.variantList` `A`, `B`; tab B, `K` with nothing selected → the control is B's row; Variant ▾ B numbers it 2, A numbers the anchor's next 2; All variations → the two alternatives' legs in different tints (canvas pixels); `VARIATION_UNBALANCED` listed and locating the anchor; *Loop* → `AB`, `BA`; F8: Export ▾ *This course (2 variants)* → two pages, *All variations* → one, *One map per runner* disabled; Layout mode's Variant ▾ shows AB, no *All variations*, BA picked keeps the mode and *This variant BA* prints one page; three undos → loop, the control, the group gone; F15 (a second test): a control into B and one into A → All variations labels both 2, the anchor 1 and the exit 3; a second control into B → codes again. On a phone a group written over tRPC shows its block with `editor-variation-readonly`, ＋ and *Loop* disabled, and tab B switches the rows |
 
 ## Pending in this chapter
+
+- **Attached objects in the viewer and kiosk** (§7 "Attached objects",
+  J10): they follow a moved control there too (the layer resolves), but
+  `courseObject.list` is cached until reload in the viewer (`course-layer.md`
+  §8.3), so a removed control's object shows detached only after a
+  reload. During a control drag the UI-layer outline of a selected
+  attached object follows only when the drag lands (the layer's derivation
+  reports then).
 
 - **The top bar past tier 2** (§2 "Top bar", F29): below 1220 px of row
   only the mode words have gone; the view group, presence chips, a save

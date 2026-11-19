@@ -94,6 +94,7 @@ import {
 } from "../lib/course-leg-labels";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { courseLayerRequest, PROVISIONAL_SITE_ID, sheetCrossings, sheetExchanges, type LayoutRequest, type ProvisionalVisit } from "../lib/course-layer-request";
+import { course } from "@oxygen/shared";
 import { dragLegShapes } from "../lib/editor/leg-length";
 import { outlinePoints, vertexRule } from "../lib/editor/geometry-edit";
 import type { CourseInfo } from "../map-gl/engine";
@@ -1174,12 +1175,13 @@ export function MapViewer({
   // interior is the map, so a press there pans (§5, §7; docs/bugfix-editor-area-press-pans.md). An image is hit
   // inside its turned box, after everything else (J7): a control inside a lucka still wins.
   const uiAreas = useMemo(
+    // An attached object (J10) hits where the layer draws it: moved with its control, left out when that is not drawn.
     () => (editor
-      ? drawnObjects.flatMap((o) => (o.kind === "image"
+      ? course.resolveAttached(drawnObjects, courseInfo?.derivation?.sites ?? []).flatMap((o) => (o.kind === "image"
         ? [{ id: o.id, ring: imageRing(o.geometry, o.props.rotationDeg), filled: true }]
         : vertexRule(o.kind).closed ? [{ id: o.id, ring: outlinePoints(o.geometry, true) }] : []))
       : []),
-    [editor, drawnObjects],
+    [editor, drawnObjects, courseInfo?.derivation?.sites],
   );
   // `style: "none"` legs have no layer object, so no hit piece: they hit from the derivation (§6.7).
   const uiLegs = useMemo(() => (editor ? uiLegsOf(courseInfo?.derivation?.courses) : []), [editor, courseInfo]);

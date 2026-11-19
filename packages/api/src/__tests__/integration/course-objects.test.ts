@@ -193,6 +193,60 @@ describe("scope over the event's classes (§8.2)", () => {
   });
 });
 
+describe("attached to a control (J10, course-layer.md §8.1 \"Attachment\", §8.4)", () => {
+  const IMG = [{ x: 18, y: 18 }, { x: 22, y: 22 }];
+  const row = async (seq: number) => ctx.db.courseObject.findFirstOrThrow({ where: { eventId: ctx.eventId, seq } });
+  const wire = async (seq: number) => (await caller.courseObject.list()).find((o) => o.id === seq)!;
+
+  it("create and update take the public control id, store the UUID; null detaches, absent keeps; unknown and the toner saver are refused", async () => {
+    await caller.control.create({ codes: "131", xpos: 20, ypos: 20 });
+    const c131 = await ctx.db.control.findFirstOrThrow({ where: { eventId: ctx.eventId, codes: "131" } });
+    const o = await caller.courseObject.create({ kind: "image", geometry: IMG, props: { graphicId: 1 }, scope: { all: true }, attach: { controlId: 131, at: { x: 20, y: 20 } } });
+    expect(o.attach).toEqual({ controlId: 131, at: { x: 20, y: 20 } });
+    expect((await row(o.id)).attach).toEqual({ controlId: c131.id, at: { x: 20, y: 20 } });
+    const kept = await caller.courseObject.update({ id: o.id, props: { graphicId: 1, opacity: 0.5 } });
+    expect(kept.attach).toEqual({ controlId: 131, at: { x: 20, y: 20 } });
+    expect(BigInt(kept.version)).toBeGreaterThan(BigInt(o.version));
+    await expect(caller.courseObject.update({ id: o.id, attach: { controlId: 99999, at: { x: 0, y: 0 } } })).rejects.toThrow(/Unknown control 99999/);
+    await expect(caller.courseObject.create({ kind: "toner_saver", geometry: SQUARE, props: {}, scope: { all: true }, attach: { controlId: 131, at: { x: 0, y: 0 } } })).rejects.toThrow(/cannot be attached/);
+    const off = await caller.courseObject.update({ id: o.id, attach: null });
+    expect(off.attach).toBeUndefined();
+    expect((await row(o.id)).attach).toBeNull();
+  });
+
+  it("a control move writes nothing to the object; the wire keeps the stored geometry and at (the layer resolves)", async () => {
+    await caller.control.create({ codes: "132", xpos: 50, ypos: 50 });
+    const o = await caller.courseObject.create({ kind: "oob_line", geometry: [{ x: 48, y: 48 }, { x: 52, y: 52 }], props: {}, scope: { all: true }, attach: { controlId: 132, at: { x: 50, y: 50 } } });
+    const before = await row(o.id);
+    await caller.control.update({ id: 132, xpos: 60, ypos: 55 });
+    const after = await row(o.id);
+    expect(after).toEqual(before);
+    expect((await wire(o.id)).geometry).toEqual([{ x: 48, y: 48 }, { x: 52, y: 52 }]);
+  });
+
+  it("a deleted control leaves the object detached where it was drawn, untouched; restore re-attaches; a hand edit meanwhile does not move twice", async () => {
+    await caller.control.create({ codes: "133", xpos: 70, ypos: 70 });
+    const o = await caller.courseObject.create({ kind: "oob_line", geometry: [{ x: 70, y: 70 }, { x: 72, y: 72 }], props: {}, scope: { all: true }, attach: { controlId: 133, at: { x: 70, y: 70 } } });
+    await caller.control.update({ id: 133, xpos: 80, ypos: 75 });
+    const before = await row(o.id);
+    await caller.control.delete({ id: 133 });
+    expect(await row(o.id)).toEqual(before);
+    // Drawn at the control's last place: stored + (80, 75) − (70, 70).
+    const detached = await wire(o.id);
+    expect(detached.attach).toBeUndefined();
+    expect(detached.geometry).toEqual([{ x: 80, y: 75 }, { x: 82, y: 77 }]);
+    const stored = (await loadCourseObjects(ctx.db, ctx.eventId)).find((x) => x.seq === o.id)!;
+    expect(stored.attach).toBeUndefined();
+    expect(stored.geometry).toEqual([{ x: 80, y: 75 }, { x: 82, y: 77 }]);
+    // Moved by hand while detached: the drawn place sent, `at` set to the deleted control's position.
+    await caller.courseObject.update({ id: o.id, geometry: [{ x: 90, y: 75 }, { x: 92, y: 77 }] });
+    await caller.control.restore({ id: 133 });
+    const back = await wire(o.id);
+    expect(back.attach).toEqual({ controlId: 133, at: { x: 80, y: 75 } });
+    expect(back.geometry).toEqual([{ x: 90, y: 75 }, { x: 92, y: 77 }]);
+  });
+});
+
 describe("checkout snapshot (map-storage.md §7.2)", () => {
   it("carries the rows verbatim: UUIDs, seq, scope UUIDs, token", async () => {
     const before = await ctx.db.courseObject.findMany({ where: { eventId: ctx.eventId }, orderBy: { seq: "asc" } });

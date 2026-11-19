@@ -525,3 +525,38 @@ describe("courseDocumentContext", () => {
     expect(layer.objects).toEqual([]);
   });
 });
+
+describe("attached objects (J10, docs/course-layer.md §8.3)", () => {
+  const img = (over: Partial<CourseLayerObject> = {}): CourseLayerObject =>
+    ({ id: "img", kind: "image", geometry: [{ x: 38, y: 8 }, { x: 42, y: 12 }], props: { graphicId: 3 }, ...over }) as CourseLayerObject;
+  const oob = (over: Partial<CourseLayerObject> = {}): CourseLayerObject =>
+    ({ id: "oob", kind: "oob_area", geometry: [{ x: 35, y: 5, hOut: { x: 1, y: 0 } }, { x: 45, y: 5 }, { x: 40, y: 15 }], props: {}, ...over }) as CourseLayerObject;
+  const shifted = (o: CourseLayerObject, dx: number, dy: number) => ({ ...o, geometry: o.geometry.map((v) => ({ ...v, x: v.x + dx, y: v.y + dy })) }) as CourseLayerObject;
+
+  it("draws an attached object where its control is now: the same as the object stored at the translated place", () => {
+    // Control 31 is at (40, 10); attached when it was at (30, 0): drawn 10 mm right and up.
+    const attach = { controlId: "31", at: { x: 30, y: 0 } };
+    for (const o of [img(), oob()]) {
+      const attached = courseLayer(layerInput({ objects: [{ ...o, attach }] }));
+      const placed = courseLayer(layerInput({ objects: [shifted(o, 10, 10)] }));
+      expect(attached.objects).toEqual(placed.objects);
+      expect(attached.images).toEqual(placed.images);
+      expect(attached.colours).toEqual(placed.colours);
+    }
+  });
+
+  it("is not drawn where its control is not; a filter region follows or drops; a scene without attach is unchanged", () => {
+    const on99 = img({ attach: { controlId: "99", at: { x: 80, y: 80 } } });
+    // 99 is not on the course: the attached image is left out (its images list empty).
+    expect(courseLayer(layerInput({ objects: [on99] })).images).toEqual([]);
+    // The all-controls view draws 99.
+    expect(courseLayer(layerInput({ structure: null, viewOptions: { allControls: true }, objects: [on99] })).images).toHaveLength(1);
+    const region = { id: "r", kind: "filter_region", geometry: [{ x: 0, y: 0 }, { x: 4, y: 0 }, { x: 0, y: 4 }], props: { mode: "hide", symbols: "all" } } as CourseLayerObject;
+    const follows = courseLayer(layerInput({ objects: [{ ...region, attach: { controlId: "31", at: { x: 40, y: 10 } } }] }));
+    const plain = courseLayer(layerInput({ objects: [region] }));
+    expect(follows.regions).toEqual(plain.regions);
+    expect(courseLayer(layerInput({ objects: [{ ...region, attach: { controlId: "99", at: { x: 0, y: 0 } } }] })).regions).toEqual(courseLayer(layerInput()).regions);
+    const objects = [img(), oob()];
+    expect(courseLayer(layerInput({ objects }))).toEqual(courseLayer(layerInput({ objects: objects.map((o) => ({ ...o })) })));
+  });
+});

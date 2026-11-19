@@ -13,6 +13,7 @@ import { isAppliedMatch } from "../map-document/render-bridge.js";
 import { COORD_FLAG } from "../render/pass-stream.js";
 import type { SymbolLibraryId } from "../symbol-library/index.js";
 import { courseDocumentContext } from "./context.js";
+import { resolveAttached } from "./objects.js";
 import { legPolylineOf } from "./bends.js";
 import { legLengthMm, routedBends } from "./derive.js";
 import { sectionsOf } from "./structure.js";
@@ -377,7 +378,7 @@ export function courseChecks(input: CourseChecksInput): CourseCheck[] {
     }
 
     if (structure.orderMode === "ordered") {
-      const obstacles = [...(input.document?.obstacles ?? []), ...objectObstacles(input.objects ?? [])];
+      const obstacles = [...(input.document?.obstacles ?? []), ...objectObstacles(resolveAttached(input.objects ?? [], input.sites.filter(positioned)))];
       const boxes = obstacles.map((o) => boxOf(o.points));
       // Crossing and map-issue points are never items (§10.3): the layer skips them, so do the legs.
       const seqVisits = visits.filter((v) => positioned(v.site) && v.site.kind !== "crossing_point" && v.site.kind !== "map_issue");

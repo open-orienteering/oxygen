@@ -38,6 +38,20 @@ export interface ObjectSectionProps {
   aspectLock?: boolean;
   onAspectLock?: () => void;
   onScope: (scope: Obj["scope"]) => void;
+  /**
+   * Attachment (J10, docs/course-editor.md §7 "Attached objects"): the control it follows (its code, or null), and
+   * the actions; absent for a kind that cannot attach (the toner saver).
+   */
+  attach?: {
+    code: string | null;
+    /** A drawn control to attach to exists. */
+    canAttach: boolean;
+    picking: boolean;
+    onAttachNearest: () => void;
+    onPickToggle: () => void;
+    onCentre: () => void;
+    onDetach: () => void;
+  };
   onRegenerate?: () => void;
   onDelete: () => void;
   /** A filter region's grouped symbol list and eyedropper (§6.4, §7); absent until the document is loaded. */
@@ -82,8 +96,29 @@ export function ObjectSection(props: ObjectSectionProps) {
         if (props.onStyle) props.onStyle(next);
         else if (next.props) props.onProps(next.props);
       }} />
+      {p.attach && <AttachBlock a={p.attach} />}
       {vertexRule(o.kind).curves && <p data-testid="editor-geometry-hint" className="text-[10px] text-slate-400">{t("geometryHint")}</p>}
       <ScopeEditor scope={o.scope} courses={p.courses} classes={p.classes} onScope={p.onScope} />
+    </div>
+  );
+}
+
+const LINK = "text-[11px] text-purple-700 hover:underline cursor-pointer disabled:text-slate-300 disabled:no-underline disabled:cursor-default";
+
+/** *Attach to control* (the nearest, or a picked one), *Centre on control*, *Detach* (J10). */
+function AttachBlock({ a }: { a: NonNullable<ObjectSectionProps["attach"]> }) {
+  const { t } = useTranslation("editor");
+  return (
+    <div data-testid="editor-object-attach" data-attached={a.code ?? ""} className="space-y-0.5">
+      <p className="text-[11px] text-slate-500">{a.code ? t("attachedTo", { code: a.code }) : t("attachNone")}</p>
+      <div className="flex flex-wrap gap-x-3 gap-y-0.5">
+        <button type="button" data-testid="editor-object-attach-nearest" disabled={!a.canAttach} onClick={a.onAttachNearest} className={LINK}>{t("attachNearest")}</button>
+        <button type="button" data-testid="editor-object-attach-pick" aria-pressed={a.picking} disabled={!a.canAttach} onClick={a.onPickToggle} className={LINK}>
+          {a.picking ? t("attachPicking") : t("attachPick")}
+        </button>
+        <button type="button" data-testid="editor-object-centre" disabled={!a.canAttach} onClick={a.onCentre} className={LINK}>{t("attachCentre")}</button>
+        {a.code && <button type="button" data-testid="editor-object-detach" onClick={a.onDetach} className={LINK}>{t("attachDetach")}</button>}
+      </div>
     </div>
   );
 }

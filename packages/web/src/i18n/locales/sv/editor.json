@@ -654,5 +654,12 @@
   "transformRotate": "Vrid",
   "transformRotate90": "Vrid 90°",
   "transformFlipH": "Spegla ↔",
-  "transformFlipV": "Spegla ↕"
+  "transformFlipV": "Spegla ↕",
+  "attachedTo": "Följer kontroll {{code}}",
+  "attachNone": "Inte fäst vid en kontroll",
+  "attachNearest": "Fäst vid närmaste kontroll",
+  "attachPick": "Fäst vid kontrollen jag klickar på",
+  "attachPicking": "Klicka på en kontroll… (klicka igen för att avbryta)",
+  "attachCentre": "Centrera på kontrollen",
+  "attachDetach": "Lossa"
 }

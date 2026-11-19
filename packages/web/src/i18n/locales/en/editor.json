@@ -654,5 +654,12 @@
   "transformRotate": "Turn",
   "transformRotate90": "Turn 90°",
   "transformFlipH": "Flip ↔",
-  "transformFlipV": "Flip ↕"
+  "transformFlipV": "Flip ↕",
+  "attachedTo": "Follows control {{code}}",
+  "attachNone": "Not attached to a control",
+  "attachNearest": "Attach to nearest control",
+  "attachPick": "Attach to a control I click",
+  "attachPicking": "Click a control… (click again to cancel)",
+  "attachCentre": "Centre on control",
+  "attachDetach": "Detach"
 }

@@ -853,6 +853,110 @@ test.describe("I: image tool and style fields", () => {
   });
 });
 
+// docs/course-editor.md §7 "Attached objects", course-layer.md §8.1 (J10): an object follows its control.
+test.describe("J10: attach to a control", () => {
+  desktopOnly();
+
+  test("attach to a picked control; the control dragged, the object follows with nothing written to it; centre, delete and undo, detach; the print draws it", async ({ page }) => {
+    test.setTimeout(180_000);
+    await openEditor(page);
+    const nameId = nameIdOf(page);
+    const [code] = await regularCodes(page, 1);
+    const control = await site(page, code);
+    const c0 = control.mm;
+    // A 10 mm 709 square, unattached, on a clear spot (so its edges are clicked, not a control; after *Centre* its
+    // edges are 5 mm from the control, outside the circle).
+    const sheetToggle = page.getByTestId("map-toggle-descriptions");
+    if (/hide/i.test((await sheetToggle.textContent()) ?? "")) await sheetToggle.click();
+    const f = await toPaper(page, await emptyPoint(page, 90));
+    const square = [{ x: f.x - 5, y: f.y - 5 }, { x: f.x + 5, y: f.y - 5 }, { x: f.x + 5, y: f.y + 5 }, { x: f.x - 5, y: f.y + 5 }];
+    const made = await trpcCall<{ id: number }>("courseObject.create", { kind: "oob_area", geometry: square, props: {}, scope: { all: true } });
+    let objectMutations = 0;
+    page.on("request", (r) => { if (/courseObject\.(update|create|delete)/.test(r.url())) objectMutations++; });
+    const { drop } = await allControlsSheet();
+    try {
+      const hatchesBefore = (await printed(page, nameId, "allControls=1")).hatches;
+      await page.reload();
+      await editorReady(page);
+      if (/hide/i.test((await sheetToggle.textContent()) ?? "")) await sheetToggle.click();
+      const row = objectRow(page, made.id);
+      await expect(row).toBeAttached({ timeout: 15000 });
+      // Select it by its outline, then *Attach to a control I click* and click the control: one update, attached,
+      // the object selected again. (*Attach to nearest* is `attach.test.ts`'s `nearestSite`.)
+      await clickMap(page, await toPage(page, { x: f.x - 5, y: f.y }));
+      await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-id", String(made.id), { timeout: 10000 });
+      await expect(page.getByTestId("editor-object-attach-nearest")).toBeEnabled();
+      const attached = waitForTrpc(page, "courseObject.update");
+      let before = objectMutations;
+      await page.getByTestId("editor-object-attach-pick").click();
+      await expect(page.getByTestId("editor-object-attach-pick")).toHaveAttribute("aria-pressed", "true");
+      await clickMap(page, await sitePoint(page, code));
+      await attached;
+      await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-id", String(made.id), { timeout: 10000 });
+      expect(objectMutations - before).toBe(1);
+      await expect.poll(async () => JSON.parse((await row.getAttribute("data-attach")) || "null")?.controlId).toBe(Number(control.id));
+      await expect(page.getByTestId("editor-object-attach")).toHaveAttribute("data-attached", code);
+
+      // The control dragged 6 mm right: the object is drawn 6 mm right, and nothing is written to it.
+      await page.keyboard.press("Escape");
+      await select(page, code);
+      before = objectMutations;
+      const moved = waitForTrpc(page, "control.update");
+      await dragMm(page, c0, { x: c0.x + 6, y: c0.y });
+      await moved;
+      const c1 = (await site(page, code)).mm;
+      expect(c1.x - c0.x).toBeGreaterThan(3);
+      await expect.poll(async () => { const d = (await row.getAttribute("data-drawn"))!.split(" ")[0].split(",").map(Number); return Math.round((d[0] - square[0].x) * 100) / 100; }, { timeout: 15000 })
+        .toBeCloseTo(c1.x - c0.x, 1);
+      expect(objectMutations - before).toBe(0);
+      expect((await geometryOf(row))[0].x).toBeCloseTo(square[0].x, 6);
+      // The print still draws it after its control moved (the same hatch count; the position is the layer's unit tests).
+      expect(hatchesBefore).toBeGreaterThan(0);
+      expect((await printed(page, nameId, "allControls=1")).hatches).toBe(hatchesBefore);
+
+      // Centre on control: one write, its centre on the control.
+      await page.keyboard.press("Escape");
+      // Its left edge, drawn moved with the control.
+      await clickMap(page, await toPage(page, { x: f.x - 5 + (c1.x - c0.x), y: f.y + (c1.y - c0.y) }));
+      await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-id", String(made.id), { timeout: 10000 });
+      const centred = waitForTrpc(page, "courseObject.update");
+      await page.getByTestId("editor-object-centre").click();
+      await centred;
+      await expect.poll(async () => { const d = (await row.getAttribute("data-drawn"))!.split(" ").map((p) => p.split(",").map(Number)); return Math.round(((d[0][0] + d[1][0]) / 2 - c1.x) * 10) / 10; }, { timeout: 15000 }).toBe(0);
+
+      // Delete the control: nothing is written to the object, which stays drawn, now detached; undo re-attaches.
+      await page.keyboard.press("Escape");
+      await select(page, code);
+      before = objectMutations;
+      page.once("dialog", (d) => void d.accept());
+      const deleted = waitForTrpc(page, "control.delete");
+      await page.keyboard.press("Delete");
+      await deleted;
+      await expect.poll(async () => (await row.getAttribute("data-attach")) ?? "", { timeout: 15000 }).toBe("");
+      expect((await row.getAttribute("data-drawn")) ?? "").not.toBe("");
+      expect(objectMutations - before).toBe(0);
+      const restored = waitForTrpc(page, "control.restore");
+      await page.keyboard.press("Control+z");
+      await restored;
+      await expect.poll(async () => JSON.parse((await row.getAttribute("data-attach")) || "null")?.controlId, { timeout: 15000 }).toBe(Number(control.id));
+
+      // Detach: one write; it stays where it is drawn.
+      await clickMap(page, await toPage(page, { x: c1.x - 5, y: c1.y }));
+      await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-id", String(made.id), { timeout: 10000 });
+      const drawnBefore = await row.getAttribute("data-drawn");
+      const detached = waitForTrpc(page, "courseObject.update");
+      await page.getByTestId("editor-object-detach").click();
+      await detached;
+      await expect.poll(async () => (await row.getAttribute("data-attach")) ?? "", { timeout: 15000 }).toBe("");
+      expect(await row.getAttribute("data-drawn")).toBe(drawnBefore);
+    } finally {
+      await cleanup("courseObject.delete", { id: made.id });
+      await drop();
+      await trpcCall("control.update", { id: Number(control.id), xpos: control.mm.x, ypos: control.mm.y }).catch(() => undefined);
+    }
+  });
+});
+
 // docs/course-editor.md §6.4, §7 (P3): the filter region's list grouped by heading, and the eyedropper.
 test.describe("filter symbol picker (docs/course-editor.md §6.4, §7)", () => {
   desktopOnly();

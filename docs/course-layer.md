@@ -1254,6 +1254,7 @@ moved into them (§3.6).
 | `scope` | `JSONB` | `{ "all": true }` or `{ "courses": [uuid], "classes": [uuid] }` (§8.2); no foreign key |
 | `z` | `INT` default 0 | draw order among the event's objects (`z`, then `seq`) |
 | `version` | `BIGINT` default 0 | the §7 token (§8.4) |
+| `attach` | `JSONB` NULL (migration `20261119130000_course_objects_attach`, J10) | `{ "controlId": uuid, "at": { "x", "y" } }`: the object follows that control ("Attachment" below); NULL for a free object; no foreign key |
 | `source` | `TEXT` NULL, CHECK `import` / `layout` (migrations `20261101130000_course_objects_source`; D1 deviation from D2's table; `layout` F12) | `import` for what the importers and the backfill wrote (§6.4; a re-import replaces exactly those), `layout` for what F12 moved from a template's or sheet's map-anchored layout objects (§3.6), NULL for an object drawn by hand; not on the wire |
 | `created_at`, `updated_at` | `TIMESTAMPTZ` | `set_updated_at` |
 
@@ -1285,6 +1286,22 @@ on `text`, `image` and `whiteout` only (J4, superseding D2 for white-out
 opacity); the 7xx kinds, `toner_saver`, `filter_region` and
 `inset_frame` refuse them (strict props), and `whiteout` refuses
 `rotationDeg` — a vertex path turns by its vertices (J11).
+
+**Attachment** (J10). An object may follow a control: `attach =
+{ controlId, at }`, where `at` is the control's position (paper mm) when
+the geometry was written. It is drawn translated by the control's
+position now minus `at`, so moving the control moves it and writes
+nothing to the object (a door around a control, Lusseloppet's *lucka*).
+`resolveAttached(objects, sites)` (`course/objects.ts`) is the rule: it
+matches `String(controlId)` against the drawn sites' ids, translates the
+geometry (`translateGeometry`, handles unchanged) and drops the attach;
+an object whose control is not drawn in the view is left out, so an
+attached object shows only where its control does (user answer 8). The
+layer resolves before anything else reads the objects (colours, the
+toner saver flag, the drawn objects, the stored regions), and the
+checks (§9) resolve the same way, so an obstacle follows its control
+too. `toner_saver` and `inset_frame` cannot be attached
+(`UNATTACHABLE_KINDS`; a write is `BAD_REQUEST`).
 
 ### 8.2 Scope
 
@@ -1330,6 +1347,10 @@ input, so a stored region acts exactly like D3's (never on the course).
   `MapPanel` with the runner's course highlighted, so it draws the
   `all`-scoped objects and that course's. A `toner_saver` is not drawn
   on screen (no frame).
+- **Attached objects** are drawn where their control is (§8.1
+  "Attachment") on screen and in print alike: the print's sites carry
+  row UUIDs, the screen's the public ids, and the wire `attach` names the
+  control by the same id its sites do.
 - **Editor.** Hit-testing, selecting, drawing and editing objects are
   the editor's (`course-editor.md` §7, D5); importers writing their 707 /
   708 / 711 lines and 709 polygons as objects is D1.
@@ -1337,14 +1358,15 @@ input, so a stored region acts exactly like D3's (never on the course).
 ### 8.4 API and tokens
 
 `courseObject.*` (`packages/api/src/routers/courseObject.ts`), the wire
-type `course.CourseObject = { id: seq, kind, geometry, props, scope, z, version, inCourses }`
-(`inCourses`: §8.2, read-only):
+type `course.CourseObject = { id: seq, kind, geometry, props, scope, z, version, inCourses, attach? }`
+(`inCourses`: §8.2, read-only; `attach`: `{ controlId, at }` with the
+control's public id, its first code or else its `seq`, absent when free):
 
 | Procedure | Access | |
 |---|---|---|
 | `list` | `courses.view` or the event's kiosk key | the event's objects ordered `z`, `seq` |
-| `create { kind, geometry, props, scope, z? }` | `courses.edit` | returns the object with its token |
-| `update { id, baseVersion?, geometry?, props?, scope?, z? }` | `courses.edit` | the kind is fixed; an absent field keeps the stored one, a sent one (`null` included) is validated with the rest |
+| `create { kind, geometry, props, scope, z?, attach? }` | `courses.edit` | returns the object with its token |
+| `update { id, baseVersion?, geometry?, props?, scope?, z?, attach? }` | `courses.edit` | the kind is fixed; an absent field keeps the stored one, a sent one (`null` included) is validated with the rest; `attach: null` frees the object |
 | `delete { id, baseVersion? }` | `courses.edit` | |
 | `reorder { ids }` | `courses.edit` | `z` = the position in `ids`; takes and advances no token |
 
@@ -1355,6 +1377,19 @@ venue box are forwarded to the cloud (typed 412 offline,
 box and were lost at checkin. The box's copy follows the cloud's (row
 G19, `map-storage.md` §7.2 "Following the cloud during a lease"): at the
 settings cadence and right after a forwarded write.
+
+**Attach on the wire** (J10). `attach.controlId` is a public control
+id; an unknown one, or an attach on an unattachable kind, is
+`BAD_REQUEST`. The editor sends `attach` with every write that sends
+geometry, so undo restores the offset to the control as well as the
+shape. An attached object whose control is **removed** (soft-deleted)
+reads as detached where it was last drawn: `list` returns its geometry
+moved by the removed control's position minus `at`, without `attach`,
+and the row is left as it is, so restoring the control (undo of the
+delete) attaches it again with no double move (user answer 7). An
+`update` that sends geometry without `attach` while the control is
+removed keeps the attachment with `at` set to the removed control's
+position, so the written place is where it was shown.
 
 **Token** (§7). Objects are not journaled, so their token is not a
 journal entry's HLC: every `create` / `update` mints one from the node's
@@ -1374,7 +1409,10 @@ and token — exact since G18 through the snapshot's `versions`, where the
 row's own `version` crosses HTTP as a rounded JSON number;
 `map-storage.md` §7.2) and in the per-event dump after
 `class_course_pools` (`BACKUP_TABLES`; `map-storage.md` §7.3) — the
-venue's kiosk map draws them (08 §4.8; 07 §9.2).
+venue's kiosk map draws them (08 §4.8; 07 §9.2). `attach` is a nullable
+JSON column: the lease import and the cloud mirror write a null one as
+SQL NULL (`NULLABLE_JSON_OBJECT_FIELDS`), not JSON `null`; its
+`controlId` is a row UUID like the scope's.
 
 ## 9. Checks
 
@@ -2286,6 +2324,8 @@ label.
 | integration | `course-print.test.ts` "F12" | §3.6: a sheet's map-anchored white-out and text, migrated on the shared database, are `source = 'layout'` objects scoped to its course; the sheet keeps its page object; the composed page draws the white-out at upper white and the text at 4 mm on paper |
 | E2E | `course-editor-layout.spec.ts` "F12" | §3.6: a legacy map-anchored white-out and 709 area seeded on a sheet and migrated: listed in Course mode scoped to the course, the map's ink under the white-out gone on the canvas, the sheet's `maps.pdf` one page with one more hatch |
 | unit | `packages/api/src/__tests__/version-conflict.test.ts` | §8.4: the object `CONFLICT` payload |
+| unit | `objects.test.ts` "attachment (J10)", `layer.test.ts` "attached objects (J10)" | §8.1 "Attachment": the schema; `resolveAttached` translates by site − `at` with the handles kept, drops an object whose site is not drawn, returns an unattached list itself; §8.3 an attached object draws exactly as the same object stored at the translated place, is not drawn without its control, a filter region follows or drops, a scene without attach is unchanged |
+| integration | `course-objects.test.ts` "attached to a control (J10)" | §8.4 "Attach on the wire": create / update with the public control id, the UUID stored; `null` detaches, absent keeps; an unknown control and a toner saver refused; a control move writes nothing to the object; a deleted control's object read detached where it was drawn with the row untouched, restore re-attaches, a hand edit meanwhile does not move it twice |
 | integration | `packages/api/src/__tests__/integration/course-objects.test.ts` | §8.4: every kind created and listed in draw order with public ids; `inset_frame`, unknown course / class, bad body refused; update advances the token, `hatch: "710"` round-trips, `"711"` refused; stale token → `CONFLICT` with the object now and nothing written, none = LWW, stale delete; reorder keeps tokens; kiosk-key read, viewer cannot write; §8.2 class scope through `course_id` and the pool, the same resolution on the wire (`inCourses`); §8.5 snapshot round trip verbatim |
 | integration | `course-print.test.ts` "course objects on the page" | §8.3 print: a sheet takes the objects in scope (all-controls: `all` only), they add passes over the map, `hatch: "710"` adds one hatch pass, a stored filter region hides map objects |
 | integration | `backup.test.ts` | §8.5: the dump's `course_objects` section |

@@ -125,8 +125,20 @@ export function courseObjectScopeSchemaOf<S extends z.ZodType<string | number>>(
 }
 export type CourseObjectScope<Id = number> = { all: true } | { courses: Id[]; classes: Id[] };
 
-/** What the course layer takes: the body plus an id for the object's `ref`. */
-export type CourseLayerObject = CourseObjectBody & { id: number | string };
+/**
+ * An object attached to a control (J10, §8.1 "Attachment"): drawn translated by the control's position minus `at`
+ * (the control's position when the geometry was last written), and only where that control is drawn. The control
+ * is a UUID in the row, its public id on the wire, the layer's site id in the layer input.
+ */
+export interface CourseObjectAttach<Id = string> { controlId: Id; at: MapPoint }
+export function courseObjectAttachSchemaOf<S extends z.ZodType<string | number>>(id: S) {
+  return z.strictObject({ controlId: id, at: z.strictObject({ x: z.number().finite(), y: z.number().finite() }) });
+}
+/** The kinds that cannot attach: the toner saver's hull is generated from the course; `inset_frame` is reserved. */
+export const UNATTACHABLE_KINDS: readonly CourseObjectKind[] = ["toner_saver", "inset_frame"];
+
+/** What the course layer takes: the body plus an id for the object's `ref`, and its attachment (site id). */
+export type CourseLayerObject = CourseObjectBody & { id: number | string; attach?: CourseObjectAttach<string | number> };
 
 /** A course object on the tRPC wire: public ids (course / class seq), the row's token. */
 export type CourseObject = CourseObjectBody & {
@@ -142,6 +154,8 @@ export type CourseObject = CourseObjectBody & {
    * server with print's rule; `null` for `{ all: true }`.
    */
   inCourses: number[] | null;
+  /** The control (public id) it follows (J10); absent when unattached, or detached by its control's delete. */
+  attach?: CourseObjectAttach<number>;
 };
 
 /**
@@ -158,7 +172,29 @@ export function courseObjectInScope<Id>(scope: CourseObjectScope<Id>, drawn: { c
 /** A scope with course / class UUIDs: a `course_objects` row's (the wire names them by public id). */
 export type StoredScope = CourseObjectScope<string>;
 /** A `course_objects` row as the layer, the snapshot and the print pipeline read it: body + UUID scope. */
-export type StoredCourseObject = CourseObjectBody & { id: string; seq: number; scope: StoredScope; z: number; version: bigint };
+export type StoredCourseObject = CourseObjectBody & { id: string; seq: number; scope: StoredScope; z: number; version: bigint; attach?: CourseObjectAttach<string> };
+
+/** A vertex path moved by (`dx`, `dy`); Bézier handles are offsets and stay as they are. */
+export function translateGeometry<V extends MapPoint>(geometry: readonly V[], dx: number, dy: number): V[] {
+  return geometry.map((v) => ({ ...v, x: v.x + dx, y: v.y + dy }));
+}
+
+/**
+ * The objects as drawn (J10, §8.3): an attached one translated by its site's position minus `at`, without its
+ * `attach`; one whose site is not among `sites` (not drawn in this view) left out. Without any attached object the
+ * input itself is returned, so an unattached scene is exactly as before.
+ */
+export function resolveAttached<O extends { geometry: readonly PathVertex[]; attach?: CourseObjectAttach<string | number> }>(objects: readonly O[], sites: readonly { id: string; x: number; y: number }[]): readonly O[] {
+  if (!objects.some((o) => o.attach)) return objects;
+  const at = new Map(sites.map((s) => [s.id, s]));
+  return objects.flatMap((o) => {
+    if (!o.attach) return [o];
+    const site = at.get(String(o.attach.controlId));
+    if (!site) return [];
+    const { attach, ...rest } = o;
+    return [{ ...rest, geometry: translateGeometry(o.geometry, site.x - attach.at.x, site.y - attach.at.y) } as unknown as O];
+  });
+}
 
 /** The objects drawn with a course (UUID), or with no course (`null`: `all`-scoped only). */
 export function objectsInScope(objects: readonly StoredCourseObject[], courseId: string | null, byCourse: ReadonlyMap<string, string[]>): StoredCourseObject[] {
