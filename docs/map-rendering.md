@@ -3883,6 +3883,7 @@ WebGL2 per-pass path against the golden, measured at introduction
 | `course-all-controls` | ISOM 403, 304; all controls with a free-order course | every site drawn, codes, no legs, start north |
 | `course-leg-styles` | ISOM 401, 505, 516; S → 31 a bent 705, 31 → 32 a bent 707 marked route over the 516, 32 → F `style: "none"` with a stored gap (F1, `course-layer.md` §10.1) | the 705 piece runs through its bend; the route in upper purple, dashed, after black; nothing for the `none` leg, which keeps its pieces; numbers unchanged |
 | `course-corridor` | ISOM 401, 505, 101, 516; S → 31 → 32 one 60 m run (4 mm, h 2 < R 2.5) with its `edge` and a 3 mm band, bent at (36, 10); 32 → 33 a 150 m corridor without edge with a 2 mm band; 33 → F plain (F2, re-shaped in F19, `course-layer.md` §10.2) | the band one generated `clip` region: every base pass masked, no course pass; clear inside every corridor (at the bend, at the change of width at 32) and inside the mouths (31's circle across, the 701's back corner), the band round them, nothing behind the 701's base; at 33, the corridor's only terminal end, the band stops on the line through its centre with rounded corners and the map shows behind it (F22, `course-layer.md` §10.2 "Ends"); the edge lower purple `705/edge` along S → 31 → 32 only, over the 401; 31's circle opened towards both legs (two arcs), 32 and 33 whole (the wide corridor covers the junctions; h ≥ R), no cut in the derivation; no 705 along the three corridor legs, 33 → F the only leg line (F14). Drawn on the default GL path (the arena path's MSAA edge steps exceed `ARENA_FILTER_MAX_RATIO` on this many edges: 2.0 %, D3's filter scenes cover the arena masks) |
+| `course-corridor-translucent` | `course-corridor`'s map and course with translucent bands: the narrow run at 0.6, the wide leg at 0.5 (J13, `course-layer.md` §10.2) | no region and no mask; one white-out fill (`white-upper`) at the minimum 50 %, its rings the opaque scene's clip region, above every map pass and lower purple, below upper purple; WebGL2 through the arena path (an alpha pass) held to the arena tier's 1.5 % (`e2e/map-gl-golden.spec.ts` "translucent corridor band"); `course-corridor` itself stays opaque (its wide leg's stored 0.5 is now 1, as the migration) and bit-identical |
 | `course-graphics` | ISOM 406, 505, 106; S → 31 → 32 → F with three `image` course objects (J5, J6): the 64 px lucka PNG (opaque red band, half-opaque gold band, transparent middle) framing 31, the striped 32 × 16 px RGB graphic cropped to its middle half, flipped and turned 20°, a lucka at 80 % Multiply framing 32; graphics `goldenSceneGraphics` | one image pass each in `course:graphics` after every map colour and lower purple, before upper purple: the circles and numbers over the luckas, the map's green through the middle, the stripes over the brown line and the lucka under them; drawn on the arena path only (§6.2 "Image tier") |
 
 The **filter scenes** (D3, 04 §8 row "Filter regions", §4.11) draw one
@@ -4609,10 +4610,10 @@ The shared module is exported as a namespace: `import { render } from
   transparency groups for every kind, GL offscreen targets); a page-oracle
   path where a page-layer Multiply blends against the map layer (the two
   rasters are composited `over`, exact for opacity, not for Multiply —
-  with J4's page objects); the **translucent corridor band**
-  (`course-layer.md` §10.2, F26 → J13), which needs only a white fill with
-  alpha over the band's rings in a row above the map colours and below
-  the course. Multiply and `/ca` on the club's printer are unverified
+  with J4's page objects). The **translucent corridor band** landed in
+  J13 (`course-layer.md` §10.2) as a white fill with alpha in the
+  upper-white row — no row lies above every map colour and below lower
+  purple, so lower-purple ink in the band is veiled too. Multiply and `/ca` on the club's printer are unverified
   until the print checkpoint after J5.
 
 - **Images** (§3.10). Outside the frame an image course object's PNG is

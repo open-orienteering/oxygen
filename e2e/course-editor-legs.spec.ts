@@ -402,10 +402,26 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
 
       expect((await printed(page, nameId, `maps=${sheet.seq}`)).pages).toBe(1);
 
-      // F25: no White opacity field until the band can draw translucency (F26).
-      await expect(page.getByTestId("editor-leg-corridor-opacity")).toHaveCount(0);
+      // J13: White opacity in %, 100 by default; 50 makes the band translucent — the map shows through it, still
+      // lighter — one write, one undo entry; undo makes it white again.
+      const opacity = page.getByTestId("editor-leg-corridor-opacity");
+      // The band at the narrowed width (F19 above), both sides, clear of the circles: white now.
+      const narrowBand = along([1, -1].flatMap((side) => [0.8, 1.6, 2.4, 3.2, 4.2].map((d) => side * (narrowHalf + d))));
+      await expect.poll(() => inkAt(page, narrowBand, "map"), { timeout: 30000 }).toBe(0);
+      await expect(opacity).toHaveValue("100");
+      await expect(page.getByTestId("editor-leg-corridor-opacity-hint")).toBeVisible();
+      const veiled = waitForTrpc(page, "course.setStructure");
+      await opacity.fill("50");
+      await opacity.press("Enter");
+      await veiled;
+      await expect(opacity).toHaveValue("50");
+      await expect.poll(() => inkAt(page, narrowBand, "map"), { timeout: 30000 }).toBeGreaterThan(0);
+      expect((await printed(page, nameId, `maps=${sheet.seq}`)).pages).toBe(1);
+      await page.keyboard.press("Control+z");
+      await expect(opacity).toHaveValue("100", { timeout: 15000 });
+      await expect.poll(() => inkAt(page, narrowBand, "map"), { timeout: 30000 }).toBe(0);
       // Values outside their ranges are not written: the fields show the stored ones again.
-      for (const [field, bad, stored] of [["width", "0", String(narrowM)], ["white", "-1", "5"]] as const) {
+      for (const [field, bad, stored] of [["width", "0", String(narrowM)], ["white", "-1", "5"], ["opacity", "150", "100"]] as const) {
         await page.getByTestId(`editor-leg-corridor-${field}`).fill(bad);
         await page.getByTestId(`editor-leg-corridor-${field}`).press("Tab");
         await expect(page.getByTestId(`editor-leg-corridor-${field}`)).toHaveValue(stored);
@@ -416,7 +432,7 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
       await page.getByTestId("editor-leg-corridor-width").press("Enter");
       await widened;
       await expect(page.getByTestId("editor-leg-corridor-width")).toHaveValue("80");
-      // F25: the hidden White opacity rides along on the write (the stored corridor, spread).
+      // The White opacity rides along on the width's write (the stored corridor, spread).
       const courseId = Number(await page.getByTestId("editor-course-picker").inputValue());
       const storedCorridor = async () => Object.values((await trpcCall<{ id: number; legs?: Record<string, { corridor?: { widthM: number; whiteOpacity: number } }> }[]>("course.list", undefined, false))
         .find((c) => c.id === courseId)?.legs ?? {})[0]?.corridor;

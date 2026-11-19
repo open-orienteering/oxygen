@@ -53,6 +53,7 @@ describe("golden PNGs", () => {
       "course-all-controls",
       "course-leg-styles",
       "course-corridor",
+      "course-corridor-translucent",
       "course-exchange",
       "course-legs-curved",
       "course-graphics",

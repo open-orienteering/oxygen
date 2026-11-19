@@ -948,11 +948,13 @@ or writing another item's leg.
   edge on, a 5 mm white band, opacity 1 (decision log, F3: a band visible
   at once); with one, the fields width m (`-width`, > 0), white mm
   (`-white`, ≥ 0), the edge checkbox (`-edge`) and **Remove**
-  (`-remove`). There is **no White opacity field** (F25, user answer
-  2026-11-10: hidden until the band can draw translucency, F26): the band
-  draws opaque whatever `whiteOpacity` says (`course-layer.md` §10.2), so
-  the field and its "opaque for now" note are gone. The stored value is
-  kept: every corridor write spreads the stored corridor, and the API
+  (`-remove`), and **White opacity (%)** (`-opacity`, 0–100 in steps of
+  5, stored 0–1; J13, F26 folded in — it was hidden since F25 while the
+  band drew opaque). Below 100 the band is translucent: the map shows
+  through it, veiled (`course-layer.md` §10.2). One opacity draws every
+  band — the most transparent one in view — which a hint under the fields
+  says (`editor-leg-corridor-opacity-hint`). Every corridor write spreads
+  the stored corridor, and the API
   still validates it (0–1). A number is written on blur or
   Enter; a value outside its range is not written and the field shows the
   stored value again. On the map (F19, `course-layer.md` §10.2) the

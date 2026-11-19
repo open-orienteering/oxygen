@@ -56,7 +56,7 @@ export interface CourseCorridor {
   edge: boolean;
   /** Width of the white band outside the edge, paper mm at the base map's scale; 0 = none. */
   whiteMm: number;
-  /** Stored, drawn opaque until the backends carry alpha (map-rendering.md §8). */
+  /** 0–1; below 1 the band is a translucent white fill instead of the clip, the minimum over the drawn legs (§10.2, J13). */
   whiteOpacity: number;
 }
 
@@ -284,6 +284,8 @@ export interface DerivedCorridor {
   /** The white band outside the edge, paper mm. */
   whiteMm: number;
   edge: boolean;
+  /** The band's opacity below 1 (§10.2, J13); absent = 1. Not part of the corridor's geometry or its cache key. */
+  whiteOpacity?: number;
 }
 
 export interface DerivedCourse {

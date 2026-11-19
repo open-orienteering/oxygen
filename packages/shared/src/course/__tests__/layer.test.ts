@@ -1,7 +1,7 @@
 /** `courseLayer()` through `symbolise` with a document (course-layer.md §1, §3). */
 
 import { describe, expect, it } from "vitest";
-import { courseLayer, courseRenderInput, legLine } from "../layer.js";
+import { bandOpacity, courseLayer, courseRenderInput, legLine } from "../layer.js";
 import { courseDocumentContext } from "../context.js";
 import { SITES, layerInput, linear, site, sprintContext } from "./helpers.js";
 import { materialiseLibrary } from "../../symbol-library/index.js";
@@ -284,10 +284,37 @@ describe("filter regions (map-rendering §4.11)", () => {
 
 describe("corridors (§10.2, F2)", () => {
   // S (10, 10) → 31 (40, 10) at 1:15 000: 60 m = 4 mm, the edge at y = 8 / 12, the band to 5 / 15.
-  const corridor = { widthM: 60, edge: true, whiteMm: 3, whiteOpacity: 0.5 };
+  const corridor = { widthM: 60, edge: true, whiteMm: 3, whiteOpacity: 1 };
   const withLeg = (leg: CourseLegProps, over: Parameters<typeof layerInput>[0] = {}) =>
     courseLayer(layerInput({ structure: linear(undefined, { items: [{ siteId: "S" }, { siteId: "31", leg }, { siteId: "32" }] }), ...over }));
   const far = [{ x: 80, y: 80 }, { x: 90, y: 80 }, { x: 90, y: 90 }];
+
+  it("J13: below opacity 1 the band is one translucent white fill, not a clip; the minimum wins; 0 draws no band", () => {
+    const opaque = withLeg({ corridor });
+    const half = withLeg({ corridor: { ...corridor, whiteOpacity: 0.5 } });
+    expect(half.regions).toHaveLength(0);
+    const fills = half.objects.filter((o) => o.ref?.kind === "corridor" && o.ref.id === "band");
+    expect(fills).toHaveLength(1);
+    expect(fills[0].opacity).toBe(0.5);
+    expect(half.symbols[fills[0].symbolIdx].id).toBe("course:whiteout");
+    expect(flattenRings(fills[0].path)).toEqual(flattenRings(opaque.regions.at(-1)!.path));
+    // Opaque: as before, no band object and the same symbols.
+    expect(opaque.objects.some((o) => o.ref?.kind === "corridor" && o.ref.id === "band")).toBe(false);
+    expect(half.symbols).toEqual(opaque.symbols);
+    // What rounds to 1 is opaque; 0 draws neither a clip nor a fill.
+    expect(withLeg({ corridor: { ...corridor, whiteOpacity: 0.99996 } }).regions.at(-1)!.mode).toBe("clip");
+    const none = withLeg({ corridor: { ...corridor, whiteOpacity: 0 } });
+    expect(none.regions).toHaveLength(0);
+    expect(none.objects.some((o) => o.ref?.kind === "corridor" && o.ref.id === "band")).toBe(false);
+  });
+
+  it("J13: bandOpacity is the minimum over legs with a white band; a leg without one does not count", () => {
+    const leg = (whiteOpacity: number, whiteMm = 3) => ({ from: "a", to: "b", points: [], style: "line" as const, gaps: [], pieces: [], corridor: { widthMm: 4, whiteMm, edge: true, ...(whiteOpacity < 1 ? { whiteOpacity } : {}) } });
+    const course = (legs: ReturnType<typeof leg>[]) => ({ id: "c", orderMode: "ordered" as const, sequence: [], legs });
+    expect(bandOpacity([course([leg(1), leg(0.6)]), course([leg(0.5)])])).toBe(0.5);
+    expect(bandOpacity([course([leg(1), leg(0.2, 0)])])).toBe(1);
+    expect(bandOpacity([])).toBe(1);
+  });
 
   it("the band is one clip region of every symbol, after the explicit and the stored regions", () => {
     const stored: CourseLayerObject = { id: 4, kind: "filter_region", geometry: far, props: { mode: "hide", symbols: "all" } };

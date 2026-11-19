@@ -125,7 +125,9 @@ export function LegSection(p: LegSectionProps) {
               valid={(v) => v > 0} onCommit={(widthM) => setCorridor({ widthM })} />
             <NumberField testId="editor-leg-corridor-white" label={t("legCorridorWhite")} value={corridor.whiteMm} step={0.5} min={0} disabled={readOnly}
               valid={(v) => v >= 0} onCommit={(whiteMm) => setCorridor({ whiteMm })} />
-            {/* No White opacity field until the band can draw translucency (F26): the stored value rides along in `setCorridor`. */}
+            {/* J13 (§6.7, course-layer.md §10.2): stored 0–1, shown in %; the most transparent band in view sets every band. */}
+            <NumberField testId="editor-leg-corridor-opacity" label={t("legCorridorOpacity")} value={Math.round(corridor.whiteOpacity * 100)} step={5} min={0} max={100} disabled={readOnly}
+              valid={(v) => v >= 0 && v <= 100} onCommit={(pct) => setCorridor({ whiteOpacity: Math.round(pct) / 100 })} />
             <label className="flex items-end gap-1.5 pb-1 text-[11px] text-slate-500">
               <input data-testid="editor-leg-corridor-edge" type="checkbox" checked={corridor.edge} disabled={readOnly}
                 onChange={(e) => setCorridor({ edge: e.target.checked })} />
@@ -133,6 +135,7 @@ export function LegSection(p: LegSectionProps) {
             </label>
           </div>
         )}
+        {corridor && !readOnly && <p data-testid="editor-leg-corridor-opacity-hint" className="text-[10px] text-slate-400">{t("legCorridorOpacityHint")}</p>}
       </div>
 
       <div data-testid="editor-leg-crossing" data-site-id={leg.crossing?.controlId ?? ""} className="space-y-0.5">

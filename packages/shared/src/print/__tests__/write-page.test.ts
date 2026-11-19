@@ -151,6 +151,20 @@ describe("writePage", () => {
     expect(openPurple(ops)).toBe(openPurple(plain) - 1);
   });
 
+  it("a translucent corridor band (J13): no W* clip; one white fill under an ExtGState in a page group; an opaque one has neither", async () => {
+    const base = pageScene("page-ring");
+    const page = (whiteOpacity: number): PageInput => ({ ...base, course: { ...base.course, structure: { version: 1, id: "c", orderMode: "ordered", items: [{ siteId: "S" }, { siteId: "31" }, { siteId: "32", leg: { corridor: { widthM: 120, edge: true, whiteMm: 4, whiteOpacity } } }, { siteId: "F" }] } } });
+    const half = await PDFDocument.load(await build([page(0.5)]));
+    const opaque = await PDFDocument.load(await build([page(1)]));
+    const ops = content(half, 0);
+    expect(ops.split("\n").some((l) => l.endsWith("W* n"))).toBe(false);
+    expect(content(opaque, 0).split("\n").some((l) => l.endsWith("W* n"))).toBe(true);
+    expect(ops).toMatch(/\/GS\d+ gs/);
+    expect(content(opaque, 0)).not.toMatch(/\/GS\d+ gs/);
+    expect(half.getPage(0).node.get(PDFName.of("Group"))).toBeDefined();
+    expect(opaque.getPage(0).node.get(PDFName.of("Group"))).toBeUndefined();
+  });
+
   it("a narrow edged corridor (F19): round-capped open edge pieces ending on the opened circles; the circles drawn open", async () => {
     // 40 m at 1:10 000 = 4 mm: h 2 < R 3.75, so 31 and 32 open towards the leg and the edge ends on them.
     const base = pageScene("page-ring");

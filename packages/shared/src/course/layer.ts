@@ -10,7 +10,7 @@ import type { DocumentRenderInput } from "../map-document/render-bridge.js";
 import { makePath } from "../render/pass-stream.js";
 import type { LineSymbol, RenderSymbol } from "../render/symbol.js";
 import type { DocumentColour } from "../map-document/header.js";
-import type { RenderObject } from "../render/symbolise.js";
+import { objectAlpha, type RenderObject } from "../render/symbolise.js";
 import type { FilterRegion } from "../render/filter-region.js";
 import { COORD_FLAG } from "../render/pass-stream.js";
 import { remapRenderColours } from "../render/transform.js";
@@ -20,7 +20,7 @@ import { COURSE_GRAPHICS_ID, courseColourStack, withObjectColours, withTintColou
 import { deriveCourse, structuresOf } from "./derive.js";
 import { TONER_WHITE_ID, courseObjects, filterRegionOf, hasTonerSaver, objectColours, resolveAttached } from "./objects.js";
 import { CROSSING_BODY_MM, CROSSING_SECTION_MM, CROSSING_SECTION_OFFSET_MM, courseSymbols } from "./symbols.js";
-import type { CourseFilterRegion, CourseLayer, CourseLayerInput, CourseRenderObject } from "./types.js";
+import type { CourseFilterRegion, CourseLayer, CourseLayerInput, CourseRenderObject, DerivedCourse } from "./types.js";
 import type { MapPoint } from "../course-maps/schema.js";
 
 const TONER_WHITE = { id: TONER_WHITE_ID, name: "Toner saver white", cmyk: [0, 0, 0, 0] as [number, number, number, number] };
@@ -128,9 +128,22 @@ export function courseLayer(input: CourseLayerInput): CourseLayer {
   // Stored filter regions (§8.3) follow the explicit ones.
   const stored = inputObjects.flatMap((o) => (o.kind === "filter_region" ? [filterRegionOf(o)] : []));
   const regions = [...(input.regions ?? []), ...stored].map((r) => filterRegion(r, stack.remap));
-  // §10.2: the corridors' white band cuts every map colour away; the course is never filtered.
-  if (corridors?.band) regions.push({ path: ringsPath(corridors.band), mode: "clip", symbols: "all" });
+  // §10.2: the corridors' white band cuts every map colour away; the course is never filtered. Below opacity 1
+  // (J13) it is a translucent white fill in the upper-white row instead, at the minimum over the banded legs;
+  // at 0 no band is drawn at all.
+  if (corridors?.band) {
+    const alpha = objectAlpha({ opacity: bandOpacity(derivation.courses) });
+    if (alpha.opacity === undefined) regions.push({ path: ringsPath(corridors.band), mode: "clip", symbols: "all" });
+    else if (alpha.opacity > 0) objects.push({ symbolIdx: idx.whiteout, path: ringsPath(corridors.band), opacity: alpha.opacity, ref: { kind: "corridor", id: "band" } });
+  }
   return { colours, remap: stack.remap, symbols, objects, images: built.images, derivation, warnings: built.warnings, regions };
+}
+
+/** The corridors' band opacity (§10.2, J13): the minimum `whiteOpacity` over the legs with a white band. */
+export function bandOpacity(courses: readonly DerivedCourse[]): number {
+  let min = 1;
+  for (const c of courses) for (const l of c.legs) if (l.corridor && l.corridor.whiteMm > 0) min = Math.min(min, l.corridor.whiteOpacity ?? 1);
+  return min;
 }
 
 interface VariationTinting {

@@ -220,7 +220,7 @@ export function deriveCourse(input: CourseLayerInput, m: CourseMetrics): CourseD
         const derived: DerivedLeg = { from: a.id, to: b.id, points, style: leg?.style ?? "line", gaps, pieces };
         // §10.2: ground metres at the base map's scale; the band is paper mm already.
         const k = leg?.corridor;
-        if (k) derived.corridor = { widthMm: (k.widthM * 1000) / input.document.mapScale, whiteMm: k.whiteMm, edge: k.edge };
+        if (k) derived.corridor = { widthMm: (k.widthM * 1000) / input.document.mapScale, whiteMm: k.whiteMm, edge: k.edge, ...(k.whiteOpacity < 1 ? { whiteOpacity: k.whiteOpacity } : {}) };
         if (via) derived.crossing = via.id;
         legs.push(derived);
       }

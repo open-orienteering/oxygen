@@ -1239,6 +1239,20 @@ marked routes, map text and logos, and filter regions. They are the
 stored, scoped kind of a sheet's map-anchored layout objects, which F12
 moved into them (§3.6).
 
+
+**J13 reset** (user answer 11; migration
+`20261119140000_corridor_white_opacity_reset`). Until J13 a corridor's
+`whiteOpacity` was stored but drawn opaque, so stored values below 1 were
+reset to 1 when J13 made them draw translucent: old maps print as before.
+Data only, on `courses.structure` — top-level legs and legs inside a
+variation's alternatives (a recursive walk over every `corridor` key), the
+variant child rows included (they are ordinary course rows); every other
+key is kept, rows with nothing below 1 are not rewritten, and a second
+run changes nothing. It writes no journal entry and no version token (it
+is not a user edit). Journal payloads (`course.upserted` carries the
+whole row), checkout snapshots and dumps are **not** rewritten: replaying
+an old entry or importing an old snapshot brings the old value back, and
+it then draws translucent.
 ### 8.1 Table and kinds
 
 `oxygen.course_objects` (migration `20261101120000_course_objects`):
@@ -1685,11 +1699,26 @@ all-white corridor map); `edge` draws the boundary in purple.
   while the course — circles, the legs that draw a line (below), numbers,
   the edge, layout and course objects — draws over it with the stack and the 7xx colour roles
   unchanged. No band (`whiteMm` 0 on every corridor) adds no region.
-- **`whiteOpacity`** is stored and validated (0 … 1) but drawn opaque: a
-  clip removes the map wholly. A translucent band needs a paint with
-  alpha over the same rings (`map-rendering.md` §8). The editor shows no
-  field for it until then (F25, `course-editor.md` §6.7): a stored value
-  is kept on every corridor write.
+- **`whiteOpacity`** (0 … 1; J13, F26 folded in). The derivation carries
+  it on `DerivedCorridor` only below 1 (an opaque corridor derives as
+  before); it is not part of the corridor's geometry or its cache key.
+  The **effective opacity** is the minimum over every drawn leg with a
+  corridor and `whiteMm` > 0 (`bandOpacity`): one value for the whole
+  band, so a leg at 100 % beside one at 50 % draws both bands at 50 %
+  (the editor's hint says so). At 1 — or what rounds to it, ≥ 0.99995
+  (`objectAlpha`, `map-rendering.md` §3.9) — the band is the clip above,
+  bit-identical to before. Below 1 there is **no region**: the band's
+  rings (`ringsPath(band)`) are one area object in the white-out symbol
+  (`course:whiteout`, fill `white-upper`) with that `opacity` and ref
+  `{ kind: "corridor", id: "band" }` (no hit target), so it draws in the
+  upper-white row — above every map colour and lower purple, below
+  `course:graphics` and upper purple — and the map shows through it,
+  veiled. Lower-purple ink inside the band (the outer half of the edge
+  line, mouth circles, another course's leg crossing it) is veiled too;
+  numbers and 707 are not (Pending). At 0 no band is drawn at all (no
+  clip, no fill). The PDF draws it as a white fill under an ExtGState
+  `/ca` in a page `/Group` (`course-print.md` §2); an opaque corridor's
+  page has neither.
 - **Mouths** (F19, user feedback 2026-11-08 item 6, "the way
   Coursecraft does it"; answers 1–3). Every control, finish or start
   that a corridor leg — edged or not — starts or ends at is a mouth: its
@@ -2288,6 +2317,7 @@ label.
 | unit | `derive.test.ts` | legs and clearances, circles in the way, unpositioned sites, automatic vs authored gaps, the event's auto cuts off (no automatic slits / gaps, authored ones kept, §3.4), authored pieces and bends, free order, all-controls, start rotation, sequence / repeated / code numbers, y-down placement, manual offsets, multi-course |
 | unit | `layer.test.ts` | one `symbolise` call with a document: warning-free, lower purple under black, re-indexed document colours, object offsets; turned start, arcs, legs; auto cuts off = the objects without cut features; knockout halo order; sprint sizes; layout objects (white-out, 709.b, rows on top, text values, page-mm sizes); toner-saver ring and its warning; the toner saver white (P1: a `toner_saver` and a `whiteoutInverted` map object fill the top row, the last pass after black, upper purple and a layout text's row; none for a plain white-out or without a window); images; `courseDocumentContext` |
 | pass-stream | `scenes.test.ts`, snapshots in `render/__fixtures__/streams/course/` | the course scenes (`map-rendering.md` §6.3; `course-leg-styles` since F1, `course-corridor` since F2, `course-legs-curved` since F13 — symbolised with the layer's regions, masks in the snapshot; `course-corridor` re-recorded in F14: no 705 along its three corridor legs, in F13: one buffer ring per run, and re-shaped in F19: a 60 m edged run S → 31 → 32 and a 150 m unedged leg, the mouths, 31 opened twice, the round-capped edge; re-recorded in F22: the band stops on the line through 33, its only terminal end — the golden `course-corridor.png` changed in 4 032 px, all in one box round 33; `scenes.test.ts` probes the map behind 33 and the band beside the leg before it) warning-free and equal to their snapshots at 1 µm, plus each scene's rule |
+| unit / pass-stream / PDF / integration / E2E (J13) | `derive.test.ts` "corridors", `layer.test.ts` "J13", `scenes.test.ts` "course-corridor-translucent", `print/__tests__/write-page.test.ts` "a translucent corridor band", `api/…/integration/corridor-opacity-migration.test.ts`, `e2e/course-editor-legs.spec.ts` "Corridor on selected leg" | §10.2 `whiteOpacity`: carried below 1 only; 0.5 → no region, one band fill at 0.5 in `course:whiteout` with the clip's rings, the same symbols as opaque; the minimum wins, a leg without a white band does not count; 0.99996 clips; 0 draws nothing; the scene's fill above the map and lower purple, below upper purple; the PDF without `W* n`, with `/GSn gs` and a page `/Group`, the opaque page with neither; §6.4 "J13 reset": values below 1 reset top-level and inside alternatives, a soft-deleted event's course too, other rows untouched and not rewritten, the result valid, a second run a no-op; in the editor the field shows 100, 50 veils the band (map ink in it), the print one page, one undo makes it white, 150 is not written |
 | unit | `packages/api/src/__tests__/course-geometry.test.ts` | `editorCourseLayer`: sequence in order with roles, centre-to-centre legs, unpositioned controls skipped, free order without legs, no automatic cuts; `hasPositionedItems` (`length_source` derived / NULL); `legDistancesMm(layer)` from the derived legs = the pre-E6 sequence formula bit for bit (fixtures + 50 generated sequences, per-leg and total rounding at two scales, E6); `courseLengthM` |
 | unit | `packages/api/src/__tests__/document-readers-parity.test.ts` | cut features of the document = the legacy OCAD adapter's (now a test oracle, `__tests__/helpers/ocad-oracle.ts`) within 1e-6 mm on the fixture and the corpus (§4.2) |
 | unit | `packages/shared/src/course/__tests__/sequence.test.ts` (the API's `course-sequence.test.ts` until G13; also `splitStructure`, `crossingRowsOf`) | §6.2 "Readers" (E6): `courseSequenceOf` — columns (defaults, `start_name`, a live `finish_control_id`, unmatched fall back, the flags), a stored structure (explicit ends, no ends → defaults, roles), a deleted explicit start, an invalid column read as the columns, no starts / finishes |
@@ -2430,9 +2460,14 @@ label.
   transaction of about a thousand
   queries (`setStructure` allows it 30 s); a batched child write is the
   lever if real courses get near the cap.
-- **A translucent corridor band** (§10.2, F26 deferred): `whiteOpacity`
-  is stored and drawn opaque until the stream carries alpha
-  (`map-rendering.md` §8); the editor's field returns with it.
+- **The translucent band's limits** (§10.2, J13): one effective opacity
+  for every band (the minimum); exact per-leg opacities need the band's
+  runs split by opacity (F26's second session). Lower-purple ink inside a
+  translucent band is veiled; a band pulled back by half a line width
+  round its own edges and mouths would keep it whole (a row of its own if
+  the gate print shows it matters). A band at 99 % veils, at 100 % clips
+  — the two read differently on the map. The J13 reset rewrote
+  `courses.structure` only (§6.4).
 - **Per-request cost on corridor courses** (§10.2). A control drag on a
   corridor course re-derives the corridors on every request (one request
   in flight since F20, `map-rendering.md` §5.2 "Engine"), and so does a

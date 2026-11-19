@@ -16,7 +16,7 @@ import type { DocumentColour } from "../../../map-document/header.js";
 import { courseLayer, courseRenderInput } from "../../../course/layer.js";
 import type { CourseDocumentContext, CourseLayer, CourseLayerInput, CourseSite, CourseStructure } from "../../../course/types.js";
 
-export const courseSceneNames = ["course-legs", "course-cuts", "course-objects", "course-sprint", "course-all-controls", "course-leg-styles", "course-corridor", "course-exchange", "course-legs-curved", "course-graphics"] as const;
+export const courseSceneNames = ["course-legs", "course-cuts", "course-objects", "course-sprint", "course-all-controls", "course-leg-styles", "course-corridor", "course-corridor-translucent", "course-exchange", "course-legs-curved", "course-graphics"] as const;
 export type CourseSceneName = (typeof courseSceneNames)[number];
 
 export interface CourseScene {
@@ -183,26 +183,40 @@ function legStyles(): CourseScene {
  * plain. The 701 and every circle the corridors end at are mouths: the map shows inside them and the band wraps
  * them. The edges end on the triangle and on 31's circle, which opens towards both legs; 32's circle stays whole
  * (the wide corridor covers the narrow one's junctions there), as does 33's. The band is a clip region: the 505,
- * 101 and 516 are cut away in it, the course draws over it.
+ * 101 and 516 are cut away in it, the course draws over it. Every band is opaque (J13: the stored 0.5 of the wide
+ * leg was reset to 1 by the migration; the translucent band is `course-corridor-translucent`).
  */
 function corridor(): CourseScene {
+  return corridorScene("course-corridor", 1, 1);
+}
+
+/**
+ * The same corridors with translucent bands (J13, course-layer.md §10.2): the narrow run at 0.6, the wide leg at 0.5 —
+ * the minimum wins, so the whole band is one white fill at 50 % in the upper-white row, the map veiled under it, no
+ * clip region.
+ */
+function corridorTranslucent(): CourseScene {
+  return corridorScene("course-corridor-translucent", 0.6, 0.5);
+}
+
+function corridorScene(name: "course-corridor" | "course-corridor-translucent", narrowOpacity: number, wideOpacity: number): CourseScene {
   const base = new BaseMap("ISOM2017-2")
     .add("401", area(0, 0, 50, 0, 50, 40, 0, 40))
     .add("505", line(0, 14, 50, 20))
     .add("101", line(28, 0, 30, 40))
     .add("516", line(4, 24, 46, 36));
   const sites = [site("S", "start", 6, 6, "S1"), site("31", "control", 22, 8), site("32", "control", 40, 24), site("33", "control", 20, 32), site("F", "finish", 6, 30, "F1")];
-  const narrow = { widthM: 60, edge: true, whiteMm: 3, whiteOpacity: 1 };
+  const narrow = { widthM: 60, edge: true, whiteMm: 3, whiteOpacity: narrowOpacity };
   const structure = ordered([], {
     items: [
       { siteId: "S" },
       { siteId: "31", leg: { corridor: narrow } },
       { siteId: "32", leg: { bends: [{ x: 36, y: 10 }], corridor: narrow } },
-      { siteId: "33", leg: { corridor: { widthM: 150, edge: false, whiteMm: 2, whiteOpacity: 0.5 } } },
+      { siteId: "33", leg: { corridor: { widthM: 150, edge: false, whiteMm: 2, whiteOpacity: wideOpacity } } },
       { siteId: "F" },
     ],
   });
-  return scene("course-corridor", base, { structure, sites, objects: [], appearance: {}, viewOptions: {} });
+  return scene(name, base, { structure, sites, objects: [], appearance: {}, viewOptions: {} });
 }
 
 /**
@@ -276,6 +290,7 @@ const builders: Record<CourseSceneName, () => CourseScene> = {
   "course-all-controls": allControls,
   "course-leg-styles": legStyles,
   "course-corridor": corridor,
+  "course-corridor-translucent": corridorTranslucent,
   "course-exchange": exchange,
   "course-legs-curved": legsCurved,
   "course-graphics": graphics,

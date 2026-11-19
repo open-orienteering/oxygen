@@ -248,6 +248,17 @@ test.describe("WebGL2 map backend — images (arena path)", () => {
   });
 });
 
+/**
+ * Translucent corridor band (J13, course-layer.md §10.2): `course-corridor-translucent` through the arena path (its
+ * band is an alpha pass), held to the arena tier's 1.5 % as `course-graphics` is — a course scene with hairline legs.
+ */
+test.describe("WebGL2 map backend — translucent corridor band (arena path)", () => {
+  test("course-corridor-translucent through the arena path matches the reference raster", async ({ page }, testInfo) => {
+    await compareScene(page, testInfo, "course-corridor-translucent", "arena", ARENA_FILTER_MAX_RATIO);
+    await expect(page.getByTestId("map-gl-canvas")).toHaveAttribute("data-path", "arena");
+  });
+});
+
 test.describe("WebGL2 map backend — alpha and Multiply (arena path)", () => {
   for (const name of ALPHA_SCENES) {
     test(`${name} through the arena path matches the reference raster within the alpha tier`, async ({ page }, testInfo) => {
