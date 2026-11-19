@@ -1023,8 +1023,10 @@ test.describe("J18: hide the attached control's circle and number", () => {
       const purpleBefore = await inkIn(page, ring, "purple");
 
       // Select the image (a click inside it); the attach block offers both checkboxes, off.
-      await clickMap(page, await toPage(page, f));
-      await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-id", String(made.id), { timeout: 10000 });
+      await expect(async () => {
+        await clickMap(page, await toPage(page, f));
+        await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-id", String(made.id), { timeout: 3000 });
+      }).toPass({ timeout: 30000 });
       await expect(page.getByTestId("editor-object-hide-circle")).not.toBeChecked();
       await expect(page.getByTestId("editor-object-hide-number")).not.toBeChecked();
 
@@ -1114,9 +1116,10 @@ test.describe("J16: object multi-selection", () => {
       await openEditor(page);
       const sheetToggle = page.getByTestId("map-toggle-descriptions");
       if (/hide/i.test((await sheetToggle.textContent()) ?? "")) await sheetToggle.click();
-      const centre = await emptyPoint(page, 120);
-      const a = await toPaper(page, { x: centre.x - 45, y: centre.y });
-      const b = await toPaper(page, { x: centre.x + 45, y: centre.y });
+      // Two clear spots, each away from every site and number (a crowded map has no 120 px gap for both).
+      const pa = await emptyPoint(page, 60);
+      const a = await toPaper(page, pa);
+      const b = await toPaper(page, await emptyPoint(page, 60, [pa]));
       for (const c of [a, b]) {
         const o = await trpcCall<{ id: number }>("courseObject.create", { kind: "image", geometry: [{ x: c.x - 2, y: c.y - 2 }, { x: c.x + 2, y: c.y + 2 }], props: { graphicId }, scope: { all: true } });
         made.push(o.id);
@@ -1127,9 +1130,11 @@ test.describe("J16: object multi-selection", () => {
       const [rowA, rowB] = made.map((id) => objectRow(page, id));
       await expect(rowB).toBeAttached({ timeout: 15000 });
 
-      // A click selects A; Ctrl-click adds B: the multi inspector, both outlined.
-      await clickMap(page, await toPage(page, a));
-      await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-id", String(made[0]), { timeout: 10000 });
+      // A click selects A (retried: the view and the object list settle after the reload); Ctrl-click adds B.
+      await expect(async () => {
+        await clickMap(page, await toPage(page, a));
+        await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-id", String(made[0]), { timeout: 3000 });
+      }).toPass({ timeout: 30000 });
       await page.keyboard.down("Control");
       await page.mouse.click(...Object.values(await toPage(page, b)) as [number, number]);
       await page.keyboard.up("Control");
@@ -1164,6 +1169,21 @@ test.describe("J16: object multi-selection", () => {
       made.push(...copies);
       await page.keyboard.press("Delete");
       await expect.poll(async () => (await ours()).length, { timeout: 15000 }).toBe(2);
+      // Ctrl+D then Ctrl+Z: the copies are gone and leave the selection; a Delete then removes nothing.
+      await clickMap(page, await toPage(page, a));
+      await page.keyboard.down("Control");
+      await page.mouse.click(...Object.values(await toPage(page, b)) as [number, number]);
+      await page.keyboard.up("Control");
+      await expect(page.getByTestId("editor-object-multi")).toHaveAttribute("data-count", "2", { timeout: 10000 });
+      await page.keyboard.press("Control+d");
+      await expect.poll(async () => (await ours()).length, { timeout: 15000 }).toBe(4);
+      made.push(...(await ours()).filter((id) => !made.includes(id)));
+      await page.keyboard.press("Control+z");
+      await expect.poll(async () => (await ours()).length, { timeout: 15000 }).toBe(2);
+      await expect(page.getByTestId("editor-object-multi")).toHaveCount(0, { timeout: 10000 });
+      await page.keyboard.press("Delete");
+      await page.waitForTimeout(500);
+      expect((await ours()).length).toBe(2);
       // Shift-click toggles too: B out of {A, B} leaves A alone.
       await page.keyboard.press("Escape");
       await clickMap(page, await toPage(page, a));

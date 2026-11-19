@@ -156,10 +156,15 @@ whole box, else rings in fractions of the graphic. It is traced lazily,
 the first time a knockout image of the graphic is loaded
 (`loadCourseObjects` → `withOutlines`; `graphicOutline` in
 `course-maps/graphics.ts`: a PNG's alpha through `sharp`, an SVG
-rasterised in a print worker first, both at 512 px, under the print
-gate), and stored; an upload, `saveToClub` or a snapshot import leaves it
-NULL, so it is traced on first use. A graphic that cannot be traced cuts
-by its box and is tried again next load. Storing it stamps `updated_at`
+rasterised in a print worker under the print gate first, both at 512 px),
+and stored; an upload, `saveToClub` or a snapshot import leaves it NULL,
+so it is traced on first use. Only the event's own and club graphics are
+read: a knockout naming another event's graphic cuts by its box. Bytes
+that cannot be decoded (resvg or `sharp` refuse them) are stored as `[]`,
+the box, and not read again (as the 0 × 0 size); a print worker timeout
+or failure stores nothing and is tried again next load. The trace itself
+runs on the API thread (tens of milliseconds at 512 px, once per
+graphic). Storing it stamps `updated_at`
 once (the trigger), so a thumbnail is refetched once. Deleting a graphic that sheets still place leaves
 those image objects pointing at a missing graphic: the editor and print
 report it as before J2 (`IMAGE_MISSING`); the picker does not check use.

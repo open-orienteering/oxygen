@@ -970,8 +970,9 @@ export function EditorPage() {
   const selectedObject = useMemo(() => (rawSelectedObject ? shownObject(rawSelectedObject, sitePos) : null), [rawSelectedObject, sitePos]);
   const selectedHidden = rawSelectedObject !== null && selectedObject === null;
   useEffect(() => { if (selectedHidden) dispatch({ type: "select-object", id: null }); }, [selectedHidden]);
-  // J16: the object multi-selection as drawn. A member not drawn in the view leaves it, as above; one not in the list
-  // yet (a duplicate's copies before the refetch) waits for it.
+  // J16: the object multi-selection as drawn. A member not drawn in the view leaves it, as above, and so does one no
+  // longer in the list (deleted: an undo, another editor) — except a duplicate's copies before the refetch (`pendingCopies`).
+  const pendingCopies = useRef(new Set<number>());
   const multiObjects = useMemo(() => state.objectMulti.flatMap((id) => {
     const raw = objects.find((x) => x.id === id);
     const shown = raw ? shownObject(raw, sitePos) : null;
@@ -979,8 +980,12 @@ export function EditorPage() {
   }), [state.objectMulti, objects, sitePos]);
   const multiHidden = useMemo(() => state.objectMulti.filter((id) => {
     const raw = objects.find((x) => x.id === id);
-    return raw !== undefined && shownObject(raw, sitePos) === null;
+    if (raw === undefined) return !pendingCopies.current.has(id);
+    return shownObject(raw, sitePos) === null;
   }), [state.objectMulti, objects, sitePos]);
+  useEffect(() => {
+    for (const id of pendingCopies.current) if (objects.some((x) => x.id === id)) pendingCopies.current.delete(id);
+  }, [objects]);
   /** The multi-selection as shown now: a drag's or style edit's drafts, else the props last sent (as `selectedObject`'s keys). */
   const shownMulti = () => multiObjects.map((o) => ({
     ...o, geometry: drafts.get(o.id) ?? o.geometry, props: propDrafts.get(o.id) ?? sentProps.current.get(o.id) ?? o.props,
@@ -1171,6 +1176,7 @@ export function EditorPage() {
 
   /** J16: `Delete` on an object multi-selection: one write per object, one undo entry (undo creates them again). */
   const deleteObjectsMany = useCallback((list: readonly CourseObject[]) => {
+    if (list.length === 0) return;
     const bodies = list.map((o) => ({ kind: o.kind, geometry: o.geometry, props: o.props, scope: o.scope, ...(o.attach ? { attach: o.attach } : {}) }) as Pick<CourseObject, "kind" | "geometry" | "props" | "scope"> & { attach?: CourseObject["attach"] });
     const box = { ids: list.map((o) => o.id) };
     void (async () => {
@@ -1183,6 +1189,7 @@ export function EditorPage() {
 
   /** J16: `Ctrl+D` on an object multi-selection: a copy of each 3 mm down-right, the copies selected; one undo entry. */
   const duplicateObjectsMany = useCallback(async (list: readonly CourseObject[]) => {
+    if (list.length === 0) return;
     const bodies = list.map((o) => ({ ...duplicateBody(o), scope: o.scope }));
     const made = await run(() => writes.createObjects(bodies));
     if (!made) return;
@@ -1191,6 +1198,8 @@ export function EditorPage() {
       async () => { for (const id of box.ids) await writes.deleteObject(id); },
       async () => { box.ids = (await writes.createObjects(bodies)).map((o) => o.id); },
     );
+    // The copies are selected before the list has them: they wait for it rather than leave the selection.
+    for (const id of box.ids) pendingCopies.current.add(id);
     dispatch({ type: "set-object-multi", ids: box.ids });
   }, [run, writes, record]);
 

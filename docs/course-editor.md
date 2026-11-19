@@ -572,8 +572,9 @@ screen-size Bézier handle on a thin line from its vertex — and text). The too
 | — | snapping | the rail's toggle (§6.2) |
 
 **Escape** cancels a mouse drag in flight first (§3, F24), then drops
-an active tool (back to `V`), then a multi-selection, then a selected
-object, then the §3 cascade. `V`
+an active tool (back to `V`), then a multi-selection of controls, then
+one of objects (J16, §7 "Multi-selection"), then a selected object, then
+the §3 cascade. `V`
 returns to select from any tool; right-click exits an exclusive tool.
 
 ### 6.1 Placement (`S`, `K`, `M`)
@@ -878,11 +879,13 @@ than three hull points).
   the action bar; not in All variations, §12).
 - **`1`–`9`** show and activate the n-th alternative of the selection's
   variation group (§12; with `V`).
-- `Delete` / `Backspace` deletes the multi-selection, else the selected
+- `Delete` / `Backspace` deletes the multi-selection of controls, else
+  that of objects (J16, one undo entry), else the selected
   leg's **focused bend** (§6.7), else the selected object's **focused
   vertex** (§7 "Editing geometry"), else the selected object, else the
   selected control.
-- **`Ctrl+D`** duplicates the selected object, **`Ctrl+C`** / **`Ctrl+X`**
+- **`Ctrl+D`** duplicates the selected object (or each object of an
+  object multi-selection, J16), **`Ctrl+C`** / **`Ctrl+X`**
   copy / cut it, **`Ctrl+V`** pastes (J12, §7 "Duplicate, copy, cut,
   paste"); with `V`, in Course mode, for a setter who may edit. `Cmd` on a
   Mac.
@@ -1306,8 +1309,8 @@ any other, with `source = 'layout'` that the wire does not carry.
   crop, *Cut out graphics below* off) removes its key, so an untouched
   object's props stay as before. **Cut out graphics below** (J15, user
   2026-11-19) writes `props.knockout: true`: the image cuts the images
-  below it in the course layer by its box (course-layer.md §3.6
-  "Knockout images"), so hatches placed over a whole-map overlay show the
+  below it in the course layer by its graphic's traced outline (J19; by
+  its box where there is none, course-layer.md §3.6 "Knockout images"), so hatches placed over a whole-map overlay show the
   map through their openings, and moving a hatch moves the hole. Its
   hint (`styleKnockoutHint`) says so. Duplicate, copy and paste carry the
   flag with the rest of the props. A
@@ -1406,9 +1409,11 @@ empty map, Layout or Map mode end it; Escape drops it (after a tool and a
 control multi-selection, before a single object). An unselected image
 takes the modified click too (a plain press on it still pans). A press on
 a handle of the selected object (knob, corner, crop edge, vertex, grip)
-keeps its own gesture. Members are outlined blue without handles
+keeps its own gesture; a modified press on its body is a toggle, so a
+Shift-drag there moves nothing (and takes it out on release). Members are outlined blue without handles
 (`editor-object-multi-outline`); an attached member not drawn in the view
-leaves the selection.
+leaves the selection, and so does one no longer in the list (an undo,
+another editor), except a duplicate's copies until the list has them.
 
 - **Move.** A drag on a member moves every member by the same offset
   (past 3 px; `groupMoved`): drafts while dragging, then one write per

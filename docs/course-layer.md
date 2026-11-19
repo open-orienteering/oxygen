@@ -1363,7 +1363,9 @@ control (its UI site). The flags act only while the image is attached:
 a free image's flags do nothing, and a detached image (*Detach*, or its
 control deleted) shows the circle and number again. The circle is lower
 purple, under the graphics row (§3.6), so an opaque hatch over the control
-hid it already; the flag is for a hatch whose opening shows the map.
+hid it already; the flag is for a hatch whose opening shows the map. The
+hiding goes wherever the image is drawn with its control: an `all`-scoped
+hatch hides them on all-controls and setter sheets too.
 
 **Graphic outline (J19).** A knockout image object read by the API
 (`loadCourseObjects`, so the list, the print job and the checks alike)

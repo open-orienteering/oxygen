@@ -301,8 +301,9 @@ corners in the order bottom-left, bottom-right, top-right, top-left).
   its quad does.
 - **Knockout** (J15). An image whose object is marked `knockout`
   (`RenderObject.knockout`, "Cut out graphics below") masks the image
-  passes below it in the same stream by its footprint: the quad inset
-  0.05 mm, not its pixels (§4.11 "Knockout footprints"). The pass stays
+  passes below it in the same stream by its footprint: its graphic's
+  traced outline when the object carries one (J19), else the quad inset
+  0.05 mm (§4.11 "Knockout footprints"). The pass stays
   an ordinary image pass; the cut is a mask (§3.8) on the passes below.
 - **Backends.** The reference raster (§5.1) draws an SVG `<image>`
   through the quad, the PDF (§5.3) an image XObject under `cm`, each from

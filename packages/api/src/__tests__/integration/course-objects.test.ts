@@ -282,6 +282,30 @@ describe("J18 hides and J19 outlines (course-layer.md §8.1, map-rendering.md §
     const bo = await caller.courseObject.create({ kind: "image", geometry: [{ x: 0, y: 0 }, { x: 8, y: 8 }], props: { graphicId: box.id, knockout: true }, scope: { all: true } });
     expect((await caller.courseObject.list()).find((x) => x.id === bo.id)?.outline).toBeUndefined();
     expect((await ctx.db.graphic.findUniqueOrThrow({ where: { id: BigInt(box.id) } })).outline).toEqual([]);
+    // Bytes that cannot be decoded: stored as [] (the box), not read again.
+    const junk = await ctx.db.graphic.create({ data: { eventId: ctx.eventId, name: `j19-junk-${suffix}`, mime: "image/png", data: Uint8Array.from([1, 2, 3]), sizeBytes: 3 } });
+    const jo = await caller.courseObject.create({ kind: "image", geometry: [{ x: 0, y: 0 }, { x: 8, y: 8 }], props: { graphicId: Number(junk.id), knockout: true }, scope: { all: true } });
+    expect((await caller.courseObject.list()).find((x) => x.id === jo.id)?.outline).toBeUndefined();
+    expect((await ctx.db.graphic.findUniqueOrThrow({ where: { id: junk.id } })).outline).toEqual([]);
+  });
+
+  it("another event's graphic is never read: no outline, its row untouched", async () => {
+    const other = await createTestEvent("course_objects_other");
+    try {
+      const sharp = (await import("sharp")).default;
+      const rgba = Buffer.alloc(20 * 20 * 4);
+      for (let y = 5; y < 15; y++) for (let x = 5; x < 15; x++) rgba.set([0, 0, 0, 255], (y * 20 + x) * 4);
+      const png = await sharp(rgba, { raw: { width: 20, height: 20, channels: 4 } }).png().toBuffer();
+      const foreign = await makeCaller(other.event).graphics.upload({ name: `j19-foreign-${suffix}.png`, scope: "event", fileDataBase64: png.toString("base64") });
+      const before = await ctx.db.graphic.findUniqueOrThrow({ where: { id: BigInt(foreign.id) } });
+      const o = await caller.courseObject.create({ kind: "image", geometry: [{ x: 0, y: 0 }, { x: 8, y: 8 }], props: { graphicId: foreign.id, knockout: true }, scope: { all: true } });
+      expect((await caller.courseObject.list()).find((x) => x.id === o.id)?.outline).toBeUndefined();
+      const after = await ctx.db.graphic.findUniqueOrThrow({ where: { id: BigInt(foreign.id) } });
+      expect(after.outline).toBeNull();
+      expect(after.updatedAt).toEqual(before.updatedAt);
+    } finally {
+      await ctx.db.event.delete({ where: { id: other.eventId } });
+    }
   });
 });
 

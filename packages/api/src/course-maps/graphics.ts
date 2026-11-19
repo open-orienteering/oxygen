@@ -7,7 +7,7 @@
 
 import { render } from "@oxygen/shared";
 import { type ImageWindow, SVG_RASTER_MAX_PX, type PrintSheet } from "@oxygen/shared/print";
-import { rasteriseSvgInWorker, trimSvgInWorker } from "./print-worker-host.js";
+import { PrintWorkerReplyError, printGate, rasteriseSvgInWorker, trimSvgInWorker } from "./print-worker-host.js";
 
 /** The largest upload accepted (J2, docs/course-maps.md "Data model"). */
 export const MAX_GRAPHIC_UPLOAD_BYTES = 16 * 1024 * 1024;
@@ -202,16 +202,26 @@ export async function prepareGraphicUpload(input: Buffer): Promise<PreparedGraph
 }
 
 /**
- * A graphic's outline (J19, `render.traceOutline`): its alpha at `OUTLINE_RASTER_PX` on the longer side (an SVG
- * rasterised in a print worker; callers hold `printGate`), traced. `[]` for a whole-box silhouette or an SVG without
- * a size. Throws when the bytes cannot be decoded.
+ * A graphic's outline (J19, `render.traceOutline`): its alpha at `OUTLINE_RASTER_PX` on the longer side, traced. An
+ * SVG is rasterised in a print worker under the print gate (a PNG needs only `sharp`); a worker failure or timeout
+ * throws `GraphicRasterError` (worth another try), bytes that cannot be decoded throw anything else. `[]` for a
+ * whole-box silhouette or an SVG without a size.
  */
+/** The print worker could not rasterise an SVG this time (a timeout, a worker that failed): the outline is not stored. */
+export class GraphicRasterError extends Error {}
+
 export async function graphicOutline(data: Uint8Array, mime: string, widthPx: number | null, heightPx: number | null): Promise<render.GraphicOutline> {
   let png: Uint8Array = data;
   if (mime === "image/svg+xml") {
     if (!widthPx || !heightPx) return [];
     const [w, h] = thumbBox(widthPx, heightPx, render.OUTLINE_RASTER_PX);
-    png = await rasteriseSvgInWorker(data, w, h);
+    try {
+      png = await printGate(() => rasteriseSvgInWorker(data, w, h));
+    } catch (error) {
+      // resvg could not read it: as undecodable bytes. A timeout or a failed worker: worth another try.
+      if (error instanceof PrintWorkerReplyError) throw error;
+      throw new GraphicRasterError(error instanceof Error ? error.message : String(error));
+    }
   }
   const sharp = (await import("sharp")).default;
   const { data: alpha, info } = await sharp(png, { limitInputPixels: GRAPHIC_MAX_INPUT_PIXELS })
