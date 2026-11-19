@@ -235,11 +235,16 @@ test.describe("WebGL2 map backend — images (arena path)", () => {
   test("course-graphics through the arena path matches the reference raster within the image tier", async ({ page }, testInfo) => {
     const { actual, golden } = await compareScene(page, testInfo, "course-graphics", "arena", IMAGE_TIER_MAX_RATIO);
     await expect(page.getByTestId("map-gl-canvas")).toHaveAttribute("data-path", "arena");
-    // Same pixels as the golden at the red band and the transparent middle (the golden is the oracle's).
+    // Same pixels as the golden (the oracle's) at lucka 31's red band, its half-opaque gold band and
+    // its transparent middle, inside the cropped, turned stripes and inside the Multiply lucka 32.
     const px = (img: PNG, x: number, y: number) => Array.from(img.data.subarray((y * img.width + x) * 4, (y * img.width + x) * 4 + 3));
     const near = (a: number[], b: number[]) => a.every((v, i) => Math.abs(v - b[i]) <= 8);
     // The golden frame: 10 px/mm; the lucka's box is 16 mm square round control 31.
-    for (const [x, y] of [[140, 280], [210, 262], [240, 178]] as const) expect(near(px(actual, x, y), px(golden, x, y)), `pixel ${x},${y}`).toBe(true);
+    for (const [x, y] of [[140, 280], [210, 262], [240, 178], [110, 130], [330, 130]] as const) expect(near(px(actual, x, y), px(golden, x, y)), `pixel ${x},${y}`).toBe(true);
+    // The opaque band hides the map: red; the transparent middle shows the map's light green.
+    const [r, g] = px(actual, 140, 280);
+    expect(r > 150 && g < 80, "opaque red band").toBe(true);
+    expect(near(px(actual, 240, 178), [194, 255, 179]), "map through the middle").toBe(true);
   });
 });
 

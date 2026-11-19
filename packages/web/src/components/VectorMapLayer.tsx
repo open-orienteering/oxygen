@@ -261,6 +261,7 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
         const lines = linesRef.current;
         const st = engine.renderTerrain(lines?.length ? { ...tf, lines, pxRatio: tf.camera.widthPx / (canvas.clientWidth || tf.camera.widthPx) } : tf, opts);
         setDrawnLines(st.mesh?.lines?.lines ?? 0);
+        setGraphicsState(st.imagesPending ? "pending" : "ready");
         setMode("3d");
         trackTerrainReady(engine, tf);
         return;

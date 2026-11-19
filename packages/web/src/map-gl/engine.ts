@@ -159,6 +159,8 @@ export interface TerrainFrameStats {
   drape?: DrapeRenderStats & { layers: number };
   /** JS time of the whole frame, ms. */
   cpuMs: number;
+  /** Graphics still loading or waiting (J6), as `EngineStats.graphicsPending`. */
+  imagesPending?: number;
 }
 
 /**
@@ -435,8 +437,15 @@ export class MapGlEngine {
     }
     this.graphics = g;
     if (g) {
-      g.onChange = () => this.onChange?.();
-      g.onRelease = (b) => this.renderer.releaseGraphic(b);
+      // A texture arriving or freed changes the drape too (§5.2 "Images").
+      g.onChange = () => {
+        this.drapeStale = true;
+        this.onChange?.();
+      };
+      g.onRelease = (b) => {
+        this.drapeStale = true;
+        this.renderer.releaseGraphic(b);
+      };
     }
     this.onChange?.();
   }
@@ -1051,7 +1060,8 @@ export class MapGlEngine {
       target,
       frame.lines ? { lines: frame.lines, pxRatio: frame.pxRatio ?? 1 } : undefined,
     );
-    return { mesh: meshStats, drape, cpuMs: performance.now() - t0 };
+    const pending = this.graphics?.pending ?? 0;
+    return { mesh: meshStats, drape, cpuMs: performance.now() - t0, ...(pending ? { imagesPending: pending } : {}) };
   }
 
   /**

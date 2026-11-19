@@ -1565,9 +1565,22 @@ sorting happens here.
   2048 px on the longer side; the textures (× 4/3 for mips) are held
   under their own 64 MiB budget, outside the map's (`EngineStats.graphicBytes`,
   `graphicsPending`): over it the largest is decoded again at half size
-  until the set fits; an image is never dropped. A replaced texture is
-  freed on the GPU (`releaseGraphic`). The canvas's `data-graphics` is
-  `pending` while an image draws as its loading outline, else `ready`.
+  until the set fits; an image is never dropped for the budget. An SVG
+  drawn at several sizes in one frame is asked once, at the largest box
+  (by area). A graphic no frame has asked for in 120 frames that drew
+  images (a deleted object, a switched course) is dropped; a replaced or
+  dropped texture is freed on the GPU (`releaseGraphic`) and marks the
+  drape stale, as an arrival does. Only definitive answers are
+  remembered (200, 400, 404 and other 4xx): no network with nothing
+  stored, a 5xx, 408 or 429 is asked again after a backoff (2 s doubling
+  to 60 s) and draws as loading until then; offline a graphic not stored
+  unboxed is taken for an SVG for its box request, and a miss there too
+  starts again from the probe. Offline an SVG is found only at a box
+  `prepareOfflinePrint` stored, so an image placed at a scale ratio other
+  than 1 (a page image through `T_map⁻¹` too) draws as loading offline.
+  The canvas's `data-graphics` is `pending` while an image draws as its
+  loading outline (2D) or the loader has requests in flight (3D,
+  `TerrainFrameStats.imagesPending`), else `ready`.
 * **Pattern clip** — per clip group: the areas into stencil bit 0
   (`REPLACE`, colour masked), the group's instances where the bit is
   set (`EQUAL`), the areas again with `ZERO`.
@@ -1860,6 +1873,15 @@ itself is drawn by the renderer in colour order with the map (C4,
 (`TileLayer`, `MapLoupe`, the tile-progress poll, the Web Mercator
 viewport and the calibration affine) were the other base layer until E3
 and were deleted in E4b; `documentHash` is a required prop.
+
+Images (J6): the viewer passes `VectorMapLayer` its event's `nameId`,
+and the layer makes the graphic-texture loader (§5.2 "Images") with the
+kiosk key from the URL (`kioskKeyFromUrl`), so `image` course objects
+and page images draw in the editor, the viewer and the kiosk;
+`outlineMissingImages` is set by the editor only. The Course and Layout
+modes and Class view draw through the same viewer; `MapPanel` and
+`courseLayerRequest` needed no change (every course-object kind is
+already forwarded).
 
 #### Selecting the layer
 
@@ -3726,7 +3748,9 @@ them and the fixture page decodes the scene's PNGs,
 measured at introduction 2 127 / 218 400 (0.974 %, headless Chromium,
 2026-11-18), the hairline MSAA steps of its legs and lines — the images'
 insides agree, magnified nearest on both sides. Probes compare the
-lucka's red band, gold band and transparent middle with the golden.
+lucka's red band, gold band and transparent middle, the cropped stripes
+and the Multiply lucka with the golden, and check the band is opaque red
+and the middle the map's green.
 
 Not in J3: pixel probes of the blended values (the whole-image budget
 holds them to 16 levels everywhere but the ≤ 0.5 % of edge pixels) and a
