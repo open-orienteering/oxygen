@@ -206,3 +206,24 @@ describe("variations (docs/course-editor.md §12, F7)", () => {
     expect([s.view, s.variantKey, s.activeAlternatives, s.focusGroupId]).toEqual(["course", null, {}, null]);
   });
 });
+
+describe("the image tool and the aspect lock (J7)", () => {
+  const image = { kind: "image" as const, graphicId: 4 };
+  it("the tool drops the phantom; Escape drops it first; Layout or Map mode drops it", () => {
+    const s = editorReducer({ ...initialEditorState, phantom: { x: 1, y: 1, insertAt: 0 } } as typeof initialEditorState, { type: "tool", tool: image });
+    expect(s.tool).toEqual(image);
+    expect(s.phantom).toBeNull();
+    expect(editorReducer(s, { type: "escape" }).tool).toEqual({ kind: "select" });
+    expect(escapeHasWork(s)).toBe(true);
+    expect(editorReducer(s, { type: "mode", mode: "layout" }).tool).toEqual({ kind: "select" });
+    expect(editorReducer(s, { type: "mode", mode: "map" }).tool).toEqual({ kind: "select" });
+  });
+
+  it("the lock is on by default, toggles, and survives a selection change", () => {
+    expect(initialEditorState.aspectLock).toBe(true);
+    const off = editorReducer(initialEditorState, { type: "toggle-aspect-lock" });
+    expect(off.aspectLock).toBe(false);
+    expect(editorReducer(off, { type: "select-object", id: 3 }).aspectLock).toBe(false);
+    expect(editorReducer(off, { type: "toggle-aspect-lock" }).aspectLock).toBe(true);
+  });
+});

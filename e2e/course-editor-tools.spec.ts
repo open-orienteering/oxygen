@@ -7,6 +7,7 @@
 // next reseed, controls / objects / sheets it creates are deleted in `finally` (`cleanup`).
 
 import { expect, test } from "@playwright/test";
+import { PNG } from "pngjs";
 import { reseed } from "./helpers/reseed";
 import { allControlsSheet, arm, cleanup, clickMap, controlRows, coveredBy, drag, dragMm, editorReady, emptyPoint, geometryOf, inkIn, legMidpoint, legPieces, nameIdOf, objectRow, openEditor, place, pressInside, pressOnEdge, printed, probeTemplate, regularCodes, select, selectedCode, siteCuts, site, sitePoint, sites, toolShapes, toPage, toPaper, trpcCall, newCourse, mapScale, type Site } from "./helpers/editor";
 import { waitForTrpc } from "./helpers/trpc";
@@ -713,6 +714,108 @@ test.describe("tools", () => {
       if (id) await cleanup("courseObject.delete", { id: Number(id) });
       await cleanup("courseMap.delete", { id: sheet.seq });
       await cleanup("mapTemplate.delete", { id: template.seq });
+    }
+  });
+});
+
+// docs/course-editor.md §5, §6, §7 (J7): the image tool, an image's hit rule and gestures, the style fields.
+test.describe("I: image tool and style fields", () => {
+  desktopOnly();
+
+  test("I places a picked graphic at 30 mm; inside it a drag pans and a click selects; body and corner drags; style fields write", async ({ page }) => {
+    test.setTimeout(180_000);
+    // A 16 × 8 opaque PNG uploaded to the event.
+    const png = new PNG({ width: 16, height: 8 });
+    for (let i = 0; i < 128; i++) png.data.set([0, 160, 160, 255], i * 4);
+    const { id: graphicId } = await trpcCall<{ id: number }>("graphics.upload", { name: `e2e-j7-${Date.now()}.png`, scope: "event", fileDataBase64: PNG.sync.write(png).toString("base64") });
+    let objectId: string | null = null;
+    try {
+      await openEditor(page);
+      const sheetToggle = page.getByTestId("map-toggle-descriptions");
+      if (/hide/i.test((await sheetToggle.textContent()) ?? "")) await sheetToggle.click();
+
+      // I: the tool is lit, the picker opens with its hint; nothing is placed before a graphic is picked.
+      await page.keyboard.press("i");
+      await expect(page.getByTestId("editor-tool-I")).toHaveAttribute("aria-pressed", "true");
+      await expect(page.getByTestId("editor-image-picker")).toBeVisible();
+      await expect(page.getByTestId("editor-image-hint")).toBeVisible();
+      await page.getByTestId(`editor-graphic-place-${graphicId}`).click();
+      await expect(page.getByTestId("editor-image-hint")).toHaveCount(0);
+
+      const clear = await emptyPoint(page, 80);
+      await page.mouse.move(clear.x, clear.y);
+      await expect(page.getByTestId("editor-image-ghost")).toBeAttached();
+      const created = waitForTrpc(page, "courseObject.create");
+      await page.mouse.click(clear.x, clear.y);
+      await created;
+      await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-kind", "image", { timeout: 15000 });
+      await expect(page.getByTestId("editor-tool-V")).toHaveAttribute("aria-pressed", "true");
+      await expect(page.getByTestId("editor-image-picker")).toHaveCount(0);
+      objectId = (await page.getByTestId("editor-object").getAttribute("data-object-id"))!;
+      const row = objectRow(page, objectId);
+      await expect(row).toBeAttached({ timeout: 15000 });
+      const placed = await geometryOf(row);
+      expect(Math.abs(placed[1].x - placed[0].x)).toBeCloseTo(30, 1);
+      expect(Math.abs(placed[1].y - placed[0].y)).toBeCloseTo(15, 1);
+      await expect(page.getByTestId("editor-object-handle")).toHaveCount(4);
+
+      // Unselected: a drag inside pans and leaves it alone; a click inside selects it.
+      await page.keyboard.press("Escape");
+      await expect(page.getByTestId("editor-object")).toHaveCount(0);
+      const stored = await row.getAttribute("data-geometry");
+      await pressInside(page, await geometryOf(row));
+      await expect(row).toHaveAttribute("data-geometry", stored!);
+      await expect(page.getByTestId("editor-object")).toHaveCount(0);
+      const g0 = await geometryOf(row);
+      await clickMap(page, await toPage(page, { x: (g0[0].x + g0[1].x) / 2 + 5, y: (g0[0].y + g0[1].y) / 2 }));
+      await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-id", objectId, { timeout: 5000 });
+
+      // Selected: a body drag moves it in one write.
+      const centre = await toPage(page, { x: (g0[0].x + g0[1].x) / 2 + 5, y: (g0[0].y + g0[1].y) / 2 });
+      const moved = waitForTrpc(page, "courseObject.update");
+      await drag(page, centre, { x: centre.x + 20, y: centre.y });
+      await moved;
+      await expect.poll(async () => (await row.getAttribute("data-geometry")) !== stored, { timeout: 15000 }).toBe(true);
+      const g1 = await geometryOf(row);
+      expect(Math.abs(g1[1].x - g1[0].x)).toBeCloseTo(30, 1);
+
+      // A corner drag resizes with the lock: the 2 : 1 ratio is kept.
+      const handle = (await page.getByTestId("editor-object-handle").nth(2).boundingBox())!;
+      const corner = { x: handle.x + handle.width / 2, y: handle.y + handle.height / 2 };
+      const resized = waitForTrpc(page, "courseObject.update");
+      await drag(page, corner, { x: corner.x + 40, y: corner.y - 5 });
+      await resized;
+      await expect.poll(async () => Math.abs((await geometryOf(row))[1].x - (await geometryOf(row))[0].x) > 31, { timeout: 15000 }).toBe(true);
+      const g2 = await geometryOf(row);
+      expect(Math.abs(g2[1].x - g2[0].x) / Math.abs(g2[1].y - g2[0].y)).toBeCloseTo(2, 2);
+
+      // Style fields: opacity 50 %, Multiply, rotation, a width typed with the lock; Ctrl+Z restores the width.
+      const commit = async (testId: string, value: string) => {
+        const w = waitForTrpc(page, "courseObject.update");
+        await page.getByTestId(testId).fill(value);
+        await page.getByTestId(testId).press("Enter");
+        await w;
+      };
+      await commit("editor-style-opacity", "50");
+      await expect.poll(async () => JSON.parse((await row.getAttribute("data-props")) ?? "{}").opacity, { timeout: 15000 }).toBe(0.5);
+      const blended = waitForTrpc(page, "courseObject.update");
+      await page.getByTestId("editor-style-blend").selectOption("multiply");
+      await blended;
+      await expect.poll(async () => JSON.parse((await row.getAttribute("data-props")) ?? "{}").blend, { timeout: 15000 }).toBe("multiply");
+      await commit("editor-style-rotation", "30");
+      await expect.poll(async () => JSON.parse((await row.getAttribute("data-props")) ?? "{}").rotationDeg, { timeout: 15000 }).toBe(30);
+      const before = await geometryOf(row);
+      await commit("editor-style-width", "20");
+      await expect.poll(async () => { const g = await geometryOf(row); return Math.round(Math.abs(g[1].x - g[0].x) * 10) / 10; }, { timeout: 15000 }).toBe(20);
+      const g3 = await geometryOf(row);
+      expect(Math.abs(g3[1].y - g3[0].y)).toBeCloseTo(10, 1);
+      // The page's undo, not the field's: the focus leaves the field first.
+      await page.getByTestId("editor-style-width").blur();
+      await page.keyboard.press("Control+z");
+      await expect.poll(async () => { const g = await geometryOf(row); return Math.abs(g[1].x - g[0].x); }, { timeout: 15000 }).toBeCloseTo(Math.abs(before[1].x - before[0].x), 1);
+    } finally {
+      if (objectId) await cleanup("courseObject.delete", { id: Number(objectId) });
+      await cleanup("graphics.delete", { id: graphicId });
     }
   });
 });

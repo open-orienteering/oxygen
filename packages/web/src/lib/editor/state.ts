@@ -20,12 +20,14 @@ export type EditorMode = "course" | "layout" | "field" | "map";
  */
 export type EditorView = "course" | "all" | "class" | "variant" | "all-variations";
 
-/** The tool rail's tools (08 §5.2): `V`, the armed `S` / `K` / `M`, `A` areas, `T` text, `G` gaps. */
+/** The tool rail's tools (08 §5.2): `V`, the armed `S` / `K` / `M`, `A` areas, `T` text, `I` image, `G` gaps. */
 export type EditorTool =
   | { kind: "select" }
   | { kind: "place"; chain: PlacementState }
   | { kind: "area"; poly: PolygonState }
   | { kind: "text" }
+  /** `I` (J7): places an `image` course object of graphic `graphicId`; null until one is picked in the picker. */
+  | { kind: "image"; graphicId: number | null }
   /** Gaps on the selected circle, or on the leg into control-sequence position `legInsertAt` (the clicked leg). */
   | { kind: "gap"; legInsertAt: number | null }
   /** The filter region's eyedropper (§6.4): a click adds the symbol under it to the selected region. */
@@ -49,6 +51,8 @@ export interface EditorState extends CourseEditorState {
   /** The selected course object (public id), exclusive with a selected control. */
   selectedObjectId: number | null;
   snapping: boolean;
+  /** Image size edits keep the box's ratio (J7: the inspector's lock, a corner drag); on by default. */
+  aspectLock: boolean;
 }
 
 export type EditorAction =
@@ -68,12 +72,13 @@ export type EditorAction =
   | { type: "toggle-multi"; id: number }
   | { type: "set-multi"; ids: number[] }
   | { type: "select-object"; id: number | null }
-  | { type: "toggle-snapping" };
+  | { type: "toggle-snapping" }
+  | { type: "toggle-aspect-lock" };
 
 const SELECT: EditorTool = { kind: "select" };
 
 export const initialEditorState: EditorState = {
-  ...initialCourseEditorState, mode: "course", view: "course", classSeq: null, variantKey: null, activeAlternatives: {}, focusGroupId: null, hideOthers: false, tool: SELECT, multi: [], selectedObjectId: null, snapping: false,
+  ...initialCourseEditorState, mode: "course", view: "course", classSeq: null, variantKey: null, activeAlternatives: {}, focusGroupId: null, hideOthers: false, tool: SELECT, multi: [], selectedObjectId: null, snapping: false, aspectLock: true,
 };
 
 /** A new area tool of `kind`. */
@@ -138,6 +143,8 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       return { ...state, selectedObjectId: action.id, selectedControlId: action.id === null ? state.selectedControlId : null, multi: [], phantom: null };
     case "toggle-snapping":
       return { ...state, snapping: !state.snapping };
+    case "toggle-aspect-lock":
+      return { ...state, aspectLock: !state.aspectLock };
     case "escape":
       // An active tool is dropped first (back to V), then a multi-selection, then an object; then the legacy cascade.
       if (state.tool.kind !== "select") return { ...state, tool: SELECT };
@@ -186,7 +193,7 @@ export function escapeHasWork(s: EditorState): boolean {
  * Whether the viewer draws the selected control's ring (`editor-selection-ring`,
  * §6.1): not while an exclusive tool (`K`, `S`, `M`, `A`, `T`, `G`) is armed — the
  * control just placed stays selected (chain anchor, inspector, `Ctrl+Z`) but its
- * purple circle is the mark; the ring is `V`'s. Typed on the viewer's prop, which
+ * purple circle is the mark; the ring is `V`'s. `I` is exclusive too. Typed on the viewer's prop, which
  * never sees `EditorState`.
  */
 export function showSelectionRing(editor: { tool?: { exclusive?: boolean } | null } | null | undefined): boolean {

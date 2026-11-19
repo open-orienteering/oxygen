@@ -3,7 +3,8 @@
  * selected course object's kind props and scope, plus the filter region's
  * symbol picker — the document's symbols grouped by heading
  * (`symbol-groups.ts`), or its colours, the eyedropper, and `invert`
- * ("show only these"). Every change is one write (`courseObject.update`)
+ * ("show only these"), and the style fields (J7) of an image, a map text
+ * and a white-out. Every change is one write (`courseObject.update`)
  * and one undo entry; the page writes.
  */
 
@@ -13,6 +14,7 @@ import { vertexRule } from "../../../lib/editor/geometry-edit";
 import { TONER_MARGIN_MM } from "../tools/toner-saver";
 import { render, type course, type mapDocument } from "@oxygen/shared";
 import { filterGroups, groupState, toggleGroup, type SymbolGroup } from "../../../lib/editor/symbol-groups";
+import { StyleFields } from "../StyleFields";
 
 type Obj = course.CourseObject;
 type Props = Obj["props"];
@@ -25,6 +27,11 @@ export interface ObjectSectionProps {
   courses: { id: number; name: string }[];
   classes: { id: number; name: string }[];
   onProps: (props: Props) => void;
+  /** Props and geometry in one write (J7: an image's size or crop). */
+  onStyle?: (next: { props: Props; geometry?: Obj["geometry"] }) => void;
+  /** The image size lock (editor state). */
+  aspectLock?: boolean;
+  onAspectLock?: () => void;
   onScope: (scope: Obj["scope"]) => void;
   onRegenerate?: () => void;
   onDelete: () => void;
@@ -64,9 +71,31 @@ export function ObjectSection(props: ObjectSectionProps) {
         </button>
       </div>
       <KindProps {...p} />
+      <Style {...p} onStyle={(next) => {
+        setPending({ version: props.object.version, scope: live?.scope, props: next.props });
+        if (props.onStyle) props.onStyle(next);
+        else props.onProps(next.props);
+      }} />
       {vertexRule(o.kind).curves && <p data-testid="editor-geometry-hint" className="text-[10px] text-slate-400">{t("geometryHint")}</p>}
       <ScopeEditor scope={o.scope} courses={p.courses} classes={p.classes} onScope={p.onScope} />
     </div>
+  );
+}
+
+/** Opacity on an image, a map text and a white-out; blend and rotation on the first two; flip, size, crop on an image (J7). */
+function Style(p: ObjectSectionProps & { onStyle: NonNullable<ObjectSectionProps["onStyle"]> }) {
+  const o = p.object;
+  if (o.kind !== "image" && o.kind !== "text" && o.kind !== "whiteout") return null;
+  const image = o.kind === "image";
+  return (
+    <StyleFields
+      props={o.props}
+      geometry={image ? o.geometry : undefined}
+      show={{ blend: o.kind !== "whiteout", rotation: o.kind !== "whiteout", flip: image, size: image, crop: image }}
+      aspectLock={p.aspectLock ?? true}
+      onAspectLock={() => p.onAspectLock?.()}
+      onChange={(next) => p.onStyle({ props: next.props as Props, ...(next.geometry ? { geometry: next.geometry } : {}) })}
+    />
   );
 }
 

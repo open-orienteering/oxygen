@@ -476,9 +476,15 @@ shared stage (04 §7; `map-rendering.md` §5.5), not SVG hit targets:
   inside an area hits as if the area were not there. `closedStrokeInterior`
   stays for the control circles. An area whose whole outline is
   off-screen is selected after zooming out (`F` fits the course).
-  An `image` course object (J6) is a `UiArea` too, by its box turned by
-  `rotationDeg` (`imageRing`): it hits along that outline, and a press
-  inside a lucka reaches the control it frames or pans the map.
+  An `image` course object is a **filled** `UiArea` (J7, superseding
+  J6's outline-only rule): its box turned by `rotationDeg` (`imageRing`)
+  hits anywhere inside, exactly (no reach), but after every other target
+  — a control, a number, a leg, a line's stroke and every other area's
+  outline win over it, so a control inside a lucka is still grabbed.
+  An **unselected** image takes no press: a drag inside it pans the map,
+  and a click there, off every other target, selects it (the page's map
+  click, `imageAt` in `lib/editor/image-box.ts`, so a touch tap does the
+  same); §7.
   Imported extras do not hit.
 - A leg with **no line** — `style: "none"`, or a `line` leg with a
   corridor (F14): `course.legLine(leg) === null`, the layer's own
@@ -536,7 +542,7 @@ point the drag placed, paper mm — the snapped bend, a bend's or an
 object's grip, an object's vertex; nothing for a body drag, a lasso or
 within the slop — and the viewer draws the touch stem and the loupe at
 it (F23), or the mouse loupe above the cursor (F24, §10 "Loupe"). A
-placing tool (`S`, `K`, `M`, `X`, `C`, `T`) sets `hoverPoint`: the point a
+placing tool (`S`, `K`, `M`, `X`, `C`, `T`, and `I` with a graphic picked) sets `hoverPoint`: the point a
 click (or *Place*) would drop now, paper mm — the provisional point,
 snapped, or a reused site's centre (`placeBinding`: the ghost's `at`;
 `textBinding`: the page's snapped hover); null without a hover. Only those
@@ -559,6 +565,7 @@ screen-size Bézier handle on a thin line from its vertex — and text). The too
 | `C` | crossing point | armed, §6.8 (with the `A` menu open, `C` is its *Corridor on selected leg*, §6.4) |
 | `A` | areas | a menu: out-of-bounds area, out-of-bounds line, white-out, filter region, toner saver, marked route (§6.4); *Corridor on selected leg* (§6.7) |
 | `T` | map text | one click places it (§7) |
+| `I` | image (J7) | the graphics picker opens beside the rail's button (`editor-image-picker`: the event's graphics, then the club's; upload, save and delete with `courses.edit`); a tile's Place arms that graphic, then one click places it (§7); nothing is placed before a graphic is picked (`editor-image-hint`). Course mode only; the phone's `+` menu has no entry (Pending) |
 | `G` | gaps | on the selected circle or leg (§6.3) |
 | `L` | placement loupe | toggles the loupe over a placing tool's hover (§10 "Loupe", F27); not in Layout mode |
 | — | snapping | the rail's toggle (§6.2) |
@@ -1246,13 +1253,27 @@ any other, with `source = 'layout'` that the wire does not carry.
   handles (`editor-object-handle`): dragging one moves the vertex,
   dragging the body — a line's stroke, a text, an area's edge — moves the
   whole object — one `courseObject.update { geometry }` on release, one
-  undo entry. While dragging, the page hands
+  undo entry. A **selected image** (J7) is outlined by its turned box
+  (not the stored diagonal) with four corner handles: a press on a corner
+  (7 px) resizes it in its own frame, the opposite corner fixed where it
+  is drawn, keeping the box's current ratio while the aspect lock is on
+  (`EditorState.aspectLock`, on by default; the inspector's checkbox),
+  at least 1 mm a side (`resizeImage`); a press inside it (its hit) moves
+  it; a corner is never focused, so `Delete` deletes the image. A press
+  on a control inside the selected image is the control's. While dragging, the page hands
   the viewer the object as a **draft** (`draftObjects`, drawn instead of
   the stored one with the same id) and, for a filter region,
   `draftFast` — the layer's fast bbox predicate during the drag, the exact
   one on release (`map-rendering.md` §4.11).
-- **Create**: `A` (§6.4) and `T` (a click places a map text: "Text",
-  4 mm, upper purple, `{ all: true }`, then selected).
+- **Create**: `A` (§6.4), `T` (a click places a map text: "Text",
+  4 mm, upper purple, `{ all: true }`, then selected) and `I` (J7: a
+  click places an `image` of the picked graphic, its box centred on the
+  snapped point at the graphic's aspect from `graphics.list`'s pixel size,
+  30 mm on its longer side — map-scale paper mm like a text's size, so
+  45 mm on paper for a 1:15 000 map printed at 1:10 000 — a 30 mm square
+  when the size is unknown; `{ all: true }`, one `courseObject.create`,
+  selected, the tool back to `V`). While armed with a graphic, a dashed
+  ghost of the box follows the hover (`editor-image-ghost`).
   Default props: filter region `{ mode: "hide", symbols: [] }` (nothing
   hidden until symbols are picked), others the kind's defaults
   (`course-layer.md` §8.1).
@@ -1263,10 +1284,22 @@ any other, with `source = 'layout'` that the wire does not carry.
   |---|---|
   | out-of-bounds area | hatch: *Out of bounds (709, stripes)* / *Dangerous area (710, cross-hatched)* (`course-layer.md` §3.1; the name first — in ISOM 2017-2, 710 is the crossing point); border none / solid / dashed |
   | out-of-bounds line | 708 / 711 |
-  | map text | text, size (paper mm) |
+  | map text | text, size (paper mm); opacity (%), blend (Normal / Multiply), rotation (°, about the anchor, J4) |
+  | image (J7) | opacity (%), blend, rotation (°, about the centre), flip H / V, width and height (mm, about the centre; the aspect lock), crop (whole %: left, top, width, height, each side ≥ 1 %, kept inside the graphic) and *Reset crop* |
   | toner saver | margin; *Regenerate from the course* |
   | filter region | mode (hide / clip); symbols: all, **picked symbols** or **picked colours** (the document's colour rows, a CMYK swatch and the name); **invert** ("show only these inside"); the **eyedropper** (§6.4). Picked symbols are listed **one entry per heading** (`lib/editor/symbol-groups.ts`, feedback 2026-11-06 item 5): a symbol's heading is the library code of its applied match (`isAppliedMatch`: automatic or reviewed — `601` for a match to `601.b`), else its source code's base (`101.1` → `101`; a non-numeric code such as `graphic` stays whole), so a heading's variants, minimum-size and tag-line versions and duplicates are one entry (`editor-filter-symbol-<heading>`, `data-members` the member indices) that toggles all its members: checked when all are picked, indeterminate when some are (an older region), and a toggle completes a partial group. Named from the library heading in the UI language when a member's match is applied, else by its first member's source name; a swatch (`editor-filter-swatch`): the library preview of the most used member's applied entry, else the server's preview of the most used member's own drawing (`/api/map-documents/:hash/symbols/:idx.png`, event-scoped). **Not listed**: hidden symbols (OCAD's hidden status, OMAP helpers), symbols no object uses, and symbols drawn through a proxy (`missing` ones, and those with neither a drawing nor an applied match — a region selects by the drawn symbol, never the proxy). Headings of the document's library come first in code order; headings outside it (club codes, frames, legends), `graphic` entries and rectangles fold under **Other** (`editor-filter-other`, collapsed). The search matches the heading, its library names in both languages and the members' source codes and names, and opens Other. Presentation only: the stored `symbols` stay document symbol indices (`course-layer.md` §8), nothing changes at import |
-  | white-out, marked route | — |
+  | white-out | opacity (%) (no blend: a white Multiply leaves the map unchanged; the stored field stays legal) |
+  | marked route | — |
+
+  The style fields are `StyleFields.tsx` (shared with Layout mode from
+  J8), their writes `lib/editor/style-fields.ts`: opacity is stored 0–1
+  and shown in %; a default value (100 %, Normal, 0°, flip off, the full
+  crop) removes its key, so an untouched object's props stay as before. A
+  size or crop edit writes geometry and props in one update. A **crop
+  edit keeps the visible pixels' scale and place**: the box shrinks or
+  grows by the crop and its centre moves with the crop's centre, through
+  the flips and the rotation (as J9's crop mode), so *Reset crop* gives
+  the whole graphic back at the same scale.
 
   **Scope** (`editor-scope`): *All courses*, or the courses and classes
   it belongs to (public ids on the wire, `course-layer.md` §8.2); neither
@@ -2929,6 +2962,8 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | unit (web) | `pages/editor/__tests__/bindings.test.ts` "V on a selected leg: touch (F23)" | §6.7 "Tablet", §6 (`touchPress`, the placed point): V opts in only with a selected leg; a touch press takes a bend at 10 px and declines it at 16 px (the mouse's 7 px unchanged), takes a grip at 10 px, declines an object, a site and empty map (nothing selected); `onPointerDrag` returns nothing within the slop, then the snapped bend (one write on release there) or the dragged grip, and an object's dragged vertex or grip, nothing for a body drag or a lasso; a tap focuses with no write; a cancel drops the draft with no write |
 | unit (web) | `pages/editor/__tests__/bindings.test.ts` "corridor guides" | §6.7 (F14): one blue dashed `editor-corridor-guide` per corridor leg along its points with `data-course` / `data-leg`, under the tool's shapes; the tool's hooks kept (a press on a guide declines; an armed tool stays exclusive); no guides → the binding unchanged, no binding → the guides alone |
 | unit (web) | `pages/editor/__tests__/bindings.test.ts` "hoverPoint: the placing tools' point for the placement loupe (F27)" | §6, §10 "Loupe" (F27): `placeBinding`'s `hoverPoint` is the ghost's `at` (null without a ghost); `textBinding`'s the page's snapped hover (null without one), its `onHover` passed through and its click placing the same snapped point; V, the area tool, `G` and the eyedropper set no `hoverPoint` |
+| unit (web) | `pages/editor/__tests__/bindings.test.ts` "V on an image (J7)", "I binding (J7)"; `lib/editor/__tests__/hit.test.ts` "an image (J7)"; `lib/editor/__tests__/style-fields.test.ts`; `lib/editor/__tests__/state.test.ts` "the image tool and the aspect lock (J7)"; `pages/editor/__tests__/rail.test.ts` "I (J7)" | §5, §6, §7 (J7): an unselected image declines the press; the selected one's turned outline and four corners; a body drag one draft per move and one write; a corner drag at 0° and 30° keeps the opposite turned corner, locked the ratio; a cancelled drag writes nothing; a corner click focuses nothing; `imageBoxAt` for landscape, portrait and unknown sizes; the `I` binding's ghost, `hoverPoint`, click and right-click, nothing without a graphic; the image hit below a control, a leg and a white-out's outline, inside its turned box only; opacity %, defaults removing keys, rotation clamped, size about the centre with the lock, a crop keeping the content's place at 0°, 30°, flipped, and Reset |
+| E2E | `e2e/course-editor-tools.spec.ts` "I: image tool and style fields" | §5–§7 (J7): `I` lights the rail and opens the picker with its hint; Place, a click: one create, a 30 × 15 mm image of a 16 × 8 PNG, selected, `V`, four handles; unselected, a drag inside pans and leaves it, a click inside selects it; a body drag one update; a corner drag keeps 2 : 1; opacity 50 → `0.5`, Multiply, rotation 30, width 20 → height 10 with the lock, `Ctrl+Z` restores the width |
 | E2E | `e2e/course-editor-legs.spec.ts` "F3: legs — styles, bends, corridors" (`chromium`), "F3 on a phone" (`mobile`) | §6.7: a leg made a marked route → its `course-leg` pieces `data-style="marked_route"`, `none` and the leg still selects by a click, two undos back to `line`; *Add bend here* → one `editor-bend-handle`, dragged 60 px → the drawn leg has a vertex within 0.3 mm of it and the row's metres grow, `Delete` removes it (metres back, both controls still on the course); `A` then `C` → the default corridor, no map colour left in the band beside the edge (`inkAt` "map" = 0, > 0 before), F22: map colour behind both controls (within the pre-F22 wrap R + 5 mm, beyond the inside's round end; > 0 before and after — 0 on the pre-F22 band), the entry disabled with a corridor, the course's sheet prints one page, no `editor-leg-corridor-opacity` (F25), a width of 0 and a white band of −1 not written (the stored values shown again), a width of 80 written with the stored `whiteOpacity` 1 kept (F25), *Remove* brings the map back, undo the corridor; F14: no purple along the leg's middle inside the corridor (> 0 before and after *Remove*) while the edge is purple, the Style note shown, with the leg selected no `editor-corridor-guide` (its outline instead), deselected exactly one, none in All controls and one again in Course view, a click on the leg (where it is clearest of other sites — every F3 leg click, `legClickPoint`) selects it again, after *Remove* no guide and no note. F19: R read from the gap tool's target; both circles purple across the opening's middle before the corridor, the corridor narrowed to about 1.2 R (the default 50 m can be as wide as the circle on the fixture map: h ≥ R, the circle whole inside it), then no purple there, purple on the circles' far sides and at all four junctions, a click at the end control's centre selects it (the UI circle, §5), purple across the openings again after *Remove*. F16: *Add bend here* stores a smooth bend (`hOut` ≈ (b − a) / 6, `hIn` = −`hOut`), `data-curve="smooth"`, two `editor-bend-grip`, the outline 3 points and the metres unchanged; the upper grip on screen (clear of the action bar) dragged 60 px → one write, the pair still mirrored, the outline > 3 points, the metres grow; the same grip dragged again with Alt → only its handle changes; Alt-click the bend → no handles stored, `data-curve="corner"`, no grips, *Corner* disabled; *Smooth* → two grips again; two undos back to the corner, then to the broken pair; the course's sheet prints one page; Alt held on *Add bend here* → a corner (no handles, no grips, *Smooth* enabled). F21 (appended): *Add bend here*, the handle held (mouse down, `dragHold`) at least 2h + 12 mm off the chord where the probes clear every site, read held (`inkAt(…, true)`: the overlays transparent, not hidden — a hidden overlay sends the viewer a `mouseleave`, its gesture cancel; F24: the held probes lie clear of the mouse loupe's circle, `loupeCircleAt` — the apex up the screen, or down when the loupe would cover the band beyond it, with ≥ 20 probes of each band clear) → purple at the held apex, row b's `editor-leg-meters` at least the apex's two straight pieces long (F25: a leg through the apex is no shorter), no `course.setStructure` request yet; the release → the same metres while the write is in flight, exactly one request, the stored bend within 0.5 mm of the apex, the line still there, the metres unchanged; undo → the bend back on the chord, no purple at the apex, the chord's metres; the default corridor → the chord's band white, the map at the apex's band; held again → the band beyond the apex white and the map beside the chord, no request; the release → one, the stored bend at the apex and both probes unchanged (no jump back); undo → the chord's band white again; held once more → the apex's metres, and `Escape` → the chord's metres before the release (F25), the release sends no request and the stored bend stays on the chord. F24 (§10 "Loupe"): control a held with the mouse (`dragHold`) → `editor-loupe` with `data-pointer="mouse"`, `data-scale` 2.5, 120 px, its bottom 16 px above the cursor (its top 16 px below at the map's top), centred over it within the box (±1 px), no `editor-touch-handle`; the canvas in it (read held) has purple and differs in > 10 % of its pixels from the same circle at 1× after the drag; the pointer leaving the viewer → no loupe, no control or course write (the presence heartbeat aside), the control where it was; held again and `Escape` → no loupe while the button is down, the release writes nothing, the control where it was (§3; the cascade drops the course, picked again); F30: control b's number held → no `editor-loupe` (the drag itself still runs), `Escape` → no write, the number where it was; held again → still none, the release → exactly one `course.setControlLabelOffset`; *Add bend here*, the handle held 60 px off the leg → the loupe, the UI handle within 0.5 mm of the cursor's paper point, the release → none, one write, the stored bend there; a press on the handle moved 1 px and released → no loupe; the handle held again and `Escape` → no loupe, no write, the stored bend unchanged. "F24: the loupe on an object's vertex drag" (an `oob_area` through `courseObject.create`, selected by its outline): a vertex held with the mouse → `editor-loupe` (`data-pointer="mouse"`, 16 px above the cursor or below it at the top), no stem, a vertex handle within 0.5 mm of the cursor's paper point; `Escape` → no loupe while held, no `courseObject.update` on release, `data-geometry` as stored. On a phone a tapped leg shows `editor-leg` read-only with `editor-leg-readonly` and no *Add bend here* |
 | E2E | `e2e/course-editor-legs.spec.ts` "F23: bend drags on a tablet" (`chromium`, `hasTouch` + `isMobile` at 1024 × 768; skipped on `mobile`) | §6.7 "Tablet", §10: `data-layout="desktop"` with `(pointer: coarse)`; a tapped leg's section editable, *Add bend here*; a finger 10 px beside the handle moved down-right and held → `editor-touch-handle` and `editor-loupe` visible, the UI handle within 0.6 mm of the point 48 px above the finger, the loupe's bottom 16 px above that (or its top 16 px below the finger when it flips at the map's top) and centred over the finger (±1 px), no `course.setStructure` yet; the lift → exactly one, the stored bend within 0.6 mm of the lifted point with its handles unchanged, focused, stem and loupe gone; the upper grip pressed on its far side and dragged → the loupe, one write, its handle changed and the pair mirrored, the bend in place; a bend drag joined by a second finger → no write, the bends unchanged; after an undo (the bend unfocused) a tap on the handle → focused, no write, the bends as before |
 | E2E | `e2e/course-editor-placing.spec.ts` "F27: the placement loupe toggle" (`chromium`) | §10 "Loupe" (F27): a new course, `K` armed, `editor-placement-loupe` `aria-pressed="false"` → a hover shows the ghost and no `editor-loupe`; the button → pressed, `localStorage` `oxygen.editor.placementLoupe` = `true`; a hover → `editor-loupe` `data-mode="hover"`, `data-pointer="mouse"`, 120 px, its bottom 16 px above the cursor (top 16 px below at the map's top), centred over it within the box (±1 px); the canvas in it (read held: overlays transparent) has purple; `L` → off, no loupe with the pointer still, the same circle at 1× differs in > 10 % of its pixels; `L` → on, the loupe back with no move; `dragHold` 60 px → the loupe follows the cursor, the release → the view centre moved, no control or course write (the presence heartbeat aside), the site count unchanged; a click (`place`) → one new site; the cursor 3 px off an existing control's centre (the ghost *Add ‹code›*) → the loupe's `data-x` / `data-y` within 0.01 mm of the site's centre, the cursor's paper point > 0.1 mm off it; the pointer out of the viewer → none; `Escape`, `T` armed → the loupe on a hover; `Escape` (`V`) → none on a hover; a reload → still pressed, `K`'s hover → the loupe; the button → off, the ghost and no loupe. "a mouse drag keeps F24's loupe with the toggle on": a control held in `V` → `data-mode="drag"`, `data-pointer="mouse"`; `Escape` → none |
@@ -3120,7 +3155,10 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
   objects": the edit part, `MapViewerEditorProps.mapObjects`), which Map
   mode (§13, G6) uses; course objects do not go through it.
 - **Course objects**: draw order (`courseObject.reorder`) has no control
-  in the editor; no image (logo) tool; `inset_frame` is slice F's.
+  in the editor; `inset_frame` is slice F's. **Images** (J7): no entry in
+  the phone's `+` menu (the picker is desktop chrome; the `I` key works
+  with a keyboard); no rotate handle, crop mode or Shift-inverts-lock on
+  the canvas (J9 / J11); no one-finger image drag on touch.
 - **Derived instruction rows**: 13.3 / 13.4 derive from the legs'
   crossing points since F4 and replace a hand-placed row of the same kind
   at the same anchor (`control-descriptions-and-editor-geometry.md`

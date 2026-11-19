@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { course } from "@oxygen/shared";
 import type { ToolPointer, ToolShape } from "../../../components/MapViewer";
-import { areaBinding, crossingGhost, gapBinding, pickSymbolBinding, placeBinding, scaleAbout, selectBinding, textBinding, withCorridorGuides, type GestureRef } from "../tools/bindings";
+import { areaBinding, crossingGhost, gapBinding, imageBinding, pickSymbolBinding, placeBinding, scaleAbout, selectBinding, textBinding, withCorridorGuides, type GestureRef } from "../tools/bindings";
+import { imageBoxAt } from "../../../lib/editor/image-box";
+import { imageRing } from "../../../lib/editor/hit";
 import { railKeyOf } from "../tools/rail";
 
 const ptr = (x: number, y: number, over: Partial<ToolPointer> = {}): ToolPointer => ({ pt: { x, y }, target: null, shift: false, mmPerPx: 0.1, ...over });
@@ -951,5 +953,118 @@ describe("hoverPoint: the placing tools' point for the placement loupe (F27)", (
     expect("hoverPoint" in areaBinding({ gesture, poly: { kind: "oob_area", vertices: [] }, hover: { x: 1, y: 1 }, onHover: vi.fn(), onPoly: vi.fn(), onDone: vi.fn(), onCancel: vi.fn(), snap: (p) => p })).toBe(false);
     expect("hoverPoint" in gapBinding({ gesture, target: { kind: "circle", siteId: 1, centre: { x: 0, y: 0 }, radiusMm: 2.5, gaps: [] }, redraw: vi.fn(), onAdd: vi.fn(), onRemove: vi.fn(), onExit: vi.fn() })).toBe(false);
     expect("hoverPoint" in pickSymbolBinding({ onPick: vi.fn(), onExit: vi.fn() })).toBe(false);
+  });
+});
+
+describe("V on an image (J7, docs/course-editor.md §5, §7)", () => {
+  const image = (rotationDeg?: number): course.CourseObject =>
+    ({ id: 9, kind: "image", geometry: [{ x: 0, y: 0 }, { x: 20, y: 10 }], props: { graphicId: 3, ...(rotationDeg ? { rotationDeg } : {}) }, scope: { all: true }, z: 0, version: "1", inCourses: null }) as course.CourseObject;
+  const onImage = { target: { kind: "object" as const, id: 9 } };
+
+  it("an unselected image declines the press (a drag pans, a click selects through the page)", () => {
+    const o = selectOpts({ objects: [image()] });
+    expect(selectBinding(o).onPointerDown!(ptr(5, 5, onImage))).toBe(false);
+    expect(o.onSelectObject).not.toHaveBeenCalled();
+  });
+
+  it("the selected image's outline is its turned box with four corner handles", () => {
+    const o = selectOpts({ objects: [image(30)], selected: image(30) });
+    const shapes = selectBinding(o).shapes!;
+    const outline = shapes.find((x) => x.testId === "editor-object-outline") as Extract<ToolShape, { kind: "line" }>;
+    expect(outline.points).toEqual(imageRing(image(30).geometry, 30));
+    expect(shapes.filter((x) => x.testId === "editor-object-handle")).toHaveLength(4);
+  });
+
+  it("a body drag on the selected image draws a draft per move and writes once", () => {
+    const o = selectOpts({ objects: [image()], selected: image() });
+    const b = selectBinding(o);
+    expect(b.onPointerDown!(ptr(5, 5, onImage))).toBe(true);
+    b.onPointerDrag!({ x: 6, y: 5 });
+    b.onPointerDrag!({ x: 8, y: 6 });
+    b.onPointerUp!({ x: 8, y: 6 });
+    expect(o.onObjectDraft).toHaveBeenCalledTimes(2);
+    expect(o.onObjectMoved).toHaveBeenCalledTimes(1);
+    expect(o.onObjectMoved).toHaveBeenCalledWith(9, [{ x: 3, y: 1 }, { x: 23, y: 11 }]);
+  });
+
+  it("a press on a control inside the selected image is not taken", () => {
+    const o = selectOpts({ objects: [image()], selected: image() });
+    expect(selectBinding(o).onPointerDown!(ptr(5, 5, { target: { kind: "site", id: "31" } }))).toBe(false);
+  });
+
+  for (const deg of [0, 30]) {
+    it(`a corner drag at ${deg}° keeps the opposite turned corner; unlocked it follows the pointer, locked it keeps the ratio`, () => {
+      const img = image(deg);
+      const ring = imageRing(img.geometry, deg);
+      const drag = (lock: boolean, to: { x: number; y: number }) => {
+        const o = selectOpts({ objects: [img], selected: img, aspectLock: lock });
+        const b = selectBinding(o);
+        expect(b.onPointerDown!(ptr(ring[2].x, ring[2].y))).toBe(true);
+        b.onPointerDrag!(to);
+        b.onPointerUp!(to);
+        const g = (o.onObjectMoved as ReturnType<typeof vi.fn>).mock.calls[0][1] as { x: number; y: number }[];
+        return { g, ring: imageRing(g, deg) };
+      };
+      const to = { x: ring[2].x + 4, y: ring[2].y + 1 };
+      const free = drag(false, to);
+      expect(free.ring[0].x).toBeCloseTo(ring[0].x, 6);
+      expect(free.ring[0].y).toBeCloseTo(ring[0].y, 6);
+      expect(free.ring[2].x).toBeCloseTo(to.x, 6);
+      expect(free.ring[2].y).toBeCloseTo(to.y, 6);
+      const locked = drag(true, to);
+      expect(locked.ring[0].x).toBeCloseTo(ring[0].x, 6);
+      expect(locked.ring[0].y).toBeCloseTo(ring[0].y, 6);
+      const w = Math.abs(locked.g[1].x - locked.g[0].x), h = Math.abs(locked.g[1].y - locked.g[0].y);
+      expect(w / h).toBeCloseTo(2, 6);
+    });
+  }
+
+  it("a cancelled corner drag writes nothing and drops its draft; a click on a corner focuses nothing", () => {
+    const o = selectOpts({ objects: [image()], selected: image() });
+    const b = selectBinding(o);
+    b.onPointerDown!(ptr(20, 10));
+    b.onPointerDrag!({ x: 25, y: 12 });
+    b.onPointerUp!(null);
+    expect(o.onObjectMoved).not.toHaveBeenCalled();
+    expect(o.onObjectDraft).toHaveBeenLastCalledWith(9, null);
+    b.onPointerDown!(ptr(20, 10));
+    b.onPointerUp!({ x: 20, y: 10 });
+    expect(o.onVertexFocus).not.toHaveBeenCalled();
+    expect(o.onObjectMoved).not.toHaveBeenCalled();
+  });
+});
+
+describe("I binding (J7, docs/course-editor.md §6, §7 \"Create\")", () => {
+  it("imageBoxAt: centred, the graphic's aspect, 30 mm on the longer side; a square when unknown", () => {
+    expect(imageBoxAt({ x: 50, y: 50 }, 400, 200)).toEqual([{ x: 35, y: 42.5 }, { x: 65, y: 57.5 }]);
+    expect(imageBoxAt({ x: 0, y: 0 }, 100, 300)).toEqual([{ x: -5, y: -15 }, { x: 5, y: 15 }]);
+    expect(imageBoxAt({ x: 0, y: 0 }, 0, 0)).toEqual([{ x: -15, y: -15 }, { x: 15, y: 15 }]);
+    expect(imageBoxAt({ x: 0, y: 0 }, null, null)).toEqual([{ x: -15, y: -15 }, { x: 15, y: 15 }]);
+  });
+
+  it("with a graphic: a ghost at the hover, the hover point for the loupe, a click places at the snapped point; right-click exits", () => {
+    const onPlace = vi.fn(), onExit = vi.fn();
+    const b = imageBinding({ graphicId: 3, box: (pt) => imageBoxAt(pt, 2, 1), onPlace, onExit, snap: (p) => ({ x: Math.round(p.x), y: Math.round(p.y) }), hover: { x: 10, y: 10 }, onHover: vi.fn() });
+    expect(b.exclusive).toBe(true);
+    expect(b.hoverPoint).toEqual({ x: 10, y: 10 });
+    const ghost = b.shapes!.find((x) => x.testId === "editor-image-ghost") as Extract<ToolShape, { kind: "line" }>;
+    expect(ghost.points).toEqual([{ x: -5, y: 2.5 }, { x: 25, y: 2.5 }, { x: 25, y: 17.5 }, { x: -5, y: 17.5 }]);
+    b.onClick!(ptr(10.4, 9.6));
+    expect(onPlace).toHaveBeenCalledWith({ x: 10, y: 10 });
+    b.onContextMenu!(ptr(0, 0));
+    expect(onExit).toHaveBeenCalled();
+  });
+
+  it("without a graphic picked a click places nothing and no ghost shows", () => {
+    const onPlace = vi.fn();
+    const b = imageBinding({ graphicId: null, box: (pt) => imageBoxAt(pt, 2, 1), onPlace, onExit: vi.fn(), snap: (p) => p, hover: { x: 1, y: 1 }, onHover: vi.fn() });
+    expect(b.shapes).toEqual([]);
+    expect(b.hoverPoint).toBeNull();
+    b.onClick!(ptr(1, 1));
+    expect(onPlace).not.toHaveBeenCalled();
+  });
+
+  it("lights I on the rail", () => {
+    expect(railKeyOf({ kind: "image", graphicId: null })).toBe("I");
   });
 });

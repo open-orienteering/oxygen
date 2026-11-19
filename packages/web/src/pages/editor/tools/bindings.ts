@@ -8,7 +8,8 @@
 
 import type { course } from "@oxygen/shared";
 import type { EditorToolBinding, ToolPointer, ToolShape } from "../../../components/MapViewer";
-import type { EditorTarget } from "../../../lib/editor/hit";
+import { imageRing, type EditorTarget } from "../../../lib/editor/hit";
+import { resizeImage } from "../../../lib/editor/image-box";
 import { circleGapAt, circleGapFromDrag, compassDeg, legFraction, legGapAt, legGapFromDrag, type AngularGap, type FractionGap } from "./gaps";
 import { dragBendGrip, legPolyline, moveBend, polylineDistance, polylineSlice, toggleBendSmooth, type Bend } from "../../../lib/editor/bends";
 import { legLengthShape } from "../../../lib/editor/leg-length";
@@ -32,6 +33,8 @@ export type Gesture =
   | { kind: "shift-click"; id: number }
   /** Object `id`'s geometry dragged: the whole path, a vertex, or a handle grip (§7 "Editing geometry", `geometry-gestures.ts`). */
   | ({ id: number } & GeometryDrag)
+  /** A corner (`imageRing` index) of the selected image dragged from `press` (J7): the opposite corner stays put. */
+  | { kind: "image-corner"; id: number; corner: number; base: course.CourseObject["geometry"]; rotationDeg: number; press: Pt; mmPerPx: number; moved: boolean }
   /** Two fingers on a selected object's handle ring (§10): scale `base` about its centroid. */
   | { kind: "pinch"; id: number; base: course.CourseObject["geometry"]; centre: Pt; scale: number }
   | { kind: "poly-vertex"; index: number }
@@ -71,6 +74,14 @@ export function scaleAbout(g: readonly course.CourseObject["geometry"][number][]
  * a grip per Bézier handle.
  */
 export function objectOutline(o: course.CourseObject, selected: boolean, focused: number | null = null): ToolShape[] {
+  if (o.kind === "image") {
+    // The box as drawn, turned (J7): the stored diagonal is not where a turned image's corners are; a corner handle each.
+    const ring = imageRing(o.geometry, o.props.rotationDeg);
+    return [
+      { kind: "line", points: ring, closed: true, dashed: !selected, color: selected ? BLUE : PURPLE, testId: "editor-object-outline", data: { "object-id": String(o.id), "object-kind": o.kind } },
+      ...(selected ? ring.map((c, i): ToolShape => ({ kind: "handle", x: c.x, y: c.y, active: false, testId: "editor-object-handle", data: { index: String(i), corner: String(i) } })) : []),
+    ];
+  }
   if (o.kind === "text") {
     const at = o.geometry[0];
     return [
@@ -133,6 +144,8 @@ export interface SelectOptions {
   redraw: Redraw;
   /** The selected leg (its phantom) with its bends, desktop and tablet (§6.7): handles to drag and focus. */
   leg?: LegBends | null;
+  /** A selected image's corner drag keeps the box's ratio (J7; the inspector's lock). */
+  aspectLock?: boolean;
 }
 
 /** The selected leg's bends as `V` edits them (docs/course-editor.md §6.7). */
@@ -223,7 +236,20 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
       // A finger elsewhere is the viewer's: its targets, a pan, the tap that selects an object (§10).
       if (p.touch) return false;
       const sel = shown(o);
-      if (sel) {
+      if (sel?.kind === "image") {
+        // A selected image (J7): a corner of its turned box resizes, a press inside it (the hit-test's target) moves.
+        // Its corners are not focusable, so `Delete` deletes the image.
+        const reach = HANDLE_PX * p.mmPerPx;
+        const corner = imageRing(sel.geometry, sel.props.rotationDeg).findIndex((c) => near(c, p.pt, reach));
+        if (corner >= 0) {
+          g.current = { kind: "image-corner", id: sel.id, corner, base: sel.geometry, rotationDeg: sel.props.rotationDeg ?? 0, press: p.pt, mmPerPx: p.mmPerPx, moved: false };
+          return true;
+        }
+        if (p.target?.kind === "object" && p.target.id === sel.id) {
+          g.current = { kind: "object", id: sel.id, from: p.pt, to: p.pt, moved: false, vertex: null, base: sel.geometry };
+          return true;
+        }
+      } else if (sel) {
         // Vertex, grip, then the body or within reach of its edge. A closed area's body is its outline: the hit-test
         // answers null inside it (§5), so an interior press declines and the viewer pans — the area moves by its edge
         // or a vertex (docs/bugfix-editor-area-press-pans.md).
@@ -244,6 +270,8 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
       }
       if (p.target?.kind === "object") {
         const obj = o.objects.find((x) => x.id === (p.target as { id: number }).id);
+        // An image not selected takes no press (J7): a drag pans, a click selects it (the page's map click).
+        if (obj?.kind === "image") return false;
         if (obj) {
           g.current = { kind: "object", id: obj.id, from: p.pt, to: p.pt, moved: false, vertex: null, base: obj.geometry };
           o.onSelectObject(obj.id);
@@ -272,6 +300,10 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
         leg.onBendsDraft?.(cur.bends);
         o.redraw();
         return gripPoint(cur.bends[cur.index], cur.which);
+      } else if (cur?.kind === "image-corner") {
+        if (!cur.moved && near(cur.press, pt, 3 * cur.mmPerPx)) return;
+        cur.moved = true;
+        o.onObjectDraft(cur.id, resizeImage(cur.base, cur.rotationDeg, cur.corner, pt, o.aspectLock ?? true));
       } else if (cur?.kind === "object" || cur?.kind === "grip") {
         const geometry = dragGeometry(cur, pt, mods);
         if (geometry) o.onObjectDraft(cur.id, geometry);
@@ -305,6 +337,12 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
         leg.onBendFocus(cur.index);
         return leg.onBendsChange(cur.bends);
       }
+      if (cur.kind === "image-corner") {
+        // A drag writes once; a cancelled one drops its draft; a click on a corner does nothing.
+        if (!cur.moved) return;
+        if (!pt) return o.onObjectDraft(cur.id, null);
+        return o.onObjectMoved(cur.id, resizeImage(cur.base, cur.rotationDeg, cur.corner, pt, o.aspectLock ?? true));
+      }
       if (cur.kind === "shift-click") {
         if (pt) o.onToggleMulti(cur.id);
       } else if (cur.kind === "lasso") {
@@ -324,7 +362,7 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
       if (leg && (bendAt(leg, p.pt, HANDLE_PX * p.mmPerPx) >= 0 || bendGripAt(leg, p.pt, HANDLE_PX * p.mmPerPx))) return;
       // On the selected object's edge, off its vertices: a smooth vertex there, Alt a corner (§7 "Editing geometry").
       const sel = shown(o);
-      const inserted = sel ? insertAtEdge(sel.geometry, vertexRule(sel.kind), p.pt, HANDLE_PX * p.mmPerPx, !!p.alt) : null;
+      const inserted = sel && sel.kind !== "image" ? insertAtEdge(sel.geometry, vertexRule(sel.kind), p.pt, HANDLE_PX * p.mmPerPx, !!p.alt) : null;
       if (sel && inserted) {
         o.onVertexFocus?.(inserted.index);
         return o.onObjectMoved(sel.id, inserted.geometry);
@@ -552,6 +590,41 @@ export function textBinding(o: {
     onHover: o.onHover,
     hoverPoint: o.hover,
     onClick: (p) => o.onPlace(o.snap(p.pt)),
+    onContextMenu: () => o.onExit(),
+  };
+}
+
+// ─── I: image (J7) ────────────────────────────────────────
+
+/**
+ * `I`: with a graphic picked, a dashed ghost of the box a click places (`editor-image-ghost`, centred on the snapped
+ * hover) and the click places it; with none picked a click places nothing. `hover` is the page's snapped hover
+ * (F27's placement loupe reads it as for `T`); `box` gives the box at a point.
+ */
+export function imageBinding(o: {
+  graphicId: number | null;
+  box: (pt: Pt) => [Pt, Pt];
+  onPlace: (pt: Pt) => void;
+  onExit: () => void;
+  snap: (pt: Pt) => Pt;
+  hover: Pt | null;
+  onHover: (p: ToolPointer | null) => void;
+}): EditorToolBinding {
+  const shapes: ToolShape[] = [];
+  if (o.graphicId !== null && o.hover) {
+    const [a, b] = o.box(o.hover);
+    shapes.push({
+      kind: "line", points: [a, { x: b.x, y: a.y }, b, { x: a.x, y: b.y }], closed: true, dashed: true, color: PURPLE,
+      testId: "editor-image-ghost", data: { "graphic-id": String(o.graphicId) },
+    });
+  }
+  return {
+    exclusive: true,
+    cursor: "crosshair",
+    shapes,
+    onHover: o.onHover,
+    hoverPoint: o.graphicId !== null ? o.hover : null,
+    onClick: (p) => { if (o.graphicId !== null) o.onPlace(o.snap(p.pt)); },
     onContextMenu: () => o.onExit(),
   };
 }

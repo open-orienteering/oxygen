@@ -10,6 +10,7 @@
  * lose to any layer object at the same point. Closed course objects hit by
  * their outline only (`UiArea`): the toner saver covers every control, and a
  * press inside an area pans the map (docs/bugfix-editor-area-press-pans.md).
+ * An image is hit inside its turned box, below everything else (J7).
  */
 
 import { course, render } from "@oxygen/shared";
@@ -43,14 +44,18 @@ export interface UiSite {
 export interface UiArea {
   id: number;
   ring: readonly Pt[];
+  /**
+   * An image (J7): hit anywhere inside its turned box (convex), not only along it, but after every other target —
+   * controls, numbers, legs, lines and the other areas' outlines win over it (docs/course-editor.md §5).
+   */
+  filled?: boolean;
 }
 
 /**
  * An image course object's box as a ring (J6), paper mm y-up: its two stored corners' box turned
  * `rotationDeg` clockwise as seen about the centre, as the layer draws it (course-layer.md §3.6
- * "Images"). The editor hits an image by this outline only, like a closed area: its inside may be
- * transparent (a lucka's middle shows the control under it), so a press there reaches what is
- * drawn under it or pans (course-editor.md §5).
+ * "Images"). The editor hits an image inside this ring, below everything else (`UiArea.filled`,
+ * J7): a control inside a lucka still wins (course-editor.md §5).
  */
 export function imageRing(geometry: readonly Pt[], rotationDeg = 0): Pt[] {
   const [p, q] = geometry;
@@ -159,13 +164,30 @@ export function editorHitAt(
   if (leg) return leg.t;
   for (let i = uiAreas.length - 1; i >= 0; i--) {
     const a = uiAreas[i];
-    if (!accept({ kind: "object", id: a.id })) continue;
+    if (a.filled || !accept({ kind: "object", id: a.id })) continue;
     if (ringDistance(pt, a.ring) <= toleranceMm) return { kind: "object", id: a.id };
+  }
+  for (let i = uiAreas.length - 1; i >= 0; i--) {
+    const a = uiAreas[i];
+    if (a.filled && accept({ kind: "object", id: a.id }) && insideConvexRing(pt, a.ring)) return { kind: "object", id: a.id };
   }
   return null;
 }
 
 const ringDistance = (pt: Pt, ring: readonly Pt[]): number => pathDistance(pt, ring, true);
+
+/** Whether `pt` is inside the convex ring (either winding; on the edge counts). */
+export function insideConvexRing(pt: Pt, ring: readonly Pt[]): boolean {
+  let sign = 0;
+  for (let i = 0; i < ring.length; i++) {
+    const a = ring[i], b = ring[(i + 1) % ring.length];
+    const c = (b.x - a.x) * (pt.y - a.y) - (b.y - a.y) * (pt.x - a.x);
+    if (c === 0) continue;
+    if (sign === 0) sign = Math.sign(c);
+    else if (Math.sign(c) !== sign) return false;
+  }
+  return true;
+}
 
 function pathDistance(pt: Pt, ring: readonly Pt[], closed: boolean): number {
   let best = Infinity;

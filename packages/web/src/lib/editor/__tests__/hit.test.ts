@@ -132,20 +132,29 @@ describe("editorHitAt (docs/course-editor.md §5)", () => {
     });
   });
 
-  it("an image (J6) is hit by its turned box's outline: a press inside reaches the control it frames, or the map", () => {
+  it("an image (J7) is hit inside its turned box, below controls, legs and the other areas' outlines", () => {
     const geometry = [{ x: 32, y: 2 }, { x: 48, y: 18 }];
     const withImage = hitIndex({ objects: [{ id: 21, kind: "image", geometry, props: { graphicId: 7 } }] });
-    const areas = [{ id: 21, ring: imageRing(geometry) }];
-    const at = (x: number, y: number) => editorHitAt(withImage, { x, y }, 0.5, [], areas);
+    // A white-out's outline crosses the image at x = 46.
+    const whiteout = { id: 16, ring: [{ x: 46, y: 0 }, { x: 70, y: 0 }, { x: 70, y: 30 }, { x: 46, y: 30 }] };
+    const areas = [whiteout, { id: 21, ring: imageRing(geometry), filled: true }];
+    const at = (x: number, y: number, accept?: (t: { kind: string }) => boolean) => editorHitAt(withImage, { x, y }, 0.5, [], areas, accept);
     expect(at(40, 10)).toEqual({ kind: "site", id: "31" });
-    expect(at(35, 15)).toBeNull();
+    // Leg 0 runs S (10, 10) → 31 (40, 10).
+    expect(at(34, 10)).toEqual({ kind: "leg", courseId: "c1", index: 0 });
+    expect(at(46, 15)).toEqual({ kind: "object", id: 16 });
+    expect(at(35, 15)).toEqual({ kind: "object", id: 21 });
     expect(at(32.2, 15)).toEqual({ kind: "object", id: 21 });
-    // Without the ring the layer's quad answers the whole box (what the viewer avoids).
-    expect(editorHitAt(withImage, { x: 35, y: 15 }, 0.5)).toEqual({ kind: "object", id: 21 });
+    expect(at(31, 15)).toBeNull();
+    // `accept` passes over it.
+    expect(at(35, 15, (t) => t.kind !== "object")).toBeNull();
     // Turned 45° clockwise about its centre: the bottom-left corner swings to the left, level with the centre.
     const r = imageRing(geometry, 45);
     expect(r[0].x).toBeCloseTo(40 - 8 * Math.SQRT2, 6);
     expect(r[0].y).toBeCloseTo(10, 6);
+    const turned = [{ id: 21, ring: r, filled: true }];
+    expect(editorHitAt(withImage, { x: 40 - 8 * Math.SQRT2 + 2, y: 11.5 }, 0.5, [], turned)).toEqual({ kind: "object", id: 21 });
+    expect(editorHitAt(withImage, { x: 33, y: 3 }, 0.5, [], turned)).toBeNull();
   });
 
   it("UI-layer areas (filter regions, toner savers) hit along the outline only, below everything", () => {

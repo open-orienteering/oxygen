@@ -1168,12 +1168,12 @@ export function MapViewer({
   // ─── Editor hit-test on the shared stage (docs/course-editor.md §5) ──
   const sharedHit = !!editor && glCourse;
   // Closed course objects (oob_area, whiteout, toner_saver, filter_region) hit by their outline only: their
-  // interior is the map, so a press there pans (§5, §7; docs/bugfix-editor-area-press-pans.md). An image
-  // likewise, by its turned box (J6): a lucka's transparent middle shows the control it frames.
+  // interior is the map, so a press there pans (§5, §7; docs/bugfix-editor-area-press-pans.md). An image is hit
+  // inside its turned box, after everything else (J7): a control inside a lucka still wins.
   const uiAreas = useMemo(
     () => (editor
       ? drawnObjects.flatMap((o) => (o.kind === "image"
-        ? [{ id: o.id, ring: imageRing(o.geometry, o.props.rotationDeg) }]
+        ? [{ id: o.id, ring: imageRing(o.geometry, o.props.rotationDeg), filled: true }]
         : vertexRule(o.kind).closed ? [{ id: o.id, ring: outlinePoints(o.geometry, true) }] : []))
       : []),
     [editor, drawnObjects],

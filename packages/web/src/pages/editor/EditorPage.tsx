@@ -75,7 +75,8 @@ import { afterPlaced, afterUndo, armPlacement, endsChain, ghostInfo, isVisitTool
 import { step as polygonStep, type AreaKind } from "./tools/polygon";
 import { TONER_MARGIN_MM, tonerSaverGeometry } from "./tools/toner-saver";
 import { mergeCircleGaps, mergeLegGaps, type AngularGap, type FractionGap } from "./tools/gaps";
-import { areaBinding, gapBinding, pickSymbolBinding, placeBinding, selectBinding, textBinding, withCorridorGuides, type CorridorGuide, type GapTarget, type Gesture } from "./tools/bindings";
+import { areaBinding, gapBinding, imageBinding, pickSymbolBinding, placeBinding, selectBinding, textBinding, withCorridorGuides, type CorridorGuide, type GapTarget, type Gesture } from "./tools/bindings";
+import { imageAt, imageBoxAt } from "../../lib/editor/image-box";
 import { ObjectSection } from "./modes/ObjectSection";
 import { LegSection } from "./modes/LegSection";
 import { ChecksSection, Inspector, InspectorSection, InventorySection } from "./Inspector";
@@ -679,8 +680,14 @@ export function EditorPage() {
   }, [createSite]);
 
   // ─── Gestures (stable: they flow through MapPanel's memo) ─
+  /** The objects drawn in the view and whether `V` is the tool, for the map click (J7: a click inside an image selects it). */
+  const clickContext = useRef<{ objects: readonly CourseObject[]; select: boolean }>({ objects: [], select: false });
   const handleMapClick = useCallback((pt: Pt) => {
     setRadioSwapOffer(null);
+    const c = clickContext.current;
+    // An image takes no press (a drag inside it pans); a click inside it, off every other target, selects it (§5, §7).
+    const image = c.select ? imageAt(c.objects, pt) : null;
+    if (image) return dispatch({ type: "select-object", id: image.id });
     dispatch({ type: "map-click", x: pt.x, y: pt.y });
   }, []);
 
@@ -916,6 +923,7 @@ export function EditorPage() {
   const objects = useMemo(() => objectList.data ?? [], [objectList.data]);
   const highlighted = useMemo(() => new Set(state.view !== "all" && selectedCourse ? [selectedCourse.name] : []), [state.view, selectedCourse]);
   const objectsInView = useMemo(() => courseObjectsForView(objects, highlighted, courses.data ?? []), [objects, highlighted, courses.data]);
+  clickContext.current = { objects: objectsInView, select: state.mode === "course" && state.tool.kind === "select" };
   const selectedObject = state.selectedObjectId !== null ? objects.find((o) => o.id === state.selectedObjectId) ?? null : null;
   /** Geometry being dragged (vertex or body) or drawn, drawn instead of the stored one until the list catches up. */
   const [drafts, setDrafts] = useState<Map<number, CourseObject["geometry"]>>(new Map());
@@ -1149,6 +1157,20 @@ export function EditorPage() {
     })();
   }, [createObject, setTool]);
 
+  // `I` (J7): the graphics' pixel sizes, for the placed box's aspect (the picker's query, cached).
+  const graphicsList = trpc.graphics.list.useQuery(undefined, { enabled: state.mode === "course" && !!nameId });
+  const imageBox = useCallback((graphicId: number, pt: Pt) => {
+    const g = graphicsList.data?.find((x) => x.id === graphicId);
+    return imageBoxAt(pt, g?.widthPx, g?.heightPx);
+  }, [graphicsList.data]);
+  const placeImage = useCallback((graphicId: number, pt: Pt) => {
+    setTool({ kind: "select" });
+    void (async () => {
+      const id = await createObject({ kind: "image", geometry: imageBox(graphicId, pt), props: { graphicId }, scope: { all: true } });
+      if (id !== null) dispatch({ type: "select-object", id });
+    })();
+  }, [createObject, setTool, imageBox]);
+
   const placeText = useCallback((pt: Pt) => {
     setTool({ kind: "select" });
     void (async () => {
@@ -1320,6 +1342,13 @@ export function EditorPage() {
         });
       case "text":
         return textBinding({ onPlace: placeText, onExit: exitTool, snap, hover: hover?.pt ?? null, onHover });
+      case "image": {
+        const graphicId = tool.graphicId;
+        return imageBinding({
+          graphicId, box: (pt) => imageBox(graphicId ?? 0, pt), onPlace: (pt) => { if (graphicId !== null) placeImage(graphicId, pt); },
+          onExit: exitTool, snap, hover: hover?.pt ?? null, onHover,
+        });
+      }
       case "pick-symbol":
         return pickIndex ? pickSymbolBinding({ onPick: pickAt, onExit: exitTool }) : null;
       case "gap":
@@ -1332,7 +1361,7 @@ export function EditorPage() {
       case "select":
         return selectBinding({
           gesture, redraw, selected: selectedObject, focusedVertex, onVertexFocus: setFocusedVertex, objects: objectsInView.map((o) => (drafts.has(o.id) ? { ...o, geometry: drafts.get(o.id)! } : o)),
-          sites: sitesForTools, multi: state.multi, ringMm: courseInfo?.metrics?.circleRadiusMm ?? 2.5,
+          sites: sitesForTools, multi: state.multi, ringMm: courseInfo?.metrics?.circleRadiusMm ?? 2.5, aspectLock: state.aspectLock,
           onToggleMulti: (id) => dispatch({ type: "toggle-multi", id }),
           onLasso: (ids) => dispatch({ type: "set-multi", ids }),
           onSelectObject: (id) => dispatch({ type: "select-object", id }),
@@ -1731,6 +1760,9 @@ export function EditorPage() {
         setAreaOpen((v) => !v);
       } else if (plain && key === "T") {
         setTool({ kind: "text" });
+      } else if (plain && key === "I" && state.mode === "course") {
+        // J7: the picker opens beside the rail's I; a picked graphic arms the click.
+        setTool({ kind: "image", graphicId: null });
       } else if (plain && key === "G") {
         if (canGap) setTool({ kind: "gap", legInsertAt: state.selectedControlId === null ? state.phantom?.insertAt ?? null : null });
       } else if (plain && key === "F") {
@@ -2077,6 +2109,14 @@ export function EditorPage() {
       courses={courseOptions}
       classes={(classes.data ?? []).map((c) => ({ id: c.id, name: c.name }))}
       onProps={(props) => updateObject(selectedObject, { props })}
+      onStyle={({ props, geometry }) => {
+        // Size and crop (J7) write geometry and props together; the canvas shows the box at once.
+        const shown = { ...selectedObject, geometry: drafts.get(selectedObject.id) ?? selectedObject.geometry } as CourseObject;
+        if (geometry) setDraft(shown.id, geometry);
+        updateObject(shown, geometry ? { props, geometry } : { props });
+      }}
+      aspectLock={state.aspectLock}
+      onAspectLock={() => dispatch({ type: "toggle-aspect-lock" })}
       onScope={(scope) => updateObject(selectedObject, { scope })}
       onRegenerate={selectedObject.kind === "toner_saver" ? () => {
         const margin = (selectedObject.props as { marginMm?: number }).marginMm ?? TONER_MARGIN_MM;
@@ -2257,6 +2297,7 @@ export function EditorPage() {
           else if (key === "C") armPlace("crossing");
           else if (key === "X") armPlace("exchange");
           else if (key === "T") setTool({ kind: "text" });
+          else if (key === "I") setTool({ kind: "image", graphicId: null });
           else if (key === "G") setTool({ kind: "gap", legInsertAt: state.selectedControlId === null ? state.phantom?.insertAt ?? null : null });
         }}
         onArea={startArea}
@@ -2268,6 +2309,7 @@ export function EditorPage() {
         onCorridor={addCorridor}
         snapping={state.snapping}
         onSnapping={() => dispatch({ type: "toggle-snapping" })}
+        imagePicker={nameId ? { nameId, canEdit, onPick: (graphicId) => setTool({ kind: "image", graphicId }) } : null}
       />}
       <div className="flex flex-col gap-2 min-h-0 h-full">
         {queueNode && <div className="w-64">{queueNode}</div>}
