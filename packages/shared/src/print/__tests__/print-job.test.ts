@@ -124,7 +124,7 @@ describe("renderPrintJob (§8.5)", () => {
     expect(document).toHaveBeenCalledTimes(1);
     expect(document).toHaveBeenCalledWith(hash);
     // Version 1 carried no patch (G14); version 2 drew images after each layer, over the purple (J5).
-    expect(PRINT_JOB_VERSION).toBe(6);
+    expect(PRINT_JOB_VERSION).toBe(7);
     await expect(renderPrintJob({ ...j, version: 1 } as unknown as PrintJob, host())).rejects.toThrow("Unsupported print job version 1");
     await expect(renderPrintJob({ ...j, version: 2 } as unknown as PrintJob, host())).rejects.toThrow("Unsupported print job version 2");
   });

@@ -499,6 +499,21 @@ describe("course request → knockout images (J15, docs/map-rendering.md §4.11 
     expect(alphaMasks(r)).toEqual([{ graphicId: 1, mask: 0 }, { graphicId: 2, mask: -1 }]);
   });
 
+  it("J19: a knockout carrying its graphic's outline masks by the outline (a triangle), not its box", () => {
+    const h = harness();
+    const m = loaded(h);
+    const tri = { ...lucka(true), outline: [[0.5, 0, 1, 1, 0, 1]] } as CourseLayerRequest["objects"][number];
+    const r = ask(h, request({ objects: [overlay, tri] }));
+    const [obj, colour] = overlayEntry(r);
+    expect(Array.from(r.filter!.entries)).toEqual([obj, colour, 0]);
+    const pos = Array.from(r.filter!.positions);
+    const xs = pos.filter((_, i) => i % 2 === 0).map((x) => x + m.summary.originX);
+    const ys = pos.filter((_, i) => i % 2 === 1).map((y) => y + m.summary.originY);
+    // The triangle's corners: the box's full width (35…45 mm), apex at its top (15 mm); three vertices, one triangle.
+    expect([Math.min(...xs), Math.max(...xs), Math.max(...ys)].map((v) => Math.round(v))).toEqual([35_000, 45_000, 15_000]);
+    expect(r.filter!.indices).toHaveLength(3);
+  });
+
   it("without a knockout no filter; with a document region both masks are kept, the course one after", () => {
     const h = harness();
     loaded(h);

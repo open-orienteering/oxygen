@@ -82,6 +82,7 @@ export {
   type CourseObjectBody,
   type CourseObjectKind,
   type CourseObjectScope,
+  type GraphicOutline,
 } from "./objects.js";
 export {
   COURSE_CHECK_CODES,

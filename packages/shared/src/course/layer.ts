@@ -18,7 +18,7 @@ import { circleWithGaps } from "./arcs.js";
 import { corridorGeometry } from "./corridor.js";
 import { COURSE_GRAPHICS_ID, courseColourStack, withObjectColours, withTintColours } from "./colour-stack.js";
 import { deriveCourse, structuresOf } from "./derive.js";
-import { TONER_WHITE_ID, courseObjects, filterRegionOf, hasTonerSaver, objectColours, resolveAttached } from "./objects.js";
+import { TONER_WHITE_ID, attachedHides, courseObjects, filterRegionOf, hasTonerSaver, objectColours, resolveAttached } from "./objects.js";
 import { CROSSING_BODY_MM, CROSSING_SECTION_MM, CROSSING_SECTION_OFFSET_MM, courseSymbols } from "./symbols.js";
 import type { CourseFilterRegion, CourseLayer, CourseLayerInput, CourseRenderObject, DerivedCourse } from "./types.js";
 import type { MapPoint } from "../course-maps/schema.js";
@@ -55,6 +55,8 @@ export function courseLayer(input: CourseLayerInput): CourseLayer {
   const objects: CourseRenderObject[] = [];
   // §8.3, J10: an attached object follows its control, and is drawn only where its control is.
   const inputObjects = resolveAttached(input.objects, derivation.sites);
+  // J18: circles an attached image hides (numbers are left out by the derivation).
+  const hiddenCircles = attachedHides(input.objects).circle;
 
   // §12.7: the All-variations view's tints — rows on top of the stack, tinted copies of 705 and 703.
   const palette0 = withObjectColours(stack.colours, objectColours(inputObjects));
@@ -77,7 +79,7 @@ export function courseLayer(input: CourseLayerInput): CourseLayer {
       objects.push({ symbolIdx: idx.mapIssue, path: makePath([um(s.x), um(s.y)]), ref });
     } else if (s.role === "crossing_point") {
       objects.push(...crossingObjects(s, idx.crossing, input.document.documentFactor));
-    } else {
+    } else if (!hiddenCircles.has(s.id)) {
       const symbolIdx = tinting.circleOf(s.id) ?? idx.circle;
       // §3.3: the cuts, and at an edged corridor's end its opening (§10.2, F19) — drawn here only, never a cut.
       const gaps = [...s.cuts, ...(corridors?.openings.get(s.id) ?? [])];

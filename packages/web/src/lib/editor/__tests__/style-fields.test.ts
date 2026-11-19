@@ -3,7 +3,7 @@
  * rotation clamped, size about the centre with the lock, a crop that keeps the content's scale and place.
  */
 import { describe, expect, it } from "vitest";
-import { clampCrop, cropChange, FULL_CROP, sizeChange, stylePatch, type StyleValue } from "../style-fields";
+import { clampCrop, cropChange, FULL_CROP, sizeChange, stylePatch, type StyleValue, applyPropsDiff, propsDiff } from "../style-fields";
 import { course } from "@oxygen/shared";
 import { imageBox, imageBoxAt, imageAt, IMAGE_MIN_MM } from "../image-box";
 import { resizeBox } from "../transform-gestures";
@@ -30,6 +30,11 @@ describe("style fields (J7)", () => {
     expect(stylePatch({ rotationDeg: 30 }, { rotationDeg: 0 })).toEqual({});
     expect(stylePatch({}, { flipH: true })).toEqual({ flipH: true });
     expect(stylePatch({ flipH: true, flipV: true }, { flipH: false })).toEqual({ flipV: true });
+  });
+
+  it("hide the attached control's circle and number (J18): on writes true, off removes the key", () => {
+    expect(stylePatch({ opacity: 0.5 }, { hideControlCircle: true })).toEqual({ opacity: 0.5, hideControlCircle: true });
+    expect(stylePatch({ hideControlCircle: true, hideControlNumber: true }, { hideControlNumber: false })).toEqual({ hideControlCircle: true });
   });
 
   it("knockout (J15): on writes true, off removes the key", () => {
@@ -113,5 +118,15 @@ describe("image box (J7)", () => {
     const locked = resizeBox(g, 0, 2, { x: -100, y: -100 }, true, IMAGE_MIN_MM);
     expect(locked[1].y - locked[0].y).toBeCloseTo(1, 6);
     expect(locked[1].x - locked[0].x).toBeCloseTo(2, 6);
+  });
+});
+
+describe("propsDiff / applyPropsDiff (J16: one field set on every object of a multi-selection)", () => {
+  it("carries only the edited keys; the other props stay each object's own", () => {
+    const first = { graphicId: 3, opacity: 0.5, flipH: true };
+    const diff = propsDiff(first, { graphicId: 3, opacity: 0.8 });
+    expect(diff).toEqual({ opacity: 0.8, flipH: undefined });
+    expect(applyPropsDiff({ graphicId: 7, flipH: true, knockout: true }, diff)).toEqual({ graphicId: 7, opacity: 0.8, knockout: true });
+    expect(propsDiff(first, { ...first })).toEqual({});
   });
 });

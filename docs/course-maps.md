@@ -149,7 +149,18 @@ NULL the first time it reads it — so that query writes, once per row: the
 size, or 0 × 0 for bytes that cannot be sized (answered as no size), so
 they are not read again (`course-maps/graphics.ts`
 `prepareGraphicUpload`, `graphicPixelSize`). Upload preparation runs
-under the print gate. Deleting a graphic that sheets still place leaves
+under the print gate. `outline` (JSONB, nullable; migration
+`20261119150000_graphics_outline`, J19) is the traced silhouette a
+knockout cuts by (map-rendering.md §4.11): NULL until traced, `[]` for the
+whole box, else rings in fractions of the graphic. It is traced lazily,
+the first time a knockout image of the graphic is loaded
+(`loadCourseObjects` → `withOutlines`; `graphicOutline` in
+`course-maps/graphics.ts`: a PNG's alpha through `sharp`, an SVG
+rasterised in a print worker first, both at 512 px, under the print
+gate), and stored; an upload, `saveToClub` or a snapshot import leaves it
+NULL, so it is traced on first use. A graphic that cannot be traced cuts
+by its box and is tried again next load. Storing it stamps `updated_at`
+once (the trigger), so a thumbnail is refetched once. Deleting a graphic that sheets still place leaves
 those image objects pointing at a missing graphic: the editor and print
 report it as before J2 (`IMAGE_MISSING`); the picker does not check use.
 

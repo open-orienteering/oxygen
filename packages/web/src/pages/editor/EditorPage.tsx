@@ -39,7 +39,7 @@ import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { PLACEMENT_LOUPE_KEY } from "../../lib/editor/touch";
 import { transformVertices } from "../../lib/editor/transform-gestures";
 import { courseEntry, duplicateBody, pasteAt, pasteOnSite, pasteScope, readClipboard, refusal, writeClipboard, type Refusal } from "../../lib/editor/clipboard";
-import { stylePatch, type StyleValue } from "../../lib/editor/style-fields";
+import { applyPropsDiff, propsDiff, stylePatch, type StyleValue } from "../../lib/editor/style-fields";
 import { nearestSite, objectCentre, shownObject, shownObjects, attachPatch, centrePatch, detachPatch } from "../../lib/editor/attach";
 import { useOnlineStatus } from "../../hooks/useOnlineStatus";
 import { useCapabilities } from "../../context/CapabilitiesContext";
@@ -81,7 +81,7 @@ import { TONER_MARGIN_MM, tonerSaverGeometry } from "./tools/toner-saver";
 import { mergeCircleGaps, mergeLegGaps, type AngularGap, type FractionGap } from "./tools/gaps";
 import { areaBinding, gapBinding, imageBinding, pickSymbolBinding, placeBinding, selectBinding, textBinding, withCorridorGuides, type CorridorGuide, type GapTarget, type Gesture } from "./tools/bindings";
 import { imageAt, imageBoxAt } from "../../lib/editor/image-box";
-import { ObjectSection } from "./modes/ObjectSection";
+import { ObjectMultiSection, ObjectSection } from "./modes/ObjectSection";
 import { LegSection } from "./modes/LegSection";
 import { ChecksSection, Inspector, InspectorSection, InventorySection } from "./Inspector";
 import { StatusBar } from "./StatusBar";
@@ -970,6 +970,24 @@ export function EditorPage() {
   const selectedObject = useMemo(() => (rawSelectedObject ? shownObject(rawSelectedObject, sitePos) : null), [rawSelectedObject, sitePos]);
   const selectedHidden = rawSelectedObject !== null && selectedObject === null;
   useEffect(() => { if (selectedHidden) dispatch({ type: "select-object", id: null }); }, [selectedHidden]);
+  // J16: the object multi-selection as drawn. A member not drawn in the view leaves it, as above; one not in the list
+  // yet (a duplicate's copies before the refetch) waits for it.
+  const multiObjects = useMemo(() => state.objectMulti.flatMap((id) => {
+    const raw = objects.find((x) => x.id === id);
+    const shown = raw ? shownObject(raw, sitePos) : null;
+    return shown ? [shown] : [];
+  }), [state.objectMulti, objects, sitePos]);
+  const multiHidden = useMemo(() => state.objectMulti.filter((id) => {
+    const raw = objects.find((x) => x.id === id);
+    return raw !== undefined && shownObject(raw, sitePos) === null;
+  }), [state.objectMulti, objects, sitePos]);
+  /** The multi-selection as shown now: a drag's or style edit's drafts, else the props last sent (as `selectedObject`'s keys). */
+  const shownMulti = () => multiObjects.map((o) => ({
+    ...o, geometry: drafts.get(o.id) ?? o.geometry, props: propDrafts.get(o.id) ?? sentProps.current.get(o.id) ?? o.props,
+  }) as CourseObject);
+  useEffect(() => {
+    if (multiHidden.length > 0) dispatch({ type: "set-object-multi", ids: state.objectMulti.filter((id) => !multiHidden.includes(id)) });
+  }, [multiHidden, state.objectMulti]);
   /** Geometry being dragged (vertex or body) or drawn, drawn instead of the stored one until the list catches up. */
   const [drafts, setDrafts] = useState<Map<number, CourseObject["geometry"]>>(new Map());
   /** Props shown with a geometry draft (J7: a crop writes both, so the canvas draws the new crop in the new box). */
@@ -1130,6 +1148,51 @@ export function EditorPage() {
       dispatch({ type: "select-object", id: null });
     })();
   }, [writes, run, record]);
+
+  /**
+   * J16: several objects' updates as one write and one undo entry (a group move, a style field on a multi-selection).
+   * As `updateObject` per object: an attached one's geometry goes with its drawn `at` (J10).
+   */
+  const updateObjects = useCallback((items: { o: CourseObject; given: { geometry?: CourseObject["geometry"]; props?: CourseObject["props"] } }[], onFail?: () => void) => {
+    const changes = items.map(({ o, given }) => {
+      const patch = given.geometry && o.attach ? { ...given, attach: o.attach } : given;
+      if (patch.props) sentProps.current.set(o.id, patch.props);
+      const prev = { geometry: o.geometry, props: o.props, attach: o.attach ?? null };
+      const before = Object.fromEntries(Object.keys(patch).map((k) => [k, prev[k as keyof typeof prev]]));
+      return { input: { id: o.id, ...patch }, undo: { id: o.id, ...before } };
+    });
+    if (changes.length === 0) return;
+    void (async () => {
+      const redo = () => writes.updateObjects(changes);
+      if ((await run(redo)) === undefined) return onFail?.();
+      record(() => writes.updateObjects(changes.map((c) => ({ input: c.undo, undo: c.input }))), redo);
+    })();
+  }, [writes, run, record]);
+
+  /** J16: `Delete` on an object multi-selection: one write per object, one undo entry (undo creates them again). */
+  const deleteObjectsMany = useCallback((list: readonly CourseObject[]) => {
+    const bodies = list.map((o) => ({ kind: o.kind, geometry: o.geometry, props: o.props, scope: o.scope, ...(o.attach ? { attach: o.attach } : {}) }) as Pick<CourseObject, "kind" | "geometry" | "props" | "scope"> & { attach?: CourseObject["attach"] });
+    const box = { ids: list.map((o) => o.id) };
+    void (async () => {
+      const redo = async () => { await writes.deleteObjects(box.ids.map((id, i) => ({ id, body: bodies[i] }))); return true; };
+      if ((await run(redo)) === undefined) return;
+      record(async () => { box.ids = (await writes.createObjects(bodies)).map((o) => o.id); }, redo);
+      dispatch({ type: "set-object-multi", ids: [] });
+    })();
+  }, [writes, run, record]);
+
+  /** J16: `Ctrl+D` on an object multi-selection: a copy of each 3 mm down-right, the copies selected; one undo entry. */
+  const duplicateObjectsMany = useCallback(async (list: readonly CourseObject[]) => {
+    const bodies = list.map((o) => ({ ...duplicateBody(o), scope: o.scope }));
+    const made = await run(() => writes.createObjects(bodies));
+    if (!made) return;
+    const box = { ids: made.map((o) => o.id) };
+    record(
+      async () => { for (const id of box.ids) await writes.deleteObject(id); },
+      async () => { box.ids = (await writes.createObjects(bodies)).map((o) => o.id); },
+    );
+    dispatch({ type: "set-object-multi", ids: box.ids });
+  }, [run, writes, record]);
 
   // ─── Snapping (§6.2) ──────────────────────────────────────
   const snapIndex = useMemo(
@@ -1557,6 +1620,27 @@ export function EditorPage() {
           onToggleMulti: (id) => dispatch({ type: "toggle-multi", id }),
           onLasso: (ids) => dispatch({ type: "set-multi", ids }),
           onSelectObject: (id) => dispatch({ type: "select-object", id }),
+          objectMulti: state.objectMulti,
+          onToggleObject: (id) => dispatch({ type: "toggle-object", id }),
+          onObjectsDraft: (next) => {
+            // J16: a group move's drafts, as `onObjectDraft` per member; null (a cancel) drops them.
+            for (const id of state.objectMulti) {
+              const geometry = next?.get(id) ?? null;
+              if (geometry && !gestureBefore.current.has(id)) gestureBefore.current.set(id, drafts.get(id) ?? shownById(id)?.geometry ?? geometry);
+              if (!geometry) gestureBefore.current.delete(id);
+              setDraft(id, geometry);
+            }
+          },
+          onObjectsMoved: (moves) => {
+            const items = moves.flatMap(({ id, geometry }) => {
+              const o = shownById(id);
+              const before = gestureBefore.current.get(id) ?? drafts.get(id) ?? o?.geometry;
+              gestureBefore.current.delete(id);
+              setDraft(id, geometry);
+              return o && before ? [{ o: { ...o, geometry: before } as CourseObject, given: { geometry } }] : [];
+            });
+            updateObjects(items, () => { for (const m of moves) setDraft(m.id, null); });
+          },
           onObjectDraft: (id, geometry) => {
             // The first draft of a gesture keeps what was shown before it: the undo's "before".
             // J10: the shown geometry (an attached object's drawn place), as the binding's.
@@ -1911,7 +1995,8 @@ export function EditorPage() {
         if (e.repeat && (key === "D" || key === "V")) { e.preventDefault(); return; }
         if (key === "D") {
           e.preventDefault();
-          if (o) void duplicateObject(o);
+          if (state.objectMulti.length > 0) void duplicateObjectsMany(shownMulti());
+          else if (o) void duplicateObject(o);
         } else if (key === "V") {
           e.preventDefault();
           void pasteObject();
@@ -1994,6 +2079,7 @@ export function EditorPage() {
       } else if (e.key === "Delete" || e.key === "Backspace") {
         e.preventDefault();
         if (state.multi.length > 0) deleteControls(state.multi);
+        else if (state.objectMulti.length > 0) deleteObjectsMany(shownMulti());
         else if (selectedLeg && focusedBend !== null && legEditable) {
           // The selected leg's focused bend (§6.7).
           const bends = selectedLeg.props.bends ?? [];
@@ -2014,7 +2100,7 @@ export function EditorPage() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [descControlId, runUndo, runRedo, undoStack, state, handleDelete, deleteControls, deleteObject, duplicateObject, pasteObject, canEdit, nameId, propDrafts, selectedObject, focusedVertex, drafts, setDraft, cropMode, updateObject, setChain, exitTool, finishArea,
+  }, [descControlId, runUndo, runRedo, undoStack, state, handleDelete, deleteControls, deleteObject, duplicateObject, pasteObject, deleteObjectsMany, duplicateObjectsMany, multiObjects, canEdit, nameId, propDrafts, selectedObject, focusedVertex, drafts, setDraft, cropMode, updateObject, setChain, exitTool, finishArea,
     stepSelection, armPlace, setTool, canGap, fitView, areaOpen, canTonerSaver, startArea, layoutKey, mapKey, selectedLeg, focusedBend, legEditable, writeLeg, addCorridor, selectionGroup, redraw, togglePlacementLoupe]);
 
   // ─── The URL (docs/course-editor.md §1 "URL"; F31) ─────────
@@ -2324,7 +2410,23 @@ export function EditorPage() {
       variation={variationHandlers}
     />
   );
-  const selectionSection = state.multi.length > 1 ? (
+  const selectionSection = multiObjects.length > 1 ? (
+    <ObjectMultiSection objects={shownMulti()} busy={pendingOps > 0}
+      onDuplicate={() => void duplicateObjectsMany(shownMulti())}
+      onDelete={() => deleteObjectsMany(shownMulti())}
+      onStyleAll={(next) => {
+        // The edit made on the first object's shown props, applied as a difference to each (J16): one write, one undo.
+        const list = shownMulti();
+        const diff = propsDiff(list[0].props, next);
+        if (Object.keys(diff).length === 0) return;
+        const items = list.map((o) => ({ o, given: { props: applyPropsDiff(o.props, diff) } }));
+        setPropDrafts((d) => { const n = new Map(d); for (const it of items) n.set(it.o.id, it.given.props); return n; });
+        updateObjects(items, () => {
+          setPropDrafts((d) => { const n = new Map(d); for (const it of items) n.delete(it.o.id); return n; });
+          setStyleReset((k) => k + 1);
+        });
+      }} />
+  ) : state.multi.length > 1 ? (
     <MultiSection count={state.multi.length} course={selectedCourse && structure ? selectedCourse.name : null} busy={pendingOps > 0}
       onDelete={() => deleteControls(state.multi)} onAddToCourse={bulkAddToCourse} onRadio={bulkRadio} />
   ) : selectedObject ? (

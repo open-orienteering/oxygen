@@ -816,17 +816,32 @@ print route carry them as objects. A corridor's white band is a
 (`docs/course-layer.md` §10.2): `clip`, `symbols: "all"`, the band's
 rings — the map cut away there, the course drawn over it.
 
-#### Knockout footprints (J15)
+#### Knockout footprints (J15, J19)
 
 An advent-calendar map is one overlay graphic over the whole map with
 hatches (luckor) placed on top that show the map through their opening.
 Without a cut the overlay would have to be split around every hatch.
 With **"Cut out graphics below"** on a hatch, the overlay is cut where
 the hatch is. Moving the hatch moves the cut. `applyKnockouts(stream,
-knockout)` in `render/filter-region.ts`, run by `symbolise` after the
-filter regions (which rebuild the masks):
+knockout, outlineOf)` in `render/filter-region.ts`, run by `symbolise`
+after the filter regions (which rebuild the masks):
 
-- **The footprint** is the knockout image's quad inset by
+- **The outline footprint** (J19, user 2026-11-19 "Cut along the hatch
+  outline"). When the object's `image.outline` is set (a traced graphic,
+  course-layer.md §8.1 "Graphic outline") the footprint is that outline:
+  each ring (fractions of the whole graphic, top-left origin) is taken
+  into the visible part's unit square by the crop, cut to it
+  (Sutherland–Hodgman), flipped to the quad's y-up and mapped through the
+  quad, one region path per ring (`knockoutFootprints`). Nothing of the
+  outline inside the crop: no footprint. The outline is traced once per
+  graphic (`render.traceOutline`, `render/trace-outline.ts`): the alpha
+  raster at 512 px on the longer side, inside at alpha ≥ 50 %, holes
+  filled (an opening in a hatch is the hatch's), at most 8 rings (the
+  largest), each Douglas–Peucker-simplified to at most 200 vertices; a
+  silhouette covering 99.5 % of the raster or more, or none, is `[]` (the
+  box). No inset: the trace sits on the half-alpha edge, so the hatch's
+  soft edge overlaps the cut by about half a pixel of the graphic.
+- **The box footprint** (J15; no outline) is the knockout image's quad inset by
   `KNOCKOUT_INSET_UM` (50 µm) on each side, in the quad's own frame
   (`knockoutFootprint`). Crop, rotation and flips are already in the
   quad. The image's pixels play no part: a transparent opening cuts like
@@ -1916,6 +1931,8 @@ published on `window.__mapGlDoc` for Playwright.
 | `map-gl/__tests__/buckets.test.ts` (filter regions) | per colour the unmasked draw then one per mask, the same indices regrouped, `layers` in draw order, hidden objects win over masks, no `filter` without entries; instance draws and clip groups split by mask |
 | `map-gl/__tests__/worker-course.test.ts` (filter regions) | a `hide` region hides the document object meeting it, exact and `fastFilter` alike, never a course object; a far region hides nothing; a clip region by document colour → `(object, colour, mask)` on the completed stack and the region's triangles origin-relative; the course part stays unmasked in the visible set; no regions / `null` → no filter |
 | `render/__tests__/knockout.test.ts` (J15) | `knockoutFootprint`: the quad inset 0.05 mm in its own frame, rotated too, none at 0.1 mm or less; `applyKnockouts`: only image passes below meet a footprint, fills and the knockout itself unmasked, stacked knockouts nest, filter-region masks kept and joined, masks deduplicated, the stream unchanged without a cut |
+| `render/__tests__/trace-outline.test.ts` (J19) | `traceOutline`: a centred square → its four corners in fractions; a disc within 2 % of its area and ≤ 200 vertices; a ring's hole filled; two shapes largest first, diagonal pixels closed rings; a full or empty raster `[]`; the 50 % threshold |
+| `render/__tests__/knockout.test.ts` (J19) | `knockoutFootprints`: an outline mapped through the quad with y up, cut to a crop, nothing outside it, the box without one; `symbolise` cuts by each ring, a far image unmasked; no knockout carries no mask |
 | `map-gl/__tests__/worker-course.test.ts` (knockout images, J15) | a course knockout → one `(object, colour, mask)` entry for the overlay, the footprint's triangles origin-relative, the overlay's alpha item masked and the knockout's not; none without a knockout; after a document region's mask; a page knockout on the page part in page colours, its footprint through `T_map⁻¹` and the page overlay's alpha item masked |
 | `map-gl/__tests__/worker-protocol.test.ts` (filter regions) | a `stream` source with masks → `loaded.filter`, one entry per (object, colour), transferable; none without masks |
 | `map-gl/__tests__/engine.test.ts` (loupe) | `renderInset`: one more `renderDocument` with the loupe view into the inset target, the page clip forwarded, `compositeInset` at the box; no rebuild, no worker message; nothing before the load; `releaseInset` forwarded |
@@ -4692,10 +4709,11 @@ The shared module is exported as a namespace: `import { render } from
   placement's box (`course-pages.ts`; before J5 too), so the larger one
   prints coarser under nearest-neighbour sampling. The per-pass path
   draws no images (§5.2 "Dev pages"). A knockout (J15, §4.11 "Knockout
-  footprints") cuts by the image's box, not its pixels: a round hatch
-  cuts a square, and a cut by the graphic's alpha is not planned. A
-  knockout cuts images only; cutting the map's or the course's ink is
-  what a white-out does.
+  footprints") cuts by its graphic's traced outline (J19) on course
+  objects; a **page** image (Layout mode) still cuts by its box, since
+  page objects do not carry the outline yet. The outline is the graphic's
+  silhouette at 512 px, not a per-pixel alpha cut. A knockout cuts images
+  only; cutting the map's or the course's ink is what a white-out does.
 
 - **§5.2 filter-region limits.** All masks share one stencil bit, so
   overlapping regions of different masks are fine (each masked step marks

@@ -50,6 +50,8 @@ export interface EditorState extends CourseEditorState {
   multi: number[];
   /** The selected course object (public id), exclusive with a selected control. */
   selectedObjectId: number | null;
+  /** Course objects selected together (J16: Shift/Ctrl-click), in selection order; empty or ≥ 2; exclusive with the other selections. */
+  objectMulti: number[];
   snapping: boolean;
   /** Image size edits keep the box's ratio (J7: the inspector's lock, a corner drag); on by default. */
   aspectLock: boolean;
@@ -72,13 +74,16 @@ export type EditorAction =
   | { type: "toggle-multi"; id: number }
   | { type: "set-multi"; ids: number[] }
   | { type: "select-object"; id: number | null }
+  /** J16: Shift/Ctrl-click of an object adds it to (or takes it out of) the object multi-selection. */
+  | { type: "toggle-object"; id: number }
+  | { type: "set-object-multi"; ids: number[] }
   | { type: "toggle-snapping" }
   | { type: "toggle-aspect-lock" };
 
 const SELECT: EditorTool = { kind: "select" };
 
 export const initialEditorState: EditorState = {
-  ...initialCourseEditorState, mode: "course", view: "course", classSeq: null, variantKey: null, activeAlternatives: {}, focusGroupId: null, hideOthers: false, tool: SELECT, multi: [], selectedObjectId: null, snapping: false, aspectLock: true,
+  ...initialCourseEditorState, mode: "course", view: "course", classSeq: null, variantKey: null, activeAlternatives: {}, focusGroupId: null, hideOthers: false, tool: SELECT, multi: [], selectedObjectId: null, objectMulti: [], snapping: false, aspectLock: true,
 };
 
 /** A new area tool of `kind`. */
@@ -92,7 +97,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       // The eyedropper is Course mode's (a filter region is edited there): any mode change drops it.
       if (action.mode === state.mode) return state;
       return action.mode === "layout" || action.mode === "map"
-        ? { ...state, mode: action.mode, tool: SELECT, phantom: null, selectedControlId: null, multi: [], selectedObjectId: null }
+        ? { ...state, mode: action.mode, tool: SELECT, phantom: null, selectedControlId: null, multi: [], selectedObjectId: null, objectMulti: [] }
         : { ...state, mode: action.mode, ...(state.tool.kind === "pick-symbol" ? { tool: SELECT } : {}) };
     case "view":
       // Class view needs a class (the "class" action), Variant view a key (the "variant" action); the other views drop them.
@@ -140,7 +145,14 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     case "set-multi":
       return withMulti(state, action.ids);
     case "select-object":
-      return { ...state, selectedObjectId: action.id, selectedControlId: action.id === null ? state.selectedControlId : null, multi: [], phantom: null };
+      return { ...state, selectedObjectId: action.id, selectedControlId: action.id === null ? state.selectedControlId : null, multi: [], objectMulti: [], phantom: null };
+    case "toggle-object": {
+      const base = state.objectMulti.length > 0 ? state.objectMulti : state.selectedObjectId !== null ? [state.selectedObjectId] : [];
+      const ids = base.includes(action.id) ? base.filter((id) => id !== action.id) : [...base, action.id];
+      return withObjectMulti(state, ids);
+    }
+    case "set-object-multi":
+      return withObjectMulti(state, action.ids);
     case "toggle-snapping":
       return { ...state, snapping: !state.snapping };
     case "toggle-aspect-lock":
@@ -149,6 +161,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       // An active tool is dropped first (back to V), then a multi-selection, then an object; then the legacy cascade.
       if (state.tool.kind !== "select") return { ...state, tool: SELECT };
       if (state.multi.length > 0) return { ...state, multi: [] };
+      if (state.objectMulti.length > 0) return { ...state, objectMulti: [] };
       if (state.selectedObjectId !== null) return { ...state, selectedObjectId: null };
       // Before the course is dropped: the activated alternative's claim on `K` (§12); the alternative stays displayed.
       if (state.focusGroupId !== null && state.phantom === null && state.selectedControlId === null) return { ...state, focusGroupId: null };
@@ -160,8 +173,15 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
 
 /** One control selected → the plain selection; several → `multi` (the primary selection off). */
 function withMulti(state: EditorState, ids: number[]): EditorState {
-  if (ids.length <= 1) return { ...state, multi: [], selectedControlId: ids[0] ?? null, selectedObjectId: null, phantom: null };
-  return { ...state, multi: ids, selectedControlId: null, selectedObjectId: null, phantom: null };
+  if (ids.length <= 1) return { ...state, multi: [], selectedControlId: ids[0] ?? null, selectedObjectId: null, objectMulti: [], phantom: null };
+  return { ...state, multi: ids, selectedControlId: null, selectedObjectId: null, objectMulti: [], phantom: null };
+}
+
+/** J16: one object → the plain object selection; several → `objectMulti` (no single object, no control). */
+function withObjectMulti(state: EditorState, ids: number[]): EditorState {
+  const none = { multi: [], selectedControlId: null, phantom: null };
+  if (ids.length <= 1) return { ...state, ...none, objectMulti: [], selectedObjectId: ids[0] ?? null };
+  return { ...state, ...none, objectMulti: ids, selectedObjectId: null };
 }
 
 function legacy(state: EditorState, action: CourseEditorAction): EditorState {
@@ -179,13 +199,13 @@ function legacy(state: EditorState, action: CourseEditorAction): EditorState {
     ...(next.selectedCourseId !== state.selectedCourseId
       ? { variantKey: null, activeAlternatives: {}, focusGroupId: null, ...(state.view === "variant" || state.view === "all-variations" ? { view: "course" as const } : {}) }
       : {}),
-    ...(clears ? { multi: [], selectedObjectId: null } : {}),
+    ...(clears ? { multi: [], selectedObjectId: null, objectMulti: [] } : {}),
   };
 }
 
 /** Whether Escape has anything left to dismiss (else it leaves fullscreen). */
 export function escapeHasWork(s: EditorState): boolean {
-  return s.tool.kind !== "select" || s.multi.length > 0 || s.selectedObjectId !== null
+  return s.tool.kind !== "select" || s.multi.length > 0 || s.objectMulti.length > 0 || s.selectedObjectId !== null
     || s.phantom !== null || s.selectedControlId !== null || s.selectedCourseId !== null || s.focusGroupId !== null;
 }
 

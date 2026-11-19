@@ -143,6 +143,63 @@ describe("V binding (docs/course-editor.md §6.5, §7)", () => {
   });
 });
 
+describe("object multi-selection (J16, docs/course-editor.md §7)", () => {
+  const img = (id: number): course.CourseObject =>
+    ({ id, kind: "image", geometry: [{ x: 0, y: 0 }, { x: 20, y: 10 }], props: { graphicId: 3 }, scope: { all: true }, z: 0, version: "1", inCourses: null }) as course.CourseObject;
+  const multi = (over: Partial<Parameters<typeof selectBinding>[0]> = {}) =>
+    selectOpts({ objects: [square(4), img(9)], onToggleObject: vi.fn(), onObjectsDraft: vi.fn(), onObjectsMoved: vi.fn(), ...over });
+
+  it("Shift- or Ctrl-click on an object toggles it on release, an unselected image included; nothing is dragged", () => {
+    for (const mods of [{ shift: true }, { ctrl: true }]) {
+      const o = multi();
+      const b = selectBinding(o);
+      expect(b.onPointerDown!(ptr(5, 5, { target: { kind: "object", id: 9 }, ...mods }))).toBe(true);
+      b.onPointerDrag!({ x: 8, y: 5 });
+      b.onPointerUp!({ x: 8, y: 5 });
+      expect(o.onToggleObject).toHaveBeenCalledWith(9);
+      expect(o.onObjectDraft).not.toHaveBeenCalled();
+      expect(o.onSelectObject).not.toHaveBeenCalled();
+    }
+  });
+
+  it("a selected object's body toggles with Ctrl; its vertex handle keeps its own drag", () => {
+    const o = multi({ selected: square(4) });
+    const b = selectBinding(o);
+    b.onPointerDown!(ptr(5, 0, { target: { kind: "object", id: 4 }, ctrl: true }));
+    b.onPointerUp!({ x: 5, y: 0 });
+    expect(o.onToggleObject).toHaveBeenCalledWith(4);
+    b.onPointerDown!(ptr(10.2, 10.2, { target: { kind: "object", id: 4 }, ctrl: true }));
+    b.onPointerDrag!({ x: 12, y: 12 });
+    b.onPointerUp!({ x: 12, y: 12 });
+    expect(o.onObjectMoved).toHaveBeenCalledTimes(1);
+    expect(o.onToggleObject).toHaveBeenCalledTimes(1);
+  });
+
+  it("members are outlined; a drag on one moves them all as one write, a click selects that one, a cancel drops the drafts", () => {
+    const o = multi({ objectMulti: [4, 9] });
+    expect(selectBinding(o).shapes!.filter((s) => s.testId === "editor-object-multi-outline").map((s) => (s as { data: Record<string, string> }).data["object-id"])).toEqual(["4", "9"]);
+    const b = selectBinding(o);
+    expect(b.onPointerDown!(ptr(5, 5, { target: { kind: "object", id: 9 } }))).toBe(true);
+    b.onPointerDrag!({ x: 5.1, y: 5 }); // within 3 px: still a click
+    expect(o.onObjectsDraft).not.toHaveBeenCalled();
+    b.onPointerDrag!({ x: 7, y: 6 });
+    expect((o.onObjectsDraft as ReturnType<typeof vi.fn>).mock.calls.at(-1)![0].get(9)).toEqual([{ x: 2, y: 1 }, { x: 22, y: 11 }]);
+    b.onPointerUp!({ x: 7, y: 6 });
+    expect(o.onObjectsMoved).toHaveBeenCalledWith([
+      { id: 4, geometry: [{ x: 2, y: 1 }, { x: 12, y: 1 }, { x: 12, y: 11 }, { x: 2, y: 11 }] },
+      { id: 9, geometry: [{ x: 2, y: 1 }, { x: 22, y: 11 }] },
+    ]);
+    b.onPointerDown!(ptr(5, 5, { target: { kind: "object", id: 4 } }));
+    b.onPointerUp!({ x: 5, y: 5 });
+    expect(o.onSelectObject).toHaveBeenCalledWith(4);
+    b.onPointerDown!(ptr(5, 5, { target: { kind: "object", id: 4 } }));
+    b.onPointerDrag!({ x: 9, y: 5 });
+    b.onPointerUp!(null);
+    expect(o.onObjectsDraft).toHaveBeenLastCalledWith(null);
+    expect(o.onObjectsMoved).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("geometry editing on a selected object (docs/course-editor.md §7 \"Editing geometry\")", () => {
   type Shape = { kind: string; testId?: string; data?: Record<string, string>; points?: unknown[] };
   const curved = (id: number): course.CourseObject =>

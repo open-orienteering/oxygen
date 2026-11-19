@@ -475,12 +475,19 @@ fetch list (`layer.images`, `PageImage`, `course-print.md` §6.3).
 
 **Knockout images (J15).** An image with `knockout: true` ("Cut out
 graphics below", course-editor.md §7) also sets `RenderObject.knockout`.
-`symbolise` then cuts the images below it in the same layer by its box
-(map-rendering.md §4.11 "Knockout footprints"). The rules (user
+`symbolise` then cuts the images below it in the same layer by its
+footprint (map-rendering.md §4.11 "Knockout footprints"). The rules (user
 2026-11-19, the advent-calendar overlay):
 
-- The footprint is the image's box after crop, flips and rotation, not
-  its pixels, inset 0.05 mm.
+- The footprint is the graphic's **outline** where it was traced (J19,
+  user 2026-11-19: "Cut along the hatch outline"): a course image object
+  with `knockout` carries its graphic's outline (`outline`, read-only, §8.1
+  "Graphic outline") into `RenderObject.image.outline`, and the cut follows
+  the drawn hatch, cut to the crop, through the box's flips and rotation.
+  A borderless hatch over a translucent overlay then shows no untinted
+  corners. Without an outline (a whole-box graphic, one not traced, a page
+  image) the footprint is the image's box after crop, flips and rotation,
+  inset 0.05 mm (J15).
 - It cuts only **images** below it in the **same layer**: a course image
   cuts course images, a page image cuts page images. Order is the layer's
   own (course objects by z, page objects by their order).
@@ -490,8 +497,8 @@ graphics below", course-editor.md §7) also sets `RenderObject.knockout`.
 - An attached image cuts where it is drawn (§8.1). One whose control is
   not drawn in a course is left out of that course's layer and cuts
   nothing there.
-- The cut is made from the box when the layer is symbolised, before the
-  graphic's bytes are known. A knockout whose graphic is missing in print
+- The cut is made from the box or the outline when the layer is
+  symbolised, before the graphic's bytes are known. A knockout whose graphic is missing in print
   (`IMAGE_MISSING`) or still loading on screen still cuts: the box shows
   the map with no hatch over it.
 - Images only: the course object's `props.knockout` and the page image's
@@ -1311,7 +1318,7 @@ issue message starting `OBJECT_GEOMETRY`.
 | `toner_saver` | ≥ 3: the hull — D13's editor generates the smooth offset hull of the course's sites, so its segments carry `hIn` / `hOut` and the hole ring below has Bézier flags (the hull's own straight edges stay straight) | `marginMm?` (how D5 / D13 generated it, 25 mm by default since D13; the drawn shape is the stored hull), `holeRadiusMm?` (reserved; the editor does not set it and builds no control holes) | white-out *outside* the hull in the toner saver white, the map layer's top row (§3.6, P1): the `viewOptions.window` ring with the hull as an even-odd hole; without a window (the viewer) not drawn, warning `WINDOW_MISSING` |
 | `marked_route` | ≥ 2 | — | 707 |
 | `text` | 1: the anchor | `text`, `fontSizeMm`, `fontFamily?`, `color?` (hex), `align?`, `opacity?`, `blend?`, `rotationDeg?` (J4: clockwise as seen, about the anchor) | a text symbol: upper purple, or an own colour row for `color` (§1); `{placeholders}` expanded with `viewOptions.textValues`; `angleDeg = −rotationDeg` |
-| `image` | 2: opposite corners | `graphicId`, `crop?`, `opacity?`, `blend?`, `rotationDeg?` (about the box centre, after the flips), `flipH?`, `flipV?` (J4), `knockout?` (J15: cut out the images below, §3.6 "Knockout images") | one image pass in `course:graphics` (§3.6 "Images", J5), its graphic listed in `layer.images`; drawn by the page backends, on screen from J6 |
+| `image` | 2: opposite corners | `graphicId`, `crop?`, `opacity?`, `blend?`, `rotationDeg?` (about the box centre, after the flips), `flipH?`, `flipV?` (J4), `knockout?` (J15: cut out the images below, §3.6 "Knockout images"), `hideControlCircle?`, `hideControlNumber?` (J18: while attached, hide the control's circle / number, "Attachment" below) | one image pass in `course:graphics` (§3.6 "Images", J5), its graphic listed in `layer.images`; drawn by the page backends, on screen from J6 |
 | `filter_region` | ≥ 3 points, **no** Bézier handles (a polygon; one outer ring) | `{ mode: "clip" \| "hide", symbols: "all" \| idx[] \| { colours }, invert? }` — D3's region exactly | not an object: a `regions` entry (`map-rendering.md` §4.11) |
 | `inset_frame` | ≥ 2 | — | reserved for micro insets: typed, refused on write (`PRECONDITION_FAILED`), never drawn |
 
@@ -1343,6 +1350,28 @@ checks (§9) resolve the same way against the checked course's sites, so
 an obstacle follows its control and counts only on a course that draws
 it. `toner_saver` and `inset_frame` cannot be attached
 (`UNATTACHABLE_KINDS`; a write is `BAD_REQUEST`).
+
+**Hiding the attached control (J18, user 2026-11-19).** An attached
+`image` may hide its control's circle (`hideControlCircle: true`) and its
+number (`hideControlNumber: true`), so a hatch drawn around a control
+carries the control's look itself. `attachedHides(objects)`
+(`course/objects.ts`) gives the site ids: the derivation leaves the
+number unplaced (`derive.ts`, as a hidden number, so no label and no
+leader), and the layer skips the control's circle (`layer.ts`); its legs,
+cuts and description are unchanged, and the editor still hit-tests the
+control (its UI site). The flags act only while the image is attached:
+a free image's flags do nothing, and a detached image (*Detach*, or its
+control deleted) shows the circle and number again. The circle is lower
+purple, under the graphics row (§3.6), so an opaque hatch over the control
+hid it already; the flag is for a hatch whose opening shows the map.
+
+**Graphic outline (J19).** A knockout image object read by the API
+(`loadCourseObjects`, so the list, the print job and the checks alike)
+carries its graphic's traced outline as `outline` — never written, never
+in `props` — when the graphic has one (`graphics.outline`,
+`course-maps.md` "Data model"; `withOutlines` in `course-objects.ts`). The
+course layer passes it to `RenderObject.image.outline` for a knockout
+image only; it is the cut's footprint (§3.6, map-rendering.md §4.11).
 
 ### 8.2 Scope
 
@@ -2380,6 +2409,9 @@ label.
 | unit | `layer.test.ts` "a stored filter_region course object" | §8.3: the same region as the explicit one, after it; hides the document's 516 |
 | unit | `layer.test.ts` "course objects as F12 moved layout objects" | §3.6: white-out at upper white, 709 / 709.b / 709.c by border, a text's own row on top at paper mm (no division), the toner saver ring and its white row last (P1), `WINDOW_MISSING`, an image as one render object in `course:graphics` and to `layer.images` as `{ graphicId, sizeUm, crop? }` (J5) |
 | unit | `layer.test.ts` "knockout images (J15…)" | §3.6 "Knockout images": the overlay below a knockout image masked by its footprint, not a white-out or the purple; an attached knockout cuts where it is drawn, one not drawn cuts nothing; the schema takes `knockout` on images only |
+| unit | `layer.test.ts` "knockout images (J15…)" (J19 case) | §3.6 with an outline: the overlay cut by the outline's triangle where the image is drawn (attached too); a plain image carries no outline |
+| unit | `layer.test.ts` "an attached image hides its control (J18…)" | §8.1 "Hiding the attached control": the flags drop `site:<id>` and `number:<id>` only, legs and other controls unchanged; a free image's flags do nothing, a hidden number stays hidden with labels; the props are strict on images |
+| integration | `course-objects.test.ts` "J18 hides and J19 outlines" | the hide flags round-trip, refused on other kinds; a knockout image lists its graphic's outline, traced once and stored, a plain image none; a whole-box graphic stored `[]` and listed without one |
 | unit | `scenes.test.ts` `course-knockout` | the overlay's pass alone is masked, by lucka 31's footprint; its stream snapshot |
 | pass-stream | `scenes.test.ts` "course-objects", `print/__tests__` page scenes "page-ring", "page-rotated" | §3.6: the fixtures' former map-anchored objects written as the course objects F12 makes; the stream snapshots unchanged byte for byte — the move draws the same |
 | integration | `course-objects-migration.test.ts` | §3.6 the F12 migration on a scratch database built to the migration before it: the guard refuses all eleven reasons of a live event (a solid fill, a black stroke and line, a stroked white-out, short areas and lines, an image without its graphic, a text without a size or over 100 mm at os 0.75, an unknown kind and fill), names each in the detail and changes nothing; after the runbook's fix-ups every kind maps (whiteout, legacy `whiteoutRect`, toner saver, 709 / .b / .c, 708 / 707 from purple lines and closed outlines, a template's own purple, text ÷ os with the latest map's scale and a sheet's print-scale override, image corners), scopes per row type (template, course / class / all-controls / setter sheets), `source = 'layout'`, `version 0`, `z` under a hand-drawn object, seq order; invisible objects removed; a soft-deleted event's refused object removed; club payloads stripped; page objects kept in order; every body parses; a second run changes nothing |

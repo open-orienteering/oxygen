@@ -35,6 +35,10 @@ export const HANDLE_PX = 7;
 export type Gesture =
   | { kind: "lasso"; points: Pt[] }
   | { kind: "shift-click"; id: number }
+  /** J16: a Shift- or Ctrl-click on a course object (added to or taken out of the object multi-selection on release). */
+  | { kind: "object-toggle"; id: number }
+  /** J16: a press on a member of the object multi-selection: a drag moves them all, a click selects that one. */
+  | { kind: "group"; id: number; bases: ReadonlyMap<number, course.CourseObject["geometry"]>; from: Pt; to: Pt; mmPerPx: number; moved: boolean }
   /** Object `id`'s geometry dragged: the whole path, a vertex, or a handle grip (§7 "Editing geometry", `geometry-gestures.ts`). */
   | ({ id: number } & GeometryDrag)
   /** A corner (`imageRing` index) of the selected image dragged from `press` (J7): the opposite corner stays put. */
@@ -188,6 +192,14 @@ export interface SelectOptions {
   onToggleMulti: (id: number) => void;
   onLasso: (ids: number[]) => void;
   onSelectObject: (id: number) => void;
+  /** J16: the object multi-selection (empty or ≥ 2 ids); its members are outlined and move together. */
+  objectMulti?: readonly number[];
+  /** J16: Shift/Ctrl-click on an object. */
+  onToggleObject?: (id: number) => void;
+  /** J16: live geometries of a group move, by id; null drops them (a cancel). */
+  onObjectsDraft?: (drafts: ReadonlyMap<number, course.CourseObject["geometry"]> | null) => void;
+  /** J16: a group move's one write (one undo entry). */
+  onObjectsMoved?: (moves: { id: number; geometry: course.CourseObject["geometry"] }[]) => void;
   /** Live geometry while an object or a vertex is dragged (the page draws it as a draft). */
   onObjectDraft: (id: number, geometry: course.CourseObject["geometry"] | null) => void;
   onObjectMoved: (id: number, geometry: course.CourseObject["geometry"]) => void;
@@ -255,6 +267,14 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
     // The layer draws neither regions nor toner savers on screen: the UI layer outlines them always.
     if (selected || obj.kind === "filter_region" || obj.kind === "toner_saver") shapes.push(...objectOutline(obj, selected, selected ? o.focusedVertex ?? null : null, selected && !!o.cropMode));
   }
+  // J16: each member of the object multi-selection outlined blue (no handles: a group has none).
+  for (const id of o.objectMulti ?? []) {
+    const obj = o.objects.find((x) => x.id === id);
+    if (!obj) continue;
+    for (const sh of objectOutline(obj, false)) {
+      if (sh.kind === "line" || sh.kind === "circle") shapes.push({ ...sh, dashed: false, color: BLUE, testId: "editor-object-multi-outline", data: { "object-id": String(id), "object-kind": obj.kind } });
+    }
+  }
   const byId = new Map(o.sites.map((s) => [s.id, s] as const));
   for (const id of o.multi) {
     const s = byId.get(id);
@@ -296,6 +316,9 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
       // A finger elsewhere is the viewer's: its targets, a pan, the tap that selects an object (§10).
       if (p.touch) return false;
       const sel = shown(o);
+      // J16: Shift or Ctrl on an object's body toggles it into the object multi-selection; a handle of the selected
+      // object (knob, corner, crop edge, vertex, grip) keeps its own gesture.
+      const toggle = (p.shift || !!p.ctrl) && p.target?.kind === "object" && !!o.onToggleObject;
       // The knob first (J11): it sits outside the box, a fixed screen distance from it, and wins over what is under it.
       if ((sel?.kind === "image" && !o.cropMode) || sel?.kind === "text") {
         if (near(knobOf(sel, p.mmPerPx).at, p.pt, reach)) {
@@ -310,7 +333,7 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
           g.current = { kind: "crop", id: sel.id, edge: e.edge, base: sel, to: p.pt, mmPerPx: p.mmPerPx, moved: false };
           return true;
         }
-        if (p.target?.kind === "object" && p.target.id === sel.id) {
+        if (!toggle && p.target?.kind === "object" && p.target.id === sel.id) {
           g.current = { kind: "object", id: sel.id, from: p.pt, to: p.pt, moved: false, vertex: null, base: sel.geometry };
           return true;
         }
@@ -322,7 +345,7 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
           g.current = { kind: "image-corner", id: sel.id, corner, base: sel.geometry, rotationDeg: sel.props.rotationDeg ?? 0, press: p.pt, mmPerPx: p.mmPerPx, moved: false, shift: !!p.shift };
           return true;
         }
-        if (p.target?.kind === "object" && p.target.id === sel.id) {
+        if (!toggle && p.target?.kind === "object" && p.target.id === sel.id) {
           g.current = { kind: "object", id: sel.id, from: p.pt, to: p.pt, moved: false, vertex: null, base: sel.geometry };
           return true;
         }
@@ -331,11 +354,24 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
         // answers null inside it (§5), so an interior press declines and the viewer pans — the area moves by its edge
         // or a vertex (docs/bugfix-editor-area-press-pans.md).
         const onBody = p.target?.kind === "object" && p.target.id === sel.id;
-        const d = pressGeometry(sel.geometry, vertexRule(sel.kind), { pt: p.pt, reach: HANDLE_PX * p.mmPerPx, alt: p.alt, shift: p.shift }, onBody);
-        if (d) {
+        const d = pressGeometry(sel.geometry, vertexRule(sel.kind), { pt: p.pt, reach: HANDLE_PX * p.mmPerPx, alt: p.alt, shift: p.shift }, onBody && !toggle);
+        if (d && !(toggle && d.kind === "object" && d.vertex === null)) {
           g.current = { ...d, id: sel.id };
           return true;
         }
+      }
+      if (toggle && p.target?.kind === "object") {
+        g.current = { kind: "object-toggle", id: p.target.id };
+        return true;
+      }
+      const target = p.target;
+      if (target?.kind === "object" && o.onObjectsMoved && (o.objectMulti ?? []).includes(target.id)) {
+        const bases = new Map((o.objectMulti ?? []).flatMap((id) => {
+          const obj = o.objects.find((x) => x.id === id);
+          return obj ? [[id, obj.geometry] as const] : [];
+        }));
+        g.current = { kind: "group", id: target.id, bases, from: p.pt, to: p.pt, mmPerPx: p.mmPerPx, moved: false };
+        return true;
       }
       if (p.shift && p.target?.kind === "site") {
         g.current = { kind: "shift-click", id: Number(p.target.id) };
@@ -377,6 +413,11 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
         leg.onBendsDraft?.(cur.bends);
         o.redraw();
         return gripPoint(cur.bends[cur.index], cur.which);
+      } else if (cur?.kind === "group") {
+        if (!cur.moved && near(cur.from, pt, 3 * cur.mmPerPx)) return;
+        cur.moved = true;
+        cur.to = pt;
+        o.onObjectsDraft?.(groupMoved(cur));
       } else if (cur?.kind === "image-corner") {
         if (!cur.moved && near(cur.press, pt, 3 * cur.mmPerPx)) return;
         cur.moved = true;
@@ -436,6 +477,17 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
         if (!pt) return o.onObjectStyleDraft?.(cur.id, null);
         cur.to = pt;
         return o.onObjectStyled?.(cur.id, styleChangeOf(cur));
+      }
+      if (cur.kind === "object-toggle") {
+        if (pt) o.onToggleObject?.(cur.id);
+        return;
+      }
+      if (cur.kind === "group") {
+        // A drag writes once; a cancelled one drops its drafts; a click on a member selects that one alone.
+        if (!cur.moved) return void (pt && o.onSelectObject(cur.id));
+        if (!pt) return o.onObjectsDraft?.(null);
+        cur.to = pt;
+        return o.onObjectsMoved?.([...groupMoved(cur)].map(([id, geometry]) => ({ id, geometry })));
       }
       if (cur.kind === "shift-click") {
         if (pt) o.onToggleMulti(cur.id);
@@ -502,6 +554,12 @@ function gripPoint(v: { x: number; y: number; hIn?: Pt; hOut?: Pt }, which: "in"
 }
 
 /** A bend grip's drag at `pt`: the handle moved by the pointer's offset from the press (`dragBendGrip`; Alt and Shift live). */
+/** A group move's geometries now: every member's base shifted by the drag (handles are offsets and stay). */
+export function groupMoved(d: { bases: ReadonlyMap<number, course.CourseObject["geometry"]>; from: Pt; to: Pt }): Map<number, course.CourseObject["geometry"]> {
+  const dx = d.to.x - d.from.x, dy = d.to.y - d.from.y;
+  return new Map([...d.bases].map(([id, g]) => [id, g.map((v) => ({ ...v, x: v.x + dx, y: v.y + dy }))]));
+}
+
 function gripDragged(d: Extract<Gesture, { kind: "bend-grip" }>, pt: Pt, mods?: { shift: boolean; alt: boolean }): Bend[] {
   const b = d.base[d.index];
   const h = (d.which === "out" ? b.hOut : b.hIn) ?? { x: 0, y: 0 };

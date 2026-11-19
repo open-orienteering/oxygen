@@ -252,6 +252,28 @@ describe("EditorWrites (docs/course-editor.md §3)", () => {
     expect(f.calls.at(-1)).toMatchObject({ proc: "objDelete", input: { id: 3, baseVersion: "3" } });
   });
 
+  it("updateObjects and deleteObjects run in order; a failure puts the done ones back and rethrows (J16)", async () => {
+    const f = fakeClient();
+    const w = new EditorWrites(f.client);
+    w.versions.seed("object", 1, "1");
+    w.versions.seed("object", 2, "2");
+    const g = (x: number) => [{ x, y: 0 }];
+    f.ok({ id: 1, version: "3" });
+    f.fail(new Error("boom"));
+    f.ok({ id: 1, version: "4" });
+    await expect(w.updateObjects([
+      { input: { id: 1, geometry: g(5) }, undo: { id: 1, geometry: g(0) } },
+      { input: { id: 2, geometry: g(5) }, undo: { id: 2, geometry: g(0) } },
+    ])).rejects.toThrow("boom");
+    expect(f.calls.at(-1)).toMatchObject({ proc: "objUpdate", input: { id: 1, geometry: g(0), baseVersion: "3" } });
+    const body = { kind: "whiteout" as const, geometry: [], props: {}, scope: { all: true as const } };
+    f.ok({});
+    f.fail(new Error("gone"));
+    f.ok({ id: 9, version: "1" });
+    await expect(w.deleteObjects([{ id: 1, body }, { id: 2, body }])).rejects.toThrow("gone");
+    expect(f.calls.at(-1)).toMatchObject({ proc: "objCreate", input: body });
+  });
+
   it("check-off sends no token and seeds the control's from the result (§9)", async () => {
     const f = fakeClient();
     const w = new EditorWrites(f.client);

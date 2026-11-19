@@ -289,6 +289,42 @@ export class EditorWrites {
     });
   }
 
+  /**
+   * Several updates as one gesture (J16: a group move), in order. A failure writes the `undo` of the ones already
+   * updated back (best effort) and rethrows, so the batch is all or nothing for its undo entry.
+   */
+  async updateObjects(changes: readonly { input: ObjectUpdateInput; undo: ObjectUpdateInput }[]): Promise<course.CourseObject[]> {
+    const done: ObjectUpdateInput[] = [];
+    const out: course.CourseObject[] = [];
+    try {
+      for (const c of changes) {
+        out.push(await this.updateObject(c.input));
+        done.push(c.undo);
+      }
+    } catch (e) {
+      for (const u of done.reverse()) await this.updateObject(u).catch(() => undefined);
+      throw e;
+    }
+    return out;
+  }
+
+  /**
+   * Several deletes as one gesture (J16: `Delete` on an object multi-selection). A failure creates the deleted ones
+   * again from their bodies (best effort, under new ids) and rethrows.
+   */
+  async deleteObjects(items: readonly { id: number; body: ObjectCreateInput }[]): Promise<void> {
+    const done: ObjectCreateInput[] = [];
+    try {
+      for (const it of items) {
+        await this.deleteObject(it.id);
+        done.push(it.body);
+      }
+    } catch (e) {
+      for (const b of done.reverse()) await this.createObject(b).catch(() => undefined);
+      throw e;
+    }
+  }
+
   /** `courseObject.delete` with the object's token. */
   deleteObject(id: number): Promise<void> {
     return this.serial("object", id, async () => {

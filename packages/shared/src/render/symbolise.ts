@@ -25,6 +25,7 @@ import { GlyphRegistry, type RegisteredGlyph, mapCap, mapJoin } from "./glyph-ta
 import { PathMeasure, gapIntervals, pathSections, subtractIntervals, wrapIntervals } from "./measure.js";
 import { patternInstances } from "./pattern.js";
 import { type FilterRegion, applyFilterRegions, applyKnockouts } from "./filter-region.js";
+import type { GraphicOutline } from "./trace-outline.js";
 import { placeGlyphs } from "./placement.js";
 import type { AreaSymbol, BorderSpec, LineSymbolBody, PointSymbol, RenderSymbol, StrokeSpec, TextSymbol } from "./symbol.js";
 import { type ShapedText, shapeText, shapeTextAlongPath } from "./text.js";
@@ -60,7 +61,8 @@ export interface RenderObject {
    * quad's four corners — the visible part's bottom-left, bottom-right,
    * top-right, top-left — so rotation and flips are in the corner order.
    */
-  image?: { graphicId: number; crop?: { x: number; y: number; width: number; height: number } };
+  /** `outline` (J19): the graphic's traced silhouette, the knockout footprint when `knockout` (§4.11). */
+  image?: { graphicId: number; crop?: { x: number; y: number; width: number; height: number }; outline?: GraphicOutline };
   /**
    * With `image`: the image cuts every image below it in this stream out
    * where it lies (J15, §4.11 "Knockout footprints"); ignored otherwise.
@@ -159,12 +161,13 @@ class Stage {
     const built = this.builder.build();
     const objects = this.input.objects;
     const knock = objects.some((o) => o.knockout && o.image) ? (i: number) => !!(objects[i]?.knockout && objects[i]?.image) : null;
+    const outlineOf = (i: number) => objects[i]?.image?.outline;
     const regions = this.input.regions;
-    if (!regions?.length) return { stream: knock ? applyKnockouts(built, knock) : built, warnings: this.warnings, hidden: [] };
+    if (!regions?.length) return { stream: knock ? applyKnockouts(built, knock, outlineOf) : built, warnings: this.warnings, hidden: [] };
     const filtered = applyFilterRegions(built, regions, { objectLimit: this.input.regionObjectLimit });
     for (const w of filtered.warnings) this.warnings.push({ objectIdx: -1, code: w.code, message: w.message, region: w.region });
     // After the regions: `applyFilterRegions` rebuilds the masks.
-    return { stream: knock ? applyKnockouts(filtered.stream, knock) : filtered.stream, warnings: this.warnings, hidden: filtered.hidden };
+    return { stream: knock ? applyKnockouts(filtered.stream, knock, outlineOf) : filtered.stream, warnings: this.warnings, hidden: filtered.hidden };
   }
 
   private warn(code: SymboliseWarning["code"], message: string): void {

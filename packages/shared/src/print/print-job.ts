@@ -29,9 +29,12 @@ import { type PrintPatch, prepareDocument } from "./prepared-document.js";
  * version 4 holds the whole-graphic rasters only, so it must be prepared
  * again rather than print without the logo. 6 (J15): an image may cut out
  * the images below it (`knockout`) — a version-5 host would print the
- * overlay whole over the hatches' openings.
+ * overlay whole over the hatches' openings. 7 (J18, J19): an attached image
+ * may hide its control's circle and number, and a knockout image cuts by its
+ * graphic's outline (the objects carry it) — a version-6 host would draw the
+ * hidden circles and numbers and cut by the box.
  */
-export const PRINT_JOB_VERSION = 6;
+export const PRINT_JOB_VERSION = 7;
 
 export type PrintJobGraphicMime = "image/png" | "image/svg+xml";
 

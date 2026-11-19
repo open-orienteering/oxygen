@@ -988,6 +988,198 @@ test.describe("J10: attach to a control", () => {
   });
 });
 
+// docs/course-editor.md §7 "Attached objects" (J18): an attached image hides its control's circle and number.
+test.describe("J18: hide the attached control's circle and number", () => {
+  desktopOnly();
+
+  test("the checkboxes show on an attached image; the layer drops the circle and the number; the control stays clickable", async ({ page }) => {
+    test.setTimeout(180_000);
+    const png = new PNG({ width: 8, height: 8 });
+    for (let i = 0; i < 64; i++) png.data.set([0, 160, 160, 255], i * 4);
+    const { id: graphicId } = await trpcCall<{ id: number }>("graphics.upload", { name: `e2e-j18-${Date.now()}.png`, scope: "event", fileDataBase64: PNG.sync.write(png).toString("base64") });
+    let objectId: number | null = null;
+    try {
+      await openEditor(page);
+      const sheetToggle = page.getByTestId("map-toggle-descriptions");
+      if (/hide/i.test((await sheetToggle.textContent()) ?? "")) await sheetToggle.click();
+      const [code] = await regularCodes(page, 1);
+      const control = await site(page, code);
+      // The image on a clear spot, attached where the control is: it covers nothing of the control.
+      const f = await toPaper(page, await emptyPoint(page, 90));
+      const made = await trpcCall<{ id: number }>("courseObject.create", {
+        kind: "image", geometry: [{ x: f.x - 3, y: f.y - 3 }, { x: f.x + 3, y: f.y + 3 }], props: { graphicId }, scope: { all: true },
+        attach: { controlId: Number(control.id), at: control.mm },
+      });
+      objectId = made.id;
+      await page.reload();
+      await editorReady(page);
+      if (/hide/i.test((await sheetToggle.textContent()) ?? "")) await sheetToggle.click();
+      const row = objectRow(page, made.id);
+      await expect(row).toBeAttached({ timeout: 15000 });
+      const ring = { minX: control.mm.x - 2.8, minY: control.mm.y - 2.8, maxX: control.mm.x + 2.8, maxY: control.mm.y + 2.8 };
+      const label = page.locator(`[data-testid="course-label"][data-site-id="${control.id}"]`);
+      await expect(label).toHaveCount(1, { timeout: 15000 });
+      await expect.poll(() => inkIn(page, ring, "purple"), { timeout: 30000 }).toBeGreaterThan(10);
+      const purpleBefore = await inkIn(page, ring, "purple");
+
+      // Select the image (a click inside it); the attach block offers both checkboxes, off.
+      await clickMap(page, await toPage(page, f));
+      await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-id", String(made.id), { timeout: 10000 });
+      await expect(page.getByTestId("editor-object-hide-circle")).not.toBeChecked();
+      await expect(page.getByTestId("editor-object-hide-number")).not.toBeChecked();
+
+      // Hide the circle: one write; the ring's purple goes, the number stays.
+      let wrote = waitForTrpc(page, "courseObject.update");
+      await page.getByTestId("editor-object-hide-circle").check();
+      await wrote;
+      await expect.poll(async () => JSON.parse((await row.getAttribute("data-props")) ?? "{}").hideControlCircle, { timeout: 15000 }).toBe(true);
+      await expect.poll(() => inkIn(page, ring, "purple"), { timeout: 30000 }).toBeLessThan(purpleBefore * 0.6);
+      await expect(label).toHaveCount(1);
+
+      // Hide the number: the layer draws no label for the control.
+      wrote = waitForTrpc(page, "courseObject.update");
+      await page.getByTestId("editor-object-hide-number").check();
+      await wrote;
+      await expect(label).toHaveCount(0, { timeout: 15000 });
+
+      // The control with neither is still a target: a click on it selects it.
+      await page.keyboard.press("Escape");
+      await select(page, code);
+
+    } finally {
+      if (objectId !== null) await cleanup("courseObject.delete", { id: objectId });
+      await cleanup("graphics.delete", { id: graphicId });
+    }
+  });
+});
+
+// docs/map-rendering.md §4.11 "Knockout footprints" (J19): a knockout cuts along its graphic's outline.
+test.describe("J19: cut along the graphic's outline", () => {
+  desktopOnly();
+
+  test("a round hatch cuts the overlay only under its disc: the overlay still shows in the box's corners", async ({ page }) => {
+    test.setTimeout(180_000);
+    const black = new PNG({ width: 8, height: 8 });
+    for (let i = 0; i < 64; i++) black.data.set([0, 0, 0, 255], i * 4);
+    // A 64 px disc, red, on a transparent canvas: its outline is traced at the first knockout load.
+    const disc = new PNG({ width: 64, height: 64 });
+    for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) if ((x - 31.5) ** 2 + (y - 31.5) ** 2 < 30 ** 2) disc.data.set([220, 40, 40, 255], (y * 64 + x) * 4);
+    const up = async (png: PNG, name: string) => (await trpcCall<{ id: number }>("graphics.upload", { name: `e2e-j19-${name}-${Date.now()}.png`, scope: "event", fileDataBase64: PNG.sync.write(png).toString("base64") })).id;
+    const overlayGraphic = await up(black, "overlay"), discGraphic = await up(disc, "disc");
+    const made: number[] = [];
+    try {
+      await openEditor(page);
+      const sheetToggle = page.getByTestId("map-toggle-descriptions");
+      if (/hide/i.test((await sheetToggle.textContent()) ?? "")) await sheetToggle.click();
+      const f = await toPaper(page, await emptyPoint(page, 120));
+      made.push((await trpcCall<{ id: number }>("courseObject.create", { kind: "image", geometry: [{ x: f.x - 8, y: f.y - 8 }, { x: f.x + 8, y: f.y + 8 }], props: { graphicId: overlayGraphic }, scope: { all: true } })).id);
+      const hatch = await trpcCall<{ id: number; version: string }>("courseObject.create", { kind: "image", geometry: [{ x: f.x - 5, y: f.y - 5 }, { x: f.x + 5, y: f.y + 5 }], props: { graphicId: discGraphic }, scope: { all: true } });
+      made.push(hatch.id);
+      await page.reload();
+      await editorReady(page);
+      if (/hide/i.test((await sheetToggle.textContent()) ?? "")) await sheetToggle.click();
+      // A corner of the hatch's box, outside its disc: the black overlay shows through the transparent corner.
+      const corner = { minX: f.x - 4.9, minY: f.y - 4.9, maxX: f.x - 4.1, maxY: f.y - 4.1 };
+      await expect.poll(() => inkIn(page, corner, "dark"), { timeout: 30000 }).toBeGreaterThan(3);
+      const before = await inkIn(page, corner, "dark");
+      // Knockout on: the box would cut the corner to the map; the outline leaves it black.
+      await trpcCall("courseObject.update", { id: hatch.id, baseVersion: hatch.version, props: { graphicId: discGraphic, knockout: true } });
+      await page.reload();
+      await editorReady(page);
+      if (/hide/i.test((await sheetToggle.textContent()) ?? "")) await sheetToggle.click();
+      await expect.poll(async () => JSON.parse((await objectRow(page, hatch.id).getAttribute("data-props")) ?? "{}").knockout, { timeout: 15000 }).toBe(true);
+      await expect.poll(() => inkIn(page, corner, "dark"), { timeout: 30000 }).toBeGreaterThanOrEqual(Math.floor(before * 0.8));
+      // The disc's centre is the hatch's red, not the overlay's black, either way.
+      expect(await inkIn(page, { minX: f.x - 0.5, minY: f.y - 0.5, maxX: f.x + 0.5, maxY: f.y + 0.5 }, "dark")).toBe(0);
+    } finally {
+      for (const id of made) await cleanup("courseObject.delete", { id });
+      for (const id of [overlayGraphic, discGraphic]) await cleanup("graphics.delete", { id });
+    }
+  });
+});
+
+// docs/course-editor.md §7 "Multi-selection" (J16): Shift/Ctrl-click several objects, then act on them together.
+test.describe("J16: object multi-selection", () => {
+  desktopOnly();
+
+  test("Ctrl-click adds an image; a drag moves both as one undo; a style field sets both; Ctrl+D and Delete act on the set", async ({ page }) => {
+    test.setTimeout(180_000);
+    const png = new PNG({ width: 8, height: 8 });
+    for (let i = 0; i < 64; i++) png.data.set([0, 160, 160, 255], i * 4);
+    const { id: graphicId } = await trpcCall<{ id: number }>("graphics.upload", { name: `e2e-j16-${Date.now()}.png`, scope: "event", fileDataBase64: PNG.sync.write(png).toString("base64") });
+    const made: number[] = [];
+    const ours = async () => (await page.getByTestId("editor-object-row").evaluateAll((els, g) => els
+      .filter((el) => JSON.parse(el.getAttribute("data-props") ?? "{}").graphicId === g).map((el) => Number(el.getAttribute("data-object-id"))), graphicId));
+    try {
+      await openEditor(page);
+      const sheetToggle = page.getByTestId("map-toggle-descriptions");
+      if (/hide/i.test((await sheetToggle.textContent()) ?? "")) await sheetToggle.click();
+      const centre = await emptyPoint(page, 120);
+      const a = await toPaper(page, { x: centre.x - 45, y: centre.y });
+      const b = await toPaper(page, { x: centre.x + 45, y: centre.y });
+      for (const c of [a, b]) {
+        const o = await trpcCall<{ id: number }>("courseObject.create", { kind: "image", geometry: [{ x: c.x - 2, y: c.y - 2 }, { x: c.x + 2, y: c.y + 2 }], props: { graphicId }, scope: { all: true } });
+        made.push(o.id);
+      }
+      await page.reload();
+      await editorReady(page);
+      if (/hide/i.test((await sheetToggle.textContent()) ?? "")) await sheetToggle.click();
+      const [rowA, rowB] = made.map((id) => objectRow(page, id));
+      await expect(rowB).toBeAttached({ timeout: 15000 });
+
+      // A click selects A; Ctrl-click adds B: the multi inspector, both outlined.
+      await clickMap(page, await toPage(page, a));
+      await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-id", String(made[0]), { timeout: 10000 });
+      await page.keyboard.down("Control");
+      await page.mouse.click(...Object.values(await toPage(page, b)) as [number, number]);
+      await page.keyboard.up("Control");
+      await expect(page.getByTestId("editor-object-multi")).toHaveAttribute("data-count", "2", { timeout: 10000 });
+      await expect(page.getByTestId("editor-object-multi")).toHaveAttribute("data-kind", "image");
+      await expect.poll(async () => (await toolShapes(page, "editor-object-multi-outline")).length).toBe(2);
+
+      // A drag on B moves both 3 mm right: one batch; Ctrl+Z puts both back.
+      const a0 = await geometryOf(rowA), b0 = await geometryOf(rowB);
+      await dragMm(page, b, { x: b.x + 3, y: b.y });
+      await expect.poll(async () => (await geometryOf(rowA))[0].x - a0[0].x, { timeout: 15000 }).toBeCloseTo(3, 0);
+      await expect.poll(async () => (await geometryOf(rowB))[0].x - b0[0].x, { timeout: 15000 }).toBeCloseTo(3, 0);
+      await expect(page.getByTestId("editor-object-multi")).toHaveAttribute("data-count", "2");
+      await page.keyboard.press("Control+z");
+      await expect.poll(async () => (await geometryOf(rowA))[0].x, { timeout: 15000 }).toBeCloseTo(a0[0].x, 3);
+      await expect.poll(async () => (await geometryOf(rowB))[0].x, { timeout: 15000 }).toBeCloseTo(b0[0].x, 3);
+
+      // Opacity 40 % in the multi inspector: both rows carry it.
+      const opacity = page.getByTestId("editor-object-multi-style-opacity");
+      await opacity.fill("40");
+      await opacity.press("Enter");
+      await opacity.blur();
+      for (const row of [rowA, rowB]) {
+        await expect.poll(async () => JSON.parse((await row.getAttribute("data-props")) ?? "{}").opacity, { timeout: 15000 }).toBeCloseTo(0.4, 3);
+      }
+
+      // Ctrl+D: two copies, selected together; Delete removes the copies; Escape ends the selection.
+      await page.keyboard.press("Control+d");
+      await expect.poll(async () => (await ours()).length, { timeout: 15000 }).toBe(4);
+      await expect(page.getByTestId("editor-object-multi")).toHaveAttribute("data-count", "2");
+      const copies = (await ours()).filter((id) => !made.includes(id));
+      made.push(...copies);
+      await page.keyboard.press("Delete");
+      await expect.poll(async () => (await ours()).length, { timeout: 15000 }).toBe(2);
+      // Shift-click toggles too: B out of {A, B} leaves A alone.
+      await page.keyboard.press("Escape");
+      await clickMap(page, await toPage(page, a));
+      await page.keyboard.down("Shift");
+      await page.mouse.click(...Object.values(await toPage(page, b)) as [number, number]);
+      await expect(page.getByTestId("editor-object-multi")).toHaveAttribute("data-count", "2", { timeout: 10000 });
+      await page.mouse.click(...Object.values(await toPage(page, b)) as [number, number]);
+      await page.keyboard.up("Shift");
+      await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-id", String(made[0]), { timeout: 10000 });
+    } finally {
+      for (const id of made) await cleanup("courseObject.delete", { id });
+      await cleanup("graphics.delete", { id: graphicId });
+    }
+  });
+});
+
 // docs/course-editor.md §7 "Duplicate, copy, cut, paste" (J12): the app clipboard in Course mode.
 test.describe("J12: duplicate, copy, cut, paste", () => {
   desktopOnly();

@@ -1019,7 +1019,7 @@ selection, order, copies and set of caps for both routes.
 
 ```ts
 interface PrintJob {
-  version: 6;                       // PRINT_JOB_VERSION; a host refuses another (1: G15, no patch; 2: before J5's image passes; 3: before J13's translucent band; 4: before the SVG windows; 5: before J15's knockout images)
+  version: 7;                       // PRINT_JOB_VERSION; a host refuses another (1: G15, no patch; 2: before J5's image passes; 3: before J13's translucent band; 4: before the SVG windows; 5: before J15's knockout images; 6: before J18's hidden circles and numbers and J19's outline cuts)
   document: {
     hash: string;
     rotationCorrectionDeg: number;
@@ -1247,7 +1247,7 @@ downloads from the server already differ (§3.2).
 - *Patch* (G14): the job's own `document.patch` (§8.5), applied by the
   same `prepareDocument` the server's worker runs, so an event's
   corrections print the same on the device; the client composes job
-  version 6 (`DEVICE_PRINT_JOB_VERSION`; J5 raised it to 3, since a
+  version 7 (`DEVICE_PRINT_JOB_VERSION`; J5 raised it to 3, since a
   device built before image passes would print graphics without their
   rotation, opacity or place under upper purple; J13 to 4, since a device
   built before it would print a translucent corridor band as the opaque
@@ -1255,7 +1255,9 @@ downloads from the server already differ (§3.2).
   holds a cropped SVG only as the whole-graphic raster, which the
   composer no longer asks, so it would print without the logo; J15 to 6,
   since a device built before knockout images would print the overlay
-  whole over the hatches' openings). A job stored offline at an older version reads as not stored and
+  whole over the hatches' openings; J18 and J19 to 7, since a device built
+  before them would draw an attached hatch's hidden circle and number and
+  cut by the box instead of the outline the objects now carry). A job stored offline at an older version reads as not stored and
   is prepared again.
 - *Writer*: `@cantoo/pdf-lib` with fflate's `zlibSync` — pure
   JavaScript, the same code in Node and the browser (§3.2).

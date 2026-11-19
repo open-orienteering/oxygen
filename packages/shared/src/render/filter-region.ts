@@ -7,6 +7,7 @@
  * input and print gets the screen's result by construction.
  */
 
+import type { GraphicOutline } from "./trace-outline.js";
 import { type FilterMask, type ImagePass, type Pass, type PassStream, type RenderPath, imageQuadCorners, makePath } from "./pass-stream.js";
 import { type Bounds, pathBounds, unionBounds } from "./path.js";
 import { type FlatRing, flattenRings, pointInRings, polylinesCrossRings } from "./geometry.js";
@@ -316,6 +317,52 @@ export function knockoutFootprint(q: ImagePass["quad"]): RenderPath | null {
   return makePath([...at(du, dv), ...at(1 - du, dv), ...at(1 - du, 1 - dv), ...at(du, 1 - dv)].map(Math.round), undefined, true);
 }
 
+/**
+ * A knockout image's footprint paths (J19): its graphic's outline (`GraphicOutline`, fractions of the whole graphic)
+ * cut to the pass's crop and mapped through its quad, one path per ring; with no outline (or an empty one) the box
+ * (`knockoutFootprint`). Empty: nothing of the outline is in the crop, so nothing is cut.
+ */
+export function knockoutFootprints(q: ImagePass["quad"], crop: ImagePass["crop"], outline: GraphicOutline | undefined): RenderPath[] {
+  if (!outline?.length) {
+    const box = knockoutFootprint(q);
+    return box ? [box] : [];
+  }
+  const c = crop ?? { x: 0, y: 0, width: 1, height: 1 };
+  if (!(c.width > 0) || !(c.height > 0)) return [];
+  const out: RenderPath[] = [];
+  for (const ring of outline) {
+    // Into the visible part's unit square (top-left origin), cut to it, then up the quad (its (0, 0) is bottom-left).
+    const pts: [number, number][] = [];
+    for (let i = 0; i + 1 < ring.length; i += 2) pts.push([(ring[i] - c.x) / c.width, (ring[i + 1] - c.y) / c.height]);
+    const cut = clipToUnitSquare(pts);
+    if (cut.length < 3) continue;
+    const coords = cut.flatMap(([u, t]) => [Math.round(q[0] * u + q[2] * (1 - t) + q[4]), Math.round(q[1] * u + q[3] * (1 - t) + q[5])]);
+    out.push(makePath(coords, undefined, true));
+  }
+  return out;
+}
+
+/** Sutherland–Hodgman against the unit square (convex, so one pass per edge). */
+function clipToUnitSquare(poly: [number, number][]): [number, number][] {
+  const edges: [(p: [number, number]) => number][] = [[(p) => p[0]], [(p) => 1 - p[0]], [(p) => p[1]], [(p) => 1 - p[1]]];
+  let cur = poly;
+  for (const [side] of edges) {
+    if (cur.length === 0) break;
+    const next: [number, number][] = [];
+    for (let i = 0; i < cur.length; i++) {
+      const a = cur[i], b = cur[(i + 1) % cur.length];
+      const da = side(a), db = side(b);
+      if (da >= 0) next.push(a);
+      if ((da >= 0) !== (db >= 0)) {
+        const t = da / (da - db);
+        next.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+      }
+    }
+    cur = next;
+  }
+  return cur;
+}
+
 const quadBounds = (q: ImagePass["quad"]): Bounds => {
   const c = imageQuadCorners(q);
   return { minX: Math.min(...c.map((p) => p[0])), minY: Math.min(...c.map((p) => p[1])), maxX: Math.max(...c.map((p) => p[0])), maxY: Math.max(...c.map((p) => p[1])) };
@@ -326,12 +373,13 @@ const meets = (a: Bounds, b: Bounds) => a.minX <= b.maxX && b.minX <= a.maxX && 
  * Knockout images (J15; docs/map-rendering.md §4.11 "Knockout footprints"):
  * each image pass whose object `knockout` names masks every **image** pass
  * before it in the stream (below it) whose quad bounds meet its footprint
- * (`knockoutFootprint`). Other kinds are never masked. A pass already
+ * (`knockoutFootprints`: its graphic's outline from `outlineOf` when it has
+ * one, J19, else its box). Other kinds are never masked. A pass already
  * masked by filter regions keeps those regions and gains the footprints.
  * Masks are deduplicated by region set and numbered in stream order.
  * Returns the stream unchanged when nothing is cut.
  */
-export function applyKnockouts(stream: PassStream, knockout: (objectIdx: number) => boolean): PassStream {
+export function applyKnockouts(stream: PassStream, knockout: (objectIdx: number) => boolean, outlineOf?: (objectIdx: number) => GraphicOutline | undefined): PassStream {
   const n = stream.passes.length;
   const footprints: { path: RenderPath; bounds: Bounds }[] = [];
   // Per pass: the footprint ids above it that cut it (filled walking from the top of the stream down).
@@ -348,8 +396,8 @@ export function applyKnockouts(stream: PassStream, knockout: (objectIdx: number)
       any = true;
     }
     if (knockout(stream.objectIdx[i])) {
-      const path = knockoutFootprint(p.quad);
-      if (path) footprints.push({ path, bounds: pathBounds(path) });
+      // One footprint per path (J19: an outline's rings), each cutting what its own bounds meet.
+      for (const path of knockoutFootprints(p.quad, p.crop, outlineOf?.(stream.objectIdx[i]))) footprints.push({ path, bounds: pathBounds(path) });
     }
   }
   if (!any) return stream;

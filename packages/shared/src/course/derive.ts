@@ -10,6 +10,7 @@ import type { MapPoint, PathVertex } from "../course-maps/schema.js";
 import { bendSegmentAt, legPolylineOf } from "./bends.js";
 import { circleCuts, polylineLegGaps } from "./cuts.js";
 import { sectionsOf } from "./structure.js";
+import { attachedHides } from "./objects.js";
 import type { CourseDerivation, CourseItem, CourseItemRole, CourseLayerInput, CourseSite, CourseStructure, DerivedCourse, DerivedLeg, DerivedSite, DerivedSiteRole } from "./types.js";
 
 /** Sizes the rules read, paper mm (from the resolved symbols). */
@@ -283,12 +284,14 @@ export function deriveCourse(input: CourseLayerInput, m: CourseMetrics): CourseD
     for (const e of sequences[0]) if (e.role === "control") visits.set(e.site.id, (visits.get(e.site.id) ?? true) && !!e.item.numberHidden);
     for (const [id, hidden] of visits) if (hidden) hiddenNumber.add(id);
   }
+  // J18: a number an attached image hides is not placed at all, whatever `labels` says.
+  const hiddenByObject = attachedHides(input.objects).number;
   const offsets = single?.labelOffsets ?? {};
   // The placer's direction preferences are screen conventions: place in y-down, then flip back.
   // Crossing and map-issue points are no placement obstacle (§10.3).
   const circles: PlacementCircle[] = sites.filter((s) => !isMark(s.role)).map((s) => {
     const c: PlacementCircle = { id: s.id, x: s.x, y: -s.y, radius: extentOf(s.role) };
-    if (s.role === "control" && (input.viewOptions.labels?.[s.id] !== undefined || !hiddenNumber.has(s.id))) {
+    if (s.role === "control" && !hiddenByObject.has(s.id) && (input.viewOptions.labels?.[s.id] !== undefined || !hiddenNumber.has(s.id))) {
       c.label = input.viewOptions.labels?.[s.id] ?? numbers.get(s.id)?.join("/") ?? s.code;
       const off = offsets[s.id];
       if (off) c.fixedLabel = { x: s.x + off.dx, y: -(s.y + off.dy) };

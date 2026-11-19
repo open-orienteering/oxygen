@@ -20,13 +20,16 @@ export interface StyleValue {
   crop?: Crop;
   /** Cut out graphics below (J15, docs/course-editor.md §7): images only. */
   knockout?: boolean;
+  /** While attached, hide the control's circle / number (J18, docs/course-editor.md §7 "Attached objects"). */
+  hideControlCircle?: boolean;
+  hideControlNumber?: boolean;
 }
 export interface Crop { x: number; y: number; width: number; height: number }
 
 export const FULL_CROP: Crop = { x: 0, y: 0, width: 1, height: 1 };
 
 /** A field's edit as the next props: `patch` over `props`, a default value removing its key. */
-export function stylePatch<P extends StyleValue>(props: P, patch: { opacityPct?: number; blend?: "normal" | "multiply"; rotationDeg?: number; flipH?: boolean; flipV?: boolean; crop?: Crop | null; knockout?: boolean }): P {
+export function stylePatch<P extends StyleValue>(props: P, patch: { opacityPct?: number; blend?: "normal" | "multiply"; rotationDeg?: number; flipH?: boolean; flipV?: boolean; crop?: Crop | null; knockout?: boolean; hideControlCircle?: boolean; hideControlNumber?: boolean }): P {
   const next = { ...props } as Record<string, unknown>;
   const set = (key: string, value: unknown, isDefault: boolean) => {
     if (isDefault) delete next[key];
@@ -44,6 +47,8 @@ export function stylePatch<P extends StyleValue>(props: P, patch: { opacityPct?:
   if (patch.flipH !== undefined) set("flipH", true, !patch.flipH);
   if (patch.flipV !== undefined) set("flipV", true, !patch.flipV);
   if (patch.knockout !== undefined) set("knockout", true, !patch.knockout);
+  if (patch.hideControlCircle !== undefined) set("hideControlCircle", true, !patch.hideControlCircle);
+  if (patch.hideControlNumber !== undefined) set("hideControlNumber", true, !patch.hideControlNumber);
   if (patch.crop !== undefined) {
     const c = patch.crop;
     set("crop", c, !c || (c.x === 0 && c.y === 0 && c.width === 1 && c.height === 1));
@@ -99,4 +104,28 @@ export function clampCrop(c: Crop, minW = 0.01, minH = 0.01): Crop {
   const width = Math.max(mw, Math.min(1, r(c.width))), height = Math.max(mh, Math.min(1, r(c.height)));
   const x = Math.max(0, Math.min(r(1 - width), r(c.x))), y = Math.max(0, Math.min(r(1 - height), r(c.y)));
   return { x, y, width: Math.min(width, r(1 - x)), height: Math.min(height, r(1 - y)) };
+}
+
+/**
+ * J16: what a style edit changed — every key whose value differs between `before` and `after` (undefined: removed).
+ * Applied to each object of a multi-selection with `applyPropsDiff`, so the one field edited is set on all of them
+ * and their other props stay their own.
+ */
+export function propsDiff(before: object, after: object): Record<string, unknown> {
+  const b = before as Record<string, unknown>, a = after as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const k of new Set([...Object.keys(b), ...Object.keys(a)])) {
+    if (JSON.stringify(b[k]) !== JSON.stringify(a[k])) out[k] = a[k];
+  }
+  return out;
+}
+
+/** `props` with `diff` applied (an undefined value removes the key). */
+export function applyPropsDiff<P extends object>(props: P, diff: Record<string, unknown>): P {
+  const next = { ...props } as Record<string, unknown>;
+  for (const [k, v] of Object.entries(diff)) {
+    if (v === undefined) delete next[k];
+    else next[k] = v;
+  }
+  return next as P;
 }

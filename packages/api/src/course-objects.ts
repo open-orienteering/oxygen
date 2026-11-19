@@ -15,6 +15,8 @@ import { course, encodeHlc } from "@oxygen/shared";
 import type { Prisma, PrismaClient } from "./generated/prisma/client.js";
 import { nextServerHlc } from "./serverClock.js";
 import { publicControlId } from "./control-id.js";
+import { graphicOutline } from "./course-maps/graphics.js";
+import { printGate } from "./course-maps/print-worker-host.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 type Row = { id: string; seq: number; kind: string; geometry: unknown; props: unknown; scope: unknown; attach?: unknown; z: number; version: bigint };
@@ -65,14 +67,46 @@ export function detachedIfRemoved(o: StoredCourseObject, controls: ReadonlyMap<s
   return { ...rest, geometry: course.translateGeometry(o.geometry, c.x - attach.at.x, c.y - attach.at.y) } as StoredCourseObject;
 }
 
-/** The event's objects in draw order (`z`, then `seq`); one attached to a deleted control detached where it was drawn. */
+/**
+ * The event's objects in draw order (`z`, then `seq`); one attached to a deleted control detached where it was drawn;
+ * a knockout image with its graphic's outline (J19, `withOutlines`).
+ */
 export async function loadCourseObjects(db: Db, eventId: bigint): Promise<StoredCourseObject[]> {
   const rows = await db.courseObject.findMany({ where: { eventId }, orderBy: [{ z: "asc" }, { seq: "asc" }] });
-  const objects = rows.flatMap((r) => storedObjectOf(r) ?? []);
+  const objects = await withOutlines(db, rows.flatMap((r) => storedObjectOf(r) ?? []));
   // The controls only when something is attached (most events attach nothing).
   if (!objects.some((o) => o.attach)) return objects;
   const controls = await loadAttachControls(db, eventId);
   return objects.map((o) => detachedIfRemoved(o, controls));
+}
+
+/**
+ * J19 (docs/map-rendering.md §4.11): each knockout image gets its graphic's traced outline (read-only `outline`, the
+ * footprint it cuts by), when it has one. A graphic not traced yet (`graphics.outline` NULL: uploaded, imported or
+ * copied since) is traced here once, under the print gate, and stored — `[]` for a whole box. A graphic that cannot be
+ * traced cuts by its box this time and is tried again on the next load.
+ */
+export async function withOutlines<O extends StoredCourseObject>(db: Db, objects: O[]): Promise<O[]> {
+  const ids = [...new Set(objects.flatMap((o) => (o.kind === "image" && o.props.knockout ? [o.props.graphicId] : [])))];
+  if (ids.length === 0) return objects;
+  const rows = await db.graphic.findMany({ where: { id: { in: ids.map(BigInt) } }, select: { id: true, outline: true, mime: true, widthPx: true, heightPx: true } });
+  const outlines = new Map<number, course.GraphicOutline>();
+  for (const r of rows) {
+    let outline = Array.isArray(r.outline) ? (r.outline as unknown as course.GraphicOutline) : null;
+    if (outline === null) {
+      try {
+        const held = await db.graphic.findUnique({ where: { id: r.id }, select: { data: true } });
+        if (!held) continue;
+        outline = await printGate(() => graphicOutline(held.data, r.mime, r.widthPx, r.heightPx));
+        await db.graphic.update({ where: { id: r.id }, data: { outline: outline as unknown as Prisma.InputJsonValue } });
+      } catch {
+        continue;
+      }
+    }
+    if (outline.length) outlines.set(Number(r.id), outline);
+  }
+  if (outlines.size === 0) return objects;
+  return objects.map((o) => (o.kind === "image" && o.props.knockout && outlines.has(o.props.graphicId) ? { ...o, outline: outlines.get(o.props.graphicId) } : o));
 }
 
 /** Public ids ↔ UUIDs of the event's courses and classes. */

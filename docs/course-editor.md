@@ -1377,10 +1377,63 @@ the selection when its control stops being drawn (user answer 8).
 
   Each is one `courseObject.update { geometry, attach }` and one undo
   entry. Disabled when no control is drawn.
+  - *Hide control circle* / *Hide control number*
+    (`editor-object-hide-circle`, `editor-object-hide-number`; J18, user
+    2026-11-19): on an attached **image** only. On writes
+    `hideControlCircle` / `hideControlNumber: true`, off removes the key
+    (`stylePatch`); one `courseObject.update { props }`, one undo entry.
+    The layer then draws the control without its circle or number
+    (`course-layer.md` §8.1 "Hiding the attached control"), on screen and
+    in print; the control is still selected by a click where it is. Free
+    or detached, the flags do nothing (they are kept, and act again when
+    the image is attached).
 - **A deleted control** (user answer 7): nothing is written to the
   object; the API reads it as detached where it was drawn
   (`course-layer.md` §8.4), so it stays in place and *Detach* is gone;
   undo of the delete (`control.restore`) attaches it again.
+
+### Multi-selection
+
+Row J16 (user 2026-11-19: "ctrl click images and move or operate on
+several at the same time"). In `V`, **Ctrl-click** (Cmd on a Mac) or
+**Shift-click** on a course object adds it to the object multi-selection
+or takes it out (`toggle-object`; `EditorState.objectMulti`, in selection
+order, empty or ≥ 2). The plain selected object starts it; taking one out
+of two leaves the other selected alone. It is exclusive with the control
+selection and the control multi-selection: selecting a control, a
+Shift-click or lasso of controls, a plain click on another object or on
+empty map, Layout or Map mode end it; Escape drops it (after a tool and a
+control multi-selection, before a single object). An unselected image
+takes the modified click too (a plain press on it still pans). A press on
+a handle of the selected object (knob, corner, crop edge, vertex, grip)
+keeps its own gesture. Members are outlined blue without handles
+(`editor-object-multi-outline`); an attached member not drawn in the view
+leaves the selection.
+
+- **Move.** A drag on a member moves every member by the same offset
+  (past 3 px; `groupMoved`): drafts while dragging, then one write per
+  object as one batch (`EditorWrites.updateObjects`: a failure writes the
+  done ones back and rethrows) and **one undo entry**. An attached member
+  sends its drawn `at` with its geometry, as a single move does. A click
+  on a member without a drag selects that object alone.
+- **Delete** (`Delete` / `Backspace`, or *Delete n objects*,
+  `editor-object-multi-delete`): one batch (`deleteObjects`: a failure
+  creates the deleted ones again), one undo entry (undo creates them
+  again under new ids).
+- **Duplicate** (`Ctrl+D`, or *Duplicate n objects*,
+  `editor-object-multi-duplicate`): a copy of each 3 mm down-right
+  (`duplicateBody`, attachments kept), one `createObjects` batch, one undo
+  entry; the copies become the multi-selection.
+- **Inspector** (`editor-object-multi`, `data-count`, `data-kind` the
+  shared kind or `mixed`): the count, then — when every member is one
+  styled kind (image, map text, white-out) — the style fields that kind
+  has, without size and crop (`editor-object-multi-style-*`). They show
+  the first member's values; an edit sets that one field on every member
+  (`propsDiff` / `applyPropsDiff`: the other props stay each object's
+  own), one batch, one undo entry.
+- Not for a multi-selection: copy, cut and paste (the clipboard holds one
+  object, §7 "Duplicate, copy, cut, paste"), the lasso (controls only),
+  transform handles and the knob, and Layout mode's page objects.
 
 ### Transform handles
 
@@ -3171,6 +3224,10 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | E2E | `e2e/course-editor-tools.spec.ts` "J11: transform handles in Course mode" (`chromium`) | §7 "Transform handles": a 20 × 10 mm image and a 10 mm white-out on clear spots; the image selected; its knob dragged a quarter turn → one update, `rotationDeg` ≈ 90, `Ctrl+Z` removes it; held and `Escape` → no write; a double-click → four `editor-object-crop-edge`, no knob, *Crop by its edges* pressed; the right edge a quarter in → one update, crop width 0.75, the box 15 mm wide; `Ctrl+Z` restores; `Escape` leaves crop mode with the image selected; crop mode again, a click on the white-out's edge selects it and leaves crop mode; the white-out's *Turn 90°* and *Flip ↔* → one update each, its first corner at (−5, 5) then (5, 5) from its centre. Both objects are attached to a control as if it had moved 1 mm since they were written: the crop keeps the drawn left edge with `at` the control's position and undo puts the drawn box back; the turn writes the drawn vertices with `at` the control's position |
 | unit | `lib/editor/__tests__/clipboard.test.ts`, `lib/editor/__tests__/write-client.test.ts` (`createObjects`) | §7 "Duplicate, copy, cut, paste": the entry round-trips through storage, a corrupt or older one reads empty, a throwing storage keeps the memory copy; the duplicate 3 mm right and down with its attachment; a paste at a point centred and free, onto a control at the copied offset or centred and attached; the scope rules of answer 9 (same event drawn, not drawn, view All, another event, `all`, an unscoped object); the four refusals; a batch create in order, rolled back on a failure |
 | unit / E2E | `lib/editor/__tests__/style-fields.test.ts`, `clipboard.test.ts`; `e2e/course-editor-tools.spec.ts` (the J7 test) | J15 "Cut out graphics below": on writes `knockout: true`, off removes the key; duplicate, copy, both pastes and storage keep it; in the browser the checkbox writes and clears `props.knockout` |
+| unit | `lib/editor/__tests__/state.test.ts` (J16), `pages/editor/__tests__/bindings.test.ts` "object multi-selection (J16…)", `lib/editor/__tests__/write-client.test.ts` (`updateObjects`, `deleteObjects`), `lib/editor/__tests__/style-fields.test.ts` (`propsDiff`, J18) | §7 "Multi-selection": toggle in and out, one left is the plain selection, exclusive with controls, Escape order, ended by a control / plain object / Layout mode / control multi-selection; Shift- or Ctrl-click toggles on release (an unselected image too), a vertex handle keeps its drag; members outlined, a drag moves all as one write, a click selects one, a cancel drops the drafts; batches roll back the done writes; one field set on all; the J18 hide flags on / off |
+| E2E | `e2e/course-editor-tools.spec.ts` "J16: object multi-selection" (`chromium`) | §7 "Multi-selection": two images; a click and a Ctrl-click → `editor-object-multi` (2, `image`), two outlines; a drag on one moves both 3 mm, `Ctrl+Z` puts both back; opacity 40 % in the multi inspector on both rows; `Ctrl+D` → four objects, the copies selected; `Delete` → two; Shift-click toggles in and out |
+| E2E | `e2e/course-editor-tools.spec.ts` "J18: hide the attached control's circle and number" (`chromium`) | §7 "Attached objects": an image attached to a control, selected; both checkboxes off; *Hide control circle* → one update, the circle's purple gone from the canvas, the number kept; *Hide control number* → its `course-label` gone; the control still selected by a click |
+| E2E | `e2e/course-editor-tools.spec.ts` "J19: cut along the graphic's outline" (`chromium`) | `map-rendering.md` §4.11: a black overlay and a round red hatch over it; the overlay shows in the hatch box's corner, and still does once the hatch is a knockout (the box cut would show the map there), the disc's centre stays red |
 | E2E | `e2e/course-editor-tools.spec.ts` "J12: duplicate, copy, cut, paste" (`chromium`) | §7 "Duplicate, copy, cut, paste": a 10 mm area selected; `Ctrl+D` → one create, the copy selected 3 mm right and down, scope `all`; `Ctrl+C`, the pointer on a clear spot, `Ctrl+V` → the copy centred there and selected; `Ctrl+X` takes it out; two controls Shift-selected, `Ctrl+V` → two copies attached, each centred on its control, one `Ctrl+Z` removes both; after a reload `Ctrl+V` still pastes; an image entry naming an unknown graphic → `editor-error`, nothing created |
 | E2E | `e2e/course-editor-tools.spec.ts` "filter symbol picker" (`chromium`) | §6.4 / §7 (P3): a filter region over the 505 path, *picked symbols*: `editor-filter-symbol-505` with `data-members="3"` and "Path", `601` named "Magnetic north line" (601.0 matched to 601.b), no entry with a source code (`.`), the 505 swatch image loaded, the 850 frame only under Other, the search "path" → one entry; the eyedropper armed (`aria-pressed`, `V` not lit, no `editor-selection-ring`), a click on the path → one `courseObject.update`, `"symbols":[3]`, the 505 box checked, the note "505 Path", the band's ink below a third; still armed, a second click on the path → note `already`, `Esc` → `V` with the region still selected |
 | integration | `packages/api/src/__tests__/integration/course-print.test.ts` "course objects on the page" | §7 print: the row's "reference-raster pixel probe" of a printed course object is this test's page raster, not the E2E's — no HTTP route rasterises a composed page, and poppler is on the runner for the unit / integration jobs, not the E2E job (coordinator 2026-11-01) |

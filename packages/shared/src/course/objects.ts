@@ -14,6 +14,7 @@ import { z } from "zod";
 import { type CourseMapObject, type MapPoint, type PathVertex, mapFontFamilySchema, mapImageCropSchema, objectBlendSchema, objectOpacitySchema, objectRotationSchema, pathVertexSchema, pointSchema } from "../course-maps/schema.js";
 import { expandMapText } from "../course-maps/text.js";
 import { COORD_FLAG, type RenderPath, makePath } from "../render/pass-stream.js";
+import type { GraphicOutline } from "../render/trace-outline.js";
 import { type RenderSymbol, parseRenderSymbol } from "../render/symbol.js";
 import { objectAlpha } from "../render/symbolise.js";
 import type { CourseSymbolSet } from "./symbols.js";
@@ -103,6 +104,10 @@ export const courseObjectBodySchema = z.discriminatedUnion("kind", [
       flipV: z.boolean().optional(),
       /** Cut out graphics below (J15): the box masks the images under it. */
       knockout: z.boolean().optional(),
+      /** While attached, the control's circle is not drawn where this image is (J18, docs/course-layer.md §8.1). */
+      hideControlCircle: z.boolean().optional(),
+      /** While attached, the control's number (and leader) is not drawn where this image is (J18). */
+      hideControlNumber: z.boolean().optional(),
     }),
   }),
   z.object({
@@ -140,7 +145,13 @@ export function courseObjectAttachSchemaOf<S extends z.ZodType<string | number>>
 export const UNATTACHABLE_KINDS: readonly CourseObjectKind[] = ["toner_saver", "inset_frame"];
 
 /** What the course layer takes: the body plus an id for the object's `ref`, and its attachment (site id). */
-export type CourseLayerObject = CourseObjectBody & { id: number | string; attach?: CourseObjectAttach<string | number> };
+export type CourseLayerObject = CourseObjectBody & { id: number | string; attach?: CourseObjectAttach<string | number>; outline?: GraphicOutline };
+
+/**
+ * J19: an image's graphic outline (`graphics.outline`, `render.traceOutline`), read-only — the API adds it to an
+ * image object when its graphic has one (never written, never in `props`); the knockout footprint when `knockout`.
+ */
+export type { GraphicOutline } from "../render/trace-outline.js";
 
 /** A course object on the tRPC wire: public ids (course / class seq), the row's token. */
 export type CourseObject = CourseObjectBody & {
@@ -158,6 +169,8 @@ export type CourseObject = CourseObjectBody & {
   inCourses: number[] | null;
   /** The control (public id) it follows (J10); absent when unattached, or detached by its control's delete. */
   attach?: CourseObjectAttach<number>;
+  /** J19: an image's graphic outline, read-only (`CourseLayerObject.outline`). */
+  outline?: GraphicOutline;
 };
 
 /**
@@ -174,11 +187,28 @@ export function courseObjectInScope<Id>(scope: CourseObjectScope<Id>, drawn: { c
 /** A scope with course / class UUIDs: a `course_objects` row's (the wire names them by public id). */
 export type StoredScope = CourseObjectScope<string>;
 /** A `course_objects` row as the layer, the snapshot and the print pipeline read it: body + UUID scope. */
-export type StoredCourseObject = CourseObjectBody & { id: string; seq: number; scope: StoredScope; z: number; version: bigint; attach?: CourseObjectAttach<string> };
+export type StoredCourseObject = CourseObjectBody & { id: string; seq: number; scope: StoredScope; z: number; version: bigint; attach?: CourseObjectAttach<string>; outline?: GraphicOutline };
 
 /** A vertex path moved by (`dx`, `dy`); Bézier handles are offsets and stay as they are. */
 export function translateGeometry<V extends MapPoint>(geometry: readonly V[], dx: number, dy: number): V[] {
   return geometry.map((v) => ({ ...v, x: v.x + dx, y: v.y + dy }));
+}
+
+/**
+ * The controls an attached image hides (J18, §8.1 "Attachment"): site ids whose circle and whose number the image's
+ * `hideControlCircle` / `hideControlNumber` take away. Only attached images count (a free image's flags are inert);
+ * the caller passes the objects in scope, and an image whose control is not drawn hides nothing because its control
+ * draws nothing.
+ */
+export function attachedHides(objects: readonly CourseLayerObject[]): { circle: Set<string>; number: Set<string> } {
+  const circle = new Set<string>(), number = new Set<string>();
+  for (const o of objects) {
+    if (o.kind !== "image" || !o.attach) continue;
+    const id = String(o.attach.controlId);
+    if (o.props.hideControlCircle) circle.add(id);
+    if (o.props.hideControlNumber) number.add(id);
+  }
+  return { circle, number };
 }
 
 /**
@@ -354,13 +384,14 @@ function objectBuilder(
   const textSymbol = (fontFamily: keyof typeof FONT | undefined, sizeUm: number, colour: number, align: "left" | "center" | "right" | undefined) =>
     symbol({ type: "text", fontFamily: FONT[fontFamily ?? "sans"], fontSizeUm: sizeUm, colour, align: align === "center" ? "centre" : (align ?? "left") });
   /** An image (J5): one render object in the graphics row — its quad's corners and the graphic — and a fetch-list entry. */
-  const image = (graphicId: number, crop: CourseLayerImage["crop"], box: { x: number; y: number; width: number; height: number }, style: ImageStyle, ref: CourseRenderObject["ref"]) => {
+  const image = (graphicId: number, crop: CourseLayerImage["crop"], box: { x: number; y: number; width: number; height: number }, style: ImageStyle, ref: CourseRenderObject["ref"], outline?: GraphicOutline) => {
     if (graphicsRow === undefined) return;
     const corners = imageCorners(box, style).flatMap((p) => [um(p.x), um(p.y)]);
     out.objects.push({
       symbolIdx: symbol({ type: "area", fill: graphicsRow }),
       path: makePath(corners, undefined, true),
-      image: { graphicId, ...(crop ? { crop } : {}) },
+      // J19: the outline only where it cuts (a knockout image with a traced silhouette).
+      image: { graphicId, ...(crop ? { crop } : {}), ...(style.knockout && outline?.length ? { outline } : {}) },
       ref,
       ...objectAlpha(style),
       ...(style.knockout ? { knockout: true } : {}),
@@ -429,7 +460,7 @@ export function courseObjects(
       }
       case "image": {
         const [p, q] = o.geometry;
-        b.image(o.props.graphicId, o.props.crop, { x: Math.min(p.x, q.x), y: Math.min(p.y, q.y), width: Math.abs(p.x - q.x), height: Math.abs(p.y - q.y) }, o.props, ref);
+        b.image(o.props.graphicId, o.props.crop, { x: Math.min(p.x, q.x), y: Math.min(p.y, q.y), width: Math.abs(p.x - q.x), height: Math.abs(p.y - q.y) }, o.props, ref, (o as CourseLayerObject).outline);
         break;
       }
       case "filter_region":

@@ -1149,6 +1149,8 @@ model Graphic {
   /// Pixel size (J2): a PNG's own; an SVG's viewBox scaled to 4096 px on its longer side. NULL until filled.
   widthPx   Int?     @map("width_px")
   heightPx  Int?     @map("height_px")
+  /// J19: the traced outline (`render.traceOutline`): NULL until traced, `[]` for the whole box, else rings in fractions.
+  outline   Json?
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 

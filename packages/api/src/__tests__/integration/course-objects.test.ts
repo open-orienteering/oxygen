@@ -249,6 +249,42 @@ describe("attached to a control (J10, course-layer.md §8.1 \"Attachment\", §8.
   });
 });
 
+describe("J18 hides and J19 outlines (course-layer.md §8.1, map-rendering.md §4.11)", () => {
+  it("the hide flags round-trip on an attached image", async () => {
+    await caller.control.create({ codes: "141", xpos: 30, ypos: 30 });
+    const o = await caller.courseObject.create({
+      kind: "image", geometry: [{ x: 28, y: 28 }, { x: 32, y: 32 }], props: { graphicId: 1, hideControlCircle: true, hideControlNumber: true },
+      scope: { all: true }, attach: { controlId: 141, at: { x: 30, y: 30 } },
+    });
+    expect((await caller.courseObject.list()).find((x) => x.id === o.id)?.props).toEqual({ graphicId: 1, hideControlCircle: true, hideControlNumber: true });
+    await expect(caller.courseObject.create({ kind: "whiteout", geometry: SQUARE, props: { hideControlCircle: true }, scope: { all: true } } as never)).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("a knockout image carries its graphic's outline, traced once and stored; a plain image carries none", async () => {
+    // A 40 × 40 PNG: an opaque square 10…30 px on a transparent canvas.
+    const sharp = (await import("sharp")).default;
+    const rgba = Buffer.alloc(40 * 40 * 4);
+    for (let y = 10; y < 30; y++) for (let x = 10; x < 30; x++) rgba.set([200, 0, 0, 255], (y * 40 + x) * 4);
+    const png = await sharp(rgba, { raw: { width: 40, height: 40, channels: 4 } }).png().toBuffer();
+    const g = await caller.graphics.upload({ name: `j19-${suffix}.png`, scope: "event", fileDataBase64: png.toString("base64") });
+    expect((await ctx.db.graphic.findUniqueOrThrow({ where: { id: BigInt(g.id) } })).outline).toBeNull();
+    const ko = await caller.courseObject.create({ kind: "image", geometry: [{ x: 0, y: 0 }, { x: 8, y: 8 }], props: { graphicId: g.id, knockout: true }, scope: { all: true } });
+    const plain = await caller.courseObject.create({ kind: "image", geometry: [{ x: 0, y: 0 }, { x: 8, y: 8 }], props: { graphicId: g.id }, scope: { all: true } });
+    const list = await caller.courseObject.list();
+    expect(list.find((x) => x.id === ko.id)?.outline).toEqual([[0.25, 0.25, 0.25, 0.75, 0.75, 0.75, 0.75, 0.25]]);
+    expect(list.find((x) => x.id === plain.id)?.outline).toBeUndefined();
+    expect((await ctx.db.graphic.findUniqueOrThrow({ where: { id: BigInt(g.id) } })).outline).toEqual([[0.25, 0.25, 0.25, 0.75, 0.75, 0.75, 0.75, 0.25]]);
+    // The print pipeline's loader reads the same.
+    expect((await loadCourseObjects(ctx.db, ctx.eventId)).find((x) => x.seq === ko.id)?.outline).toHaveLength(1);
+    // A fully opaque graphic is the whole box: stored as [], carried as nothing.
+    const full = await sharp({ create: { width: 8, height: 8, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 1 } } }).png().toBuffer();
+    const box = await caller.graphics.upload({ name: `j19-box-${suffix}.png`, scope: "event", fileDataBase64: full.toString("base64") });
+    const bo = await caller.courseObject.create({ kind: "image", geometry: [{ x: 0, y: 0 }, { x: 8, y: 8 }], props: { graphicId: box.id, knockout: true }, scope: { all: true } });
+    expect((await caller.courseObject.list()).find((x) => x.id === bo.id)?.outline).toBeUndefined();
+    expect((await ctx.db.graphic.findUniqueOrThrow({ where: { id: BigInt(box.id) } })).outline).toEqual([]);
+  });
+});
+
 describe("checkout snapshot (map-storage.md §7.2)", () => {
   it("carries the rows verbatim: UUIDs, seq, scope UUIDs, token", async () => {
     const before = await ctx.db.courseObject.findMany({ where: { eventId: ctx.eventId }, orderBy: { seq: "asc" } });

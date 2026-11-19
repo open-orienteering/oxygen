@@ -389,6 +389,8 @@ export interface ToolPointer {
   shift: boolean;
   /** Alt / Option held (mouse; touch never): the geometry gestures of §7 "Editing geometry". */
   alt?: boolean;
+  /** Ctrl (Cmd on a Mac) held (mouse; touch never): J16's add-to-selection click on a course object. */
+  ctrl?: boolean;
   /** Paper mm per CSS px at the current zoom: for handle tolerances. */
   mmPerPx: number;
   /** A one-finger press on a coarse pointer (offered only to a tool with `touchPress`, F23): a coarser reach. */
@@ -1214,11 +1216,11 @@ export function MapViewer({
   editorSnapRef.current = editor?.snap ?? null;
 
   /** The pointer as a tool sees it (§6): paper mm, the target under it, the zoom's mm per px. */
-  const toolPointer = (clientX: number, clientY: number, shift: boolean, alt = false): ToolPointer | null => {
+  const toolPointer = (clientX: number, clientY: number, shift: boolean, alt = false, ctrl = false): ToolPointer | null => {
     const pt = screenToMapMm(clientX, clientY);
     const edge = screenToMapMm(clientX + 1, clientY);
     if (!pt || !edge) return null;
-    return { pt, target: resolveEditorTarget(clientX, clientY) ?? null, shift, alt, mmPerPx: Math.hypot(edge.x - pt.x, edge.y - pt.y) };
+    return { pt, target: resolveEditorTarget(clientX, clientY) ?? null, shift, alt, ...(ctrl ? { ctrl } : {}), mmPerPx: Math.hypot(edge.x - pt.x, edge.y - pt.y) };
   };
   const toolPointerRef = useRef(toolPointer);
   toolPointerRef.current = toolPointer;
@@ -1606,7 +1608,7 @@ export function MapViewer({
     if (e.button !== 0) return;
     const tool = editorToolRef.current;
     if (!measuring && tool) {
-      const p = toolPointerRef.current(e.clientX, e.clientY, e.shiftKey, e.altKey);
+      const p = toolPointerRef.current(e.clientX, e.clientY, e.shiftKey, e.altKey, e.ctrlKey || e.metaKey);
       if (p && tool.onPointerDown?.(p)) {
         toolDragRef.current = { startX: e.clientX, startY: e.clientY };
         return;
@@ -1648,7 +1650,7 @@ export function MapViewer({
       return;
     }
     if (editor?.tool?.onHover && !isPanningRef.current && e.buttons === 0) {
-      const p = toolPointerRef.current(e.clientX, e.clientY, e.shiftKey, e.altKey);
+      const p = toolPointerRef.current(e.clientX, e.clientY, e.shiftKey, e.altKey, e.ctrlKey || e.metaKey);
       if (p) editor.tool.onHover(p);
     }
     // F27: the placement loupe follows the cursor, a pan included (the map, and the point under it, move with it).
@@ -1781,7 +1783,7 @@ export function MapViewer({
       if (dx + dy < 5 && !onButton) {
         const tool = editorToolRef.current;
         if (tool?.exclusive) {
-          const p = toolPointerRef.current(e.clientX, e.clientY, e.shiftKey, e.altKey);
+          const p = toolPointerRef.current(e.clientX, e.clientY, e.shiftKey, e.altKey, e.ctrlKey || e.metaKey);
           if (p) tool.onClick?.(p);
         } else {
           const pt = screenToMapMm(e.clientX, e.clientY);
@@ -3074,14 +3076,14 @@ export function MapViewer({
       onDoubleClick={(e) => {
         const tool = editorToolRef.current;
         if (!tool?.onDoubleClick || (e.target as HTMLElement).closest?.("button")) return;
-        const p = toolPointer(e.clientX, e.clientY, e.shiftKey, e.altKey);
+        const p = toolPointer(e.clientX, e.clientY, e.shiftKey, e.altKey, e.ctrlKey || e.metaKey);
         if (p) tool.onDoubleClick(p);
       }}
       onContextMenu={(e) => {
         const tool = editorToolRef.current;
         if (!tool?.onContextMenu) return;
         e.preventDefault();
-        const p = toolPointer(e.clientX, e.clientY, e.shiftKey, e.altKey);
+        const p = toolPointer(e.clientX, e.clientY, e.shiftKey, e.altKey, e.ctrlKey || e.metaKey);
         if (p) tool.onContextMenu(p);
       }}
     >

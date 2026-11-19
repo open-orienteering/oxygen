@@ -16,6 +16,7 @@ import { TONER_MARGIN_MM } from "../tools/toner-saver";
 import { render, type course, type mapDocument } from "@oxygen/shared";
 import { filterGroups, groupState, toggleGroup, type SymbolGroup } from "../../../lib/editor/symbol-groups";
 import { StyleFields } from "../StyleFields";
+import { stylePatch } from "../../../lib/editor/style-fields";
 
 type Obj = course.CourseObject;
 type Props = Obj["props"];
@@ -102,7 +103,7 @@ export function ObjectSection(props: ObjectSectionProps) {
         else if (next.props) props.onProps(next.props);
       }} />
       {p.onTransform && <TransformButtons testIdPrefix="editor-object-transform" onTransform={p.onTransform} />}
-      {p.attach && <AttachBlock a={p.attach} />}
+      {p.attach && <AttachBlock a={p.attach} hides={o.kind === "image" && p.attach.code ? { props: o.props, onProps: (next) => p.onProps(next as Props) } : undefined} />}
       {vertexRule(o.kind).curves && <p data-testid="editor-geometry-hint" className="text-[10px] text-slate-400">{t("geometryHint")}</p>}
       <ScopeEditor scope={o.scope} courses={p.courses} classes={p.classes} onScope={p.onScope} />
     </div>
@@ -111,8 +112,13 @@ export function ObjectSection(props: ObjectSectionProps) {
 
 const LINK = "text-[11px] text-purple-700 hover:underline cursor-pointer disabled:text-slate-300 disabled:no-underline disabled:cursor-default";
 
-/** *Attach to control* (the nearest, or a picked one), *Centre on control*, *Detach* (J10). */
-function AttachBlock({ a }: { a: NonNullable<ObjectSectionProps["attach"]> }) {
+type ImageProps = Extract<Obj, { kind: "image" }>["props"];
+
+/**
+ * *Attach to control* (the nearest, or a picked one), *Centre on control*, *Detach* (J10); on an attached image,
+ * *Hide control circle* and *Hide control number* (J18), each one write.
+ */
+function AttachBlock({ a, hides }: { a: NonNullable<ObjectSectionProps["attach"]>; hides?: { props: ImageProps; onProps: (next: ImageProps) => void } }) {
   const { t } = useTranslation("editor");
   return (
     <div data-testid="editor-object-attach" data-attached={a.code ?? ""} className="space-y-0.5">
@@ -125,6 +131,16 @@ function AttachBlock({ a }: { a: NonNullable<ObjectSectionProps["attach"]> }) {
         <button type="button" data-testid="editor-object-centre" disabled={!a.canAttach} onClick={a.onCentre} className={LINK}>{t("attachCentre")}</button>
         {a.code && <button type="button" data-testid="editor-object-detach" onClick={a.onDetach} className={LINK}>{t("attachDetach")}</button>}
       </div>
+      {hides && (
+        <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-slate-600">
+          <label className="flex items-center gap-1">
+            <input type="checkbox" data-testid="editor-object-hide-circle" checked={!!hides.props.hideControlCircle} onChange={(e) => hides.onProps(stylePatch(hides.props, { hideControlCircle: e.target.checked }))} />{t("attachHideCircle")}
+          </label>
+          <label className="flex items-center gap-1">
+            <input type="checkbox" data-testid="editor-object-hide-number" checked={!!hides.props.hideControlNumber} onChange={(e) => hides.onProps(stylePatch(hides.props, { hideControlNumber: e.target.checked }))} />{t("attachHideNumber")}
+          </label>
+        </div>
+      )}
     </div>
   );
 }
@@ -365,5 +381,46 @@ function ScopeEditor({ scope, courses, classes, onScope }: {
         </div>
       )}
     </fieldset>
+  );
+}
+
+/**
+ * Several course objects selected (J16, docs/course-editor.md §7 "Multi-selection"): the count, the style fields
+ * the objects share when they are all one styled kind (an edit sets that field on every one; the fields show the
+ * first object's values), *Duplicate* and *Delete*. Each action is one undo entry; the page writes.
+ */
+export function ObjectMultiSection({ objects, onStyleAll, onDuplicate, onDelete, busy }: {
+  objects: readonly Obj[];
+  /** The props the first object would get from the edit; the page applies the difference to all of them. */
+  onStyleAll: (next: Props) => void;
+  onDuplicate: () => void;
+  onDelete: () => void;
+  busy: boolean;
+}) {
+  const { t } = useTranslation("editor");
+  const first = objects[0];
+  const kind = first && objects.every((o) => o.kind === first.kind) ? first.kind : null;
+  const styled = kind === "image" || kind === "text" || kind === "whiteout";
+  const btn = "w-full px-2 py-1 rounded-md border text-xs cursor-pointer disabled:opacity-40";
+  return (
+    <div data-testid="editor-object-multi" data-count={objects.length} data-kind={kind ?? "mixed"} className="px-2.5 py-1.5 space-y-1.5">
+      <p className="text-slate-600">{t("objectsSelected", { count: objects.length })}</p>
+      {styled && first && (
+        <StyleFields
+          props={first.props as never}
+          show={{ blend: kind !== "whiteout", rotation: kind !== "whiteout", flip: kind === "image", knockout: kind === "image" }}
+          aspectLock
+          onAspectLock={() => {}}
+          testIdPrefix="editor-object-multi-style"
+          onChange={(next) => { if (next.props) onStyleAll(next.props as Props); }}
+        />
+      )}
+      <button type="button" data-testid="editor-object-multi-duplicate" disabled={busy} onClick={onDuplicate} className={`${btn} border-slate-200 text-slate-700 hover:bg-slate-50`}>
+        {t("objectsDuplicate", { count: objects.length })}
+      </button>
+      <button type="button" data-testid="editor-object-multi-delete" disabled={busy} onClick={onDelete} className={`${btn} border-red-200 text-red-600 hover:bg-red-50`}>
+        {t("objectsDelete", { count: objects.length })}
+      </button>
+    </div>
   );
 }

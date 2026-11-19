@@ -138,6 +138,29 @@ describe("editorReducer (docs/course-editor.md §3)", () => {
     expect(s).toMatchObject({ selectedObjectId: null, selectedControlId: 32 });
   });
 
+  it("J16: Shift/Ctrl-click toggles objects into a multi-selection, exclusive with controls; Escape drops it first", () => {
+    let s = editorReducer(initialEditorState, { type: "select-object", id: 4 });
+    s = editorReducer(s, { type: "toggle-object", id: 9 });
+    expect(s).toMatchObject({ objectMulti: [4, 9], selectedObjectId: null, selectedControlId: null, multi: [] });
+    s = editorReducer(s, { type: "toggle-object", id: 12 });
+    expect(s.objectMulti).toEqual([4, 9, 12]);
+    // Taking one out of three leaves two; one out of two leaves the plain selection.
+    expect(editorReducer(s, { type: "toggle-object", id: 9 }).objectMulti).toEqual([4, 12]);
+    const one = editorReducer(editorReducer(s, { type: "toggle-object", id: 9 }), { type: "toggle-object", id: 12 });
+    expect(one).toMatchObject({ objectMulti: [], selectedObjectId: 4 });
+    expect(escapeHasWork(s)).toBe(true);
+    expect(editorReducer(s, { type: "escape" })).toMatchObject({ objectMulti: [], selectedObjectId: null });
+    // A control selection, a plain object click and Layout mode end it; the control multi-selection drops it too.
+    expect(editorReducer(s, { type: "select", id: 31 }).objectMulti).toEqual([]);
+    expect(editorReducer(s, { type: "select-object", id: 5 })).toMatchObject({ objectMulti: [], selectedObjectId: 5 });
+    expect(editorReducer(s, { type: "mode", mode: "layout" }).objectMulti).toEqual([]);
+    expect(editorReducer(s, { type: "set-multi", ids: [31, 32] })).toMatchObject({ objectMulti: [], multi: [31, 32] });
+    // A control selection is not carried into an object multi-selection.
+    const fromControl = editorReducer(editorReducer(initialEditorState, { type: "select", id: 31 }), { type: "toggle-object", id: 4 });
+    expect(fromControl).toMatchObject({ selectedObjectId: 4, selectedControlId: null, objectMulti: [] });
+    expect(editorReducer(s, { type: "set-object-multi", ids: [] })).toMatchObject({ objectMulti: [], selectedObjectId: null });
+  });
+
   it("chain and polygon updates apply to their own tool only; a tool drops the phantom", () => {
     let s = editorReducer(initialEditorState, { type: "map-click", x: 1, y: 1 });
     s = editorReducer(s, { type: "tool", tool: { kind: "text" } });

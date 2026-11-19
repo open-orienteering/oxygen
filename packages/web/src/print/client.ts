@@ -41,9 +41,11 @@ import type { PrintFace, PrintWorkerNeed, PrintWorkerRequest, PrintWorkerRespons
  * a version-3 job stored offline is `notStored` likewise. 5 (SVG windows):
  * a cropped SVG is asked over its window; a version-4 store lacks those
  * rasters, so it is `notStored` and stored again. 6 (J15): knockout images
- * cut the images below them; a version-5 job is `notStored` likewise.
+ * cut the images below them; a version-5 job is `notStored` likewise. 7 (J18,
+ * J19): an attached image may hide its control's circle and number, and a
+ * knockout cuts by its graphic's outline; a version-6 job is `notStored`.
  */
-export const DEVICE_PRINT_JOB_VERSION = 6;
+export const DEVICE_PRINT_JOB_VERSION = 7;
 /** An idle print worker is terminated after this long (its decoded document is large). */
 export const PRINT_WORKER_IDLE_MS = 60_000;
 /**

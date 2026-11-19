@@ -4,7 +4,7 @@
  * 50 µm in its own frame — and nothing else; filter-region masks are kept and extended.
  */
 import { describe, expect, it } from "vitest";
-import { KNOCKOUT_INSET_UM, applyKnockouts, knockoutFootprint } from "../filter-region.js";
+import { KNOCKOUT_INSET_UM, applyKnockouts, knockoutFootprint, knockoutFootprints } from "../filter-region.js";
 import { type ImagePass, type Pass, makePath } from "../pass-stream.js";
 import { diffPassStreams } from "../stream-json.js";
 import { type RenderObject, symbolise } from "../symbolise.js";
@@ -90,5 +90,45 @@ describe("J15 symbolise with knockout images", () => {
     expect(out.masks![0].regions).toHaveLength(2);
     expect(out.masks![0].regions[0]).toBe(region);
     expect(diffPassStreams(applyKnockouts(stream, () => false), stream)).toEqual([]);
+  });
+});
+
+describe("J19 knockout by the graphic's outline", () => {
+  // A triangle in the graphic's own fractions (top-left origin): apex top-centre, base along the bottom.
+  const tri = [[0.5, 0, 1, 1, 0, 1]];
+
+  it("maps the outline through the quad (y up) instead of the box; a crop cuts it; outside the crop nothing", () => {
+    const q: ImagePass["quad"] = [20000, 0, 0, 10000, 1000, 2000];
+    const [p] = knockoutFootprints(q, undefined, tri);
+    // Apex at the quad's top (v = 1), base at its bottom (v = 0).
+    expect(coords(p)).toEqual([11000, 12000, 21000, 2000, 1000, 2000]);
+    // Cropped to the right half: the triangle's right half, scaled across the whole quad.
+    const [h] = knockoutFootprints(q, { x: 0.5, y: 0, width: 0.5, height: 1 }, tri);
+    const xs = coords(h).filter((_, i) => i % 2 === 0);
+    expect(Math.min(...xs)).toBe(1000);
+    expect(Math.max(...xs)).toBe(21000);
+    expect(knockoutFootprints(q, { x: 0, y: 0, width: 0.1, height: 0.1 }, tri)).toEqual([]);
+    // No outline, or an empty one: the inset box.
+    expect(knockoutFootprints(q, undefined, [])).toEqual([knockoutFootprint(q)]);
+    expect(knockoutFootprints(q, undefined, undefined)).toEqual([knockoutFootprint(q)]);
+  });
+
+  it("symbolise cuts by each ring of the outline the image carries; a ring missing the image below leaves it whole", () => {
+    const overlay = img(box(0, 0, 100000, 100000), 1);
+    const far = img(box(200000, 0, 10000, 10000), 3);
+    // Two rings: one over the overlay's centre, one off it (the left tenth of the graphic, x < 10 % → x < 44000 µm).
+    const lucka = img(box(40000, 40000, 20000, 20000), 2, { knockout: true, image: { graphicId: 2, outline: [[0.4, 0.4, 0.6, 0.4, 0.6, 0.6, 0.4, 0.6], [0, 0, 0.05, 0, 0.05, 0.05]] } });
+    const s = run([overlay, far, lucka]);
+    const at = (g: number) => s.passes.findIndex((p) => p.kind === "image" && p.graphicId === g);
+    const m = s.maskIdx![at(1)];
+    expect(m).toBeGreaterThanOrEqual(0);
+    expect(s.masks![m].regions.map(coords)).toEqual([
+      [48000, 52000, 52000, 52000, 52000, 48000, 48000, 48000],
+      [40000, 60000, 41000, 60000, 41000, 59000],
+    ]);
+    expect(s.maskIdx![at(3)]).toBe(-1);
+    // Without knockout the outline is not even carried.
+    const plain = run([overlay, img(box(40000, 40000, 20000, 20000), 2, { image: { graphicId: 2, outline: tri } })]);
+    expect(plain.maskIdx).toBeUndefined();
   });
 });

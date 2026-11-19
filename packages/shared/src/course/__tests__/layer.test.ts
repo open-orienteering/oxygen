@@ -570,9 +570,55 @@ describe("knockout images (J15, docs/course-layer.md §3.6)", () => {
     expect(streamOf([overlay, lucka({ attach: { controlId: "99", at: { x: 40, y: 10 } } } as Partial<CourseLayerObject>)]).stream.maskIdx).toBeUndefined();
   });
 
+  it("J19: with its graphic's outline it cuts by the outline, where it is drawn (attached included)", () => {
+    const tri = [[0.5, 0, 1, 1, 0, 1]];
+    const { stream } = streamOf([overlay, lucka({ outline: tri })]);
+    expect(Array.from(stream.masks![0].regions[0].coords)).toEqual([40000, 15000, 45000, 5000, 35000, 5000]);
+    const moved = streamOf([overlay, lucka({ outline: tri, geometry: [{ x: 25, y: -5 }, { x: 35, y: 5 }], attach: { controlId: "31", at: { x: 30, y: 0 } } } as Partial<CourseLayerObject>)]);
+    expect(Array.from(moved.stream.masks![0].regions[0].coords)).toEqual([40000, 15000, 45000, 5000, 35000, 5000]);
+    // The outline rides only on a knockout image.
+    const layer = courseLayer(layerInput({ objects: [overlay, { ...lucka({ outline: tri }), props: { graphicId: 2 } } as CourseLayerObject] }));
+    expect(layer.objects.find((o) => o.image?.graphicId === 2)?.image).toEqual({ graphicId: 2 });
+  });
+
   it("is a strict image prop: other kinds refuse it", () => {
     expect(courseObjectBodySchema.safeParse({ kind: "image", geometry: [{ x: 0, y: 0 }, { x: 1, y: 1 }], props: { graphicId: 1, knockout: true } }).success).toBe(true);
     expect(courseObjectBodySchema.safeParse({ kind: "whiteout", geometry: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0, y: 1 }], props: { knockout: true } }).success).toBe(false);
+  });
+});
+
+describe("an attached image hides its control (J18, docs/course-layer.md §8.1)", () => {
+  const hatch = (props: Record<string, unknown>, attach: CourseLayerObject["attach"] = { controlId: "31", at: { x: 40, y: 10 } }): CourseLayerObject =>
+    ({ id: "h", kind: "image", geometry: [{ x: 35, y: 5 }, { x: 45, y: 15 }], props: { graphicId: 2, ...props }, ...(attach ? { attach } : {}) }) as CourseLayerObject;
+  const refs = (objects: CourseLayerObject[], over: Partial<Parameters<typeof layerInput>[0]> = {}) =>
+    courseLayer(layerInput({ objects, ...over })).objects.map((o) => `${o.ref.kind}:${o.ref.id}`);
+
+  it("hideControlCircle leaves out that control's circle; hideControlNumber its number; the legs and the other controls stay", () => {
+    const plain = refs([hatch({})]);
+    expect(plain).toContain("site:31");
+    expect(plain).toContain("number:31");
+    const noCircle = refs([hatch({ hideControlCircle: true })]);
+    expect(noCircle).not.toContain("site:31");
+    expect(noCircle).toContain("number:31");
+    const noNumber = refs([hatch({ hideControlNumber: true })]);
+    expect(noNumber).toContain("site:31");
+    expect(noNumber).not.toContain("number:31");
+    const both = refs([hatch({ hideControlCircle: true, hideControlNumber: true })]);
+    expect(both.filter((r) => r.startsWith("leg:"))).toEqual(plain.filter((r) => r.startsWith("leg:")));
+    expect(both.filter((r) => r.endsWith(":32"))).toEqual(plain.filter((r) => r.endsWith(":32")));
+  });
+
+  it("a free image's flags do nothing; a hidden number stays hidden even when labels name the control", () => {
+    const free = refs([hatch({ hideControlCircle: true, hideControlNumber: true }, null as never)]);
+    expect(free).toContain("site:31");
+    expect(free).toContain("number:31");
+    expect(refs([hatch({ hideControlNumber: true })], { viewOptions: { labelMode: "sequence", labels: { "31": "X" } } })).not.toContain("number:31");
+  });
+
+  it("are strict image props", () => {
+    const body = (kind: string, props: Record<string, unknown>) => ({ kind, geometry: kind === "image" ? [{ x: 0, y: 0 }, { x: 1, y: 1 }] : [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0, y: 1 }], props });
+    expect(courseObjectBodySchema.safeParse(body("image", { graphicId: 1, hideControlCircle: true, hideControlNumber: false })).success).toBe(true);
+    expect(courseObjectBodySchema.safeParse(body("whiteout", { hideControlCircle: true })).success).toBe(false);
   });
 });
 

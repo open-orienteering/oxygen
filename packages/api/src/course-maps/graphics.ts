@@ -5,8 +5,9 @@
  * embed them (docs/course-print.md §6.3).
  */
 
+import { render } from "@oxygen/shared";
 import { type ImageWindow, SVG_RASTER_MAX_PX, type PrintSheet } from "@oxygen/shared/print";
-import { trimSvgInWorker } from "./print-worker-host.js";
+import { rasteriseSvgInWorker, trimSvgInWorker } from "./print-worker-host.js";
 
 /** The largest upload accepted (J2, docs/course-maps.md "Data model"). */
 export const MAX_GRAPHIC_UPLOAD_BYTES = 16 * 1024 * 1024;
@@ -198,6 +199,28 @@ export async function prepareGraphicUpload(input: Buffer): Promise<PreparedGraph
     if (data.byteLength <= MAX_GRAPHIC_STORED_BYTES) return { mime, data, widthPx: info.width, heightPx: info.height };
   }
   throw new Error(`The PNG is over ${MAX_GRAPHIC_STORED_BYTES / MIB} MB even at ${GRAPHIC_FALLBACK_PX.at(-1)} px; save it smaller or as SVG`);
+}
+
+/**
+ * A graphic's outline (J19, `render.traceOutline`): its alpha at `OUTLINE_RASTER_PX` on the longer side (an SVG
+ * rasterised in a print worker; callers hold `printGate`), traced. `[]` for a whole-box silhouette or an SVG without
+ * a size. Throws when the bytes cannot be decoded.
+ */
+export async function graphicOutline(data: Uint8Array, mime: string, widthPx: number | null, heightPx: number | null): Promise<render.GraphicOutline> {
+  let png: Uint8Array = data;
+  if (mime === "image/svg+xml") {
+    if (!widthPx || !heightPx) return [];
+    const [w, h] = thumbBox(widthPx, heightPx, render.OUTLINE_RASTER_PX);
+    png = await rasteriseSvgInWorker(data, w, h);
+  }
+  const sharp = (await import("sharp")).default;
+  const { data: alpha, info } = await sharp(png, { limitInputPixels: GRAPHIC_MAX_INPUT_PIXELS })
+    .resize({ width: render.OUTLINE_RASTER_PX, height: render.OUTLINE_RASTER_PX, fit: "inside", withoutEnlargement: true })
+    .ensureAlpha()
+    .extractChannel(3)
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  return render.traceOutline(new Uint8Array(alpha.buffer, alpha.byteOffset, alpha.byteLength), info.width, info.height);
 }
 
 /** A thumbnail's pixel box: `w × h` fitted inside `max × max`, aspect kept, never enlarged, at least 1 px. */
