@@ -67,14 +67,12 @@ export function detachedIfRemoved(o: StoredCourseObject, controls: ReadonlyMap<s
 
 /** The event's objects in draw order (`z`, then `seq`); one attached to a deleted control detached where it was drawn. */
 export async function loadCourseObjects(db: Db, eventId: bigint): Promise<StoredCourseObject[]> {
-  const [rows, controls] = await Promise.all([
-    db.courseObject.findMany({ where: { eventId }, orderBy: [{ z: "asc" }, { seq: "asc" }] }),
-    loadAttachControls(db, eventId),
-  ]);
-  return rows.flatMap((r) => {
-    const o = storedObjectOf(r);
-    return o ? [detachedIfRemoved(o, controls)] : [];
-  });
+  const rows = await db.courseObject.findMany({ where: { eventId }, orderBy: [{ z: "asc" }, { seq: "asc" }] });
+  const objects = rows.flatMap((r) => storedObjectOf(r) ?? []);
+  // The controls only when something is attached (most events attach nothing).
+  if (!objects.some((o) => o.attach)) return objects;
+  const controls = await loadAttachControls(db, eventId);
+  return objects.map((o) => detachedIfRemoved(o, controls));
 }
 
 /** Public ids ↔ UUIDs of the event's courses and classes. */

@@ -943,9 +943,17 @@ export function EditorPage() {
     return (id: number) => m.get(id) ?? null;
   }, [drawnSites]);
   const objectsInView = useMemo(() => shownObjects(courseObjectsForView(objects, highlighted, courses.data ?? []), sitePos), [objects, highlighted, courses.data, sitePos]);
+  /** An object as drawn (J10 `shownObject`), the stored one when its control is not drawn. */
+  const shownById = (id: number): CourseObject | undefined => {
+    const raw = objects.find((x) => x.id === id);
+    return raw ? shownObject(raw, sitePos) ?? raw : undefined;
+  };
   clickContext.current = { objects: objectsInView, select: state.mode === "course" && state.tool.kind === "select" };
   const rawSelectedObject = state.selectedObjectId !== null ? objects.find((o) => o.id === state.selectedObjectId) ?? null : null;
-  const selectedObject = useMemo(() => (rawSelectedObject ? shownObject(rawSelectedObject, sitePos) ?? rawSelectedObject : null), [rawSelectedObject, sitePos]);
+  // J10: an attached object whose control is not drawn in the view is not selectable: it is dropped from the selection.
+  const selectedObject = useMemo(() => (rawSelectedObject ? shownObject(rawSelectedObject, sitePos) : null), [rawSelectedObject, sitePos]);
+  const selectedHidden = rawSelectedObject !== null && selectedObject === null;
+  useEffect(() => { if (selectedHidden) dispatch({ type: "select-object", id: null }); }, [selectedHidden]);
   /** Geometry being dragged (vertex or body) or drawn, drawn instead of the stored one until the list catches up. */
   const [drafts, setDrafts] = useState<Map<number, CourseObject["geometry"]>>(new Map());
   /** Props shown with a geometry draft (J7: a crop writes both, so the canvas draws the new crop in the new box). */
@@ -1004,8 +1012,14 @@ export function EditorPage() {
   const [attachPick, setAttachPick] = useState<number | null>(null);
   useEffect(() => {
     if (attachPick === null) return;
-    if (state.selectedObjectId !== null && state.selectedObjectId !== attachPick) { setAttachPick(null); return; }
+    // Cancelled by another object's selection, by a selection cleared to nothing (Escape, an empty-map click), and by
+    // leaving Course mode or `V`: the armed button is gone then, so nothing may attach out of sight.
     const controlId = state.selectedControlId;
+    const cleared = state.selectedObjectId === null && controlId === null;
+    if ((state.selectedObjectId !== null && state.selectedObjectId !== attachPick) || cleared || state.mode !== "course" || state.tool.kind !== "select") {
+      setAttachPick(null);
+      return;
+    }
     if (controlId === null) return;
     const raw = objects.find((x) => x.id === attachPick);
     const site = drawnSites.find((d) => d.id === controlId);
@@ -1014,7 +1028,7 @@ export function EditorPage() {
     const shown = shownObject(raw, sitePos) ?? raw;
     updateObject(shown, attachPatch(shown, site));
     dispatch({ type: "select-object", id: attachPick });
-  }, [attachPick, state.selectedControlId, state.selectedObjectId, objects, drawnSites, sitePos, updateObject]);
+  }, [attachPick, state.selectedControlId, state.selectedObjectId, state.mode, state.tool.kind, objects, drawnSites, sitePos, updateObject]);
 
   const deleteObject = useCallback((o: CourseObject) => {
     const body = { kind: o.kind, geometry: o.geometry, props: o.props, scope: o.scope, ...(o.attach ? { attach: o.attach } : {}) } as Pick<CourseObject, "kind" | "geometry" | "props" | "scope"> & { attach?: CourseObject["attach"] };
@@ -1416,12 +1430,14 @@ export function EditorPage() {
           onSelectObject: (id) => dispatch({ type: "select-object", id }),
           onObjectDraft: (id, geometry) => {
             // The first draft of a gesture keeps what was shown before it: the undo's "before".
-            if (geometry && !gestureBefore.current.has(id)) gestureBefore.current.set(id, drafts.get(id) ?? objects.find((x) => x.id === id)?.geometry ?? geometry);
+            // J10: the shown geometry (an attached object's drawn place), as the binding's.
+            if (geometry && !gestureBefore.current.has(id)) gestureBefore.current.set(id, drafts.get(id) ?? shownById(id)?.geometry ?? geometry);
             if (!geometry) gestureBefore.current.delete(id);
             setDraft(id, geometry);
           },
           onObjectMoved: (id, geometry) => {
-            const o = objects.find((x) => x.id === id);
+            // J10: the shown object, so an attached one is written with its drawn `at` beside the drawn geometry.
+            const o = shownById(id);
             // Undo restores what the gesture started from — a previous gesture's draft while the list catches up.
             const before = gestureBefore.current.get(id) ?? drafts.get(id) ?? o?.geometry;
             gestureBefore.current.delete(id);

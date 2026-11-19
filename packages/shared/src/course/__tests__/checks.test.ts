@@ -236,6 +236,18 @@ describe("legs", () => {
       expect(through(15, 3).map((c) => [c.code, c.leg?.index])).toEqual([["LEG_CROSSES_OOB", 2]]);
     });
   });
+  it("an attached area follows its control, and counts only where the course draws that control (J10, course-layer.md §8.1)", () => {
+    const area = (dx: number, controlId: string, at: { x: number; y: number }) => ({
+      id: "a", kind: "oob_area" as const, props: {}, attach: { controlId, at },
+      geometry: [{ x: 21 + dx, y: -2 }, { x: 24 + dx, y: -2 }, { x: 24 + dx, y: 2 }, { x: 21 + dx, y: 2 }],
+    });
+    // Stored 30 mm east, attached to 32 when it stood 30 mm east of where it is now: drawn over leg 32 → 33.
+    const follows = run({ objects: [area(30, "32", { x: 50, y: 0 })] }).filter((c) => c.code === "LEG_CROSSES_OOB");
+    expect(follows.map((c) => [c.leg?.index, c.at])).toEqual([[2, { x: 21, y: 0 }]]);
+    // Attached to 99, an event site this course does not visit: not drawn, so no finding, though it lies on the leg.
+    const sites = [...SITES, S("99", 50, 20)];
+    expect(run({ sites, objects: [area(0, "99", { x: 50, y: 20 })] }).filter((c) => c.code === "LEG_CROSSES_OOB")).toEqual([]);
+  });
   it("a leg running inside an area without crossing its edge", () => {
     const inside: CheckObstacle = { ...oob, points: [{ x: 15, y: -3 }, { x: 30, y: -3 }, { x: 30, y: 3 }, { x: 15, y: 3 }] };
     const found = run({ document: { libraryId: "ISOM2017-2", obstacles: [inside] } }).filter((c) => c.code === "LEG_CROSSES_OOB");

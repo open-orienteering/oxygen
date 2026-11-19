@@ -1299,8 +1299,9 @@ an object whose control is not drawn in the view is left out, so an
 attached object shows only where its control does (user answer 8). The
 layer resolves before anything else reads the objects (colours, the
 toner saver flag, the drawn objects, the stored regions), and the
-checks (§9) resolve the same way, so an obstacle follows its control
-too. `toner_saver` and `inset_frame` cannot be attached
+checks (§9) resolve the same way against the checked course's sites, so
+an obstacle follows its control and counts only on a course that draws
+it. `toner_saver` and `inset_frame` cannot be attached
 (`UNATTACHABLE_KINDS`; a write is `BAD_REQUEST`).
 
 ### 8.2 Scope
@@ -1389,7 +1390,10 @@ and the row is left as it is, so restoring the control (undo of the
 delete) attaches it again with no double move (user answer 7). An
 `update` that sends geometry without `attach` while the control is
 removed keeps the attachment with `at` set to the removed control's
-position, so the written place is where it was shown.
+position, so the written place is where it was shown. A control row that
+no longer exists at all (controls are soft-deleted, so only a row
+removed outside the app) frees the object at its stored geometry, and a
+geometry write then clears the attachment.
 
 **Token** (§7). Objects are not journaled, so their token is not a
 journal entry's HLC: every `create` / `update` mints one from the node's
@@ -2324,7 +2328,7 @@ label.
 | integration | `course-print.test.ts` "F12" | §3.6: a sheet's map-anchored white-out and text, migrated on the shared database, are `source = 'layout'` objects scoped to its course; the sheet keeps its page object; the composed page draws the white-out at upper white and the text at 4 mm on paper |
 | E2E | `course-editor-layout.spec.ts` "F12" | §3.6: a legacy map-anchored white-out and 709 area seeded on a sheet and migrated: listed in Course mode scoped to the course, the map's ink under the white-out gone on the canvas, the sheet's `maps.pdf` one page with one more hatch |
 | unit | `packages/api/src/__tests__/version-conflict.test.ts` | §8.4: the object `CONFLICT` payload |
-| unit | `objects.test.ts` "attachment (J10)", `layer.test.ts` "attached objects (J10)" | §8.1 "Attachment": the schema; `resolveAttached` translates by site − `at` with the handles kept, drops an object whose site is not drawn, returns an unattached list itself; §8.3 an attached object draws exactly as the same object stored at the translated place, is not drawn without its control, a filter region follows or drops, a scene without attach is unchanged |
+| unit | `objects.test.ts` "attachment (J10)", `layer.test.ts` "attached objects (J10)", `checks.test.ts` (an attached area follows its control and counts only where the course draws it), `sheet-rows.test.ts` (a print sheet's object attached to a row UUID draws at the translated place, and not on a setter sheet without that control) | §8.1 "Attachment": the schema; `resolveAttached` translates by site − `at` with the handles kept, drops an object whose site is not drawn, returns an unattached list itself; §8.3 an attached object draws exactly as the same object stored at the translated place, is not drawn without its control, a filter region follows or drops, a scene without attach is unchanged |
 | integration | `course-objects.test.ts` "attached to a control (J10)" | §8.4 "Attach on the wire": create / update with the public control id, the UUID stored; `null` detaches, absent keeps; an unknown control and a toner saver refused; a control move writes nothing to the object; a deleted control's object read detached where it was drawn with the row untouched, restore re-attaches, a hand edit meanwhile does not move it twice |
 | integration | `packages/api/src/__tests__/integration/course-objects.test.ts` | §8.4: every kind created and listed in draw order with public ids; `inset_frame`, unknown course / class, bad body refused; update advances the token, `hatch: "710"` round-trips, `"711"` refused; stale token → `CONFLICT` with the object now and nothing written, none = LWW, stale delete; reorder keeps tokens; kiosk-key read, viewer cannot write; §8.2 class scope through `course_id` and the pool, the same resolution on the wire (`inCourses`); §8.5 snapshot round trip verbatim |
 | integration | `course-print.test.ts` "course objects on the page" | §8.3 print: a sheet takes the objects in scope (all-controls: `all` only), they add passes over the map, `hatch: "710"` adds one hatch pass, a stored filter region hides map objects |

@@ -378,7 +378,10 @@ export function courseChecks(input: CourseChecksInput): CourseCheck[] {
     }
 
     if (structure.orderMode === "ordered") {
-      const obstacles = [...(input.document?.obstacles ?? []), ...objectObstacles(resolveAttached(input.objects ?? [], input.sites.filter(positioned)))];
+      // J10: an attached obstacle follows its control and exists only where the course draws that control, as the
+      // layer resolves it (course-layer.md §8.1 "Attachment").
+      const drawnSites = [...new Map(visits.map((v) => [v.site.id, v.site] as const)).values()].filter(positioned);
+      const obstacles = [...(input.document?.obstacles ?? []), ...objectObstacles(resolveAttached(input.objects ?? [], drawnSites))];
       const boxes = obstacles.map((o) => boxOf(o.points));
       // Crossing and map-issue points are never items (§10.3): the layer skips them, so do the legs.
       const seqVisits = visits.filter((v) => positioned(v.site) && v.site.kind !== "crossing_point" && v.site.kind !== "map_issue");

@@ -1334,8 +1334,10 @@ derivation's sites (`courseInfo.derivation.sites`; before the layer
 reports, the stored coordinates), so a dragged control's object follows
 the drag's result, not a stale row. Selection, the hit-test (the
 viewer's closed-area rings resolve the same way), every gesture, the
-inspector and drafts use the shown object; an object whose control is
-not drawn in the view is not shown or selectable (user answer 8).
+inspector and drafts use the shown object, a canvas gesture's start
+(the undo's "before") included; an object whose control is not drawn in
+the view is not shown or selectable, and a selected one is dropped from
+the selection when its control stops being drawn (user answer 8).
 
 - **Writes.** Every write that sends geometry sends `attach` with it
   (the shown one), so undo puts back the shape and the offset together.
@@ -1348,8 +1350,9 @@ not drawn in the view is not shown or selectable (user answer 8).
   - *Attach to a control I click* (`editor-object-attach-pick`,
     `aria-pressed` while armed): the next control selected becomes the
     one it follows, and the object is selected again. The button again,
-    or selecting another object, cancels it (Escape is not part of it:
-    it clears the selection as usual, §3).
+    selecting another object, a selection cleared to nothing (Escape, a
+    click on empty map) or leaving Course mode or `V` cancels it, so
+    nothing attaches once the armed button is out of sight.
   - *Centre on control* (`editor-object-centre`): moved so its centre is
     on its control (the nearest when free) and attached to it
     (`centrePatch`).
@@ -3042,7 +3045,7 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | unit (shared) | `packages/shared/src/map-document/__tests__/render-bridge.test.ts` "a subset of objects" | `map-document-format.md` §8: `docIdx` maps each render object to its document object; `only` symbolises the listed objects and keeps the symbol table aligned |
 | unit (web) | `lib/editor/__tests__/state.test.ts`, `pages/editor/__tests__/bindings.test.ts` "the eyedropper binding" | §6.4: `pick-symbol` dropped by Escape first (the object stays selected) and by any mode change; the binding is exclusive with a crosshair, a click picks with 6 px × `mmPerPx`, right-click exits, no shapes; `railKeyOf` lights no rail button |
 | unit | `lib/editor/__tests__/attach.test.ts` | §7 "Attached objects" (J10): `shownObject` moves an attached object to its control's drawn position with `at` that position, hides it without its control; attach keeps the drawn place, centre moves the centre onto the control, detach keeps the drawn place without `attach`; a text centres by its anchor; the nearest site |
-| E2E | `e2e/course-editor-tools.spec.ts` "J10: attach to a control" (`chromium`) | §7 "Attached objects": a 10 mm `oob_area` on a clear spot selected by its edge; *Attach to a control I click* armed (`aria-pressed`), a click on a control → one `courseObject.update`, the object selected again, `data-attach` that control, `data-attached` its code; the control dragged 6 mm → `data-drawn` moved by the control's offset, the stored geometry unchanged and no object write; the all-controls `maps.pdf` still draws its 709 hatch; a click on its moved edge selects it; *Centre on control* → one update, its centre on the control; the control deleted → no object write, `data-attach` empty and still drawn; `Ctrl+Z` (`control.restore`) attaches it again; *Detach* → one update, drawn where it was |
+| E2E | `e2e/course-editor-tools.spec.ts` "J10: attach to a control" (`chromium`) | §7 "Attached objects": a 10 mm `oob_area` on a clear spot selected by its edge; *Attach to a control I click* armed (`aria-pressed`), a click on a control → one `courseObject.update`, the object selected again, `data-attach` that control, `data-attached` its code; the control dragged 6 mm → `data-drawn` moved by the control's offset, the stored geometry unchanged and no object write; the all-controls `maps.pdf` still draws its 709 hatch; a click on its moved edge selects it; that edge dragged 3 mm up → drawn exactly 3 mm higher and no further east, `at` the control's position now; *Centre on control* → one update, its centre on the control; the control deleted → no object write, `data-attach` empty and still drawn; `Ctrl+Z` (`control.restore`) attaches it again; *Detach* → one update, drawn where it was |
 | E2E | `e2e/course-editor-tools.spec.ts` "filter symbol picker" (`chromium`) | §6.4 / §7 (P3): a filter region over the 505 path, *picked symbols*: `editor-filter-symbol-505` with `data-members="3"` and "Path", `601` named "Magnetic north line" (601.0 matched to 601.b), no entry with a source code (`.`), the 505 swatch image loaded, the 850 frame only under Other, the search "path" → one entry; the eyedropper armed (`aria-pressed`, `V` not lit, no `editor-selection-ring`), a click on the path → one `courseObject.update`, `"symbols":[3]`, the 505 box checked, the note "505 Path", the band's ink below a third; still armed, a second click on the path → note `already`, `Esc` → `V` with the region still selected |
 | integration | `packages/api/src/__tests__/integration/course-print.test.ts` "course objects on the page" | §7 print: the row's "reference-raster pixel probe" of a printed course object is this test's page raster, not the E2E's — no HTTP route rasterises a composed page, and poppler is on the runner for the unit / integration jobs, not the E2E job (coordinator 2026-11-01) |
 | unit (web) | `packages/web/src/lib/editor/__tests__/checks.test.ts` | §8: sites and the explicit structure as `courseChecks` takes them, two controls 20 m apart, the server's `DESCRIPTION_STALE` merged in order, markers (rings, a leg cross, unpositioned skipped), length from the leg polylines, locate |
@@ -3117,6 +3120,13 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
   reload. During a control drag the UI-layer outline of a selected
   attached object follows only when the drag lands (the layer's derivation
   reports then).
+- **Undo across a removed control** (§7 "Attached objects", J10): the
+  wire shows an object of a removed control without `attach`, so a
+  delete of that object, or an *Attach* / *Centre* on it, records an
+  undo without the old attachment; undoing those and then the control's
+  delete leaves it free. An undo that names a control deleted since
+  (or whose first code changed, so its public id did) is refused
+  (`BAD_REQUEST`) and said like any failed undo.
 
 - **The top bar past tier 2** (§2 "Top bar", F29): below 1220 px of row
   only the mode words have gone; the view group, presence chips, a save

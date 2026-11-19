@@ -919,10 +919,23 @@ test.describe("J10: attach to a control", () => {
       // Its left edge, drawn moved with the control.
       await clickMap(page, await toPage(page, { x: f.x - 5 + (c1.x - c0.x), y: f.y + (c1.y - c0.y) }));
       await expect(page.getByTestId("editor-object")).toHaveAttribute("data-object-id", String(made.id), { timeout: 10000 });
+      // Its edge dragged 3 mm up after the control moved: drawn exactly 3 mm higher, `at` the control's position now
+      // (the gesture starts from the drawn object, not the stored one with the old `at`).
+      const drawnAt = async () => (await row.getAttribute("data-drawn"))!.split(" ")[0].split(",").map(Number);
+      const [xBefore, yBefore] = await drawnAt();
+      const edgeMoved = waitForTrpc(page, "courseObject.update");
+      const edgeAt = { x: f.x - 5 + (c1.x - c0.x), y: f.y + (c1.y - c0.y) };
+      await dragMm(page, edgeAt, { x: edgeAt.x, y: edgeAt.y + 3 });
+      await edgeMoved;
+      await expect.poll(async () => Math.abs((await drawnAt())[1] - yBefore - 3) < 0.3, { timeout: 15000 }).toBe(true);
+      expect(Math.abs((await drawnAt())[0] - xBefore)).toBeLessThan(0.3);
+      const at = JSON.parse((await row.getAttribute("data-attach")) || "null")?.at;
+      expect(at.x).toBeCloseTo(c1.x, 3);
+      expect(at.y).toBeCloseTo(c1.y, 3);
       const centred = waitForTrpc(page, "courseObject.update");
       await page.getByTestId("editor-object-centre").click();
       await centred;
-      await expect.poll(async () => { const d = (await row.getAttribute("data-drawn"))!.split(" ").map((p) => p.split(",").map(Number)); return Math.round(((d[0][0] + d[1][0]) / 2 - c1.x) * 10) / 10; }, { timeout: 15000 }).toBe(0);
+      await expect.poll(async () => { const d = (await row.getAttribute("data-drawn"))!.split(" ").map((p) => p.split(",").map(Number)); return Math.abs((d[0][0] + d[1][0]) / 2 - c1.x) < 0.05; }, { timeout: 15000 }).toBe(true);
 
       // Delete the control: nothing is written to the object, which stays drawn, now detached; undo re-attaches.
       await page.keyboard.press("Escape");
