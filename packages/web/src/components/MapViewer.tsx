@@ -400,6 +400,12 @@ export type ToolShape =
   | { kind: "line"; points: readonly { x: number; y: number }[]; closed?: boolean; dashed?: boolean; color?: string; fill?: string; widthPx?: number; testId?: string; data?: Record<string, string> }
   /** A screen-size square handle. */
   | { kind: "handle"; x: number; y: number; active?: boolean; testId?: string; data?: Record<string, string> }
+  /**
+   * Screen-size dots on points of `x`, `y` (a GPS track's stored points, G29): `indices`, else `from … to` inclusive
+   * thinned in screen space to one per `gapPx` (index order; the spacing doubles while over `TRACK_NODES_MAX`) — one
+   * path, so a long track's nodes stay one element. `active`: the hovered one, larger and filled.
+   */
+  | { kind: "nodes"; x: ArrayLike<number>; y: ArrayLike<number>; indices?: readonly number[]; from?: number; to?: number; gapPx?: number; active?: boolean; testId?: string; data?: Record<string, string> }
   /** A screen-size Bézier handle grip at `x`, `y` on a thin line from its vertex `from`. */
   | { kind: "grip"; x: number; y: number; from: { x: number; y: number }; testId?: string; data?: Record<string, string> }
   | { kind: "text"; x: number; y: number; text: string; dxPx?: number; dyPx?: number; color?: string; testId?: string }
@@ -3927,6 +3933,41 @@ function renderDescriptionRows(
   }
 }
 
+/** The most dots one `nodes` shape draws (its spacing doubles until it fits). */
+export const TRACK_NODES_MAX = 4000;
+
+type Proj = (x: number, y: number) => { x: number; y: number } | null;
+const nodesCache = new WeakMap<object, { key: string; pts: { x: number; y: number }[] }>();
+
+/** A `nodes` shape's dots in screen px: its indices projected, or its range thinned to `gapPx` (cached per view). */
+export function nodePoints(sh: Extract<ToolShape, { kind: "nodes" }>, project: Proj): { x: number; y: number }[] {
+  if (sh.indices) return sh.indices.map((i) => project(sh.x[i], sh.y[i])).filter((q): q is { x: number; y: number } => q !== null);
+  const from = sh.from ?? 0, to = sh.to ?? sh.x.length - 1;
+  if (to < from) return [];
+  const a = project(sh.x[from], sh.y[from]), b = project(sh.x[to], sh.y[to]);
+  const key = `${from},${to},${sh.gapPx},${a?.x},${a?.y},${b?.x},${b?.y}`;
+  const hit = nodesCache.get(sh.x);
+  if (hit?.key === key) return hit.pts;
+  const proj: ({ x: number; y: number } | null)[] = [];
+  for (let i = from; i <= to; i++) proj.push(project(sh.x[i], sh.y[i]));
+  let gap = Math.max(0, sh.gapPx ?? 0), pts: { x: number; y: number }[] = [];
+  for (;;) {
+    pts = [];
+    let last: { x: number; y: number } | null = null;
+    const g2 = gap * gap;
+    for (const q of proj) {
+      if (!q) continue;
+      if (last && (q.x - last.x) ** 2 + (q.y - last.y) ** 2 < g2) continue;
+      pts.push(q);
+      last = q;
+    }
+    if (pts.length <= TRACK_NODES_MAX) break;
+    gap = Math.max(1, gap * 2);
+  }
+  nodesCache.set(sh.x, { key, pts });
+  return pts;
+}
+
 /** One tool shape (docs/course-editor.md §6) in the rotated overlay's inner px; `pxPerMm` sizes true-size circles. */
 function toolShapeNode(
   sh: ToolShape,
@@ -3956,6 +3997,19 @@ function toolShapeNode(
       if (!p) return null;
       return <rect key={key} x={p.x - 4} y={p.y - 4} width={8} height={8} fill={sh.active ? "#7c3aed" : "#ffffff"} stroke="#7c3aed"
         strokeWidth={1.5} data-testid={sh.testId} data-x={sh.x} data-y={sh.y} {...data} />;
+    }
+    case "nodes": {
+      const pts = nodePoints(sh, project);
+      if (pts.length === 0) return null;
+      // Zero-length round-capped subpaths: a dot each, a purple ring with a white (or, hovered, purple) centre.
+      const d = pts.map((q) => `M${q.x.toFixed(1)},${q.y.toFixed(1)}h0`).join("");
+      return (
+        <g key={key} data-testid={sh.testId} data-count={pts.length} {...data}
+          data-points={sh.indices ? sh.indices.map((i) => `${sh.x[i]},${sh.y[i]}`).join(" ") : undefined}>
+          <path d={d} stroke="#7c3aed" strokeWidth={sh.active ? 11 : 7} strokeLinecap="round" fill="none" />
+          <path d={d} stroke={sh.active ? "#7c3aed" : "#ffffff"} strokeWidth={sh.active ? 5 : 4} strokeLinecap="round" fill="none" />
+        </g>
+      );
     }
     case "grip": {
       const p = project(sh.x, sh.y), q = project(sh.from.x, sh.from.y);

@@ -75,6 +75,17 @@ export function splitIndexAt(full: gpsTrack.ProjectedTrack, trim: Range, pt: Pt,
   return index >= trim.start + 1 && index <= trim.end - 2 ? index : null;
 }
 
+/**
+ * The splittable stored points (`trim.start + 1 … trim.end − 2`) within `radiusMm` of stored point `index`, in index
+ * order: drawn round the hovered node (G29), so every point the pointer can reach shows whatever the thinning.
+ */
+export function nodesNear(full: gpsTrack.ProjectedTrack, trim: Range, index: number, radiusMm: number): number[] {
+  const out: number[] = [];
+  const c = { x: full.x[index], y: full.y[index] }, r2 = radiusMm * radiusMm;
+  for (let i = trim.start + 1; i <= trim.end - 2; i++) if (dist2(full, i, c) <= r2) out.push(i);
+  return out;
+}
+
 /** The id of the line nearest `pt` within `reachMm` (ties to list order), else null. */
 export function nearestTrack(lines: readonly { id: string; line: gpsTrack.ProjectedTrack }[], pt: Pt, reachMm: number): string | null {
   let out: string | null = null, best = reachMm;
