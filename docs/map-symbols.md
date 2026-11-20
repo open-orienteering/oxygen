@@ -1636,8 +1636,9 @@ colour but the **use**: one colour reference of one symbol.
 2. **Roads over contours is kept by default; every deviation is listed;
    the defaults can be overridden.** Where the map's own table draws
    road infill and paved-area brown over the contour brown (6 of the 10
-   maps), that deviation is kept without anyone asking. Every other
-   deviation is dropped by default. All of them are listed, kept and
+   maps), that deviation is kept without anyone asking (since `ocad-20`
+   also roads and paved areas over the blue line symbols, "Deviations"
+   below). Every other deviation is dropped by default. All of them are listed, kept and
    dropped. Each can be switched the other way per map in the colour
    panel (row I7). The user asked for the overrides "if it is not a lot
    of extra work", and at least the list: the list is row I6's, the
@@ -2009,24 +2010,42 @@ the row named the browns only). Since `ocad-20` / `omap-13` the list
 also keeps **roads over water** (the user, 2026-11-20, after comparing
 his maps in both orders: the only road difference left was a road the
 source draws over a stream): `brown50-road`, `brown30-road` and
-`black-road-outline` over `blue100-line` (ISOM, ISSkiOM) or
-`blue100-pointline` (ISSprOM). The stream sinks to just under the road
-and stays over the lakes it is drawn over; the paved-area browns are not
-in this part of the list (a paved area over a stream hides it, which the
-IOF order does not), nor the blue point symbols. Lakes and other blue
-areas already stand under the road in the palette. Every other deviation
-is dropped by default.
+`black-road-outline` — the same uppers as over the contours, the
+paved-area browns included — over `blue100-line` (ISOM) or
+`blue100-pointline` (ISSprOM, where the blue points share the row). The
+paved browns are in the list because a paved area's black edge takes the
+`black-road-outline` role: without them a bordered paved area would be
+half over a stream, its edge over and its fill under. The stream sinks to
+just under the road and stays over the lakes it is drawn over. **On ISOM
+that puts the whole blue line row of that source colour under lower
+purple** (streams, ditches, narrow marsh, blue north lines), as a kept
+road-over-contour deviation does the contours: the course's circles and
+legs are drawn over them on such maps (put to the user, 2026-11-20).
+Lakes and other blue areas already stand under the road in the palette.
+`ROLE_RULES` has no ISSkiOM table, so on an ISSkiOM-spec map the pair
+arises only where a match gives the roles. Every other deviation is
+dropped by default.
 
 **Stones under open land** (the user, 2026-11-20: on an older club map
 stones come through the open areas in the IOF order) is such a dropped
-deviation, and is drawn as the palette says, on purpose: the source
-table draws the open-land yellow over the black (`yellow100>black100`,
+deviation as far as the mechanism tells (the map file is not in the
+cloud; presumed until the pair is seen in the map's panel), and is drawn
+as the palette says, on purpose: the source table draws the open-land
+yellow over the black (`yellow100>black100`,
 or `yellow50` / `yellow75` for rough and semi-open land),
 so in the map's own order the yellow covers stones the file still holds
 under open land; in the IOF order every black point and line stands
 over the yellow, as ISOM draws them. The deviation is listed in the
 review page's Colour layers panel with its object counts, and **Keep**
-there draws that map in its own order for the pair. It is not kept by
+there draws that map in its own order for the pair — and for what that
+pair drags along: every black of that colour under the yellow and so
+under lower purple, and the yellow over the greens and lakes the source
+draws it over (implied keeps). If no such pair is listed, the cover is
+another one: a second black or grey (a screened black takes the nearest
+black screen role, so the pair is `yellow…>black50-building` or similar),
+a white mask or roleless colour the source-order gap placed (no
+deviation, nothing to keep; shown under source-ordered rows), or a
+library-drawn boulder drawn on the `black100` carrier row. It is not kept by
 default, because the same pair on another table would hide paths
 and fences under fields (§9.3 "Measured": the yellow the
 Club-full and Nacka tables draw over cultivated dots and the black
@@ -2368,6 +2387,9 @@ one rebuild.
 
 #### Measured (rows I3 and I4)
 
+Measured at the I4 defaults; the `ocad-20` default (roads over water)
+has not been run on the ten corpus maps.
+
 **At I4** (`map-rendering.md` §6.5 "I4", the tables per map and the
 reading): over the ten maps **64 014 pixels change** against the source
 order (I3: 710 573; 0.043 % of all pixels, 0.22 % of ink), and **every
@@ -2410,7 +2432,7 @@ the importer's default.
 
 | Test (`packages/shared/src/…`) | Covers |
 |---|---|
-| `import/__tests__/colour-layers.test.ts` | a badly ordered ISOM table: the whole stack bottom first (the paved area's and the building's black edge and dots kept under their fills, own order); one brown 50 % split into paved area and road infill (same ink and number, ids `src:n` and `src:n/<id>`); one black as road outline and, moved under fills, dots and edges (ids `…/under<k>`, unique); the road outline over the paved brown and under the infill, buildings over the paved brown; every source-drawn symbol's parts in source order; each palette id on one row, every needed, purple and overlay id present; an alias (source ink, a row of its own) and an insert (palette ink); unreferenced colours (identified, and by name); a zero-object symbol's row; no-role rows, the graphic row and unused roleless colours by the source order (between the contour brown and the blue; `sourceOrdered` with `aboveLowerPurple`); both course purples inserted in the map's ink, the source purple an ordinary row at the bottom; the overlay's places; `courseColourStack`; the per-reference re-index, every reference on a row of its own colour, `reindex.colours`; `documentSymbolFingerprints` unchanged; two colours of one role (source order; the carrier by use, ties to the lowest); a hinted source purple under the course row, the ink by use and by index, the palette's without a purple; both specs' order (the contour brown either side of lower purple; every row in palette order); a ski green as `green-skio`, never aliased; a no-role colour drawn by an area and a line (two rows, `src:n` and `src:n/none:other`); the alias by use, ties to the lowest index; an inserted `purple50` in the palette's ink; spot and overprint on split rows; an inserted row the edition lacks named `iof2024:`; determinism; input unchanged; bad references and infos. I4: an OCAD road drawn inside out (brown main under black borders, suggested match) — the main on a row of its own just under the outline, no palette id; the same road drawn from the library at the palette places, carrying the ids; its infill under the table's black a dropped deviation with the library road's objects; Club-full's table (`club-colour-tables.ts`): every deviation listed with object counts, most first; streets (infill and outline) over the contours kept by default — the contour brown under the road, over the lakes and paved areas it was drawn over, under lower purple, the infill under lower purple; both dropped by override (the contour brown over the road and lower purple); a lake over the contours dropped by default and kept by override (under lower purple); keeps that cannot all hold: a default-dropped pair implied (`impliedBy`), blocked by an explicit drop (`blockedBy`), deterministic; a mask white (hint `white-over-green-brown`) over the black by the source order, no palette id, `aboveLowerPurple`; a white the source has at its palette place stays there; a graphic frame bar's black on a row of its own at its source place; an inserted `white-upper` over a roleless colour the table has on top (ISSprOM); the carrier is §9.2's colour (most used), not the row with the most objects; a moved part against another colour's outline the source draws under it (kept under it, no pair of one role a deviation); pass 2 (a roleless part the gap put over its symbol's black, moved directly under it); nothing left implied by a deviation that is then blocked. `ocad-20`: roads (infill and outline) over a stream kept by default — the stream under the road, over the lake; both dropped by override; ISSprOM's `blue100-pointline`; stones (black 100 %) the table draws under the open-land yellow drawn over it by default and under it by a keep override |
+| `import/__tests__/colour-layers.test.ts` | a badly ordered ISOM table: the whole stack bottom first (the paved area's and the building's black edge and dots kept under their fills, own order); one brown 50 % split into paved area and road infill (same ink and number, ids `src:n` and `src:n/<id>`); one black as road outline and, moved under fills, dots and edges (ids `…/under<k>`, unique); the road outline over the paved brown and under the infill, buildings over the paved brown; every source-drawn symbol's parts in source order; each palette id on one row, every needed, purple and overlay id present; an alias (source ink, a row of its own) and an insert (palette ink); unreferenced colours (identified, and by name); a zero-object symbol's row; no-role rows, the graphic row and unused roleless colours by the source order (between the contour brown and the blue; `sourceOrdered` with `aboveLowerPurple`); both course purples inserted in the map's ink, the source purple an ordinary row at the bottom; the overlay's places; `courseColourStack`; the per-reference re-index, every reference on a row of its own colour, `reindex.colours`; `documentSymbolFingerprints` unchanged; two colours of one role (source order; the carrier by use, ties to the lowest); a hinted source purple under the course row, the ink by use and by index, the palette's without a purple; both specs' order (the contour brown either side of lower purple; every row in palette order); a ski green as `green-skio`, never aliased; a no-role colour drawn by an area and a line (two rows, `src:n` and `src:n/none:other`); the alias by use, ties to the lowest index; an inserted `purple50` in the palette's ink; spot and overprint on split rows; an inserted row the edition lacks named `iof2024:`; determinism; input unchanged; bad references and infos. I4: an OCAD road drawn inside out (brown main under black borders, suggested match) — the main on a row of its own just under the outline, no palette id; the same road drawn from the library at the palette places, carrying the ids; its infill under the table's black a dropped deviation with the library road's objects; Club-full's table (`club-colour-tables.ts`): every deviation listed with object counts, most first; streets (infill and outline) over the contours kept by default — the contour brown under the road, over the lakes and paved areas it was drawn over, under lower purple, the infill under lower purple; both dropped by override (the contour brown over the road and lower purple); a lake over the contours dropped by default and kept by override (under lower purple); keeps that cannot all hold: a default-dropped pair implied (`impliedBy`), blocked by an explicit drop (`blockedBy`), deterministic; a mask white (hint `white-over-green-brown`) over the black by the source order, no palette id, `aboveLowerPurple`; a white the source has at its palette place stays there; a graphic frame bar's black on a row of its own at its source place; an inserted `white-upper` over a roleless colour the table has on top (ISSprOM); the carrier is §9.2's colour (most used), not the row with the most objects; a moved part against another colour's outline the source draws under it (kept under it, no pair of one role a deviation); pass 2 (a roleless part the gap put over its symbol's black, moved directly under it); nothing left implied by a deviation that is then blocked. `ocad-20`: roads (infill and outline) over a stream kept by default — the stream under the road, over the lake, under lower purple; both dropped by override; a bordered paved area whole over a stream; a contour over road over stream, nothing blocked; ISSprOM's `blue100-pointline`; stones (black 100 %) the table draws under the open-land yellow drawn over it by default and under it by a keep override |
 | `render/__tests__/transform.test.ts` | `reindexRenderColours` (one row per reference, the identity, a count mismatch throws) |
 
 ## 10. Pending in this chapter

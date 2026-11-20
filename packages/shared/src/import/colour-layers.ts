@@ -111,16 +111,17 @@ export const deviationKey = (upper: string, lower: string): string => `${upper}>
 
 /**
  * Deviations kept unless the input says otherwise: road infill, paved-area
- * brown and the road outline drawn over the contour brown (the user's
- * answer 2, 2026-11-17: roads over contours), and road infill and outline
- * drawn over the blue line symbols (the user, 2026-11-20: roads over
- * water — a road crossing a stream or ditch the table draws under it stays
- * whole). Every other deviation is dropped by default.
+ * brown and the road outline (also a paved area's black edge) drawn over
+ * the contour brown (the user's answer 2, 2026-11-17: roads over
+ * contours) and over the blue line symbols (the user, 2026-11-20: roads
+ * over water — a road crossing a stream or ditch the table draws under it
+ * stays whole). The same uppers for both, so a bordered paved area is
+ * never half over a stream. Every other deviation is dropped by default.
  */
-export const KEPT_BY_DEFAULT: ReadonlySet<string> = new Set([
-  ...["brown50-road", "brown30-road", "brown50-paved", "brown30-paved", "black-road-outline"].flatMap((u) => ["brown100-line", "brown100"].map((l) => deviationKey(u, l))),
-  ...["brown50-road", "brown30-road", "black-road-outline"].flatMap((u) => ["blue100-line", "blue100-pointline"].map((l) => deviationKey(u, l))),
-]);
+const ROAD_UPPERS = ["brown50-road", "brown30-road", "brown50-paved", "brown30-paved", "black-road-outline"];
+export const KEPT_BY_DEFAULT: ReadonlySet<string> = new Set(
+  ROAD_UPPERS.flatMap((u) => ["brown100-line", "brown100", "blue100-line", "blue100-pointline"].map((l) => deviationKey(u, l))),
+);
 
 export interface ColourLayersInput {
   /** The source colour table, in source order (as the reader gives it, before §9.2's alignment). */

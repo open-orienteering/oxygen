@@ -207,7 +207,7 @@
       "title": "Deviations",
       "summary_one": "{{count}} deviation, {{kept}} kept",
       "summary_other": "{{count}} deviations, {{kept}} kept",
-      "hint": "Pairs of layers the map's colour table draws the other way round from the IOF order. Kept: drawn as the map draws them. Dropped: drawn in the IOF order. By default roads and paved areas stay over the contours; every other pair is dropped. Keep or drop a pair for this map, or reset it to its default; each change builds the map again.",
+      "hint": "Pairs of layers the map's colour table draws the other way round from the IOF order. Kept: drawn as the map draws them. Dropped: drawn in the IOF order. By default roads and paved areas stay over the contours, streams and ditches; every other pair is dropped. Keep or drop a pair for this map, or reset it to its default; each change builds the map again.",
       "none": "The map's colour table agrees with the IOF order.",
       "pair": "{{upper}} over {{lower}}",
       "kept": "Kept",

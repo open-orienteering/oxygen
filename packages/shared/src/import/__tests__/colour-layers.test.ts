@@ -588,7 +588,27 @@ describe("buildColourLayers: deviations (roads over water, stones under open lan
     for (const upper of ["brown50-road", "black-road-outline"]) {
       expect(r.report.deviations.find((d) => d.upper === upper && d.lower === "blue100-line")).toMatchObject({ kept: true, byDefault: true, objects: { upper: 6, lower: 5 } });
     }
-    expect([...KEPT_BY_DEFAULT]).toEqual(expect.arrayContaining(["brown30-road>blue100-pointline", "black-road-outline>blue100-pointline"]));
+    // On ISOM the stream then stands under lower purple, as a kept road-over-contour deviation puts the contours.
+    expect(stream(r)).toBeLessThan(rowOfRole(r, "purple-lower"));
+  });
+
+  it("keeps a bordered paved area whole over a stream: fill and edge both over it, never the edge alone", () => {
+    const c = [colour(1, "Blå", ink("blue100-line")), colour(2, "Brun 50%", ink("brown50-paved")), colour(3, "Svart", [0, 0, 0, 1])];
+    const paved: Sym = { objects: 3, render: sym({ type: "area", fill: 1, border: { main: { colour: 2, widthUm: 100 } } }) };
+    const r = build(c, [line(0, 5), paved, line(2, 7)]);
+    const [fill, edge] = rowsOf(r, 1);
+    expect(rowsOf(r, 0)[0]).toBeLessThan(fill);
+    expect(rowsOf(r, 0)[0]).toBeLessThan(edge);
+    expect(r.report.deviations.find((d) => d.upper === "brown50-paved" && d.lower === "blue100-line")).toMatchObject({ kept: true, byDefault: true });
+  });
+
+  it("keeps the stream under the road and the contour over both when the table draws them so", () => {
+    const c = [colour(1, "Blå", ink("blue100-line")), colour(2, "Brun 50%", ink("brown50-road")), colour(3, "Svart", [0, 0, 0, 1]), colour(4, "Brun", ink("brown100-line"))];
+    const rd: Sym = { objects: 6, render: sym({ type: "line", borders: { left: { colour: 2, widthUm: 140, shiftUm: 290 }, right: { colour: 2, widthUm: 140, shiftUm: 290 }, backgroundColour: 1 } }) };
+    const r = build(c, [line(0, 5), rd, line(3, 12)]);
+    expect(rowsOf(r, 0)[0]).toBeLessThan(rowsOf(r, 1)[infill]);
+    expect(rowsOf(r, 2)[0]).toBeGreaterThan(rowsOf(r, 1)[outline]);
+    expect(r.report.deviations.every((d) => !d.blockedBy)).toBe(true);
   });
 
   it("draws the stream over the road again when both are dropped by override", () => {
@@ -602,7 +622,10 @@ describe("buildColourLayers: deviations (roads over water, stones under open lan
     const sprRoad: Sym = { objects: 4, render: sym({ type: "line", borders: { left: { colour: 2, widthUm: 140, shiftUm: 290 }, right: { colour: 2, widthUm: 140, shiftUm: 290 }, backgroundColour: 1 } }) };
     const r = build(spr, [line(0, 5), sprRoad], [], "ISSprOM2019-2");
     expect(rowsOf(r, 0)[0]).toBeLessThan(rowsOf(r, 1)[2]);
-    expect(r.report.deviations.find((d) => d.upper === "brown50-road" && d.lower === "blue100-pointline")).toMatchObject({ kept: true, byDefault: true });
+    expect(rowsOf(r, 0)[0]).toBeLessThan(rowsOf(r, 1)[0]);
+    for (const upper of ["brown50-road", "black-road-outline"]) {
+      expect(r.report.deviations.find((d) => d.upper === upper && d.lower === "blue100-pointline")).toMatchObject({ kept: true, byDefault: true });
+    }
   });
 
   it("draws stones over open land when the table hides them under it: dropped by default, kept by override", () => {
