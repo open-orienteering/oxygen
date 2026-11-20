@@ -687,6 +687,9 @@ Decided by the user before planning (2026-11-15):
   again under its id, then restores its trim and `convertedOp`; it comes
   back at the end of the list (the wart G25 accepted for delete's undo).
 
+`T` also splits map lines (G32, `course-editor.md` §13 "Split tool"): a
+click on no GPS track is the map lines'.
+
 **The tool's tracks.** `T` acts on every track selected in the list
 (G26's checkboxes) that is visible and `ready` — G30 (user 2026-11-20)
 widened this from the one selected track, so that the parts of a split
@@ -694,10 +697,11 @@ stay the tool's (below); with none selected it has none, and the panel
 says so (`editor-tracks-tool-hint`, `data-state` `pick` | `ready`). In
 `T` a click goes to the nearest visible track within 6 CSS px — the
 tool's own first on a tie, then list order: on a tool's track it splits
-(below), on another it selects that one alone; a click on empty map does
-nothing. `T` needs the panel on (§5.1 "Where it is off", and loaded) —
-not *Apply corrections*: track writes do not touch the patch — and falls
-back to `V` when the panel turns off.
+(below), on another it selects that one alone; a click on no track is
+the map lines' (G32). On GPS tracks `T` needs the panel on (§5.1 "Where
+it is off", and loaded) — not *Apply corrections*: track writes do not
+touch the patch; it falls back to `V` only when the panel and drawing
+are both off (`course-editor.md` §13 "Split tool").
 
 **Nodes** (G30; user 2026-11-20: "When it is armed, shouldn't I see the
 nodepoints then, and it will split each time I click one?"). On each

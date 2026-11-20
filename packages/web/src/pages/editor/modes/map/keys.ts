@@ -1,6 +1,6 @@
 /**
  * Map mode's keys (docs/course-editor.md §13 "Gestures and keys"; 08 §5.3, the Map column). Undo / redo are the
- * page's, as in every mode. Course mode's tool keys (`S K M X C G`) are not here: course edits are locked; `P` `L` `A` are Map mode's drawing tools (§13 "Drawing"), `T` its Tracks tool (§13 "GPS tracks: editing").
+ * page's, as in every mode. Course mode's tool keys (`S K M X C G`) are not here: course edits are locked; `P` `L` `A` are Map mode's drawing tools (§13 "Drawing"), `T` its split tool for map lines and GPS tracks (§13 "Split tool", "GPS tracks: editing").
  */
 
 import type { MapRailTool } from "../../tools/rail";

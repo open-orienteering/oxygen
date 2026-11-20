@@ -1143,6 +1143,79 @@ export interface TrackLayer {
  * drawn below the tool's own shapes and never take a pointer; hover, press and click report the zoom on their way to
  * the tool, whose answers are kept. Every Map-mode binding is wrapped with it (G25; G7, G9, G27 add tools).
  */
+// ─── Map mode's `T` on map lines: select a line, split it at a node (docs/course-editor.md §13 "Split tool", G32) ──
+
+export interface MapSplitContext {
+  /** As `V`'s: the viewer's hit-test, the click sequence and the selection callback. */
+  hit: MapSelectContext["hit"];
+  clickSeq: MapSelectContext["clickSeq"];
+  onSelect: MapSelectContext["onSelect"];
+  /** The selected line's nodes (its one ring), or null: nothing drawn, a click selects. */
+  line: { vertices: readonly Vertex[]; closed: boolean } | null;
+  /** No split while a write is in flight. */
+  canSplit?: boolean;
+  /** A click on node `index` of the selected line: *Split at node* there. */
+  onSplit: (index: number) => void;
+}
+
+/** The nodes a line splits at (*Split at node*, §13 answer 4): every node of a loop, else all but the two ends. */
+export function splitNodes(line: { vertices: readonly Vertex[]; closed: boolean }): number[] {
+  const n = line.vertices.length;
+  const out: number[] = [];
+  for (let i = line.closed ? 0 : 1; i < (line.closed ? n : n - 1); i++) out.push(i);
+  return out;
+}
+
+/**
+ * `T` on map lines (G32, user 2026-11-20): the selected line's splittable nodes drawn as handles
+ * (`editor-split-node`, `data-index`); a click within `HANDLE_PX` of one splits the line there (*Split at node*), any
+ * other click selects as `V` does (the topmost hit), so the next line is one click away.
+ */
+export function mapSplitBinding(c: MapSplitContext): EditorToolBinding {
+  const nodes = c.line ? splitNodes(c.line) : [];
+  const shapes: ToolShape[] = nodes.map((i) => ({ kind: "handle", x: c.line!.vertices[i].x, y: c.line!.vertices[i].y, testId: "editor-split-node", data: { index: String(i) } }));
+  return {
+    exclusive: true,
+    shapes,
+    onClick: (p) => {
+      if (c.line && c.canSplit !== false) {
+        const reach = HANDLE_PX * p.mmPerPx;
+        let best: { i: number; d: number } | null = null;
+        for (const i of nodes) {
+          const v = c.line.vertices[i];
+          const d = Math.hypot(v.x - p.pt.x, v.y - p.pt.y);
+          if (d <= reach && (!best || d < best.d)) best = { i, d };
+        }
+        if (best) {
+          c.clickSeq.current++; // a hit-test in flight must not reselect over the split
+          return c.onSplit(best.i);
+        }
+      }
+      mapHitClick(c, p.pt, p.mmPerPx, (stack) => c.onSelect(stack[0] ?? null, stack));
+    },
+  };
+}
+
+/**
+ * `T` whole (G32): the GPS tracks' binding (null while they are off) over the map lines' — both drawn, a click on a
+ * GPS track (`hitsTrack`, the tracks tool's own rule) the tracks', any other click the lines'.
+ */
+export function mapTBinding(
+  tracks: EditorToolBinding | null, hitsTrack: (pt: Pt, reachMm: number) => boolean, lines: EditorToolBinding, clickSeq?: { current: number },
+): EditorToolBinding {
+  if (!tracks) return lines;
+  return {
+    ...tracks,
+    shapes: [...(tracks.shapes ?? []), ...(lines.shapes ?? [])],
+    onClick: (p) => {
+      if (!hitsTrack(p.pt, MAP_HIT_PX * p.mmPerPx)) return lines.onClick?.(p);
+      // A line hit-test still in flight is dropped: it must not undo this track pick when it answers.
+      if (clickSeq) clickSeq.current++;
+      tracks.onClick?.(p);
+    },
+  };
+}
+
 export function withTrackLayer(b: EditorToolBinding, layer: TrackLayer): EditorToolBinding {
   const out: EditorToolBinding = {
     ...b,

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { gpsTrack } from "@oxygen/shared";
-import { hoverCandidate, IDLE, liveTrim, trackToolStep, type TrackToolState, type TrackToolTarget } from "../tools/tracks";
-import { mapTracksBinding } from "../tools/bindings";
+import { clickHitsTrack, hoverCandidate, IDLE, liveTrim, trackToolStep, type TrackToolState, type TrackToolTarget } from "../tools/tracks";
+import { mapSplitBinding, mapTBinding, mapTracksBinding, splitNodes } from "../tools/bindings";
 import type { ToolPointer } from "../../../components/MapViewer";
 import { nodePoints, TRACK_NODES_MAX } from "../../../lib/editor/track-nodes";
 
@@ -208,5 +208,79 @@ describe("after a split: the parts' handles on the shared point, a stale hover (
     const b = mapTracksBinding({ targets: [target], lines, gesture: { current: IDLE }, hover: { id: "t", index: 8, mmPerPx: MM }, ...cb() });
     expect((b.shapes ?? []).map((s) => s.testId)).toEqual(["editor-track-nodes", "editor-track-handle", "editor-track-handle"]);
     expect(b.cursor).toBeUndefined();
+  });
+});
+
+describe("T on map lines (G32): mapSplitBinding, splitNodes, mapTBinding", () => {
+  const v = (pts: [number, number][]) => pts.map(([x, y]) => ({ x, y }));
+  const ptr = (x: number, y: number): ToolPointer => ({ pt: { x, y }, target: null, shift: false, mmPerPx: MM });
+  const hitStub = (refs: { added: string }[]) => vi.fn(async () => refs.map((ref) => ({ ref })));
+  it("splitNodes: all but the ends of an open line, every node of a loop", () => {
+    expect(splitNodes({ vertices: v([[0, 0], [1, 0], [2, 0], [3, 0]]), closed: false })).toEqual([1, 2]);
+    expect(splitNodes({ vertices: v([[0, 0], [1, 0]]), closed: false })).toEqual([]);
+    expect(splitNodes({ vertices: v([[0, 0], [1, 0], [1, 1]]), closed: true })).toEqual([0, 1, 2]);
+  });
+  it("draws the selected line's splittable nodes; a click on one splits, elsewhere it selects the hit", async () => {
+    const onSplit = vi.fn(), onSelect = vi.fn();
+    const hit = hitStub([{ added: "b" }]);
+    const b = mapSplitBinding({ hit: hit as never, clickSeq: { current: 0 }, onSelect, line: { vertices: v([[0, 0], [1, 0], [2, 0]]), closed: false }, onSplit });
+    expect((b.shapes ?? []).map((s) => s.kind === "handle" && [s.x, s.data?.index, s.testId])).toEqual([[1, "1", "editor-split-node"]]);
+    b.onClick!(ptr(1.1, 0.1));
+    expect(onSplit).toHaveBeenCalledWith(1);
+    expect(hit).not.toHaveBeenCalled();
+    // An end node is no split: the click selects.
+    b.onClick!(ptr(0, 0));
+    await vi.waitFor(() => expect(onSelect).toHaveBeenCalledWith({ added: "b" }, [{ added: "b" }]));
+    expect(onSplit).toHaveBeenCalledTimes(1);
+  });
+  it("without a selected line, or while a write is in flight, a click selects", async () => {
+    const onSplit = vi.fn(), onSelect = vi.fn();
+    const none = mapSplitBinding({ hit: hitStub([]) as never, clickSeq: { current: 0 }, onSelect, line: null, onSplit });
+    expect(none.shapes).toEqual([]);
+    none.onClick!(ptr(1, 0));
+    await vi.waitFor(() => expect(onSelect).toHaveBeenCalledWith(null, []));
+    const busy = mapSplitBinding({ hit: hitStub([]) as never, clickSeq: { current: 0 }, onSelect, line: { vertices: v([[0, 0], [1, 0], [2, 0]]), closed: false }, canSplit: false, onSplit });
+    busy.onClick!(ptr(1, 0));
+    expect(onSplit).not.toHaveBeenCalled();
+  });
+  it("mapTBinding: a click on a GPS track goes to the tracks, any other to the lines; both drawn", () => {
+    const tracksClick = vi.fn(), linesClick = vi.fn();
+    const t = { exclusive: true, shapes: [{ kind: "handle" as const, x: 0, y: 0, testId: "editor-track-handle" }], onClick: tracksClick };
+    const l = { exclusive: true, shapes: [{ kind: "handle" as const, x: 5, y: 5, testId: "editor-split-node" }], onClick: linesClick };
+    const b = mapTBinding(t, (pt) => pt.y < 1, l);
+    expect((b.shapes ?? []).map((s) => s.testId)).toEqual(["editor-track-handle", "editor-split-node"]);
+    b.onClick!(ptr(0, 0));
+    expect(tracksClick).toHaveBeenCalledTimes(1);
+    b.onClick!(ptr(0, 5));
+    expect(linesClick).toHaveBeenCalledTimes(1);
+    expect(mapTBinding(null, () => true, l)).toBe(l);
+  });
+});
+
+describe("G32 review cases", () => {
+  const v = (pts: [number, number][]) => pts.map(([x, y]) => ({ x, y }));
+  const ptr = (x: number, y: number): ToolPointer => ({ pt: { x, y }, target: null, shift: false, mmPerPx: MM });
+  it("clickHitsTrack: on a tool's track or another visible one, not off them", () => {
+    expect(clickHitsTrack({ x: 4, y: 0.1 }, 0.3, [target], lines)).toBe(true);
+    expect(clickHitsTrack({ x: 4, y: 2.9 }, 0.3, [], lines)).toBe(true);
+    expect(clickHitsTrack({ x: 4, y: 1.5 }, 0.3, [target], lines)).toBe(false);
+  });
+  it("a loop splits at any node, the nearest of two in reach; a split bumps the click sequence", () => {
+    const onSplit = vi.fn(), clickSeq = { current: 3 };
+    const b = mapSplitBinding({ hit: vi.fn(async () => []) as never, clickSeq, onSelect: vi.fn(), line: { vertices: v([[0, 0], [0.3, 0], [0.3, 0.3]]), closed: true }, onSplit });
+    b.onClick!(ptr(0.05, 0));
+    expect(onSplit).toHaveBeenLastCalledWith(0);
+    b.onClick!(ptr(0.25, 0));
+    expect(onSplit).toHaveBeenLastCalledWith(1);
+    expect(clickSeq.current).toBe(5);
+  });
+  it("mapTBinding keeps the tracks' press and hover; a click on a track drops a line hit-test in flight", () => {
+    const down = vi.fn(() => true), hover = vi.fn(), clickSeq = { current: 0 };
+    const t = { exclusive: true, onPointerDown: down, onHover: hover, onClick: vi.fn() };
+    const b = mapTBinding(t, () => true, { exclusive: true, onClick: vi.fn() }, clickSeq);
+    expect(b.onPointerDown).toBe(down);
+    expect(b.onHover).toBe(hover);
+    b.onClick!(ptr(0, 0));
+    expect(clickSeq.current).toBe(1);
   });
 });

@@ -77,6 +77,11 @@ function clickedTrack(pt: Pt, reachMm: number, targets: readonly TrackToolTarget
   return { split: index === null ? null : { id, index } };
 }
 
+/** Whether a click at `pt` is on a GPS track at all (a tool's or another visible one); else it is the map lines' (G32). */
+export function clickHitsTrack(pt: Pt, reachMm: number, targets: readonly TrackToolTarget[], lines: readonly TrackLine[]): boolean {
+  return clickedTrack(pt, reachMm, targets, lines) !== null;
+}
+
 /** The node a click at `pt` would split at now (drawn highlighted under the pointer), else null. */
 export function hoverCandidate(pt: Pt, reachMm: number, targets: readonly TrackToolTarget[], lines: readonly TrackLine[]): SplitCandidate | null {
   if (targets.length === 0) return null;
