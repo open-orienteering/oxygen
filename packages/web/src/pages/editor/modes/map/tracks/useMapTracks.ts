@@ -18,7 +18,7 @@ import type { LoadedMapDocument } from "../../../../../lib/map-document-cache";
 import type { EditorWrites, TrackImportItem, TrackMeta } from "../../../../../lib/editor/write-client";
 import { paperFrameOf } from "../../../../../lib/vector-map";
 import type { EditorToolBinding } from "../../../../../components/MapViewer";
-import { mapTracksBinding, type TrackLayer } from "../../../tools/bindings";
+import { mapTracksBinding, type TrackHover, type TrackLayer } from "../../../tools/bindings";
 import { IDLE, type TrackToolState } from "../../../tools/tracks";
 import { newAddId } from "../symbols";
 import { DEFAULT_TOLERANCE_MM, decimateLayer, layerShapes, remainderShape, toleranceMm } from "./decimate";
@@ -261,12 +261,17 @@ export function useMapTracks(a: MapTracksArgs): MapTracks {
   const shownTrim = useCallback((m: TrackMeta): gpsTrack.TrackRange => (
     draftTrim?.id === m.id ? draftTrim.trim : pendingTrim?.id === m.id ? pendingTrim.trim : m.trim
   ), [draftTrim, pendingTrim]);
-  // The tool's track: the one selected track, visible and ready (G26's selection, kept for G27).
-  const toolRow = armed && active && selection.length === 1 && selection[0].visible && selection[0].geometry ? selection[0] : null;
-  const toolFull = toolRow ? fullLine(toolRow.meta) : null;
-  const target = useMemo(() => (toolRow && toolFull ? {
-    id: toolRow.meta.id, full: toolFull, trim: pendingTrim?.id === toolRow.meta.id ? pendingTrim.trim : toolRow.meta.trim,
-  } : null), [toolRow, toolFull, pendingTrim]);
+  // The tool's tracks: every selected track that is visible and ready (G26's selection; G30: more than one, so the
+  // two parts of a split stay the tool's and a next click splits again).
+  const toolRows = useMemo(() => (armed && active ? selection.filter((r) => r.visible && r.geometry) : []), [armed, active, selection]);
+  const targets = useMemo(() => toolRows.flatMap((r) => {
+    const full = fullLine(r.meta);
+    return full ? [{ id: r.meta.id, full, trim: pendingTrim?.id === r.meta.id ? pendingTrim.trim : r.meta.trim }] : [];
+  }), [toolRows, fullLine, pendingTrim]);
+  const [toolHover, setToolHover] = useState<TrackHover | null>(null);
+  const onToolHover = useCallback((h: TrackHover | null) => setToolHover((was) => (
+    was?.id === h?.id && was?.index === h?.index && was?.mmPerPx === h?.mmPerPx ? was : h
+  )), []);
 
   // ─── The layer, decimated to the pixel ──
   const [tolerance, setTolerance] = useState(DEFAULT_TOLERANCE_MM);
@@ -287,14 +292,15 @@ export function useMapTracks(a: MapTracksArgs): MapTracks {
   const shapes = useMemo(() => {
     const decimated = drawnLines.length > 0 ? decimateLayer(drawnLines, tolerance) : null;
     const out = decimated ? layerShapes(decimated) : [];
-    // The tool's track whole, under the layer, while part of it is trimmed away (a handle can be dragged back over it).
-    if (target) {
-      const trim = shownTrim(toolRow!.meta);
-      // At the tolerance the layer settled on (doubled over the budget); one track, outside the budget's count.
+    // A tool's track whole, under the layer, while part of it is trimmed away (a handle can be dragged back over it).
+    for (const target of targets) {
+      const meta = toolRows.find((r) => r.meta.id === target.id)!.meta;
+      const trim = shownTrim(meta);
+      // At the tolerance the layer settled on (doubled over the budget); outside the budget's count.
       if (trim.start > 0 || trim.end < target.full.x.length) out.unshift(remainderShape(target.id, target.full, decimated?.tolerance ?? tolerance));
     }
     return out;
-  }, [drawnLines, tolerance, target, shownTrim, toolRow]);
+  }, [drawnLines, tolerance, targets, shownTrim, toolRows]);
   const layer = useMemo<TrackLayer>(() => ({ shapes, onScale }), [shapes, onScale]);
 
   // ─── Writes ──
@@ -445,7 +451,8 @@ export function useMapTracks(a: MapTracksArgs): MapTracks {
         const [left, right] = gpsTrack.splitTrack({ name: null, points: p }, index);
         addPoints([[ids[0], left.points], [ids[1], right.points]]);
         patchList((ts) => ts.flatMap((x) => (x.id === id ? res.tracks : [x])));
-        setSelectedIds([]);
+        // The parts take the original's place in the selection: still the tool's, so the next click splits again (G30).
+        setSelectedIds((was) => was.flatMap((x) => (x === id ? ids : [x])));
         const u = splitUndo(meta, p, ids);
         record(
           // The original again under its id, at the end of the list, with its trim and mark (§5.2, user 2026-11-15).
@@ -454,6 +461,8 @@ export function useMapTracks(a: MapTracksArgs): MapTracks {
             await writes.importTracks([u.item]);
             if (u.trim) await writes.updateTrack({ id, trim: u.trim });
             if (u.mark) await writes.markTracksConverted([u.mark]);
+            // The parts leave the selection (a later redo must not bring them back ticked beside newer picks).
+            setSelectedIds((was) => was.filter((x) => x !== ids[0] && x !== ids[1]));
           }),
           () => send(() => writes.splitTrack({ id, index, ids })),
         );
@@ -503,17 +512,20 @@ export function useMapTracks(a: MapTracksArgs): MapTracks {
   const panelLoading = disabled === null && (!(lease.isSuccess || lease.isError) || list.isLoading);
   const toolOff = !mapDoc ? t("mapNone") : disabled ? t(`tracksDisabled_${disabled}`) : panelLoading ? t("tracksLoading") : null;
   const toolLines = useMemo(() => drawnLines.map((l) => ({ id: l.id, line: l.line })), [drawnLines]);
+  const hover = toolHover && targets.some((x) => x.id === toolHover.id) ? toolHover : null;
   const toolBinding = useMemo(() => (!armed || toolOff ? null : mapTracksBinding({
-    target,
+    targets,
     lines: toolLines,
     gesture: toolGesture,
     canPress: !editing,
+    hover: editing ? null : hover,
+    onHover: onToolHover,
     onDraft: setDraftTrim,
     onTrim,
     onSplit,
     onSelect: onToolSelect,
     // draftTrim: the handles follow the drag.
-  })), [armed, toolOff, target, toolLines, editing, onTrim, onSplit, onToolSelect, draftTrim]); // eslint-disable-line react-hooks/exhaustive-deps
+  })), [armed, toolOff, targets, toolLines, editing, hover, onToolHover, onTrim, onSplit, onToolSelect, draftTrim]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const onLocateTrack = useCallback((id: string) => {
     const g = geometry.get(id);
@@ -538,7 +550,7 @@ export function useMapTracks(a: MapTracksArgs): MapTracks {
     onLocate: onLocateTrack,
     onAverage,
     averaging,
-    tool: armed && !toolOff ? (target ? "ready" as const : "pick" as const) : null,
+    tool: armed && !toolOff ? (targets.length > 0 ? "ready" as const : "pick" as const) : null,
   };
   return { layer, selection, clearSelection, mark, toolBinding, toolOff, panel };
 }

@@ -21,7 +21,8 @@ import { isClosedKind, pointInPolygon, smoothed, step, type PolygonState } from 
 import { nearestEdge, outlinePoints, vertexRule, type Vertex } from "../../../lib/editor/geometry-edit";
 import { ringRule } from "../modes/map/nodes";
 import { angleOfDrag } from "../modes/map/symbols";
-import { liveTrim, trackToolStep, type TrackToolState, type TrackToolStep, type TrackToolTarget } from "./tracks";
+import { hoverCandidate, liveTrim, trackToolStep, type SplitCandidate, type TrackToolState, type TrackToolStep, type TrackToolTarget } from "./tracks";
+import { nodesNear } from "../modes/map/tracks/edit";
 import type { gpsTrack } from "@oxygen/shared";
 import {
   dragGeometry, geometryHandles, geometryShapes, gripsOf, insertAtEdge, pressGeometry, releaseGeometry, type GeometryDrag,
@@ -1168,21 +1169,32 @@ export function withTrackLayer(b: EditorToolBinding, layer: TrackLayer): EditorT
   return out;
 }
 
-// ─── Map mode's `T`: the Tracks tool (docs/course-editor.md §13 "GPS tracks: editing", G27) ──────────
+// ─── Map mode's `T`: the Tracks tool (docs/course-editor.md §13 "GPS tracks: editing", G27, G30) ──────────
+
+/** Screen spacing of the nodes drawn along a tool's track (the renderer thins to it at the current zoom). */
+export const TRACK_NODE_GAP_PX = 10;
+/** Around the hovered node every stored point is drawn, within this radius. */
+export const TRACK_NODE_NEAR_PX = 60;
+
+/** The hovered node: the split a click would make, and the zoom it was found at (for the nodes drawn round it). */
+export type TrackHover = SplitCandidate & { mmPerPx: number };
 
 export interface MapTracksContext {
-  /** The tool's track (the one selected, visible, ready track), or null: no handles, a click selects. */
-  target: TrackToolTarget | null;
+  /** The tool's tracks (the selected, visible, ready ones), maybe none: then no nodes or handles, a click selects. */
+  targets: readonly TrackToolTarget[];
   /** The visible tracks as drawn (trimmed): a click on one selects it. */
   lines: readonly { id: string; line: gpsTrack.ProjectedTrack }[];
   gesture: { current: TrackToolState };
   /** Presses are taken (no trim or split write in flight). */
   canPress?: boolean;
+  /** The node under the pointer (the page keeps it, so the nodes round it are drawn); null off every node. */
+  hover?: TrackHover | null;
+  onHover?: (h: TrackHover | null) => void;
   /** The trim a held handle shows now (the layer draws it); null when released or cancelled. */
   onDraft: (live: { id: string; trim: gpsTrack.TrackRange } | null) => void;
   /** A handle released at another point: one write, `before` for the undo. */
   onTrim: (id: string, trim: gpsTrack.TrackRange, before: gpsTrack.TrackRange) => void;
-  /** A click on the tool's track: split at stored point `index`. */
+  /** A click on a node of a tool's track: split at stored point `index`. */
   onSplit: (id: string, index: number) => void;
   /** A click on another track: it becomes the tool's track (the selection alone). */
   onSelect: (id: string) => void;
@@ -1191,21 +1203,37 @@ export interface MapTracksContext {
 
 /**
  * Map mode's Tracks tool (§13 "GPS tracks: editing"; docs/map-gps-tracks.md §5.2): exclusive, so a drag off a handle
- * pans; the tool's track's two end handles (`editor-track-handle`, at stored points `trim.start` and `trim.end − 1`)
- * drag along its stored points, one trim write on release; a click on the track splits it, on another track selects
- * it (`tools/tracks.ts`).
+ * pans. On each tool's track its splittable stored points are drawn as nodes (`editor-track-nodes`, thinned to
+ * `TRACK_NODE_GAP_PX` on screen, every one within `TRACK_NODE_NEAR_PX` of the hovered node), the node a click would
+ * split at highlighted (`editor-track-node-hover`); its two end handles (`editor-track-handle`, at stored points
+ * `trim.start` and `trim.end − 1`, drawn last) drag along its stored points, one trim write on release; a click on a
+ * tool's track splits it, on another track selects it (`tools/tracks.ts`).
  */
 export function mapTracksBinding(c: MapTracksContext): EditorToolBinding {
-  const t = c.target;
   const live = liveTrim(c.gesture.current);
-  const trim = t && live?.id === t.id ? live.trim : t?.trim;
   const shapes: ToolShape[] = [];
-  if (t && trim) {
+  const handles: ToolShape[] = [];
+  const hover = c.hover ?? null;
+  let hovered = false;
+  for (const t of c.targets) {
+    const trim = live?.id === t.id ? live.trim : t.trim;
+    if (!live && hover?.id === t.id && hover.index > trim.start && hover.index < trim.end - 1) hovered = true;
+    const data = { "track-id": t.id };
+    // Splittable: two visible points left on each side (§1.2 "Split"); none while a handle is held.
+    if (!live && trim.end - trim.start >= 4) {
+      shapes.push({ kind: "nodes", x: t.full.x, y: t.full.y, from: trim.start + 1, to: trim.end - 2, gapPx: TRACK_NODE_GAP_PX, testId: "editor-track-nodes", data });
+      if (hover?.id === t.id && hover.index > trim.start && hover.index < trim.end - 1) {
+        const near = nodesNear(t.full, trim, hover.index, TRACK_NODE_NEAR_PX * hover.mmPerPx);
+        shapes.push({ kind: "nodes", x: t.full.x, y: t.full.y, indices: near, testId: "editor-track-nodes-near", data });
+        shapes.push({ kind: "nodes", x: t.full.x, y: t.full.y, indices: [hover.index], active: true, testId: "editor-track-node-hover", data: { ...data, index: String(hover.index) } });
+      }
+    }
     for (const end of ["start", "end"] as const) {
       const i = end === "start" ? trim.start : trim.end - 1;
-      shapes.push({ kind: "handle", x: t.full.x[i], y: t.full.y[i], active: live !== null, testId: "editor-track-handle", data: { "track-id": t.id, end, index: String(i) } });
+      handles.push({ kind: "handle", x: t.full.x[i], y: t.full.y[i], active: live?.id === t.id, testId: "editor-track-handle", data: { ...data, end, index: String(i) } });
     }
   }
+  shapes.push(...handles);
   /** The step's state kept, the drafted trim reported when it changed, the effect sent; whether the press was taken. */
   const apply = (r: TrackToolStep): boolean => {
     const was = liveTrim(c.gesture.current);
@@ -1214,17 +1242,25 @@ export function mapTracksBinding(c: MapTracksContext): EditorToolBinding {
     if (was?.trim.start !== now?.trim.start || was?.trim.end !== now?.trim.end) c.onDraft(now);
     const e = r.effect;
     if (e?.kind === "trim") c.onTrim(e.id, e.trim, e.before);
-    else if (e?.kind === "split") c.onSplit(e.id, e.index);
-    else if (e?.kind === "select") c.onSelect(e.id);
+    else if (e?.kind === "split") {
+      c.onHover?.(null);
+      c.onSplit(e.id, e.index);
+    } else if (e?.kind === "select") c.onSelect(e.id);
     return r.taken;
   };
   return {
     exclusive: true,
     shapes,
-    onClick: (p) => void apply(trackToolStep(c.gesture.current, { type: "click", pt: p.pt, reachMm: MAP_HIT_PX * p.mmPerPx, target: t, lines: c.lines })),
+    cursor: hovered ? "pointer" : undefined,
+    onHover: (p) => {
+      if (!c.onHover) return;
+      const h = p && c.gesture.current.kind === "idle" ? hoverCandidate(p.pt, MAP_HIT_PX * p.mmPerPx, c.targets, c.lines) : null;
+      c.onHover(h ? { ...h, mmPerPx: p!.mmPerPx } : null);
+    },
+    onClick: (p) => void apply(trackToolStep(c.gesture.current, { type: "click", pt: p.pt, reachMm: MAP_HIT_PX * p.mmPerPx, targets: c.targets, lines: c.lines })),
     onPointerDown: (p) => {
       if (p.touch || c.canPress === false) return false;
-      return apply(trackToolStep(c.gesture.current, { type: "down", pt: p.pt, handleMm: HANDLE_PX * p.mmPerPx, dragMm: MAP_DRAG_PX * p.mmPerPx, target: t }));
+      return apply(trackToolStep(c.gesture.current, { type: "down", pt: p.pt, handleMm: HANDLE_PX * p.mmPerPx, dragMm: MAP_DRAG_PX * p.mmPerPx, targets: c.targets }));
     },
     onPointerDrag: (pt) => {
       apply(trackToolStep(c.gesture.current, { type: "drag", pt }));

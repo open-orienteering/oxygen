@@ -735,7 +735,15 @@ test.describe("GPS tracks in Map mode (docs/course-editor.md §13)", () => {
       await rowById(page, idA).getByTestId("editor-track-select").check();
       await page.getByTestId("editor-tool-T").click();
 
-      // A click on the track at point 15 splits it there: two parts sharing the point, the selection cleared.
+      // Armed, the track's splittable points are drawn as nodes; the one under the pointer is highlighted (G30).
+      await expect(page.locator(`[data-testid="editor-track-nodes"][data-track-id="${idA}"]`)).toHaveCount(1);
+      expect(Number(await page.locator(`[data-testid="editor-track-nodes"][data-track-id="${idA}"]`).getAttribute("data-count"))).toBeGreaterThan(1);
+      const q15 = await toPage(page, mm(passA.mm[15]));
+      await page.mouse.move(q15.x, q15.y);
+      await expect(page.getByTestId("editor-track-node-hover")).toHaveAttribute("data-index", "15");
+      await expect(page.locator(`[data-testid="editor-track-nodes-near"][data-track-id="${idA}"]`)).toHaveCount(1);
+
+      // A click on that node splits there: two parts sharing the point, both still selected (the tool's tracks).
       let split = waitForTrpc(page, "mapTrack.split");
       await clickAt(page, passA.mm[15]);
       const [left, right] = (await answer<{ tracks: { id: string; pointCount: number }[] }>(await split)).tracks;
@@ -743,13 +751,14 @@ test.describe("GPS tracks in Map mode (docs/course-editor.md §13)", () => {
       expect(left.id < right.id).toBe(true);
       await expect(rows(page)).toHaveCount(3);
       await expect(rowById(page, idA)).toHaveCount(0);
-      await expect(page.getByTestId("editor-tracks-tool-hint")).toHaveAttribute("data-state", "pick");
+      await expect(page.getByTestId("editor-tracks-tool-hint")).toHaveAttribute("data-state", "ready");
       await expect(pathOf(page, left.id)).toHaveCount(1);
       await expect(pathOf(page, right.id)).toHaveCount(1);
-
-      // Select the right part by a click on it, split it at point 25: the middle is points 15 … 25.
-      await clickAt(page, passA.mm[35]);
+      await expect(rowById(page, left.id).getByTestId("editor-track-select")).toBeChecked();
       await expect(rowById(page, right.id).getByTestId("editor-track-select")).toBeChecked();
+      await expect(page.getByTestId("editor-track-nodes")).toHaveCount(2);
+
+      // The next click splits again, no re-selecting: the right part at point 25, so the middle is points 15 … 25.
       split = waitForTrpc(page, "mapTrack.split");
       await clickAt(page, passA.mm[25]);
       const [middle, rest] = (await answer<{ tracks: { id: string; pointCount: number }[] }>(await split)).tracks;
@@ -877,6 +886,43 @@ test.describe("GPS tracks in Map mode (docs/course-editor.md §13)", () => {
       expect((await listed()).map((t) => t.id)).toEqual([idA, idB, avg.id]);
     } finally {
       await dropEventPatch(EDITOR_EVENT).catch(() => undefined);
+      await clearTracks().catch(() => undefined);
+    }
+  });
+
+  // ─── G31: TCX import (docs/map-gps-tracks.md §2.4) ──
+  test("TCX: the passes as a Garmin activity import like their GPX, one track per activity, drawn the same", async ({ page }) => {
+    test.setTimeout(120_000);
+    try {
+      // The fixture's passes re-written as TCX: each trk one Activity, its points split over two laps.
+      const gpx = readFileSync(PASSES, "utf8");
+      const activities = [...gpx.matchAll(/<trk>([\s\S]*?)<\/trk>/g)].map((m, k) => {
+        const pts = [...m[1].matchAll(/lat="([^"]+)" lon="([^"]+)"/g)].map(([, lat, lon], i) =>
+          `<Trackpoint><Time>2026-01-17T09:${String(k * 10 + Math.floor(i / 60)).padStart(2, "0")}:${String(i % 60).padStart(2, "0")}Z</Time>` +
+          `<Position><LatitudeDegrees>${lat}</LatitudeDegrees><LongitudeDegrees>${lon}</LongitudeDegrees></Position></Trackpoint>`);
+        const half = Math.ceil(pts.length / 2);
+        return `<Activity Sport="Running"><Id>2026-01-17T09:0${k}:00Z</Id><Lap><Track>${pts.slice(0, half).join("")}</Track></Lap><Lap><Track>${pts.slice(half).join("")}</Track></Lap></Activity>`;
+      });
+      const tcx = `<?xml version="1.0" encoding="UTF-8"?><TrainingCenterDatabase xmlns="http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2"><Activities>${activities.join("")}</Activities></TrainingCenterDatabase>`;
+      await openEditor(page, "?mode=map");
+      await expect(page.getByTestId("editor-tracks-none")).toBeVisible({ timeout: 15_000 });
+      const imported = waitForTrpc(page, "mapTrack.import");
+      await page.getByTestId("editor-tracks-file").setInputFiles([{ name: "passes.tcx", mimeType: "application/vnd.garmin.tcx+xml", buffer: Buffer.from(tcx) }]);
+      await imported;
+      await expect(rows(page)).toHaveCount(2);
+      await expect(page.getByTestId("editor-tracks-import-result")).toHaveAttribute("data-imported", "2");
+      const ids = await rows(page).evaluateAll((els) => els.map((e) => e.getAttribute("data-track-id")!));
+      for (const [k, id] of ids.entries()) {
+        await expect(rowById(page, id)).toHaveAttribute("data-state", "ready", { timeout: 15_000 });
+        await expect(rowById(page, id)).toHaveAttribute("data-points", String(passes.tracks[k].points));
+      }
+      const meta = await listed();
+      expect(meta.map((t) => t.sourceName)).toEqual(["passes.tcx", "passes.tcx"]);
+      // Drawn where the GPX's points project.
+      const first = await drawn(page, ids[0]);
+      expect(first[0].x).toBeCloseTo(passA.mm[0][0], 2);
+      expect(first[0].y).toBeCloseTo(passA.mm[0][1], 2);
+    } finally {
       await clearTracks().catch(() => undefined);
     }
   });

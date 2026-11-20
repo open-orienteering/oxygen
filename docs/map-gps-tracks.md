@@ -1,7 +1,7 @@
 # GPS tracks
 
 Status: **draft** — chapter of the vector map pipeline specification,
-started by sub-slice G22; §4 by G23; §1 by G24; §5.1 by G25; §6 by G26; §6.7 by G28. GPS tracks are new scope for slice G (user,
+started by sub-slice G22; §4 by G23; §1 by G24; §5.1 by G25; §6 by G26; §6.7 by G28; §2.4 by G31; §5.2's nodes by G30. GPS tracks are new scope for slice G (user,
 2026-11-13, `docs/research/vector-map-pipeline/SLICES.md` "Slice G",
 rows G20–G28): the research decides none of it beyond 04 §7
 ("Georeferenced inputs" become paper-space overlays) and 06 §3.2 (a
@@ -10,11 +10,11 @@ decisions in `decisions/slice-g.md`. When the research and this
 document disagree, this document wins.
 
 The use is ski-O mapping: a mapper skis the tracks with a GPS logger,
-imports the GPX files into an event, averages several passes, trims and
+imports the GPX or TCX files into an event, averages several passes, trims and
 splits them, and converts them into ISSkiOM track lines on the event's
 map (Map mode, `course-editor.md` §13). This chapter is normative for
 `packages/shared/src/gps-track/` (`import { gpsTrack } from
-"@oxygen/shared"`). It covers storage (§1), reading GPX (§2), the
+"@oxygen/shared"`). It covers storage (§1), reading GPX and TCX (§2), the
 geometry on the paper (§3), averaging passes (§4), the reference layer
 and editing (§5) and conversion into map objects (§6).
 
@@ -159,9 +159,9 @@ Errors carry their code as the message prefix, as `PATCH_*` do:
   with `event_id` rewritten, `created_by` kept only when that user
   exists, `ON CONFLICT (id) DO NOTHING` (twice is once).
 
-## 2. GPX
+## 2. GPX and TCX
 
-A GPX file is parsed **in the browser**; the server stores points, not
+A GPX or TCX file (§2.4) is parsed **in the browser**; the server stores points, not
 the file (slice G "Decided in this split"). `parseGpx(text)` is pure,
 uses no DOM or Node API, and streams over the import's dependency-free
 tokenizer (`import/xml.ts` `parseXml`), so a file of hundreds of
@@ -236,6 +236,50 @@ interface Track { name: string | null; points: TrackPoints }
 | `malformed` | The text is not well-formed XML (truncated, mismatched tags, no root element). Wraps `XmlParseError`; `offset` is its character offset. |
 | `not-gpx` | Well-formed XML whose root is not `gpx` (a KML file, say). |
 | `no-points` | No segment or route has two valid points (a waypoints-only file). |
+| `not-tcx` | `parseTcx` only (§2.4): the root is not `TrainingCenterDatabase`. |
+
+### 2.4 TCX and telling the two apart
+
+Written by row G31 (user 2026-11-20: "could we support TCX import as
+well?"; `packages/shared/src/gps-track/tcx.ts`). `parseTcx(text)`
+reads Garmin's Training Center XML v2 into the same `GpxFile` shape as
+`parseGpx`, over the same tokenizer, so the import, the caps and the
+rest of this document treat both alike.
+
+- **The root's local name must be `TrainingCenterDatabase`**, else
+  `not-tcx`; prefixes are stripped, the namespace is not checked, a
+  byte-order mark is skipped, `Extensions` are ignored.
+- **One track per `Activities/Activity`** (also each leg of a multisport
+  file, `Activities/MultiSportSession/FirstSport|NextSport/Activity`),
+  `source: "trk"`, timed,
+  `segmentIndex: 0`, `trackIndex` its position among the activities,
+  unnamed (the list shows the file name, §5.1). Every `Lap`'s `Track`s
+  are joined in file order: a watch's auto-laps (every kilometre, say)
+  and pauses do not cut a recording into many tracks; cutting is the
+  Tracks tool's split (§5.2). (Deviation from the G31 planner, who
+  proposed one track per `Track` like GPX segments; recorded in
+  `decisions/slice-g.md`.)
+- **One track per `Courses/Course`**, `source: "rte"`, untimed like a
+  GPX route (a course's times are a planned pace), named after its
+  `Name`; its `CoursePoint`s count as `waypoints`.
+- **A `Trackpoint`** gives `Position/LatitudeDegrees`,
+  `Position/LongitudeDegrees`, `AltitudeMeters` and `Time`, read with
+  §2.2's rules (plain decimals, the ranges, the ISO 8601 times, the
+  first of each wins, the roundings). A `Trackpoint` **without a
+  `Position`** (a sensor-only sample, common in Garmin files) is not a
+  point and not counted; one whose position is unreadable, out of range
+  or exactly 0° / 0° (a device's "no fix", TCX only) is skipped and
+  counted in `skippedPoints`. An activity or
+  course left with fewer than two points counts in `skippedSegments`.
+- `creator` is the first `Creator/Name` (the device); `version` null.
+- Errors: `malformed`, `not-tcx`, `no-points`, as `GpxParseError`.
+
+**`parseTrackFile(text)`** is what the import calls (`model.ts`
+`planImport`): GPX or TCX **by the root element, not the file name** —
+`parseGpx`, and when its root is not `gpx`, `parseTcx`. A root that is
+neither is `not-gpx`, shown as "not a GPX or TCX file". The picker
+accepts `.gpx` and `.tcx` (`application/gpx+xml`,
+`application/vnd.garmin.tcx+xml`); a drop takes any file.
 
 ## 3. Geometry
 
@@ -643,15 +687,37 @@ Decided by the user before planning (2026-11-15):
   again under its id, then restores its trim and `convertedOp`; it comes
   back at the end of the list (the wart G25 accepted for delete's undo).
 
-**The tool's track.** `T` acts on the one track selected in the list
-(G26's checkboxes) while it is visible and `ready`; with none or several
-selected it has no track, and the panel says so
-(`editor-tracks-tool-hint`, `data-state` `pick` | `ready`). In `T` a
-click goes to the nearest visible track within 6 CSS px — the tool's own
-first on a tie, then list order: on the tool's track it splits (below), on
-another it selects that one alone; a click on empty map does nothing. `T` needs the panel on (§5.1 "Where it is off", and loaded) —
+**The tool's tracks.** `T` acts on every track selected in the list
+(G26's checkboxes) that is visible and `ready` — G30 (user 2026-11-20)
+widened this from the one selected track, so that the parts of a split
+stay the tool's (below); with none selected it has none, and the panel
+says so (`editor-tracks-tool-hint`, `data-state` `pick` | `ready`). In
+`T` a click goes to the nearest visible track within 6 CSS px — the
+tool's own first on a tie, then list order: on a tool's track it splits
+(below), on another it selects that one alone; a click on empty map does
+nothing. `T` needs the panel on (§5.1 "Where it is off", and loaded) —
 not *Apply corrections*: track writes do not touch the patch — and falls
 back to `V` when the panel turns off.
+
+**Nodes** (G30; user 2026-11-20: "When it is armed, shouldn't I see the
+nodepoints then, and it will split each time I click one?"). On each
+tool's track its splittable stored points (`trim.start + 1 …
+trim.end − 2`) are drawn as dots, `editor-track-nodes` (`data-track-id`,
+`data-count`): one path, thinned in screen space at the current zoom to
+one per 10 CSS px in index order, the spacing doubling while over 4 000
+dots (`lib/editor/track-nodes.ts` `nodePoints`). The stored point a click would split
+at is found on hover with the click's own rule (`tools/tracks.ts`
+`hoverCandidate`) and drawn larger and filled,
+`editor-track-node-hover` (`data-index`), with every splittable point
+within 60 CSS px of it, unthinned (`editor-track-nodes-near`,
+`edit.ts` `nodesNear`), so the point under the pointer is always shown
+whatever the thinning; the cursor is a pointer there. While a handle is
+held no nodes are drawn; a track of fewer than four kept points has
+none. The handles are drawn above the nodes and keep the press; where two
+handles share a point (a split's two parts meet there) the first move
+picks the one that lands nearest the pointer, so the right part's start
+is dragged forward and the left part's end back. A hovered point no
+longer splittable (a redo trimmed it away) is not drawn.
 
 **Trim.** The tool's track has two handles (`editor-track-handle`,
 `data-end` `start` | `end`, `data-index`) on its stored points
@@ -672,14 +738,18 @@ and redo are one `update` each. Until the write settles the new trim is
 drawn and no new press is taken. Trim is at stored points only: the API
 takes indices, and the points never change under an id (§1.2).
 
-**Split.** A click on the tool's track within 6 CSS px splits it at the
-nearer stored point of the nearest kept segment (ties to the earlier),
+**Split.** A click on a tool's track within 6 CSS px splits it at the
+nearer stored point of the nearest kept segment (ties to the earlier) —
+the hovered node —
 when that leaves two visible points on each side
 (`trim.start + 1 … trim.end − 2`, §1.2 "Split"); next to a handle a
 click does nothing. One `mapTrack.split { id, index, ids }`, the ids
 UUIDv7 minted on the device in consecutive milliseconds (ascending, left
 first); the parts' points are the stored points split on the device
-(`splitTrack`, §3.5), so nothing is fetched. The selection is cleared.
+(`splitTrack`, §3.5), so nothing is fetched. The two parts take the
+original's place in the selection (G30, replacing Q3's "cleared"), so
+they stay the tool's tracks with their nodes, and the next click splits
+again without re-selecting.
 The undo is the user's answer above (remove the parts, `import` the
 original under its id with its points, name, file name, `derivedFrom` and
 `singlePass`, then `update` its trim when not whole and `markConverted`
@@ -734,11 +804,12 @@ review — each the G27 planner's conservative recommendation:
   (§6 answer 1). In the usual case the marks were null, so "clears them
   all" holds.
 - **Q2 the tool's track and split gesture**: the single checkbox-selected
-  visible track; split is a plain click on it (no armed *Split* button),
+  visible track (widened by G30 to every selected visible track); split is a plain click on it (no armed *Split* button),
   at stored points only; a click goes to the nearest track in reach (the
   tool's own on a tie), so a click meant for a neighbouring pass selects it
   rather than splitting; on empty map nothing.
-- **Q3 after a split** the selection is cleared and the original's eye
+- **Q3 after a split** the selection is cleared (superseded by G30, user
+  2026-11-20: the parts stay selected, "The tool's tracks") and the original's eye
   override is not carried to the parts (only a visible track can be split;
   a part of a converted track shown by its eye falls back to hidden).
 - **Q4 restoring a trim** is dragging the handle back out over the grey
@@ -969,6 +1040,7 @@ other or running past.
 | File | Proves |
 |------|--------|
 | `gps-track/__tests__/gpx.test.ts` | GPX 1.1 (Garmin-style, extensions, metadata, two segments) and 1.0 (root name, routes, two tracks); one track per segment in file order with `trackIndex` / `segmentIndex`; four tracks from two `trk` × two `trkseg`; a prefixed namespace, BOM and CDATA name; routes untimed; missing time and elevation per point and per column; zoneless and offset times; invalid points and short segments skipped and counted; `malformed` (truncated, mismatched, empty, not XML), `not-gpx` (KML), `no-points` (waypoints only); a timed route dropped to untimed; the first `time` / `ele` winning over a private element; decimal-only coordinates; impossible dates, hour 24, second 60 and offsets rejected; quantisation; 200 000 points |
+| `gps-track/__tests__/tcx.test.ts` | §2.4: an activity of two laps and three `Track`s one timed track, a position-less sample not a point, an out-of-range latitude skipped and counted, an exponent coordinate, zoneless and offset times, elevations rounded, `Extensions` ignored, a short activity a skipped segment, the device as `creator`, BOM; a course one untimed named track with its course point a waypoint; `not-tcx`, `malformed`, `no-points`; a `MultiSportSession`'s two legs two tracks, 0° / 0° skipped; `parseTrackFile` reading GPX and TCX by the root, a KML `not-gpx`, a truncated GPX `malformed` |
 | `gps-track/__tests__/project.test.ts` | The frame read from `e2e/test.xmap` by the importer; its reference point (a hard-coded lat / lng on the zone's central meridian); paper → WGS 84 → paper within 0.002 mm on it and on an OCAD-unit SWEREF99 TM frame; WGS 84 → paper → WGS 84 within 1e-7°; outside points kept and counted; `correctionDeg`; `not-georeferenced` (no CRS, no origin, unknown code) and `not-projectable` with its index and cause, both ways |
 | `gps-track/__tests__/geometry.test.ts` | Resample spacing, exact ends, duplicates, degenerate lines, step and window `RangeError`s; smoothing: straight line fixed, seeded noisy line reduced, corner cut < 1.5 m with the legs unmoved, ends bit-identical, determinism (same bytes), no mutation, the 1-2-3-2-1 kernel and the shrunk window; simplify: tolerance bound at 0.05 / 0.1 / 0.5 mm, subset in order, ends, collinear, tolerance 0, a closed loop, 200 000 points, determinism |
 | `gps-track/__tests__/average.test.ts` | Every `RangeError`; no mutation, same bytes twice; the upper-median reference for 2, 3 and 4 passes and the tie among passes of the median length; `unitNormals` (left of travel, one-sided ends, corner bisector, hairpin fallback); two parallel passes → the centre line (straight to 1e-9 m, concentric arcs to 2 cm); an outlier within the gate held to the band of the good passes, also as the reference, and one beyond it without a vote; all 6 orders × 8 reversal patterns of three noisy passes → the same bytes, ranges and reference; the ends rule on a tie (reversed and kept, through `reversed`) and evidence over it; `reversed` following each input reversal; a pass covering half (either way round) → one range ending within a step of where it begins; a detour → its range, re-matched after; a loop crossing itself, with its second visit nearer, does not cross-match; a closed loop skied the other way round is orientated by its matches; `iterations` 1, 2 and 3 differ; ranges disjoint; the result unprojects index-aligned through the `e2e/test.xmap` frame; three 10 km passes at a fix per metre |
@@ -978,10 +1050,10 @@ other or running past.
 | `api/src/__tests__/backup.test.ts` | `map_gps_tracks` directly after `map_patches`, filtered by event |
 | `api/src/__tests__/integration/map-gps-tracks.test.ts` | The CHECKs; cascade with the event; `created_by` SET NULL; import / list / get round trip (deep-equal points, null columns, input order, list without points), an average with `derivedFrom` + `singlePass`, refusals writing nothing, a retried import by id, an id of another event, scoping; caps (200 000 points, 500 000 a call, 200 tracks with concurrent imports, split at the cap); update (trim set and restored, non-destructive, unchanged keeps the version, every bad trim, `single_pass` untouched); split (shared point, trims, ranges, the row replaced, order, a repeat with ids, split-split-remove); remove twice; markConverted (set, clear, unknown id writes nothing); a course setter does all, a viewer, a kiosk key and a stranger nothing; not in the checkout snapshot; no journal entry |
 | `api/src/__tests__/integration/backup.test.ts` | The dump's `map_gps_tracks` section holds the event's tracks; `restore-map-gps-tracks.sql` restores them exactly (points, trim, ranges, token above 2^53) into another event, a missing importer NULL, an existing one kept, twice is once |
-| `web/src/pages/editor/__tests__/map-tracks-model.test.ts` | §5.1: where it is off; the import plan (segments in file order, names cut, per-file parse errors, skip counts, the 200 000-point refusal, calls within 200 tracks / 500 000 points); the trimmed projection, length, outside count, `not-projectable`; rows; colour; locate's bounds; per-device overrides; a deleted track's re-import |
+| `web/src/pages/editor/__tests__/map-tracks-model.test.ts` | §5.1: where it is off; the import plan (a TCX file beside a GPX one, §2.4; segments in file order, names cut, per-file parse errors, skip counts, the 200 000-point refusal, calls within 200 tracks / 500 000 points); the trimmed projection, length, outside count, `not-projectable`; rows; colour; locate's bounds; per-device overrides; a deleted track's re-import |
 | `web/src/pages/editor/__tests__/map-tracks-decimate.test.ts` | §5.1 "Decimation to the pixel": the octave tolerance, the tolerance bound and ends, determinism, the 50 000-point budget, the layer's paths; §5.2: an average's runs (solid and dashed touching, a one-sample range none, a range over the whole line), one path per run under one track id, the dashed ones marked |
-| `web/src/pages/editor/__tests__/map-tracks-edit.test.ts` | §5.2: handle ↔ stored-point index and back (start inclusive, end exclusive), the handles' bounds over the whole track keeping two points, a drag to the nearest point within the bounds (outward too, stopping at a bound), an out-and-back keeping the handle on its leg; the split index (the nearer vertex of the nearest kept segment, ties earlier, out of reach or too near an end none, the trimmed-away stretch not clickable); the track under a click; the kept line; an average's ranges clipped and shifted by the trim; a split's undo (remove the parts, the original's re-import, trim and mark only when set, an average's `derivedFrom` / `singlePass` kept) |
-| `web/src/pages/editor/__tests__/map-tracks-tool.test.ts` | §5.2, the Tracks tool's reducer and binding: a press on a handle taken (the nearer one), elsewhere or without a track not; the drag threshold; the live trim along the stored points, outward restoring, two points kept; the release writing once with the trim before, nothing at the same index, cancelled or without a gesture; a click splitting on the tool's track, nothing next to a handle, selecting another track, nothing on empty map, selecting without a tool track, the nearer of two tracks in reach winning and the tool's own on a tie; the binding exclusive, its handles at the live trim, the draft reported and cleared, the effects sent; no press while a write is in flight; no handles and no press without a track |
+| `web/src/pages/editor/__tests__/map-tracks-edit.test.ts` | §5.2: handle ↔ stored-point index and back (start inclusive, end exclusive), the handles' bounds over the whole track keeping two points, a drag to the nearest point within the bounds (outward too, stopping at a bound), an out-and-back keeping the handle on its leg; the split index (the nearer vertex of the nearest kept segment, ties earlier, out of reach or too near an end none, the trimmed-away stretch not clickable); the track under a click; the kept line; an average's ranges clipped and shifted by the trim; G30's `nodesNear` (the splittable points round a point, clipped to the trim, the other leg of an out-and-back included); a split's undo (remove the parts, the original's re-import, trim and mark only when set, an average's `derivedFrom` / `singlePass` kept) |
+| `web/src/pages/editor/__tests__/map-tracks-tool.test.ts` | §5.2, the Tracks tool's reducer and binding: a press on a handle taken (the nearer one), elsewhere or without a track not; the drag threshold; the live trim along the stored points, outward restoring, two points kept; the release writing once with the trim before, nothing at the same index, cancelled or without a gesture; a click splitting on the tool's track, nothing next to a handle, selecting another track, nothing on empty map, selecting without a tool track, the nearer of two tracks in reach winning and the tool's own on a tie; the binding exclusive, its handles at the live trim, the draft reported and cleared, the effects sent; no press while a write is in flight; no handles and no press without a track; G30: `hoverCandidate` equal to the click's split and none off the track, next to a handle or without a tool track; two tool tracks (a click splits the one it is on, a press takes the nearest handle of either); the nodes, the near nodes and the hovered node drawn with the handles last, the cursor; hover reported with the zoom and cleared by a split; no nodes while a handle is held or on a track too short; a hovered index outside the splittable range not drawn; two parts' handles on their shared point, the first move dragging the one that follows it either way; `nodePoints` thinning to the gap in index order and doubling it over 4 000 |
 | `web/src/pages/editor/__tests__/map-tracks-average.test.ts` | §5.2 *Average*: the worker's handler is `averageTracks` with the defaults (two passes 3 m apart, one covering half → the centre line, the rest on the one pass, one range), a `RangeError` its error; the passes copied (compact, never the rows' buffers); the client — one worker, answers by id, order-independent bytes, an error rejected, `dispose` terminating and cancelling a job in flight; the import item (client id, name, `sourceName` `""`, `derivedFrom`, `singlePass`, untimed WGS 84 back on the paper within 0.002 mm); refused over 200 000 points or without a georeference |
 | `web/src/pages/editor/__tests__/map-tracks-convert.test.ts` | §6 (and §5.2: an average's sources marked with its op and restored on undo, a track converted in the same batch keeping its own op, a source of two averages taking the later's, a skipped average marking none): the fixture L → one `add` at 100 and 1000 units per mm, equal to `drawOp`'s; ends pinned under smoothing; fewer nodes with smoothing and a larger tolerance; determinism and no mutation; rounded duplicates and a one-coordinate track; outside points; a conversion's ops, marks, previous marks, node counts and skipped tracks; `putSymbols` on first use only, applying without an issue; ascending ids; the controls' defaults and ranges; the node count's warning above 2000; the remembered symbol (§6.4); the picker's order |
 | `web/src/lib/editor/__tests__/snap.test.ts` (G28 cases) | §6.7's target search `nearestOnLines`: the nearest point inside a segment, the 1.5 mm reach inclusive and not beyond, the symbol filter, points / areas / texts never lines, hidden symbols and the skipped object, a tie to the lower index, a Bézier line measured on its curve with the hit part's ends, the effective document (a hidden line not found, an added one found), the bounding-box reject at the edge; `nearestOnPath` on one line in document units |
@@ -989,7 +1061,7 @@ other or running past.
 | `web/src/pages/editor/__tests__/map-tracks-convert.test.ts` (G28 cases) | §6.7 in a conversion: the fixture L's start end to end onto a track's end node and its end extended 1 mm onto another; off or out of reach the ops exactly as without; a path no target; a batch in list order (the second track onto the first's line; not the other way round; not when converted as a path); a tie to the document's line; the node count after a cut; *Snap ends* stored, on by default |
 | `web/src/pages/editor/__tests__/map-shape-ops.test.ts` (G28 cases) | *Snap ends* on an added line: the `add` rewritten as the only op, the track line untouched, the inverse restoring it; the line never its own target and paths none (`no-target`); `closed`, `multi-part`; nothing on a document line |
 | `api/src/__tests__/integration/print-patch.test.ts` | §6 in print (G26, the row's page raster): a line `add` with `ISSkiOM2019:801.1` materialised on first use changes the rasterised `maps.pdf` page only inside its box |
-| `e2e/map-gps-tracks.spec.ts` | §5.1 end to end on `e2e/test.ocd`: import by the picker (a non-GPX file reported), the rows, the paths at the fixture's paper mm, locate, hide kept across a reload, a converted track hidden by default and *Show converted*, rename, delete and its undo, a reload keeping the tracks; §6: the fixture track converted with 801.1 — the preview, the op, the mark, the canvas, `maps.pdf`'s strokes, undo, redo, a second conversion moving the mark, the settings and symbol across a reload, a refused mark keeping the undo entry; §6.7: two ISSkiOM 801.1 lines put through the patch, the fixture converted with *Snap ends* on (two ends counted, the start on one line's end node, the end extended onto the other, both lines unchanged), off (the line as recorded), *Snap ends* on the added line (one write, then `no-target`, undone), off remembered across a reload; §5.2 on `e2e/fixtures/gps-passes.gpx` (two synthetic passes, generated with the expected average): trim by `T`'s end handle, undo / redo, outward restoring, the start handle, a reload keeping it; split, split, delete the middle, three undos bringing the original back under its id at the end of the list, the redo splitting again; *Average* of the two passes — one import with `derivedFrom` and `singlePass` as the generator's, the passes hidden, the average solid on the centre line and dashed on the one pass, converting it marking all three with one op and its undo restoring them, the average's undo showing the passes (`course-editor.md` §13 "Tests" has the detail) |
+| `e2e/map-gps-tracks.spec.ts` | §5.1 end to end on `e2e/test.ocd`: import by the picker (a non-GPX file reported; G31: the two passes re-written as a two-lap TCX activity each import as two tracks with the GPX's point counts, the file as their source and drawn where the GPX's points project), the rows, the paths at the fixture's paper mm, locate, hide kept across a reload, a converted track hidden by default and *Show converted*, rename, delete and its undo, a reload keeping the tracks; §6: the fixture track converted with 801.1 — the preview, the op, the mark, the canvas, `maps.pdf`'s strokes, undo, redo, a second conversion moving the mark, the settings and symbol across a reload, a refused mark keeping the undo entry; §6.7: two ISSkiOM 801.1 lines put through the patch, the fixture converted with *Snap ends* on (two ends counted, the start on one line's end node, the end extended onto the other, both lines unchanged), off (the line as recorded), *Snap ends* on the added line (one write, then `no-target`, undone), off remembered across a reload; §5.2 on `e2e/fixtures/gps-passes.gpx` (two synthetic passes, generated with the expected average): trim by `T`'s end handle, undo / redo, outward restoring, the start handle, a reload keeping it; split (G30: the nodes drawn when armed, the hovered node at point 15 with the near nodes, both parts still selected with their nodes after the split), split again without re-selecting, delete the middle, three undos bringing the original back under its id at the end of the list, the redo splitting again; *Average* of the two passes — one import with `derivedFrom` and `singlePass` as the generator's, the passes hidden, the average solid on the centre line and dashed on the one pass, converting it marking all three with one op and its undo restoring them, the average's undo showing the passes (`course-editor.md` §13 "Tests" has the detail) |
 
 ## 8. Pending in this chapter
 
@@ -999,6 +1071,16 @@ other or running past.
   a new track; left until a mapper asks.
 - *Average* has no cancel and no progress: a long job (§4.6: 3 s at 50 km)
   shows only the busy button; leaving Map mode drops it.
+- T's nodes (§5.2, G30) are thinned over the whole track, not culled to
+  the view (no `onView`, below): at a deep zoom on a long track the 4 000
+  cap widens their spacing on screen; the nodes round the hovered one are
+  always all drawn. The thinning projects every kept point on each
+  change of view (cached per view; `lib/editor/track-nodes.ts`).
+- TCX (§2.4): activities are unnamed (the file name shows).
+- T's hover (§5.2, G30) finds the track under the pointer on every
+  pointer move: tracks whose box is out of reach are passed over, but the
+  one under the pointer is scanned in full (tens of ms on a 200 000-point
+  track in Node); not throttled to a frame.
 - A split's parts fall back to the default visibility (§5.2 Q3), so a
   converted track shown by its eye vanishes when split; an average's pass
   shown by its eye keeps that override after the average goes, though it

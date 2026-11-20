@@ -103,6 +103,7 @@ import { editorHitAt, HIT_TOLERANCE_PX, imageRing, uiLegsOf, type EditorTarget }
 import { showSelectionRing } from "../lib/editor/state";
 import { escapeCancels } from "../lib/editor/mouse-drag";
 import { COARSE_HIT_TOLERANCE_PX, HANDLE_LIFT_PX, IDLE as SITE_TOUCH_IDLE, LONG_PRESS_MS, LOUPE_DIAMETER_PX, LOUPE_SCALE, liftedPoint, loupePlacement, placementLoupe, siteTouch, type SiteTouch, type SiteTouchEvent } from "../lib/editor/touch";
+import { nodePoints } from "../lib/editor/track-nodes";
 
 /** Persisted compass state: "1"/absent = rotation locked (north up). */
 const ROTATION_LOCK_STORAGE_KEY = "oxygen.map.rotationLock";
@@ -403,6 +404,12 @@ export type ToolShape =
   | { kind: "line"; points: readonly { x: number; y: number }[]; closed?: boolean; dashed?: boolean; color?: string; fill?: string; widthPx?: number; testId?: string; data?: Record<string, string> }
   /** A screen-size square handle. */
   | { kind: "handle"; x: number; y: number; active?: boolean; testId?: string; data?: Record<string, string> }
+  /**
+   * Screen-size dots on points of `x`, `y` (a GPS track's stored points, G30): `indices`, else `from … to` inclusive
+   * thinned in screen space to one per `gapPx` (index order; the spacing doubles while over `TRACK_NODES_MAX`) — one
+   * path, so a long track's nodes stay one element. `active`: the hovered one, larger and filled.
+   */
+  | { kind: "nodes"; x: ArrayLike<number>; y: ArrayLike<number>; indices?: readonly number[]; from?: number; to?: number; gapPx?: number; active?: boolean; testId?: string; data?: Record<string, string> }
   /**
    * A screen-size Bézier handle grip at `x`, `y` on a thin line from its vertex `from`. With `lengthPx` the grip is
    * drawn that many screen px from `from` towards `x`, `y` (a rotate knob's fixed stem, J9).
@@ -3968,6 +3975,19 @@ function toolShapeNode(
       if (!p) return null;
       return <rect key={key} x={p.x - 4} y={p.y - 4} width={8} height={8} fill={sh.active ? "#7c3aed" : "#ffffff"} stroke="#7c3aed"
         strokeWidth={1.5} data-testid={sh.testId} data-x={sh.x} data-y={sh.y} {...data} />;
+    }
+    case "nodes": {
+      const pts = nodePoints(sh, project);
+      if (pts.length === 0) return null;
+      // Zero-length round-capped subpaths: a dot each, a purple ring with a white (or, hovered, purple) centre.
+      const d = pts.map((q) => `M${q.x.toFixed(1)},${q.y.toFixed(1)}h0`).join("");
+      return (
+        <g key={key} data-testid={sh.testId} data-count={pts.length} {...data}
+          data-points={sh.indices ? sh.indices.map((i) => `${sh.x[i]},${sh.y[i]}`).join(" ") : undefined}>
+          <path d={d} stroke="#7c3aed" strokeWidth={sh.active ? 11 : 7} strokeLinecap="round" fill="none" />
+          <path d={d} stroke={sh.active ? "#7c3aed" : "#ffffff"} strokeWidth={sh.active ? 5 : 4} strokeLinecap="round" fill="none" />
+        </g>
+      );
     }
     case "grip": {
       let p = project(sh.x, sh.y);

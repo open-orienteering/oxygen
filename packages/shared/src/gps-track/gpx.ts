@@ -9,7 +9,8 @@
 import { parseXml, XmlParseError } from "../import/xml.js";
 import { quantiseDeg, quantiseEle, type Track, type TrackPoints } from "./track.js";
 
-export type GpxErrorCode = "malformed" | "not-gpx" | "no-points";
+/** `not-tcx` is `parseTcx`'s; `parseTrackFile` reports a file that is neither as `not-gpx`. */
+export type GpxErrorCode = "malformed" | "not-gpx" | "not-tcx" | "no-points";
 
 /** The file cannot be read as GPX tracks. `offset` is the character offset of a markup error. */
 export class GpxParseError extends Error {
@@ -48,7 +49,7 @@ export interface GpxFile {
 }
 
 /** Local name of a possibly prefixed element name (`gpx:trkpt` → `trkpt`). */
-const local = (name: string): string => {
+export const localName = (name: string): string => {
   const i = name.indexOf(":");
   return i < 0 ? name : name.slice(i + 1);
 };
@@ -87,7 +88,8 @@ export function parseGpxTime(text: string): number | null {
 /** A plain decimal (optionally signed, optionally with an exponent) — not `Number()`'s hex, binary or `Infinity`. */
 const DECIMAL = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/;
 
-function finiteOrNull(text: string | undefined): number | null {
+/** A plain decimal's value, else null (also read by `parseTcx`). */
+export function finiteOrNull(text: string | undefined): number | null {
   if (text === undefined) return null;
   const s = text.trim();
   if (!DECIMAL.test(s)) return null;
@@ -154,7 +156,7 @@ export function parseGpx(text: string): GpxFile {
   try {
     parseXml(src, {
       start(rawName, attrs) {
-        const name = local(rawName);
+        const name = localName(rawName);
         path.push(name);
         const depth = path.length;
         if (skipDepth >= 0) return;
@@ -190,7 +192,7 @@ export function parseGpx(text: string): GpxFile {
         }
       },
       end(rawName) {
-        const name = local(rawName);
+        const name = localName(rawName);
         const depth = path.length;
         path.pop();
         if (skipDepth >= 0) {
