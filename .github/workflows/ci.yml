@@ -33,7 +33,7 @@ jobs:
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Generate Prisma client
@@ -61,7 +61,7 @@ jobs:
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Generate Prisma client
@@ -94,7 +94,7 @@ jobs:
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Generate Prisma client
@@ -148,7 +148,7 @@ jobs:
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Generate Prisma client
@@ -184,6 +184,38 @@ jobs:
             test-results
           if-no-files-found: ignore
 
+  # Builds the production image on every PR (amd64 only, not pushed) so a
+  # runtime or native-module change is proven before merge, not first on
+  # :edge. sharp and @resvg/resvg-js are loaded lazily by the API, so the
+  # smoke script renders a PNG with both instead of only starting the server.
+  # docs/deps-2026-11.md "Node 24".
+  image:
+    name: Docker image smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v4
+      - name: Build cloud image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: cloud
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: oxygen-smoke:ci
+          cache-from: type=gha,scope=image-smoke
+          cache-to: type=gha,scope=image-smoke,mode=max
+      - name: Native modules render in the image
+        run: docker run --rm -w /app/packages/api oxygen-smoke:ci node scripts/image-smoke.mjs
+      - name: Image runs the pinned Node major
+        run: |
+          want="v$(cat .nvmrc)."
+          got="$(docker run --rm oxygen-smoke:ci node --version)"
+          echo "image node: ${got}, .nvmrc: $(cat .nvmrc)"
+          case "${got}" in "${want}"*) ;; *) exit 1 ;; esac
+
   # The one E2E check the merge flow reads ("E2E tests"): green only when
   # every shard and the preview stack passed. Runs even when one failed, so
   # the check reports failure instead of staying skipped.
@@ -203,7 +235,7 @@ jobs:
   publish:
     name: Publish GHCR image
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [unit, integration, e2e]
+    needs: [unit, integration, e2e, image]
     uses: ./.github/workflows/publish.yml
     permissions:
       contents: read

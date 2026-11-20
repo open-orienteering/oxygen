@@ -57,7 +57,7 @@ describe("published-image demo", () => {
   it("installs OpenSSL before Prisma dependencies", () => {
     const dockerfile = readFileSync(path.join(ROOT, "Dockerfile"), "utf8");
     const depsStage = dockerfile.slice(
-      dockerfile.indexOf("FROM node:20-slim AS base"),
+      dockerfile.indexOf("FROM node:24-slim AS base"),
       dockerfile.indexOf("FROM deps AS build"),
     );
     assert.match(depsStage, /apt-get install[^]*\bopenssl\b/);
