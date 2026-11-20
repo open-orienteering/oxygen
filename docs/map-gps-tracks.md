@@ -705,7 +705,7 @@ tool's track its splittable stored points (`trim.start + 1 …
 trim.end − 2`) are drawn as dots, `editor-track-nodes` (`data-track-id`,
 `data-count`): one path, thinned in screen space at the current zoom to
 one per 10 CSS px in index order, the spacing doubling while over 4 000
-dots (`MapViewer.tsx` `nodePoints`). The stored point a click would split
+dots (`lib/editor/track-nodes.ts` `nodePoints`). The stored point a click would split
 at is found on hover with the click's own rule (`tools/tracks.ts`
 `hoverCandidate`) and drawn larger and filled,
 `editor-track-node-hover` (`data-index`), with every splittable point
@@ -1075,7 +1075,7 @@ other or running past.
   the view (no `onView`, below): at a deep zoom on a long track the 4 000
   cap widens their spacing on screen; the nodes round the hovered one are
   always all drawn. The thinning projects every kept point on each
-  change of view (cached per view).
+  change of view (cached per view; `lib/editor/track-nodes.ts`).
 - TCX (§2.4): activities are unnamed (the file name shows).
 - T's hover (§5.2, G30) finds the track under the pointer on every
   pointer move: tracks whose box is out of reach are passed over, but the

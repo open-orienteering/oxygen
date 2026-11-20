@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { gpsTrack } from "@oxygen/shared";
 import { hoverCandidate, IDLE, liveTrim, trackToolStep, type TrackToolState, type TrackToolTarget } from "../tools/tracks";
 import { mapTracksBinding } from "../tools/bindings";
-import { nodePoints, TRACK_NODES_MAX, type ToolPointer } from "../../../components/MapViewer";
+import type { ToolPointer } from "../../../components/MapViewer";
+import { nodePoints, TRACK_NODES_MAX } from "../../../lib/editor/track-nodes";
 
 const line = (pts: [number, number][]): gpsTrack.ProjectedTrack => ({
   x: Float64Array.from(pts, (p) => p[0]),
