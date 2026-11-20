@@ -237,8 +237,11 @@ then the club library's, as tiles `editor-layout-graphic-tile` with a
 `thumb.png` thumbnail, name, pixel size and bytes; the thumbnail is the
 Place button `editor-layout-graphic-place-<id>`; *Save to club*
 `…-save-club-<id>` on an event graphic; *Delete* `…-delete-<id>`, a
-second click confirming; upload `…-upload`, PNG or SVG up to 16 MiB,
-checked before the file is read); then the template's key (§5),
+second click confirming; upload `…-upload`, PNG or SVG up to 16 MiB each,
+checked before the file is read; several files can be picked at once
+(J20): they upload one after another, the button counts them
+(*Uploading 2 of 5…*), and a file that fails is named in the error
+while the rest still upload); then the template's key (§5),
 the classes (§6) and **Club templates** (`editor-layout-club`, collapsed;
 E-pages): the club library's rows (`editor-layout-club-row-<id>`) with
 *Bring in* (`…-club-import-<id>`: `mapTemplate.loadFromClub` under a free
@@ -886,6 +889,8 @@ of the event, course seq (the event's last), sort order, seq.
 | E2E | `e2e/course-maps.spec.ts` "the retired Maps and Map templates pages redirect…" | E-pages: `/maps?course=1` → `/courses?course=1`, `/map-templates` → Layout mode; neither tab is shown |
 | E2E | `e2e/course-editor-layout.spec.ts` "Course editor auto templates" | Export ▾ → this course creates the sheet and prints one page; the auto badge and the sheet key; a class scale makes a class sheet; Class view shows `1:15000`; this class exports; Create extra template moves the course, its row moves it back, undo moves it again |
 | E2E | `e2e/course-editor-layout.spec.ts` "Course editor layout" "graphics: upload an SVG…" | E3 (ported from `course-maps.spec.ts`'s legacy layout editor): the graphics picker uploads an SVG (`graphics.upload`), its Place button arms the image tool, a click on the page places it (one `saveLayout`, an `image` row in the list and in `courseMap.get`); selected from the list and deleted, gone from both; J2: the tile's thumbnail loads at 256 px and shows "4096 × 4096 px", *Save to club* adds a club tile, a confirmed delete removes each; J8: the picker opens from `editor-layout-tool-I` |
+| E2E | `e2e/course-editor-layout.spec.ts` "J20: several files picked at once…" | J20: three files picked at once, the middle one a `.txt`: both SVGs get tiles and are listed by `graphics.list`, the error names the `.txt` file only |
+| unit (web) | `lib/__tests__/graphics-picker.test.ts` "uploads several files in order…" | J20: `uploadEach` sends in order, reports progress, collects named failures and keeps going |
 | Unit | `lib/__tests__/map-layout-editor.test.ts`, `pages/editor/__tests__/layout-model.test.ts`, `layout-bindings.test.ts` | J8: `createImageObjectAt` at the graphic's aspect; a white-out fill drops blend; `styleShowOf` per kind; the y-down adapter round trip; `styleChangeOf` as a whole-object write (a removed key stays removed), a box kept on the page, a rotation kept on the page by its turned box, opacity moving nothing, a typed size capped to the printable area; a crop of a rotated, flipped (and already cropped) page image keeping a source pixel in place through `course.imageCorners`; the lock XOR Shift on an image's corner |
 | Unit / E2E | `pages/editor/__tests__/layout-model.test.ts`; `e2e/course-editor-layout.spec.ts` (style fields) | J15: `styleShowOf` gives `knockout` on images only; duplicate and paste keep it; in the browser the page image's checkbox saves `knockout: true`, a white-out has none |
 | E2E | `e2e/course-editor-layout.spec.ts` "J8: style fields on page objects…" | J8: `I` without a graphic places nothing; an image placed from the picker at its aspect, drawn in its colour; opacity 0 shows the page and 100 removes the key; Multiply and Normal; rotation; width with the lock and one undo; flip H; a crop to the left half and one undo restoring box and crop (each one `saveLayout`); a white-out without blend or lock, its width alone; a text's rotation |

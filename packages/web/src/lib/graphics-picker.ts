@@ -52,3 +52,31 @@ export function uploadProblem(file: { name: string; type: string; size: number }
   if (file.size > GRAPHIC_UPLOAD_MAX_BYTES) return "size";
   return null;
 }
+
+/** One file's failure in a multi-file upload: its name and the message to show. */
+export interface UploadFailure {
+  name: string;
+  message: string;
+}
+
+/**
+ * Upload `files` one after another (J20): a failed file does not stop the
+ * rest. `upload` throws with the message to show; `onProgress` gets the
+ * 1-based index of the file being sent. Returns the failures in file order.
+ */
+export async function uploadEach<F extends { name: string }>(
+  files: readonly F[],
+  upload: (file: F) => Promise<void>,
+  onProgress?: (index: number, total: number) => void,
+): Promise<UploadFailure[]> {
+  const failures: UploadFailure[] = [];
+  for (let i = 0; i < files.length; i++) {
+    onProgress?.(i + 1, files.length);
+    try {
+      await upload(files[i]);
+    } catch (e) {
+      failures.push({ name: files[i].name, message: e instanceof Error ? e.message : String(e) });
+    }
+  }
+  return failures;
+}

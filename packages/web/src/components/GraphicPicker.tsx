@@ -15,7 +15,7 @@ import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import { fileToBase64 } from "../lib/file-to-base64";
 import { formatBytes } from "../lib/editor/map-info";
-import { graphicGroups, graphicSizeLabel, graphicThumbUrl, uploadErrorKey, uploadProblem, type PickerGraphic } from "../lib/graphics-picker";
+import { graphicGroups, graphicSizeLabel, graphicThumbUrl, uploadEach, uploadErrorKey, uploadProblem, type PickerGraphic } from "../lib/graphics-picker";
 
 export function GraphicPicker(p: {
   nameId: string;
@@ -38,21 +38,29 @@ export function GraphicPicker(p: {
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
   const groups = graphicGroups(graphics.data ?? []);
 
-  const onFile = async (file: File) => {
-    setError(null);
+  const [progress, setProgress] = useState<{ index: number; total: number } | null>(null);
+
+  /** One file's check and upload; throws the message to show. */
+  const uploadOne = async (file: File) => {
     const problem = uploadProblem(file);
-    if (problem) {
-      setError(problem === "size" ? t("graphicsTooLarge") : t("graphicsWrongType"));
-      return;
-    }
+    if (problem) throw new Error(problem === "size" ? t("graphicsTooLarge") : t("graphicsWrongType"));
     try {
       const fileDataBase64 = await fileToBase64(file);
       await upload.mutateAsync({ name: file.name, scope: "event", fileDataBase64 });
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       const key = uploadErrorKey(message);
-      setError(key ? t(key) : t("graphicsUploadFailed", { detail: message }));
+      throw new Error(key ? t(key) : t("graphicsUploadFailed", { detail: message }), { cause: e });
     }
+  };
+
+  /** J20: several files at once, one after another; each failure is named, the rest still upload. */
+  const onFiles = async (files: File[]) => {
+    setError(null);
+    const failures = await uploadEach(files, uploadOne, (index, total) => setProgress({ index, total }));
+    setProgress(null);
+    if (failures.length === 0) return;
+    setError(files.length === 1 ? failures[0].message : failures.map((f) => t("graphicsFileFailed", { name: f.name, detail: f.message })).join("\n"));
   };
 
   const tile = (g: PickerGraphic) => {
@@ -113,20 +121,20 @@ export function GraphicPicker(p: {
       )}
       {p.canEdit && (
         <>
-          <input ref={input} type="file" accept=".svg,.png,image/svg+xml,image/png" className="hidden" data-testid={`${prefix}-upload`}
+          <input ref={input} type="file" multiple accept=".svg,.png,image/svg+xml,image/png" className="hidden" data-testid={`${prefix}-upload`}
             onChange={(e) => {
-              const file = e.target.files?.[0];
+              const files = Array.from(e.target.files ?? []);
               e.target.value = "";
-              if (file) void onFile(file);
+              if (files.length > 0) void onFiles(files);
             }} />
-          <button type="button" onClick={() => input.current?.click()} disabled={upload.isPending}
+          <button type="button" onClick={() => input.current?.click()} disabled={progress !== null}
             className="text-[11px] text-purple-700 hover:underline cursor-pointer disabled:opacity-50">
-            {upload.isPending ? t("graphicsUploading") : t("layoutUpload")}
+            {progress === null ? t("layoutUpload") : progress.total > 1 ? t("graphicsUploadingCount", { index: progress.index, total: progress.total }) : t("graphicsUploading")}
           </button>
           <p className="text-[10px] text-slate-400">{t("graphicsUploadHint")}</p>
         </>
       )}
-      {error && <p className="text-[11px] text-red-700" role="alert" data-testid={`${prefix}-error`}>{error}</p>}
+      {error && <p className="text-[11px] text-red-700 whitespace-pre-line" role="alert" data-testid={`${prefix}-error`}>{error}</p>}
     </div>
   );
 }

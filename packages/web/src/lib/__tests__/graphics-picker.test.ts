@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GRAPHIC_UPLOAD_MAX_BYTES, graphicGroups, graphicSizeLabel, graphicThumbUrl, uploadErrorKey, uploadProblem } from "../graphics-picker";
+import { GRAPHIC_UPLOAD_MAX_BYTES, graphicGroups, graphicSizeLabel, graphicThumbUrl, uploadEach, uploadErrorKey, uploadProblem } from "../graphics-picker";
 
 const g = (id: number, club: boolean) => ({ id, name: `g${id}`, mime: "image/png", sizeBytes: 1, widthPx: 4, heightPx: 2, club, version: "1-0" });
 
@@ -32,5 +32,22 @@ describe("graphics picker helpers (J2)", () => {
     expect(uploadProblem({ name: "photo.jpg", type: "image/jpeg", size: 10 })).toBe("type");
     expect(uploadProblem({ name: "big.png", type: "image/png", size: GRAPHIC_UPLOAD_MAX_BYTES + 1 })).toBe("size");
     expect(uploadProblem({ name: "max.png", type: "image/png", size: GRAPHIC_UPLOAD_MAX_BYTES })).toBeNull();
+  });
+
+  it("uploads several files in order, names each failure and keeps going (J20)", async () => {
+    const sent: string[] = [];
+    const progress: string[] = [];
+    const failures = await uploadEach(
+      [{ name: "a.svg" }, { name: "b.png" }, { name: "c.svg" }],
+      async (f) => {
+        sent.push(f.name);
+        if (f.name === "b.png") throw new Error("too big");
+      },
+      (i, n) => progress.push(`${i}/${n}`),
+    );
+    expect(sent).toEqual(["a.svg", "b.png", "c.svg"]);
+    expect(progress).toEqual(["1/3", "2/3", "3/3"]);
+    expect(failures).toEqual([{ name: "b.png", message: "too big" }]);
+    expect(await uploadEach([], async () => {})).toEqual([]);
   });
 });

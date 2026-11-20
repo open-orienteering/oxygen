@@ -232,6 +232,36 @@ test.describe("Course editor layout (docs/course-layout.md)", () => {
     }
   });
 
+  test("J20: several files picked at once upload one after another; a bad one is named and the rest still upload", async ({ page }) => {
+    await openEditor(page);
+    const nameId = nameIdOf(page);
+    const { sheet, drop } = await sheetFixture("Layout multi upload");
+    const stamp = Date.now();
+    const names = [`e2e-multi-a-${stamp}.svg`, `e2e-multi-b-${stamp}.svg`];
+    const svg = (fill: string) => Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10" fill="${fill}"/></svg>`);
+    try {
+      await page.goto(`/${nameId}/course-editor?mode=layout&sheet=${sheet.seq}`);
+      await editorReady(page);
+      await page.getByTestId("editor-layout-tool-I").click();
+      await page.getByTestId("editor-layout-graphic-upload").setInputFiles([
+        { name: names[0], mimeType: "image/svg+xml", buffer: svg("#336699") },
+        { name: `e2e-multi-notes-${stamp}.txt`, mimeType: "text/plain", buffer: Buffer.from("not a graphic") },
+        { name: names[1], mimeType: "image/svg+xml", buffer: svg("#993366") },
+      ]);
+      const tiles = page.getByTestId("editor-layout-graphic-event").getByTestId("editor-layout-graphic-tile");
+      for (const n of names) await expect(tiles.filter({ hasText: n })).toHaveCount(1);
+      const error = page.getByTestId("editor-layout-graphic-error");
+      await expect(error).toContainText(`e2e-multi-notes-${stamp}.txt`);
+      await expect(error).not.toContainText(names[0]);
+      const listed = await trpcCall<{ name: string }[]>("graphics.list", undefined, false);
+      expect(listed.filter((g) => g.name.includes(`-${stamp}.`)).map((g) => g.name).sort()).toEqual([...names].sort());
+    } finally {
+      const left = await trpcCall<{ id: number; name: string }[]>("graphics.list", undefined, false).catch(() => []);
+      for (const g of left.filter((x) => x.name.includes(`-${stamp}.`))) await cleanup("graphics.delete", { id: g.id });
+      await drop();
+    }
+  });
+
   test("J8: style fields on page objects — an image at its aspect, opacity, Multiply, rotation, size with the lock, flip, crop, undo; a white-out without blend or lock; a text's rotation", async ({ page }) => {
     await openEditor(page);
     const nameId = nameIdOf(page);
