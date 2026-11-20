@@ -12,13 +12,19 @@ import { importOcadToDocument } from "../import/ocad.js";
 import { buildImportReport } from "../map-store/documents.js";
 import {
   colourSettingsOfReport,
+  colourSettingsKey,
   defaultDeviationChoice,
+  documentFollowsColour,
   matchColourOptions,
   normaliseColourSettings,
   parseColourSettings,
+  pictureDeviationsQuery,
+  reportDeviationKeys,
   reportFollowsColour,
   sameColourSettings,
+  withDeviationChoice,
 } from "../map-store/colour-settings.js";
+import { colourPictureKey, parsePictureDeviations } from "../map-store/colour-pictures.js";
 import { buildColourReview, colourPictureUrl, roleName } from "../map-store/review-colours.js";
 
 const fixture = (name: string) => readFileSync(fileURLToPath(new URL(`../../../../e2e/${name}`, import.meta.url)));
@@ -94,6 +100,102 @@ describe("colour settings", () => {
     const fallback = { colourStack: { order: "source" }, warnings: [{ code: "COLOUR_LAYERS_FAILED" }] };
     expect(reportFollowsColour(fallback, { order: "iof", deviations: {} })).toBe(true);
     expect(reportFollowsColour(fallback, { order: "source", deviations: {} })).toBe(false);
+  });
+});
+
+describe("a document's colour setting by what gave it (row I7)", () => {
+  const BUILDING = "black50-building>brown100-line";
+  const PAVED_BUILDING = "brown50-paved>black50-building";
+
+  it("an override that changes no bytes gives the same document, which its report alone does not follow", async () => {
+    const plain = await imported("colour-layers.ocd");
+    // Kept by implication at the defaults: keeping it explicitly is a no-op.
+    const noop = await imported("colour-layers.ocd", { deviations: { [BUILDING]: "keep" } });
+    expect(noop.hash).toBe(plain.hash);
+    const asked = { order: "iof" as const, deviations: { [BUILDING]: "keep" as const } };
+    // The stored report is the first import's: the defaults (the bug carried from I6).
+    expect(reportFollowsColour(plain.report, asked)).toBe(false);
+    expect(documentFollowsColour({ report: plain.report }, asked)).toBe(false);
+    expect(documentFollowsColour({ report: plain.report, recorded: [asked] }, asked)).toBe(true);
+    // The recorded setting does not stand in for another one.
+    expect(documentFollowsColour({ report: plain.report, recorded: [asked] }, { order: "iof", deviations: { [PAVED_BUILDING]: "keep" } })).toBe(false);
+    expect(documentFollowsColour({ report: plain.report, recorded: [asked] }, { order: "source", deviations: {} })).toBe(false);
+    // The report still answers for the defaults, with or without rows.
+    expect(documentFollowsColour({ report: plain.report, recorded: [asked] }, { order: "iof", deviations: {} })).toBe(true);
+  });
+
+  it("compares only what can change the document: overrides of listed pairs, none in the map's own order", async () => {
+    const plain = await imported("colour-layers.ocd");
+    const recorded = [{ order: "iof" as const, deviations: { [BUILDING]: "keep" as const, "black100>blue100-line": "keep" as const } }];
+    expect(documentFollowsColour({ report: plain.report, recorded }, { order: "iof", deviations: { [BUILDING]: "keep" } })).toBe(true);
+    const source = await imported("colour-layers.ocd", { colourOrder: "source" });
+    expect(documentFollowsColour({ report: source.report, recorded: [] }, { order: "source", deviations: { [BUILDING]: "keep" } })).toBe(true);
+  });
+
+  it("keys a setting by its normalised canonical JSON", () => {
+    expect(colourSettingsKey({ order: "iof", deviations: {} })).toBe('{"order":"iof","deviations":{}}');
+    expect(colourSettingsKey({ order: "iof", deviations: { [YELLOW]: "keep", [ROAD]: "keep" } })).toBe(colourSettingsKey({ order: "iof", deviations: { [YELLOW]: "keep" } }));
+    expect(colourSettingsKey({ order: "iof", deviations: { [YELLOW]: "keep", [BUILDING]: "keep" } })).toBe(`{"order":"iof","deviations":{"${BUILDING}":"keep","${YELLOW}":"keep"}}`);
+  });
+});
+
+describe("the panel's overrides and the picture's key (row I7)", () => {
+  const BUILDING = "black50-building>brown100-line";
+  const PAVED_BUILDING = "brown50-paved>black50-building";
+
+  it("changes one deviation's choice; a reset or a choice equal to the default removes the key", () => {
+    const s = { order: "iof" as const, deviations: { [YELLOW]: "keep" as const } };
+    expect(withDeviationChoice(s, ROAD, "drop")).toEqual({ order: "iof", deviations: { [ROAD]: "drop", [YELLOW]: "keep" } });
+    expect(withDeviationChoice(s, ROAD, "keep")).toEqual(s);
+    expect(withDeviationChoice(s, YELLOW, "default")).toEqual({ order: "iof", deviations: {} });
+    expect(withDeviationChoice(s, YELLOW, "drop")).toEqual({ order: "iof", deviations: {} });
+    // Kept while the order is the map's own.
+    expect(withDeviationChoice({ order: "source", deviations: {} }, ROAD, "drop")).toEqual({ order: "source", deviations: { [ROAD]: "drop" } });
+  });
+
+  it("lists a document's deviation keys", async () => {
+    expect(reportDeviationKeys((await imported("colour-layers.ocd")).report)).toHaveLength(9);
+    expect(reportDeviationKeys((await imported("colour-layers.ocd", { colourOrder: "source" })).report)).toEqual([]);
+  });
+
+  it("gives each deviation the map's choice and whether it is overridden, from the setting", async () => {
+    const { header, report } = await imported("colour-layers.ocd");
+    const by = (v: ReturnType<typeof buildColourReview>, key: string) => v.deviations.find((d) => d.key === key)!;
+    const none = buildColourReview(HASH, header, report, null);
+    expect(by(none, ROAD)).toMatchObject({ choice: null, overridden: false });
+    const plain = buildColourReview(HASH, header, report, { order: "iof", deviations: {} });
+    expect(by(plain, ROAD)).toMatchObject({ choice: "keep", overridden: false });
+    expect(by(plain, PAVED_BUILDING)).toMatchObject({ choice: "drop", overridden: false });
+    // A no-op override: the report says "implied", the setting says overridden.
+    const noop = buildColourReview(HASH, header, report, { order: "iof", deviations: { [BUILDING]: "keep" } });
+    expect(by(noop, BUILDING)).toMatchObject({ why: "implied", kept: true, choice: "keep", overridden: true });
+  });
+
+  it("carries the map's overrides in a source document's IOF picture URL only", async () => {
+    const iof = await imported("colour-layers.ocd");
+    const source = await imported("colour-layers.ocd", { colourOrder: "source" });
+    const setting = { order: "source" as const, deviations: { [ROAD]: "drop" as const, [PAVED_BUILDING]: "keep" as const } };
+    const q = encodeURIComponent(`${PAVED_BUILDING}:keep,${ROAD}:drop`);
+    expect(buildColourReview(HASH, source.header, source.report, setting).pictures).toEqual({
+      iof: `/api/map-documents/${HASH}/colour-order/iof.png?deviations=${q}`,
+      source: `/api/map-documents/${HASH}/colour-order/source.png`,
+    });
+    expect(buildColourReview(HASH, source.header, source.report, { order: "source", deviations: {} }).pictures.iof).toBe(`/api/map-documents/${HASH}/colour-order/iof.png`);
+    expect(buildColourReview(HASH, iof.header, iof.report, { order: "iof", deviations: { [ROAD]: "drop" } }).pictures.iof).toBe(`/api/map-documents/${HASH}/colour-order/iof.png`);
+  });
+
+  it("parses the picture's deviations query and keys the picture by it", () => {
+    expect(parsePictureDeviations(undefined)).toEqual({});
+    expect(parsePictureDeviations(`${ROAD}:drop,${YELLOW}:keep,${PAVED_BUILDING}:drop`)).toEqual({ [ROAD]: "drop", [YELLOW]: "keep" });
+    expect(parsePictureDeviations("nonsense")).toBeNull();
+    expect(parsePictureDeviations(`${ROAD}:maybe`)).toBeNull();
+    expect(pictureDeviationsQuery({ [YELLOW]: "keep", [ROAD]: "drop" })).toBe(`${ROAD}:drop,${YELLOW}:keep`);
+    expect(colourPictureKey("iof")).toBe("iof");
+    expect(colourPictureKey("iof", { [ROAD]: "keep" })).toBe("iof");
+    expect(colourPictureKey("source", { [ROAD]: "drop" })).toBe("source");
+    const k = colourPictureKey("iof", { [ROAD]: "drop" });
+    expect(k).toMatch(/^iof-[0-9a-f]{16}$/);
+    expect(colourPictureKey("iof", { [YELLOW]: "keep" })).not.toBe(k);
   });
 });
 

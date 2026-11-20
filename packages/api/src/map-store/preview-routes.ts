@@ -29,7 +29,7 @@ import {
   stripPng,
 } from "./previews.js";
 import { identity, MAP_DOCUMENT_CACHE_CONTROL, matchesEtag, parseDocumentHash, requireDocumentAccess } from "./routes.js";
-import { COLOUR_PICTURE_KIND, colourPicture, parseColourOrder } from "./colour-pictures.js";
+import { COLOUR_PICTURE_KIND, colourPicture, parseColourOrder, parsePictureDeviations } from "./colour-pictures.js";
 
 export const LIBRARY_PREVIEW_CACHE_CONTROL = "public, max-age=31536000, immutable";
 
@@ -62,19 +62,21 @@ export function registerMapPreviewRoutes(server: FastifyInstance): void {
   });
 
   // The before / after picture (docs/map-symbols.md §8.7): the other order may need an import, so a slow one is a 503.
-  server.get<{ Params: { hash: string; file: string } }>("/api/map-documents/:hash/colour-order/:file", async (req, reply) => {
+  // `?deviations=` (row I7): the map's overrides for a `source` document's IOF picture, part of the picture's key.
+  server.get<{ Params: { hash: string; file: string }; Querystring: { deviations?: string } }>("/api/map-documents/:hash/colour-order/:file", async (req, reply) => {
     const hash = parseDocumentHash(req.params.hash);
     if (!hash) return reply.code(400).send({ error: "Invalid document hash" });
     const raw = stripPng(req.params.file);
     const order = raw === null ? null : parseColourOrder(raw);
     if (order === null) return reply.code(400).send({ error: "Invalid colour order" });
+    const deviations = parsePictureDeviations(typeof req.query.deviations === "string" ? req.query.deviations : undefined);
+    if (deviations === null) return reply.code(400).send({ error: "Invalid deviations" });
     if (!(await requireDocumentAccess(req, reply, hash))) return reply;
-    const etag = previewEtag(hash, COLOUR_PICTURE_KIND, order);
-    const result = await colourPicture(prisma(), hash, order, { startedBy: (await identity(req)).user?.id ?? null });
+    const result = await colourPicture(prisma(), hash, order, { startedBy: (await identity(req)).user?.id ?? null, deviations });
     if ("failed" in result) return reply.code(502).send({ error: `No picture: ${result.failed}` });
     if ("pending" in result) return reply.code(503).header("Retry-After", "5").send({ error: "The picture is being drawn; ask again" });
     if ("missing" in result) return reply.code(404).send({ error: "Unknown document" });
-    return sendPng(req, reply, result.png, etag, MAP_DOCUMENT_CACHE_CONTROL);
+    return sendPng(req, reply, result.png, previewEtag(hash, COLOUR_PICTURE_KIND, result.key), MAP_DOCUMENT_CACHE_CONTROL);
   });
 
   server.get<{ Params: { libraryId: string; version: string; file: string } }>(

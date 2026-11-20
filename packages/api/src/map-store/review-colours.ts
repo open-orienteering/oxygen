@@ -7,7 +7,7 @@
  */
 
 import { mapDocument, mapImport, render, symbolLibrary } from "@oxygen/shared";
-import { colourSettingsOfReport, defaultDeviationChoice, reportColourFallback, reportColourOrder, type ColourOrder, type MapColourSettings } from "./colour-settings.js";
+import { colourSettingsOfReport, defaultDeviationChoice, pictureDeviationsQuery, reportColourFallback, reportColourOrder, type ColourOrder, type MapColourSettings } from "./colour-settings.js";
 
 export type ColourLayerFlag =
   /** The row's source colour stands on several rows that draw (a draws-nothing `identified` row does not count). */
@@ -63,6 +63,10 @@ export interface ColourDeviationView {
   /** Why it is kept or dropped: its default, an override, implied by kept ones, or blocked (wanted kept, cannot hold). */
   why: "default" | "override" | "implied" | "blocked";
   objects: { upper: number; lower: number };
+  /** What the map the review is for asks for this deviation: its override, else the default; `null` without a target (row I7). */
+  choice: mapImport.DeviationChoice | null;
+  /** The map overrides this deviation (its setting holds the key), read from the setting, not the report: an override that changes no bytes is not in the report (row I7). */
+  overridden: boolean;
   impliedBy?: string[];
   blockedBy?: string[];
 }
@@ -80,11 +84,17 @@ export interface ColourReview {
   layers: ColourLayerView[] | null;
   /** Every deviation, kept or dropped, the most objects first; `[]` in the map's own order. */
   deviations: ColourDeviationView[];
-  /** The before / after picture in each order (`/api/map-documents/:hash/colour-order/:order.png`). */
+  /**
+   * The before / after picture in each order (`/api/map-documents/:hash/colour-order/:order.png`); a `source`
+   * document's IOF picture carries the map's overrides as `?deviations=` (row I7).
+   */
   pictures: Record<ColourOrder, string>;
 }
 
-export const colourPictureUrl = (hash: string, order: ColourOrder) => `/api/map-documents/${hash}/colour-order/${order}.png`;
+export function colourPictureUrl(hash: string, order: ColourOrder, deviations: Readonly<Record<string, mapImport.DeviationChoice>> = {}): string {
+  const q = order === "iof" ? pictureDeviationsQuery(deviations) : "";
+  return `/api/map-documents/${hash}/colour-order/${order}.png${q ? `?deviations=${encodeURIComponent(q)}` : ""}`;
+}
 
 const ROLE_NAMES: ReadonlyMap<string, string> = new Map(
   [...symbolLibrary.palettes.iof2022, ...symbolLibrary.palettes.iof2024].map((p) => [p.id, p.name] as const),
@@ -98,7 +108,8 @@ type Layers = NonNullable<mapImport.ColourStackSummary["layers"]>;
 export function buildColourReview(hash: string, header: Pick<mapDocument.MapDocumentHeader, "colours">, report: unknown, setting: MapColourSettings | null): ColourReview {
   const layers = (report as { colourStack?: { layers?: Layers } } | null)?.colourStack?.layers;
   const order = reportColourOrder(report) ?? (layers ? "iof" : "source");
-  const pictures = { iof: colourPictureUrl(hash, "iof"), source: colourPictureUrl(hash, "source") };
+  // A `source` document's IOF picture is the document the switch gives: drawn with the map's overrides (row I7).
+  const pictures = { iof: colourPictureUrl(hash, "iof", order === "source" && setting ? setting.deviations : {}), source: colourPictureUrl(hash, "source") };
   const base = { order, fallback: reportColourFallback(report), built: colourSettingsOfReport(report), setting, pictures };
   if (order !== "iof" || !layers) return { ...base, layers: null, deviations: [] };
 
@@ -149,6 +160,8 @@ export function buildColourReview(hash: string, header: Pick<mapDocument.MapDocu
       kept: d.kept,
       default: defaultDeviationChoice(key),
       why,
+      choice: setting ? (setting.deviations[key] ?? defaultDeviationChoice(key)) : null,
+      overridden: !!setting && key in setting.deviations,
       objects: d.objects,
       ...(d.impliedBy ? { impliedBy: d.impliedBy } : {}),
       ...(d.blockedBy ? { blockedBy: d.blockedBy } : {}),

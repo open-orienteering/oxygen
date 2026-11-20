@@ -3,15 +3,16 @@
  * "Colour layers", §9.3 answers 1–3): the switch between the IOF order and
  * the map's own order, a before / after picture of the map in both, the
  * layers top first with the map's colour, the IOF layer, the object count
- * and flags, and every deviation kept or dropped with its default. The
- * deviation rows are read-only here (row I7 makes them switchable).
+ * and flags, and every deviation kept or dropped with its default. Each
+ * deviation row can be kept or dropped for this map, or reset to its
+ * default (row I7, §9.3 "Overrides (row I7)").
  */
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "@oxygen/api";
 import { scopePreviewUrl } from "../../lib/map-review";
-import { canSwitchOrder, chosenOrder, deviationSummary, layerLabel, layersTopFirst, orderedFlags, retryUrl, type ColourOrder } from "../../lib/map-review-colours";
+import { canSwitchOrder, chosenOrder, deviationControls, deviationSummary, layerLabel, layersTopFirst, orderedFlags, retryUrl, type ColourOrder, type DeviationChoice } from "../../lib/map-review-colours";
 
 type ColourReview = inferRouterOutputs<AppRouter>["mapImport"]["review"]["colour"];
 
@@ -79,6 +80,7 @@ export function ColourLayersPanel({
   busy,
   hasTarget,
   onSwitch,
+  onDeviation,
 }: {
   colour: ColourReview;
   /** The event's name id on the event route: picture URLs are scoped with `?event=`. */
@@ -88,6 +90,8 @@ export function ColourLayersPanel({
   /** The review is for a map (an event, or a club route with its series). */
   hasTarget: boolean;
   onSwitch: (order: ColourOrder) => void;
+  /** Keep or drop a deviation for this map, or `default` to reset it (row I7). */
+  onDeviation: (key: string, choice: DeviationChoice | "default") => void;
 }) {
   const { t } = useTranslation("mapReview");
   const chosen = chosenOrder(colour);
@@ -215,7 +219,9 @@ export function ColourLayersPanel({
             <p className="text-slate-600">{t("colours.deviations.none")}</p>
           ) : (
             <ul className="space-y-1">
-              {colour.deviations.map((d) => (
+              {colour.deviations.map((d) => {
+                const controls = deviationControls(d, { canEdit, busy, hasTarget });
+                return (
                 <li
                   key={d.key}
                   data-testid="colour-deviation"
@@ -223,6 +229,8 @@ export function ColourLayersPanel({
                   data-kept={d.kept ? "true" : "false"}
                   data-default={d.default}
                   data-why={d.why}
+                  data-choice={d.choice ?? ""}
+                  data-overridden={d.overridden ? "true" : "false"}
                   className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-1"
                 >
                   <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${d.kept ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-700"}`}>
@@ -232,8 +240,46 @@ export function ColourLayersPanel({
                   <span className="text-xs text-slate-500">
                     {t(`colours.deviations.why.${d.why}`)} · {t(`colours.deviations.default.${d.default}`)} · {t("colours.deviations.objects", { upper: d.objects.upper, lower: d.objects.lower })}
                   </span>
+                  {d.overridden && (
+                    <span data-testid="colour-deviation-overridden" className="px-1.5 py-0.5 rounded text-xs bg-blue-50 text-blue-800">
+                      {t(`colours.deviations.overridden.${d.choice ?? d.default}`)}
+                    </span>
+                  )}
+                  {canEdit && hasTarget && (
+                    <span className="ml-auto inline-flex items-center gap-2">
+                      <span role="group" aria-label={t("colours.deviations.choose", { upper: d.upperName, lower: d.lowerName })} className="inline-flex rounded border border-slate-300 overflow-hidden text-xs">
+                        {(["keep", "drop"] as const).map((c) => (
+                          <button
+                            key={c}
+                            type="button"
+                            data-testid={`colour-deviation-${c}`}
+                            aria-pressed={controls[c].pressed}
+                            disabled={controls[c].disabled}
+                            className={`px-2 py-0.5 cursor-pointer disabled:cursor-default ${
+                              controls[c].pressed ? "bg-blue-600 text-white" : "bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                            }`}
+                            onClick={() => onDeviation(d.key, c)}
+                          >
+                            {t(`colours.deviations.${c}`)}
+                          </button>
+                        ))}
+                      </span>
+                      {controls.reset.shown && (
+                        <button
+                          type="button"
+                          data-testid="colour-deviation-reset"
+                          disabled={controls.reset.disabled}
+                          className="text-xs underline text-slate-600 cursor-pointer disabled:opacity-50 disabled:cursor-default"
+                          onClick={() => onDeviation(d.key, "default")}
+                        >
+                          {t("colours.deviations.reset")}
+                        </button>
+                      )}
+                    </span>
+                  )}
                 </li>
-              ))}
+                );
+              })}
             </ul>
           )}
         </div>

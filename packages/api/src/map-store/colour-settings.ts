@@ -28,7 +28,7 @@ export const DEFAULT_COLOUR_SETTINGS: Readonly<MapColourSettings> = Object.freez
 /** The default choice for a deviation key (the user's answer 2: roads over contours kept, every other dropped). */
 export const defaultDeviationChoice = (key: string): DeviationChoice => (mapImport.KEPT_BY_DEFAULT.has(key) ? "keep" : "drop");
 
-const DEVIATION_KEY = /^[a-z0-9-]+>[a-z0-9-]+$/;
+export const DEVIATION_KEY = /^[a-z0-9-]+>[a-z0-9-]+$/;
 
 /** Drop choices equal to the default and sort the keys, so equal settings compare and serialise equal. */
 export function normaliseColourSettings(s: { order: ColourOrder; deviations?: Readonly<Record<string, DeviationChoice>> }): MapColourSettings {
@@ -38,6 +38,27 @@ export function normaliseColourSettings(s: { order: ColourOrder; deviations?: Re
     if (choice !== defaultDeviationChoice(key)) deviations[key] = choice;
   }
   return { order: s.order, deviations };
+}
+
+/** A deviation override as the panel sets it (row I7): `keep` or `drop`, or `default` to remove the override (a reset). */
+export type DeviationChoiceInput = DeviationChoice | "default";
+
+/** The setting with one deviation's choice changed (row I7, `mapImport.setDeviation`); a choice equal to the default is none. */
+export function withDeviationChoice(s: MapColourSettings, key: string, choice: DeviationChoiceInput): MapColourSettings {
+  const deviations: Record<string, DeviationChoice> = { ...s.deviations };
+  delete deviations[key];
+  if (choice !== "default") deviations[key] = choice;
+  return normaliseColourSettings({ order: s.order, deviations });
+}
+
+/** The deviation keys a stored document's report lists (`[]` in the map's own order). */
+export function reportDeviationKeys(report: unknown): string[] {
+  return ((report as ColourReport)?.colourStack?.layers?.deviations ?? []).map((d) => mapImport.deviationKey(d.upper, d.lower));
+}
+
+/** The `deviations` query of a picture URL for these overrides; `""` for none. */
+export function pictureDeviationsQuery(deviations: Readonly<Record<string, DeviationChoice>>): string {
+  return Object.entries(normaliseColourSettings({ order: "iof", deviations }).deviations).map(([k, c]) => `${k}:${c}`).join(",");
 }
 
 /** A stored setting (a row's columns, or a job's `colour` snapshot); anything malformed reads as the defaults. */
@@ -124,6 +145,56 @@ export function reportFollowsColour(report: unknown, settings: MapColourSettings
   const listed = new Set(((report as ColourReport)?.colourStack?.layers?.deviations ?? []).map((d) => mapImport.deviationKey(d.upper, d.lower)));
   const relevant = Object.fromEntries(Object.entries(asked.deviations).filter(([k]) => listed.has(k)));
   return JSON.stringify(relevant) === JSON.stringify(built.deviations);
+}
+
+/** A setting's identity: the normalised setting as canonical JSON (`map_document_colour_settings.colour_key`). */
+export const colourSettingsKey = (s: MapColourSettings): string => JSON.stringify(colourSettingsJson(normaliseColourSettings(s)));
+
+/**
+ * The part of a setting that can change a document: in the map's own order
+ * none of the overrides (stage 7 ignores them), in the IOF order only the
+ * overrides of deviations the document lists (an override of a pair the
+ * map does not have changes nothing).
+ */
+function relevantColourSettings(report: unknown, s: MapColourSettings): MapColourSettings {
+  const n = normaliseColourSettings(s);
+  if (n.order === "source") return { order: "source", deviations: {} };
+  const listed = new Set(((report as ColourReport)?.colourStack?.layers?.deviations ?? []).map((d) => mapImport.deviationKey(d.upper, d.lower)));
+  return { order: n.order, deviations: Object.fromEntries(Object.entries(n.deviations).filter(([k]) => listed.has(k))) };
+}
+
+/**
+ * Whether a stored document is what importing its source under `settings`
+ * gives (row I7; docs/map-storage.md §6.9): its report says so
+ * (`reportFollowsColour`), or an import in that setting gave it — a
+ * setting recorded for it in `map_document_colour_settings`. The report is
+ * written once, by the document's first import, so an override that
+ * changes no bytes is only known from the recorded settings.
+ */
+export function documentFollowsColour(doc: { report: unknown; recorded?: readonly MapColourSettings[] }, settings: MapColourSettings): boolean {
+  if (reportFollowsColour(doc.report, settings)) return true;
+  if (!doc.recorded?.length) return false;
+  const asked = colourSettingsKey(relevantColourSettings(doc.report, settings));
+  return doc.recorded.some((r) => colourSettingsKey(relevantColourSettings(doc.report, r)) === asked);
+}
+
+/** Record that importing a document's source in `settings` gave it (every finished import job, row I7). */
+export async function recordDocumentColour(db: Db, documentHash: string, settings: MapColourSettings): Promise<void> {
+  const n = normaliseColourSettings(settings);
+  await db.mapDocumentColourSetting.createMany({ data: [{ documentHash, colourKey: colourSettingsKey(n), colour: colourSettingsJson(n) }], skipDuplicates: true });
+}
+
+/** The settings recorded for each of `hashes` (a hash without rows is absent). */
+export async function loadRecordedColours(db: Db, hashes: readonly string[]): Promise<Map<string, MapColourSettings[]>> {
+  const out = new Map<string, MapColourSettings[]>();
+  if (!hashes.length) return out;
+  const rows = await db.mapDocumentColourSetting.findMany({ where: { documentHash: { in: [...new Set(hashes)] } }, select: { documentHash: true, colour: true } });
+  for (const r of rows) {
+    const list = out.get(r.documentHash) ?? [];
+    list.push(parseColourSettings(r.colour));
+    out.set(r.documentHash, list);
+  }
+  return out;
 }
 
 // ---- the rows ------------------------------------------------------------------

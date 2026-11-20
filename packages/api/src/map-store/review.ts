@@ -12,7 +12,7 @@ import { applyJobResult, startImportJob, type ImportJobRow } from "./jobs.js";
 import { readDocumentHead, readObjectsPerSymbol } from "./previews.js";
 import { staleReason } from "./rematch.js";
 import { terrainReview, type TerrainReview } from "./heightfield.js";
-import { colourSettingsOfReport, loadColourSettings, reportFollowsColour, writeColourSettings, type ColourTarget, type MapColourSettings } from "./colour-settings.js";
+import { colourSettingsOfReport, colourTargetKey, documentFollowsColour, loadColourSettings, loadRecordedColours, reportDeviationKeys, withDeviationChoice, writeColourSettings, type DeviationChoiceInput, type ColourTarget, type MapColourSettings } from "./colour-settings.js";
 import { buildColourReview, type ColourReview } from "./review-colours.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -50,7 +50,7 @@ export interface ReviewPayload {
  */
 export async function isDocumentCurrent(db: Db, doc: { hash: string; importerVersion: string; libraryVersion: string; report: Prisma.JsonValue }, kind: string, header?: mapDocument.MapDocumentHeader, colour?: MapColourSettings | null): Promise<boolean> {
   if (staleReason(doc, true)) return false;
-  if (colour && !reportFollowsColour(doc.report, colour)) return false;
+  if (colour && !documentFollowsColour({ report: doc.report, recorded: (await loadRecordedColours(db, [doc.hash])).get(doc.hash) }, colour)) return false;
   return storedDocumentFollowsDecisions(db, doc, await loadClubDecisions(db, kind), header);
 }
 
@@ -126,9 +126,48 @@ export async function changeColourSettings(
   }
   const colourTarget = await colourTargetOf(db, input.target, doc.sourceHash);
   if (!colourTarget) return { ok: false, reason: "source-mismatch" };
-  const settings = await writeColourSettings(db, colourTarget, input.change(await loadColourSettings(db, colourTarget)), input.userId);
+  // Read, change and write under a lock on the target: a deviation change depends on the stored setting (row I7),
+  // so two changes at once must not lose one.
+  const settings = await db.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`map-colour:${colourTargetKey(colourTarget)}`}))`;
+    return writeColourSettings(tx, colourTarget, input.change(await loadColourSettings(tx, colourTarget)), input.userId);
+  });
   const job = await startImportJob(db, { sourceHash: doc.sourceHash, startedBy: input.userId, holdMs: input.holdMs, patch: mapDocument.parseVersionPatch(doc.patch), colour: settings });
   return { ok: true, settings, job };
+}
+
+export type DeviationChangeResult = ColourChangeResult | { ok: false; reason: "unknown-deviation" };
+
+/**
+ * Override one deviation of a map, or reset it (row I7; docs/map-symbols.md
+ * §9.3 "Overrides (row I7)"): `changeColourSettings` with the one choice
+ * changed. `keep` and `drop` name a deviation the reviewed document lists;
+ * `default` removes the key whatever the document lists.
+ */
+export async function changeDeviation(
+  db: PrismaClient,
+  input: { hash: string; target: ReviewTarget; key: string; choice: DeviationChoiceInput; userId: string | null; holdMs?: number },
+): Promise<DeviationChangeResult> {
+  const doc = await db.mapDocument.findUnique({ where: { hash: input.hash }, select: { report: true } });
+  if (!doc) return { ok: false, reason: "not-found" };
+  if (input.choice !== "default" && !reportDeviationKeys(doc.report).includes(input.key)) return { ok: false, reason: "unknown-deviation" };
+  const { key, choice, ...rest } = input;
+  return changeColourSettings(db, { ...rest, change: (s) => withDeviationChoice(s, key, choice) });
+}
+
+/**
+ * The colour setting a decision on a reviewed document imports with: the
+ * map's (the review's target) when the document follows it — so a no-op
+ * override the report cannot show is kept (row I7) — else the document's
+ * own, read from its report.
+ */
+async function reviewedColourSettings(db: Db, doc: { hash: string; sourceHash: string; report: Prisma.JsonValue }, target: ReviewTarget | null): Promise<MapColourSettings> {
+  const own = colourSettingsOfReport(doc.report);
+  const colourTarget = target ? await colourTargetOf(db, target, doc.sourceHash) : null;
+  if (!colourTarget) return own;
+  const setting = await loadColourSettings(db, colourTarget);
+  const recorded = (await loadRecordedColours(db, [doc.hash])).get(doc.hash);
+  return documentFollowsColour({ report: doc.report, recorded }, setting) ? setting : own;
 }
 
 export type DecideResult =
@@ -141,7 +180,7 @@ export type DecideResult =
  * decider (§4.2 own-job clause) but pinned nowhere until `finalise`.
  * Throws `DecisionInputError` for a list that does not fit the document.
  */
-export async function decideOnDocument(db: PrismaClient, input: { hash: string; decisions: readonly ReviewDecision[]; userId: string | null; holdMs?: number }): Promise<DecideResult> {
+export async function decideOnDocument(db: PrismaClient, input: { hash: string; decisions: readonly ReviewDecision[]; userId: string | null; holdMs?: number; target?: ReviewTarget | null }): Promise<DecideResult> {
   const doc = await db.mapDocument.findUnique({ where: { hash: input.hash }, select: { sourceHash: true, patch: true, report: true } });
   const header = doc ? (await readDocumentHead(db, input.hash))?.header : null;
   if (!doc || !header) return { ok: false, reason: "not-found" };
@@ -149,7 +188,7 @@ export async function decideOnDocument(db: PrismaClient, input: { hash: string; 
   await writeDecisions(db, writes, input.userId);
   // The reviewed document's corrections and colour setting come along (docs/map-patches.md §5 answer 1;
   // docs/map-symbols.md §9.3 "Per map (row I6)"): a job without a target has no map to read the setting from.
-  const job = await startImportJob(db, { sourceHash: doc.sourceHash, startedBy: input.userId, holdMs: input.holdMs, patch: mapDocument.parseVersionPatch(doc.patch), colour: colourSettingsOfReport(doc.report) });
+  const job = await startImportJob(db, { sourceHash: doc.sourceHash, startedBy: input.userId, holdMs: input.holdMs, patch: mapDocument.parseVersionPatch(doc.patch), colour: await reviewedColourSettings(db, { hash: input.hash, ...doc }, input.target ?? null) });
   return { ok: true, job, applied: writes.length };
 }
 

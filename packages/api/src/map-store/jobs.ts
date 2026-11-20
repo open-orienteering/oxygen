@@ -24,7 +24,7 @@ import { writePinnedMapFileColumns } from "./event-document.js";
 import { abandonPromote, completePromote, reresolveAfterPin } from "./patches.js";
 import { synchronizePositionedControlCoordinates } from "../event-crs.js";
 import type { ImportWorkerData, ImportWorkerMessage } from "./import-worker.js";
-import { colourSettingsForJob, colourSettingsJson, parseColourSettings, reportFollowsColour, DEFAULT_COLOUR_SETTINGS, type MapColourSettings } from "./colour-settings.js";
+import { colourSettingsForJob, colourSettingsJson, documentFollowsColour, loadRecordedColours, parseColourSettings, recordDocumentColour, DEFAULT_COLOUR_SETTINGS, type MapColourSettings } from "./colour-settings.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -240,6 +240,8 @@ async function execute(db: Db, job: ImportJobRow): Promise<void> {
     });
     // An existing row may be old and unreferenced: touch it before pinning so a racing GC skips it (§8.2).
     if (stored.deduplicated) await touchDocument(db, stored.documentHash);
+    // The setting this import was asked for gave this document (row I7): a deduplicated one keeps its first report.
+    await recordDocumentColour(db, stored.documentHash, job.colour);
     await applyJobResult(db, { ...job, documentHash: stored.documentHash });
     // Stage 10: previews and the height field are cache, so a failure is logged inside and never fails the job.
     await progress(db, job.id, "derive");
@@ -398,10 +400,11 @@ export async function currentDocumentFor(db: Db, sourceHash: string, decisions: 
     orderBy: { createdAt: "desc" },
     select: { hash: true, report: true, patch: true },
   });
+  const recorded = await loadRecordedColours(db, candidates.map((c) => c.hash));
   for (const c of candidates) {
     // The same version patch baked (docs/map-patches.md §5 answer 1); null and [] are none.
     if (!mapDocument.sameVersionPatch(c.patch, patch)) continue;
-    if (!reportFollowsColour(c.report, colour)) continue;
+    if (!documentFollowsColour({ report: c.report, recorded: recorded.get(c.hash) }, colour)) continue;
     if (await storedDocumentFollowsDecisions(db, c, decisions)) return { hash: c.hash };
   }
   return null;

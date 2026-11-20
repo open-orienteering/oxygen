@@ -205,7 +205,8 @@ function MapReview({ documentHash, target, pinnedHash, mapName, canEdit, backTo,
   const applyPending = async () => {
     setError(null);
     try {
-      const { job: decided } = await decide.mutateAsync({ documentHash, decisions: pendingToDecisions(pending) });
+      // The map the review is for (row I7): the decision imports in its colour setting.
+      const { job: decided } = await decide.mutateAsync({ documentHash, decisions: pendingToDecisions(pending), ...(clubMapId ? { clubMapId } : {}) });
       followJob(decided as Job);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -227,6 +228,22 @@ function MapReview({ documentHash, target, pinnedHash, mapName, canEdit, backTo,
       setError(err instanceof Error ? err.message : String(err));
     }
   };
+  const setDeviation = trpc.mapImport.setDeviation.useMutation();
+  const changeDeviation = async (key: string, choice: "keep" | "drop" | "default") => {
+    if (!hasTarget) return;
+    setError(null);
+    try {
+      const { job: changed } = await setDeviation.mutateAsync({
+        documentHash,
+        key,
+        choice,
+        target: target.kind === "event" ? { kind: "event" } : { kind: "club", clubMapId: clubMapId! },
+      });
+      followJob(changed as Job);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
   const finalise = trpc.mapImport.finalise.useMutation({
     onSuccess: () => {
       setFinalisedNow(true);
@@ -240,7 +257,7 @@ function MapReview({ documentHash, target, pinnedHash, mapName, canEdit, backTo,
   const visible = (rows: ReviewRowData[]) =>
     onlyToReview ? rows.filter((r) => rowOutcome(r.match) === "suggested" || pending.has(r.symbolIdx)) : rows;
 
-  const busy = decide.isPending || setColourOrder.isPending || jobId !== null;
+  const busy = decide.isPending || setColourOrder.isPending || setDeviation.isPending || jobId !== null;
   const decideOn = (row: ReviewRowData, decision: PendingDecision | null) => setPendingMap((p) => setPending(p, row, decision));
 
   const header = (
@@ -371,9 +388,9 @@ function MapReview({ documentHash, target, pinnedHash, mapName, canEdit, backTo,
         </div>
       )}
 
-      <ColourLayersPanel colour={data.colour} nameId={nameId} canEdit={canEdit} busy={busy} hasTarget={hasTarget} onSwitch={(o) => void switchOrder(o)} />
+      <ColourLayersPanel colour={data.colour} nameId={nameId} canEdit={canEdit} busy={busy} hasTarget={hasTarget} onSwitch={(o) => void switchOrder(o)} onDeviation={(k, c) => void changeDeviation(k, c)} />
 
-      <CrtPanel documentHash={documentHash} canEdit={canEdit} busy={busy} onJob={followJob} onError={setError} rows={data.symbols} />
+      <CrtPanel documentHash={documentHash} clubMapId={clubMapId} canEdit={canEdit} busy={busy} onJob={followJob} onError={setError} rows={data.symbols} />
 
       <div className="flex items-center justify-between mt-6 mb-2">
         <h2 className="font-semibold text-slate-900">{t("usedSymbols")}</h2>
@@ -676,6 +693,7 @@ function ReviewRowCard({
 
 function CrtPanel({
   documentHash,
+  clubMapId,
   canEdit,
   busy,
   rows,
@@ -683,6 +701,8 @@ function CrtPanel({
   onError,
 }: {
   documentHash: string;
+  /** The club map the review is for, else the current event's (row I7: the import keeps its colour setting). */
+  clubMapId: string | null;
   canEdit: boolean;
   busy: boolean;
   rows: ReviewRowData[];
@@ -726,7 +746,7 @@ function CrtPanel({
     }
     try {
       const crt = await file.text();
-      const result = await importCrt.mutateAsync({ documentHash, crt, dryRun: true });
+      const result = await importCrt.mutateAsync({ documentHash, crt, dryRun: true, ...(clubMapId ? { clubMapId } : {}) });
       setPreview({ fileName: file.name, crt, result });
     } catch (err) {
       onError(err instanceof Error ? err.message : String(err));
@@ -736,7 +756,7 @@ function CrtPanel({
   const confirm = async () => {
     if (!preview) return;
     try {
-      const result = await importCrt.mutateAsync({ documentHash, crt: preview.crt });
+      const result = await importCrt.mutateAsync({ documentHash, crt: preview.crt, ...(clubMapId ? { clubMapId } : {}) });
       setPreview(null);
       if (result.job) onJob(result.job as Job);
       else setNote(t("crt.nothingApplied"));

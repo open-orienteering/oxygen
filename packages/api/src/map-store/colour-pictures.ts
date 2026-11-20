@@ -10,11 +10,12 @@
  * order), written once and never updated.
  */
 
+import { createHash } from "node:crypto";
 import { mapDocument } from "@oxygen/shared";
 import type { PrismaClient } from "../generated/prisma/client.js";
 import { colourPictureWindow, renderColourPicturePng } from "../render/previews.js";
 import { getBlob } from "./blob-store.js";
-import { colourSettingsOfReport, type ColourOrder } from "./colour-settings.js";
+import { colourSettingsOfReport, DEVIATION_KEY, normaliseColourSettings, pictureDeviationsQuery, reportDeviationKeys, type ColourOrder, type DeviationChoice } from "./colour-settings.js";
 import { awaitImportJob, getImportJob, isTerminal, startImportJob, type ImportJobRow } from "./jobs.js";
 import { once, readPreview, serialised, writePreview } from "./previews.js";
 
@@ -34,7 +35,56 @@ export function parseColourOrder(raw: string): ColourOrder | null {
   return raw === "iof" || raw === "source" ? raw : null;
 }
 
-export type ColourPictureResult = { png: Buffer } | { pending: true } | { missing: true } | { failed: string };
+/**
+ * The overrides a picture is drawn with, as the `deviations` query carries
+ * them (row I7): `upper>lower:keep,upper>lower:drop`, normalised (choices
+ * equal to the default left out, keys sorted). `null` for a malformed
+ * value; `{}` for none.
+ */
+export function parsePictureDeviations(raw: string | undefined): Record<string, DeviationChoice> | null {
+  if (raw === undefined || raw === "") return {};
+  if (raw.length > 4000) return null;
+  const deviations: Record<string, DeviationChoice> = {};
+  for (const part of raw.split(",")) {
+    const at = part.lastIndexOf(":");
+    const key = part.slice(0, at), choice = part.slice(at + 1);
+    if (at <= 0 || !DEVIATION_KEY.test(key) || (choice !== "keep" && choice !== "drop")) return null;
+    deviations[key] = choice;
+  }
+  return normaliseColourSettings({ order: "iof", deviations }).deviations;
+}
+
+/**
+ * The picture's `map_previews.key` (docs/map-storage.md §4.5): the order,
+ * and for an IOF picture drawn with overrides (a `source` document's, row
+ * I7) a digest of them, so a picture is never reused across overrides.
+ */
+export function colourPictureKey(order: ColourOrder, deviations: Readonly<Record<string, DeviationChoice>> = {}): string {
+  const q = order === "iof" ? pictureDeviationsQuery(deviations) : "";
+  return q ? `${order}-${createHash("sha256").update(q).digest("hex").slice(0, 16)}` : order;
+}
+
+export type ColourPictureResult = { png: Buffer; key: string } | { pending: true } | { missing: true } | { failed: string };
+
+/** Only the overrides of deviations in `listed` (the IOF documents of a source list the same deviations). */
+const restrictTo = (deviations: Record<string, DeviationChoice>, listed: readonly string[]): Record<string, DeviationChoice> =>
+  Object.fromEntries(Object.entries(deviations).filter(([k]) => listed.includes(k)));
+
+/**
+ * The overrides a picture request may use (row I7), so the stored keys stay
+ * bounded: none unless the document is in the map's own order and the IOF
+ * picture is asked for, then only those of deviations a stored IOF document
+ * of the same source and corrections lists (when there is one yet; the
+ * import narrows them again).
+ */
+async function pictureOverrides(db: PrismaClient, row: { sourceHash: string; patch: unknown; header: unknown }, order: ColourOrder, asked: Record<string, DeviationChoice> | undefined): Promise<Record<string, DeviationChoice>> {
+  const ownOrder: ColourOrder = (row.header as { colourOrder?: { order?: ColourOrder } } | null)?.colourOrder?.order ?? "source";
+  if (ownOrder !== "source" || order !== "iof" || !asked || !Object.keys(asked).length) return {};
+  const patch = mapDocument.parseVersionPatch(row.patch);
+  const siblings = await db.mapDocument.findMany({ where: { sourceHash: row.sourceHash }, orderBy: { createdAt: "desc" }, select: { header: true, patch: true, report: true } });
+  const iof = siblings.find((d) => (d.header as { colourOrder?: { order?: string } } | null)?.colourOrder?.order === "iof" && mapDocument.sameVersionPatch(d.patch, patch));
+  return iof ? restrictTo(asked, reportDeviationKeys(iof.report)) : asked;
+}
 
 
 /**
@@ -61,7 +111,7 @@ async function decodeStored(db: PrismaClient, hash: string): Promise<mapDocument
  * render queue is entered (its derive stage renders through the same
  * queue). Throws when that import fails.
  */
-async function produce(db: PrismaClient, hash: string, order: ColourOrder, startedBy: string | null): Promise<Buffer | null> {
+async function produce(db: PrismaClient, hash: string, order: ColourOrder, startedBy: string | null, asked: Record<string, DeviationChoice>): Promise<{ png: Buffer; key: string } | null> {
   const row = await db.mapDocument.findUnique({ where: { hash }, select: { sourceHash: true, patch: true, report: true, header: true } });
   if (!row) return null;
   // The stored header summary says the order (none: before the layers, the map's own), so the import, if any, runs
@@ -69,14 +119,21 @@ async function produce(db: PrismaClient, hash: string, order: ColourOrder, start
   const ownOrder: ColourOrder = (row.header as { colourOrder?: { order?: ColourOrder } } | null)?.colourOrder?.order ?? "source";
   let otherHash: string | null = null;
   if (ownOrder !== order) {
-    // The document the switch gives: the same corrections and overrides, the other order.
+    // The document the switch gives: the same corrections and overrides, the other order. A `source` document lists
+    // no deviations, so its IOF picture takes the map's overrides from the caller (row I7).
     const patch = mapDocument.parseVersionPatch(row.patch);
-    const colour = { order, deviations: colourSettingsOfReport(row.report).deviations };
+    const colour = { order, deviations: order === "iof" && Object.keys(asked).length ? asked : colourSettingsOfReport(row.report).deviations };
     let job = (await runningJobFor(db, row.sourceHash, patch, colour)) ?? (await startImportJob(db, { sourceHash: row.sourceHash, startedBy, patch, colour, holdMs: 0 }));
     if (!isTerminal(job.state)) job = (await awaitImportJob(db, job.id)) ?? job;
     if (job.state !== "done" || !job.documentHash) throw new Error(`the ${order} import of ${row.sourceHash} ${job.state === "failed" ? `failed: ${job.error ?? ""}` : `is still ${job.state}`}`);
     otherHash = job.documentHash;
+    // The overrides that document lists: the picture's key never names one it does not (bounded keys, row I7).
+    if (Object.keys(asked).length) {
+      const other = await db.mapDocument.findUnique({ where: { hash: otherHash }, select: { report: true } });
+      asked = restrictTo(asked, reportDeviationKeys(other?.report));
+    }
   }
+  const key = colourPictureKey(order, asked);
   // Decoded and drawn inside the one-at-a-time queue (map-storage.md §4.5), never while waiting on the import.
   const png = await serialised(async () => {
     const reviewed = await decodeStored(db, hash);
@@ -85,8 +142,8 @@ async function produce(db: PrismaClient, hash: string, order: ColourOrder, start
     return renderColourPicturePng(drawn, colourPictureWindow(reviewed));
   });
   if (!png) return null;
-  await writePreview(db, hash, COLOUR_PICTURE_KIND, order, png);
-  return png;
+  await writePreview(db, hash, COLOUR_PICTURE_KIND, key, png);
+  return { png, key };
 }
 
 /**
@@ -95,16 +152,20 @@ async function produce(db: PrismaClient, hash: string, order: ColourOrder, start
  * work goes on and `{ pending: true }` says to ask again. `{ missing }`
  * when there is no such document.
  */
-export async function colourPicture(db: PrismaClient, hash: string, order: ColourOrder, opts: { startedBy: string | null; waitMs?: number }): Promise<ColourPictureResult> {
-  const stored = await readPreview(db, hash, COLOUR_PICTURE_KIND, order);
-  if (stored) return { png: stored };
-  const id = `${hash}/${COLOUR_PICTURE_KIND}/${order}`;
+export async function colourPicture(db: PrismaClient, hash: string, order: ColourOrder, opts: { startedBy: string | null; waitMs?: number; deviations?: Record<string, DeviationChoice> }): Promise<ColourPictureResult> {
+  const row = await db.mapDocument.findUnique({ where: { hash }, select: { sourceHash: true, patch: true, header: true } });
+  if (!row) return { missing: true };
+  const asked = await pictureOverrides(db, row, order, opts.deviations);
+  const key = colourPictureKey(order, asked);
+  const stored = await readPreview(db, hash, COLOUR_PICTURE_KIND, key);
+  if (stored) return { png: stored, key };
+  const id = `${hash}/${COLOUR_PICTURE_KIND}/${key}`;
   const failed = failures.get(id);
   if (failed && Date.now() - failed.at < COLOUR_PICTURE_FAILURE_TTL_MS) return { failed: failed.message };
-  const work = once(id, () => produce(db, hash, order, opts.startedBy));
+  const work = once(id, () => produce(db, hash, order, opts.startedBy, asked));
   // A failure is remembered (the panel retries) and reported to the request that is waiting; one after the wait is logged.
   const settled = work.then(
-    (png) => (png ? { png } : { missing: true as const }),
+    (out) => (out ?? { missing: true as const }),
     (err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
       failures.set(id, { at: Date.now(), message });

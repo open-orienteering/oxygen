@@ -57,9 +57,9 @@ export async function writePreview(db: Db, hash: string, kind: PreviewKind, key:
 }
 
 /** Renders of the same row in flight on this instance share one promise. */
-const inFlight = new Map<string, Promise<Buffer | null>>();
-export function once(id: string, fn: () => Promise<Buffer | null>): Promise<Buffer | null> {
-  let p = inFlight.get(id);
+const inFlight = new Map<string, Promise<unknown>>();
+export function once<T = Buffer>(id: string, fn: () => Promise<T | null>): Promise<T | null> {
+  let p = inFlight.get(id) as Promise<T | null> | undefined;
   if (!p) {
     p = fn().finally(() => inFlight.delete(id));
     inFlight.set(id, p);

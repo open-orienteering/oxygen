@@ -11,7 +11,7 @@ import type { Prisma, PrismaClient } from "../generated/prisma/client.js";
 import { DecisionInputError, loadClubDecisions, MAX_REVIEW_DECISIONS } from "./decisions.js";
 import type { ImportJobRow } from "./jobs.js";
 import { readDocumentHeader } from "./previews.js";
-import { decideOnDocument } from "./review.js";
+import { decideOnDocument, type ReviewTarget } from "./review.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -67,12 +67,12 @@ export type CrtImportResult =
  * Resolve a CRT against the document and record what applies as `decide`
  * would. Nothing applicable, or `dryRun`, writes nothing and starts no job.
  */
-export async function importDocumentCrt(db: PrismaClient, input: { hash: string; crt: string; userId: string | null; dryRun?: boolean; holdMs?: number }): Promise<CrtImportResult> {
+export async function importDocumentCrt(db: PrismaClient, input: { hash: string; crt: string; userId: string | null; dryRun?: boolean; holdMs?: number; target?: ReviewTarget | null }): Promise<CrtImportResult> {
   const header: mapDocument.MapDocumentHeader | null = await readDocumentHeader(db, input.hash);
   if (!header) return { ok: false, reason: "not-found" };
   const plan = planCrtImport(header, input.crt);
   if (input.dryRun || plan.decisions.length === 0) return { ok: true, ...plan, applied: 0, job: null };
-  const res = await decideOnDocument(db, { hash: input.hash, decisions: plan.decisions, userId: input.userId, holdMs: input.holdMs });
+  const res = await decideOnDocument(db, { hash: input.hash, decisions: plan.decisions, userId: input.userId, holdMs: input.holdMs, target: input.target });
   if (!res.ok) return res;
   return { ok: true, ...plan, applied: res.applied, job: res.job };
 }

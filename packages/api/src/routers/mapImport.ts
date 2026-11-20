@@ -14,7 +14,8 @@ import { resolveEventCapabilities } from "../permissions.js";
 import { getImportJob, isClaimable, kickImportJobs, latestImportJobForEvent, type ImportJobRow } from "../map-store/jobs.js";
 import { DecisionInputError, MAX_REVIEW_DECISIONS, reviewDecisionSchema } from "../map-store/decisions.js";
 import { exportDocumentCrt, importDocumentCrt, MAX_CRT_BYTES } from "../map-store/crt.js";
-import { buildReview, changeColourSettings, decideOnDocument, finaliseDocument, type ReviewTarget } from "../map-store/review.js";
+import { buildReview, changeColourSettings, changeDeviation, decideOnDocument, finaliseDocument, type DeviationChangeResult, type ReviewTarget } from "../map-store/review.js";
+import { DEVIATION_KEY } from "../map-store/colour-settings.js";
 import { checkDocumentAccess, EDIT_ACCESS, READ_ACCESS, type DocumentAccessMode } from "../map-store/routes.js";
 import type { Context } from "../trpc.js";
 import type { PrismaClient } from "../generated/prisma/client.js";
@@ -59,6 +60,24 @@ async function present(db: PrismaClient, row: ImportJobRow) {
     updatedAt: row.updatedAt.toISOString(),
     report,
   };
+}
+
+/** The map a review round is for, as `review` reads it: the club map series, else the current event's map. */
+function reviewTargetOf(ctx: Context, clubMapId: string | undefined): ReviewTarget | null {
+  return clubMapId ? { kind: "club", clubMapId } : ctx.event ? { kind: "event", eventId: ctx.event.id } : null;
+}
+
+/** A colour change's target (`setColourOrder`, `setDeviation`): the event's needs `courses.edit`, a club map's a signed-in user. */
+async function colourChangeTarget(ctx: Context, target: z.infer<typeof targetSchema>): Promise<ReviewTarget> {
+  return target.kind === "event" ? { kind: "event", eventId: await requireEventCapability(ctx, "courses.edit") } : { kind: "club", clubMapId: target.clubMapId };
+}
+
+/** A failed colour change as the caller sees it. */
+function colourChangeError(result: Extract<DeviationChangeResult, { ok: false }>, target: ReviewTarget): TRPCError {
+  if (result.reason === "not-found") return new TRPCError({ code: "NOT_FOUND", message: "Map document not found" });
+  if (result.reason === "no-target") return new TRPCError({ code: "NOT_FOUND", message: target.kind === "event" ? "The event has no map" : "Club map not found" });
+  if (result.reason === "unknown-deviation") return new TRPCError({ code: "BAD_REQUEST", message: "The document has no such deviation" });
+  return new TRPCError({ code: "PRECONDITION_FAILED", message: "The target's map is not this document's source file" });
 }
 
 function kickIfClaimable(db: PrismaClient, row: ImportJobRow): void {
@@ -113,10 +132,7 @@ export const mapImportRouter = router({
     .input(z.object({ documentHash: documentHashSchema, clubMapId: z.string().uuid().optional() }))
     .query(async ({ ctx, input }) => {
       await requireDocument(ctx, input.documentHash, READ_ACCESS);
-      const target: ReviewTarget | null = input.clubMapId
-        ? { kind: "club", clubMapId: input.clubMapId }
-        : ctx.event ? { kind: "event", eventId: ctx.event.id } : null;
-      const review = await buildReview(prisma(), input.documentHash, target);
+      const review = await buildReview(prisma(), input.documentHash, reviewTargetOf(ctx, input.clubMapId));
       if (!review) throw new TRPCError({ code: "NOT_FOUND", message: "Map document not found" });
       return review;
     }),
@@ -128,13 +144,13 @@ export const mapImportRouter = router({
    * would, so a large map is polled like an upload.
    */
   decide: authedProcedure
-    .input(z.object({ documentHash: documentHashSchema, decisions: z.array(reviewDecisionSchema).min(1).max(MAX_REVIEW_DECISIONS) }))
+    .input(z.object({ documentHash: documentHashSchema, decisions: z.array(reviewDecisionSchema).min(1).max(MAX_REVIEW_DECISIONS), clubMapId: z.string().uuid().optional() }))
     .mutation(async ({ ctx, input }) => {
       await requireDocument(ctx, input.documentHash, EDIT_ACCESS);
       const db = prisma();
       let result;
       try {
-        result = await decideOnDocument(db, { hash: input.documentHash, decisions: input.decisions, userId: ctx.user?.id ?? null });
+        result = await decideOnDocument(db, { hash: input.documentHash, decisions: input.decisions, userId: ctx.user?.id ?? null, target: reviewTargetOf(ctx, input.clubMapId) });
       } catch (err: unknown) {
         if (err instanceof DecisionInputError) throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
         throw err;
@@ -155,17 +171,31 @@ export const mapImportRouter = router({
   setColourOrder: authedProcedure
     .input(z.object({ documentHash: documentHashSchema, order: z.enum(["iof", "source"]), target: targetSchema }))
     .mutation(async ({ ctx, input }) => {
-      const target: ReviewTarget = input.target.kind === "event"
-        ? { kind: "event", eventId: await requireEventCapability(ctx, "courses.edit") }
-        : { kind: "club", clubMapId: input.target.clubMapId };
+      const target = await colourChangeTarget(ctx, input.target);
       await requireDocument(ctx, input.documentHash, EDIT_ACCESS);
       const db = prisma();
       const result = await changeColourSettings(db, { hash: input.documentHash, target, change: (s) => ({ ...s, order: input.order }), userId: ctx.user?.id ?? null });
-      if (!result.ok) {
-        if (result.reason === "not-found") throw new TRPCError({ code: "NOT_FOUND", message: "Map document not found" });
-        if (result.reason === "no-target") throw new TRPCError({ code: "NOT_FOUND", message: target.kind === "event" ? "The event has no map" : "Club map not found" });
-        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "The target's map is not this document's source file" });
-      }
+      if (!result.ok) throw colourChangeError(result, target);
+      return { settings: result.settings, job: await present(db, result.job) };
+    }),
+
+  /**
+   * Override one deviation of the map, or reset it (docs/map-symbols.md
+   * §9.3 "Overrides (row I7)", answer 2): `keep` or `drop` a deviation the
+   * reviewed document lists, or `default` to remove the override. Stored
+   * on the target as `setColourOrder` stores the order (only choices that
+   * differ from the default), with its permission, and the document's
+   * source imported again in the new setting: the job is returned as
+   * `status` would, and nothing is pinned until `finalise`.
+   */
+  setDeviation: authedProcedure
+    .input(z.object({ documentHash: documentHashSchema, key: z.string().max(200).regex(DEVIATION_KEY, "a deviation key upper>lower"), choice: z.enum(["keep", "drop", "default"]), target: targetSchema }))
+    .mutation(async ({ ctx, input }) => {
+      const target = await colourChangeTarget(ctx, input.target);
+      await requireDocument(ctx, input.documentHash, EDIT_ACCESS);
+      const db = prisma();
+      const result = await changeDeviation(db, { hash: input.documentHash, target, key: input.key, choice: input.choice, userId: ctx.user?.id ?? null });
+      if (!result.ok) throw colourChangeError(result, target);
       return { settings: result.settings, job: await present(db, result.job) };
     }),
 
@@ -194,13 +224,14 @@ export const mapImportRouter = router({
       documentHash: documentHashSchema,
       crt: z.string().refine((s) => Buffer.byteLength(s, "utf8") <= MAX_CRT_BYTES, "a CRT of at most 1 MiB"),
       dryRun: z.boolean().optional(),
+      clubMapId: z.string().uuid().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       await requireDocument(ctx, input.documentHash, EDIT_ACCESS);
       const db = prisma();
       let result;
       try {
-        result = await importDocumentCrt(db, { hash: input.documentHash, crt: input.crt, userId: ctx.user?.id ?? null, dryRun: input.dryRun });
+        result = await importDocumentCrt(db, { hash: input.documentHash, crt: input.crt, userId: ctx.user?.id ?? null, dryRun: input.dryRun, target: reviewTargetOf(ctx, input.clubMapId) });
       } catch (err: unknown) {
         if (err instanceof DecisionInputError) throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
         throw err;

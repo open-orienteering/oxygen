@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canSwitchOrder, chosenOrder, deviationSummary, layerLabel, layersTopFirst, orderedFlags, retryUrl } from "../map-review-colours";
+import { canSwitchOrder, chosenOrder, deviationControls, deviationSummary, layerLabel, layersTopFirst, orderedFlags, retryUrl } from "../map-review-colours";
 
 describe("the colour panel's helpers (docs/map-symbols.md §8.7)", () => {
   it("lists the layers top first", () => {
@@ -38,5 +38,28 @@ describe("the colour panel's helpers (docs/map-symbols.md §8.7)", () => {
 
   it("summarises the deviations", () => {
     expect(deviationSummary([{ kept: true }, { kept: false }, { kept: true }])).toEqual({ count: 3, kept: 2 });
+  });
+
+  it("gives a deviation row its keep / drop / reset controls (row I7)", () => {
+    const can = { canEdit: true, busy: false, hasTarget: true };
+    // Dropped by default, not overridden: Drop pressed and disabled, Keep pressable, no reset.
+    expect(deviationControls({ choice: "drop", overridden: false, default: "drop" }, can)).toEqual({
+      keep: { pressed: false, disabled: false },
+      drop: { pressed: true, disabled: true },
+      reset: { shown: false, disabled: false },
+    });
+    // Kept by override: Keep pressed, reset shown.
+    expect(deviationControls({ choice: "keep", overridden: true, default: "drop" }, can)).toEqual({
+      keep: { pressed: true, disabled: true },
+      drop: { pressed: false, disabled: false },
+      reset: { shown: true, disabled: false },
+    });
+    // Without edit rights, while a job runs, without a target (choice null): all disabled.
+    for (const opts of [{ ...can, canEdit: false }, { ...can, busy: true }]) {
+      const c = deviationControls({ choice: "drop", overridden: true, default: "keep" }, opts);
+      expect([c.keep.disabled, c.drop.disabled, c.reset.disabled]).toEqual([true, true, true]);
+    }
+    const none = deviationControls({ choice: null, overridden: false, default: "keep" }, { ...can, hasTarget: false });
+    expect(none).toEqual({ keep: { pressed: true, disabled: true }, drop: { pressed: false, disabled: true }, reset: { shown: false, disabled: true } });
   });
 });
