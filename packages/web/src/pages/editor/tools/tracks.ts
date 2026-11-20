@@ -1,6 +1,6 @@
 /**
  * Map mode's Tracks tool `T`, the reducer (docs/map-gps-tracks.md §5.2; docs/course-editor.md §13 "GPS tracks:
- * editing"; rows G27, G29): the tool's tracks are the selected visible ones; on each a press on an end handle drags it
+ * editing"; rows G27, G30): the tool's tracks are the selected visible ones; on each a press on an end handle drags it
  * along the stored points — the trim, one write on release —, and a click on one splits it at the stored point under
  * the pointer (the hovered node, `hoverCandidate`); a click on another track selects it. Pure: the binding
  * (`bindings.ts` `mapTracksBinding`) keeps the state in a ref and turns the effects into the page's writes.
@@ -22,7 +22,9 @@ export interface TrackToolTarget {
 export type TrackToolState =
   | { kind: "idle" }
   /** Handle `end` held: `from` its index at the press, `index` where it is now; moved once past `dragMm`. */
-  | { kind: "drag"; target: TrackToolTarget; end: TrackEnd; from: number; index: number; press: Pt; dragMm: number; slackMm: number; moved: boolean };
+  | { kind: "drag"; target: TrackToolTarget; end: TrackEnd; from: number; index: number; press: Pt; dragMm: number; slackMm: number; moved: boolean;
+      /** Other handles on the same point (a split's two parts meet there): the first move picks the one that follows it. */
+      alts?: readonly { target: TrackToolTarget; end: TrackEnd }[] };
 
 export const IDLE: TrackToolState = { kind: "idle" };
 
@@ -97,14 +99,33 @@ export function trackToolStep(s: TrackToolState, e: TrackToolEvent): TrackToolSt
       if (!best) return none(IDLE);
       const t = best.t;
       const from = handleIndex(best.end, t.trim);
-      return { state: { kind: "drag", target: t, end: best.end, from, index: from, press: e.pt, dragMm: e.dragMm, slackMm: e.handleMm, moved: false }, taken: true, effect: null };
+      const at = pointOf(t.full, from);
+      const alts: { target: TrackToolTarget; end: TrackEnd }[] = [];
+      for (const o of e.targets) {
+        for (const end of ["start", "end"] as const) {
+          if (o === t && end === best.end) continue;
+          if (dist(pointOf(o.full, handleIndex(end, o.trim)), at) <= 1e-9) alts.push({ target: o, end });
+        }
+      }
+      return { state: { kind: "drag", target: t, end: best.end, from, index: from, press: e.pt, dragMm: e.dragMm, slackMm: e.handleMm, moved: false, ...(alts.length ? { alts } : {}) }, taken: true, effect: null };
     }
     case "drag": {
       if (s.kind !== "drag") return none();
       if (!s.moved && dist(s.press, e.pt) <= s.dragMm) return none();
-      const { lo, hi } = handleBounds(s.end, s.target.trim, s.target.full.x.length);
-      const index = dragIndex(s.target.full, s.index, e.pt, lo, hi, s.slackMm);
-      return none({ ...s, index, moved: true });
+      const place = (target: TrackToolTarget, end: TrackEnd, from: number) => {
+        const { lo, hi } = handleBounds(end, target.trim, target.full.x.length);
+        return dragIndex(target.full, from, e.pt, lo, hi, s.slackMm);
+      };
+      if (!s.moved && s.alts) {
+        // The first move: of the handles on the pressed point, the one that lands nearest the pointer (ties: the first).
+        let pick = { target: s.target, end: s.end, from: s.from, index: place(s.target, s.end, s.from) };
+        for (const a of s.alts) {
+          const from = handleIndex(a.end, a.target.trim), index = place(a.target, a.end, from);
+          if (dist(pointOf(a.target.full, index), e.pt) < dist(pointOf(pick.target.full, pick.index), e.pt)) pick = { target: a.target, end: a.end, from, index };
+        }
+        return none({ kind: "drag", target: pick.target, end: pick.end, from: pick.from, index: pick.index, press: s.press, dragMm: s.dragMm, slackMm: s.slackMm, moved: true });
+      }
+      return none({ ...s, index: place(s.target, s.end, s.index), moved: true });
     }
     case "up": {
       if (s.kind !== "drag") return none(IDLE);

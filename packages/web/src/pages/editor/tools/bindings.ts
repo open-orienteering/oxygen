@@ -935,7 +935,7 @@ export function withTrackLayer(b: EditorToolBinding, layer: TrackLayer): EditorT
   return out;
 }
 
-// ─── Map mode's `T`: the Tracks tool (docs/course-editor.md §13 "GPS tracks: editing", G27, G29) ──────────
+// ─── Map mode's `T`: the Tracks tool (docs/course-editor.md §13 "GPS tracks: editing", G27, G30) ──────────
 
 /** Screen spacing of the nodes drawn along a tool's track (the renderer thins to it at the current zoom). */
 export const TRACK_NODE_GAP_PX = 10;
@@ -980,13 +980,15 @@ export function mapTracksBinding(c: MapTracksContext): EditorToolBinding {
   const shapes: ToolShape[] = [];
   const handles: ToolShape[] = [];
   const hover = c.hover ?? null;
+  let hovered = false;
   for (const t of c.targets) {
     const trim = live?.id === t.id ? live.trim : t.trim;
+    if (!live && hover?.id === t.id && hover.index > trim.start && hover.index < trim.end - 1) hovered = true;
     const data = { "track-id": t.id };
     // Splittable: two visible points left on each side (§1.2 "Split"); none while a handle is held.
     if (!live && trim.end - trim.start >= 4) {
       shapes.push({ kind: "nodes", x: t.full.x, y: t.full.y, from: trim.start + 1, to: trim.end - 2, gapPx: TRACK_NODE_GAP_PX, testId: "editor-track-nodes", data });
-      if (hover?.id === t.id) {
+      if (hover?.id === t.id && hover.index > trim.start && hover.index < trim.end - 1) {
         const near = nodesNear(t.full, trim, hover.index, TRACK_NODE_NEAR_PX * hover.mmPerPx);
         shapes.push({ kind: "nodes", x: t.full.x, y: t.full.y, indices: near, testId: "editor-track-nodes-near", data });
         shapes.push({ kind: "nodes", x: t.full.x, y: t.full.y, indices: [hover.index], active: true, testId: "editor-track-node-hover", data: { ...data, index: String(hover.index) } });
@@ -1015,7 +1017,7 @@ export function mapTracksBinding(c: MapTracksContext): EditorToolBinding {
   return {
     exclusive: true,
     shapes,
-    cursor: hover ? "pointer" : undefined,
+    cursor: hovered ? "pointer" : undefined,
     onHover: (p) => {
       if (!c.onHover) return;
       const h = p && c.gesture.current.kind === "idle" ? hoverCandidate(p.pt, MAP_HIT_PX * p.mmPerPx, c.targets, c.lines) : null;

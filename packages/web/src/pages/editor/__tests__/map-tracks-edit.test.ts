@@ -133,7 +133,7 @@ describe("a split's undo (§5.2, user 2026-11-15)", () => {
   });
 });
 
-describe("nodesNear (G29)", () => {
+describe("nodesNear (G30)", () => {
   const l = (n: number): gpsTrack.ProjectedTrack => ({ x: Float64Array.from({ length: n }, (_, i) => i), y: new Float64Array(n), metresPerMm: 7.5 });
   it("the splittable points within the radius of a point, in index order", () => {
     expect(nodesNear(l(20), { start: 0, end: 20 }, 10, 2.5)).toEqual([8, 9, 10, 11, 12]);

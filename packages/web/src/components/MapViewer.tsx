@@ -401,7 +401,7 @@ export type ToolShape =
   /** A screen-size square handle. */
   | { kind: "handle"; x: number; y: number; active?: boolean; testId?: string; data?: Record<string, string> }
   /**
-   * Screen-size dots on points of `x`, `y` (a GPS track's stored points, G29): `indices`, else `from … to` inclusive
+   * Screen-size dots on points of `x`, `y` (a GPS track's stored points, G30): `indices`, else `from … to` inclusive
    * thinned in screen space to one per `gapPx` (index order; the spacing doubles while over `TRACK_NODES_MAX`) — one
    * path, so a long track's nodes stay one element. `active`: the hovered one, larger and filled.
    */
@@ -3937,7 +3937,7 @@ function renderDescriptionRows(
 export const TRACK_NODES_MAX = 4000;
 
 type Proj = (x: number, y: number) => { x: number; y: number } | null;
-const nodesCache = new WeakMap<object, { key: string; pts: { x: number; y: number }[] }>();
+const nodesCache = new WeakMap<object, { key: string; project: Proj; pts: { x: number; y: number }[] }>();
 
 /** A `nodes` shape's dots in screen px: its indices projected, or its range thinned to `gapPx` (cached per view). */
 export function nodePoints(sh: Extract<ToolShape, { kind: "nodes" }>, project: Proj): { x: number; y: number }[] {
@@ -3947,7 +3947,8 @@ export function nodePoints(sh: Extract<ToolShape, { kind: "nodes" }>, project: P
   const a = project(sh.x[from], sh.y[from]), b = project(sh.x[to], sh.y[to]);
   const key = `${from},${to},${sh.gapPx},${a?.x},${a?.y},${b?.x},${b?.y}`;
   const hit = nodesCache.get(sh.x);
-  if (hit?.key === key) return hit.pts;
+  // The projection is a new function per view (rotation, zoom, pan, the 3D camera): it is part of the key.
+  if (hit?.key === key && hit.project === project) return hit.pts;
   const proj: ({ x: number; y: number } | null)[] = [];
   for (let i = from; i <= to; i++) proj.push(project(sh.x[i], sh.y[i]));
   let gap = Math.max(0, sh.gapPx ?? 0), pts: { x: number; y: number }[] = [];
@@ -3964,7 +3965,7 @@ export function nodePoints(sh: Extract<ToolShape, { kind: "nodes" }>, project: P
     if (pts.length <= TRACK_NODES_MAX) break;
     gap = Math.max(1, gap * 2);
   }
-  nodesCache.set(sh.x, { key, pts });
+  nodesCache.set(sh.x, { key, project, pts });
   return pts;
 }
 

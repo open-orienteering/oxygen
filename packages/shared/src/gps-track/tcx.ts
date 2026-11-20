@@ -8,6 +8,9 @@ import { parseXml, XmlParseError } from "../import/xml.js";
 import { finiteOrNull, GpxParseError, localName, parseGpx, parseGpxTime, type GpxFile, type ParsedTrack } from "./gpx.js";
 import { quantiseDeg, quantiseEle } from "./track.js";
 
+/** Where an `Activity` sits: `Activities`, or a multisport session's legs (`Activities/MultiSportSession/FirstSport|NextSport`). */
+const ACTIVITY_PARENTS = new Set(["Activities", "FirstSport", "NextSport"]);
+
 interface Run {
   lat: number[];
   lng: number[];
@@ -74,7 +77,7 @@ export function parseTcx(text: string): GpxFile {
           return;
         }
         const parent = path[depth - 2];
-        if ((name === "Activity" && parent === "Activities") || (name === "Course" && parent === "Courses")) {
+        if ((name === "Activity" && ACTIVITY_PARENTS.has(parent)) || (name === "Course" && parent === "Courses")) {
           run = { lat: [], lng: [], time: [], ele: [], skipped: 0 };
           courseName = null;
         } else if (!run) {
@@ -117,7 +120,8 @@ export function parseTcx(text: string): GpxFile {
         if (name === "Trackpoint" && pt && r) {
           if (pt.position) {
             const lat = finiteOrNull(pt.lat), lng = finiteOrNull(pt.lng);
-            if (lat === null || lng === null || lat < -90 || lat > 90 || lng < -180 || lng > 180) r.skipped++;
+            // 0° / 0° is a device's "no fix", not a point in the Gulf of Guinea (§2.4).
+            if (lat === null || lng === null || lat < -90 || lat > 90 || lng < -180 || lng > 180 || (lat === 0 && lng === 0)) r.skipped++;
             else {
               r.lat.push(quantiseDeg(lat));
               r.lng.push(quantiseDeg(lng));
@@ -127,7 +131,7 @@ export function parseTcx(text: string): GpxFile {
             }
           }
           pt = null;
-        } else if (r && name === "Activity" && path[path.length - 1] === "Activities") {
+        } else if (r && name === "Activity" && ACTIVITY_PARENTS.has(path[path.length - 1])) {
           emit("trk", activities++, r, null);
           run = null;
         } else if (r && name === "Course" && path[path.length - 1] === "Courses") {

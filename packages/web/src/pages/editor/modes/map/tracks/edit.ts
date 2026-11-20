@@ -77,7 +77,7 @@ export function splitIndexAt(full: gpsTrack.ProjectedTrack, trim: Range, pt: Pt,
 
 /**
  * The splittable stored points (`trim.start + 1 … trim.end − 2`) within `radiusMm` of stored point `index`, in index
- * order: drawn round the hovered node (G29), so every point the pointer can reach shows whatever the thinning.
+ * order: drawn round the hovered node (G30), so every point the pointer can reach shows whatever the thinning.
  */
 export function nodesNear(full: gpsTrack.ProjectedTrack, trim: Range, index: number, radiusMm: number): number[] {
   const out: number[] = [];
@@ -86,10 +86,30 @@ export function nodesNear(full: gpsTrack.ProjectedTrack, trim: Range, index: num
   return out;
 }
 
-/** The id of the line nearest `pt` within `reachMm` (ties to list order), else null. */
+const boxes = new WeakMap<ArrayLike<number>, { minX: number; minY: number; maxX: number; maxY: number }>();
+/** A line's bounding box, cached per coordinate array (a line's arrays never change under it). */
+function boxOf(line: gpsTrack.ProjectedTrack) {
+  let b = boxes.get(line.x);
+  if (!b) {
+    b = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+    for (let i = 0; i < line.x.length; i++) {
+      b.minX = Math.min(b.minX, line.x[i]); b.maxX = Math.max(b.maxX, line.x[i]);
+      b.minY = Math.min(b.minY, line.y[i]); b.maxY = Math.max(b.maxY, line.y[i]);
+    }
+    boxes.set(line.x, b);
+  }
+  return b;
+}
+
+/**
+ * The id of the line nearest `pt` within `reachMm` (ties to list order), else null. Lines whose box is out of reach
+ * are passed over unscanned (T's hover runs this on every pointer move, G30).
+ */
 export function nearestTrack(lines: readonly { id: string; line: gpsTrack.ProjectedTrack }[], pt: Pt, reachMm: number): string | null {
   let out: string | null = null, best = reachMm;
   for (const l of lines) {
+    const b = boxOf(l.line);
+    if (pt.x < b.minX - reachMm || pt.x > b.maxX + reachMm || pt.y < b.minY - reachMm || pt.y > b.maxY + reachMm) continue;
     const s = nearestSegment(l.line, 0, l.line.x.length - 1, pt);
     if (s && (s.d < best || (out === null && s.d <= best))) { best = s.d; out = l.id; }
   }

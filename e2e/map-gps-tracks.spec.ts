@@ -735,7 +735,7 @@ test.describe("GPS tracks in Map mode (docs/course-editor.md §13)", () => {
       await rowById(page, idA).getByTestId("editor-track-select").check();
       await page.getByTestId("editor-tool-T").click();
 
-      // Armed, the track's splittable points are drawn as nodes; the one under the pointer is highlighted (G29).
+      // Armed, the track's splittable points are drawn as nodes; the one under the pointer is highlighted (G30).
       await expect(page.locator(`[data-testid="editor-track-nodes"][data-track-id="${idA}"]`)).toHaveCount(1);
       expect(Number(await page.locator(`[data-testid="editor-track-nodes"][data-track-id="${idA}"]`).getAttribute("data-count"))).toBeGreaterThan(1);
       const q15 = await toPage(page, mm(passA.mm[15]));
@@ -890,7 +890,7 @@ test.describe("GPS tracks in Map mode (docs/course-editor.md §13)", () => {
     }
   });
 
-  // ─── G30: TCX import (docs/map-gps-tracks.md §2.4) ──
+  // ─── G31: TCX import (docs/map-gps-tracks.md §2.4) ──
   test("TCX: the passes as a Garmin activity import like their GPX, one track per activity, drawn the same", async ({ page }) => {
     test.setTimeout(120_000);
     try {

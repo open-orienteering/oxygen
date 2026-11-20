@@ -261,7 +261,7 @@ export function useMapTracks(a: MapTracksArgs): MapTracks {
   const shownTrim = useCallback((m: TrackMeta): gpsTrack.TrackRange => (
     draftTrim?.id === m.id ? draftTrim.trim : pendingTrim?.id === m.id ? pendingTrim.trim : m.trim
   ), [draftTrim, pendingTrim]);
-  // The tool's tracks: every selected track that is visible and ready (G26's selection; G29: more than one, so the
+  // The tool's tracks: every selected track that is visible and ready (G26's selection; G30: more than one, so the
   // two parts of a split stay the tool's and a next click splits again).
   const toolRows = useMemo(() => (armed && active ? selection.filter((r) => r.visible && r.geometry) : []), [armed, active, selection]);
   const targets = useMemo(() => toolRows.flatMap((r) => {
@@ -451,7 +451,7 @@ export function useMapTracks(a: MapTracksArgs): MapTracks {
         const [left, right] = gpsTrack.splitTrack({ name: null, points: p }, index);
         addPoints([[ids[0], left.points], [ids[1], right.points]]);
         patchList((ts) => ts.flatMap((x) => (x.id === id ? res.tracks : [x])));
-        // The parts take the original's place in the selection: still the tool's, so the next click splits again (G29).
+        // The parts take the original's place in the selection: still the tool's, so the next click splits again (G30).
         setSelectedIds((was) => was.flatMap((x) => (x === id ? ids : [x])));
         const u = splitUndo(meta, p, ids);
         record(
@@ -461,6 +461,8 @@ export function useMapTracks(a: MapTracksArgs): MapTracks {
             await writes.importTracks([u.item]);
             if (u.trim) await writes.updateTrack({ id, trim: u.trim });
             if (u.mark) await writes.markTracksConverted([u.mark]);
+            // The parts leave the selection (a later redo must not bring them back ticked beside newer picks).
+            setSelectedIds((was) => was.filter((x) => x !== ids[0] && x !== ids[1]));
           }),
           () => send(() => writes.splitTrack({ id, index, ids })),
         );

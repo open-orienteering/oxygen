@@ -115,7 +115,7 @@ describe("mapTracksBinding (tools/bindings.ts)", () => {
   });
 });
 
-describe("T's nodes and hovered node (G29; docs/map-gps-tracks.md §5.2)", () => {
+describe("T's nodes and hovered node (G30; docs/map-gps-tracks.md §5.2)", () => {
   const ptr = (x: number, y: number): ToolPointer => ({ pt: { x, y }, target: null, shift: false, mmPerPx: MM });
   const cb = () => ({ onDraft: vi.fn(), onTrim: vi.fn(), onSplit: vi.fn(), onSelect: vi.fn() });
 
@@ -188,5 +188,24 @@ describe("nodePoints (MapViewer, the `nodes` shape)", () => {
     const pts = nodePoints({ kind: "nodes", x: bx, y: by, from: 0, to: n - 1, gapPx: 1 }, (x, y) => ({ x, y }));
     expect(pts.length).toBeLessThanOrEqual(TRACK_NODES_MAX);
     expect(pts.length).toBeGreaterThan(TRACK_NODES_MAX / 2);
+  });
+});
+
+describe("after a split: the parts' handles on the shared point, a stale hover (G30)", () => {
+  const cb = () => ({ onDraft: vi.fn(), onTrim: vi.fn(), onSplit: vi.fn(), onSelect: vi.fn() });
+  const left: TrackToolTarget = { id: "l", full: line(Array.from({ length: 6 }, (_, i) => [i, 0] as [number, number])), trim: { start: 0, end: 6 } };
+  const right: TrackToolTarget = { id: "r", full: line(Array.from({ length: 6 }, (_, i) => [i + 5, 0] as [number, number])), trim: { start: 0, end: 6 } };
+  it("a press on the shared point drags whichever handle follows the pointer: forward the right part's start, back the left's end", () => {
+    let s = trackToolStep(IDLE, { type: "down", pt: { x: 5, y: 0 }, handleMm: 0.35, dragMm: 0.15, targets: [left, right] }).state;
+    s = trackToolStep(s, { type: "drag", pt: { x: 7, y: 0 } }).state;
+    expect(liveTrim(s)).toEqual({ id: "r", trim: { start: 2, end: 6 } });
+    s = trackToolStep(IDLE, { type: "down", pt: { x: 5, y: 0 }, handleMm: 0.35, dragMm: 0.15, targets: [left, right] }).state;
+    s = trackToolStep(s, { type: "drag", pt: { x: 3, y: 0 } }).state;
+    expect(liveTrim(s)).toEqual({ id: "l", trim: { start: 0, end: 4 } });
+  });
+  it("a hovered index outside the splittable range (a redo trimmed it away) draws no hover and no pointer cursor", () => {
+    const b = mapTracksBinding({ targets: [target], lines, gesture: { current: IDLE }, hover: { id: "t", index: 8, mmPerPx: MM }, ...cb() });
+    expect((b.shapes ?? []).map((s) => s.testId)).toEqual(["editor-track-nodes", "editor-track-handle", "editor-track-handle"]);
+    expect(b.cursor).toBeUndefined();
   });
 });

@@ -97,3 +97,12 @@ describe("parseTrackFile", () => {
     expect(code(() => parseTrackFile("<gpx"))).toBe("malformed");
   });
 });
+
+describe("parseTcx: multisport and no-fix positions", () => {
+  it("each leg of a MultiSportSession is an activity; a 0° / 0° position is skipped and counted", () => {
+    const leg = (sport: string, lat: number) => `<${sport}><Activity Sport="Other"><Lap><Track>${tp(lat, 18)}${tp(0, 0)}${tp(lat + 0.001, 18)}</Track></Lap></Activity></${sport}>`;
+    const f = parseTcx(`<TrainingCenterDatabase><Activities><MultiSportSession>${leg("FirstSport", 59)}${leg("NextSport", 60)}</MultiSportSession></Activities></TrainingCenterDatabase>`);
+    expect(f.tracks.map((t) => [t.trackIndex, t.points.lat])).toEqual([[0, [590000000, 590010000]], [1, [600000000, 600010000]]]);
+    expect(f.skippedPoints).toBe(2);
+  });
+});
