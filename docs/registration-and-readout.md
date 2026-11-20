@@ -9,8 +9,14 @@ SI Card Inserted
     │
     ▼
 ┌──────────────────────┐
-│  Web Serial Reader   │  packages/web/src/lib/webserial.ts
-│  (si:card-readout)   │  Browser-side SI protocol over Web Serial API
+│  Card readers (1..N) │  packages/web/src/lib/webserial.ts (USB, Web Serial)
+│  (si:card-readout)   │  each implements SIReader (lib/si-reader.ts)
+└─────────┬────────────┘
+          │
+          ▼
+┌──────────────────────┐
+│   ReaderHub          │  packages/web/src/lib/reader-hub.ts
+│                      │  Fans every reader's si:* events into one stream
 └─────────┬────────────┘
           │
           ▼
@@ -36,7 +42,12 @@ SI Card Inserted
 | Component | File | Role |
 |-----------|------|------|
 | SI protocol | `packages/web/src/lib/si-protocol.ts` | Low-level SI card protocol (read/write/parse) |
-| Web Serial | `packages/web/src/lib/webserial.ts` | SI reader connection, card read, station programming |
+| Reader contract | `packages/web/src/lib/si-reader.ts` | `SIReader` interface and status type shared by every transport |
+| Reader hub | `packages/web/src/lib/reader-hub.ts` | Holds several readers, re-dispatches their events, aggregate status |
+| Web Serial | `packages/web/src/lib/webserial.ts` | USB SI station connection, card read, station programming |
+| Reader BT | `packages/web/src/lib/reader-bt/connection.ts` | SPORTident Reader BT over Web Bluetooth: GATT, card flow, auto-reconnect |
+| Reader BT protocol | `packages/web/src/lib/reader-bt/protocol.ts` | Pure Reader BT message decoder/encoder (`docs/si-protocol/reader-bt.md`) |
+| Reader dialog | `packages/web/src/components/ReaderConnectionDialog.tsx` | Lists readers, adds and disconnects them |
 | DeviceManager | `packages/web/src/context/DeviceManager.tsx` | Card processing pipeline, action routing |
 | Kiosk channel | `packages/web/src/lib/kiosk-channel.ts` | BroadcastChannel protocol for admin↔kiosk IPC |
 | Kiosk page | `packages/web/src/pages/KioskPage.tsx` | Self-service kiosk display (readout, pre-start, registration) |
@@ -46,9 +57,43 @@ SI Card Inserted
 
 ---
 
-## 1. SI Card Read (Web Serial)
+## 1. SI Card Read
 
-When an SI card is inserted into a connected reader, the WebSerial layer reads the card data and emits events:
+### 1a. Readers and the reader hub
+
+Oxygen can hold several card readers at once, and every one of them feeds the same pipeline. Each reader implements `SIReader` (`lib/si-reader.ts`): an id, a kind (`serial` or `ble`), a label, a status (`idle | connecting | connected | reading | error`), optional device info (serial number, firmware, model, operating mode) and `disconnect()`. A USB SI station is an `SIReaderConnection` (`lib/webserial.ts`); it learns its serial number, firmware, model and mode from the SYS_VAL block it already reads on connect. A SPORTident Reader BT is a `ReaderBtConnection` (`lib/reader-bt/connection.ts`, see "Bluetooth readers" below); it adds a battery percentage.
+
+`DeviceManager` owns one `ReaderHub` (`lib/reader-hub.ts`) instead of one connection. The hub re-dispatches every reader's events:
+
+| Event | Detail from the hub |
+|-------|---------------------|
+| `si:card-readout` | the reader's `SICardReadout`, untouched |
+| `si:card-detected` | the detection plus `readerId` |
+| `si:card-removed` | `{ readerId }` |
+| `si:status` | `{ status, readerId, readerStatus }`, where `status` is the best status across all readers (reading > connected > connecting > error > idle) |
+| `hub:readers-changed` | a snapshot of every reader, for the dialog |
+
+Because `status` is the aggregate, everything that reads `readerStatus` from the context (Recent Cards, Card Readout, the kiosk) sees "live" while any reader is live. Station programming on the Controls page uses `serialStatus` instead, the aggregate over USB stations only, and `getReaderConnection()` returns the first USB station.
+
+**Connecting.** The header pill (and the kiosk's reader button in standalone mode) opens the reader connection dialog. It lists every reader with its status, serial number, firmware and the time of its last card, warns when a station is not in readout mode, and has a **USB station** button that opens the browser's serial picker and a **Bluetooth Reader BT** button (`connect-reader-bt`) that opens the Bluetooth picker. The Bluetooth button is disabled, with the reason underneath, when the browser has no Web Bluetooth (Chrome on desktop Linux only exposes it with `chrome://flags/#enable-experimental-web-platform-features`, and the dialog says so there), when the page is not a secure context (plain `http://<venue-box>:8080` is not; HTTPS and localhost are), or when `getAvailability()` reports no adapter. A collapsible help section explains how to wake a Reader BT. The dialog closes after a successful connect. Cancelling a picker leaves nothing behind. On page load DeviceManager reopens *every* port the origin was granted before, not only the first.
+
+**Bluetooth readers.** `ReaderBtConnection` speaks the Reader BT GATT protocol (`docs/si-protocol/reader-bt.md`) over Web Bluetooth only (Chrome/Edge on desktop and Android):
+
+- *Connect* — `gatt.connect()`, discover the Settings, Card readout and Battery services by UUID (never cached), subscribe to read settings, card state and card data, then ReadDeviceInfo (serial, firmware), ReadAllSettings (operating mode; the row warns when it is not Readout) and the battery level, which is followed by notification. Every GATT operation runs through one queue, because Web Bluetooth rejects concurrent operations.
+- *Card flow (pull)* — CardStateChange "in" → `si:card-detected` → write a 0x1103 request → the (segmented) complete readout → `toSICardReadout` → **Feedback OK** written → `si:card-readout`. Feedback is the reader's two beeps, the Bluetooth counterpart of the serial ACK; it is sent as soon as the card decodes and never waits for `storeReadout`. A missing response (3 s) or a decode error is retried once, then Feedback error (five beeps on firmware 2.2.0) is written; a card pulled out before the readout completes fails it immediately, with the error beeps right away. CardStateChange "out" → `si:card-removed`. A card-data notification nobody asked for (AUTOSEND on) is handled the same way with a synthesised detection.
+- *Reconnect* — a Reader BT that loses its link (out of range, interference, the page reloaded) goes to sleep and advertises again only when the next card is inserted, so Oxygen waits for that card for as long as the page is open: the row shows "Connection lost" (or "Waiting for the reader" for a remembered reader) with the hint to insert a card. Under the hood it first tries a direct `gatt.connect()` (capped at 5 s), then watches for the reader's advertisements where the browser supports it **and** tries `gatt.connect()` every 2 s (every 10 s after five minutes). A connect to a silent reader fails at once, so the poll is cheap, and on Linux Chrome, where advertisements never reach the page, it is what reconnects. The woken reader reports the card that woke it, so that card is read out without re-inserting; the whole thing takes 5–8 s from the insert on Linux. Each `gatt.connect()` is abandoned after 8 s because a connect to a sleeping reader may hang; service discovery after a successful connect is not capped. A manual Disconnect or Forget stops the wait; after a manual Disconnect the row offers **Reconnect**, which runs the same sequence.
+- *Linux hosts* — Chrome on desktop Linux needs `chrome://flags/#enable-experimental-web-platform-features` for Web Bluetooth at all, and BlueZ needs a longer LE supervision timeout than its 420 ms default or the link drops after a few quick readouts (the reader's own request for 6 s is refused by the kernel): add `[LE]` / `ConnectionSupervisionTimeout=600` to `/etc/bluetooth/main.conf` and restart the `bluetooth` service. Verified with `btmon`: new links then come up with a 6000 ms timeout. See `docs/si-protocol/reader-bt.md`, "Hardware findings".
+- *Page reload* — reloading drops the Bluetooth link (Chrome releases it about 2 s after unload), so after a reload the remembered reader shows "Waiting for the reader" until the next card is inserted.
+- *Remembering* — every Reader BT added through the picker is stored in `localStorage["oxygen-reader-bt-devices"]` (`{id, name, lastSeen}`). On page load DeviceManager takes the granted devices from `navigator.bluetooth.getDevices()` that are in that list, adds them as "Waiting for the reader", and connects each the same way: directly if the link is still up, otherwise when it advertises. **Forget** drops the reader from the list and calls `device.forget()`, revoking the browser's permission. Where `getDevices()` is missing the reader has to be added again through the picker after a reload.
+- *Debugging* — `localStorage.setItem("oxygen-si-debug", "1")` logs every notification and write with a `[ReaderBT]` prefix, as it does `[SI]` for USB stations.
+
+Nothing needs adding to the deployment: no `Permissions-Policy` header is set today. A future one must allow `bluetooth=(self)` and `serial=(self)`.
+
+**Kiosk with several readers.** Only the reader that reported the most recent card insert may clear the kiosk's "do not remove the card" screen, so lifting a card from one reader does not cancel a readout in progress on another.
+
+### 1b. Card events
+
+When an SI card is inserted into a connected reader, the reader reads the card data and emits events:
 
 1. **`si:card-detected`** — Card physically detected (before data is read). Carries the card number.
 2. **`si:card-readout`** — Full card data read. Carries an `SICardReadout` object:
@@ -108,7 +153,7 @@ storeReadout.mutateAsync({
   cardNo,
   punches: [{ controlCode, time }],     // times in seconds
   checkTime, startTime, finishTime,       // seconds since midnight
-  cardType, batteryVoltage,
+  cardType, batteryVoltage,               // integer mV (meosFromVolts of the readout's volts)
   punchesFresh: boolean,                  // from isPunchDataFresh()
   ownerData: { firstName, lastName, ... },
   metadata: { batteryDate, clearCount, ... },
