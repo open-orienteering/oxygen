@@ -804,17 +804,23 @@ export function useMapMode(a: MapModeArgs): MapMode {
     canClose: () => !writingRef.current,
   })), [armed?.kind, poly, drawHover, onDrawHover, holeDraft, finishHole, disarm, drawSnap]);
   // `T` on map lines (G32): the selected line's splittable nodes; a click on one is *Split at node* there.
+  // One kind's nodes at a time: while GPS tracks are the tool's (ticked, visible), the line's are not drawn.
+  const trackNodes = tool === "T" && tracks.selection.some((r) => r.visible && r.geometry);
   const splitLine = useMemo(() => {
-    if (tool !== "T" || !selected || !model || selectedHidden) return null;
+    if (tool !== "T" || trackNodes || !selected || !model || selectedHidden) return null;
     const n = nodesOf(model, selected, { canEdit: canPatch, correctionsOn, coords: draftCoords });
     if (!n || !("path" in n) || n.path.area || n.path.rings.length !== 1) return null;
     return { vertices: n.path.rings[0].vertices, closed: n.path.rings[0].closed };
-  }, [tool, selected, model, selectedHidden, canPatch, correctionsOn, draftCoords]);
+  }, [tool, trackNodes, selected, model, selectedHidden, canPatch, correctionsOn, draftCoords]);
   const clearTrackSelection = tracks.clearSelection;
-  const selectLine = useCallback((ref: MapObjectRef | null, refs: MapObjectRef[]) => {
-    select(ref, refs);
-    if (ref) clearTrackSelection();
-  }, [select, clearTrackSelection]);
+  // A map selection made in T by any path (a click, Tab, a correction row) drops the GPS track selection.
+  useEffect(() => { if (tool === "T" && selected) clearTrackSelection(); }, [selected]); // eslint-disable-line react-hooks/exhaustive-deps
+  /** `T`'s click off the GPS tracks selects the topmost line under it; on no line it deselects, unless tracks are picked. */
+  const selectLine = useCallback((_ref: MapObjectRef | null, refs: MapObjectRef[]) => {
+    const lines = model ? refs.filter((r) => { const i = model.indexOf(r); return i !== null && model.doc.attrs.type[i] === mapDocument.OBJECT_TYPE.line; }) : [];
+    if (lines.length > 0) select(lines[0], lines);
+    else if (!trackNodes) select(null, []);
+  }, [model, select, trackNodes]);
   const splitBinding = useMemo(() => (tool !== "T" ? null : mapSplitBinding({
     hit,
     clickSeq,
@@ -826,7 +832,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
       runOp(splitChange(model, current, selected, index, newAddId()));
     },
   })), [tool, hit, selectLine, splitLine, canWrite, model, selected, selectedHidden, current, runOp]);
-  const tBinding = splitBinding ? mapTBinding(tracks.toolBinding, tracks.hitsTrack, splitBinding) : null;
+  const tBinding = splitBinding ? mapTBinding(tracks.toolBinding, tracks.hitsTrack, splitBinding, clickSeq) : null;
   const binding = tBinding ?? joinBinding ?? holeBinding ?? pointBinding ?? lineBinding ?? nodesBinding ?? selectBinding;
 
   const selectedList = useMemo(() => (selected ? [selected] : []), [selected]);

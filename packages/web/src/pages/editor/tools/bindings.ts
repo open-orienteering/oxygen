@@ -1186,7 +1186,10 @@ export function mapSplitBinding(c: MapSplitContext): EditorToolBinding {
           const d = Math.hypot(v.x - p.pt.x, v.y - p.pt.y);
           if (d <= reach && (!best || d < best.d)) best = { i, d };
         }
-        if (best) return c.onSplit(best.i);
+        if (best) {
+          c.clickSeq.current++; // a hit-test in flight must not reselect over the split
+          return c.onSplit(best.i);
+        }
       }
       mapHitClick(c, p.pt, p.mmPerPx, (stack) => c.onSelect(stack[0] ?? null, stack));
     },
@@ -1197,12 +1200,19 @@ export function mapSplitBinding(c: MapSplitContext): EditorToolBinding {
  * `T` whole (G32): the GPS tracks' binding (null while they are off) over the map lines' — both drawn, a click on a
  * GPS track (`hitsTrack`, the tracks tool's own rule) the tracks', any other click the lines'.
  */
-export function mapTBinding(tracks: EditorToolBinding | null, hitsTrack: (pt: Pt, reachMm: number) => boolean, lines: EditorToolBinding): EditorToolBinding {
+export function mapTBinding(
+  tracks: EditorToolBinding | null, hitsTrack: (pt: Pt, reachMm: number) => boolean, lines: EditorToolBinding, clickSeq?: { current: number },
+): EditorToolBinding {
   if (!tracks) return lines;
   return {
     ...tracks,
     shapes: [...(tracks.shapes ?? []), ...(lines.shapes ?? [])],
-    onClick: (p) => (hitsTrack(p.pt, MAP_HIT_PX * p.mmPerPx) ? tracks.onClick?.(p) : lines.onClick?.(p)),
+    onClick: (p) => {
+      if (!hitsTrack(p.pt, MAP_HIT_PX * p.mmPerPx)) return lines.onClick?.(p);
+      // A line hit-test still in flight is dropped: it must not undo this track pick when it answers.
+      if (clickSeq) clickSeq.current++;
+      tracks.onClick?.(p);
+    },
   };
 }
 

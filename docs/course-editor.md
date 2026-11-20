@@ -2222,7 +2222,7 @@ table `modes/map/keys.ts`):
 | `V` | the select tool |
 | `N` | the nodes tool ("Nodes"; user 2026-11-15, G7 question 1) |
 | `P` / `L` / `A` | the point, line and area tools ("Drawing"); nothing while drawing is disabled |
-| `T` | the split tool ("Split tool"; G27, G30, G32): on map lines, a click selects a line and draws its splittable nodes, a click on one is *Split at node* there; on GPS tracks ("GPS tracks: editing") trim and split the selected tracks, their points drawn as nodes; nothing while the GPS tracks are off |
+| `T` | the split tool ("Split tool"; G27, G30, G32): on map lines, a click selects a line and draws its splittable nodes, a click on one is *Split at node* there; on GPS tracks ("GPS tracks: editing") trim and split the selected tracks, their points drawn as nodes; nothing while both the GPS tracks and drawing are off |
 | `Enter` | finishes the line or area being drawn ("Drawing"), or closes *Cut hole*'s ring ("Line and area operations") |
 | `Escape` | a drag in flight first (dropped, nothing written), then an armed *Join* or *Cut hole* (dropped, a hole's ring with it; "Line and area operations"), then the line or area being drawn (dropped), then an open *Change symbol* picker, then the palette of a `symbol` entry's *Attach* ("Unresolved", G12b), then the GPS tracks' convert panel (closed, nothing written; §13 "GPS tracks: convert"), then (in `N`) the focused node, then any tool but `V` back to `V`, then the selection, then fullscreen; never the course. As in §3 (F24), the keypress that drops a drag also takes the next step |
 
@@ -3047,10 +3047,18 @@ the map lines' (`mapSplitBinding`); a click on a GPS track (within
 6 CSS px, `tools/tracks.ts` `clickHitsTrack`, the tracks' own rule) goes
 to the tracks, any other click to the lines.
 
-- **Selecting.** A click off every GPS track selects the topmost map
-  object under it, as `V` does (`hits[0]`), and drops the GPS track
-  selection; a click picking a GPS track drops the map selection, so the
-  nodes shown are one kind's. A click on empty map deselects.
+- **Selecting.** A click off every GPS track selects the topmost **line**
+  under it (the hit stack filtered to lines; an area or point under it is
+  passed over), and with it the stack for `Tab`. On no line it deselects
+  the map object — unless GPS tracks are the tool's, which then stay
+  ticked (a near miss on a track does not drop them). A map selection
+  made in `T` by any path (a click, `Tab`, a correction row) drops the
+  GPS track selection; a click picking a GPS track drops the map
+  selection; and while ticked visible tracks are the tool's, the selected
+  line's nodes are not drawn — so the nodes shown are one kind's, never
+  the whole map. `Delete` hides the selected object, as in `V`. A track
+  shown over its converted line (*Show converted*) takes a click within
+  6 CSS px first: hide it to split the line.
 - **Nodes.** The selected object, when it is a single-part line (not an
   area, not hidden, with *Apply corrections* on and `courses.edit`;
   `nodesOf`), draws its splittable nodes as handles,
@@ -3061,7 +3069,9 @@ to the tracks, any other click to the lines.
   there (`shape-ops.ts` `splitChange`, §13 answer 4: the start part
   stays the object and stays selected, the rest becomes a new added
   line); one write, one undo entry. A click elsewhere selects, so the
-  other part is one click away. No split while a write is in flight.
+  other part is one click away. No split while a write is in flight; a
+  split or a track pick drops a line hit-test still in flight
+  (`clickSeq`), so a late answer does not reselect over it.
 - **Off** only when both the GPS tracks are off and drawing is
   (`canDraw`); its title then gives the tracks' reason. The rail's title
   is "Split: click a line or GPS track, then a node to split it there".
@@ -3076,16 +3086,19 @@ the import item), the tool's reducer `tools/tracks.ts` with its binding
 `tools/bindings.ts` `mapTracksBinding`, the writes in `useMapTracks.ts`.
 No patch write: none of it needs *Apply corrections*.
 
-- **The Tracks tool `T`** (`editor-tool-T`, after `A`; key `T`) is
-  disabled, its title the reason, while the *GPS tracks* section is off
-  or loading, and falls back to `V` when it turns off. Exclusive: a drag
+- **The split tool `T`** (`editor-tool-T`, after `A`; key `T`; "Split
+  tool" above, G32) works on GPS tracks while the *GPS tracks* section is
+  on and loaded, and on map lines while drawing is enabled; it is
+  disabled, its title the tracks' reason, only when both are off, and
+  falls back to `V` then. Exclusive: a drag
   off a handle pans. Its tracks are the selected rows'
   (`editor-track-select`) that are visible and `ready` (G30: every one,
   not only a single selection); the section shows
   `editor-tracks-tool-hint` (`data-state` `pick` without one, `ready`
   with one). A click goes to the nearest visible track within 6 CSS px (its
   own first on a tie, then list order): a tool's track splits (below),
-  another is selected alone; a click on empty map does nothing. Escape goes back to `V` (the table above).
+  another is selected alone; a click on no GPS track is the map lines'
+  ("Split tool"). Escape goes back to `V` (the table above).
 - **Nodes** (G30, user 2026-11-20): each tool's track draws its
   splittable stored points as dots (`editor-track-nodes`,
   `data-track-id`, `data-count`; one path thinned to one per 10 CSS px, at
@@ -3344,6 +3357,11 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 
 ## Pending in this chapter
 
+- **`T` on a selection without split nodes** (§13 "Split tool", G32): a
+  multi-part line, one over `MAP_NODES_MAX`, a hidden one or *Apply
+  corrections* off selects but draws no nodes and says nothing why; the
+  inspector's *Split at node* shows `no-node` (its focus is `N`'s). A hint
+  on the map would say it.
 - **Attached objects in the viewer and kiosk** (§7 "Attached objects",
   J10): they follow a moved control there too (the layer resolves), but
   `courseObject.list` is cached until reload in the viewer (`course-layer.md`

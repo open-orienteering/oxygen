@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { gpsTrack } from "@oxygen/shared";
-import { hoverCandidate, IDLE, liveTrim, trackToolStep, type TrackToolState, type TrackToolTarget } from "../tools/tracks";
+import { clickHitsTrack, hoverCandidate, IDLE, liveTrim, trackToolStep, type TrackToolState, type TrackToolTarget } from "../tools/tracks";
 import { mapSplitBinding, mapTBinding, mapTracksBinding, splitNodes } from "../tools/bindings";
 import type { ToolPointer } from "../../../components/MapViewer";
 import { nodePoints, TRACK_NODES_MAX } from "../../../lib/editor/track-nodes";
@@ -254,5 +254,33 @@ describe("T on map lines (G32): mapSplitBinding, splitNodes, mapTBinding", () =>
     b.onClick!(ptr(0, 5));
     expect(linesClick).toHaveBeenCalledTimes(1);
     expect(mapTBinding(null, () => true, l)).toBe(l);
+  });
+});
+
+describe("G32 review cases", () => {
+  const v = (pts: [number, number][]) => pts.map(([x, y]) => ({ x, y }));
+  const ptr = (x: number, y: number): ToolPointer => ({ pt: { x, y }, target: null, shift: false, mmPerPx: MM });
+  it("clickHitsTrack: on a tool's track or another visible one, not off them", () => {
+    expect(clickHitsTrack({ x: 4, y: 0.1 }, 0.3, [target], lines)).toBe(true);
+    expect(clickHitsTrack({ x: 4, y: 2.9 }, 0.3, [], lines)).toBe(true);
+    expect(clickHitsTrack({ x: 4, y: 1.5 }, 0.3, [target], lines)).toBe(false);
+  });
+  it("a loop splits at any node, the nearest of two in reach; a split bumps the click sequence", () => {
+    const onSplit = vi.fn(), clickSeq = { current: 3 };
+    const b = mapSplitBinding({ hit: vi.fn(async () => []) as never, clickSeq, onSelect: vi.fn(), line: { vertices: v([[0, 0], [0.3, 0], [0.3, 0.3]]), closed: true }, onSplit });
+    b.onClick!(ptr(0.05, 0));
+    expect(onSplit).toHaveBeenLastCalledWith(0);
+    b.onClick!(ptr(0.25, 0));
+    expect(onSplit).toHaveBeenLastCalledWith(1);
+    expect(clickSeq.current).toBe(5);
+  });
+  it("mapTBinding keeps the tracks' press and hover; a click on a track drops a line hit-test in flight", () => {
+    const down = vi.fn(() => true), hover = vi.fn(), clickSeq = { current: 0 };
+    const t = { exclusive: true, onPointerDown: down, onHover: hover, onClick: vi.fn() };
+    const b = mapTBinding(t, () => true, { exclusive: true, onClick: vi.fn() }, clickSeq);
+    expect(b.onPointerDown).toBe(down);
+    expect(b.onHover).toBe(hover);
+    b.onClick!(ptr(0, 0));
+    expect(clickSeq.current).toBe(1);
   });
 });
