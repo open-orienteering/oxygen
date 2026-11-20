@@ -7,7 +7,7 @@
  * (`print-worker.test.ts`, `integration/course-print.test.ts`).
  */
 
-import { PDFDocument, PDFName, PDFRawStream } from "@cantoo/pdf-lib";
+import { PDFArray, PDFDocument, PDFName, PDFRawStream, decodePDFRawStream } from "@cantoo/pdf-lib";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { defaultMapAppearance } from "../../course-maps/schema.js";
 import { resolveSheet, type SheetInput } from "../../course-maps/resolve-sheet.js";
@@ -50,6 +50,14 @@ function sheet(label: string, objects: SheetInput["objects"] = []): SheetInput {
 async function imageCount(bytes: Uint8Array): Promise<number> {
   const pdf = await PDFDocument.load(bytes);
   return pdf.context.enumerateIndirectObjects().filter(([, o]) => o instanceof PDFRawStream && o.dict.get(PDFName.of("Subtype")) === PDFName.of("Image")).length;
+}
+
+/** Page 1's content stream, decoded. */
+async function pageContent(bytes: Uint8Array): Promise<string> {
+  const pdf = await PDFDocument.load(bytes);
+  const c = pdf.getPage(0).node.Contents();
+  const streams = c instanceof PDFArray ? c.asArray().map((r) => pdf.context.lookup(r) as PDFRawStream) : [c as unknown as PDFRawStream];
+  return streams.map((s) => new TextDecoder().decode(decodePDFRawStream(s).decode())).join("\n");
 }
 
 const logo = (graphicId: number) => ({ id: `logo${graphicId}`, anchor: "page" as const, kind: "image" as const, graphicId, x: 10, y: 10, width: 20, height: 10 });
@@ -95,6 +103,21 @@ describe("renderCoursePages (shared)", () => {
     expect(rasteriseSvg).toHaveBeenCalledTimes(1);
     // The graphic id goes along (G15): a host without the SVG asks its server for that graphic's PNG at the box.
     expect(rasteriseSvg).toHaveBeenCalledWith(SVG, ...svgRasterBox(20, 10), 8);
+  });
+
+  it("rasterises a cropped SVG over the union window of its crops on the page, at the box the largest placement needs there (§6.3)", async () => {
+    const rasteriseSvg = vi.fn(async () => PNG);
+    const left = { ...logo(8), id: "l", crop: { x: 0, y: 0, width: 0.25, height: 0.5 } };
+    const right = { ...logo(8), id: "r", x: 40, crop: { x: 0.5, y: 0.5, width: 0.25, height: 0.5 } };
+    const out = await renderCoursePages({ document: doc, sheets: [sheet("A", [left, right])], fonts, graphics: new Map([[8, { mime: "image/svg+xml", data: SVG }]]), rasteriseSvg, deterministic: true });
+    expect(out.warnings).toEqual([]);
+    expect(rasteriseSvg).toHaveBeenCalledTimes(1);
+    // Union window [0, 0, 0.75, 1]: each crop is 1/3 of it wide and 1/2 high, so the window is 3 × 2 placed sizes.
+    expect(rasteriseSvg).toHaveBeenCalledWith(SVG, ...svgRasterBox(20, 10, { width: 1 / 3, height: 0.5 }), 8, { x: 0, y: 0, width: 0.75, height: 1 });
+    // A crop of the window: 3× and 2× its width and height, offset by its place in the window.
+    const ops = await pageContent(out.bytes);
+    expect(ops).toMatch(/0 0 1 1 re W n 3 0 0 2 -2 0 cm \/Im0 Do Q/);
+    expect(ops).toMatch(/0 0 1 1 re W n 3 0 0 2 0 -1 cm \/Im0 Do Q/);
   });
 
   it("leaves an SVG graphic out with a warning when the host has no rasteriser; the PDF is still written", async () => {

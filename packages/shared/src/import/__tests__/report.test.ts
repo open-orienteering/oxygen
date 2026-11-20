@@ -81,6 +81,28 @@ describe("importReportSchema warningDetails", () => {
     expect(importReportSchema.safeParse({ ...base, colourStack: { ...stack, purplesDisplaced: [{ name: "Violett", role: "middle", why: "position" }] } }).success).toBe(false);
   });
 
+  it("accepts a colour stack with the order and the layered stack's lists (absent before ocad-19 / omap-12)", () => {
+    const stack = { source: 3, inserted: ["purple-lower", "purple-upper"], aliased: [], conflicts: [], unclassified: [], areasAboveLowerPurple: [], purplesDisplaced: [] };
+    const layers = {
+      rows: [
+        { row: 0, source: 0, role: "brown50-paved", place: null, origin: "use", objects: 4, symbols: 1, graphicObjects: 0, sourceOrdered: null, ownOrder: false },
+        { row: 1, source: 0, role: "brown50-road", place: null, origin: "use", objects: 2, symbols: 1, graphicObjects: 0, sourceOrdered: null, ownOrder: false },
+        { row: 2, source: 1, role: "blue100-line", place: null, origin: "identified", objects: 0, symbols: 0, graphicObjects: 0, sourceOrdered: null, ownOrder: false },
+        { row: 3, source: 2, role: null, place: "area", origin: "use", objects: 1, symbols: 1, graphicObjects: 0, sourceOrdered: "no-role", ownOrder: false },
+        { row: 4, source: null, role: "purple-lower", place: null, origin: "insert", objects: 0, symbols: 0, graphicObjects: 0, sourceOrdered: null, ownOrder: false },
+      ],
+      split: [{ source: 0, sourceNumber: 12, roles: ["brown50-paved", "brown50-road"] }],
+      sourceOrdered: [{ row: 3, source: 2, reason: "no-role", role: null, objects: 1, aboveLowerPurple: false }],
+      noRole: [{ row: 3, source: 2, place: "area", objects: 1 }],
+      deviations: [{ upper: "brown50-road", lower: "brown100-line", kept: true, byDefault: true, objects: { upper: 2, lower: 9 } }, { upper: "blue100-area", lower: "brown100-line", kept: false, byDefault: false, objects: { upper: 1, lower: 9 }, blockedBy: ["black100"] }],
+      purpleInk: null,
+    };
+    expect(importReportSchema.safeParse({ ...base, colourStack: { ...stack, order: "source" } }).success).toBe(true);
+    expect(importReportSchema.parse({ ...base, colourStack: { ...stack, order: "iof", layers } }).colourStack?.layers?.rows).toHaveLength(5);
+    expect(importReportSchema.safeParse({ ...base, colourStack: { ...stack, order: "mapper" } }).success).toBe(false);
+    expect(importReportSchema.safeParse({ ...base, colourStack: { ...stack, order: "iof", layers: { ...layers, rows: [{ ...layers.rows[0], origin: "guess" }] } } }).success).toBe(false);
+  });
+
   it("rejects an entry without a message or with a negative symbol index", () => {
     expect(importWarningDetailSchema.safeParse({ code: "X" }).success).toBe(false);
     expect(importWarningDetailSchema.safeParse({ code: "X", message: "m", symbolIdx: -1 }).success).toBe(false);

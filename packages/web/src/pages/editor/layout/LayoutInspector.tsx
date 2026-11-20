@@ -3,20 +3,20 @@
  * Layout mode the template/sheet properties"): the sheet or template
  * (picker, the template link, print scale, block, page and appearance in
  * template scope), the selection's properties, the scope's objects with
- * the sheet's validation issues (`validate.ts` codes), the graphics
- * library for the image tool.
+ * the sheet's validation issues (`validate.ts` codes). The graphics
+ * library opens beside the rail's `I` (J8, `LayoutRail`).
  */
 
-import { useRef, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { CourseMapObject, MapFillMode, MapTemplateSettings } from "@oxygen/shared";
-import { trpc } from "../../../lib/trpc";
 import { fillModePatch } from "../../../lib/map-layout-editor";
-import { fileToBase64 } from "../../../lib/file-to-base64";
+import { StyleFields } from "../StyleFields";
+import { TransformButtons, type TransformOp } from "../TransformButtons";
 import type { SheetGeometry } from "../../../lib/editor/layout";
 import { InspectorSection } from "../Inspector";
 import type { LayoutSelection, LayoutTarget, LayoutTool } from "./bindings";
-import { FILL_MODES, type EditorSheet, type LayoutSnapshot } from "./model";
+import { FILL_MODES, styleGeometryOf, styleShowOf, type EditorSheet, type LayoutSnapshot } from "./model";
 import { NumberField, TextField } from "./fields";
 
 type T = ReturnType<typeof useTranslation<"editor">>["t"];
@@ -46,8 +46,16 @@ export function LayoutInspector(p: {
   onSelect: (s: LayoutSelection) => void;
   onPatch: (p: Partial<LayoutSnapshot>) => void;
   onObject: (id: string, patch: Partial<CourseMapObject>) => void;
+  /** A style field's commit (J8): the whole next object's style keys, and the box when a size or crop changed it. */
+  onStyle: (id: string, next: { props?: CourseMapObject; geometry?: readonly { x: number; y: number }[] }) => void;
+  aspectLock: boolean;
+  onAspectLock: () => void;
+  /** The image in crop mode on the page (J9); its button is not shown on a coarse pointer (handles are mouse only). */
+  cropMode: string | null;
+  onCropMode: (id: string | null) => void;
+  /** A line's or path's turn or flip (J9). */
+  onTransform: (id: string, op: TransformOp) => void;
   onDelete: () => void;
-  onPlaceImage: (graphicId: number) => void;
   /** No sheet to show: what creates one (`NoSheetActions`). */
   noSheet: ReactNode;
   /** Sheet scope: rename / add / delete (`SheetActions`). */
@@ -168,6 +176,24 @@ export function LayoutInspector(p: {
           {p.selection?.kind === "description" && <p className="text-[11px] text-slate-500">{t("layoutDescription")}</p>}
           {!p.selection && <p className="text-[11px] text-slate-400">{t("nothingSelected")}</p>}
           {o && <ObjectProperties o={o} t={t} purple={p.purple} onPatch={(patch) => p.onObject(o.id, patch)} />}
+          {o && (() => {
+            const show = styleShowOf(o);
+            return (
+              <StyleFields
+                props={o as never}
+                geometry={styleGeometryOf(o)}
+                show={show}
+                aspectLock={show.lock ? p.aspectLock : false}
+                onAspectLock={p.onAspectLock}
+                onChange={(next) => p.onStyle(o.id, { ...(next.props ? { props: next.props as unknown as CourseMapObject } : {}), ...(next.geometry ? { geometry: next.geometry } : {}) })}
+                testIdPrefix="editor-layout-style"
+                {...(o.kind === "image" && !p.coarse ? { cropMode: { on: p.cropMode === o.id, onToggle: () => p.onCropMode(p.cropMode === o.id ? null : o.id) } } : {})}
+              />
+            );
+          })()}
+          {o && (o.kind === "line" || o.kind === "path") && (
+            <TransformButtons testIdPrefix="editor-layout-transform" onTransform={(op) => p.onTransform(o.id, op)} />
+          )}
           {(o || p.selection?.kind === "description") && (
             <button type="button" data-testid="editor-layout-delete" onClick={p.onDelete} className="text-[11px] text-red-600 hover:underline cursor-pointer">
               {o ? t("layoutDelete") : t("layoutHideDescription")}
@@ -195,7 +221,6 @@ export function LayoutInspector(p: {
           ))}
         </ul>
       </InspectorSection>
-      <GraphicsSection t={t} active={p.tool.kind === "place" && p.tool.what === "image" ? p.tool.graphicId ?? null : null} onPlace={p.onPlaceImage} />
       <span hidden data-testid="editor-layout-state" data-centre={`${snap.centre.x},${snap.centre.y}`} data-print-scale={snap.printScale}
         data-description={JSON.stringify(snap.description)} />
     </>
@@ -245,36 +270,3 @@ function ObjectProperties({ o, t, purple, onPatch }: { o: CourseMapObject; t: T;
     </div>
   );
 }
-
-function GraphicsSection({ t, active, onPlace }: { t: T; active: number | null; onPlace: (id: number) => void }) {
-  const utils = trpc.useUtils();
-  const graphics = trpc.graphics.list.useQuery();
-  const upload = trpc.graphics.upload.useMutation({ onSuccess: () => void utils.graphics.list.invalidate() });
-  const input = useRef<HTMLInputElement | null>(null);
-  return (
-    <InspectorSection title={t("layoutGraphics")} testId="editor-layout-graphics" defaultOpen={false}>
-      <div className="px-2.5 pb-2 space-y-1">
-        {(graphics.data ?? []).length === 0 && <p className="text-[11px] text-slate-400">{t("layoutNoGraphics")}</p>}
-        {(graphics.data ?? []).map((g) => (
-          <div key={g.id} className="flex items-center gap-1.5 text-[11px] text-slate-600">
-            <span className="truncate flex-1">{g.name}</span>
-            <button type="button" data-testid={`editor-layout-graphic-place-${g.id}`} aria-pressed={active === g.id} onClick={() => onPlace(g.id)}
-              className={`px-1.5 py-0.5 rounded border cursor-pointer ${active === g.id ? "border-purple-300 bg-purple-50 text-purple-700" : "border-slate-200 hover:bg-slate-50"}`}>
-              {t("layoutPlace")}
-            </button>
-          </div>
-        ))}
-        <input ref={input} type="file" accept=".svg,.png,image/svg+xml,image/png" className="hidden" data-testid="editor-layout-graphic-upload"
-          onChange={(e) => {
-            const file = e.target.files?.[0];
-            e.target.value = "";
-            if (!file) return;
-            void fileToBase64(file).then((fileDataBase64) => upload.mutateAsync({ name: file.name, scope: "event", fileDataBase64 }));
-          }} />
-        <button type="button" onClick={() => input.current?.click()} disabled={upload.isPending}
-          className="text-[11px] text-purple-700 hover:underline cursor-pointer disabled:opacity-50">{t("layoutUpload")}</button>
-      </div>
-    </InspectorSection>
-  );
-}
-

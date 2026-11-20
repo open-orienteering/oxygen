@@ -38,9 +38,14 @@
 import { writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildE2eTestOcad } from "./lib/ocad-fixture.mjs";
+import { buildColourLayersOcad, buildE2eTestOcad } from "./lib/ocad-fixture.mjs";
 
-const OUT = resolve(dirname(fileURLToPath(import.meta.url)), "../e2e/test.ocd");
-const buf = buildE2eTestOcad();
-writeFileSync(OUT, buf);
-console.log(`wrote ${OUT} (${buf.length} bytes)`);
+const E2E = resolve(dirname(fileURLToPath(import.meta.url)), "../e2e");
+// Also `e2e/colour-layers.ocd` (row I5): a badly ordered colour table for the IOF colour layers'
+// E2E (docs/map-symbols.md §9.3; `COLOUR_LAYERS_OCAD` in the library says what is where).
+for (const [name, build] of [["test.ocd", buildE2eTestOcad], ["colour-layers.ocd", buildColourLayersOcad]]) {
+  const out = resolve(E2E, name);
+  const buf = build();
+  writeFileSync(out, buf);
+  console.log(`wrote ${out} (${buf.length} bytes)`);
+}

@@ -8,7 +8,9 @@
 
 import {
   course,
+  courseMapObjectPageBounds as courseMapObjectPageBoundsOf,
   getPaperDimensions,
+  isWhiteoutObject,
   type CourseMapObject,
   type DescriptionBlockSettings,
   type MapFillMode,
@@ -18,7 +20,8 @@ import {
 } from "@oxygen/shared";
 import type { LayoutRequest } from "../../../lib/course-layer-request";
 import { sheetWindow, windowCentre, type SheetGeometry } from "../../../lib/editor/layout";
-import { createImageObjectAt, createObjectAt } from "../../../lib/map-layout-editor";
+import { constrainMapObjectExtent, createImageObjectAt, createObjectAt, translateMapObject } from "../../../lib/map-layout-editor";
+import { flipVertices, rotateVertices } from "../../../lib/editor/transform-gestures";
 import type { PlaceKind } from "./bindings";
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "@oxygen/api";
@@ -167,7 +170,10 @@ export function pathObject(points: PathVertex[], printable: MapRect): Extract<Co
  * clamped to the printable area by `lib/map-layout-editor.ts`'s creators.
  * The block is not an object: the rail's `D` shows it (`description`).
  */
-export function placeObject(what: Exclude<PlaceKind, "description" | "path">, at: Pt, printable: MapRect, graphicId?: number): CourseMapObject | null {
+export function placeObject(
+  what: Exclude<PlaceKind, "description" | "path">, at: Pt, printable: MapRect, graphicId?: number,
+  size?: { widthPx: number | null; heightPx: number | null } | null,
+): CourseMapObject | null {
   switch (what) {
     case "header": {
       const o = createObjectAt("text", at, printable);
@@ -176,7 +182,7 @@ export function placeObject(what: Exclude<PlaceKind, "description" | "path">, at
     case "text":
       return createObjectAt("text", at, printable);
     case "image":
-      return graphicId === undefined ? null : createImageObjectAt(graphicId, at, printable);
+      return graphicId === undefined ? null : createImageObjectAt(graphicId, at, printable, size);
     case "whiteout": {
       const o = createObjectAt("rectangle", at, printable);
       if (o.kind !== "rectangle") return o;
@@ -188,4 +194,104 @@ export function placeObject(what: Exclude<PlaceKind, "description" | "path">, at
     case "rectangle":
       return createObjectAt(what, at, printable);
   }
+}
+
+// ─── Style fields (J8; docs/course-layout.md §3 "Style fields") ───
+
+/** Which style fields a page object shows: opacity always; blend off white-outs; rotation on text, rectangle, image; flip, crop and knockout (J15) on image; size on rectangle and image, the lock on image. */
+export function styleShowOf(o: CourseMapObject): { blend: boolean; rotation: boolean; flip: boolean; size: boolean; crop: boolean; lock: boolean; knockout: boolean } {
+  const image = o.kind === "image";
+  return {
+    blend: !isWhiteoutObject(o),
+    rotation: o.kind === "text" || o.kind === "rectangle" || image,
+    flip: image,
+    size: image || o.kind === "rectangle",
+    crop: image,
+    lock: image,
+    knockout: image,
+  };
+}
+
+/**
+ * A rectangle's or image's box as the shared style fields take it: two corners, y-up (`lib/editor/style-fields.ts`
+ * works in a course object's y-up paper mm). Page mm are y-down, so y is negated; `rotationDeg` is clockwise as
+ * seen in both spaces.
+ */
+export function styleGeometryOf(o: CourseMapObject): [Pt, Pt] | undefined {
+  if (o.kind !== "rectangle" && o.kind !== "image") return undefined;
+  return [{ x: o.x, y: -(o.y + o.height) }, { x: o.x + o.width, y: -o.y }];
+}
+
+/** The page box (y-down, top-left) of a style-field geometry. */
+export function rectOfStyleGeometry(g: readonly Pt[]): MapRect {
+  const x0 = Math.min(g[0].x, g[1].x), x1 = Math.max(g[0].x, g[1].x), y0 = Math.min(g[0].y, g[1].y), y1 = Math.max(g[0].y, g[1].y);
+  return { x: x0, y: -y1, width: x1 - x0, height: y1 - y0 };
+}
+
+/**
+ * A style field's commit on page object `o` as the whole next object (default values removed, not merged). A size
+ * or crop sets the box from `geometry`, no larger than the printable area (an image scaled down whole, so it keeps
+ * its ratio). A change of box or rotation is then kept on the printable area by its drawn extent; opacity, blend and
+ * flips move nothing (docs/course-layout.md §3 "Style fields").
+ */
+export function styleChangeOf(o: CourseMapObject, next: { props?: CourseMapObject; geometry?: readonly Pt[] }, printable: MapRect): CourseMapObject {
+  let out = next.props ?? o;
+  let boxChanged = false;
+  if (next.geometry && (out.kind === "rectangle" || out.kind === "image")) {
+    const r = rectOfStyleGeometry(next.geometry);
+    const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+    let { width, height } = r;
+    if (out.kind === "image") {
+      const k = Math.min(1, printable.width / width, printable.height / height);
+      width *= k;
+      height *= k;
+    } else {
+      width = Math.min(width, printable.width);
+      height = Math.min(height, printable.height);
+    }
+    out = { ...out, x: cx - width / 2, y: cy - height / 2, width, height };
+    boxChanged = true;
+  }
+  const turned = "rotationDeg" in out && (out.rotationDeg ?? 0) !== ("rotationDeg" in o ? (o.rotationDeg ?? 0) : 0);
+  return boxChanged || turned ? constrainMapObjectExtent(out, printable) : out;
+}
+
+/** A line's or path's inspector transform (J9): turn by `deg` clockwise as seen, or mirror across H / V. */
+export type PathTransform = { kind: "rotate"; deg: number } | { kind: "flip"; axis: "h" | "v" };
+
+/**
+ * A line or path transformed about the centre of its bounds, baked into its vertices and Bézier handles (lines and
+ * paths store no angle, docs/course-layout.md §3 "Rotate and flip a line or path"), kept on the printable area
+ * (`constrainMapObjectExtent`: one larger than the area is pinned at its top-left). Null for any other kind (those
+ * turn by their field and knob) and for a whole turn.
+ */
+export function transformPathOf(o: CourseMapObject, op: PathTransform, printable: MapRect): CourseMapObject | null {
+  if (o.kind !== "path" && o.kind !== "line") return null;
+  // A whole turn changes nothing: no write, no empty undo entry.
+  if (op.kind === "rotate" && op.deg % 360 === 0) return null;
+  const b = courseMapObjectPageBoundsOf(o);
+  const about = { x: b.x + b.width / 2, y: -(b.y + b.height / 2) };
+  // Page mm are y-down: the shared maths turn and mirror in y-up, so y (and each handle's y) is negated round it.
+  const up = <V extends { x: number; y: number; hIn?: Pt; hOut?: Pt }>(v: V): V => ({
+    ...v, y: -v.y, ...(v.hIn ? { hIn: { x: v.hIn.x, y: -v.hIn.y } } : {}), ...(v.hOut ? { hOut: { x: v.hOut.x, y: -v.hOut.y } } : {}),
+  });
+  const apply = <V extends { x: number; y: number; hIn?: Pt; hOut?: Pt }>(vs: readonly V[]): V[] =>
+    (op.kind === "rotate" ? rotateVertices(vs.map(up), op.deg, about) : flipVertices(vs.map(up), op.axis, about)).map(up);
+  if (o.kind === "line") {
+    const [a, c] = apply([{ x: o.x1, y: o.y1 }, { x: o.x2, y: o.y2 }]);
+    return constrainMapObjectExtent({ ...o, x1: a.x, y1: a.y, x2: c.x, y2: c.y }, printable);
+  }
+  return constrainMapObjectExtent({ ...o, points: apply(o.points) }, printable);
+}
+
+/** `Ctrl+D` on a page object (J12; docs/course-layout.md §2 "Keys"): a copy 3 mm down-right on the page, a new id, kept on the printable area. */
+export function duplicatePageObject(o: CourseMapObject, printable: MapRect): CourseMapObject {
+  return constrainMapObjectExtent({ ...translateMapObject(o, 3, 3), id: crypto.randomUUID() } as CourseMapObject, printable);
+}
+
+/** `Ctrl+V` of a page object (J12): its page bounds' centre on `at` (page mm), a new id, kept on the printable area. */
+export function pastePageObject(o: CourseMapObject, at: Pt, printable: MapRect): CourseMapObject {
+  const b = courseMapObjectPageBoundsOf(o);
+  const moved = translateMapObject(o, at.x - (b.x + b.width / 2), at.y - (b.y + b.height / 2));
+  return constrainMapObjectExtent({ ...moved, id: crypto.randomUUID() } as CourseMapObject, printable);
 }

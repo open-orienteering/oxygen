@@ -31,7 +31,8 @@ import { writeCourseObject } from "../../course-objects.js";
 import { applyPatchChange } from "../../map-store/patches.js";
 import { exportEventSnapshot, importEventSnapshot, type EventSnapshot } from "../../sync/lease.js";
 import { fetchSnapshotBlobs } from "../../sync/snapshotMaps.js";
-import { fetchSnapshotGraphics } from "../../sync/snapshotGraphics.js";
+import { exportPeerBlobSlice, fetchSnapshotGraphics } from "../../sync/snapshotGraphics.js";
+import { EXPORT_BLOB_MAX_BYTES } from "../../sync/snapshotMaps.js";
 import { createTestEvent, disconnect, type TestEventContext } from "../helpers/test-db.js";
 
 const fixture = resolve(__dirname, "../../../../../e2e/test.ocd");
@@ -164,5 +165,41 @@ describe("printing on a venue box from its checkout copy (course-print.md §8.7)
     for (const [id, png] of cloud.pngs) expect(venue.pngs.get(id)!.equals(png)).toBe(true);
     expect(venue.mapsPdf.equals(cloud.mapsPdf)).toBe(true);
     expect(venue.descriptionsPdf.equals(cloud.descriptionsPdf)).toBe(true);
+  }, 120_000);
+});
+
+describe("a graphic over 4 MiB travels in lease.exportBlob's slices (J2)", () => {
+  it("fetches, verifies and imports it with its pixel size", async () => {
+    // Noise does not compress: 1400 × 1000 RGBA is ≈ 5.3 MiB, two slices.
+    const big = await sharp(randomBytes(1400 * 1000 * 4), { raw: { width: 1400, height: 1000, channels: 4 } }).png({ compressionLevel: 0 }).toBuffer();
+    expect(big.byteLength).toBeGreaterThan(EXPORT_BLOB_MAX_BYTES);
+    // The test above imported the event, so its row (and id) is the box's now.
+    const row0 = await vec.db.event.findUniqueOrThrow({ where: { nameId: vec.nameId } });
+    const event = { ...vec.event, id: row0.id };
+    const id = (await vec.db.graphic.create({ data: { eventId: event.id, name: "big.png", mime: "image/png", data: big, sizeBytes: big.length } })).id;
+    try {
+      const snapshot = JSON.parse(JSON.stringify(await exportEventSnapshot(vec.db, event))) as EventSnapshot;
+      const row = snapshot.graphics!.find((g) => g.id === id.toString())!;
+      expect(row.sizeBytes).toBe(big.length);
+      const slices: number[] = [];
+      const graphicBlobs = await fetchSnapshotGraphics(vec.db, snapshot.graphics!, async (gid, start, length) => {
+        if (gid === row.id) slices.push(length);
+        // The exporter's own answer, as `lease.exportBlob` gives it.
+        return exportPeerBlobSlice(vec.db, event.id, { table: "graphics", id: gid, start, length });
+      });
+      expect(slices.length).toBe(2);
+      expect(Math.max(...slices)).toBeLessThanOrEqual(EXPORT_BLOB_MAX_BYTES);
+      expect(graphicBlobs.bytes.get(row.id)!.equals(big)).toBe(true);
+
+      const blobs = await fetchSnapshotBlobs(vec.db, snapshot.maps!, async () => {
+        throw new Error("the box holds the map blobs already");
+      });
+      await importEventSnapshot(vec.db, snapshot, blobs, graphicBlobs);
+      const held = await vec.db.graphic.findUniqueOrThrow({ where: { id }, select: { data: true, widthPx: true, heightPx: true } });
+      expect(Buffer.from(held.data).equals(big)).toBe(true);
+      expect([held.widthPx, held.heightPx]).toEqual([1400, 1000]);
+    } finally {
+      await vec.db.graphic.deleteMany({ where: { id } });
+    }
   }, 120_000);
 });

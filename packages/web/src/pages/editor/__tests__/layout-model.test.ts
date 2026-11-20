@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { defaultMapAppearance } from "@oxygen/shared";
-import { FILL_MODES, geometryOf, layoutRequestOf, nextSheetName, pathObject, templateWriteOf, placeObject, scopeObjects, sheetKeyOf, snapshotOf, withEditable, type EditorSheet } from "../layout/model";
+import { course, defaultMapAppearance, type CourseMapObject } from "@oxygen/shared";
+import { cropChange, sizeChange } from "../../../lib/editor/style-fields";
+import { duplicatePageObject, pastePageObject, FILL_MODES, geometryOf, rectOfStyleGeometry, transformPathOf, styleChangeOf, styleGeometryOf, styleShowOf, layoutRequestOf, nextSheetName, pathObject, templateWriteOf, placeObject, scopeObjects, sheetKeyOf, snapshotOf, withEditable, type EditorSheet } from "../layout/model";
 
 const settings = { printMarginMm: 3, mapFrame: { x: 10, y: 10, width: 190, height: 277 }, description: { visible: false, x: 150, y: 12, cellSizeMm: 6 }, appearance: defaultMapAppearance };
 const sheetText = { id: "s", kind: "text" as const, anchor: "page" as const, x: 20, y: 30, text: "{course}", fontSizeMm: 4, color: "#000000" };
@@ -118,3 +119,136 @@ describe("nextSheetName (E-pages: Add a sheet)", () => {
     expect(nextSheetName("Blue", [])).toBe("Blue 2");
   });
 });
+
+describe("page objects' style fields (J8, docs/course-layout.md §3 \"Style fields\")", () => {
+  const printable = { x: 3, y: 3, width: 204, height: 291 };
+  const img = { id: "i", kind: "image" as const, anchor: "page" as const, graphicId: 1, x: 50, y: 50, width: 40, height: 20 };
+  const rect = { id: "r", kind: "rectangle" as const, anchor: "page" as const, x: 10, y: 10, width: 20, height: 10, fillMode: "whiteout" as const };
+  const text = { id: "t", kind: "text" as const, anchor: "page" as const, x: 10, y: 10, text: "A", fontSizeMm: 4, color: "#000000" };
+  const line = { id: "l", kind: "line" as const, anchor: "page" as const, x1: 0, y1: 0, x2: 5, y2: 5, stroke: "#000000", strokeWidthMm: 0.3 };
+
+  it("which fields each kind shows", () => {
+    expect(styleShowOf(img)).toEqual({ blend: true, rotation: true, flip: true, size: true, crop: true, lock: true, knockout: true });
+    expect(styleShowOf(rect)).toEqual({ blend: false, rotation: true, flip: false, size: true, crop: false, lock: false, knockout: false });
+    expect(styleShowOf({ ...rect, fillMode: "solid" as const })).toMatchObject({ blend: true });
+    expect(styleShowOf(text)).toMatchObject({ blend: true, rotation: true, size: false });
+    expect(styleShowOf(line)).toMatchObject({ blend: true, rotation: false, size: false });
+  });
+
+  it("the y-down adapter round-trips a page box", () => {
+    expect(styleGeometryOf(img)).toEqual([{ x: 50, y: -70 }, { x: 90, y: -50 }]);
+    expect(rectOfStyleGeometry(styleGeometryOf(img)!)).toEqual({ x: 50, y: 50, width: 40, height: 20 });
+    expect(styleGeometryOf(text)).toBeUndefined();
+  });
+
+  it("a commit is the whole next object: a removed key stays removed; a box applied and kept on the page", () => {
+    const withOpacity = { ...img, opacity: 0.5 };
+    const { opacity: _o, ...plain } = withOpacity;
+    expect(styleChangeOf(withOpacity, { props: plain }, printable)).toEqual(img);
+    expect(styleChangeOf(img, { geometry: [{ x: 60, y: -65 }, { x: 80, y: -55 }] }, printable)).toMatchObject({ x: 60, y: 55, width: 20, height: 10 });
+    expect(styleChangeOf(img, { geometry: [{ x: -10, y: -65 }, { x: 10, y: -55 }] }, printable)).toMatchObject({ x: 3, width: 20 });
+  });
+
+  it("a rotation is kept on the page by the turned box; opacity alone moves nothing; a size is at most the printable area", () => {
+    const edge = { ...img, x: 165, y: 5 };
+    const turned = styleChangeOf(edge, { props: { ...edge, rotationDeg: 90 } }, printable) as typeof img;
+    // 40 × 20 turned 90° is 20 wide, 40 tall about its centre (185, 15): pushed down to the top margin.
+    expect(turned.y + turned.height / 2 - 20).toBeCloseTo(3, 6);
+    expect(turned.x).toBe(165);
+    const header = { ...text, x: 200, text: "A long header text" };
+    expect(styleChangeOf(header, { props: { ...header, opacity: 0.5 } }, printable)).toMatchObject({ x: 200 });
+    const big = styleChangeOf(img, { geometry: sizeChange(styleGeometryOf(img)!, "width", 1000, true) }, printable) as typeof img;
+    expect(big.width).toBeCloseTo(204, 6);
+    expect(big.height).toBeCloseTo(102, 6);
+    expect(big.x).toBeCloseTo(3, 6);
+    const wide = styleChangeOf({ ...rect, fillMode: "solid" as const }, { geometry: sizeChange(styleGeometryOf(rect)!, "width", 500, false) }, printable) as typeof rect;
+    expect([wide.x, wide.width, wide.height]).toEqual([3, 204, 10]);
+  });
+
+  // The renderer's rule: the page box flipped to y-up (`flipPageObject`), turned by `course.imageCorners`, the source
+  // (u, v) placed bilinearly in the crop; back to page mm y-down.
+  const H = 297;
+  function place(o: CourseMapObject & { kind: "image" }, u: number, v: number) {
+    const crop = o.crop ?? { x: 0, y: 0, width: 1, height: 1 };
+    const [bl, br, tr, tl] = course.imageCorners({ x: o.x, y: H - o.y - o.height, width: o.width, height: o.height }, o);
+    const s = (u - crop.x) / crop.width, t = (v - crop.y) / crop.height;
+    const top = { x: tl.x + (tr.x - tl.x) * s, y: tl.y + (tr.y - tl.y) * s };
+    const bot = { x: bl.x + (br.x - bl.x) * s, y: bl.y + (br.y - bl.y) * s };
+    return { x: top.x + (bot.x - top.x) * t, y: H - (top.y + (bot.y - top.y) * t) };
+  }
+  for (const style of [{ rotationDeg: 30, flipH: true }, { rotationDeg: -70, flipV: true }, { rotationDeg: 90, flipH: true, flipV: true, crop: { x: 0.1, y: 0.2, width: 0.6, height: 0.5 } }]) {
+    it(`a crop through the adapter keeps a source pixel in place on the page: ${JSON.stringify(style)}`, () => {
+      const o = { ...img, x: 80, y: 100, ...style } as CourseMapObject & { kind: "image" };
+      const r = cropChange(styleGeometryOf(o)!, o, o.crop, { x: 0.25, y: 0.3, width: 0.4, height: 0.3 });
+      const n = styleChangeOf(o, { props: { ...o, crop: r.crop }, geometry: r.geometry }, printable) as typeof o;
+      const a = place(o, 0.4, 0.45), b = place(n, 0.4, 0.45);
+      expect(b.x).toBeCloseTo(a.x, 6);
+      expect(b.y).toBeCloseTo(a.y, 6);
+    });
+  }
+
+  it("a crop on a page image in y-down page mm: left 25 % and top 50 % keep the visible pixels in place", () => {
+    const left = cropChange(styleGeometryOf(img)!, {}, undefined, { x: 0.25, y: 0, width: 0.75, height: 1 });
+    expect(rectOfStyleGeometry(left.geometry)).toEqual({ x: 60, y: 50, width: 30, height: 20 });
+    const top = cropChange(styleGeometryOf(img)!, {}, undefined, { x: 0, y: 0.5, width: 1, height: 0.5 });
+    expect(rectOfStyleGeometry(top.geometry)).toEqual({ x: 50, y: 60, width: 40, height: 10 });
+  });
+});
+
+describe("a line's or path's turn and flip (J9, docs/course-layout.md §3 \"Rotate and flip a line or path\")", () => {
+  const printable = { x: 3, y: 3, width: 204, height: 291 };
+  const path = { id: "p", kind: "path" as const, anchor: "page" as const, closed: true, fillMode: "none" as const,
+    points: [{ x: 50, y: 50, hOut: { x: 5, y: 0 } }, { x: 70, y: 50 }, { x: 70, y: 60 }, { x: 50, y: 60 }] };
+  it("a quarter turn clockwise as seen on the page turns vertices and handles about the bounds' centre", () => {
+    const r = transformPathOf(path, { kind: "rotate", deg: 90 }, printable) as typeof path;
+    // Centre (60, 55); the top-left vertex goes to the top-right, its rightward handle points down the page.
+    expect(r.points[0].x).toBeCloseTo(65, 6);
+    expect(r.points[0].y).toBeCloseTo(45, 6);
+    expect(r.points[0].hOut!.x).toBeCloseTo(0, 6);
+    expect(r.points[0].hOut!.y).toBeCloseTo(5, 6);
+    expect(r.closed).toBe(true);
+  });
+  it("a flip mirrors about the centre and keeps the bounds; the legacy line kind; kept on the page; boxes refused", () => {
+    const f = transformPathOf(path, { kind: "flip", axis: "h" }, printable) as typeof path;
+    expect(f.points.map((p) => p.x)).toEqual([70, 50, 50, 70]);
+    expect(f.points[0].hOut).toEqual({ x: -5, y: 0 });
+    const line = { id: "l", kind: "line" as const, anchor: "page" as const, x1: 10, y1: 10, x2: 30, y2: 20, stroke: "#000000", strokeWidthMm: 0.3 };
+    expect(transformPathOf(line, { kind: "flip", axis: "v" }, printable)).toMatchObject({ x1: 10, y1: 20, x2: 30, y2: 10 });
+    const edge = { ...line, x1: 4, y1: 10, x2: 44, y2: 10 };
+    const turned = transformPathOf(edge, { kind: "rotate", deg: 90 }, printable) as typeof line;
+    expect(Math.min(turned.y1, turned.y2)).toBeCloseTo(3, 6);
+    const long = { ...line, x1: 100, y1: 20, x2: 100, y2: 270 };
+    const across = transformPathOf(long, { kind: "rotate", deg: 90 }, printable) as typeof line;
+    expect(Math.min(across.x1, across.x2)).toBeCloseTo(3, 6);
+    expect(transformPathOf(path, { kind: "rotate", deg: 360 }, printable)).toBeNull();
+    expect(transformPathOf({ id: "t", kind: "text", anchor: "page", x: 1, y: 1, text: "A", fontSizeMm: 4, color: "#000000" }, { kind: "rotate", deg: 90 }, printable)).toBeNull();
+  });
+});
+
+describe("duplicate and paste of a page object (J12, docs/course-layout.md §2 \"Keys\")", () => {
+  const printable = { x: 3, y: 3, width: 204, height: 291 };
+  const rect = { id: "r", anchor: "page", kind: "rectangle", x: 20, y: 30, width: 10, height: 6 } as CourseMapObject;
+
+  it("duplicate: 3 mm down-right on the page with a new id; kept on the printable area", () => {
+    const d = duplicatePageObject(rect, printable) as typeof rect & { x: number; y: number };
+    expect(d.id).not.toBe("r");
+    expect([d.x, d.y]).toEqual([23, 33]);
+    const edge = duplicatePageObject({ ...rect, x: 200, y: 290 } as CourseMapObject, printable) as typeof rect & { x: number; y: number; width: number };
+    expect(edge.x + edge.width).toBeLessThanOrEqual(207 + 1e-9);
+  });
+
+  it("a knockout page image (J15) keeps its flag through duplicate and paste", () => {
+    const img = { id: "i", anchor: "page", kind: "image", graphicId: 1, x: 20, y: 30, width: 10, height: 6, knockout: true } as CourseMapObject;
+    expect(duplicatePageObject(img, printable)).toMatchObject({ knockout: true });
+    expect(pastePageObject(img, { x: 100, y: 100 }, printable)).toMatchObject({ knockout: true });
+  });
+
+  it("paste: centred on the point, a new id, kept on the printable area", () => {
+    const p = pastePageObject(rect, { x: 100, y: 100 }, printable) as typeof rect & { x: number; y: number };
+    expect([p.x, p.y]).toEqual([95, 97]);
+    expect(p.id).not.toBe("r");
+    const out = pastePageObject(rect, { x: 0, y: 0 }, printable) as typeof rect & { x: number; y: number };
+    expect([out.x, out.y]).toEqual([3, 3]);
+  });
+});
+

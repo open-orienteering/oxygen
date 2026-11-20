@@ -219,7 +219,9 @@ describe("corridors (§10.2, F2)", () => {
   it("resolve to paper mm at the document's map scale; whiteMm stays paper mm", () => {
     const [leg] = withLeg({ corridor }, { document: { ...isomContext(1.5) } });
     // 1:10 000: 60 m = 6 mm.
-    expect(leg.corridor).toEqual({ widthMm: 6, whiteMm: 3, edge: true });
+    expect(leg.corridor).toEqual({ widthMm: 6, whiteMm: 3, edge: true, whiteOpacity: 0.4 });
+    // J13: an opaque band carries no opacity (the derivation as before).
+    expect(withLeg({ corridor: { ...corridor, whiteOpacity: 1 } }, { document: { ...isomContext(1.5) } })[0].corridor).toEqual({ widthMm: 6, whiteMm: 3, edge: true });
     const [at15] = withLeg({ corridor });
     expect(at15.corridor!.widthMm).toBeCloseTo(4, 9);
   });

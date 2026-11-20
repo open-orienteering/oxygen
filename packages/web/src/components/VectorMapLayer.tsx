@@ -27,6 +27,11 @@
  * remounts the canvas (a fresh context) and loads again (§5.4 "Layer").
  * There is no other renderer to fall back to.
  *
+ * With `nameId` set the engine draws image passes (J6, §5.2 "Images") from
+ * the event's `print.png` graphics (`GraphicTextures`), an outline until
+ * a texture is in; the canvas's `data-graphics` is `pending` while one is
+ * drawn as that outline, else `ready`.
+ *
  * With `heightField` and `terrain` set (the viewer's 3D mode, §5.4 "3D
  * mode") the engine gets the field and every frame is a 3D one — the map
  * draped over the mesh under `terrain.camera`; without them the frame is
@@ -41,6 +46,7 @@ import type { CourseLayerRequest, DocumentHit, EditInput, MapObjectRef } from ".
 import type { mapDocument, render } from "@oxygen/shared";
 import { MapGlRenderer } from "../map-gl/renderer";
 import { loupeView } from "../map-gl/view";
+import { createFrameReader, offscreenTarget, type FrameReader, type FrameReaderHandle } from "../map-gl/readback";
 import type { LoadedMapDocument } from "../lib/map-document-cache";
 import { loadMapFonts, loadTextAtlas } from "../lib/map-fonts";
 import { textAtlasPagesFor } from "../map-gl/text-atlas";
@@ -49,6 +55,10 @@ import type { HeightField } from "@oxygen/shared/src/terrain/field/read.js";
 import type { TerrainCamera } from "../map-gl/terrain/camera";
 import type { TerrainMesh } from "../map-gl/terrain/mesh";
 import type { TerrainLine } from "../map-gl/terrain/lines";
+import { GraphicTextures } from "../lib/graphic-textures";
+import { venueAwareFetch } from "../lib/node-discovery";
+import { kioskKeyFromUrl } from "../lib/kiosk-key";
+import { offlinePrintStore } from "../print/offline-store";
 
 /** The editor's loupe: the magnified point in paper µm, the circle's centre and diameter in container CSS px. */
 export interface VectorLoupe {
@@ -127,9 +137,20 @@ interface Props {
   onMaxTextureSize?: (size: number) => void;
   /** Lines 3D frames draw on the terrain (§5.4 "3D mode" "Tracks on the terrain", H8); ignored in 2D. */
   terrainLines?: readonly TerrainLine[] | null;
+  /**
+   * The frame reader once the layer has drawn (§5.4 "Layer", row I8b): draws a view complete offscreen and reads it
+   * back, top row first; `null` on a reload, a remount and unmount. 2D only (it rejects while `terrain` is set).
+   */
+  onFrameReader?: ((read: FrameReader | null) => void) | null;
+  /** Drawn but not shown (the compare view's diff reads it, row I8b); its messages still show. */
+  hidden?: boolean;
+  /** The event the graphics of image passes are fetched through (J6); without it images draw as outlines. */
+  nameId?: string | null;
+  /** Keep a failed image's outline (the editor); the viewer and kiosk draw nothing for it. */
+  outlineMissingImages?: boolean;
 }
 
-export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, course = null, onCourse, onCourseSupport, loupe = null, patch = null, patchVersion = "0", mapObjects = null, heightField = null, terrain = null, onTerrain, onTerrainError, onMaxTextureSize, terrainLines = null }: Props) {
+export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, course = null, onCourse, onCourseSupport, loupe = null, patch = null, patchVersion = "0", mapObjects = null, heightField = null, terrain = null, onTerrain, onTerrainError, onMaxTextureSize, terrainLines = null, onFrameReader = null, hidden = false, nameId = null, outlineMissingImages = false }: Props) {
   const { t } = useTranslation("dashboard");
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<MapGlEngine | null>(null);
@@ -137,7 +158,12 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
   const viewRef = useRef(view);
   viewRef.current = view;
   const frameRef = useRef<number | null>(null);
+  /** The frame reader of the current engine (row I8b): its reads hold the layer's own draws. */
+  const readerRef = useRef<FrameReaderHandle | null>(null);
   const [status, setStatus] = useState<VectorLayerStatus>("loading");
+  const [graphics, setGraphicsState] = useState<"pending" | "ready">("ready");
+  const outlineRef = useRef(outlineMissingImages);
+  outlineRef.current = outlineMissingImages;
   // Each attempt is a fresh canvas (`key`): a lost context cannot be had
   // again from the same element. `lostRef` counts lost contexts.
   const [attempt, setAttempt] = useState(0);
@@ -233,10 +259,12 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
       frameRef.current = null;
       const engine = engineRef.current, v = viewRef.current, canvas = canvasRef.current;
       if (!engine || !v || !canvas || !loadedRef.current) return;
+      // A frame read is in flight (it moved the engine's view): its end asks for this draw again.
+      if (readerRef.current?.busy()) return;
       // Resizing the drawing buffer clears it; this frame redraws it.
       if (canvas.width !== v.widthPx) canvas.width = v.widthPx;
       if (canvas.height !== v.heightPx) canvas.height = v.heightPx;
-      const opts = { colour: coloursOf(engine.colours) };
+      const opts = { colour: coloursOf(engine.colours), outlineMissingImages: outlineRef.current };
       const tf = terrainRef.current;
       if (tf && engine.terrainMesh) {
         // A 3D frame: the camera's canvas size, the drape re-rendered when it has settled (§5.6 "Settling").
@@ -245,6 +273,7 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
         const lines = linesRef.current;
         const st = engine.renderTerrain(lines?.length ? { ...tf, lines, pxRatio: tf.camera.widthPx / (canvas.clientWidth || tf.camera.widthPx) } : tf, opts);
         setDrawnLines(st.mesh?.lines?.lines ?? 0);
+        setGraphicsState(st.imagesPending ? "pending" : "ready");
         setMode("3d");
         trackTerrainReady(engine, tf);
         return;
@@ -257,7 +286,8 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
         setTerrainReady(false);
       }
       engine.setView(v);
-      engine.render(opts);
+      const st = engine.render(opts);
+      setGraphicsState(st.imagesPending ? "pending" : "ready");
       const l = loupeRef.current;
       if (l) {
         // CSS → device px with the ratio the view was built with.
@@ -297,9 +327,25 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
     const engine = new MapGlEngine(renderer, workerTransport(), { budgetBytes: budgetBytes(budget) });
     engineRef.current = engine;
     loadedRef.current = false;
+    const reader = createFrameReader({
+      engine,
+      makeTarget: (w, h) => offscreenTarget(renderer.gl, w, h),
+      renderOptions: () => ({ colour: coloursOf(engine.colours) }),
+      restoreView: () => viewRef.current,
+      onIdle: requestDraw,
+    });
+    readerRef.current = reader;
     engine.onChange = requestDraw;
     engine.onCourse = (info) => onCourseRef.current?.(info);
     engine.onEdit = (info) => setHighlighted(info.highlighted);
+    if (nameId) {
+      engine.setGraphics(new GraphicTextures(nameId, {
+        fetch: venueAwareFetch,
+        decode: (blob, o) => createImageBitmap(blob, o),
+        store: offlinePrintStore,
+        kioskKey: kioskKeyFromUrl(),
+      }));
+    }
     // Sent right after the load reaches the worker.
     engine.setCourse(courseRef.current);
     setHighlighted(null);
@@ -360,6 +406,8 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
       frameRef.current = null;
       engineRef.current = null;
       loadedRef.current = false;
+      if (readerRef.current === reader) readerRef.current = null;
+      reader.dispose();
       setLoadedAttempt(null);
       // The mesh goes with the engine: the host is 2D until the next engine has the field again.
       if (fieldSentRef.current) onTerrainRef.current?.(null);
@@ -369,7 +417,7 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
       engine.dispose();
       renderer.dispose();
     };
-  }, [doc, budget, attempt, requestDraw]);
+  }, [doc, budget, attempt, requestDraw, nameId]);
 
   // The field goes to the loaded engine (again after a remount); `null` drops it (§5.4 "3D mode" "Drawing").
   useEffect(() => {
@@ -443,6 +491,14 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
     });
   }, [patch, patchVersion]);
 
+  // The frame reader goes to the host once drawn, like the hit-test (row I8b); 2D frames only.
+  useEffect(() => {
+    const reader = readerRef.current;
+    if (!onFrameReader || !hitReady || !reader) return;
+    onFrameReader((v, opts) => (terrainRef.current ? Promise.reject(new Error("frame reads are 2D only")) : reader.read(v, opts)));
+    return () => onFrameReader(null);
+  }, [onFrameReader, hitReady]);
+
   // Every view change is one redraw; detail requests and evictions follow from `setView`.
   useEffect(() => {
     if (view) requestDraw();
@@ -465,11 +521,12 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
         data-patch-version={drawnPatch ?? undefined}
         data-selected-objects={highlighted ?? undefined}
         data-status={status}
+        data-graphics={graphics}
         data-ready={status === "complete" ? "true" : "false"}
         data-mode={mode}
         data-terrain-ready={mode === "3d" && terrainReady ? "true" : undefined}
         data-terrain-lines={mode === "3d" ? drawnLines : undefined}
-        style={{ position: "absolute", left: 0, top: 0, width, height, zIndex, pointerEvents: "none" }}
+        style={{ position: "absolute", left: 0, top: 0, width, height, zIndex, pointerEvents: "none", opacity: hidden ? 0 : undefined }}
       />
       {(status === "error" || status === "webgl") && (
         <MapLayerMessage

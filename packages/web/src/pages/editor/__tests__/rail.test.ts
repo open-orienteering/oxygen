@@ -23,3 +23,10 @@ describe("railKeyOf (docs/course-editor.md §2)", () => {
     expect(["start", "control", "finish", "crossing", "exchange"].map((x) => place(x as Parameters<typeof place>[0]))).toEqual(["S", "K", "M", "C", "X"]);
   });
 });
+
+describe("I (J7)", () => {
+  it("the image tool lights I, with or without a graphic picked", () => {
+    expect(railKeyOf({ kind: "image", graphicId: null })).toBe("I");
+    expect(railKeyOf({ kind: "image", graphicId: 7 })).toBe("I");
+  });
+});

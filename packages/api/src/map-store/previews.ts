@@ -17,7 +17,8 @@ import { getBlob } from "./blob-store.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
-export type PreviewKind = "thumbnail" | "symbol";
+/** `colour-order`: the colour panel's before / after picture, keyed by the order (`iof`, `source`; docs/map-symbols.md §8.7). */
+export type PreviewKind = "thumbnail" | "symbol" | "colour-order";
 
 // ---- request parsing ----------------------------------------------------------
 
@@ -37,7 +38,7 @@ export function stripPng(file: string): string | null {
 }
 
 export function previewEtag(hash: string, kind: PreviewKind, key: string): string {
-  return kind === "thumbnail" ? `"${hash}/thumbnail"` : `"${hash}/symbols/${key}"`;
+  return kind === "thumbnail" ? `"${hash}/thumbnail"` : kind === "colour-order" ? `"${hash}/colour-order/${key}"` : `"${hash}/symbols/${key}"`;
 }
 
 export function libraryPreviewEtag(libraryId: string, version: string, code: string): string {
@@ -51,14 +52,14 @@ export async function readPreview(db: Db, hash: string, kind: PreviewKind, key: 
   return row ? Buffer.from(row.png) : null;
 }
 
-async function writePreview(db: Db, hash: string, kind: PreviewKind, key: string, png: Buffer): Promise<void> {
+export async function writePreview(db: Db, hash: string, kind: PreviewKind, key: string, png: Buffer): Promise<void> {
   await db.mapPreview.createMany({ data: [{ documentHash: hash, kind, key, png: new Uint8Array(png) }], skipDuplicates: true });
 }
 
 /** Renders of the same row in flight on this instance share one promise. */
-const inFlight = new Map<string, Promise<Buffer | null>>();
-function once(id: string, fn: () => Promise<Buffer | null>): Promise<Buffer | null> {
-  let p = inFlight.get(id);
+const inFlight = new Map<string, Promise<unknown>>();
+export function once<T = Buffer>(id: string, fn: () => Promise<T | null>): Promise<T | null> {
+  let p = inFlight.get(id) as Promise<T | null> | undefined;
   if (!p) {
     p = fn().finally(() => inFlight.delete(id));
     inFlight.set(id, p);
@@ -66,9 +67,9 @@ function once(id: string, fn: () => Promise<Buffer | null>): Promise<Buffer | nu
   return p;
 }
 
-/** Thumbnails decode and symbolise a whole document; one at a time per instance bounds the memory. */
+/** Thumbnails (and the colour pictures) decode and symbolise a whole document; one at a time per instance bounds the memory. Never wait on an import inside: its derive stage renders a thumbnail. */
 let thumbnailQueue: Promise<unknown> = Promise.resolve();
-function serialised<T>(fn: () => Promise<T>): Promise<T> {
+export function serialised<T>(fn: () => Promise<T>): Promise<T> {
   const run = thumbnailQueue.then(fn, fn);
   thumbnailQueue = run.catch(() => undefined);
   return run;

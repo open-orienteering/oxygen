@@ -17,6 +17,7 @@ import type { MapWindow } from "../course-maps/schema.js";
 import type { SheetInput } from "../course-maps/resolve-sheet.js";
 import { courseDocumentContext } from "../course/context.js";
 import { type PaperFrame, epsgOf } from "../geo/projection.js";
+import { type ImageWindow, cropInWindow, unionWindow } from "../render/image-window.js";
 import type { FontFamily } from "../render/pass-stream.js";
 import { type TrueTypeFont, parseTrueType } from "../render/truetype.js";
 import type { ColourMode } from "./colour.js";
@@ -75,10 +76,11 @@ export interface CoursePagesOptions {
   /**
    * Rasteriser for SVG graphics, to PNG at an exact pixel box; `graphicId`
    * names the graphic (G15: a host without the SVG asks the server's
-   * `print.png` for it, §8.5). Absent: an SVG graphic is left out with an
-   * `SVG_RASTER` warning.
+   * `print.png` for it, §8.5). `window` is the part of the graphic to
+   * rasterise (fractions, top-left origin; absent = all, §6.3). Absent: an
+   * SVG graphic is left out with an `SVG_RASTER` warning.
    */
-  rasteriseSvg?: (svg: Uint8Array, widthPx: number, heightPx: number, graphicId: number) => Promise<Uint8Array>;
+  rasteriseSvg?: (svg: Uint8Array, widthPx: number, heightPx: number, graphicId: number, window?: ImageWindow) => Promise<Uint8Array>;
   /** Awaited before each composed sheet: the host's chance to run other work between pages (the API's event loop, §8.2). Absent: no yield. */
   yieldToHost?: () => Promise<void>;
   /** Called after each page is written (the print worker streams these back as progress). */
@@ -98,7 +100,7 @@ export interface CoursePagesResult {
   warnings: string[];
 }
 
-/** Pixel box for a graphic placed at `widthMm × heightMm` (its crop shows a fraction of the source; §6.3). */
+/** Pixel box for a graphic placed at `widthMm × heightMm` (its crop shows a fraction of the source, or of the rasterised window; §6.3). */
 export function svgRasterBox(widthMm: number, heightMm: number, crop?: { width: number; height: number }): [number, number] {
   const px = (mm: number, frac: number) => Math.max(1, Math.round(((mm / frac) / 25.4) * SVG_RASTER_DPI));
   let w = px(widthMm, crop?.width ?? 1), h = px(heightMm, crop?.height ?? 1);
@@ -159,30 +161,42 @@ export async function renderCoursePages(opts: CoursePagesOptions): Promise<Cours
     const page = composePage(pageInputFor(opts.document, sheet, geo), fonts);
     for (const w of page.warnings) pageWarnings.push(`${sheet.label}: ${w.code}: ${w.message}`);
     const images = new Map<number, Uint8Array>();
+    const windows = new Map<number, ImageWindow>();
+    // SVG: one raster per graphic and page, over the union of its crops (§6.3), at the largest box a placement needs.
+    const svgPlacements = new Map<number, typeof page.images>();
     for (const img of page.images) {
       const g = opts.graphics?.get(img.graphicId);
       if (!g) continue;
       if (g.mime === "image/png") images.set(img.graphicId, g.data);
-      else if (g.mime === "image/svg+xml") {
+      else if (g.mime === "image/svg+xml") svgPlacements.set(img.graphicId, [...(svgPlacements.get(img.graphicId) ?? []), img]);
+    }
+    for (const [graphicId, placed] of svgPlacements) {
+      const g = opts.graphics!.get(graphicId)!;
+      const window = unionWindow(placed.map((i) => i.crop));
+      let box: [number, number] = [0, 0];
+      for (const img of placed) {
         // Placed size on paper: page objects in page mm; image course objects enlarge with T_map.
         const k = img.layer === "map" ? page.mapLayer.transform.scaleRatio : 1;
-        const [w, h] = svgRasterBox((img.rectUm.width / 1000) * k, (img.rectUm.height / 1000) * k, img.crop);
-        const key = `${img.graphicId}/${w}x${h}`;
-        let png = pngCache.get(key);
-        if (!png) {
-          try {
-            if (!rasterise) throw new Error("no SVG rasteriser");
-            png = await rasterise(g.data, w, h, img.graphicId);
-            pngCache.set(key, png);
-          } catch (err) {
-            pageWarnings.push(`${sheet.label}: SVG_RASTER: graphic ${img.graphicId}: ${err instanceof Error ? err.message : String(err)}`);
-            continue;
-          }
-        }
-        images.set(img.graphicId, png);
+        const b = svgRasterBox((img.sizeUm[0] / 1000) * k, (img.sizeUm[1] / 1000) * k, cropInWindow(img.crop, window));
+        if (b[0] * b[1] > box[0] * box[1]) box = b;
       }
+      const [w, h] = box;
+      const key = `${graphicId}/${w}x${h}${window ? `/${window.x},${window.y},${window.width},${window.height}` : ""}`;
+      let png = pngCache.get(key);
+      if (!png) {
+        try {
+          if (!rasterise) throw new Error("no SVG rasteriser");
+          png = await (window ? rasterise(g.data, w, h, graphicId, window) : rasterise(g.data, w, h, graphicId));
+          pngCache.set(key, png);
+        } catch (err) {
+          pageWarnings.push(`${sheet.label}: SVG_RASTER: graphic ${graphicId}: ${err instanceof Error ? err.message : String(err)}`);
+          continue;
+        }
+      }
+      images.set(graphicId, png);
+      if (window) windows.set(graphicId, window);
     }
-    const written = await writePage(writer, page, { mode, images });
+    const written = await writePage(writer, page, { mode, images, windows });
     if (copies > 1) writer.copyPage(written.page, copies - 1);
     pageCount += copies;
     for (const w of written.warnings) pageWarnings.push(`${sheet.label}: ${w}`);

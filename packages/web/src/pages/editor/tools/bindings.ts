@@ -8,7 +8,12 @@
 
 import type { course } from "@oxygen/shared";
 import type { EditorToolBinding, ToolPointer, ToolShape } from "../../../components/MapViewer";
-import type { EditorTarget } from "../../../lib/editor/hit";
+import { imageRing, type EditorTarget } from "../../../lib/editor/hit";
+import { IMAGE_MIN_MM } from "../../../lib/editor/image-box";
+import {
+  anchorKnob, cropEdge, edgeHandles, knobBase, resizeBox, rotationAt, ROTATE_STEM_PX, uncroppedRing, type BoxEdge,
+} from "../../../lib/editor/transform-gestures";
+import type { Crop } from "../../../lib/editor/style-fields";
 import { circleGapAt, circleGapFromDrag, compassDeg, legFraction, legGapAt, legGapFromDrag, type AngularGap, type FractionGap } from "./gaps";
 import { dragBendGrip, legPolyline, moveBend, polylineDistance, polylineSlice, toggleBendSmooth, type Bend } from "../../../lib/editor/bends";
 import { legLengthShape } from "../../../lib/editor/leg-length";
@@ -16,7 +21,8 @@ import { isClosedKind, pointInPolygon, smoothed, step, type PolygonState } from 
 import { nearestEdge, outlinePoints, vertexRule, type Vertex } from "../../../lib/editor/geometry-edit";
 import { ringRule } from "../modes/map/nodes";
 import { angleOfDrag } from "../modes/map/symbols";
-import { liveTrim, trackToolStep, type TrackToolState, type TrackToolStep, type TrackToolTarget } from "./tracks";
+import { hoverCandidate, liveTrim, trackToolStep, type SplitCandidate, type TrackToolState, type TrackToolStep, type TrackToolTarget } from "./tracks";
+import { nodesNear } from "../modes/map/tracks/edit";
 import type { gpsTrack } from "@oxygen/shared";
 import {
   dragGeometry, geometryHandles, geometryShapes, gripsOf, insertAtEdge, pressGeometry, releaseGeometry, type GeometryDrag,
@@ -30,8 +36,18 @@ export const HANDLE_PX = 7;
 export type Gesture =
   | { kind: "lasso"; points: Pt[] }
   | { kind: "shift-click"; id: number }
+  /** J16: a Shift- or Ctrl-click on a course object (added to or taken out of the object multi-selection on release). */
+  | { kind: "object-toggle"; id: number }
+  /** J16: a press on a member of the object multi-selection: a drag moves them all, a click selects that one. */
+  | { kind: "group"; id: number; bases: ReadonlyMap<number, course.CourseObject["geometry"]>; from: Pt; to: Pt; mmPerPx: number; moved: boolean }
   /** Object `id`'s geometry dragged: the whole path, a vertex, or a handle grip (§7 "Editing geometry", `geometry-gestures.ts`). */
   | ({ id: number } & GeometryDrag)
+  /** A corner (`imageRing` index) of the selected image dragged from `press` (J7): the opposite corner stays put. */
+  | { kind: "image-corner"; id: number; corner: number; base: course.CourseObject["geometry"]; rotationDeg: number; press: Pt; mmPerPx: number; moved: boolean; shift: boolean }
+  /** The rotate knob of the selected image or text (J11): the pointer's turn about `pivot` since `press`; Shift snaps to 15°. */
+  | { kind: "rotate"; id: number; base: StyledObject; pivot: Pt; press: Pt; to: Pt; shift: boolean; mmPerPx: number; moved: boolean }
+  /** A crop edge of the selected image in crop mode (J11): that crop side follows the pointer. */
+  | { kind: "crop"; id: number; edge: BoxEdge; base: Extract<course.CourseObject, { kind: "image" }>; to: Pt; mmPerPx: number; moved: boolean }
   /** Two fingers on a selected object's handle ring (§10): scale `base` about its centroid. */
   | { kind: "pinch"; id: number; base: course.CourseObject["geometry"]; centre: Pt; scale: number }
   | { kind: "poly-vertex"; index: number }
@@ -45,6 +61,35 @@ export type Gesture =
   | null;
 
 export interface GestureRef { current: Gesture }
+
+/** The kinds the canvas turns by a knob (J11): an image about its centre, a text about its anchor. */
+type StyledObject = Extract<course.CourseObject, { kind: "image" | "text" }>;
+/**
+ * What a knob or crop drag changes, and only that (J11 review): the rotation, or the crop with the box. The page
+ * applies it to the props it shows at that moment, so an inspector edit committed during the press is kept.
+ */
+export type StyleChange = { patch: { rotationDeg?: number; crop?: Crop }; geometry?: course.CourseObject["geometry"] };
+
+/** The knob's tip for `o` at `mmPerPx` (J11): above an image's top edge, or along a text's own up from its anchor. */
+export function knobOf(o: StyledObject, mmPerPx: number): { from: Pt; at: Pt } {
+  const stem = ROTATE_STEM_PX * mmPerPx;
+  if (o.kind === "text") return { from: o.geometry[0], at: anchorKnob(o.geometry[0], o.props.rotationDeg ?? 0, stem) };
+  const k = knobBase(imageRing(o.geometry, o.props.rotationDeg));
+  return { from: k.at, at: { x: k.at.x + k.normal.x * stem, y: k.at.y + k.normal.y * stem } };
+}
+
+/** The pivot a knob turns about: an image's centre, a text's anchor. */
+function pivotOf(o: StyledObject): Pt {
+  if (o.kind === "text") return o.geometry[0];
+  return { x: (o.geometry[0].x + o.geometry[1].x) / 2, y: (o.geometry[0].y + o.geometry[1].y) / 2 };
+}
+
+/** The change a knob or crop drag leaves (J11; the page puts it through `stylePatch`, so 0° and the full crop drop their keys). */
+export function styleChangeOf(g: Extract<NonNullable<Gesture>, { kind: "rotate" | "crop" }>): StyleChange {
+  if (g.kind === "rotate") return { patch: { rotationDeg: rotationAt(g.base.props.rotationDeg ?? 0, g.pivot, g.press, g.to, g.shift) } };
+  const r = cropEdge(g.base.geometry, g.base.props, g.edge, g.to);
+  return { geometry: r.geometry, patch: { crop: r.crop } };
+}
 
 /** Re-render the page: a gesture in `GestureRef` changed what the tool draws. */
 export type Redraw = () => void;
@@ -70,12 +115,36 @@ export function scaleAbout(g: readonly course.CourseObject["geometry"][number][]
  * with each curve sampled (§7 "Editing geometry"); when selected, a handle per vertex (`focused` drawn active) and
  * a grip per Bézier handle.
  */
-export function objectOutline(o: course.CourseObject, selected: boolean, focused: number | null = null): ToolShape[] {
+export function objectOutline(o: course.CourseObject, selected: boolean, focused: number | null = null, cropMode = false): ToolShape[] {
+  if (o.kind === "image") {
+    // The box as drawn, turned (J7): the stored diagonal is not where a turned image's corners are; a corner handle each.
+    const ring = imageRing(o.geometry, o.props.rotationDeg);
+    const outline: ToolShape = { kind: "line", points: ring, closed: true, dashed: !selected, color: selected ? BLUE : PURPLE, testId: "editor-object-outline", data: { "object-id": String(o.id), "object-kind": o.kind } };
+    if (!selected) return [outline];
+    if (cropMode) {
+      // Crop mode (J11): the whole graphic dashed, an edge handle per side; no corners, no knob.
+      return [
+        { kind: "line", points: uncroppedRing(o.geometry, o.props), closed: true, dashed: true, color: "#94a3b8", widthPx: 1, testId: "editor-object-crop-full" },
+        outline,
+        ...edgeHandles(ring).map((h): ToolShape => ({ kind: "handle", x: h.at.x, y: h.at.y, active: false, testId: "editor-object-crop-edge", data: { edge: h.edge } })),
+      ];
+    }
+    const k = knobBase(ring);
+    return [
+      outline,
+      ...ring.map((c, i): ToolShape => ({ kind: "handle", x: c.x, y: c.y, active: false, testId: "editor-object-handle", data: { index: String(i), corner: String(i) } })),
+      // The knob a fixed screen distance above the top edge (J11): `lengthPx` along the box's own up.
+      { kind: "grip", from: k.at, x: k.at.x + k.normal.x, y: k.at.y + k.normal.y, lengthPx: ROTATE_STEM_PX, testId: "editor-object-rotate" },
+    ];
+  }
   if (o.kind === "text") {
     const at = o.geometry[0];
+    const up = anchorKnob(at, o.props.rotationDeg ?? 0, 1);
     return [
       { kind: "circle", x: at.x, y: at.y, rMm: 0.6, color: selected ? BLUE : PURPLE, testId: "editor-object-outline", data: { "object-id": String(o.id) } },
       ...(selected ? geometryHandles(o.geometry, focused, OBJECT_IDS) : []),
+      // The knob on a stem from the anchor along the text's own up (J11; it turns about the anchor, user answer 6).
+      ...(selected ? [{ kind: "grip", from: at, x: up.x, y: up.y, lengthPx: ROTATE_STEM_PX, testId: "editor-object-rotate" } as ToolShape] : []),
     ];
   }
   return geometryShapes(o.geometry, vertexRule(o.kind).closed, { selected, focused, ids: OBJECT_IDS, data: { "object-id": String(o.id), "object-kind": o.kind } });
@@ -124,6 +193,14 @@ export interface SelectOptions {
   onToggleMulti: (id: number) => void;
   onLasso: (ids: number[]) => void;
   onSelectObject: (id: number) => void;
+  /** J16: the object multi-selection (empty or ≥ 2 ids); its members are outlined and move together. */
+  objectMulti?: readonly number[];
+  /** J16: Shift/Ctrl-click on an object. */
+  onToggleObject?: (id: number) => void;
+  /** J16: live geometries of a group move, by id; null drops them (a cancel). */
+  onObjectsDraft?: (drafts: ReadonlyMap<number, course.CourseObject["geometry"]> | null) => void;
+  /** J16: a group move's one write (one undo entry). */
+  onObjectsMoved?: (moves: { id: number; geometry: course.CourseObject["geometry"] }[]) => void;
   /** Live geometry while an object or a vertex is dragged (the page draws it as a draft). */
   onObjectDraft: (id: number, geometry: course.CourseObject["geometry"] | null) => void;
   onObjectMoved: (id: number, geometry: course.CourseObject["geometry"]) => void;
@@ -133,6 +210,15 @@ export interface SelectOptions {
   redraw: Redraw;
   /** The selected leg (its phantom) with its bends, desktop and tablet (§6.7): handles to drag and focus. */
   leg?: LegBends | null;
+  /** A selected image's corner drag keeps the box's ratio (J7; the inspector's lock); Shift inverts it, live (J11). */
+  aspectLock?: boolean;
+  /** The selected image is in crop mode (J11): its edges crop; its corners and knob are hidden. */
+  cropMode?: boolean;
+  onCropMode?: (on: boolean) => void;
+  /** Live props (and a crop's box) while a knob or crop edge is dragged (J11); null drops it. */
+  onObjectStyleDraft?: (id: number, change: StyleChange | null) => void;
+  /** A knob or crop drag's one write (J11). */
+  onObjectStyled?: (id: number, change: StyleChange) => void;
 }
 
 /** The selected leg's bends as `V` edits them (docs/course-editor.md §6.7). */
@@ -180,7 +266,15 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
   for (const obj of o.objects) {
     const selected = obj.id === o.selected?.id;
     // The layer draws neither regions nor toner savers on screen: the UI layer outlines them always.
-    if (selected || obj.kind === "filter_region" || obj.kind === "toner_saver") shapes.push(...objectOutline(obj, selected, selected ? o.focusedVertex ?? null : null));
+    if (selected || obj.kind === "filter_region" || obj.kind === "toner_saver") shapes.push(...objectOutline(obj, selected, selected ? o.focusedVertex ?? null : null, selected && !!o.cropMode));
+  }
+  // J16: each member of the object multi-selection outlined blue (no handles: a group has none).
+  for (const id of o.objectMulti ?? []) {
+    const obj = o.objects.find((x) => x.id === id);
+    if (!obj) continue;
+    for (const sh of objectOutline(obj, false)) {
+      if (sh.kind === "line" || sh.kind === "circle") shapes.push({ ...sh, dashed: false, color: BLUE, testId: "editor-object-multi-outline", data: { "object-id": String(id), "object-kind": obj.kind } });
+    }
   }
   const byId = new Map(o.sites.map((s) => [s.id, s] as const));
   for (const id of o.multi) {
@@ -223,16 +317,62 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
       // A finger elsewhere is the viewer's: its targets, a pan, the tap that selects an object (§10).
       if (p.touch) return false;
       const sel = shown(o);
-      if (sel) {
+      // J16: Shift or Ctrl on an object's body toggles it into the object multi-selection; a handle of the selected
+      // object (knob, corner, crop edge, vertex, grip) keeps its own gesture.
+      const toggle = (p.shift || !!p.ctrl) && p.target?.kind === "object" && !!o.onToggleObject;
+      // The knob first (J11): it sits outside the box, a fixed screen distance from it, and wins over what is under it.
+      if ((sel?.kind === "image" && !o.cropMode) || sel?.kind === "text") {
+        if (near(knobOf(sel, p.mmPerPx).at, p.pt, reach)) {
+          g.current = { kind: "rotate", id: sel.id, base: sel, pivot: pivotOf(sel), press: p.pt, to: p.pt, shift: !!p.shift, mmPerPx: p.mmPerPx, moved: false };
+          return true;
+        }
+      }
+      if (sel?.kind === "image" && o.cropMode) {
+        // Crop mode (J11): the edges; the body still moves below.
+        const e = edgeHandles(imageRing(sel.geometry, sel.props.rotationDeg)).find((h) => near(h.at, p.pt, reach));
+        if (e) {
+          g.current = { kind: "crop", id: sel.id, edge: e.edge, base: sel, to: p.pt, mmPerPx: p.mmPerPx, moved: false };
+          return true;
+        }
+        if (!toggle && p.target?.kind === "object" && p.target.id === sel.id) {
+          g.current = { kind: "object", id: sel.id, from: p.pt, to: p.pt, moved: false, vertex: null, base: sel.geometry };
+          return true;
+        }
+      } else if (sel?.kind === "image") {
+        // A selected image (J7): a corner of its turned box resizes, a press inside it (the hit-test's target) moves.
+        // Its corners are not focusable, so `Delete` deletes the image.
+        const corner = imageRing(sel.geometry, sel.props.rotationDeg).findIndex((c) => near(c, p.pt, reach));
+        if (corner >= 0) {
+          g.current = { kind: "image-corner", id: sel.id, corner, base: sel.geometry, rotationDeg: sel.props.rotationDeg ?? 0, press: p.pt, mmPerPx: p.mmPerPx, moved: false, shift: !!p.shift };
+          return true;
+        }
+        if (!toggle && p.target?.kind === "object" && p.target.id === sel.id) {
+          g.current = { kind: "object", id: sel.id, from: p.pt, to: p.pt, moved: false, vertex: null, base: sel.geometry };
+          return true;
+        }
+      } else if (sel) {
         // Vertex, grip, then the body or within reach of its edge. A closed area's body is its outline: the hit-test
         // answers null inside it (§5), so an interior press declines and the viewer pans — the area moves by its edge
         // or a vertex (docs/bugfix-editor-area-press-pans.md).
         const onBody = p.target?.kind === "object" && p.target.id === sel.id;
-        const d = pressGeometry(sel.geometry, vertexRule(sel.kind), { pt: p.pt, reach: HANDLE_PX * p.mmPerPx, alt: p.alt, shift: p.shift }, onBody);
-        if (d) {
+        const d = pressGeometry(sel.geometry, vertexRule(sel.kind), { pt: p.pt, reach: HANDLE_PX * p.mmPerPx, alt: p.alt, shift: p.shift }, onBody && !toggle);
+        if (d && !(toggle && d.kind === "object" && d.vertex === null)) {
           g.current = { ...d, id: sel.id };
           return true;
         }
+      }
+      if (toggle && p.target?.kind === "object") {
+        g.current = { kind: "object-toggle", id: p.target.id };
+        return true;
+      }
+      const target = p.target;
+      if (target?.kind === "object" && o.onObjectsMoved && (o.objectMulti ?? []).includes(target.id)) {
+        const bases = new Map((o.objectMulti ?? []).flatMap((id) => {
+          const obj = o.objects.find((x) => x.id === id);
+          return obj ? [[id, obj.geometry] as const] : [];
+        }));
+        g.current = { kind: "group", id: target.id, bases, from: p.pt, to: p.pt, mmPerPx: p.mmPerPx, moved: false };
+        return true;
       }
       if (p.shift && p.target?.kind === "site") {
         g.current = { kind: "shift-click", id: Number(p.target.id) };
@@ -244,6 +384,8 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
       }
       if (p.target?.kind === "object") {
         const obj = o.objects.find((x) => x.id === (p.target as { id: number }).id);
+        // An image not selected takes no press (J7): a drag pans, a click selects it (the page's map click).
+        if (obj?.kind === "image") return false;
         if (obj) {
           g.current = { kind: "object", id: obj.id, from: p.pt, to: p.pt, moved: false, vertex: null, base: obj.geometry };
           o.onSelectObject(obj.id);
@@ -272,6 +414,24 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
         leg.onBendsDraft?.(cur.bends);
         o.redraw();
         return gripPoint(cur.bends[cur.index], cur.which);
+      } else if (cur?.kind === "group") {
+        if (!cur.moved && near(cur.from, pt, 3 * cur.mmPerPx)) return;
+        cur.moved = true;
+        cur.to = pt;
+        o.onObjectsDraft?.(groupMoved(cur));
+      } else if (cur?.kind === "image-corner") {
+        if (!cur.moved && near(cur.press, pt, 3 * cur.mmPerPx)) return;
+        cur.moved = true;
+        // Shift inverts the lock, read live (J11): pressed or let go mid-drag, the ratio follows.
+        if (mods) cur.shift = mods.shift;
+        o.onObjectDraft(cur.id, cornerResized(cur, pt, o.aspectLock ?? true));
+      } else if (cur?.kind === "rotate" || cur?.kind === "crop") {
+        const from = cur.kind === "rotate" ? cur.press : cur.to;
+        if (!cur.moved && near(from, pt, 3 * cur.mmPerPx)) return;
+        cur.moved = true;
+        cur.to = pt;
+        if (cur.kind === "rotate" && mods) cur.shift = mods.shift;
+        o.onObjectStyleDraft?.(cur.id, styleChangeOf(cur));
       } else if (cur?.kind === "object" || cur?.kind === "grip") {
         const geometry = dragGeometry(cur, pt, mods);
         if (geometry) o.onObjectDraft(cur.id, geometry);
@@ -305,6 +465,31 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
         leg.onBendFocus(cur.index);
         return leg.onBendsChange(cur.bends);
       }
+      if (cur.kind === "image-corner") {
+        // A drag writes once; a cancelled one drops its draft; a click on a corner does nothing.
+        if (!cur.moved) return;
+        if (!pt) return o.onObjectDraft(cur.id, null);
+        return o.onObjectMoved(cur.id, cornerResized(cur, pt, o.aspectLock ?? true));
+      }
+      if (cur.kind === "rotate" || cur.kind === "crop") {
+        // A drag writes once (geometry only with a crop); a cancelled one drops its draft; a click does nothing.
+        o.redraw();
+        if (!cur.moved) return;
+        if (!pt) return o.onObjectStyleDraft?.(cur.id, null);
+        cur.to = pt;
+        return o.onObjectStyled?.(cur.id, styleChangeOf(cur));
+      }
+      if (cur.kind === "object-toggle") {
+        if (pt) o.onToggleObject?.(cur.id);
+        return;
+      }
+      if (cur.kind === "group") {
+        // A drag writes once; a cancelled one drops its drafts; a click on a member selects that one alone.
+        if (!cur.moved) return void (pt && o.onSelectObject(cur.id));
+        if (!pt) return o.onObjectsDraft?.(null);
+        cur.to = pt;
+        return o.onObjectsMoved?.([...groupMoved(cur)].map(([id, geometry]) => ({ id, geometry })));
+      }
       if (cur.kind === "shift-click") {
         if (pt) o.onToggleMulti(cur.id);
       } else if (cur.kind === "lasso") {
@@ -324,7 +509,11 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
       if (leg && (bendAt(leg, p.pt, HANDLE_PX * p.mmPerPx) >= 0 || bendGripAt(leg, p.pt, HANDLE_PX * p.mmPerPx))) return;
       // On the selected object's edge, off its vertices: a smooth vertex there, Alt a corner (§7 "Editing geometry").
       const sel = shown(o);
-      const inserted = sel ? insertAtEdge(sel.geometry, vertexRule(sel.kind), p.pt, HANDLE_PX * p.mmPerPx, !!p.alt) : null;
+      // On the selected image itself (not a leg or control inside it): crop mode (J11).
+      // A finger never (mouse only), and not on a corner handle (J11 review).
+      if (sel?.kind === "image" && !o.cropMode && !p.touch && p.target?.kind === "object" && p.target.id === sel.id
+        && !imageRing(sel.geometry, sel.props.rotationDeg).some((c) => near(c, p.pt, HANDLE_PX * p.mmPerPx))) return o.onCropMode?.(true);
+      const inserted = sel && sel.kind !== "image" ? insertAtEdge(sel.geometry, vertexRule(sel.kind), p.pt, HANDLE_PX * p.mmPerPx, !!p.alt) : null;
       if (sel && inserted) {
         o.onVertexFocus?.(inserted.index);
         return o.onObjectMoved(sel.id, inserted.geometry);
@@ -366,11 +555,22 @@ function gripPoint(v: { x: number; y: number; hIn?: Pt; hOut?: Pt }, which: "in"
 }
 
 /** A bend grip's drag at `pt`: the handle moved by the pointer's offset from the press (`dragBendGrip`; Alt and Shift live). */
+/** A group move's geometries now: every member's base shifted by the drag (handles are offsets and stay). */
+export function groupMoved(d: { bases: ReadonlyMap<number, course.CourseObject["geometry"]>; from: Pt; to: Pt }): Map<number, course.CourseObject["geometry"]> {
+  const dx = d.to.x - d.from.x, dy = d.to.y - d.from.y;
+  return new Map([...d.bases].map(([id, g]) => [id, g.map((v) => ({ ...v, x: v.x + dx, y: v.y + dy }))]));
+}
+
 function gripDragged(d: Extract<Gesture, { kind: "bend-grip" }>, pt: Pt, mods?: { shift: boolean; alt: boolean }): Bend[] {
   const b = d.base[d.index];
   const h = (d.which === "out" ? b.hOut : b.hIn) ?? { x: 0, y: 0 };
   const vec = { x: h.x + pt.x - d.press.x, y: h.y + pt.y - d.press.y };
   return dragBendGrip(d.base, d.index, d.which, vec, mods?.alt ?? false, mods?.shift ?? false);
+}
+
+/** A corner drag's box: the lock XOR Shift (J11), at least 1 mm a side, the opposite corner fixed. */
+function cornerResized(d: Extract<Gesture, { kind: "image-corner" }>, pt: Pt, lock: boolean): course.CourseObject["geometry"] {
+  return resizeBox(d.base, d.rotationDeg, d.corner, pt, lock !== d.shift, IMAGE_MIN_MM);
 }
 
 /** The selected object as the page shows it (a draft from the last gesture until the list catches up). */
@@ -552,6 +752,41 @@ export function textBinding(o: {
     onHover: o.onHover,
     hoverPoint: o.hover,
     onClick: (p) => o.onPlace(o.snap(p.pt)),
+    onContextMenu: () => o.onExit(),
+  };
+}
+
+// ─── I: image (J7) ────────────────────────────────────────
+
+/**
+ * `I`: with a graphic picked, a dashed ghost of the box a click places (`editor-image-ghost`, centred on the snapped
+ * hover) and the click places it; with none picked a click places nothing. `hover` is the page's snapped hover
+ * (F27's placement loupe reads it as for `T`); `box` gives the box at a point.
+ */
+export function imageBinding(o: {
+  graphicId: number | null;
+  box: (pt: Pt) => [Pt, Pt];
+  onPlace: (pt: Pt) => void;
+  onExit: () => void;
+  snap: (pt: Pt) => Pt;
+  hover: Pt | null;
+  onHover: (p: ToolPointer | null) => void;
+}): EditorToolBinding {
+  const shapes: ToolShape[] = [];
+  if (o.graphicId !== null && o.hover) {
+    const [a, b] = o.box(o.hover);
+    shapes.push({
+      kind: "line", points: [a, { x: b.x, y: a.y }, b, { x: a.x, y: b.y }], closed: true, dashed: true, color: PURPLE,
+      testId: "editor-image-ghost", data: { "graphic-id": String(o.graphicId) },
+    });
+  }
+  return {
+    exclusive: true,
+    cursor: "crosshair",
+    shapes,
+    onHover: o.onHover,
+    hoverPoint: o.graphicId !== null ? o.hover : null,
+    onClick: (p) => { if (o.graphicId !== null) o.onPlace(o.snap(p.pt)); },
     onContextMenu: () => o.onExit(),
   };
 }
@@ -908,6 +1143,79 @@ export interface TrackLayer {
  * drawn below the tool's own shapes and never take a pointer; hover, press and click report the zoom on their way to
  * the tool, whose answers are kept. Every Map-mode binding is wrapped with it (G25; G7, G9, G27 add tools).
  */
+// ─── Map mode's `T` on map lines: select a line, split it at a node (docs/course-editor.md §13 "Split tool", G32) ──
+
+export interface MapSplitContext {
+  /** As `V`'s: the viewer's hit-test, the click sequence and the selection callback. */
+  hit: MapSelectContext["hit"];
+  clickSeq: MapSelectContext["clickSeq"];
+  onSelect: MapSelectContext["onSelect"];
+  /** The selected line's nodes (its one ring), or null: nothing drawn, a click selects. */
+  line: { vertices: readonly Vertex[]; closed: boolean } | null;
+  /** No split while a write is in flight. */
+  canSplit?: boolean;
+  /** A click on node `index` of the selected line: *Split at node* there. */
+  onSplit: (index: number) => void;
+}
+
+/** The nodes a line splits at (*Split at node*, §13 answer 4): every node of a loop, else all but the two ends. */
+export function splitNodes(line: { vertices: readonly Vertex[]; closed: boolean }): number[] {
+  const n = line.vertices.length;
+  const out: number[] = [];
+  for (let i = line.closed ? 0 : 1; i < (line.closed ? n : n - 1); i++) out.push(i);
+  return out;
+}
+
+/**
+ * `T` on map lines (G32, user 2026-11-20): the selected line's splittable nodes drawn as handles
+ * (`editor-split-node`, `data-index`); a click within `HANDLE_PX` of one splits the line there (*Split at node*), any
+ * other click selects as `V` does (the topmost hit), so the next line is one click away.
+ */
+export function mapSplitBinding(c: MapSplitContext): EditorToolBinding {
+  const nodes = c.line ? splitNodes(c.line) : [];
+  const shapes: ToolShape[] = nodes.map((i) => ({ kind: "handle", x: c.line!.vertices[i].x, y: c.line!.vertices[i].y, testId: "editor-split-node", data: { index: String(i) } }));
+  return {
+    exclusive: true,
+    shapes,
+    onClick: (p) => {
+      if (c.line && c.canSplit !== false) {
+        const reach = HANDLE_PX * p.mmPerPx;
+        let best: { i: number; d: number } | null = null;
+        for (const i of nodes) {
+          const v = c.line.vertices[i];
+          const d = Math.hypot(v.x - p.pt.x, v.y - p.pt.y);
+          if (d <= reach && (!best || d < best.d)) best = { i, d };
+        }
+        if (best) {
+          c.clickSeq.current++; // a hit-test in flight must not reselect over the split
+          return c.onSplit(best.i);
+        }
+      }
+      mapHitClick(c, p.pt, p.mmPerPx, (stack) => c.onSelect(stack[0] ?? null, stack));
+    },
+  };
+}
+
+/**
+ * `T` whole (G32): the GPS tracks' binding (null while they are off) over the map lines' — both drawn, a click on a
+ * GPS track (`hitsTrack`, the tracks tool's own rule) the tracks', any other click the lines'.
+ */
+export function mapTBinding(
+  tracks: EditorToolBinding | null, hitsTrack: (pt: Pt, reachMm: number) => boolean, lines: EditorToolBinding, clickSeq?: { current: number },
+): EditorToolBinding {
+  if (!tracks) return lines;
+  return {
+    ...tracks,
+    shapes: [...(tracks.shapes ?? []), ...(lines.shapes ?? [])],
+    onClick: (p) => {
+      if (!hitsTrack(p.pt, MAP_HIT_PX * p.mmPerPx)) return lines.onClick?.(p);
+      // A line hit-test still in flight is dropped: it must not undo this track pick when it answers.
+      if (clickSeq) clickSeq.current++;
+      tracks.onClick?.(p);
+    },
+  };
+}
+
 export function withTrackLayer(b: EditorToolBinding, layer: TrackLayer): EditorToolBinding {
   const out: EditorToolBinding = {
     ...b,
@@ -934,21 +1242,32 @@ export function withTrackLayer(b: EditorToolBinding, layer: TrackLayer): EditorT
   return out;
 }
 
-// ─── Map mode's `T`: the Tracks tool (docs/course-editor.md §13 "GPS tracks: editing", G27) ──────────
+// ─── Map mode's `T`: the Tracks tool (docs/course-editor.md §13 "GPS tracks: editing", G27, G30) ──────────
+
+/** Screen spacing of the nodes drawn along a tool's track (the renderer thins to it at the current zoom). */
+export const TRACK_NODE_GAP_PX = 10;
+/** Around the hovered node every stored point is drawn, within this radius. */
+export const TRACK_NODE_NEAR_PX = 60;
+
+/** The hovered node: the split a click would make, and the zoom it was found at (for the nodes drawn round it). */
+export type TrackHover = SplitCandidate & { mmPerPx: number };
 
 export interface MapTracksContext {
-  /** The tool's track (the one selected, visible, ready track), or null: no handles, a click selects. */
-  target: TrackToolTarget | null;
+  /** The tool's tracks (the selected, visible, ready ones), maybe none: then no nodes or handles, a click selects. */
+  targets: readonly TrackToolTarget[];
   /** The visible tracks as drawn (trimmed): a click on one selects it. */
   lines: readonly { id: string; line: gpsTrack.ProjectedTrack }[];
   gesture: { current: TrackToolState };
   /** Presses are taken (no trim or split write in flight). */
   canPress?: boolean;
+  /** The node under the pointer (the page keeps it, so the nodes round it are drawn); null off every node. */
+  hover?: TrackHover | null;
+  onHover?: (h: TrackHover | null) => void;
   /** The trim a held handle shows now (the layer draws it); null when released or cancelled. */
   onDraft: (live: { id: string; trim: gpsTrack.TrackRange } | null) => void;
   /** A handle released at another point: one write, `before` for the undo. */
   onTrim: (id: string, trim: gpsTrack.TrackRange, before: gpsTrack.TrackRange) => void;
-  /** A click on the tool's track: split at stored point `index`. */
+  /** A click on a node of a tool's track: split at stored point `index`. */
   onSplit: (id: string, index: number) => void;
   /** A click on another track: it becomes the tool's track (the selection alone). */
   onSelect: (id: string) => void;
@@ -957,21 +1276,37 @@ export interface MapTracksContext {
 
 /**
  * Map mode's Tracks tool (§13 "GPS tracks: editing"; docs/map-gps-tracks.md §5.2): exclusive, so a drag off a handle
- * pans; the tool's track's two end handles (`editor-track-handle`, at stored points `trim.start` and `trim.end − 1`)
- * drag along its stored points, one trim write on release; a click on the track splits it, on another track selects
- * it (`tools/tracks.ts`).
+ * pans. On each tool's track its splittable stored points are drawn as nodes (`editor-track-nodes`, thinned to
+ * `TRACK_NODE_GAP_PX` on screen, every one within `TRACK_NODE_NEAR_PX` of the hovered node), the node a click would
+ * split at highlighted (`editor-track-node-hover`); its two end handles (`editor-track-handle`, at stored points
+ * `trim.start` and `trim.end − 1`, drawn last) drag along its stored points, one trim write on release; a click on a
+ * tool's track splits it, on another track selects it (`tools/tracks.ts`).
  */
 export function mapTracksBinding(c: MapTracksContext): EditorToolBinding {
-  const t = c.target;
   const live = liveTrim(c.gesture.current);
-  const trim = t && live?.id === t.id ? live.trim : t?.trim;
   const shapes: ToolShape[] = [];
-  if (t && trim) {
+  const handles: ToolShape[] = [];
+  const hover = c.hover ?? null;
+  let hovered = false;
+  for (const t of c.targets) {
+    const trim = live?.id === t.id ? live.trim : t.trim;
+    if (!live && hover?.id === t.id && hover.index > trim.start && hover.index < trim.end - 1) hovered = true;
+    const data = { "track-id": t.id };
+    // Splittable: two visible points left on each side (§1.2 "Split"); none while a handle is held.
+    if (!live && trim.end - trim.start >= 4) {
+      shapes.push({ kind: "nodes", x: t.full.x, y: t.full.y, from: trim.start + 1, to: trim.end - 2, gapPx: TRACK_NODE_GAP_PX, testId: "editor-track-nodes", data });
+      if (hover?.id === t.id && hover.index > trim.start && hover.index < trim.end - 1) {
+        const near = nodesNear(t.full, trim, hover.index, TRACK_NODE_NEAR_PX * hover.mmPerPx);
+        shapes.push({ kind: "nodes", x: t.full.x, y: t.full.y, indices: near, testId: "editor-track-nodes-near", data });
+        shapes.push({ kind: "nodes", x: t.full.x, y: t.full.y, indices: [hover.index], active: true, testId: "editor-track-node-hover", data: { ...data, index: String(hover.index) } });
+      }
+    }
     for (const end of ["start", "end"] as const) {
       const i = end === "start" ? trim.start : trim.end - 1;
-      shapes.push({ kind: "handle", x: t.full.x[i], y: t.full.y[i], active: live !== null, testId: "editor-track-handle", data: { "track-id": t.id, end, index: String(i) } });
+      handles.push({ kind: "handle", x: t.full.x[i], y: t.full.y[i], active: live?.id === t.id, testId: "editor-track-handle", data: { ...data, end, index: String(i) } });
     }
   }
+  shapes.push(...handles);
   /** The step's state kept, the drafted trim reported when it changed, the effect sent; whether the press was taken. */
   const apply = (r: TrackToolStep): boolean => {
     const was = liveTrim(c.gesture.current);
@@ -980,17 +1315,25 @@ export function mapTracksBinding(c: MapTracksContext): EditorToolBinding {
     if (was?.trim.start !== now?.trim.start || was?.trim.end !== now?.trim.end) c.onDraft(now);
     const e = r.effect;
     if (e?.kind === "trim") c.onTrim(e.id, e.trim, e.before);
-    else if (e?.kind === "split") c.onSplit(e.id, e.index);
-    else if (e?.kind === "select") c.onSelect(e.id);
+    else if (e?.kind === "split") {
+      c.onHover?.(null);
+      c.onSplit(e.id, e.index);
+    } else if (e?.kind === "select") c.onSelect(e.id);
     return r.taken;
   };
   return {
     exclusive: true,
     shapes,
-    onClick: (p) => void apply(trackToolStep(c.gesture.current, { type: "click", pt: p.pt, reachMm: MAP_HIT_PX * p.mmPerPx, target: t, lines: c.lines })),
+    cursor: hovered ? "pointer" : undefined,
+    onHover: (p) => {
+      if (!c.onHover) return;
+      const h = p && c.gesture.current.kind === "idle" ? hoverCandidate(p.pt, MAP_HIT_PX * p.mmPerPx, c.targets, c.lines) : null;
+      c.onHover(h ? { ...h, mmPerPx: p!.mmPerPx } : null);
+    },
+    onClick: (p) => void apply(trackToolStep(c.gesture.current, { type: "click", pt: p.pt, reachMm: MAP_HIT_PX * p.mmPerPx, targets: c.targets, lines: c.lines })),
     onPointerDown: (p) => {
       if (p.touch || c.canPress === false) return false;
-      return apply(trackToolStep(c.gesture.current, { type: "down", pt: p.pt, handleMm: HANDLE_PX * p.mmPerPx, dragMm: MAP_DRAG_PX * p.mmPerPx, target: t }));
+      return apply(trackToolStep(c.gesture.current, { type: "down", pt: p.pt, handleMm: HANDLE_PX * p.mmPerPx, dragMm: MAP_DRAG_PX * p.mmPerPx, targets: c.targets }));
     },
     onPointerDrag: (pt) => {
       apply(trackToolStep(c.gesture.current, { type: "drag", pt }));

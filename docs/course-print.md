@@ -129,8 +129,14 @@ entry carries CMYK. A pass's `colour` indexes it.
 | `rgb` | `rg` / `RG` with the shared naive sRGB (`cmykToHex`, the screen's colour) | the hex as is | `k`, `K` |
 
 Components are written clamped to 0..1 with at most four decimals.
-No overprint, no transparency, no spot colours: the IOF layering is the
-colour stack's order (05 §5.4). `rgb` is for proofs and the golden
+No overprint, no spot colours: the IOF layering is the colour stack's
+order (05 §5.4). **Transparency only where a pass asks for it**
+(map-rendering.md §3.9, slice J): an ExtGState with `/ca` `/CA` and
+`/BM /Multiply`, glyph and text passes through isolated
+transparency-group forms, and a page `/Group` in the page's colour space
+on the pages that use one (map-rendering.md §5.3). A page without them
+is byte-identical to before (J1 checked the 69 golden and page-scene
+PDFs, both modes). `rgb` is for proofs and the golden
 comparison against the other backends (C3); `cmyk` for printing.
 
 Not in slice C (user decision 2026-10-23, decision log): `cmyk-offset`
@@ -294,8 +300,8 @@ to an event without corrections.
    §5.3).
 3. Emitted — the operators also get the frame, which they take back
    through `T_map⁻¹` and use to leave out what cannot paint inside it
-   (C13, `map-rendering.md` §5.3 "Frame culling") — as `q <frame> re W n  q <T_map> cm 4 M <passes> Q  [q <T_map>
-   cm <map images> Q]  Q`; coordinates integers in the layer unit
+   (C13, `map-rendering.md` §5.3 "Frame culling") — as `q <frame> re W n  q <T_map> cm 4 M <passes> Q  Q`, image course
+   objects among the passes (J5); coordinates integers in the layer unit
    (≤ 5 µm printed, a whole fraction of 10 µm; C11) relative to the
    window centre moved onto the 10 µm grid, each path under its own
    anchor, under a 9-decimal `cm` that folds both in (05 §5.2,
@@ -321,8 +327,8 @@ objects' `courseObjects`) with the frame, grown by the same 1 mm
 the map frame; the extra millimetre is white on the white sheet and keeps
 the ring's outer edge off the frame clip's edge, so no map ink seam shows
 there either), plus the description block
-(§6.2), in one `symbolise` call. Emitted as `q <µm → pt> cm 4 M <passes>
-[<page images>] Q` after the map layer, **unclipped**: 05 §5.1 clips the
+(§6.2), in one `symbolise` call. Emitted as `q <µm → pt> cm 4 M <passes> Q`
+(layout images among the passes, J5) after the map layer, **unclipped**: 05 §5.1 clips the
 page layer to the printable area, but legacy never clipped to
 `printMarginMm` (it only warns, `validate.ts`), and slice C keeps that.
 
@@ -330,7 +336,10 @@ page layer to the printable area, but legacy never clipped to
 course layer's completed stack (`layer.colours`, upper white included,
 ending with the toner saver white when the map layer draws one),
 then `#ffffff` and the block's ink when a block is drawn, then the hex
-colours of page objects in first-use order (`withObjectColours`). So a
+colours of page objects in first-use order (`withObjectColours`), then —
+only when a layout image is on the page — `page:graphics`, the row
+every layout image draws in (J5), so a layout graphic covers every other
+page object. So a
 page white-out prints in the stack's upper white, a page 709 in its upper
 purple at the size the map draws it (`documentFactor × scaleRatio`), and
 the block and page objects follow the map. Page-layer order is
@@ -526,7 +535,8 @@ with `sheet` = `PageInput` minus `map` and `geo`.
   draw shifts nothing), an empty gap list meaning the automatic cuts. A
   `marked_route` leg prints 707's dashes as one subpath per dash
   (§4.3); a corridor's band is a clip region over the map passes (a
-  `W*` clip, §4.3), its edge a lower-purple 705 stroke. Every course gets legs and
+  `W*` clip, §4.3) at opacity 1, below 1 a white fill under an ExtGState
+  `/ca` in a page `/Group` (J13, `course-layer.md` §10.2), its edge a lower-purple 705 stroke. Every course gets legs and
   automatic cuts from the course layer, with cut features from the
   pinned document (`cutFeaturesOfDocument`, §3.4 there) — unless the
   event's **Auto cuts** toggle is off: then the sheet carries
@@ -554,6 +564,13 @@ text with placeholders, lines and paths (dashes as
 legacy print draws them), rectangles, `solid` fills, `whiteout`,
 `whiteoutInverted` (ring against the frame + 1 mm, §4.4), `outOfBounds` (709 / 709.b /
 709.c from the library), images (§6.3). Sizes are page mm as stored.
+Opacity and Multiply print per pass through the ExtGStates of §2 (J4):
+every object kind, every fill mode, the fill and the stroke of one shape
+each at the object's opacity. A rotated rectangle prints as its turned
+corners about the box centre and a rotated text at its anchor
+(`course-layer.md` §3.6); `flipPageObject` flips the box and leaves
+`rotationDeg` as stored, since clockwise as seen is the same on the
+y-down page and in y-up page mm.
 User colours print through the inverse
 naive conversion in `cmyk` and as the hex in `rgb` (§2).
 
@@ -584,24 +601,56 @@ formula for formula, as objects for the shared stage:
 
 ### 6.3 Graphics
 
-Image objects become `PageImage`s in their layer's space (an `image`
-course object: paper µm under `T_map`, so it turns with a rotated window;
-a page-anchored layout object: page µm). The composer takes PNG bytes per graphic id; `writePage`
-embeds each distinct PNG once (`/Subtype /Image`, `Im<n>` in first-use
-order) and draws it `q [<rect> re W n] <w 0 0 h x y> cm /Imn Do Q`,
-stretched to the rectangle like the legacy `preserveAspectRatio="none"`,
-the crop's part filling it under a clip. An image without bytes is
-skipped with `IMAGE_MISSING`.
+Image objects are **image passes** in their layer's stream (J5,
+`map-rendering.md` §3.10): an `image` course object in the map layer's
+`course:graphics` row (paper µm under `T_map`, so it turns with a rotated
+window; below upper purple, so control circles and numbers draw over
+it), a layout object in the page layer's `page:graphics` row (page µm,
+on top of the page objects). Its quad carries the box, the flips and the
+rotation; its pass the opacity and blend (course-layer.md §3.6
+"Images"). A knockout image (J15, course-layer.md §3.6 "Knockout
+images") cuts the images below it in its layer: in the PDF each cut
+image's `Do` is drawn inside a `W* n` clip of its mask (the page outside
+the footprints, map-rendering.md §5.3), the knockout's own `Do` after it
+unclipped. No extra XObject is written; a job without knockouts writes the same bytes as before. The composer also lists each placement as a `PageImage`
+`{ layer, graphicId, sizeUm, crop? }` — the fetch list: which graphics
+to load, and the placed size an SVG is rasterised to (`svgRasterBox`).
+`writePage` embeds each distinct PNG once, before either layer is
+written (`/Subtype /Image`, `Im<n>` in first-use order; RGB with an
+`/SMask` when the PNG has alpha), and hands the names to both layers'
+operators, which draw `q <quad> cm [0 0 1 1 re W n <crop> cm] /Imn Do
+Q` in stream order — stretched to the box like the legacy
+`preserveAspectRatio="none"`, the crop's part filling it. A placement
+without bytes is skipped with `IMAGE_MISSING` (one warning each); a page
+without images writes the same bytes as before J5 (a digest test).
 
 **SVG logos** are rasterised in the API at render time (05 §5.7 a), so
-`graphics` rows stay as uploaded: resvg at 600 dpi of the placed size
-(the crop's source size), at most 4096 px per side (`svgRasterBox`), text
-in the bundled faces only (no system fonts),
-stretched to the exact pixel box; cached per graphic and size within one
-export. `renderCoursePages` asks its `rasteriseSvg` input for the PNG
-(the API's binding passes resvg, `rasteriseSvgGraphic`; since G15 it also
-receives the graphic id, which `renderPrintJob` uses to ask the server's
-`print.png` for that box, §8.5); without one an
+`graphics` rows stay as stored: resvg at 600 dpi of the placed size, at
+most 4096 px per side (`svgRasterBox`), text in the bundled faces only
+(no system fonts), stretched to the exact pixel box. Since the SVG
+sharpness fix (2026-11-19) only the part a page shows is rasterised:
+per page and graphic, the **window** is the union of its placements'
+crops (`unionWindow`, edges rounded out to 1/1024; none when a placement
+is uncropped), and the box is the largest a placement needs for the
+window (`svgRasterBox` of the placed size with the crop taken relative
+to the window, `cropInWindow`). Before, the whole graphic was rasterised
+at the crop's source size, so a small crop of a large drawing hit the
+4096 px cap and printed with few pixels. `writePage` takes the windows
+(`WritePageOptions.windows`) and the image operator draws each crop
+relative to its graphic's window. Cached per graphic, box and window
+within one export. `renderCoursePages` asks its `rasteriseSvg` input for
+the PNG with the window (the API's binding passes resvg,
+`rasteriseSvgGraphic(svg, w, h, window?)`, which wraps the original root
+in an outer `<svg>` whose `viewBox` is the window in the canvas's pixels,
+`svg-window.ts`; since G15 it also receives the graphic id, which
+`renderPrintJob` uses to ask the server's `print.png` for that box and
+window, §8.5). The wrapper keeps everything before the root (the XML
+declaration, a DOCTYPE and its entities, comments) in place and reads the
+root's start tag with quoted values, so entity references and a `>` in an
+attribute survive; a document it still cannot carry (it does not parse
+wrapped, e.g. a prefixed `<s:svg>` root, which uploads refuse) gets the
+window cut from a whole raster at the window's density, at most 16384 px
+a side. Without a rasteriser an
 SVG graphic is left out with `SVG_RASTER: … no SVG rasteriser` (and the
 writer's `IMAGE_MISSING`), as when resvg fails — a host that cannot
 rasterise is sent PNGs instead (slice G: "the browser never rasterises
@@ -735,21 +784,21 @@ lines drawn by the library; images DeviceRGB in `cmyk`.
 
 | Test | Covers |
 |---|---|
-| `print/__tests__/page.test.ts` | `T_map` against `mapToPage` (0°, ±rotation), inverse, frame in map space, `flipPageObject`, `transformPassStream` (slices kept, widths / taper / glyph instances / text scaled and turned, hatch lines on the transformed lines) |
+| `print/__tests__/page.test.ts` | `T_map` against `mapToPage` (0°, ±rotation), inverse, frame in map space, `flipPageObject` (J4: rotation, flips, opacity and blend kept), `transformPassStream` (slices kept, widths / taper / glyph instances / text scaled and turned, hatch lines on the transformed lines, J4: each pass's opacity and blend kept) |
 | `print/__tests__/description.test.ts` | every `IOF_SYMBOLS` key converts; 2.4 one fill, 1.10 one disc, 0.3 two strokes + disc, Bézier flags; block size and position, border, thick / thin rules, header sizes and weight, F text 0.34 × cell, pictograms centred at 0.8 × cell, one symbol per key |
-| `print/__tests__/compose.test.ts` | one colour-sorted map stream with lower purple < black < upper purple; block text / rules / pictograms on appended colours; no block → empty page layer; map ring outer boundary = frame (+1 mm) through `T_map⁻¹` in the toner saver white, page ring = frame + 1 mm, page white-out at upper white; P1: with a 709 area and a course text outside a map toner saver, its ring is the map layer's last pass (the page layer still draws after); placeholders; rotated `T_map`; images in layer space; `CourseStackError`; auto cuts off = the stream without cut features (D17) |
+| `print/__tests__/compose.test.ts` | one colour-sorted map stream with lower purple < black < upper purple; block text / rules / pictograms on appended colours; no block → empty page layer; map ring outer boundary = frame (+1 mm) through `T_map⁻¹` in the toner saver white, page ring = frame + 1 mm, page white-out at upper white; P1: with a 709 area and a course text outside a map toner saver, its ring is the map layer's last pass (the page layer still draws after); placeholders; rotated `T_map`; images in layer space; J4: image opacity / blend / rotation / flips on the page images of both layers; J5: an image course object and a layout image as image passes (course:graphics below upper purple, page:graphics last), each listed as a `PageImage` with its `sizeUm`, no `page:graphics` row without a layout image; `CourseStackError`; auto cuts off = the stream without cut features (D17) |
 | `print/__tests__/writer.test.ts` (C8) | a bold text symbol and a regular one embed two font objects, `…+LiberationSans` and `…+LiberationSans-Bold` |
-| `print/__tests__/write-page.test.ts` | operator order (sheet, frame clip, `T_map` `cm`, page `cm`), no `rg` in `cmyk` / no `k` in `rgb`, rotated `cm`, two pages sharing font, glyph forms and image XObject, page labels and outlines, `/Measure /GEO` (SWEREF99 TM corners near 58.6° N 15° E, rotated corners), deterministic bytes, missing image warning, an object far outside the frame absent from the content stream (C13) |
+| `print/__tests__/write-page.test.ts` | operator order (sheet, frame clip, `T_map` `cm`, page `cm`), no `rg` in `cmyk` / no `k` in `rgb`, rotated `cm`, two pages sharing font, glyph forms and image XObject, page labels and outlines, `/Measure /GEO` (SWEREF99 TM corners near 58.6° N 15° E, rotated corners), deterministic bytes, missing image warning, an object far outside the frame absent from the content stream (C13); J5: the four image-less page scenes' bytes unchanged (sha256 in `rgb` and `cmyk`), an image drawn by its quad as the layer's last op, an alpha PNG with an `/SMask`; J15: a knockout page image cuts the image below by a `W* n` clip with its own `Do` after it, a translucent cut image's ExtGState and `Do` inside the clip, no clip without a knockout |
 | `print/__tests__/isomorphic.test.ts` | no Node API, `Buffer`, `process`, `setImmediate`, `worker_threads`, sharp or resvg in any file the print module or the layout half (`course-maps/{resolve-layout,resolve-sheet,sheet-rows}.ts`) reaches, transitively; the package root reaches neither `print/writer.ts` nor `@cantoo/pdf-lib` (G13) |
-| `print/__tests__/course-pages.test.ts` (G13) | `renderCoursePages` with fonts as input: equal deterministic bytes, copies and `onPage`, `yieldToHost` once per composed sheet, a PNG embedded, an SVG through the injected rasteriser once per size, no rasteriser → `SVG_RASTER` and the PDF still written; `svgRasterBox`; `pageInputFor` |
+| `print/__tests__/course-pages.test.ts` (G13) | `renderCoursePages` with fonts as input: equal deterministic bytes, copies and `onPage`, `yieldToHost` once per composed sheet, a PNG embedded, an SVG through the injected rasteriser once per size, a cropped SVG over the union window of its crops with each crop drawn relative to it, no rasteriser → `SVG_RASTER` and the PDF still written; `svgRasterBox`; `pageInputFor` |
 | `print/__tests__/prepared-document.test.ts` (G13) | `prepareDocument`: decode once per key, the last two kept, a concurrent decode shared, a failed one forgotten; `objectsNear` by extent plus margin |
 | `packages/shared/src/__tests__/sheet-rows.test.ts` (G13) | `rowForClass` (template and scale), `rowForVariant` (the root's id and classes), the all-variations suffix, `sharedWindowCentre`, a setter sheet's group, `sheetForMapRow` = `resolveSheet` over `sheetInputForMapRow` |
 | `packages/shared/src/__tests__/resolve-sheet.test.ts` (in the API as `course-print-sheet.test.ts` until G13) | `resolveSheet`: paper / frame / window / tilt, structure and roles, unique sites, label offsets, extras, authored gaps from the structure only (start and finish rows, no GeoJSON, E6), description block / hidden, all-controls, free order, the event's auto cuts off on the view options (D17) |
 | `packages/shared/src/__tests__/resolve-layout.test.ts` "course sites", "layoutCourseEnds" (E6; the API's `course-map-layout.test.ts` until G13) | start, `course_controls` and finish from the rows with straight legs, no `cuts`; an unplaced end not drawn; the ends of a NULL structure from the columns (lowest-seq defaults, `firstAsStart`) and of a stored one from its items |
 | `packages/api/src/__tests__/integration/course-maps.test.ts` "creates, duplicates and applies…", "resolveSheet: a template previewed…" (E6; E-pages read both through `resolveSheet`, `previewLayout` gone) | a course with no structure and no GeoJSON resolves start → controls → finish (the event's first start / finish) and its description rows; a template alone resolves centred on the map origin |
 | `packages/api/src/__tests__/integration/course-print.test.ts` | the E2E fixture map pinned on a `vector` event: legacy event → no print document; two sheets → one PDF of two A4 pages, `TrimBox`, labels, outlines, Type0 / CIDFontType2 shared, frame clip and `T_map`, no `rg`, PNG and rasterised SVG logos shared (600 dpi), `/Measure /GEO` of the fixture's georeference, deterministic bytes |
-| `packages/api/src/render/__tests__/page-raster.test.ts` | the page oracle: white outside the frame and the ring, map inside, page box on top; rotated building where `T_map` puts it; block position on A4 |
-| `packages/api/src/render/__tests__/golden-files.test.ts` | `page-sprint-a4`, `page-ring`, `page-rotated` match the page oracle; `descriptions-a4` matches the description-sheet oracle (F11) |
+| `packages/api/src/render/__tests__/page-raster.test.ts` | the page oracle: white outside the frame and the ring, map inside, page box on top; rotated building where `T_map` puts it; block position on A4; J4: the layered Multiply product at a probe pixel, `backdropPng` byte for byte at supersample 2 |
+| `packages/api/src/render/__tests__/golden-files.test.ts` | `page-sprint-a4`, `page-ring`, `page-rotated`, `page-objects-alpha` (J4: a 50 % filled and stroked rectangle, a Multiply rectangle over map and purple, a 30° white-out at 60 %, a 20° text at 50 %, a 50 % page 709, a 50 % course white-out and a turned course text), `page-graphics` (J5: the lucka PNG around control 31 under its circle and number, turned 15° at 70 % around control 32, a Multiply page image over map and purple, a striped RGB graphic cropped, flipped and turned −20°) match the page oracle; `descriptions-a4` matches the description-sheet oracle (F11) |
 | `print/__tests__/description-sheet.test.ts` (F11) | §6.4: a 14-row block 4 × 3 / 3 × 2 / 3 × 2 per page at 5 / 6 / 7 mm; placement inside the margin; `count` (runners + vacancies, at least 1), a number, `fill`; 13 copies at 5 mm → two pages of one class; classes in order, never sharing a page; the gap only between blocks (0 / 20 / 30 mm); `DESCRIPTION_TOO_TALL`; the writer: one A4 page per tiled page labelled by class, one outline item each, the white sheet first, no `rg` in `cmyk` / no `k` in `rgb`, the XObject set the same for one page and three, deterministic bytes |
 
 The page goldens (`e2e/__golden__/map-gl/page-*.png`, 05 §7 tier 3) are
@@ -757,7 +806,11 @@ the page oracle (`render/page-raster.ts`): the map layer moved through
 `T_map` into page µm (`transformPassStream`) and rasterised over the
 frame alone — the frame clip is the raster's extent — composited with the
 page layer on white paper, at 10 px/mm, supersampled 2× (an A4 sheet at
-the scene goldens' 4× would be a ~400 MB intermediate). The
+the scene goldens' 4× would be a ~400 MB intermediate). A page layer with
+a Multiply pass is **layered** (J4): drawn by resvg onto the sheet so far
+(`backdropPng`, scaled nearest-neighbour) instead of composited over it,
+so it multiplies the map under it as the PDF's page does; pages without
+Multiply are composited as before, their goldens unchanged. The
 description-sheet golden (`descriptions-a4.png`, F11:
 `descriptionSheetScene()`, one class at 6 mm cells, `fill` → 3 × 4
 blocks) is the same oracle with no map layer
@@ -953,8 +1006,11 @@ tie-break, which the host does run — use `compareLabels` (pinned to
 
 ```text
 GET /api/maps/:nameId/print-job?<the maps.pdf query>
-GET /api/maps/:nameId/graphics/:id/print.png[?w=&h=]
+GET /api/maps/:nameId/graphics/:id/print.png[?w=&h=[&crop=]]
 ```
+
+`print.png` answers the event's kiosk key as well as `courses.view` (J2,
+`course-maps.md` API).
 
 **`print-job`** takes `maps.pdf`'s query (§8, `course-maps.md` API)
 and answers through the same builder, `buildPrintJob`
@@ -963,7 +1019,7 @@ selection, order, copies and set of caps for both routes.
 
 ```ts
 interface PrintJob {
-  version: 2;                       // PRINT_JOB_VERSION; a host refuses another (1: G15, no patch)
+  version: 7;                       // PRINT_JOB_VERSION; a host refuses another (1: G15, no patch; 2: before J5's image passes; 3: before J13's translucent band; 4: before the SVG windows; 5: before J15's knockout images; 6: before J18's hidden circles and numbers and J19's outline cuts)
   document: {
     hash: string;
     rotationCorrectionDeg: number;
@@ -1034,9 +1090,21 @@ interface PrintJob {
 
 | Graphic | `w`, `h` | Body |
 |---|---|---|
-| SVG | required, integers 1–4096 (`SVG_RASTER_MAX_PX`), else 400 | `rasteriseSvgGraphic(data, w, h)` — resvg at that exact box, the bundled faces only (§6.3) — run in a print worker under `printGate` (§8.2: print CPU stays off the event loop; the request may wait behind a running print, as `maps.pdf` does) |
+| SVG | required, integers 1–4096 (`SVG_RASTER_MAX_PX`), else 400 | `rasteriseSvgGraphic(data, w, h, crop)` — resvg at that exact box, the bundled faces only (§6.3) — run in a print worker under `printGate` (§8.2: print CPU stays off the event loop; the request may wait behind a running print, as `maps.pdf` does) |
 | PNG | ignored | the stored bytes |
 | SVG resvg cannot read, a worker that dies, the 10 min timeout | — | 400 `{ error }` with the message (`maps.pdf`'s convention, §8.1) |
+
+Optional `crop=x,y,w,h` (2026-11-19, §6.3): the window of an SVG to
+rasterise, as fractions of its canvas, top-left origin — what the
+composer and the map's texture loader ask (`windowParam`, exact 1/1024
+steps). Each a plain decimal, the size positive and the window inside
+0–1, else 400 `crop must be x,y,w,h: …`. Absent = the whole graphic. A
+PNG ignores it. The map's loader asks a window at its screen size too
+(`map-rendering.md` §5.2), so a zoom adds `print.png` requests — one per
+power-of-two step that grows the box, at most 8 MP each — which queue
+under `printGate` with `maps.pdf` as the print's own do; a client that
+gets a server without `crop` (an older API) would draw the whole raster
+as the window, so web and API deploy together (one image pair).
 
 `courses.view` on the event; the graphic must be the event's or a club
 graphic (`event_id NULL`), as `GET /api/maps/:nameId/graphics/:id`
@@ -1059,7 +1127,7 @@ call:
 interface PrintJobHost {
   document(hash: string): Promise<Uint8Array> | Uint8Array;  // prepareDocument's loader
   fonts: PrintFonts;
-  graphic(id: number, box?: [w: number, h: number]): Promise<Uint8Array>;  // print.png
+  graphic(id: number, box?: [w: number, h: number], window?: ImageWindow): Promise<Uint8Array>;  // print.png[?w=&h=[&crop=]]
   deterministic?: boolean;
   yieldToHost?: () => Promise<void>;
   onPage?: CoursePagesOptions["onPage"];
@@ -1179,7 +1247,18 @@ downloads from the server already differ (§3.2).
 - *Patch* (G14): the job's own `document.patch` (§8.5), applied by the
   same `prepareDocument` the server's worker runs, so an event's
   corrections print the same on the device; the client composes job
-  version 2 (`DEVICE_PRINT_JOB_VERSION`).
+  version 7 (`DEVICE_PRINT_JOB_VERSION`; J5 raised it to 3, since a
+  device built before image passes would print graphics without their
+  rotation, opacity or place under upper purple; J13 to 4, since a device
+  built before it would print a translucent corridor band as the opaque
+  clip; the SVG windows (2026-11-19) to 5, since a store prepared at 4
+  holds a cropped SVG only as the whole-graphic raster, which the
+  composer no longer asks, so it would print without the logo; J15 to 6,
+  since a device built before knockout images would print the overlay
+  whole over the hatches' openings; J18 and J19 to 7, since a device built
+  before them would draw an attached hatch's hidden circle and number and
+  cut by the box instead of the outline the objects now carry). A job stored offline at an older version reads as not stored and
+  is prepared again.
 - *Writer*: `@cantoo/pdf-lib` with fflate's `zlibSync` — pure
   JavaScript, the same code in Node and the browser (§3.2).
 - *Sorting*: `compareLabels` (`course-maps/collate.ts`,
@@ -1309,7 +1388,7 @@ page no service worker controls, which includes the dev server):
 | Key (same origin) | Body |
 |---|---|
 | `/api/maps/<nameId>/print-job?<query>` — the query normalised (`normaliseQuery`: parameters sorted by name, then value) | the job as served (JSON), header `x-oxygen-stored-at` (ISO time) |
-| `/api/maps/<nameId>/graphics/<id>/print.png[?w=&h=]` | the PNG as served |
+| `/api/maps/<nameId>/graphics/<id>/print.png[?w=&h=[&crop=]]` | the PNG as served |
 | `/offline-print/<nameId>` | the manifest `{ storedAt, documentHash, jobVersion, queries, skipped, complete }` |
 
 A run replaces the event's entries and deletes those outside its new
@@ -1445,12 +1524,14 @@ back to the box's `maps.pdf`.
 | `packages/api/src/__tests__/integration/course-maps.test.ts` "a readout-path request is answered…" | 150 extra pages in one print while `race.recentActivity` is polled every 10 ms: every probe is answered within 500 ms and more than three were answered before the PDF finished; the PDF has all pages. A smoke test of the route wiring — the event-loop bound itself is `print-worker.test.ts`'s |
 | `packages/api/src/__tests__/integration/course-print.test.ts` | §7.5's row, plus `qpdf --check` of both colour modes; the worker's bytes equal the in-process bytes (`deterministic: true`) and `onPage` fires once per sheet |
 | `packages/api/src/__tests__/integration/print-patch.test.ts` (G14) | the event's patch in `maps.pdf` (one A4 sheet of `e2e/test.ocd`, `deterministic`, through the print worker): a hide of a lone point object → the PDF differs, the job names the patch at the write's version, `maps.pdf` equals `renderCoursePages` over `loadPinnedPrintDocument` (`patchHidden` 1), and where `pdftocairo` is installed (CI) every pixel that changed lies inside the object's 16 mm box on the page; an add of the same symbol 30 mm off the frame centre → the next print on the same worker differs and only inside its box; `setEnabled(false)` → the unpatched bytes and the unpatched job, `true` → the patched bytes again; the job with a patch composed over HTTP equals `maps.pdf` |
+| `packages/api/src/__tests__/svg-window.test.ts` (SVG sharpness fix, 2026-11-19) | `parseRasterWindow` and its refusals; `rasteriseSvgGraphic` over a window: the window fills the box (a 1-unit line of a 1000-unit canvas is 2 px of a 200 px window raster), stretched to another aspect, a canvas in mm with its own viewBox, a DOCTYPE's entities and a `>` in a root attribute carried, a prefixed root cut from a whole raster; `reframeSvg` wraps the root, replacing only its position and size |
+| `packages/shared/src/render/__tests__/image-window.test.ts` | `unionWindow` (rounded out to 1/1024, uncropped = whole), `cropInWindow`, `windowParam` |
 | `packages/api/src/__tests__/print-worker.test.ts` | the worker on `e2e/test.ocd`: bytes equal in-process; with a patch (G14): equal to the in-process bytes over the patched document and unlike the unpatched ones, the blob read once per hash + version and again for a new version (which shows), a disabled patch the unpatched bytes; a `raster` request equals the in-process `rasteriseSvgGraphic` at the exact box (G15); the blob read and sent once per worker; `page` order; an error keeps the worker usable; `CourseStackError` re-created (a document with palette ids stripped); a reset rejects the request in flight and the next call recovers; the main thread's event-loop delay stays under 25 ms (or half a page) during a 10-page A3 print; `PRINT_WORKERS` parsing |
-| `packages/api/src/__tests__/integration/print-job.test.ts` (G15) | §8.5: the job's shape (version, document hash and rotation, sheets in print order, graphics ascending with the image course object's and without another event's, `cmyk`, `info`, file name), JSON-safe, `no-store`; `buildPrintJob`'s in-memory job holds no `undefined`, non-finite number, `Map`, `Date` or typed array and equals its JSON round trip and the route's body; composed over HTTP through `renderPrintJob` (document from `/api/map-documents/:hash`, graphics from `print.png`, the bundled faces) it equals `maps.pdf`'s bytes (both `deterministic`) for every sheet, one sheet, `allControls`, `classes`, `copies=runners&spare=1`, and on a butterfly root `courses`, `variants` and `allVariations` (labels `Long AB` / `Long BA`, `_Long_A4_AB_BA.pdf`), the SVG fetched at `svgRasterBox`'s box and only the foreign graphic `IMAGE_MISSING`; the caps and selection 400s word for word `maps.pdf`'s (201 sheets, `spare=501`, `spare` alone, two selections, unknown map, `copies=all`); no pin 400, unknown event 404; `print.png`: SVG = `rasteriseSvgGraphic` at w × h, PNG as stored, the `w`/`h` 400s, club graphic 200, another event's / unknown 404, bad id 400; 401 / 403 / 200 under `AUTH_MODE=proxy` on the job and `print.png` |
+| `packages/api/src/__tests__/integration/print-job.test.ts` (G15) | §8.5: the job's shape (version, document hash and rotation, sheets in print order, graphics ascending with the image course object's and without another event's, `cmyk`, `info`, file name), JSON-safe, `no-store`; `buildPrintJob`'s in-memory job holds no `undefined`, non-finite number, `Map`, `Date` or typed array and equals its JSON round trip and the route's body; composed over HTTP through `renderPrintJob` (document from `/api/map-documents/:hash`, graphics from `print.png`, the bundled faces) it equals `maps.pdf`'s bytes (both `deterministic`) for every sheet, one sheet, `allControls`, `classes`, `copies=runners&spare=1`, and on a butterfly root `courses`, `variants` and `allVariations` (labels `Long AB` / `Long BA`, `_Long_A4_AB_BA.pdf`), the SVG fetched at `svgRasterBox`'s box and only the foreign graphic `IMAGE_MISSING`; the caps and selection 400s word for word `maps.pdf`'s (201 sheets, `spare=501`, `spare` alone, two selections, unknown map, `copies=all`); no pin 400, unknown event 404; `print.png`: SVG = `rasteriseSvgGraphic` at w × h, PNG as stored, the `w`/`h` 400s, `crop` = `rasteriseSvgGraphic` over that window (unlike the whole raster) and its 400s, a PNG ignoring it, club graphic 200, another event's / unknown 404, bad id 400; 401 / 403 / 200 under `AUTH_MODE=proxy` on the job and `print.png` |
 | `packages/api/src/__tests__/course-map-graphics.test.ts` (G15 part) | `parseRasterBox`: integers 1–4096 both sides, every other form the 400 message; `sheetGraphicIds`: page objects' and image course objects' graphics once each, ascending (the regression of `docs/bugfix-course-object-image-print.md`) |
 | `packages/api/src/__tests__/integration/venue-print.test.ts` (G18) | §8.7: one node prints as the cloud (the event's patch hiding one object, G14; a template with an event PNG and a club PNG, an image course object with an event SVG, a course sheet, an all-controls sheet, a class on the template), takes its own checkout snapshot through JSON, loses the club graphic, imports the snapshot as the box (graphics fetched by id and checked) and prints again: `print-job` equal, every `print.png` equal, `maps.pdf` and the description sheets byte-equal |
 | `e2e/course-maps.spec.ts` "export on a venue box whose cloud is unreachable" (G18) | §8.7 in the browser: with `layout.autoSheets` answering the forwarder's `CLOUD_UNREACHABLE` 412, the Courses page's course export skips the step and downloads (a course with a sheet: one A4 page, no error shown); a course without one shows maps.pdf's "No requested maps found" |
-| `packages/shared/src/print/__tests__/print-job.test.ts` (G15, G14) | `renderPrintJob` equals `renderCoursePages` for the same inputs (copies, a PNG and an SVG; the PNG fetched once without a box, the SVG once per box by id); a JSON round trip gives equal bytes; an unfetchable graphic gives `SVG_RASTER` / `IMAGE_MISSING` and a PDF; the document read once per hash; version 1 refused; with a patch (G14): `renderCoursePages`' bytes over the patched prepared document and not the unpatched ones, a JSON round trip equal, a disabled patch the unpatched bytes, a skipped op a `PATCH_ISSUE` warning and still a PDF |
+| `packages/shared/src/print/__tests__/print-job.test.ts` (G15, G14) | `renderPrintJob` equals `renderCoursePages` for the same inputs (copies, a PNG and an SVG; the PNG fetched once without a box, the SVG once per box by id; a cropped SVG asked with its window); a JSON round trip gives equal bytes; an unfetchable graphic gives `SVG_RASTER` / `IMAGE_MISSING` and a PDF; the document read once per hash; version 1 refused; with a patch (G14): `renderCoursePages`' bytes over the patched prepared document and not the unpatched ones, a JSON round trip equal, a disabled patch the unpatched bytes, a skipped op a `PATCH_ISSUE` warning and still a PDF |
 | `packages/shared/src/print/__tests__/prepared-document.test.ts` (G13, G14) | decode, render input, header and cut features; one read per key, the third key evicts the oldest, a failed decode forgotten; with a patch: a hidden boulder neither drawn nor a cut feature, an added one both; one entry per version and a null, disabled or op-less patch the unpatched entry; a patch keyed onto another document not applied; `preparedDocumentKey`; a skipped op in `patchIssues`; `objectsNear` |
 | `e2e/course-maps.spec.ts` "export a course that has no template yet" (G15, G14 part) | `print-job?courses=` of the exported course: version 2, `cmyk`, a document hash, no patch, as many pages (with copies) as the same query's `maps.pdf`, its file name; after `mapPatch.applyChange` (a hide) the job carries the patch at the write's version, the device's export (no `maps.pdf` request) equals the patched `maps.pdf` object for object, and removing the op makes the patch null again |
 | `e2e/course-maps.spec.ts` "export a course that has no template yet" (G16 part), "the server prints when the device cannot" | §8.6 in Chromium: the Courses page's course export asks `print-job` and not `maps.pdf`, is saved under the job's file name and equals `maps.pdf` of the same query object for object (all but `Info`, the cross-reference and object streams); again with a PNG and an SVG on the sheet — `print.png` asked for the PNG without a box and for the SVG with `w`, `h` (the first E2E on `print.png`); `navigator.deviceMemory` 0.5 → `maps.pdf` asked, no job, one A4 page downloaded. Runs the Vite dev server: the production chunk is `offline-print.preview.spec.ts`'s (G29) |
@@ -1468,6 +1549,7 @@ back to the box's `maps.pdf`.
 | `e2e/course-editor-layout.spec.ts` "F11: description sheets" (`chromium`) | Export ▾ → *Description sheets…*: focus inside the dialog and kept there by Tab; every class with a course checked; `k` typed in it arms no tool; *None* disables the download; two classes, two copies, 5 mm → a `…_descriptions.pdf` of two A4 pages; Escape closes the dialog only |
 | `e2e/courses.spec.ts` "Export → Description sheets…" (`chromium`) | the Courses page's export menu opens the same dialog; `fill` → `itest_descriptions.pdf`, one page per checked class |
 | `packages/api/src/__tests__/integration/variant-pages.test.ts` (F8) | §4.6 on a butterfly (AB / BA) with a class of three runners and a plain course: `?courses=<root>` two pages in key order labelled `Long AB` / `Long BA`, the course id the root's and the runners' course the child's, `{variant}`, `{course}`, the block header and its numbering the variant's, one shared window; `?courses=<variant>` one page (`_Long_BA.pdf`, `Info /Title`) and no new sheet; `?variants=` in key order; `?classes=` per variant with the class in the header; `?allVariations=` one page — three structures, no tint, codes, the block once per control without numbers, `_Long_AB_BA.pdf`; F15: a second root with an equal fork — `viewOptions.labels` 1, 2, 2, 3, `labelMode` still `code`, the block rows 1, 2, 2, 3, no tint, no `allVariations`; an unequal fork has neither labels nor row numbers; `copies=runners&spare=1` → AB × 3, BA × 2 sharing `/Contents`, `qpdf --check`; a class's and a plain course's stacks; the unfiltered export; `autoSheets` makes no sheet for a variant and returns the root's; `courseMap.resolveSheet { variantKey }` (block, `{variant}`, the shared window, Class view, a key without a variant, a plain course) and `courseMap.list`'s per-variant validation; the 400s (unknown key, a non-root, a bare `variants`, two selections, `copies` ≠ runners, `spare` alone or negative, `copies` without a course selection) |
+| `packages/shared/src/print/__tests__/alpha-pdf.test.ts` (J1) | §3.9 opacity and Multiply: `q /GSn gs … Q` around a fill, stroke or hatch; glyph and text passes through an isolated transparency-group form whose BBox holds a turned glyph's farthest corner; one ExtGState per (opacity, blend) per document; the page `/Group` only on pages that use one, in the mode's colour space, kept by `copyPage`; a culled pass asks for nothing; inside a mask's clip; an opaque stream writes no `gs`; a writer without `alpha` (or without `group`, for glyph and text) draws opaque |
 | `packages/shared/src/print/__tests__/writer.test.ts` "copies a page", `compose.test.ts` "the all-variations page" (F8) | `copyPage`: three pages on one content stream and one resources dictionary, the trim box, the label repeated, one outline item, the bytes about one page's; the all-variations input composes with the plain colour table (no `course-tint:` row) and more course passes than the spine alone; F15: `viewOptions.labels` draws the numbers the sequence would, the colour table unchanged |
 | `e2e/course-editor.spec.ts` "F7: variations and loops" (F8 part) | Export ▾ *This course (2 variants)* → two pages per own sheet, *All variations* → one per sheet, *One map per runner* disabled without runners; Layout mode shows Variant ▾ = AB and no *All variations*; BA picked → the mode kept, *This variant BA* → one page per sheet (the suite may hand the course another test's map exchange: two part sheets) |
 | `e2e/courses.spec.ts` "a course with variations lists its variants…" (F8 part) | a variant row's one action (`export-variant-<seq>`, its title) requests `?variants=<root>:B` (of `print-job` since G16, §8.6, or `maps.pdf`); the root row's `export-all-variations-<root>` requests `?allVariations=<root>`; the seed's missing base map shows on the error line |
@@ -1533,6 +1615,20 @@ pixels beyond 16 levels; scenes not listed are 0.000 % in all columns):
 | `course-all-controls` | 0.478 | 0.000 | 0.398 |
 | `page-sprint-a4` | 0.073 | — | 0.062 |
 | `page-ring` | 0.057 | — | 0.045 |
+| `page-rotated` | 0.027 | — | 0.015 |
+| `page-objects-alpha` (J4) | 0.008 | — | 0.003 |
+| `page-graphics` (J5) | 0.025 | — | 0.014 |
+
+J1 (2026-11-18; poppler 24.02): the alpha scenes `alpha-passes`,
+`alpha-text` and `blend-multiply` measure 0.000 % in all three columns;
+re-measured after J3 halved `alpha-text`'s halo (250 µm): still 0.000 %.
+J4 (2026-11-18, poppler 24.02): `page-objects-alpha` at introduction,
+with the layered page oracle (§7.5) for its Multiply rectangle.
+J5 (2026-11-18, poppler 24.02): `page-graphics` at introduction. With
+resvg's default smooth sampling it measured 0.893 % / 0.879 % (every
+band edge of the 64 px lucka enlarged 25× differed); poppler draws an
+image without `/Interpolate` nearest-neighbour, so the oracle does too
+(`image-rendering="optimizeSpeed"`, `map-rendering.md` §5.1).
 
 C11 (2026-10-24) re-measured `rgb` with the layer unit: every ratio
 within 0.014 pp of the µm encoding's (largest: `lib-text-layout`
@@ -1541,7 +1637,6 @@ text budget), outline runs ≤ 0.002 %; all 57 golden tests and
 `qpdf --check` pass. A 10 µm printed unit was rejected on this tier
 (`lib-borders` 0.84 %, `lib-hatch` 0.45 %, `hatch-area` 0.22 %:
 `map-rendering.md` §5.3 "Units").
-| `page-rotated` | 0.027 | — | 0.015 |
 
 Every outline run is 0.000 %: the residual of the embedded-font runs is
 the glyph renderer alone, largest on the small text of `lib-text` and
@@ -1868,6 +1963,15 @@ The tool's own tests (`print-run.test.ts`, `measure-print.test.mjs`,
 
 ## Pending in this chapter
 
+- **SVG graphics stored before the upload trim** (2026-11-19) keep the
+  canvas they were uploaded with; the window raster (§6.3) keeps their
+  crops sharp, and uploading the file again stores it trimmed. No
+  migration rewrites stored rows (Marcus's choice: "Trim new uploads").
+- **Transparency on the club's printer** (slice J): `/ca`, `/BM
+  /Multiply` and transparency-group forms render correctly in poppler
+  (`pdftocairo`, the PDF tier) and pass `qpdf --check`; a real printer or
+  RIP is unverified until the manual print checkpoint after J5. A PDF/X
+  profile (Pending above) must allow or flatten them.
 - **PDF size** (rows C11, C13, done): Club-full A4 at 1:10 000 is
   917 kB and Sprint A3 654 kB (§11.5); 05 Appendix B's 0.25 / 0.5 MB
   assumed 6.7× / 1.5× fewer path points than the windows hold and the
@@ -1895,7 +1999,7 @@ The tool's own tests (`print-run.test.ts`, `measure-print.test.mjs`,
   ⊕ course in one stream in colour-stack order (legs under the line art
   above areas, `stack-order`), so the base map is not one XObject but
   two halves split at lower purple, and a variant's corridors clip the
-  map passes per page (`W*`, §4.3) — a composer restructuring, not a
+  map passes per page (`W*`, §4.3; a translucent band is a fill, J13) — a composer restructuring, not a
   resource flag. By §11.5 (917 kB per Club-full A4 page, nearly all of
   it the map stream) a four-variant course is about 3.7 MB against about
   1.1 MB shared, acceptable for a download; identical **copies** of a

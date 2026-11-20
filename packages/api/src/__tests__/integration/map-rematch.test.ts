@@ -16,6 +16,7 @@ import { applyEventMap } from "../../event-map.js";
 import { startImportJob } from "../../map-store/jobs.js";
 import { getBlob } from "../../map-store/blob-store.js";
 import { planRematch, runRematch } from "../../map-store/rematch.js";
+import { importMapToDocument } from "../../import/ocad.js";
 
 const FIXTURE = resolve(__dirname, "../../../../../e2e/test.ocd");
 const sha256 = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
@@ -128,6 +129,49 @@ describe("planRematch / runRematch", () => {
       await removed.cleanup();
     }
   }, 60_000);
+});
+
+describe("the release re-match moves a source-order pin onto the IOF colour layers (row I5)", () => {
+  it("re-imports an ocad-18 document in the iof order; its patch keeps every op and re-materialises its symbol", async () => {
+    const ev = await createTestEvent("map_rematch_layers");
+    // The same file as ocad-18 drew it: the source order (§9.2), stored under the old importer.
+    const old = await importMapToDocument(fixture, "test.ocd", "ocad", { importer: "ocad-18", match: { decisions: [], colourOrder: "source" } });
+    const oldDoc = mapDocument.decodeMapDocument(old.bytes);
+    expect(oldDoc.header.colourOrder).toEqual({ order: "source" });
+    const sym = mapDocument.materialiseSymbol(oldDoc, "ISOM2017-2:204");
+    if (!sym.ok) throw new Error("fixture");
+    const target = oldDoc.attrs.sourceIndex[0];
+    const ADD = "019a7d2e-0000-7000-8000-0000000000cc";
+    const ops = {
+      [`hide:${target}`]: { op: "hide", sourceIndex: target },
+      [`add:${ADD}`]: { op: "add", id: ADD, type: mapDocument.OBJECT_TYPE.point, symbol: { patch: sym.key }, coords: [[1000, 1000]] },
+    };
+    const patchRow = () => ctx.db.mapPatch.findUniqueOrThrow({ where: { eventId: ev.eventId } });
+    try {
+      await ctx.db.mapDocument.createMany({
+        data: [{ hash: old.documentHash, bytes: Uint8Array.from(old.bytes), sizeBytes: old.bytes.byteLength, formatVersion: 1, importerVersion: "ocad-18", libraryVersion: old.libraryVersion, sourceHash, header: {}, report: {} }],
+        skipDuplicates: true,
+      });
+      await ctx.db.mapFile.create({ data: { eventId: ev.eventId, fileName: "test.ocd", sourceHash, documentHash: old.documentHash } });
+      await ctx.db.mapPatch.create({ data: { eventId: ev.eventId, documentHash: old.documentHash, ops, symbols: { [sym.key]: sym.symbol }, version: 3n } });
+      expect(await mine({ eventId: ev.eventId })).toEqual([expect.objectContaining({ kind: "event", documentHash: old.documentHash, reason: "importer" })]);
+
+      const run = await runRematch(ctx.db, { eventId: ev.eventId, itemTimeoutMs: 60_000 });
+      expect(run.failures).toEqual([]);
+      const pin = (await ctx.db.mapFile.findFirstOrThrow({ where: { eventId: ev.eventId } })).documentHash!;
+      expect(pin).not.toBe(old.documentHash);
+      const now = mapDocument.decodeMapDocument((await getBlob(ctx.db, "map_documents", pin))!);
+      expect(now.header.format.importer).toBe(mapImport.OCAD_IMPORTER_VERSION);
+      expect(now.header.colourOrder?.order).toBe("iof");
+      const rekeyed = await patchRow();
+      expect(rekeyed).toMatchObject({ documentHash: pin, ops, unresolved: {} });
+      const again = mapDocument.materialiseSymbol(now, sym.key);
+      if (!again.ok) throw new Error("not materialisable on the layers");
+      expect(rekeyed.symbols).toEqual({ [sym.key]: JSON.parse(JSON.stringify(again.symbol)) });
+    } finally {
+      await ev.cleanup();
+    }
+  }, 120_000);
 });
 
 describe("the event's map patch follows the re-match (docs/map-patches.md §4.4, G11)", () => {

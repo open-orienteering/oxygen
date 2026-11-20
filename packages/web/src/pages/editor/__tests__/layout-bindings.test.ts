@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { CourseMapObject } from "@oxygen/shared";
 import type { ToolPointer } from "../../../components/MapViewer";
-import { sheetWindow, toView, type SheetGeometry } from "../../../lib/editor/layout";
+import { sheetWindow, toView, upOf, type SheetGeometry } from "../../../lib/editor/layout";
+import { rotationAt } from "../../../lib/editor/transform-gestures";
 import { LAYOUT_KEYS, layoutBinding, type LayoutBindingContext, type LayoutGesture } from "../layout/bindings";
 import type { GestureRef } from "../tools/bindings";
 import type { PolygonState } from "../tools/polygon";
@@ -25,7 +26,7 @@ function ctx(over: Partial<Omit<LayoutBindingContext, "onPreview" | "onCommit" |
   const fns = { onPreview: vi.fn(), onCommit: vi.fn(), onSelect: vi.fn(), onPlace: vi.fn() };
   const c: LayoutBindingContext = {
     geometry: g, editable: [box], locked: [logo], description: { visible: true, x: 140, y: 12, cellSizeMm: 6 }, block: { x: 140, y: 12, width: 48, height: 30 },
-    centre: { x: 0, y: 0 }, selection: null, tool: { kind: "select" }, snapping: false, gesture, imageHref: (id: number) => `/img/${id}`,
+    centre: { x: 0, y: 0 }, selection: null, tool: { kind: "select" }, snapping: false, gesture,
     ...fns,
     ...over,
   };
@@ -46,12 +47,11 @@ describe("Layout binding (docs/course-layout.md §2, §3; 08 §5.3 Layout column
     expect(b.onPointerDown!(at(120, 200))).toBe(false);
   });
 
-  it("draws the sheet and the page images on the UI layer", () => {
+  it("draws the sheet on the UI layer; page images are the map engine's (J6), not a UI shape", () => {
     const shapes = layoutBinding(ctx()).shapes!;
     const ids = shapes.flatMap((s) => ("testId" in s && s.testId ? [s.testId] : []));
-    expect(ids).toEqual(expect.arrayContaining(["editor-layout-paper", "editor-layout-printable", "editor-layout-frame", "editor-layout-image", "editor-layout-description"]));
-    const img = shapes.find((s) => s.kind === "image")!;
-    expect(img.kind === "image" && img.href).toBe("/img/9");
+    expect(ids).toEqual(expect.arrayContaining(["editor-layout-paper", "editor-layout-printable", "editor-layout-frame", "editor-layout-description"]));
+    expect(ids).not.toContain("editor-layout-image");
   });
 
   it("click on an object selects it; a drag moves it by the page offset and commits once", () => {
@@ -312,3 +312,176 @@ describe("V on a selected path: the course editor's geometry gestures (D16, docs
   });
 
 });
+
+describe("an image corner drag and the lock (J8, docs/course-layout.md §3)", () => {
+  const img: CourseMapObject = { id: "img", kind: "image", anchor: "page", graphicId: 9, x: 50, y: 50, width: 40, height: 20 };
+  const dragCorner = (lock: boolean | undefined, shift: boolean) => {
+    const c = ctx({ editable: [img], selection: { kind: "object", id: "img" }, aspectLock: lock });
+    const b = layoutBinding(c);
+    expect(b.onPointerDown!(at(90, 70, { shift }))).toBe(true);
+    b.onPointerDrag!(view(100, 90));
+    b.onPointerUp!(view(100, 90));
+    const o = c.onCommit.mock.calls[0][0].objects[0] as Extract<CourseMapObject, { kind: "image" }>;
+    return o.width / o.height;
+  };
+  it("locked keeps the ratio and Shift frees it; unlocked is free and Shift keeps it", () => {
+    expect(dragCorner(true, false)).toBeCloseTo(2, 6);
+    expect(dragCorner(true, true)).not.toBeCloseTo(2, 2);
+    expect(dragCorner(false, false)).not.toBeCloseTo(2, 2);
+    expect(dragCorner(false, true)).toBeCloseTo(2, 6);
+  });
+});
+
+describe("transform handles (J9, docs/course-layout.md §3 \"Transform handles\")", () => {
+  const img: CourseMapObject = { id: "img", kind: "image", anchor: "page", graphicId: 9, x: 50, y: 50, width: 40, height: 20 };
+  const sel = (o: CourseMapObject, over: Partial<LayoutBindingContext> = {}) => ctx({ editable: [o], selection: { kind: "object", id: o.id }, ...over });
+  const committed = (c: ReturnType<typeof ctx>) => c.onCommit.mock.calls[0][0].objects[0] as Extract<CourseMapObject, { kind: "image" | "rectangle" }>;
+  // The knob: 24 px above the top edge's middle at 0.1 mm/px (pagePerView 1) → 2.4 mm above (70, 50).
+  const knob = { x: 70, y: 50 - 2.4 };
+
+  it("draws the turned box, its corners and the knob; a path gets no knob", () => {
+    const ids = layoutBinding(sel({ ...img, rotationDeg: 30 })).shapes!.flatMap((s) => ("testId" in s && s.testId ? [s.testId] : []));
+    expect(ids.filter((i) => i === "editor-layout-handle")).toHaveLength(4);
+    expect(ids).toContain("editor-layout-rotate");
+    const path: CourseMapObject = { id: "p", kind: "path", anchor: "page", closed: true, points: [{ x: 10, y: 10 }, { x: 30, y: 10 }, { x: 20, y: 30 }], fillMode: "none" };
+    const pathIds = layoutBinding(sel(path)).shapes!.flatMap((s) => ("testId" in s && s.testId ? [s.testId] : []));
+    expect(pathIds).not.toContain("editor-layout-rotate");
+  });
+
+  it("a knob drag turns about the centre by the pointer's angle, Shift in 15° steps; a cancel writes nothing", () => {
+    const c = sel(img);
+    const b = layoutBinding(c);
+    expect(b.onPointerDown!(at(knob.x, knob.y))).toBe(true);
+    // From straight above the centre (70, 60) to straight right of it: a quarter turn clockwise.
+    b.onPointerDrag!(view(90, 60));
+    b.onPointerUp!(view(90, 60));
+    expect(committed(c).rotationDeg).toBeCloseTo(90, 6);
+    const s = sel(img);
+    const bs = layoutBinding(s);
+    bs.onPointerDown!(at(knob.x, knob.y));
+    bs.onPointerDrag!(view(80, 50), { shift: true, alt: false });
+    bs.onPointerUp!(view(80, 50));
+    expect((committed(s).rotationDeg ?? 0) % 15).toBe(0);
+    const n = sel(img);
+    const bn = layoutBinding(n);
+    bn.onPointerDown!(at(knob.x, knob.y));
+    bn.onPointerDrag!(view(90, 60));
+    bn.onPointerUp!(null);
+    expect(n.onCommit).not.toHaveBeenCalled();
+    expect(n.onPreview).toHaveBeenLastCalledWith(null);
+  });
+
+  it("a text turns about its anchor", () => {
+    const text: CourseMapObject = { id: "t", kind: "text", anchor: "page", x: 100, y: 100, text: "Header", fontSizeMm: 5, color: "#000000" };
+    const c = sel(text);
+    const b = layoutBinding(c);
+    const k = (b.shapes!.find((s) => "testId" in s && s.testId === "editor-layout-rotate") as { from: { x: number; y: number } }).from;
+    const kPage = { x: toPageOf(k).x, y: toPageOf(k).y - 2.4 };
+    expect(b.onPointerDown!(at(kPage.x, kPage.y))).toBe(true);
+    // The anchor is the pivot: a pointer straight right of the anchor from straight above it is +90.
+    b.onPointerDrag!(view(100 + 20, 100));
+    b.onPointerUp!(view(120, 100));
+    const o = c.onCommit.mock.calls[0][0].objects[0] as Extract<CourseMapObject, { kind: "text" }>;
+    expect([o.x, o.y]).toEqual([100, 100]);
+    // The angle about the anchor, not about the box's centre.
+    expect(o.rotationDeg).toBeCloseTo(rotationAt(0, upOf({ x: 100, y: 100 }), upOf(kPage), upOf({ x: 120, y: 100 }), false), 6);
+  });
+
+  it("a corner of a turned image keeps its opposite drawn corner; Shift pressed mid-drag frees the lock", () => {
+    const turned = { ...img, rotationDeg: 30 } as CourseMapObject;
+    const c = sel(turned, { aspectLock: true });
+    const b = layoutBinding(c);
+    const handles = b.shapes!.filter((s) => "testId" in s && s.testId === "editor-layout-handle") as unknown as { x: number; y: number; data: { handle: string } }[];
+    const se = handles.find((h) => h.data.handle === "se")!, nw = handles.find((h) => h.data.handle === "nw")!;
+    const sePage = toPageOf(se), nwPage = toPageOf(nw);
+    expect(b.onPointerDown!(at(sePage.x, sePage.y))).toBe(true);
+    b.onPointerDrag!(view(sePage.x + 2, sePage.y + 12), { shift: true, alt: false });
+    b.onPointerUp!(view(sePage.x + 2, sePage.y + 12));
+    const o = committed(c);
+    const after = layoutBinding(sel(o)).shapes!.filter((s) => "testId" in s && s.testId === "editor-layout-handle") as unknown as { x: number; y: number; data: { handle: string } }[];
+    const nwAfter = toPageOf(after.find((h) => h.data.handle === "nw")!);
+    expect(nwAfter.x).toBeCloseTo(nwPage.x, 6);
+    expect(nwAfter.y).toBeCloseTo(nwPage.y, 6);
+    expect(o.width / o.height).not.toBeCloseTo(2, 2);
+  });
+
+  it("an unturned locked corner stays on the printable area, the ratio kept (J9 review (1))", () => {
+    const low = { ...img, y: 274 } as CourseMapObject;
+    const c = sel(low, { aspectLock: true });
+    const b = layoutBinding(c);
+    expect(b.onPointerDown!(at(90, 294))).toBe(true);
+    b.onPointerDrag!(view(150, 294));
+    b.onPointerUp!(view(150, 294));
+    const o = committed(c);
+    expect(o.y + o.height).toBeLessThanOrEqual(294 + 1e-9);
+    expect([o.x, o.y]).toEqual([50, 274]);
+    expect(o.width / o.height).toBeCloseTo(2, 6);
+  });
+
+  it("a move keeps a turned box on the page as drawn, without a jump (J9 review (3))", () => {
+    // 100 × 10 at 90°: drawn x 5..15, y 55..155 (on the page by its turned extent).
+    const tall: CourseMapObject = { id: "tall", kind: "rectangle", anchor: "page", x: -40, y: 100, width: 100, height: 10, fillMode: "none", rotationDeg: 90 };
+    const c = sel(tall);
+    const b = layoutBinding(c);
+    expect(b.onPointerDown!(at(10, 100))).toBe(true);
+    b.onPointerDrag!(view(10, 101));
+    b.onPointerUp!(view(10, 101));
+    expect(committed(c)).toMatchObject({ x: -40, y: 101 });
+    const up = sel(tall);
+    const bu = layoutBinding(up);
+    bu.onPointerDown!(at(10, 100));
+    bu.onPointerDrag!(view(10, 20));
+    bu.onPointerUp!(view(10, 20));
+    // Its drawn top (centre y − 50) stops at the top margin.
+    expect(committed(up).y + 5 - 50).toBeCloseTo(3, 6);
+  });
+
+  it("a turned text's corner drag is taken into its frame: down the page widens a 90° text", () => {
+    const text: CourseMapObject = { id: "t", kind: "text", anchor: "page", x: 100, y: 100, text: "Header", fontSizeMm: 5, color: "#000000", rotationDeg: 90 };
+    const c = sel(text);
+    const b = layoutBinding(c);
+    const handles = b.shapes!.filter((s) => "testId" in s && s.testId === "editor-layout-handle") as unknown as { x: number; y: number; data: { handle: string } }[];
+    const ne = toPageOf(handles.find((h) => h.data.handle === "ne")!);
+    expect(b.onPointerDown!(at(ne.x, ne.y))).toBe(true);
+    b.onPointerDrag!(view(ne.x, ne.y + 5));
+    b.onPointerUp!(view(ne.x, ne.y + 5));
+    const o = c.onCommit.mock.calls[0][0].objects[0] as Extract<CourseMapObject, { kind: "text" }>;
+    expect(o.maxWidthMm! - 5 * 6 * 0.55).toBeCloseTo(5, 6);
+  });
+
+  it("a rectangle keeps its ratio only with Shift", () => {
+    const c = sel(box);
+    const b = layoutBinding(c);
+    b.onPointerDown!(at(80, 70, { shift: true }));
+    b.onPointerDrag!(view(110, 75));
+    b.onPointerUp!(view(110, 75));
+    expect(committed(c).width / committed(c).height).toBeCloseTo(1.5, 6);
+  });
+
+  it("crop mode: a double-click on the selected image enters it; only its edges take a press; an edge drag is one write of box and crop", () => {
+    const onCropMode = vi.fn();
+    const enter = layoutBinding(sel(img, { onCropMode }));
+    enter.onDoubleClick!(at(60, 60));
+    expect(onCropMode).toHaveBeenCalledWith("img");
+    const c = sel(img, { cropMode: "img", onCropMode });
+    const b = layoutBinding(c);
+    const ids = b.shapes!.flatMap((s) => ("testId" in s && s.testId ? [s.testId] : []));
+    expect(ids.filter((i) => i === "editor-layout-crop-edge")).toHaveLength(4);
+    expect(ids).not.toContain("editor-layout-rotate");
+    expect(ids).not.toContain("editor-layout-handle");
+    // The right edge's middle (90, 60) dragged to 80: three quarters kept.
+    expect(b.onPointerDown!(at(90, 60))).toBe(true);
+    b.onPointerDrag!(view(80, 60));
+    b.onPointerUp!(view(80, 60));
+    expect(c.onCommit).toHaveBeenCalledTimes(1);
+    const o = committed(c) as Extract<CourseMapObject, { kind: "image" }>;
+    expect(o.crop).toEqual({ x: 0, y: 0, width: 0.75, height: 1 });
+    expect([o.x, o.width]).toEqual([50, 30]);
+  });
+});
+
+function toPageOf(p: { x: number; y: number }) {
+  // The test geometry's page ↔ view is a translation (1 page mm = 1 paper mm, y flipped about the page centre).
+  const o = toView({ x: 0, y: 0 }, g), one = toView({ x: 1, y: 1 }, g);
+  return { x: (p.x - o.x) / (one.x - o.x), y: (p.y - o.y) / (one.y - o.y) };
+}

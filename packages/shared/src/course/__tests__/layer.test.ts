@@ -1,7 +1,8 @@
 /** `courseLayer()` through `symbolise` with a document (course-layer.md §1, §3). */
 
 import { describe, expect, it } from "vitest";
-import { courseLayer, courseRenderInput, legLine } from "../layer.js";
+import { bandOpacity, courseLayer, courseRenderInput, legLine } from "../layer.js";
+import { courseObjectBodySchema } from "../objects.js";
 import { courseDocumentContext } from "../context.js";
 import { SITES, layerInput, linear, site, sprintContext } from "./helpers.js";
 import { materialiseLibrary } from "../../symbol-library/index.js";
@@ -24,6 +25,29 @@ const fonts = () => [liberation().sans];
 const colourId = (layer: ReturnType<typeof courseLayer>, i: number) => layer.colours[i].paletteIds?.[0] ?? layer.colours[i].id;
 
 describe("courseLayer + courseRenderInput → one symbolise call", () => {
+  it("J4: a 50 % white-out's fill pass and a 30° text's passes carry opacity; the text's glyphs turn −30°", () => {
+    const objects: CourseLayerObject[] = [
+      { id: 1, kind: "whiteout", geometry: [{ x: 5, y: 5 }, { x: 15, y: 5 }, { x: 15, y: 15 }, { x: 5, y: 15 }], props: { opacity: 0.5, blend: "multiply" } },
+      { id: 2, kind: "text", geometry: [{ x: 20, y: 20 }], props: { text: "Lucka", fontSizeMm: 3, opacity: 0.4, rotationDeg: 30 } },
+    ];
+    const layer = courseLayer(layerInput({ objects }));
+    const input = courseRenderInput(isomDocument(), layer);
+    const { stream } = symbolise({ ...input, fonts: fonts() });
+    const passesOf = (id: string) => {
+      const k = layer.objects.findIndex((o) => o.ref.id === id) + input.courseObjectOffset;
+      return stream.passes.filter((_, j) => stream.objectIdx[j] === k);
+    };
+    const white = passesOf("course-object:1");
+    expect(white.map((p) => p.kind)).toEqual(["fill"]);
+    expect(white[0]).toMatchObject({ opacity: 0.5, blend: "multiply" });
+    const text = passesOf("course-object:2");
+    expect(text.length).toBeGreaterThan(0);
+    for (const p of text) {
+      expect(p.opacity).toBe(0.4);
+      if (p.kind === "text") expect([...p.angles!].every((a) => Math.abs(a + 30) < 1e-4)).toBe(true);
+    }
+  });
+
   it("draws warning-free, lower purple under black, numbers upper purple (ISOM, user decision 2026-10-24)", () => {
     const layer = courseLayer(layerInput());
     const input = courseRenderInput(isomDocument(), layer);
@@ -75,9 +99,11 @@ describe("courseLayer + courseRenderInput → one symbolise call", () => {
     expect(Math.max(...halo.map(({ k }) => k))).toBeLessThan(Math.min(...text.filter(({ p }) => p.kind === "text" && !p.haloWidthUm).map(({ k }) => k)));
   });
 
-  it("sprint documents: 6 mm circles, numbers upper purple, stack unchanged", () => {
+  it("sprint documents: 6 mm circles, numbers upper purple, the stack gains only the graphics row (J5)", () => {
     const layer = courseLayer(layerInput({ document: sprintContext() }));
-    expect(layer.remap).toBeNull();
+    const upper = layer.colours.findIndex((c) => c.paletteIds?.includes("purple-upper"));
+    expect(layer.colours[upper - 1].id).toBe("course:graphics");
+    expect(layer.remap!.every((n, i) => n === (i < upper - 1 ? i : i + 1))).toBe(true);
     const circle = layer.objects.find((o) => o.ref.kind === "site" && o.ref.id === "32")!;
     expect(Math.max(...Array.from(circle.path.coords).filter((_, i) => i % 2 === 1))).toBe(40000 + 3000);
     const number = layer.symbols[layer.objects.find((o) => o.ref.kind === "number")!.symbolIdx];
@@ -259,10 +285,39 @@ describe("filter regions (map-rendering §4.11)", () => {
 
 describe("corridors (§10.2, F2)", () => {
   // S (10, 10) → 31 (40, 10) at 1:15 000: 60 m = 4 mm, the edge at y = 8 / 12, the band to 5 / 15.
-  const corridor = { widthM: 60, edge: true, whiteMm: 3, whiteOpacity: 0.5 };
+  const corridor = { widthM: 60, edge: true, whiteMm: 3, whiteOpacity: 1 };
   const withLeg = (leg: CourseLegProps, over: Parameters<typeof layerInput>[0] = {}) =>
     courseLayer(layerInput({ structure: linear(undefined, { items: [{ siteId: "S" }, { siteId: "31", leg }, { siteId: "32" }] }), ...over }));
   const far = [{ x: 80, y: 80 }, { x: 90, y: 80 }, { x: 90, y: 90 }];
+
+  it("J13: below opacity 1 the band is one translucent white fill, not a clip; the minimum wins; 0 draws no band", () => {
+    const opaque = withLeg({ corridor });
+    const half = withLeg({ corridor: { ...corridor, whiteOpacity: 0.5 } });
+    expect(half.regions).toHaveLength(0);
+    const fills = half.objects.filter((o) => o.ref?.kind === "corridor" && o.ref.id === "band");
+    expect(fills).toHaveLength(1);
+    expect(fills[0].opacity).toBe(0.5);
+    expect(half.symbols[fills[0].symbolIdx].id).toBe("course:whiteout");
+    expect(flattenRings(fills[0].path)).toEqual(flattenRings(opaque.regions.at(-1)!.path));
+    // Opaque: as before, no band object and the same symbols.
+    expect(opaque.objects.some((o) => o.ref?.kind === "corridor" && o.ref.id === "band")).toBe(false);
+    expect(half.symbols).toEqual(opaque.symbols);
+    // What rounds to 1 is opaque; 0 draws neither a clip nor a fill.
+    expect(withLeg({ corridor: { ...corridor, whiteOpacity: 0.99996 } }).regions.at(-1)!.mode).toBe("clip");
+    const none = withLeg({ corridor: { ...corridor, whiteOpacity: 0 } });
+    expect(none.regions).toHaveLength(0);
+    expect(none.objects.some((o) => o.ref?.kind === "corridor" && o.ref.id === "band")).toBe(false);
+  });
+
+  it("J13: bandOpacity is the minimum over legs with a white band; a leg without one does not count", () => {
+    const leg = (whiteOpacity: number, whiteMm = 3, points = [{ x: 0, y: 0 }, { x: 10, y: 0 }]) => ({ from: "a", to: "b", points, style: "line" as const, gaps: [], pieces: [], corridor: { widthMm: 4, whiteMm, edge: true, ...(whiteOpacity < 1 ? { whiteOpacity } : {}) } });
+    const course = (legs: ReturnType<typeof leg>[]) => ({ id: "c", orderMode: "ordered" as const, sequence: [], legs });
+    expect(bandOpacity([course([leg(1), leg(0.6)]), course([leg(0.5)])])).toBe(0.5);
+    expect(bandOpacity([course([leg(1), leg(0.2, 0)])])).toBe(1);
+    // A leg of one point makes no band run: it does not count either.
+    expect(bandOpacity([course([leg(1), leg(0.2, 3, [{ x: 0, y: 0 }])])])).toBe(1);
+    expect(bandOpacity([])).toBe(1);
+  });
 
   it("the band is one clip region of every symbol, after the explicit and the stored regions", () => {
     const stored: CourseLayerObject = { id: 4, kind: "filter_region", geometry: far, props: { mode: "hide", symbols: "all" } };
@@ -466,11 +521,104 @@ describe("course objects as F12 moved layout objects (§3.6 retired, §8.3)", ()
     expect(courseLayer(layerInput({ objects: [saver] })).colours.some((c) => c.id === "course:toner-saver-white")).toBe(false);
   });
 
-  it("image objects are returned for the page backends, not as objects", () => {
-    const img: CourseLayerObject = { id: "img", kind: "image", geometry: [{ x: 4, y: 6 }, { x: 1, y: 2 }], props: { graphicId: 3, crop: { x: 0, y: 0.5, width: 1, height: 0.5 } } };
+  it("image objects draw in course:graphics — above upper white and the map, below upper purple — and are listed to fetch (J5)", () => {
+    const img: CourseLayerObject = { id: "img", kind: "image", geometry: [{ x: 4, y: 6 }, { x: 1, y: 2 }], props: { graphicId: 3, crop: { x: 0, y: 0.5, width: 1, height: 0.5 }, opacity: 0.5 } };
     const layer = courseLayer(layerInput({ objects: [img] }));
-    expect(layer.images).toEqual([{ graphicId: 3, crop: { x: 0, y: 0.5, width: 1, height: 0.5 }, rectUm: { x: 1000, y: 2000, width: 3000, height: 4000 } }]);
-    expect(layer.objects.some((o) => o.ref.kind === "object")).toBe(false);
+    expect(layer.images).toEqual([{ graphicId: 3, crop: { x: 0, y: 0.5, width: 1, height: 0.5 }, sizeUm: [3000, 4000] }]);
+    const input = courseRenderInput(isomDocument(), layer);
+    const { stream, warnings } = symbolise({ ...input, fonts: fonts() });
+    expect(warnings).toEqual([]);
+    const at = stream.passes.findIndex((p) => p.kind === "image");
+    expect(stream.passes[at]).toEqual({ kind: "image", colour: layer.colours.findIndex((c) => c.id === "course:graphics"), graphicId: 3, quad: [3000, 0, 0, 4000, 1000, 2000], crop: { x: 0, y: 0.5, width: 1, height: 0.5 }, opacity: 0.5 });
+    const ids = stream.passes.map((p) => colourId(layer, p.colour));
+    // Every map colour and upper white under it; upper purple (numbers, 7xx) over it.
+    expect(ids.slice(0, at).every((id) => id !== "purple-upper")).toBe(true);
+    expect(ids.slice(at + 1)).toContain("purple-upper");
+    expect(ids.slice(at + 1).every((id) => id !== "black100" && id !== "purple-lower")).toBe(true);
+  });
+});
+
+describe("knockout images (J15, docs/course-layer.md §3.6)", () => {
+  const overlay: CourseLayerObject = { id: "ov", kind: "image", geometry: [{ x: 0, y: 0 }, { x: 80, y: 60 }], props: { graphicId: 1 } };
+  const lucka = (over: Partial<CourseLayerObject> = {}): CourseLayerObject =>
+    ({ id: "lu", kind: "image", geometry: [{ x: 35, y: 5 }, { x: 45, y: 15 }], props: { graphicId: 2, knockout: true }, ...over }) as CourseLayerObject;
+  const streamOf = (objects: CourseLayerObject[]) => {
+    const layer = courseLayer(layerInput({ objects }));
+    return { layer, stream: symbolise({ ...courseRenderInput(isomDocument(), layer), fonts: fonts() }).stream };
+  };
+  const maskOf = (s: ReturnType<typeof streamOf>["stream"], graphicId: number) => {
+    const i = s.passes.findIndex((p) => p.kind === "image" && p.graphicId === graphicId);
+    return i < 0 ? undefined : (s.maskIdx?.[i] ?? -1);
+  };
+
+  it("cuts the overlay below it by its box; nothing else of the course or the map is masked", () => {
+    const { stream } = streamOf([overlay, lucka()]);
+    expect(maskOf(stream, 1)).toBe(0);
+    expect(maskOf(stream, 2)).toBe(-1);
+    // The footprint: the box (35…45, 5…15 mm) inset 50 µm.
+    expect(Array.from(stream.masks![0].regions[0].coords)).toEqual([35050, 5050, 44950, 5050, 44950, 14950, 35050, 14950]);
+    stream.passes.forEach((p, i) => {
+      if (p.kind !== "image") expect(stream.maskIdx![i]).toBe(-1);
+    });
+    expect(streamOf([overlay, lucka({ props: { graphicId: 2 } } as Partial<CourseLayerObject>)]).stream.maskIdx).toBeUndefined();
+  });
+
+  it("an attached knockout cuts where it is drawn; one whose control is not drawn cuts nothing", () => {
+    // Control 31 is at (40, 10); attached when it was at (30, 0): drawn 10 mm right and up.
+    const { stream } = streamOf([overlay, lucka({ geometry: [{ x: 25, y: -5 }, { x: 35, y: 5 }], attach: { controlId: "31", at: { x: 30, y: 0 } } } as Partial<CourseLayerObject>)]);
+    expect(Array.from(stream.masks![0].regions[0].coords)).toEqual([35050, 5050, 44950, 5050, 44950, 14950, 35050, 14950]);
+    expect(streamOf([overlay, lucka({ attach: { controlId: "99", at: { x: 40, y: 10 } } } as Partial<CourseLayerObject>)]).stream.maskIdx).toBeUndefined();
+  });
+
+  it("J19: with its graphic's outline it cuts by the outline, where it is drawn (attached included)", () => {
+    const tri = [[0.5, 0, 1, 1, 0, 1]];
+    const { stream } = streamOf([overlay, lucka({ outline: tri })]);
+    expect(Array.from(stream.masks![0].regions[0].coords)).toEqual([40000, 15000, 45000, 5000, 35000, 5000]);
+    const moved = streamOf([overlay, lucka({ outline: tri, geometry: [{ x: 25, y: -5 }, { x: 35, y: 5 }], attach: { controlId: "31", at: { x: 30, y: 0 } } } as Partial<CourseLayerObject>)]);
+    expect(Array.from(moved.stream.masks![0].regions[0].coords)).toEqual([40000, 15000, 45000, 5000, 35000, 5000]);
+    // The outline rides only on a knockout image.
+    const layer = courseLayer(layerInput({ objects: [overlay, { ...lucka({ outline: tri }), props: { graphicId: 2 } } as CourseLayerObject] }));
+    expect(layer.objects.find((o) => o.image?.graphicId === 2)?.image).toEqual({ graphicId: 2 });
+  });
+
+  it("is a strict image prop: other kinds refuse it", () => {
+    expect(courseObjectBodySchema.safeParse({ kind: "image", geometry: [{ x: 0, y: 0 }, { x: 1, y: 1 }], props: { graphicId: 1, knockout: true } }).success).toBe(true);
+    expect(courseObjectBodySchema.safeParse({ kind: "whiteout", geometry: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0, y: 1 }], props: { knockout: true } }).success).toBe(false);
+  });
+});
+
+describe("an attached image hides its control (J18, docs/course-layer.md §8.1)", () => {
+  const hatch = (props: Record<string, unknown>, attach: CourseLayerObject["attach"] = { controlId: "31", at: { x: 40, y: 10 } }): CourseLayerObject =>
+    ({ id: "h", kind: "image", geometry: [{ x: 35, y: 5 }, { x: 45, y: 15 }], props: { graphicId: 2, ...props }, ...(attach ? { attach } : {}) }) as CourseLayerObject;
+  const refs = (objects: CourseLayerObject[], over: Partial<Parameters<typeof layerInput>[0]> = {}) =>
+    courseLayer(layerInput({ objects, ...over })).objects.map((o) => `${o.ref.kind}:${o.ref.id}`);
+
+  it("hideControlCircle leaves out that control's circle; hideControlNumber its number; the legs and the other controls stay", () => {
+    const plain = refs([hatch({})]);
+    expect(plain).toContain("site:31");
+    expect(plain).toContain("number:31");
+    const noCircle = refs([hatch({ hideControlCircle: true })]);
+    expect(noCircle).not.toContain("site:31");
+    expect(noCircle).toContain("number:31");
+    const noNumber = refs([hatch({ hideControlNumber: true })]);
+    expect(noNumber).toContain("site:31");
+    expect(noNumber).not.toContain("number:31");
+    const both = refs([hatch({ hideControlCircle: true, hideControlNumber: true })]);
+    expect(both.filter((r) => r.startsWith("leg:"))).toEqual(plain.filter((r) => r.startsWith("leg:")));
+    expect(both.filter((r) => r.endsWith(":32"))).toEqual(plain.filter((r) => r.endsWith(":32")));
+  });
+
+  it("a free image's flags do nothing; a hidden number stays hidden even when labels name the control", () => {
+    const free = refs([hatch({ hideControlCircle: true, hideControlNumber: true }, null as never)]);
+    expect(free).toContain("site:31");
+    expect(free).toContain("number:31");
+    expect(refs([hatch({ hideControlNumber: true })], { viewOptions: { labelMode: "sequence", labels: { "31": "X" } } })).not.toContain("number:31");
+  });
+
+  it("are strict image props", () => {
+    const body = (kind: string, props: Record<string, unknown>) => ({ kind, geometry: kind === "image" ? [{ x: 0, y: 0 }, { x: 1, y: 1 }] : [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0, y: 1 }], props });
+    expect(courseObjectBodySchema.safeParse(body("image", { graphicId: 1, hideControlCircle: true, hideControlNumber: false })).success).toBe(true);
+    expect(courseObjectBodySchema.safeParse(body("whiteout", { hideControlCircle: true })).success).toBe(false);
   });
 });
 
@@ -489,5 +637,40 @@ describe("courseDocumentContext", () => {
   it("a site at the origin is not drawn", () => {
     const layer = courseLayer(layerInput({ sites: [site("31", "control", 0, 0)], structure: linear(["31"]) }));
     expect(layer.objects).toEqual([]);
+  });
+});
+
+describe("attached objects (J10, docs/course-layer.md §8.3)", () => {
+  const img = (over: Partial<CourseLayerObject> = {}): CourseLayerObject =>
+    ({ id: "img", kind: "image", geometry: [{ x: 38, y: 8 }, { x: 42, y: 12 }], props: { graphicId: 3 }, ...over }) as CourseLayerObject;
+  const oob = (over: Partial<CourseLayerObject> = {}): CourseLayerObject =>
+    ({ id: "oob", kind: "oob_area", geometry: [{ x: 35, y: 5, hOut: { x: 1, y: 0 } }, { x: 45, y: 5 }, { x: 40, y: 15 }], props: {}, ...over }) as CourseLayerObject;
+  const shifted = (o: CourseLayerObject, dx: number, dy: number) => ({ ...o, geometry: o.geometry.map((v) => ({ ...v, x: v.x + dx, y: v.y + dy })) }) as CourseLayerObject;
+
+  it("draws an attached object where its control is now: the same as the object stored at the translated place", () => {
+    // Control 31 is at (40, 10); attached when it was at (30, 0): drawn 10 mm right and up.
+    const attach = { controlId: "31", at: { x: 30, y: 0 } };
+    for (const o of [img(), oob()]) {
+      const attached = courseLayer(layerInput({ objects: [{ ...o, attach }] }));
+      const placed = courseLayer(layerInput({ objects: [shifted(o, 10, 10)] }));
+      expect(attached.objects).toEqual(placed.objects);
+      expect(attached.images).toEqual(placed.images);
+      expect(attached.colours).toEqual(placed.colours);
+    }
+  });
+
+  it("is not drawn where its control is not; a filter region follows or drops; a scene without attach is unchanged", () => {
+    const on99 = img({ attach: { controlId: "99", at: { x: 80, y: 80 } } });
+    // 99 is not on the course: the attached image is left out (its images list empty).
+    expect(courseLayer(layerInput({ objects: [on99] })).images).toEqual([]);
+    // The all-controls view draws 99.
+    expect(courseLayer(layerInput({ structure: null, viewOptions: { allControls: true }, objects: [on99] })).images).toHaveLength(1);
+    const region = { id: "r", kind: "filter_region", geometry: [{ x: 0, y: 0 }, { x: 4, y: 0 }, { x: 0, y: 4 }], props: { mode: "hide", symbols: "all" } } as CourseLayerObject;
+    const follows = courseLayer(layerInput({ objects: [{ ...region, attach: { controlId: "31", at: { x: 40, y: 10 } } }] }));
+    const plain = courseLayer(layerInput({ objects: [region] }));
+    expect(follows.regions).toEqual(plain.regions);
+    expect(courseLayer(layerInput({ objects: [{ ...region, attach: { controlId: "99", at: { x: 0, y: 0 } } }] })).regions).toEqual(courseLayer(layerInput()).regions);
+    const objects = [img(), oob()];
+    expect(courseLayer(layerInput({ objects }))).toEqual(courseLayer(layerInput({ objects: objects.map((o) => ({ ...o })) })));
   });
 });

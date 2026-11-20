@@ -12,6 +12,7 @@ import { parentPort, workerData } from "node:worker_threads";
 import { mapDocument, type mapImport } from "@oxygen/shared";
 import { importMapToDocument, type ImportStage, type MapSourceKind } from "../import/ocad.js";
 import { buildImportReport } from "./documents.js";
+import { matchColourOptions, parseColourSettings, type MapColourSettings } from "./colour-settings.js";
 
 export interface ImportWorkerData {
   bytes: Uint8Array;
@@ -21,6 +22,8 @@ export interface ImportWorkerData {
   decisions?: mapImport.SymbolDecision[];
   /** The job's version patch snapshot, baked before encoding (docs/map-patches.md §5). */
   patch?: mapDocument.VersionPatch;
+  /** The job's colour setting snapshot, applied by stage 7 (docs/map-symbols.md §9.3 "Per map (row I6)"). */
+  colour?: MapColourSettings;
 }
 
 export type ImportWorkerMessage =
@@ -30,11 +33,11 @@ export type ImportWorkerMessage =
 
 const port = parentPort;
 if (port) {
-  const { bytes, fileName, kind, decisions, patch } = workerData as ImportWorkerData;
+  const { bytes, fileName, kind, decisions, patch, colour } = workerData as ImportWorkerData;
   const post = (m: ImportWorkerMessage) => port.postMessage(m);
   (async () => {
     const file = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    const result = await importMapToDocument(file, fileName, kind ?? "ocad", { onStage: (stage) => post({ type: "stage", stage }), match: { decisions: decisions ?? [] }, patch: patch ?? [] });
+    const result = await importMapToDocument(file, fileName, kind ?? "ocad", { onStage: (stage) => post({ type: "stage", stage }), match: { decisions: decisions ?? [], ...matchColourOptions(parseColourSettings(colour)) }, patch: patch ?? [] });
     const { header } = mapDocument.readMapDocumentHeader(result.bytes);
     const report = buildImportReport(result, header, fileName);
     post({ type: "done", bytes: result.bytes, documentHash: result.documentHash, fileHash: result.fileHash, libraryVersion: result.libraryVersion, report });

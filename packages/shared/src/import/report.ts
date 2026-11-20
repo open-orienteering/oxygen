@@ -69,6 +69,12 @@ export const WARNING_CLASS: Readonly<Record<string, WarningClass>> = {
   COLOUR_ORDER_CONFLICT: "outcome",
   COLOUR_UNCLASSIFIED: "outcome",
   COLOUR_AREA_ABOVE_LOWER_PURPLE: "outcome",
+  COLOUR_DEVIATION_KEPT: "outcome",
+  COLOUR_DEVIATION_DROPPED: "outcome",
+  COLOUR_DEVIATION_BLOCKED: "outcome",
+  COLOUR_NO_ROLE: "outcome",
+  COLOUR_SOURCE_ORDERED_ABOVE_LOWER_PURPLE: "outcome",
+  COLOUR_LAYERS_FAILED: "outcome",
   CRT_LINE_INVALID: "outcome",
   CRT_QUERY_UNSUPPORTED: "outcome",
   CRT_LIBRARY_MISMATCH: "outcome",
@@ -79,6 +85,43 @@ export const WARNING_CLASS: Readonly<Record<string, WarningClass>> = {
   READER_WARNING: "reader",
   PATCH_ISSUE: "outcome",
 };
+
+const sourceNumber = z.number().int().optional();
+const sourceOrderReason = z.enum(["no-role", "graphic", "mask"]);
+const noRolePlace = z.enum(["area", "other"]);
+
+/** `ColourLayersReport` (colour-layers.ts) without `inserted` and `aliased`, which `colourStack` carries in both orders. */
+export const colourLayersReportSchema = z.object({
+  rows: z.array(
+    z.object({
+      row: z.number().int().min(0),
+      source: z.number().int().min(0).nullable(),
+      role: z.string().nullable(),
+      place: noRolePlace.nullable(),
+      origin: z.enum(["use", "alias", "insert", "unreferenced", "identified"]),
+      objects: z.number().int().min(0),
+      symbols: z.number().int().min(0),
+      graphicObjects: z.number().int().min(0),
+      sourceOrdered: sourceOrderReason.nullable(),
+      ownOrder: z.boolean(),
+    }),
+  ),
+  split: z.array(z.object({ source: z.number().int().min(0), sourceNumber, roles: z.array(z.string().nullable()) })),
+  sourceOrdered: z.array(z.object({ row: z.number().int().min(0), source: z.number().int().min(0), sourceNumber, reason: sourceOrderReason, role: z.string().nullable(), objects: z.number().int().min(0), aboveLowerPurple: z.boolean() })),
+  noRole: z.array(z.object({ row: z.number().int().min(0), source: z.number().int().min(0), sourceNumber, place: noRolePlace, objects: z.number().int().min(0) })),
+  deviations: z.array(
+    z.object({
+      upper: z.string(),
+      lower: z.string(),
+      kept: z.boolean(),
+      byDefault: z.boolean(),
+      objects: z.object({ upper: z.number().int().min(0), lower: z.number().int().min(0) }),
+      impliedBy: z.array(z.string()).optional(),
+      blockedBy: z.array(z.string()).optional(),
+    }),
+  ),
+  purpleInk: z.number().int().min(0).nullable(),
+});
 
 /** The S0 gate's test: does this code mean a source construct could not be represented? */
 export function isUnsupportedPrimitive(code: string): boolean {
@@ -153,6 +196,10 @@ export const importReportSchema = z.object({
       areasAboveLowerPurple: z.array(z.object({ name: z.string(), sourceNumber: z.number().int().optional(), paletteId: z.string().optional() })).optional(),
       /** Absent before `ocad-18` / `omap-11` (docs/map-symbols.md §9.2 step 4, C15). */
       purplesDisplaced: z.array(z.object({ name: z.string(), sourceNumber: z.number().int().optional(), role: z.enum(["lower", "upper"]), why: z.enum(["position", "duplicate"]) })).optional(),
+      /** The order the stack was built in (docs/map-symbols.md §9.3 "In the importer"). Absent before `ocad-19` / `omap-12`: `source`. */
+      order: z.enum(["iof", "source"]).optional(),
+      /** `iof` only: the layered stack's report (`buildColourLayers`, §9.3 "Layers" Output), for the review page's colour panel (I6). */
+      layers: colourLayersReportSchema.optional(),
     })
     .optional(),
   /** Stage 5 (docs/map-import.md §3.8): the header's georeference projected to WGS 84. Absent before `ocad-5` / `omap-2`. */

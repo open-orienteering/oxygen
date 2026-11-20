@@ -53,6 +53,20 @@ describe("disabledReason (docs/map-gps-tracks.md §5.1 'Where it is off')", () =
 });
 
 describe("planImport (§5.1 'Import')", () => {
+  it("a TCX file imports beside a GPX one (§2.4): its activity one track, named after nothing, its file named", () => {
+    const tcx = '<TrainingCenterDatabase><Activities><Activity><Lap><Track>'
+      + '<Trackpoint><Position><LatitudeDegrees>58.6</LatitudeDegrees><LongitudeDegrees>15</LongitudeDegrees></Position></Trackpoint>'
+      + '</Track></Lap><Lap><Track>'
+      + '<Trackpoint><Position><LatitudeDegrees>58.7</LatitudeDegrees><LongitudeDegrees>15.1</LongitudeDegrees></Position></Trackpoint>'
+      + '</Track></Lap></Activity></Activities></TrainingCenterDatabase>';
+    const plan = planImport([{ name: "a.gpx", text: gpx([{ name: "First", mm: [[0, 0], [1, 0]] }]) }, { name: "run.tcx", text: tcx }]);
+    expect(plan.issues).toEqual([]);
+    expect(plan.calls[0].map((t) => [t.name, t.sourceName, t.points.lat])).toEqual([
+      ["First", "a.gpx", expect.any(Array)],
+      [null, "run.tcx", [586000000, 587000000]],
+    ]);
+  });
+
   it("one track per segment in file order, names cut to 200 and file names to 255, points verbatim", () => {
     const long = "x".repeat(300);
     const plan = planImport([

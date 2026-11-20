@@ -377,6 +377,114 @@ test.describe("vector map layer", () => {
     }
   });
 
+  // J6 (docs/map-rendering.md §5.2 "Images"): a stored `image` course object reaches the viewer as the white-out
+  // does and is drawn by the map engine from the graphic's `print.png`.
+  test("a stored image course object is drawn on the canvas from its graphic", async ({ page }) => {
+    test.setTimeout(180_000);
+    await openEvent(page);
+    await viewerWithMap(page);
+    let { viewer, canvas } = await openCourses(page);
+    const fit = await snapshot(viewer, canvas);
+    const spot = findSpot(fit, isYellow, (p) =>
+      [-3, 0, 3].every((dx) => [-3, 0, 3].every((dy) => { const c = fit.rgb({ x: p.x + dx, y: p.y + dy }); return !!c && isYellow(c); })));
+    expect(spot, "open yellow ground").toBeDefined();
+
+    // An opaque 8 × 8 teal PNG, uploaded to the event, placed as a 2 mm image there.
+    const png = new PNG({ width: 8, height: 8 });
+    for (let i = 0; i < 64; i++) png.data.set([0, 160, 160, 255], i * 4);
+    const headers = { "content-type": "application/json", "x-event-id": "itest" };
+    const up = await page.request.post(`${API}/trpc/graphics.upload`, { headers, data: { name: `e2e-j6-${Date.now()}.png`, fileDataBase64: PNG.sync.write(png).toString("base64") } });
+    expect(up.ok(), await up.text()).toBe(true);
+    const graphicId = ((await up.json()) as { result: { data: { id: number } } }).result.data.id;
+    const res = await page.request.post(`${API}/trpc/courseObject.create`, {
+      headers,
+      data: { kind: "image", geometry: [{ x: spot!.x - 1, y: spot!.y - 1 }, { x: spot!.x + 1, y: spot!.y + 1 }], props: { graphicId }, scope: { all: true } },
+    });
+    expect(res.ok(), await res.text()).toBe(true);
+    const id = ((await res.json()) as { result: { data: { id: number } } }).result.data.id;
+    try {
+      await page.reload();
+      ({ viewer, canvas } = await openCourses(page));
+      await expect(viewer).toHaveAttribute("data-course-layer", "gl", { timeout: 30_000 });
+      await zoomOn(page, viewer, canvas, spot!);
+      await expect(canvas).toHaveAttribute("data-graphics", "ready", { timeout: 30_000 });
+      await expect.poll(async () => {
+        const c = (await snapshot(viewer, canvas)).rgb(spot!);
+        return !!c && Math.abs(c[0] - 0) <= 12 && Math.abs(c[1] - 160) <= 12 && Math.abs(c[2] - 160) <= 12;
+      }, { timeout: 30_000 }).toBe(true);
+      const beside = (await snapshot(viewer, canvas)).rgb({ x: spot!.x + 3, y: spot!.y });
+      expect(beside && isYellow(beside), `yellow beside the image: ${JSON.stringify(beside)}`).toBe(true);
+    } finally {
+      await page.request.post(`${API}/trpc/courseObject.delete`, { headers, data: { id } });
+      await page.request.post(`${API}/trpc/graphics.delete`, { headers, data: { id: graphicId } });
+    }
+  });
+
+  // SVG sharpness (2026-11-19; docs/map-rendering.md §5.2 "Images", course-maps.md "Data model"): an SVG uploaded with
+  // bounds much larger than its drawing is stored trimmed to it, and a cropped placement is asked over its crop's
+  // window only, at the window's size on screen rounded up to a power of two.
+  test("cropped SVGs are drawn from a raster of their crops' window at screen size; oversized upload bounds are trimmed", async ({ page }) => {
+    test.setTimeout(180_000);
+    await openEvent(page);
+    await viewerWithMap(page);
+    let { viewer, canvas } = await openCourses(page);
+    const fit = await snapshot(viewer, canvas);
+    const spot = findSpot(fit, isYellow, (p) =>
+      [-3, 0, 3].every((dx) => [-3, 0, 3].every((dy) => { const c = fit.rgb({ x: p.x + dx, y: p.y + dy }); return !!c && isYellow(c); })));
+    expect(spot, "open yellow ground").toBeDefined();
+
+    // A 1000 × 500 canvas drawing a 150 × 100 strip: teal, orange and blue thirds.
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 500"><rect x="100" y="100" width="50" height="100" fill="#00a0a0"/>` +
+      `<rect x="150" y="100" width="50" height="100" fill="#ff8000"/><rect x="200" y="100" width="50" height="100" fill="#0000ff"/></svg>`;
+    const headers = { "content-type": "application/json", "x-event-id": "itest" };
+    const up = await page.request.post(`${API}/trpc/graphics.upload`, { headers, data: { name: `e2e-svg-trim-${Date.now()}.svg`, fileDataBase64: Buffer.from(svg).toString("base64") } });
+    expect(up.ok(), await up.text()).toBe(true);
+    const uploaded = ((await up.json()) as { result: { data: { id: number; widthPx: number | null; heightPx: number | null } } }).result.data;
+    const graphicId = uploaded.id;
+    // Trimmed to the strip (a probe pixel of margin): about 3:2, not the canvas's 2:1.
+    expect(uploaded.widthPx! / uploaded.heightPx!).toBeGreaterThan(1.45);
+    expect(uploaded.widthPx! / uploaded.heightPx!).toBeLessThan(1.55);
+
+    // Two 2 × 2 mm placements, one showing the teal third, one the orange: one texture over the first two thirds,
+    // each crop drawn relative to it (without that the orange one would sample the teal).
+    const ids: number[] = [];
+    for (const [dx, cropX] of [[-1.5, 0], [1.5, 1 / 3]] as const) {
+      const res = await page.request.post(`${API}/trpc/courseObject.create`, {
+        headers,
+        data: { kind: "image", geometry: [{ x: spot!.x + dx - 1, y: spot!.y - 1 }, { x: spot!.x + dx + 1, y: spot!.y + 1 }], props: { graphicId, crop: { x: cropX, y: 0, width: 1 / 3, height: 1 } }, scope: { all: true } },
+      });
+      expect(res.ok(), await res.text()).toBe(true);
+      ids.push(((await res.json()) as { result: { data: { id: number } } }).result.data.id);
+    }
+    const asked: string[] = [];
+    page.on("request", (r) => {
+      if (r.url().includes(`/graphics/${graphicId}/print.png`)) asked.push(new URL(r.url()).search);
+    });
+    try {
+      await page.reload();
+      ({ viewer, canvas } = await openCourses(page));
+      await expect(viewer).toHaveAttribute("data-course-layer", "gl", { timeout: 30_000 });
+      await zoomOn(page, viewer, canvas, spot!);
+      await expect(canvas).toHaveAttribute("data-graphics", "ready", { timeout: 30_000 });
+      const near = (c: [number, number, number] | null | undefined, rgb: [number, number, number]) => !!c && c.every((v, i) => Math.abs(v - rgb[i]) <= 16);
+      await expect.poll(async () => {
+        const shot = await snapshot(viewer, canvas);
+        return [-0.3, 0, 0.3].every((d) =>
+          near(shot.rgb({ x: spot!.x - 1.5 + d, y: spot!.y + d }), [0, 160, 160]) && near(shot.rgb({ x: spot!.x + 1.5 + d, y: spot!.y + d }), [255, 128, 0]));
+      }, { timeout: 30_000, message: "teal in the first placement, orange in the second" }).toBe(true);
+      // Asked over the union window [0, 0, 2/3 rounded out, 1]; once zoomed in, at the window's screen size (a power
+      // of two, or the 8 MP cap) — larger than the print's 600 dpi box of the window (95 × 47 px for two 2 mm thirds).
+      const windowed = asked.filter((q) => q.includes("crop=0,0,0.6669921875,1"));
+      expect(windowed.length, asked.join(" ")).toBeGreaterThan(0);
+      const boxes = windowed.map((q) => { const u = new URLSearchParams(q); return [Number(u.get("w")), Number(u.get("h"))]; });
+      const screenSized = ([w, h]: number[]) => Math.max(w, h) > 95 && ((Math.max(w, h) & (Math.max(w, h) - 1)) === 0 || w * h > 0.99 * 4096 * 2048);
+      expect(boxes.some(screenSized), JSON.stringify(boxes)).toBe(true);
+    } finally {
+      for (const id of ids) await page.request.post(`${API}/trpc/courseObject.delete`, { headers, data: { id } });
+      await page.request.post(`${API}/trpc/graphics.delete`, { headers, data: { id: graphicId } });
+    }
+  });
+
   // docs/course-layer.md §10.1 (F1) through the viewer plumbing (F2): course.list carries the stored leg whole,
   // MapPanel → MapViewer → courseLayerRequest put it on the item, the GL layer draws it.
   test("a stored marked-route leg draws 707's dashes on the canvas", async ({ page }) => {
@@ -605,5 +713,81 @@ test.describe("vector map layer", () => {
     } finally {
       await restore();
     }
+  });
+});
+
+// docs/map-symbols.md §9.3 "In the importer" (row I5): a map whose colour table is badly ordered is drawn on the
+// IOF colour layers. `e2e/colour-layers.ocd` (scripts/lib/ocad-fixture.mjs, COLOUR_LAYERS_OCAD) draws, in its own
+// order, the paved brown over the building, the yellow on top and the black path under lower purple; one brown 50 %
+// is both the paved area and a street drawn over the contour. Paper mm, y up.
+test.describe("vector map layer on the IOF colour layers", () => {
+  test.describe.configure({ mode: "serial" });
+
+  const isGrey = ([r, g, b]: Rgb) => Math.max(r, g, b) - Math.min(r, g, b) < 24 && r > 95 && r < 165;
+  const isPaved = ([r, g, b]: Rgb) => r > 200 && g > 140 && g < 195 && b > 85 && b < 150;
+  const isContour = ([r, g, b]: Rgb) => r > 165 && g > 55 && g < 130 && b < 45;
+  const isOpenLand = ([r, g, b]: Rgb) => r > 220 && g > 160 && g < 215 && b < 85;
+
+  test.beforeAll(async () => {
+    await reseed();
+  });
+  // The seed event leaves with no map of its own again, for the specs after this one.
+  test.afterAll(async () => {
+    await reseed();
+  });
+
+  async function openLayeredMap(page: Page) {
+    await openEvent(page);
+    const viewer = page.getByTestId("map-viewer").first();
+    const upload = page.getByTestId("map-panel").first().getByRole("button", { name: "Upload map" });
+    await expect(viewer.or(upload)).toBeVisible({ timeout: 60_000 });
+    if (!(await viewer.isVisible())) await uploadEventMap(page, "e2e/colour-layers.ocd");
+    await expect(viewer).toBeVisible({ timeout: 60_000 });
+    return openCourses(page);
+  }
+
+  /** The canvas colour at a paper point, after zooming in on `at` from the fitted view. */
+  async function colourNear(page: Page, viewer: Locator, canvas: Locator, at: Pt) {
+    await zoomOn(page, viewer, canvas, at);
+    const shot = await snapshot(viewer, canvas);
+    return (p: Pt) => shot.rgb(p);
+  }
+
+  test("draws a building over its paved area", async ({ page }) => {
+    test.setTimeout(180_000);
+    const { viewer, canvas } = await openLayeredMap(page);
+    const near = await colourNear(page, viewer, canvas, { x: 12, y: 12 });
+    // The building (10..20 mm) in its grey on top of the paved area (0..30 mm), the paved brown around it.
+    const building = near({ x: 15, y: 15 });
+    expect(building && isGrey(building), `building grey over the paved area: ${JSON.stringify(building)}`).toBe(true);
+    const paved = near({ x: 6, y: 6 });
+    expect(paved && isPaved(paved), `paved brown beside the building: ${JSON.stringify(paved)}`).toBe(true);
+  });
+
+  test("draws the street over the contour (roads over contours, kept by default)", async ({ page }) => {
+    test.setTimeout(180_000);
+    const { viewer, canvas } = await openLayeredMap(page);
+    // The street (x = 20 mm, 0.6 mm) crosses the contour (y = 50 mm): the street's brown at the crossing, the contour's 3 mm along.
+    const near = await colourNear(page, viewer, canvas, { x: 21, y: 50 });
+    const crossing = [-0.05, 0, 0.05].map((dy) => near({ x: 20, y: 50 + dy }));
+    expect(crossing.every((c) => c && isPaved(c)), `street brown over the contour: ${JSON.stringify(crossing)}`).toBe(true);
+    const contour = [-0.05, 0, 0.05].map((dy) => near({ x: 23, y: 50 + dy }));
+    expect(contour.some((c) => c && isContour(c)), `contour brown beside the street: ${JSON.stringify(contour)}`).toBe(true);
+  });
+
+  test("draws a leg over the open land and under the black path the table has under everything", async ({ page }) => {
+    test.setTimeout(180_000);
+    const { viewer, canvas } = await openLayeredMap(page);
+    // Course L: a leg along x = 65 mm from the white paper below the black path (y = -10) into the yellow (0..20).
+    await showCourse(page, viewer, canvas, "L", [["291", { x: 65, y: -25 }], ["292", { x: 65, y: 16 }]]);
+    const near = await colourNear(page, viewer, canvas, { x: 65, y: -3 });
+    const over = [-0.1, 0, 0.1].map((dx) => near({ x: 65 + dx, y: 4 }));
+    expect(over.some((c) => c && isPurple(c)), `purple leg over the open land: ${JSON.stringify(over)}`).toBe(true);
+    const beside = near({ x: 67, y: 4 });
+    expect(beside && isOpenLand(beside), `open land beside the leg: ${JSON.stringify(beside)}`).toBe(true);
+    const crossing = [-0.1, 0, 0.1].map((dy) => near({ x: 65, y: -10 + dy }));
+    expect(crossing.some((c) => c && isDark(c)), `the black path over the leg: ${JSON.stringify(crossing)}`).toBe(true);
+    const below = near({ x: 65, y: -13 });
+    expect(below && isPurple(below), `purple leg on the paper below the path: ${JSON.stringify(below)}`).toBe(true);
   });
 });

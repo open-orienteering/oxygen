@@ -9,12 +9,14 @@
 import type { MapDocumentInput } from "../map-document/codec.js";
 import type { DocumentSymbolInput, DocumentWarning } from "../map-document/header.js";
 import { parseRenderSymbol, type RenderSymbol } from "../render/symbol.js";
-import { remapRenderColours, renderColourRefs } from "../render/transform.js";
+import { reindexRenderColours, remapRenderColours, renderColourRefs } from "../render/transform.js";
 import { getLibraryEntry, getSymbolLibrary, SYMBOL_LIBRARY_VERSION, type SymbolLibraryId } from "../symbol-library/index.js";
 import type { PaletteEdition } from "../symbol-library/palette.js";
 import { colourRefs } from "../symbol-library/schema.js";
 import { alignColourStack, identifySourceColours, type PurpleDisplaced } from "./colour-align.js";
 import { detectPaletteEdition, formatClass } from "./colour-class.js";
+import { buildColourLayers, ColourLayersError, type ColourLayersReport, type ColourLayersResult, deviationKey, type DeviationChoice, symbolColourUses } from "./colour-layers.js";
+import { rolePalette } from "./colour-roles.js";
 import { canonicalCandidates, chooseLibrary, detectDocumentFactor, type FactorDetection, MATCH_THRESHOLDS, matchContext, matchSymbol, type SymbolDecision } from "./matcher.js";
 
 export interface MatchDocumentOptions {
@@ -25,7 +27,18 @@ export interface MatchDocumentOptions {
   /** Force the document factor (03 §6.6 override). */
   factor?: number;
   decisions?: readonly SymbolDecision[];
+  /**
+   * Stage 7's colour order (docs/map-symbols.md §9.3 "In the importer", row I5): `iof`, the layered stack
+   * (`buildColourLayers`, the default), or `source`, the mapper's table (§9.2, the user's per-map switch back).
+   */
+  colourOrder?: ColourOrder;
+  /** `iof` only: per deviation key (`"upper>lower"`), keep or drop, overriding the defaults (§9.3 "Deviations"). */
+  deviations?: Readonly<Record<string, DeviationChoice>>;
 }
+
+/** The two colour orders of stage 7 (§9.3 answer 1). */
+export type ColourOrder = "iof" | "source";
+export const DEFAULT_COLOUR_ORDER: ColourOrder = "iof";
 
 export interface MatchingSummary {
   library: { id: string; version: string };
@@ -51,6 +64,10 @@ export interface ColourStackSummary {
   areasAboveLowerPurple: { name: string; sourceNumber?: number; paletteId?: string }[];
   /** Source purples left in place as ordinary colours because they do not stand where the course purple goes (§9.2 step 4, C15). */
   purplesDisplaced: PurpleDisplaced[];
+  /** The order the stack was built in (`header.colourOrder.order`). */
+  order: ColourOrder;
+  /** `iof` only: the layered stack's report (§9.3 "Layers" Output) less `inserted` and `aliased`, which are above. */
+  layers?: Omit<ColourLayersReport, "inserted" | "aliased">;
 }
 
 export interface MatchDocumentResult {
@@ -135,9 +152,62 @@ export function matchDocument(input: MapDocumentInput, opts: MatchDocumentOption
     return { ...s, match: m };
   });
 
-  const aligned = alignColourStack({ colours, infos, spec: library.spec, edition, needed, usage });
-  for (const c of aligned.conflicts) warn("COLOUR_ORDER_CONFLICT", `${c.colour}: ${c.reason}`);
-  for (const a of aligned.areasAboveLowerPurple) warn("COLOUR_AREA_ABOVE_LOWER_PURPLE", `"${a.name}" is drawn above lower purple and hides the course overprint under it`);
+  // Stage 7: the layered stack (§9.3, `iof`) or the mapper's table (§9.2, `source`). A map whose layers cannot be
+  // resolved is drawn in its own order, with a warning, rather than failing the import.
+  let order: ColourOrder = opts.colourOrder ?? DEFAULT_COLOUR_ORDER;
+  let layered: ColourLayersResult | null = null;
+  if (order === "iof") {
+    const uses = symbolColourUses(
+      matched.map((s, i) => ({ render: renders[i], match: s.match ?? null, origin: s.origin })),
+      objectsPerSymbol,
+      infos,
+      rolePalette(library.spec, edition),
+    );
+    try {
+      layered = buildColourLayers({ colours, infos, uses, needed, spec: library.spec, edition, ...(opts.deviations ? { deviations: opts.deviations } : {}) });
+    } catch (e) {
+      if (!(e instanceof ColourLayersError)) throw e;
+      warn("COLOUR_LAYERS_FAILED", `${e.message}: drawn in the map's own colour order`);
+      order = "source";
+    }
+  }
+
+  let stack: Pick<ColourStackSummary, "inserted" | "aliased" | "conflicts" | "areasAboveLowerPurple" | "purplesDisplaced" | "layers">;
+  let stackColours: MapDocumentInput["header"]["colours"];
+  let remapped: DocumentSymbolInput[];
+  let colourOrder: NonNullable<MapDocumentInput["header"]["colourOrder"]>;
+  if (layered) {
+    const rep = layered.report;
+    const name = (source: number) => `"${colours[source].name}"`;
+    // One fixed message per deviation code: which pairs, and why, are in the report (`layers.deviations`). A message
+    // saying "by default" or "by override" would put the override into the header's bytes, so an override equal to the
+    // default would not give the same document.
+    for (const d of rep.deviations) {
+      if (d.blockedBy) warn("COLOUR_DEVIATION_BLOCKED", "a pair of IOF layers wanted in the map's own order could not be drawn so and is drawn in the IOF order");
+      else if (d.kept) warn("COLOUR_DEVIATION_KEPT", "a pair of IOF layers the map's colour table orders the other way round is drawn in the map's own order");
+      else warn("COLOUR_DEVIATION_DROPPED", "a pair of IOF layers the map's colour table orders the other way round is drawn in the IOF order");
+    }
+    for (const r of rep.noRole) if (r.objects > 0) warn("COLOUR_NO_ROLE", `${name(r.source)} (${r.place}) has no IOF layer and is drawn where the map's own order puts it`);
+    for (const r of rep.sourceOrdered) {
+      // A roleless line colour above lower purple is where the palette puts line colours; areas, masks and layout may hide the course.
+      if (!r.aboveLowerPurple || r.objects === 0 || (r.reason === "no-role" && rep.rows[r.row].place !== "area")) continue;
+      warn("COLOUR_SOURCE_ORDERED_ABOVE_LOWER_PURPLE", `${name(r.source)} (${r.reason}) is drawn above lower purple, where the map's own order puts it, and may hide the course overprint under it`);
+    }
+    const { inserted, aliased, ...lists } = rep;
+    stack = { inserted, aliased, conflicts: [], areasAboveLowerPurple: [], purplesDisplaced: [], layers: lists };
+    stackColours = layered.colours;
+    remapped = matched.map((s, i) => (renders[i] ? { ...s, render: reindexRenderColours(renders[i]!, layered!.reindex.symbols[i]!) } : s));
+    colourOrder = { order: "iof", kept: rep.deviations.filter((d) => d.kept).map((d) => deviationKey(d.upper, d.lower)).sort() };
+  } else {
+    const aligned = alignColourStack({ colours, infos, spec: library.spec, edition, needed, usage });
+    for (const c of aligned.conflicts) warn("COLOUR_ORDER_CONFLICT", `${c.colour}: ${c.reason}`);
+    for (const a of aligned.areasAboveLowerPurple) warn("COLOUR_AREA_ABOVE_LOWER_PURPLE", `"${a.name}" is drawn above lower purple and hides the course overprint under it`);
+    stack = { inserted: aligned.inserted, aliased: aligned.aliased, conflicts: aligned.conflicts, areasAboveLowerPurple: aligned.areasAboveLowerPurple, purplesDisplaced: aligned.purplesDisplaced };
+    stackColours = aligned.colours;
+    remapped = matched.map((s, i) => (renders[i] ? { ...s, render: remapRenderColours(renders[i]!, aligned.remap) } : s));
+    colourOrder = { order: "source" };
+  }
+
   const unclassified: ColourStackSummary["unclassified"] = [];
   infos.forEach((info) => {
     if (info.class || usage[info.index] === 0) return;
@@ -148,13 +218,13 @@ export function matchDocument(input: MapDocumentInput, opts: MatchDocumentOption
     warn("COLOUR_UNCLASSIFIED", `"${c.name}" (${formatClass(null)}) is used by symbols but is not an IOF colour`);
   });
 
-  const remapped = matched.map((s, i) => (renders[i] ? { ...s, render: remapRenderColours(renders[i]!, aligned.remap) } : s));
   const out: MapDocumentInput = {
     header: {
       ...header,
       documentFactor: factor.factor,
       library: { id: library.id, version: SYMBOL_LIBRARY_VERSION },
-      colours: aligned.colours,
+      colours: stackColours,
+      colourOrder,
       symbols: remapped,
       warnings: [...(header.warnings ?? []), ...warnings.values()],
     },
@@ -163,7 +233,7 @@ export function matchDocument(input: MapDocumentInput, opts: MatchDocumentOption
   return {
     input: out,
     matching: summary,
-    colourStack: { source: colours.length, inserted: aligned.inserted, aliased: aligned.aliased, conflicts: aligned.conflicts, unclassified, areasAboveLowerPurple: aligned.areasAboveLowerPurple, purplesDisplaced: aligned.purplesDisplaced },
+    colourStack: { source: colours.length, ...stack, unclassified, order },
     warnings: [...warnings.values()],
   };
 }

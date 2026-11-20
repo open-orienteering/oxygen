@@ -15,6 +15,7 @@ import {
   type FontRef,
   type GlyphMesh,
   type Pass,
+  type PassAlpha,
   type PassStream,
   type RenderPath,
   type Slice,
@@ -35,10 +36,32 @@ const sliceJson = z.object({
 const capJson = z.enum(["butt", "round", "square", "pointed"]);
 const joinJson = z.enum(["miter", "round", "bevel"]);
 
+/** §3.9: opacity in [0, 1] (1 parses to absent), blend "multiply"; both optional. */
+const alphaJson = {
+  opacity: z.number().min(0).max(1).optional(),
+  blend: z.literal("multiply").optional(),
+};
+
+/** The canonical alpha fields of a parsed pass: opacity only below 1. */
+function alphaFromJson(p: { opacity?: number; blend?: "multiply" }): PassAlpha {
+  return {
+    ...(p.opacity !== undefined && p.opacity < 1 ? { opacity: p.opacity } : {}),
+    ...(p.blend ? { blend: p.blend } : {}),
+  };
+}
+
+/** The alpha fields of a pass for the projection: opacity to 4 decimals. */
+function alphaToJson(p: PassAlpha): { opacity?: number; blend?: "multiply" } {
+  return {
+    ...(p.opacity !== undefined ? { opacity: q(p.opacity, 4) } : {}),
+    ...(p.blend ? { blend: p.blend } : {}),
+  };
+}
+
 const passJson = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("fill"), colour: z.number().int(), path: pathJson }),
+  z.object({ kind: z.literal("fill"), ...alphaJson, colour: z.number().int(), path: pathJson }),
   z.object({
-    kind: z.literal("stroke"),
+    kind: z.literal("stroke"), ...alphaJson,
     colour: z.number().int(),
     path: pathJson,
     slices: z.array(sliceJson).optional(),
@@ -48,7 +71,7 @@ const passJson = z.discriminatedUnion("kind", [
     taper: z.object({ startUm: z.number().optional(), endUm: z.number().optional() }).optional(),
   }),
   z.object({
-    kind: z.literal("glyph"),
+    kind: z.literal("glyph"), ...alphaJson,
     colour: z.number().int(),
     glyphId: z.number().int(),
     partIdx: z.number().int().default(0),
@@ -57,7 +80,7 @@ const passJson = z.discriminatedUnion("kind", [
     clip: pathJson.optional(),
   }),
   z.object({
-    kind: z.literal("hatch"),
+    kind: z.literal("hatch"), ...alphaJson,
     colour: z.number().int(),
     path: pathJson,
     widthUm: z.number().positive(),
@@ -66,7 +89,7 @@ const passJson = z.discriminatedUnion("kind", [
     angleDeg: z.number().default(0),
   }),
   z.object({
-    kind: z.literal("text"),
+    kind: z.literal("text"), ...alphaJson,
     colour: z.number().int(),
     fontId: z.number().int(),
     sizeUm: z.number().positive(),
@@ -74,6 +97,14 @@ const passJson = z.discriminatedUnion("kind", [
     positions: z.array(z.number()),
     angles: z.array(z.number()).optional(),
     haloWidthUm: z.number().positive().optional(),
+  }),
+  z.object({
+    kind: z.literal("image"), ...alphaJson,
+    colour: z.number().int(),
+    graphicId: z.number().int(),
+    /** The unit square's affine `[a, b, c, d, e, f]`, µm (§3.10). */
+    quad: z.tuple([z.number(), z.number(), z.number(), z.number(), z.number(), z.number()]),
+    crop: z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1), width: z.number().positive().max(1), height: z.number().positive().max(1) }).optional(),
   }),
 ]);
 
@@ -133,6 +164,61 @@ function pathToJson(p: RenderPath): z.input<typeof pathJson> {
   return out;
 }
 
+function passFromJson(p: z.output<typeof passJson>): Pass {
+  switch (p.kind) {
+    case "fill":
+      return { kind: "fill", colour: p.colour, path: pathFromJson(p.path), rule: "evenodd" };
+    case "stroke":
+      return {
+        kind: "stroke",
+        colour: p.colour,
+        path: pathFromJson(p.path),
+        ...(p.slices ? { slices: p.slices } : {}),
+        widthUm: p.widthUm,
+        cap: p.cap,
+        join: p.join,
+        ...(p.taper ? { taper: p.taper } : {}),
+      };
+    case "glyph":
+      if (p.instances.length % 5 !== 0) throw new Error("glyph instances must be 5 numbers each");
+      return {
+        kind: "glyph",
+        colour: p.colour,
+        glyphId: p.glyphId,
+        partIdx: p.partIdx,
+        instances: Float32Array.from(p.instances),
+        ...(p.clip ? { clip: pathFromJson(p.clip) } : {}),
+      };
+    case "hatch":
+      return {
+        kind: "hatch",
+        colour: p.colour,
+        path: pathFromJson(p.path),
+        widthUm: p.widthUm,
+        spacingUm: p.spacingUm,
+        offsetUm: p.offsetUm,
+        angleDeg: p.angleDeg,
+      };
+    case "text":
+      if (p.positions.length !== p.glyphs.length * 2) {
+        throw new Error("text positions must be x,y per glyph");
+      }
+      if (p.angles && p.angles.length !== p.glyphs.length) throw new Error("text angles must be one per glyph");
+      return {
+        kind: "text",
+        colour: p.colour,
+        fontId: p.fontId,
+        sizeUm: p.sizeUm,
+        glyphs: Uint16Array.from(p.glyphs),
+        positions: Float32Array.from(p.positions),
+        ...(p.angles ? { angles: Float32Array.from(p.angles) } : {}),
+        ...(p.haloWidthUm ? { haloWidthUm: p.haloWidthUm } : {}),
+      };
+    case "image":
+      return { kind: "image", colour: p.colour, graphicId: p.graphicId, quad: [...p.quad], ...(p.crop ? { crop: { ...p.crop } } : {}) };
+  }
+}
+
 /** Parses and validates a JSON projection; the result is canonically sorted. */
 export function passStreamFromJson(input: unknown): PassStream {
   const j = passStreamJsonSchema.parse(input);
@@ -144,56 +230,9 @@ export function passStreamFromJson(input: unknown): PassStream {
     throw new Error("maskIdx must be parallel to passes and index masks");
   }
   const passes: Pass[] = j.passes.map((p): Pass => {
-    switch (p.kind) {
-      case "fill":
-        return { kind: "fill", colour: p.colour, path: pathFromJson(p.path), rule: "evenodd" };
-      case "stroke":
-        return {
-          kind: "stroke",
-          colour: p.colour,
-          path: pathFromJson(p.path),
-          ...(p.slices ? { slices: p.slices } : {}),
-          widthUm: p.widthUm,
-          cap: p.cap,
-          join: p.join,
-          ...(p.taper ? { taper: p.taper } : {}),
-        };
-      case "glyph":
-        if (p.instances.length % 5 !== 0) throw new Error("glyph instances must be 5 numbers each");
-        return {
-          kind: "glyph",
-          colour: p.colour,
-          glyphId: p.glyphId,
-          partIdx: p.partIdx,
-          instances: Float32Array.from(p.instances),
-          ...(p.clip ? { clip: pathFromJson(p.clip) } : {}),
-        };
-      case "hatch":
-        return {
-          kind: "hatch",
-          colour: p.colour,
-          path: pathFromJson(p.path),
-          widthUm: p.widthUm,
-          spacingUm: p.spacingUm,
-          offsetUm: p.offsetUm,
-          angleDeg: p.angleDeg,
-        };
-      case "text":
-        if (p.positions.length !== p.glyphs.length * 2) {
-          throw new Error("text positions must be x,y per glyph");
-        }
-        if (p.angles && p.angles.length !== p.glyphs.length) throw new Error("text angles must be one per glyph");
-        return {
-          kind: "text",
-          colour: p.colour,
-          fontId: p.fontId,
-          sizeUm: p.sizeUm,
-          glyphs: Uint16Array.from(p.glyphs),
-          positions: Float32Array.from(p.positions),
-          ...(p.angles ? { angles: Float32Array.from(p.angles) } : {}),
-          ...(p.haloWidthUm ? { haloWidthUm: p.haloWidthUm } : {}),
-        };
-    }
+    const pass = passFromJson(p);
+    const a = alphaFromJson(p);
+    return a.opacity === undefined && a.blend === undefined ? pass : { ...pass, ...a };
   });
   const glyphTable: GlyphMesh[] = j.glyphTable.map((g) => ({
     glyphId: g.glyphId,
@@ -221,6 +260,66 @@ function q(v: number, digits = 3): number {
   return Object.is(r, -0) ? 0 : r;
 }
 
+function passToJson(p: Pass): z.input<typeof passJson> {
+  switch (p.kind) {
+    case "fill":
+      return { kind: "fill", colour: p.colour, path: pathToJson(p.path) };
+    case "stroke":
+      return {
+        kind: "stroke",
+        colour: p.colour,
+        path: pathToJson(p.path),
+        ...(p.slices
+          ? { slices: p.slices.map((sl) => ({ seg0: sl.seg0, t0: q(sl.t0, 6), seg1: sl.seg1, t1: q(sl.t1, 6) })) }
+          : {}),
+        widthUm: q(p.widthUm),
+        cap: p.cap,
+        join: p.join,
+        ...(p.taper ? { taper: p.taper } : {}),
+      };
+    case "glyph":
+      return {
+        kind: "glyph",
+        colour: p.colour,
+        glyphId: p.glyphId,
+        partIdx: p.partIdx,
+        // x, y are µm (3 decimals); cos, sin and scale are unitless and keep 6.
+        instances: Array.from(p.instances, (v, k) => q(v, k % 5 < 2 ? 3 : 6)),
+        ...(p.clip ? { clip: pathToJson(p.clip) } : {}),
+      };
+    case "hatch":
+      return {
+        kind: "hatch",
+        colour: p.colour,
+        path: pathToJson(p.path),
+        widthUm: q(p.widthUm),
+        spacingUm: q(p.spacingUm),
+        offsetUm: q(p.offsetUm),
+        angleDeg: q(p.angleDeg),
+      };
+    case "text":
+      return {
+        kind: "text",
+        colour: p.colour,
+        fontId: p.fontId,
+        sizeUm: q(p.sizeUm),
+        glyphs: Array.from(p.glyphs),
+        positions: Array.from(p.positions, (v) => q(v)),
+        ...(p.angles ? { angles: Array.from(p.angles, (v) => q(v, 6)) } : {}),
+        ...(p.haloWidthUm ? { haloWidthUm: q(p.haloWidthUm) } : {}),
+      };
+    case "image":
+      return {
+        kind: "image",
+        colour: p.colour,
+        graphicId: p.graphicId,
+        quad: p.quad.map((v) => q(v)) as [number, number, number, number, number, number],
+        ...(p.crop ? { crop: { x: q(p.crop.x, 6), y: q(p.crop.y, 6), width: q(p.crop.width, 6), height: q(p.crop.height, 6) } } : {}),
+      };
+  }
+
+}
+
 /**
  * JSON projection of a stream. Float arrays are quantised to 3 decimals;
  * this is what snapshot files contain, so it must be deterministic for
@@ -232,56 +331,7 @@ export function passStreamToJson(stream: PassStream): PassStreamJson {
   return {
     objectIdx: Array.from(s.objectIdx),
     symbolIdx: Array.from(s.symbolIdx),
-    passes: s.passes.map((p) => {
-      switch (p.kind) {
-        case "fill":
-          return { kind: "fill", colour: p.colour, path: pathToJson(p.path) };
-        case "stroke":
-          return {
-            kind: "stroke",
-            colour: p.colour,
-            path: pathToJson(p.path),
-            ...(p.slices
-              ? { slices: p.slices.map((sl) => ({ seg0: sl.seg0, t0: q(sl.t0, 6), seg1: sl.seg1, t1: q(sl.t1, 6) })) }
-              : {}),
-            widthUm: q(p.widthUm),
-            cap: p.cap,
-            join: p.join,
-            ...(p.taper ? { taper: p.taper } : {}),
-          };
-        case "glyph":
-          return {
-            kind: "glyph",
-            colour: p.colour,
-            glyphId: p.glyphId,
-            partIdx: p.partIdx,
-            // x, y are µm (3 decimals); cos, sin and scale are unitless and keep 6.
-            instances: Array.from(p.instances, (v, k) => q(v, k % 5 < 2 ? 3 : 6)),
-            ...(p.clip ? { clip: pathToJson(p.clip) } : {}),
-          };
-        case "hatch":
-          return {
-            kind: "hatch",
-            colour: p.colour,
-            path: pathToJson(p.path),
-            widthUm: q(p.widthUm),
-            spacingUm: q(p.spacingUm),
-            offsetUm: q(p.offsetUm),
-            angleDeg: q(p.angleDeg),
-          };
-        case "text":
-          return {
-            kind: "text",
-            colour: p.colour,
-            fontId: p.fontId,
-            sizeUm: q(p.sizeUm),
-            glyphs: Array.from(p.glyphs),
-            positions: Array.from(p.positions, (v) => q(v)),
-            ...(p.angles ? { angles: Array.from(p.angles, (v) => q(v, 6)) } : {}),
-            ...(p.haloWidthUm ? { haloWidthUm: q(p.haloWidthUm) } : {}),
-          };
-      }
-    }),
+    passes: s.passes.map((p) => ({ ...passToJson(p), ...alphaToJson(p) })),
     glyphTable: s.glyphTable.map((g) => ({
       glyphId: g.glyphId,
       partIdx: g.partIdx,
@@ -362,6 +412,8 @@ export function diffPassStreams(a: PassStream, b: PassStream, opts: DiffOptions 
     }
     if (p.kind !== r.kind) { where(`kind ${p.kind} vs ${r.kind}`); continue; }
     if (p.colour !== r.colour) where(`colour ${p.colour} vs ${r.colour}`);
+    if (!near(p.opacity ?? 1, r.opacity ?? 1, 1e-4)) where(`opacity ${p.opacity ?? 1} vs ${r.opacity ?? 1}`);
+    if ((p.blend ?? "normal") !== (r.blend ?? "normal")) where(`blend ${p.blend ?? "normal"} vs ${r.blend ?? "normal"}`);
     switch (p.kind) {
       case "fill": {
         const d = samePath(p.path, (r as typeof p).path);
@@ -428,6 +480,15 @@ export function diffPassStreams(a: PassStream, b: PassStream, opts: DiffOptions 
           }
         }
         if ((p.haloWidthUm ?? 0) !== (t.haloWidthUm ?? 0)) where("haloWidthUm");
+        break;
+      }
+      case "image": {
+        const im = r as typeof p;
+        if (p.graphicId !== im.graphicId) where(`graphic ${p.graphicId} vs ${im.graphicId}`);
+        if (p.quad.some((v, k) => !near(v, im.quad[k]))) where(`quad [${p.quad.join(", ")}] vs [${im.quad.join(", ")}]`);
+        const crop = (c: typeof p.crop) => c ?? { x: 0, y: 0, width: 1, height: 1 };
+        const ca = crop(p.crop), cb = crop(im.crop);
+        if (!near(ca.x, cb.x, 1e-6) || !near(ca.y, cb.y, 1e-6) || !near(ca.width, cb.width, 1e-6) || !near(ca.height, cb.height, 1e-6)) where("crop");
         break;
       }
     }

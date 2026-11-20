@@ -2,7 +2,7 @@
 
 import type { EditorTool } from "../../../lib/editor/state";
 
-export type RailTool = "V" | "S" | "K" | "M" | "X" | "C" | "A" | "T" | "G";
+export type RailTool = "V" | "S" | "K" | "M" | "X" | "C" | "A" | "T" | "I" | "G";
 
 /**
  * Map mode's tools (docs/course-editor.md §13): `V` select (G6), `N` nodes (G7), `P` / `L` / `A` point, line, area
@@ -46,6 +46,7 @@ export function railKeyOf(tool: EditorTool): RailTool | null {
     case "place": return { start: "S", control: "K", finish: "M", crossing: "C", exchange: "X" }[tool.chain.tool] as RailTool;
     case "area": return "A";
     case "text": return "T";
+    case "image": return "I";
     case "gap": return "G";
     case "pick-symbol": return null;
   }

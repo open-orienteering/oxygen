@@ -405,7 +405,7 @@ export interface CourseReply {
   warnings: Record<string, number>;
   /** The whole mesh atlas, only when the course added meshes to it (earlier meshes keep their `base`). */
   atlas?: MeshAtlas;
-  /** The input's filter regions over the document's objects; null without regions (clears the filter). */
+  /** The input's filter regions over the document's objects, then the course and page parts' knockout masks (J15); null without either (clears the filter). */
   filter: FilterReply | null;
   /** What the editor hit-tests; null when cleared or unsupported. */
   hit: CourseHitIndex | null;
@@ -1079,6 +1079,11 @@ function dropObjects(f: FilterReply, objects: ReadonlySet<number> | undefined): 
   return { ...f, entries: Uint32Array.from(keep) };
 }
 
+/** A filter with nothing hidden or masked: the seed when only the course or page parts carry masks (J15). */
+function emptyFilter(): FilterReply {
+  return { hidden: new Uint32Array(0), entries: new Uint32Array(0), positions: new Float32Array(0), indices: new Uint32Array(0), masks: [] };
+}
+
 /** Two filter replies as one: the second's masks after the first's. */
 function concatFilters(a: FilterReply, b: FilterReply): FilterReply {
   const entries = new Uint32Array(a.entries.length + b.entries.length);
@@ -1167,9 +1172,11 @@ function courseReply(state: State | undefined, msg: CourseRequest): { reply: Cou
   const part = prepared(stream, COURSE_BUCKET, glyphMesh);
   const pagePart = pageStream && pageGlyphMesh ? prepared(pageStream, PAGE_BUCKET, pageGlyphMesh) : null;
 
-  // Filter regions act on the document's objects only (the course part is never filtered, §4.11) —
-  // the effective document's (§5.2 "Patch").
-  const filter = layer.regions.length ? effectiveFilter(state, layer.regions, !!fastFilter, warnings) : null;
+  // Filter regions act on the document's objects only (§4.11) — the effective document's (§5.2 "Patch").
+  // Knockout images (J15) mask images of the course and page parts: their masks join the reply.
+  const docFilter = layer.regions.length ? effectiveFilter(state, layer.regions, !!fastFilter, warnings) : null;
+  const ownMasks = [stream, pageStream].filter((s): s is render.PassStream => !!s?.masks?.length && !!s.maskIdx).map((s) => filterReply(s, [], s.maskIdx, s.masks!, state.ctx));
+  const filter = ownMasks.length ? ownMasks.reduce(concatFilters, docFilter ?? emptyFilter()) : docFilter;
 
   const um = (v: number) => v / 1000;
   const reply: CourseReply = {
@@ -1334,6 +1341,11 @@ export function highlightPasses(stream: render.PassStream, passes: readonly numb
         out.push({ ...p, colour: HIGHLIGHT_COLOUR });
         break;
     }
+  }
+  // The highlight is an opaque outline (user 2026-11-14): copied passes lose opacity and blend (J3).
+  for (const p of out) {
+    delete p.opacity;
+    delete p.blend;
   }
   // Unmasked: the highlight is never filtered (the masks' pass indices are the source stream's).
   return {

@@ -157,3 +157,50 @@ describe("rasterisePassStream — filter regions (map-rendering §4.11, 04 §8)"
     expect(near(img, ...contourAt(24), s.colour(20))).toBe(true);
   });
 });
+
+describe("§3.9 opacity and blend (J1)", () => {
+  const mix = (a: string, b: string, t: number) => {
+    const [ar, ag, ab] = hex(a), [br, bg, bb] = hex(b);
+    const c = (x: number, y: number) => Math.round(x * (1 - t) + y * t).toString(16).padStart(2, "0");
+    return `#${c(ar, br)}${c(ag, bg)}${c(ab, bb)}`;
+  };
+  const multiply = (a: string, b: string) => {
+    const [ar, ag, ab] = hex(a), [br, bg, bb] = hex(b);
+    const c = (x: number, y: number) => Math.round((x * y) / 255).toString(16).padStart(2, "0");
+    return `#${c(ar, br)}${c(ag, bg)}${c(ab, bb)}`;
+  };
+  const Y = fixtureColours[1], B = fixtureColours[4], K = fixtureColours[5], P = fixtureColours[6];
+
+  it("a 50 % fill mixes with what is under it", async () => {
+    const img = await raster("alpha-passes");
+    expectColour(img, 6000, 6000, mix(Y, K, 0.5));
+  });
+
+  it("a self-crossing 50 % stroke blends once at the crossing", async () => {
+    const img = await raster("alpha-passes");
+    // The two diagonals cross at (19500, 6500), over blue.
+    expectColour(img, 19500, 6500, mix(B, P, 0.5));
+    expectColour(img, 23500, 8000, mix(B, P, 0.5));
+  });
+
+  it("overlapping glyph instances of one 50 % pass blend once in the overlap", async () => {
+    const img = await raster("alpha-passes");
+    expectColour(img, 18250, 18500, mix(B, K, 0.5));
+    expectColour(img, 17000, 18500, mix(B, K, 0.5));
+  });
+
+  it("a 25 % dashed stroke: dash mixed, gap untouched", async () => {
+    const img = await raster("alpha-passes");
+    expectColour(img, 5000, 12500, mix(Y, K, 0.25));
+    expectColour(img, 11500, 12500, Y);
+  });
+
+  it("Multiply multiplies with every colour under it, black stays black", async () => {
+    const img = await raster("blend-multiply");
+    expectColour(img, 6000, 9000, multiply(Y, P));
+    expectColour(img, 18000, 9000, multiply(B, P));
+    expectColour(img, 6000, 10000, K);
+    expectColour(img, 6000, 16500, mix(Y, multiply(Y, P), 0.5));
+    expectColour(img, 18000, 16500, mix(B, multiply(B, P), 0.5));
+  });
+});

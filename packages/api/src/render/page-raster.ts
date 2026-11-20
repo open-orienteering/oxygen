@@ -7,8 +7,11 @@
  * are drawn separately and composited: the map layer moved through
  * `T_map` into page µm (`transformPassStream`) and rasterised over the
  * frame alone — the frame clip is the raster's extent — and the page
- * layer over the whole sheet on transparent, both over white paper.
- * Images are not drawn (no page scene carries one).
+ * layer over the whole sheet on transparent, both over white paper. A
+ * page layer with a Multiply pass is drawn onto the sheet so far instead
+ * (`backdropPng`, J4), so it multiplies the map under it as in the PDF.
+ * Images are drawn from the PNG bytes given by graphic id (J5); one without
+ * bytes is left out, as the PDF leaves it out.
  */
 
 import { render } from "@oxygen/shared";
@@ -20,11 +23,12 @@ import {
   composePage,
   descriptionSheetScene,
   pageScene,
+  pageSceneGraphics,
   tileDescriptionSheets,
   transformPassStream,
 } from "@oxygen/shared/print";
 import { glyphOutlineFrom } from "./fonts.js";
-import { goldenFonts } from "./golden.js";
+import { goldenFonts, graphicHrefs } from "./golden.js";
 import { encodePng, rasterisePassStream } from "./reference-raster.js";
 
 export interface PageRaster {
@@ -59,13 +63,21 @@ export function over(dst: Uint8Array, dw: number, dh: number, src: { width: numb
 
 export async function rasterisePage(
   page: ComposedPage,
-  opts: { pxPerMm?: number; supersample?: number; /** Colour by stack index; default the naive conversion of the page's stack. */ colour?: (i: number) => string } = {},
+  opts: {
+    pxPerMm?: number;
+    supersample?: number;
+    /** Colour by stack index; default the naive conversion of the page's stack. */
+    colour?: (i: number) => string;
+    /** PNG bytes by graphic id, for the page's image passes (J5). */
+    images?: ReadonlyMap<number, Uint8Array>;
+  } = {},
 ): Promise<PageRaster> {
   const pxPerMm = opts.pxPerMm ?? render.GOLDEN_PX_PER_MM;
   const fonts = await goldenFonts();
   const hex = page.colours.map((c) => render.cmykToHex(c.cmyk));
   const colour = opts.colour ?? ((i: number) => hex[i] ?? "#ff00ff");
-  const common = { colour, pxPerMm, background: "none", glyphOutline: glyphOutlineFrom(fonts), supersample: opts.supersample ?? 1 };
+  const imageHref = graphicHrefs(opts.images);
+  const common = { colour, pxPerMm, background: "none", glyphOutline: glyphOutlineFrom(fonts), supersample: opts.supersample ?? 1, imageHref };
   const width = Math.round(page.paper.widthMm * pxPerMm);
   const height = Math.round(page.paper.heightMm * pxPerMm);
   const pixels = new Uint8Array(width * height * 4).fill(255);
@@ -78,11 +90,17 @@ export async function rasterisePage(
   over(pixels, width, height, map, Math.round((f.x / 1000) * pxPerMm), Math.round((page.paper.heightMm - (f.y + f.height) / 1000) * pxPerMm));
 
   if (page.pageLayer.stream.passes.length) {
-    const sheet = await rasterisePassStream(page.pageLayer.stream, {
-      ...common,
-      bounds: { minX: 0, minY: 0, maxX: page.paper.widthMm * 1000, maxY: page.paper.heightMm * 1000 },
-    });
-    over(pixels, width, height, sheet, 0, 0);
+    const bounds = { minX: 0, minY: 0, maxX: page.paper.widthMm * 1000, maxY: page.paper.heightMm * 1000 };
+    if (page.pageLayer.stream.passes.some((p) => p.blend === "multiply")) {
+      // Layered (J4): a Multiply page object blends with the map under it, as the PDF's page group does,
+      // so the page layer is drawn onto the sheet so far rather than composited over it afterwards.
+      const sheet = await rasterisePassStream(page.pageLayer.stream, { ...common, bounds, backdropPng: await encodePng({ width, height, pixels }) });
+      if (sheet.width !== width || sheet.height !== height) throw new Error(`page oracle: page layer ${sheet.width}×${sheet.height}, sheet ${width}×${height}`);
+      // The backdrop covers the sheet: a transparent pixel means it was letterboxed.
+      for (let i = 3; i < sheet.pixels.length; i += 4) if (sheet.pixels[i] !== 255) throw new Error("page oracle: the layered page layer left a transparent pixel");
+      return { width, height, pixels: sheet.pixels };
+    }
+    over(pixels, width, height, await rasterisePassStream(page.pageLayer.stream, { ...common, bounds }), 0, 0);
   }
   return { width, height, pixels };
 }
@@ -101,7 +119,7 @@ export async function composePageScene(name: PageSceneName): Promise<ComposedPag
 
 /** A page scene's golden (`e2e/__golden__/map-gl/page-*.png`): the page oracle at the golden density. */
 export async function renderPageGoldenPng(name: PageSceneName): Promise<Buffer> {
-  return encodePng(await rasterisePage(await composePageScene(name), { supersample: PAGE_GOLDEN_SUPERSAMPLE }));
+  return encodePng(await rasterisePage(await composePageScene(name), { supersample: PAGE_GOLDEN_SUPERSAMPLE, images: pageSceneGraphics(name) }));
 }
 
 // ---- description sheets (docs/course-print.md §6.4, §7.5) -------------------

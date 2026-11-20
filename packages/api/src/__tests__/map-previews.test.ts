@@ -17,6 +17,7 @@ import {
   stripPng,
 } from "../map-store/previews.js";
 import { matchesEtag, parseDocumentHash } from "../map-store/routes.js";
+import { parseColourOrder } from "../map-store/colour-pictures.js";
 
 const V = symbolLibrary.SYMBOL_LIBRARY_VERSION;
 
@@ -28,6 +29,12 @@ describe("preview request parsing", () => {
     expect(parseSymbolIdx("17")).toBe(17);
     expect(parseSymbolIdx("9999999")).toBe(9999999); // out of range is a 404, not a 400
     for (const bad of ["", "-1", "01", "1.5", "1e3", "abc", " 1", "99999999999999999999"]) expect(parseSymbolIdx(bad), bad).toBeNull();
+  });
+
+  it("colour order: iof or source (the colour panel's picture)", () => {
+    expect(parseColourOrder("iof")).toBe("iof");
+    expect(parseColourOrder("source")).toBe("source");
+    for (const bad of ["", "IOF", "own", "source.png"]) expect(parseColourOrder(bad), bad).toBeNull();
   });
 
   it(".png suffix is required", () => {
@@ -53,6 +60,7 @@ describe("preview request parsing", () => {
     const h = "a".repeat(64);
     expect(previewEtag(h, "thumbnail", "")).toBe(`"${h}/thumbnail"`);
     expect(previewEtag(h, "symbol", "3")).toBe(`"${h}/symbols/3"`);
+    expect(previewEtag(h, "colour-order", "source")).toBe(`"${h}/colour-order/source"`);
     expect(libraryPreviewEtag("ISOM2017-2", V, "418")).toBe(`"ISOM2017-2@${V}/418"`);
     const e = previewEtag(h, "symbol", "3");
     expect(matchesEtag(`W/${e}`, e)).toBe(true);

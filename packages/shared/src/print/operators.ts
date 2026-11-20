@@ -25,12 +25,13 @@
  * Writer-independent: resources are names handed out by `OperatorResources`.
  */
 
-import type { FontRef, GlyphMesh, Pass, PassStream, RenderPath, StrokeCap, StrokeJoin } from "../render/pass-stream.js";
+import { type BlendMode, type FontRef, type GlyphMesh, type Pass, type PassStream, type RenderPath, type StrokeCap, type StrokeJoin, passHasAlpha } from "../render/pass-stream.js";
 import { type Bounds, type Segment, hatchLines, pathBounds, pathRings, ringSegments, sliceSegments, unionBounds } from "../render/path.js";
 import { STROKE_MITRE_LIMIT, strokeOutline } from "../render/geometry.js";
 import { type GlyphOutline, passStreamBounds } from "../render/reference-svg.js";
 import { COORD_FLAG } from "../render/pass-stream.js";
 import type { ColourStack } from "../render/symbol.js";
+import { type ImageWindow, cropInWindow } from "../render/image-window.js";
 import { type ColourMode, type PdfColour, colourOperator, stackColour } from "./colour.js";
 import { glyphHex } from "./fonts.js";
 
@@ -58,6 +59,20 @@ export interface OperatorResources {
    * units, turn and scale folded in); default the identity.
    */
   glyph(mesh: GlyphMesh, matrix?: Matrix): string;
+  /**
+   * ExtGState resource name (without the slash) for a pass's opacity and
+   * blend (map-rendering §3.9); the writer also marks the page as a
+   * transparency group in `mode`'s colour space. Absent = the writer
+   * cannot draw alpha, and alpha passes are drawn opaque.
+   */
+  alpha?(opacity: number | undefined, blend: BlendMode | undefined, mode: ColourMode): string;
+  /**
+   * An isolated transparency-group form XObject (without the slash) whose
+   * content `draw` writes against the form's own resources; `bbox` in the
+   * content's units. `undefined` when `draw` writes nothing. Glyph and text
+   * passes with alpha draw through one, so overlapping instances paint once.
+   */
+  group?(bbox: [number, number, number, number], draw: (resources: OperatorResources) => string): string | undefined;
 }
 
 export interface OperatorOptions {
@@ -75,6 +90,14 @@ export interface OperatorOptions {
    * (map-rendering.md §5.3 "Frame culling"). Unset = nothing is.
    */
   cull?: Bounds;
+  /**
+   * Image XObject names (without the slash) by graphic id, embedded by the
+   * caller before the operators are written (J5); an image pass whose
+   * graphic has none draws nothing.
+   */
+  images?: ReadonlyMap<number, string>;
+  /** The part of the graphic each image XObject shows (an SVG window, course-print.md §6.3); a crop is drawn relative to it. Absent = all. */
+  imageWindows?: ReadonlyMap<number, ImageWindow>;
 }
 
 /** A PDF number: fixed-point (never JS exponent notation, ISO 32000 §7.3.3), trailing zeros dropped. */
@@ -390,6 +413,9 @@ export function filterClipPath(frame: Bounds, region: RenderPath): RenderPath {
   return { coords, flags, closed: true };
 }
 
+/** Padding of a transparency-group form's box round its pass's bounds, µm (the bounds are control-point and em estimates). */
+export const GROUP_BBOX_PAD_UM = 2000;
+
 /** Graphics-state values the emitter tracks to skip redundant operators; mirrors `q` / `Q`. */
 interface GState {
   fill?: string;
@@ -409,9 +435,10 @@ export function passStreamOperators(stream: PassStream, opts: OperatorOptions): 
   const e = coords(opts.originUm, unit);
   const path = (p: RenderPath, forceClosed = false) => pathOps(p, e, forceClosed);
   const cull = opts.cull && { minX: opts.cull.minX - CULL_MARGIN_UM, minY: opts.cull.minY - CULL_MARGIN_UM, maxX: opts.cull.maxX + CULL_MARGIN_UM, maxY: opts.cull.maxY + CULL_MARGIN_UM };
-  const out: string[] = [];
+  let out: string[] = [];
   let gs: GState = {};
-  const stack: GState[] = [];
+  let stack: GState[] = [];
+  let res: OperatorResources = opts.resources;
   const save = () => {
     out.push("q");
     stack.push({ ...gs });
@@ -535,7 +562,7 @@ export function passStreamOperators(stream: PassStream, opts: OperatorOptions): 
           save();
           out.push(`${path(p.clip!, true)} W* n`);
         }
-        glyphInstances(p.instances, mesh, unit, e, opts.resources, out, keep);
+        glyphInstances(p.instances, mesh, unit, e, res, out, keep);
         if (clipped) restore();
         break;
       }
@@ -555,7 +582,7 @@ export function passStreamOperators(stream: PassStream, opts: OperatorOptions): 
         const ref = fonts.get(p.fontId);
         if (!ref) break;
         const halo = (p.haloWidthUm ?? 0) > 0;
-        const name = opts.resources.font(ref, p.glyphs);
+        const name = res.font(ref, p.glyphs);
         if (halo) {
           strokeColour(p.colour);
           lineStyle(2 * p.haloWidthUm!, 1, 1);
@@ -576,7 +603,7 @@ export function passStreamOperators(stream: PassStream, opts: OperatorOptions): 
         } else {
           // Fallback: the outlines the reference raster draws, even-odd like it.
           for (let i = 0; i < p.glyphs.length; i++) {
-            const o = opts.resources.glyphOutline?.(ref, p.glyphs[i]);
+            const o = res.glyphOutline?.(ref, p.glyphs[i]);
             if (!o) continue;
             const k = p.sizeUm / o.unitsPerEm;
             const a = angle(i), c = (Math.cos(a) * k) / unit, s = (Math.sin(a) * k) / unit;
@@ -590,8 +617,91 @@ export function passStreamOperators(stream: PassStream, opts: OperatorOptions): 
         }
         break;
       }
+      case "image": {
+        // §3.10: `q <quad> cm 0 0 1 1 re W n <crop> cm /Imn Do Q` — the unit square through the quad (rotation and
+        // flips in the matrix), and the crop's part filling it: the whole image enlarged and offset under that clip.
+        const name = opts.images?.get(p.graphicId);
+        if (!name) break;
+        const q = p.quad;
+        const quad = cmOperator([q[0] * e.k, q[1] * e.k, q[2] * e.k, q[3] * e.k, (q[4] - e.ox) * e.k, (q[5] - e.oy) * e.k]);
+        const c = cropInWindow(p.crop, opts.imageWindows?.get(p.graphicId));
+        out.push(c
+          ? `q ${quad} 0 0 1 1 re W n ${cmOperator([1 / c.width, 0, 0, 1 / c.height, -c.x / c.width, (c.y + c.height - 1) / c.height])} /${name} Do Q`
+          : `q ${quad} /${name} Do Q`);
+        break;
+      }
     }
   };
+  // §3.9: a pass with opacity or blend is drawn inside `q /GSn gs … Q` — one painting operator for a
+  // fill, stroke or hatch, so each pixel blends once. A glyph or text pass paints once per instance or
+  // glyph: it is drawn into an isolated transparency-group form, and the form under the ExtGState.
+  // A pass that writes nothing (culled) asks for no resource.
+  const emitAlpha = (p: Pass) => {
+    if ((p.kind === "glyph" || p.kind === "text") && !opts.resources.group) {
+      // A writer that can make ExtGStates but no forms: the pass draws opaque (§5.3).
+      emit(p);
+      return;
+    }
+    const group = opts.resources.group;
+    if ((p.kind === "glyph" || p.kind === "text") && group) {
+      let b: { minX: number; minY: number; maxX: number; maxY: number } | null | undefined;
+      if (p.kind === "glyph") {
+        // As the cull above: the form's farthest corner (mitres in) times the instance's scale, so a turn stays inside.
+        const mesh = meshes.get(`${p.glyphId}/${p.partIdx}`);
+        if (!mesh || p.instances.length === 0) return;
+        const [x0, y0, x1, y1] = glyphFormBBox(mesh);
+        const reach = Math.hypot(Math.max(Math.abs(x0), Math.abs(x1)), Math.max(Math.abs(y0), Math.abs(y1)));
+        b = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+        const inst = p.instances;
+        for (let i = 0; i < inst.length; i += 5) {
+          const r = reach * inst[i + 4];
+          b.minX = Math.min(b.minX, inst[i] - r);
+          b.minY = Math.min(b.minY, inst[i + 1] - r);
+          b.maxX = Math.max(b.maxX, inst[i] + r);
+          b.maxY = Math.max(b.maxY, inst[i + 1] + r);
+        }
+      } else {
+        b = passStreamBounds({ ...stream, passes: [p], objectIdx: new Uint32Array(1), symbolIdx: new Uint32Array(1) });
+      }
+      if (!b) return;
+      const pad = (p.kind === "text" ? p.sizeUm + 2 * (p.haloWidthUm ?? 0) : 0) + GROUP_BBOX_PAD_UM;
+      const bbox: [number, number, number, number] = [
+        Math.floor((b.minX - pad - e.ox) * e.k),
+        Math.floor((b.minY - pad - e.oy) * e.k),
+        Math.ceil((b.maxX + pad - e.ox) * e.k),
+        Math.ceil((b.maxY + pad - e.oy) * e.k),
+      ];
+      const name = group(bbox, (inner) => {
+        const saved = { out, gs, stack, res };
+        out = [];
+        gs = {};
+        stack = [];
+        res = inner;
+        try {
+          emit(p);
+          return out.join("\n");
+        } finally {
+          ({ out, gs, stack, res } = saved);
+        }
+      });
+      if (name === undefined) return;
+      out.push(`q /${opts.resources.alpha!(p.opacity, p.blend, opts.mode)} gs /${name} Do Q`);
+      return;
+    }
+    const start = out.length;
+    save();
+    const at = out.length;
+    out.push("");
+    emit(p);
+    if (out.length === at + 1) {
+      out.length = start;
+      gs = stack.pop() ?? {};
+      return;
+    }
+    out[at] = `/${opts.resources.alpha!(p.opacity, p.blend, opts.mode)} gs`;
+    restore();
+  };
+
   // Filter masks (§3.8, 05 §5.3): a run of passes under one mask is drawn inside
   // `q <frame + region> W* n …` per region, closed by `Q` before the next mask or an unmasked pass.
   let frame: Bounds | undefined;
@@ -612,7 +722,8 @@ export function passStreamOperators(stream: PassStream, opts: OperatorOptions): 
       }
       open = m;
     }
-    emit(p);
+    if (passHasAlpha(p) && opts.resources.alpha) emitAlpha(p);
+    else emit(p);
   });
   if (open >= 0) restore();
   return out.join("\n");

@@ -11,6 +11,8 @@
 import {
   type CoursePagesOptions as SharedCoursePagesOptions,
   type CoursePagesResult,
+  type ImageWindow,
+  isWholeWindow,
   type PreparedDocument,
   type PrintPatch,
   renderCoursePages as renderSharedCoursePages,
@@ -19,25 +21,65 @@ import {
 import type { PrismaClient, Prisma } from "../generated/prisma/client.js";
 import { getBlob } from "../map-store/blob-store.js";
 import { eventPrintPatch } from "../map-store/patches.js";
-import { BUNDLED_FONT_FILES, bundledPrintFonts } from "../render/fonts.js";
+import { bundledPrintFonts } from "../render/fonts.js";
 import { type BaseMapInfo, getBaseMapInfo } from "./map-source.js";
+import { svgFontOptions, windowedSvg } from "./svg-window.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
 /** The shared options less what this binding supplies: the bundled fonts and the yield; `rasteriseSvg` defaults to resvg. */
 export type CoursePagesOptions = Omit<SharedCoursePagesOptions, "fonts" | "yieldToHost">;
 
-/** resvg at an exact pixel box (aspect stretched like the legacy `preserveAspectRatio="none"`). */
-export async function rasteriseSvgGraphic(svg: Uint8Array, widthPx: number, heightPx: number): Promise<Uint8Array> {
+/**
+ * resvg at an exact pixel box (aspect stretched like the legacy
+ * `preserveAspectRatio="none"`); over `window` of the graphic's canvas only
+ * when given (course-print.md §6.3), so a crop gets the whole box. A
+ * document the window wrapper cannot carry (it does not parse wrapped) gets
+ * the window cut from a whole raster at the window's density instead.
+ */
+export async function rasteriseSvgGraphic(svg: Uint8Array, widthPx: number, heightPx: number, window?: ImageWindow): Promise<Uint8Array> {
   const { Resvg } = await import("@resvg/resvg-js");
   const sharp = (await import("sharp")).default;
-  // Text in a logo uses the bundled faces only: the same output on every host.
-  const fontFiles = Object.values(BUNDLED_FONT_FILES).map((f) => f.path);
-  const r = new Resvg(Buffer.from(svg), { fitTo: { mode: "width", value: widthPx }, font: { loadSystemFonts: false, fontFiles, defaultFontFamily: "Liberation Sans" } });
-  const png = r.render().asPng();
+  const font = svgFontOptions();
+  const source = Buffer.from(svg);
+  if (window && !isWholeWindow(window)) {
+    const canvas = new Resvg(source, { font });
+    let png: Buffer;
+    try {
+      const windowed = Buffer.from(windowedSvg(source.toString("utf8"), [canvas.width, canvas.height], window, [widthPx, heightPx]), "utf8");
+      png = new Resvg(windowed, { fitTo: { mode: "width", value: widthPx }, font }).render().asPng();
+    } catch {
+      // The wrapped document does not parse (markup the reframe cannot carry): the window cut from a whole raster.
+      return windowFromWhole(Resvg, sharp, source, font, window, widthPx, heightPx);
+    }
+    return exactBox(sharp, png, widthPx, heightPx);
+  }
+  return exactBox(sharp, new Resvg(source, { fitTo: { mode: "width", value: widthPx }, font }).render().asPng(), widthPx, heightPx);
+}
+
+type ResvgCtor = typeof import("@resvg/resvg-js").Resvg;
+type Sharp = typeof import("sharp").default;
+
+/** A PNG at exactly `w × h` (stretched when resvg rounded differently). */
+async function exactBox(sharp: Sharp, png: Buffer | Uint8Array, w: number, h: number): Promise<Uint8Array> {
   const meta = await sharp(png).metadata();
-  if (meta.width === widthPx && meta.height === heightPx) return new Uint8Array(png);
-  return new Uint8Array(await sharp(png).resize(widthPx, heightPx, { fit: "fill" }).png().toBuffer());
+  if (meta.width === w && meta.height === h) return new Uint8Array(png);
+  return new Uint8Array(await sharp(png).resize(w, h, { fit: "fill" }).png().toBuffer());
+}
+
+/** The longest side the fallback's whole raster may have, px. */
+const WINDOW_FALLBACK_MAX_PX = 16384;
+
+/** Fallback for `rasteriseSvgGraphic`'s window: the whole canvas at the window's density (at most 16384 px a side), the window cut out and fitted to the box. */
+async function windowFromWhole(Resvg: ResvgCtor, sharp: Sharp, svg: Buffer, font: ReturnType<typeof svgFontOptions>, window: ImageWindow, w: number, h: number): Promise<Uint8Array> {
+  let fw = Math.ceil(w / window.width), fh = Math.ceil(h / window.height);
+  const k = Math.min(1, WINDOW_FALLBACK_MAX_PX / Math.max(fw, fh));
+  fw = Math.max(1, Math.round(fw * k));
+  fh = Math.max(1, Math.round(fh * k));
+  const whole = await exactBox(sharp, new Resvg(svg, { fitTo: { mode: "width", value: fw }, font }).render().asPng(), fw, fh);
+  const left = Math.min(fw - 1, Math.floor(window.x * fw)), top = Math.min(fh - 1, Math.floor(window.y * fh));
+  const width = Math.max(1, Math.min(fw - left, Math.round(window.width * fw))), height = Math.max(1, Math.min(fh - top, Math.round(window.height * fh)));
+  return new Uint8Array(await sharp(whole).extract({ left, top, width, height }).resize(w, h, { fit: "fill" }).png().toBuffer());
 }
 
 /** One page at a time on the event loop: other requests (card readouts) run between pages of a long export (course-print.md §8.2). */
@@ -50,7 +92,7 @@ const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resol
  * aligned.
  */
 export async function renderCoursePages(opts: CoursePagesOptions): Promise<CoursePagesResult> {
-  return renderSharedCoursePages({ ...opts, fonts: await bundledPrintFonts(), rasteriseSvg: opts.rasteriseSvg ?? rasteriseSvgGraphic, yieldToHost: yieldToEventLoop });
+  return renderSharedCoursePages({ ...opts, fonts: await bundledPrintFonts(), rasteriseSvg: opts.rasteriseSvg ?? ((svg, w, h, _id, window) => rasteriseSvgGraphic(svg, w, h, window)), yieldToHost: yieldToEventLoop });
 }
 
 /** The pinned document's identity, without decoding it. */

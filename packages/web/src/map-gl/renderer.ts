@@ -24,7 +24,7 @@ import { TerrainLines, type LineDrawStats, type TerrainLine } from "./terrain/li
 import { buildTextGlyphs, GLYPH_TABLE_TEXELS, GLYPH_TABLE_WIDTH, type TextAtlasPage } from "./text-atlas.js";
 import {
   FILL_VERTEX_BYTES, HATCH_VERTEX_BYTES, STROKE_VERTEX_BYTES,
-  type ClipGroup, type DrawLayer, type PreparedPart, type ResidentPart, type VisibleSet,
+  type AlphaLayer, type ClipGroup, type ImageDraw, type DrawLayer, type PreparedPart, type ResidentPart, type VisibleSet,
 } from "./buckets.js";
 
 export interface View {
@@ -41,6 +41,12 @@ export interface View {
 }
 
 /** Options of the arena path (`renderDocument`); the screen-only rules of 04 §6.11. */
+/** A texture of a window of its graphic (`[x, y, width, height]`, fractions, top-left origin; §5.2 "Images"). */
+export interface WindowedTexture {
+  source: TexImageSource;
+  window: [number, number, number, number];
+}
+
 export interface DocumentRenderOptions {
   colour: (idx: number) => [number, number, number];
   background?: [number, number, number];
@@ -59,7 +65,16 @@ export interface DocumentRenderOptions {
    */
   viewMatrix?: Float32Array;
   /** Profiling (dev page `kinds=`): draw only these kinds. */
-  kinds?: ReadonlySet<"fill" | "hatch" | "stroke" | "glyph" | "clip" | "text">;
+  kinds?: ReadonlySet<"fill" | "hatch" | "stroke" | "glyph" | "clip" | "text" | "image">;
+  /**
+   * An image's texture (J6, §5.2 "Images"): `undefined` while it loads (drawn as an outline),
+   * `null` when it cannot be had (an outline with `outlineMissingImages`, else nothing). Without
+   * it every image is an outline. A texture of part of the graphic (an SVG's window) comes with
+   * that `window`, and the crop is drawn relative to it. `pxPerUm` is the target's density.
+   */
+  graphic?: (image: ImageDraw, pxPerUm: number) => TexImageSource | WindowedTexture | null | undefined;
+  /** Draw a failed image's outline too (the editor); the viewer and kiosk draw nothing. */
+  outlineMissingImages?: boolean;
   /**
    * Layout mode's page (docs/course-layout.md §1): colours below `fromColour` are the map layer,
    * drawn only inside the frame (`ringUm`, paper µm); the page layer above them is not clipped.
@@ -188,6 +203,82 @@ void main() {
 
 // ---- arena path (B2): shaders -----------------------------------------------
 
+/**
+ * The arena fragment shaders' output (J3, §5.2 "Alpha layers"): `u_clear` = 1 − opacity and
+ * `u_multiply` are 0 on opaque draws (a uniform's default), so an opaque draw writes
+ * `(colour, a)` as before. An alpha layer folds its opacity into the coverage; Multiply writes
+ * `mix(1, colour, k)` for the `DST_COLOR, ZERO` blend. In an alpha layer a fragment below
+ * `u_minCover` (the interior phase) or with no coverage is discarded, so it does not take the
+ * pixel's stencil mark.
+ */
+const FS_A_OUT = `
+uniform float u_clear;
+uniform float u_multiply;
+uniform float u_minCover;
+out vec4 o;
+void outA(vec3 c, float a) {
+  if ((u_clear > 0.0 || u_multiply > 0.5) && (a <= 0.0 || a < u_minCover)) discard;
+  float k = a * (1.0 - u_clear);
+  o = u_multiply > 0.5 ? vec4(mix(vec3(1.0), c, k), 1.0) : vec4(c, k);
+}
+`;
+
+/**
+ * Images (J6, §5.2 "Images"): the unit square (two triangles by vertex id; with u_outline its
+ * four corners as a line loop) through the pass's affine, origin-relative. The texture is
+ * straight alpha (decoded unpremultiplied): its alpha × opacity is the coverage, blended as
+ * the alpha layers blend (Multiply: mix(1, colour, k) under DST_COLOR, ZERO).
+ */
+const VS_A_IMAGE = `#version 300 es
+precision highp float;
+uniform mat4 u_view;
+uniform vec4 u_ab_cd;
+uniform vec2 u_ef;
+uniform vec4 u_crop;
+uniform float u_outline;
+out vec2 v_uv;
+void main() {
+  int i = gl_VertexID;
+  vec2 q = u_outline > 0.5 ? vec2(i == 1 || i == 2 ? 1.0 : 0.0, i >= 2 ? 1.0 : 0.0)
+    : vec2(i == 1 || i == 2 || i == 4 ? 1.0 : 0.0, i == 2 || i == 4 || i == 5 ? 1.0 : 0.0);
+  vec2 p = u_ef + q.x * u_ab_cd.xy + q.y * u_ab_cd.zw;
+  v_uv = vec2(u_crop.x + q.x * u_crop.z, u_crop.y + (1.0 - q.y) * u_crop.w);
+  gl_Position = u_view * vec4(p, 0.0, 1.0);
+}
+`;
+
+const FS_A_IMAGE = `#version 300 es
+precision highp float;
+uniform sampler2D u_tex;
+uniform float u_opacity;
+uniform float u_multiply;
+uniform float u_outline;
+in vec2 v_uv;
+out vec4 o;
+void main() {
+  if (u_outline > 0.5) { o = vec4(0.5, 0.5, 0.5, 0.6); return; }
+  vec4 t = texture(u_tex, v_uv);
+  float k = t.a * u_opacity;
+  if (k <= 0.0) discard;
+  o = u_multiply > 0.5 ? vec4(mix(vec3(1.0), t.rgb, k), 1.0) : vec4(t.rgb, k);
+}
+`;
+
+const FS_A_SOLID = `#version 300 es
+precision highp float;
+uniform vec3 u_colour;
+${FS_A_OUT}
+void main() { outA(u_colour, 1.0); }
+`;
+
+const FS_A_ALPHA = `#version 300 es
+precision highp float;
+uniform vec3 u_colour;
+in float v_alpha;
+${FS_A_OUT}
+void main() { outA(u_colour, v_alpha); }
+`;
+
 /** Positions are relative to the document origin; `u_view` is the model → clip matrix (view.ts, built in f64). */
 const VS_ARENA = `#version 300 es
 precision highp float;
@@ -225,11 +316,11 @@ uniform float u_tintPx;      // below this stripe spacing on screen, draw the co
 in float v_d;
 flat in float v_sp;
 flat in float v_hw;
-out vec4 o;
+${FS_A_OUT}
 void main() {
-  if (v_sp * u_pxPerUm < u_tintPx) { o = vec4(u_colour, clamp(2.0 * v_hw / v_sp, 0.0, 1.0)); return; }
+  if (v_sp * u_pxPerUm < u_tintPx) { outA(u_colour, clamp(2.0 * v_hw / v_sp, 0.0, 1.0)); return; }
   float m = v_d - v_sp * floor(v_d / v_sp + 0.5);
-  o = vec4(u_colour, clamp((v_hw - abs(m)) * u_pxPerUm + 0.5, 0.0, 1.0));
+  outA(u_colour, clamp((v_hw - abs(m)) * u_pxPerUm + 0.5, 0.0, 1.0));
 }
 `;
 
@@ -327,7 +418,7 @@ in vec2 v_uv;
 flat in float v_pxPerEm;
 flat in float v_range;
 flat in float v_halo;
-out vec4 o;
+${FS_A_OUT}
 void main() {
   vec4 t = texture(u_page, v_uv);
   float a;
@@ -339,16 +430,8 @@ void main() {
     a = clamp((m - 0.5) * v_range * v_pxPerEm + 0.5, 0.0, 1.0);
   }
   if (a <= 0.0) discard;
-  o = vec4(u_colour, a);
+  outA(u_colour, a);
 }
-`;
-
-const FS_ALPHA = `#version 300 es
-precision highp float;
-uniform vec3 u_colour;
-in float v_alpha;
-out vec4 o;
-void main() { o = vec4(u_colour, v_alpha); }
 `;
 
 interface TimerExt {
@@ -388,6 +471,8 @@ export function drapeTextureBytes(w: number, h: number): number {
 
 export interface FrameStats {
   drawCalls: number;
+  /** Images in view drawn as an outline because their texture is not loaded (J6); absent when none. */
+  imagesPending?: number;
   /** JS time of the frame, ms. */
   cpuMs: number;
   gpuMs?: number;
@@ -397,6 +482,8 @@ const CLIP_BIT = 0x01;
 const PARITY_BIT = 0x02;
 /** Filter masks (map-rendering §3.8): set inside the union of a mask's regions; masked draws need it clear. */
 const REGION_BIT = 0x04;
+/** Alpha layers (J3, §5.2 "Alpha layers"): set by a layer's first fragment per sample, so later ones fail; cleared after the layer. */
+const ALPHA_BIT = 0x08;
 
 const VS_BLIT = `#version 300 es
 precision highp float;
@@ -586,6 +673,10 @@ export class MapGlRenderer {
 
   /** Frees every GL resource; the renderer is unusable afterwards. */
   dispose(): void {
+    for (const t of this.graphicTextures.values()) this.gl.deleteTexture(t.tex);
+    this.graphicTextures.clear();
+    if (this.imageVao) this.gl.deleteVertexArray(this.imageVao);
+    this.imageVao = undefined;
     this.disposeDocument();
     this.disposeTextAtlas();
     this.deleteOffscreen("supersample");
@@ -1048,12 +1139,12 @@ export class MapGlRenderer {
   }
 
   private arenaPrograms(): ArenaState["programs"] {
-    const common = ["u_view", "u_pxPerUm", "u_minPx", "u_colour"];
+    const common = ["u_view", "u_pxPerUm", "u_minPx", "u_colour", "u_clear", "u_multiply", "u_minCover"];
     this.arenaProgramCache ??= {
-      fill: this.link(VS_A_FILL, FS_SOLID, ["a_pos"], common),
+      fill: this.link(VS_A_FILL, FS_A_SOLID, ["a_pos"], common),
       hatch: this.link(VS_A_HATCH, FS_A_HATCH, ["a_pos", "a_n", "a_h"], [...common, "u_tintPx"]),
-      stroke: this.link(VS_A_STROKE, FS_ALPHA, ["a_pos", "a_off", "a_hw"], common),
-      inst: this.link(VS_A_INST, FS_ALPHA, ["a_i0", "a_i1"], [...common, "u_atlas", "u_minGlyphPx"]),
+      stroke: this.link(VS_A_STROKE, FS_A_ALPHA, ["a_pos", "a_off", "a_hw"], common),
+      inst: this.link(VS_A_INST, FS_A_ALPHA, ["a_i0", "a_i1"], [...common, "u_atlas", "u_minGlyphPx"]),
       text: this.link(VS_A_TEXT, FS_A_TEXT, ["a_i0", "a_i1"], [...common, "u_glyphs", "u_page", "u_minTextPx"]),
     };
     return this.arenaProgramCache;
@@ -1277,6 +1368,7 @@ export class MapGlRenderer {
     gl.disable(gl.STENCIL_TEST);
 
     let draws = 0;
+    let imagesPending = 0;
     const vs = a.vs;
     if (vs) {
       this.bindArenaVaos(a);
@@ -1376,7 +1468,7 @@ export class MapGlRenderer {
           draws++;
         }
       };
-      const on = (k: "fill" | "hatch" | "stroke" | "glyph" | "clip" | "text") => !opts.kinds || opts.kinds.has(k);
+      const on = (k: "fill" | "hatch" | "stroke" | "glyph" | "clip" | "text" | "image") => !opts.kinds || opts.kinds.has(k);
       const pc = opts.pageClip;
       if (pc) {
         const [x, y, w, h] = scissorOfRing(m, pc.ringUm, a.originX, a.originY, t.width, t.height);
@@ -1390,6 +1482,18 @@ export class MapGlRenderer {
         }
         const masked = l.mask >= 0 && vs.filter;
         if (masked) draws += this.markMask(a, vs.filter!.masks[l.mask], true);
+        if (l.alpha !== undefined) {
+          const al = vs.alpha![l.alpha];
+          if (al.kind === "image") {
+            if (on("image")) {
+              const d = this.drawImageLayer(m, al, opts, view.pxPerUm);
+              draws += d.draws;
+              imagesPending += d.pending;
+            }
+          } else if (on(al.kind)) draws += this.drawAlphaLayer(a, al, rgb, text?.textures);
+          if (masked) draws += this.markMask(a, vs.filter!.masks[l.mask], false);
+          continue;
+        }
         if (on("fill")) indexed("fill", l, rgb);
         if (on("hatch")) indexed("hatch", l, rgb);
         if (on("stroke")) indexed("stroke", l, rgb);
@@ -1413,8 +1517,112 @@ export class MapGlRenderer {
     }
     this.frameCounter++;
     const stats: FrameStats = { drawCalls: draws, cpuMs: performance.now() - t0 };
+    if (imagesPending) stats.imagesPending = imagesPending;
     if (this.lastGpuMs !== undefined) stats.gpuMs = this.lastGpuMs;
     return stats;
+  }
+
+  private imageProgram?: Program;
+  private imageVao?: WebGLVertexArrayObject;
+  private graphicTextures = new Map<TexImageSource, { tex: WebGLTexture; bytes: number }>();
+
+  /** GPU bytes of the image textures (with their mip chains, 4/3), J6. */
+  get graphicBytes(): number {
+    let n = 0;
+    for (const t of this.graphicTextures.values()) n += t.bytes;
+    return n;
+  }
+
+  /** Deletes the texture made from `source` (the loader replaced or dropped it), J6. */
+  releaseGraphic(source: TexImageSource): void {
+    const t = this.graphicTextures.get(source);
+    if (!t) return;
+    this.gl.deleteTexture(t.tex);
+    this.graphicTextures.delete(source);
+  }
+
+  private graphicTexture(source: TexImageSource): WebGLTexture {
+    const hit = this.graphicTextures.get(source);
+    if (hit) return hit.tex;
+    const gl = this.gl;
+    const tex = gl.createTexture()!;
+    gl.activeTexture(gl.TEXTURE3);
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    // Straight alpha, as decoded (`premultiplyAlpha: "none"`): the shader folds the alpha in.
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, source);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    // Enlarged: nearest, as the PDF and the oracle sample (§3.10), so the canvas shows the print's pixels;
+    // reduced: trilinear, so a large graphic zoomed out does not alias.
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.activeTexture(gl.TEXTURE0);
+    const { width, height } = source as { width: number; height: number };
+    this.graphicTextures.set(source, { tex, bytes: Math.round((width * height * 4 * 4) / 3) });
+    return tex;
+  }
+
+  /**
+   * One image (J6, §5.2 "Images"): its texture through the quad, under the pass's opacity and
+   * blend; under a mask only where the region bit is clear. A quad covers each pixel once, so no
+   * stencil test-and-set is needed. Without its texture: the quad's outline (1 px, 60 % grey)
+   * while loading, or after a failure with `outlineMissingImages`.
+   */
+  private drawImageLayer(m: Float32Array, al: AlphaLayer, opts: DocumentRenderOptions, pxPerUm: number): { draws: number; pending: number } {
+    const gl = this.gl;
+    const img = al.image!;
+    const got = opts.graphic ? opts.graphic(img, pxPerUm) : undefined;
+    const windowed = got && typeof got === "object" && "window" in got ? got : undefined;
+    const source = windowed ? windowed.source : (got as TexImageSource | null | undefined);
+    // The crop relative to the texture's window (the whole graphic when it has none).
+    const [wx, wy, ww, wh] = windowed?.window ?? [0, 0, 1, 1];
+    const crop = [(img.crop[0] - wx) / ww, (img.crop[1] - wy) / wh, img.crop[2] / ww, img.crop[3] / wh];
+    if (source === null && !opts.outlineMissingImages) return { draws: 0, pending: 0 };
+    this.imageProgram ??= this.link(VS_A_IMAGE, FS_A_IMAGE, [], ["u_view", "u_ab_cd", "u_ef", "u_crop", "u_outline", "u_tex", "u_opacity", "u_multiply"]);
+    this.imageVao ??= gl.createVertexArray()!;
+    const P = this.imageProgram;
+    gl.useProgram(P.prog);
+    gl.bindVertexArray(this.imageVao);
+    gl.uniformMatrix4fv(P.uniforms.u_view, false, m);
+    const q = img.quad;
+    gl.uniform4f(P.uniforms.u_ab_cd, q[0], q[1], q[2], q[3]);
+    gl.uniform2f(P.uniforms.u_ef, q[4], q[5]);
+    gl.uniform4f(P.uniforms.u_crop, crop[0], crop[1], crop[2], crop[3]);
+    if (al.mask >= 0) {
+      gl.enable(gl.STENCIL_TEST);
+      gl.stencilMask(0);
+      gl.stencilFunc(gl.EQUAL, 0, REGION_BIT);
+      gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
+    }
+    let pending = 0;
+    if (source) {
+      const tex = this.graphicTexture(source);
+      gl.activeTexture(gl.TEXTURE3);
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.uniform1i(P.uniforms.u_tex, 3);
+      gl.uniform1f(P.uniforms.u_outline, 0);
+      gl.uniform1f(P.uniforms.u_opacity, al.opacity);
+      gl.uniform1f(P.uniforms.u_multiply, al.multiply ? 1 : 0);
+      if (al.multiply) gl.blendFuncSeparate(gl.DST_COLOR, gl.ZERO, gl.ZERO, gl.ONE);
+      else gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ZERO, gl.ONE);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+    } else {
+      pending = source === undefined ? 1 : 0;
+      gl.uniform1f(P.uniforms.u_outline, 1);
+      gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ZERO, gl.ONE);
+      gl.drawArrays(gl.LINE_LOOP, 0, 4);
+    }
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    if (al.mask >= 0) {
+      gl.stencilMask(0xff);
+      gl.disable(gl.STENCIL_TEST);
+    }
+    return { draws: 1, pending };
   }
 
   private instancePointers(p: Program, offset: number): void {
@@ -1442,6 +1650,94 @@ export class MapGlRenderer {
     gl.colorMask(true, true, true, true);
     gl.disable(gl.STENCIL_TEST);
     return 1;
+  }
+
+  /**
+   * One alpha layer (J3, §5.2 "Alpha layers"): the pass drawn with its opacity (and Multiply)
+   * in stencil test-and-set — a sample's first fragment sets `ALPHA_BIT`, later ones fail — so
+   * the pass paints each sample once; then the bit cleared by the same geometry with colour off.
+   * Every kind but a fill draws twice before the clear: full-coverage fragments first, then the
+   * fringe, so a quad's or ribbon's faint edge cannot take a sample a neighbour covers fully. A
+   * clipped glyph pass marks and clears its area (`CLIP_BIT`) around it. Under a mask the region
+   * bit must be clear, as for an opaque draw.
+   */
+  private drawAlphaLayer(a: ArenaState, al: AlphaLayer, rgb: [number, number, number], pages: WebGLTexture[] | undefined): number {
+    const gl = this.gl;
+    const P = a.programs;
+    const regionBit = al.mask >= 0 ? REGION_BIT : 0;
+    const clip = al.kind === "clip";
+    const prog = al.kind === "fill" || al.kind === "hatch" || al.kind === "stroke" ? P[al.kind] : al.kind === "text" ? P.text : P.inst;
+    let draws = 0;
+    const geometry = () => {
+      if (al.kind === "fill" || al.kind === "hatch" || al.kind === "stroke") {
+        gl.bindVertexArray(a.vaos[al.kind]);
+        gl.drawElements(gl.TRIANGLES, al.count, gl.UNSIGNED_INT, al.offset * 4);
+        draws++;
+        return;
+      }
+      if (al.kind === "text") {
+        gl.bindVertexArray(a.vaos.text);
+        gl.bindBuffer(gl.ARRAY_BUFFER, a.vsBuffers.text);
+        for (const r of al.runs) {
+          const page = pages?.[r.cls];
+          if (!page) continue;
+          gl.activeTexture(gl.TEXTURE2);
+          gl.bindTexture(gl.TEXTURE_2D, page);
+          gl.activeTexture(gl.TEXTURE0);
+          this.instancePointers(P.text, r.first * INSTANCE_FLOATS * 4);
+          gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, r.count);
+          draws++;
+        }
+        return;
+      }
+      gl.bindVertexArray(a.vaos.inst);
+      gl.bindBuffer(gl.ARRAY_BUFFER, clip ? a.vsBuffers.clipInst : a.vsBuffers.glyph);
+      for (const r of al.runs) {
+        this.instancePointers(P.inst, r.first * INSTANCE_FLOATS * 4);
+        gl.drawArraysInstanced(gl.TRIANGLES, 0, classVertices(r.cls), r.count);
+        draws++;
+      }
+    };
+    const area = (op: number) => {
+      gl.useProgram(P.fill.prog);
+      gl.bindVertexArray(a.vaos.clip);
+      gl.colorMask(false, false, false, false);
+      gl.stencilMask(CLIP_BIT);
+      gl.stencilFunc(gl.ALWAYS, CLIP_BIT, 0xff);
+      gl.stencilOp(op, op, op);
+      gl.drawElements(gl.TRIANGLES, al.count, gl.UNSIGNED_INT, al.offset * 4);
+      gl.colorMask(true, true, true, true);
+      draws++;
+    };
+    gl.enable(gl.STENCIL_TEST);
+    if (clip) area(gl.REPLACE);
+    gl.useProgram(prog.prog);
+    gl.uniform3f(prog.uniforms.u_colour, rgb[0], rgb[1], rgb[2]);
+    gl.uniform1f(prog.uniforms.u_clear, 1 - al.opacity);
+    gl.uniform1f(prog.uniforms.u_multiply, al.multiply ? 1 : 0);
+    // Destination alpha is kept in both modes (review J3), so a framebuffer read as RGBA stays opaque.
+    if (al.multiply) gl.blendFuncSeparate(gl.DST_COLOR, gl.ZERO, gl.ZERO, gl.ONE);
+    else gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ZERO, gl.ONE);
+    gl.stencilMask(ALPHA_BIT);
+    gl.stencilFunc(gl.EQUAL, clip ? CLIP_BIT : 0, ALPHA_BIT | regionBit | (clip ? CLIP_BIT : 0));
+    gl.stencilOp(gl.KEEP, gl.KEEP, gl.INVERT);
+    for (const minCover of al.kind === "fill" ? [0] : [0.999, 0]) {
+      gl.uniform1f(prog.uniforms.u_minCover, minCover);
+      geometry();
+    }
+    // The clear: the same fragments (zero coverage still discarded), colour off, the bit zeroed.
+    gl.uniform1f(prog.uniforms.u_minCover, 0);
+    gl.colorMask(false, false, false, false);
+    gl.stencilFunc(gl.ALWAYS, 0, 0xff);
+    gl.stencilOp(gl.ZERO, gl.ZERO, gl.ZERO);
+    geometry();
+    gl.colorMask(true, true, true, true);
+    gl.uniform1f(prog.uniforms.u_clear, 0);
+    gl.uniform1f(prog.uniforms.u_multiply, 0);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    if (clip) area(gl.ZERO);
+    gl.disable(gl.STENCIL_TEST);
+    return draws;
   }
 
   /** A clip group: its areas into stencil bit 0, its instances where the bit is set (and `regionTest` clear), the areas cleared. Three draws. */

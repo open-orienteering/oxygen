@@ -18,8 +18,8 @@ import { course } from "@oxygen/shared";
 import { Semaphore, intSetting } from "../map-render-limits.js";
 import { workerBootstrap } from "../worker-bootstrap.js";
 import type { CoursePagesOptions } from "./pdf-page.js";
-import { type CoursePagesResult, type PrintPatch, preparedDocumentKey } from "@oxygen/shared/print";
-import type { PrintWorkerMessage, PrintWorkerRasterRequest, PrintWorkerRequest } from "./print-worker.js";
+import { type CoursePagesResult, type ImageWindow, type PrintPatch, preparedDocumentKey } from "@oxygen/shared/print";
+import type { PrintWorkerMessage, PrintWorkerRasterRequest, PrintWorkerRequest, PrintWorkerTrimRequest } from "./print-worker.js";
 
 export const PRINT_WORKER_TIMEOUT_MS = 10 * 60_000;
 const MAX_WORKERS = 4;
@@ -159,23 +159,41 @@ export async function renderCoursePagesInWorker(opts: WorkerPrintOptions): Promi
  * that box, so resvg never runs on the event loop. Callers hold
  * `printGate`; the request queues behind the worker's print in flight.
  */
-export async function rasteriseSvgInWorker(svg: Uint8Array, width: number, height: number, timeoutMs = PRINT_WORKER_TIMEOUT_MS): Promise<Uint8Array> {
+export async function rasteriseSvgInWorker(svg: Uint8Array, width: number, height: number, window?: ImageWindow, timeoutMs = PRINT_WORKER_TIMEOUT_MS): Promise<Uint8Array> {
+  return askWorker((id) => ({ type: "raster", id, svg: new Uint8Array(svg), width, height, ...(window ? { window } : {}) }), "raster", timeoutMs);
+}
+
+/**
+ * An SVG upload trimmed to its drawing (`trimSvgUpload`, course-maps.md
+ * "Data model") in a print worker, so resvg never runs on the event loop;
+ * null when it is stored as uploaded. Callers hold `printGate`.
+ */
+export async function trimSvgInWorker(svg: Uint8Array, timeoutMs = PRINT_WORKER_TIMEOUT_MS): Promise<Buffer | null> {
+  const bytes = await askWorker((id) => ({ type: "trim", id, svg: new Uint8Array(svg) }), "trim", timeoutMs);
+  return bytes.byteLength > 0 ? Buffer.from(bytes) : null;
+}
+
+/** One `raster` or `trim` request on a free worker (the first when all are busy); its `png` bytes. */
+/** The worker answered with an error (the input cannot be read), as opposed to a timeout or a failed worker. */
+export class PrintWorkerReplyError extends Error {}
+
+async function askWorker(make: (id: number) => PrintWorkerRasterRequest | PrintWorkerTrimRequest, what: string, timeoutMs: number): Promise<Uint8Array> {
   ensureSlots();
   const slot = slots.find((s) => !s.busy) ?? slots[0];
   slot.busy = true;
   try {
     const worker = slot.worker ?? startWorker(slot);
     const id = nextId++;
-    const req: PrintWorkerRasterRequest = { type: "raster", id, svg: new Uint8Array(svg), width, height };
+    const req = make(id);
     return await new Promise<Uint8Array>((resolve, reject) => {
       const timer = setTimeout(() => {
-        finish(() => reject(new Error(`raster exceeded ${timeoutMs} ms`)));
+        finish(() => reject(new Error(`${what} exceeded ${timeoutMs} ms`)));
         void worker.terminate();
       }, timeoutMs);
       const onMessage = (m: PrintWorkerMessage) => {
         if (m.id !== id) return;
         if (m.type === "png") finish(() => resolve(m.bytes));
-        else if (m.type === "error") finish(() => reject(new Error(m.message)));
+        else if (m.type === "error") finish(() => reject(new PrintWorkerReplyError(m.message)));
       };
       const finish = (fn: () => void) => {
         clearTimeout(timer);

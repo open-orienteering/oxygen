@@ -182,6 +182,8 @@ export type TokenTable = (typeof TOKEN_TABLES)[number];
 
 /** `course_maps` columns typed `Json?` (schema.prisma). */
 export const NULLABLE_JSON_SHEET_FIELDS = ["windowCenter"] as const;
+/** `course_objects` columns typed `Json?` (J10's `attach`). */
+export const NULLABLE_JSON_OBJECT_FIELDS = ["attach"] as const;
 
 /**
  * Rows of a snapshot table as the importer inserts them: exact tokens, a
@@ -201,6 +203,7 @@ function importRows(
   }
   if ((TOKEN_TABLES as readonly string[]).includes(t)) {
     const exact = applyTokens(rows, snapshot.versions?.[t as TokenTable]);
+    if (t === "courseObject") return exact.map((r) => withDbNulls(r, NULLABLE_JSON_OBJECT_FIELDS));
     if (t !== "courseMap") return exact;
     return exact.map((r) => withDbNulls({ ...r, templateId: knownTemplate(r.templateId) }, NULLABLE_JSON_SHEET_FIELDS));
   }

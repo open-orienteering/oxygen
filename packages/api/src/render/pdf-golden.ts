@@ -34,10 +34,11 @@ import {
   mapLayerOperators,
   rgbToCmykNaive,
   writeDescriptionPage,
+  pageSceneGraphics,
   writePage,
 } from "@oxygen/shared/print";
 import { bundledPdfFaces } from "./fonts.js";
-import { GOLDEN_SUPERSAMPLE, goldenFonts } from "./golden.js";
+import { GOLDEN_SUPERSAMPLE, goldenFonts, graphicHrefs } from "./golden.js";
 import {
   PAGE_GOLDEN_SUPERSAMPLE,
   type PageRaster,
@@ -92,11 +93,14 @@ export async function goldenScenePdf(
   const colours = sceneStack(scene.stream, scene.colour);
   const writer = await PdfWriter.create({ faces: await faces(), deterministic: true, info: { title: name }, text: opts.text });
   const page = writer.addPage({ widthPt: (bounds.maxX - bounds.minX) * UM_TO_PT, heightPt: (bounds.maxY - bounds.minY) * UM_TO_PT });
+  const images = new Map<number, string>();
+  for (const [id, png] of render.goldenSceneGraphics(name)) images.set(id, (await page.image(png)).name);
   page.addContent(
     mapLayerOperators(scene.stream, {
       colours,
       mode,
       resources: page.resources,
+      images,
       matrix: layerMatrix({ scaleRatio: 1, atPt: [-bounds.minX * UM_TO_PT, -bounds.minY * UM_TO_PT] }),
     }),
   );
@@ -107,7 +111,7 @@ export async function goldenScenePdf(
 export async function pageScenePdf(name: PageSceneName, mode: ColourMode, page?: ComposedPage): Promise<GoldenPdf> {
   const composed = page ?? (await composePageScene(name));
   const writer = await PdfWriter.create({ faces: await faces(), deterministic: true, info: { title: name } });
-  await writePage(writer, composed, { mode });
+  await writePage(writer, composed, { mode, images: pageSceneGraphics(name) });
   return {
     bytes: await writer.save(),
     width: Math.round(composed.paper.widthMm * render.GOLDEN_PX_PER_MM),
@@ -226,12 +230,12 @@ export async function goldenOracle(name: render.GoldenSceneName, colour: (i: num
   const scene = render.goldenScene(name, fonts);
   const { bounds } = render.goldenFrame(scene.stream);
   const { glyphOutlineFrom } = await import("./fonts.js");
-  return rasterisePassStream(scene.stream, { colour, bounds, pxPerMm: render.GOLDEN_PX_PER_MM, glyphOutline: glyphOutlineFrom(fonts), supersample: GOLDEN_SUPERSAMPLE });
+  return rasterisePassStream(scene.stream, { colour, bounds, pxPerMm: render.GOLDEN_PX_PER_MM, glyphOutline: glyphOutlineFrom(fonts), supersample: GOLDEN_SUPERSAMPLE, imageHref: graphicHrefs(render.goldenSceneGraphics(name)) });
 }
 
 /** The page oracle drawn in other colours. */
-export async function pageOracle(page: ComposedPage, colour: (i: number) => string): Promise<Pixels> {
-  return rasterisePage(page, { supersample: PAGE_GOLDEN_SUPERSAMPLE, colour });
+export async function pageOracle(page: ComposedPage, colour: (i: number) => string, images?: ReadonlyMap<number, Uint8Array>): Promise<Pixels> {
+  return rasterisePage(page, { supersample: PAGE_GOLDEN_SUPERSAMPLE, colour, images });
 }
 
 /** The description-sheet oracle drawn in other colours. */

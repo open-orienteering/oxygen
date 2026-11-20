@@ -1,10 +1,10 @@
 /** The dynamic bucket through the worker (docs/map-rendering.md §5.2 "Dynamic bucket"). */
 
 import { describe, it, expect } from "vitest";
-import { COURSE_BUCKET, PAGE_BUCKET, createMapGlWorker, type CourseLayerRequest, type CourseReply, type LoadedReply, type LoadRequest, type WorkerReply } from "../worker";
+import { COURSE_BUCKET, COURSE_OBJECT_BASE, PAGE_BUCKET, createMapGlWorker, type CourseLayerRequest, type CourseReply, type LoadedReply, type LoadRequest, type WorkerReply } from "../worker";
 import { buildVisibleSet, type PreparedPart, type ResidentPart } from "../buckets";
 import { INSTANCE_FLOATS } from "../mesh-atlas";
-import { render } from "@oxygen/shared";
+import { mapDocument, mapImport, render } from "@oxygen/shared";
 
 import { documentBytes, fontBytes, indexOf, isomStack, latin, request } from "./course-fixture";
 
@@ -55,23 +55,24 @@ function loaded(w: ReturnType<typeof harness>, req = load()): LoadedReply {
 }
 
 describe("course-layer load (docs/map-rendering.md §5.2 Dynamic bucket)", () => {
-  it("keys the static buckets on the course-completed stack: upper white below upper purple, rows above moved up one", () => {
+  it("keys the static buckets on the course-completed stack: upper white and the graphics row (J5) below upper purple, rows above moved up two", () => {
     const h = harness();
     const m = loaded(h);
     const doc = isomStack();
     const stack = m.summary.colourStack!;
-    expect(stack).toHaveLength(doc.length + 1);
+    expect(stack).toHaveLength(doc.length + 2);
     const upper = indexOf(stack, "purple-upper");
-    expect(stack[upper - 1].id).toBe("iof2024:white-upper");
+    expect(stack[upper - 2].id).toBe("iof2024:white-upper");
+    expect(stack[upper - 1].id).toBe("course:graphics");
     expect(m.summary.courseLayer).toEqual({ supported: true, cutFeatures: 0 });
-    // The black line keeps its index (below upper purple); the top-row line moved up one, same CMYK.
+    // The black line keeps its index (below upper purple); the top-row line moved up two, same CMYK.
     const black = indexOf(doc, "black100");
     const colours = new Set<number>();
     for (const p of [...m.base, ...(m.large ? [m.large] : [])]) for (const c of partColours(p)) colours.add(c);
     h.w.handle({ type: "prepare", ids: m.summary.detailCells });
     for (const s of h.sent.slice(1)) if (s.msg.type === "part") for (const c of partColours(s.msg.part)) colours.add(c);
-    expect(colours).toEqual(new Set([black, doc.length]));
-    expect(stack[doc.length].cmyk).toEqual(doc[doc.length - 1].cmyk);
+    expect(colours).toEqual(new Set([black, doc.length + 1]));
+    expect(stack[doc.length + 1].cmyk).toEqual(doc[doc.length - 1].cmyk);
     expect(stack[black].cmyk).toEqual(doc[black].cmyk);
   });
 
@@ -115,6 +116,56 @@ describe("course request → the dynamic bucket", () => {
     expect(r.msg.type).toBe("course");
     return r.msg as CourseReply;
   };
+
+  it("on a document drawn on the IOF colour layers (row I5): the course stack completes it, the legs' purple over every area row", () => {
+    // A table that draws a yellow area over its black and its paved brown: on the layers both areas sink under lower purple.
+    const cmyk = (c: number, m: number, y: number, k: number) => [c, m, y, k] as [number, number, number, number];
+    const area = (code: string, fill: number) => ({ code, name: code, kind: "area" as const, render: { type: "area" as const, id: code, code, name: code, fill } });
+    const square = (symbolIdx: number, sourceIndex: number, x0: number, y0: number, side: number) =>
+      ({ symbolIdx, type: mapDocument.OBJECT_TYPE.area, sourceIndex, coords: [x0, y0, x0 + side, y0, x0 + side, y0 + side, x0, y0 + side], flags: [0, 0, 0, 0] });
+    const matched = mapImport.matchDocument({
+      header: {
+        format: { version: 1, importer: "test-1" },
+        source: { kind: "ocad", version: "2018.8.3", hash: "00".repeat(32), bytes: 1 },
+        unitsPerMm: 100,
+        mapScale: 15000,
+        georeferencing: { crs: null, paperOrigin: null },
+        colours: [
+          { id: "src:1", name: "Black", cmyk: cmyk(0, 0, 0, 1), sourceNumber: 1 },
+          { id: "src:2", name: "Brown 50%", cmyk: cmyk(0, 0.28, 0.5, 0.09), sourceNumber: 2 },
+          { id: "src:3", name: "Yellow", cmyk: cmyk(0, 0.27, 0.79, 0), sourceNumber: 3 },
+        ],
+        symbols: [
+          { code: "516.0", name: "Black line", kind: "line", render: { type: "line", id: "l", code: "516", name: "l", main: { colour: 0, widthUm: 300 } } },
+          area("501.0", 1),
+          area("401.0", 2),
+        ],
+      },
+      objects: [
+        { symbolIdx: 0, type: mapDocument.OBJECT_TYPE.line, sourceIndex: 0, coords: [2500, 0, 2500, 2000], flags: [0, 0] },
+        square(1, 1, 0, 0, 3000),
+        square(2, 2, 3000, 0, 4000),
+      ],
+    });
+    expect(matched.colourStack.order).toBe("iof");
+    const u8 = mapDocument.encodeMapDocument(matched.input);
+    const bytes = u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength) as ArrayBuffer;
+    const h = harness();
+    const m = loaded(h, load({ source: { kind: "document", bytes, options: { unmatched: "proxy" } } }));
+    expect(m.summary.courseLayer?.supported).toBe(true);
+    const stack = m.summary.colourStack!;
+    // The summary types the stack as a render stack; its rows still carry their palette ids.
+    const index = mapImport.paletteIndexOfStack(stack as readonly mapDocument.DocumentColour[]);
+    const at = (id: string) => index.get(id) ?? -1;
+    expect(at("white-upper")).toBe(at("purple-upper") - 2); // the graphics row (J5) between them
+    const r = ask(h, request());
+    expect(r.colours).toEqual(stack);
+    const lower = at("purple-lower");
+    for (const id of ["yellow100", "brown50-paved"]) expect(at(id), id).toBeLessThan(lower);
+    expect(at("black100")).toBeGreaterThan(lower);
+    // The legs draw in lower purple.
+    expect(partColours(r.part!).has(lower)).toBe(true);
+  });
 
   it("one `all` part on the completed stack, object ids after the document's, glyph meshes appended to the atlas", () => {
     const h = harness();
@@ -263,7 +314,7 @@ describe("course request → the dynamic bucket", () => {
     loaded(h);
     const r = ask(h, request({ objects: [{ id: "w1", kind: "whiteout", geometry: [{ x: 20, y: 5 }, { x: 30, y: 5 }, { x: 30, y: 15 }, { x: 20, y: 15 }], props: {} }] }));
     const fill = r.part!.fill!;
-    const white = indexOf(r.colours, "purple-upper") - 1;
+    const white = indexOf(r.colours, "purple-upper") - 2; // below the graphics row (J5)
     expect([...fill.ranges.colour]).toContain(white);
     expect(white).toBeGreaterThan(indexOf(r.colours, "black100"));
   });
@@ -308,7 +359,7 @@ describe("course request with a page → the page part (docs/course-layout.md §
     for (const c of partColours(part)) expect(c).toBeGreaterThanOrEqual(base);
     for (const c of partColours(r.part!)) expect(c).toBeLessThan(base);
     // The page white-out takes the stack's upper white, in the page's copy of the table.
-    const white = indexOf(r.colours, "purple-upper") - 1;
+    const white = indexOf(r.colours, "purple-upper") - 2; // below the graphics row (J5)
     expect(partColours(part)).toContain(base + white);
     expect(r.colours[base + white].cmyk).toEqual(r.colours[white].cmyk);
     expect(r.colours[base + white].id).not.toBe(r.colours[white].id);
@@ -345,7 +396,7 @@ describe("course request with a page → the page part (docs/course-layout.md §
     // Page mm (y-down) → paper mm: x − 75, 158.5 − y. The rectangle reaches 8 mm left of the frame (x = 10).
     const objects = [{ id: "wo", kind: "rectangle" as const, anchor: "page" as const, x: 2, y: 100, width: 60, height: 60, fillMode: "whiteoutInverted" as const }];
     const r = ask(h, request({ page: page({ objects }) }));
-    const white = r.page!.colourBase + indexOf(r.colours, "purple-upper") - 1;
+    const white = r.page!.colourBase + indexOf(r.colours, "purple-upper") - 2; // below the graphics row (J5)
     const at = (x: number, y: number) => fillCovers(r.pagePart!, white, (x - 75) * 1000, (158.5 - y) * 1000, m.summary);
     expect(at(40, 130)).toBe(false);
     expect(at(13, 103)).toBe(false);
@@ -409,5 +460,94 @@ describe("course request → filter regions over the static buckets (§5.2 Filte
     loaded(h);
     expect(ask(h, request()).filter).toBeNull();
     expect(ask(h, null, 2).filter).toBeNull();
+  });
+});
+
+describe("course request → knockout images (J15, docs/map-rendering.md §4.11 Knockout footprints)", () => {
+  const ask = (h: ReturnType<typeof harness>, input: CourseLayerRequest | null, generation = 1): CourseReply => {
+    h.w.handle({ type: "course", generation, input });
+    return h.sent[h.sent.length - 1].msg as CourseReply;
+  };
+  const overlay = { id: "ov", kind: "image", geometry: [{ x: 0, y: 0 }, { x: 80, y: 60 }], props: { graphicId: 1 } } as CourseLayerRequest["objects"][number];
+  const lucka = (knockout: boolean) => ({ id: "lu", kind: "image", geometry: [{ x: 35, y: 5 }, { x: 45, y: 15 }], props: { graphicId: 2, ...(knockout ? { knockout } : {}) } }) as CourseLayerRequest["objects"][number];
+  /** The overlay's (object id, colour): its index among the layer's objects, the graphics row. */
+  const overlayEntry = (r: CourseReply): [number, number] => {
+    const i = r.hit!.refs.findIndex((ref) => ref.id.endsWith(":ov"));
+    expect(i).toBeGreaterThanOrEqual(0);
+    const colour = r.colours.findIndex((c) => /graphics/.test(c.id));
+    return [COURSE_OBJECT_BASE + i, colour];
+  };
+  const alphaMasks = (r: CourseReply, part = r.part!) => {
+    const entryMask = new Map<number, number>();
+    const e = r.filter!.entries;
+    for (let i = 0; i < e.length; i += 3) entryMask.set(e[i] * 65536 + e[i + 1], e[i + 2]);
+    const vs = buildVisibleSet([{ part, base: { fill: 0, hatch: 0, stroke: 0 } }], undefined, { entryMask, positions: r.filter!.positions, indices: r.filter!.indices, masks: r.filter!.masks });
+    return (vs.alpha ?? []).map((a) => ({ graphicId: a.image?.graphicId, mask: a.mask }));
+  };
+
+  it("the overlay under a knockout image gets a mask entry on the course part; the knockout itself draws unmasked", () => {
+    const h = harness();
+    const m = loaded(h);
+    const r = ask(h, request({ objects: [overlay, lucka(true)] }));
+    expect(r.filter).not.toBeNull();
+    const [obj, colour] = overlayEntry(r);
+    expect(Array.from(r.filter!.entries)).toEqual([obj, colour, 0]);
+    // The footprint (10 mm square inset 0.05 mm) in origin-relative µm.
+    const xs = Array.from(r.filter!.positions).filter((_, i) => i % 2 === 0).map((x) => x + m.summary.originX);
+    expect(Math.min(...xs)).toBeCloseTo(35_050, 0);
+    expect(Math.max(...xs)).toBeCloseTo(44_950, 0);
+    expect(alphaMasks(r)).toEqual([{ graphicId: 1, mask: 0 }, { graphicId: 2, mask: -1 }]);
+  });
+
+  it("J19: a knockout carrying its graphic's outline masks by the outline (a triangle), not its box", () => {
+    const h = harness();
+    const m = loaded(h);
+    const tri = { ...lucka(true), outline: [[0.5, 0, 1, 1, 0, 1]] } as CourseLayerRequest["objects"][number];
+    const r = ask(h, request({ objects: [overlay, tri] }));
+    const [obj, colour] = overlayEntry(r);
+    expect(Array.from(r.filter!.entries)).toEqual([obj, colour, 0]);
+    const pos = Array.from(r.filter!.positions);
+    const xs = pos.filter((_, i) => i % 2 === 0).map((x) => x + m.summary.originX);
+    const ys = pos.filter((_, i) => i % 2 === 1).map((y) => y + m.summary.originY);
+    // The triangle's corners: the box's full width (35…45 mm), apex at its top (15 mm); three vertices, one triangle.
+    expect([Math.min(...xs), Math.max(...xs), Math.max(...ys)].map((v) => Math.round(v))).toEqual([35_000, 45_000, 15_000]);
+    expect(r.filter!.indices).toHaveLength(3);
+  });
+
+  it("without a knockout no filter; with a document region both masks are kept, the course one after", () => {
+    const h = harness();
+    loaded(h);
+    expect(ask(h, request({ objects: [overlay, lucka(false)] })).filter).toBeNull();
+    const black = indexOf(isomStack(), "black100");
+    const square = [{ x: 20, y: 5 }, { x: 30, y: 5 }, { x: 30, y: 15 }, { x: 20, y: 15 }];
+    const r = ask(h, request({ objects: [overlay, lucka(true)], regions: [{ rings: [square], mode: "clip", symbols: { colours: [black] } }] }), 2);
+    const [obj, colour] = overlayEntry(r);
+    expect(Array.from(r.filter!.entries)).toEqual([0, black, 0, obj, colour, 1]);
+    expect(r.filter!.masks).toHaveLength(2);
+    expect(alphaMasks(r)[0]).toEqual({ graphicId: 1, mask: 1 });
+  });
+
+  it("a knockout page image masks the page image below it on the page part, in page colours", () => {
+    const h = harness();
+    const m = loaded(h);
+    const frame = { x: 10, y: 10, width: 190, height: 277 };
+    const window = { minX: 30 - 95, minY: 10 - 138.5, width: 190, height: 277 };
+    const objects = [
+      { id: "o", anchor: "page" as const, kind: "image" as const, graphicId: 1, x: 0, y: 0, width: 100, height: 100 },
+      { id: "k", anchor: "page" as const, kind: "image" as const, graphicId: 2, x: 40, y: 40, width: 20, height: 20, knockout: true },
+    ];
+    const r = ask(h, request({ page: { paper: { heightMm: 297 }, frame, window, objects, description: null } }));
+    const e = Array.from(r.filter!.entries);
+    expect(e).toHaveLength(3);
+    expect(e[1]).toBeGreaterThanOrEqual(r.page!.colourBase);
+    expect(r.colours[e[1]].id).toMatch(/^page:.*graphics/);
+    // The footprint in map paper µm through T_map⁻¹ (page mm x − 75, 158.5 − y): page 40..60 mm inset 0.05 mm.
+    const pos = Array.from(r.filter!.positions);
+    const xs = pos.filter((_, i) => i % 2 === 0).map((x) => x + m.summary.originX), ys = pos.filter((_, i) => i % 2 === 1).map((y) => y + m.summary.originY);
+    expect(Math.min(...xs)).toBeCloseTo(-34_950, -1);
+    expect(Math.max(...xs)).toBeCloseTo(-15_050, -1);
+    expect(Math.min(...ys)).toBeCloseTo(98_550, -1);
+    expect(Math.max(...ys)).toBeCloseTo(118_450, -1);
+    expect(alphaMasks(r, r.pagePart!)).toEqual([{ graphicId: 1, mask: 0 }, { graphicId: 2, mask: -1 }]);
   });
 });

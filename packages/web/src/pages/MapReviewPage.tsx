@@ -8,7 +8,7 @@
  * (`/settings/map-review/:documentHash?clubMap=<series>`) and from an
  * event's course editor (`/:nameId/map-review/:documentHash`).
  */
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import type { inferRouterOutputs } from "@trpc/server";
@@ -20,6 +20,9 @@ import { useCurrentUser } from "../context/CurrentUserContext";
 import { useCapabilities } from "../context/CapabilitiesContext";
 import { LanguageSelector } from "../components/LanguageSelector";
 import { UserChip } from "../components/UserChip";
+import { ColourLayersPanel } from "../components/map-review/ColourLayersPanel";
+import { CompareView } from "../components/map-review/CompareView";
+import { comparePairs, defaultComparePair, parseCompareQuery, withCompareQuery, type CompareQuery } from "../lib/map-compare";
 import {
   candidateIsCurrent,
   isJobPending,
@@ -162,13 +165,19 @@ function MapReview({ documentHash, target, pinnedHash, mapName, canEdit, backTo,
   const navigate = useNavigate();
   const utils = trpc.useUtils();
   const nameId = target.kind === "event" ? target.nameId : null;
-  const review = trpc.mapImport.review.useQuery({ documentHash }, { retry: false });
+  const clubMapId = target.kind === "club" ? target.clubMapId : null;
+  // The map the review is for: its colour setting (docs/map-symbols.md §8.7); the event's comes from the header.
+  const review = trpc.mapImport.review.useQuery(clubMapId ? { documentHash, clubMapId } : { documentHash }, { retry: false });
   const [pending, setPendingMap] = useState<PendingDecisions>(new Map());
   const [jobId, setJobId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [onlyToReview, setOnlyToReview] = useState(false);
   const [showUnused, setShowUnused] = useState(false);
   const [finalisedNow, setFinalisedNow] = useState(false);
+  // The compare view's state is in the query (row I8a, docs/map-symbols.md §8.7 "Compare").
+  const [searchParams, setSearchParams] = useSearchParams();
+  const compare = parseCompareQuery(searchParams);
+  const setCompare = useCallback((q: CompareQuery | null) => setSearchParams((p) => withCompareQuery(p, q), { replace: true }), [setSearchParams]);
 
   const job = trpc.mapImport.status.useQuery(
     { jobId: jobId ?? "" },
@@ -202,8 +211,41 @@ function MapReview({ documentHash, target, pinnedHash, mapName, canEdit, backTo,
   const applyPending = async () => {
     setError(null);
     try {
-      const { job: decided } = await decide.mutateAsync({ documentHash, decisions: pendingToDecisions(pending) });
+      // The map the review is for (row I7): the decision imports in its colour setting.
+      const { job: decided } = await decide.mutateAsync({ documentHash, decisions: pendingToDecisions(pending), ...(clubMapId ? { clubMapId } : {}) });
       followJob(decided as Job);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+  const setColourOrder = trpc.mapImport.setColourOrder.useMutation();
+  const hasTarget = target.kind === "event" || clubMapId !== null;
+  const switchOrder = async (order: "iof" | "source") => {
+    if (!hasTarget) return;
+    setError(null);
+    try {
+      const { job: switched } = await setColourOrder.mutateAsync({
+        documentHash,
+        order,
+        target: target.kind === "event" ? { kind: "event" } : { kind: "club", clubMapId: clubMapId! },
+      });
+      followJob(switched as Job);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+  const setDeviation = trpc.mapImport.setDeviation.useMutation();
+  const changeDeviation = async (key: string, choice: "keep" | "drop" | "default") => {
+    if (!hasTarget) return;
+    setError(null);
+    try {
+      const { job: changed } = await setDeviation.mutateAsync({
+        documentHash,
+        key,
+        choice,
+        target: target.kind === "event" ? { kind: "event" } : { kind: "club", clubMapId: clubMapId! },
+      });
+      followJob(changed as Job);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -221,7 +263,7 @@ function MapReview({ documentHash, target, pinnedHash, mapName, canEdit, backTo,
   const visible = (rows: ReviewRowData[]) =>
     onlyToReview ? rows.filter((r) => rowOutcome(r.match) === "suggested" || pending.has(r.symbolIdx)) : rows;
 
-  const busy = decide.isPending || jobId !== null;
+  const busy = decide.isPending || setColourOrder.isPending || setDeviation.isPending || jobId !== null;
   const decideOn = (row: ReviewRowData, decision: PendingDecision | null) => setPendingMap((p) => setPending(p, row, decision));
 
   const header = (
@@ -352,7 +394,22 @@ function MapReview({ documentHash, target, pinnedHash, mapName, canEdit, backTo,
         </div>
       )}
 
-      <CrtPanel documentHash={documentHash} canEdit={canEdit} busy={busy} onJob={followJob} onError={setError} rows={data.symbols} />
+      <ColourLayersPanel
+        colour={data.colour}
+        nameId={nameId}
+        canEdit={canEdit}
+        busy={busy}
+        hasTarget={hasTarget}
+        onSwitch={(o) => void switchOrder(o)}
+        onDeviation={(k, c) => void changeDeviation(k, c)}
+        onCompare={() => setCompare({ pair: defaultComparePair({ documentHash, pinnedHash }), mode: compare?.mode ?? "side" })}
+      />
+      {/* Not before the pin is known: `use` would fall back to `order` and ask for an import nobody wanted. */}
+      {compare && !(compare.pair === "use" && pinnedHash === undefined) && (
+        <CompareView pairs={comparePairs({ documentHash, pinnedHash, colour: data.colour })} query={compare} nameId={nameId} onChange={setCompare} />
+      )}
+
+      <CrtPanel documentHash={documentHash} clubMapId={clubMapId} canEdit={canEdit} busy={busy} onJob={followJob} onError={setError} rows={data.symbols} />
 
       <div className="flex items-center justify-between mt-6 mb-2">
         <h2 className="font-semibold text-slate-900">{t("usedSymbols")}</h2>
@@ -655,6 +712,7 @@ function ReviewRowCard({
 
 function CrtPanel({
   documentHash,
+  clubMapId,
   canEdit,
   busy,
   rows,
@@ -662,6 +720,8 @@ function CrtPanel({
   onError,
 }: {
   documentHash: string;
+  /** The club map the review is for, else the current event's (row I7: the import keeps its colour setting). */
+  clubMapId: string | null;
   canEdit: boolean;
   busy: boolean;
   rows: ReviewRowData[];
@@ -705,7 +765,7 @@ function CrtPanel({
     }
     try {
       const crt = await file.text();
-      const result = await importCrt.mutateAsync({ documentHash, crt, dryRun: true });
+      const result = await importCrt.mutateAsync({ documentHash, crt, dryRun: true, ...(clubMapId ? { clubMapId } : {}) });
       setPreview({ fileName: file.name, crt, result });
     } catch (err) {
       onError(err instanceof Error ? err.message : String(err));
@@ -715,7 +775,7 @@ function CrtPanel({
   const confirm = async () => {
     if (!preview) return;
     try {
-      const result = await importCrt.mutateAsync({ documentHash, crt: preview.crt });
+      const result = await importCrt.mutateAsync({ documentHash, crt: preview.crt, ...(clubMapId ? { clubMapId } : {}) });
       setPreview(null);
       if (result.job) onJob(result.job as Job);
       else setNote(t("crt.nothingApplied"));

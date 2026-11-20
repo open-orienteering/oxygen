@@ -4,8 +4,10 @@
  * the source imports to now and runs an ordinary import job for each, so
  * the pin follows the fresh document:
  *
- *   club_map_versions  stale importer, library release or club decisions
- *   map_files          stale importer or library release only — an event
+ *   club_map_versions  stale importer, library release, club decisions or
+ *                      the series' colour setting
+ *   map_files          stale importer, library release or the event's
+ *                      colour setting only — an event
  *                      keeps the document it pinned when only decisions
  *                      changed (06 §6 copy-on-use; `finalise` moves it) —
  *                      and a live event's row with a source but no
@@ -28,11 +30,13 @@ import { loadClubDecisions, storedDocumentFollowsDecisions } from "./decisions.j
 import { eventDocumentHash } from "./event-document.js";
 import { awaitImportJob, startImportJob, type ImportJobRow } from "./jobs.js";
 import { reresolveEventPatch } from "./patches.js";
+import { colourTargetKey, DEFAULT_COLOUR_SETTINGS, documentFollowsColour, loadAllColourSettings, loadRecordedColours, type ColourTarget } from "./colour-settings.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
 /** `patch`: an event's map patch keyed to another document than its pin (the sweep, docs/map-patches.md §4.4). */
-export type RematchReason = "importer" | "library" | "decisions" | "unpinned" | "patch";
+/** `colour`: the pin's document is not in its map's colour setting (docs/map-symbols.md §9.3 "Per map (row I6)"). */
+export type RematchReason = "importer" | "library" | "decisions" | "colour" | "unpinned" | "patch";
 
 export interface RematchItem {
   kind: "club" | "event" | "patch";
@@ -77,11 +81,12 @@ export interface RematchOptions {
   onItem?: (result: RematchItemResult, run: RematchRun) => void;
 }
 
-/** Why a document is stale, or `null` when importing its source now reproduces it. */
-export function staleReason(doc: { importerVersion: string; libraryVersion: string }, followsDecisions: boolean): RematchReason | null {
+/** Why a document is stale, or `null` when importing its source now reproduces it; importer, library, decisions, colour in that order. */
+export function staleReason(doc: { importerVersion: string; libraryVersion: string }, followsDecisions: boolean, followsColour = true): RematchReason | null {
   if (!(IMPORTER_VERSIONS as readonly string[]).includes(doc.importerVersion)) return "importer";
   if (!doc.libraryVersion.endsWith(`@${symbolLibrary.SYMBOL_LIBRARY_VERSION}`)) return "library";
-  return followsDecisions ? null : "decisions";
+  if (!followsDecisions) return "decisions";
+  return followsColour ? null : "colour";
 }
 
 /** Pins whose document is stale, club versions first, oldest first; then live events' sourced rows without a document. */
@@ -90,7 +95,7 @@ export async function planRematch(db: Db, opts: Pick<RematchOptions, "eventId" |
     ? []
     : await db.clubMapVersion.findMany({
         orderBy: [{ uploadedAt: "asc" }, { id: "asc" }],
-        select: { id: true, sourceHash: true, documentHash: true, label: true, patch: true, clubMap: { select: { name: true } } },
+        select: { id: true, clubMapId: true, sourceHash: true, documentHash: true, label: true, patch: true, clubMap: { select: { name: true } } },
       });
   const files = await db.mapFile.findMany({
     where: { documentHash: { not: null }, sourceHash: { not: null }, event: { removed: false }, ...(opts.eventId ? { eventId: opts.eventId } : {}) },
@@ -117,17 +122,27 @@ export async function planRematch(db: Db, opts: Pick<RematchOptions, "eventId" |
     if (!decisions) decisionsByKind.set(d.source.kind, (decisions = await loadClubDecisions(db, d.source.kind)));
     reasons.set(d.hash, (await storedDocumentFollowsDecisions(db, d, decisions)) ? null : "decisions");
   }
+  // The colour setting is the map's, not the document's: judged per pin (§6.9).
+  const reportOf = new Map(docs.map((d) => [d.hash, d.report]));
+  const settings = await loadAllColourSettings(db);
+  const colourOf = (target: ColourTarget) => settings.get(colourTargetKey(target)) ?? DEFAULT_COLOUR_SETTINGS;
+  // A document follows a setting by its report or by a setting recorded for it (row I7: an override that changes no bytes).
+  const recorded = await loadRecordedColours(db, docs.map((d) => d.hash));
+  const followsColour = (hash: string, target: ColourTarget) => documentFollowsColour({ report: reportOf.get(hash), recorded: recorded.get(hash) }, colourOf(target));
 
   const items: RematchItem[] = [];
   for (const v of versions) {
-    const reason = reasons.get(v.documentHash) ?? null;
+    const reason = reasons.get(v.documentHash) ?? (followsColour(v.documentHash, { kind: "club", clubMapId: v.clubMapId }) ? null : "colour");
     if (reason) items.push({ kind: "club", id: v.id, name: `${v.clubMap.name} (${v.label})`, sourceHash: v.sourceHash, documentHash: v.documentHash, reason, ...withPatch(mapDocument.parseVersionPatch(v.patch)) });
   }
   const seen = new Set<string>();
   for (const f of files) {
-    const reason = reasons.get(f.documentHash!) ?? null;
-    // Only technical staleness moves an event's pin (copy-on-use).
-    if (!reason || reason === "decisions") continue;
+    const docReason = reasons.get(f.documentHash!) ?? null;
+    // Only technical staleness moves an event's pin (copy-on-use), and the event's own colour setting.
+    const reason = docReason && docReason !== "decisions"
+      ? docReason
+      : followsColour(f.documentHash!, { kind: "event", eventId: f.eventId, sourceHash: f.sourceHash! }) ? null : "colour";
+    if (!reason) continue;
     const key = `${f.eventId}|${f.sourceHash}`;
     if (seen.has(key)) continue;
     seen.add(key);

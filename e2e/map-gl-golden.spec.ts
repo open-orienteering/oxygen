@@ -47,6 +47,14 @@ const FILTER_SCENES = ["filter-clip-brown", "filter-hide-505", "filter-moved", "
  */
 const ARENA_FILTER_MAX_RATIO = 0.015;
 
+/**
+ * Alpha arena tier (J3, map-rendering.md §6.2; planner answer 18): J1's alpha scenes through the
+ * arena path (the per-pass path draws no alpha), MSAA only, held to the contract's 0.5 % (measured at
+ * introduction, J3: alpha-passes 0.242 %, alpha-text 0.111 %, blend-multiply 0.224 %).
+ */
+const ALPHA_SCENES = ["alpha-passes", "alpha-text", "blend-multiply"] as const;
+const ALPHA_TIER_MAX_RATIO = 0.005;
+
 type Probe = { at: [number, number] | [number, number, number, number]; colour: string; drawn: boolean };
 const BROWN = "#bf4000", GREEN = "#33ff00", BLACK = "#000000";
 /** The straight 101 contour (2, 6) → (58, 30) mm at x mm. */
@@ -209,6 +217,74 @@ test.describe("WebGL2 map backend — filter regions (arena path)", () => {
         expect(probeDrawn(golden, probe), `golden: ${where}`).toBe(probe.drawn);
         expect(probeDrawn(actual, probe), `arena: ${where}`).toBe(probe.drawn);
       }
+    });
+  }
+});
+
+/**
+ * Image tier (J6, map-rendering.md §5.2 "Images", §6.2): `course-graphics` through the arena path
+ * (the per-pass path draws no images), MSAA only, held to the arena filter tier's 1.5 %: measured
+ * at introduction 0.974 %, the same MSAA coverage steps on hairlines as the filter scenes — the
+ * images' insides agree (textures sampled nearest when enlarged, as the oracle and the PDF sample). Probes, paper mm (scene y-up,
+ * frame origin at the stream's bounds): the lucka around 31 shows its opaque red band and the
+ * map's green through its transparent middle; the control circle draws over it.
+ */
+const IMAGE_TIER_MAX_RATIO = ARENA_FILTER_MAX_RATIO;
+
+test.describe("WebGL2 map backend — images (arena path)", () => {
+  test("course-graphics through the arena path matches the reference raster within the image tier", async ({ page }, testInfo) => {
+    const { actual, golden } = await compareScene(page, testInfo, "course-graphics", "arena", IMAGE_TIER_MAX_RATIO);
+    await expect(page.getByTestId("map-gl-canvas")).toHaveAttribute("data-path", "arena");
+    // Same pixels as the golden (the oracle's) at lucka 31's red band, its half-opaque gold band and
+    // its transparent middle, inside the cropped, turned stripes and inside the Multiply lucka 32.
+    const px = (img: PNG, x: number, y: number) => Array.from(img.data.subarray((y * img.width + x) * 4, (y * img.width + x) * 4 + 3));
+    const near = (a: number[], b: number[]) => a.every((v, i) => Math.abs(v - b[i]) <= 8);
+    // The golden frame: 10 px/mm; the lucka's box is 16 mm square round control 31.
+    for (const [x, y] of [[140, 280], [210, 262], [240, 178], [110, 130], [330, 130]] as const) expect(near(px(actual, x, y), px(golden, x, y)), `pixel ${x},${y}`).toBe(true);
+    // The opaque band hides the map: red; the transparent middle shows the map's light green.
+    const [r, g] = px(actual, 140, 280);
+    expect(r > 150 && g < 80, "opaque red band").toBe(true);
+    expect(near(px(actual, 240, 178), [194, 255, 179]), "map through the middle").toBe(true);
+  });
+});
+
+/**
+ * Knockout images (J15, map-rendering.md §4.11 "Knockout footprints"): `course-knockout` through the arena path, held
+ * to the image tier. An opaque overlay over the whole map; lucka 31 cuts it out ("Cut out graphics below"), lucka 32
+ * does not. Probes, golden frame px: lucka 31's transparent middle shows the map's light green (the overlay is cut
+ * there), lucka 32's middle shows the overlay's orange band, outside both the overlay's blue band.
+ */
+test.describe("WebGL2 map backend — knockout images (arena path)", () => {
+  test("course-knockout through the arena path matches the reference raster; the overlay is cut under lucka 31 only", async ({ page }, testInfo) => {
+    const { actual, golden } = await compareScene(page, testInfo, "course-knockout", "arena", IMAGE_TIER_MAX_RATIO);
+    await expect(page.getByTestId("map-gl-canvas")).toHaveAttribute("data-path", "arena");
+    const px = (img: PNG, x: number, y: number) => Array.from(img.data.subarray((y * img.width + x) * 4, (y * img.width + x) * 4 + 3));
+    const near = (a: number[], b: number[]) => a.every((v, i) => Math.abs(v - b[i]) <= 8);
+    for (const [x, y] of [[180, 178], [372, 140], [60, 150], [140, 280]] as const) expect(near(px(actual, x, y), px(golden, x, y)), `pixel ${x},${y}`).toBe(true);
+    expect(near(px(actual, 180, 178), [194, 255, 179]), "the map through lucka 31").toBe(true);
+    expect(near(px(actual, 372, 140), [240, 140, 0]), "the overlay through lucka 32").toBe(true);
+  });
+});
+
+/**
+ * Translucent corridor band (J13, course-layer.md §10.2): `course-corridor-translucent` through the arena path (its
+ * band is an alpha pass), held to the arena tier's 1.5 % as `course-graphics` is — a course scene with hairline legs.
+ */
+test.describe("WebGL2 map backend — translucent corridor band (arena path)", () => {
+  test("course-corridor-translucent through the arena path matches the reference raster", async ({ page }, testInfo) => {
+    await compareScene(page, testInfo, "course-corridor-translucent", "arena", ARENA_FILTER_MAX_RATIO);
+    await expect(page.getByTestId("map-gl-canvas")).toHaveAttribute("data-path", "arena");
+  });
+});
+
+test.describe("WebGL2 map backend — alpha and Multiply (arena path)", () => {
+  for (const name of ALPHA_SCENES) {
+    test(`${name} through the arena path matches the reference raster within the alpha tier`, async ({ page }, testInfo) => {
+      await compareScene(page, testInfo, name, "arena", ALPHA_TIER_MAX_RATIO);
+      // The page sends an alpha scene to the arena path even without `path=arena`.
+      await page.goto(`/dev/map-gl?fixture=${name}`);
+      await expect(page.getByTestId("map-gl-canvas")).toHaveAttribute("data-path", "arena");
+      await expect(page.getByTestId("map-gl-stats")).toContainText(/[1-9]\d* alpha layers/);
     });
   }
 });

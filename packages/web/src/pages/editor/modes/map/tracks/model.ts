@@ -69,7 +69,7 @@ export function chunkTracks(items: TrackImportItem[]): TrackImportItem[][] {
   return calls;
 }
 
-/** The files' text parsed (`parseGpx`, §2) into the import's calls; a file that does not parse is an issue, the rest go. */
+/** The files' text parsed (`parseTrackFile`: GPX or TCX, §2) into the import's calls; a file that does not parse is an issue, the rest go. */
 export function planImport(files: readonly { name: string; text: string }[]): ImportPlan {
   const items: TrackImportItem[] = [];
   const issues: ImportIssue[] = [];
@@ -77,7 +77,7 @@ export function planImport(files: readonly { name: string; text: string }[]): Im
   for (const f of files) {
     let parsed: gpsTrack.GpxFile;
     try {
-      parsed = gpsTrack.parseGpx(f.text);
+      parsed = gpsTrack.parseTrackFile(f.text);
     } catch (e) {
       issues.push({ file: f.name, code: e instanceof gpsTrack.GpxParseError ? e.code : "malformed" });
       continue;

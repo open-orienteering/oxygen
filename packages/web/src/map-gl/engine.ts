@@ -20,8 +20,9 @@
 
 import {
   aboveZoomGate, BucketLru, buildVisibleSet, CLUB_BUDGET_BYTES, DRAW_MARGIN_CELLS, filterEntryKey, PREFETCH_MARGIN_CELLS, visibleCells,
-  type PreparedPart, type ResidentPart, type ViewRect, type VisibleFilter,
+  type ImageDraw, type PreparedPart, type ResidentPart, type ViewRect, type VisibleFilter,
 } from "./buckets.js";
+import type { GraphicTextures } from "../lib/graphic-textures.js";
 import type { mapDocument, render as R } from "@oxygen/shared";
 import type { DocumentRenderOptions, FrameStats, InsetBox, MapGlRenderer, TextAtlasImage } from "./renderer.js";
 import { viewMatrix, type RenderTarget } from "./view.js";
@@ -112,6 +113,9 @@ export interface EngineStats {
   prepareMs: number[];
   /** With a height field (§5.6 "Engine API"). */
   terrain?: TerrainStats;
+  /** Image textures (J6): decoded bytes the loader holds (its own budget, not in `residentBytes`) and requests in flight. */
+  graphicBytes: number;
+  graphicsPending: number;
 }
 
 /** The 3D side of `stats()` (§5.6 "Measurements (H6)"). */
@@ -155,6 +159,8 @@ export interface TerrainFrameStats {
   drape?: DrapeRenderStats & { layers: number };
   /** JS time of the whole frame, ms. */
   cpuMs: number;
+  /** Graphics still loading or waiting (J6), as `EngineStats.graphicsPending`. */
+  imagesPending?: number;
 }
 
 /**
@@ -407,7 +413,41 @@ export class MapGlEngine {
   private withHighlight(opts: DocumentRenderOptions): DocumentRenderOptions {
     const hl = this.opts.highlight;
     const colour = opts.colour;
-    return { ...opts, colour: (i) => (i === HIGHLIGHT_COLOUR ? hl : colour(i)), ...(this.pageClip ? { pageClip: this.pageClip } : {}) };
+    const g = this.graphics;
+    return {
+      ...opts,
+      colour: (i) => (i === HIGHLIGHT_COLOUR ? hl : colour(i)),
+      ...(this.pageClip ? { pageClip: this.pageClip } : {}),
+      ...(g && !opts.graphic ? { graphic: (img: ImageDraw, pxPerUm: number) => g.get(img, pxPerUm) } : {}),
+    };
+  }
+
+  private graphics: GraphicTextures | null = null;
+
+  /**
+   * The image textures (J6, §5.2 "Images"): each frame asks it for the textures of the images in
+   * view; an arrival redraws (`onChange`), a texture it drops is freed on the GPU. The engine
+   * disposes it with itself; `null` detaches (images draw as outlines).
+   */
+  setGraphics(g: GraphicTextures | null): void {
+    if (this.graphics === g) return;
+    if (this.graphics) {
+      this.graphics.onChange = undefined;
+      this.graphics.onRelease = undefined;
+    }
+    this.graphics = g;
+    if (g) {
+      // A texture arriving or freed changes the drape too (§5.2 "Images").
+      g.onChange = () => {
+        this.drapeStale = true;
+        this.onChange?.();
+      };
+      g.onRelease = (b) => {
+        this.drapeStale = true;
+        this.renderer.releaseGraphic(b);
+      };
+    }
+    this.onChange?.();
   }
 
   /**
@@ -800,6 +840,13 @@ export class MapGlEngine {
   }
 
   /** Rebuilds the visible set if the drawn set changed (arrivals coalesced); true when it did. */
+  private alphaLayers = 0;
+
+  /** Alpha layers in the current visible set (J3, §5.2 "Alpha layers"); the fixture page's stats line. */
+  get visibleAlphaLayers(): number {
+    return this.alphaLayers;
+  }
+
   private rebuild(t0: number): boolean {
     // Arrivals are coalesced while more drawn detail is pending; the last one always rebuilds.
     const hold = this.dirty && this.arrivalOnly && !this.isComplete() && t0 - this.lastRebuildAt < ARRIVAL_REBUILD_MS;
@@ -832,6 +879,7 @@ export class MapGlEngine {
     const vs = buildVisibleSet(parts, hidden, f?.visible);
     this.st.lastBuildMs = performance.now() - t0;
     this.renderer.setVisibleSet(vs);
+    this.alphaLayers = vs.alpha?.length ?? 0;
     this.lru.fixedBytes = this.fixedBytes + this.renderer.documentBytes.visibleSet;
     this.dirty = false;
     this.arrivalOnly = false;
@@ -1012,7 +1060,8 @@ export class MapGlEngine {
       target,
       frame.lines ? { lines: frame.lines, pxRatio: frame.pxRatio ?? 1 } : undefined,
     );
-    return { mesh: meshStats, drape, cpuMs: performance.now() - t0 };
+    const pending = this.graphics?.pending ?? 0;
+    return { mesh: meshStats, drape, cpuMs: performance.now() - t0, ...(pending ? { imagesPending: pending } : {}) };
   }
 
   /**
@@ -1050,6 +1099,8 @@ export class MapGlEngine {
       lastRebuildMs: this.st.lastRebuildMs,
       lastBuildMs: this.st.lastBuildMs,
       prepareMs: this.st.prepareMs.slice(),
+      graphicBytes: this.graphics?.bytes ?? 0,
+      graphicsPending: this.graphics?.pending ?? 0,
       ...(this.mesh ? { terrain: this.terrainStats() } : {}),
     };
   }
@@ -1078,6 +1129,8 @@ export class MapGlEngine {
     // A hit-test in flight is never answered now: its caller hears so.
     for (const w of this.hits.values()) w.reject(new Error("map engine disposed"));
     this.hits.clear();
+    this.graphics?.dispose();
+    this.graphics = null;
     this.transport.terminate();
   }
 }

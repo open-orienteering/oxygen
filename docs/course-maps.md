@@ -99,14 +99,90 @@ PDF composer draws the rotated window under `T_map` (`course-print.md`
 `Class` carries the print override: `print_scale` and
 `sheet_template_id` (`ON DELETE SET NULL`). Layout data, not journaled.
 
+Every layout object takes `opacity?` (0–1 inclusive, 0 allowed, absent =
+1) and `blend?` (the literal `"multiply"`, absent = normal); text,
+rectangle and image take `rotationDeg?` (degrees **clockwise as seen**,
+finite within ±360, not normalised; 0 and absent alike); an image takes
+`flipH?` / `flipV?` (J4; `objectOpacitySchema`, `objectBlendSchema`,
+`objectRotationSchema` in `course-maps/schema.ts`) and `knockout?` (J15:
+cut out the page images below it, course-layer.md §3.6 "Knockout
+images"; absent = off). The stored box is
+always the unrotated one: a rectangle and an image turn about its
+centre, after the flips; a text about its anchor point (user 2026-11-18,
+question 6). Lines and paths store no angle (an unknown key is stripped,
+as for any layout key). Objects without the fields parse as before, so
+no migration; an older build strips the fields on parse (decision log,
+J4 rollback). How they are drawn: [`course-layer.md`](course-layer.md) §3.6.
+
 Both event-scoped tables use UUIDv7 plus per-event `seq`. Deleting an event
 cascades through all maps and templates. Deleting a course cascades through
 its maps; deleting a template leaves maps in place with `template_id = NULL`
 so the UI can report and repair the invalid assignment.
 
-`graphics` stores uploaded SVG or PNG images (BIGSERIAL id, 2 MB cap,
-mime-checked at upload; SVG content is parsed and rejected if it contains
-scripts, event handlers or external references). `event_id NULL` marks a
+`graphics` stores uploaded SVG or PNG images (BIGSERIAL id, mime-checked
+at upload; SVG content is parsed and rejected if it contains scripts,
+event handlers or external references). An upload may be up to 16 MiB
+and a stored row at most 8 MiB (J2): a PNG whose longer side is over
+4096 px is resampled to 4096 by `sharp` (aspect and alpha kept, metadata
+dropped); a PNG still over 8 MiB is resampled to 3072, then 2048 px, and
+refused only beyond that (user 2026-11-18, question 12); a PNG that fits
+is stored byte for byte; an SVG over 8 MiB is refused. An SVG whose
+canvas is much larger than what it draws is stored **trimmed** to the
+drawing (user 2026-11-19, "Trim new uploads"; `trimSvgUpload` in
+`course-maps/svg-window.ts`, run in a print worker, `trimSvgInWorker`, so
+resvg stays off the event loop): rendered by resvg at 2048 px on its longer
+side, the pixels with any alpha bound the drawing, plus one probe pixel
+each side; when that leaves more than 5 % of the canvas width or height
+empty, the original root is wrapped in an outer `<svg>` whose `viewBox`
+is those bounds (the original's own viewBox, styles and fonts keep their
+meaning; the prolog, a DOCTYPE's entities included, stays in front). The
+wrapped SVG is rendered once more and kept only if resvg reads it and it
+still draws. Otherwise, or when it draws nothing or resvg cannot read it,
+the SVG is stored byte for byte. Graphics stored before are not
+changed. A PNG over 64
+megapixels is refused before decoding. `width_px` / `height_px`
+(nullable) hold the pixel size: a PNG's own, an SVG's (trimmed) viewBox scaled so
+its longer side is 4096 px (question 14). Written at upload, copied by
+`saveToClub`, computed by the venue's snapshot import; the migration
+fills PNG rows from their IHDR and `graphics.list` fills any row still
+NULL the first time it reads it — so that query writes, once per row: the
+size, or 0 × 0 for bytes that cannot be sized (answered as no size), so
+they are not read again (`course-maps/graphics.ts`
+`prepareGraphicUpload`, `graphicPixelSize`). Upload preparation runs
+under the print gate. `outline` (JSONB, nullable; migration
+`20261119150000_graphics_outline`, J19) is the traced silhouette a
+knockout cuts by (map-rendering.md §4.11): NULL until traced, `[]` for the
+whole box, else rings in fractions of the graphic. It is traced lazily,
+the first time a knockout image of the graphic is loaded
+(`loadCourseObjects` → `withOutlines`; `graphicOutline` in
+`course-maps/graphics.ts`: a PNG's alpha through `sharp`, an SVG
+rasterised in a print worker under the print gate first, both at 512 px),
+and stored; an upload, `saveToClub` or a snapshot import leaves it NULL,
+so it is traced on first use. Only the event's own and club graphics are
+read: a knockout naming another event's graphic cuts by its box. Bytes
+that cannot be decoded (resvg or `sharp` refuse them) are stored as `[]`,
+the box, and not read again (as the 0 × 0 size); a print worker timeout
+or failure stores nothing and is tried again next load. The trace itself
+runs on the API thread (tens of milliseconds at 512 px, once per
+graphic). Storing it stamps `updated_at`
+once (the trigger), so a thumbnail is refetched once. Deleting a graphic that sheets still place leaves
+those image objects pointing at a missing graphic: the editor and print
+report it as before J2 (`IMAGE_MISSING`); the picker does not check use.
+
+Tests (J2): `packages/api/src/__tests__/course-map-graphics-upload.test.ts`
+(pixel size, the 4096 resample with alpha, the 3072/2048 fallbacks, the
+2048 refusal, 64 MP and SVG over 8 MiB refused, an SVG trimmed to its
+drawing (in a print worker; an Illustrator-style DOCTYPE's entities kept so the stored bytes render) and one that draws nothing kept, `thumbBox`);
+`integration/graphics.test.ts` (upload sizes, the list's backfill and its
+0 × 0 mark, the migration's IHDR SQL, `version` after a byte change,
+`saveToClub`, `thumb.png` for PNG and SVG, the kiosk key on the three
+routes, a club graphic, and not across events); `integration/venue-print.test.ts`
+"a graphic over 4 MiB" (two `exportBlob` slices, imported with its size);
+`packages/shared/src/__tests__/course-maps.test.ts` "layout objects:
+opacity, blend, rotation, flip (J4)" (each field per kind, ranges, old
+objects unchanged, validation by the rotated extent);
+`packages/web/src/lib/__tests__/graphics-picker.test.ts`; E2E in
+`course-layout.md`'s test table ("graphics: upload an SVG…"). `event_id NULL` marks a
 club-library graphic shared across events; event rows cascade on event
 delete. An `image` layout object references a graphic by id; print
 embeds it in the page (PNG as is, SVG rasterised in the API at render
@@ -184,7 +260,10 @@ Event-scoped tRPC routers:
   §6); `saveLayout` and `update` take an optional `baseVersion` (a stale
   one is `CONFLICT` with the row now; omitted, last writer wins) and
   answer the new `version`
-- `graphics` — list (event + club), upload (base64), saveToClub, delete
+- `graphics` — list (event + club, each with `widthPx` / `heightPx` and
+  `version`, the bytes' version for content-keyed URLs),
+  upload (base64, ≤ 16 MiB, prepared as in Data model), saveToClub,
+  delete
 
 REST:
 
@@ -201,10 +280,23 @@ GET /api/maps/:nameId/maps.pdf
 
 GET /api/maps/:nameId/print-job?<the maps.pdf query>   (the job maps.pdf composes, JSON; G15; version 2 carries the event's patch, G14)
 GET /api/maps/:nameId/graphics/:id
-GET /api/maps/:nameId/graphics/:id/print.png[?w=&h=]   (the PNG a print embeds; SVG needs w, h; G15)
+GET /api/maps/:nameId/graphics/:id/print.png[?w=&h=[&crop=]]   (the PNG a print embeds; SVG needs w, h, crop = its window; G15)
+GET /api/maps/:nameId/graphics/:id/thumb.png[?v=]       (≤ 256 px on the longer side, never enlarged; immutable cache; J2)
 ```
 
-All require `courses.view`. `print-job` has `maps.pdf`'s selection,
+The three graphic routes answer `courses.view`, and the event's kiosk key
+(header `x-kiosk-key` or `?k=`; J2, user 2026-11-18 Q2: the kiosk and
+viewer draw images; the key reads the event's own graphics and any club
+graphic by id, answer 15). `thumb.png` resamples a PNG with `sharp`
+(at most 64 MP decoded) and rasterises an SVG with resvg in a print
+worker, both under the print gate. An id's bytes can be replaced (a
+checkout's import replaces the row under the cloud's id; an id can be
+reused after deletes), so the picker asks `thumb.png?v=<version>` from
+`graphics.list` (`<sizeBytes>-<updated_at ms>`; the row's trigger stamps
+`updated_at` on any write) and the answer is `Cache-Control: private,
+max-age=31536000, immutable` per URL; the route ignores `v`.
+
+The other routes require `courses.view` (the kiosk key where stated). `print-job` has `maps.pdf`'s selection,
 order, caps and 400s; a host composes it with `renderPrintJob`
 (`@oxygen/shared/print`) to `maps.pdf`'s bytes (`course-print.md` §8.5). The web app's exports call `print-job` and compose
 on the device whenever it can, falling back to `maps.pdf`
@@ -331,7 +423,11 @@ The shared validator reports:
 
 - missing base-map scale
 - controls outside every map frame for their course
-- descriptions or page-anchored objects outside the paper
+- descriptions or page-anchored objects outside the paper — an object
+  by its rotated extent (`courseMapObjectPageExtent`, J4: a rectangle or
+  image's box turned about its centre, a text's estimated box about its
+  anchor); `courseMapObjectPageBounds` stays the stored, unrotated box
+  the editor hit-tests and resizes (`rotatedRectBounds` in `geometry.ts`)
 - missing template (added by the API list resolver)
 
 Course objects are not layout objects and are not checked: they follow

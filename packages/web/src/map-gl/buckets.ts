@@ -118,6 +118,11 @@ export function passBounds(pass: render.Pass, meshRadius: (glyphId: number, part
       }
       return b;
     }
+    case "image": {
+      let b: render.Bounds | undefined;
+      for (const [x, y] of render.imageQuadCorners(pass.quad)) b = union(b, x, y, x, y);
+      return b;
+    }
   }
 }
 
@@ -273,6 +278,59 @@ export interface ClipItem {
 
 export type PartLayer = "base" | "detail" | "all";
 
+/** The pass kinds an alpha item can be (J3; docs/map-rendering.md §5.2 "Alpha items"). */
+export type AlphaKind = "fill" | "hatch" | "stroke" | "glyph" | "text" | "image";
+
+/**
+ * An image pass as the arena path draws it (J6, §5.2 "Images"): the unit square's affine with
+ * its translation origin-relative, the crop as `[x, y, width, height]` of the source (top-left
+ * origin), and its placed size in stream µm (the SVG raster box).
+ */
+export interface ImageDraw {
+  graphicId: number;
+  quad: [number, number, number, number, number, number];
+  crop: [number, number, number, number];
+  sizeUm: [number, number];
+}
+
+/**
+ * A pass with opacity below 1 or the Multiply blend (§3.9), prepared but kept out of the
+ * range tables: it draws as its own layer (§5.2 "Alpha layers"), so it paints each pixel once.
+ */
+export interface AlphaItem {
+  kind: AlphaKind;
+  colour: number;
+  object: number;
+  /** Which source of the part (`prepareBucketPartFrom`), then the pass's index in that source's stream: the order within a colour. */
+  source: number;
+  pass: number;
+  /** (0, 1]; 1 only with Multiply. */
+  opacity: number;
+  multiply: boolean;
+  /** Fill, hatch, stroke: first index and index count in the part's `[kind].indices`. */
+  start?: number;
+  count?: number;
+  /** Glyph, text: INSTANCE_FLOATS per instance, origin-relative, run after run. */
+  instances?: Float32Array;
+  /** Glyph, text: per size class (glyph) or atlas page (text), first instance and count in `instances`. */
+  runs?: { cls: number; first: number; count: number }[];
+  /** A pattern-clipped glyph pass: its area's triangles, x, y origin-relative. */
+  clip?: { positions: Float32Array; indices: Uint32Array };
+  /** An image pass (J6): every image is an alpha item, opaque ones at opacity 1. */
+  image?: ImageDraw;
+}
+
+/** A pass's alpha state as the arena path draws it: null = opaque, "drop" = nothing to draw (opacity ≤ 0). */
+export function passAlphaState(p: render.Pass): { opacity: number; multiply: boolean } | null | "drop" {
+  const multiply = p.blend === "multiply";
+  const o = p.opacity;
+  if (o === undefined && !multiply) return null;
+  const opacity = o === undefined || !Number.isFinite(o) ? 1 : o;
+  if (opacity <= 0) return "drop";
+  if (opacity >= 1 && !multiply) return null;
+  return { opacity: Math.min(1, opacity), multiply };
+}
+
 export interface PreparedPart {
   bucket: number;
   layer: PartLayer;
@@ -282,6 +340,8 @@ export interface PreparedPart {
   glyph?: InstancePart;
   text?: InstancePart;
   clips: ClipItem[];
+  /** Passes with opacity or blend, in prepared order; absent when none (an opaque part is as before). */
+  alpha?: AlphaItem[];
   /**
    * Arena bytes this part occupies on the GPU once uploaded (its fill, hatch and stroke vertices).
    * Instances, indices and clip geometry reach the GPU only through the visible-set buffers, which
@@ -315,7 +375,8 @@ export interface PrepareContext {
   textGlyph: Map<number, TextPassGlyphs>;
 }
 
-const BASE_KINDS = new Set<render.PassKind>(["fill", "hatch"]);
+/** Kinds drawn below the zoom gate too; an image is one quad, so it is never detail (J6). */
+const BASE_KINDS = new Set<render.PassKind>(["fill", "hatch", "image"]);
 
 /** Growable float32 / uint32 arrays: preparation appends without `number[]` boxing or a copy at the end. */
 class GrowF32 {
@@ -460,6 +521,19 @@ export function prepareBucketPartFrom(sources: readonly PartSource[], bucket: nu
   const stroke = new StrokeWriter(ox, oy), strokeR = new RangeBuilder();
   const inst = { glyph: new Map<string, { colour: number; cls: number; data: number[]; objects: { object: number; count: number }[] }>(), text: new Map<string, { colour: number; cls: number; data: number[]; objects: { object: number; count: number }[] }>() };
   const clips: ClipItem[] = [];
+  const alpha: AlphaItem[] = [];
+  /**
+   * An alpha fill / hatch / stroke's indices, held back and appended after
+   * every opaque index of the kind (review J3): the no-hide fast path draws
+   * one span per colour, so an alpha pass between two opaque ones of the
+   * same colour must not sit inside it.
+   */
+  const deferred = { fill: [] as { item: AlphaItem; idx: Uint32Array }[], hatch: [] as { item: AlphaItem; idx: Uint32Array }[], stroke: [] as { item: AlphaItem; idx: Uint32Array }[] };
+  const defer = (kind: keyof typeof deferred, buf: GrowU32, start: number, item: AlphaItem) => {
+    deferred[kind].push({ item, idx: buf.a.slice(start, buf.n) });
+    buf.n = start;
+    alpha.push(item);
+  };
 
   const addInstances = (kind: "glyph" | "text", colour: number, cls: number, object: number, data: number[]) => {
     if (!data.length) return;
@@ -480,6 +554,9 @@ export function prepareBucketPartFrom(sources: readonly PartSource[], bucket: nu
     if (layer === "base" && !BASE_KINDS.has(pass.kind)) continue;
     if (layer === "detail" && BASE_KINDS.has(pass.kind)) continue;
     const object = src.stream.objectIdx[pi];
+    const as = passAlphaState(pass);
+    if (as === "drop") continue;
+    const al = as ? { kind: pass.kind as AlphaKind, colour: pass.colour, object, source: one ? 0 : merged!.source[k], pass: pi, opacity: as.opacity, multiply: as.multiply } : null;
     switch (pass.kind) {
       case "fill": {
         const { positions, indices } = triangulateEvenOdd(render.flattenRings(pass.path, tol));
@@ -489,7 +566,8 @@ export function prepareBucketPartFrom(sources: readonly PartSource[], bucket: nu
         const start = fillIdx.n;
         fillIdx.reserve(indices.length);
         for (let i = 0; i < indices.length; i++) fillIdx.a[fillIdx.n++] = indices[i] + base;
-        fillR.add(pass.colour, 0, object, start, indices.length);
+        if (al) defer("fill", fillIdx, start, { ...al, start, count: indices.length });
+        else fillR.add(pass.colour, 0, object, start, indices.length);
         break;
       }
       case "hatch": {
@@ -509,14 +587,16 @@ export function prepareBucketPartFrom(sources: readonly PartSource[], bucket: nu
         const start = hatchIdx.n;
         hatchIdx.reserve(indices.length);
         for (let i = 0; i < indices.length; i++) hatchIdx.a[hatchIdx.n++] = indices[i] + base;
-        hatchR.add(pass.colour, 0, object, start, indices.length);
+        if (al) defer("hatch", hatchIdx, start, { ...al, start, count: indices.length });
+        else hatchR.add(pass.colour, 0, object, start, indices.length);
         break;
       }
       case "stroke": {
         stroke.hw2 = Math.min(65535, Math.round(pass.widthUm));
         const start = stroke.indices.n;
         strokeStrip(pass, tol, stroke);
-        strokeR.add(pass.colour, 0, object, start, stroke.indices.n - start);
+        if (al) defer("stroke", stroke.indices, start, { ...al, start, count: stroke.indices.n - start });
+        else strokeR.add(pass.colour, 0, object, start, stroke.indices.n - start);
         break;
       }
       case "glyph": {
@@ -541,7 +621,13 @@ export function prepareBucketPartFrom(sources: readonly PartSource[], bucket: nu
             const rr = m.radius * data[i + 4];
             grow(data[i] - rr, data[i + 1] - rr, data[i] + rr, data[i + 1] + rr);
           }
-          clips.push({ colour: pass.colour, object, cls: m.cls, bounds, positions: pos, indices: Uint32Array.from(indices), instances: Float32Array.from(data) });
+          if (al) {
+            if (data.length) alpha.push({ ...al, instances: Float32Array.from(data), runs: [{ cls: m.cls, first: 0, count: data.length / INSTANCE_FLOATS }], clip: { positions: pos, indices: Uint32Array.from(indices) } });
+          } else {
+            clips.push({ colour: pass.colour, object, cls: m.cls, bounds, positions: pos, indices: Uint32Array.from(indices), instances: Float32Array.from(data) });
+          }
+        } else if (al) {
+          if (data.length) alpha.push({ ...al, instances: Float32Array.from(data), runs: [{ cls: m.cls, first: 0, count: data.length / INSTANCE_FLOATS }] });
         } else {
           addInstances("glyph", pass.colour, m.cls, object, data);
         }
@@ -561,13 +647,55 @@ export function prepareBucketPartFrom(sources: readonly PartSource[], bucket: nu
           const a = pass.angles ? (pass.angles[g] * Math.PI) / 180 : 0; // §3.5 `angles`, degrees CCW
           arr.push(pass.positions[2 * g] - ox, pass.positions[2 * g + 1] - oy, Math.cos(a), Math.sin(a), pass.sizeUm, entry, t.haloEm, 0);
         }
-        for (const [page, data] of byPage) addInstances("text", pass.colour, page, object, data);
+        if (al) {
+          const pages = [...byPage.keys()].sort((a, b) => a - b);
+          const n = pages.reduce((t, pg) => t + byPage.get(pg)!.length, 0);
+          if (!n) break;
+          const instances = new Float32Array(n);
+          const runs: { cls: number; first: number; count: number }[] = [];
+          let o = 0;
+          for (const pg of pages) {
+            const d = byPage.get(pg)!;
+            instances.set(d, o);
+            runs.push({ cls: pg, first: o / INSTANCE_FLOATS, count: d.length / INSTANCE_FLOATS });
+            o += d.length;
+          }
+          alpha.push({ ...al, instances, runs });
+        } else {
+          for (const [page, data] of byPage) addInstances("text", pass.colour, page, object, data);
+        }
+        break;
+      }
+      case "image": {
+        // Always its own layer (J6): the texture's alpha blends, so it is drawn as an alpha item at opacity 1 when opaque.
+        const q = pass.quad;
+        const c = pass.crop ?? { x: 0, y: 0, width: 1, height: 1 };
+        alpha.push({
+          ...(al ?? { kind: "image" as const, colour: pass.colour, object, source: one ? 0 : merged!.source[k], pass: pi, opacity: 1, multiply: false }),
+          image: {
+            graphicId: pass.graphicId,
+            quad: [q[0], q[1], q[2], q[3], q[4] - ox, q[5] - oy],
+            crop: [c.x, c.y, c.width, c.height],
+            sizeUm: [Math.hypot(q[0], q[1]), Math.hypot(q[2], q[3])],
+          },
+        });
         break;
       }
     }
   }
 
+  for (const [kind, buf] of [["fill", fillIdx], ["hatch", hatchIdx], ["stroke", stroke.indices]] as const) {
+    for (const { item, idx } of deferred[kind]) {
+      if (!("start" in item)) continue;
+      item.start = buf.n;
+      buf.reserve(idx.length);
+      buf.a.set(idx, buf.n);
+      buf.n += idx.length;
+    }
+  }
+
   const part: PreparedPart = { bucket, layer, clips, gpuBytes: 0, ms: 0 };
+  if (alpha.length) part.alpha = alpha;
   if (fillIdx.n) {
     part.fill = { verts: fillPos.view().buffer as ArrayBuffer, vertexCount: fillPos.n / 2, indices: fillIdx.view(), ranges: fillR.build() };
   }
@@ -679,6 +807,10 @@ export function partTransferables(p: PreparedPart): ArrayBuffer[] {
     t(k.ranges);
   }
   for (const c of p.clips) out.push(c.positions.buffer as ArrayBuffer, c.indices.buffer as ArrayBuffer, c.instances.buffer as ArrayBuffer);
+  for (const a of p.alpha ?? []) {
+    if (a.instances) out.push(a.instances.buffer as ArrayBuffer);
+    if (a.clip) out.push(a.clip.positions.buffer as ArrayBuffer, a.clip.indices.buffer as ArrayBuffer);
+  }
   return out;
 }
 
@@ -729,7 +861,7 @@ export interface ClipGroup {
  * stream's masks, so a mask is a function of (object, colour).
  */
 export interface VisibleFilter {
-  /** `filterEntryKey(object, colour)` → mask index. Entries not listed are unmasked (the course part never is). */
+  /** `filterEntryKey(object, colour)` → mask index. Entries not listed are unmasked (the course and page parts only by knockout images, J15). */
   entryMask: ReadonlyMap<number, number>;
   /** Region triangles of every mask, x, y relative to the document origin (even-odd triangulated; a mask's regions overlap freely). */
   positions: Float32Array;
@@ -741,10 +873,32 @@ export interface VisibleFilter {
 /** Key of a range-table entry in `VisibleFilter.entryMask`. */
 export const filterEntryKey = (object: number, colour: number): number => object * 65536 + colour;
 
-/** One step of the draw loop: a colour, unmasked (`mask` −1) or under one mask. */
+/** One step of the draw loop: a colour, unmasked (`mask` −1) or under one mask; or one alpha layer (`alpha`, J3). */
 export interface DrawLayer {
   colour: number;
   mask: number;
+  /** Index into `VisibleSet.alpha`: this step draws that one pass (§5.2 "Alpha layers"). */
+  alpha?: number;
+}
+
+/**
+ * One alpha pass in view (J3): drawn on its own, in stencil test-and-set so it paints each
+ * pixel once. Geometry is appended to the visible set's own buffers after the opaque draws'.
+ */
+export interface AlphaLayer {
+  /** `clip`: a pattern-clipped glyph pass (area in `clips`, instances in `clips.instances`). */
+  kind: AlphaKind | "clip";
+  colour: number;
+  mask: number;
+  opacity: number;
+  multiply: boolean;
+  /** Fill, hatch, stroke: first index and count in `[kind].indices`; clip: in `clips.indices`. */
+  offset: number;
+  count: number;
+  /** Glyph, text, clip: per class or page, first instance and count in the kind's instance buffer. */
+  runs: { cls: number; first: number; count: number }[];
+  /** An image (J6): what to draw, its translation relative to the part's origin as every vertex. */
+  image?: ImageDraw;
 }
 
 export interface VisibleSet {
@@ -767,6 +921,8 @@ export interface VisibleSet {
   layers: DrawLayer[];
   /** The region triangles of the masks the draws use (`buildVisibleSet`'s filter, passed through). */
   filter?: Pick<VisibleFilter, "positions" | "indices" | "masks">;
+  /** Alpha passes in view, in draw order (J3); absent when none. */
+  alpha?: AlphaLayer[];
 }
 
 /**
@@ -923,8 +1079,96 @@ export function buildVisibleSet(parts: ResidentPart[], hidden?: ReadonlySet<numb
   for (const k of [vs.fill, vs.hatch, vs.stroke, vs.glyph, vs.text]) for (const d of k.draws) add(d.colour, d.mask);
   for (const g of vs.clips.groups) add(g.colour, g.mask);
   vs.layers = [...layers.values()].sort((a, b) => a.colour - b.colour || a.mask - b.mask);
+  const alpha = alphaLayers(parts, hide, maskOf, vs);
+  if (alpha.length) {
+    vs.alpha = alpha;
+    // Per colour: the opaque steps, then the alpha layers in their order (§5.2 "Alpha layers").
+    const steps: DrawLayer[] = [...vs.layers, ...alpha.map((l, i) => ({ colour: l.colour, mask: l.mask, alpha: i }))];
+    vs.layers = steps.sort((a, b) => a.colour - b.colour || (a.alpha === undefined ? (b.alpha === undefined ? a.mask - b.mask : -1) : b.alpha === undefined ? 1 : a.alpha - b.alpha));
+  }
   vs.colours = [...new Set(vs.layers.map((l) => l.colour))];
   return vs;
+}
+
+/**
+ * The alpha layers in view (J3, §5.2 "Alpha layers"), and their geometry appended to `vs`'s
+ * buffers. Order: colour, then the static parts' passes by (source, stream index) — one stream,
+ * so the stream's order — then each dynamic part's (negative bucket) in parts order.
+ */
+function alphaLayers(parts: ResidentPart[], hide: ReadonlySet<number> | undefined, maskOf: (object: number, colour: number) => number, vs: VisibleSet): AlphaLayer[] {
+  const items: { p: ResidentPart; a: AlphaItem; rank: number }[] = [];
+  parts.forEach((p, n) => {
+    for (const a of p.part.alpha ?? []) {
+      if (hide?.has(a.object)) continue;
+      if ((a.count ?? 1) === 0) continue;
+      items.push({ p, a, rank: p.part.bucket < 0 ? n + 1 : 0 });
+    }
+  });
+  if (!items.length) return [];
+  items.sort((x, y) => x.a.colour - y.a.colour || x.rank - y.rank || (x.rank === 0 ? x.a.source - y.a.source || x.a.pass - y.a.pass : 0));
+  const extra = { fill: [] as number[], hatch: [] as number[], stroke: [] as number[] };
+  const inst = { glyph: [] as Float32Array[], text: [] as Float32Array[], clip: [] as Float32Array[] };
+  const clipPos: Float32Array[] = [], clipIdx: number[] = [];
+  const at = {
+    fill: vs.fill.indices.length, hatch: vs.hatch.indices.length, stroke: vs.stroke.indices.length,
+    glyph: vs.glyph.instances.length / INSTANCE_FLOATS, text: vs.text.instances.length / INSTANCE_FLOATS,
+    clip: vs.clips.instances.length / INSTANCE_FLOATS, clipIdx: vs.clips.indices.length, clipVert: vs.clips.positions.length / 2,
+  };
+  const out: AlphaLayer[] = [];
+  for (const { p, a } of items) {
+    const base = { colour: a.colour, mask: maskOf(a.object, a.colour), opacity: a.opacity, multiply: a.multiply };
+    if (a.image) {
+      out.push({ ...base, kind: "image", offset: 0, count: 0, runs: [], image: a.image });
+      continue;
+    }
+    if (a.kind === "fill" || a.kind === "hatch" || a.kind === "stroke") {
+      const k = p.part[a.kind]!;
+      const add = p.base[a.kind];
+      const offset = at[a.kind] + extra[a.kind].length;
+      for (let i = a.start!; i < a.start! + a.count!; i++) extra[a.kind].push(k.indices[i] + add);
+      out.push({ ...base, kind: a.kind, offset, count: a.count!, runs: [] });
+      continue;
+    }
+    const kind = a.clip ? "clip" : (a.kind as "glyph" | "text");
+    const first = at[kind];
+    inst[kind].push(a.instances!);
+    at[kind] += a.instances!.length / INSTANCE_FLOATS;
+    const runs = a.runs!.map((r) => ({ cls: r.cls, first: first + r.first, count: r.count }));
+    if (a.clip) {
+      const offset = at.clipIdx;
+      for (let i = 0; i < a.clip.indices.length; i++) clipIdx.push(a.clip.indices[i] + at.clipVert);
+      clipPos.push(a.clip.positions);
+      at.clipIdx += a.clip.indices.length;
+      at.clipVert += a.clip.positions.length / 2;
+      out.push({ ...base, kind: "clip", offset, count: a.clip.indices.length, runs });
+    } else {
+      out.push({ ...base, kind: a.kind, offset: 0, count: 0, runs });
+    }
+  }
+  const catU32 = (a: Uint32Array, b: number[]) => {
+    if (!b.length) return a;
+    const r = new Uint32Array(a.length + b.length);
+    r.set(a);
+    r.set(b, a.length);
+    return r;
+  };
+  const catF32 = (a: Float32Array, b: Float32Array[]) => {
+    if (!b.length) return a;
+    const r = new Float32Array(a.length + b.reduce((n, x) => n + x.length, 0));
+    r.set(a);
+    let o = a.length;
+    for (const x of b) { r.set(x, o); o += x.length; }
+    return r;
+  };
+  vs.fill.indices = catU32(vs.fill.indices, extra.fill);
+  vs.hatch.indices = catU32(vs.hatch.indices, extra.hatch);
+  vs.stroke.indices = catU32(vs.stroke.indices, extra.stroke);
+  vs.glyph.instances = catF32(vs.glyph.instances, inst.glyph);
+  vs.text.instances = catF32(vs.text.instances, inst.text);
+  vs.clips.instances = catF32(vs.clips.instances, inst.clip);
+  vs.clips.positions = catF32(vs.clips.positions, clipPos);
+  vs.clips.indices = catU32(vs.clips.indices, clipIdx);
+  return out;
 }
 
 /** Greedy grouping of clip items per (colour, mask): an item joins the first group none of whose footprints it meets. */

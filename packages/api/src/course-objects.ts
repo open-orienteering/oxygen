@@ -14,9 +14,14 @@ import { z } from "zod";
 import { course, encodeHlc } from "@oxygen/shared";
 import type { Prisma, PrismaClient } from "./generated/prisma/client.js";
 import { nextServerHlc } from "./serverClock.js";
+import { publicControlId } from "./control-id.js";
+import { GraphicRasterError, graphicOutline } from "./course-maps/graphics.js";
+
+/** A stored `graphics.outline` (J19): rings of numbers; anything else reads as not traced. */
+const outlineSchema = z.array(z.array(z.number().finite()));
 
 type Db = PrismaClient | Prisma.TransactionClient;
-type Row = { id: string; seq: number; kind: string; geometry: unknown; props: unknown; scope: unknown; z: number; version: bigint };
+type Row = { id: string; seq: number; kind: string; geometry: unknown; props: unknown; scope: unknown; attach?: unknown; z: number; version: bigint };
 
 /** The stored row shape and the scope filter live in the shared course layer since G13 (the print pipeline reads them, docs/course-print.md §1). */
 export type StoredScope = course.StoredScope;
@@ -25,6 +30,7 @@ export type StoredCourseObject = course.StoredCourseObject;
 export const { objectsInScope } = course;
 
 const storedScopeSchema = course.courseObjectScopeSchemaOf(z.string().uuid());
+const storedAttachSchema = course.courseObjectAttachSchemaOf(z.string().uuid());
 
 /** A fresh token: objects carry no journal entry, so the node clock mints one. */
 export function nextObjectVersion(): bigint {
@@ -36,13 +42,83 @@ export function storedObjectOf(row: Row): StoredCourseObject | null {
   const body = course.courseObjectBodySchema.safeParse({ kind: row.kind, geometry: row.geometry, props: row.props });
   const scope = storedScopeSchema.safeParse(row.scope);
   if (!body.success || !scope.success) return null;
-  return { ...body.data, id: row.id, seq: row.seq, scope: scope.data, z: row.z, version: row.version };
+  // J10: an attachment that does not parse reads as none (a row written by a newer image).
+  const attach = row.attach == null ? null : storedAttachSchema.safeParse(row.attach);
+  return { ...body.data, id: row.id, seq: row.seq, scope: scope.data, z: row.z, version: row.version, ...(attach?.success ? { attach: attach.data } : {}) };
 }
 
-/** The event's objects in draw order (`z`, then `seq`). */
+/** A control as attachment reads it: its UUID, public id, position and whether it is deleted. */
+export interface AttachControl { id: string; publicId: number; x: number; y: number; removed: boolean }
+
+export async function loadAttachControls(db: Db, eventId: bigint): Promise<Map<string, AttachControl>> {
+  const rows = await db.control.findMany({ where: { eventId }, select: { id: true, codes: true, seq: true, xpos: true, ypos: true, removed: true } });
+  return new Map(rows.map((c) => [c.id, { id: c.id, publicId: publicControlId(c), x: c.xpos, y: c.ypos, removed: c.removed }]));
+}
+
+/**
+ * An object whose control is deleted (or gone), detached where it was last drawn (J10, user answer 7;
+ * docs/course-layer.md §8.1 "Attachment"): its geometry moved by the deleted control's position minus `at`, no
+ * `attach`. The row is untouched, so restoring the control re-attaches it.
+ */
+export function detachedIfRemoved(o: StoredCourseObject, controls: ReadonlyMap<string, AttachControl>): StoredCourseObject {
+  if (!o.attach) return o;
+  const c = controls.get(o.attach.controlId);
+  if (c && !c.removed) return o;
+  const { attach, ...rest } = o;
+  if (!c) return rest;
+  return { ...rest, geometry: course.translateGeometry(o.geometry, c.x - attach.at.x, c.y - attach.at.y) } as StoredCourseObject;
+}
+
+/**
+ * The event's objects in draw order (`z`, then `seq`); one attached to a deleted control detached where it was drawn;
+ * a knockout image with its graphic's outline (J19, `withOutlines`).
+ */
 export async function loadCourseObjects(db: Db, eventId: bigint): Promise<StoredCourseObject[]> {
   const rows = await db.courseObject.findMany({ where: { eventId }, orderBy: [{ z: "asc" }, { seq: "asc" }] });
-  return rows.flatMap((r) => storedObjectOf(r) ?? []);
+  const objects = await withOutlines(db, eventId, rows.flatMap((r) => storedObjectOf(r) ?? []));
+  // The controls only when something is attached (most events attach nothing).
+  if (!objects.some((o) => o.attach)) return objects;
+  const controls = await loadAttachControls(db, eventId);
+  return objects.map((o) => detachedIfRemoved(o, controls));
+}
+
+/**
+ * J19 (docs/map-rendering.md §4.11): each knockout image gets its graphic's traced outline (read-only `outline`, the
+ * footprint it cuts by), when it has one. A graphic not traced yet (`graphics.outline` NULL: uploaded, imported or
+ * copied since) is traced here once and stored — `[]` for a whole box. Only the event's own and club graphics are
+ * read (a graphic of another event cuts by the box, as a missing one). Bytes that cannot be decoded are stored as `[]`
+ * (the box, not read again); a print worker that fails or times out leaves NULL, tried again on the next load.
+ */
+export async function withOutlines<O extends StoredCourseObject>(db: Db, eventId: bigint, objects: O[]): Promise<O[]> {
+  const ids = [...new Set(objects.flatMap((o) => (o.kind === "image" && o.props.knockout ? [o.props.graphicId] : [])))];
+  if (ids.length === 0) return objects;
+  const rows = await db.graphic.findMany({
+    where: { id: { in: ids.map(BigInt) }, OR: [{ eventId }, { eventId: null }] },
+    select: { id: true, outline: true, mime: true, widthPx: true, heightPx: true },
+  });
+  const outlines = new Map<number, course.GraphicOutline>();
+  for (const r of rows) {
+    const parsed = r.outline == null ? null : outlineSchema.safeParse(r.outline);
+    let outline: course.GraphicOutline | null = parsed?.success ? parsed.data : null;
+    if (outline === null) {
+      const held = await db.graphic.findUnique({ where: { id: r.id }, select: { data: true } });
+      if (!held) continue;
+      try {
+        outline = await graphicOutline(held.data, r.mime, r.widthPx, r.heightPx);
+      } catch (error) {
+        if (error instanceof GraphicRasterError) {
+          console.warn(`graphic ${r.id}: outline not traced this time (${error.message})`);
+          continue;
+        }
+        console.warn(`graphic ${r.id}: outline cannot be traced, cut by its box (${error instanceof Error ? error.message : String(error)})`);
+        outline = [];
+      }
+      await db.graphic.update({ where: { id: r.id }, data: { outline: outline as unknown as Prisma.InputJsonValue } });
+    }
+    if (outline.length) outlines.set(Number(r.id), outline);
+  }
+  if (outlines.size === 0) return objects;
+  return objects.map((o) => (o.kind === "image" && o.props.knockout && outlines.has(o.props.graphicId) ? { ...o, outline: outlines.get(o.props.graphicId) } : o));
 }
 
 /** Public ids ↔ UUIDs of the event's courses and classes. */
@@ -92,11 +168,26 @@ export function storedScope(scope: course.CourseObjectScope<number>, ids: ScopeI
 export interface WireContext {
   ids: ScopeIds;
   byCourse: ReadonlyMap<string, string[]>;
+  /** Every control of the event by UUID, deleted ones included (J10). */
+  controls: ReadonlyMap<string, AttachControl>;
 }
 
 export async function loadWireContext(db: Db, eventId: bigint): Promise<WireContext> {
-  const [ids, byCourse] = await Promise.all([loadScopeIds(db, eventId), classesByCourse(db, eventId)]);
-  return { ids, byCourse };
+  const [ids, byCourse, controls] = await Promise.all([loadScopeIds(db, eventId), classesByCourse(db, eventId), loadAttachControls(db, eventId)]);
+  return { ids, byCourse, controls };
+}
+
+/**
+ * Wire → stored attachment (J10): the public control id among the event's live controls (the control endpoints'
+ * id space: the first code, else the seq). An unknown or deleted control is `BAD_REQUEST` naming it; a kind that
+ * cannot attach (`toner_saver`, `inset_frame`) too.
+ */
+export function storedAttach(kind: course.CourseObjectKind, attach: course.CourseObjectAttach<number>, w: WireContext): course.CourseObjectAttach<string> {
+  if (course.UNATTACHABLE_KINDS.includes(kind)) throw new TRPCError({ code: "BAD_REQUEST", message: `A ${kind} object cannot be attached to a control` });
+  const live = [...w.controls.values()].filter((c) => !c.removed);
+  const c = live.find((x) => x.publicId === attach.controlId);
+  if (!c) throw new TRPCError({ code: "BAD_REQUEST", message: `Unknown control ${attach.controlId}` });
+  return { controlId: c.id, at: { x: attach.at.x, y: attach.at.y } };
 }
 
 /** The courses (UUIDs) a scope draws with: the named ones and every course a named class runs. */
@@ -107,11 +198,16 @@ export function scopeCourses(scope: StoredScope, byCourse: ReadonlyMap<string, s
   return [...out];
 }
 
-export function toWire(o: StoredCourseObject, w: WireContext): course.CourseObject {
-  const { id: _uuid, seq, scope, version, ...body } = o;
+export function toWire(stored: StoredCourseObject, w: WireContext): course.CourseObject {
+  const o = detachedIfRemoved(stored, w.controls);
+  const { id: _uuid, seq, scope, version, attach, ...body } = o;
   const courses = scopeCourses(scope, w.byCourse);
   const inCourses = courses === null ? null : courses.flatMap((id) => (w.ids.courseSeq.has(id) ? [w.ids.courseSeq.get(id)!] : [])).sort((a, b) => a - b);
-  return { ...body, id: seq, scope: wireScope(scope, w.ids), version: version.toString(), inCourses } as course.CourseObject;
+  const control = attach ? w.controls.get(attach.controlId) : undefined;
+  return {
+    ...body, id: seq, scope: wireScope(scope, w.ids), version: version.toString(), inCourses,
+    ...(attach && control ? { attach: { controlId: control.publicId, at: attach.at } } : {}),
+  } as course.CourseObject;
 }
 
 /** `inset_frame` is typed for micro insets and refused until they exist (§8.1). */
@@ -128,9 +224,12 @@ export function assertWritableKind(kind: course.CourseObjectKind): void {
 export async function writeCourseObject(
   db: Db,
   eventId: bigint,
-  data: { body: course.CourseObjectBody; scope: StoredScope; z?: number; source?: "import" },
+  data: { body: course.CourseObjectBody; scope: StoredScope; z?: number; source?: "import"; attach?: course.CourseObjectAttach<string> },
 ): Promise<StoredCourseObject> {
   assertWritableKind(data.body.kind);
+  if (data.attach && course.UNATTACHABLE_KINDS.includes(data.body.kind)) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: `A ${data.body.kind} object cannot be attached to a control` });
+  }
   const row = await db.courseObject.create({
     data: {
       eventId,
@@ -138,6 +237,7 @@ export async function writeCourseObject(
       geometry: data.body.geometry as Prisma.InputJsonValue,
       props: data.body.props as Prisma.InputJsonValue,
       scope: data.scope as Prisma.InputJsonValue,
+      ...(data.attach ? { attach: data.attach as unknown as Prisma.InputJsonValue } : {}),
       z: data.z ?? 0,
       ...(data.source ? { source: data.source } : {}),
       version: nextObjectVersion(),

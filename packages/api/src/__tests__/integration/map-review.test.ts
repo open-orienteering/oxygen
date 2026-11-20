@@ -117,6 +117,14 @@ describe("mapImport.review", () => {
     expect(r.stack.colours).toEqual(header.colours);
     // The report's colour-stack summary, incl. the source purples the course purples displaced (C15; none on this fixture).
     expect(r.stack.alignment).toMatchObject({ source: expect.any(Number), purplesDisplaced: [] });
+    // Row I5: the order the stack was built in and the layered stack's report (I6's panel reads it).
+    expect(r.stack.alignment).toMatchObject({ order: "iof", layers: { rows: expect.any(Array), split: expect.any(Array), deviations: expect.any(Array) } });
+    // Row I6: the colour panel, for the event's map of this source (no setting row: the defaults).
+    expect(r.colour).toMatchObject({ order: "iof", fallback: false, built: { order: "iof", deviations: {} }, setting: { order: "iof", deviations: {} } });
+    expect(r.colour.layers!.length).toBe(header.colours.length);
+    expect(r.colour.layers!.some((l) => l.flags.includes("split"))).toBe(false);
+    expect(r.colour.deviations.map((d) => d.kept)).toEqual([false, false, false]);
+    expect(r.colour.pictures).toEqual({ iof: `/api/map-documents/${docA}/colour-order/iof.png`, source: `/api/map-documents/${docA}/colour-order/source.png` });
     expect(r.report).toMatchObject({ matching: { library: { id: "ISOM2017-2" } } });
   }, 30_000);
 

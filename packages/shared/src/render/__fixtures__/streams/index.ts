@@ -200,6 +200,99 @@ export const textWithHalo: PassStreamJson = {
   fontTable: [{ fontId: 0, family: "liberation-sans", bold: false, italic: false }],
 };
 
+
+/**
+ * §3.9 opacity on every kind (J1): over a yellow and a blue fill, a 50 % black
+ * fill, a self-crossing 50 % purple stroke (each pixel blends once), a dashed
+ * 25 % black stroke, a 50 % green hatch and a 50 % glyph pass whose instances
+ * overlap (once), one of them pattern-clipped.
+ */
+export const alphaPasses: PassStreamJson = {
+  objectIdx: [0, 1, 2, 3, 4, 5, 6, 7],
+  symbolIdx: [401, 301, 402, 701, 505, 408, 418, 418],
+  passes: [
+    { kind: "fill", colour: 1, path: { coords: [0, 0, 15000, 0, 15000, 24000, 0, 24000], closed: true } },
+    { kind: "fill", colour: 4, path: { coords: [15000, 0, 30000, 0, 30000, 24000, 15000, 24000], closed: true } },
+    { kind: "fill", colour: 5, opacity: 0.5, path: { coords: [2500, 2500, 9500, 2500, 9500, 9500, 2500, 9500], closed: true } },
+    {
+      kind: "stroke", colour: 6, opacity: 0.5,
+      path: { coords: [11500, 3500, 27500, 9500, 27500, 3500, 11500, 9500] },
+      widthUm: 1500, cap: "butt", join: "round",
+    },
+    {
+      kind: "stroke", colour: 5, opacity: 0.25,
+      path: { coords: [2500, 12500, 27500, 12500] },
+      slices: [
+        { seg0: 0, t0: 0, seg1: 0, t1: 0.3 },
+        { seg0: 0, t0: 0.4, seg1: 0, t1: 0.7 },
+        { seg0: 0, t0: 0.8, seg1: 0, t1: 1 },
+      ],
+      widthUm: 1000, cap: "butt", join: "miter",
+    },
+    {
+      kind: "hatch", colour: 2, opacity: 0.5,
+      path: { coords: [2500, 15500, 13500, 15500, 13500, 21500, 2500, 21500], closed: true },
+      widthUm: 400, spacingUm: 1200, offsetUm: 0, angleDeg: 30,
+    },
+    { kind: "glyph", colour: 5, opacity: 0.5, glyphId: 1, partIdx: 0, instances: [17500, 18500, 1, 0, 1, 19000, 18500, 1, 0, 1] },
+    {
+      kind: "glyph", colour: 6, opacity: 0.5, glyphId: 1, partIdx: 0,
+      instances: [23500, 17500, 1, 0, 1, 25000, 17500, 1, 0, 1, 26500, 17500, 1, 0, 1, 25000, 20000, 1, 0, 1],
+      clip: { coords: [22500, 15500, 27500, 15500, 27500, 19500, 22500, 19500], closed: true },
+    },
+  ],
+  glyphTable: [
+    {
+      glyphId: 1,
+      partIdx: 0,
+      // a 3 mm disc as an octagon: neighbours 1.5 mm apart overlap
+      fills: [{ coords: [1500, 0, 1061, 1061, 0, 1500, -1061, 1061, -1500, 0, -1061, -1061, 0, -1500, 1061, -1061], closed: true }],
+      strokes: [],
+    },
+  ],
+};
+
+/** §3.9 text at 50 % with its 50 % halo over a yellow fill: adjacent halo strokes overlap and blend once (J1). */
+export const alphaText: PassStreamJson = {
+  objectIdx: [0, 1, 1],
+  symbolIdx: [401, 710, 710],
+  passes: [
+    { kind: "fill", colour: 1, path: { coords: [0, 0, 16000, 0, 16000, 8000, 0, 8000], closed: true } },
+    {
+      kind: "text", colour: 4, opacity: 0.5, fontId: 0, sizeUm: 4000,
+      glyphs: [36, 37, 38], positions: [1500, 2500, 4300, 2500, 7000, 2500],
+      haloWidthUm: 250,
+    },
+    {
+      kind: "text", colour: 5, opacity: 0.5, fontId: 0, sizeUm: 4000,
+      glyphs: [36, 37, 38], positions: [1500, 2500, 4300, 2500, 7000, 2500],
+    },
+  ],
+  fontTable: [{ fontId: 0, family: "liberation-sans", bold: false, italic: false }],
+};
+
+/**
+ * §3.9 Multiply (J1): over yellow, blue and a black stroke — a purple Multiply
+ * fill (yellow × purple, blue × purple, black stays black), the same at 50 %, and
+ * a lower-purple Multiply stroke across both fills and the first purple fill.
+ */
+export const blendMultiply: PassStreamJson = {
+  objectIdx: [0, 1, 2, 3, 4, 5],
+  symbolIdx: [401, 301, 101, 406, 406, 701],
+  passes: [
+    { kind: "fill", colour: 1, path: { coords: [0, 0, 12000, 0, 12000, 20000, 0, 20000], closed: true } },
+    { kind: "fill", colour: 4, path: { coords: [12000, 0, 24000, 0, 24000, 20000, 12000, 20000], closed: true } },
+    { kind: "stroke", colour: 5, path: { coords: [2000, 10000, 22000, 10000] }, widthUm: 800, cap: "butt", join: "miter" },
+    { kind: "fill", colour: 6, blend: "multiply", path: { coords: [2500, 7500, 21500, 7500, 21500, 12500, 2500, 12500], closed: true } },
+    { kind: "fill", colour: 6, blend: "multiply", opacity: 0.5, path: { coords: [2500, 14500, 21500, 14500, 21500, 18500, 2500, 18500], closed: true } },
+    {
+      kind: "stroke", colour: 7, blend: "multiply",
+      path: { coords: [1500, 2500, 22500, 5500] },
+      widthUm: 1500, cap: "butt", join: "miter",
+    },
+  ],
+};
+
 export const renderFixtures = {
   "fill-with-holes": fillWithHoles,
   "dashed-bezier-stroke": dashedBezierStroke,
@@ -207,6 +300,9 @@ export const renderFixtures = {
   "hatch-area": hatchArea,
   "colour-order": colourOrder,
   "text-with-halo": textWithHalo,
+  "alpha-passes": alphaPasses,
+  "alpha-text": alphaText,
+  "blend-multiply": blendMultiply,
 } as const satisfies Record<string, PassStreamJson>;
 
 export type RenderFixtureName = keyof typeof renderFixtures;

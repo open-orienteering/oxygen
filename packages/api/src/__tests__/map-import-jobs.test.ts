@@ -58,6 +58,23 @@ describe("import worker", () => {
     expect(stages).toEqual(["parse", "normalise", "match", "encode"]);
   }, 60_000);
 
+  it("applies the job's colour setting as the inline path does (row I6)", async () => {
+    const file = readFileSync(fileURLToPath(new URL("../../../../e2e/colour-layers.ocd", import.meta.url)));
+    const [source, inlineSource, dropped, inlineDropped] = await Promise.all([
+      runImportInWorker(file, "colour-layers.ocd", { colour: { order: "source", deviations: {} }, timeoutMs: 60_000 }),
+      importOcadToDocument(file, "colour-layers.ocd", { match: { colourOrder: "source" } }),
+      runImportInWorker(file, "colour-layers.ocd", { colour: { order: "iof", deviations: { "brown50-road>brown100-line": "drop" } }, timeoutMs: 60_000 }),
+      importOcadToDocument(file, "colour-layers.ocd", { match: { deviations: { "brown50-road>brown100-line": "drop" } } }),
+    ]);
+    expect(source.documentHash).toBe(inlineSource.documentHash);
+    expect(source.report.colourStack.order).toBe("source");
+    expect(dropped.documentHash).toBe(inlineDropped.documentHash);
+    expect(dropped.report.colourStack.layers!.deviations.find((d) => d.upper === "brown50-road" && d.lower === "brown100-line")).toMatchObject({ kept: false, byDefault: false });
+    // A setting equal to the defaults is the default import.
+    const plain = await runImportInWorker(file, "colour-layers.ocd", { colour: { order: "iof", deviations: { "brown50-road>brown100-line": "keep" } }, timeoutMs: 60_000 });
+    expect(plain.documentHash).toBe((await importOcadToDocument(file, "colour-layers.ocd")).documentHash);
+  }, 60_000);
+
   it("imports a Mapper file when told the kind, with the same hashes as the inline path", async () => {
     const xmap = readFileSync(fileURLToPath(new URL("../../../../e2e/test.xmap", import.meta.url)));
     const stages: string[] = [];
@@ -67,7 +84,7 @@ describe("import worker", () => {
     ]);
     expect(worker.documentHash).toBe(inline.documentHash);
     expect(worker.report.source.kind).toBe("omap");
-    expect(worker.report.importer).toBe("omap-11");
+    expect(worker.report.importer).toBe("omap-13");
     expect(stages).toEqual(["parse", "normalise", "match", "encode"]);
   }, 60_000);
 

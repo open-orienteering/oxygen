@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mapDocument } from "@oxygen/shared";
+import { mapDocument, mapImport } from "@oxygen/shared";
 import { pickIndexOf } from "../symbol-pick";
 
 const T = mapDocument.OBJECT_TYPE;
@@ -70,6 +70,43 @@ describe("the eyedropper's pick (docs/course-editor.md §6.4)", () => {
 
   it("empty map picks nothing", () => {
     expect(index.symbolAt({ x: 100, y: 100 }, 0.5)).toBeNull();
+  });
+
+  describe("on the IOF colour layers (docs/map-symbols.md §9.3, row I5)", () => {
+    // A table that draws its paved brown over its building grey: a building on a paved area.
+    const ink = { grey: [0, 0, 0, 0.5] as [number, number, number, number], brown: [0, 0.28, 0.5, 0.09] as [number, number, number, number] };
+    const input = (): mapDocument.MapDocumentInput => ({
+      header: {
+        format: { version: 1, importer: "test-1" },
+        source: { kind: "ocad", version: "2018.8.3", hash: "00".repeat(32), bytes: 1 },
+        unitsPerMm: 100,
+        mapScale: 4000,
+        georeferencing: { crs: null, paperOrigin: null },
+        colours: [
+          { id: "src:1", name: "Grey 50%", cmyk: ink.grey, sourceNumber: 1 },
+          { id: "src:2", name: "Brown 50%", cmyk: ink.brown, sourceNumber: 2 },
+        ],
+        symbols: [
+          { code: "521.0", name: "Building", kind: "area", render: { type: "area", id: "b", code: "521", name: "Building", fill: 0 } },
+          { code: "501.0", name: "Paved area", kind: "area", render: { type: "area", id: "p", code: "501", name: "Paved area", fill: 1 } },
+        ],
+      },
+      objects: [
+        { symbolIdx: 1, type: T.area, sourceIndex: 0, coords: [0, 0, 4000, 0, 4000, 4000, 0, 4000], flags: [0, 0, 0, 0] },
+        { symbolIdx: 0, type: T.area, sourceIndex: 1, coords: [1000, 1000, 2000, 1000, 2000, 2000, 1000, 2000], flags: [0, 0, 0, 0] },
+      ],
+    });
+    const pick = (order: "iof" | "source") => {
+      const d = mapDocument.decodeMapDocument(mapDocument.encodeMapDocument(mapImport.matchDocument(input(), { colourOrder: order }).input));
+      const hit = pickIndexOf(d).symbolAt({ x: 15, y: 15 }, 0.1)!;
+      return { symbol: d.header.symbols[hit.symbolIdx].code, ink: hit.colour === null ? null : d.header.colours[hit.colour].cmyk };
+    };
+
+    it("picks the building drawn over its paved area, with the building's ink", () => {
+      expect(pick("iof")).toEqual({ symbol: "521.0", ink: ink.grey });
+      // The map's own order draws the paved brown over it.
+      expect(pick("source")).toEqual({ symbol: "501.0", ink: ink.brown });
+    });
   });
 
   describe("over the effective document (map-patches §2.4)", () => {

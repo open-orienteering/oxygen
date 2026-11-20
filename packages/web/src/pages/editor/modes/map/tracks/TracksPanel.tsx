@@ -131,7 +131,7 @@ export function TracksPanel({ panel, convert }: { panel: Panel; convert?: Tracks
           {panel.importing ? t("tracksImporting") : t("tracksImport")}
         </button>
         <span className="text-[11px] text-slate-400">{t("tracksDropHint")}</span>
-        <input ref={input} type="file" multiple accept=".gpx,application/gpx+xml" data-testid="editor-tracks-file" className="hidden"
+        <input ref={input} type="file" multiple accept=".gpx,.tcx,application/gpx+xml,application/vnd.garmin.tcx+xml" data-testid="editor-tracks-file" className="hidden"
           onChange={(e) => {
             const picked = files(e.currentTarget.files);
             e.currentTarget.value = "";

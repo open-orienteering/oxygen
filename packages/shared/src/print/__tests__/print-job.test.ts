@@ -96,6 +96,14 @@ describe("renderPrintJob (§8.5)", () => {
     expect(b.bytes).toEqual(a.bytes);
   });
 
+  it("a cropped SVG is asked by id at the window's box, with the window (print.png's `crop`, §6.3)", async () => {
+    const graphic = vi.fn(async (_id: number, _box?: [number, number], _window?: unknown) => PNG);
+    const cropped = { ...logo(8), crop: { x: 0.25, y: 0, width: 0.5, height: 1 } };
+    const out = await renderPrintJob(job([sheet("A", [cropped])], [{ id: 8, mime: "image/svg+xml" }]), host({ graphic }));
+    expect(out.warnings).toEqual([]);
+    expect(graphic.mock.calls).toEqual([[8, svgRasterBox(20, 10), { x: 0.25, y: 0, width: 0.5, height: 1 }]]);
+  });
+
   it("a graphic the host cannot fetch is left out with the server's warnings; the PDF is still written", async () => {
     const graphic = vi.fn(async () => {
       throw new Error("offline");
@@ -115,9 +123,10 @@ describe("renderPrintJob (§8.5)", () => {
     await renderPrintJob(j, host({ document }));
     expect(document).toHaveBeenCalledTimes(1);
     expect(document).toHaveBeenCalledWith(hash);
-    // Version 1 carried no patch: a host that composed it would drop the event's corrections (G14).
-    expect(PRINT_JOB_VERSION).toBe(2);
+    // Version 1 carried no patch (G14); version 2 drew images after each layer, over the purple (J5).
+    expect(PRINT_JOB_VERSION).toBe(7);
     await expect(renderPrintJob({ ...j, version: 1 } as unknown as PrintJob, host())).rejects.toThrow("Unsupported print job version 1");
+    await expect(renderPrintJob({ ...j, version: 2 } as unknown as PrintJob, host())).rejects.toThrow("Unsupported print job version 2");
   });
 });
 

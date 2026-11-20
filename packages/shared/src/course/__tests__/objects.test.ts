@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 import { courseLayer } from "../layer.js";
-import { courseObjectBodySchema, courseObjectInScope, courseObjectScopeSchemaOf, objectsInScope, type CourseLayerObject, type StoredCourseObject } from "../objects.js";
+import { courseObjectAttachSchemaOf, courseObjectBodySchema, courseObjectInScope, courseObjectScopeSchemaOf, objectsInScope, resolveAttached, type CourseLayerObject, type StoredCourseObject } from "../objects.js";
 import { COORD_FLAG } from "../../render/pass-stream.js";
 import { layerInput } from "./helpers.js";
 import { z } from "zod";
@@ -46,6 +46,30 @@ describe("courseObjectBodySchema (§8.1)", () => {
     // A region is a polygon: Bézier handles are refused, not dropped.
     expect(issues({ kind: "filter_region", geometry: [{ x: 0, y: 0, hOut: { x: 1, y: 0 } }, ...SQUARE], props: { mode: "hide", symbols: "all" } })).not.toEqual([]);
     expect(issues({ kind: "banner", geometry: SQUARE, props: {} })).not.toEqual([]);
+  });
+});
+
+describe("courseObjectBodySchema: opacity, blend, rotation, flip (J4, §8.1)", () => {
+  const style = { opacity: 0.5, blend: "multiply" };
+  it("takes opacity and blend on text, image and white-out; rotation on text and image; flips on image", () => {
+    expect(issues({ kind: "text", geometry: [{ x: 1, y: 2 }], props: { text: "x", fontSizeMm: 3, ...style, rotationDeg: 30 } })).toEqual([]);
+    expect(issues({ kind: "image", geometry: SQUARE.slice(0, 2), props: { graphicId: 3, ...style, rotationDeg: -90, flipH: true, flipV: false } })).toEqual([]);
+    expect(issues({ kind: "whiteout", geometry: SQUARE, props: { opacity: 0 } })).toEqual([]);
+    expect(issues({ kind: "whiteout", geometry: SQUARE, props: style })).toEqual([]);
+  });
+
+  it("refuses them elsewhere, out of range, an unknown blend and rotation on a white-out", () => {
+    for (const [kind, geometry] of [["oob_area", SQUARE], ["oob_line", SQUARE], ["marked_route", SQUARE], ["toner_saver", SQUARE], ["inset_frame", SQUARE]] as const) {
+      expect(issues({ kind, geometry, props: { opacity: 0.5 } }), kind).not.toEqual([]);
+      expect(issues({ kind, geometry, props: { blend: "multiply" } }), kind).not.toEqual([]);
+    }
+    expect(issues({ kind: "filter_region", geometry: SQUARE, props: { mode: "hide", symbols: "all", opacity: 0.5 } })).not.toEqual([]);
+    expect(issues({ kind: "whiteout", geometry: SQUARE, props: { rotationDeg: 10 } })).not.toEqual([]);
+    expect(issues({ kind: "whiteout", geometry: SQUARE, props: { opacity: 1.5 } })).not.toEqual([]);
+    expect(issues({ kind: "whiteout", geometry: SQUARE, props: { opacity: -0.1 } })).not.toEqual([]);
+    expect(issues({ kind: "whiteout", geometry: SQUARE, props: { blend: "screen" } })).not.toEqual([]);
+    expect(issues({ kind: "text", geometry: [{ x: 1, y: 2 }], props: { text: "x", fontSizeMm: 3, rotationDeg: 400 } })).not.toEqual([]);
+    expect(issues({ kind: "image", geometry: SQUARE.slice(0, 2), props: { graphicId: 3, flipH: "yes" } })).not.toEqual([]);
   });
 });
 
@@ -137,8 +161,10 @@ describe("course objects in the layer (§8.3)", () => {
 
   it("image → layer.images from two corners; toner saver needs the window; inset_frame and filter_region draw no object", () => {
     const img = draw([obj({ kind: "image", geometry: [{ x: 10, y: 8 }, { x: 2, y: 4 }], props: { graphicId: 9 } })]);
-    expect(img.own).toHaveLength(0);
-    expect(img.layer.images).toEqual([{ graphicId: 9, rectUm: { x: 2000, y: 4000, width: 8000, height: 4000 } }]);
+    expect(img.own).toHaveLength(1);
+    expect(img.own[0].image).toEqual({ graphicId: 9 });
+    expect([...img.own[0].path.coords]).toEqual([2000, 4000, 10000, 4000, 10000, 8000, 2000, 8000]);
+    expect(img.layer.images).toEqual([{ graphicId: 9, sizeUm: [8000, 4000] }]);
 
     const toner = obj({ kind: "toner_saver", geometry: SQUARE, props: {} });
     expect(draw([toner]).own).toHaveLength(0);
@@ -170,5 +196,64 @@ describe("course objects in the layer (§8.3)", () => {
     const region = draw([obj({ kind: "filter_region", geometry: SQUARE, props: { mode: "hide", symbols: "all" } })]);
     expect(region.own).toHaveLength(0);
     expect(region.layer.regions).toHaveLength(1);
+  });
+
+  it("opacity and blend reach a white-out's and a text's render object, only off their defaults (J4)", () => {
+    const w = draw([obj({ kind: "whiteout", geometry: SQUARE, props: { opacity: 0.5, blend: "multiply" } })]);
+    expect(w.own[0]).toMatchObject({ opacity: 0.5, blend: "multiply" });
+    const opaque = draw([obj({ kind: "whiteout", geometry: SQUARE, props: { opacity: 1 } })]);
+    expect("opacity" in opaque.own[0]).toBe(false);
+    expect("blend" in opaque.own[0]).toBe(false);
+    // Bit-identical to an object without the fields.
+    expect(opaque.own).toEqual(draw([obj({ kind: "whiteout", geometry: SQUARE, props: {} })]).own);
+    const t = draw([obj({ kind: "text", geometry: [{ x: 3, y: 4 }], props: { text: "x", fontSizeMm: 3, opacity: 0.25 } })]);
+    expect(t.own[0].opacity).toBe(0.25);
+  });
+
+  it("a rotated text turns about its anchor: angleDeg is the clockwise rotation negated; 0 and whole turns are none (J4)", () => {
+    const text = (rotationDeg?: number) =>
+      draw([obj({ kind: "text", geometry: [{ x: 3, y: 4 }], props: { text: "x", fontSizeMm: 3, ...(rotationDeg === undefined ? {} : { rotationDeg }) } })]).own[0];
+    expect(text(30).angleDeg).toBe(-30);
+    expect([...text(30).path.coords]).toEqual([3000, 4000]);
+    expect(text(0)).toEqual(text());
+    expect(text(360)).toEqual(text());
+    expect("angleDeg" in text()).toBe(false);
+  });
+
+  it("an image's opacity and blend go on its render object, rotation and flips into its corner order (J4, J5)", () => {
+    const corners = (props: Record<string, unknown>) => {
+      const o = draw([obj({ kind: "image", geometry: [{ x: 0, y: 0 }, { x: 20, y: 10 }], props: { graphicId: 9, ...props } } as never)]).own[0];
+      return { o, pts: [...o.path.coords].map((v) => v / 1000) };
+    };
+    const { o } = corners({ opacity: 0.4, blend: "multiply" });
+    expect(o).toMatchObject({ opacity: 0.4, blend: "multiply" });
+    // Bottom-left, bottom-right, top-right, top-left of the visible part.
+    expect(corners({}).pts).toEqual([0, 0, 20, 0, 20, 10, 0, 10]);
+    expect(corners({ flipH: true }).pts).toEqual([20, 0, 0, 0, 0, 10, 20, 10]);
+    expect(corners({ flipV: true }).pts).toEqual([0, 10, 20, 10, 20, 0, 0, 0]);
+    expect(corners({ flipH: true, flipV: true }).pts).toEqual([20, 10, 0, 10, 0, 0, 20, 0]);
+    // 90° clockwise about the centre (10, 5): the image's bottom-left goes to the top-left corner of the turned box.
+    expect(corners({ rotationDeg: 90 }).pts).toEqual([5, 15, 5, -5, 15, -5, 15, 15]);
+    const plain = corners({ opacity: 1, rotationDeg: 0, flipH: false }).o;
+    expect("opacity" in plain || "blend" in plain).toBe(false);
+  });
+});
+
+describe("attachment (J10, docs/course-layer.md §8.1)", () => {
+  const o = { id: 1, kind: "oob_line" as const, geometry: [{ x: 0, y: 0, hOut: { x: 1, y: 2 } }, { x: 5, y: 0 }], props: {} };
+  it("the schema takes a control and the position it was at", () => {
+    const s = courseObjectAttachSchemaOf(z.number().int());
+    expect(s.safeParse({ controlId: 31, at: { x: 1, y: 2 } }).success).toBe(true);
+    expect(s.safeParse({ controlId: 31 }).success).toBe(false);
+    expect(s.safeParse({ controlId: 31, at: { x: 1, y: 2 }, extra: 1 }).success).toBe(false);
+  });
+  it("resolveAttached translates by site − at keeping handles, drops one whose site is not drawn, returns an unattached list itself", () => {
+    const sites = [{ id: "31", x: 10, y: 20 }];
+    const [moved] = resolveAttached([{ ...o, attach: { controlId: 31, at: { x: 7, y: 17 } } }], sites);
+    expect(moved.geometry).toEqual([{ x: 3, y: 3, hOut: { x: 1, y: 2 } }, { x: 8, y: 3 }]);
+    expect("attach" in moved).toBe(false);
+    expect(resolveAttached([{ ...o, attach: { controlId: 32, at: { x: 0, y: 0 } } }], sites)).toEqual([]);
+    const list = [o];
+    expect(resolveAttached(list, sites)).toBe(list);
   });
 });

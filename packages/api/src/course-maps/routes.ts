@@ -7,7 +7,7 @@ import { renderGate } from "../map-render-limits.js";
 import { type PinnedPrintSource, pinnedPrintSource } from "./pdf-page.js";
 import { PRINT_JOB_VERSION, type PrintGraphic, type PrintJob, type PrintJobGraphicMime, type PrintSheet } from "@oxygen/shared/print";
 import { printGate, rasteriseSvgInWorker, renderCoursePagesInWorker, resetPrintWorkers } from "./print-worker-host.js";
-import { parseRasterBox, sheetGraphicIds } from "./graphics.js";
+import { GRAPHIC_MAX_INPUT_PIXELS, GRAPHIC_THUMB_PX, graphicPixelSize, parseRasterBox, parseRasterWindow, sheetGraphicIds, thumbBox } from "./graphics.js";
 import { classesByCourse, loadCourseObjects } from "../course-objects.js";
 
 type Db = ReturnType<typeof prisma>;
@@ -500,7 +500,8 @@ export function registerCourseMapRoutes(
     Params: { nameId: string; id: string };
   }>("/api/maps/:nameId/graphics/:id", async (req, reply) => {
     const { nameId } = req.params;
-    const event = await assertRestAccess(req, reply, { nameId, cap: "courses.view" });
+    // The kiosk key too (J2, user 2026-11-18 Q2: kiosk and viewer draw images).
+    const event = await assertRestAccess(req, reply, { nameId, cap: "courses.view", allowKiosk: true });
     if (!event) return;
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) {
@@ -524,14 +525,15 @@ export function registerCourseMapRoutes(
   });
 
   // A graphic as the PNG a print embeds (docs/course-print.md §8.5): an
-  // SVG rasterised by resvg at w × h in a print worker, a PNG as stored.
+  // SVG rasterised by resvg at w × h in a print worker (over the `crop`
+  // window of it when given, §6.3), a PNG as stored (`crop` ignored).
   // The browser never rasterises SVG (slice G).
   server.get<{
     Params: { nameId: string; id: string };
-    Querystring: { w?: string; h?: string };
+    Querystring: { w?: string; h?: string; crop?: string };
   }>("/api/maps/:nameId/graphics/:id/print.png", async (req, reply) => {
     const { nameId } = req.params;
-    const event = await assertRestAccess(req, reply, { nameId, cap: "courses.view" });
+    const event = await assertRestAccess(req, reply, { nameId, cap: "courses.view", allowKiosk: true });
     if (!event) return;
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) {
@@ -548,8 +550,10 @@ export function registerCourseMapRoutes(
     if (graphic.mime === "image/svg+xml") {
       const box = parseRasterBox(req.query.w, req.query.h);
       if (typeof box === "string") return reply.code(400).send({ error: box });
+      const window = parseRasterWindow(req.query.crop);
+      if (typeof window === "string") return reply.code(400).send({ error: window });
       try {
-        png = await printGate(() => rasteriseSvgInWorker(new Uint8Array(graphic.data), box[0], box[1]));
+        png = await printGate(() => rasteriseSvgInWorker(new Uint8Array(graphic.data), box[0], box[1], window));
       } catch (error) {
         req.log.error(error);
         return reply.code(400).send({ error: error instanceof Error ? error.message : "Could not rasterise the graphic" });
@@ -560,6 +564,54 @@ export function registerCourseMapRoutes(
     return reply
       .header("Content-Type", "image/png")
       .header("Cache-Control", "private, max-age=3600")
+      .send(Buffer.from(png));
+  });
+
+  // A graphic's thumbnail (J2, docs/course-maps.md "API"): a PNG at most
+  // `GRAPHIC_THUMB_PX` on its longer side, aspect kept, never enlarged. A
+  // PNG is resampled by sharp, an SVG rasterised by resvg in a print worker,
+  // both under the print gate. The picker asks it as `thumb.png?v=<version>`
+  // (`graphics.list`), so a URL names one content and the answer is immutable.
+  server.get<{
+    Params: { nameId: string; id: string };
+  }>("/api/maps/:nameId/graphics/:id/thumb.png", async (req, reply) => {
+    const { nameId } = req.params;
+    const event = await assertRestAccess(req, reply, { nameId, cap: "courses.view", allowKiosk: true });
+    if (!event) return;
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      return reply.code(400).send({ error: "Invalid graphic id" });
+    }
+    const graphic = await prisma().graphic.findFirst({
+      where: { id: BigInt(id), OR: [{ eventId: event.id }, { eventId: null }] },
+      select: { mime: true, data: true, widthPx: true, heightPx: true },
+    });
+    if (!graphic) {
+      return reply.code(404).send({ error: "Graphic not found" });
+    }
+    const size =
+      graphic.widthPx && graphic.heightPx
+        ? { widthPx: graphic.widthPx, heightPx: graphic.heightPx }
+        : graphicPixelSize(graphic.data, graphic.mime);
+    if (!size) return reply.code(400).send({ error: "The graphic could not be read" });
+    const [w, h] = thumbBox(size.widthPx, size.heightPx, GRAPHIC_THUMB_PX);
+    let png: Uint8Array;
+    try {
+      if (graphic.mime === "image/svg+xml") {
+        png = await printGate(() => rasteriseSvgInWorker(new Uint8Array(graphic.data), w, h));
+      } else {
+        const sharp = (await import("sharp")).default;
+        png = await printGate(() =>
+          sharp(Buffer.from(graphic.data), { limitInputPixels: GRAPHIC_MAX_INPUT_PIXELS }).resize({ width: w, height: h, fit: "fill" }).png().toBuffer(),
+        );
+      }
+    } catch (error) {
+      req.log.error(error);
+      return reply.code(400).send({ error: error instanceof Error ? error.message : "Could not make the thumbnail" });
+    }
+    return reply
+      .header("Content-Type", "image/png")
+      .header("Cache-Control", "private, max-age=31536000, immutable")
       .send(Buffer.from(png));
   });
 }

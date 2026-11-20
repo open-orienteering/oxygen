@@ -133,12 +133,15 @@ shaped the original layout was retired in May 2026
   UUID PK only.
 - **Pure server-side** (`map_files`, `tracks`, `routes`) use `BIGSERIAL`.
 - **Content-addressed map store** (`map_sources`, `map_documents`,
-  `map_previews`) is keyed by SHA-256 hash; the club map series
+  `map_previews`, and `map_document_colour_settings` by its document's
+  hash and the setting's canonical JSON) is keyed by SHA-256 hash; the club map series
   (`club_maps`, `club_map_versions`) and the import plumbing
   (`map_uploads`, `map_import_jobs`) use UUIDs (`docs/map-storage.md` §2),
   as does an event's map patch (`map_patches`, one row per event,
   `docs/map-patches.md` §3.1) and its GPS tracks (`map_gps_tracks`,
-  client-mintable, `docs/map-gps-tracks.md` §1.1).
+  client-mintable, `docs/map-gps-tracks.md` §1.1) and a map's colour
+  setting (`map_colour_settings`, per club map series or per event and
+  source file, `docs/map-symbols.md` §9.3).
 - **Top-level entity** (`events`) uses `BIGSERIAL` — there is no offline-
   authored event.
 - **Global directories** (`runner_directory`, `club_directory`,
