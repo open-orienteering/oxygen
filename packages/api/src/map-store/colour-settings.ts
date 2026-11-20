@@ -25,7 +25,7 @@ export interface MapColourSettings {
 
 export const DEFAULT_COLOUR_SETTINGS: Readonly<MapColourSettings> = Object.freeze({ order: mapImport.DEFAULT_COLOUR_ORDER, deviations: Object.freeze({}) as Record<string, DeviationChoice> });
 
-/** The default choice for a deviation key (the user's answer 2: roads over contours kept, every other dropped). */
+/** The default choice for a deviation key (roads and paved areas over contours and over the blue line symbols kept, every other dropped). */
 export const defaultDeviationChoice = (key: string): DeviationChoice => (mapImport.KEPT_BY_DEFAULT.has(key) ? "keep" : "drop");
 
 export const DEVIATION_KEY = /^[a-z0-9-]+>[a-z0-9-]+$/;

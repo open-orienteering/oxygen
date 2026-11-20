@@ -61,6 +61,16 @@ describe("colour settings", () => {
     expect(sameColourSettings({ order: "iof", deviations: {} }, { order: "source", deviations: {} })).toBe(false);
   });
 
+  it("keeps roads over water by default (ocad-20): a stored keep on the pair is none, a drop is an override", () => {
+    const WATER = "brown50-road>blue100-line";
+    expect(defaultDeviationChoice(WATER)).toBe("keep");
+    expect(defaultDeviationChoice("black-road-outline>blue100-line")).toBe("keep");
+    expect(defaultDeviationChoice("brown50-paved>blue100-pointline")).toBe("keep");
+    expect(defaultDeviationChoice("blue100-area>brown100-line")).toBe("drop");
+    expect(normaliseColourSettings({ order: "iof", deviations: { [WATER]: "keep" } }).deviations).toEqual({});
+    expect(normaliseColourSettings({ order: "iof", deviations: { [WATER]: "drop" } }).deviations).toEqual({ [WATER]: "drop" });
+  });
+
   it("gives stage 7 its options, with no deviations key at the defaults", () => {
     expect(matchColourOptions({ order: "iof", deviations: {} })).toEqual({ colourOrder: "iof" });
     expect(matchColourOptions({ order: "source", deviations: { [ROAD]: "drop" } })).toEqual({ colourOrder: "source", deviations: { [ROAD]: "drop" } });
