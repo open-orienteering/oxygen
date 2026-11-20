@@ -46,6 +46,80 @@ async function finalise(page: Page): Promise<void> {
   await expect(page.getByTestId("review-in-use")).toBeVisible({ timeout: 15000 });
 }
 
+/**
+ * The compare view (row I8a, docs/map-symbols.md §8.7 "Compare"): opened from the colour panel on `pair`, both panes
+ * drawn with `hashes` (a: left, b: right; `null` for one the other order's route gives), a drag in one pane moving
+ * both, the swipe divider, a flip, Escape. Returns the two panes' hashes.
+ */
+async function checkCompare(page: Page, pair: "use" | "order", hashes: [string | null, string | null]): Promise<[string, string]> {
+  await page.getByTestId("review-colours").getByTestId("colour-compare").click();
+  const view = page.getByTestId("compare-view");
+  await expect(view).toBeVisible();
+  await expect(view).toHaveAttribute("data-pair", pair);
+  await expect(page).toHaveURL(new RegExp(`[?&]compare=${pair}`));
+  const panes = view.getByTestId("compare-pane");
+  await expect(panes).toHaveCount(2);
+  const got: string[] = [];
+  for (const [i, side] of (["a", "b"] as const).entries()) {
+    const pane = view.locator(`[data-testid="compare-pane"][data-side="${side}"]`);
+    await expect(pane.getByTestId("map-vector-layer")).toHaveAttribute("data-ready", "true", { timeout: 90000 });
+    const hash = (await pane.getByTestId("map-vector-layer").getAttribute("data-document-hash"))!;
+    expect(hash).toMatch(HASH);
+    if (hashes[i]) expect(hash).toBe(hashes[i]);
+    await expect(pane).toHaveAttribute("data-document-hash", hash);
+    got.push(hash);
+  }
+  // One camera: a drag in the left pane moves both by the same.
+  const a = view.locator('[data-testid="compare-pane"][data-side="a"]');
+  const b = view.locator('[data-testid="compare-pane"][data-side="b"]');
+  const before = await a.getAttribute("data-view");
+  expect(before).toBeTruthy();
+  expect(await b.getAttribute("data-view")).toBe(before);
+  const box = (await a.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 60, box.y + box.height / 2 + 30, { steps: 5 });
+  await page.mouse.up();
+  await expect(a).not.toHaveAttribute("data-view", before!);
+  expect(await b.getAttribute("data-view")).toBe(await a.getAttribute("data-view"));
+  const [cx0, cy0] = before!.split(",").map(Number);
+  const [cx1, cy1, p1] = (await a.getAttribute("data-view"))!.split(",").map(Number);
+  // The content followed the pointer: 60 px right, 30 px down.
+  expect(cx1 - cx0).toBeCloseTo(-60 / p1, 0);
+  expect(cy1 - cy0).toBeCloseTo(30 / p1, 0);
+
+  // Swipe: one pane, both layers; the divider drags; a flip shows one whole, the next the other.
+  await view.getByTestId("compare-mode-swipe").click();
+  await expect(page).toHaveURL(/[?&]mode=swipe/);
+  const swipe = view.locator('[data-testid="compare-pane"][data-side="swipe"]');
+  await expect(swipe.locator('[data-testid="map-vector-layer"][data-ready="true"]')).toHaveCount(2, { timeout: 30000 });
+  await expect(swipe.getByTestId("compare-layer-a")).toHaveAttribute("data-document-hash", got[0]);
+  await expect(swipe.getByTestId("compare-layer-b")).toHaveAttribute("data-document-hash", got[1]);
+  await expect(swipe).toHaveAttribute("data-divider", "0.500");
+  const divider = (await swipe.getByTestId("compare-divider").boundingBox())!;
+  const sbox = (await swipe.boundingBox())!;
+  await page.mouse.move(divider.x + divider.width / 2, divider.y + divider.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(sbox.x + sbox.width * 0.25, divider.y + divider.height / 2, { steps: 5 });
+  await page.mouse.up();
+  await expect.poll(async () => Number(await swipe.getAttribute("data-divider"))).toBeLessThan(0.3);
+  await expect(swipe).toHaveAttribute("data-showing", "split");
+  // Space flips whatever has focus (here the Swipe button, which it does not press again): the divider was left, so A whole.
+  await page.keyboard.press("Space");
+  await expect(swipe).toHaveAttribute("data-showing", "a");
+  await expect(view).toHaveAttribute("data-mode", "swipe");
+  await view.getByTestId("compare-flip").click();
+  await expect(swipe).toHaveAttribute("data-showing", "b");
+  await view.getByTestId("compare-fit").click();
+  await page.keyboard.press("Space");
+  await expect(swipe).toHaveAttribute("data-showing", "a");
+
+  await page.keyboard.press("Escape");
+  await expect(view).toHaveCount(0);
+  await expect(page).not.toHaveURL(/[?&]compare=/);
+  return [got[0]!, got[1]!];
+}
+
 test.describe("map import review", () => {
   test.beforeAll(reseed);
   test.afterAll(reseed);
@@ -281,6 +355,8 @@ test.describe("map import review", () => {
     const keptPicture = panel.getByTestId("colour-picture-iof");
     await expectLoaded(keptPicture);
     expect((await (await page.request.get((await keptPicture.getAttribute("src"))!)).body()).equals(defaultsPicture)).toBe(false);
+    // Compare (row I8a): opens on the version in use against this one.
+    await checkCompare(page, "use", [original, kept]);
 
     // Drop a deviation kept by default, on top.
     await change(ROAD, "drop");
@@ -307,6 +383,14 @@ test.describe("map import review", () => {
     await expect(row(BUILDING).getByTestId("colour-deviation-overridden")).toBeVisible();
     await expect(page.getByTestId("review-in-use")).toBeVisible();
     await expect(page.getByTestId("review-outdated")).toHaveCount(0);
+    // Compare (row I8a): in use, so it opens on the orders; the `use` pair is one version, and says so.
+    await panel.getByTestId("colour-compare").click();
+    await expect(page.getByTestId("compare-view")).toHaveAttribute("data-pair", "order");
+    await page.getByTestId("compare-pair-use").click();
+    await expect(page.getByTestId("compare-view")).toHaveAttribute("data-pair", "use");
+    await expect(page.getByTestId("compare-same")).toBeVisible({ timeout: 30000 });
+    await page.getByTestId("compare-close").click();
+    await expect(page.getByTestId("compare-view")).toHaveCount(0);
     await change(BUILDING, "reset");
     await expect(row(BUILDING)).toHaveAttribute("data-overridden", "false", { timeout: 20000 });
     expect(hashOf(page.url())).toBe(original);
@@ -343,6 +427,10 @@ test.describe("map import review", () => {
       await expect(img).toHaveAttribute("src", new RegExp(`/colour-order/${order}\\.png\\?event=${nameId}$`));
       await expectLoaded(img);
     }
+
+    // Compare (row I8a): this version is in use, so it opens on the two orders — this IOF document and its own order's.
+    const [, own] = await checkCompare(page, "order", [original, null]);
+    expect(own).not.toBe(original);
 
     // An override with the event as target, then reset: back to the event's document.
     const row = panel.locator('[data-testid="colour-deviation"][data-key="brown50-paved>black50-building"]');

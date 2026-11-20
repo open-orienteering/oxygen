@@ -15,8 +15,9 @@ import { mapDocument } from "@oxygen/shared";
 import type { PrismaClient } from "../generated/prisma/client.js";
 import { colourPictureWindow, renderColourPicturePng } from "../render/previews.js";
 import { getBlob } from "./blob-store.js";
-import { colourSettingsOfReport, DEVIATION_KEY, normaliseColourSettings, pictureDeviationsQuery, reportDeviationKeys, type ColourOrder, type DeviationChoice } from "./colour-settings.js";
-import { awaitImportJob, getImportJob, isTerminal, startImportJob, type ImportJobRow } from "./jobs.js";
+import { colourSettingsOfReport, DEVIATION_KEY, normaliseColourSettings, pictureDeviationsQuery, reportDeviationKeys, type ColourOrder, type DeviationChoice, type MapColourSettings } from "./colour-settings.js";
+import { loadClubDecisions } from "./decisions.js";
+import { awaitImportJob, currentDocumentFor, getImportJob, isTerminal, startImportJob, type ImportJobRow } from "./jobs.js";
 import { once, readPreview, serialised, writePreview } from "./previews.js";
 
 export const COLOUR_PICTURE_KIND = "colour-order" as const;
@@ -33,6 +34,13 @@ export function resetColourPictureFailures(): void {
 
 export function parseColourOrder(raw: string): ColourOrder | null {
   return raw === "iof" || raw === "source" ? raw : null;
+}
+
+/** The colour-order route's file name (§4.5): `iof.png` / `source.png` the picture, `.json` the document (row I8a). */
+export function parseColourOrderFile(file: string): { order: ColourOrder; format: "png" | "json" } | null {
+  const m = /^(.*)\.(png|json)$/.exec(file);
+  const order = m ? parseColourOrder(m[1]!) : null;
+  return order && m ? { order, format: m[2] as "png" | "json" } : null;
 }
 
 /**
@@ -78,8 +86,7 @@ const restrictTo = (deviations: Record<string, DeviationChoice>, listed: readonl
  * import narrows them again).
  */
 async function pictureOverrides(db: PrismaClient, row: { sourceHash: string; patch: unknown; header: unknown }, order: ColourOrder, asked: Record<string, DeviationChoice> | undefined): Promise<Record<string, DeviationChoice>> {
-  const ownOrder: ColourOrder = (row.header as { colourOrder?: { order?: ColourOrder } } | null)?.colourOrder?.order ?? "source";
-  if (ownOrder !== "source" || order !== "iof" || !asked || !Object.keys(asked).length) return {};
+  if (ownOrderOf(row) !== "source" || order !== "iof" || !asked || !Object.keys(asked).length) return {};
   const patch = mapDocument.parseVersionPatch(row.patch);
   const siblings = await db.mapDocument.findMany({ where: { sourceHash: row.sourceHash }, orderBy: { createdAt: "desc" }, select: { header: true, patch: true, report: true } });
   const iof = siblings.find((d) => (d.header as { colourOrder?: { order?: string } } | null)?.colourOrder?.order === "iof" && mapDocument.sameVersionPatch(d.patch, patch));
@@ -111,27 +118,74 @@ async function decodeStored(db: PrismaClient, hash: string): Promise<mapDocument
  * render queue is entered (its derive stage renders through the same
  * queue). Throws when that import fails.
  */
+type DocumentRow = { sourceHash: string; patch: unknown; report: unknown; header: unknown };
+
+/** The order a stored document is drawn in, from its header summary (none: before the layers, the map's own). */
+const ownOrderOf = (row: { header: unknown }): ColourOrder => (row.header as { colourOrder?: { order?: ColourOrder } } | null)?.colourOrder?.order ?? "source";
+
+/**
+ * The document the switch to `order` gives for a stored document (§4.5;
+ * row I8a's compare view): the same source, corrections and overrides, the
+ * other order — a `source` document lists no deviations, so its IOF side
+ * takes `asked` (the map's overrides, row I7). Found by dedup, by waiting
+ * for a running job without a target in that setting, or imported by one
+ * (`started_by` the requester). Returns its hash and the overrides it
+ * lists. Throws when the import fails.
+ */
+async function importOtherOrder(db: PrismaClient, row: DocumentRow, order: ColourOrder, startedBy: string | null, asked: Record<string, DeviationChoice>): Promise<{ hash: string; asked: Record<string, DeviationChoice> }> {
+  const patch = mapDocument.parseVersionPatch(row.patch);
+  const colour: MapColourSettings = { order, deviations: order === "iof" && Object.keys(asked).length ? asked : colourSettingsOfReport(row.report).deviations };
+  const hash = (await readableCurrentDocument(db, row.sourceHash, patch, colour, startedBy)) ?? (await importForRequester(db, row.sourceHash, order, patch, colour, startedBy));
+  let listed = asked;
+  // The overrides that document lists: the picture's key never names one it does not (bounded keys, row I7).
+  if (Object.keys(asked).length) {
+    const other = await db.mapDocument.findUnique({ where: { hash }, select: { report: true } });
+    listed = restrictTo(asked, reportDeviationKeys(other?.report));
+  }
+  return { hash, asked: listed };
+}
+
+/**
+ * The stored document of that source and setting, when the requester can already read it — a club version, or a
+ * job of their own (§4.2) — so asking again writes no job row (row I8a; bounded rows, decision I7 (7)).
+ */
+async function readableCurrentDocument(db: PrismaClient, sourceHash: string, patch: mapDocument.VersionPatch, colour: MapColourSettings, startedBy: string | null): Promise<string | null> {
+  const source = await db.mapSource.findUnique({ where: { fileHash: sourceHash }, select: { kind: true } });
+  const decisions = source ? await loadClubDecisions(db, source.kind) : [];
+  const existing = await currentDocumentFor(db, sourceHash, decisions, patch, colour);
+  if (!existing) return null;
+  if (startedBy === null) return existing.hash;
+  const own = await db.mapImportJob.findFirst({ where: { documentHash: existing.hash, startedBy, state: { not: "failed" } }, select: { id: true } });
+  if (own) return existing.hash;
+  const version = await db.clubMapVersion.findFirst({ where: { documentHash: existing.hash }, select: { id: true } });
+  return version ? existing.hash : null;
+}
+
+/**
+ * The import that gives it: a running job without a target in that setting waited for, else one started (dedup or
+ * the worker, `started_by` the requester). Waited for someone else's job: one of the requester's own after it (dedup,
+ * no worker), so they may read the document (§4.2). Throws when the import fails.
+ */
+async function importForRequester(db: PrismaClient, sourceHash: string, order: ColourOrder, patch: mapDocument.VersionPatch, colour: MapColourSettings, startedBy: string | null): Promise<string> {
+  const running = await runningJobFor(db, sourceHash, patch, colour);
+  let job = running ?? (await startImportJob(db, { sourceHash, startedBy, patch, colour, holdMs: 0 }));
+  if (!isTerminal(job.state)) job = (await awaitImportJob(db, job.id)) ?? job;
+  if (job.state !== "done" || !job.documentHash) throw new Error(`the ${order} import of ${sourceHash} ${job.state === "failed" ? `failed: ${job.error ?? ""}` : `is still ${job.state}`}`);
+  if (running && (await db.mapImportJob.findUnique({ where: { id: running.id }, select: { startedBy: true } }))?.startedBy !== startedBy) {
+    await startImportJob(db, { sourceHash, startedBy, patch, colour, holdMs: 0 });
+  }
+  return job.documentHash;
+}
+
 async function produce(db: PrismaClient, hash: string, order: ColourOrder, startedBy: string | null, asked: Record<string, DeviationChoice>): Promise<{ png: Buffer; key: string } | null> {
   const row = await db.mapDocument.findUnique({ where: { hash }, select: { sourceHash: true, patch: true, report: true, header: true } });
   if (!row) return null;
-  // The stored header summary says the order (none: before the layers, the map's own), so the import, if any, runs
-  // before a whole document is decoded.
-  const ownOrder: ColourOrder = (row.header as { colourOrder?: { order?: ColourOrder } } | null)?.colourOrder?.order ?? "source";
+  // The import, if any, runs before a whole document is decoded.
   let otherHash: string | null = null;
-  if (ownOrder !== order) {
-    // The document the switch gives: the same corrections and overrides, the other order. A `source` document lists
-    // no deviations, so its IOF picture takes the map's overrides from the caller (row I7).
-    const patch = mapDocument.parseVersionPatch(row.patch);
-    const colour = { order, deviations: order === "iof" && Object.keys(asked).length ? asked : colourSettingsOfReport(row.report).deviations };
-    let job = (await runningJobFor(db, row.sourceHash, patch, colour)) ?? (await startImportJob(db, { sourceHash: row.sourceHash, startedBy, patch, colour, holdMs: 0 }));
-    if (!isTerminal(job.state)) job = (await awaitImportJob(db, job.id)) ?? job;
-    if (job.state !== "done" || !job.documentHash) throw new Error(`the ${order} import of ${row.sourceHash} ${job.state === "failed" ? `failed: ${job.error ?? ""}` : `is still ${job.state}`}`);
-    otherHash = job.documentHash;
-    // The overrides that document lists: the picture's key never names one it does not (bounded keys, row I7).
-    if (Object.keys(asked).length) {
-      const other = await db.mapDocument.findUnique({ where: { hash: otherHash }, select: { report: true } });
-      asked = restrictTo(asked, reportDeviationKeys(other?.report));
-    }
+  if (ownOrderOf(row) !== order) {
+    const other = await importOtherOrder(db, row, order, startedBy, asked);
+    otherHash = other.hash;
+    asked = other.asked;
   }
   const key = colourPictureKey(order, asked);
   // Decoded and drawn inside the one-at-a-time queue (map-storage.md §4.5), never while waiting on the import.
@@ -175,6 +229,46 @@ export async function colourPicture(db: PrismaClient, hash: string, order: Colou
   );
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<{ pending: true }>((resolve) => { timer = setTimeout(() => resolve({ pending: true }), opts.waitMs ?? colourPictureWaitMs()); });
+  try {
+    return await Promise.race([settled, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export type ColourOrderDocumentResult = { documentHash: string } | { pending: true } | { missing: true } | { failed: string };
+
+/**
+ * The document the colour switch to `order` gives for document `hash`
+ * (docs/map-storage.md §4.5 "The other order's document"; row I8a's
+ * compare view): the picture's import without the picture. Its own order
+ * is the document itself, no job. The other order: with `deviations` (the
+ * map's overrides) on a `source` document's IOF side, found by dedup or
+ * imported (`started_by` the requester). The same failure memory and wait
+ * as the picture: a failed import is not started again for a while; past
+ * `waitMs` the work goes on and `{ pending }` says to ask again.
+ */
+export async function colourOrderDocument(db: PrismaClient, hash: string, order: ColourOrder, opts: { startedBy: string | null; waitMs?: number; deviations?: Record<string, DeviationChoice> }): Promise<ColourOrderDocumentResult> {
+  const row = await db.mapDocument.findUnique({ where: { hash }, select: { sourceHash: true, patch: true, report: true, header: true } });
+  if (!row) return { missing: true };
+  if (ownOrderOf(row) === order) return { documentHash: hash };
+  const asked = await pictureOverrides(db, row, order, opts.deviations);
+  // Per requester: the work ends with a job row of theirs (§4.2's own-job clause).
+  const id = `${hash}/document/${colourPictureKey(order, asked)}/${opts.startedBy ?? ""}`;
+  const failed = failures.get(id);
+  if (failed && Date.now() - failed.at < COLOUR_PICTURE_FAILURE_TTL_MS) return { failed: failed.message };
+  const work = once<string>(id, async () => (await importOtherOrder(db, row, order, opts.startedBy, asked)).hash);
+  const settled = work.then(
+    (documentHash): ColourOrderDocumentResult => (documentHash ? { documentHash } : { missing: true }),
+    (err: unknown): ColourOrderDocumentResult => {
+      const message = err instanceof Error ? err.message : String(err);
+      failures.set(id, { at: Date.now(), message });
+      console.error(`[map-previews] ${order} document of ${hash}:`, message);
+      return { failed: message };
+    },
+  );
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<ColourOrderDocumentResult>((resolve) => { timer = setTimeout(() => resolve({ pending: true }), opts.waitMs ?? colourPictureWaitMs()); });
   try {
     return await Promise.race([settled, timeout]);
   } finally {

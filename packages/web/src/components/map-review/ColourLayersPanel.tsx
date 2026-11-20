@@ -5,7 +5,8 @@
  * layers top first with the map's colour, the IOF layer, the object count
  * and flags, and every deviation kept or dropped with its default. Each
  * deviation row can be kept or dropped for this map, or reset to its
- * default (row I7, §9.3 "Overrides (row I7)").
+ * default (row I7, §9.3 "Overrides (row I7)"). **Compare** opens the
+ * live compare view (row I8a, §8.7 "Compare").
  */
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -81,6 +82,7 @@ export function ColourLayersPanel({
   hasTarget,
   onSwitch,
   onDeviation,
+  onCompare,
 }: {
   colour: ColourReview;
   /** The event's name id on the event route: picture URLs are scoped with `?event=`. */
@@ -92,6 +94,8 @@ export function ColourLayersPanel({
   onSwitch: (order: ColourOrder) => void;
   /** Keep or drop a deviation for this map, or `default` to reset it (row I7). */
   onDeviation: (key: string, choice: DeviationChoice | "default") => void;
+  /** Open the compare view (row I8a, §8.7 "Compare"). */
+  onCompare?: () => void;
 }) {
   const { t } = useTranslation("mapReview");
   const chosen = chosenOrder(colour);
@@ -144,7 +148,20 @@ export function ColourLayersPanel({
       </div>
 
       <div>
-        <h3 className="font-medium text-slate-800 mb-1">{t("colours.picture.title")}</h3>
+        <div className="flex flex-wrap items-center gap-2 mb-1">
+          <h3 className="font-medium text-slate-800">{t("colours.picture.title")}</h3>
+          {onCompare && (
+            <button
+              type="button"
+              data-testid="colour-compare"
+              title={t("colours.compare.openHint")}
+              className="rounded border border-blue-600 px-2 py-0.5 text-xs font-medium text-blue-700 cursor-pointer hover:bg-blue-50"
+              onClick={onCompare}
+            >
+              {t("colours.compare.open")}
+            </button>
+          )}
+        </div>
         <div className="flex flex-wrap gap-3">
           {ORDERS.map((o) => (
             // Keyed by the URL: a new document starts the picture over (its retry count and state).

@@ -1187,6 +1187,53 @@ the panel knows the map's setting. In order:
   is no reset-all and no batching. Disabled as the switch is: without edit
   rights, without a target, while a job runs.
 
+**Compare (row I8a).** Asked by the user on 2026-11-18 during the I-gate
+review: the before / after pictures are fixed crops of one window and hard
+to compare. A **Compare** button in the before / after block opens a
+read-only full-viewport view owned by the review page; nothing is pinned
+or rebuilt from it. Its state is in the page's query —
+`?compare=use|order&mode=side|swipe` (`side` is not written) — and Escape
+or **Close** removes it. Two pairs: **`use`** — the document in use (the
+pin) against the reviewed one, offered when a pin exists — and
+**`order`** — the reviewed document's IOF order against the map's own
+order, always offered. The view opens on `use` when the pin differs from
+the reviewed document, else on `order`. The panes are labelled *In use* /
+*This version* and *IOF order* / *The map's own order*; a pair of one
+hash is drawn with a "same version" note. The reviewed document and the
+pin load through `loadMapDocument(hash, { eventId })` (`map-storage.md`
+§4.2 unchanged); the other order's hash comes from
+`GET …/colour-order/:order.json` (`map-storage.md` §4.5 "The other
+order's document"), its URL the picture's with `.json` for `.png` (so a
+`source` document's IOF side carries the map's overrides as its picture
+does, and `?event=` on the event route), asked again every 5 s while it
+answers 503. **Side by side**: two panes (stacked on a view taller than it
+is wide) over one paper camera — wheel, drag and pinch in either move
+both (`map-viewport.ts`'s `zoomAt` / `panBy`); the view opens fitted to the
+union of the two documents' bounds (`fitMm`, 4 % padding), **Fit** fits
+again. **Swipe**: one pane, both documents stacked, the first drawn left
+of a draggable divider (from the middle) and the second right of it;
+**Flip** or Space shows whole the document the divider hides more (the
+second from the middle), and the next flip the other. Each side is
+its own `VectorMapLayer` on the `club` budget, without a course or a
+patch; the layer and `map-gl/` are unchanged. Code:
+`packages/web/src/lib/map-compare.ts` (pairs, the query, the divider and
+flip, layout, fit, gestures), `components/map-review/CompareView.tsx`.
+Test ids: `colour-compare`, `compare-view` (`data-pair`, `data-mode`),
+`compare-pane` (`data-side` `a` / `b` / `swipe`, `data-document-hash`,
+`data-view` the camera, `data-divider`, `data-showing` `a` / `b` /
+`split`), `compare-layer-a` / `-b`, `compare-divider`, `compare-pair-*`,
+`compare-mode-*`, `compare-flip`, `compare-fit`, `compare-same`,
+`compare-close`. The diff view and *next difference* are row I8b.
+Tests: `packages/web/src/lib/__tests__/map-compare.test.ts` (pairs per
+panel state, the default pair, the `.png` → `.json` URL, the query, the
+divider and flip, layout, the fit, the gestures on the one camera);
+`integration/map-colour-order-document.test.ts` (`map-storage.md` §10);
+`e2e/map-review.spec.ts` — after the paved-over-building keep the view
+opens on `use` with both canvases ready on the two hashes, a drag in one
+pane moves both by the drag, the swipe divider drags, a flip and Space
+alternate the documents, Escape closes; on the event route it opens on
+`order`, its second side the map's own order's document.
+
 Role and palette names are the IOF palette's English names in both
 languages: there is no Swedish palette (decided overnight on the user's
 standing instruction, 2026-11-17, for review). Strings under
@@ -2291,7 +2338,8 @@ the importer's default.
 
 - **Canonical layers (§9.3)**: the importer draws on them by default
   since I5, with the per-map switch and the colour panel since I6 and the
-  per-map deviation overrides since I7. Not in the slice: batching several
+  per-map deviation overrides since I7. Row I8b in `SLICES.md`: the
+  compare view's diff and *next difference* (§8.7 "Compare (row I8a)"). Not in the slice: batching several
   overrides into one rebuild; a club-wide default
   for which deviations are kept; an inserted purple 50 % as a 50 % screen
   of the map's purple (both orders use it at full strength).
