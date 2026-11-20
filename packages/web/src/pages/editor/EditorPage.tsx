@@ -37,6 +37,10 @@ import { PresenceChips } from "./PresenceChips";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { PLACEMENT_LOUPE_KEY } from "../../lib/editor/touch";
+import { transformVertices } from "../../lib/editor/transform-gestures";
+import { courseEntry, duplicateBody, pasteAt, pasteOnSite, pasteScope, readClipboard, refusal, writeClipboard, type Refusal } from "../../lib/editor/clipboard";
+import { applyPropsDiff, propsDiff, stylePatch, type StyleValue } from "../../lib/editor/style-fields";
+import { nearestSite, objectCentre, shownObject, shownObjects, attachPatch, centrePatch, detachPatch } from "../../lib/editor/attach";
 import { useOnlineStatus } from "../../hooks/useOnlineStatus";
 import { useCapabilities } from "../../context/CapabilitiesContext";
 import { paperFrameOf } from "../../lib/vector-map";
@@ -75,8 +79,9 @@ import { afterPlaced, afterUndo, armPlacement, endsChain, ghostInfo, isVisitTool
 import { step as polygonStep, type AreaKind } from "./tools/polygon";
 import { TONER_MARGIN_MM, tonerSaverGeometry } from "./tools/toner-saver";
 import { mergeCircleGaps, mergeLegGaps, type AngularGap, type FractionGap } from "./tools/gaps";
-import { areaBinding, gapBinding, pickSymbolBinding, placeBinding, selectBinding, textBinding, withCorridorGuides, type CorridorGuide, type GapTarget, type Gesture } from "./tools/bindings";
-import { ObjectSection } from "./modes/ObjectSection";
+import { areaBinding, gapBinding, imageBinding, pickSymbolBinding, placeBinding, selectBinding, textBinding, withCorridorGuides, type CorridorGuide, type GapTarget, type Gesture } from "./tools/bindings";
+import { imageAt, imageBoxAt } from "../../lib/editor/image-box";
+import { ObjectMultiSection, ObjectSection } from "./modes/ObjectSection";
 import { LegSection } from "./modes/LegSection";
 import { ChecksSection, Inspector, InspectorSection, InventorySection } from "./Inspector";
 import { StatusBar } from "./StatusBar";
@@ -99,6 +104,16 @@ type Structure = course.WireCourseStructure;
 type CourseObject = course.CourseObject;
 
 const NO_DRAFTS: CourseObject[] = [];
+
+/** The viewer's centre in paper mm (its published `data-centre-x/y`, µm), where a paste lands with the pointer off the map. */
+function viewCentreMm(): Pt | null {
+  const el = document.querySelector('[data-testid="map-viewer"]');
+  const x = Number(el?.getAttribute("data-centre-x")), y = Number(el?.getAttribute("data-centre-y"));
+  return el && Number.isFinite(x) && Number.isFinite(y) ? { x: x / 1000, y: y / 1000 } : null;
+}
+
+/** The kinds the inspector turns and flips (J11; user answer 4, "lines and areas"): not the toner saver, whose shape is the course's hull. */
+const TURNABLE_PATH_KINDS: ReadonlySet<string> = new Set(["oob_area", "oob_line", "whiteout", "marked_route", "filter_region"]);
 /** New map text: size on paper (§7). */
 const TEXT_SIZE_MM = 4;
 
@@ -367,6 +382,7 @@ export function EditorPage() {
     );
   }, [outbox.entries, notice, client]);
 
+  const layoutNotify = useCallback((why: Refusal | "clipboardWrongTypePage" | "clipboardGraphicsUnknown") => setErrorMsg(t(why)), [t]);
   const layoutMode = useLayoutMode({
     enabled: state.mode === "layout",
     nameId: nameId ?? "",
@@ -376,6 +392,8 @@ export function EditorPage() {
     variantKey: sheetVariant,
     run,
     record,
+    notify: layoutNotify,
+    viewCentre: viewCentreMm,
   });
   // Map mode (§13): the event's map corrections, course edits locked — its own props, rail, inspector and keys.
   /** Drops undo entries (a promote drops Map mode's patch entries, §13 "Promote"). */
@@ -679,8 +697,14 @@ export function EditorPage() {
   }, [createSite]);
 
   // ─── Gestures (stable: they flow through MapPanel's memo) ─
+  /** The objects drawn in the view and whether `V` is the tool, for the map click (J7: a click inside an image selects it). */
+  const clickContext = useRef<{ objects: readonly CourseObject[]; select: boolean }>({ objects: [], select: false });
   const handleMapClick = useCallback((pt: Pt) => {
     setRadioSwapOffer(null);
+    const c = clickContext.current;
+    // An image takes no press (a drag inside it pans); a click inside it, off every other target, selects it (§5, §7).
+    const image = c.select ? imageAt(c.objects, pt) : null;
+    if (image) return dispatch({ type: "select-object", id: image.id });
     dispatch({ type: "map-click", x: pt.x, y: pt.y });
   }, []);
 
@@ -915,11 +939,71 @@ export function EditorPage() {
   // ─── Course objects (§7) ─────────────────────────────────
   const objects = useMemo(() => objectList.data ?? [], [objectList.data]);
   const highlighted = useMemo(() => new Set(state.view !== "all" && selectedCourse ? [selectedCourse.name] : []), [state.view, selectedCourse]);
-  const objectsInView = useMemo(() => courseObjectsForView(objects, highlighted, courses.data ?? []), [objects, highlighted, courses.data]);
-  const selectedObject = state.selectedObjectId !== null ? objects.find((o) => o.id === state.selectedObjectId) ?? null : null;
+  // J10: an attached object is worked on where it is drawn (`shownObject`): its control's drawn position (the
+  // layer's derivation; before it reports, the stored coordinates). Keyed by the positions' text, so a report that
+  // changes nothing keeps every object as it was.
+  const drawnKey = courseInfo?.derivation
+    ? courseInfo.derivation.sites.map((d) => `${d.id}:${d.x}:${d.y}`).join(";")
+    : `stored:${(controlCoords.data ?? []).filter((c) => c.mapX !== 0 || c.mapY !== 0).map((c) => `${c.id}:${c.mapX}:${c.mapY}`).join(";")}`;
+  const drawnSites = useMemo(() => {
+    const out: { id: number; x: number; y: number }[] = [];
+    if (drawnKey.startsWith("stored:")) {
+      for (const part of drawnKey.slice(7).split(";").filter(Boolean)) { const [id, x, y] = part.split(":").map(Number); out.push({ id, x, y }); }
+    } else {
+      for (const part of drawnKey.split(";").filter(Boolean)) { const [id, x, y] = part.split(":").map(Number); if (Number.isFinite(id)) out.push({ id, x, y }); }
+    }
+    return out;
+  }, [drawnKey]);
+  const sitePos = useMemo(() => {
+    const m = new Map(drawnSites.map((d) => [d.id, { x: d.x, y: d.y }] as const));
+    return (id: number) => m.get(id) ?? null;
+  }, [drawnSites]);
+  const objectsInView = useMemo(() => shownObjects(courseObjectsForView(objects, highlighted, courses.data ?? []), sitePos), [objects, highlighted, courses.data, sitePos]);
+  /** An object as drawn (J10 `shownObject`), the stored one when its control is not drawn. */
+  const shownById = (id: number): CourseObject | undefined => {
+    const raw = objects.find((x) => x.id === id);
+    return raw ? shownObject(raw, sitePos) ?? raw : undefined;
+  };
+  clickContext.current = { objects: objectsInView, select: state.mode === "course" && state.tool.kind === "select" };
+  const rawSelectedObject = state.selectedObjectId !== null ? objects.find((o) => o.id === state.selectedObjectId) ?? null : null;
+  // J10: an attached object whose control is not drawn in the view is not selectable: it is dropped from the selection.
+  const selectedObject = useMemo(() => (rawSelectedObject ? shownObject(rawSelectedObject, sitePos) : null), [rawSelectedObject, sitePos]);
+  const selectedHidden = rawSelectedObject !== null && selectedObject === null;
+  useEffect(() => { if (selectedHidden) dispatch({ type: "select-object", id: null }); }, [selectedHidden]);
+  // J16: the object multi-selection as drawn. A member not drawn in the view leaves it, as above, and so does one no
+  // longer in the list (deleted: an undo, another editor) — except a duplicate's copies before the refetch (`pendingCopies`).
+  const pendingCopies = useRef(new Set<number>());
+  const multiObjects = useMemo(() => state.objectMulti.flatMap((id) => {
+    const raw = objects.find((x) => x.id === id);
+    const shown = raw ? shownObject(raw, sitePos) : null;
+    return shown ? [shown] : [];
+  }), [state.objectMulti, objects, sitePos]);
+  const multiHidden = useMemo(() => state.objectMulti.filter((id) => {
+    const raw = objects.find((x) => x.id === id);
+    if (raw === undefined) return !pendingCopies.current.has(id);
+    return shownObject(raw, sitePos) === null;
+  }), [state.objectMulti, objects, sitePos]);
+  useEffect(() => {
+    for (const id of pendingCopies.current) if (objects.some((x) => x.id === id)) pendingCopies.current.delete(id);
+  }, [objects]);
+  /** The multi-selection as shown now: a drag's or style edit's drafts, else the props last sent (as `selectedObject`'s keys). */
+  const shownMulti = () => multiObjects.map((o) => ({
+    ...o, geometry: drafts.get(o.id) ?? o.geometry, props: propDrafts.get(o.id) ?? sentProps.current.get(o.id) ?? o.props,
+  }) as CourseObject);
+  useEffect(() => {
+    if (multiHidden.length > 0) dispatch({ type: "set-object-multi", ids: state.objectMulti.filter((id) => !multiHidden.includes(id)) });
+  }, [multiHidden, state.objectMulti]);
   /** Geometry being dragged (vertex or body) or drawn, drawn instead of the stored one until the list catches up. */
   const [drafts, setDrafts] = useState<Map<number, CourseObject["geometry"]>>(new Map());
-  useEffect(() => { setDrafts((d) => (d.size ? new Map() : d)); }, [objectList.data]);
+  /** Props shown with a geometry draft (J7: a crop writes both, so the canvas draws the new crop in the new box). */
+  const [propDrafts, setPropDrafts] = useState<Map<number, CourseObject["props"]>>(new Map());
+  /** Bumped when an inspector write failed: its optimistic values go (`ObjectSection.resetKey`). */
+  const [styleReset, setStyleReset] = useState(0);
+  useEffect(() => {
+    setDrafts((d) => (d.size ? new Map() : d));
+    setPropDrafts((d) => (d.size ? new Map() : d));
+    sentProps.current.clear();
+  }, [objectList.data]);
   /** The selected object's focused vertex (a click on its handle): `Delete` removes it (§7 "Editing geometry"). */
   // Keyed by the object it belongs to, so a selection change drops it.
   const [focus, setFocus] = useState<{ objectId: number; index: number } | null>(null);
@@ -929,6 +1013,24 @@ export function EditorPage() {
     setFocus(index === null || selectedObjectId === null ? null : { objectId: selectedObjectId, index });
   /** Per object, the geometry shown when the gesture in progress drew its first draft (`onObjectDraft`). */
   const gestureBefore = useRef(new Map<number, CourseObject["geometry"]>());
+  /**
+   * Per object, the drafts a knob or crop drag found (J11): a cancel puts back only drafts that were there before it
+   * (an earlier gesture's, still waiting for the list), never its own (J11 review (2)).
+   */
+  const styleBefore = useRef(new Map<number, { geometry?: CourseObject["geometry"]; props?: CourseObject["props"] }>());
+  /**
+   * Per object, the props of the last write sent (an inspector edit committed on blur, during a canvas press included),
+   * until the list catches up: a knob or crop drag applies its change to these, so it never sends older props (J11 review (1)).
+   */
+  const sentProps = useRef(new Map<number, CourseObject["props"]>());
+  /**
+   * Crop mode (J11, §7 "Transform handles"): the selected image's edges crop. Page state, not an undo step; it holds
+   * only while that image stays selected in Course mode with `V`, and is never offered on a coarse pointer.
+   */
+  const coarsePointer = useMediaQuery("(pointer: coarse)");
+  const [cropModeId, setCropModeId] = useState<number | null>(null);
+  const cropMode = cropModeId !== null && cropModeId === state.selectedObjectId && state.mode === "course" && state.tool.kind === "select" && !coarsePointer;
+  useEffect(() => { if (cropModeId !== null && !cropMode) setCropModeId(null); }, [cropModeId, cropMode]);
   const setDraft = useCallback((id: number, geometry: CourseObject["geometry"] | null) => {
     setDrafts((prev) => {
       const next = new Map(prev);
@@ -938,7 +1040,7 @@ export function EditorPage() {
   }, []);
 
   /** Create an object: one undo entry (undo deletes it; redo creates it again, under a new id). */
-  const createObject = useCallback(async (body: Pick<CourseObject, "kind" | "geometry" | "props" | "scope">): Promise<number | null> => {
+  const createObject = useCallback(async (body: Pick<CourseObject, "kind" | "geometry" | "props" | "scope"> & { attach?: CourseObject["attach"] }): Promise<number | null> => {
     const made = await run(() => writes.createObject(body));
     if (!made) return null;
     const box = { id: made.id };
@@ -949,18 +1051,100 @@ export function EditorPage() {
     return made.id;
   }, [run, writes, record]);
 
-  const updateObject = useCallback((o: CourseObject, patch: { geometry?: CourseObject["geometry"]; props?: CourseObject["props"]; scope?: CourseObject["scope"] }) => {
-    const prev = { geometry: o.geometry, props: o.props, scope: o.scope };
+  const updateObject = useCallback((o: CourseObject, given: { geometry?: CourseObject["geometry"]; props?: CourseObject["props"]; scope?: CourseObject["scope"]; attach?: CourseObject["attach"] | null }, onFail?: () => void) => {
+    // J10: geometry is where the object is drawn, so an attached one sends the drawn `at` with it (`o` is shown).
+    const patch = given.geometry && o.attach && !("attach" in given) ? { ...given, attach: o.attach } : given;
+    if (patch.props) sentProps.current.set(o.id, patch.props);
+    const prev = { geometry: o.geometry, props: o.props, scope: o.scope, attach: o.attach ?? null };
     const before = Object.fromEntries(Object.keys(patch).map((k) => [k, prev[k as keyof typeof prev]]));
     void (async () => {
       const redo = () => writes.updateObject({ id: o.id, ...patch });
-      if ((await run(redo)) === undefined) return;
+      if ((await run(redo)) === undefined) return onFail?.();
       record(() => writes.updateObject({ id: o.id, ...before }), redo);
     })();
   }, [writes, run, record]);
 
+  /**
+   * *Attach to a control I click* (J10): armed for one object; the next control selected is the one it follows,
+   * and the object is selected again. Another object's selection, or the button again, cancels it.
+   */
+  const [attachPick, setAttachPick] = useState<number | null>(null);
+  useEffect(() => {
+    if (attachPick === null) return;
+    // Cancelled by another object's selection, by a selection cleared to nothing (Escape, an empty-map click), and by
+    // leaving Course mode or `V`: the armed button is gone then, so nothing may attach out of sight.
+    const controlId = state.selectedControlId;
+    const cleared = state.selectedObjectId === null && controlId === null;
+    if ((state.selectedObjectId !== null && state.selectedObjectId !== attachPick) || cleared || state.mode !== "course" || state.tool.kind !== "select") {
+      setAttachPick(null);
+      return;
+    }
+    if (controlId === null) return;
+    const raw = objects.find((x) => x.id === attachPick);
+    const site = drawnSites.find((d) => d.id === controlId);
+    setAttachPick(null);
+    if (!raw || !site) return;
+    const shown = shownObject(raw, sitePos) ?? raw;
+    updateObject(shown, attachPatch(shown, site));
+    dispatch({ type: "select-object", id: attachPick });
+  }, [attachPick, state.selectedControlId, state.selectedObjectId, state.mode, state.tool.kind, objects, drawnSites, sitePos, updateObject]);
+
+  // ─── Duplicate, copy, cut, paste (J12, §7 "Duplicate, copy, cut, paste") ──
+  const hoverPt = useRef<Pt | null>(null);
+  /** The graphics a pasted image may name (`graphics.list`: the event's and the club's), fetched when needed; null when it failed. */
+  const graphicIdsNow = useCallback(async (): Promise<Set<number> | null> => {
+    const list = await utils.graphics.list.fetch().catch(() => null);
+    return list ? new Set(list.map((g) => g.id)) : null;
+  }, [utils]);
+
+  /** `Ctrl+D`: a copy 3 mm down-right (an attachment kept), selected; one create, one undo entry. */
+  const duplicateObject = useCallback(async (o: CourseObject) => {
+    const body = duplicateBody(o);
+    const id = await createObject({ ...body, scope: o.scope });
+    if (id !== null) dispatch({ type: "select-object", id });
+  }, [createObject]);
+
+  /** `Ctrl+V`: the clipboard's object at the pointer (or the view centre), or onto each selected drawn control. */
+  const pasteObject = useCallback(async () => {
+    const entry = readClipboard();
+    if (!entry || !nameId) return;
+    const controlIds = state.multi.length > 0 ? state.multi : state.selectedControlId !== null ? [state.selectedControlId] : [];
+    let graphicIds: Set<number> | null = null;
+    if (entry.type === "course" && entry.object.kind === "image") {
+      // Unknown graphics refuse nothing in `refusal`: a failed list is said, not let through or blamed on the graphic.
+      graphicIds = await graphicIdsNow();
+      if (!graphicIds) return setErrorMsg(t("clipboardGraphicsUnknown"));
+    }
+    const why = refusal(entry, { event: nameId, mode: "course", graphicIds, onControls: controlIds.length > 0 });
+    if (why) return setErrorMsg(t(why));
+    if (entry.type !== "course") return;
+    const scope = pasteScope(entry, {
+      event: nameId,
+      drawnCourseIds: (courses.data ?? []).filter((c) => highlighted.has(c.name)).map((c) => c.id),
+      currentCourseId: state.view !== "all" && selectedCourse ? selectedCourse.id : null,
+    });
+    if (controlIds.length > 0) {
+      const targets = controlIds.flatMap((id) => drawnSites.find((d) => d.id === id) ?? []);
+      if (targets.length === 0) return setErrorMsg(t("clipboardNoDrawnControl"));
+      // One copy per control, attached; one undo entry for the batch (a failure rolls the made ones back).
+      const bodies = targets.map((site) => ({ ...pasteOnSite(entry.object, site), scope }));
+      const made = await run(() => writes.createObjects(bodies));
+      if (!made) return;
+      const box = { ids: made.map((o) => o.id) };
+      record(
+        async () => { for (const id of box.ids) await writes.deleteObject(id); },
+        async () => { box.ids = (await writes.createObjects(bodies)).map((o) => o.id); },
+      );
+      return;
+    }
+    const pt = hoverPt.current ?? viewCentreMm();
+    if (!pt) return;
+    const id = await createObject({ ...pasteAt(entry.object, pt), scope });
+    if (id !== null) dispatch({ type: "select-object", id });
+  }, [nameId, state.multi, state.selectedControlId, state.view, graphicIdsNow, t, courses.data, highlighted, selectedCourse, drawnSites, run, writes, record, createObject]);
+
   const deleteObject = useCallback((o: CourseObject) => {
-    const body = { kind: o.kind, geometry: o.geometry, props: o.props, scope: o.scope } as Pick<CourseObject, "kind" | "geometry" | "props" | "scope">;
+    const body = { kind: o.kind, geometry: o.geometry, props: o.props, scope: o.scope, ...(o.attach ? { attach: o.attach } : {}) } as Pick<CourseObject, "kind" | "geometry" | "props" | "scope"> & { attach?: CourseObject["attach"] };
     const box = { id: o.id };
     void (async () => {
       const redo = async () => { await writes.deleteObject(box.id); return true; };
@@ -969,6 +1153,55 @@ export function EditorPage() {
       dispatch({ type: "select-object", id: null });
     })();
   }, [writes, run, record]);
+
+  /**
+   * J16: several objects' updates as one write and one undo entry (a group move, a style field on a multi-selection).
+   * As `updateObject` per object: an attached one's geometry goes with its drawn `at` (J10).
+   */
+  const updateObjects = useCallback((items: { o: CourseObject; given: { geometry?: CourseObject["geometry"]; props?: CourseObject["props"] } }[], onFail?: () => void) => {
+    const changes = items.map(({ o, given }) => {
+      const patch = given.geometry && o.attach ? { ...given, attach: o.attach } : given;
+      if (patch.props) sentProps.current.set(o.id, patch.props);
+      const prev = { geometry: o.geometry, props: o.props, attach: o.attach ?? null };
+      const before = Object.fromEntries(Object.keys(patch).map((k) => [k, prev[k as keyof typeof prev]]));
+      return { input: { id: o.id, ...patch }, undo: { id: o.id, ...before } };
+    });
+    if (changes.length === 0) return;
+    void (async () => {
+      const redo = () => writes.updateObjects(changes);
+      if ((await run(redo)) === undefined) return onFail?.();
+      record(() => writes.updateObjects(changes.map((c) => ({ input: c.undo, undo: c.input }))), redo);
+    })();
+  }, [writes, run, record]);
+
+  /** J16: `Delete` on an object multi-selection: one write per object, one undo entry (undo creates them again). */
+  const deleteObjectsMany = useCallback((list: readonly CourseObject[]) => {
+    if (list.length === 0) return;
+    const bodies = list.map((o) => ({ kind: o.kind, geometry: o.geometry, props: o.props, scope: o.scope, ...(o.attach ? { attach: o.attach } : {}) }) as Pick<CourseObject, "kind" | "geometry" | "props" | "scope"> & { attach?: CourseObject["attach"] });
+    const box = { ids: list.map((o) => o.id) };
+    void (async () => {
+      const redo = async () => { await writes.deleteObjects(box.ids.map((id, i) => ({ id, body: bodies[i] }))); return true; };
+      if ((await run(redo)) === undefined) return;
+      record(async () => { box.ids = (await writes.createObjects(bodies)).map((o) => o.id); }, redo);
+      dispatch({ type: "set-object-multi", ids: [] });
+    })();
+  }, [writes, run, record]);
+
+  /** J16: `Ctrl+D` on an object multi-selection: a copy of each 3 mm down-right, the copies selected; one undo entry. */
+  const duplicateObjectsMany = useCallback(async (list: readonly CourseObject[]) => {
+    if (list.length === 0) return;
+    const bodies = list.map((o) => ({ ...duplicateBody(o), scope: o.scope }));
+    const made = await run(() => writes.createObjects(bodies));
+    if (!made) return;
+    const box = { ids: made.map((o) => o.id) };
+    record(
+      async () => { for (const id of box.ids) await writes.deleteObject(id); },
+      async () => { box.ids = (await writes.createObjects(bodies)).map((o) => o.id); },
+    );
+    // The copies are selected before the list has them: they wait for it rather than leave the selection.
+    for (const id of box.ids) pendingCopies.current.add(id);
+    dispatch({ type: "set-object-multi", ids: box.ids });
+  }, [run, writes, record]);
 
   // ─── Snapping (§6.2) ──────────────────────────────────────
   const snapIndex = useMemo(
@@ -1149,6 +1382,20 @@ export function EditorPage() {
     })();
   }, [createObject, setTool]);
 
+  // `I` (J7): the graphics' pixel sizes, for the placed box's aspect (the picker's query, cached).
+  const graphicsList = trpc.graphics.list.useQuery(undefined, { enabled: state.mode === "course" && !!nameId });
+  const imageBox = useCallback((graphicId: number, pt: Pt) => {
+    const g = graphicsList.data?.find((x) => x.id === graphicId);
+    return imageBoxAt(pt, g?.widthPx, g?.heightPx);
+  }, [graphicsList.data]);
+  const placeImage = useCallback((graphicId: number, pt: Pt) => {
+    setTool({ kind: "select" });
+    void (async () => {
+      const id = await createObject({ kind: "image", geometry: imageBox(graphicId, pt), props: { graphicId }, scope: { all: true } });
+      if (id !== null) dispatch({ type: "select-object", id });
+    })();
+  }, [createObject, setTool, imageBox]);
+
   const placeText = useCallback((pt: Pt) => {
     setTool({ kind: "select" });
     void (async () => {
@@ -1320,6 +1567,13 @@ export function EditorPage() {
         });
       case "text":
         return textBinding({ onPlace: placeText, onExit: exitTool, snap, hover: hover?.pt ?? null, onHover });
+      case "image": {
+        const graphicId = tool.graphicId;
+        return imageBinding({
+          graphicId, box: (pt) => imageBox(graphicId ?? 0, pt), onPlace: (pt) => { if (graphicId !== null) placeImage(graphicId, pt); },
+          onExit: exitTool, snap, hover: hover?.pt ?? null, onHover,
+        });
+      }
       case "pick-symbol":
         return pickIndex ? pickSymbolBinding({ onPick: pickAt, onExit: exitTool }) : null;
       case "gap":
@@ -1331,19 +1585,81 @@ export function EditorPage() {
         }) : null;
       case "select":
         return selectBinding({
-          gesture, redraw, selected: selectedObject, focusedVertex, onVertexFocus: setFocusedVertex, objects: objectsInView.map((o) => (drafts.has(o.id) ? { ...o, geometry: drafts.get(o.id)! } : o)),
-          sites: sitesForTools, multi: state.multi, ringMm: courseInfo?.metrics?.circleRadiusMm ?? 2.5,
+          gesture, redraw, selected: selectedObject, focusedVertex, onVertexFocus: setFocusedVertex,
+          objects: objectsInView.map((o) => (drafts.has(o.id) || propDrafts.has(o.id) ? { ...o, geometry: drafts.get(o.id) ?? o.geometry, props: propDrafts.get(o.id) ?? o.props } as CourseObject : o)),
+          sites: sitesForTools, multi: state.multi, ringMm: courseInfo?.metrics?.circleRadiusMm ?? 2.5, aspectLock: state.aspectLock,
+          cropMode: cropMode && selectedObject?.kind === "image",
+          onCropMode: (on) => setCropModeId(on ? selectedObjectId : null),
+          onObjectStyleDraft: (id, change) => {
+            const o = shownById(id);
+            if (!o) return;
+            if (!change) {
+              // A cancel: back to the drafts found at the first draft, or none.
+              const found = styleBefore.current.get(id);
+              styleBefore.current.delete(id);
+              setDraft(id, found?.geometry ?? null);
+              setPropDrafts((d) => { const n = new Map(d); if (found?.props) n.set(id, found.props); else n.delete(id); return n; });
+              return;
+            }
+            if (!styleBefore.current.has(id)) styleBefore.current.set(id, { geometry: drafts.get(id), props: propDrafts.get(id) });
+            const found = styleBefore.current.get(id)!;
+            const base = found.props ?? sentProps.current.get(id) ?? o.props;
+            if (change.geometry) setDraft(id, change.geometry);
+            setPropDrafts((d) => new Map(d).set(id, stylePatch(base as StyleValue, change.patch) as CourseObject["props"]));
+          },
+          onObjectStyled: (id, change) => {
+            const o = shownById(id);
+            const found = styleBefore.current.get(id);
+            styleBefore.current.delete(id);
+            if (!o) return;
+            // What is shown now (an earlier gesture's draft, else the props last sent, else the list's): the undo's
+            // "before" and the base the change applies to.
+            const before = { ...o, geometry: found?.geometry ?? o.geometry, props: found?.props ?? sentProps.current.get(id) ?? o.props } as CourseObject;
+            const props = stylePatch(before.props as StyleValue, change.patch) as CourseObject["props"];
+            const given = { props, ...(change.geometry ? { geometry: change.geometry } : {}) };
+            if (change.geometry) setDraft(id, change.geometry);
+            setPropDrafts((d) => new Map(d).set(id, props));
+            // One write, one undo entry; a props-only change (the knob) sends no geometry, so no `attach` (J10's rule).
+            updateObject(before, given, () => {
+              setDraft(id, null);
+              setPropDrafts((d) => { const n = new Map(d); n.delete(id); return n; });
+              setStyleReset((k) => k + 1);
+            });
+          },
           onToggleMulti: (id) => dispatch({ type: "toggle-multi", id }),
           onLasso: (ids) => dispatch({ type: "set-multi", ids }),
           onSelectObject: (id) => dispatch({ type: "select-object", id }),
+          objectMulti: state.objectMulti,
+          onToggleObject: (id) => dispatch({ type: "toggle-object", id }),
+          onObjectsDraft: (next) => {
+            // J16: a group move's drafts, as `onObjectDraft` per member; null (a cancel) drops them.
+            for (const id of state.objectMulti) {
+              const geometry = next?.get(id) ?? null;
+              if (geometry && !gestureBefore.current.has(id)) gestureBefore.current.set(id, drafts.get(id) ?? shownById(id)?.geometry ?? geometry);
+              if (!geometry) gestureBefore.current.delete(id);
+              setDraft(id, geometry);
+            }
+          },
+          onObjectsMoved: (moves) => {
+            const items = moves.flatMap(({ id, geometry }) => {
+              const o = shownById(id);
+              const before = gestureBefore.current.get(id) ?? drafts.get(id) ?? o?.geometry;
+              gestureBefore.current.delete(id);
+              setDraft(id, geometry);
+              return o && before ? [{ o: { ...o, geometry: before } as CourseObject, given: { geometry } }] : [];
+            });
+            updateObjects(items, () => { for (const m of moves) setDraft(m.id, null); });
+          },
           onObjectDraft: (id, geometry) => {
             // The first draft of a gesture keeps what was shown before it: the undo's "before".
-            if (geometry && !gestureBefore.current.has(id)) gestureBefore.current.set(id, drafts.get(id) ?? objects.find((x) => x.id === id)?.geometry ?? geometry);
+            // J10: the shown geometry (an attached object's drawn place), as the binding's.
+            if (geometry && !gestureBefore.current.has(id)) gestureBefore.current.set(id, drafts.get(id) ?? shownById(id)?.geometry ?? geometry);
             if (!geometry) gestureBefore.current.delete(id);
             setDraft(id, geometry);
           },
           onObjectMoved: (id, geometry) => {
-            const o = objects.find((x) => x.id === id);
+            // J10: the shown object, so an attached one is written with its drawn `at` beside the drawn geometry.
+            const o = shownById(id);
             // Undo restores what the gesture started from — a previous gesture's draft while the list catches up.
             const before = gestureBefore.current.get(id) ?? drafts.get(id) ?? o?.geometry;
             gestureBefore.current.delete(id);
@@ -1370,18 +1686,25 @@ export function EditorPage() {
       l.corridor && l.points.length >= 2 && !(outlinedLegAt !== null && insertIndexForLeg(rows, index) === outlinedLegAt)
         ? [{ course: derived!.id, index, points: l.points }] : []);
   }, [state.mode, state.view, selectedCourse, courseView, courseInfo, rows, outlinedLegAt]);
-  const shownBinding = withCorridorGuides(toolBinding, corridorGuides);
+  // J12: the pointer's last paper point over the map (null off it), where a paste lands; kept in a ref, no re-render.
+  const corridorBinding = withCorridorGuides(toolBinding, corridorGuides);
+  const shownBinding = corridorBinding ? {
+    ...corridorBinding,
+    onHover: (p: ToolPointer | null) => { hoverPt.current = p?.pt ?? null; corridorBinding.onHover?.(p); },
+  } : null;
 
   // Drafts: objects being dragged (a region's drag is live, 08 §5.3). A region being drawn picks nothing yet (§6.4).
   const draftObjects = useMemo(() => {
-    if (drafts.size === 0) return NO_DRAFTS;
+    if (drafts.size === 0 && propDrafts.size === 0) return NO_DRAFTS;
     const out: CourseObject[] = [];
-    for (const [id, geometry] of drafts) {
-      const o = objects.find((x) => x.id === id);
-      if (o) out.push({ ...o, geometry } as CourseObject);
+    for (const id of new Set([...drafts.keys(), ...propDrafts.keys()])) {
+      // Drafts are in drawn geometry (J10): over the shown object, whose `at` is its control's drawn position.
+      const raw = objects.find((x) => x.id === id);
+      const o = raw ? shownObject(raw, sitePos) ?? raw : undefined;
+      if (o) out.push({ ...o, geometry: drafts.get(id) ?? o.geometry, props: propDrafts.get(id) ?? o.props } as CourseObject);
     }
     return out;
-  }, [drafts, objects]);
+  }, [drafts, propDrafts, objects, sitePos]);
   const draftFast = [...drafts.keys()].some((id) => objects.find((o) => o.id === id)?.kind === "filter_region");
 
   const [viewRequest, setViewRequest] = useState<MapViewerEditorProps["viewRequest"]>(null);
@@ -1669,8 +1992,32 @@ export function EditorPage() {
       } else if (mod && (e.key === "y" || e.key === "Y")) {
         e.preventDefault();
         runRedo();
+      } else if (mod && !e.shiftKey && !e.altKey && ["D", "C", "X", "V"].includes(key) && state.mode === "course" && canEdit && state.tool.kind === "select") {
+        // J12: the app clipboard (§7 "Duplicate, copy, cut, paste"). Copy and cut leave a text selection to the browser.
+        // As shown: a drag's geometry or props draft, else the props last sent (J11's window before the refetch).
+        const o = selectedObject ? {
+          ...selectedObject,
+          geometry: drafts.get(selectedObject.id) ?? selectedObject.geometry,
+          props: propDrafts.get(selectedObject.id) ?? sentProps.current.get(selectedObject.id) ?? selectedObject.props,
+        } as CourseObject : null;
+        // A held key does not repeat a create.
+        if (e.repeat && (key === "D" || key === "V")) { e.preventDefault(); return; }
+        if (key === "D") {
+          e.preventDefault();
+          if (state.objectMulti.length > 0) void duplicateObjectsMany(shownMulti());
+          else if (o) void duplicateObject(o);
+        } else if (key === "V") {
+          e.preventDefault();
+          void pasteObject();
+        } else if (o && !window.getSelection()?.toString()) {
+          e.preventDefault();
+          writeClipboard(courseEntry(o, nameId ?? ""));
+          if (key === "X") deleteObject(o);
+        }
       } else if (e.key === "Escape") {
         setAreaOpen(false);
+        // Crop mode is the cascade's first step (J11): the image stays selected.
+        if (cropMode) { setCropModeId(null); return; }
         // A bend or grip drag in flight ends here (§6.7): its draft drops, the release then writes nothing.
         if (gesture.current?.kind === "bend" || gesture.current?.kind === "bend-grip") {
           gesture.current = null;
@@ -1731,6 +2078,9 @@ export function EditorPage() {
         setAreaOpen((v) => !v);
       } else if (plain && key === "T") {
         setTool({ kind: "text" });
+      } else if (plain && key === "I" && state.mode === "course") {
+        // J7: the picker opens beside the rail's I; a picked graphic arms the click.
+        setTool({ kind: "image", graphicId: null });
       } else if (plain && key === "G") {
         if (canGap) setTool({ kind: "gap", legInsertAt: state.selectedControlId === null ? state.phantom?.insertAt ?? null : null });
       } else if (plain && key === "F") {
@@ -1738,6 +2088,7 @@ export function EditorPage() {
       } else if (e.key === "Delete" || e.key === "Backspace") {
         e.preventDefault();
         if (state.multi.length > 0) deleteControls(state.multi);
+        else if (state.objectMulti.length > 0) deleteObjectsMany(shownMulti());
         else if (selectedLeg && focusedBend !== null && legEditable) {
           // The selected leg's focused bend (§6.7).
           const bends = selectedLeg.props.bends ?? [];
@@ -1758,7 +2109,7 @@ export function EditorPage() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [descControlId, runUndo, runRedo, undoStack, state, handleDelete, deleteControls, deleteObject, selectedObject, focusedVertex, drafts, setDraft, updateObject, setChain, exitTool, finishArea,
+  }, [descControlId, runUndo, runRedo, undoStack, state, handleDelete, deleteControls, deleteObject, duplicateObject, pasteObject, deleteObjectsMany, duplicateObjectsMany, multiObjects, canEdit, nameId, propDrafts, selectedObject, focusedVertex, drafts, setDraft, cropMode, updateObject, setChain, exitTool, finishArea,
     stepSelection, armPlace, setTool, canGap, fitView, areaOpen, canTonerSaver, startArea, layoutKey, mapKey, selectedLeg, focusedBend, legEditable, writeLeg, addCorridor, selectionGroup, redraw, togglePlacementLoupe]);
 
   // ─── The URL (docs/course-editor.md §1 "URL"; F31) ─────────
@@ -2041,7 +2392,8 @@ export function EditorPage() {
     <ul data-testid="editor-objects" hidden>
       {objects.map((o) => (
         <li key={o.id} data-testid="editor-object-row" data-object-id={o.id} data-object-kind={o.kind}
-          data-geometry={o.geometry.map((v) => `${v.x},${v.y}`).join(" ")} data-geometry-json={JSON.stringify(o.geometry)} data-props={JSON.stringify(o.props)} data-scope={JSON.stringify(o.scope)} />
+          data-geometry={o.geometry.map((v) => `${v.x},${v.y}`).join(" ")} data-geometry-json={JSON.stringify(o.geometry)} data-props={JSON.stringify(o.props)} data-scope={JSON.stringify(o.scope)}
+          data-attach={o.attach ? JSON.stringify(o.attach) : ""} data-drawn={(() => { const d = o.attach ? shownObject(o, sitePos) : o; return d ? d.geometry.map((v) => `${v.x},${v.y}`).join(" ") : ""; })()} />
       ))}
     </ul>
   );
@@ -2067,17 +2419,76 @@ export function EditorPage() {
       variation={variationHandlers}
     />
   );
-  const selectionSection = state.multi.length > 1 ? (
+  const selectionSection = multiObjects.length > 1 ? (
+    <ObjectMultiSection objects={shownMulti()} busy={pendingOps > 0}
+      onDuplicate={() => void duplicateObjectsMany(shownMulti())}
+      onDelete={() => deleteObjectsMany(shownMulti())}
+      onStyleAll={(next) => {
+        // The edit made on the first object's shown props, applied as a difference to each (J16): one write, one undo.
+        const list = shownMulti();
+        const diff = propsDiff(list[0].props, next);
+        if (Object.keys(diff).length === 0) return;
+        const items = list.map((o) => ({ o, given: { props: applyPropsDiff(o.props, diff) } }));
+        setPropDrafts((d) => { const n = new Map(d); for (const it of items) n.set(it.o.id, it.given.props); return n; });
+        updateObjects(items, () => {
+          setPropDrafts((d) => { const n = new Map(d); for (const it of items) n.delete(it.o.id); return n; });
+          setStyleReset((k) => k + 1);
+        });
+      }} />
+  ) : state.multi.length > 1 ? (
     <MultiSection count={state.multi.length} course={selectedCourse && structure ? selectedCourse.name : null} busy={pendingOps > 0}
       onDelete={() => deleteControls(state.multi)} onAddToCourse={bulkAddToCourse} onRadio={bulkRadio} />
   ) : selectedObject ? (
     <ObjectSection
-      object={drafts.has(selectedObject.id) ? { ...selectedObject, geometry: drafts.get(selectedObject.id)! } as CourseObject : selectedObject}
+      object={drafts.has(selectedObject.id) || propDrafts.has(selectedObject.id)
+        ? { ...selectedObject, geometry: drafts.get(selectedObject.id) ?? selectedObject.geometry, props: propDrafts.get(selectedObject.id) ?? selectedObject.props } as CourseObject
+        : selectedObject}
+      cropMode={selectedObject.kind === "image" && !coarsePointer ? { on: cropMode, onToggle: () => setCropModeId(cropMode ? null : selectedObject.id) } : undefined}
+      onTransform={TURNABLE_PATH_KINDS.has(selectedObject.kind) ? (op) => {
+        // J11: a line's or area's turn or flip bakes into its vertices, about the centre of their bounds (as *Centre
+        // on control*); one write, one undo entry; a whole turn writes nothing.
+        const id = selectedObject.id;
+        const shownNow = { ...selectedObject, geometry: drafts.get(id) ?? selectedObject.geometry } as CourseObject;
+        const geometry = transformVertices(shownNow.geometry, op, objectCentre(shownNow));
+        if (!geometry) return;
+        setDraft(id, geometry);
+        updateObject(shownNow, { geometry }, () => setDraft(id, null));
+      } : undefined}
       document={mapDoc?.header ?? null}
       courses={courseOptions}
       classes={(classes.data ?? []).map((c) => ({ id: c.id, name: c.name }))}
       onProps={(props) => updateObject(selectedObject, { props })}
+      resetKey={styleReset}
+      onStyle={({ props, geometry, shownProps }) => {
+        // J7: a style field writes props, a size field geometry, a crop both; the canvas shows it at once, and undo
+        // restores what the inspector showed. A failed write drops the drafts and the inspector's optimistic values.
+        const id = selectedObject.id;
+        const shown = { ...selectedObject, geometry: drafts.get(id) ?? selectedObject.geometry, props: shownProps } as CourseObject;
+        if (geometry) setDraft(id, geometry);
+        if (geometry && props) setPropDrafts((d) => new Map(d).set(id, props));
+        updateObject(shown, { ...(props ? { props } : {}), ...(geometry ? { geometry } : {}) }, () => {
+          setDraft(id, null);
+          setPropDrafts((d) => { const n = new Map(d); n.delete(id); return n; });
+          setStyleReset((k) => k + 1);
+        });
+      }}
+      aspectLock={state.aspectLock}
+      onAspectLock={() => dispatch({ type: "toggle-aspect-lock" })}
       onScope={(scope) => updateObject(selectedObject, { scope })}
+      attach={courseShared.UNATTACHABLE_KINDS.includes(selectedObject.kind) ? undefined : (() => {
+        const attachedId = selectedObject.attach?.controlId ?? null;
+        const nearest = () => nearestSite(objectCentre(selectedObject), drawnSites);
+        const target = () => (attachedId !== null ? drawnSites.find((d) => d.id === attachedId) ?? null : nearest());
+        return {
+          code: attachedId !== null ? coordsById.get(attachedId)?.code ?? String(attachedId) : null,
+          canAttach: drawnSites.length > 0,
+          picking: attachPick === selectedObject.id,
+          onAttachNearest: () => { const s = nearest(); if (s) updateObject(selectedObject, attachPatch(selectedObject, s)); },
+          onPickToggle: () => setAttachPick((v) => (v === selectedObject.id ? null : selectedObject.id)),
+          onCentre: () => { const s = target(); if (s) updateObject(selectedObject, centrePatch(selectedObject, s)); },
+          onDetach: () => updateObject(selectedObject, detachPatch(selectedObject)),
+        };
+      })()}
       onRegenerate={selectedObject.kind === "toner_saver" ? () => {
         const margin = (selectedObject.props as { marginMm?: number }).marginMm ?? TONER_MARGIN_MM;
         const hull = tonerSaverGeometry(rows.flatMap((r) => (r.pt ? [r.pt] : [])), margin);
@@ -2257,6 +2668,7 @@ export function EditorPage() {
           else if (key === "C") armPlace("crossing");
           else if (key === "X") armPlace("exchange");
           else if (key === "T") setTool({ kind: "text" });
+          else if (key === "I") setTool({ kind: "image", graphicId: null });
           else if (key === "G") setTool({ kind: "gap", legInsertAt: state.selectedControlId === null ? state.phantom?.insertAt ?? null : null });
         }}
         onArea={startArea}
@@ -2268,6 +2680,7 @@ export function EditorPage() {
         onCorridor={addCorridor}
         snapping={state.snapping}
         onSnapping={() => dispatch({ type: "toggle-snapping" })}
+        imagePicker={nameId ? { nameId, canEdit, onPick: (graphicId) => setTool({ kind: "image", graphicId }) } : null}
       />}
       <div className="flex flex-col gap-2 min-h-0 h-full">
         {queueNode && <div className="w-64">{queueNode}</div>}

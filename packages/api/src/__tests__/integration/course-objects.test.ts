@@ -77,7 +77,7 @@ describe("courseObject CRUD", () => {
       { kind: "toner_saver", geometry: SQUARE, props: { marginMm: 5 } },
       { kind: "marked_route", geometry: [{ x: 0, y: 0, hOut: { x: 1, y: 1 } }, { x: 5, y: 5 }], props: {} },
       { kind: "text", geometry: [{ x: 1, y: 2 }], props: { text: "Ingen passage", fontSizeMm: 3 } },
-      { kind: "image", geometry: [{ x: 0, y: 0 }, { x: 10, y: 5 }], props: { graphicId: 3 } },
+      { kind: "image", geometry: [{ x: 0, y: 0 }, { x: 10, y: 5 }], props: { graphicId: 3, knockout: true } },
       { kind: "filter_region", geometry: SQUARE, props: { mode: "hide", symbols: [4, 5], invert: true } },
     ];
     const made: course.CourseObject[] = [];
@@ -94,6 +94,8 @@ describe("courseObject CRUD", () => {
 
     const list = await caller.courseObject.list();
     expect(list.map((o) => o.kind)).toEqual([...bodies.map((b) => b.kind)].reverse());
+    // J15: the knockout flag is stored and listed.
+    expect(list.find((o) => o.kind === "image")).toMatchObject({ props: { graphicId: 3, knockout: true } });
     expect(list.find((o) => o.kind === "filter_region")).toMatchObject({ geometry: SQUARE, props: { mode: "hide", symbols: [4, 5], invert: true } });
   });
 
@@ -190,6 +192,120 @@ describe("scope over the event's classes (§8.2)", () => {
     const listed = await caller.courseObject.list();
     expect(listed.find((o) => o.id === byPool.id)?.inCourses).toEqual(byPool.inCourses);
     expect(listed.filter((o) => "all" in o.scope).every((o) => o.inCourses === null)).toBe(true);
+  });
+});
+
+describe("attached to a control (J10, course-layer.md §8.1 \"Attachment\", §8.4)", () => {
+  const IMG = [{ x: 18, y: 18 }, { x: 22, y: 22 }];
+  const row = async (seq: number) => ctx.db.courseObject.findFirstOrThrow({ where: { eventId: ctx.eventId, seq } });
+  const wire = async (seq: number) => (await caller.courseObject.list()).find((o) => o.id === seq)!;
+
+  it("create and update take the public control id, store the UUID; null detaches, absent keeps; unknown and the toner saver are refused", async () => {
+    await caller.control.create({ codes: "131", xpos: 20, ypos: 20 });
+    const c131 = await ctx.db.control.findFirstOrThrow({ where: { eventId: ctx.eventId, codes: "131" } });
+    const o = await caller.courseObject.create({ kind: "image", geometry: IMG, props: { graphicId: 1 }, scope: { all: true }, attach: { controlId: 131, at: { x: 20, y: 20 } } });
+    expect(o.attach).toEqual({ controlId: 131, at: { x: 20, y: 20 } });
+    expect((await row(o.id)).attach).toEqual({ controlId: c131.id, at: { x: 20, y: 20 } });
+    const kept = await caller.courseObject.update({ id: o.id, props: { graphicId: 1, opacity: 0.5 } });
+    expect(kept.attach).toEqual({ controlId: 131, at: { x: 20, y: 20 } });
+    expect(BigInt(kept.version)).toBeGreaterThan(BigInt(o.version));
+    await expect(caller.courseObject.update({ id: o.id, attach: { controlId: 99999, at: { x: 0, y: 0 } } })).rejects.toThrow(/Unknown control 99999/);
+    await expect(caller.courseObject.create({ kind: "toner_saver", geometry: SQUARE, props: {}, scope: { all: true }, attach: { controlId: 131, at: { x: 0, y: 0 } } })).rejects.toThrow(/cannot be attached/);
+    const off = await caller.courseObject.update({ id: o.id, attach: null });
+    expect(off.attach).toBeUndefined();
+    expect((await row(o.id)).attach).toBeNull();
+  });
+
+  it("a control move writes nothing to the object; the wire keeps the stored geometry and at (the layer resolves)", async () => {
+    await caller.control.create({ codes: "132", xpos: 50, ypos: 50 });
+    const o = await caller.courseObject.create({ kind: "oob_line", geometry: [{ x: 48, y: 48 }, { x: 52, y: 52 }], props: {}, scope: { all: true }, attach: { controlId: 132, at: { x: 50, y: 50 } } });
+    const before = await row(o.id);
+    await caller.control.update({ id: 132, xpos: 60, ypos: 55 });
+    const after = await row(o.id);
+    expect(after).toEqual(before);
+    expect((await wire(o.id)).geometry).toEqual([{ x: 48, y: 48 }, { x: 52, y: 52 }]);
+  });
+
+  it("a deleted control leaves the object detached where it was drawn, untouched; restore re-attaches; a hand edit meanwhile does not move twice", async () => {
+    await caller.control.create({ codes: "133", xpos: 70, ypos: 70 });
+    const o = await caller.courseObject.create({ kind: "oob_line", geometry: [{ x: 70, y: 70 }, { x: 72, y: 72 }], props: {}, scope: { all: true }, attach: { controlId: 133, at: { x: 70, y: 70 } } });
+    await caller.control.update({ id: 133, xpos: 80, ypos: 75 });
+    const before = await row(o.id);
+    await caller.control.delete({ id: 133 });
+    expect(await row(o.id)).toEqual(before);
+    // Drawn at the control's last place: stored + (80, 75) − (70, 70).
+    const detached = await wire(o.id);
+    expect(detached.attach).toBeUndefined();
+    expect(detached.geometry).toEqual([{ x: 80, y: 75 }, { x: 82, y: 77 }]);
+    const stored = (await loadCourseObjects(ctx.db, ctx.eventId)).find((x) => x.seq === o.id)!;
+    expect(stored.attach).toBeUndefined();
+    expect(stored.geometry).toEqual([{ x: 80, y: 75 }, { x: 82, y: 77 }]);
+    // Moved by hand while detached: the drawn place sent, `at` set to the deleted control's position.
+    await caller.courseObject.update({ id: o.id, geometry: [{ x: 90, y: 75 }, { x: 92, y: 77 }] });
+    await caller.control.restore({ id: 133 });
+    const back = await wire(o.id);
+    expect(back.attach).toEqual({ controlId: 133, at: { x: 80, y: 75 } });
+    expect(back.geometry).toEqual([{ x: 90, y: 75 }, { x: 92, y: 77 }]);
+  });
+});
+
+describe("J18 hides and J19 outlines (course-layer.md §8.1, map-rendering.md §4.11)", () => {
+  it("the hide flags round-trip on an attached image", async () => {
+    await caller.control.create({ codes: "141", xpos: 30, ypos: 30 });
+    const o = await caller.courseObject.create({
+      kind: "image", geometry: [{ x: 28, y: 28 }, { x: 32, y: 32 }], props: { graphicId: 1, hideControlCircle: true, hideControlNumber: true },
+      scope: { all: true }, attach: { controlId: 141, at: { x: 30, y: 30 } },
+    });
+    expect((await caller.courseObject.list()).find((x) => x.id === o.id)?.props).toEqual({ graphicId: 1, hideControlCircle: true, hideControlNumber: true });
+    await expect(caller.courseObject.create({ kind: "whiteout", geometry: SQUARE, props: { hideControlCircle: true }, scope: { all: true } } as never)).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("a knockout image carries its graphic's outline, traced once and stored; a plain image carries none", async () => {
+    // A 40 × 40 PNG: an opaque square 10…30 px on a transparent canvas.
+    const sharp = (await import("sharp")).default;
+    const rgba = Buffer.alloc(40 * 40 * 4);
+    for (let y = 10; y < 30; y++) for (let x = 10; x < 30; x++) rgba.set([200, 0, 0, 255], (y * 40 + x) * 4);
+    const png = await sharp(rgba, { raw: { width: 40, height: 40, channels: 4 } }).png().toBuffer();
+    const g = await caller.graphics.upload({ name: `j19-${suffix}.png`, scope: "event", fileDataBase64: png.toString("base64") });
+    expect((await ctx.db.graphic.findUniqueOrThrow({ where: { id: BigInt(g.id) } })).outline).toBeNull();
+    const ko = await caller.courseObject.create({ kind: "image", geometry: [{ x: 0, y: 0 }, { x: 8, y: 8 }], props: { graphicId: g.id, knockout: true }, scope: { all: true } });
+    const plain = await caller.courseObject.create({ kind: "image", geometry: [{ x: 0, y: 0 }, { x: 8, y: 8 }], props: { graphicId: g.id }, scope: { all: true } });
+    const list = await caller.courseObject.list();
+    expect(list.find((x) => x.id === ko.id)?.outline).toEqual([[0.25, 0.25, 0.25, 0.75, 0.75, 0.75, 0.75, 0.25]]);
+    expect(list.find((x) => x.id === plain.id)?.outline).toBeUndefined();
+    expect((await ctx.db.graphic.findUniqueOrThrow({ where: { id: BigInt(g.id) } })).outline).toEqual([[0.25, 0.25, 0.25, 0.75, 0.75, 0.75, 0.75, 0.25]]);
+    // The print pipeline's loader reads the same.
+    expect((await loadCourseObjects(ctx.db, ctx.eventId)).find((x) => x.seq === ko.id)?.outline).toHaveLength(1);
+    // A fully opaque graphic is the whole box: stored as [], carried as nothing.
+    const full = await sharp({ create: { width: 8, height: 8, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 1 } } }).png().toBuffer();
+    const box = await caller.graphics.upload({ name: `j19-box-${suffix}.png`, scope: "event", fileDataBase64: full.toString("base64") });
+    const bo = await caller.courseObject.create({ kind: "image", geometry: [{ x: 0, y: 0 }, { x: 8, y: 8 }], props: { graphicId: box.id, knockout: true }, scope: { all: true } });
+    expect((await caller.courseObject.list()).find((x) => x.id === bo.id)?.outline).toBeUndefined();
+    expect((await ctx.db.graphic.findUniqueOrThrow({ where: { id: BigInt(box.id) } })).outline).toEqual([]);
+    // Bytes that cannot be decoded: stored as [] (the box), not read again.
+    const junk = await ctx.db.graphic.create({ data: { eventId: ctx.eventId, name: `j19-junk-${suffix}`, mime: "image/png", data: Uint8Array.from([1, 2, 3]), sizeBytes: 3 } });
+    const jo = await caller.courseObject.create({ kind: "image", geometry: [{ x: 0, y: 0 }, { x: 8, y: 8 }], props: { graphicId: Number(junk.id), knockout: true }, scope: { all: true } });
+    expect((await caller.courseObject.list()).find((x) => x.id === jo.id)?.outline).toBeUndefined();
+    expect((await ctx.db.graphic.findUniqueOrThrow({ where: { id: junk.id } })).outline).toEqual([]);
+  });
+
+  it("another event's graphic is never read: no outline, its row untouched", async () => {
+    const other = await createTestEvent("course_objects_other");
+    try {
+      const sharp = (await import("sharp")).default;
+      const rgba = Buffer.alloc(20 * 20 * 4);
+      for (let y = 5; y < 15; y++) for (let x = 5; x < 15; x++) rgba.set([0, 0, 0, 255], (y * 20 + x) * 4);
+      const png = await sharp(rgba, { raw: { width: 20, height: 20, channels: 4 } }).png().toBuffer();
+      const foreign = await makeCaller(other.event).graphics.upload({ name: `j19-foreign-${suffix}.png`, scope: "event", fileDataBase64: png.toString("base64") });
+      const before = await ctx.db.graphic.findUniqueOrThrow({ where: { id: BigInt(foreign.id) } });
+      const o = await caller.courseObject.create({ kind: "image", geometry: [{ x: 0, y: 0 }, { x: 8, y: 8 }], props: { graphicId: foreign.id, knockout: true }, scope: { all: true } });
+      expect((await caller.courseObject.list()).find((x) => x.id === o.id)?.outline).toBeUndefined();
+      const after = await ctx.db.graphic.findUniqueOrThrow({ where: { id: BigInt(foreign.id) } });
+      expect(after.outline).toBeNull();
+      expect(after.updatedAt).toEqual(before.updatedAt);
+    } finally {
+      await ctx.db.event.delete({ where: { id: other.eventId } });
+    }
   });
 });
 

@@ -86,11 +86,12 @@ interface PassStream {
   masks?: FilterMask[];    // filter masks, §3.8
   maskIdx?: Int32Array;    // pass i → mask, −1 = none
 }
-type Pass = FillPass | StrokePass | GlyphPass | HatchPass | TextPass;
+type Pass = FillPass | StrokePass | GlyphPass | HatchPass | TextPass | ImagePass;
 ```
 
 Every pass has `kind` and `colour` (an index into the document's colour
-stack; lower index is drawn first). The types are in
+stack; lower index is drawn first), and may carry `opacity` and `blend`
+(§3.9). The types are in
 `packages/shared/src/render/pass-stream.ts`; this section states the
 semantics the types cannot.
 
@@ -178,7 +179,7 @@ is likewise its own pass (§4.9).
 
 Passes are sorted by `(colour, kind, symbolIdx)`, stable in insertion
 order for ties. Kind order within a colour is
-`fill < hatch < stroke < glyph < text`. `sortPassStream` is the single
+`fill < hatch < stroke < glyph < text < image` (image: J5, §3.10). `sortPassStream` is the single
 implementation; `PassStreamBuilder.build()` applies it. A stream handed to
 a backend is always sorted; backends iterate front to back and that *is*
 the painter's order. Because the sort is colour-major, "all passes of
@@ -199,6 +200,13 @@ a line-text glyph's angle outside the 1e-4° comparison, B8). Parsing sorts.
 `masks` / `maskIdx` (§3.8) are projected together when present (an
 error when only one is, or an index points past `masks`) and compared:
 a mask present on one side only, or a region path that moved.
+`opacity` and `blend` (§3.9) are projected when present — `opacity` to 4
+decimals, `opacity: 1` parsing to absent, a value outside [0, 1] or an
+unknown blend refused — and compared: an opacity difference over 1e-4,
+any blend difference. An image pass (§3.10) projects `graphicId`, its
+`quad` at 3 decimals (µm) and its `crop` at 6 (unitless); the comparator
+names a different graphic, a quad entry off by more than 1e-3 or a crop
+entry off by more than 1e-6.
 
 ### 3.8 Filter masks
 
@@ -210,11 +218,98 @@ region's hole ring is outside the region), and the mask is the
 intersection of their outsides. The stream carries no frame — what
 "outside" is bounded by is each backend's own (the image frame, the PDF
 window, the stencil buffer's clear value). Masks are what clip-mode
-filter regions produce (§4.11); a stream without them omits both fields.
+filter regions and knockout images produce (§4.11); a stream without them
+omits both fields.
 `sortPassStream` permutes `maskIdx` with the passes; `maskIdx` is a
 function of (object, colour) by construction (§4.11), so a backend that
 draws per range-table entry can apply it there. Backends: §5.1
 (nested clip groups), §5.2 ("Filter regions"), §5.3 (`W* n`).
+
+### 3.9 Opacity and blend
+
+`opacity?: number`, `blend?: "multiply"` on every pass kind (`PassAlpha`;
+slice J, J1)
+
+A pass may be drawn with an **opacity** in [0, 1) and/or the **Multiply**
+blend; absent means opaque and normal, and a stream without either field
+draws exactly as before in every backend (the same SVG, operators and PDF
+bytes). `symbolise` sets both from its input object (`RenderObject.opacity`,
+`.blend`; `objectAlpha`): every pass the object emits carries them — main
+lines, borders, halos, frames, pattern glyphs, text and its halo alike.
+Opacity that rounds to 1 at the projection's 4 decimals (≥ 0.99995), or is not finite, is not stored; below 0 is 0; 0 stays in the
+stream (drawn as written, still hit-testable). Document objects never
+set one; the course and page layers do, from a user object (J4).
+
+- **Once per pass.** A pass paints each pixel once: a self-crossing
+  stroke, the joins of a polyline, overlapping glyph instances of one
+  pass and adjacent glyphs of one text or halo pass blend once, not twice.
+  Two passes blend twice in stream order — a shape filled and stroked at
+  50 % shows the stroke's inner half over the fill (per pass, not per
+  group; group opacity is Pending).
+- **Multiply** multiplies the pass's colour with everything beneath it —
+  every earlier pass and the paper — channel by channel; with opacity the
+  result is `mix(dst, dst × colour, opacity)`. Black stays black, white
+  shows the pass's colour.
+- **Order** is unchanged: the canonical sort (§3.6) does not look at the
+  fields; they travel with their pass.
+- **Backends**: the reference raster (§5.1) wraps the pass in one group;
+  the PDF (§5.3) draws it under an ExtGState, a glyph or text pass inside
+  a transparency group; WebGL2 (§5.2) draws alpha passes opaque until J3.
+
+### 3.10 Image
+
+`{ kind: "image", colour, graphicId, quad: [a, b, c, d, e, f], crop? }`
+(`ImagePass`; slice J, J5)
+
+A raster **graphic** (a PNG the course-map document's graphics library
+holds, `graphicId`) drawn onto the unit square mapped by the affine
+`quad`: the source's bottom-left corner lands at `(e, f)`, its
+bottom-right at `(a + e, b + f)`, its top-left at `(c + e, d + f)` — in
+stream µm, y-up. So the quad carries size, rotation and either flip, and
+the pass is a parallelogram in general (`imageQuadCorners` gives its four
+corners in the order bottom-left, bottom-right, top-right, top-left).
+
+- **`crop`** `{ x, y, width, height }` — the part of the source drawn, as
+  fractions of the source with (0, 0) at its top-left (image convention):
+  that part fills the unit square, the rest is not drawn. Absent: the
+  whole source.
+- **Pixels.** The graphic's own alpha is kept: a transparent pixel shows
+  what is under it, a half-opaque one blends once. Sampled
+  nearest-neighbour in the reference raster and the PDF (no
+  `/Interpolate`; J5): both draw the same source pixel at a point, which
+  is what holds the PDF tier at ≤ 0.5 % on a 64 px source enlarged 25×
+  (`page-graphics`, course-print.md §9.2). Sources are expected large
+  enough that a pixel is under the printer's dot.
+- **Opacity and blend** (§3.9) apply on top of the graphic's alpha.
+- **Order.** Last in its colour (§3.6). The pass's `colour` is a row of
+  the colour stack that holds images only (`course:graphics`,
+  `page:graphics`, course-layer.md §3.6): where graphics draw relative to
+  the map's and course's inks is set by where that row sits; the row's
+  own CMYK is not used.
+- **From symbolisation.** `symbolise` emits one image pass for a
+  `RenderObject` with `image: { graphicId, crop? }` whose symbol is an
+  area symbol with a fill row and whose path is the four corners
+  bottom-left, bottom-right, top-right, top-left (of the drawn part, as
+  seen): `quad = [x₁ − x₀, y₁ − y₀, x₃ − x₀, y₃ − y₀, x₀, y₀]`. No graphic
+  (`graphicId` 0), another corner count or a symbol without a fill row
+  warns `IMAGE_WITHOUT_GRAPHIC` and draws nothing. There is no image
+  symbol type: the object carries the graphic, the symbol only the row
+  (J5 decision log).
+- **Hit-test and filter regions** use the quad: a point inside it hits at
+  distance 0 (a transparent pixel too — the object is what is picked),
+  outside by its distance to the quad's edge; the pass meets a region when
+  its quad does.
+- **Knockout** (J15). An image whose object is marked `knockout`
+  (`RenderObject.knockout`, "Cut out graphics below") masks the image
+  passes below it in the same stream by its footprint: its graphic's
+  traced outline when the object carries one (J19), else the quad inset
+  0.05 mm (§4.11 "Knockout footprints"). The pass stays
+  an ordinary image pass; the cut is a mask (§3.8) on the passes below.
+- **Backends.** The reference raster (§5.1) draws an SVG `<image>`
+  through the quad, the PDF (§5.3) an image XObject under `cm`, each from
+  the bytes its caller gives by graphic id; without bytes the pass is
+  left out (the PDF warns `IMAGE_MISSING`, course-print.md §4.4). WebGL2
+  (§5.2) does not draw image passes until J6.
 
 ## 4. Symbolisation rules
 
@@ -689,7 +784,8 @@ region when a vertex of its path lies inside the region (even-odd), an
 edge of its path crosses or touches a region edge, or — areas only
 (fills, hatches, a pattern pass's clip area) — a region vertex lies
 inside the area. A stroke counts by its centre line (not its width), a
-glyph pass by its instances' origins, a text pass by its glyph origins.
+glyph pass by its instances' origins, a text pass by its glyph origins,
+an image pass (§3.10) as the area its quad bounds.
 **The fast predicate** (`boundsMeetRegion`, 04 §7 "while dragging"):
 the object's symbolised bounds (`objectBounds`: control-point bounds
 grown by half a stroke width, glyphs by their mesh radius × scale, text
@@ -721,6 +817,57 @@ print route carry them as objects. A corridor's white band is a
 (`docs/course-layer.md` §10.2): `clip`, `symbols: "all"`, the band's
 rings — the map cut away there, the course drawn over it.
 
+#### Knockout footprints (J15, J19)
+
+An advent-calendar map is one overlay graphic over the whole map with
+hatches (luckor) placed on top that show the map through their opening.
+Without a cut the overlay would have to be split around every hatch.
+With **"Cut out graphics below"** on a hatch, the overlay is cut where
+the hatch is. Moving the hatch moves the cut. `applyKnockouts(stream,
+knockout, outlineOf)` in `render/filter-region.ts`, run by `symbolise`
+after the filter regions (which rebuild the masks):
+
+- **The outline footprint** (J19, user 2026-11-19 "Cut along the hatch
+  outline"). When the object's `image.outline` is set (a traced graphic,
+  course-layer.md §8.1 "Graphic outline") the footprint is that outline:
+  each ring (fractions of the whole graphic, top-left origin) is taken
+  into the visible part's unit square by the crop, cut to it
+  (Sutherland–Hodgman), flipped to the quad's y-up and mapped through the
+  quad, one region path per ring (`knockoutFootprints`). Nothing of the
+  outline inside the crop: no footprint. The outline is traced once per
+  graphic (`render.traceOutline`, `render/trace-outline.ts`): the alpha
+  raster at 512 px on the longer side, inside at alpha ≥ 50 %, holes
+  filled (an opening in a hatch is the hatch's), at most 8 rings (the
+  largest), each Douglas–Peucker-simplified to at most 200 vertices; a
+  silhouette covering 99.5 % of the raster or more, or none, is `[]` (the
+  box). No inset: the trace sits on the half-alpha edge, so the hatch's
+  soft edge overlaps the cut by about half a pixel of the graphic.
+- **The box footprint** (J15; no outline) is the knockout image's quad inset by
+  `KNOCKOUT_INSET_UM` (50 µm) on each side, in the quad's own frame
+  (`knockoutFootprint`). Crop, rotation and flips are already in the
+  quad. The image's pixels play no part: a transparent opening cuts like
+  an opaque band. That is the point, because the map shows through the
+  opening. The inset keeps the hatch's own edge over the cut, so no
+  hairline of paper shows at the boundary. A quad with a side of 0.1 mm
+  or less has no footprint.
+- **What is cut**: only **image** passes **below** the knockout in the
+  stream (earlier, i.e. lower z or seq within the colour row), and only
+  where their quad bounds meet the footprint's bounds. That keeps masks
+  off far-away images. Fills, strokes, glyphs and text are never cut, so
+  white-outs and the course's purple are not cut. A knockout image can be
+  cut by a knockout image above it. Stacked hatches then nest.
+- **Same layer only.** The course layer and the page layer are symbolised
+  separately (course-layer.md §3.6), so a course image never cuts a page
+  image or the other way round. Document objects carry no images.
+- **Masks.** A cut image pass gets a mask (§3.8) whose regions are the
+  footprints above it that meet it, plus its filter-region regions if it
+  already had a mask. Masks are deduplicated by that set and numbered in
+  stream order. `maskIdx` stays a function of (object, colour), because
+  an object has one image pass. A stream with no cut is returned as it
+  was, so streams without knockouts are byte-identical to before.
+- **Attached objects** cut where they are drawn. One whose control is not
+  drawn in a course is not in the stream and cuts nothing.
+
 ## 5. Backends
 
 ### 5.1 Reference raster (api: tests and previews)
@@ -735,11 +882,23 @@ per instance; hatches are generated lines under a `<clipPath>`; text uses
 caller-supplied glyph outlines or, without them, em boxes (debug only,
 never an oracle). A `pointed` stroke with a `taper` is the shared
 `strokeOutline()` (`render/geometry.ts`) filled non-zero, as the PDF
-backend draws it (§5.3; SVG has no tapered stroke). A masked pass (§3.8)
-is wrapped in one `<g clip-path>` per region of its mask, nested; each
+backend draws it (§5.3; SVG has no tapered stroke). A pass with opacity
+or blend (§3.9) carries them on one outer `<g opacity
+style="mix-blend-mode:multiply">` around the whole pass — outside a
+masked pass's (§3.8) mask and clip groups, because resvg isolates a clipped group and a blend
+inside it would lose its backdrop; one group per pass is what makes a
+pass paint once. A masked pass is wrapped in one `<g clip-path>` per region of its mask, nested; each
 `<clipPath>` is the image frame (the viewBox rectangle) with the region's
 rings, `clip-rule="evenodd"` — so the pass shows outside every region.
 A mask's clip paths are defined once.
+An image pass (§3.10, J5) is `<g transform="matrix(quad) matrix(1 0 0 −1
+0 1)">` around one `<image preserveAspectRatio="none"
+image-rendering="optimizeSpeed">` whose `href` the caller gives
+(`imageHref(graphicId)`, a data URI; none: the pass is left out); a crop
+draws the whole source enlarged (`1 / width` by `1 / height`) and offset
+under a `<clipPath>` of the unit square. `passStreamBounds` counts the
+quad's corners. The page oracle passes the scene's PNGs
+(`rasterisePage(page, { images })`, course-print.md §7.5).
 
 This is the **oracle** of the golden-image tier. It is slow and simple on
 purpose and is never used to draw a map for use. Its production jobs
@@ -823,7 +982,10 @@ renderer.ts    arena programs + visible-set draw loop;            WebGL2
 Status: B2 — strips, arenas, buckets, visible set, mesh atlas, worker,
 screen-only LOD; B3 — MSDF text from the committed text atlas; B4 — the
 viewer drives it (§5.4). Not yet: `WEBGL_multi_draw` (§8). The per-pass path (`setStream` / `render`: one draw per pass,
-stencil fills) is kept unchanged as the backend's golden path
+stencil fills) is kept unchanged as the backend's golden path — it draws no
+alpha: `prepareStream` refuses a stream with an opacity or blend pass
+(`streamHasAlpha`, J3) rather than draw it opaque, and the fixture page
+sends such a scene to the arena path —
 (`MapGlFixturePage`, §6.2) and as the reference the arena path is
 compared with (`compare=1`, below). The S1 batch path (`batch.ts`,
 `setBatches` / `renderBatches`) is gone; its measurements are the
@@ -935,6 +1097,18 @@ are contiguous, so a colour of a part is one span. `object` is the
 document's effective `objectIndex` ("Object identity and the patch"
 below); the course part's start at `COURSE_OBJECT_BASE`.
 
+**Alpha items (J3).** A pass with opacity below 1 or the Multiply blend
+(§3.9; `passAlphaState`: absent or ≥ 1 without blend is opaque, ≤ 0 is
+not prepared, Multiply alone is opacity 1) is prepared like any pass of
+its kind but kept **out of the range tables**: its triangles go into the
+part's arrays with an `AlphaItem` naming their span (fill, hatch,
+stroke), or the item carries its own instances in runs per size class or
+atlas page (glyph, text) and, for a pattern-clipped glyph pass, its
+area's triangles. `PreparedPart.alpha` lists the items in prepared
+order — `(source, pass)`, the stream's order within a source — and is
+present only when non-empty, so an opaque part is exactly as before.
+`partTransferables` carries their buffers.
+
 **Visible set (04 §6.8 point 2).** `buildVisibleSet(parts, hidden)`
 concatenates the drawn parts' spans per (colour, kind) into one index
 buffer per indexed kind (rebased onto each part's arena offset) and one
@@ -949,7 +1123,19 @@ objects and a filter's join them) are skipped entry by entry. With a filter (`bu
 regions" below) an entry goes to the draw of its mask: per colour the
 unmasked draw first, then one per mask, masks ascending — every kind in
 that order, which `VisibleSet.layers` lists as the draw loop's
-`(colour, mask)` steps.
+`(colour, mask)` steps. **Alpha layers (J3):** each alpha item in view
+(hidden objects skipped, its `(object, colour)` mask taken) is one
+`AlphaLayer` — one pass, not one object: a text pass over two atlas
+pages is one layer with two runs. Its indices or instances are appended
+to the visible set's buffers after the opaque draws' (clip areas to
+`clips`), and `layers` gets one step `{ colour, mask, alpha }` per layer,
+**after its colour's opaque steps**, in the order: the static parts'
+(cells and the large bucket, one stream) by `(source, pass)`, then each
+dynamic part's (negative bucket: course, edit, page) in parts order —
+the "course draws over the map's objects of that colour" rule.
+`VisibleSet.alpha` is present only when non-empty. Draws per alpha layer:
+3 (2 for a fill), per run for text and glyphs, + 2 for a clipped glyph
+pass, + 2 under a mask.
 
 **Clip groups.** Pattern-clipped glyph passes of one colour are merged
 into groups whose footprints (clip area ∪ instance extents) do not meet,
@@ -1132,7 +1318,13 @@ loaded, whose results for the objects a patch changed are dropped, and
 the patch's own stream ("Object identity and the patch"), the two
 replies concatenated (the patch's masks after the document's) — so a
 moved object is filtered where it is now and an added one is filtered
-too. The course part is never filtered. The objects' symbolised bounds
+too. The course part is never filtered by regions; its images and the
+page part's are masked by knockout images (J15, §4.11 "Knockout
+footprints"). Their masks, from the course and page streams' own
+`maskIdx`, are appended to the document filter's (`concatFilters`):
+the document's masks first, then the course part's, then the page part's. With any knockout present the visible set takes the per-entry masked path for every part, as a clip region or a corridor band already makes it. Course entries carry
+`COURSE_OBJECT_BASE` ids and page entries the page colours, so the
+`(object, colour)` keys never collide. The objects' symbolised bounds
 are computed once per stream on the first filter request and kept. The reply's `filter` (`FilterReply`)
 carries the hidden object ids, the masked range-table entries as
 `(object, colour, mask)` triples (a mask is a function of the pair,
@@ -1161,7 +1353,8 @@ CLIP_BIT | REGION_BIT`), and clears the bit over the same triangles —
 two extra draws per masked step. Unmasked steps draw as before, without
 the stencil. Masked draws of a colour come after its unmasked draws of
 every kind; ink of one colour is opaque, so the order within a colour
-does not show.
+does not show — except for alpha layers (J3), which follow their colour's
+opaque steps in stream order (above).
 
 **Per-pass path.** `prepareStream` gives each prepared item of a masked
 pass the mask's regions as stencil fans (`Prepared.mask`, one
@@ -1382,6 +1575,94 @@ sorting happens here.
   reference raster draws (§5.1: `stroke-width = 2 · haloWidthUm`). The
   ramp is one screen pixel (analytic AA on top of MSAA, 04 §6.9). Text
   whose em is under `minTextPx` (4 px) collapses in the vertex shader.
+* **Alpha layers** (J3, §3.9) — one pass at a time, so it paints each
+  sample once. The arena fragment shaders end in `outA(colour, a)`:
+  `u_clear` (1 − opacity) and `u_multiply` are 0 on opaque draws, which
+  then write `(colour, a)` as before; an alpha layer writes `(colour,
+  a · opacity)` under `blendFuncSeparate(SRC_ALPHA, ONE_MINUS_SRC_ALPHA,
+  ZERO, ONE)`, or for Multiply `(mix(1, colour, a · opacity), 1)` under
+  `blendFuncSeparate(DST_COLOR, ZERO, ZERO, ONE)` — destination alpha
+  kept in both, so loupe and drape textures stay opaque — `dst · (1 − α + α·c)`
+  per channel, across parts and across the map and page, which share
+  the framebuffer. **Stencil test-and-set:** `ALPHA_BIT` (0x08) with
+  `stencilFunc(EQUAL, 0, ALPHA_BIT [| REGION_BIT])`, `stencilOp(KEEP,
+  KEEP, INVERT)`, `stencilMask(ALPHA_BIT)`: a sample's first fragment
+  sets the bit and later fragments of the pass fail — a self-crossing
+  stroke, join wedges, overlapping instances and halo quads blend once,
+  keeping the shaders' own edge alpha (hairline floor, hatch ramp,
+  MSDF). Every kind but a fill draws **twice**: fragments of full
+  coverage first (`u_minCover` 0.999), then the fringe, so a quad's or
+  ribbon's faint edge cannot take a sample a neighbour covers fully; a
+  zero-coverage fragment is always discarded. An alpha fill, hatch or
+  stroke's indices sit after every opaque index of its kind in the part
+  (review J3), so a colour's opaque span never takes one in. Then the same geometry
+  with colour off and `ZERO` clears the bit. A clipped glyph pass marks
+  its area in `CLIP_BIT` first and tests `EQUAL, CLIP_BIT, CLIP_BIT |
+  ALPHA_BIT [| REGION_BIT]`, and clears the area after. Two alpha passes
+  that overlap blend twice, in order; a filled and stroked shape at 50 %
+  shows the stroke's inner half over the fill (per pass, not per group).
+  The `kinds` switch, the page-clip scissor and the screen-only rules
+  apply as to an opaque draw.
+* **Images** (J6, §3.10) — every image pass is an alpha item (at opacity
+  1 when opaque: its texture's own alpha blends), so it draws as its own
+  step in its row's place, after the row's opaque draws; the graphics
+  rows hold only images, so that is stream order. One draw per image: the
+  unit square by vertex id (no buffer) through the pass's affine,
+  origin-relative like every vertex, `v` flipped and the crop applied to
+  the texture coordinate; the texel's straight alpha × opacity is the
+  coverage, blended as an alpha layer (Multiply under `DST_COLOR, ZERO`).
+  A quad covers each sample once, so no stencil test-and-set; under a
+  mask the region bit must be clear. Textures are RGBA8 from an
+  unpremultiplied, unconverted `ImageBitmap`, mipmapped; **magnified
+  nearest-neighbour**, as the oracle and the PDF sample (§3.10), so an
+  enlarged graphic shows the pixels it prints with; minified trilinear.
+  Without its texture an image draws its quad's outline (1 px, 60 % grey)
+  while it loads (`FrameStats.imagesPending`), and after a failure only
+  with `outlineMissingImages` (the editor); the viewer and kiosk draw
+  nothing for it. The loupe and the 3D drape draw through the same call.
+  **Graphic textures** (`lib/graphic-textures.ts`, one loader per
+  `VectorMapLayer`, `MapGlEngine.setGraphics`): bytes only from
+  `print.png` with the kiosk key — a graphic is asked without a box
+  first, a PNG answers as stored and an SVG answers 400, then is asked
+  over its **window** — the union of the crops drawn in the frame
+  (`unionWindow`, course-print.md §6.3; none when one is uncropped), as
+  `print.png?w=&h=&crop=` — at the larger of `svgRasterBox` of the
+  window for its placed size in stream µm (scale ratio 1: in Layout a
+  map-layer image is asked smaller than it prints) and the window's size
+  on screen (`pxPerUm`, which the renderer passes to its `graphic`
+  option) rounded up to a power of two, at most 4096 px on the longer
+  side and 8 MP in all (`SVG_WINDOW_MAX_PIXELS`, so one window fits the
+  64 MiB budget undivided) (`svgDrawBox`; SVG sharpness fix, 2026-11-19: before, the whole
+  graphic was asked at the print box and decoded at most 2048 px, so a
+  crop or a zoom showed few pixels). It is asked again 250 ms after the
+  box grows or the window changes, the old texture drawn meanwhile with
+  its own window (when a crop grows past it, the part outside samples the
+  texture's edge until the new raster arrives); a smaller box on the same window asks nothing, so zooming
+  out keeps the sharper texture. The texture comes with its window
+  (`WindowedTexture`) and the renderer draws the crop relative to it. On
+  a network failure the offline print store's copy under the same URL,
+  else under the print's own box of the window (what
+  `prepareOfflinePrint` stored). Decoded at most 2048 px on the longer
+  side for a PNG and 4096 px for an SVG window; the textures (× 4/3 for mips) are held
+  under their own 64 MiB budget, outside the map's (`EngineStats.graphicBytes`,
+  `graphicsPending`): over it the largest is decoded again at half size
+  until the set fits; an image is never dropped for the budget. An SVG
+  drawn at several sizes or crops in one frame is asked once, over the
+  union window at the largest box (by area). A graphic no frame has asked for in 120 frames that drew
+  images (a deleted object, a switched course) is dropped; a replaced or
+  dropped texture is freed on the GPU (`releaseGraphic`) and marks the
+  drape stale, as an arrival does. Only definitive answers are
+  remembered (200, 400, 404 and other 4xx): no network with nothing
+  stored, a 5xx, 408 or 429 is asked again after a backoff (2 s doubling
+  to 60 s) and draws as loading until then; offline a graphic not stored
+  unboxed is taken for an SVG for its box request, and a miss there too
+  starts again from the probe. Offline an SVG is found only at a box and
+  window `prepareOfflinePrint` stored, so an image placed at a scale
+  ratio other than 1 (a page image through `T_map⁻¹` too) draws as
+  loading offline.
+  The canvas's `data-graphics` is `pending` while an image draws as its
+  loading outline (2D) or the loader has requests in flight (3D,
+  `TerrainFrameStats.imagesPending`), else `ready`.
 * **Pattern clip** — per clip group: the areas into stencil bit 0
   (`REPLACE`, colour masked), the group's instances where the bit is
   set (`EQUAL`), the areas again with `ZERO`.
@@ -1589,6 +1870,9 @@ By default it draws through the per-pass path (supersampled 2×);
 worker handler (gate off, Latin text page) and draws through the arena
 path at the context's MSAA — the §6.2 MSDF text tier and the filter
 scenes' arena tier (a stream with masks brings its filter on `loaded`).
+A scene with an alpha pass always takes the arena path (J3; `data-path`
+says which), and the stats line names its alpha layers
+(`engine.visibleAlphaLayers`).
 
 `/dev/map-gl-doc?mode=source|pilot|envelope[&via=document|reader][&worker=0][&gate=0][&budget=<MB>][&lod=0][&kinds=…][&compare=1][&url=…][&bench=1]`
 (`pages/dev/MapGlDocPage.tsx`) runs the whole pipeline on an OCAD,
@@ -1619,7 +1903,7 @@ residency budget (MB, default 150), `lod=0` turns off the glyph skip,
 the text skip and the hatch tint, `kinds=fill,stroke,…` draws only those kinds; `compare=1`
 also draws the same stream through the per-pass golden path into a
 second canvas at a zoom where every stroke is ≥ 1.5 px and publishes
-the fraction of pixels differing by more than 16 levels (§6.2's channel tolerance); `pick=1` (G5)
+the fraction of pixels differing by more than 16 levels (§6.2's channel tolerance) — unavailable for a stream with an alpha pass, which the per-pass path does not draw (the page says so, J3); `pick=1` (G5)
 makes a click hit-test the document (`hitDocument`, 6 CSS px) and select the top hit through the
 edit part, publishing the hits and the edit state as `__mapGlDoc.pick` once the frame that draws it
 is drawn (the canvas's `data-pick`), and `window.__mapGlDocLines()` lists every line object's first
@@ -1650,11 +1934,17 @@ published on `window.__mapGlDoc` for Playwright.
 | `map-gl/__tests__/engine.test.ts` (dynamic bucket) | `setCourse` uploads `C`, drawn below the zoom gate too, rebuilt at once, `onCourse` / `onChange`, `engine.colours` = the reply's; one request in flight (F20): of three calls during one request the first and the last are posted, both replies drawn in order, the middle never sent; `null` recorded and posted like any input, releasing `C`; the inputs before the load → one request with the last, right after the load message; a `load` during a request re-posts at once with a new generation and the older reply is dropped; a worker `error` ends the request and the recorded input goes; F20b: a course `error` of an overtaken generation ends nothing and leaves the load in flight standing, the matching one ends the request (its late reply dropped, the waiting input drawn), one of an older generation leaves the request in flight; course bytes fixed |
 | `map-gl/__tests__/buckets.test.ts` (filter regions) | per colour the unmasked draw then one per mask, the same indices regrouped, `layers` in draw order, hidden objects win over masks, no `filter` without entries; instance draws and clip groups split by mask |
 | `map-gl/__tests__/worker-course.test.ts` (filter regions) | a `hide` region hides the document object meeting it, exact and `fastFilter` alike, never a course object; a far region hides nothing; a clip region by document colour → `(object, colour, mask)` on the completed stack and the region's triangles origin-relative; the course part stays unmasked in the visible set; no regions / `null` → no filter |
+| `render/__tests__/knockout.test.ts` (J15) | `knockoutFootprint`: the quad inset 0.05 mm in its own frame, rotated too, none at 0.1 mm or less; `applyKnockouts`: only image passes below meet a footprint, fills and the knockout itself unmasked, stacked knockouts nest, filter-region masks kept and joined, masks deduplicated, the stream unchanged without a cut |
+| `render/__tests__/trace-outline.test.ts` (J19) | `traceOutline`: a centred square → its four corners in fractions; a disc within 2 % of its area and ≤ 200 vertices; a ring's hole filled; two shapes largest first, diagonal pixels closed rings; a full or empty raster `[]`; the 50 % threshold |
+| `render/__tests__/knockout.test.ts` (J19) | `knockoutFootprints`: an outline mapped through the quad with y up, cut to a crop, nothing outside it, the box without one; `symbolise` cuts by each ring, a far image unmasked; no knockout carries no mask |
+| `map-gl/__tests__/worker-course.test.ts` (knockout images, J15) | a course knockout → one `(object, colour, mask)` entry for the overlay, the footprint's triangles origin-relative, the overlay's alpha item masked and the knockout's not; none without a knockout; after a document region's mask; a page knockout on the page part in page colours, its footprint through `T_map⁻¹` and the page overlay's alpha item masked |
 | `map-gl/__tests__/worker-protocol.test.ts` (filter regions) | a `stream` source with masks → `loaded.filter`, one entry per (object, colour), transferable; none without masks |
 | `map-gl/__tests__/engine.test.ts` (loupe) | `renderInset`: one more `renderDocument` with the loupe view into the inset target, the page clip forwarded, `compositeInset` at the box; no rebuild, no worker message; nothing before the load; `releaseInset` forwarded |
 | `map-gl/__tests__/engine.test.ts` (filter regions) | a clip region masks the black line's draw, a hide region removes it, the reply's hidden ids join `setHidden`'s, `null` clears mask and hidden set |
 | `map-gl/__tests__/prepare.test.ts` (filter regions) | every item of a masked pass carries one fan per region, shared by the passes of one mask |
 | `map-gl/__tests__/worker-patch.test.ts` (G4) | object identity: range-table ids are the `objectIndex`, though the bridge drops an object of a hidden symbol; a load without a patch, with `null`, a disabled or an empty patch → the identity state and the same parts; hide → ids only, nothing touched; modify within a cell → that cell only, the object under its own id at its new place, the queue preparing the new content; a move across cells → both touched, the old cell out of the detail set; add → id N in its cell; add outside the grid → the large bucket, `null` once removed; resymbol to a patch symbol with a new glyph → the atlas grown, earlier meshes in place, the instance on the new mesh; hide + modify → hidden wins, nothing touched; a second change elsewhere → its cell only, the toggle off → parts deep-equal to the unpatched load's; detail only for the held cells; issues reported; transferables; a patch with the load drawn from the first frame; a request before the load → `error { patch }`; a request whose symbolisation throws → `error`, the next change diffed against the last reply; `worker-patch-failure.test.ts`: a request that throws while preparing puts the overlay, bytes and cut features back, the atlas it grew goes with the next reply; with a course layer: cut features skip a hidden boulder, course ids from `COURSE_OBJECT_BASE`, a hide region acts where a moved object is now and on an added one, clip regions over pinned and patch objects → the document's masks first, the patch's after, each with its own triangles |
+| `map-gl/__tests__/alpha.test.ts` (J3) | `passAlphaState`; alpha items out of the range tables (an opaque part has no `alpha` key), one per pass, clipped glyph with its area, two sources in order, buffers in the transfer list; visible set without alpha unchanged, alpha steps after the colour's opaque steps (static by stream order, then the dynamic part), indices rebased and appended, hidden skipped, mask per (object, colour), glyph and clip instances appended; `prepareStream` refuses alpha; the highlight drops opacity and blend |
+| `e2e/map-gl-golden.spec.ts` (alpha) | `alpha-passes`, `alpha-text`, `blend-multiply` through the arena path at the contract budget (§6.2 "Alpha arena tier"), sent there without `path=arena` |
 | `map-gl/__tests__/buckets.test.ts` (G4) | `prepareBucketPartFrom`: two streams merged by colour into one colour-major range table, the first source first within a colour, each source's own glyph meshes; left-out passes absent; one source = `prepareBucketPart`; `sourcesHaveLayer`; `assignToGrid`: the load's grid by centre, outside it or large → the large bucket |
 | `map-gl/__tests__/engine.test.ts` (G4) | `setPatch` before the load goes with it and the first frame hides the object; a change posts `patch`, never `load`, hide skips the object's ranges and the toggle off restores the same visible set; a touched cell's resident detail swapped in the same reply, a cell that left the detail set released and not asked for; a touched cell's detail in transit when the request went dropped and asked again (old part, then the new one); one request in flight, the latest next, a failed one rejecting only its callers; a worker `error` without a generation ends the request in flight and the waiting input is sent; a reply's atlas reaches the renderer, `L` replaced and cleared with its bytes; a reply re-posts the course |
 | `e2e/map-gl-golden.spec.ts` (filter regions) | the four `filter-*` scenes on the per-pass path at the contract budget, and through the arena path at `ARENA_FILTER_MAX_RATIO` with pixel probes on both sides of each region (§6.2) |
@@ -1669,6 +1959,15 @@ itself is drawn by the renderer in colour order with the map (C4,
 (`TileLayer`, `MapLoupe`, the tile-progress poll, the Web Mercator
 viewport and the calibration affine) were the other base layer until E3
 and were deleted in E4b; `documentHash` is a required prop.
+
+Images (J6): the viewer passes `VectorMapLayer` its event's `nameId`,
+and the layer makes the graphic-texture loader (§5.2 "Images") with the
+kiosk key from the URL (`kioskKeyFromUrl`), so `image` course objects
+and page images draw in the editor, the viewer and the kiosk;
+`outlineMissingImages` is set by the editor only. The Course and Layout
+modes and Class view draw through the same viewer; `MapPanel` and
+`courseLayerRequest` needed no change (every course-object kind is
+already forwarded).
 
 #### Selecting the layer
 
@@ -2386,9 +2685,10 @@ document itself. Three pieces, all in the viewer's worker and engine:
   unclipped by a page frame. Strokes, glyphs and text are redrawn as
   they are (text halos are left out); **a fill or hatch is drawn as a
   150 µm outline** (`HIGHLIGHT_OUTLINE_UM`) of its area, and a
-  pattern-clipped glyph pass as the outline of its clip — the stream has
-  no alpha (§8 "Alpha"), and a flooded area would hide what is selected
-  inside it (user decision 2026-11-14; deviation from 04 §7's "passes
+  pattern-clipped glyph pass as the outline of its clip — a flooded area
+  would hide what is selected inside it (a translucent flood is possible
+  since J3 and not built; `highlightPasses` drops the copies' opacity and
+  blend, so the highlight stays opaque) (user decision 2026-11-14; deviation from 04 §7's "passes
   redrawn in a highlight colour"). Selecting re-symbolises and
   re-prepares nothing static: the copies keep their tessellation input,
   the static parts are untouched.
@@ -2453,8 +2753,8 @@ and draws no description sheet.
 **Tools.** `MapViewerEditorProps.tool` (D5, `course-editor.md` §6): the
 viewer offers pointer-down to the active tool first, routes clicks of an
 exclusive tool to it, and draws its `ToolShape`s (paper mm → the rotated
-overlay) in `editor-tool-layer` — circles, lines, handles, text and (D7)
-`image`, a raster by its three corners; `draftObjects` replace stored course
+overlay) in `editor-tool-layer` — circles, lines, handles and text (D7's
+`image` raster left in J6: images are the map engine's); `draftObjects` replace stored course
 objects in the layer request, with `fastFilter` while a filter region is
 dragged (§4.11).
 
@@ -3187,6 +3487,40 @@ stream order — the stream order *is* the painter's order (§3.6), so no
 reordering and no decision of the backend's own. `docs/course-print.md`
 owns everything around it: the writer, colour modes, fonts, the page.
 
+**Opacity and blend** (§3.9; J1). A fill, stroke, tapered outline or
+hatch with `opacity` or `blend` is written as `q /GS<n> gs … Q` — one
+painting operator, so each pixel blends once. A glyph or text pass (one
+`Do` per instance, one glyph per `Tj`; a form's fill and stroke
+composite separately) is drawn into an **isolated transparency-group
+form** (`OperatorResources.group`, `TG<n>`: `/Group << /S /Transparency
+/I true >>`, its own `/Resources`, content self-contained — its own
+colour, line style and `Tr`, a BBox in layer units — for a glyph pass
+each instance's position ± the form's farthest corner (mitres in, as
+the cull computes it) times its scale, so a turn stays inside; for a
+text pass its bounds plus `sizeUm + 2 × haloWidthUm`; both plus
+`GROUP_BBOX_PAD_UM`, since the BBox clips) and the form is drawn `q /GS<n> gs
+/TG<n> Do Q`. The ExtGState (`OperatorResources.alpha`) is `<< /Type
+/ExtGState /ca a /CA a [/BM /Multiply] >>`, one per distinct (opacity to
+4 decimals, blend) per document, named in first-use order; the page that
+uses one gets `/Group << /Type /Group /S /Transparency /CS /DeviceCMYK >>`
+(`/DeviceRGB` in `rgb`), copied with `copyPage`. A pass that writes
+nothing (culled) asks for no resource; an alpha pass under a filter mask
+stays inside the mask's `W* n`. A writer without `alpha` (none in the
+tree) draws alpha passes opaque; one with `alpha` but no `group` draws
+glyph and text alpha passes opaque (the others under their ExtGState). Tests: `print/__tests__/alpha-pdf.test.ts`.
+
+**Images** (§3.10; J5). An image pass is `q <quad> cm [0 0 1 1 re W n
+<crop> cm] /Im<n> Do Q`: the quad in the layer's unit, so the image
+XObject's unit square lands on it; a crop clips to the unit square and
+draws the whole source under `[1/w 0 0 1/h −x/w (y + h − 1)/h] cm` (the
+crop's y is from the top, PDF's v from the bottom). The XObject names come
+from the caller (`OperatorOptions.images`, graphic id → name); a pass
+whose graphic has no name is left out. An image with alpha is an RGB
+XObject with an `/SMask`; no `/Interpolate`, so it samples
+nearest-neighbour as the oracle does. Opacity and blend wrap the whole
+`q … Q` in the pass's ExtGState like any other pass. Tests:
+`print/__tests__/operators.test.ts` "image (§3.10, J5)".
+
 **Units** (05 §5.2; C11 2026-10-24). Coordinates are the stream's paper
 µm minus `originUm`, written as **integers in a layer unit `u`**
 (`unitUm`; `passStreamOperators` defaults to 1 µm). `mapLayerOperators`
@@ -3266,7 +3600,9 @@ miss) and without moving any point that is written:
 | `stroke`, pointed + taper | the whole **outline**, bounds as is |
 | `glyph` | an **instance**: its position grown by the form's reach (the farthest corner of `glyphFormBBox` from the origin, strokes and mitres in) × the instance's scale — a turn cannot take the form farther. Turn classes are counted over all instances, so the form choice is the unculled one's; a pass with no instance left writes nothing, not even its colour |
 
-Not culled: `text` and `hatch` (a text is one pass of few glyphs; a
+Not culled: `text`, `hatch` and `image` (an image is one `Do`, but its
+XObject is embedded whether drawn or not: culling it pays only with the
+embedding culled too, Pending; a text is one pass of few glyphs; a
 hatch is clipped to its area, whose bounds would be the test — both left
 for a measurement that asks for them), clips and filter-mask frames. A
 page is unchanged but for its bytes: the golden tier and the corpus
@@ -3497,6 +3833,42 @@ arena image (a 5 × 5 px window, Σ|Δ| ≤ 90). Measured at introduction
 | `filter-moved` | 267 / 260 400 (0.103 %) | 1 875 / 260 400 (0.720 %) |
 | `filter-show-only` | 373 / 260 400 (0.143 %) | 2 723 / 260 400 (1.046 %) |
 
+**Alpha arena tier** (J3; planner answer 18: the arena path only, at
+most 1.5 %). J1's `alpha-passes`, `alpha-text` and `blend-multiply`
+(§6.3) are drawn through the arena path only — the per-pass path draws
+no alpha (§5.2) — against J1's goldens. They measure under the
+contract's budget, so the tier is held to it (**≤ 0.5 %**,
+`ALPHA_TIER_MAX_RATIO`); the reference raster composites each pass once,
+so the whole-image diff checks the once-per-pass rule, the second blend
+where two passes overlap and the Multiply products. The test also
+asserts that the page sends the scene to the arena path and draws alpha
+layers. Measured at introduction (headless Chromium, 2026-11-18):
+
+| Scene | Arena |
+|---|---|
+| `alpha-passes` | 201 / 83 200 (0.242 %) |
+| `alpha-text` | 20 / 18 000 (0.111 %) |
+| `blend-multiply` | 128 / 57 200 (0.224 %) |
+
+**Image tier** (J6). `course-graphics` (§6.3) is drawn through the arena
+path only (the per-pass path draws no images; `prepareStream` refuses
+them and the fixture page decodes the scene's PNGs,
+`goldenSceneGraphics`) and held to the filter arena tier's **≤ 1.5 %**:
+measured at introduction 2 127 / 218 400 (0.974 %, headless Chromium,
+2026-11-18), the hairline MSAA steps of its legs and lines — the images'
+insides agree, magnified nearest on both sides. Probes compare the
+lucka's red band, gold band and transparent middle, the cropped stripes
+and the Multiply lucka with the golden, and check the band is opaque red
+and the middle the map's green.
+
+`course-knockout` (J15) is held to the same tier. It probes lucka 31's
+middle for the map's green (the overlay cut), lucka 32's middle for the
+overlay's orange (not cut) and the overlay outside both.
+
+Not in J3: pixel probes of the blended values (the whole-image budget
+holds them to 16 levels everywhere but the ≤ 0.5 % of edge pixels) and a
+framebuffer-target run (loupe and drape call the same `renderDocument`).
+
 **PDF leg** (C3, `packages/api/src/render/__tests__/pdf-golden.test.ts`;
 the method and the full table are `docs/course-print.md` §9.2). Every
 golden scene is written as a one-page PDF covering its golden frame,
@@ -3563,6 +3935,14 @@ symbolisation, and every backend must draw all of them:
 | `hatch-area` | 45° hatch with offset, clipped to a pentagon |
 | `colour-order` | passes pushed out of order; the sort decides what covers what |
 | `text-with-halo` | halo pass under text pass, same positions, different colours |
+| `alpha-passes` | §3.9 opacity on fill, self-crossing stroke, dashed stroke, hatch, overlapping glyph instances (one clipped), over yellow and blue (J1) |
+| `alpha-text` | §3.9 text and its halo at 50 % over a fill: overlapping halo strokes blend once (J1) |
+| `blend-multiply` | §3.9 Multiply over yellow, blue and black, at 100 % and 50 %, a Multiply stroke over a Multiply fill (J1) |
+
+The three §3.9 fixtures are drawn by the reference raster and the PDF
+(goldens in `e2e/__golden__/map-gl/`, the PDF tier of §6.2 at its usual
+budgets); the WebGL2 backend's golden spec does not list them until J3
+draws alpha.
 
 The symbolisation rules of §4 are proven by the **pilot symbol family**
 (`packages/shared/src/render/__fixtures__/pilot-symbols.ts`, exported as
@@ -3616,6 +3996,9 @@ WebGL2 per-pass path against the golden, measured at introduction
 | `course-all-controls` | ISOM 403, 304; all controls with a free-order course | every site drawn, codes, no legs, start north |
 | `course-leg-styles` | ISOM 401, 505, 516; S → 31 a bent 705, 31 → 32 a bent 707 marked route over the 516, 32 → F `style: "none"` with a stored gap (F1, `course-layer.md` §10.1) | the 705 piece runs through its bend; the route in upper purple, dashed, after black; nothing for the `none` leg, which keeps its pieces; numbers unchanged |
 | `course-corridor` | ISOM 401, 505, 101, 516; S → 31 → 32 one 60 m run (4 mm, h 2 < R 2.5) with its `edge` and a 3 mm band, bent at (36, 10); 32 → 33 a 150 m corridor without edge with a 2 mm band; 33 → F plain (F2, re-shaped in F19, `course-layer.md` §10.2) | the band one generated `clip` region: every base pass masked, no course pass; clear inside every corridor (at the bend, at the change of width at 32) and inside the mouths (31's circle across, the 701's back corner), the band round them, nothing behind the 701's base; at 33, the corridor's only terminal end, the band stops on the line through its centre with rounded corners and the map shows behind it (F22, `course-layer.md` §10.2 "Ends"); the edge lower purple `705/edge` along S → 31 → 32 only, over the 401; 31's circle opened towards both legs (two arcs), 32 and 33 whole (the wide corridor covers the junctions; h ≥ R), no cut in the derivation; no 705 along the three corridor legs, 33 → F the only leg line (F14). Drawn on the default GL path (the arena path's MSAA edge steps exceed `ARENA_FILTER_MAX_RATIO` on this many edges: 2.0 %, D3's filter scenes cover the arena masks) |
+| `course-corridor-translucent` | `course-corridor`'s map and course with translucent bands: the narrow run at 0.6, the wide leg at 0.5 (J13, `course-layer.md` §10.2) | no region and no mask; one white-out fill (`white-upper`) at the minimum 50 %, its rings the opaque scene's clip region, above every map pass and lower purple, below upper purple; WebGL2 through the arena path (an alpha pass) held to the arena tier's 1.5 % (`e2e/map-gl-golden.spec.ts` "translucent corridor band"); `course-corridor` itself stays opaque (its wide leg's stored 0.5 is now 1, as the migration) and bit-identical |
+| `course-graphics` | ISOM 406, 505, 106; S → 31 → 32 → F with three `image` course objects (J5, J6): the 64 px lucka PNG (opaque red band, half-opaque gold band, transparent middle) framing 31, the striped 32 × 16 px RGB graphic cropped to its middle half, flipped and turned 20°, a lucka at 80 % Multiply framing 32; graphics `goldenSceneGraphics` | one image pass each in `course:graphics` after every map colour and lower purple, before upper purple: the circles and numbers over the luckas, the map's green through the middle, the stripes over the brown line and the lucka under them; drawn on the arena path only (§6.2 "Image tier") |
+| `course-knockout` | the `course-graphics` map and course; three `image` course objects (J15): the opaque striped graphic over the whole map (the overlay), a lucka marked `knockout` framing 31, a plain lucka framing 32; graphics `goldenSceneGraphics` | the overlay's pass alone is masked, by lucka 31's footprint (§4.11 "Knockout footprints"); the map's green and the lower-purple circle and legs show through lucka 31's middle, the overlay through lucka 32's; outside the luckas the opaque overlay hides the map and the lower-purple course, upper-purple numbers draw over it; arena path only (§6.2 "Image tier") |
 
 The **filter scenes** (D3, 04 §8 row "Filter regions", §4.11) draw one
 ISOM base map — a 407 area (0–60 × 0–40 mm), 101 contours (a straight
@@ -4294,7 +4677,7 @@ Tests:
 | `packages/web/src/map-gl/text-atlas.ts` | the MSDF text atlas: page ranges and selection, glyph lookup, glyph table, halo clamp (§5.2 "Text atlas") |
 | `packages/web/src/map-gl/text-atlas-build.ts`, `packages/web/scripts/generate-text-atlas.ts`, `packages/web/scripts/text-atlas/Dockerfile` | atlas generation (`pnpm text-atlas:generate`, §4.10) |
 | `packages/shared/fonts/msdf/` | the committed text atlas pages |
-| `packages/web/src/map-gl/buckets.ts` | cells, large bucket, per-part preparation and range table, visible set, clip groups, zoom gate, LRU |
+| `packages/web/src/map-gl/buckets.ts` | cells, large bucket, per-part preparation and range table, alpha items and layers (J3), visible set, clip groups, zoom gate, LRU |
 | `packages/web/src/map-gl/arena.ts` | vertex arenas: free list, growth by copy |
 | `packages/web/src/map-gl/worker.ts`, `worker-entry.ts` | the worker's message handler and its binding |
 | `packages/web/src/map-gl/engine.ts` | main-thread controller: worker transport, residency, visible-set rebuilds, the one course request in flight (F20), the document hit-test and the edit part (G5), the 3D frame (H6: `setTerrain`, `renderTerrain`, settling, the drape's budget) |
@@ -4327,12 +4710,38 @@ The shared module is exported as a namespace: `import { render } from
 
 ## 8. Pending in this chapter
 
-- **Alpha: a translucent corridor band** (`docs/course-layer.md` §10.2,
-  F2). `LegProps.corridor.whiteOpacity` is stored but drawn opaque: the
-  band is a clip region, which removes the map wholly. A band below 1
-  needs a fill with alpha over the same rings — a pass colour opacity the
-  stream, the three backends and the PDF (`ca` / an ExtGState) do not
-  carry yet — drawn above every map colour and below the course.
+- **Alpha** (§3.9). The stream, the reference raster and the PDF carry
+  opacity and Multiply since J1, the WebGL2 arena path since J3 (§5.2
+  "Alpha layers", the §6.2 alpha tier); the per-pass path refuses them.
+  Known GL limits: within a colour row the alpha layers follow the row's
+  opaque draws, so an opaque pass later in the stream that overlaps a
+  Multiply pass of the same row draws under it on screen and over it in
+  the PDF; alpha layers are not merged (non-overlapping alpha passes of
+  one state could share a draw, as clip groups do — for J6's draw
+  counts); a halo wider than half the MSDF range is clamped and reads as
+  a half-coverage box at saturation (opaque or not; `alpha-text` keeps
+  its halo inside the field). Not yet:
+  **group opacity** (a filled and stroked shape at 50 % as one group: PDF
+  transparency groups for every kind, GL offscreen targets); a page-oracle
+  path where a page-layer Multiply blends against the map layer (the two
+  rasters are composited `over`, exact for opacity, not for Multiply —
+  with J4's page objects). The **translucent corridor band** landed in
+  J13 (`course-layer.md` §10.2) as a white fill with alpha in the
+  upper-white row — no row lies above every map colour and below lower
+  purple, so lower-purple ink in the band is veiled too. Multiply and `/ca` on the club's printer are unverified
+  until the print checkpoint after J5.
+
+- **Images** (§3.10). Outside the frame an image course object's PNG is
+  still embedded and its `Do` written (§5.3 "Frame culling"). One SVG
+  placed at two sizes on a page is rasterised once, at the last
+  placement's box (`course-pages.ts`; before J5 too), so the larger one
+  prints coarser under nearest-neighbour sampling. The per-pass path
+  draws no images (§5.2 "Dev pages"). A knockout (J15, §4.11 "Knockout
+  footprints") cuts by its graphic's traced outline (J19) on course
+  objects; a **page** image (Layout mode) still cuts by its box, since
+  page objects do not carry the outline yet. The outline is the graphic's
+  silhouette at 512 px, not a per-pixel alpha cut. A knockout cuts images
+  only; cutting the map's or the course's ink is what a white-out does.
 
 - **§5.2 filter-region limits.** All masks share one stencil bit, so
   overlapping regions of different masks are fine (each masked step marks

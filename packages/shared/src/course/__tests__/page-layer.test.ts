@@ -10,6 +10,7 @@ import { pageScene } from "../../print/__fixtures__/pages.js";
 import { mapLayerTransform, pagePointToMap } from "../../print/page.js";
 import { liberation } from "../../render/__tests__/fonts.js";
 import type { TextPass } from "../../render/pass-stream.js";
+import type { CourseMapObject } from "../../course-maps/schema.js";
 import { courseLayer } from "../layer.js";
 import { mapLayerWindow, pageLayer, pageStreamInMap } from "../page-layer.js";
 
@@ -40,6 +41,66 @@ describe("pageLayer", () => {
     const { input, colours } = layerColours("page-ring");
     const layer = pageLayer({ ...input, objects: [], context: input.map.context }, colours, fonts());
     expect(layer.stream.passes).toEqual([]);
+  });
+});
+
+describe("pageLayer: opacity, blend, rotation (J4)", () => {
+  const draw = (objects: CourseMapObject[]) => {
+    const { input, colours } = layerColours("page-ring");
+    return pageLayer({ ...input, objects, context: input.map.context }, colours, fonts());
+  };
+  const H = 90; // page-ring's paper height, mm
+  const rect = (extra: Partial<Extract<CourseMapObject, { kind: "rectangle" }>> = {}): CourseMapObject =>
+    ({ id: "r", anchor: "page", kind: "rectangle", x: 10, y: 10, width: 20, height: 10, fillMode: "solid", fill: "#1f6fb2", stroke: "#000000", strokeWidthMm: 0.4, ...extra });
+  const bbox = (c: Int32Array) => {
+    const xs = [...c].filter((_, i) => i % 2 === 0), ys = [...c].filter((_, i) => i % 2 === 1);
+    return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+  };
+
+  it("a filled and stroked shape at 50 % puts the opacity on both its fill and its stroke pass; Multiply likewise", () => {
+    const passes = draw([rect({ opacity: 0.5, blend: "multiply" })]).stream.passes;
+    expect(passes.map((p) => p.kind)).toEqual(["fill", "stroke"]);
+    for (const p of passes) expect(p).toMatchObject({ opacity: 0.5, blend: "multiply" });
+  });
+
+  it("opacity reaches a white-out outside, a line and an open path (every kind, every fill mode)", () => {
+    const passes = draw([
+      rect({ fillMode: "whiteoutInverted", fill: undefined, stroke: undefined, strokeWidthMm: undefined, opacity: 0.5 }),
+      { id: "l", anchor: "page", kind: "line", x1: 10, y1: 40, x2: 40, y2: 40, stroke: "#000000", strokeWidthMm: 0.5, opacity: 0.5 },
+      { id: "p", anchor: "page", kind: "path", points: [{ x: 10, y: 50 }, { x: 30, y: 60 }, { x: 40, y: 50 }], closed: false, fillMode: "none", stroke: "#000000", strokeWidthMm: 0.5, opacity: 0.5 },
+    ]).stream.passes;
+    expect(passes.length).toBe(3);
+    for (const p of passes) expect(p.opacity).toBe(0.5);
+  });
+
+  it("objects without the fields, or at opacity 1, give today's stream", () => {
+    const plain = draw([rect()]).stream;
+    expect(draw([rect({ opacity: 1, rotationDeg: 0 })]).stream).toEqual(plain);
+    for (const p of plain.passes) expect("opacity" in p || "blend" in p).toBe(false);
+  });
+
+  it("a rectangle turned 90° is its turned corners about the box centre, in every fill mode", () => {
+    // Stored y-down: box 10..30 × 10..20, centre (20, 15). Turned 90°: 15..25 × 5..25; y-up page µm: y = H − y.
+    for (const fillMode of ["solid", "whiteout", "outOfBounds"] as const) {
+      const fill = draw([rect({ rotationDeg: 90, fillMode })]).stream.passes.find((p) => p.kind === "fill" || p.kind === "hatch")!;
+      expect("path" in fill).toBe(true);
+      if (!("path" in fill)) continue;
+      expect(bbox(fill.path.coords), fillMode).toEqual([15000, (H - 25) * 1000, 25000, (H - 5) * 1000]);
+    }
+    // Clockwise as seen: the path's first corner, the stored bottom-left (10, 20) y-down, lands at (15, 5)
+    // (counter-clockwise would put it at (25, 25)).
+    const solid = draw([rect({ rotationDeg: 90 })]).stream.passes.find((p) => p.kind === "fill")!;
+    if ("path" in solid) expect([solid.path.coords[0], solid.path.coords[1]]).toEqual([15000, (H - 5) * 1000]);
+    // A 709 hatch stays upright: the turned path carries no object angle.
+    const hatch = draw([rect({ rotationDeg: 30, fillMode: "outOfBounds" })]).stream.passes.find((p) => p.kind === "hatch");
+    const upright = draw([rect({ fillMode: "outOfBounds" })]).stream.passes.find((p) => p.kind === "hatch");
+    expect(hatch && upright && hatch.angleDeg).toBe(upright?.angleDeg);
+  });
+
+  it("a page text turned 30° clockwise gets glyph angles of −30 (counter-clockwise in y-up)", () => {
+    const text = draw([{ id: "t", anchor: "page", kind: "text", x: 20, y: 40, text: "Lucka", fontSizeMm: 4, color: "#000000", rotationDeg: 30, opacity: 0.5 }]).stream.passes.find((p) => p.kind === "text") as TextPass;
+    expect(text.opacity).toBe(0.5);
+    expect([...text.angles!].every((a) => Math.abs(a + 30) < 1e-4)).toBe(true);
   });
 });
 

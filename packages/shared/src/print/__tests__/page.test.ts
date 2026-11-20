@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import { mapToPage, mapWindowForFrame } from "../../course-maps/geometry.js";
 import type { CourseMapObject } from "../../course-maps/schema.js";
 import { hatchLines, pathBounds } from "../../render/path.js";
-import { makePath, type PassStream } from "../../render/pass-stream.js";
+import { imageQuadCorners, makePath, type PassStream } from "../../render/pass-stream.js";
 import { flipPageObject, frameInMap, frameRectUm, inverseMapLayerTransform, mapLayerTransform, mapPointToPage, pagePointToMap, transformPassStream } from "../page.js";
 
 const H = 297;
@@ -79,6 +79,15 @@ describe("flipPageObject", () => {
     expect(flipped.points[0]).toEqual({ x: 0, y: 297, hOut: { x: 1, y: -2 } });
     expect(flipped.points[1]).toEqual({ x: 4, y: 289 });
   });
+
+  it("leaves rotation (clockwise as seen), flips, opacity and blend as stored (J4)", () => {
+    const rect: CourseMapObject = { id: "r", anchor: "page", kind: "rectangle", x: 5, y: 10, width: 20, height: 30, fillMode: "whiteout", rotationDeg: 30, opacity: 0.5, blend: "multiply" };
+    expect(flipPageObject(rect, H)).toMatchObject({ rotationDeg: 30, opacity: 0.5, blend: "multiply" });
+    const image: CourseMapObject = { id: "i", anchor: "page", kind: "image", graphicId: 1, x: 5, y: 10, width: 20, height: 30, rotationDeg: -45, flipH: true, flipV: true };
+    expect(flipPageObject(image, H)).toMatchObject({ y: 257, rotationDeg: -45, flipH: true, flipV: true });
+    const text: CourseMapObject = { id: "t", anchor: "page", kind: "text", x: 5, y: 10, text: "x", fontSizeMm: 3, color: "#000000", rotationDeg: 15 };
+    expect(flipPageObject(text, H)).toMatchObject({ rotationDeg: 15 });
+  });
 });
 
 describe("transformPassStream", () => {
@@ -119,6 +128,20 @@ describe("transformPassStream", () => {
     expect(g.instances[4]).toBeCloseTo(k, 6);
   });
 
+  it("an image (J5): its four corners land where T_map puts them, under rotation and scale; crop and alpha kept", () => {
+    const img: PassStream = { ...stream, objectIdx: new Uint32Array(1), symbolIdx: new Uint32Array(1), passes: [{ kind: "image", colour: 4, graphicId: 7, quad: [8000, 2000, -1000, 6000, 3000, -4000], crop: { x: 0.1, y: 0.2, width: 0.5, height: 0.6 }, opacity: 0.5, blend: "multiply" }] };
+    const p = transformPassStream(img, t).passes[0];
+    if (p.kind !== "image" || img.passes[0].kind !== "image") throw new Error("kind");
+    const src = imageQuadCorners(img.passes[0].quad), dst = imageQuadCorners(p.quad);
+    for (let i = 0; i < 4; i++) {
+      const [x, y] = mapPointToPage(t, src[i][0], src[i][1]);
+      expect(dst[i][0]).toBeCloseTo(x, 6);
+      expect(dst[i][1]).toBeCloseTo(y, 6);
+    }
+    expect(Math.hypot(p.quad[0], p.quad[1])).toBeCloseTo(Math.hypot(8000, 2000) * k, 6);
+    expect(p).toMatchObject({ graphicId: 7, crop: { x: 0.1, y: 0.2, width: 0.5, height: 0.6 }, opacity: 0.5, blend: "multiply" });
+  });
+
   it("hatch lines land on the transformed lines of the original", () => {
     const src = stream.passes[2], dst = out.passes[2];
     if (src.kind !== "hatch" || dst.kind !== "hatch") throw new Error("kind");
@@ -130,6 +153,11 @@ describe("transformPassStream", () => {
       expect(Math.abs(p - Math.round(p))).toBeLessThan(1e-3);
     }
     expect(dst.spacingUm).toBeCloseTo(1400 * k, 9);
+  });
+
+  it("keeps each pass's opacity and blend (J4)", () => {
+    const alpha = transformPassStream({ ...stream, passes: stream.passes.map((p, i) => ({ ...p, opacity: 0.25 * (i + 1), ...(i % 2 ? { blend: "multiply" as const } : {}) })) }, t);
+    expect(alpha.passes.map((p) => [p.opacity, p.blend])).toEqual([[0.25, undefined], [0.5, "multiply"], [0.75, undefined], [1, "multiply"]]);
   });
 
   it("filter masks: region paths moved like the passes", () => {

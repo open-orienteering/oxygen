@@ -20,7 +20,7 @@ import type { FontMetrics } from "../render/truetype.js";
 import type { PassStream } from "../render/pass-stream.js";
 import type { RenderSymbol } from "../render/symbol.js";
 import { symbolise } from "../render/symbolise.js";
-import { courseColourStack, withObjectColours } from "./colour-stack.js";
+import { PAGE_GRAPHICS_ID, courseColourStack, withObjectColours } from "./colour-stack.js";
 import { pageObjectColours, pageObjects } from "./objects.js";
 import { courseSymbols } from "./symbols.js";
 import type { CourseDocumentContext } from "./types.js";
@@ -56,7 +56,7 @@ export interface PageLayer {
   frameUm: ComposedPage["frameUm"];
   /** The frame's corners in paper mm (y-up): where the map layer is clipped. */
   frameRing: MapPoint[];
-  /** Page images (`layer: "page"`, page µm); never in the stream. */
+  /** The graphics the page layer draws (`layer: "page"`, page µm): the fetch list (J5); the drawing is in the stream. */
   images: PageImage[];
   warnings: PageWarning[];
 }
@@ -92,7 +92,10 @@ export function pageLayer(input: PageLayerInput, mapColours: readonly DocumentCo
     { x: (fr.x + fr.width) / 1000, y: (fr.y + fr.height) / 1000 },
     { x: fr.x / 1000, y: (fr.y + fr.height) / 1000 },
   ];
-  const built = pageObjects(flipped, set, pageSymbols, palette.indexOf, { window: frameRing, textValues: input.textValues });
+  // Page images draw in the page layer's last row, `page:graphics`, added only when there is one (J5).
+  const colours = [...palette.colours];
+  const graphicsRow = flipped.some((o) => o.kind === "image") ? colours.push({ id: PAGE_GRAPHICS_ID, name: "Page graphics", cmyk: [0, 0, 0, 0] }) - 1 : undefined;
+  const built = pageObjects(flipped, set, pageSymbols, palette.indexOf, { window: frameRing, textValues: input.textValues }, graphicsRow);
   for (const w of built.warnings) warnings.push({ code: w.code, message: w.message });
   const render = built.objects.map(({ ref: _ref, ...o }) => o);
   if (input.description) {
@@ -105,7 +108,7 @@ export function pageLayer(input: PageLayerInput, mapColours: readonly DocumentCo
   for (const w of page.warnings) warnings.push({ code: w.code, message: `page layer: ${w.message}` });
 
   const images: PageImage[] = built.images.map((i) => ({ layer: "page" as const, ...i }));
-  return { stream: page.stream, colours: palette.colours, transform, frameUm, frameRing: frameInMap(transform, frameUm), images, warnings };
+  return { stream: page.stream, colours, transform, frameUm, frameRing: frameInMap(transform, frameUm), images, warnings };
 }
 
 /**

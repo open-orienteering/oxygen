@@ -27,10 +27,11 @@ const source = doc("source");
 const iof = doc("iof");
 
 describe("the course layer's stack on the IOF layers", () => {
-  it("accepts the stack: upper white directly under upper purple, lower purple over every area row", () => {
+  it("accepts the stack: upper white and the graphics row (J5) directly under upper purple, lower purple over every area row", () => {
     const stack = courseColourStack(iof.header.colours);
     const upper = stack.index.get("purple-upper")!;
-    expect(stack.index.get("white-upper")).toBe(upper - 1);
+    expect(stack.index.get("white-upper")).toBe(upper - 2);
+    expect(stack.colours[upper - 1].id).toBe("course:graphics");
     expect(upper).toBe(stack.colours.length - 1);
     const lower = stack.index.get("purple-lower")!;
     for (const id of ["yellow100", "brown50-paved", "brown50-road"]) {

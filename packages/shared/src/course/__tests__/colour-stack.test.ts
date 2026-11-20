@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CourseStackError, VARIATION_TINTS, courseColourStack, hexToCmyk, withObjectColours, withTintColours } from "../colour-stack.js";
+import { COURSE_GRAPHICS_ID, CourseStackError, VARIATION_TINTS, courseColourStack, hexToCmyk, withObjectColours, withTintColours } from "../colour-stack.js";
 import { paletteStack } from "../../symbol-library/palette.js";
 import type { DocumentColour } from "../../map-document/header.js";
 import { cmykToHex } from "../../render/symbol.js";
@@ -9,27 +9,31 @@ const aligned = (spec: "ISOM2017-2" | "ISSprOM2019-2"): DocumentColour[] =>
   paletteStack("iof2024", spec).map((c) => ({ ...c, paletteIds: [c.id.slice(c.id.indexOf(":") + 1)] }));
 
 describe("courseColourStack (course-layer.md §1)", () => {
-  it("inserts upper white directly below upper purple when the stack lacks it (every ISOM document)", () => {
+  it("inserts upper white and the graphics row directly below upper purple when the stack lacks them (every ISOM document)", () => {
     const doc = aligned("ISOM2017-2");
     const upper = doc.findIndex((c) => c.paletteIds?.includes("purple-upper"));
     const out = courseColourStack(doc);
-    expect(out.colours).toHaveLength(doc.length + 1);
+    expect(out.colours).toHaveLength(doc.length + 2);
     expect(out.index.get("white-upper")).toBe(upper);
-    expect(out.index.get("purple-upper")).toBe(upper + 1);
+    expect(out.colours[upper + 1]).toEqual({ id: COURSE_GRAPHICS_ID, name: "Course graphics", cmyk: [0, 0, 0, 0] });
+    expect(out.index.get("purple-upper")).toBe(upper + 2);
     expect(out.colours[upper]).toMatchObject({ id: "iof2024:white-upper", cmyk: [0, 0, 0, 0], paletteIds: ["white-upper"] });
     // Remap shifts only indices at or above the insertion point.
     expect(out.remap).not.toBeNull();
-    out.remap!.forEach((n, i) => expect(n).toBe(i < upper ? i : i + 1));
+    out.remap!.forEach((n, i) => expect(n).toBe(i < upper ? i : i + 2));
+    // Idempotent: the completed stack comes back unchanged.
+    expect(courseColourStack(out.colours)).toMatchObject({ colours: out.colours, remap: null });
     // Lower purple keeps its place under black.
     expect(out.index.get("purple-lower")!).toBeLessThan(out.index.get("black100")!);
   });
 
-  it("leaves a stack that already has upper white unchanged (ISSprOM palette)", () => {
+  it("a stack that already has upper white gets only the graphics row, between it and upper purple (ISSprOM palette)", () => {
     const doc = aligned("ISSprOM2019-2");
     const out = courseColourStack(doc);
-    expect(out.remap).toBeNull();
-    expect(out.colours).toEqual(doc);
-    expect(out.index.get("white-upper")).toBe(out.index.get("purple-upper")! - 1);
+    const upper = doc.findIndex((c) => c.paletteIds?.includes("purple-upper"));
+    expect(out.colours).toEqual([...doc.slice(0, upper), { id: COURSE_GRAPHICS_ID, name: "Course graphics", cmyk: [0, 0, 0, 0] }, ...doc.slice(upper)]);
+    expect(out.remap).toEqual(doc.map((_, i) => (i < upper ? i : i + 1)));
+    expect(out.index.get("white-upper")).toBe(out.index.get("purple-upper")! - 2);
   });
 
   it("inserts below upper purple even when a source colour sits above it", () => {
@@ -41,8 +45,8 @@ describe("courseColourStack (course-layer.md §1)", () => {
       { id: "src:4", name: "Frame", cmyk: [0, 0, 0, 1] },
     ];
     const out = courseColourStack(doc);
-    expect(out.colours.map((c) => c.id)).toEqual(["src:0", "src:1", "src:2", "iof2024:white-upper", "src:3", "src:4"]);
-    expect(out.remap).toEqual([0, 1, 2, 4, 5]);
+    expect(out.colours.map((c) => c.id)).toEqual(["src:0", "src:1", "src:2", "iof2024:white-upper", COURSE_GRAPHICS_ID, "src:3", "src:4"]);
+    expect(out.remap).toEqual([0, 1, 2, 5, 6]);
   });
 
   it("refuses a stack without both purples (not aligned)", () => {

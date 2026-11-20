@@ -287,8 +287,8 @@ describe("course pages from the pinned document", () => {
     const streams = c instanceof PDFArray ? c.asArray().map((r) => lookup<PDFRawStream>(doc, r)) : [lookup<PDFRawStream>(doc, c)];
     const ops = streams.map((s) => new TextDecoder().decode(decodePDFRawStream(s).decode())).join("\n");
     expect(ops).toContain("22.677 22.677 549.921 796.535 re W n");
-    // 1:7 500 map printed at 1:7 500: scale 1 × µm → pt.
-    expect(ops).toMatch(/0\.002834646 0 0 0\.002834646 [\d.]+ [\d.]+ cm/);
+    // 1:7 500 map printed at 1:7 500: scale 1 × the 5 µm layer unit → pt (map-rendering.md §5.3 "Units").
+    expect(ops).toMatch(/0\.014173228 0 0 0\.014173228 [\d.]+ [\d.]+ cm/);
     expect(ops).not.toMatch(/ (rg|RG)\b/);
     expect(ops).toMatch(/\/F\d+ [\d.]+ Tf/);
     expect(ops).toMatch(/\/Im\d+ Do/);

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { CourseMapObject } from "@oxygen/shared";
 import {
-  alignedCentre, descriptionRect, gridSnap, handleAt, layoutObjectAt, objectHandles, pageBounds, pageDelta, pagePerView, pathFromView,
+  alignedCentre, descriptionRect, gridSnap, handleAt, layoutObjectAt, objectHandles, objectRing, pageBounds, pageDelta, pagePerView, pathFromView,
   sheetShapes, sheetWindow, toPage, toView, windowCentre, type SheetGeometry,
 } from "../layout";
 
@@ -146,5 +146,23 @@ describe("align map and drags (docs/course-layout.md §4)", () => {
   it("grid snapping to 1 mm when on", () => {
     expect(gridSnap({ x: 10.4, y: 7.6 }, true)).toEqual({ x: 10, y: 8 });
     expect(gridSnap({ x: 10.4, y: 7.6 }, false)).toEqual({ x: 10.4, y: 7.6 });
+  });
+});
+
+describe("turned page objects (J9, docs/course-layout.md §3 \"Transform handles\")", () => {
+  const rect: CourseMapObject = { id: "r", kind: "rectangle", anchor: "page", x: 50, y: 50, width: 40, height: 10, fillMode: "none", rotationDeg: 90 };
+  it("a 90° rectangle is hit where it is drawn, not where it is stored; 0° unchanged", () => {
+    // Centre (70, 55): turned a quarter, it runs 50 → 75 down the page, 65 → 75 across.
+    expect(layoutObjectAt({ x: 70, y: 40 }, [rect], 0)).toBe(0);
+    expect(layoutObjectAt({ x: 55, y: 55 }, [rect], 0)).toBe(-1);
+    expect(layoutObjectAt({ x: 55, y: 55 }, [{ ...rect, rotationDeg: undefined }], 0)).toBe(0);
+  });
+  it("handles sit on the turned corners; a text turns about its anchor", () => {
+    const ring = objectRing(rect);
+    for (const h of objectHandles(rect)) expect(ring.some((p) => Math.hypot(p.x - h.at.x, p.y - h.at.y) < 1e-9)).toBe(true);
+    const text: CourseMapObject = { id: "t", kind: "text", anchor: "page", x: 100, y: 100, text: "AB", fontSizeMm: 4, color: "#000000", rotationDeg: 180 };
+    const flat = objectRing({ ...text, rotationDeg: undefined });
+    // Half a turn about the anchor mirrors every corner through it.
+    objectRing(text).forEach((p, i) => { const q = flat[i]; expect(p.x).toBeCloseTo(200 - q.x, 6); expect(p.y).toBeCloseTo(200 - q.y, 6); });
   });
 });

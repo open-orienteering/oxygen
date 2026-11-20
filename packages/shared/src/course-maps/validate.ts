@@ -2,6 +2,7 @@ import {
   getPaperDimensions,
   pointInWindow,
   rectInside,
+  rotatedRectBounds,
   type PaperDimensions,
 } from "./geometry.js";
 import { descriptionBlockSize } from "./description-rows.js";
@@ -55,7 +56,26 @@ export function printablePageRect(document: CourseMapDocument): MapRect {
   };
 }
 
-/** A layout object's bounds on the page (page mm, y-down): every layout object is page-anchored since F12. */
+/**
+ * What a layout object covers on the page (page mm, y-down), its rotation
+ * included (J4): a rectangle and an image turn about the box centre, a text
+ * about its anchor. `courseMapObjectPageBounds` stays the stored, unrotated
+ * box the editor hit-tests and resizes; validation reads this one.
+ */
+export function courseMapObjectPageExtent(object: CourseMapObject): MapRect {
+  const box = courseMapObjectPageBounds(object);
+  switch (object.kind) {
+    case "rectangle":
+    case "image":
+      return rotatedRectBounds(box, object.rotationDeg ?? 0, { x: box.x + box.width / 2, y: box.y + box.height / 2 });
+    case "text":
+      return rotatedRectBounds(box, object.rotationDeg ?? 0, { x: object.x, y: object.y });
+    default:
+      return box;
+  }
+}
+
+/** A layout object's stored bounds on the page (page mm, y-down): every layout object is page-anchored since F12. */
 export function courseMapObjectPageBounds(object: CourseMapObject): MapRect {
   switch (object.kind) {
     case "text": {
@@ -171,7 +191,7 @@ export function validateCourseMap(
   }
 
   for (const object of options.document.objects) {
-    const bounds = courseMapObjectPageBounds(object);
+    const bounds = courseMapObjectPageExtent(object);
     if (!rectInside(bounds, printable)) {
       issues.push({
         code: "object_outside_page",

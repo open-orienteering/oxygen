@@ -30,6 +30,9 @@ describe("golden PNGs", () => {
       "hatch-area",
       "colour-order",
       "text-with-halo",
+      "alpha-passes",
+      "alpha-text",
+      "blend-multiply",
       "pilot-scene",
       "lib-dash-ocad",
       "lib-dash-omap",
@@ -50,8 +53,11 @@ describe("golden PNGs", () => {
       "course-all-controls",
       "course-leg-styles",
       "course-corridor",
+      "course-corridor-translucent",
       "course-exchange",
       "course-legs-curved",
+      "course-graphics",
+      "course-knockout",
       "filter-clip-brown",
       "filter-hide-505",
       "filter-moved",
@@ -71,7 +77,7 @@ describe("golden PNGs", () => {
   }
 
   it("lists every page scene", () => {
-    expect([...pageSceneNames]).toEqual(["page-sprint-a4", "page-ring", "page-rotated"]);
+    expect([...pageSceneNames]).toEqual(["page-sprint-a4", "page-ring", "page-rotated", "page-objects-alpha", "page-graphics"]);
   });
 
   for (const name of pageSceneNames) {

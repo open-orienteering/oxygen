@@ -1,7 +1,8 @@
 /**
  * The tool rail (docs/course-editor.md §2, §6; 08 §5.2): `V` select / move,
  * the armed creation tools `S` / `K` / `M`, `A` areas (a menu of kinds),
- * `T` map text, `G` gaps on the selected circle or leg, and the snapping
+ * `T` map text, `I` image (J7: a graphics picker beside the button while
+ * the tool is active), `G` gaps on the selected circle or leg, and the snapping
  * toggle, `X` the map exchange (§6.9) and `C` the crossing point (§6.8).
  * Every tool has its key; the page owns the keyboard.
  */
@@ -11,6 +12,7 @@ import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import type { EditorTool } from "../../lib/editor/state";
 import { AREA_CHOICES, AREA_KEYS, CORRIDOR_KEY, railKeyOf, type AreaChoice, type RailTool } from "./tools/rail";
+import { GraphicPicker } from "../../components/GraphicPicker";
 
 export type { AreaChoice } from "./tools/rail";
 
@@ -31,6 +33,8 @@ export interface ToolRailProps {
   onCorridor: () => void;
   snapping: boolean;
   onSnapping: () => void;
+  /** `I`'s picker (J7): the event to list graphics for, whether the user may upload / delete, the pick. */
+  imagePicker?: { nameId: string; canEdit: boolean; onPick: (graphicId: number) => void } | null;
 }
 
 const BTN = "w-8 h-8 rounded-md text-xs font-semibold flex items-center justify-center";
@@ -42,7 +46,21 @@ export function ToolRail(p: ToolRailProps) {
   // The `A` menu is a portal at the button's screen position: inside the rail it sat under the inspector
   // (a later sibling of the overlay strip paints over it) and under the map panel's own stacking.
   const areaButton = useRef<HTMLButtonElement | null>(null);
+  const imageButton = useRef<HTMLButtonElement | null>(null);
   const [menuAt, setMenuAt] = useState<{ left: number; top: number } | null>(null);
+  const [pickerAt, setPickerAt] = useState<{ left: number; top: number } | null>(null);
+  const imageOpen = p.tool.kind === "image" && !!p.imagePicker;
+  const armedGraphic = p.tool.kind === "image" ? p.tool.graphicId : null;
+  useLayoutEffect(() => {
+    if (!imageOpen) { setPickerAt(null); return; }
+    const place = () => {
+      const r = imageButton.current?.getBoundingClientRect();
+      if (r) setPickerAt({ left: r.right + 6, top: Math.max(8, Math.min(r.top, window.innerHeight - 420)) });
+    };
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [imageOpen]);
   useLayoutEffect(() => {
     if (!areaOpen) { setMenuAt(null); return; }
     const place = () => {
@@ -56,7 +74,7 @@ export function ToolRail(p: ToolRailProps) {
   const button = (key: RailTool, label: string, onClick: () => void, disabled = false, title = label) => (
     <button
       key={key}
-      ref={key === "A" ? areaButton : undefined}
+      ref={key === "A" ? areaButton : key === "I" ? imageButton : undefined}
       type="button"
       data-testid={`editor-tool-${key}`}
       aria-pressed={active === key}
@@ -79,12 +97,21 @@ export function ToolRail(p: ToolRailProps) {
       {button("C", t("toolCrossing"), () => p.onTool("C"))}
       {button("A", t("toolArea"), () => p.onAreaOpen(!areaOpen))}
       {button("T", t("toolText"), () => p.onTool("T"))}
+      {p.imagePicker && button("I", t("toolImage"), () => p.onTool("I"))}
       {button("G", t("toolGap"), () => p.onTool("G"), !p.canGap)}
       <div className="h-px bg-slate-200 my-0.5" />
       <button type="button" data-testid="editor-snapping" aria-pressed={p.snapping} title={t("snapping")} aria-label={t("snapping")} onClick={p.onSnapping}
         className={`${BTN} ${p.snapping ? "bg-purple-100 text-purple-700" : "text-slate-500 hover:bg-slate-100"} cursor-pointer`}>
         <svg viewBox="0 0 16 16" className="w-4 h-4" aria-hidden><path d="M4 2v6a4 4 0 0 0 8 0V2M4 5h3M9 5h3" fill="none" stroke="currentColor" strokeWidth="1.6" /></svg>
       </button>
+      {imageOpen && pickerAt && createPortal(
+        <div data-testid="editor-image-picker" style={{ left: pickerAt.left, top: pickerAt.top }}
+          className="fixed z-50 w-64 max-h-[400px] overflow-y-auto bg-white border border-slate-200 rounded-lg shadow-lg p-2 text-xs">
+          {armedGraphic === null && <p data-testid="editor-image-hint" className="mb-1.5 text-[11px] text-slate-500">{t("imagePickFirst")}</p>}
+          <GraphicPicker nameId={p.imagePicker!.nameId} active={armedGraphic} onPick={p.imagePicker!.onPick} canEdit={p.imagePicker!.canEdit} testIdPrefix="editor-graphic" />
+        </div>,
+        document.body,
+      )}
       {areaOpen && menuAt && createPortal(
         <div data-testid="editor-area-menu" role="menu" style={{ left: menuAt.left, top: menuAt.top }}
           className="fixed z-50 w-48 bg-white border border-slate-200 rounded-lg shadow-lg py-1 text-xs">

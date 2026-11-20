@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createMapGlWorker, type CourseReply, type WorkerReply } from "../../../map-gl/worker";
 import { documentBytes, fontBytes, latin, request } from "../../../map-gl/__tests__/course-fixture";
-import { editorHitAt, HIT_TOLERANCE_PX, uiLegsOf } from "../hit";
+import { editorHitAt, HIT_TOLERANCE_PX, imageRing, uiLegsOf } from "../hit";
 
 /** The fixture course (S 10,10 → 31 40,10 → 32 60,40 → F 10,40) through the real worker. */
 function hitIndex(over: Parameters<typeof request>[0] = {}): NonNullable<CourseReply["hit"]> {
@@ -132,6 +132,31 @@ describe("editorHitAt (docs/course-editor.md §5)", () => {
     });
   });
 
+  it("an image (J7) is hit inside its turned box, below controls, legs and the other areas' outlines", () => {
+    const geometry = [{ x: 32, y: 2 }, { x: 48, y: 18 }];
+    const withImage = hitIndex({ objects: [{ id: 21, kind: "image", geometry, props: { graphicId: 7 } }] });
+    // A white-out's outline crosses the image at x = 46.
+    const whiteout = { id: 16, ring: [{ x: 46, y: 0 }, { x: 70, y: 0 }, { x: 70, y: 30 }, { x: 46, y: 30 }] };
+    const areas = [whiteout, { id: 21, ring: imageRing(geometry), filled: true }];
+    const at = (x: number, y: number, accept?: (t: { kind: string }) => boolean) => editorHitAt(withImage, { x, y }, 0.5, [], areas, accept);
+    expect(at(40, 10)).toEqual({ kind: "site", id: "31" });
+    // Leg 0 runs S (10, 10) → 31 (40, 10).
+    expect(at(34, 10)).toEqual({ kind: "leg", courseId: "c1", index: 0 });
+    expect(at(46, 15)).toEqual({ kind: "object", id: 16 });
+    expect(at(35, 15)).toEqual({ kind: "object", id: 21 });
+    expect(at(32.2, 15)).toEqual({ kind: "object", id: 21 });
+    expect(at(31, 15)).toBeNull();
+    // `accept` passes over it.
+    expect(at(35, 15, (t) => t.kind !== "object")).toBeNull();
+    // Turned 45° clockwise about its centre: the bottom-left corner swings to the left, level with the centre.
+    const r = imageRing(geometry, 45);
+    expect(r[0].x).toBeCloseTo(40 - 8 * Math.SQRT2, 6);
+    expect(r[0].y).toBeCloseTo(10, 6);
+    const turned = [{ id: 21, ring: r, filled: true }];
+    expect(editorHitAt(withImage, { x: 40 - 8 * Math.SQRT2 + 2, y: 11.5 }, 0.5, [], turned)).toEqual({ kind: "object", id: 21 });
+    expect(editorHitAt(withImage, { x: 33, y: 3 }, 0.5, [], turned)).toBeNull();
+  });
+
   it("UI-layer areas (filter regions, toner savers) hit along the outline only, below everything", () => {
     const ring = [{ x: 0, y: 50 }, { x: 30, y: 50 }, { x: 30, y: 70 }, { x: 0, y: 70 }];
     expect(editorHitAt(index, { x: 15, y: 60 }, 0.5, [], [{ id: 5, ring }])).toBeNull();
@@ -139,6 +164,16 @@ describe("editorHitAt (docs/course-editor.md §5)", () => {
     expect(editorHitAt(index, { x: 31, y: 60 }, 0.5, [], [{ id: 5, ring }])).toBeNull();
     expect(editorHitAt(index, { x: 40, y: 10 }, 0.5, [], [{ id: 5, ring: [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }] }]))
       .toEqual({ kind: "site", id: "31" });
+  });
+
+  it("a translucent corridor band (J13) is no target: a point in it hits nothing, a control inside it still hits", () => {
+    const corridor = { widthM: 60, edge: true, whiteMm: 3, whiteOpacity: 0.5 };
+    const structure = { version: 1 as const, id: "c1", orderMode: "ordered" as const, items: [{ siteId: "S" }, { siteId: "31", leg: { corridor } }, { siteId: "32" }, { siteId: "F" }] };
+    const reply = courseReply({ structure });
+    expect(reply.hit!.refs.some((r) => r.kind === "corridor" && r.id === "band")).toBe(true);
+    // The band at y = 13.5 (the edge at 12, the band to 15), beside the leg.
+    expect(editorHitAt(reply.hit!, { x: 20, y: 13.5 }, 0.5)).toBeNull();
+    expect(editorHitAt(reply.hit!, { x: 42.5, y: 10 }, 0.1)).toEqual({ kind: "site", id: "31" });
   });
 
   it("a circle with a stored gap is open arcs: its centre hits only through the UI-layer circle (§5)", () => {

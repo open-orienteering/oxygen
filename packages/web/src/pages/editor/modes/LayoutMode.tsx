@@ -26,7 +26,8 @@ import { trpc } from "../../../lib/trpc";
 import { VersionBook, versionConflictOfError } from "../../../lib/version-book";
 import { EditorConflict } from "../../../lib/editor/write-client";
 import type { MapViewerEditorProps, ToolPointer } from "../../../components/MapViewer";
-import { descriptionRect, gridSnap, pageBounds, pathFromView, pathRule, type SheetGeometry } from "../../../lib/editor/layout";
+import { descriptionRect, gridSnap, pageBounds, pathFromView, pathRule, toPage, type SheetGeometry } from "../../../lib/editor/layout";
+import { readClipboard, refusal, writeClipboard, type Refusal } from "../../../lib/editor/clipboard";
 import { deleteVertex, type Vertex } from "../../../lib/editor/geometry-edit";
 import type { Gesture } from "../tools/bindings";
 import { step as polygonStep } from "../tools/polygon";
@@ -41,7 +42,7 @@ import { ClassOverridesSection, ClubTemplatesSection, TemplateKeySection } from 
 import { NoSheetActions, SheetActions, TemplateActions } from "../layout/SheetActions";
 import { SetterSection } from "../layout/SetterSection";
 import { useCapabilities } from "../../../context/CapabilitiesContext";
-import { geometryOf, layoutRequestOf, pathObject, placeObject, scopeObjects, sheetKeyOf, snapshotOf, templateWriteOf, withEditable, type EditorSheet, type LayoutSnapshot } from "../layout/model";
+import { duplicatePageObject, geometryOf, layoutRequestOf, pastePageObject, pathObject, placeObject, scopeObjects, sheetKeyOf, snapshotOf, styleChangeOf, templateWriteOf, transformPathOf, withEditable, type EditorSheet, type PathTransform, type LayoutSnapshot } from "../layout/model";
 
 type Pt = { x: number; y: number };
 
@@ -58,6 +59,10 @@ export interface LayoutModeArgs {
   /** One write, through the page's pending count and error line; `undefined` when it failed. */
   run: <T>(op: () => Promise<T>) => Promise<T | undefined>;
   record: (undo: () => Promise<unknown>, redo: () => Promise<unknown>) => unknown;
+  /** Why a paste was refused (J12), shown on the page's error line; a course object's entry is `clipboardWrongTypePage`. */
+  notify?: (why: Refusal | "clipboardWrongTypePage" | "clipboardGraphicsUnknown") => void;
+  /** The viewer's centre in paper mm, where a paste lands with the pointer off the map (J12). */
+  viewCentre?: () => Pt | null;
 }
 
 export interface LayoutMode {
@@ -164,6 +169,15 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
   const [focus, setFocus] = useState<{ id: string; index: number } | null>(null);
   const [tool, setTool] = useState<LayoutTool>({ kind: "select" });
   const [snapping, setSnapping] = useState(false);
+  /** The image size lock (J8): the style fields' size and an image corner drag (Shift inverts); Layout's own, on by default. */
+  const [aspectLock, setAspectLock] = useState(true);
+  /** The image in crop mode (J9), keyed by its id: a selection or tool change ends it. Page state, not an undo step. */
+  const [cropModeOf, setCropMode] = useState<string | null>(null);
+  const cropMode = cropModeOf !== null && selection?.kind === "object" && selection.id === cropModeOf && tool.kind === "select" ? cropModeOf : null;
+  // Another selection, a tool or a delete leaves crop mode for good (J9 review (2)), not until the image is reselected.
+  useEffect(() => { if (cropModeOf !== null && cropMode === null) setCropMode(null); }, [cropModeOf, cropMode]);
+  // The graphics' pixel sizes, for a placed image's aspect (the picker's query, cached).
+  const graphicsList = trpc.graphics.list.useQuery(undefined, { enabled: a.enabled });
   const gesture = useRef<LayoutGesture>(null);
   /** `P`'s drawing (the course editor's area flow): its gesture and hover, paper mm. */
   const drawGesture = useRef<Gesture>(null);
@@ -250,6 +264,8 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
   const purple = snap?.settings.appearance.purple ?? "#a626ff";
   const place = useCallback((what: Exclude<PlaceKind, "path">, at: Pt, graphicId?: number) => {
     if (!stored || !geometry || !data) return;
+    // `I` before a graphic is picked: the click places nothing and the tool stays (J8).
+    if (what === "image" && graphicId === undefined) return;
     const page = gridSnap(at, snapping);
     setTool({ kind: "select" });
     if (what === "description") {
@@ -258,11 +274,12 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
       setSelection({ kind: "description" });
       return;
     }
-    const o = placeObject(what, page, geometry.printable, graphicId);
+    const size = graphicId !== undefined ? graphicsList.data?.find((x) => x.id === graphicId) ?? null : null;
+    const o = placeObject(what, page, geometry.printable, graphicId, size);
     if (!o) return;
     change({ objects: [...scopeObjects(data, stored).editable, o] });
     setSelection({ kind: "object", id: o.id });
-  }, [stored, geometry, data, change, snapping]);
+  }, [stored, geometry, data, change, snapping, graphicsList.data]);
   /** `P` closed: one closed page path, one write, selected (docs/course-layout.md §3). */
   const finishPath = useCallback((points: Vertex[]) => {
     setTool({ kind: "select" });
@@ -285,8 +302,7 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
       geometry, editable: scoped.editable, locked: scoped.locked, description: snap.description, block, centre: snap.centre,
       // Align map stores a sheet's window; a template has none (its preview follows the course).
       selection: data?.scope === "template" && selection?.kind === "frame" ? null : selection,
-      tool, snapping, gesture,
-      imageHref: (id) => `/api/maps/${encodeURIComponent(a.nameId)}/graphics/${id}`,
+      tool, snapping, gesture, aspectLock, cropMode, onCropMode: setCropMode,
       onPreview: (c) => setDraft(c && stored ? apply(stored, c) : null),
       onCommit: change,
       onSelect: setSelection,
@@ -300,7 +316,7 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
         onCancel: () => setTool({ kind: "select" }),
       } : undefined,
     });
-  }, [a.enabled, a.nameId, geometry, snap, scoped, block, data?.scope, selection, tool, snapping, stored, apply, change, place, drawHover, finishPath, focusedVertex, onVertexFocus]);
+  }, [a.enabled, geometry, snap, scoped, block, data?.scope, selection, tool, snapping, aspectLock, cropMode, stored, apply, change, place, drawHover, finishPath, focusedVertex, onVertexFocus]);
 
   const layoutRequest = useMemo(() => (a.enabled && data && snap && geometry ? layoutRequestOf(data, snap, geometry) : null), [a.enabled, data, snap, geometry]);
 
@@ -310,6 +326,19 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
     if (!data || !stored) return;
     change({ objects: scopeObjects(data, stored).editable.map((o) => (o.id === id ? ({ ...o, ...patch } as CourseMapObject) : o)) });
   }, [data, stored, change]);
+  /** A line's or path's turn or flip from the inspector (J9): baked into its vertices, one write. */
+  const transformObject = useCallback((id: string, op: PathTransform) => {
+    if (!data || !stored || !geometry) return;
+    const editable = scopeObjects(data, stored).editable;
+    const o = editable.find((x) => x.id === id);
+    const next = o ? transformPathOf(o, op, geometry.printable) : null;
+    if (next) change({ objects: editable.map((x) => (x.id === id ? next : x)) });
+  }, [data, stored, geometry, change]);
+  /** A style field's commit (J8): the whole next object (default values removed), one write, one undo entry. */
+  const styleObject = useCallback((id: string, next: { props?: CourseMapObject; geometry?: readonly Pt[] }) => {
+    if (!data || !stored || !geometry) return;
+    change({ objects: scopeObjects(data, stored).editable.map((o) => (o.id === id ? styleChangeOf(o, next, geometry.printable) : o)) });
+  }, [data, stored, geometry, change]);
   const deleteSelected = useCallback(() => {
     if (!data || !stored) return;
     if (selection?.kind === "object") change({ objects: scopeObjects(data, stored).editable.filter((o) => o.id !== selection.id) });
@@ -317,10 +346,40 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
     setSelection(null);
   }, [data, stored, selection, change]);
 
+  // ─── J12: duplicate, copy, cut, paste (docs/course-layout.md §2 "Keys") ──
+  /** The pointer's last place on the map (paper mm), where a paste lands; null off the map. */
+  const hoverPt = useRef<Pt | null>(null);
+  const duplicateObject = useCallback((o: CourseMapObject) => {
+    if (!data || !stored || !geometry) return;
+    const copy = duplicatePageObject(o, geometry.printable);
+    change({ objects: [...scopeObjects(data, stored).editable, copy] });
+    setSelection({ kind: "object", id: copy.id });
+  }, [data, stored, geometry, change]);
+  const pasteObject = useCallback(async () => {
+    if (!data || !stored || !geometry) return;
+    const entry = readClipboard();
+    if (!entry) return;
+    let graphicIds: Set<number> | null = null;
+    if (entry.type === "page" && entry.object.kind === "image") {
+      // Fetched (cached) at paste time: a list not loaded yet must not let a foreign graphic through.
+      const list = await utils.graphics.list.fetch().catch(() => null);
+      if (!list) { a.notify?.("clipboardGraphicsUnknown"); return; }
+      graphicIds = new Set(list.map((g) => g.id));
+    }
+    const why = refusal(entry, { event: a.nameId, mode: "page", graphicIds });
+    if (why) { a.notify?.(why === "clipboardWrongType" ? "clipboardWrongTypePage" : why); return; }
+    if (entry.type !== "page") return;
+    const pt = hoverPt.current ?? a.viewCentre?.() ?? null;
+    const b = geometry.printable;
+    const at = pt ? toPage(pt, geometry) : { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+    const copy = pastePageObject(entry.object, at, geometry.printable);
+    change({ objects: [...scopeObjects(data, stored).editable, copy] });
+    setSelection({ kind: "object", id: copy.id });
+  }, [data, stored, geometry, change, utils, a.nameId, a.notify, a.viewCentre]);
+
   const onTool = useCallback((what: PlaceKind | "select", graphicId?: number) => {
     if (what === "select") { setTool({ kind: "select" }); return; }
     if (what === "description" && snap?.description.visible) { setTool({ kind: "select" }); setSelection({ kind: "description" }); return; }
-    if (what === "image" && graphicId === undefined) return;
     if (what === "path") {
       // A fresh drawing: no gesture or hover left from an earlier one.
       drawGesture.current = null;
@@ -328,13 +387,19 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
       setTool({ kind: "draw", poly: { kind: "layout_path", vertices: [] } });
       return;
     }
-    setTool({ kind: "place", what, ...(graphicId !== undefined ? { graphicId } : {}) });
+    // `I` (key or rail) again while a graphic is armed keeps it; a pick arms the picked one.
+    setTool((prev) => {
+      const id = graphicId ?? (what === "image" && prev.kind === "place" && prev.what === "image" ? prev.graphicId : undefined);
+      return { kind: "place", what, ...(id !== undefined ? { graphicId: id } : {}) };
+    });
   }, [snap]);
 
   const onKey = useCallback((e: KeyboardEvent): boolean => {
     const key = e.key.length === 1 ? e.key.toUpperCase() : e.key;
     const plain = !e.ctrlKey && !e.metaKey && !e.altKey;
     if (e.key === "Escape") {
+      // A drag in flight is the viewer's (it cancels first); then crop mode, the tool, the selection.
+      if (cropMode) { setCropMode(null); return true; }
       if (tool.kind !== "select") { setTool({ kind: "select" }); return true; }
       if (selection) { setSelection(null); return true; }
       return false;
@@ -366,17 +431,30 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
       setSelection({ kind: "object", id: next.id });
       return true;
     }
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && ["D", "C", "X", "V"].includes(key) && canEdit && tool.kind === "select") {
+      // J12: the app clipboard (docs/course-layout.md §2 "Keys"); copy and cut leave a text selection to the browser.
+      // A held key does not repeat a create.
+      if (e.repeat && (key === "D" || key === "V")) { e.preventDefault(); return true; }
+      if (key === "V") { e.preventDefault(); void pasteObject(); return true; }
+      if (!selectedObject) { if (key === "D") e.preventDefault(); return key === "D"; }
+      if (key === "D") { e.preventDefault(); duplicateObject(selectedObject); return true; }
+      if (window.getSelection()?.toString()) return false;
+      e.preventDefault();
+      writeClipboard({ v: 1, type: "page", event: a.nameId, object: selectedObject });
+      if (key === "X") deleteSelected();
+      return true;
+    }
     if (!plain) return false;
     if (key === "F") { fit(); return true; }
     const what = LAYOUT_KEYS[key];
     if (what) {
-      // `I` arms the image tool only with a graphic picked in the Graphics section.
-      if (what === "image") return true;
+      // No picker without an event (the rail's button is disabled then): `I` does nothing.
+      if (what === "image" && !a.nameId) return false;
       onTool(what);
       return true;
     }
     return false;
-  }, [tool, selection, deleteSelected, scoped, fit, onTool, geometry, finishPath, selectedPath, focusedVertex, updateObject]);
+  }, [tool, selection, cropMode, deleteSelected, scoped, fit, onTool, geometry, finishPath, selectedPath, focusedVertex, updateObject, a.nameId, canEdit, selectedObject, duplicateObject, pasteObject]);
 
   // ─── Validation (validate.ts, unchanged codes) ───────────
   const issues = useMemo(() => {
@@ -396,7 +474,7 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
   const editor: MapViewerEditorProps = useMemo(() => ({
     actionLayout: "bar",
     contextActions: [],
-    tool: binding,
+    tool: binding ? { ...binding, onHover: (p: ToolPointer | null) => { hoverPt.current = p?.pt ?? null; binding.onHover?.(p); } } : null,
     layout: layoutRequest,
     viewRequest,
     onDismiss: () => setSelection(null),
@@ -404,7 +482,8 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
 
   const open = useCallback((next: LayoutTarget | null) => setTarget(next), []);
 
-  const rail = <LayoutRail tool={tool} onTool={(w) => onTool(w)} canImage={false} snapping={snapping} onSnapping={() => setSnapping((v) => !v)} />;
+  const rail = <LayoutRail tool={tool} onTool={(w) => onTool(w)} snapping={snapping} onSnapping={() => setSnapping((v) => !v)}
+    imagePicker={a.nameId ? { nameId: a.nameId, canEdit, onPick: (id) => onTool("image", id) } : null} />;
 
   const siblings = (sheets.data ?? []).filter((r) => (data?.sheet ? r.courseId === data.sheet.courseSeq && r.kind === data.sheet.kind && (r.class?.seq ?? null) === data.sheet.classSeq : false));
 
@@ -430,8 +509,13 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
       onSelect={setSelection}
       onPatch={patchSnapshot}
       onObject={updateObject}
+      onStyle={styleObject}
+      aspectLock={aspectLock}
+      onAspectLock={() => setAspectLock((v) => !v)}
+      cropMode={cropMode}
+      onCropMode={setCropMode}
+      onTransform={transformObject}
       onDelete={deleteSelected}
-      onPlaceImage={(id) => onTool("image", id)}
       canEdit={canEdit}
       templateActions={data ? <TemplateActions template={data.template} canEdit={canEdit} run={run} onOpen={open} /> : null}
       noSheet={<NoSheetActions view={a.view} course={a.course} canEdit={canEdit} run={run} onOpen={open} />}

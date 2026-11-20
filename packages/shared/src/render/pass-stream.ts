@@ -50,10 +50,29 @@ export interface Slice {
   t1: number;
 }
 
+/** Blend modes a pass may ask for (map-rendering §3.9); absent = normal. */
+export type BlendMode = "multiply";
+
+/**
+ * Opacity and blend of a pass (map-rendering §3.9). Set by `symbolise`
+ * from its input object; document objects never set one. Absent means
+ * opaque and normal — a stream without them draws exactly as before.
+ * `opacity` is in [0, 1) when present: 1 is never stored.
+ */
+export interface PassAlpha {
+  opacity?: number;
+  blend?: BlendMode;
+}
+
+/** True when the pass carries an opacity below 1 or a blend. */
+export function passHasAlpha(pass: PassAlpha): boolean {
+  return pass.opacity !== undefined || pass.blend !== undefined;
+}
+
 export type StrokeCap = "butt" | "round" | "square" | "pointed";
 export type StrokeJoin = "miter" | "round" | "bevel";
 
-export interface FillPass {
+export interface FillPass extends PassAlpha {
   kind: "fill";
   /** Index into the document's colour stack. */
   colour: number;
@@ -66,7 +85,7 @@ export interface FillPass {
   rule: "evenodd";
 }
 
-export interface StrokePass {
+export interface StrokePass extends PassAlpha {
   kind: "stroke";
   colour: number;
   path: RenderPath;
@@ -79,7 +98,7 @@ export interface StrokePass {
   taper?: { startUm?: number; endUm?: number };
 }
 
-export interface GlyphPass {
+export interface GlyphPass extends PassAlpha {
   kind: "glyph";
   colour: number;
   glyphId: number;
@@ -91,7 +110,7 @@ export interface GlyphPass {
   clip?: RenderPath;
 }
 
-export interface HatchPass {
+export interface HatchPass extends PassAlpha {
   kind: "hatch";
   colour: number;
   path: RenderPath;
@@ -101,7 +120,7 @@ export interface HatchPass {
   angleDeg: number;
 }
 
-export interface TextPass {
+export interface TextPass extends PassAlpha {
   kind: "text";
   colour: number;
   fontId: number;
@@ -119,7 +138,25 @@ export interface TextPass {
   haloWidthUm?: number;
 }
 
-export type Pass = FillPass | StrokePass | GlyphPass | HatchPass | TextPass;
+/**
+ * A placed graphic (map-rendering §3.10, J5): the visible part of graphic
+ * `graphicId` drawn into a parallelogram. `quad` is the affine
+ * `[a, b, c, d, e, f]` taking the unit square onto it in stream µm, y-up —
+ * `(x, y) → (a·x + c·y + e, b·x + d·y + f)`, `(0, 0)` the visible part's
+ * bottom-left — which is PDF's own image space, so rotation and flips are
+ * in the matrix. `crop` (fractions of the source, top-left origin) is the
+ * part that fills the quad; absent = all of it. The bytes are the
+ * backend's to find by id.
+ */
+export interface ImagePass extends PassAlpha {
+  kind: "image";
+  colour: number;
+  graphicId: number;
+  quad: [number, number, number, number, number, number];
+  crop?: { x: number; y: number; width: number; height: number };
+}
+
+export type Pass = FillPass | StrokePass | GlyphPass | HatchPass | TextPass | ImagePass;
 export type PassKind = Pass["kind"];
 
 /**
@@ -133,7 +170,15 @@ export const PASS_KIND_ORDER: Record<PassKind, number> = {
   stroke: 2,
   glyph: 3,
   text: 4,
+  // Appended (J5): no existing sort key moves. Images sit in their own rows, so the slot rarely matters.
+  image: 5,
 };
+
+/** The four corners of an image pass's quad (stream µm): (0,0), (1,0), (1,1), (0,1) of the unit square. */
+export function imageQuadCorners(q: ImagePass["quad"]): [number, number][] {
+  const at = (u: number, v: number): [number, number] => [q[0] * u + q[2] * v + q[4], q[1] * u + q[3] * v + q[5]];
+  return [at(0, 0), at(1, 0), at(1, 1), at(0, 1)];
+}
 
 /** One colour part of a point/line/pattern glyph, geometry in glyph-local µm. */
 export interface GlyphMesh {
@@ -176,7 +221,7 @@ export interface PassStream {
   passes: Pass[];
   glyphTable: GlyphMesh[];
   fontTable: FontRef[];
-  /** Filter masks (clip-mode filter regions, §4.11); absent = none. */
+  /** Filter masks (clip-mode filter regions and knockout images, §4.11); absent = none. */
   masks?: FilterMask[];
   /** Per pass → index into `masks`, −1 = unmasked. Absent = no pass is masked. */
   maskIdx?: Int32Array;

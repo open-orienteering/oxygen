@@ -10,17 +10,17 @@ import type { DocumentRenderInput } from "../map-document/render-bridge.js";
 import { makePath } from "../render/pass-stream.js";
 import type { LineSymbol, RenderSymbol } from "../render/symbol.js";
 import type { DocumentColour } from "../map-document/header.js";
-import type { RenderObject } from "../render/symbolise.js";
+import { objectAlpha, type RenderObject } from "../render/symbolise.js";
 import type { FilterRegion } from "../render/filter-region.js";
 import { COORD_FLAG } from "../render/pass-stream.js";
 import { remapRenderColours } from "../render/transform.js";
 import { circleWithGaps } from "./arcs.js";
 import { corridorGeometry } from "./corridor.js";
-import { courseColourStack, withObjectColours, withTintColours } from "./colour-stack.js";
+import { COURSE_GRAPHICS_ID, courseColourStack, withObjectColours, withTintColours } from "./colour-stack.js";
 import { deriveCourse, structuresOf } from "./derive.js";
-import { TONER_WHITE_ID, courseObjects, filterRegionOf, hasTonerSaver, objectColours } from "./objects.js";
+import { TONER_WHITE_ID, attachedHides, courseObjects, filterRegionOf, hasTonerSaver, objectColours, resolveAttached } from "./objects.js";
 import { CROSSING_BODY_MM, CROSSING_SECTION_MM, CROSSING_SECTION_OFFSET_MM, courseSymbols } from "./symbols.js";
-import type { CourseFilterRegion, CourseLayer, CourseLayerInput, CourseRenderObject } from "./types.js";
+import type { CourseFilterRegion, CourseLayer, CourseLayerInput, CourseRenderObject, DerivedCourse } from "./types.js";
 import type { MapPoint } from "../course-maps/schema.js";
 
 const TONER_WHITE = { id: TONER_WHITE_ID, name: "Toner saver white", cmyk: [0, 0, 0, 0] as [number, number, number, number] };
@@ -53,9 +53,13 @@ export function courseLayer(input: CourseLayerInput): CourseLayer {
   });
   const { idx } = set;
   const objects: CourseRenderObject[] = [];
+  // §8.3, J10: an attached object follows its control, and is drawn only where its control is.
+  const inputObjects = resolveAttached(input.objects, derivation.sites);
+  // J18: circles an attached image hides (numbers are left out by the derivation).
+  const hiddenCircles = attachedHides(input.objects).circle;
 
   // §12.7: the All-variations view's tints — rows on top of the stack, tinted copies of 705 and 703.
-  const palette0 = withObjectColours(stack.colours, objectColours(input.objects));
+  const palette0 = withObjectColours(stack.colours, objectColours(inputObjects));
   const tinting = variationTints(input, set, palette0.colours);
   const palette = { ...palette0, colours: tinting.colours };
 
@@ -75,7 +79,7 @@ export function courseLayer(input: CourseLayerInput): CourseLayer {
       objects.push({ symbolIdx: idx.mapIssue, path: makePath([um(s.x), um(s.y)]), ref });
     } else if (s.role === "crossing_point") {
       objects.push(...crossingObjects(s, idx.crossing, input.document.documentFactor));
-    } else {
+    } else if (!hiddenCircles.has(s.id)) {
       const symbolIdx = tinting.circleOf(s.id) ?? idx.circle;
       // §3.3: the cuts, and at an edged corridor's end its opening (§10.2, F19) — drawn here only, never a cut.
       const gaps = [...s.cuts, ...(corridors?.openings.get(s.id) ?? [])];
@@ -112,10 +116,11 @@ export function courseLayer(input: CourseLayerInput): CourseLayer {
 
   const symbols: RenderSymbol[] = [...set.symbols, ...tinting.symbols];
   // A toner saver covers everything the map layer draws: its white is the top row (objects.ts, P1).
-  const drawsToner = (input.viewOptions.window?.length ?? 0) >= 3 && hasTonerSaver(input.objects);
+  const drawsToner = (input.viewOptions.window?.length ?? 0) >= 3 && hasTonerSaver(inputObjects);
   const colours = drawsToner ? [...palette.colours, TONER_WHITE] : palette.colours;
   const tonerWhite = drawsToner ? colours.length - 1 : undefined;
-  const built = courseObjects(input.objects, set, symbols, palette.indexOf, input.viewOptions, stack.index.get("purple-upper")!, tonerWhite);
+  const graphicsRow = colours.findIndex((c) => c.id === COURSE_GRAPHICS_ID);
+  const built = courseObjects(inputObjects, set, symbols, palette.indexOf, input.viewOptions, stack.index.get("purple-upper")!, tonerWhite, graphicsRow);
   objects.push(...built.objects);
   if (edgeObjects.length) {
     const edgeIdx = symbols.push(set.edge) - 1;
@@ -123,11 +128,24 @@ export function courseLayer(input: CourseLayerInput): CourseLayer {
   }
 
   // Stored filter regions (§8.3) follow the explicit ones.
-  const stored = input.objects.flatMap((o) => (o.kind === "filter_region" ? [filterRegionOf(o)] : []));
+  const stored = inputObjects.flatMap((o) => (o.kind === "filter_region" ? [filterRegionOf(o)] : []));
   const regions = [...(input.regions ?? []), ...stored].map((r) => filterRegion(r, stack.remap));
-  // §10.2: the corridors' white band cuts every map colour away; the course is never filtered.
-  if (corridors?.band) regions.push({ path: ringsPath(corridors.band), mode: "clip", symbols: "all" });
+  // §10.2: the corridors' white band cuts every map colour away; the course is never filtered. Below opacity 1
+  // (J13) it is a translucent white fill in the upper-white row instead, at the minimum over the banded legs;
+  // at 0 no band is drawn at all.
+  if (corridors?.band) {
+    const alpha = objectAlpha({ opacity: bandOpacity(derivation.courses) });
+    if (alpha.opacity === undefined) regions.push({ path: ringsPath(corridors.band), mode: "clip", symbols: "all" });
+    else if (alpha.opacity > 0) objects.push({ symbolIdx: idx.whiteout, path: ringsPath(corridors.band), opacity: alpha.opacity, ref: { kind: "corridor", id: "band" } });
+  }
   return { colours, remap: stack.remap, symbols, objects, images: built.images, derivation, warnings: built.warnings, regions };
+}
+
+/** The corridors' band opacity (§10.2, J13): the minimum `whiteOpacity` over the legs with a white band (two points or more, as `corridorGeometry`'s runs). */
+export function bandOpacity(courses: readonly DerivedCourse[]): number {
+  let min = 1;
+  for (const c of courses) for (const l of c.legs) if (l.corridor && l.corridor.whiteMm > 0 && l.points.length >= 2) min = Math.min(min, l.corridor.whiteOpacity ?? 1);
+  return min;
 }
 
 interface VariationTinting {

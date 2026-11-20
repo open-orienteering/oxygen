@@ -15,6 +15,7 @@ import type { HeightField } from "@oxygen/shared/src/terrain/field/read.js";
 import { DRAPE_ARRIVAL_MS, DRAPE_SETTLE_MS } from "../engine";
 import { aboveZoomGate } from "../buckets";
 import { drapeTextureBytes } from "../renderer";
+import type { GraphicTextures } from "../../lib/graphic-textures";
 import { assembleTerrainMesh, type TerrainMesh } from "../terrain/mesh";
 import type { PreparedField, TerrainFrame } from "../terrain/program";
 import type { TerrainLine } from "../terrain/lines";
@@ -930,6 +931,27 @@ describe("MapGlEngine terrain (docs/map-rendering.md §5.6 \"Engine API\", \"Set
     expect(f.background).toEqual([1, 1, 1]);
     expect(f.drapes).toHaveLength(1);
     expect([...f.drapes[0].matrix]).toEqual([...twoDMatrix(v, summary.originX, summary.originY)]);
+  });
+
+  it("a graphic arriving or released re-renders the drape (J6); pending graphics are reported", async () => {
+    const { engine, renderer, cam } = await withTerrain();
+    const released: unknown[] = [];
+    (renderer as unknown as { releaseGraphic: (b: unknown) => void }).releaseGraphic = (b) => released.push(b);
+    const g = { onChange: undefined as (() => void) | undefined, onRelease: undefined as ((b: ImageBitmap) => void) | undefined, pending: 1, bytes: 0, get: () => undefined, dispose: () => undefined };
+    engine.setGraphics(g as unknown as GraphicTextures);
+    const frame = { camera: cam(125_000, 125_000), exaggeration: 1 };
+    expect(engine.renderTerrain(frame, opts).imagesPending).toBe(1);
+    engine.renderTerrain(frame, opts);
+    expect(renderer.drapeRenders).toHaveLength(1);
+    g.pending = 0;
+    g.onChange!();
+    expect(engine.renderTerrain(frame, opts).imagesPending).toBeUndefined();
+    expect(renderer.drapeRenders).toHaveLength(2);
+    const bitmap = {} as ImageBitmap;
+    g.onRelease!(bitmap);
+    expect(released).toEqual([bitmap]);
+    engine.renderTerrain(frame, opts);
+    expect(renderer.drapeRenders).toHaveLength(3);
   });
 
   it("passes the lines to the mesh draw (§5.6 \"Lines\"); new lines re-render no drape", async () => {

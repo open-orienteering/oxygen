@@ -25,10 +25,10 @@ describe("comparePassOrder", () => {
   it("orders by colour first", () => {
     expect(comparePassOrder({ colour: 1, kind: "text", symbolIdx: 0 }, { colour: 2, kind: "fill", symbolIdx: 0 })).toBeLessThan(0);
   });
-  it("then by kind: fill < hatch < stroke < glyph < text", () => {
+  it("then by kind: fill < hatch < stroke < glyph < text < image (J5)", () => {
     const kinds = Object.keys(PASS_KIND_ORDER) as (keyof typeof PASS_KIND_ORDER)[];
     const sorted = [...kinds].sort((a, b) => comparePassOrder({ colour: 0, kind: a, symbolIdx: 0 }, { colour: 0, kind: b, symbolIdx: 0 }));
-    expect(sorted).toEqual(["fill", "hatch", "stroke", "glyph", "text"]);
+    expect(sorted).toEqual(["fill", "hatch", "stroke", "glyph", "text", "image"]);
   });
   it("then by symbol index", () => {
     expect(comparePassOrder({ colour: 0, kind: "fill", symbolIdx: 401 }, { colour: 0, kind: "fill", symbolIdx: 402 })).toBeLessThan(0);

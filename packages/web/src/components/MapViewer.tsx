@@ -94,11 +94,12 @@ import {
 } from "../lib/course-leg-labels";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { courseLayerRequest, PROVISIONAL_SITE_ID, sheetCrossings, sheetExchanges, type LayoutRequest, type ProvisionalVisit } from "../lib/course-layer-request";
+import { course } from "@oxygen/shared";
 import { dragLegShapes } from "../lib/editor/leg-length";
 import { outlinePoints, vertexRule } from "../lib/editor/geometry-edit";
 import type { CourseInfo } from "../map-gl/engine";
 import type { TerrainLine } from "../map-gl/terrain/lines";
-import { editorHitAt, HIT_TOLERANCE_PX, uiLegsOf, type EditorTarget } from "../lib/editor/hit";
+import { editorHitAt, HIT_TOLERANCE_PX, imageRing, uiLegsOf, type EditorTarget } from "../lib/editor/hit";
 import { showSelectionRing } from "../lib/editor/state";
 import { escapeCancels } from "../lib/editor/mouse-drag";
 import { COARSE_HIT_TOLERANCE_PX, HANDLE_LIFT_PX, IDLE as SITE_TOUCH_IDLE, LONG_PRESS_MS, LOUPE_DIAMETER_PX, LOUPE_SCALE, liftedPoint, loupePlacement, placementLoupe, siteTouch, type SiteTouch, type SiteTouchEvent } from "../lib/editor/touch";
@@ -388,6 +389,8 @@ export interface ToolPointer {
   shift: boolean;
   /** Alt / Option held (mouse; touch never): the geometry gestures of §7 "Editing geometry". */
   alt?: boolean;
+  /** Ctrl (Cmd on a Mac) held (mouse; touch never): J16's add-to-selection click on a course object. */
+  ctrl?: boolean;
   /** Paper mm per CSS px at the current zoom: for handle tolerances. */
   mmPerPx: number;
   /** A one-finger press on a coarse pointer (offered only to a tool with `touchPress`, F23): a coarser reach. */
@@ -400,11 +403,12 @@ export type ToolShape =
   | { kind: "line"; points: readonly { x: number; y: number }[]; closed?: boolean; dashed?: boolean; color?: string; fill?: string; widthPx?: number; testId?: string; data?: Record<string, string> }
   /** A screen-size square handle. */
   | { kind: "handle"; x: number; y: number; active?: boolean; testId?: string; data?: Record<string, string> }
-  /** A screen-size Bézier handle grip at `x`, `y` on a thin line from its vertex `from`. */
-  | { kind: "grip"; x: number; y: number; from: { x: number; y: number }; testId?: string; data?: Record<string, string> }
-  | { kind: "text"; x: number; y: number; text: string; dxPx?: number; dyPx?: number; color?: string; testId?: string }
-  /** A raster on the UI layer (Layout mode's page images): its top-left, top-right and bottom-left corners, paper mm. */
-  | { kind: "image"; topLeft: { x: number; y: number }; topRight: { x: number; y: number }; bottomLeft: { x: number; y: number }; href: string; testId?: string; data?: Record<string, string> };
+  /**
+   * A screen-size Bézier handle grip at `x`, `y` on a thin line from its vertex `from`. With `lengthPx` the grip is
+   * drawn that many screen px from `from` towards `x`, `y` (a rotate knob's fixed stem, J9).
+   */
+  | { kind: "grip"; x: number; y: number; from: { x: number; y: number }; lengthPx?: number; testId?: string; data?: Record<string, string> }
+  | { kind: "text"; x: number; y: number; text: string; dxPx?: number; dyPx?: number; color?: string; testId?: string };
 
 /**
  * An editor tool's hooks into the viewer (docs/course-editor.md §6). The
@@ -1170,10 +1174,16 @@ export function MapViewer({
   // ─── Editor hit-test on the shared stage (docs/course-editor.md §5) ──
   const sharedHit = !!editor && glCourse;
   // Closed course objects (oob_area, whiteout, toner_saver, filter_region) hit by their outline only: their
-  // interior is the map, so a press there pans (§5, §7; docs/bugfix-editor-area-press-pans.md).
+  // interior is the map, so a press there pans (§5, §7; docs/bugfix-editor-area-press-pans.md). An image is hit
+  // inside its turned box, after everything else (J7): a control inside a lucka still wins.
   const uiAreas = useMemo(
-    () => (editor ? drawnObjects.filter((o) => vertexRule(o.kind).closed).map((o) => ({ id: o.id, ring: outlinePoints(o.geometry, true) })) : []),
-    [editor, drawnObjects],
+    // An attached object (J10) hits where the layer draws it: moved with its control, left out when that is not drawn.
+    () => (editor
+      ? course.resolveAttached(drawnObjects, courseInfo?.derivation?.sites ?? []).flatMap((o) => (o.kind === "image"
+        ? [{ id: o.id, ring: imageRing(o.geometry, o.props.rotationDeg), filled: true }]
+        : vertexRule(o.kind).closed ? [{ id: o.id, ring: outlinePoints(o.geometry, true) }] : []))
+      : []),
+    [editor, drawnObjects, courseInfo?.derivation?.sites],
   );
   // `style: "none"` legs have no layer object, so no hit piece: they hit from the derivation (§6.7).
   const uiLegs = useMemo(() => (editor ? uiLegsOf(courseInfo?.derivation?.courses) : []), [editor, courseInfo]);
@@ -1206,11 +1216,11 @@ export function MapViewer({
   editorSnapRef.current = editor?.snap ?? null;
 
   /** The pointer as a tool sees it (§6): paper mm, the target under it, the zoom's mm per px. */
-  const toolPointer = (clientX: number, clientY: number, shift: boolean, alt = false): ToolPointer | null => {
+  const toolPointer = (clientX: number, clientY: number, shift: boolean, alt = false, ctrl = false): ToolPointer | null => {
     const pt = screenToMapMm(clientX, clientY);
     const edge = screenToMapMm(clientX + 1, clientY);
     if (!pt || !edge) return null;
-    return { pt, target: resolveEditorTarget(clientX, clientY) ?? null, shift, alt, mmPerPx: Math.hypot(edge.x - pt.x, edge.y - pt.y) };
+    return { pt, target: resolveEditorTarget(clientX, clientY) ?? null, shift, alt, ...(ctrl ? { ctrl } : {}), mmPerPx: Math.hypot(edge.x - pt.x, edge.y - pt.y) };
   };
   const toolPointerRef = useRef(toolPointer);
   toolPointerRef.current = toolPointer;
@@ -1598,7 +1608,7 @@ export function MapViewer({
     if (e.button !== 0) return;
     const tool = editorToolRef.current;
     if (!measuring && tool) {
-      const p = toolPointerRef.current(e.clientX, e.clientY, e.shiftKey, e.altKey);
+      const p = toolPointerRef.current(e.clientX, e.clientY, e.shiftKey, e.altKey, e.ctrlKey || e.metaKey);
       if (p && tool.onPointerDown?.(p)) {
         toolDragRef.current = { startX: e.clientX, startY: e.clientY };
         return;
@@ -1640,7 +1650,7 @@ export function MapViewer({
       return;
     }
     if (editor?.tool?.onHover && !isPanningRef.current && e.buttons === 0) {
-      const p = toolPointerRef.current(e.clientX, e.clientY, e.shiftKey, e.altKey);
+      const p = toolPointerRef.current(e.clientX, e.clientY, e.shiftKey, e.altKey, e.ctrlKey || e.metaKey);
       if (p) editor.tool.onHover(p);
     }
     // F27: the placement loupe follows the cursor, a pan included (the map, and the point under it, move with it).
@@ -1773,7 +1783,7 @@ export function MapViewer({
       if (dx + dy < 5 && !onButton) {
         const tool = editorToolRef.current;
         if (tool?.exclusive) {
-          const p = toolPointerRef.current(e.clientX, e.clientY, e.shiftKey, e.altKey);
+          const p = toolPointerRef.current(e.clientX, e.clientY, e.shiftKey, e.altKey, e.ctrlKey || e.metaKey);
           if (p) tool.onClick?.(p);
         } else {
           const pt = screenToMapMm(e.clientX, e.clientY);
@@ -3066,14 +3076,14 @@ export function MapViewer({
       onDoubleClick={(e) => {
         const tool = editorToolRef.current;
         if (!tool?.onDoubleClick || (e.target as HTMLElement).closest?.("button")) return;
-        const p = toolPointer(e.clientX, e.clientY, e.shiftKey, e.altKey);
+        const p = toolPointer(e.clientX, e.clientY, e.shiftKey, e.altKey, e.ctrlKey || e.metaKey);
         if (p) tool.onDoubleClick(p);
       }}
       onContextMenu={(e) => {
         const tool = editorToolRef.current;
         if (!tool?.onContextMenu) return;
         e.preventDefault();
-        const p = toolPointer(e.clientX, e.clientY, e.shiftKey, e.altKey);
+        const p = toolPointer(e.clientX, e.clientY, e.shiftKey, e.altKey, e.ctrlKey || e.metaKey);
         if (p) tool.onContextMenu(p);
       }}
     >
@@ -3122,6 +3132,8 @@ export function MapViewer({
           onTerrainError={onTerrainLayerError}
           onMaxTextureSize={setMaxTextureSize}
           terrainLines={gpsRouteLines3d}
+          nameId={nameId ?? null}
+          outlineMissingImages={!!editor}
         />
       )}
       {/* 3D: the map's gestures go to the camera (§5.4 "3D mode" "Gestures") */}
@@ -3958,8 +3970,13 @@ function toolShapeNode(
         strokeWidth={1.5} data-testid={sh.testId} data-x={sh.x} data-y={sh.y} {...data} />;
     }
     case "grip": {
-      const p = project(sh.x, sh.y), q = project(sh.from.x, sh.from.y);
+      let p = project(sh.x, sh.y);
+      const q = project(sh.from.x, sh.from.y);
       if (!p || !q) return null;
+      if (sh.lengthPx !== undefined) {
+        const len = Math.hypot(p.x - q.x, p.y - q.y) || 1;
+        p = { x: q.x + ((p.x - q.x) / len) * sh.lengthPx, y: q.y + ((p.y - q.y) / len) * sh.lengthPx };
+      }
       return (
         <g key={key}>
           <line x1={q.x} y1={q.y} x2={p.x} y2={p.y} stroke="#7c3aed" strokeWidth={1} />
@@ -3972,14 +3989,6 @@ function toolShapeNode(
       if (!p) return null;
       return <text key={key} x={p.x + (sh.dxPx ?? 0)} y={p.y + (sh.dyPx ?? 0)} fill={color} fontSize={12} fontWeight={600}
         paintOrder="stroke" stroke="#ffffff" strokeWidth={3} data-testid={sh.testId}>{sh.text}</text>;
-    }
-    case "image": {
-      // A unit image under the affine map of its three projected corners: scale, rotation and the y flip in one.
-      const o = project(sh.topLeft.x, sh.topLeft.y), u = project(sh.topRight.x, sh.topRight.y), v = project(sh.bottomLeft.x, sh.bottomLeft.y);
-      if (!o || !u || !v) return null;
-      const m = [u.x - o.x, u.y - o.y, v.x - o.x, v.y - o.y, o.x, o.y].map((n) => n.toFixed(3)).join(" ");
-      return <image key={key} href={sh.href} x={0} y={0} width={1} height={1} preserveAspectRatio="none" transform={`matrix(${m})`}
-        data-testid={sh.testId} {...data} />;
     }
   }
 }

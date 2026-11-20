@@ -327,6 +327,13 @@ async function canvasShot(page: Page, held = false): Promise<{ png: { width: num
   return { png, pixelOf, pxPerMm: v.pxPerUm * 1000 * k };
 }
 
+/** The GL canvas's RGB at a paper point (mm), the overlays hidden; null off the canvas. */
+export async function canvasColourAt(page: Page, at: Pt): Promise<[number, number, number] | null> {
+  const { png, pixelOf } = await canvasShot(page);
+  const i = pixelOf(at);
+  return i === null ? null : [png.data[i], png.data[i + 1], png.data[i + 2]];
+}
+
 /**
  * Whether the canvas is one plain colour (each channel within 8) everywhere within `radiusMm` of a paper point,
  * sampled every canvas pixel. A probe that reads lower purple (a leg, a circle) at a point needs plain map under

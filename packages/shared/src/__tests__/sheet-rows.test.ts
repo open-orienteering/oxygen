@@ -10,6 +10,9 @@
 import { describe, expect, it } from "vitest";
 import { defaultMapAppearance } from "../course-maps/schema.js";
 import { resolveSheet } from "../course-maps/resolve-sheet.js";
+import { courseLayer } from "../course/layer.js";
+import { isomContext } from "../course/__tests__/helpers.js";
+import type { StoredCourseObject } from "../course/objects.js";
 import {
   type MapRowContext,
   type PrintMapRow,
@@ -143,6 +146,24 @@ describe("sheetInputForMapRow / sheetForMapRow", () => {
     const input = sheetInputForMapRow(row({ kind: "setter", props: { setter: 1, controlIds: ["A", "C"] }, course: null }), ctx);
     expect(input.course).toBeNull();
     expect(input.allControls?.map((c) => c.id)).toEqual(["A", "C"]);
+  });
+
+  it("an attached object prints where its control (a row UUID) is now, and not on a sheet without it (J10, course-layer.md §8.3)", () => {
+    const area = (dx: number, attach?: StoredCourseObject["attach"]): StoredCourseObject => ({
+      id: "uuid-obj", seq: 7, scope: { all: true }, z: 0, version: 0n, kind: "oob_area", props: {},
+      geometry: [{ x: 5 + dx, y: -15 }, { x: 15 + dx, y: -15 }, { x: 10 + dx, y: -5 }], ...(attach ? { attach } : {}),
+    });
+    // B stands at (10, −10); attached when it stood 20 mm west: printed 20 mm east of its stored place.
+    const layerOf = (r: PrintMapRow, objects: StoredCourseObject[]) => {
+      const sheet = sheetForMapRow(r, { ...ctx, courseObjects: objects });
+      return courseLayer({ ...sheet.course, objects: sheet.course.objects ?? [], document: isomContext() });
+    };
+    const attached = layerOf(row(), [area(-20, { controlId: "B", at: { x: -10, y: -10 } })]);
+    const placed = layerOf(row(), [area(0)]);
+    expect(attached.objects).toEqual(placed.objects);
+    // A setter sheet of A and C only does not draw B: the object is left out.
+    const setter = row({ kind: "setter", props: { setter: 1, controlIds: ["A", "C"] }, course: null });
+    expect(layerOf(setter, [area(-20, { controlId: "B", at: { x: -10, y: -10 } })]).objects).toEqual(layerOf(setter, []).objects);
   });
 
   it("refuses a row without a template", () => {

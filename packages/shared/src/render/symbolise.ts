@@ -8,8 +8,11 @@
 
 import {
   COORD_FLAG,
+  type BlendMode,
   type FontRef,
+  type ImagePass,
   type Pass,
+  type PassAlpha,
   type PassStream,
   PassStreamBuilder,
   type RenderPath,
@@ -21,7 +24,8 @@ import { flattenRings, offsetPolyline, roundCorners } from "./geometry.js";
 import { GlyphRegistry, type RegisteredGlyph, mapCap, mapJoin } from "./glyph-table.js";
 import { PathMeasure, gapIntervals, pathSections, subtractIntervals, wrapIntervals } from "./measure.js";
 import { patternInstances } from "./pattern.js";
-import { type FilterRegion, applyFilterRegions } from "./filter-region.js";
+import { type FilterRegion, applyFilterRegions, applyKnockouts } from "./filter-region.js";
+import type { GraphicOutline } from "./trace-outline.js";
 import { placeGlyphs } from "./placement.js";
 import type { AreaSymbol, BorderSpec, LineSymbolBody, PointSymbol, RenderSymbol, StrokeSpec, TextSymbol } from "./symbol.js";
 import { type ShapedText, shapeText, shapeTextAlongPath } from "./text.js";
@@ -42,6 +46,38 @@ export interface RenderObject {
    * render bridge from the object type.
    */
   textLayout?: "box" | "path";
+  /**
+   * Opacity 0–1 of every pass this object emits (map-rendering §3.9).
+   * Absent, ≥ 1 or not finite = opaque; below 0 = 0. Set by the course
+   * and page layers from a user object; document objects never set it.
+   */
+  opacity?: number;
+  /** Blend of every pass this object emits; absent = normal (§3.9). */
+  blend?: BlendMode;
+  /**
+   * A placed graphic (§3.10, J5): the object draws one image pass instead
+   * of its symbol's passes, in the row of its symbol's fill (an area
+   * symbol; the course and page layers' graphics rows). `path` is the
+   * quad's four corners — the visible part's bottom-left, bottom-right,
+   * top-right, top-left — so rotation and flips are in the corner order.
+   */
+  /** `outline` (J19): the graphic's traced silhouette, the knockout footprint when `knockout` (§4.11). */
+  image?: { graphicId: number; crop?: { x: number; y: number; width: number; height: number }; outline?: GraphicOutline };
+  /**
+   * With `image`: the image cuts every image below it in this stream out
+   * where it lies (J15, §4.11 "Knockout footprints"); ignored otherwise.
+   */
+  knockout?: boolean;
+}
+
+/** The canonical alpha fields of an object (§3.9): `opacity` only below 1, `blend` only when set. */
+export function objectAlpha(obj: { opacity?: number; blend?: BlendMode }): PassAlpha {
+  const out: PassAlpha = {};
+  const o = obj.opacity;
+  // Below 0.99995 only: what rounds to 1 at the projection's 4 decimals is opaque everywhere.
+  if (o !== undefined && Number.isFinite(o) && o < 0.99995) out.opacity = Math.max(0, o);
+  if (obj.blend === "multiply") out.blend = "multiply";
+  return out;
 }
 
 export interface SymboliseInput {
@@ -58,7 +94,7 @@ export interface SymboliseInput {
 export interface SymboliseWarning {
   /** The object, or −1 for a filter-region warning (`region` says which). */
   objectIdx: number;
-  code: "UNKNOWN_SYMBOL" | "NO_FONT" | "EMPTY_GEOMETRY" | "TEXT_WITHOUT_TEXT" | "FILTER_EMPTY_REGION";
+  code: "UNKNOWN_SYMBOL" | "NO_FONT" | "EMPTY_GEOMETRY" | "TEXT_WITHOUT_TEXT" | "FILTER_EMPTY_REGION" | "IMAGE_WITHOUT_GRAPHIC";
   message: string;
   region?: number;
 }
@@ -78,6 +114,7 @@ class Stage {
   readonly warnings: SymboliseWarning[] = [];
   private objectIdx = 0;
   private symbolIdx = 0;
+  private alpha: PassAlpha = {};
   private readonly input: SymboliseInput;
 
   constructor(input: SymboliseInput) {
@@ -91,6 +128,7 @@ class Stage {
     this.input.objects.forEach((obj, i) => {
       this.objectIdx = i;
       this.symbolIdx = obj.symbolIdx;
+      this.alpha = objectAlpha(obj);
       const sym = this.input.symbols[obj.symbolIdx];
       if (!sym) {
         this.warn("UNKNOWN_SYMBOL", `object ${i} references symbol ${obj.symbolIdx}`);
@@ -98,6 +136,10 @@ class Stage {
       }
       if (obj.path.coords.length === 0) {
         this.warn("EMPTY_GEOMETRY", `object ${i} has no coordinates`);
+        return;
+      }
+      if (obj.image) {
+        this.image(obj, sym);
         return;
       }
       switch (sym.type) {
@@ -116,12 +158,16 @@ class Stage {
       }
     });
     this.builder.glyphTable.push(...this.glyphs.table);
-    const stream = this.builder.build();
+    const built = this.builder.build();
+    const objects = this.input.objects;
+    const knock = objects.some((o) => o.knockout && o.image) ? (i: number) => !!(objects[i]?.knockout && objects[i]?.image) : null;
+    const outlineOf = (i: number) => objects[i]?.image?.outline;
     const regions = this.input.regions;
-    if (!regions?.length) return { stream, warnings: this.warnings, hidden: [] };
-    const filtered = applyFilterRegions(stream, regions, { objectLimit: this.input.regionObjectLimit });
+    if (!regions?.length) return { stream: knock ? applyKnockouts(built, knock, outlineOf) : built, warnings: this.warnings, hidden: [] };
+    const filtered = applyFilterRegions(built, regions, { objectLimit: this.input.regionObjectLimit });
     for (const w of filtered.warnings) this.warnings.push({ objectIdx: -1, code: w.code, message: w.message, region: w.region });
-    return { stream: filtered.stream, warnings: this.warnings, hidden: filtered.hidden };
+    // After the regions: `applyFilterRegions` rebuilds the masks.
+    return { stream: knock ? applyKnockouts(filtered.stream, knock, outlineOf) : filtered.stream, warnings: this.warnings, hidden: filtered.hidden };
   }
 
   private warn(code: SymboliseWarning["code"], message: string): void {
@@ -129,7 +175,8 @@ class Stage {
   }
 
   private push(pass: Pass): void {
-    this.builder.push(pass, this.objectIdx, this.symbolIdx);
+    const a = this.alpha;
+    this.builder.push(a.opacity === undefined && a.blend === undefined ? pass : { ...pass, ...a }, this.objectIdx, this.symbolIdx);
   }
 
   // ---- glyph instances ---------------------------------------------------
@@ -155,6 +202,20 @@ class Stage {
         ...(clip ? { clip } : {}),
       });
     });
+  }
+
+  // ---- image (§3.10) -----------------------------------------------------
+
+  private image(obj: RenderObject, sym: RenderSymbol): void {
+    const g = obj.image!;
+    const c = obj.path.coords;
+    const colour = sym.type === "area" ? sym.fill : undefined;
+    if (!(g.graphicId > 0) || c.length !== 8 || colour === undefined) {
+      this.warn("IMAGE_WITHOUT_GRAPHIC", `object ${this.objectIdx}: an image needs a graphic, four corners and an area symbol's fill row; not drawn`);
+      return;
+    }
+    const quad: ImagePass["quad"] = [c[2] - c[0], c[3] - c[1], c[6] - c[0], c[7] - c[1], c[0], c[1]];
+    this.push({ kind: "image", colour, graphicId: g.graphicId, quad, ...(g.crop ? { crop: { ...g.crop } } : {}) });
   }
 
   // ---- point -------------------------------------------------------------

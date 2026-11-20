@@ -11,14 +11,59 @@
  * a fixed `/ID`, so equal input gives equal bytes (05 §5.8).
  */
 
-import { PDFDocument, PDFHexString, PDFName, type PDFPage, type PDFRef, PDFString } from "@cantoo/pdf-lib";
+import { PDFDict, PDFDocument, PDFHexString, PDFName, type PDFPage, type PDFRef, PDFString } from "@cantoo/pdf-lib";
 import { WGS84_WKT } from "./geo.js";
 import type { GeoViewport } from "./page.js";
 import { UM_TO_PT } from "./operators.js";
-import type { FontFamily, FontRef, GlyphMesh } from "../render/pass-stream.js";
+import type { BlendMode, FontFamily, FontRef, GlyphMesh } from "../render/pass-stream.js";
 import { type TrueTypeFont, parseTrueType } from "../render/truetype.js";
 import { cidWidths, fontDescriptorValues, subsetTag, subsetTrueType, toUnicodeCMap } from "./fonts.js";
 import { type Matrix, type OperatorResources, glyphFormBBox, glyphFormContent } from "./operators.js";
+import type { ColourMode } from "./colour.js";
+
+/**
+ * Where a resource name is registered: a page's `/Resources`, or a
+ * transparency-group form's own (§3.9). `page` is the page the content
+ * ends up on, whose `/Group` an ExtGState sets.
+ */
+interface ResourceTarget {
+  page: PDFPage;
+  font(name: string, ref: PDFRef): void;
+  xobject(name: string, ref: PDFRef): void;
+  extGState(name: string, ref: PDFRef): void;
+}
+
+const pageTarget = (page: PDFPage): ResourceTarget => ({
+  page,
+  font: (name, ref) => page.node.setFontDictionary(PDFName.of(name), ref),
+  xobject: (name, ref) => page.node.setXObject(PDFName.of(name), ref),
+  extGState: (name, ref) => page.node.setExtGState(PDFName.of(name), ref),
+});
+
+/** A form's resources, collected while its content is drawn; written into the form's dictionary. */
+class FormTarget implements ResourceTarget {
+  readonly fonts = new Map<string, PDFRef>();
+  readonly xobjects = new Map<string, PDFRef>();
+  readonly extGStates = new Map<string, PDFRef>();
+  readonly page: PDFPage;
+  constructor(page: PDFPage) {
+    this.page = page;
+  }
+  font(name: string, ref: PDFRef): void {
+    this.fonts.set(name, ref);
+  }
+  xobject(name: string, ref: PDFRef): void {
+    this.xobjects.set(name, ref);
+  }
+  extGState(name: string, ref: PDFRef): void {
+    this.extGStates.set(name, ref);
+  }
+  /** Stable text of the resources, for de-duplicating equal forms. */
+  key(): string {
+    const part = (m: Map<string, PDFRef>) => [...m].map(([n, r]) => `${n}=${r.toString()}`).sort().join(",");
+    return `${part(this.fonts)};${part(this.xobjects)};${part(this.extGStates)}`;
+  }
+}
 
 /** An embedded raster image: its resource name on the page and its pixel size. */
 export interface PdfImage {
@@ -83,6 +128,8 @@ export class PdfWriter {
   private readonly faces: Face[] = [];
   private readonly forms = new Map<string, { name: string; ref: PDFRef }>();
   private readonly formsByMesh = new WeakMap<GlyphMesh, Map<string, { name: string; ref: PDFRef }>>();
+  private readonly extGStates = new Map<string, { name: string; ref: PDFRef }>();
+  private readonly groupForms = new Map<string, { name: string; ref: PDFRef }>();
   private readonly images = new Map<string, { ref: PDFRef; width: number; height: number; name: string; bytes: Uint8Array }[]>();
   private imageCount = 0;
   private readonly pages: { page: PDFPage; label?: string; outlineTitle?: string }[] = [];
@@ -148,7 +195,7 @@ export class PdfWriter {
     const { width, height } = src.getSize();
     for (let i = 0; i < count; i++) {
       const page = this.doc.addPage([width, height]);
-      for (const key of ["TrimBox", "Contents", "Resources", "VP"]) {
+      for (const key of ["TrimBox", "Contents", "Resources", "VP", "Group"]) {
         const value = src.node.get(PDFName.of(key));
         if (value) page.node.set(PDFName.of(key), value);
       }
@@ -194,7 +241,7 @@ export class PdfWriter {
     page.node.set(PDFName.of("VP"), ctx.obj(arr));
   }
 
-  /** @internal */ fontFor(page: PDFPage, ref: FontRef, glyphIds: ArrayLike<number>): string | undefined {
+  /** @internal */ fontFor(target: ResourceTarget, ref: FontRef, glyphIds: ArrayLike<number>): string | undefined {
     const face = this.face(ref);
     if (!face || !face.embeddable) return undefined;
     if (!face.ref) {
@@ -202,7 +249,7 @@ export class PdfWriter {
       face.name = `F${this.fontCount++}`;
     }
     for (let i = 0; i < glyphIds.length; i++) face.glyphs.add(glyphIds[i]);
-    page.node.setFontDictionary(PDFName.of(face.name!), face.ref);
+    target.font(face.name!, face.ref);
     return face.name;
   }
 
@@ -212,7 +259,7 @@ export class PdfWriter {
     return face && path ? { path, unitsPerEm: face.metrics.unitsPerEm } : undefined;
   }
 
-  /** @internal */ glyphFor(page: PDFPage, mesh: GlyphMesh, matrix?: Matrix): string {
+  /** @internal */ glyphFor(target: ResourceTarget, mesh: GlyphMesh, matrix?: Matrix): string {
     const identity = !matrix || (matrix[0] === 1 && matrix[1] === 0 && matrix[2] === 0 && matrix[3] === 1 && matrix[4] === 0 && matrix[5] === 0);
     const m = identity ? "" : matrix.join(" ");
     let byMatrix = this.formsByMesh.get(mesh);
@@ -232,8 +279,79 @@ export class PdfWriter {
       }
       byMatrix.set(m, form);
     }
-    page.node.setXObject(PDFName.of(form.name), form.ref);
+    target.xobject(form.name, form.ref);
     return form.name;
+  }
+
+  /**
+   * An ExtGState for opacity and blend (§3.9), one per distinct pair per
+   * document, named `GS<n>` in first-use order. The page that uses one
+   * gets `/Group << /S /Transparency /CS … >>` in the page's colour space.
+   */
+  /** @internal */ alphaFor(target: ResourceTarget, opacity: number | undefined, blend: BlendMode | undefined, mode: ColourMode): string {
+    const a = opacity === undefined ? 1 : Math.round(opacity * 10000) / 10000;
+    const key = `${a}/${blend ?? "normal"}`;
+    let gs = this.extGStates.get(key);
+    if (!gs) {
+      const ctx = this.doc.context;
+      const dict = ctx.obj({ Type: "ExtGState", ca: a, CA: a, ...(blend === "multiply" ? { BM: "Multiply" } : {}) });
+      gs = { name: `GS${this.extGStates.size}`, ref: ctx.register(dict) };
+      this.extGStates.set(key, gs);
+    }
+    target.extGState(gs.name, gs.ref);
+    const page = target.page;
+    if (!page.node.get(PDFName.of("Group"))) {
+      page.node.set(
+        PDFName.of("Group"),
+        this.doc.context.obj({ Type: "Group", S: "Transparency", CS: mode === "rgb" ? "DeviceRGB" : "DeviceCMYK" }),
+      );
+    }
+    return gs.name;
+  }
+
+  /**
+   * An isolated transparency-group form (§3.9): `draw` writes its content
+   * against the form's own resources; `bbox` in the content's units.
+   * Equal content, box and resources share one XObject (`TG<n>`).
+   * `undefined` when `draw` writes nothing.
+   */
+  /** @internal */ groupFor(target: ResourceTarget, bbox: [number, number, number, number], draw: (resources: OperatorResources) => string): string | undefined {
+    const child = new FormTarget(target.page);
+    const content = draw(this.resourcesFor(child));
+    if (!content) return undefined;
+    const key = `${bbox.join(" ")}\n${child.key()}\n${content}`;
+    let form = this.groupForms.get(key);
+    if (!form) {
+      const ctx = this.doc.context;
+      const res = PDFDict.withContext(ctx);
+      const sub = (name: string, m: Map<string, PDFRef>) => {
+        if (m.size === 0) return;
+        const d = PDFDict.withContext(ctx);
+        for (const [n, ref] of [...m].sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0))) d.set(PDFName.of(n), ref);
+        res.set(PDFName.of(name), d);
+      };
+      sub("Font", child.fonts);
+      sub("XObject", child.xobjects);
+      sub("ExtGState", child.extGStates);
+      const dict = ctx.obj({ Type: "XObject", Subtype: "Form", BBox: bbox, Group: { Type: "Group", S: "Transparency", I: true } });
+      dict.set(PDFName.of("Resources"), res);
+      const stream = ctx.flateStream(content, {});
+      for (const [k, v] of dict.entries()) stream.dict.set(k, v);
+      form = { name: `TG${this.groupForms.size}`, ref: ctx.register(stream) };
+      this.groupForms.set(key, form);
+    }
+    target.xobject(form.name, form.ref);
+    return form.name;
+  }
+
+  /** @internal */ resourcesFor(target: ResourceTarget, mode?: ColourMode): OperatorResources {
+    return {
+      font: (ref, glyphIds) => this.fontFor(target, ref, glyphIds),
+      glyphOutline: (ref, glyphId) => this.outlineFor(ref, glyphId),
+      glyph: (mesh, matrix) => this.glyphFor(target, mesh, matrix),
+      alpha: (opacity, blend, m) => this.alphaFor(target, opacity, blend, m ?? mode ?? "cmyk"),
+      group: (bbox, draw) => this.groupFor(target, bbox, draw),
+    };
   }
 
   /** @internal */ content(page: PDFPage, ops: string): void {
@@ -366,11 +484,7 @@ export class PdfWriterPage {
   constructor(writer: PdfWriter, page: PDFPage) {
     this.writer = writer;
     this.page = page;
-    this.resources = {
-      font: (ref, glyphIds) => writer.fontFor(page, ref, glyphIds),
-      glyphOutline: (ref, glyphId) => writer.outlineFor(ref, glyphId),
-      glyph: (mesh, matrix) => writer.glyphFor(page, mesh, matrix),
-    };
+    this.resources = writer.resourcesFor(pageTarget(page));
   }
 
   /** Appends a content stream (operators from `operators.ts`, in page points). */

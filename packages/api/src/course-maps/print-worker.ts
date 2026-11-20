@@ -9,14 +9,17 @@
  *   → { type: "done", id, bytes, pageCount, warnings } bytes transferred
  *   ← { type: "raster", id, svg, width, height }       an SVG logo for `print.png` (§8.5)
  *   → { type: "png", id, bytes }                       bytes transferred
+ *   ← { type: "trim", id, svg }                         an SVG upload trimmed to its drawing (`trimSvgUpload`)
+ *   → { type: "png", id, bytes }                       the trimmed SVG's bytes, empty when kept as uploaded
  *   → { type: "error", id, message, code? }
  */
 
 import { parentPort } from "node:worker_threads";
 import { course } from "@oxygen/shared";
-import type { ColourMode } from "@oxygen/shared/print";
+import type { ColourMode, ImageWindow } from "@oxygen/shared/print";
 import { prepareDocument, type PrintGraphic, type PrintPatch, type PrintSheet } from "@oxygen/shared/print";
 import { rasteriseSvgGraphic, renderCoursePages } from "./pdf-page.js";
+import { trimSvgUpload } from "./svg-window.js";
 
 export interface PrintWorkerRequest {
   type: "print";
@@ -42,6 +45,15 @@ export interface PrintWorkerRasterRequest {
   svg: Uint8Array;
   width: number;
   height: number;
+  /** The part of the canvas to rasterise (course-print.md §6.3); absent = all. */
+  window?: ImageWindow;
+}
+
+/** An SVG upload's trim (course-maps.md "Data model"): resvg off the event loop. */
+export interface PrintWorkerTrimRequest {
+  type: "trim";
+  id: number;
+  svg: Uint8Array;
 }
 
 export type PrintWorkerMessage =
@@ -85,7 +97,7 @@ if (port) {
 
   const raster = async (req: PrintWorkerRasterRequest): Promise<void> => {
     try {
-      const png = await rasteriseSvgGraphic(req.svg, req.width, req.height);
+      const png = await rasteriseSvgGraphic(req.svg, req.width, req.height, req.window);
       const bytes = png.byteOffset === 0 && png.byteLength === png.buffer.byteLength ? png : png.slice();
       post({ type: "png", id: req.id, bytes }, [bytes.buffer as ArrayBuffer]);
     } catch (err) {
@@ -93,8 +105,19 @@ if (port) {
     }
   };
 
-  port.on("message", (req: PrintWorkerRequest | PrintWorkerRasterRequest) => {
+  const trim = async (req: PrintWorkerTrimRequest): Promise<void> => {
+    try {
+      const out = await trimSvgUpload(Buffer.from(req.svg));
+      const bytes = out ? new Uint8Array(out) : new Uint8Array(0);
+      post({ type: "png", id: req.id, bytes }, [bytes.buffer as ArrayBuffer]);
+    } catch (err) {
+      post({ type: "error", id: req.id, message: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
+  port.on("message", (req: PrintWorkerRequest | PrintWorkerRasterRequest | PrintWorkerTrimRequest) => {
     if (req.type === "print") queue = queue.then(() => handle(req));
     else if (req.type === "raster") queue = queue.then(() => raster(req));
+    else if (req.type === "trim") queue = queue.then(() => trim(req));
   });
 }

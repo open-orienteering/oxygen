@@ -178,6 +178,37 @@ describe("course scenes", () => {
     expect(p.role).toBe("crossing_point");
     expect(p.angleDeg).not.toBe(90);
   });
+  it("course-corridor-translucent (J13): no region; one white fill at the minimum 50 % in upper white, above every map colour and lower purple, below upper purple", () => {
+    const { scene, stream } = run("course-corridor-translucent");
+    expect(scene.layer.regions).toEqual([]);
+    expect(stream.maskIdx?.some((m) => m >= 0) ?? false).toBe(false);
+    const passes = coursePasses(scene, stream);
+    const band = passes.filter((x) => x.ref === "corridor:band");
+    expect(band).toHaveLength(1);
+    expect(band[0].p.opacity).toBe(0.5);
+    expect(band[0].colour).toBe("white-upper");
+    const base = stream.passes.map((_, k) => k).filter((k) => stream.objectIdx[k] < scene.courseObjectOffset);
+    expect(Math.max(...base)).toBeLessThan(band[0].k);
+    for (const x of passes.filter((q) => q.colour === "purple-lower")) expect(x.k).toBeLessThan(band[0].k);
+    for (const x of passes.filter((q) => q.colour === "purple-upper")) expect(x.k).toBeGreaterThan(band[0].k);
+    // The fill is the opaque scene's clip region, and nothing else differs but the region.
+    const opaque = run("course-corridor");
+    expect(flattenRings(scene.layer.objects.find((o) => o.ref.kind === "corridor" && o.ref.id === "band")!.path)).toEqual(flattenRings(opaque.scene.layer.regions[0].path));
+  });
+
+  it("course-knockout (J15): the overlay alone is masked, by lucka 31's footprint only; the luckas and the map are not", () => {
+    const { scene, stream } = run("course-knockout");
+    const images = coursePasses(scene, stream).filter((x) => x.p.kind === "image");
+    expect(images.map((x) => x.ref)).toEqual(["object:course-object:overlay", "object:course-object:lucka-31", "object:course-object:lucka-32"]);
+    const mask = (k: number) => stream.maskIdx?.[k] ?? -1;
+    expect(mask(images[0].k)).toBeGreaterThanOrEqual(0);
+    expect(mask(images[1].k)).toBe(-1);
+    expect(mask(images[2].k)).toBe(-1);
+    for (let k = 0; k < stream.passes.length; k++) if (k !== images[0].k) expect(mask(k), `pass ${k}`).toBe(-1);
+    const m = stream.masks![mask(images[0].k)];
+    expect(m.regions).toHaveLength(1);
+  });
+
   it("course-corridor: one clip region, the map masked in the band and clear inside the corridors and the mouths, the course never masked", () => {
     const { scene, stream } = run("course-corridor");
     expect(scene.layer.regions.map((r) => [r.mode, r.symbols])).toEqual([["clip", "all"]]);

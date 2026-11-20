@@ -56,7 +56,7 @@ export interface CourseCorridor {
   edge: boolean;
   /** Width of the white band outside the edge, paper mm at the base map's scale; 0 = none. */
   whiteMm: number;
-  /** Stored, drawn opaque until the backends carry alpha (map-rendering.md §8). */
+  /** 0–1; below 1 the band is a translucent white fill instead of the clip, the minimum over the drawn legs (§10.2, J13). */
   whiteOpacity: number;
 }
 
@@ -284,6 +284,8 @@ export interface DerivedCorridor {
   /** The white band outside the edge, paper mm. */
   whiteMm: number;
   edge: boolean;
+  /** The band's opacity below 1 (§10.2, J13); absent = 1. Not part of the corridor's geometry or its cache key. */
+  whiteOpacity?: number;
 }
 
 export interface DerivedCourse {
@@ -302,13 +304,18 @@ export interface CourseDerivation {
   courses: DerivedCourse[];
 }
 
-/** An `image` object: not in the pass stream, drawn by the page backends from its graphic's bytes. */
+/**
+ * A graphic the layer draws (J5): what to fetch, not how to draw it — the
+ * image itself is a render object in the `course:graphics` row (an
+ * `image` render object, map-rendering §3.10), its opacity, blend,
+ * rotation and flips there. One entry per placement, in draw order.
+ */
 export interface CourseLayerImage {
   graphicId: number;
+  /** The placed size, paper µm (an SVG is rasterised at it, course-print.md §6.3). */
+  sizeUm: [number, number];
   /** Visible part of the source as fractions, top-left origin; absent = all. */
   crop?: { x: number; y: number; width: number; height: number };
-  /** Paper µm, y-up: lower-left corner and size. */
-  rectUm: { x: number; y: number; width: number; height: number };
 }
 
 export interface CourseLayerWarning {
@@ -324,7 +331,7 @@ export interface CourseLayer {
   remap: number[] | null;
   symbols: RenderSymbol[];
   objects: CourseRenderObject[];
-  /** `image` course objects: not in the pass stream, drawn by the page backends. */
+  /** The graphics `image` course objects draw (J5): the fetch list; the images themselves are image passes. */
   images: CourseLayerImage[];
   derivation: CourseDerivation;
   warnings: CourseLayerWarning[];

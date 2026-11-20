@@ -21,6 +21,7 @@ import {
 import type { ToolShape } from "../../components/MapViewer";
 import { clampPagePoint, type ResizeHandle } from "../map-layout-editor";
 import { mapVertices, nearestEdge, vertexRule, type Vertex } from "./geometry-edit";
+import { boxRing } from "./transform-gestures";
 
 type Pt = { x: number; y: number };
 
@@ -117,9 +118,41 @@ export function pathFromView(vertices: readonly Vertex[], g: Pick<SheetGeometry,
   return mapVertices(vertices, (q) => toPage(q, g)).map((v) => ({ ...v, ...clampPagePoint(v, printable) }));
 }
 
+/** Page mm (y-down) ↔ the y-up frame of the shared transform maths (J8's adapter, `layout/model.ts`). */
+export const upOf = (p: Pt): Pt => ({ x: p.x, y: -p.y });
+
+/** A turned page object: text (about its anchor), a rectangle or an image (about its centre). */
+export type TurnedObject = Extract<CourseMapObject, { kind: "text" | "rectangle" | "image" }>;
+export const isTurnable = (o: CourseMapObject): o is TurnedObject => o.kind === "text" || o.kind === "rectangle" || o.kind === "image";
+
+/** A turnable object's pivot on the page: a text's anchor, a box's centre. */
+export function objectPivot(o: TurnedObject): Pt {
+  if (o.kind === "text") return { x: o.x, y: o.y };
+  const b = courseMapObjectPageBounds(o);
+  return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+}
+
+/**
+ * A text's, rectangle's or image's box on the page as drawn: its stored bounds turned `rotationDeg` clockwise as
+ * seen about its pivot (J9), in `boxRing`'s order mapped to the page — sw, se, ne, nw.
+ */
+export function objectRing(o: TurnedObject): Pt[] {
+  const b = courseMapObjectPageBounds(o);
+  const corners = [upOf({ x: b.x, y: b.y + b.height }), upOf({ x: b.x + b.width, y: b.y })];
+  return boxRing(corners, o.rotationDeg ?? 0, upOf(objectPivot(o))).map(upOf);
+}
+
+/** `p` taken into a turnable object's unturned frame (page mm), so its stored bounds hit-test it. */
+function unturned(p: Pt, o: TurnedObject): Pt {
+  const deg = o.rotationDeg ?? 0;
+  if (!deg) return p;
+  const c = objectPivot(o);
+  return upOf(boxRing([upOf(p), upOf(p)], -deg, upOf(c))[0]);
+}
+
 /**
  * The topmost layout object under a page point (the last in draw order
- * wins): text, rectangles and images by their bounds, lines within `tolMm`
+ * wins): text, rectangles and images by their bounds as drawn (turned, J9), lines within `tolMm`
  * of the segment, paths within `tolMm` of their outline along its curves —
  * a closed path never by its inside, as the course editor's areas (D16,
  * docs/course-layout.md §3), so a press inside one reaches what is under
@@ -137,7 +170,7 @@ export function layoutObjectAt(p: Pt, objects: readonly CourseMapObject[], tolMm
       if (edge && edge.dist <= tolMm) return i;
       continue;
     }
-    if (inRect(p, courseMapObjectPageBounds(o), tolMm)) return i;
+    if (inRect(isTurnable(o) ? unturned(p, o) : p, courseMapObjectPageBounds(o), tolMm)) return i;
   }
   return -1;
 }
@@ -149,11 +182,9 @@ export function layoutObjectAt(p: Pt, objects: readonly CourseMapObject[], tolMm
 export function objectHandles(o: CourseMapObject): { handle: ResizeHandle; at: Pt }[] {
   if (o.kind === "line") return [{ handle: "start", at: { x: o.x1, y: o.y1 } }, { handle: "end", at: { x: o.x2, y: o.y2 } }];
   if (o.kind === "path") return [];
-  const b = courseMapObjectPageBounds(o);
-  return [
-    { handle: "nw", at: { x: b.x, y: b.y } }, { handle: "ne", at: { x: b.x + b.width, y: b.y } },
-    { handle: "sw", at: { x: b.x, y: b.y + b.height } }, { handle: "se", at: { x: b.x + b.width, y: b.y + b.height } },
-  ];
+  // On the drawn (turned) corners, J9.
+  const [sw, se, ne, nw] = objectRing(o);
+  return [{ handle: "nw", at: nw }, { handle: "ne", at: ne }, { handle: "sw", at: sw }, { handle: "se", at: se }];
 }
 
 /** The handle within `tolMm` of a page point, nearest first. */
@@ -170,6 +201,14 @@ export function handleAt(p: Pt, handles: readonly { handle: ResizeHandle; at: Pt
 export function selectionShapes(r: MapRect, handles: readonly { handle: ResizeHandle; at: Pt }[], g: Pick<SheetGeometry, "frame" | "window">, testId: string): ToolShape[] {
   return [
     { kind: "line", points: rectInView(r, g), closed: true, color: "#2563eb", dashed: true, widthPx: 1.5, testId },
+    ...handles.map((h): ToolShape => ({ kind: "handle", ...toView(h.at, g), testId: "editor-layout-handle", data: { handle: h.handle } })),
+  ];
+}
+
+/** A page ring's outline and its handles as UI shapes (a turned selection, J9). */
+export function ringShapes(ring: readonly Pt[], handles: readonly { handle: ResizeHandle; at: Pt }[], g: Pick<SheetGeometry, "frame" | "window">, testId: string): ToolShape[] {
+  return [
+    { kind: "line", points: ring.map((p) => toView(p, g)), closed: true, color: "#2563eb", dashed: true, widthPx: 1.5, testId },
     ...handles.map((h): ToolShape => ({ kind: "handle", ...toView(h.at, g), testId: "editor-layout-handle", data: { handle: h.handle } })),
   ];
 }

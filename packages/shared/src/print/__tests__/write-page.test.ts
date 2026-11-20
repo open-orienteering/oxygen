@@ -13,6 +13,7 @@ import type { PaperFrame } from "../../geo/projection.js";
 import { liberation } from "../../render/__tests__/fonts.js";
 import { type Pass, makePath } from "../../render/pass-stream.js";
 import { pageScene } from "../__fixtures__/pages.js";
+import { encodeRgbaPng, luckaPng } from "../__fixtures__/png.js";
 import { composePage, writePage } from "../compose.js";
 import type { ColourMode } from "../colour.js";
 import type { PageInput } from "../page.js";
@@ -27,6 +28,18 @@ const fonts = () => [liberation().sans, liberation().narrow];
 /** A 1 × 1 PNG. */
 const PNG = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="), (c) => c.charCodeAt(0));
 const geo: PaperFrame = { unitsPerMm: 1000, mapScale: 10000, georeferencing: { crs: { authority: "EPSG", code: 3006, name: "SWEREF99 TM" }, paperOrigin: { x: 500000, y: 6500000 } } };
+
+/** SHA-256 (first 16 hex) of each image-less scene's deterministic PDF on the commit before J5. */
+const BASELINE_DIGESTS: Record<string, string> = {
+  "page-objects-alpha cmyk": "d78e3fbb79a3e7b1",
+  "page-objects-alpha rgb": "7fde054d52e0c823",
+  "page-ring cmyk": "ba0091325e18c231",
+  "page-ring rgb": "8a4fcd3eaa330017",
+  "page-rotated cmyk": "46f1fa4b6750e65a",
+  "page-rotated rgb": "b3afcf12d2dcb72c",
+  "page-sprint-a4 cmyk": "2a5980f0fead5319",
+  "page-sprint-a4 rgb": "d563c84c601df8b4",
+};
 
 async function build(inputs: PageInput[], mode: ColourMode = "cmyk"): Promise<Uint8Array> {
   const w = await PdfWriter.create({ faces, deterministic: true, info: { title: "Test · maps" } });
@@ -138,6 +151,20 @@ describe("writePage", () => {
     expect(openPurple(ops)).toBe(openPurple(plain) - 1);
   });
 
+  it("a translucent corridor band (J13): no W* clip; one white fill under an ExtGState in a page group; an opaque one has neither", async () => {
+    const base = pageScene("page-ring");
+    const page = (whiteOpacity: number): PageInput => ({ ...base, course: { ...base.course, structure: { version: 1, id: "c", orderMode: "ordered", items: [{ siteId: "S" }, { siteId: "31" }, { siteId: "32", leg: { corridor: { widthM: 120, edge: true, whiteMm: 4, whiteOpacity } } }, { siteId: "F" }] } } });
+    const half = await PDFDocument.load(await build([page(0.5)]));
+    const opaque = await PDFDocument.load(await build([page(1)]));
+    const ops = content(half, 0);
+    expect(ops.split("\n").some((l) => l.endsWith("W* n"))).toBe(false);
+    expect(content(opaque, 0).split("\n").some((l) => l.endsWith("W* n"))).toBe(true);
+    expect(ops).toMatch(/\/GS\d+ gs/);
+    expect(content(opaque, 0)).not.toMatch(/\/GS\d+ gs/);
+    expect(half.getPage(0).node.get(PDFName.of("Group"))).toBeDefined();
+    expect(opaque.getPage(0).node.get(PDFName.of("Group"))).toBeUndefined();
+  });
+
   it("a narrow edged corridor (F19): round-capped open edge pieces ending on the opened circles; the circles drawn open", async () => {
     // 40 m at 1:10 000 = 4 mm: h 2 < R 3.75, so 31 and 32 open towards the leg and the edge ends on them.
     const base = pageScene("page-ring");
@@ -203,7 +230,11 @@ describe("writePage", () => {
     const im = xo[0].get(PDFName.of("Im0"));
     expect(lookup<PDFRawStream>(doc, im).dict.get(PDFName.of("Subtype"))).toEqual(PDFName.of("Image"));
     // Page µm under the page layer's cm: (10, 10) mm from the top-left, 20 × 10 mm → lower-left (10, 277) mm.
-    expect(content(doc, 0)).toContain("q 20000 0 0 10000 10000 277000 cm /Im0 Do Q");
+    // J5: an image pass in the page layer's last row, `page:graphics`, in the layer's 5 µm unit: (10, 10) mm from
+    // the top-left, 20 × 10 mm → lower-left (10, 277) mm; it is the layer's last painting operator.
+    const ops = content(doc, 0);
+    expect(ops).toContain("q 4000 0 0 2000 2000 55400 cm /Im0 Do Q");
+    expect(ops.trimEnd().split("\n").slice(-2)).toEqual(["q 4000 0 0 2000 2000 55400 cm /Im0 Do Q", "Q"]);
   });
 
   it("page labels and one outline item per page", async () => {
@@ -241,6 +272,60 @@ describe("writePage", () => {
     const a = await build([withLogo(pageScene("page-sprint-a4")), pageScene("page-rotated")]);
     const b = await build([withLogo(pageScene("page-sprint-a4")), pageScene("page-rotated")]);
     expect(Array.from(a).join(",")).toBe(Array.from(b).join(","));
+  });
+
+  it("image-less pages keep their bytes (J5 baseline, recorded before images became passes)", async () => {
+    const { createHash } = await import("node:crypto");
+    const digest = async (name: Parameters<typeof pageScene>[0], mode: ColourMode) => createHash("sha256").update(await build([pageScene(name)], mode) as unknown as string).digest("hex").slice(0, 16);
+    const got: Record<string, string> = {};
+    for (const name of ["page-sprint-a4", "page-ring", "page-rotated", "page-objects-alpha"] as const) {
+      for (const mode of ["rgb", "cmyk"] as const) got[`${name} ${mode}`] = await digest(name, mode);
+    }
+    expect(got).toEqual(BASELINE_DIGESTS);
+  });
+
+  it("J5: a PNG with alpha is embedded with an /SMask, an opaque one without; equal bytes are one XObject", async () => {
+    const w = await PdfWriter.create({ faces, deterministic: true });
+    const lucka = luckaPng(16);
+    const opaque = encodeRgbaPng(2, 2, new Uint8Array(12).fill(90), 3);
+    const input = { ...pageScene("page-ring"), objects: [
+      { id: "a", anchor: "page" as const, kind: "image" as const, graphicId: 1, x: 10, y: 10, width: 10, height: 10 },
+      { id: "b", anchor: "page" as const, kind: "image" as const, graphicId: 2, x: 30, y: 10, width: 10, height: 10 },
+      { id: "c", anchor: "page" as const, kind: "image" as const, graphicId: 3, x: 50, y: 10, width: 10, height: 10 },
+    ] };
+    await writePage(w, composePage(input, fonts()), { mode: "cmyk", images: new Map([[1, lucka], [2, opaque], [3, lucka]]) });
+    const doc = await PDFDocument.load(await w.save());
+    const xo = doc.getPage(0).node.Resources()!.lookup(PDFName.of("XObject"), PDFDict);
+    expect(xo.keys().map(String).filter((k) => k.startsWith("/Im")).sort()).toEqual(["/Im0", "/Im1"]);
+    const dict = (n: string) => lookup<PDFRawStream>(doc, xo.get(PDFName.of(n))).dict;
+    expect(dict("Im0").get(PDFName.of("SMask"))).toBeInstanceOf(PDFRef);
+    expect(dict("Im1").get(PDFName.of("SMask"))).toBeUndefined();
+    expect(content(doc, 0).match(/\/Im0 Do/g)).toHaveLength(2);
+  });
+
+  it("J15: a knockout page image cuts the page image below by a W* clip; its own Do is outside the clip; without it no clip", async () => {
+    const opaque = encodeRgbaPng(2, 2, new Uint8Array(12).fill(90), 3);
+    const lucka = luckaPng(16);
+    const page = (knockout?: boolean) => ({ ...pageScene("page-ring"), objects: [
+      { id: "overlay", anchor: "page" as const, kind: "image" as const, graphicId: 1, x: 0, y: 0, width: 100, height: 100 },
+      { id: "lucka", anchor: "page" as const, kind: "image" as const, graphicId: 2, x: 40, y: 40, width: 20, height: 20, ...(knockout ? { knockout } : {}) },
+    ] });
+    const ops = async (knockout?: boolean) => {
+      const w = await PdfWriter.create({ faces, deterministic: true });
+      await writePage(w, composePage(page(knockout), fonts()), { mode: "cmyk", images: new Map([[1, opaque], [2, lucka]]) });
+      return content(await PDFDocument.load(await w.save()), 0);
+    };
+    const cut = await ops(true);
+    // The overlay (Im0) inside `q … W* n … Q`, the lucka (Im1) after the clip is restored.
+    expect(cut).toMatch(/W\* n\nq [^\n]* cm \/Im0 Do Q\nQ\n(?:[^\n]*\n)*?q [^\n]* cm \/Im1 Do Q/);
+    const plain = await ops(false);
+    expect(plain).not.toMatch(/W\* n\nq [^\n]* cm \/Im0/);
+    // A translucent overlay is cut the same way: its ExtGState and Do both inside the clip block.
+    const w = await PdfWriter.create({ faces, deterministic: true });
+    const translucent = { ...page(true), objects: page(true).objects.map((o) => (o.id === "overlay" ? { ...o, opacity: 0.5 } : o)) };
+    await writePage(w, composePage(translucent, fonts()), { mode: "cmyk", images: new Map([[1, opaque], [2, lucka]]) });
+    const alpha = content(await PDFDocument.load(await w.save()), 0);
+    expect(alpha).toMatch(/W\* n\n(?:q\n)?\/GS\d+ gs\nq [^\n]* cm \/Im0 Do Q\nQ\n(?:Q\n)?q [^\n]* cm \/Im1 Do Q/);
   });
 
   it("an image object without bytes is skipped with a warning", async () => {

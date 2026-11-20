@@ -5,7 +5,7 @@
  *
  *   → init      { faces }                once per worker: the bundled faces, regular, narrow, bold
  *   → compose   { id, job, deterministic? }
- *   ← need      { id, reqId, what: "document", hash } | { id, reqId, what: "graphic", graphicId, box? }
+ *   ← need      { id, reqId, what: "document", hash } | { id, reqId, what: "graphic", graphicId, box?, window? }
  *   → reply     { reqId, bytes } | { reqId, error }
  *   ← page      { id, index, label, warnings }
  *   ← done      { id, bytes, pageCount, warnings }
@@ -13,7 +13,7 @@
  *
  * The worker asks for the document only when its `prepareDocument` cache
  * lacks the hash, a PNG graphic once without a box and an SVG once per
- * pixel box (`print.png?w=&h=`); the main thread owns every request.
+ * pixel box and window (`print.png?w=&h=&crop=`); the main thread owns every request.
  */
 
 import type { render } from "@oxygen/shared";
@@ -32,7 +32,7 @@ export type PrintWorkerRequest =
 
 export type PrintWorkerNeed =
   | { type: "need"; id: number; reqId: number; what: "document"; hash: string }
-  | { type: "need"; id: number; reqId: number; what: "graphic"; graphicId: number; box?: [number, number] };
+  | { type: "need"; id: number; reqId: number; what: "graphic"; graphicId: number; box?: [number, number]; window?: { x: number; y: number; width: number; height: number } };
 
 export type PrintWorkerResponse =
   | PrintWorkerNeed

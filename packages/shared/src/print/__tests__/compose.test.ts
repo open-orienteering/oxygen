@@ -126,21 +126,33 @@ describe("composePage", () => {
     expect(page.mapLayer.stream.passes.some((p) => p.kind === "text")).toBe(true);
   });
 
-  it("images: an image course object and a page-anchored image object become page images in their layer's space", () => {
+  it("images (J5): an image course object is a pass in course:graphics, a page image in page:graphics (the page layer's last row); page.images is the fetch list", () => {
     const base = pageScene("page-ring");
-    const mapLogo: CourseLayerObject = { id: "map-logo", kind: "image", geometry: [{ x: -5, y: -1 }, { x: 5, y: -5 }], props: { graphicId: 8, crop: { x: 0.5, y: 0, width: 0.5, height: 1 } } };
+    const mapLogo: CourseLayerObject = { id: "map-logo", kind: "image", geometry: [{ x: -5, y: -1 }, { x: 5, y: -5 }], props: { graphicId: 8, crop: { x: 0.5, y: 0, width: 0.5, height: 1 }, opacity: 0.5, blend: "multiply" } };
     const page = composePage(
       {
         ...base,
         course: { ...base.course, objects: [...(base.course.objects ?? []), mapLogo] },
-        objects: [...base.objects, { id: "logo", anchor: "page", kind: "image", graphicId: 7, x: 10, y: 10, width: 20, height: 10 }],
+        objects: [...base.objects, { id: "logo", anchor: "page", kind: "image", graphicId: 7, x: 10, y: 10, width: 20, height: 10, rotationDeg: 90 }],
       },
       fonts(),
     );
     expect(page.images).toEqual([
-      { layer: "map", graphicId: 8, rectUm: { x: -5000, y: -5000, width: 10000, height: 4000 }, crop: { x: 0.5, y: 0, width: 0.5, height: 1 } },
-      { layer: "page", graphicId: 7, rectUm: { x: 10000, y: 70000, width: 20000, height: 10000 } },
+      { layer: "map", graphicId: 8, sizeUm: [10000, 4000], crop: { x: 0.5, y: 0, width: 0.5, height: 1 } },
+      { layer: "page", graphicId: 7, sizeUm: [20000, 10000] },
     ]);
+    const mapImage = page.mapLayer.stream.passes.find((p) => p.kind === "image")!;
+    expect(mapImage).toEqual({ kind: "image", colour: page.colours.findIndex((c) => c.id === "course:graphics"), graphicId: 8, quad: [10000, 0, 0, 4000, -5000, -5000], crop: { x: 0.5, y: 0, width: 0.5, height: 1 }, opacity: 0.5, blend: "multiply" });
+    const pagePasses = page.pageLayer.stream.passes;
+    const last = pagePasses[pagePasses.length - 1];
+    expect(page.colours[last.colour].id).toBe("page:graphics");
+    expect(page.colours.at(-1)!.id).toBe("page:graphics");
+    // 90° clockwise about the box centre (20, 75) page mm y-up: the image's bottom-left at the turned box's top-left (15, 85).
+    expect(last).toEqual({ kind: "image", colour: page.colours.length - 1, graphicId: 7, quad: [0, -20000, 10000, 0, 15000, 85000] });
+  });
+
+  it("a page without images has no page:graphics row", () => {
+    expect(composePage(pageScene("page-ring"), fonts()).colours.some((c) => c.id === "page:graphics")).toBe(false);
   });
 
   it("the event's auto cuts off: no automatic slits or gaps in the map layer, the same stream as without cut features", () => {

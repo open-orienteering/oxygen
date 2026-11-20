@@ -35,9 +35,11 @@ export interface ObjectUpdateInput {
   geometry?: course.CourseObject["geometry"];
   props?: course.CourseObject["props"];
   scope?: course.CourseObject["scope"];
+  /** J10: the control it follows and where it was (`null` detaches; absent keeps). */
+  attach?: course.CourseObjectAttach<number> | null;
 }
 
-export type ObjectCreateInput = Pick<course.CourseObject, "kind" | "geometry" | "props" | "scope">;
+export type ObjectCreateInput = Pick<course.CourseObject, "kind" | "geometry" | "props" | "scope"> & { attach?: course.CourseObjectAttach<number> | null };
 
 /** What a `mapPatch.` write answers (docs/map-patches.md §3.2): the row's version and the delivered patch. */
 export interface PatchWriteResult {
@@ -262,6 +264,21 @@ export class EditorWrites {
     return res;
   }
 
+  /**
+   * Several creates as one gesture (J12: a paste onto selected controls), in order so their `seq` follow it. A failure
+   * deletes the ones already made (best effort) and rethrows, so the batch is all or nothing for its undo entry.
+   */
+  async createObjects(inputs: readonly ObjectCreateInput[]): Promise<course.CourseObject[]> {
+    const made: course.CourseObject[] = [];
+    try {
+      for (const input of inputs) made.push(await this.createObject(input));
+    } catch (e) {
+      for (const o of made.reverse()) await this.deleteObject(o.id).catch(() => undefined);
+      throw e;
+    }
+    return made;
+  }
+
   /** `courseObject.update` with the object's token; a conflict is always a refresh (§8.4: no base to diff). */
   updateObject(input: ObjectUpdateInput): Promise<course.CourseObject> {
     const fields = Object.keys(input).filter((k) => k !== "id");
@@ -270,6 +287,42 @@ export class EditorWrites {
       this.versions.seed("object", res.id, res.version);
       return res;
     });
+  }
+
+  /**
+   * Several updates as one gesture (J16: a group move), in order. A failure writes the `undo` of the ones already
+   * updated back (best effort) and rethrows, so the batch is all or nothing for its undo entry.
+   */
+  async updateObjects(changes: readonly { input: ObjectUpdateInput; undo: ObjectUpdateInput }[]): Promise<course.CourseObject[]> {
+    const done: ObjectUpdateInput[] = [];
+    const out: course.CourseObject[] = [];
+    try {
+      for (const c of changes) {
+        out.push(await this.updateObject(c.input));
+        done.push(c.undo);
+      }
+    } catch (e) {
+      for (const u of done.reverse()) await this.updateObject(u).catch(() => undefined);
+      throw e;
+    }
+    return out;
+  }
+
+  /**
+   * Several deletes as one gesture (J16: `Delete` on an object multi-selection). A failure creates the deleted ones
+   * again from their bodies (best effort, under new ids) and rethrows.
+   */
+  async deleteObjects(items: readonly { id: number; body: ObjectCreateInput }[]): Promise<void> {
+    const done: ObjectCreateInput[] = [];
+    try {
+      for (const it of items) {
+        await this.deleteObject(it.id);
+        done.push(it.body);
+      }
+    } catch (e) {
+      for (const b of done.reverse()) await this.createObject(b).catch(() => undefined);
+      throw e;
+    }
   }
 
   /** `courseObject.delete` with the object's token. */

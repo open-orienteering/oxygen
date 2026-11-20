@@ -1523,7 +1523,9 @@ sheets after courses, classes and templates. On import a class's
 `sheet_template_id` or a sheet's `template_id` naming a template the
 snapshot does not carry (an exporter that predates G18) becomes NULL —
 before G18 a class with a print override made the checkout fail on that FK.
-A sheet's JSON-null `window_center` is written as SQL NULL.
+A sheet's JSON-null `window_center` is written as SQL NULL, and so is
+a course object's JSON-null `attach` (J10, `NULLABLE_JSON_OBJECT_FIELDS`
+in `sync/lease.ts`; the G19 refresh's mirror the same).
 
 **Tokens** (`docs/course-layout.md` §2, `course-layer.md` §8.5). The
 rows' `version` is an HLC above 2^53, and the snapshot crosses HTTP as
@@ -1568,8 +1570,10 @@ It answers `NOT_FOUND` unless the context event's `map_files` reference
 the hash: as `source_hash` or `document_hash`, or (sources) as the
 `source_hash` of a document they pin. A graphic it answers only when it
 is the context event's own, or a club graphic one of the event's layout
-rows references (the `graphics` part's rule); graphics are at most 2 MiB,
-so one slice. The slices are §4.4's
+rows references (the `graphics` part's rule); a graphic is at most
+8 MiB (J2), so up to two slices (tested in `venue-print.test.ts`). The
+snapshot carries no pixel size: the importing box computes `width_px` /
+`height_px` from the bytes. The slices are §4.4's
 (`SOURCE_SLICE_BYTES`, 4 MiB), read with `getBlob` ranges (§4.3); the
 venue assembles them and checks `size === size_bytes` and
 `sha256(bytes) === hash` before inserting. 07 §9.2 put the bytes base64

@@ -21,7 +21,7 @@
  */
 
 import { flattenRings, pointInRings, type FlatRing } from "./geometry.js";
-import { PASS_KIND_ORDER, type Pass, type PassStream } from "./pass-stream.js";
+import { PASS_KIND_ORDER, type Pass, type PassStream, imageQuadCorners } from "./pass-stream.js";
 import { pathBounds } from "./path.js";
 
 export interface HitOptions {
@@ -131,6 +131,12 @@ function passDistance(stream: PassStream, p: Pass, x: number, y: number, opts: H
         best = Math.min(best, Math.hypot(dx, dy));
       }
       return best;
+    }
+    case "image": {
+      // By its quad (J5): 0 inside, else the distance to its edge — transparent pixels hit too.
+      const ring = imageQuadCorners(p.quad).flat();
+      if (pointInRings([ring], x, y)) return 0;
+      return distToRings([ring], true, x, y);
     }
   }
 }

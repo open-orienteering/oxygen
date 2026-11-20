@@ -94,6 +94,18 @@ boxes are estimated like the legacy placer's (0.65 em per character).
   re-indexes the document's symbols with `remapRenderColours`. Done at
   layer-build time, not by import alignment, so no stored document
   changes hash (Pending: fold it into stage 7 at the next importer bump).
+- **Graphics** (`course:graphics`, `COURSE_GRAPHICS_ID`; J5) is always
+  inserted **directly below upper purple**, above upper white, whatever
+  the document holds: the row image course objects draw in
+  (`map-rendering.md` §3.10), so a graphic covers the map, lower purple
+  and white-outs and upper purple (control circles, numbers, 709) draws
+  over it (decided with the user). It holds images only; its CMYK
+  (0/0/0/0) is never used and it matches no palette entry. Since every
+  stack gains it, `remap` is set for every document (each colour at or
+  above upper purple moves up one more). A toner saver's white is the
+  layer's last row (P1), so it covers an image course object outside its
+  hull like any other course symbol there (before J5 a map image was
+  drawn after the whole map layer and showed through).
 - Course objects in their own hex colours (a `text` object's `color`, §8.3) get one row each, in
   first-use order, **on top of the stack** (`course-object:#rrggbb`,
   CMYK by the naive inverse of `cmykToHex`): legacy print draws them
@@ -128,9 +140,10 @@ symbols after the document's (re-indexed when `remap` is set) and its
 objects after the document's; `objects[courseObjectOffset + i]` is
 `layer.objects[i]`, whose `ref` (`site`, `leg`, `number`, `leader`,
 `extra`, `object` + id) says which input it came from — the viewer's
-per-object hide and hit-testing (04 §7). Map-anchored images are not in
-the stream: `layer.images` carries them with their paper rectangle for
-the page backends.
+per-object hide and hit-testing (04 §7). Image course objects are in
+the stream (J5): one image pass each in the graphics row; `layer.images`
+lists their graphics (`{ graphicId, sizeUm, crop? }`) so a page backend
+knows which bytes to fetch.
 
 For consumers: when `remap` is set, every document colour at or above
 upper purple moves up one index, so anything keyed on the document's
@@ -430,6 +443,67 @@ page white-out outside the frame ring at upper white, 709 / 709.b /
 which ship no file: `symbolise` warns `NO_FONT`, `map-rendering.md`
 §4.10; `{placeholders}` expanded; empty text skipped), images as page
 images.
+
+**Opacity, blend and rotation (J4).** A layout object's `opacity` (0–1)
+and `blend` (`"multiply"`) go onto **every** render object it emits —
+the fill and the stroke of a filled and stroked shape alike, so at 50 %
+the stroke's inner half shows over the fill (per pass, not per group;
+`map-rendering.md` §3.9) — in every fill mode, 709 and white-out outside
+included. A render object carries `opacity` only below 1 and `blend`
+only when Multiply (`objectAlpha`), so an object without the fields
+emits exactly today's stream. `rotationDeg` is clockwise as seen and the
+stored geometry stays the unrotated box: a rectangle is drawn as its four
+corners turned about the box centre, in any fill mode (a 709 hatch stays
+upright: the turned path carries no object angle); a text turns about its
+anchor (the baseline point `align` names), its render object taking
+`angleDeg = −rotationDeg` (symbolise's angles are counter-clockwise in
+y-up). Rotation 0, absent or a whole turn draws as unrotated. Lines and
+paths store no angle.
+
+**Images (J5).** An `image` layout object or course object is one render
+object whose path is its box's four corners — bottom-left,
+bottom-right, top-right, top-left of the graphic as seen — and whose
+symbol is the area symbol `course:graphics` filling the graphics row,
+with `image: { graphicId, crop? }` (`imageCorners`): `flipH` swaps the
+left and right corners, `flipV` the top and bottom, then `rotationDeg`
+turns all four clockwise about the box centre; opacity and blend as
+above. `symbolise` turns it into one image pass. A layout image goes in
+the page layer's own graphics row (`page:graphics`, appended last to
+the page stack when the page has an image: on top of every page
+object); a course image in `course:graphics`. Both are listed in the
+fetch list (`layer.images`, `PageImage`, `course-print.md` §6.3).
+
+**Knockout images (J15).** An image with `knockout: true` ("Cut out
+graphics below", course-editor.md §7) also sets `RenderObject.knockout`.
+`symbolise` then cuts the images below it in the same layer by its
+footprint (map-rendering.md §4.11 "Knockout footprints"). The rules (user
+2026-11-19, the advent-calendar overlay):
+
+- The footprint is the graphic's **outline** where it was traced (J19,
+  user 2026-11-19: "Cut along the hatch outline"): a course image object
+  with `knockout` carries its graphic's outline (`outline`, read-only, §8.1
+  "Graphic outline") into `RenderObject.image.outline`, and the cut follows
+  the drawn hatch, cut to the crop, through the box's flips and rotation.
+  A borderless hatch over a translucent overlay then shows no untinted
+  corners. Without an outline (a whole-box graphic, one not traced, a page
+  image) the footprint is the image's box after crop, flips and rotation,
+  inset 0.05 mm (J15).
+- It cuts only **images** below it in the **same layer**: a course image
+  cuts course images, a page image cuts page images. Order is the layer's
+  own (course objects by z, page objects by their order).
+- White-outs, the course's purple and the map are never cut. An opaque
+  overlay therefore hides the map and the lower-purple circles and legs
+  everywhere but under a knockout. Upper-purple numbers draw over it.
+- An attached image cuts where it is drawn (§8.1). One whose control is
+  not drawn in a course is left out of that course's layer and cuts
+  nothing there.
+- The cut is made from the box or the outline when the layer is
+  symbolised, before the graphic's bytes are known. A knockout whose graphic is missing in print
+  (`IMAGE_MISSING`) or still loading on screen still cuts: the box shows
+  the map with no hatch over it.
+- Images only: the course object's `props.knockout` and the page image's
+  `knockout` (`course-maps.md`); other kinds refuse the field (course
+  objects) or ignore it.
 
 **Migration (F12).** `packages/api/prisma/migrations/20261109120000_map_anchored_objects_to_course_objects`
 (the runbook: `docs/migrations/2026-f12-map-anchored-objects.md`). Every
@@ -1085,6 +1159,20 @@ admin, synchronous, all events) filled `structure` where it was `NULL`
 The club run is the coordinator's after merge (the dev database is off
 limits from a worktree, as for §4.4); its numbers go into this table.
 
+**J13 reset** (user answer 11; migration
+`20261119140000_corridor_white_opacity_reset`). Until J13 a corridor's
+`whiteOpacity` was stored but drawn opaque, so stored values below 1 were
+reset to 1 when J13 made them draw translucent: old maps print as before.
+Data only, on `courses.structure` — top-level legs and legs inside a
+variation's alternatives (a recursive walk over every `corridor` key), the
+variant child rows included (they are ordinary course rows); every other
+key is kept, rows with nothing below 1 are not rewritten, and a second
+run changes nothing. It writes no journal entry and no version token (it
+is not a user edit); the courses' `updated_at` trigger does mark the reset rows. Journal payloads (`course.upserted` carries the
+whole row), checkout snapshots and dumps are **not** rewritten: replaying
+an old entry or importing an old snapshot brings the old value back, and
+it then draws translucent.
+
 ## 7. Concurrency
 
 Gate G1, decided by the user 2026-10-31 (decision log): **optimistic
@@ -1197,6 +1285,7 @@ marked routes, map text and logos, and filter regions. They are the
 stored, scoped kind of a sheet's map-anchored layout objects, which F12
 moved into them (§3.6).
 
+
 ### 8.1 Table and kinds
 
 `oxygen.course_objects` (migration `20261101120000_course_objects`):
@@ -1212,6 +1301,7 @@ moved into them (§3.6).
 | `scope` | `JSONB` | `{ "all": true }` or `{ "courses": [uuid], "classes": [uuid] }` (§8.2); no foreign key |
 | `z` | `INT` default 0 | draw order among the event's objects (`z`, then `seq`) |
 | `version` | `BIGINT` default 0 | the §7 token (§8.4) |
+| `attach` | `JSONB` NULL (migration `20261119130000_course_objects_attach`, J10) | `{ "controlId": uuid, "at": { "x", "y" } }`: the object follows that control ("Attachment" below); NULL for a free object; no foreign key |
 | `source` | `TEXT` NULL, CHECK `import` / `layout` (migrations `20261101130000_course_objects_source`; D1 deviation from D2's table; `layout` F12) | `import` for what the importers and the backfill wrote (§6.4; a re-import replaces exactly those), `layout` for what F12 moved from a template's or sheet's map-anchored layout objects (§3.6), NULL for an object drawn by hand; not on the wire |
 | `created_at`, `updated_at` | `TIMESTAMPTZ` | `set_updated_at` |
 
@@ -1224,11 +1314,11 @@ issue message starting `OBJECT_GEOMETRY`.
 |---|---|---|---|
 | `oob_area` | ≥ 3 vertices, closed | `border?: "none" \| "solid" \| "dashed"` (default none); `hatch?: "709" \| "710"` (default 709) | 709; 709.b with a solid boundary, 709.c dashed; with `hatch: "710"` the dangerous area's cross-hatch (§3.1) with the same boundaries |
 | `oob_line` | ≥ 2 | `symbol?: "708" \| "711"` (default 708) | 708 out-of-bounds boundary or 711 out-of-bounds route |
-| `whiteout` | ≥ 3, closed | — | `course:whiteout` at upper white (§3.6) |
+| `whiteout` | ≥ 3, closed | `opacity?`, `blend?` (J4) | `course:whiteout` at upper white (§3.6), the opacity and blend on its render object |
 | `toner_saver` | ≥ 3: the hull — D13's editor generates the smooth offset hull of the course's sites, so its segments carry `hIn` / `hOut` and the hole ring below has Bézier flags (the hull's own straight edges stay straight) | `marginMm?` (how D5 / D13 generated it, 25 mm by default since D13; the drawn shape is the stored hull), `holeRadiusMm?` (reserved; the editor does not set it and builds no control holes) | white-out *outside* the hull in the toner saver white, the map layer's top row (§3.6, P1): the `viewOptions.window` ring with the hull as an even-odd hole; without a window (the viewer) not drawn, warning `WINDOW_MISSING` |
 | `marked_route` | ≥ 2 | — | 707 |
-| `text` | 1: the anchor | `text`, `fontSizeMm`, `fontFamily?`, `color?` (hex), `align?` | a text symbol: upper purple, or an own colour row for `color` (§1); `{placeholders}` expanded with `viewOptions.textValues` |
-| `image` | 2: opposite corners | `graphicId`, `crop?` | `layer.images` (a graphic of the event), drawn by the page backends |
+| `text` | 1: the anchor | `text`, `fontSizeMm`, `fontFamily?`, `color?` (hex), `align?`, `opacity?`, `blend?`, `rotationDeg?` (J4: clockwise as seen, about the anchor) | a text symbol: upper purple, or an own colour row for `color` (§1); `{placeholders}` expanded with `viewOptions.textValues`; `angleDeg = −rotationDeg` |
+| `image` | 2: opposite corners | `graphicId`, `crop?`, `opacity?`, `blend?`, `rotationDeg?` (about the box centre, after the flips), `flipH?`, `flipV?` (J4), `knockout?` (J15: cut out the images below, §3.6 "Knockout images"), `hideControlCircle?`, `hideControlNumber?` (J18: while attached, hide the control's circle / number, "Attachment" below) | one image pass in `course:graphics` (§3.6 "Images", J5), its graphic listed in `layer.images`; drawn by the page backends, on screen from J6 |
 | `filter_region` | ≥ 3 points, **no** Bézier handles (a polygon; one outer ring) | `{ mode: "clip" \| "hide", symbols: "all" \| idx[] \| { colours }, invert? }` — D3's region exactly | not an object: a `regions` entry (`map-rendering.md` §4.11) |
 | `inset_frame` | ≥ 2 | — | reserved for micro insets: typed, refused on write (`PRECONDITION_FAILED`), never drawn |
 
@@ -1237,8 +1327,53 @@ geometry and a text's `fontSizeMm` are not divided by the print
 enlargement (the page transform enlarges them with the map; F12 divided
 a moved text's page size once, §3.6). The 7xx kinds take the library's dimensions × the document
 factor × appearance (decision "Sizes"): 08 §4.5's per-object width,
-cross spacing, dash and white-out opacity are not stored (decision log,
-D2).
+cross spacing and dash are not stored (decision log, D2). `opacity`
+(0–1, absent = 1) and `blend` (`"multiply"`, absent = normal) are stored
+on `text`, `image` and `whiteout` only (J4, superseding D2 for white-out
+opacity); the 7xx kinds, `toner_saver`, `filter_region` and
+`inset_frame` refuse them (strict props), and `whiteout` refuses
+`rotationDeg` — a vertex path turns by its vertices (J11).
+
+**Attachment** (J10). An object may follow a control: `attach =
+{ controlId, at }`, where `at` is the control's position (paper mm) when
+the geometry was written. It is drawn translated by the control's
+position now minus `at`, so moving the control moves it and writes
+nothing to the object (a door around a control, Lusseloppet's *lucka*).
+`resolveAttached(objects, sites)` (`course/objects.ts`) is the rule: it
+matches `String(controlId)` against the drawn sites' ids, translates the
+geometry (`translateGeometry`, handles unchanged) and drops the attach;
+an object whose control is not drawn in the view is left out, so an
+attached object shows only where its control does (user answer 8). The
+layer resolves before anything else reads the objects (colours, the
+toner saver flag, the drawn objects, the stored regions), and the
+checks (§9) resolve the same way against the checked course's sites, so
+an obstacle follows its control and counts only on a course that draws
+it. `toner_saver` and `inset_frame` cannot be attached
+(`UNATTACHABLE_KINDS`; a write is `BAD_REQUEST`).
+
+**Hiding the attached control (J18, user 2026-11-19).** An attached
+`image` may hide its control's circle (`hideControlCircle: true`) and its
+number (`hideControlNumber: true`), so a hatch drawn around a control
+carries the control's look itself. `attachedHides(objects)`
+(`course/objects.ts`) gives the site ids: the derivation leaves the
+number unplaced (`derive.ts`, as a hidden number, so no label and no
+leader), and the layer skips the control's circle (`layer.ts`); its legs,
+cuts and description are unchanged, and the editor still hit-tests the
+control (its UI site). The flags act only while the image is attached:
+a free image's flags do nothing, and a detached image (*Detach*, or its
+control deleted) shows the circle and number again. The circle is lower
+purple, under the graphics row (§3.6), so an opaque hatch over the control
+hid it already; the flag is for a hatch whose opening shows the map. The
+hiding goes wherever the image is drawn with its control: an `all`-scoped
+hatch hides them on all-controls and setter sheets too.
+
+**Graphic outline (J19).** A knockout image object read by the API
+(`loadCourseObjects`, so the list, the print job and the checks alike)
+carries its graphic's traced outline as `outline` — never written, never
+in `props` — when the graphic has one (`graphics.outline`,
+`course-maps.md` "Data model"; `withOutlines` in `course-objects.ts`). The
+course layer passes it to `RenderObject.image.outline` for a knockout
+image only; it is the cut's footprint (§3.6, map-rendering.md §4.11).
 
 ### 8.2 Scope
 
@@ -1284,6 +1419,10 @@ input, so a stored region acts exactly like D3's (never on the course).
   `MapPanel` with the runner's course highlighted, so it draws the
   `all`-scoped objects and that course's. A `toner_saver` is not drawn
   on screen (no frame).
+- **Attached objects** are drawn where their control is (§8.1
+  "Attachment") on screen and in print alike: the print's sites carry
+  row UUIDs, the screen's the public ids, and the wire `attach` names the
+  control by the same id its sites do.
 - **Editor.** Hit-testing, selecting, drawing and editing objects are
   the editor's (`course-editor.md` §7, D5); importers writing their 707 /
   708 / 711 lines and 709 polygons as objects is D1.
@@ -1291,14 +1430,15 @@ input, so a stored region acts exactly like D3's (never on the course).
 ### 8.4 API and tokens
 
 `courseObject.*` (`packages/api/src/routers/courseObject.ts`), the wire
-type `course.CourseObject = { id: seq, kind, geometry, props, scope, z, version, inCourses }`
-(`inCourses`: §8.2, read-only):
+type `course.CourseObject = { id: seq, kind, geometry, props, scope, z, version, inCourses, attach? }`
+(`inCourses`: §8.2, read-only; `attach`: `{ controlId, at }` with the
+control's public id, its first code or else its `seq`, absent when free):
 
 | Procedure | Access | |
 |---|---|---|
 | `list` | `courses.view` or the event's kiosk key | the event's objects ordered `z`, `seq` |
-| `create { kind, geometry, props, scope, z? }` | `courses.edit` | returns the object with its token |
-| `update { id, baseVersion?, geometry?, props?, scope?, z? }` | `courses.edit` | the kind is fixed; an absent field keeps the stored one, a sent one (`null` included) is validated with the rest |
+| `create { kind, geometry, props, scope, z?, attach? }` | `courses.edit` | returns the object with its token |
+| `update { id, baseVersion?, geometry?, props?, scope?, z?, attach? }` | `courses.edit` | the kind is fixed; an absent field keeps the stored one, a sent one (`null` included) is validated with the rest; `attach: null` frees the object |
 | `delete { id, baseVersion? }` | `courses.edit` | |
 | `reorder { ids }` | `courses.edit` | `z` = the position in `ids`; takes and advances no token |
 
@@ -1309,6 +1449,22 @@ venue box are forwarded to the cloud (typed 412 offline,
 box and were lost at checkin. The box's copy follows the cloud's (row
 G19, `map-storage.md` §7.2 "Following the cloud during a lease"): at the
 settings cadence and right after a forwarded write.
+
+**Attach on the wire** (J10). `attach.controlId` is a public control
+id; an unknown one, or an attach on an unattachable kind, is
+`BAD_REQUEST`. The editor sends `attach` with every write that sends
+geometry, so undo restores the offset to the control as well as the
+shape. An attached object whose control is **removed** (soft-deleted)
+reads as detached where it was last drawn: `list` returns its geometry
+moved by the removed control's position minus `at`, without `attach`,
+and the row is left as it is, so restoring the control (undo of the
+delete) attaches it again with no double move (user answer 7). An
+`update` that sends geometry without `attach` while the control is
+removed keeps the attachment with `at` set to the removed control's
+position, so the written place is where it was shown. A control row that
+no longer exists at all (controls are soft-deleted, so only a row
+removed outside the app) frees the object at its stored geometry, and a
+geometry write then clears the attachment.
 
 **Token** (§7). Objects are not journaled, so their token is not a
 journal entry's HLC: every `create` / `update` mints one from the node's
@@ -1328,7 +1484,10 @@ and token — exact since G18 through the snapshot's `versions`, where the
 row's own `version` crosses HTTP as a rounded JSON number;
 `map-storage.md` §7.2) and in the per-event dump after
 `class_course_pools` (`BACKUP_TABLES`; `map-storage.md` §7.3) — the
-venue's kiosk map draws them (08 §4.8; 07 §9.2).
+venue's kiosk map draws them (08 §4.8; 07 §9.2). `attach` is a nullable
+JSON column: the lease import and the cloud mirror write a null one as
+SQL NULL (`NULLABLE_JSON_OBJECT_FIELDS`), not JSON `null`; its
+`controlId` is a row UUID like the scope's.
 
 ## 9. Checks
 
@@ -1597,11 +1756,26 @@ all-white corridor map); `edge` draws the boundary in purple.
   while the course — circles, the legs that draw a line (below), numbers,
   the edge, layout and course objects — draws over it with the stack and the 7xx colour roles
   unchanged. No band (`whiteMm` 0 on every corridor) adds no region.
-- **`whiteOpacity`** is stored and validated (0 … 1) but drawn opaque: a
-  clip removes the map wholly. A translucent band needs a paint with
-  alpha over the same rings (`map-rendering.md` §8). The editor shows no
-  field for it until then (F25, `course-editor.md` §6.7): a stored value
-  is kept on every corridor write.
+- **`whiteOpacity`** (0 … 1; J13, F26 folded in). The derivation carries
+  it on `DerivedCorridor` only below 1 (an opaque corridor derives as
+  before); it is not part of the corridor's geometry or its cache key.
+  The **effective opacity** is the minimum over every drawn leg with a
+  corridor and `whiteMm` > 0 (`bandOpacity`): one value for the whole
+  band, so a leg at 100 % beside one at 50 % draws both bands at 50 %
+  (the editor's hint says so). At 1 — or what rounds to it, ≥ 0.99995
+  (`objectAlpha`, `map-rendering.md` §3.9) — the band is the clip above,
+  bit-identical to before. Below 1 there is **no region**: the band's
+  rings (`ringsPath(band)`) are one area object in the white-out symbol
+  (`course:whiteout`, fill `white-upper`) with that `opacity` and ref
+  `{ kind: "corridor", id: "band" }` (no hit target), so it draws in the
+  upper-white row — above every map colour and lower purple, below
+  `course:graphics` and upper purple — and the map shows through it,
+  veiled. Lower-purple ink inside the band (the outer half of the edge
+  line, mouth circles, another course's leg crossing it) is veiled too;
+  numbers and 707 are not (Pending). At 0 no band is drawn at all (no
+  clip, no fill). The PDF draws it as a white fill under an ExtGState
+  `/ca` in a page `/Group` (`course-print.md` §2); an opaque corridor's
+  page has neither.
 - **Mouths** (F19, user feedback 2026-11-08 item 6, "the way
   Coursecraft does it"; answers 1–3). Every control, finish or start
   that a corridor leg — edged or not — starts or ends at is a mouth: its
@@ -2200,6 +2374,7 @@ label.
 | unit | `derive.test.ts` | legs and clearances, circles in the way, unpositioned sites, automatic vs authored gaps, the event's auto cuts off (no automatic slits / gaps, authored ones kept, §3.4), authored pieces and bends, free order, all-controls, start rotation, sequence / repeated / code numbers, y-down placement, manual offsets, multi-course |
 | unit | `layer.test.ts` | one `symbolise` call with a document: warning-free, lower purple under black, re-indexed document colours, object offsets; turned start, arcs, legs; auto cuts off = the objects without cut features; knockout halo order; sprint sizes; layout objects (white-out, 709.b, rows on top, text values, page-mm sizes); toner-saver ring and its warning; the toner saver white (P1: a `toner_saver` and a `whiteoutInverted` map object fill the top row, the last pass after black, upper purple and a layout text's row; none for a plain white-out or without a window); images; `courseDocumentContext` |
 | pass-stream | `scenes.test.ts`, snapshots in `render/__fixtures__/streams/course/` | the course scenes (`map-rendering.md` §6.3; `course-leg-styles` since F1, `course-corridor` since F2, `course-legs-curved` since F13 — symbolised with the layer's regions, masks in the snapshot; `course-corridor` re-recorded in F14: no 705 along its three corridor legs, in F13: one buffer ring per run, and re-shaped in F19: a 60 m edged run S → 31 → 32 and a 150 m unedged leg, the mouths, 31 opened twice, the round-capped edge; re-recorded in F22: the band stops on the line through 33, its only terminal end — the golden `course-corridor.png` changed in 4 032 px, all in one box round 33; `scenes.test.ts` probes the map behind 33 and the band beside the leg before it) warning-free and equal to their snapshots at 1 µm, plus each scene's rule |
+| unit / pass-stream / PDF / integration / E2E (J13) | `derive.test.ts` "corridors", `layer.test.ts` "J13", `scenes.test.ts` "course-corridor-translucent", `print/__tests__/write-page.test.ts` "a translucent corridor band", `api/…/integration/corridor-opacity-migration.test.ts`, `e2e/course-editor-legs.spec.ts` "Corridor on selected leg" | §10.2 `whiteOpacity`: carried below 1 only; 0.5 → no region, one band fill at 0.5 in `course:whiteout` with the clip's rings, the same symbols as opaque; the minimum wins, a leg without a white band does not count; 0.99996 clips; 0 draws nothing; the scene's fill above the map and lower purple, below upper purple; the PDF without `W* n`, with `/GSn gs` and a page `/Group`, the opaque page with neither; §6.4 "J13 reset": values below 1 reset top-level and inside alternatives, a soft-deleted event's course too, other rows untouched and not rewritten, the result valid, a second run a no-op; in the editor the field shows 100, 50 veils the band (map ink in it), the print one page, one undo makes it white, 150 is not written |
 | unit | `packages/api/src/__tests__/course-geometry.test.ts` | `editorCourseLayer`: sequence in order with roles, centre-to-centre legs, unpositioned controls skipped, free order without legs, no automatic cuts; `hasPositionedItems` (`length_source` derived / NULL); `legDistancesMm(layer)` from the derived legs = the pre-E6 sequence formula bit for bit (fixtures + 50 generated sequences, per-leg and total rounding at two scales, E6); `courseLengthM` |
 | unit | `packages/api/src/__tests__/document-readers-parity.test.ts` | cut features of the document = the legacy OCAD adapter's (now a test oracle, `__tests__/helpers/ocad-oracle.ts`) within 1e-6 mm on the fixture and the corpus (§4.2) |
 | unit | `packages/shared/src/course/__tests__/sequence.test.ts` (the API's `course-sequence.test.ts` until G13; also `splitStructure`, `crossingRowsOf`) | §6.2 "Readers" (E6): `courseSequenceOf` — columns (defaults, `start_name`, a live `finish_control_id`, unmatched fall back, the flags), a stored structure (explicit ends, no ends → defaults, roles), a deleted explicit start, an invalid column read as the columns, no starts / finishes |
@@ -2232,13 +2407,21 @@ label.
 | golden | `e2e/__golden__/map-gl/course-*.png`, `packages/api/src/render/__tests__/golden-files.test.ts`, `e2e/map-gl-golden.spec.ts` | reference raster = committed golden; WebGL2 ≤ 0.5 % (`map-rendering.md` §6.2). The PDF tier joins in C3 |
 | unit (web) | `packages/web/src/lib/__tests__/course-layer-request.test.ts` | the §5 request rules (offsets only with the sheet or the editor; `autoCuts: false` only when off; F4: `overlayTypeOf`, crossing / map-issue sites never make the view all-controls, `setterMarks` and a leg's `crossing` passed through, `sheetCrossings`); the provisional visit (a control at a position, before the finish, past the end, repeats counted; start / finish replace or lead / end; a reused site adds no site, `provisionalDrawn` agrees with the site pushed (P4); the split leg loses its stored gaps; ignored without exactly one highlighted course); §8.2 scope by highlighted course over `inCourses`, all-controls = `all` only, parked nowhere; objects without scope / `z` / token / `inCourses` |
 | unit | `packages/shared/src/course/__tests__/objects.test.ts` | §8.1 each kind accepted (`hatch` included), short geometry / unknown props / an unknown `hatch` / bad filter props / Bézier region refused; §8.2 the scope truth table; §8.3 each kind onto its symbol (709 / 709.b / 709.c, the dangerous area and its boundaries for `hatch: "710"`, 708 / 711, 707, white-out), Bézier handles kept, text upper purple or own row and not divided by the enlargement, image corners, toner saver with and without a window and with Bézier handles (bezier flags in the hole ring only), `inset_frame` and `filter_region` draw nothing |
+| unit | `objects.test.ts` "opacity, blend, rotation, flip (J4)", `page-layer.test.ts` "pageLayer: opacity, blend, rotation (J4)", `print/__tests__/page.test.ts`, `print/__tests__/compose.test.ts` | §8.1 the J4 props accepted on `text` / `image` / `whiteout`, refused on the other kinds, out of range, an unknown blend, rotation on a white-out; §3.6 / §8.3 opacity and blend on the render objects only off their defaults (opacity 1 = the plain object), both passes of a filled and stroked rectangle, a 90° rectangle's turned corners in solid / white-out / 709 (the hatch upright), a 30° text's angle of −30 (course and page), 0 and 360 as absent; image fields carried in both layers with the streams unchanged; `flipPageObject` keeps the fields; `transformPassStream` keeps a pass's opacity and blend |
 | unit | `layer.test.ts` "a stored filter_region course object" | §8.3: the same region as the explicit one, after it; hides the document's 516 |
-| unit | `layer.test.ts` "course objects as F12 moved layout objects" | §3.6: white-out at upper white, 709 / 709.b / 709.c by border, a text's own row on top at paper mm (no division), the toner saver ring and its white row last (P1), `WINDOW_MISSING`, an image to `layer.images` as `{ graphicId, crop, rectUm }` |
+| unit | `layer.test.ts` "course objects as F12 moved layout objects" | §3.6: white-out at upper white, 709 / 709.b / 709.c by border, a text's own row on top at paper mm (no division), the toner saver ring and its white row last (P1), `WINDOW_MISSING`, an image as one render object in `course:graphics` and to `layer.images` as `{ graphicId, sizeUm, crop? }` (J5) |
+| unit | `layer.test.ts` "knockout images (J15…)" | §3.6 "Knockout images": the overlay below a knockout image masked by its footprint, not a white-out or the purple; an attached knockout cuts where it is drawn, one not drawn cuts nothing; the schema takes `knockout` on images only |
+| unit | `layer.test.ts` "knockout images (J15…)" (J19 case) | §3.6 with an outline: the overlay cut by the outline's triangle where the image is drawn (attached too); a plain image carries no outline |
+| unit | `layer.test.ts` "an attached image hides its control (J18…)" | §8.1 "Hiding the attached control": the flags drop `site:<id>` and `number:<id>` only, legs and other controls unchanged; a free image's flags do nothing, a hidden number stays hidden with labels; the props are strict on images |
+| integration | `course-objects.test.ts` "J18 hides and J19 outlines" | the hide flags round-trip, refused on other kinds; a knockout image lists its graphic's outline, traced once and stored, a plain image none; a whole-box graphic stored `[]` and listed without one |
+| unit | `scenes.test.ts` `course-knockout` | the overlay's pass alone is masked, by lucka 31's footprint; its stream snapshot |
 | pass-stream | `scenes.test.ts` "course-objects", `print/__tests__` page scenes "page-ring", "page-rotated" | §3.6: the fixtures' former map-anchored objects written as the course objects F12 makes; the stream snapshots unchanged byte for byte — the move draws the same |
 | integration | `course-objects-migration.test.ts` | §3.6 the F12 migration on a scratch database built to the migration before it: the guard refuses all eleven reasons of a live event (a solid fill, a black stroke and line, a stroked white-out, short areas and lines, an image without its graphic, a text without a size or over 100 mm at os 0.75, an unknown kind and fill), names each in the detail and changes nothing; after the runbook's fix-ups every kind maps (whiteout, legacy `whiteoutRect`, toner saver, 709 / .b / .c, 708 / 707 from purple lines and closed outlines, a template's own purple, text ÷ os with the latest map's scale and a sheet's print-scale override, image corners), scopes per row type (template, course / class / all-controls / setter sheets), `source = 'layout'`, `version 0`, `z` under a hand-drawn object, seq order; invisible objects removed; a soft-deleted event's refused object removed; club payloads stripped; page objects kept in order; every body parses; a second run changes nothing |
 | integration | `course-print.test.ts` "F12" | §3.6: a sheet's map-anchored white-out and text, migrated on the shared database, are `source = 'layout'` objects scoped to its course; the sheet keeps its page object; the composed page draws the white-out at upper white and the text at 4 mm on paper |
 | E2E | `course-editor-layout.spec.ts` "F12" | §3.6: a legacy map-anchored white-out and 709 area seeded on a sheet and migrated: listed in Course mode scoped to the course, the map's ink under the white-out gone on the canvas, the sheet's `maps.pdf` one page with one more hatch |
 | unit | `packages/api/src/__tests__/version-conflict.test.ts` | §8.4: the object `CONFLICT` payload |
+| unit | `objects.test.ts` "attachment (J10)", `layer.test.ts` "attached objects (J10)", `checks.test.ts` (an attached area follows its control and counts only where the course draws it), `sheet-rows.test.ts` (a print sheet's object attached to a row UUID draws at the translated place, and not on a setter sheet without that control) | §8.1 "Attachment": the schema; `resolveAttached` translates by site − `at` with the handles kept, drops an object whose site is not drawn, returns an unattached list itself; §8.3 an attached object draws exactly as the same object stored at the translated place, is not drawn without its control, a filter region follows or drops, a scene without attach is unchanged |
+| integration | `course-objects.test.ts` "attached to a control (J10)" | §8.4 "Attach on the wire": create / update with the public control id, the UUID stored; `null` detaches, absent keeps; an unknown control and a toner saver refused; a control move writes nothing to the object; a deleted control's object read detached where it was drawn with the row untouched, restore re-attaches, a hand edit meanwhile does not move it twice |
 | integration | `packages/api/src/__tests__/integration/course-objects.test.ts` | §8.4: every kind created and listed in draw order with public ids; `inset_frame`, unknown course / class, bad body refused; update advances the token, `hatch: "710"` round-trips, `"711"` refused; stale token → `CONFLICT` with the object now and nothing written, none = LWW, stale delete; reorder keeps tokens; kiosk-key read, viewer cannot write; §8.2 class scope through `course_id` and the pool, the same resolution on the wire (`inCourses`); §8.5 snapshot round trip verbatim |
 | integration | `course-print.test.ts` "course objects on the page" | §8.3 print: a sheet takes the objects in scope (all-controls: `all` only), they add passes over the map, `hatch: "710"` adds one hatch pass, a stored filter region hides map objects |
 | integration | `backup.test.ts` | §8.5: the dump's `course_objects` section |
@@ -2339,9 +2522,16 @@ label.
   transaction of about a thousand
   queries (`setStructure` allows it 30 s); a batched child write is the
   lever if real courses get near the cap.
-- **A translucent corridor band** (§10.2, F26 deferred): `whiteOpacity`
-  is stored and drawn opaque until the stream carries alpha
-  (`map-rendering.md` §8); the editor's field returns with it.
+- **The translucent band's limits** (§10.2, J13): one effective opacity
+  for every band (the minimum); exact per-leg opacities need the band's
+  runs split by opacity (F26's second session). Lower-purple ink inside a
+  translucent band is veiled; a band pulled back by half a line width
+  round its own edges and mouths would keep it whole (a row of its own if
+  the gate print shows it matters). A band at 99 % veils, at 100 % clips
+  — the two read differently on the map, and a stored 0.996 (written by
+  the API or an import; the field writes whole percents) shows as 100 %
+  but veils. The J13 reset rewrote
+  `courses.structure` only (§6.4).
 - **Per-request cost on corridor courses** (§10.2). A control drag on a
   corridor course re-derives the corridors on every request (one request
   in flight since F20, `map-rendering.md` §5.2 "Engine"), and so does a
@@ -2394,9 +2584,7 @@ label.
   enlargement; the moved text takes the template's print scale) are not
   kept; a sheet's object now draws on every sheet of its course (a map
   exchange's other parts included) and a template's on every sheet of the
-  event; a moved `image` prints but is not previewed on the canvas (no
-  mode draws image course objects yet, `course-layout.md` Pending
-  "GL-drawn images"; Layout mode showed a map-anchored image). A
+  event (an `image` among them is drawn on the canvas since J6). A
   per-sheet scope is not planned.
 - **Upper white at import**: insert the row in stage-7 alignment
   (`colour-align.ts`) at the next importer bump, so `courseColourStack`
