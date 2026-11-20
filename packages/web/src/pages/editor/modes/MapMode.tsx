@@ -25,7 +25,7 @@ import { loadMapPatch, setMapPatch, type LoadedMapDocument, type MapPatchDeliver
 import type { EditorWrites, PatchWriteResult } from "../../../lib/editor/write-client";
 import { boundsMm } from "../../../lib/vector-map";
 import {
-  mapDrawBinding, mapNodesBinding, mapPickBinding, mapPointBinding, mapSelectBinding, withTrackLayer, type Gesture, type MapGestureRef, type MapNodeFocus,
+  mapDrawBinding, mapNodesBinding, mapPickBinding, mapPointBinding, mapSelectBinding, mapSplitBinding, mapTBinding, withTrackLayer, type Gesture, type MapGestureRef, type MapNodeFocus,
   type MapNodesGestureRef, type MapPointGestureRef,
 } from "../tools/bindings";
 import { isMapDrawTool, MAP_DRAW_KIND, MAP_RAIL, type MapRailTool } from "../tools/rail";
@@ -225,9 +225,9 @@ export function useMapMode(a: MapModeArgs): MapMode {
   const centreOn = useCallback((pt: Pt) => setViewRequest((v) => ({ key: (v?.key ?? 0) + 1, centre: pt })), []);
   // GPS tracks (§13 "GPS tracks", G25): the reference layer over every Map-mode tool and the inspector's section.
   const fitTo = useCallback((bounds: { minX: number; minY: number; maxX: number; maxY: number }) => setViewRequest((v) => ({ key: (v?.key ?? 0) + 1, bounds })), []);
-  const tracks = useMapTracks({ enabled, nameId, mapDoc, canEdit, writes, run, record, onLocate: fitTo, armed: tool === "T" });
-  // The Tracks tool (§13 "GPS tracks: editing", G27) goes back to V when the tracks are off.
-  useEffect(() => { if (tool === "T" && tracks.toolOff) setTool("V"); }, [tool, tracks.toolOff]);
+  // `T` picking a GPS track drops the map line selection (G32: nodes show on one kind of thing at a time).
+  const onTrackPicked = useCallback(() => { setSelected(null); setStack([]); }, []);
+  const tracks = useMapTracks({ enabled, nameId, mapDoc, canEdit, writes, run, record, onLocate: fitTo, armed: tool === "T", onTrackPicked });
 
   // ─── Writes ──
   const deliver = useCallback((res: PatchWriteResult) => {
@@ -312,6 +312,9 @@ export function useMapMode(a: MapModeArgs): MapMode {
   const canMove = canWrite && !convertOpen && !!selected && !selectedHidden && model?.indexOf(selected) != null;
   /** Drawing's lasting conditions (§13 "Drawing"): `courses.edit`, corrections on, a document — a write in flight aside. */
   const canDraw = canPatch && !!model && correctionsOn;
+  // `T` (§13 "Split tool", G27, G32) splits GPS tracks and map lines: off only when both are; back to V then.
+  const tOff = tracks.toolOff && !canDraw ? tracks.toolOff : null;
+  useEffect(() => { if (tool === "T" && tOff) setTool("V"); }, [tool, tOff]);
   const drawTool = isMapDrawTool(tool) ? tool : null;
   const drawKind: DrawKind | null = drawTool ? MAP_DRAW_KIND[drawTool] : null;
   // An armed drawing tool goes back to V when drawing becomes disabled.
@@ -617,7 +620,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
 
   /** Arms a rail tool; a drawing tool only while drawing is enabled, dropping the selection and *Change symbol*. */
   const armTool = useCallback((next: MapRailTool) => {
-    if ((isMapDrawTool(next) && !canDraw) || (next === "T" && tracks.toolOff)) return;
+    if ((isMapDrawTool(next) && !canDraw) || (next === "T" && tOff)) return;
     setArmedState(null);
     setPoly(null);
     drawId.current = null;
@@ -628,7 +631,7 @@ export function useMapMode(a: MapModeArgs): MapMode {
     if (next !== "V") setConvertOpen(false); // the convert panel keeps V (§13 "GPS tracks: convert")
     if (isMapDrawTool(next)) { setSelected(null); setStack([]); pendingSelect.current = null; }
     setTool(next);
-  }, [canDraw, setChanging, tracks.toolOff]);
+  }, [canDraw, setChanging, tOff]);
   /** `armTool` that also drops a drawing in progress from the draft (its op had an id; a waiting write's stays). */
   const armDropping = useCallback((next: MapRailTool) => {
     if (drawId.current) keepWaiting();
@@ -800,7 +803,31 @@ export function useMapMode(a: MapModeArgs): MapMode {
     snap: drawSnap,
     canClose: () => !writingRef.current,
   })), [armed?.kind, poly, drawHover, onDrawHover, holeDraft, finishHole, disarm, drawSnap]);
-  const binding = tracks.toolBinding ?? joinBinding ?? holeBinding ?? pointBinding ?? lineBinding ?? nodesBinding ?? selectBinding;
+  // `T` on map lines (G32): the selected line's splittable nodes; a click on one is *Split at node* there.
+  const splitLine = useMemo(() => {
+    if (tool !== "T" || !selected || !model || selectedHidden) return null;
+    const n = nodesOf(model, selected, { canEdit: canPatch, correctionsOn, coords: draftCoords });
+    if (!n || !("path" in n) || n.path.area || n.path.rings.length !== 1) return null;
+    return { vertices: n.path.rings[0].vertices, closed: n.path.rings[0].closed };
+  }, [tool, selected, model, selectedHidden, canPatch, correctionsOn, draftCoords]);
+  const clearTrackSelection = tracks.clearSelection;
+  const selectLine = useCallback((ref: MapObjectRef | null, refs: MapObjectRef[]) => {
+    select(ref, refs);
+    if (ref) clearTrackSelection();
+  }, [select, clearTrackSelection]);
+  const splitBinding = useMemo(() => (tool !== "T" ? null : mapSplitBinding({
+    hit,
+    clickSeq,
+    onSelect: selectLine,
+    line: splitLine,
+    canSplit: canWrite,
+    onSplit: (index) => {
+      if (!canWrite || !model || !selected || selectedHidden) return;
+      runOp(splitChange(model, current, selected, index, newAddId()));
+    },
+  })), [tool, hit, selectLine, splitLine, canWrite, model, selected, selectedHidden, current, runOp]);
+  const tBinding = splitBinding ? mapTBinding(tracks.toolBinding, tracks.hitsTrack, splitBinding) : null;
+  const binding = tBinding ?? joinBinding ?? holeBinding ?? pointBinding ?? lineBinding ?? nodesBinding ?? selectBinding;
 
   const selectedList = useMemo(() => (selected ? [selected] : []), [selected]);
   // The convert panel's preview is drawn with any draft still waiting for its write to be drawn.
@@ -871,9 +898,9 @@ export function useMapMode(a: MapModeArgs): MapMode {
     <div data-testid="editor-tool-rail" className="pointer-events-auto relative flex flex-col gap-1 bg-white/95 backdrop-blur-sm border border-slate-200 rounded-lg shadow-sm p-1 self-start">
       {MAP_RAIL.map((key) => {
         const label = t(RAIL_LABEL[key]);
-        const off = key === "T" ? !!tracks.toolOff : isMapDrawTool(key) && !canDraw;
+        const off = key === "T" ? !!tOff : isMapDrawTool(key) && !canDraw;
         return (
-          <button key={key} type="button" data-testid={`editor-tool-${key}`} aria-pressed={tool === key} title={off ? `${label} — ${key === "T" ? tracks.toolOff : t("mapDrawOff")}` : label} aria-label={label}
+          <button key={key} type="button" data-testid={`editor-tool-${key}`} aria-pressed={tool === key} title={off ? `${label} — ${key === "T" ? tOff : t("mapDrawOff")}` : label} aria-label={label}
             disabled={off} onClick={() => armTool(key)}
             className={`w-8 h-8 rounded-md text-xs font-semibold flex items-center justify-center cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${tool === key ? "bg-purple-100 text-purple-700" : "text-slate-600 hover:bg-slate-100"}`}>
             {key}

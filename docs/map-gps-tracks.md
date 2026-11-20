@@ -687,6 +687,9 @@ Decided by the user before planning (2026-11-15):
   again under its id, then restores its trim and `convertedOp`; it comes
   back at the end of the list (the wart G25 accepted for delete's undo).
 
+`T` also splits map lines (G32, `course-editor.md` §13 "Split tool"): a
+click on no GPS track is the map lines'.
+
 **The tool's tracks.** `T` acts on every track selected in the list
 (G26's checkboxes) that is visible and `ready` — G30 (user 2026-11-20)
 widened this from the one selected track, so that the parts of a split

@@ -19,7 +19,7 @@ import type { EditorWrites, TrackImportItem, TrackMeta } from "../../../../../li
 import { paperFrameOf } from "../../../../../lib/vector-map";
 import type { EditorToolBinding } from "../../../../../components/MapViewer";
 import { mapTracksBinding, type TrackHover, type TrackLayer } from "../../../tools/bindings";
-import { IDLE, type TrackToolState } from "../../../tools/tracks";
+import { clickHitsTrack, IDLE, type TrackToolState } from "../../../tools/tracks";
 import { newAddId } from "../symbols";
 import { DEFAULT_TOLERANCE_MM, decimateLayer, layerShapes, remainderShape, toleranceMm } from "./decimate";
 import { keptLine, splitUndo, viewRanges } from "./edit";
@@ -42,6 +42,8 @@ export interface MapTracksArgs {
   record: (undo: () => Promise<unknown>, redo: () => Promise<unknown>) => unknown;
   /** Fit the view to these paper-mm bounds (Map mode's `viewRequest`). */
   onLocate: (bounds: Bounds) => void;
+  /** `T` picked a GPS track by a click (G32: the map line selection goes). */
+  onTrackPicked?: () => void;
   /** The Tracks tool `T` is armed (G27). */
   armed?: boolean;
 }
@@ -62,6 +64,8 @@ export interface MapTracks {
   mark: (marks: readonly { id: string; opId: string | null }[]) => Promise<void>;
   /** The Tracks tool's binding while `armed` and on (G27); null otherwise. */
   toolBinding: EditorToolBinding | null;
+  /** Whether a `T` click at `pt` is on a GPS track (G32: else the map lines take it). */
+  hitsTrack: (pt: { x: number; y: number }, reachMm: number) => boolean;
   /** Why the Tracks tool is off (a sentence for the rail's title), or null. */
   toolOff: string | null;
   /** Null without a pinned document (Map mode's own `editor-map-none` stands). */
@@ -508,7 +512,11 @@ export function useMapTracks(a: MapTracksArgs): MapTracks {
     });
   }, [selection, active, frame, averaging, run, t, send, importItems, addPoints, record, removeIds]);
 
-  const onToolSelect = useCallback((id: string) => setSelectedIds([id]), []);
+  const onTrackPicked = a.onTrackPicked;
+  const onToolSelect = useCallback((id: string) => {
+    setSelectedIds([id]);
+    onTrackPicked?.();
+  }, [onTrackPicked]);
   const panelLoading = disabled === null && (!(lease.isSuccess || lease.isError) || list.isLoading);
   const toolOff = !mapDoc ? t("mapNone") : disabled ? t(`tracksDisabled_${disabled}`) : panelLoading ? t("tracksLoading") : null;
   const toolLines = useMemo(() => drawnLines.map((l) => ({ id: l.id, line: l.line })), [drawnLines]);
@@ -526,6 +534,9 @@ export function useMapTracks(a: MapTracksArgs): MapTracks {
     onSelect: onToolSelect,
     // draftTrim: the handles follow the drag.
   })), [armed, toolOff, targets, toolLines, editing, hover, onToolHover, onTrim, onSplit, onToolSelect, draftTrim]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** Whether a `T` click there is on a GPS track (else it is the map lines', G32). */
+  const hitsTrack = useCallback((pt: { x: number; y: number }, reachMm: number) => clickHitsTrack(pt, reachMm, targets, toolLines), [targets, toolLines]);
 
   const onLocateTrack = useCallback((id: string) => {
     const g = geometry.get(id);
@@ -552,5 +563,5 @@ export function useMapTracks(a: MapTracksArgs): MapTracks {
     averaging,
     tool: armed && !toolOff ? (targets.length > 0 ? "ready" as const : "pick" as const) : null,
   };
-  return { layer, selection, clearSelection, mark, toolBinding, toolOff, panel };
+  return { layer, selection, clearSelection, mark, toolBinding, hitsTrack, toolOff, panel };
 }

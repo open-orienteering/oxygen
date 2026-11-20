@@ -827,6 +827,63 @@ test.describe("Map mode line and area operations (docs/course-editor.md §13 \"L
     }
   });
 
+  test("T on a drawn line (G32): a click selects it and shows its nodes, a click on a node splits there; again on the next line; undo", async ({ page }) => {
+    test.setTimeout(240_000);
+    try {
+      await open(page);
+      const [a] = await plainSpots(page, 1, 3, 0);
+      const id = await drawLine(page, [{ x: a.x - 2, y: a.y }, { x: a.x - 1, y: a.y + 0.8 }, { x: a.x, y: a.y }, { x: a.x + 1, y: a.y + 0.8 }, { x: a.x + 2, y: a.y }]);
+      const drawn = (await opsOf())[`add:${id}`].coords!;
+      const changes = captureChanges(page) as OpChange[];
+      // Nothing selected under T: no nodes; a click on the line selects it and shows its three inner nodes.
+      await page.keyboard.press("Escape");
+      await expect(mapObject(page)).toHaveCount(0);
+      await page.keyboard.press("t");
+      await pressed(page, "T");
+      await expect(page.getByTestId("editor-split-node")).toHaveCount(0);
+      const on = await toPage(page, { x: a.x - 1.5, y: a.y + 0.4 });
+      await page.mouse.click(on.x, on.y);
+      await expect(mapObject(page)).toHaveAttribute("data-ref", `added:${id}`);
+      await expect.poll(async () => (await toolShapes(page, "editor-split-node")).length).toBe(3);
+      // A click on the middle node: one write, the start part stays the object and selected.
+      const middle = (await toolShapes(page, "editor-split-node")).find((n) => n.data.index === "2")!;
+      let wrote = waitForTrpc(page, "mapPatch.applyChange");
+      const mp = await toPage(page, middle);
+      await page.mouse.click(mp.x, mp.y);
+      await wrote;
+      let c = changes[changes.length - 1];
+      expect(c.put).toHaveLength(2);
+      expect(c.put![0]).toMatchObject({ op: "add", id, type: 2 });
+      const tailId = c.put![1].id!;
+      expect(anchorsOf(c.put![0].coords!)).toHaveLength(3);
+      await expect(mapObject(page)).toHaveAttribute("data-ref", `added:${id}`);
+      await expect.poll(async () => (await toolShapes(page, "editor-split-node")).length).toBe(1);
+      // Still T: a click on the other part selects it, its one inner node splits it again.
+      await pressed(page, "T");
+      const other = await toPage(page, { x: a.x + 1.5, y: a.y + 0.4 });
+      await page.mouse.click(other.x, other.y);
+      await expect(mapObject(page)).toHaveAttribute("data-ref", `added:${tailId}`);
+      const [node] = await toolShapes(page, "editor-split-node");
+      expect(node.data.index).toBe("1");
+      wrote = waitForTrpc(page, "mapPatch.applyChange");
+      const np = await toPage(page, node);
+      await page.mouse.click(np.x, np.y);
+      await wrote;
+      c = changes[changes.length - 1];
+      expect(c.put).toHaveLength(2);
+      expect(c.put![0]).toMatchObject({ op: "add", id: tailId });
+      await expect(page.getByTestId("editor-correction-row")).toHaveCount(3);
+      // Undo twice: the one line of all its nodes again.
+      await page.keyboard.press("Control+z");
+      await expect(page.getByTestId("editor-correction-row")).toHaveCount(2);
+      await page.keyboard.press("Control+z");
+      await expect(page.getByTestId("editor-correction-row")).toHaveCount(1);
+      expect(JSON.stringify((await opsOf())[`add:${id}`].coords)).toBe(JSON.stringify(drawn));
+    } finally {
+      await clearPatch();
+    }
+  });
+
   test("Join: a one-shot pick that Escape drops; the picked line's add removed, a straight segment between the ends; undo", async ({ page }) => {
     test.setTimeout(240_000);
     try {
