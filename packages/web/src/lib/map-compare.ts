@@ -8,7 +8,7 @@
 import { fitMm, panBy, zoomAt, type PaperViewport } from "./map-viewport";
 
 export type ComparePairKind = "use" | "order";
-export type CompareMode = "side" | "swipe";
+export type CompareMode = "side" | "swipe" | "diff";
 export type ColourOrder = "iof" | "source";
 
 /** One side of a pair: a document known by its hash, or the other order's document, asked of its route. */
@@ -53,7 +53,7 @@ export function defaultComparePair(input: { documentHash: string; pinnedHash: st
   return input.pinnedHash && input.pinnedHash !== input.documentHash ? "use" : "order";
 }
 
-// ─── Query state (`?compare=use|order&mode=side|swipe`) ──────
+// ─── Query state (`?compare=use|order&mode=side|swipe|diff`) ─
 
 export interface CompareQuery {
   pair: ComparePairKind;
@@ -63,7 +63,8 @@ export interface CompareQuery {
 export function parseCompareQuery(params: URLSearchParams): CompareQuery | null {
   const pair = params.get("compare");
   if (pair !== "use" && pair !== "order") return null;
-  return { pair, mode: params.get("mode") === "swipe" ? "swipe" : "side" };
+  const mode = params.get("mode");
+  return { pair, mode: mode === "swipe" || mode === "diff" ? mode : "side" };
 }
 
 /** A copy of `params` with the view's state written (`side` is the default and not written), or removed for `null`. */
@@ -101,9 +102,9 @@ export function compareReducer(s: CompareState, a: CompareAction): CompareState 
 
 // ─── One camera ──────────────────────────────────────────────
 
-/** The panes: two side by side on a wide view, stacked on a tall one; one in swipe. CSS px. */
+/** The panes: two side by side on a wide view, stacked on a tall one; one in swipe and in diff. CSS px. */
 export function compareLayout(w: number, h: number, mode: CompareMode): { direction: "row" | "column" | "single"; paneW: number; paneH: number } {
-  if (mode === "swipe") return { direction: "single", paneW: w, paneH: h };
+  if (mode !== "side") return { direction: "single", paneW: w, paneH: h };
   return w >= h ? { direction: "row", paneW: Math.floor(w / 2), paneH: h } : { direction: "column", paneW: w, paneH: Math.floor(h / 2) };
 }
 

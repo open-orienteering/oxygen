@@ -52,6 +52,7 @@ describe("the compare view's query state", () => {
     expect(parseCompareQuery(new URLSearchParams("compare=use"))).toEqual({ pair: "use", mode: "side" });
     expect(parseCompareQuery(new URLSearchParams("compare=order&mode=swipe"))).toEqual({ pair: "order", mode: "swipe" });
     expect(parseCompareQuery(new URLSearchParams("compare=order&mode=nonsense"))).toEqual({ pair: "order", mode: "side" });
+    expect(parseCompareQuery(new URLSearchParams("compare=use&mode=diff"))).toEqual({ pair: "use", mode: "diff" });
     expect(parseCompareQuery(new URLSearchParams("compare=nonsense"))).toBeNull();
   });
 
@@ -61,6 +62,7 @@ describe("the compare view's query state", () => {
     expect(open.toString()).toBe("clubMap=m1&compare=order&mode=swipe");
     expect(withCompareQuery(open, { pair: "use", mode: "side" }).toString()).toBe("clubMap=m1&compare=use");
     expect(withCompareQuery(open, null).toString()).toBe("clubMap=m1");
+    expect(withCompareQuery(base, { pair: "use", mode: "diff" }).toString()).toBe("clubMap=m1&compare=use&mode=diff");
     expect(base.toString()).toBe("clubMap=m1");
   });
 });
@@ -93,6 +95,7 @@ describe("one camera for both panes", () => {
     expect(compareLayout(1000, 600, "side")).toEqual({ direction: "row", paneW: 500, paneH: 600 });
     expect(compareLayout(400, 800, "side")).toEqual({ direction: "column", paneW: 400, paneH: 400 });
     expect(compareLayout(1000, 600, "swipe")).toEqual({ direction: "single", paneW: 1000, paneH: 600 });
+    expect(compareLayout(400, 800, "diff")).toEqual({ direction: "single", paneW: 400, paneH: 800 });
   });
 
   it("fits the union of the two documents' bounds into a pane", () => {

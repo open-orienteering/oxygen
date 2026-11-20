@@ -152,7 +152,8 @@
       "mode": {
         "label": "View",
         "side": "Side by side",
-        "swipe": "Swipe"
+        "swipe": "Swipe",
+        "diff": "Diff"
       },
       "side": {
         "inUse": "In use",
@@ -165,7 +166,18 @@
       "importing": "Importing this order…",
       "failed": "This version could not be loaded.",
       "divider": "Drag to move the divider",
-      "retry": "Try again"
+      "retry": "Try again",
+      "diff": {
+        "previous": "Previous difference",
+        "next": "Next difference",
+        "waiting": "Loading…",
+        "scanning": "Finding differences… {{done}} of {{total}}",
+        "none": "No differences",
+        "position": "{{n}} of {{count}}",
+        "failed": "The difference could not be drawn here.",
+        "scanFailed": "Finding differences failed.",
+        "retry": "Try again"
+      }
     },
     "layers": {
       "title": "Layers, top first",

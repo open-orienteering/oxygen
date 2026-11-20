@@ -1335,7 +1335,10 @@ sorting happens here.
   default the canvas at the view's size. A framebuffer target needs a
   stencil attachment (pattern clips). `compare=1&target=fbo` on the dev
   page draws into an offscreen 4× MSAA framebuffer and the E2E compares
-  it with the per-pass path like the canvas. The editor's **loupe**
+  it with the per-pass path like the canvas; since row I8b that target is
+  `offscreenTarget(gl, w, h)` in `map-gl/readback.ts` (4× MSAA `RGBA8` +
+  `DEPTH24_STENCIL8`, resolved into a single-sampled framebuffer before
+  `readPixels`), shared with the layer's frame reader (§5.4 "Layer"). The editor's **loupe**
   (§5.5) draws into `renderer.insetTarget(size)` — the supersample
   path's recipe, a `size`² framebuffer with 4× MSAA `RGBA8` and
   `DEPTH24_STENCIL8`, kept until the size changes or `releaseInset()` —
@@ -1788,6 +1791,29 @@ px by the canvas's ratio), and the first frame without it releases the
 inset target (§5.5 "Loupe"). Colours are the document's stack, `render.cmykToHex` of
 each `header.colours[i].cmyk`. Unmount disposes the engine (terminating
 the worker) and the renderer.
+
+**Frame reader (row I8b).** With `onFrameReader` set the layer hands its
+host a `FrameReader` once it has drawn (`drawn` or `complete`, as the
+hit-test) and `null` on a reload, a remount and unmount.
+`read(view, { lod? })` draws `view` complete offscreen —
+`engine.setView(view)` → `whenComplete()` → `render(opts, target)` into
+an `offscreenTarget` of the view's size → resolve → `readPixels` — and
+returns RGBA top row first (`flipRows`), then sets the layer's own view
+again. `lod: false` turns the screen-only skips off (`minGlyphPx`,
+`minTextPx`, `hatchTintPx` 0, as the dev page's `lod=0`). Reads are
+serialised per layer; while one is in flight the layer's own frames are
+skipped and the read's end asks for the frame again. A layer keeps at most
+two targets (one per size). Reads are 2D only (they reject while `terrain`
+is set) and reject once the layer's engine has gone, a read waiting for its
+detail included. A read whose detail has not come after 60 s rejects (a
+worker that failed never completes), a read whose `signal` was aborted
+before it started rejects without moving the view, and an offscreen target
+that is over the GPU's renderbuffer size or incomplete throws rather than
+reading zeros; each of these ends the read, so the layer's frames resume. The compare view's
+diff reads both of its layers (`docs/map-symbols.md` §8.7 "Compare —
+diff"). Tests: `map-gl/__tests__/readback.test.ts` (the row flip; the
+read's order, the skips off, serialisation and one idle call, the target
+cache, dispose).
 
 The canvas carries `data-testid="map-vector-layer"`,
 `data-document-hash`, `data-patch-version` (the patch version last drawn,
@@ -4274,6 +4300,7 @@ Tests:
 | `packages/web/src/map-gl/engine.ts` | main-thread controller: worker transport, residency, visible-set rebuilds, the one course request in flight (F20), the document hit-test and the edit part (G5), the 3D frame (H6: `setTerrain`, `renderTerrain`, settling, the drape's budget) |
 | `packages/shared/src/render/hit-test.ts` | `hitTest`, `hitTestStreams` on the symbolised shape (§5.5) |
 | `packages/web/src/map-gl/view.ts` | the arena path's model → clip matrix, `RenderTarget`, `loupeView` |
+| `packages/web/src/map-gl/readback.ts` | the offscreen 4× MSAA target (the dev page's `target=fbo`), the row flip, the layer's frame reader (row I8b) |
 | `packages/web/src/map-gl/renderer.ts` | WebGL2 backend, GPU stage (arena programs and draw loop; per-pass path, stencil, supersampling; the loupe's inset target and circle composite; the drape's tiled render target and textures and the terrain program on its context, H6; GPU timer) |
 | `packages/web/src/pages/dev/MapGlFixturePage.tsx` | dev-only golden page `/dev/map-gl` |
 | `packages/web/src/pages/dev/MapGlDocPage.tsx` | dev-only whole-document page `/dev/map-gl-doc` (load report, bench) |
@@ -4283,7 +4310,7 @@ Tests:
 | `e2e/__golden__/map-gl/`, `e2e/map-gl-golden.spec.ts` | committed goldens and the browser comparison |
 | `e2e/map-gl-doc.spec.ts` | whole-document pipeline on `e2e/test.ocd`: arena path, worker, eviction, arena = per-pass path |
 | `scripts/measure-gl.mjs` | corpus measurements through `/dev/map-gl-doc` (§5.2 Measurements; `--terrain`: §5.6 "Measurements (H6)") |
-| `packages/web/src/components/VectorMapLayer.tsx` | the vector base layer in `MapViewer` (§5.4): canvas, engine and worker lifecycle, status; the course layer request and its replies; the editor's loupe; Map mode's document objects (`mapObjects`, G5); the 3D frame (`heightField`, `terrain`, H7; `terrainLines`, H8) |
+| `packages/web/src/components/VectorMapLayer.tsx` | the vector base layer in `MapViewer` (§5.4): canvas, engine and worker lifecycle, status; the course layer request and its replies; the editor's loupe; Map mode's document objects (`mapObjects`, G5); the 3D frame (`heightField`, `terrain`, H7; `terrainLines`, H8); the frame reader (`onFrameReader`, I8b) |
 | `packages/web/src/lib/course-layer-request.ts` | the viewer's course-layer input (§5.4 "Overlay", `course-layer.md` §5) |
 | `packages/web/src/components/MapViewer.tsx` | the host: viewport state, gestures, the SVG UI layer, editor hit-testing; the 3D mode's state and the projected UI layer (H7) |
 | `packages/web/src/components/Map3d.tsx`, `lib/map-3d.ts`, `lib/map-3d-field.ts`, `hooks/useHeightField.ts` | the 3D mode (§5.4 "3D mode", H7): toggle, exaggeration, notice and pointer surface; offer, camera, projector and gesture reducer; the field padded and coarsened; the field's loader. H11: the surface choice and the DEM attribution (`Map3d.tsx`), `terrain3dSurfaces` / `defaultSurface` / `fieldAttribution` (`lib/map-3d.ts`), three fields in memory |

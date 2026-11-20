@@ -41,6 +41,7 @@ import type { CourseLayerRequest, DocumentHit, EditInput, MapObjectRef } from ".
 import type { mapDocument, render } from "@oxygen/shared";
 import { MapGlRenderer } from "../map-gl/renderer";
 import { loupeView } from "../map-gl/view";
+import { createFrameReader, offscreenTarget, type FrameReader, type FrameReaderHandle } from "../map-gl/readback";
 import type { LoadedMapDocument } from "../lib/map-document-cache";
 import { loadMapFonts, loadTextAtlas } from "../lib/map-fonts";
 import { textAtlasPagesFor } from "../map-gl/text-atlas";
@@ -127,9 +128,16 @@ interface Props {
   onMaxTextureSize?: (size: number) => void;
   /** Lines 3D frames draw on the terrain (§5.4 "3D mode" "Tracks on the terrain", H8); ignored in 2D. */
   terrainLines?: readonly TerrainLine[] | null;
+  /**
+   * The frame reader once the layer has drawn (§5.4 "Layer", row I8b): draws a view complete offscreen and reads it
+   * back, top row first; `null` on a reload, a remount and unmount. 2D only (it rejects while `terrain` is set).
+   */
+  onFrameReader?: ((read: FrameReader | null) => void) | null;
+  /** Drawn but not shown (the compare view's diff reads it, row I8b); its messages still show. */
+  hidden?: boolean;
 }
 
-export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, course = null, onCourse, onCourseSupport, loupe = null, patch = null, patchVersion = "0", mapObjects = null, heightField = null, terrain = null, onTerrain, onTerrainError, onMaxTextureSize, terrainLines = null }: Props) {
+export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, course = null, onCourse, onCourseSupport, loupe = null, patch = null, patchVersion = "0", mapObjects = null, heightField = null, terrain = null, onTerrain, onTerrainError, onMaxTextureSize, terrainLines = null, onFrameReader = null, hidden = false }: Props) {
   const { t } = useTranslation("dashboard");
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<MapGlEngine | null>(null);
@@ -137,6 +145,8 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
   const viewRef = useRef(view);
   viewRef.current = view;
   const frameRef = useRef<number | null>(null);
+  /** The frame reader of the current engine (row I8b): its reads hold the layer's own draws. */
+  const readerRef = useRef<FrameReaderHandle | null>(null);
   const [status, setStatus] = useState<VectorLayerStatus>("loading");
   // Each attempt is a fresh canvas (`key`): a lost context cannot be had
   // again from the same element. `lostRef` counts lost contexts.
@@ -233,6 +243,8 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
       frameRef.current = null;
       const engine = engineRef.current, v = viewRef.current, canvas = canvasRef.current;
       if (!engine || !v || !canvas || !loadedRef.current) return;
+      // A frame read is in flight (it moved the engine's view): its end asks for this draw again.
+      if (readerRef.current?.busy()) return;
       // Resizing the drawing buffer clears it; this frame redraws it.
       if (canvas.width !== v.widthPx) canvas.width = v.widthPx;
       if (canvas.height !== v.heightPx) canvas.height = v.heightPx;
@@ -297,6 +309,14 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
     const engine = new MapGlEngine(renderer, workerTransport(), { budgetBytes: budgetBytes(budget) });
     engineRef.current = engine;
     loadedRef.current = false;
+    const reader = createFrameReader({
+      engine,
+      makeTarget: (w, h) => offscreenTarget(renderer.gl, w, h),
+      renderOptions: () => ({ colour: coloursOf(engine.colours) }),
+      restoreView: () => viewRef.current,
+      onIdle: requestDraw,
+    });
+    readerRef.current = reader;
     engine.onChange = requestDraw;
     engine.onCourse = (info) => onCourseRef.current?.(info);
     engine.onEdit = (info) => setHighlighted(info.highlighted);
@@ -360,6 +380,8 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
       frameRef.current = null;
       engineRef.current = null;
       loadedRef.current = false;
+      if (readerRef.current === reader) readerRef.current = null;
+      reader.dispose();
       setLoadedAttempt(null);
       // The mesh goes with the engine: the host is 2D until the next engine has the field again.
       if (fieldSentRef.current) onTerrainRef.current?.(null);
@@ -443,6 +465,14 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
     });
   }, [patch, patchVersion]);
 
+  // The frame reader goes to the host once drawn, like the hit-test (row I8b); 2D frames only.
+  useEffect(() => {
+    const reader = readerRef.current;
+    if (!onFrameReader || !hitReady || !reader) return;
+    onFrameReader((v, opts) => (terrainRef.current ? Promise.reject(new Error("frame reads are 2D only")) : reader.read(v, opts)));
+    return () => onFrameReader(null);
+  }, [onFrameReader, hitReady]);
+
   // Every view change is one redraw; detail requests and evictions follow from `setView`.
   useEffect(() => {
     if (view) requestDraw();
@@ -469,7 +499,7 @@ export function VectorMapLayer({ doc, view, width, height, budget, zIndex = 1, c
         data-mode={mode}
         data-terrain-ready={mode === "3d" && terrainReady ? "true" : undefined}
         data-terrain-lines={mode === "3d" ? drawnLines : undefined}
-        style={{ position: "absolute", left: 0, top: 0, width, height, zIndex, pointerEvents: "none" }}
+        style={{ position: "absolute", left: 0, top: 0, width, height, zIndex, pointerEvents: "none", opacity: hidden ? 0 : undefined }}
       />
       {(status === "error" || status === "webgl") && (
         <MapLayerMessage
