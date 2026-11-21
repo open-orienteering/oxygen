@@ -2,24 +2,40 @@
  * Courses whose computed climb is to be written once the edit that
  * touched them has committed (docs/course-elevation.md §6 "When"). A
  * leaf module: the geometry rebuild marks, the tRPC layer drains.
- * In-memory and per process — the request that marked is the one that
- * drains; anything left (a rolled-back edit, a write outside tRPC) is
- * computed by the event's next mutation or `course.refreshClimbs`.
+ *
+ * Marks belong to the request that made them: `withClimbMarks` opens a
+ * scope (AsyncLocalStorage) and hands the marks to its caller when the
+ * work is done, so another request can never take an edit's marks before
+ * that edit has committed. A mark made outside a scope is dropped — the
+ * course's climb is then empty until the event's next edit of it or
+ * `course.refreshClimbs`.
  */
 
-const pending = new Map<bigint, Set<string>>();
+import { AsyncLocalStorage } from "node:async_hooks";
 
-export function markClimbPending(eventId: bigint, courseUuids: readonly string[]): void {
+/** Per event: the marked courses, or "all" for every course of the event. */
+export type ClimbMarks = Map<bigint, Set<string> | "all">;
+
+const scope = new AsyncLocalStorage<ClimbMarks>();
+
+export function markClimbPending(eventId: bigint, courseUuids: readonly string[] | "all"): void {
+  const marks = scope.getStore();
+  if (!marks) return;
+  if (courseUuids === "all") {
+    marks.set(eventId, "all");
+    return;
+  }
   if (courseUuids.length === 0) return;
-  let set = pending.get(eventId);
-  if (!set) pending.set(eventId, (set = new Set()));
-  for (const id of courseUuids) set.add(id);
+  const set = marks.get(eventId);
+  if (set === "all") return;
+  const ids = set ?? new Set<string>();
+  if (!set) marks.set(eventId, ids);
+  for (const id of courseUuids) ids.add(id);
 }
 
-/** The event's marked courses, cleared. */
-export function takeClimbPending(eventId: bigint): string[] {
-  const set = pending.get(eventId);
-  if (!set) return [];
-  pending.delete(eventId);
-  return [...set];
+/** Runs `fn` in a fresh scope; returns its result and the marks made in it. */
+export async function withClimbMarks<T>(fn: () => Promise<T>): Promise<{ result: T; marks: ClimbMarks }> {
+  const marks: ClimbMarks = new Map();
+  const result = await scope.run(marks, fn);
+  return { result, marks };
 }

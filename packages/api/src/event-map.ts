@@ -13,7 +13,7 @@ import { createHash } from "node:crypto";
 import type { mapDocument } from "@oxygen/shared";
 import type { PrismaClient, Prisma } from "./generated/prisma/client.js";
 import { prisma } from "./db.js";
-import { rebuildCourseLengths } from "./course-geometry.js";
+import { clearComputedClimbs, rebuildCourseLengths } from "./course-geometry.js";
 import { emitCourseUpserted } from "./referenceJournal.js";
 import type { WGS84Bounds } from "./map-projection.js";
 import { meridianStalenessFromDetection } from "./map-north.js";
@@ -64,6 +64,8 @@ async function documentStaleness(db: Db, documentHash: string | null): Promise<n
  * legs string follows the new scale.
  */
 async function refreshDerivedCourses(db: Db, eventId: bigint): Promise<void> {
+  // Every computed climb rested on the previous map's heights, whatever the course's length source.
+  await clearComputedClimbs(db, eventId, "all");
   const derived = await db.course.findMany({
     where: { eventId, removed: false, lengthSource: "derived" },
     select: { id: true },

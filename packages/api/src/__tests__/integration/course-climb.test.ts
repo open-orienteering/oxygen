@@ -12,13 +12,15 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { createHash, randomBytes } from "crypto";
+import { createHash, randomBytes, randomUUID } from "crypto";
 import { mapDocument } from "@oxygen/shared";
 import { createTestEvent, disconnect, type TestEventContext } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
 import { FLAT, HILL, encodeTerrainDoc } from "../helpers/terrain-doc.js";
 import { deriveDocumentHeightfield, readHeightfield } from "../../map-store/heightfield.js";
-import { resetClimbFields } from "../../course-climb.js";
+import { refreshMarkedClimbs, resetClimbFields } from "../../course-climb.js";
+import { withClimbMarks } from "../../course-climb-pending.js";
+import { rebuildCourseLengths } from "../../course-geometry.js";
 
 const suffix = randomBytes(4).toString("hex");
 const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
@@ -171,6 +173,83 @@ describe("the course's stored climb (docs/course-elevation.md §6)", () => {
     expect({ m: r.climbM, source: r.climbSource }).toEqual({ m: 0, source: null });
     expect((await flatCaller.course.refreshClimbs()).written).toBe(0);
     expect(await flat.db.mapHeightfield.count({ where: { documentHash: (await flat.db.mapFile.findFirstOrThrow({ where: { eventId: flat.eventId } })).documentHash! } })).toBe(0);
+  });
+
+  it("another request cannot take an edit's marks before the edit commits", async () => {
+    const row = await rowOf(ctx, over);
+    const computed = await climbOf(over);
+    const { marks } = await withClimbMarks(() =>
+      ctx.db.$transaction(async (tx) => {
+        await rebuildCourseLengths(tx, ctx.eventId, [row.id]);
+        // A heartbeat of an open editor lands while the edit is still open: it has nothing to compute.
+        await caller.course.presence({ courseId: over, mode: "course", clientId: "other-tab" });
+        await caller.course.refreshClimbs();
+      }),
+    );
+    expect(await climbOf(over), "cleared by the edit, not yet computed").toEqual({ m: 0, source: null });
+    expect(marks.get(ctx.eventId)).toEqual(new Set([row.id]));
+    expect(await refreshMarkedClimbs(ctx.db, marks)).toBe(1);
+    expect(await climbOf(over)).toEqual(computed);
+  });
+
+  it("each geometry edit journals the course cleared, then computed", async () => {
+    const row = await rowOf(ctx, over);
+    const since = await ctx.db.journalEntry.count({ where: { eventId: ctx.eventId, type: "course.upserted", payload: { path: ["id"], equals: row.id } } });
+    await caller.control.update({ id: top, xpos: 30, ypos: 31 });
+    await caller.control.update({ id: top, xpos: 30, ypos: 30 });
+    const entries = await ctx.db.journalEntry.findMany({ where: { eventId: ctx.eventId, type: "course.upserted", payload: { path: ["id"], equals: row.id } }, orderBy: { hlc: "asc" }, skip: since });
+    const climbs = entries.map((e) => (e.payload as { fields: { climbM: number } }).fields.climbM);
+    expect(climbs.length).toBeGreaterThanOrEqual(4);
+    expect(climbs.at(-2)).toBe(0);
+    expect(climbs.at(-1)).toBe((await climbOf(over)).m);
+  });
+
+  it("moving the course's ends in bulk clears a computed climb and computes it again", async () => {
+    const before = await climbOf(over);
+    expect(before.source).toBe("computed");
+    await caller.course.bulkUpdate({ ids: [over], firstAsStart: true });
+    const ends = await climbOf(over);
+    expect(ends.m === 0 ? ends.source : "computed").toBe(ends.m === 0 ? null : "computed");
+    await caller.course.bulkUpdate({ ids: [over], firstAsStart: false });
+    expect(await climbOf(over)).toEqual(before);
+    await caller.course.bulkUpdate({ ids: [over], climb: 64 });
+    expect(await climbOf(over)).toEqual({ m: 64, source: "manual" });
+    await caller.course.bulkUpdate({ ids: [over], climb: null });
+    expect(await climbOf(over)).toEqual(before);
+  });
+
+  it("a climb arriving through the journal is held as a typed one, and a cleared one is computed again", async () => {
+    const row = await rowOf(ctx, over);
+    const computed = await climbOf(over);
+    expect(computed.source).toBe("computed");
+    const latest = await ctx.db.journalEntry.findFirstOrThrow({ where: { eventId: ctx.eventId, type: "course.upserted", payload: { path: ["id"], equals: row.id } }, orderBy: { hlc: "desc" } });
+    const payload = latest.payload as { fields: Record<string, unknown> };
+    const push = async (climbM: number) => {
+      const res = await caller.events.push({
+        events: [{ id: randomUUID(), type: "course.upserted" as never, competitionId: ctx.event.nameId, stationId: "peer", timestamp: Date.now(), payload: { ...payload, fields: { ...payload.fields, climbM } } as Record<string, unknown> }],
+      });
+      expect(res.failed).toEqual([]);
+    };
+    // A peer's typed climb over this node's computed one: the next rebuild must not clear it.
+    await push(80);
+    expect(await climbOf(over)).toEqual({ m: 80, source: null });
+    await caller.control.update({ id: top, xpos: 29, ypos: 30 });
+    await caller.control.update({ id: top, xpos: 30, ypos: 30 });
+    expect(await climbOf(over)).toEqual({ m: 80, source: null });
+    // A peer's cleared climb over this node's typed one: no climb, so the compute fills it.
+    await caller.course.update({ id: over, climb: 70 });
+    await push(0);
+    expect(await climbOf(over)).toEqual({ m: 0, source: null });
+    await caller.course.refreshClimbs();
+    expect(await climbOf(over)).toEqual(computed);
+  });
+
+  it("a typed source over an empty climb is no climb: the compute fills it", async () => {
+    const row = await rowOf(ctx, over);
+    const computed = await climbOf(over);
+    await ctx.db.course.update({ where: { id: row.id }, data: { climbM: 0, climbSource: "manual" } });
+    await caller.course.refreshClimbs();
+    expect(await climbOf(over)).toEqual(computed);
   });
 
   it("the column takes its three sources and nothing else", async () => {

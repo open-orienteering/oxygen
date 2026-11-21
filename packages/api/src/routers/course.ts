@@ -62,7 +62,7 @@ import { eventPatchVersion } from "../map-store/patches.js";
 import { terrainDescriptor } from "../map-store/heightfield.js";
 import { canDownloadEventMap } from "../ocad-export.js";
 import { loadEventCrs } from "../event-crs.js";
-import { rebuildCourseLengths } from "../course-geometry.js";
+import { clearComputedClimbs, rebuildCourseLengths } from "../course-geometry.js";
 import { isTypedClimb, refreshComputedClimbs, statedClimb } from "../course-climb.js";
 import { markClimbPending } from "../course-climb-pending.js";
 import { appendJournal } from "../journalEmit.js";
@@ -1193,6 +1193,10 @@ export const courseRouter = router({
             await rewriteStructureFromColumns(tx, ctx.event.id, r.id);
           }
         }
+        if (input.firstAsStart !== undefined || input.lastAsFinish !== undefined) {
+          // The course's ends moved: a computed climb no longer holds.
+          await clearComputedClimbs(tx, ctx.event.id, rows.map((r) => r.id));
+        }
         if (input.orderMode !== undefined) {
           await rebuildCourseLengths(
             tx,
@@ -2293,6 +2297,9 @@ export const courseRouter = router({
           updateLength: false,
         });
       }
+      // The import moved controls and rewrote courses: every computed climb of the event is computed again,
+      // and the imported courses whose file states none get theirs (course-elevation.md §6 "When").
+      await clearComputedClimbs(ctx.db, eventId, "all");
 
       // ── 3. Class → Course assignments ───────────────────────
       if (input.classMapping) {

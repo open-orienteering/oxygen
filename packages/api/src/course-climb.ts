@@ -15,7 +15,7 @@ import type { Prisma, PrismaClient } from "./generated/prisma/client.js";
 import { decodeHeightField, type HeightField } from "@oxygen/shared/src/terrain/field/read.js";
 import { TERRAIN_VERSION } from "@oxygen/shared/src/terrain/field/index.js";
 import { courseProfile, fieldSampler, pickClimbField, type ClimbFieldPick, type PaperPoint, type TerrainSampler } from "@oxygen/shared/src/terrain/profile/index.js";
-import { takeClimbPending } from "./course-climb-pending.js";
+import type { ClimbMarks } from "./course-climb-pending.js";
 import { editorCourseLayer, loadCourseSequences } from "./course-geometry.js";
 import { emitCourseUpserted } from "./referenceJournal.js";
 import { eventPin } from "./map-store/event-document.js";
@@ -25,7 +25,7 @@ type Db = PrismaClient | Prisma.TransactionClient;
 
 /** A typed or imported climb: a compute never replaces it (§6 "Read rule"). */
 export const isTypedClimb = (c: { climbM: number; climbSource: string | null }): boolean =>
-  c.climbSource === "manual" || c.climbSource === "file" || (c.climbSource === null && c.climbM !== 0);
+  c.climbM !== 0 && c.climbSource !== "computed";
 
 /** What a writer stores for a climb someone stated: above 0 it is theirs, else there is none (the way back to the computed one). */
 export function statedClimb(climb: number | null | undefined, source: "manual" | "file"): { climbM: number; climbSource: string | null } {
@@ -84,46 +84,54 @@ export async function climbSamplerFor(db: Db, eventId: bigint): Promise<TerrainS
   return fieldSampler(field);
 }
 
+/** A course with no climb to state: empty and not a computed one (a typed source over an empty value is no climb, §6 "Read rule"). */
+const OPEN_CLIMB = { climbM: 0, OR: [{ climbSource: null }, { climbSource: { not: "computed" } }] };
+
 /**
  * Computes and stores the climb of the event's live ordered courses that
  * have none (§6 "The compute"). Call after the edit's transaction has
- * committed, with the root client. Returns the number of courses written.
+ * committed, with the root client. One short transaction per course,
+ * locking that course's row only. Returns the number of courses written.
  */
 export async function computeMissingClimbs(db: PrismaClient, eventId: bigint, courseUuids?: readonly string[]): Promise<number> {
   if (courseUuids && courseUuids.length === 0) return 0;
-  const ids = courseUuids ? [...courseUuids] : null;
-  const open = await db.course.count({ where: { eventId, removed: false, orderMode: "ordered", climbM: 0, climbSource: null, ...(ids ? { id: { in: ids } } : {}) } });
-  if (open === 0) return 0;
+  const open = await db.course.findMany({
+    where: { eventId, removed: false, orderMode: "ordered", ...OPEN_CLIMB, ...(courseUuids ? { id: { in: [...courseUuids] } } : {}) },
+    select: { id: true },
+    orderBy: { id: "asc" },
+  });
+  if (open.length === 0) return 0;
   const sampler = await climbSamplerFor(db, eventId);
   if (!sampler) return 0;
-  return db.$transaction(async (tx) => {
-    // Locked: an edit of one of these courses waits, then clears what is written here and computes again.
-    const locked = await tx.$queryRaw<{ id: string }[]>`
-      SELECT "id" FROM "oxygen"."courses"
-      WHERE "event_id" = ${eventId} AND "removed" = false AND "order_mode" = 'ordered' AND "climb_m" = 0 AND "climb_source" IS NULL
-      ORDER BY "id" FOR UPDATE`;
-    const rows = ids ? locked.filter((r) => ids.includes(r.id)) : locked;
-    if (rows.length === 0) return 0;
-    const sequences = await loadCourseSequences(tx, eventId, rows.map((r) => r.id));
-    let written = 0;
-    for (const [courseUuid, { seq, orderMode }] of sequences) {
-      if (orderMode !== "ordered") continue;
-      const legs = editorCourseLayer(courseUuid, seq, orderMode).derivation.courses[0]?.legs ?? [];
+  let written = 0;
+  for (const { id } of open) {
+    written += await db.$transaction(async (tx) => {
+      // Locked: an edit of this course waits, then clears what is written here and computes again.
+      const locked = await tx.$queryRaw<{ id: string }[]>`
+        SELECT "id" FROM "oxygen"."courses"
+        WHERE "id" = ${id}::uuid AND "removed" = false AND "order_mode" = 'ordered'
+          AND "climb_m" = 0 AND ("climb_source" IS NULL OR "climb_source" <> 'computed')
+        FOR UPDATE`;
+      if (locked.length === 0) return 0;
+      const found = (await loadCourseSequences(tx, eventId, [id])).get(id);
+      if (!found || found.orderMode !== "ordered") return 0;
+      const legs = editorCourseLayer(id, found.seq, found.orderMode).derivation.courses[0]?.legs ?? [];
       const climbM = computedClimbM(legs, sampler);
-      if (climbM === null) continue;
-      await tx.course.update({ where: { id: courseUuid }, data: { climbM, climbSource: "computed" } });
+      if (climbM === null) return 0;
+      await tx.course.update({ where: { id }, data: { climbM, climbSource: "computed" } });
       // The climb is not part of the course's concurrency token: the editor's next write is not refused for it.
-      await emitCourseUpserted(tx, eventId, courseUuid, { advanceVersion: false });
-      written++;
-    }
-    return written;
-  });
+      await emitCourseUpserted(tx, eventId, id, { advanceVersion: false });
+      return 1;
+    });
+  }
+  return written;
 }
 
-/** After a mutation of the event: the climbs of the courses its geometry rebuilds marked. */
-export async function refreshPendingClimbs(db: PrismaClient, eventId: bigint): Promise<number> {
-  const ids = takeClimbPending(eventId);
-  return ids.length > 0 ? refreshComputedClimbs(db, eventId, ids) : 0;
+/** After a request: the climbs of the courses its geometry rebuilds marked. */
+export async function refreshMarkedClimbs(db: PrismaClient, marks: ClimbMarks): Promise<number> {
+  let written = 0;
+  for (const [eventId, ids] of marks) written += await refreshComputedClimbs(db, eventId, ids === "all" ? undefined : [...ids]);
+  return written;
 }
 
 /** `computeMissingClimbs`, failing soft: an error is logged and the courses have no climb until the next edit. */

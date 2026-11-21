@@ -26,6 +26,7 @@ describe("the course's stored climb (docs/course-elevation.md §6)", () => {
     expect(isTypedClimb({ climbM: 85, climbSource: null })).toBe(true);
     expect(isTypedClimb({ climbM: 85, climbSource: "computed" })).toBe(false);
     expect(isTypedClimb({ climbM: 0, climbSource: null })).toBe(false);
+    expect(isTypedClimb({ climbM: 0, climbSource: "manual" })).toBe(false);
   });
 
   it("the picked field's row source", () => {

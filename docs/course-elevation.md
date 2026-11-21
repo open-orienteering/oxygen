@@ -403,19 +403,25 @@ Courses page and in the editor (§4.4). Who wrote it is
 | `computed` | `refreshComputedClimbs` (below) | yes: cleared by every re-derivation of the course's geometry, written again after it |
 | NULL | no climb (`climb_m` = 0) — or a climb written before this column or by an older image | only while `climb_m` is 0 |
 
-**Read rule.** A row with source NULL and `climb_m` ≠ 0 is a typed
-climb (the migration backfills `manual` for these; an older API image or
-a peer that knows no source writes them, AGENTS §7): nothing computed
-replaces it. `manual` and `file` win alike; they are kept apart as
-`length_source` keeps `file`.
+**Read rule.** A climb is a typed one when `climb_m` ≠ 0 and its source
+is not `computed` (`isTypedClimb`): nothing computed replaces it. That
+covers source NULL with a climb (the migration backfills `manual` for
+these; an older API image or a peer that knows no source writes them,
+AGENTS §7). `manual` and `file` win alike; they are kept apart as
+`length_source` keeps `file`. A row with `climb_m` 0 has **no climb**
+whatever its source says, and the compute fills it. A `course.upserted`
+applied from the journal carries no source, so the apply sets the
+source to NULL with the climb it writes: an incoming climb is a typed
+one here, an incoming 0 is none.
 
 **The way back.** Clearing the Courses page's climb field (or typing 0)
 writes `climb_m` 0 with source NULL, and the computed climb is stored in
 its place when there is one. There is no stated "0 m": a flat course's
 computed 0 is stored as no climb.
 
-**The compute** (`refreshComputedClimbs(eventId)`): for every live
-**ordered** course of the event with source NULL and `climb_m` 0, the
+**The compute** (`refreshComputedClimbs(db, eventId, courseUuids?)`): for
+every live **ordered** course of the event with no climb (`climb_m` 0,
+source not `computed`), the
 climb is `Math.round(courseProfile(legs, sampler).climbM)` (§2; whole
 metres, the number the editor shows) over
 
@@ -436,25 +442,49 @@ one does not, and a root whose typed climb is cleared takes the copies
 back from its variants. A clone copies a typed climb with its source and
 computes its own otherwise.
 
-**When.** `rebuildCourseLengths` — every re-derivation of a course's
-stored geometry: create, update, sequence and leg edits, control moves,
-copy, map upload, rotation, import — resets a `computed` climb to
-0 / NULL **inside the edit's transaction**, so a stored computed climb is
-never stale — and marks the course (`course-climb-pending.ts`, in
-memory). The compute then runs **after the transaction commits**,
-outside it (a field read never runs inside an edit's transaction): every
-event-scoped tRPC mutation that succeeded computes the courses marked
-for its event (`trpc.ts` `eventProcedure`), in one short transaction of
-its own that locks the rows it writes, and fails soft — an error is
-logged, the mutation's result stands and the course has no climb until
-the next edit. A write outside tRPC (a map upload's REST route) leaves
-its marks to the event's next mutation. The computed climb is journaled
+**When.** Every change of what a climb rests on resets a `computed`
+climb to 0 / NULL **inside the edit's transaction**
+(`clearComputedClimbs`), so a stored computed climb is never stale, and
+marks the course:
+
+- `rebuildCourseLengths` — every re-derivation of a course's stored
+  geometry: create, update, sequence and leg edits, control moves, copy,
+  a position-less import;
+- `course.bulkUpdate` moving the courses' ends (`firstAsStart`,
+  `lastAsFinish`);
+- a map upload, a library map or a rotation change
+  (`refreshDerivedCourses`): **every** course of the event, whatever its
+  length source — the climb rested on the previous map's heights;
+- `course.importCourses`: every course of the event (the import moves
+  shared controls), so an imported course whose file states no climb
+  gets a computed one and a re-imported course does not keep an old one.
+
+A file that states a climb overwrites the course's climb with source
+`file`, a typed one included; a file without one leaves a typed climb
+alone. Oxygen's own IOF export writes the stored climb, so exporting a
+course with a computed climb and importing that file back makes it a
+`file` climb.
+
+The marks are **the request's own** (`course-climb-pending.ts`: an
+`AsyncLocalStorage` scope opened by `eventProcedure` around every
+mutation), so no other request — an open editor's presence heartbeat,
+a readout — can take them before the edit has committed, and a request
+that marked nothing computes nothing. The compute runs **after the
+transaction commits**, outside it (a field read never runs inside an
+edit's transaction): a mutation that succeeded computes the courses it
+marked, **one short transaction per course** that locks that course's
+row only (an edit of several courses cannot deadlock with it), and
+fails soft — an error is logged, the mutation's result stands and the
+course has no climb until its next edit or `course.refreshClimbs`. A
+mark made outside a request scope is dropped the same way. The computed
+climb is journaled
 (`course.upserted`, the course's concurrency token not advanced: an
 editor's next write is not refused for it), so each geometry edit of
 such a course journals it twice — cleared, then computed. `course.refreshClimbs`
 runs the same compute for every such course of the event on demand; the
 editor calls it once per course opened when it shows a computed climb
-and the stored one is empty (heights that arrived after the last edit).
+and the stored one is empty (heights that arrived after the last edit),
+and again after a failure.
 
 **Readers.** The description sheet, the course-map header and the IOF /
 Purple Pen exports read `climb_m` as stored, whatever its source
@@ -465,7 +495,9 @@ a stored source read as `manual`). The column is stripped from the
 `course.upserted` payload, as `length_source` is (an older peer's apply
 knows no such field); it travels with the checkout snapshot. A peer that
 receives a computed climb through the journal therefore holds it as a
-typed one until it is cleared there.
+typed one until it is cleared there. That copy is not cleared by
+the peer's geometry edits: after a checkout to another node, a climb
+computed here stays as it was until someone clears it there (Pending).
 
 **The Courses page** (`CoursesPage.tsx`, the course's detail): a *Climb
 (m)* field (`course-detail-climb`, `data-source`) holding a typed climb,
@@ -496,7 +528,8 @@ leg with a route states its climb along the route.
 | `e2e/course-editor-elevation.spec.ts` | §4 in the browser on a synthetic plane field: the computed climb and its notes, a leg's numbers, a moved control, a ground model's attribution, a failed read and **Try again**, a typed climb, free order and the all-controls view, a map without a field |
 | `e2e/course-editor-phone.spec.ts` "the computed climb on a phone" | §4.4 "Phone" |
 | `packages/api/src/__tests__/course-climb.test.ts` | §6: a stated climb's source, the read rule, the field's row source, the climb to store (partial, flat, no legs) |
-| `packages/api/src/__tests__/integration/course-climb.test.ts` | §6: computed after a create commits, cleared and recomputed by a move, the journal payload and token, typed wins and clears back, a climb without a source, clone, free order, `refreshClimbs`, a field not stored, the column's constraint |
+| `packages/api/src/__tests__/integration/course-climb.test.ts` | §6: computed after a create commits, cleared and recomputed by a move, the journal payload and token, both journal entries of an edit, typed wins and clears back, a climb without a source, a typed source over an empty climb, clone, free order, bulk end moves and bulk climb, `refreshClimbs`, marks not taken by another request while the edit is open, a climb applied from the journal, a field not stored, the column's constraint |
+| `packages/api/src/__tests__/course-climb-pending.test.ts` | §6: marks are per request scope, concurrent scopes apart, `all`, a mark outside a scope dropped |
 | `e2e/courses.spec.ts` "climb" | §6 "The Courses page": typing and clearing a climb |
 | `packages/web/src/lib/editor/__tests__/sequence.test.ts` "an insert position names its drawn leg's index" | §4.5, §5: the selected leg's index, the route's marks, a repeated control |
 | `packages/web/src/lib/editor/__tests__/hover-dot.test.ts` | §5: the pointer's store |
@@ -507,11 +540,14 @@ leg with a route states its climb along the route.
 
 - §7 as marked.
 - §6: a climb is not recomputed when heights arrive later (a contour
-  field derived, a DEM job done), when the map is replaced or re-pinned
-  without a geometry rebuild, on a Height data settings change or a
+  field derived, a DEM job done), on a Height data settings change or a
   `TERRAIN_VERSION` bump — until the course's next edit or its next
   opening in the editor. The printed and exported climb does not say
   that it rests on contours.
+- §6: the climb's source does not travel in the journal, so a node that
+  received a computed climb from a peer treats it as typed and does not
+  recompute it on its own edits. Sending the source needs every peer to
+  know the column first (AGENTS §7).
 - §4.1: the Class and Variant views state no climb and show no profile;
   a forked course's climb is the shown path's, not each variant's.
 - §5: the map does not point back at the graph (hovering a leg on the map

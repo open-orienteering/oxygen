@@ -1794,8 +1794,10 @@ export function EditorPage() {
   useEffect(() => {
     if (!canEdit || !selectedCourse || selectedCourse.climb !== 0 || computedShownM <= 0 || pendingOps > 0) return;
     if (climbCaughtUp.current.has(selectedCourse.id)) return;
-    climbCaughtUp.current.add(selectedCourse.id);
-    refreshClimbsNow();
+    const id = selectedCourse.id;
+    climbCaughtUp.current.add(id);
+    // A failed catch-up is tried again the next time this course's numbers change.
+    refreshClimbsNow(undefined, { onError: () => { climbCaughtUp.current.delete(id); } });
   }, [canEdit, selectedCourse, computedShownM, pendingOps, refreshClimbsNow]);
   const profilePanel = useMemo(() => (profileShown && elevation.state === "ready" ? (
     <ProfilePanel profile={elevation.profile} datum={elevation.datum} basis={elevation.basis} legLabels={profileLabels.legs} boundLabels={profileLabels.bounds}

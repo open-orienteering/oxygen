@@ -1,5 +1,6 @@
 import { initTRPC, TRPCError } from "@trpc/server";
-import { refreshPendingClimbs } from "./course-climb.js";
+import { refreshMarkedClimbs } from "./course-climb.js";
+import { withClimbMarks } from "./course-climb-pending.js";
 import type { CreateFastifyContextOptions } from "@trpc/server/adapters/fastify";
 import type { PrismaClient } from "./generated/prisma/client.js";
 import { prisma, resolveEvent, type EventRef } from "./db.js";
@@ -166,10 +167,12 @@ const requireEvent = middleware(async ({ ctx, next }) => {
  * required. Peer-to-peer journal shipping uses `peerProcedure` instead.
  */
 export const eventProcedure = authedProcedure.use(requireEvent).use(async ({ ctx, type, next }) => {
-  const result = await next();
+  if (type !== "mutation") return next();
   // docs/course-elevation.md §6 "When": the climbs of the courses this mutation's geometry rebuilds marked are
   // computed after its transaction has committed, never inside it; a failure is logged, not the mutation's.
-  if (type === "mutation" && result.ok) await refreshPendingClimbs(ctx.db, ctx.event.id);
+  // The marks are this request's own: no other request can take them before the edit has committed.
+  const { result, marks } = await withClimbMarks(() => next());
+  if (result.ok && marks.size > 0) await refreshMarkedClimbs(ctx.db, marks);
   return result;
 });
 

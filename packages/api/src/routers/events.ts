@@ -872,10 +872,13 @@ async function applyReferenceUpsert(
   }
 
   if (type === "course.upserted") {
+    // The climb's source does not travel (referenceJournal.ts): an incoming climb is held as a typed one, whatever
+    // this node's row said before (docs/course-elevation.md §6 "Read rule").
+    const climbSource = "climbM" in fields && !("climbSource" in fields) ? { climbSource: null } : {};
     await db.course.upsert({
       where: { id: payload.id },
       create: create as never,
-      update: fields,
+      update: { ...fields, ...climbSource },
     });
     if (payload.courseControls) {
       await db.courseControl.deleteMany({ where: { courseId: payload.id } });
