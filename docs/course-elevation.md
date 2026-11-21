@@ -3,7 +3,7 @@
 Normative specification of **heights along a course**: the height profile
 of a polyline over a map's height field and the climb read from it (§1–2),
 which field is read (§3), what the course editor shows (§4–5), the course's
-stored climb (§6) and leg routes (§7, pending). The height fields themselves are
+stored climb (§6) and leg routes (§7; computed alternatives pending). The height fields themselves are
 `docs/map-terrain.md` (§4–7); the course's stored length is
 `docs/course-controls-and-matching.md` "Course length".
 
@@ -73,6 +73,25 @@ change):
     in the editor; there is no job over all events.
 14. **Every ordered course on a map with heights now prints and exports
     a climb**, the contour-based approximate ones included.
+
+2026-11-21, 23:58 (the user, in the thread, on the plan for routes):
+
+15. **The official climb follows the shortest legal alternative**,
+    computed automatically, and the setter can pin another route per
+    leg. Course length stays as it is measured.
+16. **Estimated times are shown before calibration**, from a simple
+    speed model (pace by terrain type and slope), marked uncalibrated.
+17. **One expected winner pace per course** (min/km, typed);
+    alternatives are ranked relative to it.
+
+Decided in implementation of §7.1–7.4 (2026-11-22; told to the user):
+
+18. **A route belongs to the directed control pair**, shared by every
+    course running it, and only a **chosen** route changes a climb
+    (§0.2's "a leg with a route" is "a leg with a chosen route").
+19. **Routes are not journaled**: they travel with the backup and the
+    checkout snapshot only.
+20. **A marked-route leg ignores routes**; route writes are not undoable.
 
 ## 1. The profile
 
@@ -512,9 +531,117 @@ live value is shown, which is the stored one once the edit is saved.
 
 ## 7. Leg routes
 
-*Pending.* A route is a polyline between two controls of an event, drawn
-or estimated; `profileAlong` takes it as it takes the drawn line, and a
-leg with a route states its climb along the route.
+A **route** is a polyline between two controls of an event, in the
+direction it is run. `profileAlong` takes it as it takes the drawn line.
+
+### 7.1 Model
+
+Table `leg_routes` (migration `20261122020000_leg_routes`), one row per
+route:
+
+| Column | |
+|---|---|
+| `event_id`, `from_control_id`, `to_control_id` | the directed pair; both controls cascade |
+| `points` | the route's **interior** vertices, paper mm (`[{ x, y }]`, 1 to 2000): the ends are the controls' centres and follow a moved control, as a leg's bends do |
+| `source` | `drawn` (by hand) or `computed` (an alternative the search of §7.5 found and someone kept) |
+| `model` | the cost model a computed route was found with; NULL for a drawn one |
+| `chosen` | the route the pair's climb is read along; a partial unique index allows one per pair |
+
+A route belongs to the **pair, not to a course**: every course of the
+event that runs `from` → `to` as a leg shares it (§0.9; the terrain
+between two controls is the same for every course, and a course's
+variants are copies that would otherwise each need their own). It is
+directed: the pair run the other way has its own routes. A pair may
+hold several routes; at most one is chosen.
+
+Routes are not journaled. They are in the event's backup
+(`BACKUP_TABLES`) and travel with the checkout snapshot
+(`SNAPSHOT_TABLES`).
+
+### 7.2 API
+
+`legRoute.*` (`packages/api/src/routers/legRoute.ts`); controls by their
+public id, a route by its UUID:
+
+- `list` (`courses.view`): every route of the event between live
+  controls, a pair's routes together, oldest first.
+- `save` (`courses.edit`, lease-guarded): a new route for a pair, or new
+  points for route `id` (a route keeps its pair). A new route is chosen
+  unless `chosen: false`; choosing takes the choice from the pair's
+  other routes.
+- `choose { id, chosen }`: choose the route for its pair, or take the
+  choice away — the pair is read along its drawn line again.
+- `delete { id }`.
+
+Every write that changes what a pair is read along (a chosen route
+saved, chosen, unchosen or deleted) clears the computed climb of
+**every live ordered course running the pair** in its transaction
+(`clearComputedClimbs`, §6 "When") and they are computed again after
+the commit. A write to a route that is not the chosen one changes no
+climb.
+
+### 7.3 What is read along a route
+
+`routedLegs` (`packages/shared/src/course/leg-routes.ts`): a leg whose
+pair has a chosen route is read along the route from the leg's first
+point to its last; every other leg along its drawn line (§0.2). The
+rule of §2 still runs once over the whole course (§0.6). This is the
+polyline list of
+
+- the stored computed climb (`computeMissingClimbs` through
+  `climbLegsOf`, `packages/api/src/leg-routes.ts`), and
+- the editor's climb, its selected leg's numbers, the profile graph
+  and the graph's dot on the map (§4, §5).
+
+Unchanged by a route: the course's **length** (§0.1; it stays the
+drawn line's), the drawn and printed leg, the description sheet's
+distances and every export — a route is never printed or exported
+(§0.3). A leg with style `marked_route` ignores routes: its drawn line
+is the route the runner must follow. A leg through a crossing point is
+read along the chosen route as any other; the setter draws the route
+through the crossing.
+
+### 7.4 The editor
+
+Course mode's Course view, an ordered course, a leg selected: the
+inspector's *Leg* section shows a **Routes** block
+(`editor-leg-routes`) under the leg's numbers, on a map with or
+without heights.
+
+- The list (`editor-leg-route`, `data-id`, `data-source`,
+  `data-chosen`, `data-m`, `data-climb`): the **drawn line** first
+  (`data-id="line"`), then the pair's routes. Each states its metres
+  on the ground and, when the field is read, its own climb
+  (`profileAlong` over that polyline alone, `≈` as in §4.4). A radio
+  (`editor-leg-route-choose`) chooses one; choosing the drawn line
+  takes the choice from the routes. ✕ (`editor-leg-route-remove`)
+  deletes a route.
+- **Draw route** (`editor-leg-route-draw`) takes the map: every click
+  adds a vertex from the first control towards the second
+  (`editor-route-draft`, `editor-route-draft-rest`,
+  `editor-route-draft-point`), nothing else is hit and the leg stays
+  selected. **Save route** (`editor-leg-route-done`), Enter or a
+  double click stores it as the pair's chosen route; **Cancel**,
+  Escape or a right click gives it up; Backspace takes the last vertex
+  back. The draft ends when the selection leaves the leg.
+- The selected leg's stored routes are drawn on the map, screen only
+  (`editor-route-line`, `data-chosen`): the chosen one solid, the
+  others dashed.
+- With a chosen route the leg's numbers (§4.5) are the route's: the
+  first cell is labelled **Route** instead of **Length**
+  (`editor-leg-elevation` `data-routed="true"`).
+- Route writes are not on the undo stack. On a phone the block is
+  read-only, as the section is.
+
+A chosen route's own climb in the list can differ from the leg's share
+of the course's climb (§4.5) by up to the threshold: the list reads the
+route alone, the course in one pass.
+
+### 7.5 Computed alternatives
+
+*Pending.* A leg selected shows its computed top alternatives with
+metres, climb and estimated time, and the course the same summed
+(§0.9). Decided with the user (§0.15–17).
 
 ## Tests
 
@@ -533,12 +660,16 @@ leg with a route states its climb along the route.
 | `e2e/courses.spec.ts` "climb" | §6 "The Courses page": typing and clearing a climb, a computed climb as the placeholder with its hint |
 | `packages/web/src/lib/editor/__tests__/sequence.test.ts` "an insert position names its drawn leg's index" | §4.5, §5: the selected leg's index, the route's marks, a repeated control |
 | `packages/web/src/lib/editor/__tests__/hover-dot.test.ts` | §5: the pointer's store |
+| `packages/shared/src/course/__tests__/leg-routes.test.ts` | §7.1, §7.3: a leg along its chosen route between its own ends, direction, a pair run twice, a marked route, the polyline's length, the stored points' bounds |
+| `packages/api/src/__tests__/integration/leg-routes.test.ts` | §7.2, §7.3: a saved route chosen and every course of the pair read along it, the length unchanged, direction, choose and unchoose, one chosen route per pair (and the index), new points, a typed climb and a marked route untouched, a moved control, refusals, another event, a removed control, delete, the backup |
+| `packages/web/src/lib/editor/__tests__/leg-routes.test.ts` | §7.4: the chosen routes by leg key, a pair's routes, a route's metres and climb, the list with the drawn line, the map's shapes, a draft's shapes |
+| `e2e/course-editor-routes.spec.ts` | §7.4 in the browser: a route drawn and saved, its numbers, the leg and the course read along it, the drawn line chosen back, removal; a draft's keys (Backspace, Enter, Escape) |
 | `packages/web/src/lib/editor/__tests__/profile-graph.test.ts` | §5: points and bounds, the leg at a distance, ticks, an axis that ends on ticks, the scale and its minimum span, the paths and their breaks, decimation, the height at a distance, label thinning, the kept preference |
 | `e2e/course-editor-profile.spec.ts` | §5 in the browser: the toggle, the panel under the map and above the rail's end, the controls, the summary, the kept preference, ✕; the pointer's readout, the dot on the map, a click selecting the leg |
 
 ## Pending in this chapter
 
-- §7 as marked.
+- §7.5 as marked.
 - §6: a climb is not recomputed when heights arrive later (a contour
   field derived, a DEM job done), on a Height data settings change or a
   `TERRAIN_VERSION` bump — until the course's next edit or its next
@@ -548,6 +679,11 @@ leg with a route states its climb along the route.
   received a computed climb from a peer treats it as typed and does not
   recompute it on its own edits. Sending the source needs every peer to
   know the column first (AGENTS §7).
+- §7: routes are not journaled, so a route drawn on a node that holds
+  the event's lease does not come back with the journal; route writes
+  have no concurrency token (the last write wins) and no undo; the
+  profile graph does not mark which legs are read along a route; a
+  control's hard delete takes its routes, a soft delete hides them.
 - §4.1: the Class and Variant views state no climb and show no profile;
   a forked course's climb is the shown path's, not each variant's.
 - §5: the map does not point back at the graph (hovering a leg on the map

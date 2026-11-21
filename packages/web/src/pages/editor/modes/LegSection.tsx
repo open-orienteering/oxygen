@@ -10,6 +10,7 @@
 import { useTranslation } from "react-i18next";
 import type { course } from "@oxygen/shared";
 import type { LegElevation } from "../../../lib/editor/elevation";
+import type { RouteItem } from "../../../lib/editor/leg-routes";
 import { DEFAULT_CORRIDOR, type LegPatch } from "../../../lib/editor/structure-edit";
 
 /** The wire form's leg: `crossing.controlId` is a public id (course-layer.md §6.1). */
@@ -28,6 +29,8 @@ export interface LegSectionProps {
   crossingCode?: string | null;
   /** The leg's length and heights along its line (docs/course-elevation.md §4.5); null or absent: not shown. */
   elevation?: LegElevation | null;
+  /** The leg's routes (docs/course-elevation.md §7.4); null or absent: no Routes block. */
+  routes?: LegRoutesProps | null;
   focusedBend: number | null;
   /** A phone: everything shown, nothing editable. */
   readOnly: boolean;
@@ -35,6 +38,65 @@ export interface LegSectionProps {
   onFocusBend: (index: number | null) => void;
   /** The focused bend's **Smooth** / **Corner** (F16; the tablet's Alt-click): one write. */
   onBendKind: (index: number, kind: "smooth" | "corner") => void;
+}
+
+/** The Routes block (docs/course-elevation.md §7.4): the drawn line and the pair's routes, one of them chosen. */
+export interface LegRoutesProps {
+  items: readonly RouteItem[];
+  /** A route is being drawn: its vertices so far. */
+  drawing: { points: number } | null;
+  /** A write is under way. */
+  busy: boolean;
+  onDraw: () => void;
+  onDone: () => void;
+  onCancel: () => void;
+  /** `id` null: the drawn line (no route chosen). */
+  onChoose: (id: string | null) => void;
+  onDelete: (id: string) => void;
+}
+
+function LegRoutes({ r, readOnly }: { r: LegRoutesProps; readOnly: boolean }) {
+  const { t } = useTranslation("editor");
+  const locked = readOnly || r.busy || !!r.drawing;
+  return (
+    <div data-testid="editor-leg-routes" data-drawing={r.drawing ? "true" : "false"} className="space-y-1">
+      <div className="flex items-center gap-2">
+        <span className="text-[11px] text-slate-500">{t("legRoutes")}</span>
+        {!r.drawing && (
+          <button type="button" data-testid="editor-leg-route-draw" disabled={readOnly || r.busy} onClick={r.onDraw}
+            className={`${BUTTON} ml-auto border-cyan-200 text-cyan-700 hover:bg-cyan-50`}>{t("legRouteDraw")}</button>
+        )}
+      </div>
+      <ul className="space-y-0.5">
+        {r.items.map((item) => (
+          <li key={item.id ?? "line"} data-testid="editor-leg-route" data-id={item.id ?? "line"} data-source={item.source} data-chosen={item.chosen ? "true" : "false"}
+            data-m={item.lengthM} data-climb={item.climbM ?? ""} className={`flex items-center gap-1.5 rounded px-1 ${item.chosen ? "bg-cyan-50" : ""}`}>
+            <label className="flex flex-1 items-center gap-1.5 text-[11px] text-slate-600 cursor-pointer">
+              <input type="radio" name="editor-leg-route" data-testid="editor-leg-route-choose" checked={item.chosen} disabled={locked} onChange={() => r.onChoose(item.id)} />
+              <span className="flex-1">{t(item.source === "line" ? "legRouteLine" : item.source === "computed" ? "legRouteComputed" : "legRouteDrawn")}</span>
+              <span className="font-mono text-slate-700">{item.lengthM} m{item.climbM !== null && <> · {item.approx ? "≈ " : ""}{t("legRouteClimb", { m: item.climbM })}</>}</span>
+            </label>
+            {item.id !== null && (
+              <button type="button" data-testid="editor-leg-route-remove" aria-label={t("legRouteRemove")} title={t("legRouteRemove")} disabled={locked}
+                onClick={() => r.onDelete(item.id!)} className="px-1 text-slate-400 hover:text-red-600 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed">✕</button>
+            )}
+          </li>
+        ))}
+      </ul>
+      {r.drawing ? (
+        <div className="space-y-1">
+          <p data-testid="editor-leg-route-drawing" data-points={r.drawing.points} className="text-[10px] text-cyan-700">{t("legRouteDrawing", { count: r.drawing.points })}</p>
+          <div className="flex gap-1.5">
+            <button type="button" data-testid="editor-leg-route-done" disabled={r.drawing.points === 0 || r.busy} onClick={r.onDone}
+              className={`${BUTTON} border-cyan-200 bg-cyan-600 text-white hover:bg-cyan-700`}>{t("legRouteDone")}</button>
+            <button type="button" data-testid="editor-leg-route-cancel" onClick={r.onCancel} className={`${BUTTON} border-slate-200 text-slate-600 hover:bg-slate-50`}>{t("legRouteCancel")}</button>
+          </div>
+        </div>
+      ) : (
+        <p data-testid="editor-leg-routes-hint" className="text-[10px] text-slate-400">{t("legRoutesHint")}</p>
+      )}
+    </div>
+  );
 }
 
 /** A number field committed on blur (or Enter) when `valid`; otherwise the stored value comes back. */
@@ -65,9 +127,9 @@ function LegNumbers({ e }: { e: LegElevation }) {
   );
   const signed = (m: number) => `${m > 0 ? "+" : m < 0 ? "−" : ""}${Math.abs(m)} m`;
   return (
-    <div data-testid="editor-leg-elevation" data-basis={e.basis} data-approx={e.approx ? "true" : "false"}>
+    <div data-testid="editor-leg-elevation" data-basis={e.basis} data-approx={e.approx ? "true" : "false"} data-routed={e.routed ? "true" : "false"}>
       <dl className="grid grid-cols-4 gap-x-2">
-        {cell("editor-leg-length", t("legLength"), e.lengthM, `${e.lengthM} m`)}
+        {cell("editor-leg-length", t(e.routed ? "legRouteLength" : "legLength"), e.lengthM, `${e.lengthM} m`)}
         {cell("editor-leg-climb", t("legClimb"), e.climbM, `${approx}${e.climbM} m`)}
         {cell("editor-leg-descent", t("legDescent"), e.descentM, `${approx}${e.descentM} m`)}
         {cell("editor-leg-net", t("legNet"), e.netM, e.netM === null ? "" : signed(e.netM))}
@@ -88,6 +150,7 @@ export function LegSection(p: LegSectionProps) {
       <div className="font-medium text-slate-700">{t("legTitle", { leg: p.title })}</div>
       {readOnly && <p data-testid="editor-leg-readonly" className="text-[11px] text-amber-700">{t("legReadOnly")}</p>}
       {p.elevation && <LegNumbers e={p.elevation} />}
+      {p.routes && (leg.style ?? "line") !== "marked_route" && <LegRoutes r={p.routes} readOnly={readOnly} />}
 
       <label className="block text-[11px] text-slate-500">{t("legStyle")}
         <select data-testid="editor-leg-style" className={FIELD} disabled={readOnly} value={leg.style ?? "line"}

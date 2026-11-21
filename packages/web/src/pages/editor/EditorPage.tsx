@@ -90,6 +90,7 @@ import type { MapInfoInput } from "../../lib/editor/map-info";
 import { useCourseChecks } from "./useCourseChecks";
 import { useCourseElevation } from "./useCourseElevation";
 import { legElevation, lineClimbStatus } from "../../lib/editor/elevation";
+import { chosenRouteMap, pairRoutes, routeItems, routeShapes, type RouteDraft } from "../../lib/editor/leg-routes";
 import { legAt, legBounds, readProfileOpen, writeProfileOpen } from "../../lib/editor/profile-graph";
 import { pointAtDistance } from "@oxygen/shared/src/terrain/profile/index.js";
 import { ProfilePanel } from "./ProfilePanel";
@@ -482,6 +483,64 @@ export function EditorPage() {
   }, [state.phantom, state.mode, state.view, structure, rows, explicit]);
   /** Leg editing is desktop and tablet; the phone shows the section read-only (08 §5.5). */
   const legEditable = !!selectedLeg && !isMobile;
+
+  // ─── Leg routes (docs/course-elevation.md §7.4): a route per directed control pair, one of them chosen ───
+  const legRoutes = trpc.legRoute.list.useQuery(undefined, { enabled: !!nameId && state.mode === "course" });
+  const chosenRoutes = useMemo(() => chosenRouteMap(legRoutes.data), [legRoutes.data]);
+  const selectedLegFrom = selectedLeg?.from.id ?? null;
+  const selectedLegTo = selectedLeg?.to.id ?? null;
+  const selectedPairRoutes = useMemo(
+    () => (selectedLegFrom !== null && selectedLegTo !== null ? pairRoutes(legRoutes.data, selectedLegFrom, selectedLegTo) : []),
+    [legRoutes.data, selectedLegFrom, selectedLegTo],
+  );
+  /** The route being drawn for the selected leg; it ends with the selection. */
+  const [routeDraft, setRouteDraft] = useState<RouteDraft | null>(null);
+  useEffect(() => {
+    if (routeDraft && (selectedLegFrom !== routeDraft.from || selectedLegTo !== routeDraft.to)) setRouteDraft(null);
+  }, [routeDraft, selectedLegFrom, selectedLegTo]);
+  // A route write changes the stored climb of every course running the pair (§7.2).
+  const afterRouteWrite = useCallback(() => { void utils.legRoute.list.invalidate(); void utils.course.list.invalidate(); }, [utils]);
+  const saveRoute = trpc.legRoute.save.useMutation({ onSuccess: () => { setRouteDraft(null); afterRouteWrite(); } });
+  const chooseRoute = trpc.legRoute.choose.useMutation({ onSuccess: afterRouteWrite });
+  const deleteRoute = trpc.legRoute.delete.useMutation({ onSuccess: afterRouteWrite });
+  const routeBusy = saveRoute.isPending || chooseRoute.isPending || deleteRoute.isPending;
+  const startRoute = useCallback(() => {
+    if (selectedLeg) setRouteDraft({ from: selectedLeg.from.id, to: selectedLeg.to.id, fromPt: selectedLeg.fromPt, toPt: selectedLeg.toPt, points: [] });
+  }, [selectedLeg]);
+  const saveRouteNow = saveRoute.mutate;
+  const finishRoute = useCallback(() => {
+    if (routeDraft && routeDraft.points.length > 0) saveRouteNow({ fromControlId: routeDraft.from, toControlId: routeDraft.to, points: routeDraft.points });
+  }, [routeDraft, saveRouteNow]);
+  const addRoutePoint = useCallback((pt: Pt) => setRouteDraft((d) => {
+    const last = d?.points[d.points.length - 1];
+    // A double click's second click lands on the first.
+    if (!d || d.points.length >= courseShared.LEG_ROUTE_MAX_POINTS || (last && Math.hypot(last.x - pt.x, last.y - pt.y) < 1e-6)) return d;
+    return { ...d, points: [...d.points, { x: pt.x, y: pt.y }] };
+  }), []);
+  const chooseRouteNow = chooseRoute.mutate;
+  const chooseLegRoute = useCallback((id: string | null) => {
+    if (id !== null) chooseRouteNow({ id, chosen: true });
+    else { const chosen = selectedPairRoutes.find((r) => r.chosen); if (chosen) chooseRouteNow({ id: chosen.id, chosen: false }); }
+  }, [chooseRouteNow, selectedPairRoutes]);
+  const deleteRouteNow = deleteRoute.mutate;
+  const deleteLegRoute = useCallback((id: string) => deleteRouteNow({ id }), [deleteRouteNow]);
+  const drawingRoute = routeDraft !== null;
+  // While a route is drawn its keys come first: Enter saves, Esc cancels, Backspace takes the last point back.
+  useEffect(() => {
+    if (!drawingRoute) return;
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable) && e.key !== "Escape") return;
+      if (e.key === "Enter") finishRoute();
+      else if (e.key === "Escape") setRouteDraft(null);
+      else if (e.key === "Backspace" || e.key === "Delete") setRouteDraft((d) => (d ? { ...d, points: d.points.slice(0, -1) } : d));
+      else return;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [drawingRoute, finishRoute]);
   /** One leg edit: a patch of the item's `LegProps`, one `setStructure`, one undo entry. False when nothing was written. */
   const writeLeg = useCallback((patch: LegPatch): Promise<boolean> => {
     if (!selectedLeg) return Promise.resolve(false);
@@ -1694,7 +1753,17 @@ export function EditorPage() {
   }, [state.mode, state.view, selectedCourse, courseView, courseInfo, rows, outlinedLegAt]);
   // J12: the pointer's last paper point over the map (null off it), where a paste lands; kept in a ref, no re-render.
   const corridorBinding = withCorridorGuides(toolBinding, corridorGuides);
-  const shownBinding = corridorBinding ? {
+  // Drawing a route takes the map (§7.4): every click is a vertex, nothing else is hit.
+  const routeBinding: EditorToolBinding | null = routeDraft ? {
+    exclusive: true,
+    cursor: "crosshair",
+    onHover,
+    onClick: (p) => addRoutePoint(p.pt),
+    onDoubleClick: () => finishRoute(),
+    onContextMenu: () => setRouteDraft(null),
+    shapes: routeShapes({ from: routeDraft.fromPt, to: routeDraft.toPt, routes: [], draft: routeDraft, hover: hover?.pt ?? null }),
+  } : null;
+  const shownBinding = routeBinding ? routeBinding : corridorBinding ? {
     ...corridorBinding,
     onHover: (p: ToolPointer | null) => { hoverPt.current = p?.pt ?? null; corridorBinding.onHover?.(p); },
   } : null;
@@ -1743,14 +1812,30 @@ export function EditorPage() {
   // Heights along the course (docs/course-elevation.md §4.1): an ordered course in Course mode's Course view, where
   // the rows and the drawn legs are one path.
   const elevationActive = state.mode === "course" && state.view === "course" && !!selectedCourse && structure?.orderMode === "ordered";
-  const elevationLegs = elevationActive ? courseChecks.legs : null;
-  const { elevation, retry: retryElevation } = useCourseElevation({ terrain: mapMetadata.data?.terrain, active: elevationActive, legs: elevationLegs, nameId: nameId ?? null });
+  const drawnLegs = elevationActive ? courseChecks.legs : null;
+  // Each leg along its pair's chosen route when it has one (§7.3), else as drawn.
+  const elevationLegs = useMemo(() => (drawnLegs ? courseShared.routedLegs(drawnLegs, chosenRoutes) : null), [drawnLegs, chosenRoutes]);
+  const { elevation, sampler: elevationSampler, retry: retryElevation } = useCourseElevation({ terrain: mapMetadata.data?.terrain, active: elevationActive, legs: elevationLegs, nameId: nameId ?? null });
   /** The selected leg among the course's derived legs. */
   const selectedLegIndex = useMemo(() => {
     const insertAt = state.phantom?.insertAt;
     return selectedLeg && insertAt != null && elevationLegs ? legIndexForInsert(rows, insertAt) : null;
   }, [selectedLeg, state.phantom, elevationLegs, rows]);
-  const selectedLegElevation = useMemo(() => legElevation(elevation, selectedLegIndex), [elevation, selectedLegIndex]);
+  const selectedLegRouted = selectedLegIndex !== null && !!elevationLegs?.[selectedLegIndex]?.routed;
+  const selectedLegElevation = useMemo(() => legElevation(elevation, selectedLegIndex, selectedLegRouted), [elevation, selectedLegIndex, selectedLegRouted]);
+  const selectedLegLine = selectedLegIndex !== null ? drawnLegs?.[selectedLegIndex]?.points ?? null : null;
+  /** The selected leg's Routes list: the drawn line and the pair's routes with their own numbers. */
+  const legRouteItems = useMemo(
+    () => (selectedLegLine && mapScale ? routeItems({ line: selectedLegLine, routes: selectedPairRoutes, mapScale, sampler: elevationSampler }) : null),
+    [selectedLegLine, selectedPairRoutes, mapScale, elevationSampler],
+  );
+  /** The selected leg's stored routes on the map, screen only. */
+  const routeMarkers = useMemo(
+    () => (selectedLegLine && !routeDraft && selectedPairRoutes.length > 0
+      ? routeShapes({ from: selectedLegLine[0], to: selectedLegLine[selectedLegLine.length - 1], routes: selectedPairRoutes, draft: null, hover: null }) : []),
+    [selectedLegLine, routeDraft, selectedPairRoutes],
+  );
+  const shownMarkers = useMemo(() => (routeMarkers.length > 0 ? [...courseChecks.markers, ...routeMarkers] : courseChecks.markers), [courseChecks.markers, routeMarkers]);
 
   // ─── The elevation profile under the map (docs/course-elevation.md §5): desktop and tablet ───
   const [profileOpen, setProfileOpen] = useState(() => readProfileOpen(typeof localStorage === "undefined" ? null : localStorage));
@@ -1975,12 +2060,12 @@ export function EditorPage() {
     viewRequest,
     provisional,
     onCourseInfo: setCourseInfo,
-    markers: courseChecks.markers,
+    markers: shownMarkers,
     hoverDot: profileDot,
     layout: classLayout,
     courseOverride,
     legDraft: shownLegDraft,
-  }), [profileDot, shownLegDraft, classLayout, courseChecks.markers, isMobile, fix, sheetPx, fieldMoveEnd, state.selectedControlId, state.phantom, contextActions, contextInfo, srrBadge, radioOn, suggestions, tc, courseControlIds, toolActive,
+  }), [profileDot, shownLegDraft, classLayout, shownMarkers, isMobile, fix, sheetPx, fieldMoveEnd, state.selectedControlId, state.phantom, contextActions, contextInfo, srrBadge, radioOn, suggestions, tc, courseControlIds, toolActive,
     courseView, selectedCourse, moveWarnings, moveEpoch, handleMapClick, handleLabelMoveEnd, handleSelect,
     handleDismiss, handleLegClick, shownBinding, placementLoupe, snapIndex, snap, draftObjects, draftFast, viewRequest, provisional, courseOverride, state.view]);
 
@@ -2584,6 +2669,10 @@ export function EditorPage() {
       leg={selectedLeg.props}
       crossingCode={selectedLeg.props.crossing ? coordsById.get(selectedLeg.props.crossing.controlId)?.code ?? String(selectedLeg.props.crossing.controlId) : null}
       elevation={selectedLegElevation}
+      routes={legRouteItems && legRoutes.data ? {
+        items: legRouteItems, drawing: routeDraft ? { points: routeDraft.points.length } : null, busy: routeBusy,
+        onDraw: startRoute, onDone: finishRoute, onCancel: () => setRouteDraft(null), onChoose: chooseLegRoute, onDelete: deleteLegRoute,
+      } : null}
       focusedBend={focusedBend}
       readOnly={!legEditable}
       onPatch={writeLeg}

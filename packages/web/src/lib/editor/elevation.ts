@@ -65,9 +65,11 @@ export interface LegElevation {
   netM: number | null;
   basis: ClimbBasis;
   approx: boolean;
+  /** The numbers are read along the leg's chosen route (§7.3), not its drawn line. */
+  routed: boolean;
 }
 
-export function legElevation(e: CourseElevation, legIndex: number | null): LegElevation | null {
+export function legElevation(e: CourseElevation, legIndex: number | null, routed = false): LegElevation | null {
   if (e.state !== "ready" || legIndex === null) return null;
   const leg = e.profile.legs[legIndex];
   if (!leg) return null;
@@ -79,5 +81,6 @@ export function legElevation(e: CourseElevation, legIndex: number | null): LegEl
     netM: p.netM === null ? null : shownM(p.netM),
     basis: e.basis,
     approx: p.coverage < 0.995 || p.confidence < ELEVATION_CONFIDENT_MIN,
+    routed,
   };
 }

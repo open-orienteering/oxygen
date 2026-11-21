@@ -209,6 +209,7 @@ model Event {
   mapTemplates       MapTemplate[]
   courseMaps         CourseMap[]
   courseObjects      CourseObject[]
+  legRoutes          LegRoute[]
   mapPatch           MapPatch?
   mapColourSettings  MapColourSetting[]
   mapGpsTracks       MapGpsTrack[]
@@ -476,6 +477,8 @@ model Control {
   courseControls  CourseControl[]
   punches         Punch[]
   controlUnits    ControlUnit[]
+  legRoutesFrom   LegRoute[]      @relation("LegRouteFrom")
+  legRoutesTo     LegRoute[]      @relation("LegRouteTo")
 
   @@unique([eventId, seq])
   @@index([eventId, removed])
@@ -654,6 +657,33 @@ model CourseObject {
   @@unique([eventId, seq])
   @@index([eventId, z, seq])
   @@map("course_objects")
+  @@schema("oxygen")
+}
+
+/// A route between two controls in the direction it is run (docs/course-elevation.md §7): shared by every course
+/// that runs the pair. `points` are the interior vertices in paper mm ([{ x, y }]); the ends are the controls.
+/// At most one row of a pair is `chosen` (a partial unique index): the one the pair's climb is read along.
+/// Not journaled; travels with the backup and the checkout snapshot.
+model LegRoute {
+  id            String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  eventId       BigInt   @map("event_id")
+  fromControlId String   @map("from_control_id") @db.Uuid
+  toControlId   String   @map("to_control_id") @db.Uuid
+  points        Json
+  /// 'drawn' (by hand) | 'computed' (an alternative the search found and someone kept).
+  source        String   @default("drawn")
+  /// The cost model a computed route was found with; NULL for a drawn one.
+  model         String?
+  chosen        Boolean  @default(false)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  event Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  from  Control @relation("LegRouteFrom", fields: [fromControlId], references: [id], onDelete: Cascade)
+  to    Control @relation("LegRouteTo", fields: [toControlId], references: [id], onDelete: Cascade)
+
+  @@index([eventId, fromControlId, toControlId])
+  @@map("leg_routes")
   @@schema("oxygen")
 }
 

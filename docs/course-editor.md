@@ -1663,7 +1663,10 @@ undo or a mode switch.
   length. A selected leg shows its own length, climb, descent and net
   height in the Leg section (`course-elevation.md` §4.5). The popover's
   *Show elevation profile* opens the profile graph under the map
-  (`editor-profile`, `course-elevation.md` §5).
+  (`editor-profile`, `course-elevation.md` §5). The Leg section's
+  **Routes** block draws, chooses and removes routes for the leg's
+  control pair; the climb is read along the chosen one
+  (`editor-leg-routes`, `course-elevation.md` §7.4).
 
 ## 9. Field mode
 
@@ -3192,6 +3195,7 @@ shard (`docs/dev/e2e-sharding.md` "CI"); the helpers they share are
 | `e2e/course-editor-phone.spec.ts` | the phone: the touch subset, the read-only Leg section (F3), the variation block (F7), the computed climb on the peek line (`course-elevation.md` §4.4) |
 | `e2e/course-editor-elevation.spec.ts` | the computed climb and a leg's heights (`course-elevation.md` §4) |
 | `e2e/course-editor-profile.spec.ts` | the elevation profile under the map (`course-elevation.md` §5) |
+| `e2e/course-editor-routes.spec.ts` | leg routes: draw, choose, remove (`course-elevation.md` §7.4) |
 
 Project `chromium` (desktop Chrome) runs the first six, project `mobile`
 (Pixel 7; `MOBILE_SPECS`) only the phone file. The desktop describes still

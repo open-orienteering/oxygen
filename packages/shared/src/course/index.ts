@@ -103,3 +103,4 @@ export {
   type CheckDocument,
   type CheckVariationGroup,
 } from "./checks.js";
+export { LEG_ROUTE_MAX_POINTS, LEG_ROUTE_SOURCES, legPairKey, legRoutePointsSchema, routeLengthMm, routePolyline, routedLegs, type LegRouteSource, type RoutableLeg, type RoutedLeg, type RoutePoint } from "./leg-routes.js";
