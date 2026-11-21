@@ -147,9 +147,9 @@ not pick. To place the controls by hand:
    pnpm showcase:load        # dev database on :5432, then `pnpm dev`
    ```
 2. Open **Demo Competition → Courses** and move controls in the course
-   editor. Only move existing controls: adding one, or changing a course's
-   control sequence, is not captured (the race data is fixed), and
-   `apply` refuses a control the fixture does not have.
+   editor. A new control, or a change to a course's controls, is
+   captured by `showcase-course.mjs export` ([below](#the-showcase-course));
+   `apply` takes only the positions of the controls `showcase.sql` has.
 3. Capture the positions back into the fixture:
    ```bash
    DATABASE_URL='postgresql://oxygen:oxygen@localhost:5432/oxygen?schema=oxygen' \
@@ -176,28 +176,45 @@ controls have codes from 101 up; the race's controls stay as they are.
 
 It lives in `fixtures/showcase/showcase-course.sql`, which
 `load-showcase.sh` runs right after `showcase.sql`. The file is exported
-from a database, never edited by hand:
+from a database, never edited by hand, and holds the event's whole course
+setup as the course editor left it, the race's courses included:
 
 1. `pnpm showcase:load` into a database you can edit, with the app on it,
-   and open **Demo Competition → Course Editor → Showcase**.
-2. Edit it: move controls, change the fork or the loop, draw objects,
-   lay out its sheet.
-3. Write it back:
+   and open **Demo Competition → Course Editor**.
+2. Edit the courses: move controls, change the fork or the loop, draw
+   objects, lay out the sheets, change a race course's controls.
+3. Point every course at its own start and finish and give the starts and
+   finishes codes, then write it all back:
    ```bash
-   DATABASE_URL='postgresql://oxygen:oxygen@localhost:5432/oxygen?schema=oxygen' \
-     node scripts/showcase-course.mjs export    # writes showcase-course.sql
+   export DATABASE_URL='postgresql://oxygen:oxygen@localhost:5432/oxygen?schema=oxygen'
+   pnpm exec tsx scripts/showcase-start-finish.mts   # through the API
+   node scripts/showcase-course.mjs export          # writes showcase-course.sql
+   node scripts/showcase-controls.mjs export        # the race's positions, for its checks
+   node scripts/showcase-controls.mjs apply
    pnpm test:scripts
    ```
 
-`export` takes the course named *Showcase* and its variants, their
-`course_controls` and sheets, the event's course objects, and every
-control whose `seq` is not one of the race's (so a control added for the
-showcase course goes with it). Moving a race control that the showcase
-course shares is the race's change: export it with
-`showcase-controls.mjs export`, which leaves the showcase course's own
-controls out. The first version was set by a script through the API and
-snapped onto the map's features; several of its legs cross cliffs (the
-editor's checks list them).
+`showcase-start-finish.mts` gives each live start and finish without a
+code the lowest free one in 3–10 (the rule `control.create` follows), then
+sets the *Showcase* course to start and finish at the start and finish
+that are not the race's (their `seq` is not in `showcase.sql`) and every
+other course at the race's, through `course.setStructure`, so lengths and
+variants follow. It stops if there is not exactly one of each.
+
+`export` writes every control and course of the event as an upsert on
+`id`, so the race's rows in `showcase.sql` take the editor's codes,
+positions, starts and sequences; every course's `course_controls` in place
+of `showcase.sql`'s; the course objects; the sheets (without the
+instance's print template); and the event's seq counters raised past
+every row, so the next control or course the editor creates takes a free
+`seq`. The race's results stay `showcase.sql`'s: a race course whose
+controls change no longer matches its runners' punches.
+
+`showcase-controls.json` and `showcase.sql` keep the race's positions
+for the placement checks (on a feature, clear of water and the edge);
+export them too after moving a race control. The first version of the
+showcase course was set by a script through the API and snapped onto the
+map's features.
 
 ### Tests
 
@@ -208,8 +225,8 @@ editor's checks list them).
 | Script | `scripts/__tests__/demo-map.test.mjs` | the Puit de Laven test map's injection (it is no longer the demo's map) |
 | Script | `scripts/__tests__/release-compose.test.mjs` | under `USE_DOCKER=1` the loader re-matches with the image's CLI and no host `pnpm` / Node; the source travels base64 on stdin; the map file is the o-kartan demo map, kind `ocad` |
 | Unit (api) | `packages/api/src/__tests__/demo-map-enrich.test.ts` | the demo map's invented detail ([demo-map.md](demo-map.md#tests)) |
-| Script | `scripts/__tests__/showcase-course.test.mjs` | a row's `json_populate_record` line reads back the same (quotes, backslashes; lat / lng cleared); `export` through a stub client (only non-race controls, variants, objects, sheets without the instance template); the committed file: the Showcase course, its variants and sheet in the demo event, every control it names written by one of the two files, no source names; the loader runs it after `showcase.sql` |
-| Integration (api) | `packages/api/src/__tests__/integration/showcase-fixture.test.ts` | load as the loader does, pin at 1:15 000 south of Stockholm, `course.mapMetadata`, control `lat` / `lng`, course sequences and lengths equal `rebuildCourseLengths`, the showcase course (both groups, 6 variants, corridor, marked route, out-of-bounds area, sheet, controls pinned), a second load (`docs/map-storage.md` §10) |
+| Script | `scripts/__tests__/showcase-course.test.mjs` | a row's `json_populate_record` line reads back the same (quotes, backslashes; lat / lng cleared), controls and courses as upserts on `id`; `export` through a stub client (every control and course, the course controls replaced after the courses, objects, sheets without the instance template, the seq counters, no Showcase course refused); `withEnds` (another start or finish replaced, the leg into the finish kept, missing ends added, a control run as start or finish kept, a leading group); the committed file: the race's courses and controls, the Showcase course, its variants and sheet in the demo event, every control it names written by the file, every start and finish coded with no code shared, the Showcase course at its own start and finish and every other at the race's, no source names; the loader runs it after `showcase.sql` |
+| Integration (api) | `packages/api/src/__tests__/integration/showcase-fixture.test.ts` | load as the loader does, pin at 1:15 000 south of Stockholm, `course.mapMetadata`, control `lat` / `lng`, race courses from the coded race start to the race finish, lengths equal `rebuildCourseLengths`, the showcase course (both groups, 6 variants, corridor, marked route, out-of-bounds area, sheet, controls pinned), a second load (`docs/map-storage.md` §10) |
 
 ### Pending
 

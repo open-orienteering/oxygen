@@ -112,15 +112,20 @@ describe("showcase fixture", () => {
     }
   });
 
-  it("reads each course's controls (no stale structure) with the lengths the fixture stores", async () => {
+  it("reads each race course from its race start to its race finish, with the lengths the fixture stores", async () => {
     const courses = await db.course.findMany({ where: { eventId: DEMO_EVENT_ID, parentCourseId: null, name: { not: "Showcase" } }, orderBy: { name: "asc" } });
     expect(courses.map((c) => c.name)).toEqual(["A", "B", "C", "D", "E"]);
     const sequences = await loadCourseSequences(db, DEMO_EVENT_ID, courses.map((c) => c.id));
+    // The race's start and finish (showcase.sql's), coded; the showcase course has its own.
+    const raceStart = await db.control.findFirstOrThrow({ where: { eventId: DEMO_EVENT_ID, removed: false, status: "start", name: { not: "Start Showcase" } } });
+    const raceFinish = await db.control.findFirstOrThrow({ where: { eventId: DEMO_EVENT_ID, removed: false, status: "finish", name: { not: "Mål Showcase" } } });
+    expect(raceStart.codes).toMatch(/^\d+$/);
+    expect(raceFinish.codes).toMatch(/^\d+$/);
     for (const c of courses) {
-      expect(c.structure).toBeNull();
       const middle = await db.courseControl.count({ where: { courseId: c.id } });
       const seq = sequences.get(c.id)!.seq;
       expect(seq.map((s) => s.type)).toEqual(["Start", ...Array(middle).fill("Control"), "Finish"]);
+      expect([seq[0].id, seq.at(-1)!.id]).toEqual([raceStart.id, raceFinish.id]);
     }
     // The API derives the same lengths from the loaded positions as the fixture's apply step did.
     await rebuildCourseLengths(db, DEMO_EVENT_ID, courses.map((c) => c.id));
