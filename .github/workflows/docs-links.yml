@@ -26,3 +26,6 @@ jobs:
           # this, setup-node looks for pnpm to cache and fails.
           package-manager-cache: false
       - run: node scripts/check-doc-links.mjs
+      # No club map's vector source in git, only screenshots of it
+      # (scripts/check-map-files.mjs, docs/screenshots/README.md).
+      - run: node scripts/check-map-files.mjs

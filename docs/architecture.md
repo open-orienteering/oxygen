@@ -256,11 +256,11 @@ Built-in data generation and race simulation for development and demo purposes:
 
 ## Automated Documentation Screenshots
 
-Screenshots in this directory are auto-generated. To regenerate after UI changes:
+Screenshots in `docs/screenshots/` are made by two scripts against a running app with the Demo Competition loaded:
 
 ```bash
-pnpm dev                # start dev servers
-pnpm docs:screenshots   # capture all screenshots
+pnpm docs:showcase      # headline shots (e2e/showcase/*.shot.ts): editor, layout, print, Field mode, readers
+pnpm docs:screenshots   # gallery of admin views (docs/screenshots/capture.ts)
 ```
 
-The capture script (`docs/screenshots/capture.ts`) loads the Demo Competition fixture with `scripts/load-showcase.sh` (`docs/ops/demo.md`), then captures screenshots of every major view; `--no-load` reuses an already loaded one. See [features.md](features.md) for the full screenshot gallery.
+[screenshots/README.md](screenshots/README.md) explains both, private club-map shots taken on a local machine, and the check that keeps map sources out of git. [features.md](features.md) is the tour that uses them.

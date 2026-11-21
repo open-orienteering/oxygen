@@ -1,0 +1,91 @@
+# Event setup, entries and the start draw
+
+Creating an event, Eventor import, classes, controls, clubs, runners and the start draw. This page is the detail behind the [feature tour](../features.md).
+
+## Event setup and Eventor integration
+
+The event page is mission control for external integrations. Everything the Swedish orienteering stack relies on is wired into one screen:
+
+- **Editable event type** — choose a competition, training, weekly course, or
+  custom label during creation and change it later under Event Info. Eventor
+  initializes the label on import but later syncs cannot overwrite it; raw
+  Eventor classification remains separate for reporting. See
+  [system/event-types.md](../system/event-types.md).
+- **Eventor sync** — import entries, classes, clubs, competitors, and published class-course lengths; upload start lists and results in the IOF XML formats Eventor expects.
+- **Global Runner Database** — download the federation-wide runner directory for fast name/card lookup at registration.
+- **Club sync** — pull club metadata and logos.
+- **LiveResults** — push live splits to [liveresultat.se](https://liveresultat.se) on a configurable interval.
+- **Online Input (ROC)** — pull radio-control punches from [roc.olresultat.se](https://roc.olresultat.se) (or any ROC-protocol-compatible server) on a configurable interval. Punches land in the `punches` table tagged with their source so the result engine can deduplicate against later card readouts. See [docs/system/online-input-roc.md](../system/online-input-roc.md).
+
+![Event page with sync integrations](../screenshots/event.png)
+
+## Classes
+
+Every class gets its own row of options: free start, no timing (for open / HD10-style classes), direct registration, and a maximum allowed running time. The table also shows how many runners, which course, and the class leg / length directly. The Club library's **Classes** tab stores the recurring catalogue once; a new event can bulk-add the relevant presets while preserving all settings and skipping names already present. Course creation then suggests classes that still lack a course, and an exact name selection links the new course to that class atomically.
+
+**Forked courses: variants pre-set per runner.** A class on a course with variations (a butterfly or a loop) runs its variants, and every runner in it has one before the race — a runner entered at the desk, from the Registration dialog, an Eventor sync or offline gets the variant with the fewest runners so far. The class's detail lists the variants with their runner counts and a **Distribute variants…** action that deals them over the class in start order (or randomly), so consecutive starters get different variants; by default only runners without one are dealt, and runners who have already raced always keep theirs. Run it after the draw. The readout checks a runner against her own variant only, so running another variant is a mispunch — and when a mispunched runner's punches match another variant of her class completely (she was handed the wrong map), the Runners page and the readout station say so ("Punches match variant B completely") with an **Accept variant B** button for the official at the red exit, which switches her variant and makes the run OK; nothing switches automatically, the kiosk only tells the runner to see the official, and the button needs the server. See [course-controls-and-matching.md](../course-controls-and-matching.md) "Forked courses and variants".
+
+![Class configuration](../screenshots/classes.png)
+
+## Controls and SI units
+
+The Controls page tracks two things side by side: the logical controls used in course definitions, and the physical SI station units that fulfill them. A single logical control can own multiple units — for redundancy at the same location, or after a mid-race unit swap with a different code.
+
+Battery voltage, last-checked time, programmed code, firmware, and hardware type are tracked per unit, so two stations never overwrite each other's state. The list view also shows an aggregated **Type** column (`BSF8 / BSF9` when mixed units fulfill the same control), and unit rows expose capability badges such as **AIR+** where applicable.
+
+Programming now performs a post-write SYS_VAL refresh before persisting battery data, which removes the old "freshly woken control shows exactly 3.00 V" artifact. The power-off sequence also returns the BSM8 to direct mode after OFF so the next coupling-coil probe doesn't immediately re-wake a just-programmed sleeping unit.
+
+When a control is programmed from the UI, the unit row is upserted automatically; backup-memory reads are attributed to the reading unit too. The station's volts reading is converted to the millivolts the API stores, and a station that was programmed but whose record could not be saved now reports the failure instead of looking like a success — see [bugfixes/control-programming-battery-units.md](../bugfixes/control-programming-battery-units.md).
+
+The pre-competition programming panel's target-control picker is ordered by control number rather than the import order the API returns, so a code can be found by scanning.
+
+Autosend follows the radio type rather than AIR+, since SRR transmission and contactless punching are independent features. A check station or a plain control with an SRR module therefore gets the protocol-level autosend gate without entering beacon mode, while clear and readout stations no longer offer a variant they would discard — see [bugfixes/check-station-autosend.md](../bugfixes/check-station-autosend.md).
+
+The structured search bar supports an `ordinal:` filter for a control's position within a course, matching when any course has it at that position — `ordinal:1` lists every course's first control, `ordinal:-2` the second-to-last before finish (negative values count from the end), and comma lists combine (`ordinal:1,-1`).
+
+![Controls with unit status](../screenshots/controls.png)
+
+## Clubs
+
+Clubs are pulled from Eventor (or entered manually) and rendered with their real logos in every view — runner rows, start list, results. It's a small thing but goes a long way on a public results screen.
+
+![Clubs list with logos](../screenshots/clubs.png)
+
+## Registration trends
+
+The registration trend page (overflow nav → **Trends**) plots when runners signed up for the competition — useful both retroactively and during the countdown days when last-minute entries decide whether you need extra start corridors. The same chart can overlay comparable historical events from Eventor; the curves are aligned by *days before race* so different events with different start dates can be compared at a glance. See [system/registration-trends.md](../system/registration-trends.md) for the data sources, cache strategy, and rate-limit handling.
+
+## Runner list and bulk editing
+
+Every registered competitor is on one page, with class, club, SI card, and status visible at a glance. Click any row to expand an inline detail pane — name, class, club, times, punches, and status are all editable in place with auto-save. In a class on a forked course the pane also has a **Variant** select to change the runner's variant by hand; the start list shows the variant after the class (`H21 · AC`).
+
+![Runner list with inline detail](../screenshots/runners.png)
+
+Select multiple rows and the floating action bar appears: change class, status, or club for all selected runners at once without leaving the page.
+
+![Bulk edit floating action bar](../screenshots/runners-bulk.png)
+
+## Start draw
+
+The draw engine allocates start times with configurable methods:
+
+- **Club separation** — prevents runners from the same club starting back-to-back.
+- **Random** — simple random allocation within each class.
+- **Seeded** — preserves a specific order (e.g. ranking-based).
+- **Simultaneous** — mass start for all runners in a class.
+
+The graphical timeline shows how classes are distributed across corridors (parallel start lanes) and time. Each bar covers the class's whole start window, up to and including the last runner's slot, so consecutive classes in a corridor meet edge to edge. Classes on the same course share a corridor and run one after another. Drag class bars to rearrange the schedule and re-run the draw without losing context.
+
+Three settings control how the parallel lanes are phased:
+
+- **First-control gap** (global, MM:SS, default 1:00) is the minimum time between any two runners heading for the same first control. Classes that share a first control still run in parallel — the draw interleaves them. Two classes on a 2-minute interval sharing control 31 end up on alternating minutes rather than one waiting out the other. Unchecking the box next to the field turns the constraint off entirely.
+- **Stagger corridors** (global, MM:SS) shifts each corridor relative to the previous one, wrapped within the class interval. With 8 lanes on a 2-minute interval and a 1-minute stagger you get 4 starters every minute instead of 8 every second minute.
+- **Offset** (per class, MM:SS) shifts a single class's block. For the first class in a corridor it replaces the corridor's stagger phase; for a stacked class it shifts the block relative to where it would otherwise land.
+
+If a class's own start interval is shorter than the first-control gap, the draw warns — its runners are already closer together at the control than the gap allows.
+
+![Draw panel with corridor timeline](../screenshots/draw-panel.png)
+
+After applying the draw, the start list shows every runner with their allocated start time — ready to print or sync back to Eventor.
+
+![Public start list](../screenshots/start-list.png)
