@@ -18,6 +18,7 @@ The vector map pipeline's normative spec. Code cites these by path and section n
 | [map-terrain.md](map-terrain.md) | Contour graph, height field, DEM, 3D |
 | [course-layer.md](course-layer.md) | The derived course layer |
 | [course-editor.md](course-editor.md) | The course editor |
+| [course-elevation.md](course-elevation.md) | Heights along a course: profile, climb, which field |
 | [course-layout.md](course-layout.md) | Layout mode, templates and sheets |
 | [course-print.md](course-print.md) | Course print and PDF |
 
