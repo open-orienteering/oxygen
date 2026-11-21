@@ -169,6 +169,7 @@ Repeat steps 2–3 as often as you like; `apply` is idempotent.
 
 - The control positions are the first fit; hand placement in the course editor (above) is the user's.
 - No GPS tracks, routes or printable course sheets in the fixture.
+- A real Swedish map that may be published, with invented detail, is ready to replace Puit de Laven: [demo-map.md](demo-map.md).
 
 ### Regenerate from your own Vinterserien data
 
