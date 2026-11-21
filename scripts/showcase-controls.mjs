@@ -80,7 +80,10 @@ if (command === "fit") {
   const client = pgClient(url);
   await client.connect();
   try {
-    await write(await exportControls(client, nameId));
+    // Only the race's controls: the showcase course's own are in showcase-course.sql.
+    const race = new Set(readFixtureRows(readFileSync(FIXTURE_PATH, "utf8")).controls.map((c) => Number(c.seq)));
+    const doc = await exportControls(client, nameId);
+    await write({ ...doc, controls: doc.controls.filter((c) => race.has(c.seq)) });
   } finally {
     await client.end();
   }

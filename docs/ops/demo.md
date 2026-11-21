@@ -164,6 +164,41 @@ not pick. To place the controls by hand:
 
 Repeat steps 2–3 as often as you like; `apply` is idempotent.
 
+### The showcase course
+
+Besides the race's five courses, the demo has a course named **Showcase**
+that is there to show the course editor: a three-way fork after control 2,
+a butterfly loop at control 6 (A and B, both orders), a corridor into
+control 13, a marked route to the finish, an out-of-bounds area and a
+printed sheet. Its 3 fork branches times the loop's 2 orders give 6
+variants (*Showcase AAB* … *Showcase CBA*). It has no runners. Its own
+controls have codes from 101 up; the race's controls stay as they are.
+
+It lives in `fixtures/showcase/showcase-course.sql`, which
+`load-showcase.sh` runs right after `showcase.sql`. The file is exported
+from a database, never edited by hand:
+
+1. `pnpm showcase:load` into a database you can edit, with the app on it,
+   and open **Demo Competition → Course Editor → Showcase**.
+2. Edit it: move controls, change the fork or the loop, draw objects,
+   lay out its sheet.
+3. Write it back:
+   ```bash
+   DATABASE_URL='postgresql://oxygen:oxygen@localhost:5432/oxygen?schema=oxygen' \
+     node scripts/showcase-course.mjs export    # writes showcase-course.sql
+   pnpm test:scripts
+   ```
+
+`export` takes the course named *Showcase* and its variants, their
+`course_controls` and sheets, the event's course objects, and every
+control whose `seq` is not one of the race's (so a control added for the
+showcase course goes with it). Moving a race control that the showcase
+course shares is the race's change: export it with
+`showcase-controls.mjs export`, which leaves the showcase course's own
+controls out. The first version was set by a script through the API and
+snapped onto the map's features; several of its legs cross cliffs (the
+editor's checks list them).
+
 ### Tests
 
 | Level | File | Covers |
@@ -173,11 +208,12 @@ Repeat steps 2–3 as often as you like; `apply` is idempotent.
 | Script | `scripts/__tests__/demo-map.test.mjs` | the Puit de Laven test map's injection (it is no longer the demo's map) |
 | Script | `scripts/__tests__/release-compose.test.mjs` | under `USE_DOCKER=1` the loader re-matches with the image's CLI and no host `pnpm` / Node; the source travels base64 on stdin; the map file is the o-kartan demo map, kind `ocad` |
 | Unit (api) | `packages/api/src/__tests__/demo-map-enrich.test.ts` | the demo map's invented detail ([demo-map.md](demo-map.md#tests)) |
-| Integration (api) | `packages/api/src/__tests__/integration/showcase-fixture.test.ts` | load as the loader does, pin at 1:15 000 south of Stockholm, `course.mapMetadata`, control `lat` / `lng`, course sequences and lengths equal `rebuildCourseLengths`, a second load (`docs/map-storage.md` §10) |
+| Script | `scripts/__tests__/showcase-course.test.mjs` | a row's `json_populate_record` line reads back the same (quotes, backslashes; lat / lng cleared); `export` through a stub client (only non-race controls, variants, objects, sheets without the instance template); the committed file: the Showcase course, its variants and sheet in the demo event, every control it names written by one of the two files, no source names; the loader runs it after `showcase.sql` |
+| Integration (api) | `packages/api/src/__tests__/integration/showcase-fixture.test.ts` | load as the loader does, pin at 1:15 000 south of Stockholm, `course.mapMetadata`, control `lat` / `lng`, course sequences and lengths equal `rebuildCourseLengths`, the showcase course (both groups, 6 variants, corridor, marked route, out-of-bounds area, sheet, controls pinned), a second load (`docs/map-storage.md` §10) |
 
 ### Pending
 
-- The control positions are the automatic placement above; hand placement in the course editor is the user's.
+- The control positions are the automatic placement above; hand placement in the course editor is the user's, for the race's courses and the showcase course alike. The screenshots still feature course A until the showcase course is tweaked.
 - No GPS tracks, routes or printable course sheets in the fixture.
 
 ### Regenerate from your own Vinterserien data

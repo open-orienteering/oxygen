@@ -48,10 +48,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 FIXTURE="$REPO_ROOT/fixtures/showcase/showcase.sql"
+# The showcase course (forks, a butterfly loop, a corridor; scripts/lib/showcase-course.mjs), after the race data.
+COURSE_FIXTURE="$REPO_ROOT/fixtures/showcase/showcase-course.sql"
 MAP_FILE="$REPO_ROOT/fixtures/okartan/okartan-demo.ocd"
 MAP_KIND="ocad"   # map_sources.kind: ocad | omap
 
-for f in "$FIXTURE" "$MAP_FILE"; do
+for f in "$FIXTURE" "$COURSE_FIXTURE" "$MAP_FILE"; do
   if [[ ! -f "$f" ]]; then
     echo "Fixture not found: $f" >&2
     echo "Regenerate it with:  pnpm tsx scripts/anonymize-vinterserien.ts" >&2
@@ -129,8 +131,10 @@ showcase_sql() {
   base64 < "$MAP_FILE" | tr -d '\n'
   printf "', 'base64'), %s, '%s') ON CONFLICT (file_hash) DO NOTHING;\n" "$MAP_BYTES" "$(basename "$MAP_FILE")"
   cat "$FIXTURE"
+  printf "\n"
+  cat "$COURSE_FIXTURE"
 }
-echo "Loading the map source and showcase.sql..."
+echo "Loading the map source, showcase.sql and showcase-course.sql..."
 if [[ "$USE_DOCKER" == "1" ]]; then
   showcase_sql | docker compose exec -T postgres psql -U "$PG_USER" -d "$PG_DATABASE" \
     -v ON_ERROR_STOP=1 -q
