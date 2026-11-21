@@ -1,4 +1,5 @@
 import { initTRPC, TRPCError } from "@trpc/server";
+import { refreshPendingClimbs } from "./course-climb.js";
 import type { CreateFastifyContextOptions } from "@trpc/server/adapters/fastify";
 import type { PrismaClient } from "./generated/prisma/client.js";
 import { prisma, resolveEvent, type EventRef } from "./db.js";
@@ -164,7 +165,13 @@ const requireEvent = middleware(async ({ ctx, next }) => {
  * Chains authedProcedure: when AUTH_MODE is on, a known invited user is
  * required. Peer-to-peer journal shipping uses `peerProcedure` instead.
  */
-export const eventProcedure = authedProcedure.use(requireEvent);
+export const eventProcedure = authedProcedure.use(requireEvent).use(async ({ ctx, type, next }) => {
+  const result = await next();
+  // docs/course-elevation.md §6 "When": the climbs of the courses this mutation's geometry rebuilds marked are
+  // computed after its transaction has committed, never inside it; a failure is logged, not the mutation's.
+  if (type === "mutation" && result.ok) await refreshPendingClimbs(ctx.db, ctx.event.id);
+  return result;
+});
 
 /**
  * Event-scoped procedure for race-critical mutations (the journaled set).

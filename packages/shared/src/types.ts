@@ -956,6 +956,8 @@ export interface CourseSummary {
   controlCount: number;
   length: number; // in meters
   climb: number;
+  /** Who stated the climb (docs/course-elevation.md §6): typed, from an imported file, computed from the map's heights; null without a climb. */
+  climbSource?: "manual" | "file" | "computed" | null;
   numberOfMaps: number;
   /** Visit-order mode: sequential vs any-order (no legs / sequence numbers). */
   orderMode: CourseOrderMode;

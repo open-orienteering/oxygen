@@ -3,7 +3,7 @@
  * §5): height against distance along the course, the controls as
  * vertical marks, the selected leg shaded. The pointer reads a place —
  * a crosshair, its distance, height and leg, and a dot on the map
- * (`onHover`) — and a click selects the leg under it. Plain SVG over
+ * (`onHover`, every pointer move: the page keeps it out of its state) — and a click selects the leg under it. Plain SVG over
  * `lib/editor/profile-graph.ts`.
  */
 
@@ -119,7 +119,7 @@ export function ProfilePanel(p: ProfilePanelProps) {
             ))}
             {drawn.scale.dTicks.map((d) => (
               <text key={`d${d}`} x={drawn.scale.x(d)} y={PLOT_HEIGHT - 6} textAnchor={d === 0 ? "start" : "middle"} fontSize={10} fill="#64748b" className="tabular-nums">
-                {d === 0 ? "0" : t("profileKm", { km: (d / 1000).toFixed(d % 1000 === 0 ? 0 : 1) })}
+                {d === 0 ? "0" : drawn.scale.dStep < 1000 && p.profile.lengthM < 1000 ? t("profileM", { m: d }) : t("profileKm", { km: (d / 1000).toFixed(drawn.scale.dStep >= 1000 ? 0 : drawn.scale.dStep >= 100 ? 1 : 2) })}
               </text>
             ))}
             {/* The controls. */}

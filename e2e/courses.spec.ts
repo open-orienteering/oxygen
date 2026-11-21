@@ -128,6 +128,45 @@ test.describe("Courses Page", () => {
     expect(removed.ok()).toBe(true);
   });
 
+  test("climb: a typed climb is the course's and says so; emptying the field hands it back (course-elevation.md §6)", async ({ page }) => {
+    const headers = { "x-competition-id": "itest" };
+    const mine = `E2E Climb ${Date.now()}`;
+    const created = await page.request.post("/trpc/course.create", { headers, data: { name: mine } });
+    expect(created.ok()).toBe(true);
+    const courseId = (await created.json()).result.data.id as number;
+    const stored = async () => {
+      const res = await page.request.get(`/trpc/course.detail?input=${encodeURIComponent(JSON.stringify({ id: courseId }))}`, { headers });
+      const d = (await res.json()).result.data as { climb: number; climbSource: string | null };
+      return `${d.climb}/${d.climbSource}`;
+    };
+    try {
+      await selectCompetition(page);
+      await clickTab(page, "Courses");
+      const row = page.getByRole("row").filter({ hasText: mine });
+      await expect(row).toBeVisible({ timeout: 10000 });
+      await row.getByRole("cell", { name: mine }).click();
+      const climb = page.getByTestId("course-detail-climb");
+      // No climb yet: an empty field, no line about it.
+      await expect(climb).toHaveValue("", { timeout: 5000 });
+      await expect(page.getByTestId("course-detail-climb-hint")).toHaveCount(0);
+
+      await climb.fill("85");
+      await climb.blur();
+      await expect.poll(stored, { timeout: 10000 }).toBe("85/manual");
+      await expect(climb).toHaveValue("85");
+      await expect(climb).toHaveAttribute("data-source", "manual");
+      await expect(page.getByTestId("course-detail-climb-hint")).toContainText("Clear the field");
+
+      await climb.fill("");
+      await climb.blur();
+      await expect.poll(stored, { timeout: 10000 }).toBe("0/null");
+      await expect(climb).toHaveValue("");
+      await expect(page.getByTestId("course-detail-climb-hint")).toHaveCount(0);
+    } finally {
+      await page.request.post("/trpc/course.delete", { headers, data: { id: courseId } });
+    }
+  });
+
   test("a course with variations lists its variants under it, read-only (course-layer.md §12)", async ({ page }) => {
     const headers = { "x-competition-id": "itest" };
     const post = async (path: string, data: unknown) => {

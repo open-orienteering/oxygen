@@ -84,7 +84,9 @@ test.describe("the computed climb (docs/course-elevation.md §4)", () => {
     const length = Math.hypot(b.mm.x - a.mm.x, b.mm.y - a.mm.y) * gm;
     expect(Math.abs((await num(page, "editor-leg-length")) - length)).toBeLessThanOrEqual(1);
     expect(Math.abs((await num(page, "editor-leg-net")) - net)).toBeLessThanOrEqual(1);
-    expect((await num(page, "editor-leg-climb")) - (await num(page, "editor-leg-descent"))).toBeGreaterThanOrEqual(Math.floor(net) - 2);
+    // A straight leg on a plane only rises or only falls.
+    expect(Math.abs((await num(page, "editor-leg-climb")) - Math.max(0, net))).toBeLessThanOrEqual(2);
+    expect(Math.abs((await num(page, "editor-leg-descent")) - Math.max(0, -net))).toBeLessThanOrEqual(2);
     await expect(page.getByTestId("editor-leg-elevation-note")).toBeVisible();
 
     // b moved sideways: the course's climb follows its new place.
@@ -156,7 +158,7 @@ test.describe("the computed climb (docs/course-elevation.md §4)", () => {
 
   test("a typed climb is the course's climb: the computed one is not shown in its place", async ({ page }) => {
     await servePlane(page, "contours");
-    await twoControlCourse(page, "CE typed");
+    const { name, a, b } = await twoControlCourse(page, "CE typed");
     await expect.poll(() => statsRow(page, "climb", "source"), { timeout: 20000 }).toBe("computed");
     const id = Number(await page.getByTestId("editor-course-picker").inputValue());
     await trpcCall("course.update", { id, climb: 777 });
@@ -166,11 +168,19 @@ test.describe("the computed climb (docs/course-elevation.md §4)", () => {
     expect(await statsRow(page, "climb", "m")).toBe("777");
     await page.getByTestId("editor-stats").click();
     await expect(page.getByTestId("editor-stats-elevation-note")).toHaveCount(0);
+    // The profile and a leg's heights are the map's, whatever the course states: both stay.
+    await expect(page.getByTestId("editor-stats-profile-toggle")).toBeVisible();
+    await page.getByTestId("editor-stats").click();
+    await selectLeg(page, name, a, b);
+    await expect(page.getByTestId("editor-leg-climb")).toHaveAttribute("data-m", /^\d+$/);
   });
 
   test("a map without contours shows no climb and asks for no field", async ({ page }) => {
     const served = await servePlane(page, "none");
     await twoControlCourse(page, "CE none");
+    // The course is derived (its length is the layer's): still no climb row.
+    await expect.poll(async () => Number(await statsRow(page, "length", "m")), { timeout: 15000 }).toBeGreaterThan(0);
+    expect(await statsRow(page, "climb", "m")).toBeNull();
     expect(await statsRow(page, "climb", "state")).toBeNull();
     expect(served.asked).toEqual([]);
   });

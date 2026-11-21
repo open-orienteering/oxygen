@@ -25,6 +25,7 @@ import type { Prisma, PrismaClient } from "./generated/prisma/client.js";
 import { Prisma as PrismaNs } from "./generated/prisma/client.js";
 import { persistStructure } from "./course-structure.js";
 import { rebuildCourseLengths } from "./course-geometry.js";
+import { isTypedClimb } from "./course-climb.js";
 import { emitClassUpserted, emitCourseUpserted } from "./referenceJournal.js";
 import { appendJournal } from "./journalEmit.js";
 import { reconcileVariants, type RunnerVariantChange } from "./variants.js";
@@ -117,7 +118,7 @@ export async function syncVariants(
     where: { id: rootId },
     select: {
       id: true, name: true, removed: true, structure: true, orderMode: true,
-      climbM: true, numberOfMaps: true, shorten: true, descriptionInstructions: true,
+      climbM: true, climbSource: true, numberOfMaps: true, shorten: true, descriptionInstructions: true,
     },
   });
   const structure = root.removed ? null : rootStructureOf(root.structure);
@@ -129,12 +130,14 @@ export async function syncVariants(
   const byKey = new Map(existing.map((c) => [c.variantKey ?? "", c]));
   const rootOffsets = variants.length > 0 ? await offsetsOf(db, rootId) : {};
 
+  const typedRootClimb = isTypedClimb(root);
   const live: string[] = [];
   for (const v of variants) {
     const fields = {
       name: `${root.name} ${v.key}`,
       removed: false,
-      climbM: root.climbM,
+      // A root's typed climb reaches its variants; a computed one is each variant's own (course-elevation.md §6).
+      ...(typedRootClimb ? { climbM: root.climbM, climbSource: root.climbSource ?? "manual" } : {}),
       numberOfMaps: root.numberOfMaps,
       shorten: root.shorten,
       descriptionInstructions:
@@ -164,6 +167,10 @@ export async function syncVariants(
   const droppedIds = dropped.map((c) => c.id);
   if (droppedIds.length > 0) {
     await db.course.updateMany({ where: { id: { in: droppedIds } }, data: { removed: true } });
+  }
+  // A root whose typed climb was cleared: its variants give up the copy they mirrored and compute their own.
+  if (!typedRootClimb && live.length > 0) {
+    await db.course.updateMany({ where: { id: { in: live }, climbM: { not: 0 }, OR: [{ climbSource: null }, { climbSource: { in: ["manual", "file"] } }] }, data: { climbM: 0, climbSource: null } });
   }
   if (live.length > 0) await rebuildCourseLengths(db, eventId, live);
 

@@ -1,4 +1,5 @@
-import { useState, useRef, useEffect, useCallback, useMemo, type ReactNode } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo, type ReactNode, useSyncExternalStore } from "react";
+import type { HoverDotStore } from "../lib/editor/hover-dot";
 import { useTranslation } from "react-i18next";
 import { useParams } from "react-router-dom";
 import {
@@ -356,6 +357,8 @@ export interface MapViewerEditorProps {
   fullBleed?: boolean;
   /** Check markers (docs/course-editor.md §8): UI-layer shapes, never hit targets. */
   markers?: readonly ToolShape[];
+  /** A place another panel points at (the profile graph's pointer, docs/course-elevation.md §5): a dot, never a hit target. */
+  hoverDot?: HoverDotStore;
   /**
    * A course with variation groups as the editor shows it (docs/course-editor.md §12): the first
    * entry replaces the overlay of the same name (controls, legs, hidden numbers — the displayed
@@ -3226,6 +3229,7 @@ export function MapViewer({
                 {editor.markers.map((sh, i) => toolShapeNode(sh, i, mapMmToScreen, symbolScale))}
               </g>
             )}
+            {editor?.hoverDot && viewport && <HoverDotMark store={editor.hoverDot} project={mapMmToScreen} />}
             {editor?.tool?.shapes && viewport && (
               <g data-testid="editor-tool-layer" className="pointer-events-none">
                 {editor.tool.shapes.map((sh, i) => toolShapeNode(sh, i, mapMmToScreen, symbolScale))}
@@ -3947,6 +3951,15 @@ function renderDescriptionRows(
 }
 
 /** One tool shape (docs/course-editor.md §6) in the rotated overlay's inner px; `pxPerMm` sizes true-size circles. */
+/** The hover dot (docs/course-elevation.md §5): subscribed here, so a new place redraws this node alone. */
+function HoverDotMark({ store, project }: { store: HoverDotStore; project: (x: number, y: number) => { x: number; y: number } | null }) {
+  const dot = useSyncExternalStore(store.subscribe, store.get, store.get);
+  const p = dot ? project(dot.x, dot.y) : null;
+  if (!dot || !p) return null;
+  return <circle data-testid="editor-profile-map-dot" data-x={dot.x.toFixed(2)} data-y={dot.y.toFixed(2)} data-leg={dot.leg}
+    cx={p.x} cy={p.y} r={5} fill="#a21caf" stroke="#ffffff" strokeWidth={2} className="pointer-events-none" />;
+}
+
 function toolShapeNode(
   sh: ToolShape,
   key: number,

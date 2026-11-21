@@ -76,6 +76,7 @@
   "profileShow": "Visa höjdprofil",
   "profileHide": "Dölj höjdprofil",
   "profileKm": "{{km}} km",
+  "profileM": "{{m}} m",
   "profileHeight": "{{m}} m",
   "profileAt": "vid {{km}} km",
   "profileNoData": "Ingen höjddata här",

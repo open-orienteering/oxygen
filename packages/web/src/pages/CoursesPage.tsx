@@ -755,6 +755,7 @@ function CourseInlineDetail({ courseId, readOnly = false, rootName = "" }: { cou
   const [controlsError, setControlsError] = useState<string | null>(null);
   const [editLength, setEditLength] = useState<string | null>(null);
   const [editMaps, setEditMaps] = useState<string | null>(null);
+  const [editClimb, setEditClimb] = useState<string | null>(null);
 
   if (detail.isLoading) {
     return (
@@ -777,7 +778,9 @@ function CourseInlineDetail({ courseId, readOnly = false, rootName = "" }: { cou
   // `course.update` refuses them, so the fields here are read-only.
   const hasVariations = d.structure.items.some((i) => i.kind === "variation");
 
-  const handleSave = (field: string, value: string | number | boolean) => {
+  const typedClimb = d.climb > 0 && d.climbSource !== "computed";
+
+  const handleSave = (field: string, value: string | number | boolean | null) => {
     if (readOnly) return;
     updateMutation.mutate({ id: courseId, [field]: value, baseVersion: d.version });
   };
@@ -843,7 +846,7 @@ function CourseInlineDetail({ courseId, readOnly = false, rootName = "" }: { cou
                 className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-3 gap-3">
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">
                   {t("lengthM")}
@@ -861,6 +864,30 @@ function CourseInlineDetail({ courseId, readOnly = false, rootName = "" }: { cou
                       }
                     }
                     setEditLength(null);
+                  }}
+                  className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 tabular-nums"
+                  min={0}
+                />
+              </div>
+              {/* docs/course-elevation.md §6: a typed climb is the course's; empty, the climb computed from the map stands. */}
+              <div>
+                <label className="block text-xs font-medium text-slate-500 mb-1">
+                  {t("climbM")}
+                </label>
+                <input
+                  type="number"
+                  data-testid="course-detail-climb"
+                  data-source={d.climbSource ?? ""}
+                  disabled={readOnly}
+                  value={editClimb ?? (typedClimb ? String(d.climb) : "")}
+                  placeholder={d.climbSource === "computed" ? String(d.climb) : ""}
+                  onChange={(e) => setEditClimb(e.target.value)}
+                  onBlur={() => {
+                    if (editClimb !== null) {
+                      const val = editClimb.trim() === "" ? 0 : parseInt(editClimb, 10);
+                      if (!isNaN(val) && val >= 0 && val !== (typedClimb ? d.climb : 0)) handleSave("climb", val > 0 ? val : null);
+                    }
+                    setEditClimb(null);
                   }}
                   className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 tabular-nums"
                   min={0}
@@ -890,6 +917,12 @@ function CourseInlineDetail({ courseId, readOnly = false, rootName = "" }: { cou
               </div>
             </div>
           </div>
+
+          {(d.climbSource === "computed" || typedClimb) && (
+            <p data-testid="course-detail-climb-hint" className="-mt-2 text-[11px] text-slate-400">
+              {d.climbSource === "computed" ? t("climbComputedHint", { m: d.climb }) : t("climbTypedHint")}
+            </p>
+          )}
 
           {!readOnly && (
           <div>

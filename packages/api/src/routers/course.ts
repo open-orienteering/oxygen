@@ -63,6 +63,8 @@ import { terrainDescriptor } from "../map-store/heightfield.js";
 import { canDownloadEventMap } from "../ocad-export.js";
 import { loadEventCrs } from "../event-crs.js";
 import { rebuildCourseLengths } from "../course-geometry.js";
+import { isTypedClimb, refreshComputedClimbs, statedClimb } from "../course-climb.js";
+import { markClimbPending } from "../course-climb-pending.js";
 import { appendJournal } from "../journalEmit.js";
 import {
   emitClassUpserted,
@@ -419,6 +421,7 @@ async function loadCourseDetail(
     controlCount: ccs.length,
     length: c.lengthM,
     climb: c.climbM,
+    climbSource: climbSourceOf(c),
     numberOfMaps: c.numberOfMaps,
     orderMode: c.orderMode as CourseOrderMode,
     firstAsStart: c.firstAsStart,
@@ -449,6 +452,10 @@ async function loadCourseDetail(
     }))),
   };
 }
+
+/** A stored climb's source as the clients read it (docs/course-elevation.md §6 "Read rule"): a climb without a source is a typed one. */
+const climbSourceOf = (c: { climbM: number; climbSource: string | null }): "manual" | "file" | "computed" | null =>
+  c.climbM === 0 ? null : c.climbSource === "computed" ? "computed" : c.climbSource === "file" ? "file" : "manual";
 
 export const courseRouter = router({
   list: kioskOrCoursesViewProcedure.query(async ({ ctx }): Promise<CourseSummary[]> => {
@@ -518,6 +525,7 @@ export const courseRouter = router({
           controlCount: tokens.length,
           length: c.lengthM,
           climb: c.climbM,
+          climbSource: climbSourceOf(c),
           numberOfMaps: c.numberOfMaps,
           orderMode: c.orderMode as CourseOrderMode,
           firstAsStart: c.firstAsStart,
@@ -586,7 +594,7 @@ export const courseRouter = router({
       z.object({
         name: z.string().min(1),
         length: z.number().int().optional().default(0),
-        climb: z.number().int().optional().default(0),
+        climb: z.number().int().nullable().optional().default(0),
         numberOfMaps: z.number().int().optional().default(0),
         orderMode: orderModeSchema.optional().default("ordered"),
         firstAsStart: z.boolean().optional().default(false),
@@ -611,7 +619,7 @@ export const courseRouter = router({
             eventId: ctx.event.id,
             name: input.name,
             lengthM: input.length,
-            climbM: input.climb,
+            ...statedClimb(input.climb, "manual"),
             numberOfMaps: input.numberOfMaps,
             orderMode: input.orderMode,
             firstAsStart: input.firstAsStart,
@@ -687,7 +695,8 @@ export const courseRouter = router({
           data: {
             eventId: ctx.event.id,
             name: input.name,
-            climbM: source.climbM,
+            // A typed climb is copied; a computed one is the copy's own to compute.
+            ...(isTypedClimb(source) ? { climbM: source.climbM, climbSource: source.climbSource ?? "manual" } : {}),
             numberOfMaps: source.numberOfMaps,
             orderMode: source.orderMode,
             startName: source.startName,
@@ -747,7 +756,7 @@ export const courseRouter = router({
         id: z.number().int(),
         name: z.string().min(1).optional(),
         length: z.number().int().optional(),
-        climb: z.number().int().optional(),
+        climb: z.number().int().nullable().optional(),
         numberOfMaps: z.number().int().optional(),
         orderMode: orderModeSchema.optional(),
         firstAsStart: z.boolean().optional(),
@@ -790,7 +799,11 @@ export const courseRouter = router({
       const data: Record<string, unknown> = {};
       if (input.name !== undefined) data.name = input.name;
       if (input.length !== undefined) data.lengthM = input.length;
-      if (input.climb !== undefined) data.climbM = input.climb;
+      // A typed climb is the course's; none (0 or null) hands it back to the computed one (course-elevation.md §6).
+      if (input.climb !== undefined) {
+        Object.assign(data, statedClimb(input.climb, "manual"));
+        markClimbPending(ctx.event.id, [c.id]);
+      }
       if (input.numberOfMaps !== undefined)
         data.numberOfMaps = input.numberOfMaps;
       if (input.orderMode !== undefined) data.orderMode = input.orderMode;
@@ -1129,7 +1142,7 @@ export const courseRouter = router({
       z.object({
         ids: z.array(z.number().int()),
         numberOfMaps: z.number().int().optional(),
-        climb: z.number().int().optional(),
+        climb: z.number().int().nullable().optional(),
         orderMode: orderModeSchema.optional(),
         firstAsStart: z.boolean().optional(),
         lastAsFinish: z.boolean().optional(),
@@ -1156,7 +1169,10 @@ export const courseRouter = router({
       const data: Record<string, unknown> = {};
       if (input.numberOfMaps !== undefined)
         data.numberOfMaps = input.numberOfMaps;
-      if (input.climb !== undefined) data.climbM = input.climb;
+      if (input.climb !== undefined) {
+        Object.assign(data, statedClimb(input.climb, "manual"));
+        markClimbPending(ctx.event.id, rows.map((r) => r.id));
+      }
       if (input.orderMode !== undefined) data.orderMode = input.orderMode;
       if (input.firstAsStart !== undefined)
         data.firstAsStart = input.firstAsStart;
@@ -1194,6 +1210,14 @@ export const courseRouter = router({
       });
       return { ok: true as const, count: rows.length };
     }),
+
+  /**
+   * Computes and stores the climb of the event's ordered courses that have none (docs/course-elevation.md §6):
+   * the catch-up for heights that arrived after a course's last edit. Returns how many were written.
+   */
+  refreshClimbs: coursesEditRaceProcedure.mutation(async ({ ctx }) => {
+    return { written: await refreshComputedClimbs(ctx.db, ctx.event.id) };
+  }),
 
   delete: coursesEditRaceProcedure
     .input(z.object({ id: z.number().int() }))
@@ -2176,7 +2200,8 @@ export const courseRouter = router({
             data: {
               name: pc.name,
               lengthM: Math.round(pc.length),
-              climbM: Math.round(pc.climb),
+              // The file's climb when it states one; a file without one leaves a typed climb alone (course-elevation.md §6).
+              ...(Math.round(pc.climb) > 0 ? statedClimb(pc.climb, "file") : {}),
               orderMode: pc.orderMode ?? "ordered",
               legs: legsStr,
               startName,
@@ -2196,7 +2221,7 @@ export const courseRouter = router({
               eventId,
               name: pc.name,
               lengthM: Math.round(pc.length),
-              climbM: Math.round(pc.climb),
+              ...statedClimb(pc.climb, "file"),
               orderMode: pc.orderMode ?? "ordered",
               legs: legsStr,
               startName,

@@ -488,6 +488,17 @@ bends since F3 and crossing points since F4.
 | `packages/api/src/__tests__/course-geometry.test.ts` "legDistancesMm (from the course layer, E6)" | layer-derived leg lengths = the pre-E6 formula bit for bit |
 | `packages/api/src/__tests__/course-geometry.test.ts` "legs along their bends", `integration/control-editor.test.ts` "course.setStructure with bends" | lengths along the bends; style and corridor change nothing (F1) |
 
+## Course climb
+
+`courses.climb_m` is the course's climb in metres and
+`courses.climb_source` who stated it (`manual`, `file`, `computed`,
+NULL): `docs/course-elevation.md` §6 is the specification. In short: a
+typed or imported climb is the course's; without one, Oxygen computes
+the climb from the map's height field along the course's drawn legs
+after every edit of its geometry and stores it. The description sheet
+and the exports read the stored value. Unlike the length's `derived`,
+nothing is recomputed at export, and the source's rule is typed-wins.
+
 ## Description autodetect: map source
 
 Suggested descriptions (`control.create` / `update` autofill,

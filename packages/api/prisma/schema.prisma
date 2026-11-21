@@ -499,6 +499,8 @@ model Course {
   shorten         Int      @default(0)
   /// Where `lengthM` comes from: 'file' (an imported file's published length; Eventor may overwrite it), 'derived' (edited in Oxygen: derived from the controls, recomputed at export, never overwritten by Eventor), NULL (neither) (E6; course-controls-and-matching.md "Course length").
   lengthSource    String?  @map("length_source")
+  /// Where `climbM` comes from: 'manual' (typed), 'file' (an imported file), 'computed' (from the map's height field along the course; reset by every geometry rebuild), NULL (no climb; with a climb: typed, written before the column) (docs/course-elevation.md §6).
+  climbSource     String?  @map("climb_source")
   /// Course-level description-sheet instructions (special rows + finish variant).
   /// Shape: { specials?: [{afterControlId, kind, lengthM?}], finish?: {kind, lengthM?} }.
   descriptionInstructions Json? @map("description_instructions")

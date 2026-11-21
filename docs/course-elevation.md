@@ -3,7 +3,7 @@
 Normative specification of **heights along a course**: the height profile
 of a polyline over a map's height field and the climb read from it (§1–2),
 which field is read (§3), what the course editor shows (§4–5), the course's
-stored climb (§6, pending) and leg routes (§7, pending). The height fields themselves are
+stored climb (§6) and leg routes (§7, pending). The height fields themselves are
 `docs/map-terrain.md` (§4–7); the course's stored length is
 `docs/course-controls-and-matching.md` "Course length".
 
@@ -60,6 +60,19 @@ the user):
 9. **Route alternatives are the target of §7**: a leg selected shows its
    computed top alternatives with metres, climb and estimated time, and
    the course the same summed; stored per control pair in running order.
+
+Decided in implementation of §6 (2026-11-22; told to the user, open to
+change):
+
+10. **The stored computed climb is the whole metre**, not rounded to
+    5 m: the editor, the sheet and the export state one number.
+11. **A partial profile stores no climb** (it would be a lower bound).
+12. **`file` and `manual` are distinct sources** that win alike; an
+    import without a climb leaves a typed climb alone.
+13. **Courses that exist are filled on their next edit** or when opened
+    in the editor; there is no job over all events.
+14. **Every ordered course on a map with heights now prints and exports
+    a climb**, the contour-based approximate ones included.
 
 ## 1. The profile
 
@@ -123,8 +136,9 @@ not reconcile: a steady rise below the threshold has a net and no climb.
 
 **Distance and place.** `pointAtDistance` gives the paper point a ground
 distance along a polyline (clamped to its ends), `distanceAtPoint` the
-nearest place on it to a point and how far off the point lies; the graph's
-link with the map (§5) uses both.
+nearest place on it to a point and how far off the point lies. The graph
+marks its pointer's place on the map with the first (§5); the second is
+for the map pointing back at the graph, which is pending.
 
 ## 2. Climb
 
@@ -220,14 +234,21 @@ Implementation: `packages/web/src/pages/editor/useCourseElevation.ts`
 
 ### 4.1 Which course
 
-The editor computes heights for **the selected course in Course mode,
-when its order is `ordered` and the viewer draws it alone and whole**:
+The editor computes heights for **the selected course in Course mode's
+Course view, when its order is `ordered` and the viewer draws it alone
+and whole**:
 the legs are the layer's `DerivedLeg.points` of that one course
 (`useCourseChecks` `legs`, the derivation the length is read from,
-`course-editor.md` §8). There is nothing to read — and the field is not
-asked for — in the all-controls and all-variations views, for a
-free-order course, while a part of the course is drawn (Layout mode on a
-part sheet) and for a course without legs.
+`course-editor.md` §8). There is nothing to read in the all-controls and all-variations views,
+in the Class and Variant views (their drawn path is not the inspector's
+rows, by which a leg is found), for a free-order course, while a part of
+the course is drawn (Layout mode on a part sheet) and for a course
+without legs; the field is asked for only while a course of the first
+kind is selected.
+
+A course with variation groups (`course-editor.md` §12) is read along
+**the path the Course view shows**: the alternatives picked in the
+inspector. Its climb is that path's, and changes with the pick.
 
 ### 4.2 The field
 
@@ -255,9 +276,9 @@ shows as `none`.
 The course-info popover has **one** climb row (`editor-stats-climb`,
 §0 decision 8), by the first that applies:
 
-1. **A typed climb** — the course's stored climb when it was typed
-   (until §6 stores the source, every stored climb above 0 is a typed
-   one): `85 m climb`, `data-m`, `data-source="manual"`. Nothing about
+1. **A typed climb** — the course's stored climb when its source is
+   `manual`, `file` or none (§6 "Read rule"): `85 m climb`, `data-m`,
+   `data-source="manual"`. Nothing about
    the computed climb is shown with it.
 2. **The computed climb** (`ready`): `135 m climb · 3.1 %` — the
    course's climb (§2 "A course", rounded once) and its share of the
@@ -312,7 +333,8 @@ model), `pages/editor/ProfilePanel.tsx` (the panel, plain SVG),
 144 px high (`PROFILE_PANEL_HEIGHT`); the map gives it its height, and
 the tool rail scrolls when the window is too short for both. Desktop and
 tablet only: the phone has no panel. It is shown when it is **open** and
-§4's state is `ready`, and is opened and closed by *Show / Hide elevation
+§4's state is `ready`. The profile follows a drag one render behind
+(`useDeferredValue`). It is opened and closed by *Show / Hide elevation
 profile* in the course-info popover (`editor-stats-profile-toggle`,
 `aria-pressed`; offered only in state `ready`, under a typed climb too)
 and closed by its ✕ (`editor-profile-close`). Open or closed is kept on
@@ -333,17 +355,20 @@ the device (`localStorage` `oxygen.editor.profilePanel`, `open` /
   data. **One axis**: a field with datum `relative` is drawn as *metres
   above the course's lowest point*, an `absolute` one as *metres above
   sea level*; the range is at least 10 m (`MIN_SPAN_M`) and ends on round
-  ticks (`niceTicks`: 1, 2, 5 × 10ⁿ). Distance ticks in km.
+  ticks (`niceStep`: 1, 2, 5 × 10ⁿ). Distance ticks in km, in metres on a
+  course under 1 km.
 - The controls (`editor-profile-control`, `data-index`, `data-d`): a
-  dashed vertical mark where each leg starts and at the finish, labelled
-  along the top `S`, `1`, `2` … `F` (the leg's ordinal, as the course's
-  numbers; `M` for the finish in Swedish); labels closer than 16 px thin
+  dashed vertical mark where each leg starts and where the last ends,
+  labelled along the top by what stands there (`routeMarks` over the
+  inspector's positioned rows): `S` for a start, `F` for a finish (`M` in
+  Swedish), a control's number on the course; labels closer than 16 px thin
   out, the first and last stay (`boundLabels`).
 - The selected leg (§4.5) is shaded (`editor-profile-selected`,
   `data-leg`).
 
-A long course is drawn with at most two points per pixel column — the
-column's lowest and highest, so peaks stay (`decimate`).
+A long course is drawn with about two points per pixel column — the
+column's lowest and highest, so peaks stay, and the ends of every run of
+data (`decimate`).
 
 **The pointer.** Over the graph it reads a place: a crosshair
 (`editor-profile-crosshair`) with a dot on the line, and a readout
@@ -352,19 +377,106 @@ the distance along the course and the leg by its controls' codes
 (*36 m · at 0.87 km · Leg 87 → 86*), or *No height data here*. The same
 place is marked on the map by a dot (`editor-profile-map-dot` in the
 viewer's marker layer, `data-x` / `data-y` paper mm, `data-leg`;
-`pointAtDistance` over the leg's drawn line), updated once per frame. A
+`pointAtDistance` over the leg's drawn line). The place is held in a
+store the viewer's dot subscribes to (`lib/editor/hover-dot.ts`), so a
+moving pointer redraws the dot and the readout, not the page. A
 **click** selects the leg under the pointer, as a click on the leg on
 the map does (the Leg section, the action bar's leg actions at that
 place). The pointer leaving removes the readout and the dot.
 
 ## 6. The course's stored climb
 
-*Pending: slice 4.* `courses.climb_m` is the course's climb (printed on
-the description sheet, exported as IOF `Climb`). §0 decision 8: the
-computed climb is stored there with a source (`climb_source`, as
-`length_source`), a typed one wins and can be cleared back to the
-computed one. Until then the editor shows the computed climb only for a
-course without a stored one (§4.4).
+Implementation: `packages/api/src/course-climb.ts` (the compute),
+`course-geometry.ts` `rebuildCourseLengths` (the invalidation), the
+writers in `routers/course.ts`; migration
+`20261122010000_course_climb_source`.
+
+`courses.climb_m` is the course's climb in metres — printed in the
+description sheet's header, exported as IOF `Climb`, shown on the
+Courses page and in the editor (§4.4). Who wrote it is
+`courses.climb_source` (TEXT NULL, CHECK `manual` | `file` | `computed`):
+
+| `climb_source` | Written by | Overwritten by a compute |
+|---|---|---|
+| `manual` | a climb above 0 typed on the Courses page (`course.create`, `course.update`, `course.bulkUpdate`) | never |
+| `file` | `course.importCourses` when the file states a climb above 0 | never |
+| `computed` | `refreshComputedClimbs` (below) | yes: cleared by every re-derivation of the course's geometry, written again after it |
+| NULL | no climb (`climb_m` = 0) — or a climb written before this column or by an older image | only while `climb_m` is 0 |
+
+**Read rule.** A row with source NULL and `climb_m` ≠ 0 is a typed
+climb (the migration backfills `manual` for these; an older API image or
+a peer that knows no source writes them, AGENTS §7): nothing computed
+replaces it. `manual` and `file` win alike; they are kept apart as
+`length_source` keeps `file`.
+
+**The way back.** Clearing the Courses page's climb field (or typing 0)
+writes `climb_m` 0 with source NULL, and the computed climb is stored in
+its place when there is one. There is no stated "0 m": a flat course's
+computed 0 is stored as no climb.
+
+**The compute** (`refreshComputedClimbs(eventId)`): for every live
+**ordered** course of the event with source NULL and `climb_m` 0, the
+climb is `Math.round(courseProfile(legs, sampler).climbM)` (§2; whole
+metres, the number the editor shows) over
+
+- the legs' drawn polylines of the stored course layer
+  (`editorCourseLayer` → `derivation.courses[0].legs[].points`: the
+  polylines the stored length is measured on and the editor draws), and
+- the field §3 picks from the event's terrain descriptor, **read as
+  stored** (`readHeightfield`): a field that is `pending` or has no
+  stored bytes gives no climb. The server never derives a field to
+  compute a climb.
+
+Nothing is stored when the profile is `partial` (§2: the total would be
+a lower bound), has no length, or rounds to 0; low confidence alone
+does not stop it (the editor's `≈` says so, §4.4). Free-order courses
+are never computed. A variant has its own computed climb; a root's
+typed climb reaches its variants as before (`syncVariants`), a computed
+one does not, and a root whose typed climb is cleared takes the copies
+back from its variants. A clone copies a typed climb with its source and
+computes its own otherwise.
+
+**When.** `rebuildCourseLengths` — every re-derivation of a course's
+stored geometry: create, update, sequence and leg edits, control moves,
+copy, map upload, rotation, import — resets a `computed` climb to
+0 / NULL **inside the edit's transaction**, so a stored computed climb is
+never stale — and marks the course (`course-climb-pending.ts`, in
+memory). The compute then runs **after the transaction commits**,
+outside it (a field read never runs inside an edit's transaction): every
+event-scoped tRPC mutation that succeeded computes the courses marked
+for its event (`trpc.ts` `eventProcedure`), in one short transaction of
+its own that locks the rows it writes, and fails soft — an error is
+logged, the mutation's result stands and the course has no climb until
+the next edit. A write outside tRPC (a map upload's REST route) leaves
+its marks to the event's next mutation. The computed climb is journaled
+(`course.upserted`, the course's concurrency token not advanced: an
+editor's next write is not refused for it), so each geometry edit of
+such a course journals it twice — cleared, then computed. `course.refreshClimbs`
+runs the same compute for every such course of the event on demand; the
+editor calls it once per course opened when it shows a computed climb
+and the stored one is empty (heights that arrived after the last edit).
+
+**Readers.** The description sheet, the course-map header and the IOF /
+Purple Pen exports read `climb_m` as stored, whatever its source
+(unlike a `derived` length, nothing is recomputed at export). Eventor's
+sync never writes climb. `course.list` and `course.detail` state the source
+(`climbSource`: `manual` | `file` | `computed` | null, a climb without
+a stored source read as `manual`). The column is stripped from the
+`course.upserted` payload, as `length_source` is (an older peer's apply
+knows no such field); it travels with the checkout snapshot. A peer that
+receives a computed climb through the journal therefore holds it as a
+typed one until it is cleared there.
+
+**The Courses page** (`CoursesPage.tsx`, the course's detail): a *Climb
+(m)* field (`course-detail-climb`, `data-source`) holding a typed climb,
+empty with the computed climb as its placeholder otherwise, and a line
+under the fields saying which it is (`course-detail-climb-hint`).
+Emptying the field (or 0) writes `climb: null`.
+
+**The editor** (§4.4) takes "typed" from the source: `manual`, `file`,
+or NULL with a climb. A stored `computed` climb is shown only while the
+field loads or cannot be read (rule 3 there); with the field read the
+live value is shown, which is the stored one once the edit is saved.
 
 ## 7. Leg routes
 
@@ -383,19 +495,31 @@ leg with a route states its climb along the route.
 | `packages/web/src/lib/editor/__tests__/status.test.ts` "the climb row is one number" | §4.4: the order typed · computed · stored · words, the phone's short text |
 | `e2e/course-editor-elevation.spec.ts` | §4 in the browser on a synthetic plane field: the computed climb and its notes, a leg's numbers, a moved control, a ground model's attribution, a failed read and **Try again**, a typed climb, free order and the all-controls view, a map without a field |
 | `e2e/course-editor-phone.spec.ts` "the computed climb on a phone" | §4.4 "Phone" |
-| `packages/web/src/lib/editor/__tests__/profile-graph.test.ts` | §5: points and bounds, the leg at a distance, ticks, the scale and its minimum span, the paths and their breaks, decimation, the height at a distance, label thinning, the kept preference |
+| `packages/api/src/__tests__/course-climb.test.ts` | §6: a stated climb's source, the read rule, the field's row source, the climb to store (partial, flat, no legs) |
+| `packages/api/src/__tests__/integration/course-climb.test.ts` | §6: computed after a create commits, cleared and recomputed by a move, the journal payload and token, typed wins and clears back, a climb without a source, clone, free order, `refreshClimbs`, a field not stored, the column's constraint |
+| `e2e/courses.spec.ts` "climb" | §6 "The Courses page": typing and clearing a climb |
+| `packages/web/src/lib/editor/__tests__/sequence.test.ts` "an insert position names its drawn leg's index" | §4.5, §5: the selected leg's index, the route's marks, a repeated control |
+| `packages/web/src/lib/editor/__tests__/hover-dot.test.ts` | §5: the pointer's store |
+| `packages/web/src/lib/editor/__tests__/profile-graph.test.ts` | §5: points and bounds, the leg at a distance, ticks, an axis that ends on ticks, the scale and its minimum span, the paths and their breaks, decimation, the height at a distance, label thinning, the kept preference |
 | `e2e/course-editor-profile.spec.ts` | §5 in the browser: the toggle, the panel under the map and above the rail's end, the controls, the summary, the kept preference, ✕; the pointer's readout, the dot on the map, a click selecting the leg |
 
 ## Pending in this chapter
 
-- §6–7 as marked.
+- §7 as marked.
+- §6: a climb is not recomputed when heights arrive later (a contour
+  field derived, a DEM job done), when the map is replaced or re-pinned
+  without a geometry rebuild, on a Height data settings change or a
+  `TERRAIN_VERSION` bump — until the course's next edit or its next
+  opening in the editor. The printed and exported climb does not say
+  that it rests on contours.
+- §4.1: the Class and Variant views state no climb and show no profile;
+  a forked course's climb is the shown path's, not each variant's.
 - §5: the map does not point back at the graph (hovering a leg on the map
   marks nothing on the profile); stretches of low confidence are not
   drawn apart; there is no table view of the profile and no keyboard
   reading of it; the phone has no profile.
-- §4.4: a typed climb cannot be cleared back to the computed one in the
-  editor yet, and the computed climb is not stored, printed or exported
-  (§6).
+- §4.4: a typed climb is cleared back to the computed one on the Courses
+  page (§6), not in the editor.
 - §2: the threshold was chosen on synthetic noise over the contour field;
   a comparison of `ground.lantmateriet-2m` against the contour field on
   real courses is not made (the ground field is in no test database).

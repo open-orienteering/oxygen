@@ -43,6 +43,24 @@ describe("the profile graph's model (docs/course-elevation.md §5)", () => {
     expect(s.zTicks.every((z) => z >= s.zMin && z <= s.zMax)).toBe(true);
   });
 
+  it("the height axis ends on ticks and has at least two, whatever the range", () => {
+    for (const [lo, hi] of [[0, 45], [0, 450], [103, 148], [212, 239], [0, 3], [-7, 12]]) {
+      const s = graphScale([{ dM: 0, zM: lo, leg: 0 }, { dM: 100, zM: hi, leg: 0 }], 100, { ...box, height: 104 });
+      expect(s.zTicks.length, `${lo}–${hi}`).toBeGreaterThanOrEqual(2);
+      expect(s.zTicks[0]).toBe(s.zMin);
+      expect(s.zTicks[s.zTicks.length - 1]).toBe(s.zMax);
+      expect(s.zMin).toBeLessThanOrEqual(lo);
+      expect(s.zMax).toBeGreaterThanOrEqual(hi);
+    }
+  });
+
+  it("distance ticks step by a round number of metres", () => {
+    const s = graphScale([{ dM: 0, zM: 0, leg: 0 }, { dM: 480, zM: 5, leg: 0 }], 480, box);
+    expect(s.dTicks[0]).toBe(0);
+    expect(new Set(s.dTicks.slice(1).map((d, i) => d - s.dTicks[i]))).toEqual(new Set([s.dStep]));
+    expect(s.dTicks.every((d) => d <= 480)).toBe(true);
+  });
+
   it("a course without data still has a scale", () => {
     const s = graphScale([{ dM: 0, zM: null, leg: 0 }], 100, box);
     expect(Number.isFinite(s.y(0))).toBe(true);
@@ -60,12 +78,14 @@ describe("the profile graph's model (docs/course-elevation.md §5)", () => {
   it("decimation keeps each column's lowest and highest point and every gap", () => {
     const pts: GraphPoint[] = Array.from({ length: 1000 }, (_, i) => ({ dM: i, zM: i === 500 ? null : i === 123 ? 99 : i === 777 ? -99 : Math.sin(i), leg: 0 }));
     const out = decimate(pts, 999, 50);
-    expect(out.length).toBeLessThanOrEqual(150);
+    expect(out.length).toBeLessThanOrEqual(154);
     expect(out.some((p) => p.zM === 99)).toBe(true);
     expect(out.some((p) => p.zM === -99)).toBe(true);
     expect(out.some((p) => p.zM === null)).toBe(true);
     expect(out.map((p) => p.dM)).toEqual([...out.map((p) => p.dM)].sort((a, b) => a - b));
     expect(decimate(pts.slice(0, 20), 19, 50)).toHaveLength(20);
+    // Each run's ends stay: the line reaches the start, the finish and both sides of the gap.
+    for (const d of [0, 499, 501, 999]) expect(out.some((p) => p.dM === d), String(d)).toBe(true);
   });
 
   it("the height at a distance is read between the points; null in a gap and outside", () => {

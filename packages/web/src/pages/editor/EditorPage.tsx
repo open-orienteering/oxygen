@@ -30,7 +30,7 @@ import { course as courseShared, type ControlDescription, type ControlKind, type
 import { trpc } from "../../lib/trpc";
 import { MapPanel } from "../../components/MapPanel";
 import { ControlDescriptionEditor } from "../../components/ControlDescriptionEditor";
-import type { EditorDescriptionSuggestion, EditorToolBinding, MapViewerEditorProps, ToolPointer, ToolShape } from "../../components/MapViewer";
+import type { EditorDescriptionSuggestion, EditorToolBinding, MapViewerEditorProps, ToolPointer } from "../../components/MapViewer";
 import { useCoursePresence } from "../../hooks/useCoursePresence";
 import { clockTime, courseChangedElsewhere } from "../../lib/editor/presence";
 import { PresenceChips } from "./PresenceChips";
@@ -69,7 +69,7 @@ import {
   renameAlternative, setLegGaps, setLegProps, setLoop, setNumberHidden, setRole, DEFAULT_CORRIDOR, type GroupOrders, type KindOf, type LegPatch,
 } from "../../lib/editor/structure-edit";
 import { allVariationDraws, courseDrawOf, shownLegDraftOf, type HeldLegDraft } from "../../lib/editor/variation-view";
-import { alternativeEndAt, courseViewOrders, displaySequence, effectiveEnds, explicitStructure, insertIndexForLeg, kindOfSites, legForInsert, legMeterInputs, variationBlocks, type SiteRow } from "../../lib/editor/sequence";
+import { alternativeEndAt, courseViewOrders, displaySequence, effectiveEnds, explicitStructure, insertIndexForLeg, kindOfSites, legForInsert, legIndexForInsert, legMeterInputs, routeMarks, variationBlocks, type SiteRow } from "../../lib/editor/sequence";
 import { insertBendAt, legPolyline, projectOnPolyline, setBendKind, type Bend } from "../../lib/editor/bends";
 import { courseActions } from "./ActionBar";
 import { TopBar } from "./TopBar";
@@ -93,6 +93,7 @@ import { legElevation, lineClimbStatus } from "../../lib/editor/elevation";
 import { legAt, legBounds, readProfileOpen, writeProfileOpen } from "../../lib/editor/profile-graph";
 import { pointAtDistance } from "@oxygen/shared/src/terrain/profile/index.js";
 import { ProfilePanel } from "./ProfilePanel";
+import { createHoverDotStore } from "../../lib/editor/hover-dot";
 import type { EditorCheck } from "../../lib/editor/checks";
 import { CourseSection, MultiSection, SelectionSection } from "./modes/CourseMode";
 import { AddMenu, FieldQueueNotice, FieldSection, FieldSelection, FieldTopBar, FixStatus, OverflowMenu, type AddChoice } from "./modes/FieldMode";
@@ -1739,15 +1740,15 @@ export function EditorPage() {
     structure, sites, controls: controlList.data, document: mapDoc, mapScale, objects: objectsInView,
     derivation: courseInfo?.derivation, ringMm: courseInfo?.metrics?.circleRadiusMm ?? 2.5, orders,
   });
-  // Heights along the course's line (docs/course-elevation.md §4): ordered courses, in Course mode's own view.
-  const elevationLegs = state.mode === "course" && structure?.orderMode === "ordered" ? courseChecks.legs : null;
-  const { elevation, retry: retryElevation } = useCourseElevation({ terrain: mapMetadata.data?.terrain, legs: elevationLegs, nameId: nameId ?? null });
+  // Heights along the course (docs/course-elevation.md §4.1): an ordered course in Course mode's Course view, where
+  // the rows and the drawn legs are one path.
+  const elevationActive = state.mode === "course" && state.view === "course" && !!selectedCourse && structure?.orderMode === "ordered";
+  const elevationLegs = elevationActive ? courseChecks.legs : null;
+  const { elevation, retry: retryElevation } = useCourseElevation({ terrain: mapMetadata.data?.terrain, active: elevationActive, legs: elevationLegs, nameId: nameId ?? null });
   /** The selected leg among the course's derived legs. */
   const selectedLegIndex = useMemo(() => {
     const insertAt = state.phantom?.insertAt;
-    if (!selectedLeg || insertAt == null || !elevationLegs) return null;
-    const index = elevationLegs.findIndex((_, i) => insertIndexForLeg(rows, i) === insertAt);
-    return index < 0 ? null : index;
+    return selectedLeg && insertAt != null && elevationLegs ? legIndexForInsert(rows, insertAt) : null;
   }, [selectedLeg, state.phantom, elevationLegs, rows]);
   const selectedLegElevation = useMemo(() => legElevation(elevation, selectedLegIndex), [elevation, selectedLegIndex]);
 
@@ -1758,15 +1759,6 @@ export function EditorPage() {
     return !open;
   }), []);
   const profileShown = profileOpen && !isMobile && elevation.state === "ready";
-  /** The place the pointer reads on the graph, metres along the course; one update per frame. */
-  const [profileHoverM, setProfileHoverM] = useState<number | null>(null);
-  const profileHoverPending = useRef<{ d: number | null; frame: number | null }>({ d: null, frame: null });
-  const hoverProfile = useCallback((d: number | null) => {
-    const pending = profileHoverPending.current;
-    pending.d = d;
-    if (pending.frame !== null) return;
-    pending.frame = requestAnimationFrame(() => { pending.frame = null; setProfileHoverM(pending.d); });
-  }, []);
   /** The paper point of a distance along the course's legs. */
   const profilePlace = useCallback((d: number): { leg: number; pt: Pt } | null => {
     if (elevation.state !== "ready" || !elevationLegs) return null;
@@ -1775,11 +1767,13 @@ export function EditorPage() {
     const pt = points ? pointAtDistance(points, elevation.groundMPerMm, d - elevation.profile.legs[leg].offsetM) : null;
     return pt ? { leg, pt } : null;
   }, [elevation, elevationLegs]);
-  const profileMarkers = useMemo<ToolShape[]>(() => {
-    const at = profileShown && profileHoverM !== null ? profilePlace(profileHoverM) : null;
-    const rMm = (courseInfo?.metrics?.circleRadiusMm ?? 2.5) * 0.35;
-    return at ? [{ kind: "circle", x: at.pt.x, y: at.pt.y, rMm, color: "#ffffff", fill: "#a21caf", testId: "editor-profile-map-dot", data: { x: at.pt.x.toFixed(2), y: at.pt.y.toFixed(2), leg: String(at.leg) } }] : [];
-  }, [profileShown, profileHoverM, profilePlace, courseInfo?.metrics?.circleRadiusMm]);
+  /** The place the graph's pointer reads, for the map's dot: a store, so a moving pointer does not render the page. */
+  const profileDot = useMemo(() => createHoverDotStore(), []);
+  const hoverProfile = useCallback((d: number | null) => {
+    const at = d === null ? null : profilePlace(d);
+    profileDot.set(at ? { x: at.pt.x, y: at.pt.y, leg: at.leg } : null);
+  }, [profilePlace, profileDot]);
+  useEffect(() => { if (!profileShown) profileDot.set(null); }, [profileShown, profileDot]);
   const selectProfileLeg = useCallback((leg: number, d: number) => {
     const at = profilePlace(d);
     if (!at) return;
@@ -1788,13 +1782,21 @@ export function EditorPage() {
     dispatch({ type: "leg-click", x: at.pt.x, y: at.pt.y, insertAt: insertIndexForLeg(rows, leg) });
   }, [profilePlace, rows]);
   const profileLabels = useMemo(() => {
-    const legs = elevationLegs ?? [];
-    const code = (id: string) => coordsById.get(Number(id))?.code ?? id;
-    return {
-      legs: legs.map((l) => `${code(l.from)} → ${code(l.to)}`),
-      bounds: legs.length === 0 ? [] : [t("profileStart"), ...legs.slice(0, -1).map((_, i) => String(i + 1)), t("profileFinish")],
-    };
-  }, [elevationLegs, coordsById, t]);
+    const marks = routeMarks(rows);
+    return { legs: marks.legs, bounds: marks.bounds.map((b) => (b.kind === "control" ? b.label : t(b.kind === "start" ? "profileStart" : "profileFinish"))) };
+  }, [rows, t]);
+  // docs/course-elevation.md §6 "When": heights that arrived after the course's last edit — the stored climb is
+  // empty though the editor computes one — are caught up once per course opened.
+  const refreshClimbs = trpc.course.refreshClimbs.useMutation({ onSuccess: (r) => { if (r.written > 0) void utils.course.list.invalidate(); } });
+  const climbCaughtUp = useRef(new Set<number>());
+  const computedShownM = elevation.state === "ready" && !elevation.profile.partial ? Math.round(elevation.profile.climbM) : 0;
+  const refreshClimbsNow = refreshClimbs.mutate;
+  useEffect(() => {
+    if (!canEdit || !selectedCourse || selectedCourse.climb !== 0 || computedShownM <= 0 || pendingOps > 0) return;
+    if (climbCaughtUp.current.has(selectedCourse.id)) return;
+    climbCaughtUp.current.add(selectedCourse.id);
+    refreshClimbsNow();
+  }, [canEdit, selectedCourse, computedShownM, pendingOps, refreshClimbsNow]);
   const profilePanel = useMemo(() => (profileShown && elevation.state === "ready" ? (
     <ProfilePanel profile={elevation.profile} datum={elevation.datum} basis={elevation.basis} legLabels={profileLabels.legs} boundLabels={profileLabels.bounds}
       selectedLeg={selectedLegIndex} onHover={hoverProfile} onSelectLeg={selectProfileLeg} onClose={toggleProfile} />
@@ -1936,7 +1938,6 @@ export function EditorPage() {
   const classLayout = classView.layout;
   const courseControlIds = useMemo(() => new Set([...memberIds].map(String)), [memberIds]);
   const toolActive = state.tool.kind !== "select";
-  const allMarkers = useMemo(() => (profileMarkers.length ? [...courseChecks.markers, ...profileMarkers] : courseChecks.markers), [courseChecks.markers, profileMarkers]);
   const editor: MapViewerEditorProps = useMemo(() => ({
     selectedControlId: state.selectedControlId !== null ? String(state.selectedControlId) : null,
     phantom: state.phantom ? { x: state.phantom.x, y: state.phantom.y } : null,
@@ -1972,11 +1973,12 @@ export function EditorPage() {
     viewRequest,
     provisional,
     onCourseInfo: setCourseInfo,
-    markers: allMarkers,
+    markers: courseChecks.markers,
+    hoverDot: profileDot,
     layout: classLayout,
     courseOverride,
     legDraft: shownLegDraft,
-  }), [shownLegDraft, classLayout, allMarkers, isMobile, fix, sheetPx, fieldMoveEnd, state.selectedControlId, state.phantom, contextActions, contextInfo, srrBadge, radioOn, suggestions, tc, courseControlIds, toolActive,
+  }), [profileDot, shownLegDraft, classLayout, courseChecks.markers, isMobile, fix, sheetPx, fieldMoveEnd, state.selectedControlId, state.phantom, contextActions, contextInfo, srrBadge, radioOn, suggestions, tc, courseControlIds, toolActive,
     courseView, selectedCourse, moveWarnings, moveEpoch, handleMapClick, handleLabelMoveEnd, handleSelect,
     handleDismiss, handleLegClick, shownBinding, placementLoupe, snapIndex, snap, draftObjects, draftFast, viewRequest, provisional, courseOverride, state.view]);
 
@@ -2313,8 +2315,8 @@ export function EditorPage() {
     controls: selectedCourse ? sequenceIds.length : null,
     lengthM: selectedCourse ? courseChecks.lengthM ?? totalMeters : null,
     climbM: selectedCourse?.climb ?? null,
-    // Until the computed climb is stored with its source (docs/course-elevation.md §6), a stored climb is a typed one.
-    climbManual: !!selectedCourse?.climb,
+    // A typed or imported climb is the course's (docs/course-elevation.md §6); a stored computed one is the live value's copy.
+    climbManual: !!selectedCourse?.climb && selectedCourse.climbSource !== "computed",
     line: selectedCourse ? lineClimbStatus(elevation) : null,
     scale: mapScale,
     sheetKey: state.mode === "layout" ? layoutMode.sheetKey : state.mode === "course" && state.view === "class" ? classView.sheetKey : null,

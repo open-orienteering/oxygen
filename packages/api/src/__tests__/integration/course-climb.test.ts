@@ -1,0 +1,183 @@
+/**
+ * The course's stored climb (docs/course-elevation.md §6): a climb computed
+ * from the pinned document's stored height field after an edit commits,
+ * cleared and written again when the geometry changes; a typed or imported
+ * climb wins and can be cleared back; free order, a map without a stored
+ * field, variants, clone, the catch-up mutation, the journal payload and
+ * the column's constraint.
+ *
+ * Fixture: the shared terrain tests' hill (four contour rings around
+ * (30, 30) mm at 1:15 000) as a synthetic document pinned to the event,
+ * its `contours` field derived and stored.
+ */
+
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { createHash, randomBytes } from "crypto";
+import { mapDocument } from "@oxygen/shared";
+import { createTestEvent, disconnect, type TestEventContext } from "../helpers/test-db.js";
+import { makeCaller } from "../helpers/caller.js";
+import { FLAT, HILL, encodeTerrainDoc } from "../helpers/terrain-doc.js";
+import { deriveDocumentHeightfield, readHeightfield } from "../../map-store/heightfield.js";
+import { resetClimbFields } from "../../course-climb.js";
+
+const suffix = randomBytes(4).toString("hex");
+const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
+
+let ctx: TestEventContext;
+let flat: TestEventContext;
+let caller: ReturnType<typeof makeCaller>;
+let flatCaller: ReturnType<typeof makeCaller>;
+let top: number;
+
+async function pinDocument(t: TestEventContext, objects: typeof HILL, salt: string): Promise<string> {
+  const sourceBytes = Buffer.from(`course-climb-source-${salt}`);
+  const sourceHash = sha(sourceBytes);
+  await t.db.mapSource.create({ data: { fileHash: sourceHash, kind: "ocad", bytes: sourceBytes, sizeBytes: sourceBytes.byteLength, fileName: "synthetic.ocd" } });
+  const bytes = encodeTerrainDoc(objects, salt, sourceHash);
+  const hash = sha(bytes);
+  const { header } = mapDocument.readMapDocumentHeader(bytes);
+  await t.db.mapDocument.create({
+    data: {
+      hash, bytes, sizeBytes: bytes.byteLength, formatVersion: 1, importerVersion: "test", libraryVersion: "none", sourceHash,
+      header: JSON.parse(JSON.stringify({ ...header, symbols: undefined, strings: undefined })), report: {},
+    },
+  });
+  await t.db.mapFile.create({ data: { eventId: t.eventId, fileName: "synthetic.ocd", sourceHash, documentHash: hash, scale: 15000 } });
+  return hash;
+}
+
+const rowOf = (t: TestEventContext, seq: number) => t.db.course.findFirstOrThrow({ where: { eventId: t.eventId, seq } });
+const climbOf = async (seq: number) => { const r = await rowOf(ctx, seq); return { m: r.climbM, source: r.climbSource }; };
+
+beforeAll(async () => {
+  resetClimbFields();
+  ctx = await createTestEvent("course_climb");
+  flat = await createTestEvent("course_climb_flat");
+  caller = makeCaller(ctx.event);
+  flatCaller = makeCaller(flat.event);
+  const hill = await pinDocument(ctx, HILL, `hill-${suffix}`);
+  await deriveDocumentHeightfield(ctx.db, hill);
+  expect((await readHeightfield(ctx.db, hill))?.bytes, "the hill's field is stored").toBeTruthy();
+  // A pinned document whose field was never derived: nothing stored to read.
+  await pinDocument(flat, FLAT, `flat-${suffix}`);
+  for (const c of [caller, flatCaller]) {
+    await c.control.create({ status: 4, xpos: 12, ypos: 30 });
+    await c.control.create({ status: 5, xpos: 48, ypos: 30 });
+  }
+  // On the hill's top, and two on its east slope.
+  top = (await caller.control.create({ codes: "31", xpos: 30, ypos: 30 })).id;
+  await caller.control.create({ codes: "32", xpos: 38, ypos: 30 });
+  await caller.control.create({ codes: "33", xpos: 44, ypos: 30 });
+  await flatCaller.control.create({ codes: "31", xpos: 5, ypos: 5 });
+});
+
+afterAll(async () => {
+  await ctx.cleanup();
+  await flat.cleanup();
+  await disconnect();
+});
+
+describe("the course's stored climb (docs/course-elevation.md §6)", () => {
+  let over: number;
+
+  it("a created course gets its computed climb once the create has committed", async () => {
+    over = (await caller.course.create({ name: "Over the top", controlIds: [top] })).id;
+    const c = await climbOf(over);
+    expect(c.source).toBe("computed");
+    // Start outside the lowest ring, the control on the top: at least three 5 m intervals up.
+    expect(c.m).toBeGreaterThanOrEqual(12);
+    expect(c.m).toBeLessThanOrEqual(30);
+    const listed = (await caller.course.list()).find((x) => x.id === over)!;
+    expect(listed).toMatchObject({ climb: c.m, climbSource: "computed" });
+    expect((await caller.course.detail({ id: over })).climbSource).toBe("computed");
+  });
+
+  it("a geometry change clears it and it is computed again", async () => {
+    const before = await climbOf(over);
+    // The control moved off the top to the hill's foot: the legs only cut its side, the course climbs less.
+    await caller.control.update({ id: top, xpos: 30, ypos: 48 });
+    const moved = await climbOf(over);
+    expect(moved.source === "computed" ? moved.m : 0).toBeLessThan(before.m);
+    await caller.control.update({ id: top, xpos: 30, ypos: 30 });
+    expect(await climbOf(over)).toEqual(before);
+  });
+
+  it("the computed climb is journaled without its source and does not advance the course's token", async () => {
+    const row = await rowOf(ctx, over);
+    const entries = await ctx.db.journalEntry.findMany({ where: { eventId: ctx.eventId, type: "course.upserted" }, orderBy: { hlc: "desc" }, take: 1 });
+    const fields = (entries[0].payload as { fields: Record<string, unknown> }).fields;
+    expect(fields.climbM).toBe(row.climbM);
+    expect("climbSource" in fields).toBe(false);
+    expect(BigInt(String(fields.version))).toBe(row.version);
+  });
+
+  it("a typed climb wins and survives edits; clearing it hands the climb back to the computed one", async () => {
+    const computed = await climbOf(over);
+    await caller.course.update({ id: over, climb: 99 });
+    expect(await climbOf(over)).toEqual({ m: 99, source: "manual" });
+    await caller.control.update({ id: top, xpos: 29, ypos: 30 });
+    await caller.control.update({ id: top, xpos: 30, ypos: 30 });
+    expect(await climbOf(over)).toEqual({ m: 99, source: "manual" });
+    expect((await caller.course.list()).find((x) => x.id === over)!.climbSource).toBe("manual");
+    await caller.course.update({ id: over, climb: null });
+    expect(await climbOf(over)).toEqual(computed);
+    await caller.course.update({ id: over, climb: 77 });
+    await caller.course.update({ id: over, climb: 0 });
+    expect(await climbOf(over)).toEqual(computed);
+  });
+
+  it("a climb stored without a source is a typed one (an older image's write): never replaced", async () => {
+    await ctx.db.course.update({ where: { id: (await rowOf(ctx, over)).id }, data: { climbM: 55, climbSource: null } });
+    await caller.control.update({ id: top, xpos: 29, ypos: 30 });
+    await caller.control.update({ id: top, xpos: 30, ypos: 30 });
+    expect(await climbOf(over)).toEqual({ m: 55, source: null });
+    expect((await caller.course.list()).find((x) => x.id === over)!.climbSource).toBe("manual");
+    await caller.course.update({ id: over, climb: null });
+    expect((await climbOf(over)).source).toBe("computed");
+  });
+
+  it("a clone computes its own climb; a typed climb is copied with its source", async () => {
+    const computed = await climbOf(over);
+    const copy = await caller.course.clone({ id: over, name: "Copy" });
+    expect(await climbOf(copy.id)).toEqual(computed);
+    await caller.course.update({ id: over, climb: 99 });
+    const typed = await caller.course.clone({ id: over, name: "Typed copy" });
+    expect(await climbOf(typed.id)).toEqual({ m: 99, source: "manual" });
+    await caller.course.update({ id: over, climb: null });
+  });
+
+  it("free order is never computed; back in order it is", async () => {
+    const id = (await caller.course.create({ name: "Free", controlIds: [top], orderMode: "free_order" })).id;
+    expect(await climbOf(id)).toEqual({ m: 0, source: null });
+    await caller.course.update({ id, orderMode: "ordered" });
+    expect((await climbOf(id)).source).toBe("computed");
+    await caller.course.update({ id, orderMode: "free_order" });
+    expect(await climbOf(id)).toEqual({ m: 0, source: null });
+  });
+
+  it("refreshClimbs fills courses that have none and leaves the others", async () => {
+    const computed = await climbOf(over);
+    const row = await rowOf(ctx, over);
+    await ctx.db.course.update({ where: { id: row.id }, data: { climbM: 0, climbSource: null } });
+    const { written } = await caller.course.refreshClimbs();
+    expect(written).toBeGreaterThanOrEqual(1);
+    expect(await climbOf(over)).toEqual(computed);
+    expect((await caller.course.refreshClimbs()).written).toBe(0);
+  });
+
+  it("a map whose field is not stored gives no climb, and nothing is derived to get one", async () => {
+    const id = (await flatCaller.course.create({ name: "Flat", controlIds: [(await flatCaller.control.list()).find((c) => c.codes === "31")!.id] })).id;
+    const r = await rowOf(flat, id);
+    expect({ m: r.climbM, source: r.climbSource }).toEqual({ m: 0, source: null });
+    expect((await flatCaller.course.refreshClimbs()).written).toBe(0);
+    expect(await flat.db.mapHeightfield.count({ where: { documentHash: (await flat.db.mapFile.findFirstOrThrow({ where: { eventId: flat.eventId } })).documentHash! } })).toBe(0);
+  });
+
+  it("the column takes its three sources and nothing else", async () => {
+    const row = await rowOf(ctx, over);
+    await expect(ctx.db.$executeRaw`UPDATE "oxygen"."courses" SET "climb_source" = 'guess' WHERE "id" = ${row.id}::uuid`).rejects.toThrow();
+    for (const s of ["manual", "file", "computed"]) {
+      await ctx.db.$executeRaw`UPDATE "oxygen"."courses" SET "climb_source" = ${s} WHERE "id" = ${row.id}::uuid`;
+    }
+  });
+});

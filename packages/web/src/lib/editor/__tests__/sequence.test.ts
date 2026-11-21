@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { course } from "@oxygen/shared";
-import { alternativeEndAt, courseViewOrders, displaySequence, explicitStructure, insertIndexForLeg, legForInsert, legMeterInputs, partHeadings, variationBlocks, type SiteRow } from "../sequence";
+import { alternativeEndAt, courseViewOrders, displaySequence, explicitStructure, insertIndexForLeg, legForInsert, legIndexForInsert, legMeterInputs, routeMarks, partHeadings, variationBlocks, type SiteRow } from "../sequence";
 
 const site = (id: number, status: number, x = id, y = id, code = String(id)): SiteRow => ({ id, code, status, mapX: x, mapY: y });
 // Two starts (1 the default: lowest id), one finish.
@@ -33,6 +33,19 @@ describe("display sequence and explicit structure (docs/course-editor.md §4)", 
     expect(insertIndexForLeg(rows, 0)).toBe(0);
     expect(insertIndexForLeg(rows, 1)).toBe(2);
     expect(insertIndexForLeg(rows, 2)).toBe(3);
+  });
+
+  it("an insert position names its drawn leg's index; the route's marks follow the positioned rows (course-elevation.md §4.5, §5)", () => {
+    const rows = displaySequence(st(31, 33, 32), SITES);
+    for (let leg = 0; leg < 3; leg++) expect(legIndexForInsert(rows, insertIndexForLeg(rows, leg))).toBe(leg);
+    // The leg into the unpositioned control is no drawn leg.
+    expect(legIndexForInsert(rows, 1)).toBeNull();
+    const marks = routeMarks(rows);
+    expect(marks.bounds).toEqual([{ kind: "start" }, { kind: "control", label: "1" }, { kind: "control", label: "3" }, { kind: "finish" }]);
+    expect(marks.legs).toEqual(["1 → 31", "31 → 32", "32 → 9"]);
+    // The same control twice: each visit's leg is its own.
+    const loop = displaySequence(st(31, 32, 31), SITES);
+    expect([0, 1, 2, 3].map((leg) => legIndexForInsert(loop, insertIndexForLeg(loop, leg)))).toEqual([0, 1, 2, 3]);
   });
 
   it("maps an insert position back to the leg's item and its ends (§6.7)", () => {

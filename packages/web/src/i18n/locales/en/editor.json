@@ -76,6 +76,7 @@
   "profileShow": "Show elevation profile",
   "profileHide": "Hide elevation profile",
   "profileKm": "{{km}} km",
+  "profileM": "{{m}} m",
   "profileHeight": "{{m}} m",
   "profileAt": "at {{km}} km",
   "profileNoData": "No height data here",

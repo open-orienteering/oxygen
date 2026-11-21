@@ -83,6 +83,8 @@ export async function courseUpsertPayload(
     fields: portableFields(row as unknown as Record<string, unknown>, [
       // Derived (E6): travels with the snapshot, not the journal.
       "lengthSource",
+      // docs/course-elevation.md §6: likewise.
+      "climbSource",
     ]),
     courseControls: ccs,
   };

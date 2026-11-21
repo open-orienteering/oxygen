@@ -14,6 +14,7 @@
  */
 
 import { displayCode } from "./control-id.js";
+import { markClimbPending } from "./course-climb-pending.js";
 import { course, symbolLibrary } from "@oxygen/shared";
 import type { PrismaClient, Prisma } from "./generated/prisma/client.js";
 import { loadEventCrs } from "./event-crs.js";
@@ -303,4 +304,8 @@ export async function rebuildCourseLengths(
 
     await db.course.update({ where: { id: courseUuid }, data });
   }
+  // A computed climb rests on the geometry just rebuilt (docs/course-elevation.md §6 "When"): cleared here, in the
+  // edit's transaction, and computed again once it has committed.
+  await db.course.updateMany({ where: { id: { in: courseUuids }, climbSource: "computed" }, data: { climbM: 0, climbSource: null } });
+  markClimbPending(eventId, courseUuids);
 }

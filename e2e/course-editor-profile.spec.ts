@@ -60,9 +60,20 @@ test.describe("the elevation profile (docs/course-elevation.md §5)", () => {
     await expect(page.getByTestId("editor-profile")).toHaveCount(0);
   });
 
+  test("in a short window the tool rail scrolls and ends above the panel", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 520 });
+    await servePlane(page, "contours");
+    await twoControlCourse(page, "CE short");
+    await openProfile(page);
+    const rail = page.getByTestId("editor-tool-rail");
+    expect(await rail.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+    const r = (await rail.boundingBox())!, box = (await page.getByTestId("editor-profile").boundingBox())!;
+    expect(r.y + r.height).toBeLessThanOrEqual(box.y + 1);
+  });
+
   test("the pointer reads a place: distance, height and leg, with a dot on the map; a click selects the leg", async ({ page }) => {
     await servePlane(page, "contours");
-    await twoControlCourse(page, "CE hover");
+    const { a, b } = await twoControlCourse(page, "CE hover");
     const gm = (await mapScale(page)) / 1000;
     await openProfile(page);
     const graph = (await page.getByTestId("editor-profile-graph").boundingBox())!;
@@ -84,10 +95,16 @@ test.describe("the elevation profile (docs/course-elevation.md §5)", () => {
     // The dot on the map is that place: on the plane, its height above the course's lowest point is the readout's.
     const dot = page.getByTestId("editor-profile-map-dot");
     await expect(dot).toHaveAttribute("data-leg", "1", { timeout: 5000 });
-    const xs = (await sites(page)).map((s) => s.mm.x);
+    // … the place the readout's distance names along the leg a → b, on the plane at the readout's height.
+    const f = (Number(await tip.getAttribute("data-d")) - marks[1]) / (marks[2] - marks[1]);
+    const want = { x: a.mm.x + (b.mm.x - a.mm.x) * f, y: a.mm.y + (b.mm.y - a.mm.y) * f };
+    const tolMm = 2 / gm + 0.2;
+    expect(Math.abs(Number(await dot.getAttribute("data-x")) - want.x)).toBeLessThanOrEqual(tolMm);
+    expect(Math.abs(Number(await dot.getAttribute("data-y")) - want.y)).toBeLessThanOrEqual(tolMm);
+    const xs = (await sites(page)).filter((s) => Math.abs(s.mm.x) > 0 || Math.abs(s.mm.y) > 0).map((s) => s.mm.x);
     const z = Number(await tip.getAttribute("data-z"));
     expect(z).toBeGreaterThanOrEqual(0);
-    expect((Number(await dot.getAttribute("data-x")) - Math.min(...xs)) * gm * PLANE_SLOPE).toBeGreaterThanOrEqual(z - 1.5);
+    expect(z).toBeLessThanOrEqual((Math.max(...xs) - Math.min(...xs)) * gm * PLANE_SLOPE + 1);
 
     // A click selects the leg under the pointer: the Leg section, and the graph shades it.
     await page.mouse.click(pxOf(d), graph.y + graph.height / 2);

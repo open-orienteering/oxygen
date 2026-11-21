@@ -38,8 +38,8 @@ export function legAt(bounds: readonly number[], dM: number): number {
 }
 
 /**
- * At most two points per pixel column — the column's lowest and highest,
- * in order — so a long course draws a bounded path that keeps its peaks.
+ * About two points per pixel column — the column's lowest and highest,
+ * in order, and the ends of each run of data — so a long course draws a bounded path that keeps its peaks.
  * A column with a point without data keeps one, so the break stays.
  */
 export function decimate(points: readonly GraphPoint[], lengthM: number, columns: number): GraphPoint[] {
@@ -47,14 +47,21 @@ export function decimate(points: readonly GraphPoint[], lengthM: number, columns
   const out: GraphPoint[] = [];
   let col = -1;
   let lo: GraphPoint | null = null, hi: GraphPoint | null = null, gap: GraphPoint | null = null;
+  // The ends of each run of data are kept, so the line reaches the start, the finish and the edges of a gap.
+  const ends = new Set<GraphPoint>();
+  points.forEach((p, i) => {
+    if (p.zM !== null && (i === 0 || i === points.length - 1 || points[i - 1].zM === null || points[i + 1].zM === null)) ends.add(p);
+  });
+  let kept: GraphPoint[] = [];
   const flush = () => {
-    const kept = [lo, hi, gap].filter((p): p is GraphPoint => p !== null);
-    for (const p of [...new Set(kept)].sort((a, b) => a.dM - b.dM)) out.push(p);
+    for (const p of [...new Set([lo, hi, gap, ...kept].filter((q): q is GraphPoint => q !== null))].sort((a, b) => a.dM - b.dM)) out.push(p);
     lo = hi = gap = null;
+    kept = [];
   };
   for (const p of points) {
     const c = Math.min(columns - 1, Math.floor((p.dM / lengthM) * columns));
     if (c !== col) { flush(); col = c; }
+    if (ends.has(p)) kept.push(p);
     if (p.zM === null) gap ??= p;
     else {
       if (!lo || p.zM < (lo.zM as number)) lo = p;
@@ -65,16 +72,25 @@ export function decimate(points: readonly GraphPoint[], lengthM: number, columns
   return out;
 }
 
-/** Round tick values covering `[min, max]`: steps of 1, 2 or 5 × 10ⁿ, about `count` of them. */
-export function niceTicks(min: number, max: number, count: number): number[] {
-  const span = max - min;
-  if (!(span > 0) || count < 1) return [min];
+/** A round step — 1, 2 or 5 × 10ⁿ — that splits `span` into at most `count` parts. */
+export function niceStep(span: number, count: number): number {
+  if (!(span > 0) || count < 1) return 1;
   const raw = span / count;
   const pow = 10 ** Math.floor(Math.log10(raw));
-  const step = [1, 2, 5, 10].map((m) => m * pow).find((s) => s >= raw) ?? 10 * pow;
+  return [1, 2, 5, 10].map((m) => m * pow).find((s) => s >= raw * (1 - 1e-9)) ?? 10 * pow;
+}
+
+/** The multiples of `step` in `[min, max]`. */
+export function ticksBy(min: number, max: number, step: number): number[] {
   const out: number[] = [];
-  for (let v = Math.ceil(min / step) * step; v <= max + step * 1e-9; v += step) out.push(Math.round(v / step) * step + 0);
+  for (let k = Math.ceil(min / step - 1e-9); k * step <= max + step * 1e-9; k++) out.push(Math.round(k * step * 1e6) / 1e6 + 0);
   return out;
+}
+
+/** Round tick values inside `[min, max]`: steps of 1, 2 or 5 × 10ⁿ, about `count` of them. */
+export function niceTicks(min: number, max: number, count: number): number[] {
+  if (!(max - min > 0) || count < 1) return [min];
+  return ticksBy(min, max, niceStep(max - min, count));
 }
 
 export interface GraphBox { width: number; height: number; left: number; right: number; top: number; bottom: number }
@@ -90,6 +106,8 @@ export interface GraphScale {
   dAt: (px: number) => number;
   zTicks: number[];
   dTicks: number[];
+  /** The distance ticks' step, metres. */
+  dStep: number;
 }
 
 /** A flat course still gets a readable axis: the range is at least this many metres. */
@@ -101,17 +119,19 @@ export function graphScale(points: readonly GraphPoint[], lengthM: number, box: 
   if (lo > hi) lo = hi = 0;
   if (hi - lo < MIN_SPAN_M) { const mid = (lo + hi) / 2; lo = mid - MIN_SPAN_M / 2; hi = mid + MIN_SPAN_M / 2; }
   const innerW = Math.max(1, box.width - box.left - box.right), innerH = Math.max(1, box.height - box.top - box.bottom);
-  const zTicks = niceTicks(lo, hi, Math.max(2, Math.floor(innerH / 26)));
-  const step = zTicks.length > 1 ? zTicks[1] - zTicks[0] : 1;
-  const zMin = Math.floor(lo / step) * step, zMax = Math.ceil(hi / step) * step;
+  // The range ends on ticks: the step is chosen for the data's span, the ends widened to its multiples.
+  const step = niceStep(hi - lo, Math.max(2, Math.floor(innerH / 26)));
+  const zMin = Math.floor(lo / step + 1e-9) * step, zMax = Math.ceil(hi / step - 1e-9) * step;
+  const dStep = niceStep(lengthM, Math.max(2, Math.floor(innerW / 90)));
   const len = lengthM > 0 ? lengthM : 1;
   return {
     zMin, zMax, lengthM,
     x: (dM) => box.left + (dM / len) * innerW,
     y: (zM) => box.top + (1 - (zM - zMin) / (zMax - zMin)) * innerH,
     dAt: (px) => Math.max(0, Math.min(lengthM, ((px - box.left) / innerW) * len)),
-    zTicks: niceTicks(zMin, zMax, Math.max(2, Math.floor(innerH / 26))),
-    dTicks: niceTicks(0, lengthM, Math.max(2, Math.floor(innerW / 90))).filter((d) => d <= lengthM),
+    zTicks: ticksBy(zMin, zMax, step),
+    dTicks: lengthM > 0 ? ticksBy(0, lengthM, dStep) : [0],
+    dStep,
   };
 }
 
