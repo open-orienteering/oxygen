@@ -92,7 +92,7 @@ describe("buildPpenXml", () => {
   });
 });
 
-/** Slice F in Purple Pen (row F9; docs/ppen-import-export.md). */
+/** Slice F in Purple Pen (row F9; docs/system/ppen-import-export.md). */
 describe("buildPpenXml — course structure (F9)", () => {
   function bent(): PpenExportInput {
     const input = sample();

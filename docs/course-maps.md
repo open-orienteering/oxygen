@@ -61,7 +61,7 @@ document import report's `north.meridian.medianTiltDeg`, read through
 `course-print.md` §10). Using `-north_offset` (the bearing from true
 north to the meridian direction) here would over-rotate by the
 paper-to-true-north bearing (see
-`docs/bugfix-course-map-print-orientation.md`). `mapToPage` /
+`docs/bugfixes/course-map-print-orientation.md`). `mapToPage` /
 `pageToMap` rotate about the map-frame centre when it is non-zero; the
 PDF composer draws the rotated window under `T_map` (`course-print.md`
 §4.2). Control-circle cut angles rotate with the map.
@@ -194,7 +194,7 @@ Structured JSON is validated at every tRPC boundary with the Zod schemas in
 ## Rendering pipeline
 
 `maps.pdf` composes every event's pages from its pinned map document
-since E3, the flip (`course-print.md` §8; `map-pipeline-switch.md`,
+since E3, the flip (`course-print.md` §8; `history/map-pipeline-switch.md`,
 history note). It reads the templates, course maps, courses, controls
 and graphics:
 

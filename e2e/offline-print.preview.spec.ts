@@ -16,7 +16,7 @@ import {
  * The preview-build smoke (G29; course-print.md §8.6 "Delivery" and
  * "Offline"; map-storage.md §7.1): the production bundle under
  * `vite preview`, its service worker registered — project `preview`,
- * `E2E_PREVIEW=1` (docs/e2e-sharding.md "The preview stack"). What the dev
+ * `E2E_PREVIEW=1` (docs/dev/e2e-sharding.md "The preview stack"). What the dev
  * server's E2E (`course-maps.spec.ts`, G17) cannot reach: the built
  * `print-worker-entry-<hash>.js` constructed in its emitted format
  * (an IIFE, `{ type: "module" }`), the `print-worker`, `map-fonts` and

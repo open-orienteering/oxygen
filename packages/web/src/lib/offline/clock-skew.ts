@@ -4,7 +4,7 @@
  * On each successful sync the client compares its wall clock to the server's
  * (`serverTimeMs` in the `events.push` response). If they differ by more than
  * the threshold, a persistent banner warns the operator that times recorded on
- * this device may be inaccurate. See docs/offline-architecture.md
+ * this device may be inaccurate. See docs/system/offline-architecture.md
  * § "Clock skew detection".
  *
  * Tiny external store so React can subscribe via `useSyncExternalStore`.

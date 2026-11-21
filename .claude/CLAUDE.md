@@ -15,7 +15,7 @@ These are automatic behaviors that Claude Code should perform without being aske
 
 Integration tests, E2E (`pnpm test:e2e*`, `playwright test`) and the Docker rebuild use fixed ports (4100–4303, 4400 for the preview stack, 8080, 3001) and shared databases (`oxygen_test`, `oxygen_e2e*` on :5433). Several sessions run at once in separate worktrees, so these steps are serialised through `scripts/with-verify-lock.sh <command>`; a PreToolUse hook blocks bare invocations. The wrapper waits for the lock, so a blocked session simply queues.
 
-- Selective E2E runs (`scripts/with-verify-lock.sh pnpm test:e2e e2e/foo.spec.ts`) are safe from worktrees: they run on their own stack (API :4100, web :4200, eventor :4300, db `oxygen_e2e`), start every server themselves and never attach to one that is already running (`reuseExistingServer: false`), so they test the code of the worktree they are run from even while the user's `pnpm dev` is up on 3002/5173. No `E2E_WEB_PORT=…` workaround is needed — and pointing it at 5173 now fails with "already used" instead of testing main. See `docs/bugfix-e2e-reuses-dev-server.md`.
+- Selective E2E runs (`scripts/with-verify-lock.sh pnpm test:e2e e2e/foo.spec.ts`) are safe from worktrees: they run on their own stack (API :4100, web :4200, eventor :4300, db `oxygen_e2e`), start every server themselves and never attach to one that is already running (`reuseExistingServer: false`), so they test the code of the worktree they are run from even while the user's `pnpm dev` is up on 3002/5173. No `E2E_WEB_PORT=…` workaround is needed — and pointing it at 5173 now fails with "already used" instead of testing main. See `docs/bugfixes/e2e-reuses-dev-server.md`.
 - Never run `pnpm dev` from a worktree — ports 3002/5173 belong to the user's checkout.
 - Never touch the dev database on :5432 from a worktree.
 - A fresh worktree needs `pnpm install --frozen-lockfile` and `pnpm db:generate` before anything else.
@@ -29,7 +29,7 @@ Integration tests, E2E (`pnpm test:e2e*`, `playwright test`) and the Docker rebu
 The map/course/print redesign runs on the long-lived branch `vector-map-pipeline`. Sub-slices are worktrees cut from it and PRs back into it; spike branches may be cut from it and merge back the same way. `main` is not a target until the user says so.
 
 - **Specs are normative**: `docs/map-*.md` (and later `course-*.md`) state what is implemented and, in each chapter's "Pending in this chapter" section, what is not. The research directory `docs/research/vector-map-pipeline/` is the frozen record of why; its decision log is split per slice under `decisions/` (`decisions/slice-<letter>.md`, `decisions/general.md`), indexed from its README.
-- **Work queue**: `docs/research/vector-map-pipeline/SLICES.md`. One session per row; rows with overlapping areas are never in progress together. Use `/implement-sub-slice <id>`.
+- **Work queue**: `docs/research/vector-map-pipeline/SLICES.md` lists the open rows; each slice's full rows are in `slices/slice-<letter>.md` beside it. One session per row; rows with overlapping areas are never in progress together. Use `/implement-sub-slice <id>`.
 - **When code and spec disagree, or the spec is silent**: stop and ask the user. Record the answer in the spec section first, then implement. Every deviation from a research decision gets a decision-log row. Never deviate silently.
 - **Done** means: spec section written, "Pending" trimmed, tests per AGENTS.md §4, decision-log row, `SLICES.md` row updated, PR open against `vector-map-pipeline`, `spec-reviewer` run.
 
@@ -37,8 +37,8 @@ The map/course/print redesign runs on the long-lived branch `vector-map-pipeline
 
 **Every feature or significant change must include documentation updates** (AGENTS.md §10). This includes:
 - Update `docs/features.md` for user-facing features
-- Update the relevant technical doc in `docs/` (architecture, registration-and-readout, etc.)
-- For bug fixes: create `docs/bugfix-<name>.md` explaining what happened and how it was fixed
+- Update the relevant technical doc in `docs/` (architecture, `system/registration-and-readout.md`, etc.; `docs/README.md` is the index)
+- For bug fixes: create `docs/bugfixes/<name>.md` explaining what happened and how it was fixed, and list it in `docs/bugfixes/README.md`
 - Do not consider a task complete until documentation is updated
 
 ## Known Pre-Existing Issues

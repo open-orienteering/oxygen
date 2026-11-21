@@ -11,7 +11,7 @@
 #   ./deploy.sh --migrate-only [tag]
 #
 # Scaling (idle vs event mode) is preserved from the running service.
-# See docs/deploy-gcp-cloud-run.md and docs/releases-and-images.md.
+# See docs/ops/deploy-gcp-cloud-run.md and docs/releases/README.md.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -143,7 +143,7 @@ run_cloud_run_deploy() {
     echo "   will be able to open /admin/users. See env.sh.example." >&2
   fi
 
-  # Height data (docs/deploy-gcp-cloud-run.md "Height data"; docs/map-terrain.md §7):
+  # Height data (docs/ops/deploy-gcp-cloud-run.md "Height data"; docs/map-terrain.md §7):
   # the deploy's defaults. Settings → Height data in the app (§7.8) overrides each of
   # them. The instance's one Geotorget account, referenced by secret name only: with
   # the secret the environment turns on Lantmäteriet's model and GLO-30 where it has
@@ -155,7 +155,7 @@ run_cloud_run_deploy() {
     dem_providers="${dem_providers:-lantmateriet,glo30}"
   elif [[ "$dem_providers" == *lantmateriet* ]]; then
     echo "!! MAP_DEM_PROVIDERS names lantmateriet but the secret ${DEM_SECRET} does not exist;" >&2
-    echo "   Lantmäteriet stays off. See docs/deploy-gcp-cloud-run.md \"Height data\"." >&2
+    echo "   Lantmäteriet stays off. See docs/ops/deploy-gcp-cloud-run.md \"Height data\"." >&2
   fi
   if [[ -n "$dem_providers" ]]; then
     dem_env=";MAP_DEM_PROVIDERS=${dem_providers}"
@@ -222,5 +222,5 @@ run_cloud_run_deploy "$IMAGE_REF"
 echo
 echo "Deployed ${IMAGE_REF}."
 echo "  If this is the first deploy:"
-echo "    1. Enable IAP + grant users access (docs/deploy-gcp-cloud-run.md §IAP)."
+echo "    1. Enable IAP + grant users access (docs/ops/deploy-gcp-cloud-run.md §IAP)."
 echo "  Idle vs event mode is unchanged; use ./event-mode.sh / ./idle-mode.sh to switch."

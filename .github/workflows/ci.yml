@@ -1,7 +1,8 @@
 name: CI
 
 # A change that touches only docs (docs/**, any *.md) runs no CI at all: none
-# of the jobs below reads them. docs/e2e-sharding.md "CI".
+# of the jobs below reads them (docs-links.yml still checks their links).
+# docs/dev/e2e-sharding.md "CI".
 on:
   pull_request:
     paths-ignore:
@@ -72,7 +73,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qpdf poppler-utils
       - run: pnpm test:integration
 
-  # The serial E2E suite split across runners (docs/e2e-sharding.md "CI"):
+  # The serial E2E suite split across runners (docs/dev/e2e-sharding.md "CI"):
   # each matrix job is one isolated stack running one shard of the same LPT
   # split (scripts/e2e-sharded.mjs, E2E_SHARD_TOTAL / E2E_SHARD_INDEX). It
   # does not wait for `unit`: the shards start at once, beside lint and unit.
@@ -134,7 +135,7 @@ jobs:
             test-results
           if-no-files-found: ignore
 
-  # The preview stack (G29, docs/e2e-sharding.md "The preview stack"): the
+  # The preview stack (G29, docs/dev/e2e-sharding.md "The preview stack"): the
   # production bundle under `vite preview` on :4400 with its service worker,
   # beside the shards, so the E2E wall time does not grow. The web server
   # command builds the bundle (`vite build`, a few seconds); type checking

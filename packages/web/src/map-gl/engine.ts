@@ -272,7 +272,7 @@ export class MapGlEngine {
   /**
    * The generation the worker is deriving (`undefined`: none). One course request is in flight at a
    * time: a drag's pointer moves would otherwise queue a full derivation each, all run to completion
-   * (docs/bugfix-course-drag-redraw.md).
+   * (docs/bugfixes/course-drag-redraw.md).
    */
   private courseInFlight: number | undefined;
   /** A `setCourse` came while one was in flight: `courseInput` is posted when its reply is in. */

@@ -51,7 +51,7 @@ const enlarged = decode(matchDocument(input({ factor: 1.5 })).input);
 const sprint = decode(matchDocument(input(), { library: "ISSprOM2019-2" }).input);
 const smallSki = decode(withSki(matchDocument(input()).input));
 const xmap = omapDoc("e2e/test.xmap", "test.xmap");
-const puit = omapDoc("docs/screenshots/fixtures/puit-de-laven.omap", "puit-de-laven.omap");
+const puit = omapDoc("fixtures/showcase/puit-de-laven.omap", "puit-de-laven.omap");
 
 const FIXTURES: [string, MapDocument][] = [
   ["small", small],
@@ -129,7 +129,7 @@ describe("materialiseSymbol", () => {
       if (a.ok) expect(JSON.stringify(patchSymbolSchema.parse(JSON.parse(JSON.stringify(a.symbol))))).toBe(JSON.stringify(a.symbol));
     }
     // A decoded copy of the same document (another device) gives the same bytes.
-    const again = omapDoc("docs/screenshots/fixtures/puit-de-laven.omap", "renamed.omap");
+    const again = omapDoc("fixtures/showcase/puit-de-laven.omap", "renamed.omap");
     expect(JSON.stringify(materialiseSymbol(again, "ISOM2017-2:506"))).toBe(JSON.stringify(materialiseSymbol(puit, "ISOM2017-2:506")));
   });
 

@@ -9,7 +9,7 @@ import {
 /**
  * `Build: … · Image: … · Commit: …` for a known `/api/version` answer.
  * `Image:` is left out when the deploy ref is the running version's own
- * tag (docs/releases-and-images.md, the footer block).
+ * tag (docs/releases/README.md, the footer block).
  */
 export function BuildInfoText({
   info,

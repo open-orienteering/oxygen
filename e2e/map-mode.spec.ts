@@ -446,7 +446,7 @@ const printedCounts = async (page: Page) => {
 /**
  * The print's drawing: a hash of its objects (`pdfObjects`), without the `Info` dictionary and the cross-reference and
  * object streams. Two prints a second apart differ in their dates, and so, a deflated byte more or less, in the
- * cross-reference stream's offsets — and nowhere else (docs/bugfix-printed-drawing-hash.md).
+ * cross-reference stream's offsets — and nowhere else (docs/bugfixes/printed-drawing-hash.md).
  */
 const printedDrawing = async (page: Page): Promise<string> => {
   const res = await page.request.get(`/api/maps/${EDITOR_EVENT}/maps.pdf?allControls=1`);

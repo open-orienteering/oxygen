@@ -1,8 +1,8 @@
 /**
- * The Demo Competition's control positions (docs/demo.md, "Controls on
+ * The Demo Competition's control positions (docs/ops/demo.md, "Controls on
  * the demo map"). The race data — controls, courses, runners, punches —
  * comes from a real event; only the control positions belong to the demo
- * map. They live in `docs/screenshots/fixtures/showcase-controls.json`,
+ * map. They live in `fixtures/showcase/showcase-controls.json`,
  * keyed by `controls.seq`, and are applied to `showcase.sql` here:
  *
  *   fit     a first placement: the source event's control cloud moved onto
@@ -25,7 +25,7 @@ import { analyseOmap } from "./inject-demo-points.mjs";
 import { loadApiModules } from "./showcase-map.mjs";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-export const CONTROLS_JSON_PATH = path.join(ROOT, "docs", "screenshots", "fixtures", "showcase-controls.json");
+export const CONTROLS_JSON_PATH = path.join(ROOT, "fixtures", "showcase", "showcase-controls.json");
 
 /** The demo map's scale; the source event's map was 1:15 000. */
 export const DEMO_MAP_SCALE = 10000;

@@ -9,7 +9,7 @@
 
 import type { mapDocument } from "@oxygen/shared";
 
-/** The header fields the dialog reads (`MapDocumentHeader`, docs/map-document.md). */
+/** The header fields the dialog reads (`MapDocumentHeader`, docs/map-document-format.md). */
 export type MapInfoHeader = Pick<mapDocument.MapDocumentHeader,"source" | "format" | "library" | "georeferencing" | "colours" | "symbols" | "objects">;
 
 export interface MapInfoInput {

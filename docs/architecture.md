@@ -89,7 +89,7 @@ full migration story.
 - **Append-only / immutable** — `card_readouts`, `punches`, `event_log`.
   UUID PK only, no `seq`. The offline-first work renames `event_log` →
   `journal` and adds `hlc` / `actor_id` / `schema_version` — see
-  [`offline-architecture.md`](offline-architecture.md).
+  [`system/offline-architecture.md`](system/offline-architecture.md).
 - **Pure server-side** — `map_files`, `tracks`, `routes`. `BIGSERIAL` PK.
   (`rendered_maps` and `map_tiles` were dropped in v0.6.1 with the legacy
   map pipeline, `docs/migrations/2026-vector-map-pipeline.md`.) The
@@ -99,7 +99,7 @@ full migration story.
 - **Global directories** — `runner_directory`, `club_directory`,
   `eventor_event_meta`, `users`. Eventor directories are keyed by their
   natural external IDs; `users` is invite-only email identity (see
-  [authentication.md](authentication.md)).
+  [system/authentication.md](system/authentication.md)).
 - **Settings** — `oxygen_settings` (Eventor API keys, runner-db revision,
   etc.); a flat key/value store shared by all events.
 
@@ -133,7 +133,7 @@ docker compose -f docker-compose.release.yml up -d
 ```
 Pulls `ghcr.io/open-orienteering/oxygen` (API + web, port 8080) and Postgres 18.
 Same image works on Cloud Run, Fargate, or Kubernetes. Tags and release process:
-[releases-and-images.md](releases-and-images.md).
+[releases/README.md](releases/README.md).
 
 ### Docker (build from source)
 ```bash
@@ -154,10 +154,10 @@ pnpm install && pnpm db:generate && pnpm dev
 Node.js 20+, pnpm 10+, and a PostgreSQL 18 instance. The API proxies through Vite in development.
 
 ### Cloud Shell demo
-One-click deployment via Google Cloud Shell — no local install needed. See [demo.md](demo.md).
+One-click deployment via Google Cloud Shell — no local install needed. See [ops/demo.md](ops/demo.md).
 
 ### GCP production (Cloud Run + Cloud SQL + IAP)
-Club-facing hosted deployment: the public GHCR `cloud` image on Cloud Run behind Identity-Aware Proxy, backed by Cloud SQL. GitHub Actions publish the image; the club operator runs `scripts/gcp/deploy.sh [tag]` locally to roll it out and migrate. Scales to zero between competitions. See [deploy-gcp-cloud-run.md](deploy-gcp-cloud-run.md).
+Club-facing hosted deployment: the public GHCR `cloud` image on Cloud Run behind Identity-Aware Proxy, backed by Cloud SQL. GitHub Actions publish the image; the club operator runs `scripts/gcp/deploy.sh [tag]` locally to roll it out and migrate. Scales to zero between competitions. See [ops/deploy-gcp-cloud-run.md](ops/deploy-gcp-cloud-run.md).
 
 ## Offline / Local-First Vision
 
@@ -213,7 +213,7 @@ Direct integration with the Swedish Orienteering Federation's Eventor API:
 ![Event page with sync controls](screenshots/event.png)
 
 ### Online Input (ROC)
-Per-event pull from a remote radio-control service. Currently supports the ROC protocol used by [roc.olresultat.se](https://roc.olresultat.se) (and OResults' compatible endpoint). One `setInterval` timer per event runs on the instance holding the background-jobs lease, polling the configured endpoint with a `lastId` watermark and inserting new rows into `punches` (with `source = 'online_input'`). The watermark advances in the same transaction as the inserts, and only if it still reads the value the poll started from, so a poller that raced another one rolls back rather than importing the same punches twice. Architecture and the SICenter forward-compat path are documented in [online-input-roc.md](online-input-roc.md). Code lives in `packages/api/src/online-input/` with a small `Protocol` interface so a second protocol (SICenter) is later a single new file plus a UI dropdown entry.
+Per-event pull from a remote radio-control service. Currently supports the ROC protocol used by [roc.olresultat.se](https://roc.olresultat.se) (and OResults' compatible endpoint). One `setInterval` timer per event runs on the instance holding the background-jobs lease, polling the configured endpoint with a `lastId` watermark and inserting new rows into `punches` (with `source = 'online_input'`). The watermark advances in the same transaction as the inserts, and only if it still reads the value the poll started from, so a poller that raced another one rolls back rather than importing the same punches twice. Architecture and the SICenter forward-compat path are documented in [system/online-input-roc.md](system/online-input-roc.md). Code lives in `packages/api/src/online-input/` with a small `Protocol` interface so a second protocol (SICenter) is later a single new file plus a UI dropdown entry.
 
 ### Printable course maps
 
@@ -229,7 +229,7 @@ same page through the same composer. See [course-maps.md](course-maps.md)
 and [course-print.md](course-print.md).
 
 ### Background jobs and horizontal scaling
-Almost everything in the API scales out without coordination, because every request reads and writes Postgres. The exceptions are the timers that are not driven by a request and have effects outside the database: the LiveResults push, ROC polling, and journal shipping. Running any of them twice means duplicate pushes or duplicate punches, so exactly one instance runs them at a time, chosen by a renewable lease row in `oxygen.instance_lease`. The holder reconciles its timers against the per-event configuration every few seconds, which is also how a change made on another instance takes effect. See [background-jobs-lease.md](background-jobs-lease.md).
+Almost everything in the API scales out without coordination, because every request reads and writes Postgres. The exceptions are the timers that are not driven by a request and have effects outside the database: the LiveResults push, ROC polling, and journal shipping. Running any of them twice means duplicate pushes or duplicate punches, so exactly one instance runs them at a time, chosen by a renewable lease row in `oxygen.instance_lease`. The holder reconciles its timers against the per-event configuration every few seconds, which is also how a change made on another instance takes effect. See [system/background-jobs-lease.md](system/background-jobs-lease.md).
 
 ### Kiosk Mode
 A self-service interface for race day:
@@ -245,7 +245,7 @@ Communication between the admin window and kiosk uses the BroadcastChannel API, 
 
 `CompetitionShell` derives the tab bar from `competition.dashboard` `contentSignals` (`hasMap`, `hasClasses`, `hasCourses`, `hasRunners`, `hasResults`) intersected with the user's capabilities. Tabs that are not yet relevant collapse into More; tabs the user cannot access are omitted. While the dashboard query is still loading, the shell uses the previous always-on layout (still capability-filtered) so a mature event does not flash a planning-only bar. Layout rules live in `packages/web/src/lib/shell-tabs.ts`.
 
-Identity (optional): see [authentication.md](authentication.md). With `AUTH_MODE=off` nothing changes. With `proxy`/`dev`, event-scoped tRPC requires an invited user plus a capability; kiosk and start screen stay renderable with a kiosk key (or a logged-in user who already has the matching capability).
+Identity (optional): see [system/authentication.md](system/authentication.md). With `AUTH_MODE=off` nothing changes. With `proxy`/`dev`, event-scoped tRPC requires an invited user plus a capability; kiosk and start screen stay renderable with a kiosk key (or a logged-in user who already has the matching capability).
 
 ### Test Lab
 Built-in data generation and race simulation for development and demo purposes:
@@ -263,4 +263,4 @@ pnpm dev                # start dev servers
 pnpm docs:screenshots   # capture all screenshots
 ```
 
-The capture script (`docs/screenshots/capture.ts`) loads the Demo Competition fixture with `scripts/load-showcase.sh` (`docs/demo.md`), then captures screenshots of every major view; `--no-load` reuses an already loaded one. See [features.md](features.md) for the full screenshot gallery.
+The capture script (`docs/screenshots/capture.ts`) loads the Demo Competition fixture with `scripts/load-showcase.sh` (`docs/ops/demo.md`), then captures screenshots of every major view; `--no-load` reuses an already loaded one. See [features.md](features.md) for the full screenshot gallery.

@@ -34,7 +34,7 @@ export const E2E_HEADERS = { "x-competition-id": "itest", "x-forwarded-email": "
  * `deterministic` (`CreationDate`, `/ID`; course-print.md §3.2, §8.5). The
  * cross-reference stream holds byte offsets, which move by a byte when the
  * compressed object stream with the dates does: a print a second later can
- * differ there and nowhere else (docs/bugfix-printed-drawing-hash.md).
+ * differ there and nowhere else (docs/bugfixes/printed-drawing-hash.md).
  */
 export async function pdfObjects(bytes: Uint8Array): Promise<{ pages: number; objects: Map<string, string> }> {
   const pdf = await PDFDocument.load(bytes);

@@ -1,6 +1,6 @@
 /**
  * Red exit: a run that matches another variant (slice F, row F6c; user
- * answer 3, 2026-11-07; docs/registration-and-readout.md §4f).
+ * answer 3, 2026-11-07; docs/system/registration-and-readout.md §4f).
  *
  * A runner pre-set on variant A runs B's fork. The mock SI reader reads
  * B's punches: the kiosk shows MP and points to the desk; the readout-station

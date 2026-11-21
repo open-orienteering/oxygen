@@ -1,5 +1,5 @@
 /**
- * The club library's map picker (docs/club-library.md "Copy-on-use"): a modal
+ * The club library's map picker (docs/system/club-library.md "Copy-on-use"): a modal
  * list of the club's maps; a pick copies that map's current version into the
  * event. Opened from `MapPanel`'s drop zone and the course editor's map-info
  * dialog through `useMapReplace`.

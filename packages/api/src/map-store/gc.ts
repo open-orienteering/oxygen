@@ -10,7 +10,7 @@
  * the rest. `RESTRICT` on `map_files` / `club_map_versions` / `map_patches`
  * is the belt.
  *
- * A leader-lease singleton (docs/background-jobs-lease.md): the
+ * A leader-lease singleton (docs/system/background-jobs-lease.md): the
  * supervisor's reconcile calls `maybeStartStorageGc`, which runs at most
  * once a day across the deployment, scheduled by timestamps in `settings`.
  */

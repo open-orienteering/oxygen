@@ -1,4 +1,4 @@
-// Slice E preflight survey (docs/release-slice-e.md §0): read-only.
+// Slice E preflight survey (docs/releases/slice-e.md §0): read-only.
 // Every number under "must be zero" has to be zero before the flip (E3).
 const { Client } = require(require.resolve("pg", { paths: [process.cwd()] }));
 const u = new URL(process.env.DATABASE_URL);

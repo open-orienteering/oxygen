@@ -6,7 +6,7 @@
  * tilt, `course.mapMetadata` — reads through these helpers instead.
  *
  * The pin is the latest `map_files` row's `document_hash`, for every
- * event (the per-event switch is retired, docs/map-pipeline-switch.md).
+ * event (the per-event switch is retired, docs/history/map-pipeline-switch.md).
  * No pin → the honest "no map" answer (null), never an OCAD parse.
  *
  * Caches are keyed by document or source hash. Both are content-addressed,

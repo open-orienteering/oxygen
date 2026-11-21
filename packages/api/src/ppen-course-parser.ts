@@ -194,7 +194,7 @@ export function parsePpenCourseData(xmlContent: string): ParsedCourseData {
 
   // `<leg start-control end-control>`: the bends of the leg between two
   // controls (internal ids), for every course that runs it (row F9).
-  // `<flagging>` and `<gaps>` are not read (docs/ppen-import-export.md).
+  // `<flagging>` and `<gaps>` are not read (docs/system/ppen-import-export.md).
   const rawLegs: Record<string, unknown>[] = Array.isArray(root.leg) ? root.leg : root.leg ? [root.leg] : [];
   const bendsByLeg = new Map<string, Array<{ x: number; y: number }>>();
   for (const leg of rawLegs) {

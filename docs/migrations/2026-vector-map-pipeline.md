@@ -70,7 +70,7 @@ DATABASE_URL='postgresql://oxygen:oxygen@localhost:5433/oxygen_copy?schema=oxyge
 
 Row E5 ran the whole integration suite and the full E2E suite this way,
 on copies of the shared test and E2E databases
-(`INTEGRATION_DATABASE_URL`, `E2E_DB_PREFIX`, `docs/e2e-sharding.md`).
+(`INTEGRATION_DATABASE_URL`, `E2E_DB_PREFIX`, `docs/dev/e2e-sharding.md`).
 `packages/api/src/__tests__/integration/vector-map-pipeline-drops.test.ts`
 tests the guard on a scratch database built to the migration before it.
 
@@ -125,11 +125,11 @@ it), the series' colour-stack settings (kept, unused).
 carries `file_data` in its `map_files` section;
 `packages/api/scripts/restore-legacy-map-files.sql` makes its bytes
 sources and pins them, and `pnpm map:rematch --event <name_id>` imports
-them (`docs/backup-restore.md` "Dumps written before v0.6.1").
+them (`docs/ops/backup-restore.md` "Dumps written before v0.6.1").
 
 ## Cutover
 
-The runbook is `docs/release-slice-e.md`: §0 preflight (E0), §1 v0.6.0,
+The runbook is `docs/releases/slice-e.md`: §0 preflight (E0), §1 v0.6.0,
 §2 v0.6.1. In short, for v0.6.1:
 
 1. v0.6.0 has run on production and the user's E-gate check passed.
@@ -155,7 +155,7 @@ failure needs no rollback — nothing was dropped and v0.6.0 keeps
 serving — but Prisma records the migration as failed (P3018), and every
 later `migrate deploy` (v0.6.0's too) refuses with P3009 until it is
 marked rolled back (`prisma migrate resolve --rolled-back
-20261107120000_vector_map_pipeline_drops`, `release-slice-e.md` §2).
+20261107120000_vector_map_pipeline_drops`, `releases/slice-e.md` §2).
 
 ## Status (November 2026)
 
@@ -170,4 +170,4 @@ marked rolled back (`prisma migrate resolve --rolled-back
 
 Left for later rows (`SLICES.md`): the templates redesign (E-pages), the
 editor's phase 2 (slice F), map mode (slice G). The showcase demo fixture
-was regenerated on the document pipeline by row E-demo (`docs/demo.md`).
+was regenerated on the document pipeline by row E-demo (`docs/ops/demo.md`).

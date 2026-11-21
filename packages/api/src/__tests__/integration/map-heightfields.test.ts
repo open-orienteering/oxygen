@@ -32,7 +32,7 @@ import { runStorageGc } from "../../map-store/gc.js";
 import type { AuthUser } from "../../auth.js";
 
 const OCD = resolve(__dirname, "../../../../../e2e/test.ocd");
-const OMAP = resolve(__dirname, "../../../../../docs/screenshots/fixtures/puit-de-laven-demo.omap");
+const OMAP = resolve(__dirname, "../../../../../fixtures/showcase/puit-de-laven-demo.omap");
 const suffix = randomBytes(4).toString("hex");
 const EMAIL_DOMAIN = `@map-heightfields-${suffix}.example`;
 

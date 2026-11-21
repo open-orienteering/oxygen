@@ -17,11 +17,11 @@
 #   ./backfill.sh --event <nameId>          # club rows + that event's rows only
 #   ./backfill.sh --limit 5                 # at most n maps this run
 #   ./backfill.sh --rematch [--dry-run]     # run map-rematch instead (stale pins after an
-#                                           # importer/library bump, docs/release-slice-b.md §4)
+#                                           # importer/library bump, docs/releases/slice-b.md §4)
 #
 # Re-runnable by construction: a run only revisits rows still missing a
 # document. Exit 1 if any map failed (the gate for slice A is zero failures).
-# See docs/release-slice-a.md.
+# See docs/releases/slice-a.md.
 set -euo pipefail
 SELF="$(readlink -f "$0")"
 cd "$(dirname "$SELF")"

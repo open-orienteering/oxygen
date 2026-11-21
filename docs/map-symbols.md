@@ -838,7 +838,7 @@ the document library's `<library>@<release>` like any other, so no
 schema changes; an ISSkiOM decision on an ISOM map does not apply to the
 same symbol on a sprint map.
 
-**Scope.** The instance belongs to one club (`docs/club-library.md`), so
+**Scope.** The instance belongs to one club (`docs/system/club-library.md`), so
 the table has no event or series column: a decision made while reviewing
 an event map applies to the club map of the same symbols and vice versa.
 Rows of another source kind never apply (`omap:` rows to an OCAD file).
@@ -1477,7 +1477,7 @@ first: otherwise it would be the area green. "Motionsspår" and
    palette puts above lower purple". OCAD-made maps keep the mapper's
    dark-green colour at the bottom of the area block and §9.1 read it as
    the hedge line colour, so one colour put lower purple under every area
-   (`docs/bugfix-lower-purple-under-areas.md`). A literal "directly above
+   (`docs/bugfixes/lower-purple-under-areas.md`). A literal "directly above
    the highest area colour" fails the other way: Ny_karta_test keeps a
    yellow ("Gul (över platta)") at the top of its table, above its own
    upper purple, so the gap count decides instead. **Exception (C9, user decision 2026-10-24):**

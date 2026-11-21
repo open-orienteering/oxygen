@@ -4,7 +4,7 @@ import { trpc } from "../lib/trpc";
 import { useOnlineStatus } from "../hooks/useOnlineStatus";
 
 /**
- * Red exit (F6c, docs/registration-and-readout.md §4f): the punches of a
+ * Red exit (F6c, docs/system/registration-and-readout.md §4f): the punches of a
  * mispunched run validate fully against another variant of the runner's
  * class. One line and one **Accept variant XX** button per match; the
  * accept is a manual desk action (`cardReadout.acceptVariant`), disabled

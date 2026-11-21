@@ -1,6 +1,6 @@
 // The editor around the canvas (docs/course-editor.md §2, §3, §6.9): write conflicts between two contexts, the save
 // state in the top bar (P2), the map-info dialog (P6), and map exchange (F5).
-// Split from the editor's one spec file along its describes (docs/e2e-sharding.md "CI"); the
+// Split from the editor's one spec file along its describes (docs/dev/e2e-sharding.md "CI"); the
 // helpers they share are `helpers/course-editor-spec.ts`. It runs under the `chromium` project (desktop) only.
 //
 // Hygiene (AGENTS §12): `reseed()` once in `beforeAll`, the fixture import idempotent per test

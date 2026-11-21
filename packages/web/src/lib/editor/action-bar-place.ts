@@ -6,7 +6,7 @@
  * The viewer clips (`overflow: hidden`). Centred and always below, a wide bar (a long "Also in"
  * list) on a selection left of the middle began left of the viewer, its first entries cut off and
  * unclickable, and a bar under a selection near the bottom hung below it, so reaching it scrolled
- * the clipping viewer and shifted the whole map (docs/bugfix-action-bar-off-viewer.md).
+ * the clipping viewer and shifted the whole map (docs/bugfixes/action-bar-off-viewer.md).
  */
 
 export interface ActionBarPlaceInput {

@@ -5,7 +5,7 @@ import { useSyncExternalStore } from "react";
  *
  * The offline Dexie snapshot cache is gated by a single localStorage boolean
  * so the station read cutover can be exercised in development before it ships
- * (pivot Step 6 in docs/future-architecture.md). It is intentionally tiny —
+ * (pivot Step 6 in docs/history/future-architecture.md). It is intentionally tiny —
  * not a per-competition system. Default OFF: station reads stay on
  * tRPC / React Query.
  */

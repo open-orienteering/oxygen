@@ -77,7 +77,7 @@ The lessons that shape this topic:
 - **Semantics leaked into a serialisation.** Dash layout, glyph
   placement and pattern tiling are decided inside `ocadToSvg` and then
   re-interpreted by two rasterisers (resvg, librsvg) with different
-  pattern-tile behaviour (`docs/bugfix-librsvg-pattern-tile-size.md`),
+  pattern-tile behaviour (`docs/bugfixes/archive/librsvg-pattern-tile-size.md`),
   different font handling and different anti-aliasing. The fix is to make
   the *decisions* explicit data and the rasterisers dumb.
 - **Parsing dominates.** 5.7 of 6 s per tile block is SVG parsing: the

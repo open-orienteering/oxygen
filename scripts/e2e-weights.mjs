@@ -1,6 +1,6 @@
 /**
  * Run-time weights per spec file for the sharded E2E runner
- * (`scripts/e2e-sharded.mjs`, LPT assignment; docs/e2e-sharding.md
+ * (`scripts/e2e-sharded.mjs`, LPT assignment; docs/dev/e2e-sharding.md
  * "File partitioning"). One unit is one second of a CI shard: the file's
  * summed test durations (the `list` reporter's per-test times) on one
  * `ubuntu-latest` runner with one stack, as the CI matrix runs it.
@@ -8,7 +8,7 @@
  * earlier two-stack runs scaled to it. A file split off the editor's spec
  * carries 8 s more for its own `reseed()` and first fixture import.
  * Refresh from a CI run's logs when a shard's time drifts from its weight
- * (docs/e2e-sharding.md "CI").
+ * (docs/dev/e2e-sharding.md "CI").
  *
  * A file that more than one Playwright project runs is listed per
  * project, `{ "<project>": weight }`, and its weight is the sum: the shard
@@ -88,7 +88,7 @@ export const WEIGHTS = {
 export const DEFAULT_WEIGHT = 10;
 
 /**
- * A spec for the preview stack (G29, docs/e2e-sharding.md "The preview
+ * A spec for the preview stack (G29, docs/dev/e2e-sharding.md "The preview
  * stack"): the production bundle under `vite preview`, run by project
  * `preview` with `E2E_PREVIEW=1` (`PREVIEW_SPECS` in playwright.config.ts).
  * It is in no shard of the split and carries no weight.

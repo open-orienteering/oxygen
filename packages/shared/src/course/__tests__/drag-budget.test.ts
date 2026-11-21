@@ -1,5 +1,5 @@
 /**
- * Loose time budgets for the control-drag path (docs/bugfix-course-drag-redraw.md,
+ * Loose time budgets for the control-drag path (docs/bugfixes/course-drag-redraw.md,
  * docs/course-layer.md §10.2): every pointer move of a drag re-derives the
  * course in the worker, so the derivation of a 25-control course with smooth
  * bends must stay well under a second. Before F20 the number placer alone took

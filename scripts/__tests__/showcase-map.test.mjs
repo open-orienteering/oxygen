@@ -13,7 +13,7 @@ import {
   replaceShowcaseMap,
 } from "../lib/showcase-sql.mjs";
 
-// The Demo Competition's map (docs/demo.md, "The map"): the fixture names
+// The Demo Competition's map (docs/ops/demo.md, "The map"): the fixture names
 // the committed CC0 demo map by its source hash; load-showcase.sh inserts
 // the source and the re-match imports and pins the document.
 const REPIN = "run `node scripts/patch-showcase-map.mjs` to re-pin the committed fixture";

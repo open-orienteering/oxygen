@@ -1,5 +1,5 @@
 -- Restore the GPS tracks section of a per-event dump (docs/map-gps-tracks.md
--- §1.3, docs/map-storage.md §7.3, docs/backup-restore.md) into the event
+-- §1.3, docs/map-storage.md §7.3, docs/ops/backup-restore.md) into the event
 -- `event_id`. Rows keep their id, points, trim, ranges and token;
 -- `created_by` is kept only when that user exists in this database, so a
 -- dump restores into another instance. Idempotent: a row whose id is

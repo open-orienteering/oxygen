@@ -2,7 +2,7 @@
  * The vector base layer inside `MapViewer` (docs/map-rendering.md §5.4).
  *
  * Every event draws its pinned document since E3 (the per-event switch is
- * gone, docs/map-pipeline-switch.md): it is fetched once from
+ * gone, docs/history/map-pipeline-switch.md): it is fetched once from
  * `/api/map-documents/:hash` and drawn by the WebGL2 arena path on an
  * unrotated canvas; gestures move a paper-space view; a GPS fix reaches
  * the overlay through `mapGeo`; the course is drawn by the GL layer in
@@ -280,7 +280,7 @@ test.describe("vector map layer", () => {
     // map-rendering.md §5.4 "Overlay": where a leg crosses a black line, the crossing is black (the
     // line art is drawn after lower purple) and the leg is purple on either side of it. The crossing is
     // made on white paper so the colour tests stay simple: two controls straddling a black path where
-    // there is no yellow (lower purple is drawn over the yellow too — docs/bugfix-lower-purple-under-areas.md).
+    // there is no yellow (lower purple is drawn over the yellow too — docs/bugfixes/lower-purple-under-areas.md).
     test.setTimeout(180_000);
     await openEvent(page);
     await viewerWithMap(page);
@@ -310,7 +310,7 @@ test.describe("vector map layer", () => {
     }
   });
 
-  // docs/bugfix-lower-purple-under-areas.md: the fixture has no lower purple of its own; the inserted one must go
+  // docs/bugfixes/lower-purple-under-areas.md: the fixture has no lower purple of its own; the inserted one must go
   // above its yellow, not under it (the yellow is an area colour, 03 §2.4 / Appendix B).
   test("the course layer draws lower purple over the map's yellow area", async ({ page }) => {
     test.setTimeout(180_000);

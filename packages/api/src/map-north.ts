@@ -27,7 +27,7 @@
  * History: an earlier version read the staleness formula as a
  * georeference error and auto-applied it as `rotationCorrection`, which
  * shifted GPS positions by ~200 m on Nackareservatet. See
- * `docs/bugfix-map-north-correction.md`.
+ * `docs/bugfixes/map-north-correction.md`.
  *
  * Club files often reuse 601.x for track symbols, so we cluster by exact
  * symbol id and require many near-parallel long lines. The clustering and

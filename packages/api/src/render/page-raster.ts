@@ -43,7 +43,7 @@ export interface PageRaster {
  * output: **premultiplied** RGBA, so a covered fraction `a` contributes its
  * channels as they are (compositing them as straight alpha darkened every
  * anti-aliased edge of a saturated colour — the C7 corpus run found it,
- * docs/bugfix-page-oracle-premultiplied.md).
+ * docs/bugfixes/page-oracle-premultiplied.md).
  */
 export function over(dst: Uint8Array, dw: number, dh: number, src: { width: number; height: number; pixels: Uint8Array }, ox: number, oy: number): void {
   for (let y = 0; y < src.height; y++) {

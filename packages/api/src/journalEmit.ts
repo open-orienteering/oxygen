@@ -4,7 +4,7 @@
  * Race-critical mutations call `appendJournal` with the **transaction client**
  * of the same `$transaction` that performs the table write, so journal
  * completeness is a structural property: a mutation that commits has its
- * entry, a rolled-back one doesn't. See docs/offline-architecture.md § "The
+ * entry, a rolled-back one doesn't. See docs/system/offline-architecture.md § "The
  * journal".
  *
  * Only the race-critical set is journaled (the dependency closure of live

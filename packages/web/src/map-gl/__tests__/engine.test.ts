@@ -347,7 +347,7 @@ describe("MapGlEngine dynamic bucket (docs/map-rendering.md §5.2 Dynamic bucket
   const courses = (t: { posted: WorkerRequest[] }) => t.posted.filter((m) => m.type === "course") as Extract<WorkerRequest, { type: "course" }>[];
   const derivedCourses = (info: unknown) => (info as { derivation: { courses: unknown[] } | null }).derivation?.courses.length;
 
-  it("one request in flight, latest wins: the inputs made meanwhile wait, only the last is sent once the reply is in (docs/bugfix-course-drag-redraw.md)", async () => {
+  it("one request in flight, latest wins: the inputs made meanwhile wait, only the last is sent once the reply is in (docs/bugfixes/course-drag-redraw.md)", async () => {
     const { engine, transport, infos } = await courseEngine();
     const before = courses(transport).length;
     const a = request(), b = request({ viewOptions: { labelMode: "code" } }), c = request({ structure: null });

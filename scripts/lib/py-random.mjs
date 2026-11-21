@@ -4,7 +4,7 @@
  * methods drawn the way CPython 3.10 draws them. The demo map's injected
  * features (scripts/lib/inject-demo-points.mjs) were first placed by a
  * Python script; matching its generator keeps the approved placement
- * byte-identical (docs/demo.md, "The map").
+ * byte-identical (docs/ops/demo.md, "The map").
  */
 
 const N = 624;

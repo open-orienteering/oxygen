@@ -51,7 +51,7 @@ Measured on the working tree (2026-10-12):
 | Storage | `map_files.file_data`, `club_map_files`, `map_tiles` (208 MB in dev), `rendered_maps`, `render_key` | — | 07 tables |
 | Shared helpers | `packages/shared/src/course-maps/*` (3 280 lines: overlay SVG, schema, geometry, description sheet, label placement) | — | Schema and geometry kept; SVG emitters retired; label placement and description sheet become symbolisation |
 | Tests | `course-editor.spec.ts` (16 tests), `course-maps.spec.ts`, `mobile-layout.spec.ts`, `club-map-library.spec.ts`, `webserial.spec.ts` (map after readout); integration `map-tiles`, `course-maps`, `club-maps`, `map-rotation`, `map-control-id-space` | — | Rewritten per slice against the new surfaces; fixtures from 04 §8 |
-| Docs | `map-tile-rendering.md`, `course-maps.md`, `map-color-stack.md`, `course-editor.md`, `club-library.md`, `mobile-layout.md`, `deploy-gcp-cloud-run.md` sizing notes, `backup-restore.md`, `architecture.md`, `AGENTS.md` §7 | — | Replaced by the specification's docs as each slice lands |
+| Docs | `map-tile-rendering.md`, `course-maps.md`, `map-color-stack.md`, `course-editor.md`, `system/club-library.md`, `system/mobile-layout.md`, `ops/deploy-gcp-cloud-run.md` sizing notes, `ops/backup-restore.md`, `architecture.md`, `AGENTS.md` §7 | — | Replaced by the specification's docs as each slice lands |
 
 Call sites that render a map and must survive every slice unchanged from
 the user's point of view: `CompetitionShell` (persistent side pane via

@@ -1,6 +1,6 @@
 /**
  * Regression test for e2e/helpers/trpc.ts — batch-aware tRPC response
- * matching (docs/bugfix-e2e-kiosk-and-editor-flakes.md).
+ * matching (docs/bugfixes/e2e-kiosk-and-editor-flakes.md).
  *
  * The web client's httpBatchLink merges calls issued in the same tick
  * into one request. kiosk-readout.spec.ts waited for

@@ -13,7 +13,7 @@
  *   - In reads, each character is '0' or '1'.
  *
  * Verified against a USB capture of the official Citizen POS Printer
- * Utility writing to a CT-S310II — see docs/printer-mode-management.md.
+ * Utility writing to a CT-S310II — see docs/ops/printer-mode-management.md.
  *
  * MSW5-3 on the CT-S310II controls USB mode:
  *   - OFF = Virtual COM (PID 0x0FFF, vendor-specific)

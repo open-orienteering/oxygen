@@ -1,5 +1,5 @@
 /**
- * The F20 drag fixture (docs/bugfix-course-drag-redraw.md): a synthetic
+ * The F20 drag fixture (docs/bugfixes/course-drag-redraw.md): a synthetic
  * 25-control course at 1:15 000 with one F18-style smooth bend on every
  * leg — the shape that took a course from 52 leg points to 1100 and the
  * derivation from 69 ms to 400 ms — over 3000 point features for the

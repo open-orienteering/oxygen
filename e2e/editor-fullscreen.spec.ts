@@ -2,7 +2,7 @@
 // panel locks Escape (Keyboard Lock API) once per fullscreen session, not
 // once per editor render — each re-lock made Chrome show its "press Esc to
 // exit full screen" bubble again on every hover with an armed tool
-// (docs/bugfix-fullscreen-bubble-flicker.md). Kept apart from
+// (docs/bugfixes/fullscreen-bubble-flicker.md). Kept apart from
 // `course-editor.spec.ts` until D10 folds the editor specs together.
 import { test, expect, type Page } from "@playwright/test";
 import { reseed } from "./helpers/reseed";

@@ -2,7 +2,7 @@
  * Optional Google service-account ID-token auth for venue → cloud calls.
  *
  * When the cloud instance runs behind Identity-Aware Proxy (see
- * docs/deploy-gcp-cloud-run.md), plain HTTP requests are rejected before
+ * docs/ops/deploy-gcp-cloud-run.md), plain HTTP requests are rejected before
  * they reach the API. IAP accepts programmatic callers that present an
  * OIDC ID token for a service account with the "IAP-secured Web App User"
  * role, with the token's audience set to the IAP OAuth client ID.

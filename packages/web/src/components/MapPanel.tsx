@@ -446,7 +446,7 @@ function MapPanelImpl({
   // editor, not on the editor object: that object is rebuilt on every
   // editor render (a hover with an armed tool, a selection), and each
   // re-lock makes Chrome show its "press Esc to exit full screen" bubble
-  // again (docs/bugfix-fullscreen-bubble-flicker.md).
+  // again (docs/bugfixes/fullscreen-bubble-flicker.md).
   const hasEditor = !!editor;
   useEffect(() => {
     if (!hasEditor || !isFullscreen) return;
