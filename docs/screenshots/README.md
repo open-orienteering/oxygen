@@ -49,7 +49,7 @@ What a private run does differently:
 
 ### Keeping map sources out of git
 
-`scripts/check-map-files.mjs` finds OCAD and Mapper files by extension (also `.bak` and archives), by OCAD's binary mark and by Mapper's XML root element, and fails unless the file is on the public list in `scripts/lib/map-files.mjs` with its pinned SHA-256: the test maps and the CC0 demo map. CI runs it on every push and pull request, which catches a map but only after it was pushed. The pre-commit hook stops it before it is committed; enable it once per clone:
+`scripts/check-map-files.mjs` finds OCAD and Mapper files by extension (also `.bak` and archives), by OCAD's binary mark and by Mapper's XML root element, and fails unless the file is on the public list in `scripts/lib/map-files.mjs` with its pinned SHA-256: the test maps, the CC0 Puit de Laven map and the o-kartan demo map. CI runs it on every push and pull request, which catches a map but only after it was pushed. The pre-commit hook stops it before it is committed; enable it once per clone:
 
 ```bash
 ln -s "$PWD/scripts/hooks/pre-commit-map-guard.sh" "$(git rev-parse --path-format=absolute --git-path hooks)/pre-commit"

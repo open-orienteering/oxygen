@@ -35,8 +35,8 @@ describe("isMapSource", () => {
 });
 
 describe("isPublicMap", () => {
-  it("lists only test maps and the CC0 demo map", () => {
-    for (const p of PUBLIC_MAPS.keys()) assert.match(p, /^(e2e\/|fixtures\/showcase\/puit-de-laven)/);
+  it("lists only test maps and the two demo maps", () => {
+    for (const p of PUBLIC_MAPS.keys()) assert.match(p, /^(e2e\/|fixtures\/showcase\/puit-de-laven|fixtures\/okartan\/okartan-)/);
   });
   it("accepts a listed map only with its listed content", () => {
     const [p, sha] = [...PUBLIC_MAPS][0];

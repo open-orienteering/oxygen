@@ -3,7 +3,8 @@
 //
 // A club's map is published only as raster images (screenshots), never as
 // its vector source. Only the maps listed here are public: the test maps the
-// suite draws, and the CC0 demo map (docs/ops/demo.md). Each is pinned by
+// suite draws, the CC0 Puit de Laven demo map (docs/ops/demo.md), and the
+// o-kartan.se demo map, bought with a licence for any use. Each is pinned by
 // its SHA-256, so a club map copied over one of them is caught too; a
 // deliberate change to one of these files updates its hash here.
 
@@ -14,6 +15,9 @@ export const PUBLIC_MAPS = new Map([
   ["e2e/test.xmap", "fd9bc816edc0dd1346d2df9b01c31dc05c012d08e3e762eee8ce6a3f2980d8c6"],
   ["fixtures/showcase/puit-de-laven-demo.omap", "dfd0b69b1362a068bde8ac4b1d1fef58717db43cf33d8036339c53908c12c3dc"],
   ["fixtures/showcase/puit-de-laven.omap", "57ae1a9db2457db9fcdb2a9f0c2999ac694231585c52ee97693a505a8db69daf"],
+  // The o-kartan.se demo map, licensed for any use including publication (PR #252).
+  ["fixtures/okartan/okartan-original.ocd", "1db7dde39fb8d32dee5fb1633ce2ecc99c91213113f9cc84c519ec6ea7896672"],
+  ["fixtures/okartan/okartan-demo.ocd", "a7fedfc4722e20d0b9eeb8baee6060102a5ff0a713e6327656408cb43e4f56fd"],
 ]);
 
 /** Map extensions, also inside a backup or archive name (`club.ocd.bak`, `club.omap.zip`). */
