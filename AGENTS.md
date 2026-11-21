@@ -6,7 +6,7 @@ These rules apply to all AI coding tools (Claude Code, Cursor, Copilot, Windsurf
 
 Oxygen is an orienteering competition management system. It is a pnpm monorepo with three packages:
 
-- `packages/api/` — Fastify 5 + tRPC 11 backend (Node.js 20, ESM)
+- `packages/api/` — Fastify 5 + tRPC 11 backend (Node.js 24, ESM)
 - `packages/web/` — React 19 PWA frontend (Vite, React Router v7, Tailwind CSS v4)
 - `packages/shared/` — Shared types and utilities
 - `e2e/` — Playwright E2E tests

@@ -151,7 +151,7 @@ Connects to an existing PostgreSQL 18 instance on the host (`localhost:5432`). C
 ```bash
 pnpm install && pnpm db:generate && pnpm dev
 ```
-Node.js 20+, pnpm 10+, and a PostgreSQL 18 instance. The API proxies through Vite in development.
+Node.js 24 (`.nvmrc`; 22.12+ works), pnpm 10+, and a PostgreSQL 18 instance. The API proxies through Vite in development.
 
 ### Cloud Shell demo
 One-click deployment via Google Cloud Shell — no local install needed. See [demo.md](demo.md).

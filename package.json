@@ -27,9 +27,9 @@
     "test:scripts": "node --test scripts/__tests__/*.test.mjs",
     "release:version": "node scripts/release-version.mjs"
   },
-  "packageManager": "pnpm@10.29.3",
+  "packageManager": "pnpm@10.34.9",
   "engines": {
-    "node": ">=20",
+    "node": ">=22.12",
     "pnpm": ">=10"
   },
   "devDependencies": {
@@ -73,8 +73,7 @@
       "@xmldom/xmldom@<0.9.12": "^0.9.12",
       "find-my-way@<9.6.1": "^9.10.0",
       "nanoid@<3.3.18": "^3.3.20",
-      "deepmerge-ts@<8.0.0": "^8.0.2",
-      "jsdom": "~30.0.1"
+      "deepmerge-ts@<8.0.0": "^8.0.2"
     }
   }
 }

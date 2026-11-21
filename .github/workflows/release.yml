@@ -22,7 +22,7 @@ jobs:
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version-file: .nvmrc
       - name: Parse git tag
         id: tag
         run: |
