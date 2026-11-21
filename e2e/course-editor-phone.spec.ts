@@ -1,6 +1,6 @@
 // The editor on a phone (docs/course-editor.md §10, Pixel 7): the touch subset in Course mode, the read-only Leg
 // section (F3), and the variation block (F7).
-// Split from the editor's one spec file along its describes (docs/e2e-sharding.md "CI"); the
+// Split from the editor's one spec file along its describes (docs/dev/e2e-sharding.md "CI"); the
 // helpers they share are `helpers/course-editor-spec.ts`. It runs under the `mobile` project only.
 //
 // Hygiene (AGENTS §12): `reseed()` once in `beforeAll`, the fixture import idempotent per test

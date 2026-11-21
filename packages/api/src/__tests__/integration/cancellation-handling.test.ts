@@ -9,7 +9,7 @@
  *   - course runner counts (via the class group-by)
  *
  * This corresponds to the bugfix documented in
- * docs/bugfix-cancellation-handling.md (originally numeric `Status > 0`
+ * docs/bugfixes/cancellation-handling.md (originally numeric `Status > 0`
  * coalesced Cancel with "has a result"). The PG schema now uses an
  * ENUM (`cancel`), so the bug can only re-appear if a status filter
  * forgets to add `cancel` to the withdrawn set.

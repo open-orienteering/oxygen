@@ -17,7 +17,7 @@
  *  - Chrome or Edge (WebUSB support)
  *  - Secure context (https:// or http://localhost)
  *
- * See docs/receipt-printer-setup.md for setup details and how to flip
+ * See docs/ops/receipt-printer-setup.md for setup details and how to flip
  * the printer between modes.
  */
 
@@ -249,8 +249,8 @@ export class WebUsbPrinterDriver extends EventTarget implements PrinterDriver {
       // OS driver auto-binds. Recommend the mode flip as the primary fix.
       const isWindows = navigator.userAgent.includes("Windows");
       const hint = isWindows
-        ? "On Windows, the CITIZEN printer driver is blocking access. The recommended fix is to switch the printer to Virtual COM mode via its FEED button menu (no per-laptop setup needed afterwards). As a fallback, Zadig (zadig.akeo.ie) can replace the driver with WinUSB. See docs/receipt-printer-setup.md."
-        : "On Linux, the kernel's usblp driver is blocking access. The recommended fix is to switch the printer to Virtual COM mode via its FEED button menu (a simpler udev rule is then enough). As a fallback, install the udev rule that unbinds usblp. See docs/receipt-printer-setup.md.";
+        ? "On Windows, the CITIZEN printer driver is blocking access. The recommended fix is to switch the printer to Virtual COM mode via its FEED button menu (no per-laptop setup needed afterwards). As a fallback, Zadig (zadig.akeo.ie) can replace the driver with WinUSB. See docs/ops/receipt-printer-setup.md."
+        : "On Linux, the kernel's usblp driver is blocking access. The recommended fix is to switch the printer to Virtual COM mode via its FEED button menu (a simpler udev rule is then enough). As a fallback, install the udev rule that unbinds usblp. See docs/ops/receipt-printer-setup.md.";
       throw new Error(
         `Could not claim the printer USB interface. ${hint}`,
         { cause: err },

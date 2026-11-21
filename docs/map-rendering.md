@@ -1068,7 +1068,7 @@ Constants (`buckets.ts`; 04 §6.11):
 | text skip | 4 device px | text whose em (`sizeUm × pxPerUm`) is smaller is not drawn (04 §6.11); `minTextPx` |
 | hatch tint | 1.5 device px | stripes closer than this become a tint of coverage `width / spacing` |
 | `ARRIVAL_REBUILD_MS` | 150 ms | arriving detail rebuilds the visible set at most this often while more drawn detail is pending |
-| arena growth | 1.25× | into a new buffer by re-uploading every live range from the views `put` received; offsets never move. Not `copyBufferSubData`: ANGLE on Adreno copies zeros from a buffer with in-flight draws (`docs/bugfix-adreno-arena-grow.md`) |
+| arena growth | 1.25× | into a new buffer by re-uploading every live range from the views `put` received; offsets never move. Not `copyBufferSubData`: ANGLE on Adreno copies zeros from a buffer with in-flight draws (`docs/bugfixes/adreno-arena-grow.md`) |
 
 **Assignment.** Every object goes, whole, to the cell holding the centre
 of its symbolised bounds (`passBounds`: path bounds + half width × the
@@ -1265,7 +1265,7 @@ renderer, which scissors every colour below `fromColour` to the frame's
 screen box (exact while the page is upright, which Layout mode keeps).
 
 **Engine.** `MapGlEngine.setCourse(input | null)` keeps **one request in
-flight** (F20, `docs/bugfix-course-drag-redraw.md`): with none, it posts
+flight** (F20, `docs/bugfixes/course-drag-redraw.md`): with none, it posts
 the input with a new generation; during one it records the input — the
 latest call wins, `null` included — and posts it when the reply is in, so
 a drag re-derives at the worker's rate, every reply of a posted request is
@@ -1280,7 +1280,7 @@ generation (a failed load, a real worker's `onerror`) rejects the load in
 flight and ends the request in flight, as before F20b. The current reply's part is uploaded under key `C` —
 through `GpuArena.put` like any part, so a grow re-uploads it with the
 rest and nothing goes through `copyBufferSubData`
-(`docs/bugfix-adreno-arena-grow.md`) — and the previous one released;
+(`docs/bugfixes/adreno-arena-grow.md`) — and the previous one released;
 `setAtlas` replaces the mesh texture when the reply carries an atlas.
 The part is **always resident and always drawn**: appended to the
 visible set after the drawn cells and the large bucket at every zoom,
@@ -1975,7 +1975,7 @@ already forwarded).
 panel = no map ? upload prompt : documentHash ≠ null ? viewer (vector layer) : import state
 ```
 
-Since E3 there is no per-event switch (`docs/map-pipeline-switch.md`,
+Since E3 there is no per-event switch (`docs/history/map-pipeline-switch.md`,
 history note): every event draws its pinned document.
 `documentHash` is `course.mapMetadata.documentHash` (the event's pinned
 document, `docs/map-storage.md` §6.4); `MapPanel` passes it to
@@ -3474,7 +3474,7 @@ Mesh frames (p50 / p95 ms) and drape re-renders:
 | `map-gl/terrain/__tests__/footprint.test.ts` (H6) | footprint → view: the screen rectangle at pitch 0, the analytic trapezoid tilted, every on-screen surface point of 40 random cameras inside the footprint and a layer, the box clip, empty when looking away; the pitch-0 layer is the 2D view grown by the margin (same pixel offsets, screen parity) at any bearing; limits never exceeded over 60 random cameras; split by need on a wide depth range — each layer at its need when the cap allows, the far one at the split depth's, fewer texels than one layer, the near one inside the far one and over the ground beyond the screen's bottom edge, every on-screen ground point at least at its need; both scaled together under the cap; one layer on a narrow depth range and at pitch 0 when capped; a tiny texel allowance terminates; at pitch 0 the texels lie on the pixels even where the screen crosses the field's edge; tiles partition the layer and draw every texel where its matrix puts it |
 | `map-gl/__tests__/worker-terrain.test.ts` (H6) | the `terrain` request's prepared mesh and normals equal `buildTerrainMesh` and `heightNormals` on a cone and a noise field, without a document; the two arrays transferred; an error names its generation |
 | `map-gl/__tests__/engine.test.ts` "terrain" (H6) | the field prepared in the worker and uploaded at the document's origin; drape before mesh, the layer's matrix = `viewMatrix` of its view, the hand-over view at pitch 0; mesh only while the camera moves, the settle timer's `onChange`, one re-render after it and none for the same camera; a content change and `invalidateDrape` re-render at once over the same layers; the layers' cells requested and drawn, detail arrivals re-render, gated per layer; the field and drape in `residentBytes`, the drape ≤ ⅓ of a small budget; `setTerrain(null)` drops both; a 2D render after a 3D frame draws the 2D view's cells; a superseded `setTerrain` rejects; arrivals held to `DRAPE_ARRIVAL_MS` and the last at once; a near layer above the gate and a far one below (detail drawn and requested for the near one's cells only, `whenComplete` on them); a load moves the mesh to the new origin and re-selects; a worker failure rejects and keeps the field and mesh; `dispose` rejects a request in flight; a camera that sees no mesh renders no drape |
-| `e2e/map-terrain.spec.ts` | on the dev page in headless Chromium: the lit cone top-down with a grey drape — facing flank, far flank and flat ground at §5.6's analytic values ± 10 levels, ≤ 7 draws; the checker at pitch 60 — two adjacent squares on flat ground in their own colours, the apex projected above its foot; a south-flank point at pitch 60 at its slope's shade for e = 2 and e = 1 (the mesh lifted by the R16I heights and the exaggeration applied in the shader — a flat mesh or an ignored e would show another value); with `drape=half`, the background colour beyond the drape, flat at full strength and on the far flank shaded; no background pixel inside the noise field's projected outline at mixed levels, and auto LOD within 2 % of level 0; a click picks the point under the cursor within 0.2 mm. H6 (`doc=course`): at pitch 0 over flat ground the 3D frame equals `engine.render`'s 2D frame (north up: max 10 levels, < 0.5 % over 2 — SwiftShader's MSAA resolve; turned 25°: < 1 % over 2); tilted 60° over the cone, the leg 31–32 purple on the flank, the map's black line, paper white on the south flank at §5.6's shade for its slope, ≤ 7 draws; moved to control 32 the old drape does not reach (no purple — the frame read in the same task as the move, H8: a second round trip outlasted the 150 ms settle on CI) and no re-render happens until the camera settles, then the course is there; close and tilted, a near layer and a coarser far one (> 1.5×), each at its need, the course from the near one, texels within a third of the budget, and a 2 MB budget's third respected |
+| `e2e/map-terrain.spec.ts` | §5.6 (H6, H8) |
 | `e2e/map-terrain.spec.ts` "lines on the terrain" (H8) | `doc=course&field=cone&line=…`: two opaque 8 px lines across the cone, 8 mm south and north of the apex. From above both are drawn; ≤ 7 mesh draws, 2 lines in 4 draws. 20° above the horizon at 5× the near one is drawn on its flank and the far one is hidden — no line colour where it would be, and the pick there meets the cone in front of it; at 1× the far flank faces the camera and the same line is drawn to its full width (≥ 6 of the 8 px rows in the column through it: the shader's half-width rise — centred on the ground line the terrain would swallow half). An X at half opacity on the flat field, from above: at the crossing and on a single stretch the colour is one blend of the line over the frame without it (± 8 levels; twice would be three quarters) — and on flat ground at the box's top, so it is in front of the near plane (`NEAR_HEADROOM`) |
 | `e2e/map-gl-doc.spec.ts` "terrain=1" (H6) | the 3D bench on `e2e/test.ocd` at the event budget: the field prepared in the worker, 240 frames per scenario, drape re-renders only at the start and after the pauses, ≤ 7 mesh draws, drape ≤ 10 MB |
 
@@ -4072,7 +4072,7 @@ pixels inked (some channel more than 48 below white, about a fifth of
 full coverage) on one side with no ink within one pixel on the other,
 and differing beyond the channel tolerance there (C7: a tone on the
 threshold — Crop-A's 214.0 at 206 against 207 — otherwise counted as a
-whole missing shape; `docs/bugfix-parity-ink-threshold.md`). The corpus
+whole missing shape; `docs/bugfixes/parity-ink-threshold.md`). The corpus
 tables below were measured before that rule; it only removes counts, so
 none of their verdicts would flip to `diverges`.
 Anti-aliasing shades and sub-pixel placement never count: at 10 px/mm a
@@ -4186,7 +4186,7 @@ what became of it:
   symbols; its 504.5 / 504.7 barriers, 512.3 footbridge and 519.0 tunnel
   — every object turned — diverged 24.92 / 36.28 / 26.65 / 31.96 %, and
   519.3 21.31 %, 208.4 15.04 %; all 23 are `close` since, with canonical
-  rendering on and off (`docs/bugfix-ocad-point-rotation.md`).
+  rendering on and off (`docs/bugfixes/ocad-point-rotation.md`).
 - **Spec-faithful, kept.** Cliffs: every 201.x / 202.x variant matches
   the legacy at 40 px/mm from source (0 % unexplained); canonically
   matched 202.2 / 201.5 get ISOM's flat ends (the "small houses"),
@@ -4639,7 +4639,7 @@ Tests:
 | Test | Asserts |
 |---|---|
 | `packages/api/src/render/__tests__/colour-order-diff.test.ts` | the tolerance boundary and ink count; the side-by-side image; the tile grid, a window, ranking; paint ids rising with the sort key, the id colour round trip, crisp paint images on five contract fixtures (every pixel decodes, the reference raster's grid), an overlap of one ink named by the upper row; `viewKind`, `flipKind` (a thin line over a swapped pair, no flip, the paper and a missing layer taking no part), `sharedTop`, `withoutRows`, `namePeeled` (a swap under a shared top layer, one view per peel set, no layer peeled twice, the depth limit), `nameChanges` (neighbour vote, unattributed, counts); layers (roles, uses, kind, class, names, `#n`, `graphic:`); the permutation (palette rank, roleless areas and others, ties), `permuteStack` re-indexing, `inverseOrder`, the proxies' row (`permutedRenderOptions`) and its effect — an IR-less object on an encoded document drawn in the same colour in both orders, and not without the options; the census; `parseClassification`, `classify` (first match, map scope, `*`, a `graphic:*` prefix, unattributed never classified, unused rules, share), `suggestClass`; the layered candidate on an encoded stage 7 document — `sourceTableOf`, one brown split into paved area and road infill, the road re-indexed per reference, one role per layer name, `rowOfAligned` and the proxies' row, every object in the same ink in both orders, a symbol drawing in an inserted row rejected; `jointDocument` and `paintCorrespondence` (the brown's paints to the paved and the road layer, layers back to their source rows, mismatched symbol tables rejected), `correspondingNamer` (`graphic:` too), `withoutPasses`; I4: `namePeeled`'s fine view (a pixel no view tells named by its sub-pixels, the fine view drawn only when a pixel is left, a fine view of the wrong size rejected), `fineKindOf` (block and margin, ties by key); `classify` with `residue` (only `(unattributed)`, only by a rule naming the map and `maxPx`, over the cap or on another map unclassified, never a named kind; the schema's refusals), `maxPx`, `reported` rules and `reportedClasses` (a dropped deviation in the source's direction only, not a kept one, a mask, a graphic row, an unknown layer, no report) |
-| `scripts/__tests__/measure-colour-order.test.mjs` (`pnpm test:scripts`) | on `docs/screenshots/fixtures/puit-de-laven.omap` from a `--maps` file, candidate `layers` by default: exit 1 with nothing classified, kinds summing to the changed pixels, named share ≥ 95 %, a change between two palette layers, no `+`-joined name; the layered summary (more rows than colours, split colours, both course purples inserted) and its standard-output line; `--candidate permutation` still runs, with a multi-role name; the census, tiles, suggestions and worst images written, none of the map's colour names on standard output; a window over one tile classified by a file → exit 0; I4: the layered summary's source-order, own-order and deviation counts and their standard-output lines; the committed `scripts/colour-order-classes.json` classifies every change on the CC0 map from the candidate's report → exit 0; a window that meets no tile → exit 1, the reason on standard error; usage errors (no maps, `--out` outside `.local/colour-order/`, an unknown candidate, a bad window or tile size, an unknown option, a missing file, a bad rule) → exit 2 |
+| `scripts/__tests__/measure-colour-order.test.mjs` (`pnpm test:scripts`) | on `fixtures/showcase/puit-de-laven.omap` from a `--maps` file, candidate `layers` by default: exit 1 with nothing classified, kinds summing to the changed pixels, named share ≥ 95 %, a change between two palette layers, no `+`-joined name; the layered summary (more rows than colours, split colours, both course purples inserted) and its standard-output line; `--candidate permutation` still runs, with a multi-role name; the census, tiles, suggestions and worst images written, none of the map's colour names on standard output; a window over one tile classified by a file → exit 0; I4: the layered summary's source-order, own-order and deviation counts and their standard-output lines; the committed `scripts/colour-order-classes.json` classifies every change on the CC0 map from the candidate's report → exit 0; a window that meets no tile → exit 1, the reason on standard error; usage errors (no maps, `--out` outside `.local/colour-order/`, an unknown candidate, a bad window or tile size, an unknown option, a missing file, a bad rule) → exit 2 |
 
 ## 7. Where things live
 
@@ -4815,7 +4815,7 @@ The shared module is exported as a namespace: `import { render } from
   (`ocad-16` / `omap-9`).** Alignment now places an inserted lower purple
   above the area colours as a group and reports what stays on the wrong
   side (`COLOUR_ORDER_CONFLICT`, `COLOUR_AREA_ABOVE_LOWER_PURPLE`;
-  `map-symbols.md` §9.2, `docs/bugfix-lower-purple-under-areas.md`). A map
+  `map-symbols.md` §9.2, `docs/bugfixes/lower-purple-under-areas.md`). A map
   whose *own* lower purple sits under area colours keeps that order, so
   the layer still draws its course under them there.
 - **§5.4 legacy colour settings.** `mapMetadata.colorOverrides` and

@@ -17,7 +17,7 @@ import {
 import { DEMO_MAP_PATH } from "../lib/showcase-map.mjs";
 import { FIXTURE_PATH } from "../lib/showcase-sql.mjs";
 
-// The Demo Competition's control positions (docs/demo.md, "Controls on the
+// The Demo Competition's control positions (docs/ops/demo.md, "Controls on the
 // demo map"): fitted once, adjusted in the editor, exported and applied.
 
 const CONTROL_COLS = ["id", "event_id", "seq", "name", "codes", "status", "xpos", "ypos", "lat", "lng", "removed", "kind"];

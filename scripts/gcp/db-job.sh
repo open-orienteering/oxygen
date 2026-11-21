@@ -3,8 +3,8 @@
 # Cloud Run job (no psql access from outside; the password lives only in the
 # `oxygen-database-url` secret). The script gets DATABASE_URL and the `pg`
 # client of the image; it is passed base64-encoded because `--args` splits on
-# commas. Used for the slice E preflight (docs/release-slice-e.md) and for
-# the rollback flags of v0.5.0 (docs/release-slice-e.md §1).
+# commas. Used for the slice E preflight (docs/releases/slice-e.md) and for
+# the rollback flags of v0.5.0 (docs/releases/slice-e.md §1).
 #
 # Usage:
 #   ./db-job.sh <script.js> [--tag v0.5.0] [--env KEY=VALUE]...

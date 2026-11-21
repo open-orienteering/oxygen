@@ -54,7 +54,7 @@ consumes), results, Eventor sync, the GPS replay viewer.
 
 Hard constraints inherited: paper millimetres are the model
 (`course-maps.md`); times, codes and sequences are in the results closure
-and journaled (`offline-architecture.md` "Reference data during a lease");
+and journaled (`system/offline-architecture.md` "Reference data during a lease");
 everything user-facing in `en` and `sv`.
 
 ## 2. Current state, and what to keep
@@ -95,7 +95,7 @@ rule of the course layer, 04 §7); the club inventory and code allocation;
 `controls` as *sites* shared across courses; paper-mm positions with
 server-derived WGS 84; map templates and sheets as separate things;
 validation by stable codes; club templates; autosave; the gesture model
-from `mobile-layout.md`.
+from `system/mobile-layout.md`.
 
 **Change**: the two editors become modes of one canvas; the overlay is
 objects in a course layer symbolised by the shared stage (no React SVG,
@@ -561,7 +561,7 @@ where layout and variations are authored. Design:
   three detents (peek: KPIs + selection name; half: properties or
   sequence; full: everything), draggable, never covering the selection
   (the canvas pans the selection above the sheet when it opens).
-- **Gestures** (extends `mobile-layout.md`): one finger pans in
+- **Gestures** (extends `system/mobile-layout.md`): one finger pans in
   fullscreen/standalone; tap selects; **drag only moves a selected
   object** — a selected control gets a visible handle offset above the
   finger so the circle is not hidden under it, and a long-press on an
@@ -716,7 +716,7 @@ path and `courses.geometry` consumers.
   should show "moved by X at T" on reconnect.
 - **IOF XML** representation of map exchange, crossing points and corridors
   — verify against the 3.0 XSD during phase 2 and record in
-  `iof-coursedata-export.md`.
+  `system/iof-coursedata-export.md`.
 - **09 ordering**: whether Layout mode ships in the same release as Course
   mode (recommended — otherwise two overlay implementations coexist again)
   or the old layout dialog survives one release on the PDF side alone.

@@ -1,7 +1,7 @@
 # Oxygen — Lightweight orienteering management
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
-[![Open in Cloud Shell](https://gstatic.com/cloudssh/images/open-btn.svg)](https://shell.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https://github.com/open-orienteering/oxygen&cloudshell_tutorial=docs/demo.md)
+[![Open in Cloud Shell](https://gstatic.com/cloudssh/images/open-btn.svg)](https://shell.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https://github.com/open-orienteering/oxygen&cloudshell_tutorial=docs/ops/demo.md)
 
 A modern web application for managing orienteering competitions — from entry and course setup through start draw, SI card readout, and live results. Built by [Open Orienteering](https://github.com/open-orienteering). Inspired by [MeOS](http://www.melin.nu/meos), rebuilt as a Progressive Web App with direct [Eventor](https://eventor.orientering.se) integration.
 
@@ -46,7 +46,7 @@ For a deeper dive into database design, deployment options, and subsystem detail
 ### Self-host from the published image
 
 Pre-built multi-arch images live on GHCR (`ghcr.io/open-orienteering/oxygen`).
-See [releases and images](docs/releases-and-images.md) for tags (`stable`,
+See [releases and images](docs/releases/README.md) for tags (`stable`,
 `edge`, `vX.Y.Z`) and how GitHub Releases are cut.
 
 ```bash
@@ -89,7 +89,7 @@ See [packages/api/.env.example](packages/api/.env.example) for all environment v
 Click the **Open in Cloud Shell** button at the top of this page to pull the
 published GHCR image and spin up a fully working instance in your browser — no
 Node.js, pnpm, dependency install, or source build needed. The
-[Cloud Shell tutorial](docs/demo.md) walks you through loading demo data or
+[Cloud Shell tutorial](docs/ops/demo.md) walks you through loading demo data or
 connecting your Eventor API key.
 
 ## Eventor API Key

@@ -78,7 +78,7 @@ describe("print.png's box (docs/course-print.md §8.5)", () => {
 });
 
 describe("the graphics a print needs (docs/course-print.md §8.5)", () => {
-  // Regression: an image course object's graphic was not loaded (docs/bugfix-course-object-image-print.md).
+  // Regression: an image course object's graphic was not loaded (docs/bugfixes/course-object-image-print.md).
   it("collects page objects' and image course objects' graphics, once each, ascending", () => {
     const sheet = (objects: unknown[], courseObjects?: unknown[]) =>
       ({ objects, course: courseObjects ? { objects: courseObjects } : {} }) as unknown as PrintSheet;

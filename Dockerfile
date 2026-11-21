@@ -118,7 +118,7 @@ EXPOSE 80
 # Cloud Run runs one container per service, so this target bundles the
 # built web app into the API image; staticServe.ts serves it (SPA
 # fallback + asset caching) when WEB_DIST_DIR is set. See
-# docs/deploy-gcp-cloud-run.md.
+# docs/ops/deploy-gcp-cloud-run.md.
 FROM api AS cloud
 
 COPY --from=build /app/packages/web/dist /app/web-dist

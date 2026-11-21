@@ -589,7 +589,7 @@ export function createMapGlWorker(post: Post, schedule: (fn: () => void) => void
       }
       if (msg.type === "course") {
         // A request whose derivation throws answers `error`: the engine keeps one course request in
-        // flight and must hear that it ended (F20, docs/bugfix-course-drag-redraw.md).
+        // flight and must hear that it ended (F20, docs/bugfixes/course-drag-redraw.md).
         try {
           const { reply, transfer } = courseReply(state, msg);
           post(reply, transfer);

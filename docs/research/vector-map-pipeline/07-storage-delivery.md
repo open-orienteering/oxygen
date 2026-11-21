@@ -45,8 +45,8 @@ order (09).
 | Import (06) | Source bytes by `fileHash`; source-document cache by `(fileHash, importerVersion)`; final documents by content hash; job state visible to any API instance; previews next to documents |
 | Club library (06 §6) | Series + versions; events pin a version; a version's source and document shared, not copied, across events; club symbol decisions and print profiles are club-level |
 | Course editor (08) | Stable `(documentHash, objectIndex)` references; the document an event points at never changes under its feet |
-| Kiosk / stations at a venue (`offline-architecture.md`) | The post-readout map (`MapPanel`, `CardMapPreview`) and the course view must render with zero internet when the venue node holds the lease |
-| Backups (`backup-restore.md`) | Per-event dump restores the map; club-library sources stay instance-admin gated (`club-library.md`) |
+| Kiosk / stations at a venue (`system/offline-architecture.md`) | The post-readout map (`MapPanel`, `CardMapPreview`) and the course view must render with zero internet when the venue node holds the lease |
+| Backups (`ops/backup-restore.md`) | Per-event dump restores the map; club-library sources stay instance-admin gated (`system/club-library.md`) |
 | Deployments | Cloud Run + Cloud SQL (IAP, 2 instances, request-based CPU in idle mode), self-host docker-compose, venue box — one code path for all three |
 | Operators | Delete an event or a club map version and be sure the bytes go too — eventually and safely |
 
@@ -79,13 +79,13 @@ row shares its `file_hash` with a `club_map_files` row).
   There is no object store, no shared filesystem, and the venue box never
   will have either.
 - **Copy-on-use** gives events an independent copy of a club map
-  (`club-library.md`). The *intent* — later library changes do not alter
+  (`system/club-library.md`). The *intent* — later library changes do not alter
   events — is right; the *mechanism* (duplicating 36 MB) is what 06 §6
   replaces with version pinning.
 - **Blob access rules** exist and must survive: `from_club_library` gates
   `course.downloadMap` and `/api/backup/event` (instance admin for club
   sources); `clubMap.download` is uploader-or-admin; `/api/map-tile/*`
-  accepts `courses.view` or the kiosk key (`authentication.md`).
+  accepts `courses.view` or the kiosk key (`system/authentication.md`).
 - **Tile delivery** sets `Cache-Control: public, max-age=604800` and a
   `?v=` cache-buster; the service worker caches `/api/map-tile/`
   CacheFirst with 2 000 entries and `purgeOnQuotaError`
@@ -95,7 +95,7 @@ row shares its `file_hash` with a `club_map_files` row).
   controls, courses, classes, runners, cards, punches, readouts, units —
   explicitly *not* map or tile blobs: "server-local caches, re-creatable,
   and not part of the results closure". With tiles that was the only
-  option (thousands of rows, hundreds of MB). `offline-architecture.md`
+  option (thousands of rows, hundreds of MB). `system/offline-architecture.md`
   lists "map tiles, 50 MB uploads" as cloud-owned endpoints that are
   "simply unavailable at an offline venue".
 - **Per-event backup** (`backup.ts`) emits `\copy` of event-scoped tables
@@ -114,7 +114,7 @@ row shares its `file_hash` with a `club_map_files` row).
   poll the engine" (`map-tile-rendering.md`). Two instances may serve
   alternate requests, so job state in process memory is not visible to
   the next poll. Background singletons elect through
-  `oxygen.instance_lease` (`background-jobs-lease.md`).
+  `oxygen.instance_lease` (`system/background-jobs-lease.md`).
 - **Browser storage.** The PWA manifest is `display: standalone`; the
   web app uses Dexie (`lib/offline/db.ts`) for the outbox and read
   projections, and Cache Storage via Workbox for assets and tiles.
@@ -150,7 +150,7 @@ more than this whole projection consumes.
 | Option | Description | For | Against |
 |--------|-------------|-----|---------|
 | **A. Postgres `bytea`, content-addressed tables** | One row per blob keyed by hash; `STORAGE EXTERNAL` on the blob columns | Already the only store all three deployments have; transactional with the rows that reference it (import commits document + references atomically); `pg_dump` backups and the per-event `\copy` dump cover it; `ON DELETE` semantics do the reference counting; uncompressed out-of-line TOAST makes `substring(bytes from … for …)` fetch only the chunks covering a byte range, so HTTP `Range` is O(range) not O(file) | Bytes travel DB → API → client (one extra hop vs. a CDN); Cloud SQL storage is the priciest GB in the stack ($0.17/GB-month SSD — ~$0.05 for the projection above); a 36 MB `bytea` is read into one `Buffer` by Prisma, fine at these sizes, not a streaming API |
-| **B. Object storage (GCS / S3 / MinIO)** | Blobs by hash in a bucket; DB holds metadata | Cheap GB; signed URLs could bypass the API for downloads; CDN-friendly | A second store that must be deployed, credentialed, backed up and kept consistent with the DB in every shape — the venue box would need MinIO or a filesystem fallback; signed URLs break the IAP-only topology (`deploy-gcp-cloud-run.md` rejected the LB + CDN route on cost); loses transactional import; sizes are far below where object storage earns its keep |
+| **B. Object storage (GCS / S3 / MinIO)** | Blobs by hash in a bucket; DB holds metadata | Cheap GB; signed URLs could bypass the API for downloads; CDN-friendly | A second store that must be deployed, credentialed, backed up and kept consistent with the DB in every shape — the venue box would need MinIO or a filesystem fallback; signed URLs break the IAP-only topology (`ops/deploy-gcp-cloud-run.md` rejected the LB + CDN route on cost); loses transactional import; sizes are far below where object storage earns its keep |
 | **C. Filesystem volume** | Blobs under a data directory | Simple locally | No shared disk on Cloud Run (two instances), ephemeral container FS; a second backup path; nothing A does not do better here |
 | **D. A then B behind an interface** | Ship A; keep a small `BlobStore` seam so B can be added for a large multi-club deployment | Keeps A's simplicity now, leaves the door open | Interfaces cost little only if they stay thin |
 
@@ -398,7 +398,7 @@ Both are housekeeping tables: uploads older than 24 h without
   `map_files`, `club_map_versions`, 08's tables and `map_import_jobs`.
   `RESTRICT` means a `DELETE` of a still-referenced blob fails loudly, so
   GC cannot be wrong, only late.
-- **GC job** (`background-jobs-lease.md` singleton, daily, also runnable
+- **GC job** (`system/background-jobs-lease.md` singleton, daily, also runnable
   from Settings → Maintenance): delete `map_documents` rows with no
   referencing row whose `last_referenced_at` is older than the grace
   period (30 days); then `map_sources` rows referenced by no document, no
@@ -440,7 +440,7 @@ needs to happen.
 ### 6.2 Authorisation of a hash URL
 
 The hash is 256 bits and not enumerable (unlike `/api/map-tile/<slug>/z/x/y`,
-which `deploy-gcp-cloud-run.md` flags as the obstacle to a CDN), but
+which `ops/deploy-gcp-cloud-run.md` flags as the obstacle to a CDN), but
 unguessability is not authorisation. The route accepts a request when
 either:
 
@@ -596,7 +596,7 @@ stations render. So:
   is later converted to streaming).
 - **Not in the snapshot**: `map_sources` (club property, tens of MB, not
   needed to render), `map_source_documents`, graphics and templates
-  (print is cloud-owned during a lease — `offline-architecture.md` — and
+  (print is cloud-owned during a lease — `system/offline-architecture.md` — and
   stays so; 05's isomorphic PDF module makes venue printing possible
   later by adding `graphics`, `map_templates`, `course_maps` and the
   print profile to the snapshot).
@@ -633,7 +633,7 @@ stations render. So:
   the 60 % measured in §2.
 - **Restore** of an event dump on a fresh instance: the `INSERT INTO
   oxygen.events` header, then the `\copy` blocks in FK order — sources,
-  documents, then `map_files`. `backup-restore.md` gets the new order in
+  documents, then `map_files`. `ops/backup-restore.md` gets the new order in
   09.
 
 ## 11. Capacity and cost
@@ -646,7 +646,7 @@ stations render. So:
 
 Bandwidth: one 0.3 MB document per device per event replaces hundreds of
 tile requests; Club-full browsing in the library is 3.5 MB once per device
-per version. The Cloud CDN question in `deploy-gcp-cloud-run.md` closes
+per version. The Cloud CDN question in `ops/deploy-gcp-cloud-run.md` closes
 itself: there is nothing left worth a load balancer.
 
 ## 12. Tests
@@ -733,5 +733,5 @@ less a choice between alternatives than a set of consequences of 01, 02 and
   but 09 should list the bundle-size consequence.
 - **Multi-club instances** (several clubs on one deployment) would make
   `club_*` tables need an owner column; Oxygen is single-club per instance
-  today (`club-library.md`: "one owning club") and this topic keeps that
+  today (`system/club-library.md`: "one owning club") and this topic keeps that
   assumption explicit rather than half-solving it.

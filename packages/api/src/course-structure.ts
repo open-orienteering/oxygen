@@ -366,7 +366,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * Public ids of the given controls (the structure's wire form). Ids that are not uuids name no control and are
  * left out of the map: `structureDiff` names a variation group by its own id ("v1", course-layer.md §7), which
  * reached the uuid lookup and made a stale write on a course with groups a 500 instead of a `CONFLICT`
- * (docs/bugfix-editor-overlapping-course-writes.md).
+ * (docs/bugfixes/editor-overlapping-course-writes.md).
  */
 export async function publicIdsOf(db: Db, eventId: bigint, uuids: Iterable<string>): Promise<Map<string, number>> {
   const ids = [...new Set(uuids)].filter((id) => UUID_RE.test(id));

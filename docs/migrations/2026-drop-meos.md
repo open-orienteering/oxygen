@@ -92,8 +92,8 @@ DATABASE_URL='postgresql://oxygen:oxygen@localhost:5432/oxygen?schema=oxygen' \
 **Status:** the CLI script lives at
 `packages/api/scripts/migrate-mysql-to-pg.ts` (entry point wired into
 `pnpm migrate:mysql-to-pg`). The reference implementation in
-[`docs/migrations/2026-drop-meos-migration-tool.md`] walks through the
-per-table mapping. Until the script lands, operators can use
+(the script itself; a separate walkthrough doc was planned but never
+written) holds the per-table mapping. Until the script lands, operators can use
 `mysqldump` + a SQL transform — but the recommended path is to wait for
 the CLI.
 

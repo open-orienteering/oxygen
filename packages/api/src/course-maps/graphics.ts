@@ -276,7 +276,7 @@ export function parseRasterWindow(raw: string | undefined): ImageWindow | undefi
  * §8.5), ascending: the page objects (template + sheet) and the image course
  * objects in scope. Before G15 only the rows' and templates' objects were
  * read, so an `image` course object printed as `IMAGE_MISSING`
- * (docs/bugfix-course-object-image-print.md).
+ * (docs/bugfixes/course-object-image-print.md).
  */
 export function sheetGraphicIds(sheets: readonly PrintSheet[]): number[] {
   const ids = new Set<number>();

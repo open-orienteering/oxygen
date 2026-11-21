@@ -1,7 +1,7 @@
 /**
  * Endpoint ownership classification (pivot Step 4).
  *
- * Two duals of the same boundary (docs/offline-architecture.md § "Ownership
+ * Two duals of the same boundary (docs/system/offline-architecture.md § "Ownership
  * follows the journal"):
  *
  *   - **Race-critical mutations** are owned by the lease holder. They are

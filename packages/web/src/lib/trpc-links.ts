@@ -1,6 +1,6 @@
 /**
  * Cloud-owned mutations in a batch of their own (row G18;
- * docs/offline-architecture.md "Non-critical data").
+ * docs/system/offline-architecture.md "Non-critical data").
  *
  * A venue box forwards a tRPC batch to the cloud only when every
  * procedure in it is cloud-owned, and refuses a batch that mixes them with

@@ -212,7 +212,7 @@ test.describe("Map documents", () => {
   });
   test("a map with contours gets a height field: the descriptor names it and height.bin serves it", async ({ request }) => {
     test.setTimeout(180_000);
-    const file = readFileSync("docs/screenshots/fixtures/puit-de-laven-demo.omap");
+    const file = readFileSync("fixtures/showcase/puit-de-laven-demo.omap");
     const init = await request.post(`${API_BASE}/api/map-uploads`, { headers: HEADERS, data: { fileName: "demo.omap", bytes: file.byteLength, chunkBytes: file.byteLength } });
     expect(init.status()).toBe(201);
     const { uploadId } = (await init.json()) as { uploadId: string };

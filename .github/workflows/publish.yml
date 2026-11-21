@@ -31,7 +31,7 @@ jobs:
         run: |
           IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
           SHA_TAG="sha-${GITHUB_SHA}"
-          # The version the image reports (docs/releases-and-images.md, "Tags"):
+          # The version the image reports (docs/releases/README.md, "Tags"):
           # package.json on the release commit, `git describe` past a tag.
           VERSION="$(node scripts/build-version.mjs)"
           echo "Build version: ${VERSION}"

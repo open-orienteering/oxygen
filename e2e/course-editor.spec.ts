@@ -1,6 +1,6 @@
 // The editor's core (docs/course-editor.md §1–§4, §12): the GL canvas, Course mode and its descriptions, automatic
 // cuts, the checks, the action bar's place, and variation authoring (F7).
-// Split from the editor's one spec file along its describes (docs/e2e-sharding.md "CI"); the
+// Split from the editor's one spec file along its describes (docs/dev/e2e-sharding.md "CI"); the
 // helpers they share are `helpers/course-editor-spec.ts`. It runs under the `chromium` project (desktop) only.
 //
 // Hygiene (AGENTS §12): `reseed()` once in `beforeAll`, the fixture import idempotent per test
@@ -753,7 +753,7 @@ test.describe("F7: variations and loops (docs/course-editor.md §12)", () => {
    * A page point well off the leg a → b (half its length to one side) where a click reaches the map: clear of every
    * site and drawn number, of the editor's chrome (the inspector, the rail, the action bar) and of the description
    * sheet. The viewer spans the whole editor under its floating panels, so "inside the viewer" is not enough — a point
-   * under the inspector got the K click there and placed nothing (bugfix-f7-offleg-under-inspector.md).
+   * under the inspector got the K click there and placed nothing (docs/bugfixes/f7-offleg-under-inspector.md).
    */
   async function offLeg(page: Page, a: Site, b: Site): Promise<Pt> {
     await viewSettled(page);
@@ -957,7 +957,7 @@ test.describe("The action bar stays inside the viewer (docs/course-editor.md §2
     const made: number[] = [];
     try {
       // Fourteen courses through every control: each control's "Also in" names all of them, wider than the viewer
-      // (docs/bugfix-action-bar-off-viewer.md: the F15 flake had thirteen left by earlier tests).
+      // (docs/bugfixes/action-bar-off-viewer.md: the F15 flake had thirteen left by earlier tests).
       for (let i = 1; i <= 14; i++) {
         const { id } = await trpcCall<{ id: number }>("course.create", { name: `Bar edge long course name ${i} ${stamp}` });
         made.push(id);

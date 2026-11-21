@@ -4,7 +4,7 @@
  *
  *   node scripts/build-version.mjs        # prints e.g. 0.7.0 or 0.7.0-3-gabc1234
  *
- * The git tag is the version of record (docs/releases-and-images.md, "Tags").
+ * The git tag is the version of record (docs/releases/README.md, "Tags").
  * The release commit is built before its tag exists, so its `package.json`
  * — bumped by the release PR — is ahead of the last tag and is the version.
  * Every other commit reports `git describe` over the release tags

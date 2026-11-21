@@ -1059,7 +1059,7 @@ model Punch {
 /// Append-only journal of mutations — the offline-first CRDT wire format
 /// (was oxygen_events / event_log). eventId references the orienteering event;
 /// each entry has its own UUID id and an HLC sort key. See
-/// docs/offline-architecture.md.
+/// docs/system/offline-architecture.md.
 model JournalEntry {
   id              String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
   eventId         BigInt   @map("event_id")

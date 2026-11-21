@@ -11,7 +11,7 @@ describe("actionBarPlace (docs/course-editor.md §2)", () => {
   });
 
   it("shifts a bar right of a selection near the left edge so its start stays inside the viewer", () => {
-    // Regression (docs/bugfix-action-bar-off-viewer.md): thirteen courses in "Also in" made the bar as wide
+    // Regression (docs/bugfixes/action-bar-off-viewer.md): thirteen courses in "Also in" made the bar as wide
     // as the viewer allows; centred on a control at x = 120 it began at −372, Add to … cut off.
     const w = actionBarMaxWidth(container.w);
     const { left } = place(120, 200, w, 60);

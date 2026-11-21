@@ -353,7 +353,7 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
       } else if (sel) {
         // Vertex, grip, then the body or within reach of its edge. A closed area's body is its outline: the hit-test
         // answers null inside it (§5), so an interior press declines and the viewer pans — the area moves by its edge
-        // or a vertex (docs/bugfix-editor-area-press-pans.md).
+        // or a vertex (docs/bugfixes/editor-area-press-pans.md).
         const onBody = p.target?.kind === "object" && p.target.id === sel.id;
         const d = pressGeometry(sel.geometry, vertexRule(sel.kind), { pt: p.pt, reach: HANDLE_PX * p.mmPerPx, alt: p.alt, shift: p.shift }, onBody && !toggle);
         if (d && !(toggle && d.kind === "object" && d.vertex === null)) {

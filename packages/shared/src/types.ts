@@ -643,7 +643,7 @@ export const ControlStatus = {
    * SI readout station (operating mode M_READOUT = 0x05). Not a logical
    * course role like the rest — it's a physical station type. Lives in
    * the same enum until the larger status / operating-mode separation
-   * lands; see docs/registration-and-readout.md § 11.
+   * lands; see docs/system/registration-and-readout.md § 11.
    */
   Readout: 13,
 } as const;

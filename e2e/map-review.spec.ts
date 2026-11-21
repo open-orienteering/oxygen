@@ -280,7 +280,7 @@ test.describe("map import review", () => {
   test("club map: the colour layers panel, the switch to the map's own order and back, the picture (row I6)", async ({
     page,
   }) => {
-    // e2e/colour-layers.ocd: a badly ordered table (docs/e2e-test-ocd-fixture.md), so the two orders differ.
+    // e2e/colour-layers.ocd: a badly ordered table (docs/dev/e2e-test-ocd-fixture.md), so the two orders differ.
     await page.goto("/settings");
     await expect(page.getByTestId("library-tab-maps")).toBeVisible({ timeout: 15000 });
     await page.getByTestId("library-map-upload").setInputFiles("e2e/colour-layers.ocd");

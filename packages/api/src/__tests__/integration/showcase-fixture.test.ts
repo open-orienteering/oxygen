@@ -1,5 +1,5 @@
 /**
- * The Demo Competition fixture (docs/demo.md): loaded the way
+ * The Demo Competition fixture (docs/ops/demo.md): loaded the way
  * `scripts/load-showcase.sh` loads it — the `map_sources` row from the
  * committed demo `.omap`, then `showcase.sql`, then the re-match — it pins
  * the CC0 demo map (docs/map-storage.md §6.9, `unpinned`), answers
@@ -19,7 +19,7 @@ import { prisma, type EventRef } from "../../db.js";
 import { runRematch } from "../../map-store/rematch.js";
 import { loadCourseSequences, rebuildCourseLengths } from "../../course-geometry.js";
 
-const FIXTURES = resolve(__dirname, "../../../../../docs/screenshots/fixtures");
+const FIXTURES = resolve(__dirname, "../../../../../fixtures/showcase");
 const SQL = readFileSync(resolve(FIXTURES, "showcase.sql"), "utf8");
 const MAP = readFileSync(resolve(FIXTURES, "puit-de-laven-demo.omap"));
 const MAP_HASH = createHash("sha256").update(MAP).digest("hex");

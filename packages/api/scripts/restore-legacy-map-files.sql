@@ -1,5 +1,5 @@
 -- Restore the map_files section of a per-event dump written before v0.6.1
--- (docs/backup-restore.md "Dumps from before v0.6.1", docs/map-storage.md
+-- (docs/ops/backup-restore.md "Dumps from before v0.6.1", docs/map-storage.md
 -- §7.3). Such a section carries the map's bytes in `file_data` (and, from
 -- slice A on, `source_hash`), a column v0.6.1 dropped (E5); a dump from
 -- before the vector pipeline has no hashes at all. This script makes each

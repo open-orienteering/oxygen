@@ -13,7 +13,7 @@
  * Coordinates are paper mm (the unit of `controls.xpos/ypos` and of all
  * course geometry), written to `MapPosition` with `unit="mm"`.
  *
- * The course structure (slice F, row F9; docs/iof-coursedata-export.md):
+ * The course structure (slice F, row F9; docs/system/iof-coursedata-export.md):
  * a variant is a `Course` with its root's name as `CourseFamily`; a
  * crossing point is a `CrossingPoint` control and an unnumbered row before
  * the leg's end row; a marked route is `specialInstruction="TapedRoute"` on

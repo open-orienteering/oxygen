@@ -1,6 +1,6 @@
 // Layout mode (docs/course-layout.md): sheets, auto templates, setter maps (F10), description sheets (F11), and the
 // white-outs (P7, F12).
-// Split from the editor's one spec file along its describes (docs/e2e-sharding.md "CI"); the
+// Split from the editor's one spec file along its describes (docs/dev/e2e-sharding.md "CI"); the
 // helpers they share are `helpers/course-editor-spec.ts`. It runs under the `chromium` project (desktop) only.
 //
 // Hygiene (AGENTS §12): `reseed()` once in `beforeAll`, the fixture import idempotent per test
@@ -710,7 +710,7 @@ test.describe("Course editor auto templates (docs/course-layout.md §5–§7)", 
 
 // P7 (user 2026-11-07): a white-out outside whose shape crossed the frame turned the whole frame white (first vertex
 // left of the frame) or left a white slash (crossing the bottom, first vertex inside) — the GL fill's even-odd
-// triangulation (docs/bugfix-whiteout-layout.md). Its own describe, so the parallel rows' edits above merge cleanly.
+// triangulation (docs/bugfixes/whiteout-layout.md). Its own describe, so the parallel rows' edits above merge cleanly.
 test.describe("P7: a white-out outside crossing the frame hides only what is outside its shape", () => {
   desktopOnly();
   const frame: Frame = { x: 10, y: 40, width: 190, height: 247 };

@@ -3,10 +3,10 @@
 #
 # Works against either a Dockerized PostgreSQL (USE_DOCKER=1, typically the
 # one in docker-compose.yml) or a native PostgreSQL running on the host.
-# The fixture itself is docs/screenshots/fixtures/showcase.sql — a portable,
+# The fixture itself is fixtures/showcase/showcase.sql — a portable,
 # anonymized dump derived from Vinterserien data. Its map is the CC0 Puit de
 # Laven map with invented point features (puit-de-laven-demo.omap next to
-# it; docs/demo.md, "The map"). The SQL names the map only by hash, so the
+# it; docs/ops/demo.md, "The map"). The SQL names the map only by hash, so the
 # load has three steps: insert the map_sources row from the committed .omap,
 # run the SQL, then run the map re-match, which imports the document and
 # pins it (docs/map-storage.md §6.9) — natively through `pnpm map:rematch`,
@@ -47,8 +47,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-FIXTURE="$REPO_ROOT/docs/screenshots/fixtures/showcase.sql"
-MAP_FILE="$REPO_ROOT/docs/screenshots/fixtures/puit-de-laven-demo.omap"
+FIXTURE="$REPO_ROOT/fixtures/showcase/showcase.sql"
+MAP_FILE="$REPO_ROOT/fixtures/showcase/puit-de-laven-demo.omap"
 
 for f in "$FIXTURE" "$MAP_FILE"; do
   if [[ ! -f "$f" ]]; then

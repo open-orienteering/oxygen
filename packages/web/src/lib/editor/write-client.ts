@@ -149,7 +149,7 @@ export class EditorWrites {
    * Runs `op` once every earlier write of the same row has settled: one write per row in flight, so the next reads
    * the token its predecessor's result seeded (docs/course-editor.md §3 "Tokens"). Without it a second write sent
    * while the first was in flight — Ctrl+Z twice, an undo faster than its reply — carried the same `baseVersion`
-   * and was refused as stale (docs/bugfix-editor-overlapping-course-writes.md). A refused predecessor does not stop
+   * and was refused as stale (docs/bugfixes/editor-overlapping-course-writes.md). A refused predecessor does not stop
    * the queue: the next write reads the token the refusal seeded.
    */
   private serial<T>(kind: VersionedKind, id: number, op: () => Promise<T>): Promise<T> {

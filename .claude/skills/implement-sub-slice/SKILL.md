@@ -1,19 +1,21 @@
 ---
 name: implement-sub-slice
-description: Implement one row of docs/research/vector-map-pipeline/SLICES.md end to end — plan from the spec, TDD, AGENTS.md §6 verification under the shared lock, spec and decision-log updates, PR into vector-map-pipeline, spec review. Use as /implement-sub-slice <id>, e.g. /implement-sub-slice A8.
+description: Implement one row of docs/research/vector-map-pipeline/SLICES.md end to end — plan from the spec, TDD, AGENTS.md §6 verification under the shared lock, spec and decision-log updates, PR into main, spec review. Use as /implement-sub-slice <id>, e.g. /implement-sub-slice A8.
 ---
 
 Implement sub-slice `$ARGUMENTS` of the vector map pipeline. The spec
 chapters in `docs/map-*.md` are normative; the research directory is the
-record of why. The base and target branch is `vector-map-pipeline`,
-never `main`.
+record of why. The base and target branch is `main` (the old integration
+branch `vector-map-pipeline` was retired on 2026-11-21).
 
 ## 0. Claim
 
-- Read the row in `docs/research/vector-map-pipeline/SLICES.md`. Stop if
-  its status is not `ready`: report what blocks it.
-- Confirm this worktree's branch was cut from `vector-map-pipeline`
-  (`git merge-base --is-ancestor origin/vector-map-pipeline HEAD`).
+- Read the row: its full text is in the slice's file,
+  `docs/research/vector-map-pipeline/slices/slice-<letter>.md`; open rows
+  are also listed in `SLICES.md`. Stop if its status is not `ready`:
+  report what blocks it.
+- Confirm this worktree's branch was cut from `main`
+  (`git merge-base --is-ancestor origin/main HEAD`).
 - In a fresh worktree run `pnpm install --frozen-lockfile` and
   `pnpm db:generate` first.
 - Set the row's status to `in progress: <session name>` and commit that
@@ -79,11 +81,13 @@ checkout after merge, and the PR says so.
   in the existing shape (date, topic, decision, rationale), naming every
   deviation from the research decision and what forced it.
 - Update `docs/features.md` only if something is user-visible.
-- Set the `SLICES.md` row to `review`.
+- Set the row to `review` in `slices/slice-<letter>.md` and in the open
+  rows of `SLICES.md`; once it merges, `done <date>` in the slice file and
+  drop it from `SLICES.md`.
 
 ## 5. PR and review
 
-- Push the branch; open a PR **against `vector-map-pipeline`** with: the
+- Push the branch; open a PR **against `main`** with: the
   row id in the title, the acceptance criteria as a checklist, the
   verification steps run and any skipped (with the reason), the drift
   report.

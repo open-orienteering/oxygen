@@ -40,7 +40,7 @@ describe("published-image demo", () => {
     assert.doesNotMatch(commands, /docker compose .*--build/);
   });
 
-  it("loads the showcase with the image's own re-match CLI, no host Node (docs/demo.md)", () => {
+  it("loads the showcase with the image's own re-match CLI, no host Node (docs/ops/demo.md)", () => {
     const loader = readFileSync(path.join(ROOT, "scripts/load-showcase.sh"), "utf8");
     const dockerBranch = loader.slice(loader.indexOf("# ─── 4. Import and pin the map"), loader.indexOf("# ─── 5. Smoke check"));
     const [whenDocker] = dockerBranch.split("\nelse\n");

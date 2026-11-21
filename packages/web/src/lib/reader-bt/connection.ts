@@ -18,7 +18,7 @@
  *   suppresses this.
  *
  * See docs/si-protocol/reader-bt.md for the protocol and
- * docs/registration-and-readout.md §1a for how readers are managed.
+ * docs/system/registration-and-readout.md §1a for how readers are managed.
  */
 
 import { getCardType, type SICardReadout } from "../si-protocol";

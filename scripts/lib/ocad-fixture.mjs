@@ -635,7 +635,7 @@ export const E2E_OCAD = {
 /**
  * Synthetic OCAD 2018 course-setting file for `e2e/test.ocd`.
  * Layout, codes, and georeference are load-bearing for E2E and integration
- * tests — see docs/e2e-test-ocd-fixture.md.
+ * tests — see docs/dev/e2e-test-ocd-fixture.md.
  */
 export function buildE2eTestOcad() {
   const rand = makeRand(0x5eed);

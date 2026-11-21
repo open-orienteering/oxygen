@@ -2,7 +2,7 @@
  * The viewer's 3D mode (docs/map-rendering.md §5.4 "3D mode", H7).
  *
  * The seed's map (`e2e/test.ocd`) has no contours: no 3D toggle. The CC0
- * demo map (`docs/screenshots/fixtures/puit-de-laven-demo.omap`, > 80 %
+ * demo map (`fixtures/showcase/puit-de-laven-demo.omap`, > 80 %
  * decided) is imported through the API and pinned: the toggle fetches its
  * height field once, the canvas draws the map draped over the terrain, a
  * right-drag orbits and tilts, the compass turns north up again, the
@@ -32,7 +32,7 @@ import { E2E_HEADERS, trpc } from "./helpers/print-pdf";
 import { insertGpsRoute } from "./helpers/gps-route";
 import { DEM_PROVIDER, GLO30_PROVIDER, demFieldBytes, pendingDem, readyDem, type DemProvider } from "./helpers/dem-field";
 
-const DEMO = "docs/screenshots/fixtures/puit-de-laven-demo.omap";
+const DEMO = "fixtures/showcase/puit-de-laven-demo.omap";
 
 async function openEvent(page: Page): Promise<void> {
   await page.goto("/");

@@ -99,7 +99,7 @@ export function ClubMapReviewPage() {
         target={{ kind: "club", clubMapId }}
         pinnedHash={pinnedHash}
         mapName={row?.name ?? null}
-        // Club library mutations: any signed-in user (club-library.md).
+        // Club library mutations: any signed-in user (docs/system/club-library.md).
         canEdit={!authEnabled || user !== null}
         backTo="/settings"
         pathFor={(hash) => `/settings/map-review/${hash}${clubMapId ? `?clubMap=${encodeURIComponent(clubMapId)}` : ""}`}

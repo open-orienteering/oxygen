@@ -60,7 +60,7 @@ export interface ParsedControl {
   cuts?: SlitGap[];     // Optional gap angles for OCAD circle masking
   /** IOF control description (OCD imports only — parsed from 702000 text). */
   description?: ControlDescription;
-  /** Oxygen's IOF `Extensions` map-exchange marker (docs/iof-coursedata-export.md). */
+  /** Oxygen's IOF `Extensions` map-exchange marker (docs/system/iof-coursedata-export.md). */
   mapExchange?: true;
 }
 
@@ -243,7 +243,7 @@ export function parseIOFCourseData(xmlContent: string): ParsedCourseData {
     const courseControls: ParsedCourseControl[] = [];
     // What the rows folded since the last kept one carry into the next leg:
     // a `CrossingPoint` / `EndOfMarkedRoute` row is a point on a leg, not
-    // a control of the course (docs/iof-coursedata-export.md).
+    // a control of the course (docs/system/iof-coursedata-export.md).
     let pending: Pick<ParsedCourseControl, "crossing" | "style"> & { legLength: number } = { legLength: 0 };
     for (const cc of Array.isArray(rawCCs) ? rawCCs : [rawCCs]) {
       const rowType = safeStr(cc["@_type"]) || "Control";

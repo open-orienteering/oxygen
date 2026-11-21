@@ -137,7 +137,7 @@ export interface PerformReadoutResult {
    */
   matchScore: number;
   /**
-   * Red exit (F6c, docs/registration-and-readout.md §4f): when the status
+   * Red exit (F6c, docs/system/registration-and-readout.md §4f): when the status
    * is MP and the runner's class pools two or more variants, the other
    * pooled variants the punches validate fully against; `[]` otherwise.
    * Informational for the desk — status and course are the runner's own;
@@ -855,7 +855,7 @@ export const cardReadoutRouter = router({
     }),
 
   /**
-   * Red exit (F6c, docs/registration-and-readout.md §5c): the official
+   * Red exit (F6c, docs/system/registration-and-readout.md §5c): the official
    * accepts a run of another pooled variant. Refuses a course outside the
    * class's pool (`VARIANT_NOT_IN_POOL`), the runner's current course
    * (`VARIANT_IS_CURRENT`) and a variant the punches do not validate fully

@@ -301,7 +301,7 @@ through `DeviceManager.addRecentCard` unchanged.
 | type 5 finish (type 6 only if no 5) | `finishTime`, `finishDayOfWeek` |
 | types 0 and 7 | `punches[]` in card order; `punchCount = punches.length` |
 | `card_family` | `getCardType(cardNumber)` when the number range is known, else 1 → SI9, 2 → SI8, 4 → pCard, 15 → SIAC, else `Unknown`. The number range wins on disagreement, which covers SI10/SI11 (family codes undocumented) |
-| `battery_mv` | `batteryVoltage = mv / 1000` (volts, see `docs/bugfix-siac-voltage-units.md`) |
+| `battery_mv` | `batteryVoltage = mv / 1000` (volts, see `docs/bugfixes/siac-voltage-units.md`) |
 | production block | `metadata`: `hardwareVersion`, `softwareVersion`, `clearCount`, `batteryDate` (`YYYY-MM-DD`), `productionDate` (`YYYY-MM`, the block has no day) |
 | owner data | `ownerData` (`SICardOwnerData`), `null` for minimal readouts |
 

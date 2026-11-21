@@ -28,7 +28,7 @@ conversion, and the `recreateEvent` primitive that wipes an event and
 re-creates it from scratch.
 
 Every event reads the vector pipeline and mounts the new course editor
-since E3; the seed sets nothing for it (`docs/map-pipeline-switch.md`,
+since E3; the seed sets nothing for it (`docs/history/map-pipeline-switch.md`,
 history note).
 
 ## Usage

@@ -1,5 +1,5 @@
 /**
- * Per-event dump and the map part of its restore (docs/backup-restore.md,
+ * Per-event dump and the map part of its restore (docs/ops/backup-restore.md,
  * docs/map-storage.md §7.3): the dump carries the event's `map_sources`
  * and `map_documents` rows by hash ahead of `map_files`; the restore
  * script loads them into a database that lost them, re-points a new

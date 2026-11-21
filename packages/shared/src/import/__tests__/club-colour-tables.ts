@@ -1,5 +1,5 @@
 /**
- * Two club colour tables (docs/bugfix-lower-purple-under-areas.md): source
+ * Two club colour tables (docs/bugfixes/lower-purple-under-areas.md): source
  * number, name and CMYK %, in source order (index 0 drawn first) — nothing
  * else from the maps. Both are OCAD ISOM 2017-2 maps without a lower purple
  * of their own, whose dark-green colour once dragged the inserted lower
@@ -217,7 +217,7 @@ export const toUsage = (rows: readonly ColourRowUsed[]): number[] => rows.map((r
 
 /**
  * Nackareservatet 2023 (Testkarta; Club-full in the corpus, 81 colours,
- * ISOM 2017-2, iof2022), with usage — docs/bugfix-course-purples-under-map.md.
+ * ISOM 2017-2, iof2022), with usage — docs/bugfixes/course-purples-under-map.md.
  * Six full purples: "Övre violett" at the bottom (index 0, the most used),
  * another at 2, "Upper Purple for Course Overprint" at 23 and 79, the only
  * lower candidate "Violett" (by position) at 25 under the whole area block,

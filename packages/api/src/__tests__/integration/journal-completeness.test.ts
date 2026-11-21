@@ -6,7 +6,7 @@
  * volts). `recordFinish` (Step 2a) is covered by `journal-emit.test.ts`;
  * this suite covers the rest: card readouts, results, manual punches, runner
  * CRUD + bulk edits, card linking, and the draw. See
- * docs/future-architecture.md § "Planned" Step 2.
+ * docs/history/future-architecture.md § "Planned" Step 2.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
