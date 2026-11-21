@@ -8,10 +8,11 @@ normative content lives in the spec chapters (`docs/map-*.md`), each of
 which ends in a "Pending in this chapter" section — this index only
 orders that backlog and records who is on what.
 
-Branch model: `vector-map-pipeline` is the long-lived integration branch.
-Every sub-slice is a worktree cut from it and a PR back into it. Spike
-branches may be cut from it and merged back the same way. `main` is not
-involved until a slice's gate (09 §4) has passed and the user decides.
+Branch model: until 2026-11-21, `vector-map-pipeline` was the long-lived
+integration branch; it was then merged into `main` and retired. Every
+sub-slice is now a feature branch cut from `main` and a PR back into
+`main`. Rows below that say "PR into `vector-map-pipeline`" are the record
+of that time.
 
 Finished rows live in one file per slice under [slices/](slices/) (moved there on 2026-11-21, unchanged except for statuses that were stale after the 2026-11-20 merges). Below, each slice keeps a summary, a link to its file, and only the rows that are still open. A row id cited as "SLICES.md F21" is found in the slice's file.
 
@@ -22,7 +23,7 @@ Finished rows live in one file per slice under [slices/](slices/) (moved there o
 | `ready` | Dependencies merged; may be started |
 | `blocked: <ids>` | Waits for the listed rows to merge |
 | `in progress: <session>` | A session owns it; nobody else touches its area |
-| `review` | PR open against `vector-map-pipeline` |
+| `review` | PR open against `main` |
 | `done <date>` | Merged; decision-log row written |
 | `manual` | Needs the user (corpus, staging, the club's instance) |
 

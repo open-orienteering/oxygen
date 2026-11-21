@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Native-module smoke test for the production image (CI job "Docker image
- * smoke", docs/deps-2026-11.md). The API loads sharp and @resvg/resvg-js by
+ * smoke", docs/migrations/2026-11-dependency-upgrade.md). The API loads sharp and @resvg/resvg-js by
  * dynamic import only when a course graphic or print is rendered, so a broken
  * native binary would not stop the server from starting. This script loads
  * both, renders one SVG to PNG with resvg and resamples it with sharp.

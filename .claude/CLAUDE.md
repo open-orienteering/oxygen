@@ -24,14 +24,14 @@ Integration tests, E2E (`pnpm test:e2e*`, `playwright test`) and the Docker rebu
   scripts/with-verify-lock.sh bash -c 'docker build --network host --target api -t oxygen-api . && docker build --network host --target web -t oxygen-web . && docker compose -f docker-compose.host-db.yml up -d --no-build'
   ```
 
-## Vector map pipeline (branch `vector-map-pipeline`)
+## Vector map pipeline
 
-The map/course/print redesign runs on the long-lived branch `vector-map-pipeline`. Sub-slices are worktrees cut from it and PRs back into it; spike branches may be cut from it and merge back the same way. `main` is not a target until the user says so.
+The map/course/print redesign ran on the long-lived integration branch `vector-map-pipeline` until 2026-11-21, when it was merged into `main` and retired. All work, sub-slices included, now goes on a feature branch cut from `main` and a PR back into `main` (AGENTS.md §13).
 
 - **Specs are normative**: `docs/map-*.md` (and later `course-*.md`) state what is implemented and, in each chapter's "Pending in this chapter" section, what is not. The research directory `docs/research/vector-map-pipeline/` is the frozen record of why; its decision log is split per slice under `decisions/` (`decisions/slice-<letter>.md`, `decisions/general.md`), indexed from its README.
 - **Work queue**: `docs/research/vector-map-pipeline/SLICES.md` lists the open rows; each slice's full rows are in `slices/slice-<letter>.md` beside it. One session per row; rows with overlapping areas are never in progress together. Use `/implement-sub-slice <id>`.
 - **When code and spec disagree, or the spec is silent**: stop and ask the user. Record the answer in the spec section first, then implement. Every deviation from a research decision gets a decision-log row. Never deviate silently.
-- **Done** means: spec section written, "Pending" trimmed, tests per AGENTS.md §4, decision-log row, `SLICES.md` row updated, PR open against `vector-map-pipeline`, `spec-reviewer` run.
+- **Done** means: spec section written, "Pending" trimmed, tests per AGENTS.md §4, decision-log row, `SLICES.md` row updated, PR open against `main`, `spec-reviewer` run.
 
 ## Documentation Requirement
 

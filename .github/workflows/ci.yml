@@ -189,7 +189,7 @@ jobs:
   # runtime or native-module change is proven before merge, not first on
   # :edge. sharp and @resvg/resvg-js are loaded lazily by the API, so the
   # smoke script renders a PNG with both instead of only starting the server.
-  # docs/deps-2026-11.md "Node 24".
+  # docs/migrations/2026-11-dependency-upgrade.md "Node 24".
   image:
     name: Docker image smoke
     runs-on: ubuntu-latest

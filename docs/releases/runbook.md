@@ -14,8 +14,7 @@ shape).
 
 ## 0. Preconditions
 
-- The release branch (today `vector-map-pipeline`) green on its last merge
-  commit: CI, plus the AGENTS.md §6 run.
+- `main` green on its last merge commit: CI, plus the AGENTS.md §6 run.
 - The release note written: what the release carries, a migrations table
   with the column "An older image" (what the previous release does on the
   migrated database), importer, print-job and environment changes, the
@@ -26,14 +25,15 @@ shape).
 
 ```bash
 git fetch origin
-git checkout -b release/<name> origin/vector-map-pipeline
+git checkout -b release/<name> origin/main
 pnpm release:version <x.y.z>     # only the four package.json "version" lines
 git commit -am "Release <x.y.z>"
 ```
 
-Open the release PR into `main` with the release note, merge it with a
-merge commit after green CI, then merge `main` back into
-`vector-map-pipeline` once.
+Open the release PR into `main` with the release note and the version
+bump, and merge it with a merge commit after green CI. (Until 2026-11-21
+releases came from the integration branch `vector-map-pipeline`, which
+then took `main` back once; that branch is retired.)
 
 ## 2. Cut the release
 

@@ -1,6 +1,6 @@
 # November 2026 dependency sweep, part 1 (minor / patch)
 
-The first of a stack of dependency PRs planned on 2026-11-20 after v0.9.0. This one raises every direct dependency to its newest minor or patch release in its current major, refreshes the lockfile and the advisory overrides, and adds a 7-day release-age hold. The majors each get their own PR (AGENTS.md §14): Node 24, Playwright 1.65, Vitest 5, i18next 27, then vite-plugin-pwa 2 / dotenv 18 / GitHub Actions. Previous sweep: [`deps-2026-10.md`](deps-2026-10.md).
+The first of a stack of dependency PRs planned on 2026-11-20 after v0.9.0. This one raises every direct dependency to its newest minor or patch release in its current major, refreshes the lockfile and the advisory overrides, and adds a 7-day release-age hold. The majors each get their own PR (AGENTS.md §14): Node 24, Playwright 1.65, Vitest 5, i18next 27, then vite-plugin-pwa 2 / dotenv 18 / GitHub Actions. Previous sweep: [`2026-10-dependency-sweep.md`](2026-10-dependency-sweep.md).
 
 ## 7-day release-age hold
 
@@ -68,7 +68,7 @@ On Node 24.22.3 in the cloud: build, lint (0 errors), unit (same counts as part 
 
 `@playwright/test` 1.64.1 → 1.65.1. That brings in a new Chromium build: revision 1255, Chromium 159 (it was 1248, Chromium 156). After pulling, run `pnpm exec playwright install chromium`. CI keys its browser cache on the Playwright version, so the new build downloads on the first run.
 
-This bump has its own PR because the last Chromium jump changed browser behaviour (see the compass permission in [`deps-2026-10.md`](deps-2026-10.md)). The cloud verification container can't download Playwright browsers and runs an older Chromium under the expected revision name. Its E2E run is therefore only a smoke test, and the CI E2E shards are the real gate for this PR.
+This bump has its own PR because the last Chromium jump changed browser behaviour (see the compass permission in [`2026-10-dependency-sweep.md`](2026-10-dependency-sweep.md)). The cloud verification container can't download Playwright browsers and runs an older Chromium under the expected revision name. Its E2E run is therefore only a smoke test, and the CI E2E shards are the real gate for this PR.
 
 # Part 4: Vitest 5
 

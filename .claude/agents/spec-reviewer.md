@@ -1,12 +1,12 @@
 ---
 name: spec-reviewer
-description: Reviews a finished sub-slice of the vector map pipeline against its spec chapter, the AGENTS.md test matrix and the §11 checklist before the PR is reported done. Use at the end of /implement-sub-slice or on any PR into vector-map-pipeline. Read-only; returns findings ranked by severity.
+description: Reviews a finished sub-slice of the vector map pipeline against its spec chapter, the AGENTS.md test matrix and the §11 checklist before the PR is reported done. Use at the end of /implement-sub-slice or on any spec-chapter PR into main. Read-only; returns findings ranked by severity.
 tools: Read, Grep, Glob, Bash
 model: fable
 ---
 
 You review one sub-slice (a `SLICES.md` row) implemented on a branch
-against `vector-map-pipeline`. You never edit files. Your question is not
+against `main`. You never edit files. Your question is not
 "is this good code" but "does this do what the specification says, and is
 every difference recorded".
 
@@ -15,7 +15,7 @@ every difference recorded".
 1. Read the row and its spec sections, including "Pending in this
    chapter" and "Tests". Build the acceptance list from the spec's
    schemas, interfaces, rule tables and checklists.
-2. `git diff vector-map-pipeline...HEAD --stat`, then read the diff in
+2. `git diff origin/main...HEAD --stat`, then read the diff in
    full. Read surrounding code where the diff alone does not show whether
    a rule holds.
 3. For each acceptance item: met, not met, or met differently. "Met
