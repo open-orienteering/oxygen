@@ -124,14 +124,14 @@ describe("fit", () => {
   });
 });
 
-/** A synthetic map: 100 × 100 mm, a lake in x 40…60, features on a grid, a path along y = 0. */
+/** A synthetic map: 100 × 100 mm, a lake in |x| < 5 mm, boulders on a 5 mm grid, a path along y = 0. */
 function syntheticRegion() {
+  const lake = (x, y) => Math.abs(x) < 5 && Math.abs(y) <= 50;
   const features = [];
-  for (let x = -45; x <= 45; x += 5) for (let y = -45; y <= 45; y += 5) if (x < 40 || x > 60) features.push({ x, y, symbol: "204" });
-  const lake = (x, y) => x > 40 && x < 60 && y > -50 && y < 50;
+  for (let x = -45; x <= 45; x += 5) for (let y = -45; y <= 45; y += 5) if (!lake(x, y)) features.push({ x, y, symbol: "204" });
   return {
     minX: -50, maxX: 50, minY: -50, maxY: 50,
-    features: features.filter((f) => !lake(f.x, f.y)),
+    features,
     paths: [[-50, 0, 50, 0]],
     forbiddenAt: (x, y) => (lake(x, y) ? "301" : null),
     blockedAt: lake,
@@ -140,56 +140,69 @@ function syntheticRegion() {
 }
 
 describe("snap and place", () => {
-  it("moves each control onto the nearest free feature within reach, starts and finishes onto a path, keeping 4 mm apart", () => {
+  it("moves each control onto the nearest free feature within reach, and starts and finishes onto a path", () => {
     const region = syntheticRegion();
     const rows = [
-      control("s", 900, "start", 1, 3, { name: "Start 1", codes: "" }),
-      control("a", 31, "ok", 1.2, 1.1),
-      control("b", 32, "ok", 1.4, 1.3), // nearest feature (0, 0) is a's; (5, 0) is 3.7 mm from it: too close; next is beyond 4 mm
-      control("f", 901, "finish", 20, -2, { name: "Mål", codes: "" }),
+      control("s", 900, "start", 20, 3, { name: "Start 1", codes: "" }),
+      control("a", 31, "ok", 21, 21),
+      control("f", 901, "finish", 30, -2, { name: "Mål", codes: "" }),
       control("u", 1, "clear", 0, 0),
-      control("x", 33, "ok", -49.9, 30, { removed: false }),
+      control("w", 32, "ok", 1, 30), // in the lake: its nearest boulders are on the shore
     ];
-    const { rows: out, snapped, kept } = snapControls(rows, region, { radius: 6, spacing: 4 });
+    const { rows: out, snapped, kept } = snapControls(rows, region);
     const at = (seq) => out.find((c) => c.seq === seq);
-    assert.deepEqual([at(900).xpos, at(900).ypos], [1, 0], "start onto the path");
-    assert.deepEqual([at(901).xpos, at(901).ypos], [20, 0], "finish onto the path");
-    assert.deepEqual([at(31).xpos, at(31).ypos], [0, 0]);
-    const b = at(32);
-    assert.ok(Math.hypot(b.xpos, b.ypos) >= 4, "spaced from 31");
-    assert.ok(region.features.some((f) => f.x === b.xpos && f.y === b.ypos));
-    assert.deepEqual(at(1), rows[4], "unplaced stays unplaced");
-    assert.equal(snapped, 5);
+    assert.deepEqual([at(900).xpos, at(900).ypos], [20, 0], "start onto the path");
+    assert.deepEqual([at(901).xpos, at(901).ypos], [30, 0], "finish onto the path");
+    assert.deepEqual([at(31).xpos, at(31).ypos], [20, 20]);
+    assert.deepEqual([at(32).xpos, at(32).ypos], [5, 30]);
+    assert.deepEqual(at(1), rows[3], "unplaced stays unplaced");
+    assert.equal(snapped, 4);
     assert.deepEqual(kept, []);
     assert.deepEqual(snapControls(rows, region), snapControls(rows, region), "deterministic");
   });
 
+  it("keeps controls on different features at least `spacing` apart, and each feature for one control", () => {
+    const region = { ...syntheticRegion(), features: [{ x: 20, y: 0, symbol: "204" }, { x: 23, y: 0, symbol: "204" }, { x: 29, y: 0, symbol: "204" }] };
+    const rows = [control("a", 31, "ok", 20.1, 0), control("b", 32, "ok", 23.2, 0)];
+    const spaced = snapControls(rows, region, { spacing: 4 }).rows;
+    assert.deepEqual(spaced.map((c) => c.xpos), [20, 29], "(23, 0) is 3 mm from 31: 32 takes the next feature in reach");
+    const tight = snapControls(rows, region, { spacing: 0 }).rows;
+    assert.deepEqual(tight.map((c) => c.xpos), [20, 23]);
+    const same = snapControls([control("a", 31, "ok", 20.1, 0), control("b", 32, "ok", 20.2, 0)], region, { spacing: 0 }).rows;
+    assert.notEqual(same[1].xpos, 20, "a feature holds one control");
+  });
+
   it("keeps a control with no feature within reach where it was", () => {
     const region = { ...syntheticRegion(), features: [] };
-    const { rows: out, kept } = snapControls([control("a", 31, "ok", 3, 3)], region);
-    assert.deepEqual([out[0].xpos, out[0].ypos], [3, 3]);
+    const { rows: out, kept } = snapControls([control("a", 31, "ok", 23, 3)], region);
+    assert.deepEqual([out[0].xpos, out[0].ypos], [23, 3]);
     assert.equal(kept.length, 1);
   });
 
   it("tests a leg's line against uncrossable areas, and a control's clearance from the map's edge", () => {
     const region = syntheticRegion();
-    assert.equal(legCrossesBlocked({ xpos: 30, ypos: 0 }, { xpos: 70, ypos: 0 }, region), true);
-    assert.equal(legCrossesBlocked({ xpos: 30, ypos: 0 }, { xpos: 35, ypos: 20 }, region), false);
-    assert.equal(nearMapEdge({ xpos: 0, ypos: 0 }, region), false);
+    assert.equal(legCrossesBlocked({ xpos: -20, ypos: 0 }, { xpos: 20, ypos: 0 }, region), true);
+    assert.equal(legCrossesBlocked({ xpos: 10, ypos: 0 }, { xpos: 30, ypos: 20 }, region), false);
+    assert.equal(nearMapEdge({ xpos: 20, ypos: 0 }, region), false);
     assert.equal(nearMapEdge({ xpos: 45, ypos: 0 }, region), true);
   });
 
-  it("places the cloud where no leg crosses the lake and every control finds a feature", () => {
+  it("places the cloud with no leg through the lake, no control in it or near the edge, every control on a feature", () => {
     const region = syntheticRegion();
-    // A 10 mm leg: at the fit's centre (x 0) it is clear of the lake, but the search must also keep it so.
-    const rows = [control("a", 31, "ok", 0, 0), control("b", 32, "ok", 10, 0)];
+    // Fitted at the centre, this 20 mm leg would run through the lake.
+    const rows = [control("a", 31, "ok", 1, 1), control("b", 32, "ok", 21, 1)];
     const place = placeControls(rows, region, { legs: [[31, 32]], maxScale: 1 });
     assert.equal(place.crossings, 0);
     assert.equal(place.kept.length, 0);
+    const [a, b] = place.rows;
     for (const c of place.rows) {
+      assert.ok(c.xpos !== 0 || c.ypos !== 0, "placed");
       assert.equal(region.forbiddenAt(c.xpos, c.ypos), null);
       assert.equal(nearMapEdge(c, region), false);
+      assert.ok(region.features.some((f) => f.x === c.xpos && f.y === c.ypos));
     }
+    assert.equal(legCrossesBlocked(a, b, region), false);
+    assert.equal(Math.round(Math.hypot(a.xpos - b.xpos, a.ypos - b.ypos)), 20, "the scale is kept");
     assert.deepEqual(placeControls(rows, region, { legs: [[31, 32]], maxScale: 1 }), place, "deterministic");
   });
 
@@ -231,6 +244,26 @@ describe("the demo map", () => {
       if (kind.get(c.seq) === "start" || kind.get(c.seq) === "finish") continue;
       assert.ok(region.features.some((f) => Math.hypot(f.x - c.xpos, f.y - c.ypos) < 0.02), `seq ${c.seq} is not on a feature`);
     }
+    const live = new Map(controls.filter((c) => !c.removed).map((c) => [c.seq, c]));
+    const sites = placed.filter((c) => live.has(c.seq));
+    for (const c of sites) {
+      if (kind.get(c.seq) === "start" || kind.get(c.seq) === "finish") {
+        const onPath = region.paths.some(([x1, y1, x2, y2]) => {
+          const dx = x2 - x1, dy = y2 - y1, l = dx * dx + dy * dy;
+          const t = l === 0 ? 0 : Math.max(0, Math.min(1, ((c.xpos - x1) * dx + (c.ypos - y1) * dy) / l));
+          return Math.hypot(c.xpos - x1 - t * dx, c.ypos - y1 - t * dy) < 0.02;
+        });
+        assert.ok(onPath, `seq ${c.seq} (${kind.get(c.seq)}) is not on a path`);
+      }
+    }
+    const controlSites = sites.filter((c) => kind.get(c.seq) !== "start" && kind.get(c.seq) !== "finish");
+    for (const c of controlSites) {
+      for (const d of controlSites) if (c !== d) assert.ok(Math.hypot(c.xpos - d.xpos, c.ypos - d.ypos) >= 4 - 0.02, `seq ${c.seq} and ${d.seq} under 60 m apart`);
+    }
+    // docs/ops/demo.md, "Controls on the demo map": two legs still cross water.
+    const bySeq = new Map(doc.controls.map((c) => [c.seq, c]));
+    const crossing = courseLegs(readFixtureRows(readFileSync(FIXTURE_PATH, "utf8"))).filter(([p, q]) => legCrossesBlocked(bySeq.get(p), bySeq.get(q), region));
+    assert.equal(new Set(crossing.map((l) => l.join("-"))).size, 2);
   });
 });
 

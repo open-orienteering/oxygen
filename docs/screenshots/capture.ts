@@ -30,6 +30,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import { getMockWebSerialScript } from "../../e2e/helpers/mock-webserial.js";
+import { assertDemoMap } from "../../e2e/showcase/demo-map.js";
 
 // ─── Config ──────────────────────────────────────────────────
 
@@ -575,6 +576,10 @@ async function main(): Promise<void> {
   } else {
     console.log("Step 2: Use the loaded Demo Competition (--no-load)");
   }
+
+  // Every shot goes into docs/screenshots: the event must carry the committed
+  // demo map, not a club map of the same forest (e2e/showcase/demo-map.ts).
+  await assertDemoMap(API_URL, nameId, REPO_ROOT);
 
   console.log("Step 3: Select competition");
   await trpcMutate(

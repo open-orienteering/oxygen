@@ -135,6 +135,8 @@ export function readFixtureRows(sql) {
 }
 
 const num = (v) => Math.round(v * 100) / 100;
+/** A placed position, rounded; (0, 0) means "not placed", so a control that lands there moves 0.01 mm. */
+const placedAt = (x, y) => (num(x) === 0 && num(y) === 0 ? { xpos: 0.01, ypos: 0 } : { xpos: num(x), ypos: num(y) });
 const fmt = (v) => String(num(v) === 0 ? 0 : num(v));
 
 // ─── positions file ──────────────────────────────────────────────────────────
@@ -348,7 +350,7 @@ export function fitControls(rows, region, { margin = FIT_MARGIN_MM, maxScale = S
   const out = rows.map((c) => {
     if (c.xpos === 0 && c.ypos === 0) return c;
     const [x, y] = rotate([c.xpos, c.ypos]);
-    return { ...c, xpos: num(rx + (x - cx) * scale), ypos: num(ry + (y - cy) * scale) };
+    return { ...c, ...placedAt(rx + (x - cx) * scale, ry + (y - cy) * scale) };
   });
   return { rows: out, rotation: k, scale };
 }
@@ -404,7 +406,7 @@ export function snapControls(rows, region, { radius = SNAP_RADIUS_MM, spacing = 
       }
     }
     if (best) {
-      out[i] = { ...c, xpos: num(best.x), ypos: num(best.y) };
+      out[i] = { ...c, ...placedAt(best.x, best.y) };
       snapped++;
     } else kept.push(c);
     if (type === "Control" && !c.removed) placed.push([out[i].xpos, out[i].ypos]);
@@ -487,10 +489,10 @@ export function placeControls(rows, region, { margin = FIT_MARGIN_MM, maxScale, 
     const b = bbox(placed.map((c) => [c.xpos, c.ypos]));
     for (const dx of range(region.minX + margin - b.minX, region.maxX - margin - b.maxX)) {
       for (const dy of range(region.minY + margin - b.minY, region.maxY - margin - b.maxY)) {
-        const moved = fit.rows.map((c) => (c.xpos === 0 && c.ypos === 0 ? c : { ...c, xpos: num(c.xpos + dx), ypos: num(c.ypos + dy) }));
+        const moved = fit.rows.map((c) => (c.xpos === 0 && c.ypos === 0 ? c : { ...c, ...placedAt(c.xpos + dx, c.ypos + dy) }));
         const snap = snapControls(moved, region);
         const bySeq = new Map(snap.rows.map((c) => [c.seq, c]));
-        const bad = snap.rows.filter((c) => (c.xpos !== 0 || c.ypos !== 0) && (region.forbiddenAt(c.xpos, c.ypos) || nearMapEdge(c, region))).length;
+        const bad = snap.rows.filter((c) => !c.removed && (c.xpos !== 0 || c.ypos !== 0) && (region.forbiddenAt(c.xpos, c.ypos) || nearMapEdge(c, region))).length;
         let crossings = 0;
         for (const [p, q] of legs) {
           const a = bySeq.get(p), z = bySeq.get(q);

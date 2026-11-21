@@ -111,7 +111,11 @@ describe("committed showcase.sql", () => {
   it("names nothing of the source map or its club", () => {
     const mapSection = sql.slice(sql.indexOf("-- ─── map_files"));
     for (const re of FORBIDDEN_SHOWCASE_SQL) assert.equal(re.test(mapSection), false, `map section matched ${re}`);
-    const demo = readFileSync(DEMO_MAP_PATH).toString("latin1");
-    for (const re of FORBIDDEN_SHOWCASE_SQL) assert.equal(re.test(demo), false, `demo map matched ${re}`);
+    // OCAD 12 keeps its strings as UTF-16, older parts as 8-bit: read the file both ways.
+    const bytes = readFileSync(DEMO_MAP_PATH);
+    for (const text of [bytes.toString("latin1"), bytes.toString("utf16le"), bytes.subarray(1).toString("utf16le")]) {
+      for (const re of FORBIDDEN_SHOWCASE_SQL) assert.equal(re.test(text), false, `demo map matched ${re}`);
+    }
+    assert.match(bytes.toString("utf16le") + bytes.subarray(1).toString("utf16le"), /Contour/, "the UTF-16 reading sees the symbol names");
   });
 });

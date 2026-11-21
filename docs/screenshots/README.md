@@ -21,7 +21,7 @@ SHOWCASE_URL=http://127.0.0.1:5173 pnpm docs:showcase
 pnpm docs:screenshots --no-load                      # the gallery; without --no-load it reloads the fixture first
 ```
 
-`SHOWCASE_URL` is the web app's address (default `http://127.0.0.1:5173`, the dev server). Shots are written to this folder. A public run first checks that the demo event really carries the o-kartan demo map, and stops if it does not, so a machine whose demo event holds another map cannot write it into the docs. Club maps of the same forest exist, so the check is by content, not by place: it reads the source hash in the pinned map document's header and compares it with `fixtures/okartan/okartan-demo.ocd`. Layout mode creates a course-map sheet when the course has none, which is one reason public shots only ever come from the demo.
+`SHOWCASE_URL` is the web app's address (default `http://127.0.0.1:5173`, the dev server). Shots are written to this folder. Both scripts first check that the demo event really carries the o-kartan demo map, and stop if it does not, so a machine whose demo event holds another map cannot write it into the docs. Club maps of the same forest exist, so the check is by content, not by place: `e2e/showcase/demo-map.ts` reads the source hash in the pinned map document's header and compares it with `fixtures/okartan/okartan-demo.ocd`. Layout mode creates a course-map sheet when the course has none, which is one reason public shots only ever come from the demo.
 
 Run one shot with Playwright's filter, for example `pnpm docs:showcase -g "field mode"`. The printed page needs `pdftoppm` (poppler): a public run fails without it rather than leave an old `course-map-print.png` behind.
 

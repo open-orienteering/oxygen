@@ -74,7 +74,10 @@ export async function loadApiModules() {
 /**
  * Import the committed demo map the way the API's worker does, for the
  * tests: the document's header summary, its frame and the pin's
- * quick-access columns at rotation correction 0.
+ * quick-access columns at rotation correction 0. The o-kartan file has no
+ * georeference of its own (grid id 1000), so `columns` is null here; the
+ * pin's bounds come from the re-match (covered by
+ * packages/api/src/__tests__/integration/showcase-fixture.test.ts).
  */
 export async function importShowcaseMap() {
   const { ocad, documents, metadata, shared } = await loadApiModules();

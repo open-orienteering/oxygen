@@ -12,10 +12,10 @@
  * before anything is committed. Every write the page sends is refused, and
  * shots that need one are skipped, so a real event is only ever read.
  */
-import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { assertDemoMap } from "./demo-map";
 
 export const ROOT = path.resolve(__dirname, "..", "..");
 
@@ -45,27 +45,6 @@ export const OUT_DIR = PRIVATE ? path.join(ROOT, ".local", "showcase-shots") : p
 /** Intermediate files (the exported PDF): under .local/ in a private run, and removed after use. */
 export const SCRATCH_DIR = path.join(ROOT, ".local", "showcase-scratch");
 
-/**
- * The demo map (docs/ops/demo.md, "The map"). Club maps of the same forest
- * exist and must not reach the docs, so its place is not enough: a public
- * run reads the pinned document's header and refuses any source but this
- * file, by hash.
- */
-const DEMO_MAP_FILE = path.join(ROOT, "fixtures", "okartan", "okartan-demo.ocd");
-
-/** A map document's preamble: magic, format version, header length (packages/shared/src/map-document/codec.ts). */
-const DOCUMENT_PREAMBLE_BYTES = 12;
-
-/** The source hash a map document says it was made from. */
-async function documentSourceHash(request: import("@playwright/test").APIRequestContext, documentHash: string): Promise<string | undefined> {
-  const url = `/api/map-documents/${documentHash}`;
-  const head = await (await request.get(url, { headers: { range: `bytes=0-${DOCUMENT_PREAMBLE_BYTES - 1}` } })).body();
-  if (head.byteLength < DOCUMENT_PREAMBLE_BYTES || head.subarray(0, 4).toString("latin1") !== "OXVM") return undefined;
-  const length = head.readUInt32LE(8);
-  const json = await (await request.get(url, { headers: { range: `bytes=${DOCUMENT_PREAMBLE_BYTES}-${DOCUMENT_PREAMBLE_BYTES + length - 1}` } })).body();
-  return (JSON.parse(json.toString("utf8")) as { source?: { hash?: string } }).source?.hash;
-}
-
 /** TRPC writes a private run lets through: choosing the event, and the editor's "who else is here" ping. */
 const PRIVATE_WRITES = new Set(["competition.select", "course.presence"]);
 
@@ -75,18 +54,9 @@ const PRIVATE_WRITES = new Set(["competition.select", "course.presence"]);
  */
 export function showcaseGuards(): void {
   if (!PRIVATE) {
-    test.beforeAll(async ({ request }) => {
-      const res = await request.get("/trpc/course.mapMetadata", { headers: { "x-competition-id": EVENT } });
-      const documentHash = (await res.json())?.result?.data?.documentHash as string | undefined;
-      const expected = createHash("sha256").update(readFileSync(DEMO_MAP_FILE)).digest("hex");
-      const actual = documentHash ? await documentSourceHash(request, documentHash) : undefined;
-      if (actual !== expected) {
-        throw new Error(
-          `The ${EVENT} event here does not carry the demo map ${path.relative(ROOT, DEMO_MAP_FILE)} (its document names source ${actual ?? "none"}). ` +
-            "Public shots go into the docs, so they come only from the demo map: reload it with `pnpm showcase:load`, " +
-            "or take these shots as a private run (SHOWCASE_PRIVATE=1).",
-        );
-      }
+    // Club maps of the same forest exist: the check is by the document's source hash (./demo-map.ts).
+    test.beforeAll(async () => {
+      await assertDemoMap(process.env.SHOWCASE_URL ?? "http://127.0.0.1:5173", EVENT, ROOT);
     });
   } else {
     test.beforeEach(async ({ page }) => {
