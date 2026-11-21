@@ -22,4 +22,7 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 20
+          # No install here, and the root package.json names pnpm: without
+          # this, setup-node looks for pnpm to cache and fails.
+          package-manager-cache: false
       - run: node scripts/check-doc-links.mjs
