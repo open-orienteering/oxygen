@@ -2,7 +2,7 @@
 
 Oxygen runs an orienteering event in the browser, from the first entry to the last result. This page is the short tour: a picture and a few lines per area. Each area links to its guide page, which has every detail.
 
-The demo shots come from the **Demo Competition**, a committed fixture on the CC0 Puit de Laven map ([demo guide](ops/demo.md)); some show a club map, published as images with the club's permission. [screenshots/README.md](screenshots/README.md) explains how they are made.
+The demo shots come from the **Demo Competition**, a committed fixture on a Swedish forest map from o-kartan.se ([demo guide](ops/demo.md), [demo map](ops/demo-map.md)); some show a club map, published as images with the club's permission. [screenshots/README.md](screenshots/README.md) explains how they are made.
 
 ## Set courses on the map
 

@@ -1,11 +1,12 @@
 /**
  * The Demo Competition fixture (docs/ops/demo.md): loaded the way
  * `scripts/load-showcase.sh` loads it — the `map_sources` row from the
- * committed demo `.omap`, then `showcase.sql`, then the re-match — it pins
- * the CC0 demo map (docs/map-storage.md §6.9, `unpinned`), answers
+ * committed demo `.ocd`, then `showcase.sql`, then the re-match — it pins
+ * the o-kartan demo map (docs/map-storage.md §6.9, `unpinned`), answers
  * `course.mapMetadata`, places every control on the map, and every course
- * reads its controls with the lengths the fixture stores. A second load
- * changes nothing.
+ * reads its controls with the lengths the fixture stores. The showcase
+ * course (`showcase-course.sql`) loads with its variants, objects and
+ * sheet. A second load changes nothing.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
@@ -19,9 +20,10 @@ import { prisma, type EventRef } from "../../db.js";
 import { runRematch } from "../../map-store/rematch.js";
 import { loadCourseSequences, rebuildCourseLengths } from "../../course-geometry.js";
 
-const FIXTURES = resolve(__dirname, "../../../../../fixtures/showcase");
-const SQL = readFileSync(resolve(FIXTURES, "showcase.sql"), "utf8");
-const MAP = readFileSync(resolve(FIXTURES, "puit-de-laven-demo.omap"));
+const FIXTURES = resolve(__dirname, "../../../../../fixtures");
+const SQL = readFileSync(resolve(FIXTURES, "showcase", "showcase.sql"), "utf8");
+const COURSE_SQL = readFileSync(resolve(FIXTURES, "showcase", "showcase-course.sql"), "utf8");
+const MAP = readFileSync(resolve(FIXTURES, "okartan", "okartan-demo.ocd"));
 const MAP_HASH = createHash("sha256").update(MAP).digest("hex");
 const DEMO_EVENT_ID = 9876543n;
 
@@ -34,13 +36,14 @@ url.searchParams.delete("schema");
 /** The loader's three steps: source row, SQL, re-match. */
 async function loadShowcase() {
   await db.mapSource.createMany({
-    data: [{ fileHash: MAP_HASH, kind: "omap", bytes: MAP, sizeBytes: MAP.byteLength, fileName: "puit-de-laven-demo.omap" }],
+    data: [{ fileHash: MAP_HASH, kind: "ocad", bytes: MAP, sizeBytes: MAP.byteLength, fileName: "okartan-demo.ocd" }],
     skipDuplicates: true,
   });
   const c = new Client({ connectionString: url.toString() });
   await c.connect();
   try {
     await c.query(SQL);
+    await c.query(COURSE_SQL);
   } finally {
     await c.end();
   }
@@ -79,7 +82,7 @@ describe("showcase fixture", () => {
     const pin = await db.mapFile.findFirstOrThrow({ where: { eventId: DEMO_EVENT_ID } });
     expect(pin.sourceHash).toBe(MAP_HASH);
     expect(pin.documentHash).toMatch(/^[0-9a-f]{64}$/);
-    expect(pin.scale).toBe(10000);
+    expect(pin.scale).toBe(15000);
     expect(pin.calibration).toHaveLength(4);
     expect(pin.northOffset).not.toBeNull();
   }, 120_000);
@@ -88,9 +91,12 @@ describe("showcase fixture", () => {
     const event = await demoEvent();
     expect(event.nameId).toBe("demo_competition");
     const meta = await makeCaller(event).course.mapMetadata();
-    expect(meta).toMatchObject({ scale: 10000, documentHash: expect.stringMatching(/^[0-9a-f]{64}$/) });
-    expect(meta!.bounds!.south).toBeGreaterThan(43.5);
-    expect(meta!.bounds!.north).toBeLessThan(43.7);
+    expect(meta).toMatchObject({ scale: 15000, documentHash: expect.stringMatching(/^[0-9a-f]{64}$/) });
+    // South of Stockholm.
+    expect(meta!.bounds!.south).toBeGreaterThan(59.2);
+    expect(meta!.bounds!.north).toBeLessThan(59.35);
+    expect(meta!.bounds!.west).toBeGreaterThan(18.0);
+    expect(meta!.bounds!.east).toBeLessThan(18.3);
   });
 
   it("places every live positioned control inside the map, its lat/lng derived by the pin", async () => {
@@ -107,7 +113,7 @@ describe("showcase fixture", () => {
   });
 
   it("reads each course's controls (no stale structure) with the lengths the fixture stores", async () => {
-    const courses = await db.course.findMany({ where: { eventId: DEMO_EVENT_ID }, orderBy: { name: "asc" } });
+    const courses = await db.course.findMany({ where: { eventId: DEMO_EVENT_ID, parentCourseId: null, name: { not: "Showcase" } }, orderBy: { name: "asc" } });
     expect(courses.map((c) => c.name)).toEqual(["A", "B", "C", "D", "E"]);
     const sequences = await loadCourseSequences(db, DEMO_EVENT_ID, courses.map((c) => c.id));
     for (const c of courses) {
@@ -118,8 +124,24 @@ describe("showcase fixture", () => {
     }
     // The API derives the same lengths from the loaded positions as the fixture's apply step did.
     await rebuildCourseLengths(db, DEMO_EVENT_ID, courses.map((c) => c.id));
-    const rebuilt = await db.course.findMany({ where: { eventId: DEMO_EVENT_ID }, orderBy: { name: "asc" } });
+    const rebuilt = await db.course.findMany({ where: { id: { in: courses.map((c) => c.id) } }, orderBy: { name: "asc" } });
     expect(rebuilt.map((c) => [c.name, c.lengthM, c.legs, c.lengthSource])).toEqual(courses.map((c) => [c.name, c.lengthM, c.legs, "derived"]));
+  });
+
+  it("loads the showcase course: a fork and a butterfly loop materialised as variants, a corridor, a marked route, an out-of-bounds area and a sheet", async () => {
+    const showcase = await db.course.findFirstOrThrow({ where: { eventId: DEMO_EVENT_ID, name: "Showcase", parentCourseId: null } });
+    const structure = showcase.structure as { items: { kind?: string; loop?: boolean; leg?: { corridor?: unknown; style?: string } }[] };
+    const groups = structure.items.filter((i) => i.kind === "variation");
+    expect(groups.map((g) => !!g.loop)).toEqual([false, true]);
+    expect(structure.items.some((i) => i.leg?.corridor)).toBe(true);
+    expect(structure.items.some((i) => i.leg?.style === "marked_route")).toBe(true);
+    // Three fork branches times the loop's two orders.
+    expect(await db.course.count({ where: { parentCourseId: showcase.id } })).toBe(6);
+    expect(await db.courseObject.count({ where: { eventId: DEMO_EVENT_ID, kind: "oob_area" } })).toBe(1);
+    expect(await db.courseMap.count({ where: { courseId: showcase.id } })).toBeGreaterThan(0);
+    // Its controls are placed and get lat / lng from the pin like the race's.
+    const ids = (await db.courseControl.findMany({ where: { courseId: showcase.id }, select: { controlId: true } })).map((c) => c.controlId);
+    for (const c of await db.control.findMany({ where: { id: { in: ids } } })) expect(c.lat).not.toBeNull();
   });
 
   it("loads a second time to the same state", async () => {

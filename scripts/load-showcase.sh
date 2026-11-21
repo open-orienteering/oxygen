@@ -4,10 +4,10 @@
 # Works against either a Dockerized PostgreSQL (USE_DOCKER=1, typically the
 # one in docker-compose.yml) or a native PostgreSQL running on the host.
 # The fixture itself is fixtures/showcase/showcase.sql — a portable,
-# anonymized dump derived from Vinterserien data. Its map is the CC0 Puit de
-# Laven map with invented point features (puit-de-laven-demo.omap next to
-# it; docs/ops/demo.md, "The map"). The SQL names the map only by hash, so the
-# load has three steps: insert the map_sources row from the committed .omap,
+# anonymized dump derived from Vinterserien data. Its map is the o-kartan
+# map with invented detail (fixtures/okartan/okartan-demo.ocd; docs/ops/demo.md,
+# "The map", and docs/ops/demo-map.md). The SQL names the map only by hash, so the
+# load has three steps: insert the map_sources row from the committed .ocd,
 # run the SQL, then run the map re-match, which imports the document and
 # pins it (docs/map-storage.md §6.9) — natively through `pnpm map:rematch`,
 # under USE_DOCKER=1 through the API image's own CLI, so the Cloud Shell demo
@@ -48,9 +48,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 FIXTURE="$REPO_ROOT/fixtures/showcase/showcase.sql"
-MAP_FILE="$REPO_ROOT/fixtures/showcase/puit-de-laven-demo.omap"
+# The showcase course (forks, a butterfly loop, a corridor; scripts/lib/showcase-course.mjs), after the race data.
+COURSE_FIXTURE="$REPO_ROOT/fixtures/showcase/showcase-course.sql"
+MAP_FILE="$REPO_ROOT/fixtures/okartan/okartan-demo.ocd"
+MAP_KIND="ocad"   # map_sources.kind: ocad | omap
 
-for f in "$FIXTURE" "$MAP_FILE"; do
+for f in "$FIXTURE" "$COURSE_FIXTURE" "$MAP_FILE"; do
   if [[ ! -f "$f" ]]; then
     echo "Fixture not found: $f" >&2
     echo "Regenerate it with:  pnpm tsx scripts/anonymize-vinterserien.ts" >&2
@@ -124,12 +127,14 @@ fi
 # The source row first (base64 on psql's stdin, so no file has to reach the
 # database container), then the SQL, in one psql session.
 showcase_sql() {
-  printf "SET search_path = oxygen;\nINSERT INTO map_sources (file_hash, kind, bytes, size_bytes, file_name) VALUES ('%s', 'omap', decode('" "$MAP_HASH"
+  printf "SET search_path = oxygen;\nINSERT INTO map_sources (file_hash, kind, bytes, size_bytes, file_name) VALUES ('%s', '%s', decode('" "$MAP_HASH" "$MAP_KIND"
   base64 < "$MAP_FILE" | tr -d '\n'
   printf "', 'base64'), %s, '%s') ON CONFLICT (file_hash) DO NOTHING;\n" "$MAP_BYTES" "$(basename "$MAP_FILE")"
   cat "$FIXTURE"
+  printf "\n"
+  cat "$COURSE_FIXTURE"
 }
-echo "Loading the map source and showcase.sql..."
+echo "Loading the map source, showcase.sql and showcase-course.sql..."
 if [[ "$USE_DOCKER" == "1" ]]; then
   showcase_sql | docker compose exec -T postgres psql -U "$PG_USER" -d "$PG_DATABASE" \
     -v ON_ERROR_STOP=1 -q
