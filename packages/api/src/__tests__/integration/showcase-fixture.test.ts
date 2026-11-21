@@ -133,13 +133,12 @@ describe("showcase fixture", () => {
     expect(rebuilt.map((c) => [c.name, c.lengthM, c.legs, c.lengthSource])).toEqual(courses.map((c) => [c.name, c.lengthM, c.legs, "derived"]));
   });
 
-  it("loads the showcase course: a fork and a butterfly loop materialised as variants, a corridor, a marked route, an out-of-bounds area and a sheet", async () => {
+  it("loads the showcase course: a fork and a butterfly loop materialised as variants, a corridor, an out-of-bounds area and a sheet", async () => {
     const showcase = await db.course.findFirstOrThrow({ where: { eventId: DEMO_EVENT_ID, name: "Showcase", parentCourseId: null } });
     const structure = showcase.structure as { items: { kind?: string; loop?: boolean; leg?: { corridor?: unknown; style?: string } }[] };
     const groups = structure.items.filter((i) => i.kind === "variation");
     expect(groups.map((g) => !!g.loop)).toEqual([false, true]);
     expect(structure.items.some((i) => i.leg?.corridor)).toBe(true);
-    expect(structure.items.some((i) => i.leg?.style === "marked_route")).toBe(true);
     // Three fork branches times the loop's two orders.
     expect(await db.course.count({ where: { parentCourseId: showcase.id } })).toBe(6);
     expect(await db.courseObject.count({ where: { eventId: DEMO_EVENT_ID, kind: "oob_area" } })).toBe(1);

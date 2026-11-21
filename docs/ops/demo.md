@@ -168,11 +168,12 @@ Repeat steps 2–3 as often as you like; `apply` is idempotent.
 
 Besides the race's five courses, the demo has a course named **Showcase**
 that is there to show the course editor: a three-way fork after control 2,
-a butterfly loop at control 6 (A and B, both orders), a corridor into
-control 13, a marked route to the finish, an out-of-bounds area and a
-printed sheet. Its 3 fork branches times the loop's 2 orders give 6
-variants (*Showcase AAB* … *Showcase CBA*). It has no runners. Its own
-controls have codes from 101 up; the race's controls stay as they are.
+a butterfly loop at control 6 (A and B, both orders), a corridor over
+the two legs into controls 13 and 14, an out-of-bounds area and a printed
+sheet. Its 3 fork branches times the loop's 2 orders give 6 variants
+(*Showcase AAB* … *Showcase CBA*). It has no runners. Its own controls
+have codes from 101 up, its start code 3 and its finish code 4; its last
+control is the race's 64. The race's start and finish have codes 5 and 6.
 
 It lives in `fixtures/showcase/showcase-course.sql`, which
 `load-showcase.sh` runs right after `showcase.sql`. The file is exported
@@ -226,7 +227,7 @@ map's features.
 | Script | `scripts/__tests__/release-compose.test.mjs` | under `USE_DOCKER=1` the loader re-matches with the image's CLI and no host `pnpm` / Node; the source travels base64 on stdin; the map file is the o-kartan demo map, kind `ocad` |
 | Unit (api) | `packages/api/src/__tests__/demo-map-enrich.test.ts` | the demo map's invented detail ([demo-map.md](demo-map.md#tests)) |
 | Script | `scripts/__tests__/showcase-course.test.mjs` | a row's `json_populate_record` line reads back the same (quotes, backslashes; lat / lng cleared), controls and courses as upserts on `id`; `export` through a stub client (every control and course, the course controls replaced after the courses, objects, sheets without the instance template, the seq counters, no Showcase course refused); `withEnds` (another start or finish replaced, the leg into the finish kept, missing ends added, a control run as start or finish kept, a leading group); the committed file: the race's courses and controls, the Showcase course, its variants and sheet in the demo event, every control it names written by the file, every start and finish coded with no code shared, the Showcase course at its own start and finish and every other at the race's, no source names; the loader runs it after `showcase.sql` |
-| Integration (api) | `packages/api/src/__tests__/integration/showcase-fixture.test.ts` | load as the loader does, pin at 1:15 000 south of Stockholm, `course.mapMetadata`, control `lat` / `lng`, race courses from the coded race start to the race finish, lengths equal `rebuildCourseLengths`, the showcase course (both groups, 6 variants, corridor, marked route, out-of-bounds area, sheet, controls pinned), a second load (`docs/map-storage.md` §10) |
+| Integration (api) | `packages/api/src/__tests__/integration/showcase-fixture.test.ts` | load as the loader does, pin at 1:15 000 south of Stockholm, `course.mapMetadata`, control `lat` / `lng`, race courses from the coded race start to the race finish, lengths equal `rebuildCourseLengths`, the showcase course (both groups, 6 variants, corridor, out-of-bounds area, sheet, controls pinned), a second load (`docs/map-storage.md` §10) |
 
 ### Pending
 
