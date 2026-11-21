@@ -291,7 +291,7 @@ the clock or a random source. `stats` carries counts only (no timings).
 
 H1's corpus check (a `.local/` script, not committed: the corpus is real
 club maps) builds the graph of the five corpus maps and the CC0 demo map
-(`docs/screenshots/fixtures/puit-de-laven.omap`), imported with no stored
+(`fixtures/showcase/puit-de-laven.omap`), imported with no stored
 decisions, and compares every count with T1's output. Measured 2026-11-13:
 
 | Map | chains | closed | snap joins | bridged | extended | form chains | ends frame / merge / cliff / dangling | regions | components | leaky % of length |

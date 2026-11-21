@@ -19,7 +19,7 @@ import { prisma, type EventRef } from "../../db.js";
 import { runRematch } from "../../map-store/rematch.js";
 import { loadCourseSequences, rebuildCourseLengths } from "../../course-geometry.js";
 
-const FIXTURES = resolve(__dirname, "../../../../../docs/screenshots/fixtures");
+const FIXTURES = resolve(__dirname, "../../../../../fixtures/showcase");
 const SQL = readFileSync(resolve(FIXTURES, "showcase.sql"), "utf8");
 const MAP = readFileSync(resolve(FIXTURES, "puit-de-laven-demo.omap"));
 const MAP_HASH = createHash("sha256").update(MAP).digest("hex");

@@ -2,7 +2,7 @@
  * Automated screenshot capture for documentation.
  *
  * Loads the committed Demo Competition fixture with scripts/load-showcase.sh
- * (docs/screenshots/fixtures/showcase.sql — an anonymized Vinterserien dump
+ * (fixtures/showcase/showcase.sql — an anonymized Vinterserien dump
  * with real controls, courses, classes and results on the CC0 Puit de
  * Laven demo map; docs/ops/demo.md) into the dev database and then drives the
  * frontend through every major user-facing feature with Playwright,

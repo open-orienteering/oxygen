@@ -1,5 +1,5 @@
 /**
- * SQL for the Demo Competition's map in docs/screenshots/fixtures/showcase.sql
+ * SQL for the Demo Competition's map in fixtures/showcase/showcase.sql
  * (docs/ops/demo.md): the event's `map_files` row, which names the demo map's
  * source by hash and leaves the document to the re-match that
  * `scripts/load-showcase.sh` runs after loading (docs/map-storage.md
@@ -13,7 +13,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-export const FIXTURE_PATH = path.join(ROOT, "docs", "screenshots", "fixtures", "showcase.sql");
+export const FIXTURE_PATH = path.join(ROOT, "fixtures", "showcase", "showcase.sql");
 
 const MAP_FILE_PREFIX = `INSERT INTO map_files `;
 

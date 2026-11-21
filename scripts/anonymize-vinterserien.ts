@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * Generate docs/screenshots/fixtures/showcase.sql from the live local
+ * Generate fixtures/showcase/showcase.sql from the live local
  * Vinterserien event in PostgreSQL.
  *
  * Strictly read-only on the source DB. The output is a portable SQL
@@ -36,13 +36,13 @@
  *     NOTHING so it never overwrites an operator's real club rows.
  *   - map: the source map is never written into the fixture. In its place
  *     the demo event gets a `map_files` row naming the CC0 demo map
- *     (`docs/screenshots/fixtures/puit-de-laven-demo.omap`) by its source
+ *     (`fixtures/showcase/puit-de-laven-demo.omap`) by its source
  *     hash, with no document: `scripts/load-showcase.sh` inserts the
  *     source from the committed file and the re-match imports and pins it
  *     (scripts/lib/showcase-map.mjs, docs/ops/demo.md "The map"). Only the
  *     source row's `uploaded_at` and `rotation_correction` carry over.
  *   - controls / courses: the source event's positions belong to its map,
- *     so after the dump `docs/screenshots/fixtures/showcase-controls.json`
+ *     so after the dump `fixtures/showcase/showcase-controls.json`
  *     is applied (scripts/lib/showcase-controls.mjs): positions on the
  *     demo map, `lat` / `lng` NULL, `legs` / `length_m` re-derived and
  *     `structure` NULL (its site ids name the source event's controls).
@@ -71,7 +71,7 @@ const DATABASE_URL =
   process.env.DATABASE_URL ??
   "postgresql://oxygen:oxygen@localhost:5432/oxygen?schema=oxygen";
 const SRC_NAME_ID = process.env.SRC_NAME_ID ?? "Vinterserien";
-const OUT_PATH = path.resolve("docs/screenshots/fixtures/showcase.sql");
+const OUT_PATH = path.resolve("fixtures/showcase/showcase.sql");
 const CARD_REMAP_OFFSET = 9_000_000;
 
 /**

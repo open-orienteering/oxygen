@@ -36,6 +36,6 @@ Older course notes that share the prefix: [course-maps.md](course-maps.md), [cou
 | [history/](history/) | Superseded notes and finished plans, kept for the record |
 | [si-protocol/](si-protocol/) | SPORTident protocol notes and captures |
 | [research/vector-map-pipeline/](research/vector-map-pipeline/) | Frozen research record, decision logs, and the [work queue](research/vector-map-pipeline/SLICES.md) |
-| [screenshots/](screenshots/) | Feature screenshots, their capture script, and the demo fixtures |
+| [screenshots/](screenshots/) | Feature screenshots and their capture script (the demo fixtures they use are in `fixtures/showcase/` at the repository root) |
 
 `node scripts/check-doc-links.mjs` checks that every Markdown link and every `docs/…` path in the repository resolves.

@@ -22,7 +22,7 @@ import { DEMO_SEED, injectDemoPoints } from "./inject-demo-points.mjs";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const API_SRC = path.join(ROOT, "packages", "api", "src");
-const FIXTURES = path.join(ROOT, "docs", "screenshots", "fixtures");
+const FIXTURES = path.join(ROOT, "fixtures", "showcase");
 
 /** The CC0 map as published upstream. */
 export const ORIGINAL_MAP_PATH = path.join(FIXTURES, "puit-de-laven.omap");

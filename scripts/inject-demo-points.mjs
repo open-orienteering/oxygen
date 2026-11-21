@@ -5,8 +5,8 @@
  *
  *   node scripts/inject-demo-points.mjs [in.omap] [out.omap] [seed]
  *
- * Defaults: docs/screenshots/fixtures/puit-de-laven.omap →
- * docs/screenshots/fixtures/puit-de-laven-demo.omap, seed 42. The default
+ * Defaults: fixtures/showcase/puit-de-laven.omap →
+ * fixtures/showcase/puit-de-laven-demo.omap, seed 42. The default
  * run reproduces the committed demo map byte for byte
  * (`scripts/__tests__/demo-map.test.mjs`); after changing the seed or the
  * plan, run `node scripts/patch-showcase-map.mjs` to re-pin the fixture.

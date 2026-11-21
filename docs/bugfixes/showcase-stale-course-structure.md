@@ -3,7 +3,7 @@
 ## What happened
 
 Every course of the committed Demo Competition fixture
-(`docs/screenshots/fixtures/showcase.sql`) carried a `courses.structure`
+(`fixtures/showcase/showcase.sql`) carried a `courses.structure`
 jsonb whose `siteId`s were the **source** database's control ids. The
 anonymiser (`scripts/anonymize-vinterserien.ts`) gives every control a fresh
 UUID and rewrites the uuid columns that point at it, but `structure` is
@@ -26,7 +26,7 @@ map and re-derives the course lengths.
   and the course editor writes a fresh structure on the next save.
   `scripts/showcase-controls.mjs apply` (`scripts/lib/showcase-controls.mjs`)
   does this along with the positions and the re-derived lengths.
-- The anonymiser applies `docs/screenshots/fixtures/showcase-controls.json`
+- The anonymiser applies `fixtures/showcase/showcase-controls.json`
   after its dump, so a regenerated fixture is cleared the same way.
 
 ## Tests

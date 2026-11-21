@@ -37,7 +37,7 @@ You'll land on the Demo Competition — a fully populated, anonymized showcase d
 
 ## Step 3: Reload the showcase (optional)
 
-The showcase fixture lives at `docs/screenshots/fixtures/showcase.sql`, with its map `puit-de-laven-demo.omap` beside it, and is loaded by `scripts/load-showcase.sh` / `pnpm showcase:load`. The load is idempotent — it cascade-deletes any existing `demo_competition` event before re-inserting, so re-running is safe:
+The showcase fixture lives at `fixtures/showcase/showcase.sql`, with its map `puit-de-laven-demo.omap` beside it, and is loaded by `scripts/load-showcase.sh` / `pnpm showcase:load`. The load is idempotent — it cascade-deletes any existing `demo_competition` event before re-inserting, so re-running is safe:
 
 ```bash
 # Reload into the Cloud Shell docker PostgreSQL
@@ -63,7 +63,7 @@ invented**: they sit at seeded random positions in forest and open land,
 clear of every line and of each other, and are not surveyed. Each one is
 tagged `oxygen-demo=injected` in the Mapper file, and the map's notes say
 so. The original is committed unchanged as
-`docs/screenshots/fixtures/puit-de-laven.omap`; the demo map
+`fixtures/showcase/puit-de-laven.omap`; the demo map
 `puit-de-laven-demo.omap` next to it is made from it by
 
 ```bash
@@ -117,7 +117,7 @@ this: no map bytes in the SQL, the source hash, the pin after loading,
 The controls, courses, runners and punches come from the source race;
 codes and sequences are unchanged, so results and splits stay valid. Only
 the control **positions** belong to the demo map. They live in
-`docs/screenshots/fixtures/showcase-controls.json`, one line per control,
+`fixtures/showcase/showcase-controls.json`, one line per control,
 keyed by `seq` (paper mm in the map document's frame; `0, 0` means not
 placed). `scripts/showcase-controls.mjs apply` writes them into
 `showcase.sql`. It also clears `lat` / `lng` (the pin derives them on
@@ -172,7 +172,7 @@ Repeat steps 2–3 as often as you like; `apply` is idempotent.
 
 ### Regenerate from your own Vinterserien data
 
-To regenerate the whole fixture from your own Vinterserien event (rewrites `docs/screenshots/fixtures/showcase.sql` in place), point the anonymiser at a database that is at the **current schema**. The anonymiser reads the source strictly read-only but copies every column of the source tables, so it refuses a pre-v0.6.1 database. From a dump of an older database, restore it into a scratch database first and migrate that copy:
+To regenerate the whole fixture from your own Vinterserien event (rewrites `fixtures/showcase/showcase.sql` in place), point the anonymiser at a database that is at the **current schema**. The anonymiser reads the source strictly read-only but copies every column of the source tables, so it refuses a pre-v0.6.1 database. From a dump of an older database, restore it into a scratch database first and migrate that copy:
 
 ```bash
 createdb oxygen_vinterserien_src

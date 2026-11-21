@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Re-pin the Demo Competition's map in docs/screenshots/fixtures/showcase.sql
+ * Re-pin the Demo Competition's map in fixtures/showcase/showcase.sql
  * (docs/ops/demo.md, "The map"): write the demo map
  * (`puit-de-laven-demo.omap`) from the committed CC0 original through
  * `scripts/lib/inject-demo-points.mjs`, and point the fixture's

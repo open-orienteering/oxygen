@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 // The colour-order harness (docs/map-rendering.md §6.5) on the committed CC0 map.
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const script = path.join(root, "scripts", "measure-colour-order.mjs");
-const map = path.join(root, "docs", "screenshots", "fixtures", "puit-de-laven.omap");
+const map = path.join(root, "fixtures", "showcase", "puit-de-laven.omap");
 const run = (...args) => spawnSync(process.execPath, [script, ...args], { cwd: root, encoding: "utf8" });
 
 describe("measure-colour-order.mjs", () => {
