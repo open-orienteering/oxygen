@@ -35,8 +35,8 @@
     {"seq":311101,"codes":"4","name":"Mål 1","xpos":26.16,"ypos":72.98},
     {"seq":311102,"codes":"","name":"Start 1","xpos":30.07,"ypos":49.06},
     {"seq":311103,"codes":"","name":"Mål 1","xpos":26.17,"ypos":72.98},
-    {"seq":311104,"codes":"","name":"Start 1","xpos":37.99,"ypos":35.59},
-    {"seq":311105,"codes":"","name":"Mål 1","xpos":22.16,"ypos":72.32},
+    {"seq":311104,"codes":"5","name":"Start 1","xpos":37.99,"ypos":35.59},
+    {"seq":311105,"codes":"6","name":"Mål 1","xpos":22.16,"ypos":72.32},
     {"seq":311106,"codes":"1","name":"","xpos":0,"ypos":0}
   ]
 }
