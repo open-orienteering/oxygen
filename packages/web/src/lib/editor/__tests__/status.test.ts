@@ -73,3 +73,29 @@ describe("the climb row is one number (docs/course-elevation.md §4.4)", () => {
     expect(statusRows({ ...course, climbM: null, line: null }, t).map((r) => r.id)).toEqual(["controls", "length", "scale", "checks"]);
   });
 });
+
+
+describe("the desktop popover leaves the map scale to the map-info dialog (P6, docs/course-editor.md §2)", () => {
+  it("a course: no scale row, the rest as the peek line's", () => {
+    expect(courseInfoRows(course, t).map((r) => r.id)).toEqual(["controls", "length", "climb", "checks"]);
+  });
+
+  it("no course and no sheet: no rows (the popover says No course)", () => {
+    expect(courseInfoRows({ ...course, controls: null, lengthM: null, climbM: null, checks: 0 }, t)).toEqual([]);
+  });
+
+  it("a shown sheet's key stays (docs/course-layout.md §6)", () => {
+    expect(courseInfoRows({ ...course, sheetKey: "1:15000 A4 portrait" }, t).map((r) => r.id)).toEqual(["controls", "length", "climb", "sheet", "checks"]);
+  });
+});
+
+describe("the top bar's save indicator (§3: an error or a conflict never hides)", () => {
+  it("saved and saving are the dot alone; error and conflict always show their words", () => {
+    expect(saveIndicator("saved")).toEqual({ tone: "ok", alwaysText: false, key: "statusSaved" });
+    expect(saveIndicator("saving")).toEqual({ tone: "busy", alwaysText: false, key: "statusSaving" });
+    expect(saveIndicator("error")).toEqual({ tone: "alert", alwaysText: true, key: "statusError" });
+    expect(saveIndicator("conflict")).toEqual({ tone: "alert", alwaysText: true, key: "statusConflict" });
+    // D9c: Field mode's writes wait on the device — words shown, never "Saved".
+    expect(saveIndicator("queued")).toEqual({ tone: "wait", alwaysText: true, key: "statusQueued" });
+  });
+});
