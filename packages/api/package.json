@@ -30,20 +30,20 @@
     "dem:live-check": "tsx scripts/dem-live-check.ts"
   },
   "dependencies": {
-    "@fastify/cors": "^11.3.1",
-    "@fastify/static": "^10.1.6",
+    "@fastify/cors": "^11.4.3",
+    "@fastify/static": "^10.1.11",
     "@oxygen/shared": "workspace:*",
     "@prisma/adapter-pg": "^7.10.1",
     "@prisma/client": "^7.10.1",
     "@resvg/resvg-js": "^2.6.2",
-    "@trpc/client": "^11.19.0",
-    "@trpc/server": "^11.19.0",
+    "@trpc/client": "^11.28.0",
+    "@trpc/server": "^11.28.0",
     "adm-zip": "^0.6.1",
-    "dotenv": "^17.4.2",
-    "fast-xml-parser": "^5.11.2",
-    "fastify": "^5.12.7",
+    "dotenv": "^18.0.10",
+    "fast-xml-parser": "^5.12.1",
+    "fastify": "^5.12.8",
     "geomagnetism": "^0.2.0",
-    "google-auth-library": "^11.3.1",
+    "google-auth-library": "^11.3.4",
     "mysql2": "^3.24.6",
     "ocad2geojson": "github:open-orienteering/ocad2geojson#v2.2.2-oxygen.1",
     "pdf-lib": "^1.17.1",
@@ -54,12 +54,12 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@types/node": "^26.6.5",
+    "@types/node": "^26.6.6",
     "@types/pg": "^8.23.1",
-    "@vitest/coverage-v8": "^4.1.12",
+    "@vitest/coverage-v8": "^5.1.0",
     "prisma": "^7.10.1",
     "tsx": "^4.23.15",
     "typescript": "~6.0.3",
-    "vitest": "^4.1.12"
+    "vitest": "^5.1.0"
   }
 }

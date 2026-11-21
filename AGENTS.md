@@ -6,7 +6,7 @@ These rules apply to all AI coding tools (Claude Code, Cursor, Copilot, Windsurf
 
 Oxygen is an orienteering competition management system. It is a pnpm monorepo with three packages:
 
-- `packages/api/` — Fastify 5 + tRPC 11 backend (Node.js 20, ESM)
+- `packages/api/` — Fastify 5 + tRPC 11 backend (Node.js 24, ESM)
 - `packages/web/` — React 19 PWA frontend (Vite, React Router v7, Tailwind CSS v4)
 - `packages/shared/` — Shared types and utilities
 - `e2e/` — Playwright E2E tests
@@ -309,8 +309,9 @@ Dependency hygiene is developer- and agent-driven, not Dependabot-driven. Depend
 ### On every PR that touches deps
 
 - Run `pnpm run audit:prod` locally before pushing (npm retired the legacy audit endpoint `pnpm audit` ≤10.x used; the script queries the bulk advisory endpoint directly). PRs must not introduce new high or critical advisories in the production tree. The same check runs in `.github/workflows/audit-pr.yml` and will fail the PR.
-- If a transitive dep is vulnerable and upstream has no fix, pin via `pnpm.overrides` in the root `package.json`. The block currently covers `undici`, `minimatch`, `flatted`, `serialize-javascript`, `effect`, `postcss`, `rollup`, `picomatch`, `defu`, and `vite`; add new entries with a one-line comment explaining why.
+- If a transitive dep is vulnerable and upstream has no fix, pin via `pnpm.overrides` in the root `package.json`. The block currently covers `undici`, `minimatch`, `glob`, `flatted`, `serialize-javascript`, `effect`, `postcss`, `rollup`, `picomatch`, `defu`, and `vite`; add new entries with a one-line comment explaining why.
 - Direct deps follow `^` ranges. Patch and minor bumps can land in any PR. Major bumps require a dedicated PR with the migration documented in `docs/`.
+- `pnpm-workspace.yaml` sets `minimumReleaseAge: 10080`: pnpm does not resolve a version published less than 7 days ago. A security fix that can't wait goes in `minimumReleaseAgeExclude` with a comment.
 
 ### After every push
 

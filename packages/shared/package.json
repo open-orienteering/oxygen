@@ -17,14 +17,14 @@
     "test:coverage": "vitest run --coverage"
   },
   "devDependencies": {
-    "@vitest/coverage-v8": "^4.1.12",
+    "@vitest/coverage-v8": "^5.1.0",
     "typescript": "~6.0.3",
-    "vitest": "^4.1.12"
+    "vitest": "^5.1.0"
   },
   "dependencies": {
     "@cantoo/pdf-lib": "^2.11.1",
     "polygon-clipping": "^0.15.7",
-    "proj4": "^2.22.0",
+    "proj4": "^2.23.0",
     "zod": "^4.6.7"
   }
 }

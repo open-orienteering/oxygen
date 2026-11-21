@@ -10,3 +10,8 @@ onlyBuiltDependencies:
   - prisma
   - esbuild
 
+
+# Hold new releases for 7 days (minutes) before pnpm resolves them, so a
+# compromised or broken publish has time to be pulled. A security fix that
+# can't wait goes in minimumReleaseAgeExclude with a comment.
+minimumReleaseAge: 10080

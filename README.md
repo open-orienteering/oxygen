@@ -71,7 +71,7 @@ pnpm dev                        # API on :3002, web on :5173
 
 ### Manual setup
 
-Prerequisites: Node.js >= 20, pnpm >= 10, PostgreSQL 18
+Prerequisites: Node.js 24 (see `.nvmrc`; >= 22.12 works), pnpm 10, PostgreSQL 18
 
 ```bash
 pnpm install

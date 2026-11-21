@@ -30,11 +30,11 @@ jobs:
     name: Lint, build, unit tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Generate Prisma client
@@ -58,11 +58,11 @@ jobs:
     runs-on: ubuntu-latest
     needs: unit
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Generate Prisma client
@@ -91,11 +91,11 @@ jobs:
       E2E_SHARD_TOTAL: ${{ strategy.job-total }}
       E2E_SHARD_INDEX: ${{ matrix.shard }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Generate Prisma client
@@ -111,7 +111,7 @@ jobs:
         run: echo "version=$(pnpm exec playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
       - name: Cache Playwright browsers
         id: playwright-cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}-chromium
@@ -127,7 +127,7 @@ jobs:
         run: pnpm test:e2e
       - name: Upload Playwright artifacts
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-${{ github.run_id }}-${{ github.run_attempt }}-shard-${{ matrix.shard }}
           path: |
@@ -145,11 +145,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Generate Prisma client
@@ -161,7 +161,7 @@ jobs:
         run: echo "version=$(pnpm exec playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
       - name: Cache Playwright browsers
         id: playwright-cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}-chromium
@@ -177,13 +177,45 @@ jobs:
         run: pnpm test:e2e --preview
       - name: Upload Playwright artifacts
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-${{ github.run_id }}-${{ github.run_attempt }}-preview
           path: |
             playwright-report
             test-results
           if-no-files-found: ignore
+
+  # Builds the production image on every PR (amd64 only, not pushed) so a
+  # runtime or native-module change is proven before merge, not first on
+  # :edge. sharp and @resvg/resvg-js are loaded lazily by the API, so the
+  # smoke script renders a PNG with both instead of only starting the server.
+  # docs/deps-2026-11.md "Node 24".
+  image:
+    name: Docker image smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - name: Build cloud image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: cloud
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: oxygen-smoke:ci
+          cache-from: type=gha,scope=image-smoke
+          cache-to: type=gha,scope=image-smoke,mode=max
+      - name: Native modules render in the image
+        run: docker run --rm -w /app/packages/api oxygen-smoke:ci node scripts/image-smoke.mjs
+      - name: Image runs the pinned Node major
+        run: |
+          want="v$(cat .nvmrc)."
+          got="$(docker run --rm oxygen-smoke:ci node --version)"
+          echo "image node: ${got}, .nvmrc: $(cat .nvmrc)"
+          case "${got}" in "${want}"*) ;; *) exit 1 ;; esac
 
   # The one E2E check the merge flow reads ("E2E tests"): green only when
   # every shard and the preview stack passed. Runs even when one failed, so
@@ -204,7 +236,7 @@ jobs:
   publish:
     name: Publish GHCR image
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [unit, integration, e2e]
+    needs: [unit, integration, e2e, image]
     uses: ./.github/workflows/publish.yml
     permissions:
       contents: read

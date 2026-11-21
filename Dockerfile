@@ -1,5 +1,5 @@
 # ─── Stage 1: Runtime OS dependencies ──────────────────────
-FROM node:20-slim AS base
+FROM node:24-slim AS base
 
 # Prisma's install script selects a native schema engine by probing OpenSSL.
 # Without the CLI present it falls back to debian-openssl-1.1.x; the runtime
@@ -15,7 +15,7 @@ FROM base AS deps
 
 # Keep in sync with "packageManager" in the root package.json, otherwise pnpm
 # re-downloads the pinned version on every build.
-RUN npm install -g pnpm@10.29.3
+RUN npm install -g pnpm@10.34.9
 
 WORKDIR /app
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
