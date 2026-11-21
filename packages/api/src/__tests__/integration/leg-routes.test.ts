@@ -20,6 +20,7 @@ import { HILL, encodeTerrainDoc } from "../helpers/terrain-doc.js";
 import { deriveDocumentHeightfield } from "../../map-store/heightfield.js";
 import { resetClimbFields } from "../../course-climb.js";
 import { BACKUP_TABLES } from "../../backup.js";
+import { exportEventSnapshot, importEventSnapshot } from "../../sync/lease.js";
 
 const suffix = randomBytes(4).toString("hex");
 const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
@@ -35,8 +36,8 @@ let back: number;
 
 const rowOf = (seq: number) => ctx.db.course.findFirstOrThrow({ where: { eventId: ctx.eventId, seq } });
 const climbOf = async (seq: number) => { const r = await rowOf(seq); return { m: r.climbM, source: r.climbSource }; };
-/** East of the hill's lowest ring: flat ground. */
-const AROUND = [{ x: 56, y: 30 }];
+/** Along the hill's lowest ring, east of the top: no way over it. */
+const AROUND = [{ x: 49, y: 30 }];
 
 beforeAll(async () => {
   resetClimbFields();
@@ -57,10 +58,10 @@ beforeAll(async () => {
   });
   await ctx.db.mapFile.create({ data: { eventId: ctx.eventId, fileName: "synthetic.ocd", sourceHash, documentHash: hash, scale: 15000 } });
   await deriveDocumentHeightfield(ctx.db, hash);
-  await caller.control.create({ status: 4, xpos: 4, ypos: 4 });
-  await caller.control.create({ status: 5, xpos: 56, ypos: 56 });
-  south = (await caller.control.create({ codes: "41", xpos: 30, ypos: 6 })).id;
-  north = (await caller.control.create({ codes: "42", xpos: 30, ypos: 54 })).id;
+  await caller.control.create({ status: 4, xpos: 12, ypos: 12 });
+  await caller.control.create({ status: 5, xpos: 48, ypos: 48 });
+  south = (await caller.control.create({ codes: "41", xpos: 30, ypos: 11 })).id;
+  north = (await caller.control.create({ codes: "42", xpos: 30, ypos: 49 })).id;
   over = (await caller.course.create({ name: "Over", controlIds: [south, north] })).id;
   second = (await caller.course.create({ name: "Second", controlIds: [south, north] })).id;
   back = (await caller.course.create({ name: "Back", controlIds: [north, south] })).id;
@@ -90,7 +91,7 @@ describe("leg routes (docs/course-elevation.md §7)", () => {
     expect(r).toMatchObject({ fromControlId: south, toControlId: north, points: AROUND, source: "drawn", model: null, chosen: true });
     for (const id of [over, second]) {
       const c = await climbOf(id);
-      expect(c.m, "around the hill, not over it").toBeLessThanOrEqual(straight.m - 10);
+      expect(c.m, "around the hill, not over it").toBeLessThanOrEqual(straight.m - 4);
       expect(c.m === 0 ? null : c.source).toBe(c.m === 0 ? null : "computed");
     }
     expect((await rowOf(over)).lengthM).toBe(lengthBefore);
@@ -155,12 +156,31 @@ describe("leg routes (docs/course-elevation.md §7)", () => {
     expect(await climbOf(second)).toEqual(routed);
   });
 
+  it("a control run to twice: the marked leg keeps its line, the other leg its route", async () => {
+    const extra = (await caller.control.create({ codes: "44", xpos: 46, ypos: 46 })).id;
+    const twice = (await caller.course.create({ name: "Twice", controlIds: [south, north, extra, north] })).id;
+    const plain = await climbOf(twice);
+    await caller.legRoute.choose({ id: routeId, chosen: false });
+    const unrouted = await climbOf(twice);
+    await caller.legRoute.choose({ id: routeId, chosen: true });
+    expect(plain.m).toBeLessThanOrEqual(unrouted.m - 4);
+    // The second run to `north` (from `extra`) is a marked route; south → north is not.
+    const detail = await caller.course.detail({ id: twice });
+    const structure = detail.structure as { items: { siteId: number; leg?: Record<string, unknown> }[] };
+    const last = structure.items.map((i) => i.siteId).lastIndexOf(north);
+    const items = structure.items.map((i, at) => (at === last ? { ...i, leg: { ...(i.leg ?? {}), style: "marked_route" } } : i));
+    await caller.course.setStructure({ courseId: twice, structure: { ...structure, items } as never });
+    expect(await climbOf(twice), "south → north is still read along its route").toEqual(plain);
+    await caller.course.delete({ id: twice });
+    await caller.control.delete({ id: extra });
+  });
+
   it("a moved control keeps the route's vertices: the ends follow", async () => {
-    await caller.control.update({ id: south, xpos: 32, ypos: 6 });
+    await caller.control.update({ id: south, xpos: 32, ypos: 11 });
     const [r] = await caller.legRoute.list();
     expect(r.points).toEqual(AROUND);
-    expect((await climbOf(over)).m).toBeLessThanOrEqual(straight.m - 10);
-    await caller.control.update({ id: south, xpos: 30, ypos: 6 });
+    expect((await climbOf(over)).m).toBeLessThanOrEqual(straight.m - 4);
+    await caller.control.update({ id: south, xpos: 30, ypos: 11 });
   });
 
   it("refused: the same control twice, an unknown control, no points, another event's route", async () => {
@@ -174,17 +194,42 @@ describe("leg routes (docs/course-elevation.md §7)", () => {
   });
 
   it("a removed control's routes are not listed; deleting the chosen route reads the line again", async () => {
-    const extra = (await caller.control.create({ codes: "43", xpos: 50, ypos: 10 })).id;
-    await caller.legRoute.save({ fromControlId: south, toControlId: extra, points: [{ x: 40, y: 8 }] });
+    const extra = (await caller.control.create({ codes: "43", xpos: 46, ypos: 14 })).id;
+    await caller.legRoute.save({ fromControlId: south, toControlId: extra, points: [{ x: 40, y: 12 }] });
     expect(await caller.legRoute.list()).toHaveLength(2);
     await caller.control.delete({ id: extra });
     expect((await caller.legRoute.list()).map((r) => r.id)).toEqual([routeId]);
+    await caller.legRoute.choose({ id: routeId, chosen: false });
+    const line = await climbOf(over);
+    await caller.legRoute.choose({ id: routeId, chosen: true });
+    expect((await climbOf(over)).m).toBeLessThan(line.m);
     await caller.legRoute.delete({ id: routeId });
-    expect(await climbOf(over)).toEqual(straight);
+    expect(await climbOf(over)).toEqual(line);
   });
 
   it("the routes are in the event's backup", () => {
     expect(BACKUP_TABLES).toContain("leg_routes");
     expect(BACKUP_TABLES.indexOf("leg_routes")).toBeGreaterThan(BACKUP_TABLES.indexOf("controls"));
+  });
+
+  it("the checkout snapshot carries the routes verbatim", async () => {
+    await caller.legRoute.save({ fromControlId: south, toControlId: north, points: AROUND });
+    await caller.legRoute.save({ fromControlId: north, toControlId: south, points: AROUND, chosen: false });
+    const before = await ctx.db.legRoute.findMany({ where: { eventId: ctx.eventId }, orderBy: { id: "asc" } });
+    expect(before.length).toBeGreaterThanOrEqual(2);
+    const snapshot = await exportEventSnapshot(ctx.db, ctx.event);
+    expect(snapshot.tables.legRoute).toHaveLength(before.length);
+    snapshot.event = { ...snapshot.event, nameId: `${ctx.event.nameId}_copy` };
+    // The ids travel verbatim, so the copy can only exist once the original is gone.
+    await ctx.db.legRoute.deleteMany({ where: { eventId: ctx.eventId } });
+    await ctx.db.course.deleteMany({ where: { eventId: ctx.eventId } });
+    await ctx.db.control.deleteMany({ where: { eventId: ctx.eventId } });
+    const local = await importEventSnapshot(ctx.db, snapshot);
+    try {
+      const after = await ctx.db.legRoute.findMany({ where: { eventId: local.id }, orderBy: { id: "asc" } });
+      expect(after.map(({ eventId: _e, ...r }) => r)).toEqual(before.map(({ eventId: _e, ...r }) => r));
+    } finally {
+      await ctx.db.event.delete({ where: { id: local.id } });
+    }
   });
 });

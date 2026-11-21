@@ -2,7 +2,7 @@
  * `legRoute.*` (docs/course-elevation.md §7.2): the event's leg routes —
  * a route per directed control pair, shared by every course that runs
  * the pair. Ids on the wire are public: a route by its UUID, a control
- * by its per-event number. Every write that changes what a pair's climb
+ * by its public id (its first code, else its seq). Every write that changes what a pair's climb
  * is read along clears the computed climb of the courses running the
  * pair, in its transaction; it is computed again after the commit (§6).
  */
@@ -10,10 +10,12 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { course } from "@oxygen/shared";
-import type { Prisma, PrismaClient } from "../generated/prisma/client.js";
+import { Prisma, type PrismaClient } from "../generated/prisma/client.js";
 import { coursesEditRaceProcedure, coursesViewProcedure, router } from "../trpc.js";
 import { clearComputedClimbs } from "../course-geometry.js";
 import { coursesRunningPair } from "../leg-routes.js";
+import { publicControlId } from "../control-id.js";
+import { uuidsOfPublicIds } from "../course-structure.js";
 
 type Tx = Prisma.TransactionClient;
 
@@ -27,21 +29,22 @@ export interface LegRouteWire {
   chosen: boolean;
 }
 
-const ROW = { id: true, points: true, source: true, model: true, chosen: true, fromControlId: true, toControlId: true, from: { select: { seq: true } }, to: { select: { seq: true } } } as const;
+const ROW = { id: true, points: true, source: true, model: true, chosen: true, fromControlId: true, toControlId: true, from: { select: { seq: true, codes: true } }, to: { select: { seq: true, codes: true } } } as const;
 type Row = Prisma.LegRouteGetPayload<{ select: typeof ROW }>;
 
 function toWire(r: Row): LegRouteWire {
   const points = course.legRoutePointsSchema.safeParse(r.points);
   return {
-    id: r.id, fromControlId: r.from.seq, toControlId: r.to.seq, points: points.success ? points.data : [],
+    id: r.id, fromControlId: publicControlId(r.from), toControlId: publicControlId(r.to), points: points.success ? points.data : [],
     source: r.source === "computed" ? "computed" : "drawn", model: r.model, chosen: r.chosen,
   };
 }
 
-async function controlUuid(db: PrismaClient | Tx, eventId: bigint, seq: number): Promise<string> {
-  const c = await db.control.findFirst({ where: { eventId, seq, removed: false }, select: { id: true } });
-  if (!c) throw new TRPCError({ code: "NOT_FOUND", message: `Control ${seq} not found` });
-  return c.id;
+/** A control's row by its public id (`publicControlId`: its first code, else its seq). */
+async function controlUuid(db: PrismaClient | Tx, eventId: bigint, publicId: number): Promise<string> {
+  const id = (await uuidsOfPublicIds(db, eventId, [publicId])).get(publicId);
+  if (!id) throw new TRPCError({ code: "NOT_FOUND", message: `Control ${publicId} not found` });
+  return id;
 }
 
 async function findRoute(db: PrismaClient | Tx, eventId: bigint, id: string): Promise<Row> {
@@ -53,6 +56,17 @@ async function findRoute(db: PrismaClient | Tx, eventId: bigint, id: string): Pr
 /** The pair's climb changed: the courses running it are cleared here and computed after the commit. */
 async function pairChanged(tx: Tx, eventId: bigint, from: string, to: string): Promise<void> {
   await clearComputedClimbs(tx, eventId, await coursesRunningPair(tx, eventId, from, to));
+}
+
+/** Two writers choosing a route for one pair at once: the second meets the one-chosen index (§7.2). */
+async function oneChoice<T>(write: () => Promise<T>): Promise<T> {
+  try {
+    return await write();
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002")
+      throw new TRPCError({ code: "CONFLICT", message: "The leg's route was changed at the same time; try again" });
+    throw err;
+  }
 }
 
 const idInput = z.object({ id: z.string().uuid() });
@@ -86,7 +100,7 @@ export const legRouteRouter = router({
     .mutation(async ({ ctx, input }): Promise<LegRouteWire> => {
       const eventId = ctx.event.id;
       if (input.fromControlId === input.toControlId) throw new TRPCError({ code: "BAD_REQUEST", message: "A route runs between two different controls" });
-      return ctx.db.$transaction(async (tx) => {
+      return oneChoice(() => ctx.db.$transaction(async (tx) => {
         const [from, to] = [await controlUuid(tx, eventId, input.fromControlId), await controlUuid(tx, eventId, input.toControlId)];
         const existing = input.id ? await findRoute(tx, eventId, input.id) : null;
         if (existing && (existing.fromControlId !== from || existing.toControlId !== to)) throw new TRPCError({ code: "BAD_REQUEST", message: "A route keeps its pair" });
@@ -99,7 +113,7 @@ export const legRouteRouter = router({
         // A route that is not the chosen one, before and after, changes no climb.
         if (chosen || existing?.chosen) await pairChanged(tx, eventId, from, to);
         return toWire(row);
-      });
+      }));
     }),
 
   /** Choose the route for its pair (the pair's other routes are not), or take the choice away: the pair is read along its drawn line again. */
@@ -107,14 +121,14 @@ export const legRouteRouter = router({
     .input(idInput.extend({ chosen: z.boolean() }))
     .mutation(async ({ ctx, input }): Promise<LegRouteWire> => {
       const eventId = ctx.event.id;
-      return ctx.db.$transaction(async (tx) => {
+      return oneChoice(() => ctx.db.$transaction(async (tx) => {
         const r = await findRoute(tx, eventId, input.id);
         if (r.chosen === input.chosen) return toWire(r);
         if (input.chosen) await tx.legRoute.updateMany({ where: { eventId, fromControlId: r.fromControlId, toControlId: r.toControlId, chosen: true }, data: { chosen: false } });
         const row = await tx.legRoute.update({ where: { id: r.id }, data: { chosen: input.chosen }, select: ROW });
         await pairChanged(tx, eventId, r.fromControlId, r.toControlId);
         return toWire(row);
-      });
+      }));
     }),
 
   delete: coursesEditRaceProcedure

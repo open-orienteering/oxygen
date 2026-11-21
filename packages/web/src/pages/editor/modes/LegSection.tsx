@@ -147,7 +147,7 @@ function LegRoutes({ r, readOnly }: { r: LegRoutesProps; readOnly: boolean }) {
       ) : (
         <p data-testid="editor-leg-routes-hint" className="text-[10px] text-slate-400">{t("legRoutesHint")}</p>
       )}
-      {r.alternatives && !r.drawing && <LegAlternatives a={r.alternatives} locked={readOnly || r.busy} />}
+      {r.alternatives && !r.drawing && !readOnly && <LegAlternatives a={r.alternatives} locked={r.busy} />}
     </div>
   );
 }

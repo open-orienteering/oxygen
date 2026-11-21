@@ -66,6 +66,20 @@ describe("the finder (docs/course-elevation.md §7.8)", () => {
     expect(log).toEqual(["doc", "find", "find", "doc", "find"]);
   });
 
+  it("a message the worker cannot take fails the search, and the next one starts over", async () => {
+    const log: RouteWorkerRequest["type"][] = [];
+    let broken = true;
+    const finder = createRouteFinder(() => (broken
+      ? { onmessage: null, onerror: null, postMessage() { throw new Error("could not be cloned"); }, terminate() {} }
+      : fakeWorker(log)));
+    const doc = { key: "d:0", bytes: bytes(), patch: null };
+    await expect(finder.find({ doc, field: null, req })).rejects.toThrow(/cloned/);
+    broken = false;
+    expect((await finder.find({ doc, field: null, req })).routes.length).toBeGreaterThan(0);
+    expect(log).toEqual(["doc", "find"]);
+    finder.dispose();
+  });
+
   it("dispose rejects a search in flight", async () => {
     const finder = createRouteFinder(() => ({ onmessage: null, onerror: null, postMessage() {}, terminate() {} }));
     const p = finder.find({ doc: { key: "d", bytes: bytes(), patch: null }, field: null, req });

@@ -245,6 +245,71 @@ describe("route alternatives (docs/course-elevation.md §7.7)", () => {
     expect(r.lengthM).toBeGreaterThan(270);
   });
 
+  describe("at the search's own cell size (0.25 mm), in a window like a leg's", () => {
+    const fine = (features: RouteFeature[], heightAt?: (p: RoutePoint) => number | null): RouteGrid =>
+      buildRouteGrid({ bounds: { minX: 0, minY: 0, maxX: 60, maxY: 40 }, cellMm: 0.25, groundMPerMm: 10, features, heightAt });
+    const from = { x: 10, y: 20 };
+    const to = { x: 50, y: 20 };
+    /** The y of every place the route crosses the vertical at `x`. */
+    const crossings = (points: readonly RoutePoint[], x: number): number[] => {
+      const ys: number[] = [];
+      for (let i = 1; i < points.length; i++) {
+        const [a, b] = [points[i - 1], points[i]];
+        if ((a.x - x) * (b.x - x) < 0) ys.push(a.y + ((x - a.x) / (b.x - a.x)) * (b.y - a.y));
+      }
+      return ys;
+    };
+
+    it("open terrain gives one route, not the same line twice", () => {
+      const routes = findRoutes(fine([]), from, to, { model });
+      expect(routes).toHaveLength(1);
+      expect(routes[0].points).toEqual([from, to]);
+    });
+
+    it("a control on a building with a wall between: no route crosses the wall, and every cost is a number", () => {
+      const wall = line(BLOCKED, [30, 5, 30, 35]);
+      for (const [name, features, a, b] of [
+        ["start on a building", [area(BLOCKED, rect(9, 19, 11, 21)), wall], from, to],
+        ["end on a building", [area(BLOCKED, rect(49.5, 19.5, 50.5, 20.5)), line(BLOCKED, [45, 5, 45, 35])], from, to],
+        ["end on a cliff", [wall, line(BLOCKED, [49, 20.1, 51, 20.1])], from, { x: 50, y: 20.1 }],
+      ] as const) {
+        const routes = findRoutes(fine([...features]), a, b, { model });
+        expect(routes.length, name).toBeGreaterThanOrEqual(1);
+        for (const r of routes) {
+          expect(Number.isFinite(r.costM), name).toBe(true);
+          expect(r.costM, name).toBeGreaterThan(400);
+          expect(r.points[0], name).toEqual(a);
+          expect(r.points.at(-1), name).toEqual(b);
+          const x = name === "end on a building" ? 45 : 30;
+          for (const y of crossings(r.points, x)) expect(y < 5 || y > 35, `${name}: crosses the wall at y ${y}`).toBe(true);
+        }
+      }
+    });
+
+    it("an uncrossable area thinner than a cell still closes the way, straight or slanted", () => {
+      for (const strip of [[30.02, 0, 30.2, 0, 30.2, 40, 30.02, 40], [30.15, 0, 30.35, 0, 30.35, 40, 30.15, 40], [20, 0, 20.2, 0, 40.2, 40, 40, 40]])
+        expect(findRoutes(fine([area(BLOCKED, strip)]), from, to, { model })).toEqual([]);
+    });
+
+    it("downhill costs what the model says: 400 m at 10 % down is 340", () => {
+      const g = fine([], (p) => 100 - p.x * 10 * 0.1);
+      const [r] = findRoutes(g, from, to, { model, alternatives: 0 });
+      expect(r.points).toEqual([from, to]);
+      expect(r.costM).toBeCloseTo(400 * defaultSlopeFactor(-0.1), 3);
+      expect(segmentCost(g, model, to, from)).toBeCloseTo(400 * defaultSlopeFactor(0.1), 3);
+    });
+
+    it("a bridge stays open when the river's banks are drawn as lines too", () => {
+      const g = fine([
+        area(BLOCKED_SOFT, rect(28, 0, 32, 40)), line(BLOCKED_SOFT, [28, 0, 28, 40]), line(BLOCKED_SOFT, [32, 0, 32, 40]),
+        line(C.path, [20, 20, 40, 20]),
+      ]);
+      const [r] = findRoutes(g, from, to, { model });
+      expect(r.lengthM).toBeCloseTo(400, 0);
+      expect(r.costM).toBeLessThan(400);
+    });
+  });
+
   it("the same input gives the same routes", () => {
     const features = [area(BLOCKED_SOFT, rect(17, 11, 23, 29)), area(C.slow, rect(5, 30, 35, 38))];
     expect(findRoutes(grid(features), A, B, { model })).toEqual(findRoutes(grid(features), A, B, { model }));

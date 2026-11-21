@@ -5,8 +5,8 @@
  */
 
 import { CLASS_INDEX, SHORTEST_COST_MODEL, isBlockedClass, type CostModel } from "./cost-model.js";
-import { cellOf, centreOf, nearestPassable, openDisc, type RouteGrid, type RoutePoint } from "./grid.js";
-import { costField, moveCost, tracePath, type CostField } from "./search.js";
+import { cellOf, centreOf, heightAtPoint, nearestPassable, openDisc, type RouteGrid, type RoutePoint } from "./grid.js";
+import { costField, tracePath, type CostField } from "./search.js";
 
 export interface RouteAlternative {
   /** The whole polyline, `from` first and `to` last, paper mm. */
@@ -36,7 +36,12 @@ export interface RouteSearchOptions {
 
 const TRIES = 40;
 
-/** The cost of a straight run a → b sampled every half cell; Infinity when it touches an uncrossable cell. */
+/**
+ * The cost of a straight run a → b sampled every half cell: each step's
+ * ground length × the mean class factor of the cells at its ends × the
+ * slope factor of the height difference over that step. Infinity when
+ * it touches an uncrossable cell or passes between two at a corner.
+ */
 export function segmentCost(g: RouteGrid, model: CostModel, a: RoutePoint, b: RoutePoint): number {
   const lenMm = Math.hypot(b.x - a.x, b.y - a.y);
   const steps = Math.max(1, Math.ceil(lenMm / (g.cellMm / 2)));
@@ -44,16 +49,22 @@ export function segmentCost(g: RouteGrid, model: CostModel, a: RoutePoint, b: Ro
   let cost = 0;
   let prev = cellOf(g, a);
   if (isBlockedClass(g.cls[prev])) return Infinity;
+  let prevZ = heightAtPoint(g, a);
   for (let s = 1; s <= steps; s++) {
-    const cell = cellOf(g, { x: a.x + ((b.x - a.x) * s) / steps, y: a.y + ((b.y - a.y) * s) / steps });
+    const p = { x: a.x + ((b.x - a.x) * s) / steps, y: a.y + ((b.y - a.y) * s) / steps };
+    const cell = cellOf(g, p);
     if (isBlockedClass(g.cls[cell])) return Infinity;
     if (cell !== prev) {
-      // No slipping between two uncrossable cells at a corner.
       const pc = prev % g.cols, pr = (prev - pc) / g.cols, cc = cell % g.cols, cr = (cell - cc) / g.cols;
       if (pc !== cc && pr !== cr && (isBlockedClass(g.cls[pr * g.cols + cc]) || isBlockedClass(g.cls[cr * g.cols + pc]))) return Infinity;
     }
-    cost += stepM > 0 ? moveCost(g, model, prev, cell, stepM) : 0;
+    const z = heightAtPoint(g, p);
+    if (stepM > 0) {
+      const dz = z - prevZ;
+      cost += stepM * ((model.classFactor[g.cls[prev]] + model.classFactor[g.cls[cell]]) / 2) * (Number.isNaN(dz) ? 1 : model.slopeFactor(dz / stepM));
+    }
     prev = cell;
+    prevZ = z;
   }
   return cost;
 }
@@ -68,32 +79,48 @@ export function polylineCost(g: RouteGrid, model: CostModel, points: readonly Ro
 /**
  * A grid path as a polyline with the grid's staircase taken out: from
  * each kept vertex the straight run to the farthest later one that costs
- * no more than the path between them.
+ * no more than the path between them. The path's ends are `from` and
+ * `to` where they lie in the path's end cells; an end standing on an
+ * uncrossable cell stays out of the smoothing (`stubs`).
  */
 export function smoothPath(g: RouteGrid, model: CostModel, cells: readonly number[], from: RoutePoint, to: RoutePoint): RoutePoint[] {
   const pts = cells.map((c) => centreOf(g, c));
-  pts[0] = from;
-  pts[pts.length - 1] = to;
+  if (cellOf(g, from) === cells[0]) pts[0] = from;
+  if (cellOf(g, to) === cells[cells.length - 1]) pts[pts.length - 1] = to;
   // Cost along the path up to each vertex.
   const upTo = new Float64Array(pts.length);
   for (let i = 1; i < pts.length; i++) upTo[i] = upTo[i - 1] + segmentCost(g, model, pts[i - 1], pts[i]);
+  const shortcut = (i: number, j: number): boolean => {
+    const c = segmentCost(g, model, pts[i], pts[j]);
+    return Number.isFinite(c) && c <= (upTo[j] - upTo[i]) * 1.0005 + 1e-9;
+  };
   const out: RoutePoint[] = [pts[0]];
   let i = 0;
   while (i < pts.length - 1) {
     let j = i + 1;
     // Doubling, then stepping back: far shortcuts are tried first where they hold.
     let span = 2;
-    while (i + span < pts.length && segmentCost(g, model, pts[i], pts[i + span]) <= (upTo[i + span] - upTo[i]) * 1.0005 + 1e-9) {
+    while (i + span < pts.length && shortcut(i, i + span)) {
       j = i + span;
       span *= 2;
     }
     for (let k = Math.min(pts.length - 1, i + span - 1); k > j; k--) {
-      if (segmentCost(g, model, pts[i], pts[k]) <= (upTo[k] - upTo[i]) * 1.0005 + 1e-9) { j = k; break; }
+      if (shortcut(i, k)) { j = k; break; }
     }
     out.push(pts[j]);
     i = j;
   }
   return out;
+}
+
+/** A route's cost: the model's along the polyline; a stretch that touches an uncrossable cell — the stub to a control standing on one — counts its length. */
+export function routeCost(g: RouteGrid, model: CostModel, points: readonly RoutePoint[]): number {
+  let cost = 0;
+  for (let i = 1; i < points.length; i++) {
+    const c = segmentCost(g, model, points[i - 1], points[i]);
+    cost += Number.isFinite(c) ? c : Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y) * g.groundMPerMm;
+  }
+  return cost;
 }
 
 function lengthM(g: RouteGrid, points: readonly RoutePoint[]): number {
@@ -161,6 +188,39 @@ function searchStretch(g: RouteGrid, a: number, b: number, o: Required<Pick<Rout
   return found;
 }
 
+/** The cells a polyline passes, sampled every half cell. */
+function polylineCells(g: RouteGrid, points: readonly RoutePoint[]): number[] {
+  const out: number[] = [];
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1], b = points[i];
+    const steps = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / (g.cellMm / 2)));
+    for (let s = i === 1 ? 0 : 1; s <= steps; s++) out.push(cellOf(g, { x: a.x + ((b.x - a.x) * s) / steps, y: a.y + ((b.y - a.y) * s) / steps }));
+  }
+  return out;
+}
+
+/**
+ * The routes as they are after straightening: an alternative that now
+ * runs where a kept route runs is dropped, a shortest route that does
+ * hands its mark to that route.
+ */
+function distinctRoutes(g: RouteGrid, routes: RouteAlternative[], from: RoutePoint, to: RoutePoint, maxShared: number): RouteAlternative[] {
+  const radius = Math.max(3, Math.round((Math.hypot(to.x - from.x, to.y - from.y) / g.cellMm) * 0.06));
+  const kept: { route: RouteAlternative; near: Uint8Array }[] = [];
+  for (const route of routes) {
+    const cells = polylineCells(g, route.points);
+    const twin = kept.find((k) => sharedShare(cells, k.near) > (route.shortest && !route.fastest ? 0.9 : maxShared));
+    if (twin && !route.fastest) {
+      if (route.shortest) twin.route.shortest = true;
+      continue;
+    }
+    const near = new Uint8Array(g.cols * g.rows);
+    markCorridor(g, cells, radius, near);
+    kept.push({ route, near });
+  }
+  return kept.map((k) => k.route);
+}
+
 /**
  * The route alternatives from `from` to `to` on the grid; empty when
  * there is no way. An end on an uncrossable cell starts from the
@@ -177,15 +237,19 @@ export function findRoutes(grid: RouteGrid, from: RoutePoint, to: RoutePoint, op
   if (cells.some((c) => c < 0)) return [];
   const finish = (parts: { cells: number[]; from: RoutePoint; to: RoutePoint; model: CostModel }[], fastest: boolean, shortest: boolean): RouteAlternative => {
     const points: RoutePoint[] = [];
+    const add = (p: RoutePoint) => { const last = points[points.length - 1]; if (!last || last.x !== p.x || last.y !== p.y) points.push(p); };
     for (const part of parts) {
-      const smooth = smoothPath(g, part.model, part.cells, part.from, part.to);
-      points.push(...(points.length > 0 ? smooth.slice(1) : smooth));
+      // A control on an uncrossable cell: the stub between it and the path's first passable cell is added as it is.
+      add(part.from);
+      for (const p of smoothPath(g, part.model, part.cells, part.from, part.to)) add(p);
+      add(part.to);
     }
-    return { points, lengthM: lengthM(g, points), costM: polylineCost(g, o.model, points), fastest, shortest };
+    return { points, lengthM: lengthM(g, points), costM: routeCost(g, o.model, points), fastest, shortest };
   };
   if (via.length === 0) {
-    return searchStretch(g, cells[0], cells[1], o).map((f) =>
+    const routes = searchStretch(g, cells[0], cells[1], o).map((f) =>
       finish([{ cells: f.cells, from, to, model: f.fastest || !f.shortest ? o.model : SHORTEST_COST_MODEL }], f.fastest, f.shortest));
+    return distinctRoutes(g, routes, from, to, o.maxShared);
   }
   // Through the crossing points: the fastest of each stretch joined, and the shortest of each stretch joined.
   const stretches = cells.slice(1).map((b, i) => searchStretch(g, cells[i], b, { ...o, alternatives: 0 }));

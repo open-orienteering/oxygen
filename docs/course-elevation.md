@@ -554,7 +554,7 @@ route:
 | `points` | the route's **interior** vertices, paper mm (`[{ x, y }]`, 1 to 2000): the ends are the controls' centres and follow a moved control, as a leg's bends do |
 | `source` | `drawn` (by hand) or `computed` (an alternative the search of §7.5 found and someone kept) |
 | `model` | the cost model a computed route was found with; NULL for a drawn one |
-| `chosen` | the route the pair's climb is read along; a partial unique index allows one per pair |
+| `chosen` | the route the pair's climb is read along; a partial unique index allows one per pair. Two writers choosing for one pair at once: the second gets `CONFLICT` and tries again |
 
 A route belongs to the **pair, not to a course**: every course of the
 event that runs `from` → `to` as a leg shares it (§0.9; the terrain
@@ -606,7 +606,9 @@ Unchanged by a route: the course's **length** (§0.1; it stays the
 drawn line's), the drawn and printed leg, the description sheet's
 distances and every export — a route is never printed or exported
 (§0.3). A leg with style `marked_route` ignores routes: its drawn line
-is the route the runner must follow. A leg through a crossing point is
+is the route the runner must follow. The style is the leg's own: where
+a control is run to twice, one leg to it can be marked and the other
+read along its pair's route. A leg through a crossing point is
 read along the chosen route as any other; the setter draws the route
 through the crossing.
 
@@ -632,7 +634,10 @@ without heights.
   selected. **Save route** (`editor-leg-route-done`), Enter or a
   double click stores it as the pair's chosen route; **Cancel**,
   Escape or a right click gives it up; Backspace takes the last vertex
-  back. The draft ends when the selection leaves the leg.
+  back. The draft ends when the selection leaves the leg. The keys are
+  the draft's only bare: with Ctrl, Cmd or Alt they are the browser's,
+  and Enter on a focused button or link presses it. Nothing is saved
+  while a route write is under way.
 - The selected leg's stored routes are drawn on the map, screen only
   (`editor-route-line`, `data-chosen`): the chosen one solid, the
   others dashed.
@@ -689,13 +694,20 @@ read from):
    areas overlap, the cell takes the higher rank: forest < open <
    green < boulders, marsh, water < paved < uncrossable water <
    uncrossable.
-2. **Ways** — line objects of the path classes — then mark every cell
+2. **Outlines and banks.** The outline of every uncrossable area marks
+   the cells it touches too, so an area narrower than a cell (which
+   holds no cell centre) still closes the way; so do line objects of
+   `blockedSoft` (a bank drawn as a 301 line).
+3. **Ways** — line objects of the path classes — then mark every cell
    they touch, over anything but `blocked`: a path over uncrossable
-   water is a bridge, a path into a building opens nothing.
-3. **Uncrossable lines** mark every cell they touch `blocked`. A line
-   is walked cell by cell without a diagonal step, and the search never
-   moves diagonally between two uncrossable cells, so nothing slips
-   through a barrier.
+   water and its banks is a bridge, a path into a building opens
+   nothing.
+4. **Uncrossable lines** of `blocked` mark every cell they touch
+   `blocked`, after the ways: a fence closes a path.
+
+A line is walked cell by cell without a diagonal step, and the search
+moves diagonally only when both cells beside the step are passable, so
+nothing slips through a barrier or past its corner.
 
 Line objects of other classes mean nothing. Objects a map patch hides
 and hidden symbols are skipped.
@@ -738,10 +750,19 @@ control (each move costed in its running direction).
 4. Each path is straightened: from each vertex the straight run to the
    farthest later vertex that costs no more than the path between
    them, so the grid's staircase does not lengthen a route. A route's
-   metres are its polyline's; its cost is re-read along the polyline.
+   metres are its polyline's; its cost is re-read along the polyline,
+   with the height read between the cell centres, so a straight run
+   down an even slope costs what the model says.
+5. Straightening can lay two routes on one line (open terrain: every
+   detour straightens to the leg). A route that shares more than half
+   of its length with one already kept is dropped after straightening
+   too; the shortest mark moves to the route it ran along.
 
 A control standing on an uncrossable cell is run to from the nearest
-passable cell (up to 12 cells away). A leg through a **crossing
+passable cell (up to 12 cells away): the route is searched and
+straightened from that cell, never across the obstacle, and the stub
+between the control and the cell is added as it is, costed by its
+length. A leg through a **crossing
 point** is searched in two stretches through it, with the obstacle
 opened within 1 mm of the point (`course-layer.md` §9.3); it gets the
 fastest and the shortest, without other alternatives. No way at all
@@ -759,8 +780,8 @@ Under the Routes list (§7.4), on a desktop or tablet
   field between searches). The course's out-of-bounds objects in view
   are obstacles. Without a height field the search runs without
   slopes. A result belongs to the leg as it stood — its ends, its
-  crossing point, the document, the patch, the field — and is dropped
-  when any of them changes.
+  crossing point, the document, the patch, the field, the
+  out-of-bounds objects — and is dropped when any of them changes.
 - The list (`editor-leg-alternative`, `data-kind` `fastest` /
   `shortest` / `fastestShortest` / `alternative`, `data-m`,
   `data-climb`, `data-time`): metres, the route's own climb as in
@@ -772,12 +793,15 @@ Under the Routes list (§7.4), on a desktop or tablet
   costs are timed at; 6:00 by default, kept per course in this browser
   (`oxygen.editor.routePace.<event>.<course>`).
 - **Use** (`editor-leg-alternative-use`) stores the alternative as the
-  pair's chosen route (`legRoute.save`, `source: "computed"`). An
+  pair's chosen route (`legRoute.save`, `source: "computed"`, `model`
+  the id of the model it was found under: `shortest` for the route
+  that is only the shortest, else `default-1`). An
   alternative that is the straight line cannot be stored: the drawn
   line is that route.
 - A note says the times are estimates from an uncalibrated model
   (`editor-leg-alternatives-note`); no route found says so
   (`editor-leg-alternatives-none`).
+- A phone has no alternatives: its Leg section is read-only.
 
 ## Tests
 
@@ -797,12 +821,12 @@ Under the Routes list (§7.4), on a desktop or tablet
 | `packages/web/src/lib/editor/__tests__/sequence.test.ts` "an insert position names its drawn leg's index" | §4.5, §5: the selected leg's index, the route's marks, a repeated control |
 | `packages/web/src/lib/editor/__tests__/hover-dot.test.ts` | §5: the pointer's store |
 | `packages/shared/src/course/__tests__/leg-routes.test.ts` | §7.1, §7.3: a leg along its chosen route between its own ends, direction, a pair run twice, a marked route, the polyline's length, the stored points' bounds |
-| `packages/api/src/__tests__/integration/leg-routes.test.ts` | §7.2, §7.3: a saved route chosen and every course of the pair read along it, the length unchanged, direction, choose and unchoose, one chosen route per pair (and the index), new points, a typed climb and a marked route untouched, a moved control, refusals, another event, a removed control, delete, the backup |
+| `packages/api/src/__tests__/integration/leg-routes.test.ts` | §7.2, §7.3: a saved route chosen and every course of the pair read along it, the length unchanged, direction, choose and unchoose, one chosen route per pair (and the index), new points, a typed climb and a marked route untouched, a control run to twice with one marked leg, a moved control, refusals, another event, a removed control, delete, the backup, the checkout snapshot |
 | `packages/web/src/lib/editor/__tests__/leg-routes.test.ts` | §7.4: the chosen routes by leg key, a pair's routes, a route's metres and climb, the list with the drawn line, the map's shapes, a draft's shapes |
 | `e2e/course-editor-routes.spec.ts` | §7.4 in the browser: a route drawn and saved, its numbers, the leg and the course read along it, the drawn line chosen back, removal; a draft's keys (Backspace, Enter, Escape). §7.8: alternatives round an out-of-bounds area, the pace, **Use** |
-| `packages/shared/src/route/__tests__/route.test.ts` | §7.6: codes to classes, the default model, slope; the grid's fill, holes, ranks, bridge, barrier, heights, `openDisc`, `nearestPassable`. §7.7: the cost field (distance, a gap, enclosed, slope and the reversed field); alternatives (straight, straightened, round a lake on both sides, a path against thick forest, a hill, the bounds, no way, a crossing point, a control on an obstacle, determinism) |
+| `packages/shared/src/route/__tests__/route.test.ts` | §7.6: codes to classes, the default model, slope; the grid's fill, holes, ranks, bridge, barrier, heights, `openDisc`, `nearestPassable`. §7.7: the cost field (distance, a gap, enclosed, slope and the reversed field); alternatives (straight, straightened, round a lake on both sides, a path against thick forest, a hill, the bounds, no way, a crossing point, a control on an obstacle, determinism); at the search's cell size: one route in open terrain, a control on a building or a cliff with a wall between, an uncrossable area thinner than a cell, the cost of a run downhill, a bridge over drawn banks |
 | `packages/shared/src/route/__tests__/leg.test.ts` | §7.6: a document's features by match or source code, a patch-hidden object, the course's out-of-bounds area, a leg's window and cell size |
-| `packages/web/src/lib/route/__tests__/finder.test.ts` | §7.8: the worker's state (a search needs its document), the document sent once and again when it changes, dispose |
+| `packages/web/src/lib/route/__tests__/finder.test.ts` | §7.8: the worker's state (a search needs its document), the document sent once and again when it changes, a message the worker cannot take, dispose |
 | `packages/web/src/lib/editor/__tests__/leg-alternatives.test.ts` | §7.8: the pace as typed, the clock, the list's kinds and times, the map's shapes, out-of-bounds objects as obstacles |
 | `packages/web/src/lib/editor/__tests__/profile-graph.test.ts` | §5: points and bounds, the leg at a distance, ticks, an axis that ends on ticks, the scale and its minimum span, the paths and their breaks, decimation, the height at a distance, label thinning, the kept preference |
 | `e2e/course-editor-profile.spec.ts` | §5 in the browser: the toggle, the panel under the map and above the rail's end, the controls, the summary, the kept preference, ✕; the pointer's readout, the dot on the map, a click selecting the leg |

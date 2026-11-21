@@ -98,7 +98,7 @@ test.describe("leg routes (docs/course-elevation.md §7.4)", () => {
 
       // The drawn line chosen back: the route stays in the list, the leg is read along its line again.
       const unchosen = waitForTrpc(page, "legRoute.choose");
-      await items(page).first().getByTestId("editor-leg-route-choose").check();
+      await items(page).first().getByTestId("editor-leg-route-choose").click();
       await unchosen;
       await expect(items(page).first()).toHaveAttribute("data-chosen", "true", { timeout: 15000 });
       await expect(route).toHaveAttribute("data-chosen", "false");
@@ -109,7 +109,7 @@ test.describe("leg routes (docs/course-elevation.md §7.4)", () => {
 
       // And the route again.
       const chosen = waitForTrpc(page, "legRoute.choose");
-      await route.getByTestId("editor-leg-route-choose").check();
+      await route.getByTestId("editor-leg-route-choose").click();
       await chosen;
       await expect(route).toHaveAttribute("data-chosen", "true", { timeout: 15000 });
     } finally {

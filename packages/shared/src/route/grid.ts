@@ -110,9 +110,9 @@ function walkLine(g: RouteGrid, p: ArrayLike<number>, mark: (cell: number) => vo
 }
 
 /**
- * Areas first, by rank; then ways (a path opens everything but the hard
- * uncrossable: over water it is a bridge); then uncrossable lines, which
- * nothing opens.
+ * Areas first, by rank, the uncrossable ones with their outlines; then
+ * ways (a path opens everything but the hard uncrossable: over water it
+ * is a bridge); then hard uncrossable lines, which nothing opens.
  */
 export function buildRouteGrid(input: RouteGridInput): RouteGrid {
   const { bounds, cellMm } = input;
@@ -120,12 +120,22 @@ export function buildRouteGrid(input: RouteGridInput): RouteGrid {
   const rows = Math.max(1, Math.ceil((bounds.maxY - bounds.minY) / cellMm));
   const g: RouteGrid = { x0: bounds.minX, y0: bounds.minY, cellMm, cols, rows, groundMPerMm: input.groundMPerMm, cls: new Uint8Array(cols * rows), heights: null };
   for (const f of input.features) if (f.kind === "area") fillArea(g, f.parts, f.cls);
+  // An uncrossable area's outline too: one narrower than a cell holds no cell centre and would not be on the grid.
+  // Uncrossable water's bank lines are of that kind as well: a way laid over them afterwards is still a bridge.
+  const rank = (i: number, cls: number) => { if (CLASS_PRIORITY[cls] >= CLASS_PRIORITY[g.cls[i]]) g.cls[i] = cls; };
+  for (const f of input.features) {
+    if (!isBlockedClass(f.cls) || (f.kind === "line" && f.cls !== BLOCKED_SOFT)) continue;
+    for (const p of f.parts) {
+      if (p.length < 4) continue;
+      walkLine(g, f.kind === "area" ? [...Array.from(p), p[0], p[1]] : p, (i) => rank(i, f.cls));
+    }
+  }
   for (const f of input.features) {
     if (f.kind !== "line" || !WAY_CLASSES.has(f.cls)) continue;
     for (const p of f.parts) walkLine(g, p, (i) => { if (g.cls[i] !== BLOCKED) g.cls[i] = f.cls; });
   }
   for (const f of input.features) {
-    if (f.kind !== "line" || !isBlockedClass(f.cls)) continue;
+    if (f.kind !== "line" || f.cls !== BLOCKED) continue;
     for (const p of f.parts) walkLine(g, p, (i) => { g.cls[i] = BLOCKED; });
   }
   if (input.heightAt) {
@@ -170,6 +180,18 @@ export function nearestPassable(g: RouteGrid, cell: number, maxRings = 12): numb
     if (best >= 0) return best;
   }
   return -1;
+}
+
+/** The height at a paper point, bilinear between the cell centres around it; NaN where a neighbour is unknown or without a field. */
+export function heightAtPoint(g: RouteGrid, p: RoutePoint): number {
+  if (!g.heights) return Number.NaN;
+  const fx = Math.min(g.cols - 1, Math.max(0, (p.x - g.x0) / g.cellMm - 0.5));
+  const fy = Math.min(g.rows - 1, Math.max(0, (p.y - g.y0) / g.cellMm - 0.5));
+  const c0 = Math.floor(fx), r0 = Math.floor(fy);
+  const c1 = Math.min(g.cols - 1, c0 + 1), r1 = Math.min(g.rows - 1, r0 + 1);
+  const tx = fx - c0, ty = fy - r0;
+  const h = g.heights;
+  return (h[r0 * g.cols + c0] * (1 - tx) + h[r0 * g.cols + c1] * tx) * (1 - ty) + (h[r1 * g.cols + c0] * (1 - tx) + h[r1 * g.cols + c1] * tx) * ty;
 }
 
 export { BLOCKED, BLOCKED_SOFT };

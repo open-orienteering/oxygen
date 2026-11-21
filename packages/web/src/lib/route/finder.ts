@@ -102,6 +102,8 @@ export function createRouteFinder(createWorker: () => RouteWorkerLike = createRo
   return {
     find({ doc, field, req }) {
       const w = get();
+      // A message that cannot be cloned throws here, not in the worker: the search fails like any other.
+      try {
       if (sentDoc !== doc.key) {
         w.postMessage({ type: "doc", key: doc.key, bytes: doc.bytes, patch: doc.patch });
         sentDoc = doc.key;
@@ -110,10 +112,19 @@ export function createRouteFinder(createWorker: () => RouteWorkerLike = createRo
         w.postMessage({ type: "field", key: field.key, field: field.field });
         sentField = field.key;
       }
+      } catch (err) {
+        drop();
+        return Promise.reject(err instanceof Error ? err : new Error(String(err)));
+      }
       const id = nextId++;
       return new Promise((resolve, reject) => {
         pending.set(id, { resolve, reject });
-        w.postMessage({ type: "find", id, docKey: doc.key, fieldKey: field?.key ?? null, req });
+        try {
+          w.postMessage({ type: "find", id, docKey: doc.key, fieldKey: field?.key ?? null, req });
+        } catch (err) {
+          pending.delete(id);
+          reject(err instanceof Error ? err : new Error(String(err)));
+        }
       });
     },
     dispose() {

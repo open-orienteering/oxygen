@@ -50,7 +50,7 @@ export function alternativeItems(routes: readonly RouteAlternative[], mapScale: 
   return routes.map((r, index) => ({
     index,
     kind: r.fastest && r.shortest ? "fastestShortest" : r.fastest ? "fastest" : r.shortest ? "shortest" : "alternative",
-    timeS: Math.round((r.costM * paceSPerKm) / 1000),
+    timeS: Number.isFinite(r.costM) ? Math.round((r.costM * paceSPerKm) / 1000) : 0,
     interior: r.points.slice(1, -1),
     points: r.points,
     ...routeNumbers(r.points, mapScale, sampler),

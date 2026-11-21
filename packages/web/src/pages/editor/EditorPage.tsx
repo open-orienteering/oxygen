@@ -93,7 +93,7 @@ import { legElevation, lineClimbStatus } from "../../lib/editor/elevation";
 import { chosenRouteMap, pairRoutes, routeItems, routeShapes, type RouteDraft } from "../../lib/editor/leg-routes";
 import { DEFAULT_PACE_S_PER_KM, alternativeItems, alternativeShapes, formatClock, oobFeatures, paceStorageKey, parsePace } from "../../lib/editor/leg-alternatives";
 import { createRouteFinder } from "../../lib/route/finder";
-import type { RouteAlternative } from "@oxygen/shared/src/route/index.js";
+import { DEFAULT_COST_MODEL, SHORTEST_COST_MODEL, type RouteAlternative } from "@oxygen/shared/src/route/index.js";
 import { legAt, legBounds, readProfileOpen, writeProfileOpen } from "../../lib/editor/profile-graph";
 import { pointAtDistance } from "@oxygen/shared/src/terrain/profile/index.js";
 import { ProfilePanel } from "./ProfilePanel";
@@ -512,8 +512,8 @@ export function EditorPage() {
   }, [selectedLeg]);
   const saveRouteNow = saveRoute.mutate;
   const finishRoute = useCallback(() => {
-    if (routeDraft && routeDraft.points.length > 0) saveRouteNow({ fromControlId: routeDraft.from, toControlId: routeDraft.to, points: routeDraft.points });
-  }, [routeDraft, saveRouteNow]);
+    if (routeDraft && routeDraft.points.length > 0 && !routeBusy) saveRouteNow({ fromControlId: routeDraft.from, toControlId: routeDraft.to, points: routeDraft.points });
+  }, [routeDraft, routeBusy, saveRouteNow]);
   const addRoutePoint = useCallback((pt: Pt) => setRouteDraft((d) => {
     const last = d?.points[d.points.length - 1];
     // A double click's second click lands on the first.
@@ -533,7 +533,10 @@ export function EditorPage() {
     if (!drawingRoute) return;
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable) && e.key !== "Escape") return;
+      // A focused button or link keeps its Enter: it presses what it is on.
+      if (e.key === "Enter" && el && (el.tagName === "BUTTON" || el.tagName === "A")) return;
       if (e.key === "Enter") finishRoute();
       else if (e.key === "Escape") setRouteDraft(null);
       else if (e.key === "Backspace" || e.key === "Delete") setRouteDraft((d) => (d ? { ...d, points: d.points.slice(0, -1) } : d));
@@ -1844,14 +1847,19 @@ export function EditorPage() {
   useEffect(() => () => routeFinder.dispose(), [routeFinder]);
   const selectedLegVia = useMemo(() => (selectedLeg ? crossingPt(selectedLeg.props) ?? null : null), [selectedLeg, crossingPt]);
   const patchForDoc = mapDoc && mapPatch?.patch && mapPatch.patch.documentHash === mapDoc.hash ? mapPatch : null;
+  /** The course's out-of-bounds objects the search may not cross, and what tells one set from another. */
+  const oobExtra = useMemo(() => oobFeatures(objectsInView), [objectsInView]);
+  const oobKey = useMemo(() => oobExtra.map((f) => `${f.kind}:${f.parts.map((part) => Array.from(part).join(",")).join(";")}`).join("/"), [oobExtra]);
   /** What a search of the selected leg rests on: a result is this key's alone. */
   const alternativesKey = selectedLeg && mapDoc && mapScale ? [
     mapDoc.hash, patchForDoc?.version ?? "0", elevationField?.key ?? "", selectedLeg.from.id, selectedLeg.to.id,
     selectedLeg.fromPt.x, selectedLeg.fromPt.y, selectedLeg.toPt.x, selectedLeg.toPt.y, selectedLegVia?.x ?? "", selectedLegVia?.y ?? "",
+    oobKey,
   ].join("|") : null;
   const [alternatives, setAlternatives] = useState<{ key: string; status: "running" | "done" | "error"; routes: RouteAlternative[] } | null>(null);
   const alternativesNow = alternatives && alternatives.key === alternativesKey ? alternatives : null;
   const [pointedAlternative, setPointedAlternative] = useState<number | null>(null);
+  useEffect(() => setPointedAlternative(null), [alternativesKey]);
   const findAlternatives = useCallback(() => {
     if (!alternativesKey || !selectedLeg || !mapDoc || !mapScale) return;
     const key = alternativesKey;
@@ -1859,12 +1867,12 @@ export function EditorPage() {
     routeFinder.find({
       doc: { key: `${mapDoc.hash}:${patchForDoc?.version ?? "0"}`, bytes: mapDoc.bytes, patch: patchForDoc?.patch ?? null },
       field: elevationField,
-      req: { from: selectedLeg.fromPt, to: selectedLeg.toPt, ...(selectedLegVia ? { via: [selectedLegVia] } : {}), groundMPerMm: mapScale / 1000, extra: oobFeatures(objectsInView) },
+      req: { from: selectedLeg.fromPt, to: selectedLeg.toPt, ...(selectedLegVia ? { via: [selectedLegVia] } : {}), groundMPerMm: mapScale / 1000, extra: oobExtra },
     }).then(
       (result) => setAlternatives((now) => (now?.key === key ? { key, status: "done", routes: result.routes } : now)),
       () => setAlternatives((now) => (now?.key === key ? { key, status: "error", routes: [] } : now)),
     );
-  }, [alternativesKey, selectedLeg, mapDoc, mapScale, routeFinder, patchForDoc, elevationField, selectedLegVia, objectsInView]);
+  }, [alternativesKey, selectedLeg, mapDoc, mapScale, routeFinder, patchForDoc, elevationField, selectedLegVia, oobExtra]);
   const [paceByCourse, setPaceByCourse] = useLocalStorage<number>(paceStorageKey(nameId ?? "", selectedCourse?.id ?? 0), DEFAULT_PACE_S_PER_KM);
   const setPaceText = useCallback((text: string): boolean => {
     const s = parsePace(text);
@@ -1877,7 +1885,7 @@ export function EditorPage() {
   );
   const applyAlternative = useCallback((index: number) => {
     const a = alternativeList[index];
-    if (a && selectedLeg && a.interior.length > 0) saveRouteNow({ fromControlId: selectedLeg.from.id, toControlId: selectedLeg.to.id, points: a.interior, source: "computed", model: "default-1" });
+    if (a && selectedLeg && a.interior.length > 0) saveRouteNow({ fromControlId: selectedLeg.from.id, toControlId: selectedLeg.to.id, points: a.interior, source: "computed", model: a.kind === "shortest" ? SHORTEST_COST_MODEL.id : DEFAULT_COST_MODEL.id });
   }, [alternativeList, selectedLeg, saveRouteNow]);
   const alternativeMarkers = useMemo(() => (routeDraft ? [] : alternativeShapes(alternativeList, pointedAlternative)), [alternativeList, pointedAlternative, routeDraft]);
   const shownMarkers = useMemo(

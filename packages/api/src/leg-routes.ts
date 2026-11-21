@@ -27,10 +27,10 @@ export async function chosenLegRoutes(db: Db, eventId: bigint): Promise<Map<stri
  * leg stored as a marked route keeps its line.
  */
 export function climbLegsOf(courseUuid: string, seq: GeometrySeqControl[], chosen: ReadonlyMap<string, readonly course.RoutePoint[]>): course.RoutedLeg[] {
-  const legs = editorCourseLayer(courseUuid, seq, "ordered").derivation.courses[0]?.legs ?? [];
+  const legs = editorCourseLayer(courseUuid, seq, "ordered", { legStyle: true }).derivation.courses[0]?.legs ?? [];
   if (chosen.size === 0) return legs.map((l) => ({ points: l.points, routed: false }));
-  const marked = new Set(seq.filter((c) => c.leg?.style === "marked_route").map((c) => c.id));
-  return course.routedLegs(legs.map((l) => ({ from: l.from, to: l.to, points: l.points, style: marked.has(l.to) ? "marked_route" : undefined })), chosen);
+  // The style is the leg's own: a control run to twice may have one marked leg and one that is not.
+  return course.routedLegs(legs.map((l) => ({ from: l.from, to: l.to, points: l.points, style: l.style })), chosen);
 }
 
 /** The live ordered courses of the event that run `from` → `to` as a leg. */
