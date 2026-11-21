@@ -1,33 +1,113 @@
-# Oxygen — Lightweight orienteering management
+<p align="center">
+  <img src="packages/web/public/pwa-192.png" width="88" alt="Oxygen logo">
+</p>
 
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
-[![Open in Cloud Shell](https://gstatic.com/cloudssh/images/open-btn.svg)](https://shell.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https://github.com/open-orienteering/oxygen&cloudshell_tutorial=docs/ops/demo.md)
+<h1 align="center">Oxygen</h1>
 
-A modern web application for managing orienteering competitions — from entry and course setup through start draw, SI card readout, and live results. Built by [Open Orienteering](https://github.com/open-orienteering). Inspired by [MeOS](http://www.melin.nu/meos), rebuilt as a Progressive Web App with direct [Eventor](https://eventor.orientering.se) integration.
+<p align="center">
+  <b>Run an orienteering event from your browser.</b><br>
+  Entries, course setting, map printing, SI card readout and live results in one web app<br>
+  that keeps working when the forest has no signal.
+</p>
 
-> **Note (May 2026):** Oxygen previously stored data in a MeOS-compatible MySQL layout. That compatibility layer was dropped in May 2026 — the app now runs on a single PostgreSQL 18 database (`oxygen` schema). See [`docs/migrations/2026-drop-meos.md`](docs/migrations/2026-drop-meos.md) for the migration story and the one-shot CLI that moves a MeOS database into the new schema.
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL%20v3-blue.svg" alt="License: AGPL-3.0"></a>
+  <a href="https://shell.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https://github.com/open-orienteering/oxygen&cloudshell_tutorial=docs/ops/demo.md"><img src="https://gstatic.com/cloudssh/images/open-btn.svg" alt="Open in Cloud Shell"></a>
+</p>
 
-## Features
+![The course editor: a course on the map, its control sequence and the description sheet beside it](docs/screenshots/course-editor.png)
 
-- **Competition management** — create and manage events, races, and classes
-- **Eventor integration** — sync entries, competitors, and clubs directly from the Swedish Orienteering Federation's API; upload results and start lists back
-- **Course management** — import courses from OCAD/IOF XML, manage controls and legs
-- **Start draw** — automated start time allocation with configurable algorithms
-- **SI card readout** — read SportIdent cards via Web Serial, process punches and compute results live
-- **Live results** — real-time result updates as cards are read
-- **Kiosk mode** — self-service registration and start/finish station interfaces
-- **PostgreSQL 18** — single-database design with UUIDv7 PKs, JSONB columns, native enums, and foreign-key integrity
+Oxygen takes an orienteering event from the first entry to the last result. You load your OCAD or OpenOrienteering Mapper map, set the courses on it, print the course maps, read SPORTident cards at the finish and publish results, all from a browser on a laptop, tablet or phone. It is open source, built by [Open Orienteering](https://github.com/open-orienteering) and inspired by [MeOS](http://www.melin.nu/meos).
 
-See the [feature showcase](docs/features.md) for screenshots of every view.
+## Try it in two minutes
 
-## Architecture
+You need Docker. This starts the published image with a demo competition (169 runners, 5 courses on a free demo map):
+
+```bash
+git clone https://github.com/open-orienteering/oxygen && cd oxygen
+bash scripts/demo.sh        # then open http://localhost:8080
+```
+
+Or click **Open in Cloud Shell** above and run the same script there, with nothing installed on your machine. The [demo guide](docs/ops/demo.md) walks through it.
+
+## Why Oxygen
+
+<table>
+<tr>
+<td width="50%" valign="top">
+<a href="docs/guide/maps.md"><img src="docs/screenshots/map-closeup.png" alt="A close-up of the map drawn as vectors: contours, streams, vegetation and control circles"></a>
+<h3>Your map, drawn properly</h3>
+Upload an OCAD or Mapper file and Oxygen draws it as vectors with WebGL: sharp at any zoom, in the IOF colour order, on desktop and phone. Fix the map on the spot with corrections that survive a re-import.
+</td>
+<td width="50%" valign="top">
+<a href="docs/guide/course-maps-print.md"><img src="docs/screenshots/course-map-print.png" alt="A printed course map with its description sheet" width="60%"></a>
+<h3>Print-ready course maps</h3>
+Lay out the sheet on the same canvas as the courses, then export PDF: one course, every variant of a forked course, or one map per runner. Control descriptions, cuts around features and numbers are drawn for you.
+</td>
+</tr>
+<tr>
+<td valign="top">
+<a href="docs/guide/course-editor.md"><img src="docs/screenshots/course-editor-closeup.png" alt="A close-up of a course in the editor: controls, legs and numbers on the map, one control selected"></a>
+<h3>Set courses on the map</h3>
+Click to place controls. Legs, numbers and cuts draw themselves, and descriptions are suggested from what the map shows under the circle. Forks and butterfly loops included. Imports and exports IOF XML and Purple Pen.
+</td>
+<td valign="top">
+<a href="docs/guide/course-editor.md"><img src="docs/screenshots/field-mode.png" alt="Field mode on a phone: GPS position and the bearing and distance to each control" width="45%"></a>
+<h3>Take it to the forest</h3>
+Field mode on a phone shows where you are, the distance and bearing to every control, and a checklist as you hang them. It keeps working offline and syncs when you are back in coverage.
+</td>
+</tr>
+<tr>
+<td valign="top">
+<a href="docs/guide/race-day.md"><img src="docs/screenshots/readers.png" alt="Card readers: a USB station and a Bluetooth Reader BT connected" width="70%"></a>
+<h3>SI cards with no drivers</h3>
+Read SPORTident cards straight from Chrome or Edge, over USB or the Bluetooth Reader BT. Several readers at once, each with its status, and the Reader BT with its battery level.
+</td>
+<td valign="top">
+<a href="docs/guide/race-day.md"><img src="docs/screenshots/kiosk-readout.png" alt="The self-service kiosk showing a runner's result"></a>
+<h3>A self-service finish</h3>
+A kiosk screen shows each finisher their name, class and time the moment the card is read, or exactly what went wrong. Start and finish stations, backup punches and a receipt printer cover the rest of race day.
+</td>
+</tr>
+<tr>
+<td valign="top">
+<a href="docs/guide/race-day.md"><img src="docs/screenshots/dashboard.png" alt="The race-day dashboard with counters and the map"></a>
+<h3>Race day at a glance</h3>
+Who has not started, who is in the forest, who has finished, and how far each course has come, live on a dashboard and a map.
+</td>
+<td valign="top">
+<a href="docs/guide/maps.md"><img src="docs/screenshots/map-3d-track.png" alt="A GPS track drawn on the map draped over the terrain in 3D"></a>
+<h3>Terrain and tracks in 3D</h3>
+With height data configured, see the map draped over the terrain, with GPS tracks (GPX or TCX) drawn on the ground.
+</td>
+</tr>
+</table>
+
+**And also:** Eventor sync of entries, clubs and results (Swedish federation) · LiveResults push to liveresultat.se · start draw across parallel start corridors · several competitions side by side · installable PWA that works offline · one-shot migration from MeOS · English and Swedish.
+
+The [feature tour](docs/features.md) has more pictures, and every area links on to its full detail.
+
+## Self-host
+
+Multi-arch images are published on GHCR (`ghcr.io/open-orienteering/oxygen`, tags `stable`, `edge` and `vX.Y.Z`):
+
+```bash
+docker compose -f docker-compose.release.yml up -d   # http://localhost:8080
+```
+
+Pin a release with `OXYGEN_IMAGE=ghcr.io/open-orienteering/oxygen:v0.9.0`. [Releases and images](docs/releases/README.md) explains the tags.
+
+**Eventor:** a club in the Swedish Orienteering Federation's Eventor enters its club API key once, under Settings → Eventor (an admin tab). Every event on the instance then syncs entries, clubs and competitors, and uploads results and start lists back.
+
+<details>
+<summary><b>Architecture and stack</b></summary>
 
 | Layer | Technologies |
 |-------|-------------|
-| Frontend | React 19, Vite 8, Tailwind CSS v4, TanStack Query v5, React Router v7 |
+| Frontend | React 19, Vite 8, Tailwind CSS v4, TanStack Query v5, React Router v7, WebGL2 map renderer |
 | Backend | Fastify 5, tRPC 11 (end-to-end type safety), Zod 4 |
-| Database | PostgreSQL 18 (`oxygen` schema), Prisma 7 ORM |
-| Testing | Playwright 1.62 E2E, Vitest 4 unit tests |
+| Database | PostgreSQL 18 (`oxygen` schema, UUIDv7 keys), Prisma 7 ORM |
+| Testing | Playwright E2E, Vitest unit tests |
 
 ```
 oxygen/
@@ -36,27 +116,17 @@ oxygen/
     web/      # React PWA frontend
     shared/   # Shared types and utilities
   e2e/        # Playwright E2E tests
-  docs/       # Guides and tutorials
+  docs/       # Guides, specs and runbooks
 ```
 
-For a deeper dive into database design, deployment options, and subsystem details, see the [technical architecture](docs/architecture.md).
+The [technical architecture](docs/architecture.md) covers the database design, deployment options and subsystems; [docs/README.md](docs/README.md) indexes everything else.
 
-## Quick Start
+</details>
 
-### Self-host from the published image
+<details>
+<summary><b>Develop from source</b></summary>
 
-Pre-built multi-arch images live on GHCR (`ghcr.io/open-orienteering/oxygen`).
-See [releases and images](docs/releases/README.md) for tags (`stable`,
-`edge`, `vX.Y.Z`) and how GitHub Releases are cut.
-
-```bash
-docker compose -f docker-compose.release.yml up -d
-# app: http://localhost:8080
-```
-
-Pin a release with `OXYGEN_IMAGE=ghcr.io/open-orienteering/oxygen:v1.2.3`.
-
-### Development (source)
+Prerequisites: Node.js 24 (see `.nvmrc`; >= 22.12 works), pnpm 10, PostgreSQL 18.
 
 ```bash
 git clone https://github.com/open-orienteering/oxygen
@@ -69,38 +139,19 @@ pnpm db:generate
 pnpm dev                        # API on :3002, web on :5173
 ```
 
-### Manual setup
+Without Docker, point `DATABASE_URL` in `packages/api/.env` at your own PostgreSQL 18 (for example `postgresql://oxygen:oxygen@localhost:5432/oxygen?schema=oxygen`) and skip the `docker compose` line. [packages/api/.env.example](packages/api/.env.example) lists every environment variable. Contributor rules are in [AGENTS.md](AGENTS.md).
 
-Prerequisites: Node.js 24 (see `.nvmrc`; >= 22.12 works), pnpm 10, PostgreSQL 18
+</details>
 
-```bash
-pnpm install
-# Edit packages/api/.env so DATABASE_URL points at your PostgreSQL,
-# e.g. postgresql://oxygen:oxygen@localhost:5432/oxygen?schema=oxygen
-pnpm db:push
-pnpm db:generate
-pnpm dev
-```
+<details>
+<summary><b>Coming from MeOS</b></summary>
 
-See [packages/api/.env.example](packages/api/.env.example) for all environment variables.
+Until May 2026 Oxygen stored its data in a MeOS-compatible MySQL layout. It now runs on a single PostgreSQL 18 database. [docs/migrations/2026-drop-meos.md](docs/migrations/2026-drop-meos.md) tells the story and documents the one-shot CLI that moves a MeOS database into Oxygen.
 
-## Try It Online
-
-Click the **Open in Cloud Shell** button at the top of this page to pull the
-published GHCR image and spin up a fully working instance in your browser — no
-Node.js, pnpm, dependency install, or source build needed. The
-[Cloud Shell tutorial](docs/ops/demo.md) walks you through loading demo data or
-connecting your Eventor API key.
-
-## Eventor API Key
-
-If you have access to the Swedish Orienteering Federation's Eventor system, you can connect Oxygen directly:
-
-1. Log in to [eventor.orientering.se](https://eventor.orientering.se) → your profile → API key
-2. Open Oxygen → Settings → paste the key
-
-This syncs entries, clubs, and competitors automatically and lets you upload results/start lists back to whichever Eventor the event is linked to — Test-Eventor or production.
+</details>
 
 ## License
 
-[GNU Affero General Public License v3.0](LICENSE) — free to use and modify; derivatives must remain open source, including when deployed as a hosted service.
+[GNU Affero General Public License v3.0](LICENSE): free to use and modify; derivatives must stay open source, including when run as a hosted service.
+
+Map credits: the demo competition uses the CC0 Puit de Laven map ([demo guide](docs/ops/demo.md#the-map)). Some screenshots show a club map, published as images with the club's permission.

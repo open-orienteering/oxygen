@@ -9,7 +9,7 @@ button under the event list on the start page. Its four tabs — Maps,
 Controls, Classes, Groups — are open to any signed-in user; three further
 tabs (Users, Eventor, Maintenance) are instance-admin only. Users and the
 Eventor API keys are described in [system/authentication.md](authentication.md)
-and [features.md](../features.md#eventor-api-keys).
+and [the platform guide](../guide/platform.md#eventor-api-keys).
 
 ## Maps
 

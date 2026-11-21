@@ -36,7 +36,7 @@ The map/course/print redesign ran on the long-lived integration branch `vector-m
 ## Documentation Requirement
 
 **Every feature or significant change must include documentation updates** (AGENTS.md §10). This includes:
-- Update `docs/features.md` for user-facing features
+- Update the area's guide page `docs/guide/<area>.md` for user-facing features (`docs/features.md` is the short tour: touch it only for a headline feature)
 - Update the relevant technical doc in `docs/` (architecture, `system/registration-and-readout.md`, etc.; `docs/README.md` is the index)
 - For bug fixes: create `docs/bugfixes/<name>.md` explaining what happened and how it was fixed, and list it in `docs/bugfixes/README.md`
 - Do not consider a task complete until documentation is updated

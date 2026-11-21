@@ -21,6 +21,7 @@
     "migrate:mysql-to-pg": "pnpm --filter @oxygen/api migrate:mysql-to-pg",
     "map:rematch": "pnpm --filter @oxygen/api map:rematch",
     "docs:screenshots": "tsx docs/screenshots/capture.ts",
+    "docs:showcase": "playwright test -c playwright.showcase.config.ts",
     "text-atlas:generate": "pnpm --filter @oxygen/web exec tsx scripts/generate-text-atlas.ts",
     "showcase:load": "bash scripts/load-showcase.sh",
     "audit:prod": "node scripts/audit-prod.mjs --audit-level=high",

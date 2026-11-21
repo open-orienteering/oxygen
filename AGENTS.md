@@ -259,11 +259,12 @@ They define the canonical column types, defaults, and triggers.
 ## 10. Documentation
 
 - Every feature or significant change must include documentation updates as part of the same PR.
-- Documentation lives in `docs/` as Markdown files; `docs/README.md` is the index. The top level holds `features.md`, `architecture.md` and the spec chapters (`map-*.md`, `course-*.md`, cited from code by path and section: never rename or renumber them). Everything else goes in a folder: `system/` (feature and subsystem design), `ops/` (operator guides), `releases/` (release policy and runbooks), `dev/` (test infrastructure and tooling), `bugfixes/`, `migrations/`, `history/` (superseded notes), `si-protocol/`, `research/`.
+- Documentation lives in `docs/` as Markdown files; `docs/README.md` is the index. The top level holds `features.md` (the feature tour), `architecture.md` and the spec chapters (`map-*.md`, `course-*.md`, cited from code by path and section: never rename or renumber them). Everything else goes in a folder: `guide/` (user-facing feature detail, one page per area), `system/` (feature and subsystem design), `ops/` (operator guides), `releases/` (release policy and runbooks), `dev/` (test infrastructure and tooling), `bugfixes/`, `migrations/`, `history/` (superseded notes), `si-protocol/`, `research/`.
 - Style: pragmatic, implementation-focused. Use code blocks, ASCII diagrams, and embedded SQL/bash examples. See `docs/architecture.md` and `docs/ops/receipt-printer-setup.md` for the expected format.
 - Bug fix documentation: create `docs/bugfixes/<descriptive-name>.md` explaining what happened, why, and how it was fixed, and add a line to its area in `docs/bugfixes/README.md`. See `docs/bugfixes/siac-voltage-units.md` for an example. A note whose code no longer exists moves to `docs/bugfixes/archive/`.
 - Links between docs: relative Markdown links; in code comments, the repo-relative `docs/…` path. `node scripts/check-doc-links.mjs` checks both.
-- Keep `docs/features.md` up to date when adding new user-facing features.
+- User-facing features: the detail goes in the area's guide page, `docs/guide/<area>.md`. `docs/features.md` is the short visual tour: at most three sentences and one or two pictures per area, and it changes only when a feature is big enough to headline. The README's feature cards follow the same rule.
+- A UI change to a view that has a showcase shot (`e2e/showcase/*.shot.ts`, `docs/screenshots/README.md`) updates that shot's script in the same PR, and retakes the shot when it is a public one. Never commit an OCAD or Mapper map that is not on the public list in `scripts/lib/map-files.mjs`; a club's map is published only as screenshots.
 
 ## 11. Code Review Checklist
 

@@ -80,7 +80,7 @@ checkout after merge, and the PR says so.
   to `decisions/general.md`)
   in the existing shape (date, topic, decision, rationale), naming every
   deviation from the research decision and what forced it.
-- Update `docs/features.md` only if something is user-visible.
+- Update the area's guide page `docs/guide/<area>.md` only if something is user-visible (`docs/features.md`, the short tour, only for a headline feature).
 - Set the row to `review` in `slices/slice-<letter>.md` and in the open
   rows of `SLICES.md`; once it merges, `done <date>` in the slice file and
   drop it from `SLICES.md`.

@@ -176,6 +176,12 @@ interface CaptureCtx {
 interface CaptureStep {
   name: string;
   description: string;
+  /**
+   * The committed shot shows a club map (docs/screenshots/README.md, "Which
+   * map is in which shot"): a full run keeps it, and only `--only=<name>`
+   * retakes it from the demo.
+   */
+  clubMap?: true;
   run: (ctx: CaptureCtx) => Promise<void>;
 }
 
@@ -194,6 +200,7 @@ const STEPS: CaptureStep[] = [
 
   {
     name: "dashboard",
+    clubMap: true,
     description: "Race-day dashboard (real-time counters)",
     async run({ page, nameId }) {
       await gotoPage(page, `${WEB_URL}/${nameId}`);
@@ -299,6 +306,7 @@ const STEPS: CaptureStep[] = [
 
   {
     name: "courses",
+    clubMap: true,
     description: "Courses with map overlay",
     async run({ page, nameId }) {
       await gotoPage(page, `${WEB_URL}/${nameId}/courses`);
@@ -422,6 +430,7 @@ const STEPS: CaptureStep[] = [
 
   {
     name: "tracks",
+    clubMap: true,
     description: "Tracks page with one route expanded on the map",
     async run({ page, nameId }) {
       await gotoPage(page, `${WEB_URL}/${nameId}/tracks`);
@@ -432,9 +441,9 @@ const STEPS: CaptureStep[] = [
       if (await firstRow.count()) {
         await firstRow.click({ force: true }).catch(() => {});
       }
-      await page.waitForSelector(".leaflet-container", { timeout: 15_000 }).catch(() => {});
-      await page.waitForTimeout(4000);
-      const mapEl = page.locator(".leaflet-container").first();
+      await page.waitForSelector('[data-testid="map-vector-layer"][data-ready="true"]', { timeout: 30_000 }).catch(() => {});
+      await page.waitForTimeout(1000);
+      const mapEl = page.getByTestId("map-viewer").first();
       if (await mapEl.count()) {
         await mapEl.scrollIntoViewIfNeeded().catch(() => {});
         await page.waitForTimeout(500);
@@ -589,7 +598,10 @@ async function main(): Promise<void> {
 
   const toRun = only
     ? STEPS.filter((s) => only.includes(s.name))
-    : STEPS;
+    : STEPS.filter((s) => !s.clubMap);
+  if (!only) {
+    console.log(`  Keeping the club-map shots: ${STEPS.filter((s) => s.clubMap).map((s) => s.name).join(", ")} (retake with --only=<name>)`);
+  }
 
   if (only) {
     const missing = only.filter((n) => !STEPS.some((s) => s.name === n));
