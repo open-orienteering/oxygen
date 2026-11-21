@@ -8,6 +8,8 @@
  * dialog, keeps it on its peek line (`statusRows`).
  */
 
+import type { LineClimbStatus } from "./elevation";
+
 /** `queued`: Field mode's writes wait in the device's outbox (D9c, docs/course-editor.md §9 "Offline"). */
 export type SaveState = "saved" | "saving" | "error" | "conflict" | "queued";
 
@@ -16,8 +18,12 @@ export interface StatusInput {
   controls: number | null;
   /** The course's length, metres; null without a course. */
   lengthM: number | null;
-  /** The course's stored climb (entered on the Courses page), metres; shown when set. */
+  /** The course's stored climb, metres. */
   climbM: number | null;
+  /** The stored climb was typed (Courses page, an import): it is the course's climb, the computed one is not shown. */
+  climbManual?: boolean;
+  /** The climb computed from the height field along the course (docs/course-elevation.md §4); null or absent: the stored climb only. */
+  line?: LineClimbStatus | null;
   /** The map scale's denominator. */
   scale: number | null;
   /** The shown sheet's print scale, paper and orientation (`1:10000 A4 portrait`), in place of the map scale. */
@@ -32,20 +38,48 @@ export type StatusRowId = "controls" | "length" | "climb" | "scale" | "sheet" | 
 export interface StatusRow {
   id: StatusRowId;
   text: string;
+  /** The phone's peek line shows this in place of `text`; an empty string leaves the row out there. */
+  short?: string;
   /** Machine-readable values for the row's `data-*` attributes. */
   data: Record<string, string>;
 }
 
-type StatusKey = "statusControls" | "statusLength" | "statusClimb" | "statusScale" | "statusSnapping" | "statusChecks";
+type StatusKey = "statusControls" | "statusLength" | "statusClimb" | "statusScale" | "statusSnapping" | "statusChecks"
+  | "statusClimbShare" | "statusClimbLoading" | "statusClimbUnavailable";
 /** The editor namespace's `t`, narrowed to the keys the rows use. */
-type T = (key: StatusKey, opts?: { count?: number; km?: string; m?: number; scale?: string }) => string;
+type T = (key: StatusKey, opts?: { count?: number; km?: string; m?: number | string; scale?: string; share?: string }) => string;
+
+/**
+ * The climb row (docs/course-elevation.md §4.4): one number. A typed climb (`climbManual`) is the course's; else the
+ * climb computed from the height field, with its share of the length; else the stored climb while the field loads
+ * or cannot be read; else what the field's state is.
+ */
+function climbRow(s: StatusInput, t: T): StatusRow | null {
+  const stored = s.climbM ? Math.round(s.climbM) : null;
+  const line = s.line ?? null;
+  if (stored !== null && (s.climbManual || !line))
+    return { id: "climb", text: t("statusClimb", { m: stored }), data: { m: String(stored), source: s.climbManual ? "manual" : "stored" } };
+  if (!line) return null;
+  if (line.state === "ready") {
+    const m = `${line.approx ? "≈ " : ""}${line.climbM}`;
+    const share = line.sharePct === null ? "" : line.sharePct.toFixed(1);
+    return {
+      id: "climb", text: share ? t("statusClimbShare", { m, share }) : t("statusClimb", { m }), short: t("statusClimb", { m }),
+      data: { m: String(line.climbM), source: "computed", state: "ready", share, basis: line.basis, partial: String(line.partial), approx: String(line.approx) },
+    };
+  }
+  const data = line.state === "loading" ? { state: "loading" } : { state: "unavailable", kind: line.kind };
+  if (stored !== null) return { id: "climb", text: t("statusClimb", { m: stored }), data: { m: String(stored), source: "stored", ...data } };
+  return { id: "climb", text: t(line.state === "loading" ? "statusClimbLoading" : "statusClimbUnavailable"), short: "", data };
+}
 
 /** The rows that have a value, in the order controls · length · climb · scale | sheet · snapping · checks. */
 export function statusRows(s: StatusInput, t: T): StatusRow[] {
   const rows: StatusRow[] = [];
   if (s.controls !== null) rows.push({ id: "controls", text: t("statusControls", { count: s.controls }), data: { count: String(s.controls) } });
   if (s.lengthM !== null) rows.push({ id: "length", text: t("statusLength", { km: (s.lengthM / 1000).toFixed(1) }), data: { m: String(Math.round(s.lengthM)) } });
-  if (s.climbM) rows.push({ id: "climb", text: t("statusClimb", { m: Math.round(s.climbM) }), data: { m: String(Math.round(s.climbM)) } });
+  const climb = climbRow(s, t);
+  if (climb) rows.push(climb);
   if (s.sheetKey) rows.push({ id: "sheet", text: s.sheetKey, data: { key: s.sheetKey } });
   else if (s.scale) rows.push({ id: "scale", text: t("statusScale", { scale: s.scale.toLocaleString("sv-SE") }), data: { scale: String(s.scale) } });
   if (s.snapping) rows.push({ id: "snapping", text: t("statusSnapping"), data: {} });

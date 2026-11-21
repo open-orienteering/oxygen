@@ -85,3 +85,35 @@ export function readyDem(plainUrl: string, anchoredDecided: number | null, provi
 export function pendingDem(plainUrl: string) {
   return { ...readyDem(plainUrl, null), state: "pending", anchored: { url: `${plainUrl}&source=contours.${DEM_PROVIDER.id}`, decided: null } };
 }
+
+/**
+ * A field that is one plane rising east (docs/course-elevation.md §4's E2E): `slope` metres of height
+ * per ground metre along x, 0 m at x = 0, every cell with data and confident. It covers ±`halfMm` paper mm
+ * around the origin, so any course lies inside. `source` and `provider` as in `demFieldBytes`.
+ */
+export function planeFieldBytes(opts: { groundMPerMm: number; slope: number; source?: string; provider?: DemProvider; halfMm?: number; cellMm?: number }): Buffer {
+  const cellMm = opts.cellMm ?? 5, half = opts.halfMm ?? 1000;
+  const width = Math.round((2 * half) / cellMm), height = width, cells = width * height;
+  const intervalM = 5, zScaleM = intervalM / 64;
+  const source = opts.source ?? "contours";
+  const z = new Int16Array(cells);
+  // Heights at cell centres; the offset keeps the values inside int16.
+  const zOffsetM = -half * opts.groundMPerMm * opts.slope;
+  for (let r = 0; r < height; r++) for (let c = 0; c < width; c++) z[r * width + c] = Math.round(((c + 0.5) * cellMm * opts.groundMPerMm * opts.slope) / zScaleM);
+  const header = {
+    version: 1, source, cellMm, x0: -half, y0: -half, width, height, groundMPerMm: opts.groundMPerMm, intervalM, zScaleM,
+    zOffsetM, datum: source === "contours" ? "relative" : "absolute", zMin: z[0], zMax: z[width - 1],
+    ...(source === "contours" ? {} : { provider: opts.provider ?? DEM_PROVIDER }),
+  };
+  const json = new TextEncoder().encode(JSON.stringify(header));
+  const padded = (json.byteLength + 3) & ~3;
+  const bits = (cells + 7) >> 3;
+  const buf = Buffer.alloc(12 + padded + cells * 2 + bits);
+  buf.write("OXHF", 0, "latin1");
+  buf.writeUInt32LE(1, 4);
+  buf.writeUInt32LE(padded, 8);
+  buf.set(json, 12);
+  for (let i = 0; i < cells; i++) buf.writeInt16LE(z[i], 12 + padded + i * 2);
+  buf.fill(0xff, 12 + padded + cells * 2);
+  return buf;
+}

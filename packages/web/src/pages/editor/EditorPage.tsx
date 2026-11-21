@@ -88,6 +88,8 @@ import { StatusBar } from "./StatusBar";
 import type { SaveState, StatusInput } from "../../lib/editor/status";
 import type { MapInfoInput } from "../../lib/editor/map-info";
 import { useCourseChecks } from "./useCourseChecks";
+import { useCourseElevation } from "./useCourseElevation";
+import { legElevation, lineClimbStatus } from "../../lib/editor/elevation";
 import type { EditorCheck } from "../../lib/editor/checks";
 import { CourseSection, MultiSection, SelectionSection } from "./modes/CourseMode";
 import { AddMenu, FieldQueueNotice, FieldSection, FieldSelection, FieldTopBar, FixStatus, OverflowMenu, type AddChoice } from "./modes/FieldMode";
@@ -1734,6 +1736,15 @@ export function EditorPage() {
     structure, sites, controls: controlList.data, document: mapDoc, mapScale, objects: objectsInView,
     derivation: courseInfo?.derivation, ringMm: courseInfo?.metrics?.circleRadiusMm ?? 2.5, orders,
   });
+  // Heights along the course's line (docs/course-elevation.md §4): ordered courses, in Course mode's own view.
+  const elevationLegs = state.mode === "course" && structure?.orderMode === "ordered" ? courseChecks.legs : null;
+  const { elevation, retry: retryElevation } = useCourseElevation({ terrain: mapMetadata.data?.terrain, legs: elevationLegs, nameId: nameId ?? null });
+  const selectedLegElevation = useMemo(() => {
+    const insertAt = state.phantom?.insertAt;
+    if (!selectedLeg || insertAt == null || !elevationLegs) return null;
+    const index = elevationLegs.findIndex((_, i) => insertIndexForLeg(rows, i) === insertAt);
+    return legElevation(elevation, index < 0 ? null : index);
+  }, [selectedLeg, state.phantom, elevationLegs, rows, elevation]);
   const locateSite = courseChecks.locate;
   const locateCheck = useCallback((c: EditorCheck) => {
     const { selectId, centre } = locateSite(c);
@@ -2247,6 +2258,9 @@ export function EditorPage() {
     controls: selectedCourse ? sequenceIds.length : null,
     lengthM: selectedCourse ? courseChecks.lengthM ?? totalMeters : null,
     climbM: selectedCourse?.climb ?? null,
+    // Until the computed climb is stored with its source (docs/course-elevation.md §6), a stored climb is a typed one.
+    climbManual: !!selectedCourse?.climb,
+    line: selectedCourse ? lineClimbStatus(elevation) : null,
     scale: mapScale,
     sheetKey: state.mode === "layout" ? layoutMode.sheetKey : state.mode === "course" && state.view === "class" ? classView.sheetKey : null,
     snapping: state.snapping,
@@ -2313,6 +2327,7 @@ export function EditorPage() {
       presence={<PresenceChips others={presence} selectedCourseId={state.selectedCourseId} />}
       save={save}
       status={status}
+      onRetryElevation={retryElevation}
       map={mapInfoInput}
     />
   );
@@ -2508,6 +2523,7 @@ export function EditorPage() {
       title={`${selectedLeg.from.code} → ${selectedLeg.to.code}`}
       leg={selectedLeg.props}
       crossingCode={selectedLeg.props.crossing ? coordsById.get(selectedLeg.props.crossing.controlId)?.code ?? String(selectedLeg.props.crossing.controlId) : null}
+      elevation={selectedLegElevation}
       focusedBend={focusedBend}
       readOnly={!legEditable}
       onPatch={writeLeg}

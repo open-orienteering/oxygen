@@ -32,7 +32,7 @@ export function SaveIndicator({ save }: { save: SaveState }) {
   );
 }
 
-export function StatsButton({ status }: { status: Omit<StatusInput, "scale"> }) {
+export function StatsButton({ status, onRetryElevation }: { status: Omit<StatusInput, "scale">; onRetryElevation?: () => void }) {
   const { t } = useTranslation("editor");
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
@@ -49,6 +49,8 @@ export function StatsButton({ status }: { status: Omit<StatusInput, "scale"> }) 
   }, [open]);
 
   const rows = courseInfoRows(status, t);
+  // The notes are the computed climb's: not under a typed one.
+  const line = status.climbManual ? null : status.line ?? null;
   const badge = checksBadge(status.checks);
   const label = t("stats");
   return (
@@ -78,6 +80,18 @@ export function StatsButton({ status }: { status: Omit<StatusInput, "scale"> }) 
                 </li>
               ))}
             </ul>
+          )}
+          {/* docs/course-elevation.md §4.4: what the line climb rests on, whose heights they are, and asking again. */}
+          {line?.state === "ready" && (line.basis === "contours" || line.partial || line.attribution) && (
+            <div className="mt-1 border-t border-slate-100 pt-1 text-[10px] text-slate-400 max-w-[16rem]">
+              {line.basis === "contours" && <p data-testid="editor-stats-elevation-note">{t("elevationContoursNote")}</p>}
+              {line.partial && <p data-testid="editor-stats-elevation-partial">{t("elevationPartial")}</p>}
+              {line.attribution && <p data-testid="editor-stats-elevation-attribution">{line.attribution}</p>}
+            </div>
+          )}
+          {line?.state === "unavailable" && onRetryElevation && rows.some((r) => r.id === "climb" && r.data.state === "unavailable") && (
+            <button type="button" data-testid="editor-stats-elevation-retry" onClick={onRetryElevation}
+              className="mt-1 rounded-md border border-slate-200 px-2 py-0.5 text-[11px] text-slate-600 hover:bg-slate-50 cursor-pointer">{t("elevationRetry")}</button>
           )}
         </div>
       )}

@@ -9,6 +9,7 @@
 
 import { useTranslation } from "react-i18next";
 import type { course } from "@oxygen/shared";
+import type { LegElevation } from "../../../lib/editor/elevation";
 import { DEFAULT_CORRIDOR, type LegPatch } from "../../../lib/editor/structure-edit";
 
 /** The wire form's leg: `crossing.controlId` is a public id (course-layer.md §6.1). */
@@ -25,6 +26,8 @@ export interface LegSectionProps {
   leg: LegProps;
   /** The crossing point's code (`leg.crossing`), or null without one. */
   crossingCode?: string | null;
+  /** The leg's length and heights along its line (docs/course-elevation.md §4.5); null or absent: not shown. */
+  elevation?: LegElevation | null;
   focusedBend: number | null;
   /** A phone: everything shown, nothing editable. */
   readOnly: boolean;
@@ -50,6 +53,30 @@ function NumberField(p: { testId: string; label: string; value: number; step: nu
   );
 }
 
+/** The leg's numbers (docs/course-elevation.md §4.5): read-only; a dash where the leg has no data. */
+function LegNumbers({ e }: { e: LegElevation }) {
+  const { t } = useTranslation("editor");
+  const approx = e.approx ? "≈ " : "";
+  const cell = (testId: string, label: string, m: number | null, text: string) => (
+    <div data-testid={testId} data-m={m ?? ""}>
+      <dt className="text-[10px] text-slate-400">{label}</dt>
+      <dd className="font-mono text-[11px] text-slate-700">{m === null ? "–" : text}</dd>
+    </div>
+  );
+  const signed = (m: number) => `${m > 0 ? "+" : m < 0 ? "−" : ""}${Math.abs(m)} m`;
+  return (
+    <div data-testid="editor-leg-elevation" data-basis={e.basis} data-approx={e.approx ? "true" : "false"}>
+      <dl className="grid grid-cols-4 gap-x-2">
+        {cell("editor-leg-length", t("legLength"), e.lengthM, `${e.lengthM} m`)}
+        {cell("editor-leg-climb", t("legClimb"), e.climbM, `${approx}${e.climbM} m`)}
+        {cell("editor-leg-descent", t("legDescent"), e.descentM, `${approx}${e.descentM} m`)}
+        {cell("editor-leg-net", t("legNet"), e.netM, e.netM === null ? "" : signed(e.netM))}
+      </dl>
+      {e.basis === "contours" && <p data-testid="editor-leg-elevation-note" className="text-[10px] text-slate-400">{t("elevationContoursNote")}</p>}
+    </div>
+  );
+}
+
 export function LegSection(p: LegSectionProps) {
   const { t } = useTranslation("editor");
   const { leg, readOnly } = p;
@@ -60,6 +87,7 @@ export function LegSection(p: LegSectionProps) {
     <div data-testid="editor-leg" data-readonly={readOnly ? "true" : "false"} className="px-2.5 py-1.5 space-y-2">
       <div className="font-medium text-slate-700">{t("legTitle", { leg: p.title })}</div>
       {readOnly && <p data-testid="editor-leg-readonly" className="text-[11px] text-amber-700">{t("legReadOnly")}</p>}
+      {p.elevation && <LegNumbers e={p.elevation} />}
 
       <label className="block text-[11px] text-slate-500">{t("legStyle")}
         <select data-testid="editor-leg-style" className={FIELD} disabled={readOnly} value={leg.style ?? "line"}

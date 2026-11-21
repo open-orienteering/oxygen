@@ -1499,7 +1499,9 @@ bytes, and in the descriptor (`docs/map-storage.md` §4.7). **Showing**
 it to the user (answer 16's "shows") is the viewer's: whenever its 3D
 mode draws a DEM-based field — ground, or the anchored contour field —
 it shows the drawn field's `provider.attribution` and `licence` on the
-map (`docs/map-rendering.md` §5.4 "3D mode" "Surface (H11)").
+map (`docs/map-rendering.md` §5.4 "3D mode" "Surface (H11)"). The course
+editor states the same attribution under a climb computed from such a
+field (`docs/course-elevation.md` §4.4).
 
 **Fetching is opt-in** (§7.0 answer 4, §7.0b 6). The providers are
 switched on in Settings → Height data (§7.8); unsaved, `MAP_DEM_PROVIDERS`

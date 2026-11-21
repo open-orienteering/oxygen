@@ -31,6 +31,7 @@ import { API_BASE } from "./helpers/api-base";
 import { E2E_HEADERS, trpc } from "./helpers/print-pdf";
 import { insertGpsRoute } from "./helpers/gps-route";
 import { DEM_PROVIDER, GLO30_PROVIDER, demFieldBytes, pendingDem, readyDem, type DemProvider } from "./helpers/dem-field";
+import { patchTerrainDescriptor } from "./helpers/terrain";
 
 const DEMO = "fixtures/showcase/puit-de-laven-demo.omap";
 
@@ -94,24 +95,6 @@ function inked(p: PNG): number {
   let n = 0;
   for (let i = 0; i < p.data.length; i += 4) if (Math.min(p.data[i], p.data[i + 1], p.data[i + 2]) < 230) n++;
   return n / (p.width * p.height);
-}
-
-/**
- * Rewrites `course.mapMetadata`'s terrain descriptor in the batched tRPC responses (the n-th answer,
- * from 0, goes through `patch`; `null` leaves it), so the gate's other rows run on the demo map.
- */
-async function patchTerrainDescriptor(page: Page, patch: (terrain: Record<string, unknown>, n: number) => Record<string, unknown> | null): Promise<() => number> {
-  let n = 0;
-  await page.route(/\/trpc\/[^?]*course\.mapMetadata/, async (route) => {
-    const res = await route.fetch();
-    const procs = decodeURIComponent(new URL(route.request().url()).pathname.replace(/^.*\/trpc\//, "")).split(",");
-    const body = (await res.json()) as unknown;
-    const arr = (Array.isArray(body) ? body : [body]) as { result?: { data?: { terrain?: Record<string, unknown> | null } } }[];
-    const data = arr[procs.indexOf("course.mapMetadata")]?.result?.data;
-    if (data?.terrain) data.terrain = patch(data.terrain, n++) ?? data.terrain;
-    await route.fulfill({ response: res, json: Array.isArray(body) ? arr : arr[0] });
-  });
-  return () => n;
 }
 
 /**

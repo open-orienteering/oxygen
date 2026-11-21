@@ -40,27 +40,36 @@ describe("the course-info rows (docs/course-editor.md §2, §10: the phone's pee
   });
 });
 
-describe("the desktop popover leaves the map scale to the map-info dialog (P6, docs/course-editor.md §2)", () => {
-  it("a course: no scale row, the rest as the peek line's", () => {
-    expect(courseInfoRows(course, t).map((r) => r.id)).toEqual(["controls", "length", "climb", "checks"]);
+describe("the climb row is one number (docs/course-elevation.md §4.4)", () => {
+  const line = { state: "ready" as const, climbM: 135, descentM: 120, sharePct: 3.1, basis: "contours" as const, partial: false, approx: false, attribution: null };
+  const ids = ["controls", "length", "climb", "scale", "checks"];
+
+  it("a typed climb is the course's: the computed one is not shown", () => {
+    const rows = statusRows({ ...course, climbManual: true, line }, t);
+    expect(rows.map((r) => r.id)).toEqual(ids);
+    expect(rows[2]).toEqual({ id: "climb", text: `statusClimb:{"m":85}`, data: { m: "85", source: "manual" } });
   });
 
-  it("no course and no sheet: no rows (the popover says No course)", () => {
-    expect(courseInfoRows({ ...course, controls: null, lengthM: null, climbM: null, checks: 0 }, t)).toEqual([]);
+  it("else the computed climb with its share of the length; the phone's line has the metres alone", () => {
+    const rows = statusRows({ ...course, line }, t);
+    expect(rows.map((r) => r.id)).toEqual(ids);
+    expect(rows[2]).toEqual({ id: "climb", text: `statusClimbShare:{"m":"135","share":"3.1"}`, short: `statusClimb:{"m":"135"}`, data: { m: "135", source: "computed", state: "ready", share: "3.1", basis: "contours", partial: "false", approx: "false" } });
+    expect(statusRows({ ...course, climbM: null, line }, t)[2]).toMatchObject({ data: { m: "135", source: "computed" } });
   });
 
-  it("a shown sheet's key stays (docs/course-layout.md §6)", () => {
-    expect(courseInfoRows({ ...course, sheetKey: "1:15000 A4 portrait" }, t).map((r) => r.id)).toEqual(["controls", "length", "climb", "sheet", "checks"]);
+  it("approximate values carry ≈ in the words, not in the data", () => {
+    const rows = statusRows({ ...course, climbM: null, line: { ...line, approx: true, partial: true } }, t);
+    expect(rows[2]).toMatchObject({ text: `statusClimbShare:{"m":"≈ 135","share":"3.1"}`, data: { m: "135", approx: "true", partial: "true" } });
   });
-});
 
-describe("the top bar's save indicator (§3: an error or a conflict never hides)", () => {
-  it("saved and saving are the dot alone; error and conflict always show their words", () => {
-    expect(saveIndicator("saved")).toEqual({ tone: "ok", alwaysText: false, key: "statusSaved" });
-    expect(saveIndicator("saving")).toEqual({ tone: "busy", alwaysText: false, key: "statusSaving" });
-    expect(saveIndicator("error")).toEqual({ tone: "alert", alwaysText: true, key: "statusError" });
-    expect(saveIndicator("conflict")).toEqual({ tone: "alert", alwaysText: true, key: "statusConflict" });
-    // D9c: Field mode's writes wait on the device — words shown, never "Saved".
-    expect(saveIndicator("queued")).toEqual({ tone: "wait", alwaysText: true, key: "statusQueued" });
+  it("while the field loads or cannot be read: the stored climb, else one row of words left off the phone's line", () => {
+    expect(statusRows({ ...course, line: { state: "loading" } }, t)[2]).toEqual({ id: "climb", text: `statusClimb:{"m":85}`, data: { m: "85", source: "stored", state: "loading" } });
+    expect(statusRows({ ...course, climbM: null, line: { state: "loading" } }, t)[2]).toEqual({ id: "climb", text: "statusClimbLoading", short: "", data: { state: "loading" } });
+    expect(statusRows({ ...course, climbM: 0, line: { state: "unavailable", kind: "offline" } }, t)[2]).toEqual({ id: "climb", text: "statusClimbUnavailable", short: "", data: { state: "unavailable", kind: "offline" } });
+  });
+
+  it("without a field: the stored climb, or no row", () => {
+    expect(statusRows({ ...course, line: null }, t)[2]).toMatchObject({ id: "climb", data: { m: "85", source: "stored" } });
+    expect(statusRows({ ...course, climbM: null, line: null }, t).map((r) => r.id)).toEqual(["controls", "length", "scale", "checks"]);
   });
 });

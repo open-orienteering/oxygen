@@ -70,6 +70,8 @@ export interface TopBarProps {
   save: SaveState;
   /** The course-info popover's values (§2); the map scale is the map-info dialog's (P6). */
   status: Omit<StatusInput, "scale">;
+  /** Asks for the height field again after a failed read (docs/course-elevation.md §4.3). */
+  onRetryElevation?: () => void;
   /** The map-info dialog's values (§2, P6). */
   map: MapInfoInput;
 }
@@ -204,7 +206,7 @@ export function TopBar(p: TopBarProps) {
       />
       <ExportMenu state={p.exportState} onError={p.onExportError} />
       <MapInfoButton map={p.map} />
-      <StatsButton status={p.status} />
+      <StatsButton status={p.status} onRetryElevation={p.onRetryElevation} />
       <SaveIndicator save={p.save} />
       {p.presence}
       <EditorHelp hint={t("help")} label={tc("editor.helpAria")} />

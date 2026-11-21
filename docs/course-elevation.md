@@ -2,8 +2,8 @@
 
 Normative specification of **heights along a course**: the height profile
 of a polyline over a map's height field and the climb read from it (§1–2),
-which field is read (§3), what the course editor shows (§4–5), the stated
-climb (§6) and leg routes (§7, pending). The height fields themselves are
+which field is read (§3), what the course editor shows (§4–5), the course's
+stored climb (§6, pending) and leg routes (§7, pending). The height fields themselves are
 `docs/map-terrain.md` (§4–7); the course's stored length is
 `docs/course-controls-and-matching.md` "Course length".
 
@@ -26,9 +26,10 @@ plan"):
 2. **Climb is computed along the leg's drawn line** — the course layer's
    `DerivedLeg.points`, centre to centre through bends and the crossing
    point, the polyline the stored length is measured on — until a leg has
-   a route (§7). It is named *climb along the line* wherever it is shown,
-   so it does not read as the stated climb: IOF 16.4 states climb "along
-   the shortest sensible route", and the line overstates it.
+   a route (§7). IOF 16.4 states climb "along the shortest sensible
+   route", and the line overstates it; a leg with a route states its
+   climb along the route. (Superseded in part by 8: the number is not
+   named apart.)
 3. **No per-leg climb in exports.** IOF XML 3.0 has no element for it and
    Oxygen adds no extension.
 4. **Maps without a ground model show numbers from the contour field,
@@ -45,6 +46,20 @@ the user):
    state no climb at all. Each leg shows its share of the course's rises.
 7. **This chapter's §0 is its decision record.** The feature is not a row
    of `docs/research/vector-map-pipeline/SLICES.md`.
+
+2026-11-21, 22:55 (the user, in the thread, on the first editor build):
+
+8. **One number, called climb / stigning.** The editor does not show a
+   computed "climb along the line" beside a stated climb. The computed
+   climb **is** the course's climb — in the editor, on the description
+   sheet and in exports (§6) — "to calculate the official value as
+   correctly as possible". A climb someone typed (Courses page, an
+   import) is the course's climb instead, marked manual, with a way back
+   to the computed one: the rule of the stored length
+   (`course-controls-and-matching.md` "Course length").
+9. **Route alternatives are the target of §7**: a leg selected shows its
+   computed top alternatives with metres, climb and estimated time, and
+   the course the same summed; stored per control pair in running order.
 
 ## 1. The profile
 
@@ -198,17 +213,107 @@ stated (`map-terrain.md` §7.1).
 
 ## 4. The editor's numbers
 
-*Pending: slice 2.*
+Implementation: `packages/web/src/pages/editor/useCourseElevation.ts`
+(the hook), `lib/editor/elevation.ts` (what is shown), `lib/editor/status.ts`
+(the climb row), `pages/editor/EditorStatus.tsx`, `StatusBar.tsx`,
+`modes/LegSection.tsx`.
+
+### 4.1 Which course
+
+The editor computes heights for **the selected course in Course mode,
+when its order is `ordered` and the viewer draws it alone and whole**:
+the legs are the layer's `DerivedLeg.points` of that one course
+(`useCourseChecks` `legs`, the derivation the length is read from,
+`course-editor.md` §8). There is nothing to read — and the field is not
+asked for — in the all-controls and all-variations views, for a
+free-order course, while a part of the course is drawn (Layout mode on a
+part sheet) and for a course without legs.
+
+### 4.2 The field
+
+`pickClimbField` (§3) over `course.mapMetadata.terrain`; the field is
+fetched by `useHeightField` (`docs/map-rendering.md` §5.4 "Field": one
+request per URL, kept in memory and in Cache Storage, so the editor and
+the 3D viewer share it and it reads offline once fetched). The profile is
+`courseProfile(legs, fieldSampler(field))`, recomputed when the legs
+change — a control moved, a bend dragged — never the field.
+
+### 4.3 States
+
+| State | When | Shown |
+|---|---|---|
+| `none` | §4.1 does not hold, or §3 picks no field | nothing new: the stored climb as before |
+| `loading` | the field is being fetched (a `pending` contour field is derived by this request) | the stored climb if there is one, else *Climb: reading heights…* |
+| `unavailable` | the fetch failed (`offline`, `pending`, `failed`, `missing`, `unauthorised`) | the stored climb if there is one, else *Climb: heights not available* and **Try again** (`editor-stats-elevation-retry`), which asks once more |
+| `ready` | the field is read | §4.4, §4.5 |
+
+A course whose profile has no length or no data at all (coverage 0)
+shows as `none`.
+
+### 4.4 The climb row
+
+The course-info popover has **one** climb row (`editor-stats-climb`,
+§0 decision 8), by the first that applies:
+
+1. **A typed climb** — the course's stored climb when it was typed
+   (until §6 stores the source, every stored climb above 0 is a typed
+   one): `85 m climb`, `data-m`, `data-source="manual"`. Nothing about
+   the computed climb is shown with it.
+2. **The computed climb** (`ready`): `135 m climb · 3.1 %` — the
+   course's climb (§2 "A course", rounded once) and its share of the
+   profile's length in percent to one decimal. `data-m`,
+   `data-source="computed"`, `data-state="ready"`, `data-share`,
+   `data-basis` (`ground` / `contours`), `data-partial`, `data-approx`.
+3. **The stored climb** while the field loads or cannot be read
+   (`data-source="stored"`, `data-state`).
+4. The state's words (§4.3; `data-state`), or no row in state `none`
+   without a stored climb.
+
+**Approximate.** The computed number is written `≈ 135` (`data-approx`)
+when the course is `partial` (§2) or less than 80 % of its length is
+confident (`ELEVATION_CONFIDENT_MIN`, the 3D gate's share); the data
+attributes carry the bare number.
+
+**Under the rows**, for the computed climb only: with basis `contours`
+the disclaimer *From the map's contours: approximate*
+(`editor-stats-elevation-note`; §0, 4); when partial, *Part of the course
+has no height data: at least this much* (`editor-stats-elevation-partial`);
+the field provider's attribution when it has one
+(`editor-stats-elevation-attribution`, `map-terrain.md` §7.1).
+
+**Phone.** The sheet's peek line (`editor-status`, `course-editor.md`
+§10) shows the same row without the share (`135 m climb`;
+`data-climb` on the line); the words of `loading` / `unavailable` are
+left off it, as are the notes.
+
+### 4.5 The selected leg
+
+With a leg selected (`course-editor.md` §6.7) and the state `ready`, the
+Leg section shows, read-only, on a phone too
+(`editor-leg-elevation`, `data-basis`, `data-approx`): **Length**
+(`editor-leg-length`), **Climb** (`editor-leg-climb`: the leg's share of
+the course's climb, §2), **Descent** (`editor-leg-descent`) and **Net**
+(`editor-leg-net`: the end's height minus the start's, signed), each
+in whole metres with `data-m`; a dash where the leg has no data. `≈`
+on climb and descent when less than 99.5 % of the leg has data or less
+than 80 % is confident. With basis `contours` the disclaimer is repeated
+under them (`editor-leg-elevation-note`). The leg is found among the
+course's derived legs by its insert position
+(`insertIndexForLeg`). These numbers are shown under a typed course
+climb too: they are the leg's, not the course's stated value.
 
 ## 5. The profile graph
 
 *Pending: slice 3.*
 
-## 6. The stated climb
+## 6. The course's stored climb
 
-*Pending: slice 4.* `courses.climb_m` stays the stated climb (typed on
-the Courses page, printed on the description sheet, exported as IOF
-`Climb`); the computed climb is offered, never written unasked.
+*Pending: slice 4.* `courses.climb_m` is the course's climb (printed on
+the description sheet, exported as IOF `Climb`). §0 decision 8: the
+computed climb is stored there with a source (`climb_source`, as
+`length_source`), a typed one wins and can be cleared back to the
+computed one. Until then the editor shows the computed climb only for a
+course without a stored one (§4.4).
 
 ## 7. Leg routes
 
@@ -223,10 +328,17 @@ leg with a route states its climb along the route.
 | `packages/shared/src/terrain/profile/__tests__/profile.test.ts` | §1: the sampler, sampling step, vertices once, lengths, no-data and confidence shares, net, degenerate polylines, `pointAtDistance` / `distanceAtPoint`; §2 "A course": offsets, a rise across a control, shares summing to the total, a leg without data, `partial` |
 | `packages/shared/src/terrain/profile/__tests__/climb.test.ts` | §2: the hysteresis rule on hand-made heights, descent, step independence, a noise bound against a plain sum, `climbRises`, `climbShares` |
 | `packages/shared/src/terrain/profile/__tests__/pick.test.ts` | §3: the order over every descriptor state |
+| `packages/web/src/lib/editor/__tests__/elevation.test.ts` | §4.3–4.5: what a state shows, rounding, the share, approximate, a leg's numbers and a leg without data |
+| `packages/web/src/lib/editor/__tests__/status.test.ts` "the climb row is one number" | §4.4: the order typed · computed · stored · words, the phone's short text |
+| `e2e/course-editor-elevation.spec.ts` | §4 in the browser on a synthetic plane field: the computed climb and its notes, a leg's numbers, a moved control, a ground model's attribution, a failed read and **Try again**, a typed climb, free order and the all-controls view, a map without a field |
+| `e2e/course-editor-phone.spec.ts` "the computed climb on a phone" | §4.4 "Phone" |
 
 ## Pending in this chapter
 
-- §4–7 as marked.
+- §5–7 as marked.
+- §4.4: a typed climb cannot be cleared back to the computed one in the
+  editor yet, and the computed climb is not stored, printed or exported
+  (§6).
 - §2: the threshold was chosen on synthetic noise over the contour field;
   a comparison of `ground.lantmateriet-2m` against the contour field on
   real courses is not made (the ground field is in no test database).

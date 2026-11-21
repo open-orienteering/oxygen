@@ -25,6 +25,7 @@ export const WEIGHTS = {
   "course-editor-status.spec.ts": 77, // two-context conflicts, P2 save state, P6 map info, F5 exchange
   "course-editor-layout.spec.ts": 76, // Layout mode, templates, setter maps, description sheets, white-outs
   "course-editor-placing.spec.ts": 65, // P1/P4/P5 placing, F4 crossings, F27 placement loupe
+  "course-editor-elevation.spec.ts": 60, // climb along the line, leg numbers, basis, retry; not yet measured in CI
   "field-mode.spec.ts": { mobile: 62 }, // OCAD+map, Field mode flows
   "registration-dialog.spec.ts": 46,
   "course-presence.spec.ts": 45,
