@@ -154,4 +154,4 @@ Until May 2026 Oxygen stored its data in a MeOS-compatible MySQL layout. It now 
 
 [GNU Affero General Public License v3.0](LICENSE): free to use and modify; derivatives must stay open source, including when run as a hosted service.
 
-Map credits: the demo competition uses the CC0 Puit de Laven map ([demo guide](docs/ops/demo.md#the-map)). Some screenshots show a club map, published as images with the club's permission.
+Map credits: the demo competition uses a map from [o-kartan.se](https://o-kartan.se), licensed to the project, with invented detail added ([demo map](docs/ops/demo-map.md)). Some screenshots show a club map, published as images with the club's permission.

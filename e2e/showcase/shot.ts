@@ -2,17 +2,18 @@
  * Shared plumbing for the showcase shots (playwright.showcase.config.ts,
  * docs/screenshots/README.md).
  *
- * Public run (default): the Demo Competition on the CC0 Puit de Laven map,
- * PNGs into docs/screenshots/. The run checks the event's map really is that
- * map, so a machine whose demo event carries another map cannot write it
- * into the docs.
+ * Public run (default): the Demo Competition on the o-kartan demo map
+ * (fixtures/okartan/okartan-demo.ocd), PNGs into docs/screenshots/. The run
+ * checks the event's map really is that file, so a machine whose demo event
+ * carries another map cannot write it into the docs.
  *
  * Private run (SHOWCASE_PRIVATE=1): any event on the machine the run is on,
  * PNGs into .local/showcase-shots/ (gitignored) for a person to look at
  * before anything is committed. Every write the page sends is refused, and
  * shots that need one are skipped, so a real event is only ever read.
  */
-import { mkdirSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
@@ -45,10 +46,25 @@ export const OUT_DIR = PRIVATE ? path.join(ROOT, ".local", "showcase-shots") : p
 export const SCRATCH_DIR = path.join(ROOT, ".local", "showcase-scratch");
 
 /**
- * Puit de Laven, the demo map (docs/ops/demo.md, "The map"), lies near
- * 43.58° N, 3.70° E. A public run refuses an event whose map is elsewhere.
+ * The demo map (docs/ops/demo.md, "The map"). Club maps of the same forest
+ * exist and must not reach the docs, so its place is not enough: a public
+ * run reads the pinned document's header and refuses any source but this
+ * file, by hash.
  */
-const DEMO_MAP_BOX = { south: 43.4, north: 43.8, west: 3.5, east: 3.9 };
+const DEMO_MAP_FILE = path.join(ROOT, "fixtures", "okartan", "okartan-demo.ocd");
+
+/** A map document's preamble: magic, format version, header length (packages/shared/src/map-document/codec.ts). */
+const DOCUMENT_PREAMBLE_BYTES = 12;
+
+/** The source hash a map document says it was made from. */
+async function documentSourceHash(request: import("@playwright/test").APIRequestContext, documentHash: string): Promise<string | undefined> {
+  const url = `/api/map-documents/${documentHash}`;
+  const head = await (await request.get(url, { headers: { range: `bytes=0-${DOCUMENT_PREAMBLE_BYTES - 1}` } })).body();
+  if (head.byteLength < DOCUMENT_PREAMBLE_BYTES || head.subarray(0, 4).toString("latin1") !== "OXVM") return undefined;
+  const length = head.readUInt32LE(8);
+  const json = await (await request.get(url, { headers: { range: `bytes=${DOCUMENT_PREAMBLE_BYTES}-${DOCUMENT_PREAMBLE_BYTES + length - 1}` } })).body();
+  return (JSON.parse(json.toString("utf8")) as { source?: { hash?: string } }).source?.hash;
+}
 
 /** TRPC writes a private run lets through: choosing the event, and the editor's "who else is here" ping. */
 const PRIVATE_WRITES = new Set(["competition.select", "course.presence"]);
@@ -61,11 +77,12 @@ export function showcaseGuards(): void {
   if (!PRIVATE) {
     test.beforeAll(async ({ request }) => {
       const res = await request.get("/trpc/course.mapMetadata", { headers: { "x-competition-id": EVENT } });
-      const bounds = (await res.json())?.result?.data?.bounds as { north: number; south: number; east: number; west: number } | undefined;
-      const inBox = !!bounds && bounds.south >= DEMO_MAP_BOX.south && bounds.north <= DEMO_MAP_BOX.north && bounds.west >= DEMO_MAP_BOX.west && bounds.east <= DEMO_MAP_BOX.east;
-      if (!inBox) {
+      const documentHash = (await res.json())?.result?.data?.documentHash as string | undefined;
+      const expected = createHash("sha256").update(readFileSync(DEMO_MAP_FILE)).digest("hex");
+      const actual = documentHash ? await documentSourceHash(request, documentHash) : undefined;
+      if (actual !== expected) {
         throw new Error(
-          `The ${EVENT} event here does not carry the CC0 Puit de Laven map (bounds ${JSON.stringify(bounds)}). ` +
+          `The ${EVENT} event here does not carry the demo map ${path.relative(ROOT, DEMO_MAP_FILE)} (its document names source ${actual ?? "none"}). ` +
             "Public shots go into the docs, so they come only from the demo map: reload it with `pnpm showcase:load`, " +
             "or take these shots as a private run (SHOWCASE_PRIVATE=1).",
         );

@@ -1,8 +1,8 @@
 /**
  * The Demo Competition fixture (docs/ops/demo.md): loaded the way
  * `scripts/load-showcase.sh` loads it — the `map_sources` row from the
- * committed demo `.omap`, then `showcase.sql`, then the re-match — it pins
- * the CC0 demo map (docs/map-storage.md §6.9, `unpinned`), answers
+ * committed demo `.ocd`, then `showcase.sql`, then the re-match — it pins
+ * the o-kartan demo map (docs/map-storage.md §6.9, `unpinned`), answers
  * `course.mapMetadata`, places every control on the map, and every course
  * reads its controls with the lengths the fixture stores. A second load
  * changes nothing.
@@ -19,9 +19,9 @@ import { prisma, type EventRef } from "../../db.js";
 import { runRematch } from "../../map-store/rematch.js";
 import { loadCourseSequences, rebuildCourseLengths } from "../../course-geometry.js";
 
-const FIXTURES = resolve(__dirname, "../../../../../fixtures/showcase");
-const SQL = readFileSync(resolve(FIXTURES, "showcase.sql"), "utf8");
-const MAP = readFileSync(resolve(FIXTURES, "puit-de-laven-demo.omap"));
+const FIXTURES = resolve(__dirname, "../../../../../fixtures");
+const SQL = readFileSync(resolve(FIXTURES, "showcase", "showcase.sql"), "utf8");
+const MAP = readFileSync(resolve(FIXTURES, "okartan", "okartan-demo.ocd"));
 const MAP_HASH = createHash("sha256").update(MAP).digest("hex");
 const DEMO_EVENT_ID = 9876543n;
 
@@ -34,7 +34,7 @@ url.searchParams.delete("schema");
 /** The loader's three steps: source row, SQL, re-match. */
 async function loadShowcase() {
   await db.mapSource.createMany({
-    data: [{ fileHash: MAP_HASH, kind: "omap", bytes: MAP, sizeBytes: MAP.byteLength, fileName: "puit-de-laven-demo.omap" }],
+    data: [{ fileHash: MAP_HASH, kind: "ocad", bytes: MAP, sizeBytes: MAP.byteLength, fileName: "okartan-demo.ocd" }],
     skipDuplicates: true,
   });
   const c = new Client({ connectionString: url.toString() });
@@ -79,7 +79,7 @@ describe("showcase fixture", () => {
     const pin = await db.mapFile.findFirstOrThrow({ where: { eventId: DEMO_EVENT_ID } });
     expect(pin.sourceHash).toBe(MAP_HASH);
     expect(pin.documentHash).toMatch(/^[0-9a-f]{64}$/);
-    expect(pin.scale).toBe(10000);
+    expect(pin.scale).toBe(15000);
     expect(pin.calibration).toHaveLength(4);
     expect(pin.northOffset).not.toBeNull();
   }, 120_000);
@@ -88,9 +88,12 @@ describe("showcase fixture", () => {
     const event = await demoEvent();
     expect(event.nameId).toBe("demo_competition");
     const meta = await makeCaller(event).course.mapMetadata();
-    expect(meta).toMatchObject({ scale: 10000, documentHash: expect.stringMatching(/^[0-9a-f]{64}$/) });
-    expect(meta!.bounds!.south).toBeGreaterThan(43.5);
-    expect(meta!.bounds!.north).toBeLessThan(43.7);
+    expect(meta).toMatchObject({ scale: 15000, documentHash: expect.stringMatching(/^[0-9a-f]{64}$/) });
+    // South of Stockholm.
+    expect(meta!.bounds!.south).toBeGreaterThan(59.2);
+    expect(meta!.bounds!.north).toBeLessThan(59.35);
+    expect(meta!.bounds!.west).toBeGreaterThan(18.0);
+    expect(meta!.bounds!.east).toBeLessThan(18.3);
   });
 
   it("places every live positioned control inside the map, its lat/lng derived by the pin", async () => {

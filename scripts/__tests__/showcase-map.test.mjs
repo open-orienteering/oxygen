@@ -1,8 +1,8 @@
 import { describe, it, before } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { INJECTED_TAG } from "../lib/inject-demo-points.mjs";
-import { DEMO_MAP_FILE_NAME, DEMO_MAP_PATH, ORIGINAL_MAP, ORIGINAL_MAP_PATH, buildDemoMap, importShowcaseMap, sha256Hex, showcaseSource } from "../lib/showcase-map.mjs";
+import { PUBLIC_MAPS } from "../lib/map-files.mjs";
+import { DEMO_MAP_FILE_NAME, DEMO_MAP_PATH, ORIGINAL_MAP, ORIGINAL_MAP_PATH, importShowcaseMap, sha256Hex, showcaseSource } from "../lib/showcase-map.mjs";
 import {
   FIXTURE_PATH,
   FORBIDDEN_SHOWCASE_SQL,
@@ -14,7 +14,7 @@ import {
 } from "../lib/showcase-sql.mjs";
 
 // The Demo Competition's map (docs/ops/demo.md, "The map"): the fixture names
-// the committed CC0 demo map by its source hash; load-showcase.sh inserts
+// the committed o-kartan demo map by its source hash; load-showcase.sh inserts
 // the source and the re-match imports and pins the document.
 const REPIN = "run `node scripts/patch-showcase-map.mjs` to re-pin the committed fixture";
 
@@ -24,24 +24,18 @@ describe("showcase map source", () => {
     imported = await importShowcaseMap();
   });
 
-  it("is the committed demo map as an omap source", () => {
+  it("is the committed demo map as an OCAD source", () => {
     const source = showcaseSource();
-    assert.equal(source.kind, "omap");
+    assert.equal(source.kind, "ocad");
     assert.equal(source.fileName, DEMO_MAP_FILE_NAME);
     assert.equal(source.fileHash, sha256Hex(readFileSync(DEMO_MAP_PATH)));
     assert.equal(source.sizeBytes, source.bytes.length);
   });
 
-  it("imports with the UTM 31N georeference at 1:10 000 and gives the pin's quick-access columns", () => {
-    assert.equal(imported.header.georeferencing.crs?.code, 32631);
-    assert.equal(imported.header.mapScale, 10000);
-    assert.equal(imported.result.warnings.some((w) => w.code === "CRS_UNRESOLVED"), false);
-    const { columns } = imported;
-    assert.ok(columns);
-    assert.equal(columns.scale, 10000);
-    // Near Montpellier.
-    assert.ok(columns.bounds.south > 43.5 && columns.bounds.north < 43.7 && columns.bounds.west > 3.6 && columns.bounds.east < 3.8);
-    assert.equal(columns.calibration.length, 4);
+  it("imports as an OCAD 12 map at 1:15 000 whose document names this source", () => {
+    assert.equal(imported.header.mapScale, 15000);
+    assert.equal(imported.header.source.kind, "ocad");
+    assert.equal(imported.header.source.hash, showcaseSource().fileHash);
   });
 });
 
@@ -51,7 +45,7 @@ describe("showcase map SQL", () => {
   it("writes the map_files row source-only, without dropped columns", () => {
     const line = mapFileInsert({ eventId: 9876543, uploadedAt: "2026-01-01T00:00:00.000Z", rotationCorrection: 2 }, source);
     assert.equal(line.includes("\n"), false);
-    assert.match(line, new RegExp(`VALUES \\(9876543, E'puit-de-laven-demo\\.omap', '2026-01-01T00:00:00\\.000Z', 2, '${"c".repeat(64)}', NULL\\);$`));
+    assert.match(line, new RegExp(`VALUES \\(9876543, E'okartan-demo\\.ocd', '2026-01-01T00:00:00\\.000Z', 2, '${"c".repeat(64)}', NULL\\);$`));
     assert.deepEqual(legacyMapStorageUses(line), []);
     assert.deepEqual(mapBytesInSql(line), []);
   });
@@ -79,7 +73,7 @@ describe("showcase map SQL", () => {
     assert.equal(found.sourceHash, source.fileHash);
     assert.equal(found.documentHash, null);
     assert.equal(found.rotationCorrection, 3);
-    assert.match(found.line, /VALUES \(42, E'puit-de-laven-demo\.omap', '2026-03-04T05:06:07\.000Z', 3, /);
+    assert.match(found.line, /VALUES \(42, E'okartan-demo\.ocd', '2026-03-04T05:06:07\.000Z', 3, /);
     assert.deepEqual(mapBytesInSql(out), []);
     assert.ok(out.startsWith("-- header\n") && out.endsWith("\n-- footer"));
     assert.doesNotMatch(out, /Vinter Flaten|kartutsitt/);
@@ -99,7 +93,7 @@ describe("committed showcase.sql", () => {
     assert.deepEqual(mapBytesInSql(sql), []);
   });
 
-  it("has one map, the committed CC0 demo map, named by its source hash with no document", () => {
+  it("has one map, the committed demo map, named by its source hash with no document", () => {
     assert.equal(sql.match(/^INSERT INTO map_files /gm)?.length, 1);
     const map = extractShowcaseMap(sql);
     assert.equal(map.eventId, "9876543");
@@ -108,17 +102,16 @@ describe("committed showcase.sql", () => {
     assert.equal(map.sourceHash, sha256Hex(readFileSync(DEMO_MAP_PATH)), REPIN);
   });
 
-  it("names a map source that is the injection's output on the upstream CC0 file — no club map", () => {
-    // The chain: upstream file (hash recorded) → injection → the committed demo map → the fixture's source hash.
+  it("names a map source on the public-map list, made from the licensed o-kartan original — no club map", () => {
     assert.equal(sha256Hex(readFileSync(ORIGINAL_MAP_PATH)), ORIGINAL_MAP.sha256);
-    assert.equal(extractShowcaseMap(sql).sourceHash, sha256Hex(buildDemoMap()), REPIN);
+    assert.equal(PUBLIC_MAPS.get("fixtures/okartan/okartan-original.ocd"), ORIGINAL_MAP.sha256);
+    assert.equal(PUBLIC_MAPS.get("fixtures/okartan/okartan-demo.ocd"), extractShowcaseMap(sql).sourceHash, "update the demo map's hash in scripts/lib/map-files.mjs");
   });
 
   it("names nothing of the source map or its club", () => {
     const mapSection = sql.slice(sql.indexOf("-- ─── map_files"));
     for (const re of FORBIDDEN_SHOWCASE_SQL) assert.equal(re.test(mapSection), false, `map section matched ${re}`);
-    const demo = readFileSync(DEMO_MAP_PATH, "utf8");
+    const demo = readFileSync(DEMO_MAP_PATH).toString("latin1");
     for (const re of FORBIDDEN_SHOWCASE_SQL) assert.equal(re.test(demo), false, `demo map matched ${re}`);
-    assert.ok(demo.includes(INJECTED_TAG));
   });
 });

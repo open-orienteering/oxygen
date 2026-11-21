@@ -1,5 +1,5 @@
 /**
- * The Demo Competition's map (docs/ops/demo.md, "The map"): the CC0 Puit de
+ * The Puit de Laven test map (docs/ops/demo.md, "The map"; the Demo Competition's map until 2026-11): the CC0 Puit de
  * Laven map (`scripts/fixtures/puit-de-laven.omap`) has hardly any point
  * features, so this adds invented ones — boulders (ISOM 204/205/207),
  * knolls (109/110), depressions (111) and pits (112) — at seeded random

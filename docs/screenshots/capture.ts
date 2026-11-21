@@ -3,8 +3,8 @@
  *
  * Loads the committed Demo Competition fixture with scripts/load-showcase.sh
  * (fixtures/showcase/showcase.sql — an anonymized Vinterserien dump
- * with real controls, courses, classes and results on the CC0 Puit de
- * Laven demo map; docs/ops/demo.md) into the dev database and then drives the
+ * with real controls, courses, classes and results on the o-kartan demo
+ * map; docs/ops/demo.md) into the dev database and then drives the
  * frontend through every major user-facing feature with Playwright,
  * capturing one PNG per screen. The loaded event stays for the next run.
  *
@@ -200,7 +200,6 @@ const STEPS: CaptureStep[] = [
 
   {
     name: "dashboard",
-    clubMap: true,
     description: "Race-day dashboard (real-time counters)",
     async run({ page, nameId }) {
       await gotoPage(page, `${WEB_URL}/${nameId}`);
@@ -306,7 +305,6 @@ const STEPS: CaptureStep[] = [
 
   {
     name: "courses",
-    clubMap: true,
     description: "Courses with map overlay",
     async run({ page, nameId }) {
       await gotoPage(page, `${WEB_URL}/${nameId}/courses`);
