@@ -53,6 +53,14 @@ import {
   type BackupRecord,
   type ReadoutBackupRecord,
 } from "./si-protocol";
+import type {
+  SIReader,
+  SIReaderDeviceInfo,
+  SIReaderMode,
+  SIReaderStatus,
+} from "./si-reader";
+
+export type { SIReaderStatus } from "./si-reader";
 
 /**
  * Result of `readBackupMemory()`. Discriminated by station operating mode:
@@ -100,13 +108,6 @@ export interface SIStatusEvent extends CustomEvent {
 
 // ─── Types ─────────────────────────────────────────────────
 
-export type SIReaderStatus =
-  | "idle"
-  | "connecting"
-  | "connected"
-  | "reading"
-  | "error";
-
 export interface SIReaderInfo {
   status: SIReaderStatus;
   portInfo?: SerialPortInfoLike;
@@ -129,7 +130,7 @@ interface SerialOptionsLike {
   flowControl?: string;
 }
 
-interface SerialPortLike {
+export interface SerialPortLike {
   open(options: SerialOptionsLike): Promise<void>;
   close(): Promise<void>;
   getInfo(): SerialPortInfoLike;
@@ -157,7 +158,19 @@ const BLOCK_TIMEOUT_MS = 2000;
 
 // ─── Connection class ──────────────────────────────────────
 
-export class SIReaderConnection extends EventTarget {
+let nextSerialReaderId = 1;
+
+function readerModeOf(mode: number): SIReaderMode {
+  if (isReadoutMode(mode)) return "readout";
+  return "other";
+}
+
+export class SIReaderConnection extends EventTarget implements SIReader {
+  readonly kind = "serial" as const;
+  readonly supportsStationProgramming = true;
+  readonly id = `serial:${nextSerialReaderId++}`;
+  private _info: SIReaderDeviceInfo | null = null;
+
   private port: SerialPortLike | null = null;
   private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   private buffer = new Uint8Array(0);
@@ -193,6 +206,19 @@ export class SIReaderConnection extends EventTarget {
     return this.port?.getInfo();
   }
 
+  /** Station identity learned from SYS_VAL on connect (null until then). */
+  get info(): SIReaderDeviceInfo | null {
+    return this._info;
+  }
+
+  get label(): string {
+    const model = this._info?.model;
+    const serial = this._info?.serial;
+    if (model && serial) return `${model} #${serial}`;
+    if (serial) return `SI station #${serial}`;
+    return "USB SI station";
+  }
+
   // ── Connection management ──────────────────────────────
 
   /**
@@ -208,7 +234,10 @@ export class SIReaderConnection extends EventTarget {
       const port = await (navigator as Navigator & { serial: NavigatorSerialLike }).serial.requestPort();
       await this.connectToPort(port);
     } catch (err) {
-      this.setStatus("error");
+      // A cancelled picker (NotFoundError) is not a reader fault.
+      const cancelled = err instanceof Error && err.name === "NotFoundError";
+      this.port = null;
+      this.setStatus(cancelled ? "idle" : "error");
       throw err;
     }
   }
@@ -219,7 +248,7 @@ export class SIReaderConnection extends EventTarget {
   async tryAutoReconnect(): Promise<boolean> {
     if (!("serial" in navigator)) return false;
     try {
-      const ports = await (navigator as Navigator & { serial: NavigatorSerialLike }).serial.getPorts();
+      const ports = await SIReaderConnection.grantedPorts();
       if (ports.length === 0) return false;
       this.setStatus("connecting");
       await this.connectToPort(ports[0]);
@@ -228,6 +257,26 @@ export class SIReaderConnection extends EventTarget {
       this.setStatus("idle");
       return false;
     }
+  }
+
+  /**
+   * Open a port the origin already has permission for (from `grantedPorts()`),
+   * without showing the picker. Used to restore several readers on load.
+   */
+  async attach(port: SerialPortLike): Promise<void> {
+    this.setStatus("connecting");
+    try {
+      await this.connectToPort(port);
+    } catch (err) {
+      this.port = null;
+      this.setStatus("error");
+      throw err;
+    }
+  }
+
+  /** True when this connection holds the given port object. */
+  holdsPort(port: SerialPortLike): boolean {
+    return this.port === port;
   }
 
   private async connectToPort(port: SerialPortLike): Promise<void> {
@@ -270,6 +319,19 @@ export class SIReaderConnection extends EventTarget {
     );
     // Response: [0x00, station_id, echoed_offset, ...128 bytes SYS_VAL]
     const P = 3; // data payload offset
+
+    const station = parseStationInfo(resp.data);
+    if (station) {
+      this._info = {
+        serial: station.serialNo || null,
+        firmware: station.firmwareVersion || null,
+        model: station.modelName || null,
+        mode: readerModeOf(station.mode),
+      };
+      this.dispatchEvent(
+        new CustomEvent("si:reader-info", { detail: this._info }),
+      );
+    }
 
     const proto = resp.data[P + SYSVAL.PROTO];
     const feedback = resp.data[P + SYSVAL.FEEDBACK];
@@ -1266,5 +1328,11 @@ export class SIReaderConnection extends EventTarget {
 
   static isSupported(): boolean {
     return typeof navigator !== "undefined" && "serial" in navigator;
+  }
+
+  /** Ports this origin was granted earlier (no picker, no prompt). */
+  static async grantedPorts(): Promise<SerialPortLike[]> {
+    if (!SIReaderConnection.isSupported()) return [];
+    return (navigator as Navigator & { serial: NavigatorSerialLike }).serial.getPorts();
   }
 }
