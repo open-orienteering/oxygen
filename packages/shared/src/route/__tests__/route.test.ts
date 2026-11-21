@@ -291,6 +291,36 @@ describe("route alternatives (docs/course-elevation.md §7.7)", () => {
         expect(findRoutes(fine([area(BLOCKED, strip)]), from, to, { model })).toEqual([]);
     });
 
+    it("a passage between two buildings stays open, as narrow as two cells; a way through it too", () => {
+      for (const gap of [0.4, 0.5]) {
+        const walls = [area(BLOCKED, rect(25, 0, 35, 20)), area(BLOCKED, rect(25, 20 + gap, 35, 40))];
+        const [r] = findRoutes(fine(walls), from, { x: 50, y: 20 + gap / 2 }, { model });
+        expect(r, `gap ${gap}`).toBeDefined();
+        expect(r.lengthM, `gap ${gap}`).toBeLessThan(410);
+      }
+      const lakes = [area(BLOCKED_SOFT, rect(25, 0, 35, 20)), area(BLOCKED_SOFT, rect(25, 20.5, 35, 40))];
+      expect(findRoutes(fine(lakes), from, { x: 50, y: 20.25 }, { model })[0].lengthM).toBeLessThan(410);
+    });
+
+    it("the marks are the cheapest route's and the shortest route's, after straightening too", () => {
+      const routes = findRoutes(fine([area(C.slow, rect(15, 18, 45, 22))]), from, to, { model });
+      const shortest = routes.filter((r) => r.shortest);
+      expect(shortest).toHaveLength(1);
+      expect(shortest[0].lengthM).toBeCloseTo(400, 3);
+      for (const r of routes) expect(r.lengthM).toBeGreaterThanOrEqual(shortest[0].lengthM - 1e-6);
+      expect(routes[0].fastest).toBe(true);
+      expect(routes.filter((r) => r.fastest)).toHaveLength(1);
+      for (const r of routes) expect(r.costM).toBeGreaterThanOrEqual(routes[0].costM);
+    });
+
+    it("a control beside a fence, in the fence's cell, is run to from its own side", () => {
+      const fence = line(BLOCKED, [10.05, 5, 10.05, 35]);
+      const [r] = findRoutes(fine([fence]), { x: 10.2, y: 20 }, to, { model });
+      expect(r.lengthM).toBeLessThan(402);
+      const [l] = findRoutes(fine([line(BLOCKED, [49.95, 5, 49.95, 35])]), from, { x: 49.8, y: 20 }, { model });
+      expect(l.lengthM).toBeLessThan(402);
+    });
+
     it("downhill costs what the model says: 400 m at 10 % down is 340", () => {
       const g = fine([], (p) => 100 - p.x * 10 * 0.1);
       const [r] = findRoutes(g, from, to, { model, alternatives: 0 });

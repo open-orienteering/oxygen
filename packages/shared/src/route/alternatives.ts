@@ -209,16 +209,21 @@ function distinctRoutes(g: RouteGrid, routes: RouteAlternative[], from: RoutePoi
   const kept: { route: RouteAlternative; near: Uint8Array }[] = [];
   for (const route of routes) {
     const cells = polylineCells(g, route.points);
-    const twin = kept.find((k) => sharedShare(cells, k.near) > (route.shortest && !route.fastest ? 0.9 : maxShared));
-    if (twin && !route.fastest) {
-      if (route.shortest) twin.route.shortest = true;
-      continue;
+    const twin = route.fastest ? undefined : kept.find((k) => sharedShare(cells, k.near) > maxShared);
+    if (twin) {
+      // The shortest route stays unless the route it runs along is as short: the mark is the shortest route's alone.
+      if (!route.shortest) continue;
+      if (twin.route.lengthM <= route.lengthM * (1 + 1e-6) + 1e-6) { twin.route.shortest = true; continue; }
     }
     const near = new Uint8Array(g.cols * g.rows);
     markCorridor(g, cells, radius, near);
     kept.push({ route, near });
   }
-  return kept.map((k) => k.route);
+  // Straightening can change the order: the marks are the cheapest route's and the shortest route's, the list by cost.
+  const out = kept.map((k) => k.route).sort((a, b) => a.costM - b.costM);
+  const shortest = out.reduce((s, r) => (r.lengthM < s.lengthM - 1e-6 ? r : s), out.find((r) => r.shortest) ?? out[0]);
+  for (const [i, r] of out.entries()) { r.fastest = i === 0; r.shortest = r === shortest; }
+  return out;
 }
 
 /**
@@ -233,7 +238,7 @@ export function findRoutes(grid: RouteGrid, from: RoutePoint, to: RoutePoint, op
   const g: RouteGrid = via.length > 0 ? { ...grid, cls: grid.cls.slice() } : grid;
   for (const p of via) openDisc(g, p, options.viaReachMm ?? 1, CLASS_INDEX.path);
   const stops = [from, ...via, to];
-  const cells = stops.map((p) => nearestPassable(g, cellOf(g, p)));
+  const cells = stops.map((p) => nearestPassable(g, cellOf(g, p), undefined, p));
   if (cells.some((c) => c < 0)) return [];
   const finish = (parts: { cells: number[]; from: RoutePoint; to: RoutePoint; model: CostModel }[], fastest: boolean, shortest: boolean): RouteAlternative => {
     const points: RoutePoint[] = [];

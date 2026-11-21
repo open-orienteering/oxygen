@@ -694,10 +694,14 @@ read from):
    areas overlap, the cell takes the higher rank: forest < open <
    green < boulders, marsh, water < paved < uncrossable water <
    uncrossable.
-2. **Outlines and banks.** The outline of every uncrossable area marks
-   the cells it touches too, so an area narrower than a cell (which
-   holds no cell centre) still closes the way; so do line objects of
-   `blockedSoft` (a bank drawn as a 301 line).
+2. **Thin outlines and banks.** The outline of an uncrossable ring
+   whose mean width (twice its area over its perimeter) is under 1.5
+   cells marks the cells it touches too, so a wall drawn as an area
+   narrower than a cell (which holds no cell centre) still closes the
+   way. A wider ring is its filled cells alone: the passage between
+   two buildings stays as wide as it is drawn. Line objects of
+   `blockedSoft` (a bank drawn as a 301 line) mark their cells as
+   well.
 3. **Ways** — line objects of the path classes — then mark every cell
    they touch, over anything but `blocked`: a path over uncrossable
    water and its banks is a bridge, a path into a building opens
@@ -754,12 +758,16 @@ control (each move costed in its running direction).
    with the height read between the cell centres, so a straight run
    down an even slope costs what the model says.
 5. Straightening can lay two routes on one line (open terrain: every
-   detour straightens to the leg). A route that shares more than half
-   of its length with one already kept is dropped after straightening
-   too; the shortest mark moves to the route it ran along.
+   detour straightens to the leg). An alternative that shares more
+   than half of its length with a route already kept is dropped after
+   straightening too. The shortest route is dropped only when the
+   route it runs along is as short, and that route is then marked
+   shortest. The list is by cost after straightening: its first route
+   is marked fastest, the one of least length shortest.
 
-A control standing on an uncrossable cell is run to from the nearest
-passable cell (up to 12 cells away): the route is searched and
+A control standing on an uncrossable cell is run to from the passable
+cell nearest to the control itself (up to 12 cells away; a control
+beside a fence, in the fence's cell, from its own side): the route is searched and
 straightened from that cell, never across the obstacle, and the stub
 between the control and the cell is added as it is, costed by its
 length. A leg through a **crossing
@@ -824,7 +832,7 @@ Under the Routes list (§7.4), on a desktop or tablet
 | `packages/api/src/__tests__/integration/leg-routes.test.ts` | §7.2, §7.3: a saved route chosen and every course of the pair read along it, the length unchanged, direction, choose and unchoose, one chosen route per pair (and the index), new points, a typed climb and a marked route untouched, a control run to twice with one marked leg, a moved control, refusals, another event, a removed control, delete, the backup, the checkout snapshot |
 | `packages/web/src/lib/editor/__tests__/leg-routes.test.ts` | §7.4: the chosen routes by leg key, a pair's routes, a route's metres and climb, the list with the drawn line, the map's shapes, a draft's shapes |
 | `e2e/course-editor-routes.spec.ts` | §7.4 in the browser: a route drawn and saved, its numbers, the leg and the course read along it, the drawn line chosen back, removal; a draft's keys (Backspace, Enter, Escape). §7.8: alternatives round an out-of-bounds area, the pace, **Use** |
-| `packages/shared/src/route/__tests__/route.test.ts` | §7.6: codes to classes, the default model, slope; the grid's fill, holes, ranks, bridge, barrier, heights, `openDisc`, `nearestPassable`. §7.7: the cost field (distance, a gap, enclosed, slope and the reversed field); alternatives (straight, straightened, round a lake on both sides, a path against thick forest, a hill, the bounds, no way, a crossing point, a control on an obstacle, determinism); at the search's cell size: one route in open terrain, a control on a building or a cliff with a wall between, an uncrossable area thinner than a cell, the cost of a run downhill, a bridge over drawn banks |
+| `packages/shared/src/route/__tests__/route.test.ts` | §7.6: codes to classes, the default model, slope; the grid's fill, holes, ranks, bridge, barrier, heights, `openDisc`, `nearestPassable`. §7.7: the cost field (distance, a gap, enclosed, slope and the reversed field); alternatives (straight, straightened, round a lake on both sides, a path against thick forest, a hill, the bounds, no way, a crossing point, a control on an obstacle, determinism); at the search's cell size: one route in open terrain, a control on a building or a cliff with a wall between, an uncrossable area thinner than a cell, a passage between two buildings, the marks after straightening, a control beside a fence, the cost of a run downhill, a bridge over drawn banks |
 | `packages/shared/src/route/__tests__/leg.test.ts` | §7.6: a document's features by match or source code, a patch-hidden object, the course's out-of-bounds area, a leg's window and cell size |
 | `packages/web/src/lib/route/__tests__/finder.test.ts` | §7.8: the worker's state (a search needs its document), the document sent once and again when it changes, a message the worker cannot take, dispose |
 | `packages/web/src/lib/editor/__tests__/leg-alternatives.test.ts` | §7.8: the pace as typed, the clock, the list's kinds and times, the map's shapes, out-of-bounds objects as obstacles |

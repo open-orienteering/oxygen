@@ -109,8 +109,23 @@ function walkLine(g: RouteGrid, p: ArrayLike<number>, mark: (cell: number) => vo
   }
 }
 
+/** A ring whose mean width is under this many cells is walked along its outline. */
+export const THIN_RING_CELLS = 1.5;
+
+/** A ring's mean width, paper mm: twice its area over its perimeter. */
+export function meanWidthMm(ring: ArrayLike<number>): number {
+  let area = 0, perimeter = 0;
+  const n = Math.floor(ring.length / 2);
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    area += ring[2 * i] * ring[2 * j + 1] - ring[2 * j] * ring[2 * i + 1];
+    perimeter += Math.hypot(ring[2 * j] - ring[2 * i], ring[2 * j + 1] - ring[2 * i + 1]);
+  }
+  return perimeter > 0 ? Math.abs(area) / perimeter : 0;
+}
+
 /**
- * Areas first, by rank, the uncrossable ones with their outlines; then
+ * Areas first, by rank, the thin uncrossable ones with their outlines; then
  * ways (a path opens everything but the hard uncrossable: over water it
  * is a bridge); then hard uncrossable lines, which nothing opens.
  */
@@ -120,13 +135,14 @@ export function buildRouteGrid(input: RouteGridInput): RouteGrid {
   const rows = Math.max(1, Math.ceil((bounds.maxY - bounds.minY) / cellMm));
   const g: RouteGrid = { x0: bounds.minX, y0: bounds.minY, cellMm, cols, rows, groundMPerMm: input.groundMPerMm, cls: new Uint8Array(cols * rows), heights: null };
   for (const f of input.features) if (f.kind === "area") fillArea(g, f.parts, f.cls);
-  // An uncrossable area's outline too: one narrower than a cell holds no cell centre and would not be on the grid.
-  // Uncrossable water's bank lines are of that kind as well: a way laid over them afterwards is still a bridge.
+  // A thin uncrossable ring's outline too: one narrower than a cell holds no cell centre and would not be on the
+  // grid. A wide one is its filled cells alone, so the passage between two buildings stays as wide as it is drawn.
+  // Uncrossable water's bank lines are walked as well: a way laid over them afterwards is still a bridge.
   const rank = (i: number, cls: number) => { if (CLASS_PRIORITY[cls] >= CLASS_PRIORITY[g.cls[i]]) g.cls[i] = cls; };
   for (const f of input.features) {
     if (!isBlockedClass(f.cls) || (f.kind === "line" && f.cls !== BLOCKED_SOFT)) continue;
     for (const p of f.parts) {
-      if (p.length < 4) continue;
+      if (p.length < 4 || (f.kind === "area" && meanWidthMm(p) >= THIN_RING_CELLS * cellMm)) continue;
       walkLine(g, f.kind === "area" ? [...Array.from(p), p[0], p[1]] : p, (i) => rank(i, f.cls));
     }
   }
@@ -163,15 +179,20 @@ export function openDisc(g: RouteGrid, at: RoutePoint, radiusMm: number, cls: nu
   }
 }
 
-/** The passable cell nearest to `cell` (itself when passable), searching rings up to `maxRings` cells out; -1 when none. */
-export function nearestPassable(g: RouteGrid, cell: number, maxRings = 12): number {
+/**
+ * The passable cell nearest to `cell` (itself when passable), searching rings up to `maxRings` cells out; -1 when
+ * none. With `at`, the point in `cell` that is meant, the nearest is measured from the point: a control beside a
+ * fence in the fence's cell is run to from its own side.
+ */
+export function nearestPassable(g: RouteGrid, cell: number, maxRings = 12, at?: RoutePoint): number {
   if (!isBlockedClass(g.cls[cell])) return cell;
-  const c0 = cell % g.cols, r0 = Math.floor(cell / g.cols);
+  const c0 = at ? (at.x - g.x0) / g.cellMm - 0.5 : cell % g.cols, r0 = at ? (at.y - g.y0) / g.cellMm - 0.5 : Math.floor(cell / g.cols);
+  const cc = cell % g.cols, rc = Math.floor(cell / g.cols);
   for (let ring = 1; ring <= maxRings; ring++) {
     let best = -1, bestD = Infinity;
-    for (let r = r0 - ring; r <= r0 + ring; r++) {
-      for (let c = c0 - ring; c <= c0 + ring; c++) {
-        if (Math.max(Math.abs(r - r0), Math.abs(c - c0)) !== ring || c < 0 || r < 0 || c >= g.cols || r >= g.rows) continue;
+    for (let r = rc - ring; r <= rc + ring; r++) {
+      for (let c = cc - ring; c <= cc + ring; c++) {
+        if (Math.max(Math.abs(r - rc), Math.abs(c - cc)) !== ring || c < 0 || r < 0 || c >= g.cols || r >= g.rows) continue;
         const i = r * g.cols + c;
         const d = (r - r0) ** 2 + (c - c0) ** 2;
         if (!isBlockedClass(g.cls[i]) && d < bestD) { best = i; bestD = d; }
