@@ -1,6 +1,6 @@
 /**
  * SQL for the Demo Competition's map in docs/screenshots/fixtures/showcase.sql
- * (docs/demo.md): the event's `map_files` row, which names the demo map's
+ * (docs/ops/demo.md): the event's `map_files` row, which names the demo map's
  * source by hash and leaves the document to the re-match that
  * `scripts/load-showcase.sh` runs after loading (docs/map-storage.md
  * §6.9, `unpinned`). The fixture carries no map bytes: the loader inserts

@@ -1,6 +1,6 @@
 /**
  * Red exit: a run that matches another variant (slice F, row F6c; user
- * answer 3, 2026-11-07; docs/registration-and-readout.md §4f, §5c;
+ * answer 3, 2026-11-07; docs/system/registration-and-readout.md §4f, §5c;
  * docs/course-controls-and-matching.md "Forked courses and variants"):
  *
  *   - performReadout names the pooled variants the punches validate fully

@@ -275,7 +275,7 @@ next to the document route. The original file as uploaded, for the
 people who may take it out of Oxygen (07 §6.1). Unlike a document it is
 the club's property, not a rendered view, so it follows today's
 download rules (`course.downloadMap`, `clubMap.download`,
-`docs/authentication.md`) rather than the document predicate, and it is
+`docs/system/authentication.md`) rather than the document predicate, and it is
 not cached.
 
 | Condition | Status | Body / headers |
@@ -495,7 +495,7 @@ fields come from `report.north`.
 
 **Every event.** The data readers never read `events.map_pipeline`:
 the switch never gated imports, and since E3 it gates nothing
-(`map-pipeline-switch.md`, history note) — every event draws and prints
+(`history/map-pipeline-switch.md`, history note) — every event draws and prints
 its pinned document.
 
 **No pin, no map.** A reader whose event has no `map_files` row, or
@@ -681,7 +681,7 @@ the decoded document. 2026-11-14, 16-core machine:
 
 On club-full the added peak grows about 14 B per graph cell above a
 ~190 MB floor, so a document at the 60 M budget adds about 1.1 GB. On
-the Cloud Run sizing (4 GiB, `deploy-gcp-cloud-run.md`) one derive
+the Cloud Run sizing (4 GiB, `ops/deploy-gcp-cloud-run.md`) one derive
 beside the worst recorded print (Club-full, 2.6 GB for the whole
 process) is about 3.7 GB, under the limit;
 the import worker never overlaps the job's own derive, but a lazy derive
@@ -819,7 +819,7 @@ transferred, not copied.
 tiles): added peak 23–35 MB on the crops and the sprint, 198 MB on
 club-2026, 1010 MB on club-full (41 s), at the 2 m overview — the order
 of the contour derive's (840 MB on club-full) and serialised with it, so
-the 4 GiB sizing (`deploy-gcp-cloud-run.md`) holds. The windows read
+the 4 GiB sizing (`ops/deploy-gcp-cloud-run.md`) holds. The windows read
 (up to 64 M cells, 256 MB, refused above) are on the main thread until
 they are transferred to the worker.
 
@@ -1210,7 +1210,7 @@ and with `club_map_files` its write-through to every mutation above.
   instance admin; `download` for the version's `uploaded_by` or an admin
   — the club clause of the source route (§4.4); `AUTH_MODE=off` skips
   both. Upload and rename carry no owner check, as before
-  (`club-library.md`).
+  (`system/club-library.md`).
 - **No version yet.** A series whose import failed, or is still running
   past the hold, is listed with `version: null` and its `importJob`.
   `download` and `useClubMap` answer `PRECONDITION_FAILED`: an event pins
@@ -1253,7 +1253,7 @@ series copied from the row, an import job for version 1; the event row's
 Settings → Maintenance → **Map documents** (`mapImport.backfillStatus` /
 `backfillStart`) and `pnpm map:backfill`. Production ran it for slice A
 and E0 verified every live row sourced and pinned
-(`docs/release-slice-e.md` §0).
+(`docs/releases/slice-e.md` §0).
 
 E5 removed it with the tables it walked: there is no `file_data` left to
 read. Its two remaining uses moved:
@@ -1361,7 +1361,7 @@ row with a `source_hash` but no `document_hash` is an item with reason
 The Demo Competition fixture relies on `unpinned`: its `map_files` row
 names the demo map's source and no document, and `scripts/load-showcase.sh`
 runs `map-rematch --event demo_competition` after loading it
-(`docs/demo.md`, "How the fixture holds the map").
+(`docs/ops/demo.md`, "How the fixture holds the map").
 
 A club edition's document is its file's latest import (§6.4), so all
 four move it. The colour setting is the map's own, judged per pin (all
@@ -1507,7 +1507,7 @@ worker holds the decoded arrays for the session.
 ### 7.2 Venue checkout snapshot
 
 07 §9.2. A venue box that checks an event out (`lease.checkout`,
-`docs/offline-architecture.md` "The lease") receives the event's map rows
+`docs/system/offline-architecture.md` "The lease") receives the event's map rows
 and the blobs they pin, so the box answers `/api/map-documents/:hash` for
 its kiosk and stations from its own tables, under the unchanged §4.2
 predicate evaluated against its own event copy.
@@ -1629,7 +1629,7 @@ lease, and the event is not checked out. A re-checkout replaces the
 **Writes during a lease.** Layout and print data stay cloud-owned:
 `courseMap.`, `mapTemplate.`, `layout.`, `graphics.` and `courseObject.`
 mutations on a box are forwarded to the cloud, and offline answer the
-typed 412 (`docs/offline-architecture.md` "Non-critical data"), so
+typed 412 (`docs/system/offline-architecture.md` "Non-critical data"), so
 nothing edited on a box is lost at checkin. Their reads (`courseMap.list`,
 `resolveSheet`, `courseObject.list`, the print routes) answer from the
 box's copy, which follows the cloud's (row G19, "Following the cloud
@@ -1664,7 +1664,7 @@ event's lease and the cloud answers, it makes its copy of the event's
 cloud-owned map rows equal to what a fresh checkout would hold:
 
 - **When.** On the settings cadence (`SYNC_SETTINGS_REFRESH_MS`, default
-  5 min, `docs/offline-architecture.md` "The lease"), right after the
+  5 min, `docs/system/offline-architecture.md` "The lease"), right after the
   settings refresh, for every event whose active lease this node holds;
   and once right after the box's forwarder gets a 2xx from the cloud for
   a forwarded `courseMap.`, `mapTemplate.`, `layout.`, `graphics.`,
@@ -1749,7 +1749,7 @@ cloud-owned map rows equal to what a fresh checkout would hold:
   box, including rows the box wrote itself outside the forwarder: a
   course object `course.importCourses` wrote on the box, or a map
   uploaded on the box (map uploads are cloud-owned,
-  `docs/offline-architecture.md` "Non-critical data", but not forwarded)
+  `docs/system/offline-architecture.md` "Non-critical data", but not forwarded)
   lasts until the next refresh (Pending, §9).
 - **Not touched.** Every race-critical table (`controls`, `courses`,
   `course_controls`, `classes` but its two layout columns,
@@ -1782,7 +1782,7 @@ fails on a class with a print template, as it did before G18.
 the event's map pipeline: it was pinned on upload for `legacy` events too
 (09 §3: the switch gated reads, never imports), so a box checked out
 before E3 already holds what the viewer reads. The retired per-event
-switch (`events.map_pipeline`, `docs/map-pipeline-switch.md`) was dropped
+switch (`events.map_pipeline`, `docs/history/map-pipeline-switch.md`) was dropped
 in E5. A *new* document — a map re-imported on the cloud during the
 lease — reaches the box with its source at the next refresh (row G19,
 above); offline the box keeps serving the document it holds.
@@ -1792,7 +1792,7 @@ the venue never writes them.
 
 ### 7.3 Per-event dump
 
-07 §10. `GET /api/backup/event` (`docs/backup-restore.md`) emits three
+07 §10. `GET /api/backup/event` (`docs/ops/backup-restore.md`) emits three
 more `\copy` sections, before `map_files` (the blobs in FK order):
 
 | Section | Rows |
@@ -1834,7 +1834,7 @@ merge as on the venue (§7.2: newer `decided_at` wins, nothing deleted;
 `decided_by` kept only when that user exists). With an
 event id it then loads the `map_files` section with `event_id` rewritten
 and `club_map_version_id` kept only when that version exists. The rest
-of the dump restores as before (`docs/backup-restore.md`).
+of the dump restores as before (`docs/ops/backup-restore.md`).
 
 **A dump written before v0.6.1** has `file_data` (and, before the
 pipeline, no hashes and no blob sections) in its `map_files` section, a
@@ -1953,7 +1953,7 @@ document candidates were already gone.
 
 ### 8.3 Schedule
 
-A leader-lease singleton (`docs/background-jobs-lease.md`): the
+A leader-lease singleton (`docs/system/background-jobs-lease.md`): the
 supervisor's `reconcile()` on the lease holder calls
 `maybeStartStorageGc()`, which starts a run in the background (the
 reconcile loop is not held up) when it is due:
@@ -2062,13 +2062,13 @@ review). Each lands with its own section here and its own tests.
 | Integration (api) | `packages/api/src/__tests__/integration/map-crt.test.ts` | `exportCrt` header only before any decision, the four auto matches on `includeMatches` (three until A12 added the framed 603 text to the fixture), a decision with its `# fp` from both documents of the source, predicate (stranger 403, anonymous 401, kiosk key reads, 404, bad hash); `importCrt` of the export after a `reset` writes the same row and yields the same document as `decide` (unpinned), `# keep` recorded and exported, dry run writes nothing, unappliable lines reported with no row and no job, the full-table round trip records nothing; stranger / anonymous / kiosk refused, 404, over 1 MiB 400 |
 | Unit (api) | `packages/api/src/__tests__/map-rematch-cli.test.ts` | `staleReason` matrix, CLI flags (parsing, either spelling, bad values), plan / item / summary lines |
 | Integration (api) | `packages/api/src/__tests__/integration/map-rematch.test.ts` | an `ocad-3` / `none` row pinned by an event and a club version is planned (both, `--event` scope), dry run writes nothing, a run moves both pins to the current document, second run empty; a decision change re-matches the club edition only; a live event's sourced row without a document is planned `unpinned` and imported, a soft-deleted event's is not (E5); the event's map patch follows the re-match (a hide kept on the new pin) and the sweep re-keys a row left dormant (`patch` items; `docs/map-patches.md` §4.4, G11) |
-| Integration (api) | `packages/api/src/__tests__/integration/showcase-fixture.test.ts` | the Demo Competition fixture loaded as `load-showcase.sh` loads it (source row from the committed `.omap`, `showcase.sql`, re-match): the `unpinned` row is imported and pinned with its quick-access columns, `course.mapMetadata` answers, positioned controls get `lat` / `lng` inside the pin's bounds, courses read their controls with the stored lengths, a second load gives the same pin (`docs/demo.md`) |
+| Integration (api) | `packages/api/src/__tests__/integration/showcase-fixture.test.ts` | the Demo Competition fixture loaded as `load-showcase.sh` loads it (source row from the committed `.omap`, `showcase.sql`, re-match): the `unpinned` row is imported and pinned with its quick-access columns, `course.mapMetadata` answers, positioned controls get `lat` / `lng` inside the pin's bounds, courses read their controls with the stored lengths, a second load gives the same pin (`docs/ops/demo.md`) |
 | Unit (api) | `packages/api/src/__tests__/club-map-library.test.ts` | `projectClubMapRow` (series settings, version label → source name fallback, header scale → legacy scale, legacy raster metadata, version-less row with its job and the job's source and no preview URL, nulls, job dropped once a version exists), `canRemoveClubMap` / `canDownloadClubMapVersion` matrices, `latestVersionOrRefuse` → `PRECONDITION_FAILED`; `review` counts from the import report's `matching.symbols`, null without a matched document; a promoted version's `fileName` is its source's, not its label (G12b) |
 | Integration (api) | `packages/api/src/__tests__/integration/club-maps.test.ts` | chunked upload keyed by the series UUID, list carries version / hashes / thumbnail URL / source facts, staleness from the version's report, rename, download by version source; a version-less series lists no north and no preview URL; an unimportable upload (OCAD magic, garbage after) listed with a failed job and no preview URL, its bytes kept as the source, `download` / `useClubMap` `PRECONDITION_FAILED`; unknown id `NOT_FOUND`, malformed `BAD_REQUEST`; remove stranger `FORBIDDEN`, creator ok, versions cascade; `setRotation` on the series → event copy (columns from the pin, `length_source` stays `derived`); an event upload keeps ScalePar (columns equal to the oracle); an unpinned row answers with no document and no north; `course.downloadMap` returns the source's bytes; download stranger `FORBIDDEN`; club-library copy and backup gates; the listed `review` equals the version document's report counts |
 | Unit (web) | `packages/web/src/lib/__tests__/map-document-cache.test.ts` | §7.1: route regex (documents, not previews), URL without query and the two headers, one request per hash and the same bytes, bounded memory, 401/403/404/5xx/offline/unreadable → kinds and not cached, `storage.persist()` once and absent |
 | Unit (web) | `packages/web/src/lib/__tests__/map-document-cache.test.ts` (G17) | §7.1 "App-code copy", "Prefetch", "Offline ready": a fetched document put into `map-documents` under the hash URL, once; read back when the request fails without a response or answers non-200 while offline, else `offline`; a 403 online stays `unauthorised`; prefetch stores without decoding, once per hash, not when stored, skipped offline and with `saveData`, retried after a failure; `storagePersisted` and its absence |
 | E2E | `e2e/course-maps.spec.ts` "offline print: the job kept on the device" (G17) | opening the event stores its document in `map-documents` before any map is shown (the dev server has no service worker: the app-code copy); the sync panel's *Maps on this device* lines after *Make maps available offline* |
-| E2E (preview build) | `e2e/offline-print.preview.spec.ts` (G29; project `preview`, `docs/e2e-sharding.md` "The preview stack") | §7.1 "Service worker" on the production bundle: on a controlled page *Make maps available offline* leaves the document in `map-documents` and the three faces in `map-fonts`; after a reload and `context.setOffline(true)` the reloaded page's document and face requests are answered by the service worker (`fromServiceWorker`, 200) without it fetching them from the network (`request.serviceWorker()`), the offline export prints with them, and an uncached `.ttf` is refused |
+| E2E (preview build) | `e2e/offline-print.preview.spec.ts` (G29; project `preview`, `docs/dev/e2e-sharding.md` "The preview stack") | §7.1 "Service worker" on the production bundle: on a controlled page *Make maps available offline* leaves the document in `map-documents` and the three faces in `map-fonts`; after a reload and `context.setOffline(true)` the reloaded page's document and face requests are answered by the service worker (`fromServiceWorker`, 200) without it fetching them from the network (`request.serviceWorker()`), the offline export prints with them, and an uncached `.ttf` is refused |
 | E2E | `e2e/map-vector-layer.spec.ts` | §7.1 through the viewer: the pinned document by hash, no query, `x-event-id` |
 | Unit (web) | `packages/web/src/__tests__/map-upload.test.ts` | a small file is one chunk (no base64 path, E5), init → chunks → finalise call order and progress, per-chunk retry on 5xx, no retry on 4xx, `x-event-id` only for event uploads |
 | Unit (api) | `packages/api/src/__tests__/map-previews.test.ts` | preview request parsing (`:idx`, `.png`, library code, hash), ETags and `If-None-Match`, library preview of an entry and a variant, 404 for unknown code / other version, per-instance cache hit |

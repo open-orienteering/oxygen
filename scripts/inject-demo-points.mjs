@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Make the Demo Competition's map (docs/demo.md, "The map"): add the
+ * Make the Demo Competition's map (docs/ops/demo.md, "The map"): add the
  * invented point features to the CC0 Puit de Laven map.
  *
  *   node scripts/inject-demo-points.mjs [in.omap] [out.omap] [seed]

@@ -1,5 +1,5 @@
 /**
- * The Demo Competition's control positions (docs/demo.md, "Controls on
+ * The Demo Competition's control positions (docs/ops/demo.md, "Controls on
  * the demo map"). The race data — controls, courses, runners, punches —
  * comes from a real event; only the control positions belong to the demo
  * map. They live in `docs/screenshots/fixtures/showcase-controls.json`,

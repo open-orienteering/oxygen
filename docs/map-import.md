@@ -369,7 +369,7 @@ Club-full has 23 north-oriented point symbols with rotated objects — its
 every object and are `flags 1` in Club-2026; the other corpus maps have
 none. `ocad-14` and earlier drew them north-up: six of the 23 diverged
 15–36 % from the legacy in B9's parity tool, none does since
-(`docs/map-rendering.md` §6.4, `docs/bugfix-ocad-point-rotation.md`). Objects with `ang` 0 are unaffected
+(`docs/map-rendering.md` §6.4, `docs/bugfixes/ocad-point-rotation.md`). Objects with `ang` 0 are unaffected
 by the change; the matcher (stage 6) sees the corrected orientation, so a
 promoted symbol meets a north-oriented library entry with the
 fingerprint's `north-oriented` factor (0.8 in `fingerprint.ts`;

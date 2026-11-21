@@ -5,7 +5,7 @@
 #
 # The API listens on :3001 over plain HTTP. No TLS certificate is needed:
 # Chrome 142+ Local Network Access lets the HTTPS cloud PWA call the box
-# after a one-time permission prompt (see docs/venue-runbook.md).
+# after a one-time permission prompt (see docs/ops/venue-runbook.md).
 #
 # Required environment (put them in a `.env.venue` next to this file):
 #   VENUE_NODE_ID       e.g. "venue-kolmarden-1" — the journal station id

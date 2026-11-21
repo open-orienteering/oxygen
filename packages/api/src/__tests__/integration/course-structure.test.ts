@@ -255,7 +255,7 @@ describe("concurrency (course-layer.md §7)", () => {
   });
 
   it("a stale token on a course with a variation group is a CONFLICT naming the group by its id, not a 500", async () => {
-    // docs/bugfix-editor-overlapping-course-writes.md: the group's id reached the uuid lookup of the differing sites.
+    // docs/bugfixes/editor-overlapping-course-writes.md: the group's id reached the uuid lookup of the differing sites.
     const { id } = await caller.course.create({ name: "Race variation" });
     const group = (b: number[]) => ({
       version: 1 as const, id: "s", orderMode: "ordered" as const,

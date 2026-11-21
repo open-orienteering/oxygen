@@ -1,0 +1,25 @@
+name: Doc links
+
+# Every Markdown link and every `docs/…` path in the repository must resolve
+# (scripts/check-doc-links.mjs, AGENTS.md §10). Runs on every change,
+# docs-only ones included: ci.yml skips those, and they are where links
+# break. Needs no install: the script uses only Node built-ins and git.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  links:
+    name: Check doc links
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+      - run: node scripts/check-doc-links.mjs

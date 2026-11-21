@@ -9,7 +9,7 @@
  * draws them, §5.4 "Overlay"), so they are passed as plain circles and
  * lose to any layer object at the same point. Closed course objects hit by
  * their outline only (`UiArea`): the toner saver covers every control, and a
- * press inside an area pans the map (docs/bugfix-editor-area-press-pans.md).
+ * press inside an area pans the map (docs/bugfixes/editor-area-press-pans.md).
  * An image is hit inside its turned box, below everything else (J7).
  */
 

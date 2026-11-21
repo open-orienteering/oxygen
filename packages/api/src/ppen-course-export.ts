@@ -36,7 +36,7 @@ export interface PpenExportInput extends CourseDataExport {
  * Every *placed* control is exported. Course controls referring to
  * unplaced controls are dropped, matching the IOF exporter.
  *
- * The course structure (row F9; docs/ppen-import-export.md): a variant is
+ * The course structure (row F9; docs/system/ppen-import-export.md): a variant is
  * an ordinary `kind="normal"` course (Purple Pen's own variations are not
  * written — the parser refuses them); a bent leg is a `<leg>` with
  * `<bends>`; crossing points are not written (sites nor rows), a map

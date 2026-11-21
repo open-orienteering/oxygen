@@ -1,6 +1,6 @@
 /**
  * Uploading or replacing the event's map, and taking one from the club
- * library (docs/map-storage.md §5, docs/club-library.md "Copy-on-use"). One
+ * library (docs/map-storage.md §5, docs/system/club-library.md "Copy-on-use"). One
  * hook for both places that do it: `MapPanel`'s drop zone (no map yet) and the
  * course editor's map-info dialog (`pages/editor/MapInfoDialog.tsx`, P6). Each
  * caller has its own state (progress, error, the north-lines notice, the

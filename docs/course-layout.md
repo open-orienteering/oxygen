@@ -322,7 +322,7 @@ shape — map text, 709 areas, the course — on the canvas and in the PDF
 alike, its white the map layer's top row (P1). A white-out outside of
 any size — a page-anchored shape or a toner saver — may cross the frame
 from any side or lie beyond it: it hides only what is outside its shape,
-on the canvas as in the PDF (P7, `docs/bugfix-whiteout-layout.md`). A
+on the canvas as in the PDF (P7, `docs/bugfixes/whiteout-layout.md`). A
 plain white-out is a single ring and was never affected.
 
 With `V`: a click selects an object of the scope, topmost first

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * The Demo Competition's control positions (docs/demo.md, "Controls on
+ * The Demo Competition's control positions (docs/ops/demo.md, "Controls on
  * the demo map"):
  *
  *   node scripts/showcase-controls.mjs fit <source.sql>

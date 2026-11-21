@@ -1,5 +1,5 @@
 /**
- * Cloud-owned tRPC mutations (docs/offline-architecture.md "Ownership
+ * Cloud-owned tRPC mutations (docs/system/offline-architecture.md "Ownership
  * follows the journal").
  *
  * On a venue node these are forwarded to the cloud and executed there

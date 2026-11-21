@@ -14,11 +14,11 @@
  * is sent.
  *
  * The receiving node is the single serialization point for its writes (see the
- * per-event lease in docs/offline-architecture.md), so the per-type
+ * per-event lease in docs/system/offline-architecture.md), so the per-type
  * arrival-order guards below are sufficient; append-only types (`card.read`,
  * `punch.recorded`) are guarded by dedupe keys instead and apply anywhere.
  * This endpoint doubles as the node-to-node journal-shipping sink (pivot
- * Step 3 in docs/future-architecture.md).
+ * Step 3 in docs/history/future-architecture.md).
  */
 
 import { z } from "zod";

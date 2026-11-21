@@ -1,5 +1,5 @@
 /**
- * The per-event dump script (docs/backup-restore.md, docs/map-storage.md
+ * The per-event dump script (docs/ops/backup-restore.md, docs/map-storage.md
  * §7.3): table order, per-table filters, and splitting a dump back into
  * its sections.
  */

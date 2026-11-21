@@ -407,7 +407,7 @@ user review). The flag reaches every consumer of the layer:
   box diagonal, `2·linePad` and `0.5·labelSize` (the soft clearance) of
   the centre — in input order, so the result is bit-identical to testing
   every segment at a fraction of the cost (F20,
-  `docs/bugfix-course-drag-redraw.md`; ~40 ms instead of ~350 ms on 25
+  `docs/bugfixes/course-drag-redraw.md`; ~40 ms instead of ~350 ms on 25
   controls with smooth bends). A segment with a NaN coordinate is kept
   for the tests to judge, as before.
 - **Manual positions**: `labelOffsets[siteId]` (one course only) is the
@@ -572,7 +572,7 @@ course 25 mm inside). The page layer (page objects, the description
 block) comes after the map layer and stays on top. At upper white, below
 upper purple and the object rows, the ring let 709 areas and text show
 through on screen and in print (feedback 2026-11-06 item 2;
-`docs/bugfix-toner-saver-draw-order.md`). A page-anchored
+`docs/bugfixes/toner-saver-draw-order.md`). A page-anchored
 `whiteoutInverted` is the page layer's and keeps upper white
 (`course-print.md` §4.4).
 
@@ -586,7 +586,7 @@ with the crossing resolved (`map-rendering.md` §5.2 fill row). Before
 P7 the GL canvas filled the whole frame white when the shape's first
 vertex lay outside the window, or left a white slash when the shape
 crossed an edge with its first vertex inside
-(`docs/bugfix-whiteout-layout.md`).
+(`docs/bugfixes/whiteout-layout.md`).
 
 Path vertices keep their Bézier handles (the legacy `pathData`'s
 construction, deleted in E4c);
@@ -985,7 +985,7 @@ stays allowed — the legacy shape), and `control.update { kind: "start" /
 "finish" }` on a row without a numeric code allocates one the same way.
 The code travels in `control.upserted` with the row. So a new start's
 public id is its code, and the seq-as-id that once met a punch code (a
-start with seq 80 beside control 80, `bugfix-first-leg-from-start.md`)
+start with seq 80 beside control 80, `bugfixes/first-leg-from-start.md`)
 is not handed out any more. **Existing code-less starts and finishes are
 left as they are** (no backfill; user decision): they keep the seq
 fallback, and their seq counts as held. **Display:** a start or finish
@@ -1051,7 +1051,7 @@ alone (the XML carries none). Until E5 that carry applied only over an
 it applies to every existing course, so a gap-less file never clears
 authored gaps — the rule `circle_gaps` already followed (decision log
 2026-11-07, E5). (The older "keep the OCD geometry unless the controls
-drifted > 30 m" rule never fired — `bugfix-stale-ocd-course-geometry.md`;
+drifted > 30 m" rule never fired — `bugfixes/stale-ocd-course-geometry.md`;
 E6 deleted `isOcdGeometryStaleVsXml`.) **PPen `<gaps>` are not read**
 (no fixture, no research record; Pending).
 
@@ -1073,7 +1073,7 @@ start's seq is imported as before (legacy rows are left as they are,
 §6.3).
 
 **The structure from IOF and Purple Pen files** (row F9;
-`iof-coursedata-export.md` "Importing it back", `ppen-import-export.md`).
+`system/iof-coursedata-export.md` "Importing it back", `system/ppen-import-export.md`).
 Each item's leg is the file's leg props joined (`importedLegProps`,
 `course-import-structure.ts`): the gaps above (OCD), a Purple Pen
 `<leg>`'s **bends** (drawn into the parser's leg feature, so the import
@@ -1113,13 +1113,13 @@ again). Import-time `differing` is `null`: `basePayload` reads
 a `reference.imported` one (Pending).
 
 **Backfill** (research 09 §5) — **retired in E6**: E0 ran it on prod
-(every live course has a structure, `release-slice-e.md` §0) and every
+(every live course has a structure, `releases/slice-e.md` §0) and every
 write path stores one, so the module, its CLI, the Maintenance card,
 `event.structureBackfill*`, their tests and the E2E spec are deleted. A
 course still without a structure reads from its columns (§6.2), but an
 `ocd` course's authored gaps, cuts and objects that only its GeoJSON
 holds are not recovered any more: an instance upgrading from before
-slice D runs v0.5.0's backfill first (`release-slice-e.md`). What it
+slice D runs v0.5.0's backfill first (`releases/slice-e.md`). What it
 did, as the record: `pnpm course:backfill-structure
 [--event <nameId>] [--dry-run] [--out <dir>]` and the Maintenance tab's
 "Course structures" card (`event.structureBackfillStatus` / `…Start`,
@@ -1445,7 +1445,7 @@ control's public id, its first code or else its `seq`, absent when free):
 Writes are not lease-guarded: objects are cloud-owned non-critical data
 (08 §4.8), like the sheets. Since G18 `courseObject.` mutations on a
 venue box are forwarded to the cloud (typed 412 offline,
-`offline-architecture.md` "Non-critical data"); before, they ran on the
+`system/offline-architecture.md` "Non-critical data"); before, they ran on the
 box and were lost at checkin. The box's copy follows the cloud's (row
 G19, `map-storage.md` §7.2 "Following the cloud during a lease"): at the
 settings cadence and right after a forwarded write.
@@ -1976,7 +1976,7 @@ three slice-F site kinds are drawn at once.
   sheet its group's, `course-layout.md` §8). A course sheet, a class sheet and Class view never set it.
 - **Description rows**: a leg through a crossing point derives a 13.3
   row (13.4 with `section`) after the control the leg leaves
-  (`control-descriptions-and-editor-geometry.md` "Course-level
+  (`system/control-descriptions-and-editor-geometry.md` "Course-level
   instructions").
 - **Print**: a course sheet's `sites` include the crossing points its
   legs run through (`courseInputOfLayout` reads them from the event's
@@ -2018,7 +2018,7 @@ drawing — 08 §7's fixture had numbering restart per section.
 - **The description block** of every part carries the **whole course**
   (answer 2): header, rows, `{controls}` and the derived **13.5** row
   after each exchange control (`buildDescriptionSheet { exchanges }`,
-  `control-descriptions-and-editor-geometry.md` "Derived rows").
+  `system/control-descriptions-and-editor-geometry.md` "Derived rows").
 - **ISOM 715** (continuing point after a map exchange, 03 §2.4) is not
   drawn: answer 2 makes the exchange a numbered control circle on both
   parts (decided on the user's standing instruction 2026-11-07, for
@@ -2038,7 +2038,7 @@ linear course for every reader — timing (`performReadout` reads
 `runner.courseId ?? class.courseId`), results, the Eventor upload, the
 IOF / Purple Pen export (where the root is not written: each variant is a
 `<Course>` with the root's name as its `CourseFamily`, a class on the root
-assigned to each — F9, `iof-coursedata-export.md` "Variants"), print, the kiosk — and read-only for every
+assigned to each — F9, `system/iof-coursedata-export.md` "Variants"), print, the kiosk — and read-only for every
 writer. It stays in every course list (`course.list`); a consumer that
 must not offer it filters on `parentCourseId` (decided on the user's
 standing instruction, 2026-11-07, for review). Section numbering keeps
@@ -2368,7 +2368,7 @@ label.
 | unit | `structure.test.ts` "takes a bend's handles", `derive.test.ts` "curved bends", `checks.test.ts` "test the flattened curve" | §6.1 / §10.1 / §9.2 (F13): handles parse in the column and wire forms, corners byte-equal, a non-finite or half handle refused, `structureDiff` sees a handle; the leg's `points` the flattened curve with the anchors, clipped at both sites; a stored gap at mid-length sits at the apex, not the chord's midpoint; a cut at the apex, none beside the chord; a crossing joined on the curved segment as a corner with the neighbours' handles kept, turned along the curve; a curve pulled through a building reports it where the corners do not; `VARIATION_UNBALANCED` along a looping handle |
 | pass-stream + golden | `scenes.test.ts` "course-legs-curved", `e2e/__golden__/map-gl/course-legs-curved.png` | §10.1 (F13): a curved 705 stroke through the curve's mid-point within 5 µm and its bend vertex, far from the chord; a curved 707 in upper purple; a crossing point on a curved leg, turned along it; snapshot, reference raster, WebGL2 and PDF tiers |
 | unit / integration | `course-geometry.test.ts` "curved legs", `integration/control-editor.test.ts` "course.setStructure with handles", `integration/course-export.test.ts` "a curved leg" | §4.1 (F13): the length along the curve (corners measure their own); stored `legs` through `setStructure`, the handles read back whole by `course.list`; IOF `LegLength`s / `Length` = stored; Purple Pen's flattened bends within a metre |
-| unit | `ppen-course-export.test.ts` "curved legs" | §6.4 / `ppen-import-export.md` (F13, answer Q3): a corner leg writes what it did; a curved leg's `<location>` points within 0.1 mm of the curve, its bend among them, no handles; the round trip as corners within 0.1 mm and a metre |
+| unit | `ppen-course-export.test.ts` "curved legs" | §6.4 / `system/ppen-import-export.md` (F13, answer Q3): a corner leg writes what it did; a curved leg's `<location>` points within 0.1 mm of the curve, its bend among them, no handles; the round trip as corners within 0.1 mm and a metre |
 | unit (web) | `editor/__tests__/bends.test.ts` "curved bends", `leg-length.test.ts` "curved legs", `course-editor.test.ts` "measures a curved leg" | §10.1 (F13): the editor's `legPolyline` is the layer's; *Add bend here* on a curve lands between its bends as a corner; a moved bend keeps its handles; the label and `sequenceLegMeters` along the curve; a dragged control's leg out reversed with its handles swapped |
 | E2E | `e2e/course-editor-legs.spec.ts` "F13: Bézier bends" | §10.1 on screen and in print: a curved leg written over tRPC reads back whole, its drawn pieces through the bend, purple at the apex and none at the chord's midpoint, the leg's metres longer than the chord, `maps.pdf` one page |
 | unit | `derive.test.ts` | legs and clearances, circles in the way, unpositioned sites, automatic vs authored gaps, the event's auto cuts off (no automatic slits / gaps, authored ones kept, §3.4), authored pieces and bends, free order, all-controls, start rotation, sequence / repeated / code numbers, y-down placement, manual offsets, multi-course |
@@ -2497,7 +2497,7 @@ label.
   `<flagging>` and crossing / map-issue kinds, and OCAD / Purple Pen
   corridors, are not parsed by the importers; no importer writes a
   handle (Purple Pen's bends are corners — a curve goes out flattened at
-  0.1 mm and comes back as corners, `ppen-import-export.md`). No editor
+  0.1 mm and comes back as corners, `system/ppen-import-export.md`). No editor
   gesture writes a handle until F16 (`course-editor.md` §6.7). Map exchanges split a course into parts since F5 (§11).
   Variations are materialised since F6 (§12).
 - **A crossing's section length** (§10.3): 08 §4.3's `section` is a

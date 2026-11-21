@@ -20,7 +20,7 @@
  * fixture carries every column the source table has, so a v0.6.0 database
  * would write columns the E5 migration dropped. The script refuses to run
  * against one. Restore a dump into a scratch database and run
- * `pnpm db:migrate` on it first (docs/demo.md).
+ * `pnpm db:migrate` on it first (docs/ops/demo.md).
  *
  * Transformations:
  *   - events: rename to "Demo Competition" / "demo_competition",
@@ -39,7 +39,7 @@
  *     (`docs/screenshots/fixtures/puit-de-laven-demo.omap`) by its source
  *     hash, with no document: `scripts/load-showcase.sh` inserts the
  *     source from the committed file and the re-match imports and pins it
- *     (scripts/lib/showcase-map.mjs, docs/demo.md "The map"). Only the
+ *     (scripts/lib/showcase-map.mjs, docs/ops/demo.md "The map"). Only the
  *     source row's `uploaded_at` and `rotation_correction` carry over.
  *   - controls / courses: the source event's positions belong to its map,
  *     so after the dump `docs/screenshots/fixtures/showcase-controls.json`

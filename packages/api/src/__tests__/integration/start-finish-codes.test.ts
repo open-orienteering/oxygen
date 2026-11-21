@@ -1,6 +1,6 @@
 /**
  * F32 (docs/course-layer.md §6.3 "Starts and finishes take a code";
- * docs/bugfix-first-leg-from-start.md "Found on the way"): a start or finish
+ * docs/bugfixes/first-leg-from-start.md "Found on the way"): a start or finish
  * created without a code takes the lowest free code in 3–10, then 11–30, so
  * its public id (first code, else seq) never meets another control's code.
  *

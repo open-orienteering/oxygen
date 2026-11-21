@@ -244,7 +244,7 @@ describe("buildCourseDataXml", () => {
 });
 
 /**
- * The slice-F structure in CourseData (row F9; docs/iof-coursedata-export.md
+ * The slice-F structure in CourseData (row F9; docs/system/iof-coursedata-export.md
  * "What ends up in the file"): course families, crossing points, taped
  * routes and the map exchange, and their way back through the parser.
  */

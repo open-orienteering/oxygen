@@ -3,7 +3,7 @@
 # Artifact Registry, Cloud SQL (Postgres, smallest tier, automated
 # backups), the DATABASE_URL secret, and the Cloud Run runtime service
 # account. Idempotent where practical — safe to re-run after a partial
-# failure. See docs/deploy-gcp-cloud-run.md.
+# failure. See docs/ops/deploy-gcp-cloud-run.md.
 set -euo pipefail
 cd "$(dirname "$0")"
 source ./env.sh
@@ -66,7 +66,7 @@ gcloud projects add-iam-policy-binding "$PROJECT_ID" \
 gcloud secrets add-iam-policy-binding oxygen-database-url \
   --member="serviceAccount:${RUNTIME_SA}" --role="roles/secretmanager.secretAccessor" >/dev/null
 
-# Height data (docs/deploy-gcp-cloud-run.md "Height data"): the Geotorget secret is
+# Height data (docs/ops/deploy-gcp-cloud-run.md "Height data"): the Geotorget secret is
 # created by the operator with their own credential, never by this script; once it
 # exists the runtime account may read it. Re-run this script after creating it.
 DEM_SECRET="${DEM_SECRET:-oxygen-geotorget-credentials}"
@@ -76,10 +76,10 @@ if gcloud secrets describe "$DEM_SECRET" >/dev/null 2>&1; then
   echo "── ${DEM_SECRET}: the runtime account may read it."
 else
   echo "── No ${DEM_SECRET} secret: DEM fetch stays off. To enable Lantmäteriet's height"
-  echo "   model, create it yourself (see docs/deploy-gcp-cloud-run.md \"Height data\"),"
+  echo "   model, create it yourself (see docs/ops/deploy-gcp-cloud-run.md \"Height data\"),"
   echo "   then re-run ./provision.sh and ./deploy.sh."
 fi
 
 echo
 echo "Provisioning done. Next: ./deploy.sh edge  (or a vX.Y.Z tag), then enable IAP"
-echo "(see docs/deploy-gcp-cloud-run.md §IAP)."
+echo "(see docs/ops/deploy-gcp-cloud-run.md §IAP)."

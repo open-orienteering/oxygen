@@ -115,7 +115,7 @@ Observations:
   resident set is a handful of buckets, i.e. single-digit megabytes.
 - Compare with today's cold path: `readOcad` + `ocadToSvg` ×2 + resvg per
   tile block, measured in seconds and the subject of
-  `docs/bugfix-map-tile-cold-render-cloud-timeouts.md`.
+  `docs/bugfixes/archive/map-tile-cold-render-cloud-timeouts.md`.
 
 ### 2.3 Tile counts, for scale
 

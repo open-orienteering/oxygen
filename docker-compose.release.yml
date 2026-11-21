@@ -7,7 +7,7 @@
 #     docker compose -f docker-compose.release.yml up -d
 #
 # Tags: stable (last GitHub Release), latest (same as stable), edge (main),
-# sha-<full-commit>. See docs/releases-and-images.md.
+# sha-<full-commit>. See docs/releases/README.md.
 #
 # Development still uses docker-compose.yml / docker-compose.host-db.yml
 # (build from source). Venue boxes still use docker-compose.venue.yml.

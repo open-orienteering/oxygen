@@ -1,5 +1,5 @@
 // Helpers shared by the course editor's spec files (e2e/course-editor*.spec.ts): the editor's spec was one file
-// until it was split along its describes for the CI shards (docs/e2e-sharding.md "CI").
+// until it was split along its describes for the CI shards (docs/dev/e2e-sharding.md "CI").
 import { expect, test, type Page } from "@playwright/test";
 import { clickMap, controlRows, coveredBy, drag, emptyPoint, labelOf, legBetween, legMidpoint, legPieces, newCourse, openEditor, regularCodes, select, site, sites, toPage, viewSettled, type Site } from "./editor";
 import { waitForTrpc } from "./trpc";
@@ -84,7 +84,7 @@ export async function dragTarget(page: Page, from: Pt, avoid: Pt[] = [], clearPx
  * the finish in one row of the fixture's controls, the leg b → finish runs back over a → b and a click on a → b
  * selects the leg drawn on top (F21 flake: "Leg 72 → Mål 1" took the bend, the metres under test never moved).
  * `minChordPx`: a b whose leg is shorter on screen is undone too (F16: a smooth bend's grips are a sixth of the
- * chord from it, and an 88 px leg put them 14.6 px from the bend's handle, docs/bugfix-course-editor-legs-flakes.md).
+ * chord from it, and an 88 px leg put them 14.6 px from the bend's handle, docs/bugfixes/course-editor-legs-flakes.md).
  */
 export async function twoControlCourse(page: Page, prefix: string, opts: { minChordPx?: number } = {}): Promise<{ name: string; a: Site; b: Site }> {
   await openEditor(page);

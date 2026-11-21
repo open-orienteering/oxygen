@@ -117,7 +117,7 @@ outside as an even-odd ring, meridian-tilt rotation of the window.
 What goes:
 
 - **SVG as the intermediate.** Pattern tiles had to be expanded for
-  librsvg (`bugfix-librsvg-pattern-tile-size.md`); `dominant-baseline` is
+  librsvg (`bugfixes/archive/librsvg-pattern-tile-size.md`); `dominant-baseline` is
   not implemented so baselines are computed by hand; fonts are whatever
   the container has; the ink layer is a *second rasterisation of the whole
   map* on top of the first because SVG has no colour-order primitive. The

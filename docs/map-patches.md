@@ -532,7 +532,7 @@ none or its patch is dormant. Offline the box keeps the copy it holds.
 
 `GET /api/backup/event` carries a `map_patches` section directly after
 `map_files` (all columns; a plain event-scoped section, restored with
-`event_id` rewritten as the others, `docs/backup-restore.md`). The
+`event_id` rewritten as the others, `docs/ops/backup-restore.md`). The
 `map_documents` and `map_sources` sections also carry the patch's
 document and its source, so a dormant patch restores too.
 

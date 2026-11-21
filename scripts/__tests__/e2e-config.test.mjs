@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 // Dev servers (3002/5173) and the Docker stack (3001/8080): ports a test
-// run must never use or attach to. docs/bugfix-e2e-reuses-dev-server.md.
+// run must never use or attach to. docs/bugfixes/e2e-reuses-dev-server.md.
 const FORBIDDEN = [3001, 3002, 5173, 8080];
 
 /** The variables that select a stack; stripped so the caller's shell cannot leak into a case. */
@@ -129,7 +129,7 @@ test("every spec file run by more than one project is weighted per project (scri
   assert.equal(weightOf("no-such.spec.ts"), 10);
 });
 
-// G29 (docs/e2e-sharding.md "The preview stack"; course-print.md §8.6 "Delivery"): the production
+// G29 (docs/dev/e2e-sharding.md "The preview stack"; course-print.md §8.6 "Delivery"): the production
 // bundle under `vite preview`, with its service worker, on a port of its own.
 const SHARD_RANGES = [
   [4101, 4106],

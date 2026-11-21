@@ -330,7 +330,7 @@ same pattern as `DrawHelpVisuals.tsx` on the Start-Draw screen.
 When `courses.order_mode = free_order`, the matcher switches from the
 sequential scan above to set membership: every required position must
 still be punched, but order does not matter. See
-[free-order-courses.md](free-order-courses.md) for the full model,
+[system/free-order-courses.md](system/free-order-courses.md) for the full model,
 rendering rules, and IOF `randomOrder` interop.
 
 ## Forked courses and variants
@@ -371,7 +371,7 @@ key. Where it runs:
 | `runner.update` / `bulkUpdate { classId }` (a class change) | clear + `assignVariant` |
 | `class.create` / `update` / `bulkUpdate { courseId }`, `course.importCourses`' class mapping | `syncClassPool` → `reconcileClassVariants` (deals a fresh pool in start order, balanced; clears a runner left on a variant when the class has no pool) |
 | A variant vanishing under re-materialisation (`syncVariants`, `clearRemovedVariants`) | its runners are nulled, then reconciled: dealt one of the remaining pool, null only when the class has none |
-| `events.push` of a station `runner.registered` without `courseId`, or a station `runner.updated { classId }` without `courseId` | the writing node (no lease, or the leaseholder) deals one and journals `runner.updated { courseId }` **after** the ingested entry; a follower deals nothing and waits for the leaseholder's entry (single-allocator rule, `offline-architecture.md`) |
+| `events.push` of a station `runner.registered` without `courseId`, or a station `runner.updated { classId }` without `courseId` | the writing node (no lease, or the leaseholder) deals one and journals `runner.updated { courseId }` **after** the ingested entry; a follower deals nothing and waits for the leaseholder's entry (single-allocator rule, `system/offline-architecture.md`) |
 | Eventor `sync` (re-entry: new entries, class moves) | `reconcileVariants` over the event's classes, once at the end (not journaled, as the sync's runner writes are not) |
 | Test Lab `registerFictionalRunners` / `registerRunners` | `reconcileVariants` |
 
@@ -409,7 +409,7 @@ offline matching uses the runner's variant; a runner registered offline
 has none until the writing node deals one on sync, and is matched
 against the root meanwhile.
 
-**The desk rule** (red exit, F6c; `registration-and-readout.md` §4f,
+**The desk rule** (red exit, F6c; `system/registration-and-readout.md` §4f,
 §5c). When a pooled runner's read is MP, `performReadout` lists in
 `otherVariantMatches` the other pooled variants the punches validate
 fully against (`findMatchingVariants` in `packages/shared/src/readout.ts`:
@@ -476,7 +476,7 @@ through the crossing point) and a `derived` course's `Length` is
 millimetres, not the sum of the rounded legs. Until F9 the export
 recomputed straight, centre to centre, and a bent course exported
 shorter than it stored. A leg through a crossing point keeps its whole
-length on its end row (`iof-coursedata-export.md`). The editor authors
+length on its end row (`system/iof-coursedata-export.md`). The editor authors
 bends since F3 and crossing points since F4.
 
 | Test | Covers |
@@ -578,4 +578,4 @@ features, free-text dimensions, text/rectangle OCAD objects.
 - **Rogaining / score-O** (points, time limit, penalty) and
   CommonControl matching — separate, larger feature. The
   `course_order_mode` enum is designed to grow a `score` value; see
-  [free-order-courses.md](free-order-courses.md).
+  [system/free-order-courses.md](system/free-order-courses.md).

@@ -22,7 +22,7 @@
  * computes the same LPT split into N shards and runs only shard i, on
  * stack i (ports 4100/4200/4300 + i, db <prefix>_i). CI's E2E job is a
  * matrix of N such jobs, one runner each (.github/workflows/ci.yml,
- * docs/e2e-sharding.md "CI"); any one of them replays locally with the
+ * docs/dev/e2e-sharding.md "CI"); any one of them replays locally with the
  * same two variables.
  *
  * Usage:
@@ -38,7 +38,7 @@
  *                                    # (same 4100/4200/4300 default stack as a
  *                                    # selective run, never the dev servers)
  *
- * The preview stack (G29, docs/e2e-sharding.md "The preview stack"): the
+ * The preview stack (G29, docs/dev/e2e-sharding.md "The preview stack"): the
  * production bundle under `vite preview` on :4400, with its service worker,
  * beside the default stack's API :4100, Eventor stub :4300 and db <prefix>.
  * Its specs (`*.preview.spec.ts`) are in no shard; Playwright runs them as
@@ -115,7 +115,7 @@ const PLAN_ONLY = process.argv.includes("--plan");
 const PREVIEW_ONLY = process.argv.includes("--preview");
 const args = process.argv.slice(2).filter((a) => a !== "--plan" && a !== "--preview");
 // Any argument not starting with `-` makes a run selective (unsharded) —
-// so `-g "name"` runs unsharded too (docs/e2e-sharding.md "Commands").
+// so `-g "name"` runs unsharded too (docs/dev/e2e-sharding.md "Commands").
 const hasFileFilter = args.some((a) => !a.startsWith("-"));
 
 /** Playwright flags whose value is the next argument: that value is not a file. */

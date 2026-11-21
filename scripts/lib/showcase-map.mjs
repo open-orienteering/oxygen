@@ -1,5 +1,5 @@
 /**
- * The Demo Competition's map (docs/demo.md, "The map"): the CC0 Puit de
+ * The Demo Competition's map (docs/ops/demo.md, "The map"): the CC0 Puit de
  * Laven map from github.com/dmkaplan2000/orienteering-maps, committed
  * as it was published (`puit-de-laven.omap`), and the demo map made of it
  * by `scripts/inject-demo-points.mjs` (`puit-de-laven-demo.omap`, the

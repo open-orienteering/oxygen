@@ -1068,7 +1068,7 @@ Constants (`buckets.ts`; 04 §6.11):
 | text skip | 4 device px | text whose em (`sizeUm × pxPerUm`) is smaller is not drawn (04 §6.11); `minTextPx` |
 | hatch tint | 1.5 device px | stripes closer than this become a tint of coverage `width / spacing` |
 | `ARRIVAL_REBUILD_MS` | 150 ms | arriving detail rebuilds the visible set at most this often while more drawn detail is pending |
-| arena growth | 1.25× | into a new buffer by re-uploading every live range from the views `put` received; offsets never move. Not `copyBufferSubData`: ANGLE on Adreno copies zeros from a buffer with in-flight draws (`docs/bugfix-adreno-arena-grow.md`) |
+| arena growth | 1.25× | into a new buffer by re-uploading every live range from the views `put` received; offsets never move. Not `copyBufferSubData`: ANGLE on Adreno copies zeros from a buffer with in-flight draws (`docs/bugfixes/adreno-arena-grow.md`) |
 
 **Assignment.** Every object goes, whole, to the cell holding the centre
 of its symbolised bounds (`passBounds`: path bounds + half width × the
@@ -1265,7 +1265,7 @@ renderer, which scissors every colour below `fromColour` to the frame's
 screen box (exact while the page is upright, which Layout mode keeps).
 
 **Engine.** `MapGlEngine.setCourse(input | null)` keeps **one request in
-flight** (F20, `docs/bugfix-course-drag-redraw.md`): with none, it posts
+flight** (F20, `docs/bugfixes/course-drag-redraw.md`): with none, it posts
 the input with a new generation; during one it records the input — the
 latest call wins, `null` included — and posts it when the reply is in, so
 a drag re-derives at the worker's rate, every reply of a posted request is
@@ -1280,7 +1280,7 @@ generation (a failed load, a real worker's `onerror`) rejects the load in
 flight and ends the request in flight, as before F20b. The current reply's part is uploaded under key `C` —
 through `GpuArena.put` like any part, so a grow re-uploads it with the
 rest and nothing goes through `copyBufferSubData`
-(`docs/bugfix-adreno-arena-grow.md`) — and the previous one released;
+(`docs/bugfixes/adreno-arena-grow.md`) — and the previous one released;
 `setAtlas` replaces the mesh texture when the reply carries an atlas.
 The part is **always resident and always drawn**: appended to the
 visible set after the drawn cells and the large bucket at every zoom,
@@ -1975,7 +1975,7 @@ already forwarded).
 panel = no map ? upload prompt : documentHash ≠ null ? viewer (vector layer) : import state
 ```
 
-Since E3 there is no per-event switch (`docs/map-pipeline-switch.md`,
+Since E3 there is no per-event switch (`docs/history/map-pipeline-switch.md`,
 history note): every event draws its pinned document.
 `documentHash` is `course.mapMetadata.documentHash` (the event's pinned
 document, `docs/map-storage.md` §6.4); `MapPanel` passes it to
@@ -4072,7 +4072,7 @@ pixels inked (some channel more than 48 below white, about a fifth of
 full coverage) on one side with no ink within one pixel on the other,
 and differing beyond the channel tolerance there (C7: a tone on the
 threshold — Crop-A's 214.0 at 206 against 207 — otherwise counted as a
-whole missing shape; `docs/bugfix-parity-ink-threshold.md`). The corpus
+whole missing shape; `docs/bugfixes/parity-ink-threshold.md`). The corpus
 tables below were measured before that rule; it only removes counts, so
 none of their verdicts would flip to `diverges`.
 Anti-aliasing shades and sub-pixel placement never count: at 10 px/mm a
@@ -4186,7 +4186,7 @@ what became of it:
   symbols; its 504.5 / 504.7 barriers, 512.3 footbridge and 519.0 tunnel
   — every object turned — diverged 24.92 / 36.28 / 26.65 / 31.96 %, and
   519.3 21.31 %, 208.4 15.04 %; all 23 are `close` since, with canonical
-  rendering on and off (`docs/bugfix-ocad-point-rotation.md`).
+  rendering on and off (`docs/bugfixes/ocad-point-rotation.md`).
 - **Spec-faithful, kept.** Cliffs: every 201.x / 202.x variant matches
   the legacy at 40 px/mm from source (0 % unexplained); canonically
   matched 202.2 / 201.5 get ISOM's flat ends (the "small houses"),
@@ -4815,7 +4815,7 @@ The shared module is exported as a namespace: `import { render } from
   (`ocad-16` / `omap-9`).** Alignment now places an inserted lower purple
   above the area colours as a group and reports what stays on the wrong
   side (`COLOUR_ORDER_CONFLICT`, `COLOUR_AREA_ABOVE_LOWER_PURPLE`;
-  `map-symbols.md` §9.2, `docs/bugfix-lower-purple-under-areas.md`). A map
+  `map-symbols.md` §9.2, `docs/bugfixes/lower-purple-under-areas.md`). A map
   whose *own* lower purple sits under area colours keeps that order, so
   the layer still draws its course under them there.
 - **§5.4 legacy colour settings.** `mapMetadata.colorOverrides` and

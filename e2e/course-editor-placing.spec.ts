@@ -1,6 +1,6 @@
 // Placing (docs/course-editor.md §4, §6): the circles while placing (P1, P4), the pending leg (P5), crossing and
 // map-issue points (F4), and the placement loupe (F27).
-// Split from the editor's one spec file along its describes (docs/e2e-sharding.md "CI"); the
+// Split from the editor's one spec file along its describes (docs/dev/e2e-sharding.md "CI"); the
 // helpers they share are `helpers/course-editor-spec.ts`. It runs under the `chromium` project (desktop) only.
 //
 // Hygiene (AGENTS §12): `reseed()` once in `beforeAll`, the fixture import idempotent per test
@@ -111,7 +111,7 @@ test.describe("P5: the pending leg from a just-placed start", () => {
   // file has created controls the event's seq reaches the seed's punch codes (80 in a full run), and the new start
   // then shares its id with control 80: the mirror sees no new site and the course reads the start as 80. A
   // reseed puts the seq back at the seed's. The collision itself is a server issue outside P5
-  // (docs/bugfix-first-leg-from-start.md, "Found on the way").
+  // (docs/bugfixes/first-leg-from-start.md, "Found on the way").
   test.beforeAll(async () => {
     await reseed();
   });

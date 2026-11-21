@@ -3,7 +3,7 @@
  *
  * Every journal entry is stamped with an HLC so that nodes whose wall clocks
  * disagree can still produce a consistent total ordering. See
- * `docs/offline-architecture.md` § "Hybrid logical clock (HLC)".
+ * `docs/system/offline-architecture.md` § "Hybrid logical clock (HLC)".
  *
  *   hlc = (physical_ms : 48 bits) || (logical : 16 bits)   — encoded as an 8-byte BIGINT
  *

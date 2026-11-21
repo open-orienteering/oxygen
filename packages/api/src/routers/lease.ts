@@ -9,7 +9,7 @@
  *     `checkout`/`checkin` on the venue box, `forceTakeover` on the node
  *     that needs control back after a venue box died.
  *
- * See docs/offline-architecture.md § "The lease".
+ * See docs/system/offline-architecture.md § "The lease".
  */
 
 import { z } from "zod";

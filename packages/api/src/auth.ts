@@ -6,7 +6,7 @@
  * AUTH_MODE=off (default) leaves ctx.user null and skips every auth gate.
  *
  * The identity header is only trustworthy when the proxy strips inbound
- * client copies. See docs/authentication.md.
+ * client copies. See docs/system/authentication.md.
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";

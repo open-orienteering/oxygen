@@ -299,7 +299,7 @@ export type InkKind = "dark" | "purple" | "map" | "line";
  * The GL canvas alone (the overlays hidden) and the byte offset in it of the pixel that contains a paper point (mm),
  * or null off the canvas. The pixel is the one whose square holds the point — `floor`, not `round`: pixel `i`
  * spans `[i, i + 1)`, so rounding moves up to a pixel off the point, onto a thin stroke's anti-aliased edge
- * (docs/bugfix-e2e-apex-probe-pixel.md).
+ * (docs/bugfixes/e2e-apex-probe-pixel.md).
  *
  * `held` (a gesture held mid-drag, F21): the overlays are made transparent instead of hidden. A hidden element is
  * not hit, so the pointer would leave the viewer and Chromium would send it a `mouseleave` — the viewer's cancel of
@@ -941,7 +941,7 @@ export async function freezeExternalPoll(page: Page): Promise<void> {
  * heartbeat. The top bar wraps (`flex-wrap`): a chip row that does not fit beside the toolbar adds a second row of
  * 36 px and pushes the map viewer down by as much, mid-test. A page point computed from the viewer's box before the
  * shift (`toPage`) and pressed after it lands 36 px off the handle or leg it aimed at, and a box read after it is 36 px
- * off a position computed before (docs/bugfix-course-editor-legs-flakes.md). For a spec that does not test presence.
+ * off a position computed before (docs/bugfixes/course-editor-legs-flakes.md). For a spec that does not test presence.
  */
 export async function hideOthersPresence(page: Page): Promise<void> {
   type Slot = { result?: { data?: { others?: unknown[] } } } | null;

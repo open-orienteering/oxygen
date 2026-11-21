@@ -4,7 +4,7 @@
  * `appendJournal` writes the journal row in the same transaction as the table
  * write; `race.recordFinish` is the first journaled mutation (the 2a pattern
  * proof — the rest of the race-critical set follows in 2b). See
- * docs/future-architecture.md § "Planned" Step 2.
+ * docs/history/future-architecture.md § "Planned" Step 2.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";

@@ -2,7 +2,7 @@ import { defineConfig, devices } from "@playwright/test";
 import { E2E_API_PORT, E2E_EVENTOR_PORT, E2E_PREVIEW_PORT, E2E_WEB_PORT } from "./e2e/helpers/ports";
 
 /**
- * Every event reads the vector pipeline since E3 (docs/map-pipeline-switch.md,
+ * Every event reads the vector pipeline since E3 (docs/history/map-pipeline-switch.md,
  * history note): every spec runs once, in `chromium`, except the phone's.
  *
  * Specs for the phone (docs/course-editor.md §10; 08 §7): project `mobile`
@@ -20,7 +20,7 @@ export const MOBILE_SPECS = [
 ];
 
 /**
- * Specs for the production bundle (G29; docs/e2e-sharding.md "The preview
+ * Specs for the production bundle (G29; docs/dev/e2e-sharding.md "The preview
  * stack"; course-print.md §8.6 "Delivery"): `E2E_PREVIEW=1` swaps the
  * Vite dev server for `vite build` + `vite preview` on `E2E_PREVIEW_PORT`
  * (4400), where the service worker registers, and project `preview` runs

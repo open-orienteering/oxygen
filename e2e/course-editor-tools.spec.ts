@@ -1,5 +1,5 @@
 // The editor's tools (docs/course-editor.md §6–§7): the tool chain, its keys and modifiers, the filter symbol picker.
-// Split from the editor's one spec file along its describes (docs/e2e-sharding.md "CI"); the
+// Split from the editor's one spec file along its describes (docs/dev/e2e-sharding.md "CI"); the
 // helpers they share are `helpers/course-editor-spec.ts`. It runs under the `chromium` project (desktop) only.
 //
 // Hygiene (AGENTS §12): `reseed()` once in `beforeAll`, the fixture import idempotent per test
@@ -403,7 +403,7 @@ test.describe("tools", () => {
   });
 
   test("a press inside an out-of-bounds area pans the map; its outline selects and moves it (§7)", async ({ page }) => {
-    // docs/bugfix-editor-area-press-pans.md: an area (the toner saver covers every control) swallowed every press.
+    // docs/bugfixes/editor-area-press-pans.md: an area (the toner saver covers every control) swallowed every press.
     await openEditor(page);
     // The description sheet (with no course picked, all controls') covers half the view and the shard's earlier
     // tests leave extra controls: hide it (view state, not saved) so a 60 px clear point exists.

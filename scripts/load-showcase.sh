@@ -6,7 +6,7 @@
 # The fixture itself is docs/screenshots/fixtures/showcase.sql — a portable,
 # anonymized dump derived from Vinterserien data. Its map is the CC0 Puit de
 # Laven map with invented point features (puit-de-laven-demo.omap next to
-# it; docs/demo.md, "The map"). The SQL names the map only by hash, so the
+# it; docs/ops/demo.md, "The map"). The SQL names the map only by hash, so the
 # load has three steps: insert the map_sources row from the committed .omap,
 # run the SQL, then run the map re-match, which imports the document and
 # pins it (docs/map-storage.md §6.9) — natively through `pnpm map:rematch`,

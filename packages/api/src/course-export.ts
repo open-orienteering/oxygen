@@ -14,7 +14,7 @@
  * legs' bends and through their crossing points and equal the stored ones
  * (docs/course-controls-and-matching.md "Course length").
  *
- * The structure (slice F, row F9; docs/iof-coursedata-export.md): a root
+ * The structure (slice F, row F9; docs/system/iof-coursedata-export.md): a root
  * with variants is not exported, its variants are, each with the root's
  * name as the family, and a class on the root is assigned to each of
  * them; a leg's crossing point is a `CrossingPoint` row before its end

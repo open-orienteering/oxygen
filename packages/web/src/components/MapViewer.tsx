@@ -1181,7 +1181,7 @@ export function MapViewer({
   // ─── Editor hit-test on the shared stage (docs/course-editor.md §5) ──
   const sharedHit = !!editor && glCourse;
   // Closed course objects (oob_area, whiteout, toner_saver, filter_region) hit by their outline only: their
-  // interior is the map, so a press there pans (§5, §7; docs/bugfix-editor-area-press-pans.md). An image is hit
+  // interior is the map, so a press there pans (§5, §7; docs/bugfixes/editor-area-press-pans.md). An image is hit
   // inside its turned box, after everything else (J7): a control inside a lucka still wins.
   const uiAreas = useMemo(
     // An attached object (J10) hits where the layer draws it: moved with its control, left out when that is not drawn.

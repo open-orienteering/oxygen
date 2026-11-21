@@ -4,7 +4,7 @@
  * The journal is the append-only log of race-critical mutations that ships
  * between server nodes (venue ↔ cloud) and drains from station outboxes. Each
  * row is a *journal entry*. The same JSON shape is used over the wire, in
- * Dexie, and (encoded) in Postgres. See `docs/offline-architecture.md`.
+ * Dexie, and (encoded) in Postgres. See `docs/system/offline-architecture.md`.
  *
  * This module is pure and shared by every tier. It defines the entry types,
  * the ordering primitives (HLC stamps + tie-breaks), and the dedupe keys that
@@ -154,7 +154,7 @@ export interface RunnerRegisteredPayload {
    * The allocated per-event `seq`, present on server-emitted entries. The
    * follower inserts it explicitly (the `allocate_event_seq()` trigger
    * honors supplied values) so it never re-allocates — see the lease's
-   * single-allocator rule in docs/offline-architecture.md.
+   * single-allocator rule in docs/system/offline-architecture.md.
    */
   seq?: number;
   name: string;

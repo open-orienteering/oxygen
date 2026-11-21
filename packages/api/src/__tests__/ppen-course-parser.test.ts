@@ -240,7 +240,7 @@ describe("parsePpenCourseData", () => {
     ]);
   });
 
-  // Purple Pen's <leg> (row F9; docs/ppen-import-export.md): the bends of
+  // Purple Pen's <leg> (row F9; docs/system/ppen-import-export.md): the bends of
   // the leg between two controls, for every course that runs it.
   const WITH_LEGS = SAMPLE_PPEN.replace(
     "</course-scribe-event>",

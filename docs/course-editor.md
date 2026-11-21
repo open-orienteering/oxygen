@@ -26,7 +26,7 @@ mount = new editor          (every event, since E3)
 ```
 
 There is no gate any more (the slice D flag `map.editor.vector` and the
-per-event switch are gone, `map-pipeline-switch.md` history note). The
+per-event switch are gone, `history/map-pipeline-switch.md` history note). The
 map panel inside the editor answers the cases without a drawable map
 (`map-rendering.md` §5.4 "Selecting the layer"):
 
@@ -132,15 +132,15 @@ The lock is taken once per fullscreen session, keyed on the editor being
 present rather than on the editor prop object, which changes on every
 hover with an armed tool; re-locking per render made Chrome re-show its
 exit bubble on every pointer move
-(`docs/bugfix-fullscreen-bubble-flicker.md`, `e2e/editor-fullscreen.spec.ts`).
+(`docs/bugfixes/fullscreen-bubble-flicker.md`, `e2e/editor-fullscreen.spec.ts`).
 
 | Part | `data-testid` | What it holds |
 |---|---|---|
 | Top bar (`TopBar.tsx`) | `editor-top-bar` | course picker (`editor-course-picker`; roots and plain courses — a materialised variant is edited through its root, §12), view (`editor-view-course` / `-all` / `-class`, and for a course with variations `editor-view-variant` (Variant ▾) and `editor-view-all-variations`, §12), mode (`editor-mode-course` / `-layout` / `-field` / `-map`, §13; icons alone when the row is short, "Top bar" below), undo / redo (`editor-undo` / `-redo`), hide other controls (`editor-hide-others`; in Map mode its slot is `editor-hide-overprint`, §13), auto cuts (`editor-toggle-cuts`), the placement loupe toggle (`editor-placement-loupe`, a magnifier, lit — `aria-pressed` — when on; §10 "Loupe", F27), Export ▾ (`editor-export`, icon + label, `course-layout.md` §7), the map info (`editor-map-info`, below), the course-info button and the save indicator (below), who else has a course open (§11), help popover; MapPanel adds descriptions, fullscreen and the viewer its zoom on the same row |
 | Tool rail (`ToolRail.tsx`; Layout mode: `layout/LayoutRail.tsx`, `editor-layout-rail`, `course-layout.md` §3; Map mode: `V` and `N` and its own `editor-snapping`, §13) | `editor-tool-rail` | `editor-tool-<key>` for `V`, `S`, `K`, `M`, `X` (map exchange, §6.9), `C` (crossing point, §6.8), `A` (menu `editor-area-menu`, `editor-area-<kind>`, and `editor-area-corridor` — §6.7), `T`, `G`; the snapping toggle `editor-snapping` (§6) |
-| Action bar (`ActionBar.tsx`) | `editor-action-bar` | the selection's or phantom's entries, horizontal, centred under the selection, hidden during a drag; ids `editor-action-<id>` as the legacy popover's. Always inside the viewer, 8 px from its edges (`lib/editor/action-bar-place.ts`): near a side it is shifted sideways, and when it does not fit below the selection it goes above it (`data-placement="below" \| "above"`). It is never wider than the viewer less 16 px. The *Also in* line is one line cut with an ellipsis, with the whole list in its `title` (the inspector lists the courses too) (`docs/bugfix-action-bar-off-viewer.md`). The viewer positions it (`actionLayout: "bar"`); on a phone the same list is the bottom sheet's peek row (`actionLayout: "host"`, §10) |
+| Action bar (`ActionBar.tsx`) | `editor-action-bar` | the selection's or phantom's entries, horizontal, centred under the selection, hidden during a drag; ids `editor-action-<id>` as the legacy popover's. Always inside the viewer, 8 px from its edges (`lib/editor/action-bar-place.ts`): near a side it is shifted sideways, and when it does not fit below the selection it goes above it (`data-placement="below" \| "above"`). It is never wider than the viewer less 16 px. The *Also in* line is one line cut with an ellipsis, with the whole list in its `title` (the inspector lists the courses too) (`docs/bugfixes/action-bar-off-viewer.md`). The viewer positions it (`actionLayout: "bar"`); on a phone the same list is the bottom sheet's peek row (`actionLayout: "host"`, §10) |
 | Inspector (`Inspector.tsx`, `modes/CourseMode.tsx`, `modes/ObjectSection.tsx`) | `editor-inspector` | collapsible sections: course (create, sequence — a variation group as a nested block `editor-variation`, §12 —, visit order, description sheet — `editor-description-instructions`, §4 —, clone), selection (a site: code, kind, position, description summary, "also in", hidden number, notes — §6.6; several controls: `editor-multi` with the bulk actions — §6.5; a course object: `editor-object` — §7; a leg: `editor-leg` — §6.7, `modes/LegSection.tsx`), inventory (`editor-inventory-panel`, collapsed), checks (`editor-checks`, §8) |
-| Map info (`MapInfoDialog.tsx`, model `lib/editor/map-info.ts`; P6) | `editor-map-info` → `editor-map-info-dialog` | a map icon button (`IconMap`, `components/map-icons.tsx`) in the top bar right after Export ▾ (`aria-haspopup="dialog"`, `aria-expanded`); a click opens a modal (`role="dialog"`, `aria-modal="true"`, centred over a dimmed backdrop; the close button `editor-map-info-close`, a backdrop click or Escape closes it). Its header shows the map's file name (`editor-map-info-name`, `data-name`) or, without a map, `editor-map-info-none`. Its rows, each only when it has a value: the scale `editor-map-info-scale` (`data-scale`, `1:10 000`), the north lines `editor-map-info-north` (the `NorthLinesBadge` sentence, `north-lines-badge` with `data-north-lines`; *No magnetic north lines found* when the file has none), the file `editor-map-info-file` (size and upload time, `data-bytes`, `data-uploaded`); then the document section `editor-map-info-document` (`data-source`, `data-objects`, `data-symbols`, `data-colours`; read from the loaded document's header, absent while it loads or the import runs) with `editor-map-info-source` (OCAD and its version, or OpenOrienteering Mapper), `-content` (objects · symbols · colours), `-symbol-library` (the matched symbol library and version; not `-library`, which is the action below), `-crs` (EPSG code and name) and `-importer`. Its actions: *Review symbols* (`editor-map-info-review`, a link to `/<event>/map-review/<documentHash>`, only once the document exists — `map-symbols.md` §8.7), *Replace map* (`editor-map-info-replace`; *Upload map* without a map; the hidden `accept=".ocd"` input), *From club library* (`editor-map-info-library`, only when the club library lists a map; opens `club-map-picker`, `club-library.md`). An upload's progress, error and the stale-north-lines notice (`map-upload-notice`) show in the dialog's footer |
+| Map info (`MapInfoDialog.tsx`, model `lib/editor/map-info.ts`; P6) | `editor-map-info` → `editor-map-info-dialog` | a map icon button (`IconMap`, `components/map-icons.tsx`) in the top bar right after Export ▾ (`aria-haspopup="dialog"`, `aria-expanded`); a click opens a modal (`role="dialog"`, `aria-modal="true"`, centred over a dimmed backdrop; the close button `editor-map-info-close`, a backdrop click or Escape closes it). Its header shows the map's file name (`editor-map-info-name`, `data-name`) or, without a map, `editor-map-info-none`. Its rows, each only when it has a value: the scale `editor-map-info-scale` (`data-scale`, `1:10 000`), the north lines `editor-map-info-north` (the `NorthLinesBadge` sentence, `north-lines-badge` with `data-north-lines`; *No magnetic north lines found* when the file has none), the file `editor-map-info-file` (size and upload time, `data-bytes`, `data-uploaded`); then the document section `editor-map-info-document` (`data-source`, `data-objects`, `data-symbols`, `data-colours`; read from the loaded document's header, absent while it loads or the import runs) with `editor-map-info-source` (OCAD and its version, or OpenOrienteering Mapper), `-content` (objects · symbols · colours), `-symbol-library` (the matched symbol library and version; not `-library`, which is the action below), `-crs` (EPSG code and name) and `-importer`. Its actions: *Review symbols* (`editor-map-info-review`, a link to `/<event>/map-review/<documentHash>`, only once the document exists — `map-symbols.md` §8.7), *Replace map* (`editor-map-info-replace`; *Upload map* without a map; the hidden `accept=".ocd"` input), *From club library* (`editor-map-info-library`, only when the club library lists a map; opens `club-map-picker`, `system/club-library.md`). An upload's progress, error and the stale-north-lines notice (`map-upload-notice`) show in the dialog's footer |
 | Course info (`EditorStatus.tsx` `StatsButton`, model `lib/editor/status.ts`) | `editor-stats` → `editor-stats-popover` | an icon button in the top bar (`aria-haspopup="dialog"`, `aria-expanded`) with the check count as its amber badge (`editor-stats-badge`, `data-count`, absent at zero, §8); a click opens the popover (`role="dialog"`; a second click, an outside click or Escape closes it — Escape closes only the popover, the editor's Escape cascade of §3 is not stepped, so an armed tool stays armed). Its rows, each only when it has a value, in this order: `editor-stats-controls` (`data-count`), `editor-stats-length` (`data-m`), `editor-stats-climb` (`data-m`), the shown sheet's key in Layout mode and Class view (`editor-stats-sheet`, `data-key`, `course-layout.md` §6), `editor-stats-snapping` when on, `editor-stats-checks` (`data-count`, amber). No map scale since P6: it is the map-info dialog's (`courseInfoRows`). With no course and no sheet the popover says *No course* |
 | Save indicator (`EditorStatus.tsx` `SaveIndicator`) | `editor-save-state` | in the top bar after the course-info button: a dot and the save state's words (`data-state` = `saved` / `saving` / `error` / `conflict` / `queued` — Field mode's writes waiting in the outbox, §9 "Offline", D9c —, `role="status"`, `aria-live="polite"`, the words also its `title`). `saved` / `saving` are the dot alone (green / grey pulsing; the words `sr-only`), so P2 adds a dot (≤ 16 px) and an icon button (≤ 32 px) to the top bar's row (how the row makes room on a laptop screen: "Top bar" below, F29); `error` / `conflict` show their words (`editor-save-state-text`, red) at every width — a failed or conflicting save never hides behind a popover or a tooltip; `queued` shows its words too, amber |
 | Conflict notice | `editor-conflict` | §3 |
@@ -283,7 +283,7 @@ result — so back-to-back writes send their predecessor's token. One write
 per row is in flight: a write of a row with one in flight waits for it to
 settle (`EditorWrites.serial`) and then reads the token its result seeded —
 Ctrl+Z pressed twice before the first undo's reply is two writes in order,
-not two on one token (docs/bugfix-editor-overlapping-course-writes.md). A
+not two on one token (docs/bugfixes/editor-overlapping-course-writes.md). A
 refused write passes the token its refusal seeded to the next; writes of
 different rows do not wait for each other.
 `course.setControlLabelOffset`, `course.create` / `clone` and
@@ -380,7 +380,7 @@ metres, as before. The description sheet is MapPanel's (on by default on
 desktop, all controls until a course is selected).
 
 **Description instructions** (E3b; `courses.description_instructions`,
-`control-descriptions-and-editor-geometry.md` "Course-level
+`system/control-descriptions-and-editor-geometry.md` "Course-level
 instructions"). The course section's *Description sheet* block
 (`editor-description-instructions`) is collapsed to one summary line
 (`editor-instructions-summary`: the finish variant and the instruction
@@ -510,7 +510,7 @@ shared stage (04 §7; `map-rendering.md` §5.5), not SVG hit targets:
 - A drag stays a layer request: each move updates the input, the engine
   keeps one request in flight and posts the latest when it answers
   (`map-rendering.md` §5.2 "Engine", §5.4), so the circle follows at the
-  derivation rate (F20, `docs/bugfix-course-drag-redraw.md`). Main-thread
+  derivation rate (F20, `docs/bugfixes/course-drag-redraw.md`). Main-thread
   symbolisation of the dragged object is not needed so far.
 - The selection ring, phantom, affects-chip and action bar stay UI layer
   (screen space), and so does everything a tool draws (§6: ghost, leg
@@ -600,7 +600,7 @@ returns to select from any tool; right-click exits an exclusive tool.
   `lib/course-layer-request.ts` is false). With a course the layer's
   provisional circle is the one circle at the cursor; a second, thinner
   UI-layer circle on top of it was the "blue thin circle" of feedback
-  2026-11-07 item 1 (P4, [bugfix](bugfix-ghost-circle-doubles-the-layer.md)).
+  2026-11-07 item 1 (P4, [bugfix](bugfixes/ghost-circle-doubles-the-layer.md)).
 - **Pending legs, drawn by the layer.** While the tool is armed with a
   course and the pointer is over the map (on touch: the crosshair at the
   view centre), the page hands the viewer a **provisional visit**
@@ -1199,7 +1199,7 @@ rules `course-layer.md` §10.3). Both are sites that are never items.
   draws them as the sheet prints: setter marks on the all-controls sheet.
 - **The on-map description sheet** derives the 13.3 / 13.4 rows from the
   course's legs (`sheetCrossings`), as print does (§4 "Derived
-  instruction rows" in `control-descriptions-and-editor-geometry.md`).
+  instruction rows" in `system/control-descriptions-and-editor-geometry.md`).
 - **The Controls page** marks the slice-F kinds with a badge
   (`control-kind-badge`, `data-kind`) beside the status.
 - Desktop and tablet; the phone has no `C` key and no + menu entry for
@@ -1746,7 +1746,7 @@ the selection and the undo history (`editorReducer`'s `mode`).
     queue a write goes out at once, as in the other modes, and its
     conflicts are §3's.
   - **Storage.** The Dexie table `controlWrites` in `oxygen-offline`
-    (version 4, additive; `offline-architecture.md` "Station
+    (version 4, additive; `system/offline-architecture.md` "Station
     resilience"), keyed by an increasing `seq` — the replay order — with
     the event's `nameId`. It survives a reload and a browser restart; the
     timing journal's `events` outbox and `events.push` are not used
@@ -3173,7 +3173,7 @@ slice-F site kinds since F4.
 
 **The E2E layout (D10, E3; split for the CI shards).** The editor's spec is
 seven files, split along its describes so that no one file outweighs a CI
-shard (`docs/e2e-sharding.md` "CI"); the helpers they share are
+shard (`docs/dev/e2e-sharding.md` "CI"); the helpers they share are
 `e2e/helpers/course-editor-spec.ts`:
 
 | File | Describes |
@@ -3491,7 +3491,7 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
   crop mode is not offered on a coarse pointer.
 - **Derived instruction rows**: 13.3 / 13.4 derive from the legs'
   crossing points since F4 and replace a hand-placed row of the same kind
-  at the same anchor (`control-descriptions-and-editor-geometry.md`
+  at the same anchor (`system/control-descriptions-and-editor-geometry.md`
   "Course-level instructions"); 13.5 after a map exchange since F5. The
   inspector's special rows still list the stored ones only, so a stored
   13.3 or 13.5 that a derived row replaces still shows there (its length is the

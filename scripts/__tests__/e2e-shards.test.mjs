@@ -122,7 +122,7 @@ test("ci.yml: the E2E matrix lists shards 1..N and passes the job total and its 
   assert.match(ci, /\n {2}e2e:\n {4}name: E2E tests\n/);
 });
 
-// G29: the preview stack (docs/e2e-sharding.md "The preview stack").
+// G29: the preview stack (docs/dev/e2e-sharding.md "The preview stack").
 test("isPreviewSpec: the .preview.spec.ts suffix, and there is at least one", () => {
   assert.equal(isPreviewSpec("offline-print.preview.spec.ts"), true);
   assert.equal(isPreviewSpec("e2e/offline-print.preview.spec.ts"), true);

@@ -5,7 +5,7 @@ import { PyRandom } from "../lib/py-random.mjs";
 import { DEMO_NOTE, DEMO_SEED, INJECTED_TAG, INJECTION_PLAN, analyseOmap, injectDemoPoints } from "../lib/inject-demo-points.mjs";
 import { DEMO_MAP_PATH, ORIGINAL_MAP, ORIGINAL_MAP_PATH, buildDemoMap, sha256Hex } from "../lib/showcase-map.mjs";
 
-// The Demo Competition's map (docs/demo.md, "The map"): the CC0 Puit de
+// The Demo Competition's map (docs/ops/demo.md, "The map"): the CC0 Puit de
 // Laven map plus invented point features, made by a seeded injection.
 
 describe("PyRandom", () => {

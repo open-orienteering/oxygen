@@ -827,7 +827,7 @@ D); the PDF golden tier compares the `rgb` page rasterised by
 and 5 000 pages with copies at most; pages ordered by course,
 `sort_order`, `seq`, then variant key) prints every event through the
 composer (`packages/api/src/course-maps/routes.ts`) since E3, the flip
-(`map-pipeline-switch.md`, history note). It reads the `course_maps`,
+(`history/map-pipeline-switch.md`, history note). It reads the `course_maps`,
 `map_templates`, course, control and graphics rows and writes nothing.
 The composer is the only path: the rsvg branch (OCAD → SVG →
 `rsvg-convert`, `svg-to-pdf.ts`, `map-page-svg.ts`) went in E4a.
@@ -1065,7 +1065,7 @@ interface PrintJob {
   absent (the writer's `IMAGE_MISSING`). The bytes are fetched from
   `print.png`. Since G15 `maps.pdf` loads the same set (it read the
   sheet rows' and templates' objects only, so an `image` course object
-  printed as `IMAGE_MISSING`; `docs/bugfix-course-object-image-print.md`).
+  printed as `IMAGE_MISSING`; `docs/bugfixes/course-object-image-print.md`).
 - **No pixel box in the job**: an SVG's box depends on the composed page
   (the placed rectangle, `scaleRatio` for a map-layer image, the crop;
   §6.3), so the host composes with the shared `svgRasterBox` and asks
@@ -1436,7 +1436,7 @@ caches after a reload, and the document from `map-documents`.
 
 **The preview-build smoke** (G29; `e2e/offline-print.preview.spec.ts`,
 project `preview`: `vite build` + `vite preview` on :4400 with the
-service worker registered, `docs/e2e-sharding.md` "The preview stack").
+service worker registered, `docs/dev/e2e-sharding.md` "The preview stack").
 On the production bundle it checks what the dev server cannot reach:
 
 1. The service worker installs on the first load, and the next load is
@@ -1496,7 +1496,7 @@ What the box prints is its copy, which follows the cloud's (row G19,
 `map-storage.md` §7.2 "Following the cloud during a lease"): a sheet or
 template edited on the cloud during the lease reaches the box at the
 next settings refresh, and one written from the box (those writes are
-forwarded to the cloud, `offline-architecture.md` "Non-critical data")
+forwarded to the cloud, `system/offline-architecture.md` "Non-critical data")
 reaches it before the forwarded write's reply, so an editor on the box
 reads its own write and its token. Layout can be edited on the box while
 the cloud answers. An export's sheet-ensuring step
@@ -1528,7 +1528,7 @@ back to the box's `maps.pdf`.
 | `packages/shared/src/render/__tests__/image-window.test.ts` | `unionWindow` (rounded out to 1/1024, uncropped = whole), `cropInWindow`, `windowParam` |
 | `packages/api/src/__tests__/print-worker.test.ts` | the worker on `e2e/test.ocd`: bytes equal in-process; with a patch (G14): equal to the in-process bytes over the patched document and unlike the unpatched ones, the blob read once per hash + version and again for a new version (which shows), a disabled patch the unpatched bytes; a `raster` request equals the in-process `rasteriseSvgGraphic` at the exact box (G15); the blob read and sent once per worker; `page` order; an error keeps the worker usable; `CourseStackError` re-created (a document with palette ids stripped); a reset rejects the request in flight and the next call recovers; the main thread's event-loop delay stays under 25 ms (or half a page) during a 10-page A3 print; `PRINT_WORKERS` parsing |
 | `packages/api/src/__tests__/integration/print-job.test.ts` (G15) | §8.5: the job's shape (version, document hash and rotation, sheets in print order, graphics ascending with the image course object's and without another event's, `cmyk`, `info`, file name), JSON-safe, `no-store`; `buildPrintJob`'s in-memory job holds no `undefined`, non-finite number, `Map`, `Date` or typed array and equals its JSON round trip and the route's body; composed over HTTP through `renderPrintJob` (document from `/api/map-documents/:hash`, graphics from `print.png`, the bundled faces) it equals `maps.pdf`'s bytes (both `deterministic`) for every sheet, one sheet, `allControls`, `classes`, `copies=runners&spare=1`, and on a butterfly root `courses`, `variants` and `allVariations` (labels `Long AB` / `Long BA`, `_Long_A4_AB_BA.pdf`), the SVG fetched at `svgRasterBox`'s box and only the foreign graphic `IMAGE_MISSING`; the caps and selection 400s word for word `maps.pdf`'s (201 sheets, `spare=501`, `spare` alone, two selections, unknown map, `copies=all`); no pin 400, unknown event 404; `print.png`: SVG = `rasteriseSvgGraphic` at w × h, PNG as stored, the `w`/`h` 400s, `crop` = `rasteriseSvgGraphic` over that window (unlike the whole raster) and its 400s, a PNG ignoring it, club graphic 200, another event's / unknown 404, bad id 400; 401 / 403 / 200 under `AUTH_MODE=proxy` on the job and `print.png` |
-| `packages/api/src/__tests__/course-map-graphics.test.ts` (G15 part) | `parseRasterBox`: integers 1–4096 both sides, every other form the 400 message; `sheetGraphicIds`: page objects' and image course objects' graphics once each, ascending (the regression of `docs/bugfix-course-object-image-print.md`) |
+| `packages/api/src/__tests__/course-map-graphics.test.ts` (G15 part) | `parseRasterBox`: integers 1–4096 both sides, every other form the 400 message; `sheetGraphicIds`: page objects' and image course objects' graphics once each, ascending (the regression of `docs/bugfixes/course-object-image-print.md`) |
 | `packages/api/src/__tests__/integration/venue-print.test.ts` (G18) | §8.7: one node prints as the cloud (the event's patch hiding one object, G14; a template with an event PNG and a club PNG, an image course object with an event SVG, a course sheet, an all-controls sheet, a class on the template), takes its own checkout snapshot through JSON, loses the club graphic, imports the snapshot as the box (graphics fetched by id and checked) and prints again: `print-job` equal, every `print.png` equal, `maps.pdf` and the description sheets byte-equal |
 | `e2e/course-maps.spec.ts` "export on a venue box whose cloud is unreachable" (G18) | §8.7 in the browser: with `layout.autoSheets` answering the forwarder's `CLOUD_UNREACHABLE` 412, the Courses page's course export skips the step and downloads (a course with a sheet: one A4 page, no error shown); a course without one shows maps.pdf's "No requested maps found" |
 | `packages/shared/src/print/__tests__/print-job.test.ts` (G15, G14) | `renderPrintJob` equals `renderCoursePages` for the same inputs (copies, a PNG and an SVG; the PNG fetched once without a box, the SVG once per box by id; a cropped SVG asked with its window); a JSON round trip gives equal bytes; an unfetchable graphic gives `SVG_RASTER` / `IMAGE_MISSING` and a PDF; the document read once per hash; version 1 refused; with a patch (G14): `renderCoursePages`' bytes over the patched prepared document and not the unpatched ones, a JSON round trip equal, a disabled patch the unpatched bytes, a skipped op a `PATCH_ISSUE` warning and still a PDF |
@@ -1540,7 +1540,7 @@ back to the box's `maps.pdf`.
 | `packages/web/src/print/__tests__/client.test.ts`, `capability.test.ts`, `imports.test.ts` (G16) | `printMapsPdf`: the device path (the job, the document by hash through the event, `print.png` per graphic, the job's file name, no `maps.pdf`), the worker kept and the document asked once across exports; `maps.pdf` without a `Worker` or under 2 GiB (no job asked), above the limit, for version 2, when the worker fails to start, when the document cannot be read (the worker terminated); a worker that goes silent (watchdog) and a 2xx body that is not a job → `maps.pdf`, the next export unaffected; a job 400 is the export's error with no `maps.pdf` request; `DEVICE_PRINT_JOB_VERSION` = `PRINT_JOB_VERSION`. `deviceLimit`'s table and `printCost` (copies free, 0 copies none, A3 = 2). Only `print/worker.ts` imports `@oxygen/shared/print` at runtime; `mapsPdfTarget` of every Export ▾ entry |
 | `packages/web/src/print/__tests__/client.test.ts` "offline" (G17), `offline-store.test.ts`, `offline-prepare.test.ts`; `lib/editor/__tests__/export-menu.test.ts`; `lib/__tests__/trpc-links.test.ts` | §8.6 "Offline": composing to store keeps every `print.png` the composer asks (the PNG without a box, each SVG at its box); with no network the stored job composes with its stored graphics (no `IMAGE_MISSING` / `SVG_RASTER`), carries its `storedAt`, asks no `maps.pdf`, and is the size of the online export; a query not stored `notStored`, above the limit `tooLarge`, no `Worker` `unsupported` (no request), a document that cannot be read `failed`; an HTTP error never replaced; online write-through only for a stored event, the manifest's time kept. The store: query normalisation, keys, job and stored time round trip, graphics, manifest, `retain`, five events kept, no Cache Storage. The step: every query's job, PNGs once, the one SVG sheet under four queries composed once, document and faces, the manifest; an HTTP error skipped and listed, no SVG → the worker warmed; the network going mid-run → partial, earlier entries kept; a re-run deletes entries outside the set; `unsupported` / `offline` with no request; the silent run skips within 30 min and never ensures; a second caller joins; progress until the end; `boxLearningJobs` (distinct sheets, copies 1, chunks within the limit). `offlineMapQueries` over courses, a root's variants, classes and sheets (normalised, once, no variant course, no per-runner export without runners); the offline entry an action; `ensureSheetsBestEffort` skips on a network failure |
 | `e2e/course-maps.spec.ts` "offline print: the job kept on the device" (G17) | §8.6 "Offline" in Chromium: with an SVG and a PNG on the course's sheet, the Courses page's *Make maps available offline* stores the jobs of `?courses=`, the unfiltered, `?allControls=1` and `?maps=` queries, the PNG's `print.png` and the SVG's at a box, and the manifest; the sync panel shows the document stored and *Print stored* with its time; `context.setOffline(true)`, the course's export downloads (the ensure step skipped), the notice says *Printed offline from the maps stored on…* with the manifest's time, no `maps.pdf` asked, and the PDF equals `maps.pdf` of the same query object for object; with that job deleted from the store the export's error line says it is not stored on this device. Dev server: the module worker started by the store is the one that composes (§8.6 "Offline", last paragraph) |
-| `e2e/offline-print.preview.spec.ts` "store, reload, go offline, export…" (G29; project `preview`, `docs/e2e-sharding.md` "The preview stack") | §8.6 "Delivery" and "Offline" on the production bundle (`vite build` + `vite preview`, service worker registered): the second load controlled; the precache without `print-worker-entry-<hash>.js` (`globIgnores`) and `print-worker` empty; *Make maps available offline* puts the chunk in `print-worker`, the three faces in `map-fonts`, the document in `map-documents`, the job and manifest in `offline-print`; after a reload and `context.setOffline(true)` an uncached `.ttf` is refused, and the course's export composes the stored job in the built worker (the IIFE chunk with `{ type: "module" }`), its chunk asked offline and the faces and document since the reload all answered by the service worker, which fetched none of them from the network after the reload (its own requests: only the probe's); the notice's time is the manifest's, no `maps.pdf` is asked, the PDF equals `maps.pdf` object for object |
+| `e2e/offline-print.preview.spec.ts` "store, reload, go offline, export…" (G29; project `preview`, `docs/dev/e2e-sharding.md` "The preview stack") | §8.6 "Delivery" and "Offline" on the production bundle (`vite build` + `vite preview`, service worker registered): the second load controlled; the precache without `print-worker-entry-<hash>.js` (`globIgnores`) and `print-worker` empty; *Make maps available offline* puts the chunk in `print-worker`, the three faces in `map-fonts`, the document in `map-documents`, the job and manifest in `offline-print`; after a reload and `context.setOffline(true)` an uncached `.ttf` is refused, and the course's export composes the stored job in the built worker (the IIFE chunk with `{ type: "module" }`), its chunk asked offline and the faces and document since the reload all answered by the service worker, which fetched none of them from the network after the reload (its own requests: only the probe's); the notice's time is the manifest's, no `maps.pdf` is asked, the PDF equals `maps.pdf` object for object |
 | `packages/shared/src/print/__tests__/print-job.test.ts` "the fixture job" (G16), `src/__tests__/collate.test.ts` | the fixture job's sheets (course × 3, two parts, all controls with Å1 before Z1, setter), graphics and JSON round trip; composed through `renderPrintJob` = `renderCoursePages`, the SVGs asked at their boxes. `compareLabels`: a fixed list in its literal order, equal to the en-US numeric order and not to the Swedish |
 | `packages/api/src/__tests__/worker-bootstrap.test.ts` | the shared bootstrap: `.js` imported as is, `.ts` through tsx |
 | `packages/api/src/render/__tests__/pdf-golden.test.ts` | the PDF golden tier, §9.2, and `qpdf --check` on every file it writes; `boxDown`; the swatch read-back |
@@ -1914,7 +1914,7 @@ symbols on the window, unexplained ÷ ink and their codes:
   object to its angle: the symbols are north-oriented (OCAD's rotatable
   flag clear) while every object carries an angle, which OCAD draws
   regardless. The importer now turns such a symbol, as Mapper's OCD
-  import does (`map-import.md` §3.3, `docs/bugfix-ocad-point-rotation.md`);
+  import does (`map-import.md` §3.3, `docs/bugfixes/ocad-point-rotation.md`);
   both Club-full pages pass. It was the C-gate's only failure.
 - **Size against 05 Appendix B (rows C11, C13; C13 landed 2026-11-03: Club-full A4 917 kB, Sprint A3 654 kB, below).** Before C11: Sprint A3
   889 kB against ≈ 0.5 MB, Club-full A4 at 1:10 000 1.63 MB against
@@ -1947,10 +1947,10 @@ symbols on the window, unexplained ÷ ink and their codes:
 - **Two measurement defects, fixed in C7** (user decision 2026-10-24: they
   would otherwise falsify these numbers): the page oracle composited
   resvg's premultiplied pixels as straight alpha
-  (`docs/bugfix-page-oracle-premultiplied.md`; Crop-B 4.77 → 0.49 % at
+  (`docs/bugfixes/page-oracle-premultiplied.md`; Crop-B 4.77 → 0.49 % at
   16 levels; page goldens unchanged), and B9's unexplained measure counted
   a tone on its ink threshold as a missing shape (Crop-A's 214.0 at 206
-  against 207: 68 % → 0; `docs/bugfix-parity-ink-threshold.md`).
+  against 207: 68 % → 0; `docs/bugfixes/parity-ink-threshold.md`).
 
 ### 11.6 Tests
 
@@ -1959,7 +1959,7 @@ The tool's own tests (`print-run.test.ts`, `measure-print.test.mjs`,
 
 | Test | Covers |
 |---|---|
-| `packages/api/src/render/__tests__/page-raster.test.ts` "composites the layers' premultiplied pixels" | the oracle fix the run forced (`docs/bugfix-page-oracle-premultiplied.md`) |
+| `packages/api/src/render/__tests__/page-raster.test.ts` "composites the layers' premultiplied pixels" | the oracle fix the run forced (`docs/bugfixes/page-oracle-premultiplied.md`) |
 
 ## Pending in this chapter
 

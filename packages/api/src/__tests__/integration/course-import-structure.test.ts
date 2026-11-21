@@ -257,7 +257,7 @@ describe("an OCD bundle with authored geometry", () => {
   });
 });
 
-/** An IOF file with the slice-F structure (row F9; docs/iof-coursedata-export.md "Importing it back"). */
+/** An IOF file with the slice-F structure (row F9; docs/system/iof-coursedata-export.md "Importing it back"). */
 const IOF_STRUCTURE = `<?xml version="1.0" encoding="UTF-8"?>
 <CourseData xmlns="http://www.orienteering.org/datastandard/3.0" xmlns:ox="urn:oxygen:iof:extensions" iofVersion="3.0">
   <RaceCourseData>

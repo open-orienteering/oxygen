@@ -1,6 +1,6 @@
 /**
  * Field mode's outbox (row D9c; docs/course-editor.md §9 "Offline",
- * docs/offline-architecture.md "Station resilience"): the course editor's
+ * docs/system/offline-architecture.md "Station resilience"): the course editor's
  * moves (`control.update { xpos, ypos }` — a long-press drag, a nudge, the
  * pad's numeric fields, their undo / redo) and check-offs
  * (`control.check`) wait here while the device has no connection, and are

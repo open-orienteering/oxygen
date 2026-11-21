@@ -14,7 +14,7 @@
  *
  * Checkin (venue side) = a barrier: every local journal entry shipped and
  * acked, then release on both nodes. Nothing else to reconcile — see
- * "Consequence: checkin is cheap" in docs/offline-architecture.md.
+ * "Consequence: checkin is cheap" in docs/system/offline-architecture.md.
  */
 
 import { TRPCError } from "@trpc/server";

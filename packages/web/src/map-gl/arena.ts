@@ -12,7 +12,7 @@
  * Growth does **not** `copyBufferSubData` the old buffer: ANGLE on
  * Adreno (Galaxy S25, Chrome 155) copies stale zeros from a buffer that
  * has in-flight draws, silently and without a GL error — whole detail
- * parts came back empty (`docs/bugfix-adreno-arena-grow.md`). The caller
+ * parts came back empty (`docs/bugfixes/adreno-arena-grow.md`). The caller
  * keeps the uploaded views alive anyway (`ResidentPart.part`), so the
  * registry costs no memory, and the re-upload measured no slower than
  * the copy on that device.

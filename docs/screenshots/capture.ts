@@ -4,7 +4,7 @@
  * Loads the committed Demo Competition fixture with scripts/load-showcase.sh
  * (docs/screenshots/fixtures/showcase.sql — an anonymized Vinterserien dump
  * with real controls, courses, classes and results on the CC0 Puit de
- * Laven demo map; docs/demo.md) into the dev database and then drives the
+ * Laven demo map; docs/ops/demo.md) into the dev database and then drives the
  * frontend through every major user-facing feature with Playwright,
  * capturing one PNG per screen. The loaded event stays for the next run.
  *
@@ -35,7 +35,7 @@ import { getMockWebSerialScript } from "../../e2e/helpers/mock-webserial.js";
 
 const API_URL = process.env.API_URL ?? "http://localhost:3002";
 const WEB_URL = process.env.WEB_URL ?? "http://localhost:5173";
-/** The fixture's event (docs/demo.md). */
+/** The fixture's event (docs/ops/demo.md). */
 const DEMO_NAME_ID = "demo_competition";
 const COMPETITION_NAME = "Demo Competition";
 

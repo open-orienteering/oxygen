@@ -1,4 +1,4 @@
--- Restore the map sections of a per-event dump (docs/backup-restore.md,
+-- Restore the map sections of a per-event dump (docs/ops/backup-restore.md,
 -- docs/map-storage.md §7.3) written by v0.6.1 or later. The map_files
 -- section of an older dump carries `file_data` and needs
 -- restore-legacy-map-files.sql instead (the blob sections load here either way). Idempotent: blobs are content-addressed and
