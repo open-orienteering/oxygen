@@ -91,6 +91,9 @@ import { useCourseChecks } from "./useCourseChecks";
 import { useCourseElevation } from "./useCourseElevation";
 import { legElevation, lineClimbStatus } from "../../lib/editor/elevation";
 import { chosenRouteMap, pairRoutes, routeItems, routeShapes, type RouteDraft } from "../../lib/editor/leg-routes";
+import { DEFAULT_PACE_S_PER_KM, alternativeItems, alternativeShapes, formatClock, oobFeatures, paceStorageKey, parsePace } from "../../lib/editor/leg-alternatives";
+import { createRouteFinder } from "../../lib/route/finder";
+import type { RouteAlternative } from "@oxygen/shared/src/route/index.js";
 import { legAt, legBounds, readProfileOpen, writeProfileOpen } from "../../lib/editor/profile-graph";
 import { pointAtDistance } from "@oxygen/shared/src/terrain/profile/index.js";
 import { ProfilePanel } from "./ProfilePanel";
@@ -1815,7 +1818,7 @@ export function EditorPage() {
   const drawnLegs = elevationActive ? courseChecks.legs : null;
   // Each leg along its pair's chosen route when it has one (§7.3), else as drawn.
   const elevationLegs = useMemo(() => (drawnLegs ? courseShared.routedLegs(drawnLegs, chosenRoutes) : null), [drawnLegs, chosenRoutes]);
-  const { elevation, sampler: elevationSampler, retry: retryElevation } = useCourseElevation({ terrain: mapMetadata.data?.terrain, active: elevationActive, legs: elevationLegs, nameId: nameId ?? null });
+  const { elevation, sampler: elevationSampler, field: elevationField, retry: retryElevation } = useCourseElevation({ terrain: mapMetadata.data?.terrain, active: elevationActive, legs: elevationLegs, nameId: nameId ?? null });
   /** The selected leg among the course's derived legs. */
   const selectedLegIndex = useMemo(() => {
     const insertAt = state.phantom?.insertAt;
@@ -1835,7 +1838,52 @@ export function EditorPage() {
       ? routeShapes({ from: selectedLegLine[0], to: selectedLegLine[selectedLegLine.length - 1], routes: selectedPairRoutes, draft: null, hover: null }) : []),
     [selectedLegLine, routeDraft, selectedPairRoutes],
   );
-  const shownMarkers = useMemo(() => (routeMarkers.length > 0 ? [...courseChecks.markers, ...routeMarkers] : courseChecks.markers), [courseChecks.markers, routeMarkers]);
+
+  // ─── Computed alternatives for the selected leg (docs/course-elevation.md §7.8) ───
+  const routeFinder = useMemo(() => createRouteFinder(), []);
+  useEffect(() => () => routeFinder.dispose(), [routeFinder]);
+  const selectedLegVia = useMemo(() => (selectedLeg ? crossingPt(selectedLeg.props) ?? null : null), [selectedLeg, crossingPt]);
+  const patchForDoc = mapDoc && mapPatch?.patch && mapPatch.patch.documentHash === mapDoc.hash ? mapPatch : null;
+  /** What a search of the selected leg rests on: a result is this key's alone. */
+  const alternativesKey = selectedLeg && mapDoc && mapScale ? [
+    mapDoc.hash, patchForDoc?.version ?? "0", elevationField?.key ?? "", selectedLeg.from.id, selectedLeg.to.id,
+    selectedLeg.fromPt.x, selectedLeg.fromPt.y, selectedLeg.toPt.x, selectedLeg.toPt.y, selectedLegVia?.x ?? "", selectedLegVia?.y ?? "",
+  ].join("|") : null;
+  const [alternatives, setAlternatives] = useState<{ key: string; status: "running" | "done" | "error"; routes: RouteAlternative[] } | null>(null);
+  const alternativesNow = alternatives && alternatives.key === alternativesKey ? alternatives : null;
+  const [pointedAlternative, setPointedAlternative] = useState<number | null>(null);
+  const findAlternatives = useCallback(() => {
+    if (!alternativesKey || !selectedLeg || !mapDoc || !mapScale) return;
+    const key = alternativesKey;
+    setAlternatives({ key, status: "running", routes: [] });
+    routeFinder.find({
+      doc: { key: `${mapDoc.hash}:${patchForDoc?.version ?? "0"}`, bytes: mapDoc.bytes, patch: patchForDoc?.patch ?? null },
+      field: elevationField,
+      req: { from: selectedLeg.fromPt, to: selectedLeg.toPt, ...(selectedLegVia ? { via: [selectedLegVia] } : {}), groundMPerMm: mapScale / 1000, extra: oobFeatures(objectsInView) },
+    }).then(
+      (result) => setAlternatives((now) => (now?.key === key ? { key, status: "done", routes: result.routes } : now)),
+      () => setAlternatives((now) => (now?.key === key ? { key, status: "error", routes: [] } : now)),
+    );
+  }, [alternativesKey, selectedLeg, mapDoc, mapScale, routeFinder, patchForDoc, elevationField, selectedLegVia, objectsInView]);
+  const [paceByCourse, setPaceByCourse] = useLocalStorage<number>(paceStorageKey(nameId ?? "", selectedCourse?.id ?? 0), DEFAULT_PACE_S_PER_KM);
+  const setPaceText = useCallback((text: string): boolean => {
+    const s = parsePace(text);
+    if (s !== null) setPaceByCourse(s);
+    return s !== null;
+  }, [setPaceByCourse]);
+  const alternativeList = useMemo(
+    () => (alternativesNow?.status === "done" && mapScale ? alternativeItems(alternativesNow.routes, mapScale, elevationSampler, paceByCourse) : []),
+    [alternativesNow, mapScale, elevationSampler, paceByCourse],
+  );
+  const applyAlternative = useCallback((index: number) => {
+    const a = alternativeList[index];
+    if (a && selectedLeg && a.interior.length > 0) saveRouteNow({ fromControlId: selectedLeg.from.id, toControlId: selectedLeg.to.id, points: a.interior, source: "computed", model: "default-1" });
+  }, [alternativeList, selectedLeg, saveRouteNow]);
+  const alternativeMarkers = useMemo(() => (routeDraft ? [] : alternativeShapes(alternativeList, pointedAlternative)), [alternativeList, pointedAlternative, routeDraft]);
+  const shownMarkers = useMemo(
+    () => (routeMarkers.length + alternativeMarkers.length > 0 ? [...courseChecks.markers, ...alternativeMarkers, ...routeMarkers] : courseChecks.markers),
+    [courseChecks.markers, routeMarkers, alternativeMarkers],
+  );
 
   // ─── The elevation profile under the map (docs/course-elevation.md §5): desktop and tablet ───
   const [profileOpen, setProfileOpen] = useState(() => readProfileOpen(typeof localStorage === "undefined" ? null : localStorage));
@@ -2672,6 +2720,10 @@ export function EditorPage() {
       routes={legRouteItems && legRoutes.data ? {
         items: legRouteItems, drawing: routeDraft ? { points: routeDraft.points.length } : null, busy: routeBusy,
         onDraw: startRoute, onDone: finishRoute, onCancel: () => setRouteDraft(null), onChoose: chooseLegRoute, onDelete: deleteLegRoute,
+        alternatives: alternativesKey ? {
+          status: alternativesNow?.status ?? "idle", items: alternativeList, pace: formatClock(paceByCourse), onPace: setPaceText,
+          onFind: findAlternatives, onUse: applyAlternative, onPoint: setPointedAlternative,
+        } : null,
       } : null}
       focusedBend={focusedBend}
       readOnly={!legEditable}

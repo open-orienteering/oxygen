@@ -8,7 +8,7 @@
 
 import { expect, test, type Page } from "@playwright/test";
 import { reseed } from "./helpers/reseed";
-import { clickMap, coveredBy, mapScale, sites, statsRow, toPage } from "./helpers/editor";
+import { cleanup, clickMap, coveredBy, editorReady, mapScale, sites, statsRow, toPage, trpcCall } from "./helpers/editor";
 import { waitForTrpc } from "./helpers/trpc";
 import { type Pt, desktopOnly, selectLeg, twoControlCourse } from "./helpers/course-editor-spec";
 import { PLANE_SLOPE, servePlane } from "./helpers/terrain";
@@ -154,5 +154,78 @@ test.describe("leg routes (docs/course-elevation.md §7.4)", () => {
     await items(page).nth(1).getByTestId("editor-leg-route-remove").click();
     await removed;
     await expect(items(page)).toHaveCount(1, { timeout: 15000 });
+  });
+});
+
+// Computed alternatives (§7.8): the search runs in a worker over the event's map; an out-of-bounds area drawn
+// across the leg makes the outcome the same on any map — no route may cross it.
+test.describe("computed route alternatives (docs/course-elevation.md §7.8)", () => {
+  desktopOnly();
+
+  test("Find routes lists alternatives round an out-of-bounds area with metres and an estimated time; Use stores one as the chosen route", async ({ page }) => {
+    await servePlane(page, "contours");
+    const { name, a, b } = await twoControlCourse(page, "CE alternatives", { minChordPx: 120 });
+    const gm = (await mapScale(page)) / 1000;
+    const lineM = Math.hypot(b.mm.x - a.mm.x, b.mm.y - a.mm.y) * gm;
+    // A bar across the leg's middle: a tenth of the leg thick, a third of it to each side.
+    const len = Math.hypot(b.mm.x - a.mm.x, b.mm.y - a.mm.y);
+    const u = { x: (b.mm.x - a.mm.x) / len, y: (b.mm.y - a.mm.y) / len };
+    const n = { x: -u.y, y: u.x };
+    const mid = { x: (a.mm.x + b.mm.x) / 2, y: (a.mm.y + b.mm.y) / 2 };
+    const corner = (along: number, across: number) => ({ x: mid.x + u.x * len * along + n.x * len * across, y: mid.y + u.y * len * along + n.y * len * across });
+    const geometry = [corner(-0.05, -0.33), corner(0.05, -0.33), corner(0.05, 0.33), corner(-0.05, 0.33)];
+    const { id: objectId } = await trpcCall<{ id: number }>("courseObject.create", { kind: "oob_area", geometry, props: {}, scope: { all: true } });
+    try {
+      await page.reload();
+      await editorReady(page);
+      await selectLeg(page, name, a, b);
+      const box = page.getByTestId("editor-leg-alternatives");
+      await expect(box).toHaveAttribute("data-status", "idle");
+      await page.getByTestId("editor-leg-alternatives-find").click();
+      await expect(box).toHaveAttribute("data-status", "done", { timeout: 60000 });
+      const alts = page.getByTestId("editor-leg-alternative");
+      await expect(alts.first()).toBeVisible();
+      const count = await alts.count();
+      expect(count).toBeGreaterThanOrEqual(1);
+      // No route crosses the bar: each is longer than the straight line by at least what the bar forces.
+      const round = Math.hypot(len * 0.5, len * 0.33) * 2 * gm;
+      for (let i = 0; i < count; i++) {
+        expect(Number(await alts.nth(i).getAttribute("data-m")), `alternative ${i}`).toBeGreaterThan(Math.min(round, lineM * 1.05) - 2);
+        expect(Number(await alts.nth(i).getAttribute("data-time"))).toBeGreaterThan(0);
+      }
+      expect(await alts.first().getAttribute("data-kind")).toMatch(/^fastest/);
+      await expect(page.getByTestId("editor-leg-alternatives-note")).toBeVisible();
+      await expect(page.getByTestId("editor-route-alternative").first()).toBeAttached();
+
+      // The pace: a faster one shortens every time in proportion.
+      const before = Number(await alts.first().getAttribute("data-time"));
+      const pace = page.getByTestId("editor-leg-alternatives-pace");
+      await expect(pace).toHaveValue("6:00");
+      await pace.fill("3:00");
+      await pace.blur();
+      await expect.poll(async () => Math.abs(Number(await alts.first().getAttribute("data-time")) - before / 2), { timeout: 5000 }).toBeLessThanOrEqual(1);
+      await pace.fill("nonsense");
+      await pace.blur();
+      await expect(pace).toHaveValue("3:00");
+
+      // Use: the alternative becomes the pair's chosen route, marked computed; the leg is read along it.
+      const altM = Number(await alts.first().getAttribute("data-m"));
+      const saved = waitForTrpc(page, "legRoute.save");
+      await alts.first().getByTestId("editor-leg-alternative-use").click();
+      await saved;
+      const route = items(page).nth(1);
+      try {
+        await expect(route).toHaveAttribute("data-source", "computed", { timeout: 15000 });
+        await expect(route).toHaveAttribute("data-chosen", "true");
+        expect(Math.abs(Number(await route.getAttribute("data-m")) - altM)).toBeLessThanOrEqual(2);
+        await expect(page.getByTestId("editor-leg-elevation")).toHaveAttribute("data-routed", "true", { timeout: 15000 });
+      } finally {
+        const removed = waitForTrpc(page, "legRoute.delete");
+        await route.getByTestId("editor-leg-route-remove").click();
+        await removed;
+      }
+    } finally {
+      await cleanup("courseObject.delete", { id: objectId });
+    }
   });
 });

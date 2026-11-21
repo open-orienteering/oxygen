@@ -3,7 +3,7 @@
 Normative specification of **heights along a course**: the height profile
 of a polyline over a map's height field and the climb read from it (§1–2),
 which field is read (§3), what the course editor shows (§4–5), the course's
-stored climb (§6) and leg routes (§7; computed alternatives pending). The height fields themselves are
+stored climb (§6) and leg routes with computed alternatives (§7). The height fields themselves are
 `docs/map-terrain.md` (§4–7); the course's stored length is
 `docs/course-controls-and-matching.md` "Course length".
 
@@ -92,6 +92,15 @@ Decided in implementation of §7.1–7.4 (2026-11-22; told to the user):
 19. **Routes are not journaled**: they travel with the backup and the
     checkout snapshot only.
 20. **A marked-route leg ignores routes**; route writes are not undoable.
+21. **The search is a cost grid with Dijkstra, in the browser** (a web
+    worker), not a visibility graph: area speeds and slope are per-cell
+    costs, which a visibility graph does not model. §1's "a later cost
+    surface has the same shape" is a separate `CostModel` over classes
+    and slope.
+22. **Alternatives are found on demand per leg** (Find routes), and an
+    alternative changes the climb only once someone uses it. §0.15's
+    automatic shortest legal route and §0.17's stored winner pace are
+    pending (§7.5 in "Pending").
 
 ## 1. The profile
 
@@ -639,9 +648,136 @@ route alone, the course in one pass.
 
 ### 7.5 Computed alternatives
 
-*Pending.* A leg selected shows its computed top alternatives with
-metres, climb and estimated time, and the course the same summed
-(§0.9). Decided with the user (§0.15–17).
+A leg selected can be **searched**: the editor finds the fastest route
+between its two controls under a cost model, up to two others that are
+nearly as fast and run somewhere else, and the shortest route that
+crosses nothing uncrossable — each with metres, climb and an estimated
+time (§0.9). An alternative can be kept as the pair's chosen route
+(§7.1 `source = 'computed'`, `model` the cost model's id). The search
+is `packages/shared/src/route/` (pure, no DOM); §7.6–7.8 describe it.
+
+### 7.6 Cost classes and the grid
+
+**Classes** (`cost-model.ts`). A map symbol is one of sixteen cost
+classes by its code — the applied match's canonical code, else the
+source code, as the checks read it (`course-layer.md` §9.3) — or says
+nothing about running (contours, point symbols):
+
+| Class | ISOM 2017-2 / ISSprOM 2019-2 codes |
+|---|---|
+| `forest` (also every unmapped cell) | 405 |
+| `open` · `roughOpen` | 401, 402, 412, 413, 214 · 403, 404, 213 |
+| `slow` · `walk` · `fight` | 406, 407, 414, 210 · 408, 409, 211 · 410, 212 |
+| `marsh` · `water` | 308, 310 · 302 |
+| `boulders` · `denseBoulders` | 208 · 209 |
+| `paved` · `road` · `path` · `smallPath` | 501 · 502, 503 · 504, 505 · 506, 507, 508 |
+| `blockedSoft` | 301, 307 (uncrossable water and marsh) |
+| `blocked` | 201, 411, 515, 518, 520, 521, 529, 708, 709, and the course's `oob_area` / 708 `oob_line` objects |
+
+The uncrossable set is the checks' `UNCROSSABLE_CODES` and `OOB_CODES`.
+
+**Grid** (`grid.ts`, `leg.ts`). A leg is searched in a window of the
+map: the box of its ends (and its crossing point) grown by half the
+leg's length, at least 10 mm, in square cells of 0.25 mm of paper
+(2.5 m at 1:10 000) — coarser when the window would hold more than
+1.2 million cells. Each cell has one class and, with a height field,
+the height at its centre (the field §3 picks, the one the climb is
+read from):
+
+1. **Areas** fill the cells whose centre is inside (even-odd over the
+   object's rings, so a hole is left out; curves cut into chords). Where
+   areas overlap, the cell takes the higher rank: forest < open <
+   green < boulders, marsh, water < paved < uncrossable water <
+   uncrossable.
+2. **Ways** — line objects of the path classes — then mark every cell
+   they touch, over anything but `blocked`: a path over uncrossable
+   water is a bridge, a path into a building opens nothing.
+3. **Uncrossable lines** mark every cell they touch `blocked`. A line
+   is walked cell by cell without a diagonal step, and the search never
+   moves diagonally between two uncrossable cells, so nothing slips
+   through a barrier.
+
+Line objects of other classes mean nothing. Objects a map patch hides
+and hidden symbols are skipped.
+
+### 7.7 The search
+
+**Cost** (`cost-model.ts`, `search.ts`). Costs are in **flat-forest
+metres**: a metre of flat, runnable forest costs 1. A move between
+neighbouring cells costs its ground length × the mean of the two
+cells' class factors × the slope factor of the height difference in
+the running direction. `CostModel { id, calibrated, classFactor,
+slopeFactor }` is the seam for calibration (§0.16): `default-1` is an
+uncalibrated first guess —
+
+| | factor |
+|---|---|
+| paved 0.62 · road 0.65 · path 0.72 · small path 0.85 | |
+| open 0.8 · rough open 0.92 · forest 1 | |
+| slow 1.3 · marsh 1.5 · boulders 1.7 · walk 1.8 · water 2.2 · dense boulders 2.6 · fight 3.2 | |
+| slope up | 1 + 7.5 × grade (100 m of climb ≈ 750 m of flat) |
+| slope down | 1 − 1.5 × grade to −10 %, then 0.85 + 3 × (grade − 10 %) |
+
+— and `shortest` costs every passable cell its length, whatever its
+class or slope.
+
+**Alternatives** (`alternatives.ts` `findRoutes`). Dijkstra over the
+eight neighbours gives the cost from the first control to every cell,
+and a second, reversed field the cost from every cell to the second
+control (each move costed in its running direction).
+
+1. The **fastest** route is the path of least cost.
+2. An **alternative** is the cheapest route through a cell that no
+   route tried so far comes near; it is kept when it costs at most
+   1.3 × the fastest and shares at most half of its length with the
+   routes already kept. "Near" is a corridor of 6 % of the leg's
+   straight length (at least 3 cells). Up to two are kept; 40 tries.
+3. The **shortest legal** route is the least-cost path under
+   `shortest`. When it runs where a kept route runs, that route is
+   marked shortest too; else it is one more entry.
+4. Each path is straightened: from each vertex the straight run to the
+   farthest later vertex that costs no more than the path between
+   them, so the grid's staircase does not lengthen a route. A route's
+   metres are its polyline's; its cost is re-read along the polyline.
+
+A control standing on an uncrossable cell is run to from the nearest
+passable cell (up to 12 cells away). A leg through a **crossing
+point** is searched in two stretches through it, with the obstacle
+opened within 1 mm of the point (`course-layer.md` §9.3); it gets the
+fastest and the shortest, without other alternatives. No way at all
+gives no route. The same input gives the same routes.
+
+### 7.8 The editor
+
+Under the Routes list (§7.4), on a desktop or tablet
+(`editor-leg-alternatives`, `data-status` `idle` / `running` / `done` /
+`error`):
+
+- **Find routes** (`editor-leg-alternatives-find`) runs the search in
+  a web worker (`lib/route/finder.ts`, `route-worker-entry.ts`; the
+  worker keeps the document's classified features and the height
+  field between searches). The course's out-of-bounds objects in view
+  are obstacles. Without a height field the search runs without
+  slopes. A result belongs to the leg as it stood — its ends, its
+  crossing point, the document, the patch, the field — and is dropped
+  when any of them changes.
+- The list (`editor-leg-alternative`, `data-kind` `fastest` /
+  `shortest` / `fastestShortest` / `alternative`, `data-m`,
+  `data-climb`, `data-time`): metres, the route's own climb as in
+  §7.4, and the estimated time `~m:ss` = cost × pace. The alternatives
+  are drawn on the map, dashed, the pointed-at one solid
+  (`editor-route-alternative`), screen only.
+- **Pace** (`editor-leg-alternatives-pace`, `m:ss` or decimal minutes
+  per km, 2:00–30:00): the pace on flat, runnable forest that the
+  costs are timed at; 6:00 by default, kept per course in this browser
+  (`oxygen.editor.routePace.<event>.<course>`).
+- **Use** (`editor-leg-alternative-use`) stores the alternative as the
+  pair's chosen route (`legRoute.save`, `source: "computed"`). An
+  alternative that is the straight line cannot be stored: the drawn
+  line is that route.
+- A note says the times are estimates from an uncalibrated model
+  (`editor-leg-alternatives-note`); no route found says so
+  (`editor-leg-alternatives-none`).
 
 ## Tests
 
@@ -663,13 +799,28 @@ metres, climb and estimated time, and the course the same summed
 | `packages/shared/src/course/__tests__/leg-routes.test.ts` | §7.1, §7.3: a leg along its chosen route between its own ends, direction, a pair run twice, a marked route, the polyline's length, the stored points' bounds |
 | `packages/api/src/__tests__/integration/leg-routes.test.ts` | §7.2, §7.3: a saved route chosen and every course of the pair read along it, the length unchanged, direction, choose and unchoose, one chosen route per pair (and the index), new points, a typed climb and a marked route untouched, a moved control, refusals, another event, a removed control, delete, the backup |
 | `packages/web/src/lib/editor/__tests__/leg-routes.test.ts` | §7.4: the chosen routes by leg key, a pair's routes, a route's metres and climb, the list with the drawn line, the map's shapes, a draft's shapes |
-| `e2e/course-editor-routes.spec.ts` | §7.4 in the browser: a route drawn and saved, its numbers, the leg and the course read along it, the drawn line chosen back, removal; a draft's keys (Backspace, Enter, Escape) |
+| `e2e/course-editor-routes.spec.ts` | §7.4 in the browser: a route drawn and saved, its numbers, the leg and the course read along it, the drawn line chosen back, removal; a draft's keys (Backspace, Enter, Escape). §7.8: alternatives round an out-of-bounds area, the pace, **Use** |
+| `packages/shared/src/route/__tests__/route.test.ts` | §7.6: codes to classes, the default model, slope; the grid's fill, holes, ranks, bridge, barrier, heights, `openDisc`, `nearestPassable`. §7.7: the cost field (distance, a gap, enclosed, slope and the reversed field); alternatives (straight, straightened, round a lake on both sides, a path against thick forest, a hill, the bounds, no way, a crossing point, a control on an obstacle, determinism) |
+| `packages/shared/src/route/__tests__/leg.test.ts` | §7.6: a document's features by match or source code, a patch-hidden object, the course's out-of-bounds area, a leg's window and cell size |
+| `packages/web/src/lib/route/__tests__/finder.test.ts` | §7.8: the worker's state (a search needs its document), the document sent once and again when it changes, dispose |
+| `packages/web/src/lib/editor/__tests__/leg-alternatives.test.ts` | §7.8: the pace as typed, the clock, the list's kinds and times, the map's shapes, out-of-bounds objects as obstacles |
 | `packages/web/src/lib/editor/__tests__/profile-graph.test.ts` | §5: points and bounds, the leg at a distance, ticks, an axis that ends on ticks, the scale and its minimum span, the paths and their breaks, decimation, the height at a distance, label thinning, the kept preference |
 | `e2e/course-editor-profile.spec.ts` | §5 in the browser: the toggle, the panel under the map and above the rail's end, the controls, the summary, the kept preference, ✕; the pointer's readout, the dot on the map, a click selecting the leg |
 
 ## Pending in this chapter
 
-- §7.5 as marked.
+- §7.5, decided and not built: the course's sum of route metres, climb
+  and estimated time; the shortest legal route applied to every leg
+  without a pinned one (§0.15), so the official climb follows it
+  without a click per leg; the pace as the course's expected winner
+  pace stored with the course (§0.17) — it is a per-browser pace on
+  flat forest now.
+- §7.6: bridges, underpasses, stairs and multi-level sprint areas are
+  not modelled; passable cliffs, fences and walls cost nothing to
+  cross; a symbol without a recognised code is unmapped forest; a
+  passage narrower than a cell between two barriers is closed.
+- §7.7: the cost model is uncalibrated (`default-1`); calibration from
+  GPS tracks replaces it behind `CostModel`.
 - §6: a climb is not recomputed when heights arrive later (a contour
   field derived, a DEM job done), on a Height data settings change or a
   `TERRAIN_VERSION` bump — until the course's next edit or its next

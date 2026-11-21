@@ -11,6 +11,7 @@ import { useTranslation } from "react-i18next";
 import type { course } from "@oxygen/shared";
 import type { LegElevation } from "../../../lib/editor/elevation";
 import type { RouteItem } from "../../../lib/editor/leg-routes";
+import { formatClock, type AlternativeItem } from "../../../lib/editor/leg-alternatives";
 import { DEFAULT_CORRIDOR, type LegPatch } from "../../../lib/editor/structure-edit";
 
 /** The wire form's leg: `crossing.controlId` is a public id (course-layer.md §6.1). */
@@ -53,6 +54,57 @@ export interface LegRoutesProps {
   /** `id` null: the drawn line (no route chosen). */
   onChoose: (id: string | null) => void;
   onDelete: (id: string) => void;
+  /** Computed alternatives (§7.8); null: the map cannot be searched (no document loaded). */
+  alternatives: LegAlternativesProps | null;
+}
+
+export interface LegAlternativesProps {
+  status: "idle" | "running" | "done" | "error";
+  items: readonly AlternativeItem[];
+  /** The pace the times are at, as typed (`m:ss` per km). */
+  pace: string;
+  onPace: (text: string) => boolean;
+  onFind: () => void;
+  /** Store the alternative as the pair's chosen route. */
+  onUse: (index: number) => void;
+  onPoint: (index: number | null) => void;
+}
+
+function LegAlternatives({ a, locked }: { a: LegAlternativesProps; locked: boolean }) {
+  const { t } = useTranslation("editor");
+  return (
+    <div data-testid="editor-leg-alternatives" data-status={a.status} className="space-y-1">
+      <div className="flex items-center gap-2">
+        <button type="button" data-testid="editor-leg-alternatives-find" disabled={locked || a.status === "running"} onClick={a.onFind}
+          className={`${BUTTON} border-orange-200 text-orange-700 hover:bg-orange-50`}>{t(a.status === "running" ? "legAlternativesSearching" : "legAlternativesFind")}</button>
+        <label className="ml-auto flex items-center gap-1 text-[10px] text-slate-500">{t("legAlternativesPace")}
+          <input data-testid="editor-leg-alternatives-pace" className="w-12 px-1 py-0.5 rounded border border-slate-200 bg-white text-[11px] font-mono" defaultValue={a.pace} key={a.pace}
+            onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+            onBlur={(e) => { if (!a.onPace(e.target.value)) e.target.value = a.pace; }} />
+        </label>
+      </div>
+      {a.status === "error" && <p data-testid="editor-leg-alternatives-error" className="text-[10px] text-red-600">{t("legAlternativesError")}</p>}
+      {a.status === "done" && a.items.length === 0 && <p data-testid="editor-leg-alternatives-none" className="text-[10px] text-amber-700">{t("legAlternativesNone")}</p>}
+      {a.status === "done" && a.items.length > 0 && (
+        <>
+          <ul className="space-y-0.5">
+            {a.items.map((item) => (
+              <li key={item.index} data-testid="editor-leg-alternative" data-kind={item.kind} data-m={item.lengthM} data-climb={item.climbM ?? ""} data-time={item.timeS}
+                onMouseEnter={() => a.onPoint(item.index)} onMouseLeave={() => a.onPoint(null)}
+                className="flex items-center gap-1.5 rounded px-1 text-[11px] text-slate-600 hover:bg-orange-50">
+                <span className="flex-1">{t(`legAlternativeKind.${item.kind}`)}</span>
+                <span className="font-mono text-slate-700">{item.lengthM} m{item.climbM !== null && <> · {item.approx ? "≈ " : ""}{t("legRouteClimb", { m: item.climbM })}</>} · ~{formatClock(item.timeS)}</span>
+                <button type="button" data-testid="editor-leg-alternative-use" disabled={locked || item.interior.length === 0} onClick={() => a.onUse(item.index)}
+                  title={item.interior.length === 0 ? t("legAlternativeIsLine") : undefined}
+                  className={`${BUTTON} border-orange-200 text-orange-700 hover:bg-orange-50`}>{t("legAlternativeUse")}</button>
+              </li>
+            ))}
+          </ul>
+          <p data-testid="editor-leg-alternatives-note" className="text-[10px] text-slate-400">{t("legAlternativesNote")}</p>
+        </>
+      )}
+    </div>
+  );
 }
 
 function LegRoutes({ r, readOnly }: { r: LegRoutesProps; readOnly: boolean }) {
@@ -95,6 +147,7 @@ function LegRoutes({ r, readOnly }: { r: LegRoutesProps; readOnly: boolean }) {
       ) : (
         <p data-testid="editor-leg-routes-hint" className="text-[10px] text-slate-400">{t("legRoutesHint")}</p>
       )}
+      {r.alternatives && !r.drawing && <LegAlternatives a={r.alternatives} locked={readOnly || r.busy} />}
     </div>
   );
 }

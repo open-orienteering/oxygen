@@ -8,6 +8,7 @@
 
 import { useDeferredValue, useMemo } from "react";
 import { courseProfile, fieldSampler, pickClimbField, type ClimbTerrainLike, type PaperPoint, type TerrainSampler } from "@oxygen/shared/src/terrain/profile/index.js";
+import type { HeightField } from "@oxygen/shared/src/terrain/field/types.js";
 import { useHeightField } from "../../hooks/useHeightField";
 import type { CourseElevation } from "../../lib/editor/elevation";
 
@@ -21,7 +22,7 @@ export interface CourseElevationInput {
   nameId: string | null;
 }
 
-export function useCourseElevation({ terrain, active, legs: liveLegs, nameId }: CourseElevationInput): { elevation: CourseElevation; sampler: TerrainSampler | null; retry: () => void } {
+export function useCourseElevation({ terrain, active, legs: liveLegs, nameId }: CourseElevationInput): { elevation: CourseElevation; sampler: TerrainSampler | null; field: { key: string; field: HeightField } | null; retry: () => void } {
   // The profile follows a drag one render behind: the drag's own frames come first.
   const legs = useDeferredValue(liveLegs);
   const pick = useMemo(() => pickClimbField(terrain), [terrain]);
@@ -42,5 +43,6 @@ export function useCourseElevation({ terrain, active, legs: liveLegs, nameId }: 
       datum: sampler.datum, groundMPerMm: sampler.groundMPerMm,
     };
   }, [wanted, pick, legs, state, sampler, profile]);
-  return { elevation, sampler, retry };
+  const keyed = useMemo(() => (field && pick ? { key: pick.url, field } : null), [field, pick]);
+  return { elevation, sampler, field: keyed, retry };
 }

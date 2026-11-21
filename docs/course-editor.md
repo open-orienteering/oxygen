@@ -1666,7 +1666,9 @@ undo or a mode switch.
   (`editor-profile`, `course-elevation.md` §5). The Leg section's
   **Routes** block draws, chooses and removes routes for the leg's
   control pair; the climb is read along the chosen one
-  (`editor-leg-routes`, `course-elevation.md` §7.4).
+  (`editor-leg-routes`, `course-elevation.md` §7.4). **Find routes** lists
+  computed alternatives with metres, climb and an estimated time
+  (`editor-leg-alternatives`, `course-elevation.md` §7.8).
 
 ## 9. Field mode
 
