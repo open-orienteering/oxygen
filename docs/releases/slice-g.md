@@ -1,5 +1,7 @@
 # Release runbook — slices G and H (map corrections, GPS tracks, terrain) — v0.8.0
 
+> The shared steps (preconditions, landing on `main`, tag, backup, deploy, re-match, rollback) are in [runbook.md](runbook.md); this note keeps what was particular to this release and its record.
+
 Slice G is map corrections inside an event plus GPS tracks turned into map
 objects. It covers `docs/research/vector-map-pipeline/SLICES.md` rows
 G2–G29, with V1, D9c and C15 beside them:

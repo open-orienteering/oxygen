@@ -1,5 +1,7 @@
 # Release runbook — slice E (full migration to the vector pipeline)
 
+> The shared steps (preconditions, landing on `main`, tag, backup, deploy, re-match, rollback) are in [runbook.md](runbook.md); this note keeps what was particular to this release and its record.
+
 Slice E moves every event to the vector pipeline and removes the legacy one
 (`docs/research/vector-map-pipeline/SLICES.md`, slice E; decision log
 "Slice E re-cut"). It ships as two tags with one rollback boundary:

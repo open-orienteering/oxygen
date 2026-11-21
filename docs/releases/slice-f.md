@@ -1,5 +1,7 @@
 # Release runbook — slice F (editor phase 2) — v0.7.0
 
+> The shared steps (preconditions, landing on `main`, tag, backup, deploy, re-match, rollback) are in [runbook.md](runbook.md); this note keeps what was particular to this release and its record.
+
 Slice F is the new course editor's second phase (`docs/research/vector-map-pipeline/SLICES.md`,
 rows F1–F32; F26 deferred): leg styles and Bézier bends, corridors,
 crossing and map-issue points, map exchanges, variations and loops with

@@ -174,7 +174,7 @@ not GitHub Actions.
 
 ## Release runbooks
 
-Each vector-pipeline release has a runbook in this folder: the order of operations, the exact commands and the record of what happened on production.
+Every release follows the shared steps in [runbook.md](runbook.md). Each vector-pipeline release also has its own note in this folder: what it carried, its migrations, its gates and the record of what happened on production. A new release's note holds only those deltas; the older notes below predate the shared runbook and repeat some of its steps.
 
 | Runbook | Slices | Version |
 | --- | --- | --- |

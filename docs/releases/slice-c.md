@@ -1,5 +1,7 @@
 # Release runbook — slice C (derived course layer and PDF)
 
+> The shared steps (preconditions, landing on `main`, tag, backup, deploy, re-match, rollback) are in [runbook.md](runbook.md); this note keeps what was particular to this release and its record.
+
 Slice C lands on `main` the same way slices A and B did
 ([releases/slice-b.md](slice-b.md)): one PR from
 `vector-map-pipeline`, a merge commit, a tag (`v0.4.0`), `deploy.sh`.

@@ -1,5 +1,7 @@
 # Release runbook — slices I and J (colour layers, course graphics) — v0.9.0
 
+> The shared steps (preconditions, landing on `main`, tag, backup, deploy, re-match, rollback) are in [runbook.md](runbook.md); this note keeps what was particular to this release and its record.
+
 Slice I draws every map on the IOF colour layers
 (`docs/research/vector-map-pipeline/SLICES.md` rows I1–I9):
 

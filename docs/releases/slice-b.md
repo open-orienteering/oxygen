@@ -1,5 +1,7 @@
 # Release runbook — slice B (GL viewer behind the per-event switch)
 
+> The shared steps (preconditions, landing on `main`, tag, backup, deploy, re-match, rollback) are in [runbook.md](runbook.md); this note keeps what was particular to this release and its record.
+
 Slice B lands on `main` the same way slice A did ([releases/slice-a.md](slice-a.md)):
 one PR from `vector-map-pipeline`, a merge commit, a tag, `deploy.sh`.
 Everything user-visible is behind the per-event switch

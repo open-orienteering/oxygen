@@ -1,5 +1,7 @@
 # Releasing slice A (import and storage) to the club instance
 
+> The shared steps (preconditions, landing on `main`, tag, backup, deploy, re-match, rollback) are in [runbook.md](runbook.md); this note keeps what was particular to this release and its record.
+
 Runbook for the first vector-map-pipeline release: the one 09 §4 A calls
 "no user-visible change", gated by the production backfill. It is the
 order of operations and the exact commands; the design is in
