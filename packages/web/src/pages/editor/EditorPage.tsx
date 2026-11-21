@@ -30,7 +30,7 @@ import { course as courseShared, type ControlDescription, type ControlKind, type
 import { trpc } from "../../lib/trpc";
 import { MapPanel } from "../../components/MapPanel";
 import { ControlDescriptionEditor } from "../../components/ControlDescriptionEditor";
-import type { EditorDescriptionSuggestion, EditorToolBinding, MapViewerEditorProps, ToolPointer } from "../../components/MapViewer";
+import type { EditorDescriptionSuggestion, EditorToolBinding, MapViewerEditorProps, ToolPointer, ToolShape } from "../../components/MapViewer";
 import { useCoursePresence } from "../../hooks/useCoursePresence";
 import { clockTime, courseChangedElsewhere } from "../../lib/editor/presence";
 import { PresenceChips } from "./PresenceChips";

@@ -68,7 +68,7 @@ function climbRow(s: StatusInput, t: T): StatusRow | null {
       data: { m: String(line.climbM), source: "computed", state: "ready", share, basis: line.basis, partial: String(line.partial), approx: String(line.approx) },
     };
   }
-  const data = line.state === "loading" ? { state: "loading" } : { state: "unavailable", kind: line.kind };
+  const data: Record<string, string> = line.state === "loading" ? { state: "loading" } : { state: "unavailable", kind: line.kind };
   if (stored !== null) return { id: "climb", text: t("statusClimb", { m: stored }), data: { m: String(stored), source: "stored", ...data } };
   return { id: "climb", text: t(line.state === "loading" ? "statusClimbLoading" : "statusClimbUnavailable"), short: "", data };
 }
