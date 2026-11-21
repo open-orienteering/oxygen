@@ -118,3 +118,21 @@ needed, restore the §2 backup with
 
 **Reader BT** (PR #104): one Reader BT connected at the finish, a card
 read, the link dropped and recovered on the next card.
+
+### Club production, 2026-11-21
+
+v0.9.0 (`main` `89bb795e`, PR #239), run from a v0.9.0 worktree with the
+operator's `scripts/gcp/env.sh` copied in (it is gitignored, so not in the tag):
+
+- **Backup**: on-demand backup `1795243388550` ("before v0.9.0 (slices I, J)").
+- **Deploy**: `./deploy.sh v0.9.0` applied the six migrations, the J13
+  corridor reset included (execution `oxygen-migrate-whhkx`). Revision
+  `oxygen-00056-d8p` serves 100 % of traffic (was `oxygen-00055-mk8` on
+  v0.8.0). The deploy passed no `MAP_DEM_PROVIDERS` (no
+  `oxygen-geotorget-credentials` secret); height data comes from the account
+  saved in Settings → Height data (`lantmateriet-2m`).
+- **Re-match**: the dry run listed 21 stale pins (`oxygen-map-rematch-fkx2d`).
+  The run re-matched all 21 with 0 failures, in 88.1 s
+  (`oxygen-map-rematch-drczr`). Nackareservatet 2023-03-29 (101 729 objects,
+  over the 60 000 cap) and the events on it still get no thumbnail, as before.
+- **Gates**: I-gate, J-gate and the Reader BT check (§5) are the user's, open.
