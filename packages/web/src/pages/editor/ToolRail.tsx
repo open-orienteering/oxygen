@@ -88,7 +88,7 @@ export function ToolRail(p: ToolRailProps) {
     </button>
   );
   return (
-    <div data-testid="editor-tool-rail" className="pointer-events-auto relative flex flex-col gap-1 bg-white/95 backdrop-blur-sm border border-slate-200 rounded-lg shadow-sm p-1 self-start">
+    <div data-testid="editor-tool-rail" className="pointer-events-auto relative flex flex-col gap-1 bg-white/95 backdrop-blur-sm border border-slate-200 rounded-lg shadow-sm p-1 self-start max-h-full overflow-y-auto">
       {button("V", t("toolSelect"), () => p.onTool("V"))}
       {button("S", t("toolStart"), () => p.onTool("S"))}
       {button("K", t("toolControl"), () => p.onTool("K"))}

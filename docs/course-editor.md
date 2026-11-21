@@ -1660,7 +1660,9 @@ undo or a mode switch.
   (`courses.climb`, entered on the Courses page), else the climb computed
   from the map's height field along the course, with its share of the
   length. A selected leg shows its own length, climb, descent and net
-  height in the Leg section (`course-elevation.md` §4.5).
+  height in the Leg section (`course-elevation.md` §4.5). The popover's
+  *Show elevation profile* opens the profile graph under the map
+  (`editor-profile`, `course-elevation.md` §5).
 
 ## 9. Field mode
 
@@ -3188,6 +3190,7 @@ shard (`docs/dev/e2e-sharding.md` "CI"); the helpers they share are
 | `e2e/course-editor-status.spec.ts` | conflicts between two contexts (§3), the save state in the top bar (P2), the map-info dialog (P6), map exchange (F5) |
 | `e2e/course-editor-phone.spec.ts` | the phone: the touch subset, the read-only Leg section (F3), the variation block (F7), the computed climb on the peek line (`course-elevation.md` §4.4) |
 | `e2e/course-editor-elevation.spec.ts` | the computed climb and a leg's heights (`course-elevation.md` §4) |
+| `e2e/course-editor-profile.spec.ts` | the elevation profile under the map (`course-elevation.md` §5) |
 
 Project `chromium` (desktop Chrome) runs the first six, project `mobile`
 (Pixel 7; `MOBILE_SPECS`) only the phone file. The desktop describes still

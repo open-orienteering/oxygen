@@ -23,7 +23,7 @@ import type { ReactNode } from "react";
 import type { EditorMode, EditorView } from "../../lib/editor/state";
 import type { ExportState } from "../../lib/editor/export-menu";
 import { ExportMenu } from "./ExportMenu";
-import { SaveIndicator, StatsButton } from "./EditorStatus";
+import { SaveIndicator, StatsButton, type ProfileToggle } from "./EditorStatus";
 import type { SaveState, StatusInput } from "../../lib/editor/status";
 import { MapInfoButton } from "./MapInfoDialog";
 import type { MapInfoInput } from "../../lib/editor/map-info";
@@ -72,6 +72,8 @@ export interface TopBarProps {
   status: Omit<StatusInput, "scale">;
   /** Asks for the height field again after a failed read (docs/course-elevation.md §4.3). */
   onRetryElevation?: () => void;
+  /** The elevation profile's toggle (docs/course-elevation.md §5); null or absent: not offered. */
+  profile?: ProfileToggle | null;
   /** The map-info dialog's values (§2, P6). */
   map: MapInfoInput;
 }
@@ -206,7 +208,7 @@ export function TopBar(p: TopBarProps) {
       />
       <ExportMenu state={p.exportState} onError={p.onExportError} />
       <MapInfoButton map={p.map} />
-      <StatsButton status={p.status} onRetryElevation={p.onRetryElevation} />
+      <StatsButton status={p.status} onRetryElevation={p.onRetryElevation} profile={p.profile} />
       <SaveIndicator save={p.save} />
       {p.presence}
       <EditorHelp hint={t("help")} label={tc("editor.helpAria")} />

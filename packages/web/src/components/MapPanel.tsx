@@ -77,6 +77,11 @@ export interface MapPanelPublicProps {
    * subtree. Rendered as a direct child of the MapPanel fullscreen element.
    */
   fullscreenOverlay?: React.ReactNode;
+  /**
+   * A panel under the map, inside the fullscreen subtree (the course editor's elevation profile,
+   * docs/course-elevation.md §5): the map gives it its height. Stabilize via `useMemo`.
+   */
+  bottomPanel?: React.ReactNode;
   /** Per-control punch status for mispunch visualization (keyed by control code string e.g. "67") */
   punchStatusByCode?: Record<string, "ok" | "missing" | "extra">;
   /** Focus/zoom to controls with these codes (e.g. mispunched controls) */
@@ -128,6 +133,7 @@ function MapPanelImpl({
   mapOverlay,
   mapOverlayLayout = "corner",
   fullscreenOverlay,
+  bottomPanel,
   punchStatusByCode,
   focusControlCodes,
   hideToolbar = false,
@@ -714,6 +720,8 @@ function MapPanelImpl({
           </div>
         )}
       </div>
+
+      {bottomPanel}
 
       {/* The drop zone's upload feedback, still showing once its map is in (the map-info dialog shows its own). */}
       {replace.uploading && (

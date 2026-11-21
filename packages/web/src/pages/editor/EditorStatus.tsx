@@ -32,7 +32,9 @@ export function SaveIndicator({ save }: { save: SaveState }) {
   );
 }
 
-export function StatsButton({ status, onRetryElevation }: { status: Omit<StatusInput, "scale">; onRetryElevation?: () => void }) {
+export interface ProfileToggle { open: boolean; onToggle: () => void }
+
+export function StatsButton({ status, onRetryElevation, profile }: { status: Omit<StatusInput, "scale">; onRetryElevation?: () => void; profile?: ProfileToggle | null }) {
   const { t } = useTranslation("editor");
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
@@ -92,6 +94,13 @@ export function StatsButton({ status, onRetryElevation }: { status: Omit<StatusI
           {line?.state === "unavailable" && onRetryElevation && rows.some((r) => r.id === "climb" && r.data.state === "unavailable") && (
             <button type="button" data-testid="editor-stats-elevation-retry" onClick={onRetryElevation}
               className="mt-1 rounded-md border border-slate-200 px-2 py-0.5 text-[11px] text-slate-600 hover:bg-slate-50 cursor-pointer">{t("elevationRetry")}</button>
+          )}
+          {/* docs/course-elevation.md §5: the profile panel under the map. */}
+          {profile && (
+            <button type="button" data-testid="editor-stats-profile-toggle" aria-pressed={profile.open} onClick={() => { profile.onToggle(); setOpen(false); }}
+              className="mt-1.5 block w-full rounded-md border border-slate-200 px-2 py-0.5 text-left text-[11px] text-slate-600 hover:bg-slate-50 cursor-pointer">
+              {t(profile.open ? "profileHide" : "profileShow")}
+            </button>
           )}
         </div>
       )}

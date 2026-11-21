@@ -304,7 +304,58 @@ climb too: they are the leg's, not the course's stated value.
 
 ## 5. The profile graph
 
-*Pending: slice 3.*
+Implementation: `packages/web/src/lib/editor/profile-graph.ts` (the
+model), `pages/editor/ProfilePanel.tsx` (the panel, plain SVG),
+`components/MapPanel.tsx` `bottomPanel`.
+
+**Where.** A panel under the map, inside the map's fullscreen subtree,
+144 px high (`PROFILE_PANEL_HEIGHT`); the map gives it its height, and
+the tool rail scrolls when the window is too short for both. Desktop and
+tablet only: the phone has no panel. It is shown when it is **open** and
+§4's state is `ready`, and is opened and closed by *Show / Hide elevation
+profile* in the course-info popover (`editor-stats-profile-toggle`,
+`aria-pressed`; offered only in state `ready`, under a typed climb too)
+and closed by its ✕ (`editor-profile-close`). Open or closed is kept on
+the device (`localStorage` `oxygen.editor.profilePanel`, `open` /
+`closed`; closed by default).
+
+**What** (`editor-profile`: `data-basis`, `data-datum`,
+`data-length-m`):
+
+- A header: the title, the summary `1.7 km · ↑ 38 m · ↓ 37 m`
+  (`editor-profile-summary`: the profile's length, climb and descent,
+  §2 — the computed values, also under a typed climb), what the height
+  axis counts, and with basis `contours` the disclaimer
+  (`editor-profile-note`).
+- The graph (`editor-profile-graph`): height against distance along the
+  course, one line (`editor-profile-line`, the course purple, 2 px) over
+  a light area down to the baseline. The line breaks where there is no
+  data. **One axis**: a field with datum `relative` is drawn as *metres
+  above the course's lowest point*, an `absolute` one as *metres above
+  sea level*; the range is at least 10 m (`MIN_SPAN_M`) and ends on round
+  ticks (`niceTicks`: 1, 2, 5 × 10ⁿ). Distance ticks in km.
+- The controls (`editor-profile-control`, `data-index`, `data-d`): a
+  dashed vertical mark where each leg starts and at the finish, labelled
+  along the top `S`, `1`, `2` … `F` (the leg's ordinal, as the course's
+  numbers; `M` for the finish in Swedish); labels closer than 16 px thin
+  out, the first and last stay (`boundLabels`).
+- The selected leg (§4.5) is shaded (`editor-profile-selected`,
+  `data-leg`).
+
+A long course is drawn with at most two points per pixel column — the
+column's lowest and highest, so peaks stay (`decimate`).
+
+**The pointer.** Over the graph it reads a place: a crosshair
+(`editor-profile-crosshair`) with a dot on the line, and a readout
+(`editor-profile-tooltip`: `data-d`, `data-z`, `data-leg`) — the height,
+the distance along the course and the leg by its controls' codes
+(*36 m · at 0.87 km · Leg 87 → 86*), or *No height data here*. The same
+place is marked on the map by a dot (`editor-profile-map-dot` in the
+viewer's marker layer, `data-x` / `data-y` paper mm, `data-leg`;
+`pointAtDistance` over the leg's drawn line), updated once per frame. A
+**click** selects the leg under the pointer, as a click on the leg on
+the map does (the Leg section, the action bar's leg actions at that
+place). The pointer leaving removes the readout and the dot.
 
 ## 6. The course's stored climb
 
@@ -332,10 +383,16 @@ leg with a route states its climb along the route.
 | `packages/web/src/lib/editor/__tests__/status.test.ts` "the climb row is one number" | §4.4: the order typed · computed · stored · words, the phone's short text |
 | `e2e/course-editor-elevation.spec.ts` | §4 in the browser on a synthetic plane field: the computed climb and its notes, a leg's numbers, a moved control, a ground model's attribution, a failed read and **Try again**, a typed climb, free order and the all-controls view, a map without a field |
 | `e2e/course-editor-phone.spec.ts` "the computed climb on a phone" | §4.4 "Phone" |
+| `packages/web/src/lib/editor/__tests__/profile-graph.test.ts` | §5: points and bounds, the leg at a distance, ticks, the scale and its minimum span, the paths and their breaks, decimation, the height at a distance, label thinning, the kept preference |
+| `e2e/course-editor-profile.spec.ts` | §5 in the browser: the toggle, the panel under the map and above the rail's end, the controls, the summary, the kept preference, ✕; the pointer's readout, the dot on the map, a click selecting the leg |
 
 ## Pending in this chapter
 
-- §5–7 as marked.
+- §6–7 as marked.
+- §5: the map does not point back at the graph (hovering a leg on the map
+  marks nothing on the profile); stretches of low confidence are not
+  drawn apart; there is no table view of the profile and no keyboard
+  reading of it; the phone has no profile.
 - §4.4: a typed climb cannot be cleared back to the computed one in the
   editor yet, and the computed climb is not stored, printed or exported
   (§6).

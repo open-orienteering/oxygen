@@ -90,6 +90,9 @@ import type { MapInfoInput } from "../../lib/editor/map-info";
 import { useCourseChecks } from "./useCourseChecks";
 import { useCourseElevation } from "./useCourseElevation";
 import { legElevation, lineClimbStatus } from "../../lib/editor/elevation";
+import { legAt, legBounds, readProfileOpen, writeProfileOpen } from "../../lib/editor/profile-graph";
+import { pointAtDistance } from "@oxygen/shared/src/terrain/profile/index.js";
+import { ProfilePanel } from "./ProfilePanel";
 import type { EditorCheck } from "../../lib/editor/checks";
 import { CourseSection, MultiSection, SelectionSection } from "./modes/CourseMode";
 import { AddMenu, FieldQueueNotice, FieldSection, FieldSelection, FieldTopBar, FixStatus, OverflowMenu, type AddChoice } from "./modes/FieldMode";
@@ -1739,12 +1742,63 @@ export function EditorPage() {
   // Heights along the course's line (docs/course-elevation.md §4): ordered courses, in Course mode's own view.
   const elevationLegs = state.mode === "course" && structure?.orderMode === "ordered" ? courseChecks.legs : null;
   const { elevation, retry: retryElevation } = useCourseElevation({ terrain: mapMetadata.data?.terrain, legs: elevationLegs, nameId: nameId ?? null });
-  const selectedLegElevation = useMemo(() => {
+  /** The selected leg among the course's derived legs. */
+  const selectedLegIndex = useMemo(() => {
     const insertAt = state.phantom?.insertAt;
     if (!selectedLeg || insertAt == null || !elevationLegs) return null;
     const index = elevationLegs.findIndex((_, i) => insertIndexForLeg(rows, i) === insertAt);
-    return legElevation(elevation, index < 0 ? null : index);
-  }, [selectedLeg, state.phantom, elevationLegs, rows, elevation]);
+    return index < 0 ? null : index;
+  }, [selectedLeg, state.phantom, elevationLegs, rows]);
+  const selectedLegElevation = useMemo(() => legElevation(elevation, selectedLegIndex), [elevation, selectedLegIndex]);
+
+  // ─── The elevation profile under the map (docs/course-elevation.md §5): desktop and tablet ───
+  const [profileOpen, setProfileOpen] = useState(() => readProfileOpen(typeof localStorage === "undefined" ? null : localStorage));
+  const toggleProfile = useCallback(() => setProfileOpen((open) => {
+    writeProfileOpen(typeof localStorage === "undefined" ? null : localStorage, !open);
+    return !open;
+  }), []);
+  const profileShown = profileOpen && !isMobile && elevation.state === "ready";
+  /** The place the pointer reads on the graph, metres along the course; one update per frame. */
+  const [profileHoverM, setProfileHoverM] = useState<number | null>(null);
+  const profileHoverPending = useRef<{ d: number | null; frame: number | null }>({ d: null, frame: null });
+  const hoverProfile = useCallback((d: number | null) => {
+    const pending = profileHoverPending.current;
+    pending.d = d;
+    if (pending.frame !== null) return;
+    pending.frame = requestAnimationFrame(() => { pending.frame = null; setProfileHoverM(pending.d); });
+  }, []);
+  /** The paper point of a distance along the course's legs. */
+  const profilePlace = useCallback((d: number): { leg: number; pt: Pt } | null => {
+    if (elevation.state !== "ready" || !elevationLegs) return null;
+    const leg = legAt(legBounds(elevation.profile), d);
+    const points = elevationLegs[leg]?.points;
+    const pt = points ? pointAtDistance(points, elevation.groundMPerMm, d - elevation.profile.legs[leg].offsetM) : null;
+    return pt ? { leg, pt } : null;
+  }, [elevation, elevationLegs]);
+  const profileMarkers = useMemo<ToolShape[]>(() => {
+    const at = profileShown && profileHoverM !== null ? profilePlace(profileHoverM) : null;
+    const rMm = (courseInfo?.metrics?.circleRadiusMm ?? 2.5) * 0.35;
+    return at ? [{ kind: "circle", x: at.pt.x, y: at.pt.y, rMm, color: "#ffffff", fill: "#a21caf", testId: "editor-profile-map-dot", data: { x: at.pt.x.toFixed(2), y: at.pt.y.toFixed(2), leg: String(at.leg) } }] : [];
+  }, [profileShown, profileHoverM, profilePlace, courseInfo?.metrics?.circleRadiusMm]);
+  const selectProfileLeg = useCallback((leg: number, d: number) => {
+    const at = profilePlace(d);
+    if (!at) return;
+    setRadioSwapOffer(null);
+    setBendFocus(null);
+    dispatch({ type: "leg-click", x: at.pt.x, y: at.pt.y, insertAt: insertIndexForLeg(rows, leg) });
+  }, [profilePlace, rows]);
+  const profileLabels = useMemo(() => {
+    const legs = elevationLegs ?? [];
+    const code = (id: string) => coordsById.get(Number(id))?.code ?? id;
+    return {
+      legs: legs.map((l) => `${code(l.from)} → ${code(l.to)}`),
+      bounds: legs.length === 0 ? [] : [t("profileStart"), ...legs.slice(0, -1).map((_, i) => String(i + 1)), t("profileFinish")],
+    };
+  }, [elevationLegs, coordsById, t]);
+  const profilePanel = useMemo(() => (profileShown && elevation.state === "ready" ? (
+    <ProfilePanel profile={elevation.profile} datum={elevation.datum} basis={elevation.basis} legLabels={profileLabels.legs} boundLabels={profileLabels.bounds}
+      selectedLeg={selectedLegIndex} onHover={hoverProfile} onSelectLeg={selectProfileLeg} onClose={toggleProfile} />
+  ) : null), [profileShown, elevation, profileLabels, selectedLegIndex, hoverProfile, selectProfileLeg, toggleProfile]);
   const locateSite = courseChecks.locate;
   const locateCheck = useCallback((c: EditorCheck) => {
     const { selectId, centre } = locateSite(c);
@@ -1882,6 +1936,7 @@ export function EditorPage() {
   const classLayout = classView.layout;
   const courseControlIds = useMemo(() => new Set([...memberIds].map(String)), [memberIds]);
   const toolActive = state.tool.kind !== "select";
+  const allMarkers = useMemo(() => (profileMarkers.length ? [...courseChecks.markers, ...profileMarkers] : courseChecks.markers), [courseChecks.markers, profileMarkers]);
   const editor: MapViewerEditorProps = useMemo(() => ({
     selectedControlId: state.selectedControlId !== null ? String(state.selectedControlId) : null,
     phantom: state.phantom ? { x: state.phantom.x, y: state.phantom.y } : null,
@@ -1917,11 +1972,11 @@ export function EditorPage() {
     viewRequest,
     provisional,
     onCourseInfo: setCourseInfo,
-    markers: courseChecks.markers,
+    markers: allMarkers,
     layout: classLayout,
     courseOverride,
     legDraft: shownLegDraft,
-  }), [shownLegDraft, classLayout, courseChecks.markers, isMobile, fix, sheetPx, fieldMoveEnd, state.selectedControlId, state.phantom, contextActions, contextInfo, srrBadge, radioOn, suggestions, tc, courseControlIds, toolActive,
+  }), [shownLegDraft, classLayout, allMarkers, isMobile, fix, sheetPx, fieldMoveEnd, state.selectedControlId, state.phantom, contextActions, contextInfo, srrBadge, radioOn, suggestions, tc, courseControlIds, toolActive,
     courseView, selectedCourse, moveWarnings, moveEpoch, handleMapClick, handleLabelMoveEnd, handleSelect,
     handleDismiss, handleLegClick, shownBinding, placementLoupe, snapIndex, snap, draftObjects, draftFast, viewRequest, provisional, courseOverride, state.view]);
 
@@ -2328,6 +2383,7 @@ export function EditorPage() {
       save={save}
       status={status}
       onRetryElevation={retryElevation}
+      profile={elevation.state === "ready" ? { open: profileOpen, onToggle: toggleProfile } : null}
       map={mapInfoInput}
     />
   );
@@ -2745,6 +2801,7 @@ export function EditorPage() {
           descriptionsAllControls
           toolbar={toolbar}
           mapOverlay={overlay}
+          bottomPanel={profilePanel}
           mapOverlayLayout={isMobile ? "fill" : "corner"}
           fullscreenOverlay={descControl ? (
             <ControlDescriptionEditor controlCode={descControl.code} initial={descControl.description} onSave={saveDescription} onCancel={closeDescription} />
