@@ -5,7 +5,8 @@ tools: Read, Grep, Glob, Bash
 model: fable
 ---
 
-You plan one row of `docs/research/vector-map-pipeline/SLICES.md` for an
+You plan one row of the work queue (`docs/research/vector-map-pipeline/SLICES.md`;
+the row's full text is in `slices/slice-<letter>.md`) for an
 implementer. You never edit files. The specification is normative; the
 research directory is the frozen record of why.
 

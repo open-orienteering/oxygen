@@ -10,8 +10,10 @@ never `main`.
 
 ## 0. Claim
 
-- Read the row in `docs/research/vector-map-pipeline/SLICES.md`. Stop if
-  its status is not `ready`: report what blocks it.
+- Read the row: its full text is in the slice's file,
+  `docs/research/vector-map-pipeline/slices/slice-<letter>.md`; open rows
+  are also listed in `SLICES.md`. Stop if its status is not `ready`:
+  report what blocks it.
 - Confirm this worktree's branch was cut from `vector-map-pipeline`
   (`git merge-base --is-ancestor origin/vector-map-pipeline HEAD`).
 - In a fresh worktree run `pnpm install --frozen-lockfile` and
@@ -79,7 +81,9 @@ checkout after merge, and the PR says so.
   in the existing shape (date, topic, decision, rationale), naming every
   deviation from the research decision and what forced it.
 - Update `docs/features.md` only if something is user-visible.
-- Set the `SLICES.md` row to `review`.
+- Set the row to `review` in `slices/slice-<letter>.md` and in the open
+  rows of `SLICES.md`; once it merges, `done <date>` in the slice file and
+  drop it from `SLICES.md`.
 
 ## 5. PR and review
 
