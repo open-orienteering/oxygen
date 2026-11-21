@@ -51,7 +51,8 @@
   "pnpm": {
     "overrides": {
       "undici": "^7.30.1",
-      "minimatch@<9.0.7": "^9.0.9",
+      "minimatch@<11.0.1": "^11.0.1",
+      "glob@>=9.0.0 <14.0.2": "^14.0.2",
       "flatted": "^3.4.4",
       "serialize-javascript": "^7.1.3",
       "effect": "^3.22.3",
