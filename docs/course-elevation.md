@@ -530,7 +530,7 @@ leg with a route states its climb along the route.
 | `packages/api/src/__tests__/course-climb.test.ts` | §6: a stated climb's source, the read rule, the field's row source, the climb to store (partial, flat, no legs) |
 | `packages/api/src/__tests__/integration/course-climb.test.ts` | §6: computed after a create commits, cleared and recomputed by a move, the journal payload and token, both journal entries of an edit, typed wins and clears back, a climb without a source, a typed source over an empty climb, clone, free order, bulk end moves and bulk climb, `refreshClimbs`, marks not taken by another request while the edit is open, a climb applied from the journal, a field not stored, the column's constraint |
 | `packages/api/src/__tests__/course-climb-pending.test.ts` | §6: marks are per request scope, concurrent scopes apart, `all`, a mark outside a scope dropped |
-| `e2e/courses.spec.ts` "climb" | §6 "The Courses page": typing and clearing a climb |
+| `e2e/courses.spec.ts` "climb" | §6 "The Courses page": typing and clearing a climb, a computed climb as the placeholder with its hint |
 | `packages/web/src/lib/editor/__tests__/sequence.test.ts` "an insert position names its drawn leg's index" | §4.5, §5: the selected leg's index, the route's marks, a repeated control |
 | `packages/web/src/lib/editor/__tests__/hover-dot.test.ts` | §5: the pointer's store |
 | `packages/web/src/lib/editor/__tests__/profile-graph.test.ts` | §5: points and bounds, the leg at a distance, ticks, an axis that ends on ticks, the scale and its minimum span, the paths and their breaks, decimation, the height at a distance, label thinning, the kept preference |
