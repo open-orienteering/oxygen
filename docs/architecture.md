@@ -208,7 +208,7 @@ Per-unit state (battery voltage, `checked_at`, last-programmed code, firmware) l
 Direct integration with the Swedish Orienteering Federation's Eventor API:
 - Import events, entries, classes, and clubs
 - Sync global runner database for name/card lookup
-- Upload results and start lists (Test-Eventor and production)
+- Upload results and start lists (Test-Eventor and production); each class's course length and climb go with them (`course-elevation.md` §8)
 
 ![Event page with sync controls](screenshots/event.png)
 

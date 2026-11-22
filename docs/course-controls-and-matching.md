@@ -447,6 +447,10 @@ per-leg lengths (`"1200;900;"`). Who wrote them is
 | `derived` | every re-derivation of an edited course with at least one positioned control (`rebuildCourseLengths`: create, update, sequence edits, control moves, copy, map upload, rotation, a position-less import) | recomputed from the controls' current positions and the map scale by the stored rule below (along the bends, through the crossing point, rounded once), the stored length when that is 0 | never overwritten |
 | NULL | a course without positioned controls; rows written before E6 without geometry | as `file` | as `file` |
 
+The start list Eventor returns can be one Oxygen pushed, with the
+length stored here at that time (`course-elevation.md` §8 "The way
+back").
+
 It replaced what `courses.geometry_source = 'editor'` meant to these two
 readers: the E6 migration backfilled it 1:1 (`editor` → `derived`,
 `ocd` / `xml` → `file`, `''` → NULL) and the writers set it beside

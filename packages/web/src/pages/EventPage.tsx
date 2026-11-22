@@ -304,6 +304,7 @@ function SyncBehaviorHelp() {
             <SyncRow icon="🔀" label={t("pushSplitTimes")} detail={t("pushSplitTimesDetail")} />
             <SyncRow icon="💳" label={t("syncFees")} detail={t("pushFeesDetail")} />
             <SyncRow icon="👤" label={t("pushPersonDetails")} detail={t("pushPersonDetailsDetail")} />
+            <SyncRow icon="⛰️" label={t("pushCourse")} detail={t("pushCourseDetail")} />
           </div>
 
           <div className="border-t border-slate-100 pt-2 space-y-2">

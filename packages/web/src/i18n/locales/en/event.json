@@ -144,6 +144,8 @@
   "pushFeesDetail": "Entry fee (Normal/Late type), taxable amount, paid amount, and card rental as ServiceRequest (IOF v3 format)",
   "pushPersonDetails": "Person details",
   "pushPersonDetailsDetail": "Birth date, nationality, and bib number per runner",
+  "pushCourse": "Course",
+  "pushCourseDetail": "Each class's course name, length and climb, with the start list and the results",
   "whatIsNotSynced": "What is NOT synced",
   "syncStartGroups": "Start groups / waves",
   "syncStartGroupsDetail": "StartTimeAllocationRequest (heat/wave assignments) is not yet imported — deferred for future implementation",

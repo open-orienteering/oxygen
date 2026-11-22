@@ -43,6 +43,7 @@ import {
   fetchCachedCompetitors,
   uploadResults,
   uploadStartList,
+  classCourseForUpload,
   type EventorEntry,
   type EventorResult,
   type EventorClub,
@@ -1755,6 +1756,9 @@ export const eventorRouter = router({
           status: oxygenStatus,
           place: placement?.place ?? 0,
           noTiming: cls?.noTiming === true,
+          course: classCourseForUpload(
+            cls?.courseId ? courseById.get(cls.courseId) : null,
+          ),
           fee: r.feeCents || undefined,
           cardFee:
             r.cardFeeCents !== 0
@@ -1818,14 +1822,19 @@ export const eventorRouter = router({
       const env = (event.eventorEnv as EventorEnvironment) || "prod";
       const { apiKey } = await requireApiKey(env);
 
-      const [classes, runners] = await Promise.all([
+      const [classes, courses, runners] = await Promise.all([
         ctx.db.class.findMany({
           where: { eventId: ctx.event.id, removed: false },
+        }),
+        ctx.db.course.findMany({
+          where: { eventId: ctx.event.id, removed: false },
+          select: { id: true, name: true, lengthM: true, climbM: true },
         }),
         ctx.db.runner.findMany({
           where: { eventId: ctx.event.id, removed: false },
         }),
       ]);
+      const courseById = new Map(courses.map((c) => [c.id, c]));
       const classById = new Map(classes.map((c) => [c.id, c]));
 
       const uploadData: ResultForUpload[] = runners.map((r) => {
@@ -1842,6 +1851,9 @@ export const eventorRouter = router({
           cardNo: r.cardNo || undefined,
           startTime: toAbsolute(r.startTime, event.zeroTime) || undefined,
           status: runnerStatusToValue(r.status),
+          course: classCourseForUpload(
+            cls?.courseId ? courseById.get(cls.courseId) : null,
+          ),
         };
       });
 

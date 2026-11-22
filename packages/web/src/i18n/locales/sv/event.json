@@ -144,6 +144,8 @@
   "pushFeesDetail": "Startavgift (Normal/Sen typ), skattepliktigt belopp, betalt belopp och brickhyra som ServiceRequest (IOF v3-format)",
   "pushPersonDetails": "Personuppgifter",
   "pushPersonDetailsDetail": "Födelsedatum, nationalitet och nummerlapp per löpare",
+  "pushCourse": "Bana",
+  "pushCourseDetail": "Varje klass banas namn, längd och stigning, med startlistan och resultaten",
   "whatIsNotSynced": "Vad synkas INTE",
   "syncStartGroups": "Startgrupper / vågor",
   "syncStartGroupsDetail": "StartTimeAllocationRequest (heat-/vågtilldelning) importeras inte ännu — skjuts upp till framtida implementation",

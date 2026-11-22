@@ -3,7 +3,7 @@
 Normative specification of **heights along a course**: the height profile
 of a polyline over a map's height field and the climb read from it (§1–2),
 which field is read (§3), what the course editor shows (§4–5), the course's
-stored climb (§6) and leg routes with computed alternatives (§7). The height fields themselves are
+stored climb (§6), leg routes with computed alternatives (§7) and the course in the lists sent to Eventor (§8). The height fields themselves are
 `docs/map-terrain.md` (§4–7); the course's stored length is
 `docs/course-controls-and-matching.md` "Course length".
 
@@ -180,6 +180,13 @@ to change):
     numbers the first calibration settled. Decided with the user on
     2026-11-22: adopt the three; the uphill number waits until the
     slope settles.
+
+38. **Length and climb reach Eventor with the start list and the
+    results** (§8), not as a course file: Eventor's API has no import
+    for course data (its documentation, read 2026-11-22, lists none;
+    the two list imports are the only ones Oxygen uses). The user asked
+    for the upload on 2026-11-22. Not yet tried against Test-Eventor:
+    whether Eventor keeps and shows the climb is not known.
 
 ## 1. The profile
 
@@ -1204,6 +1211,50 @@ settled nothing: fixes every 5 s cut through buildings at 1:4000
 (11.5 % of the metres on uncrossable cells) and there was little
 forest to measure against.
 
+## 8. The course in the lists sent to Eventor
+
+Eventor takes no course file. A class's length and climb reach it
+inside the two lists Oxygen already uploads (`eventor.pushStartList`,
+`eventor.pushResults`; `uploadStartList` / `uploadResults` in
+`packages/api/src/eventor.ts`): each `ClassStart` and `ClassResult`
+carries one IOF 3.0 `Course` between its `Class` and its first person:
+
+```xml
+<Course><Name>Long</Name><Length>8420</Length><Climb>265</Climb></Course>
+```
+
+- **Which course**: the course the class is assigned to
+  (`classes.course_id`), removed courses apart. A class on a forked
+  course states the root, as the lists do; its variants are not sent.
+- **Length**: `length_m` as stored, in metres; left out when 0.
+- **Climb**: `climb_m` as stored, whatever its source (§6 "Readers"),
+  in whole metres; left out when 0. Length and climb stay two numbers
+  (§0.1).
+- **Name**: the course's name. No `Id`: Eventor has no course ids to
+  match.
+- A class without a course, or whose course has neither a length nor a
+  climb, has no `Course` element and its list is as before.
+
+Nothing else of the course is sent: no controls, no positions, no leg
+routes, no times.
+
+**The way back.** Eventor's start list is where the sync reads a
+class's published length from (`course-controls-and-matching.md`
+"Course length"). If Eventor keeps the pushed `Course` (§0.38), the
+pushed length is therefore what the next sync reads:
+
+- a `derived` length is left alone, as before;
+- a `file` length or one without a source is set to the length last
+  pushed. A length changed here after a push (a file imported again, a
+  number typed on a course without positions) goes back to the pushed
+  one at the next sync unless the list is pushed again first;
+- a push made before any sync puts Oxygen's length in place of the one
+  the organiser published in Eventor, and that is what comes back.
+
+The sync still never writes climb.
+Both pushes go to the environment the event is linked to and happen
+only when a person presses the button.
+
 ## Tests
 
 | Test | Covers |
@@ -1233,10 +1284,17 @@ forest to measure against.
 | `packages/web/src/lib/route/__tests__/finder.test.ts` | §7.8: the worker's state (a search needs its document), the document sent once and again when it changes, a message the worker cannot take, the legs' costs, dispose; §7.9: the model a search ran under |
 | `packages/web/src/lib/editor/__tests__/leg-alternatives.test.ts` | §7.8: the pace as typed, the clock, the pace on flat forest, the course along its routes, the list's kinds and times, the map's shapes, out-of-bounds objects as obstacles |
 | `packages/web/src/lib/editor/__tests__/profile-graph.test.ts` | §5: points and bounds, the leg at a distance, ticks, an axis that ends on ticks, the scale and its minimum span, the paths and their breaks, decimation, the height at a distance, label thinning, the kept preference |
+| `packages/api/src/__tests__/eventor-upload.test.ts` "states each class's course with its length and climb" | §8: the element in both lists, its place and order, the class's first runner, a missing length, a missing climb, a rounded climb, no element; the pushed start list read back by the sync's parser |
+| `packages/api/src/__tests__/integration/eventor-push-courses.test.ts` | §8: the class's course from the database in both pushes, a computed and a typed climb, no climb, an empty course, a removed course, a class without a course, a forked class stating its root whatever its runner's variant, a dry run of each |
 | `e2e/course-editor-profile.spec.ts` | §5 in the browser: the toggle, the panel under the map and above the rail's end, the controls, the summary, the kept preference, ✕; the pointer's readout, the dot on the map, a click selecting the leg |
 
 ## Pending in this chapter
 
+- §8: not tried against Test-Eventor or Eventor: the lists follow the
+  IOF 3.0 schema, but whether Eventor keeps the climb, and whether it
+  shows the pushed length before its own start list is published, is
+  not known (§0.38). A forked class states its root course's numbers,
+  not each variant's.
 - §7.5: a map correction alone does not refresh the automatic routes
   until the next course edit or opening of the course mode (§0.26); the
   refreshes of several events are not capped together, and a refresh

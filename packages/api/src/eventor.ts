@@ -173,6 +173,54 @@ export interface ResultForUpload {
     time?: number; // seconds from start (undefined = no time available)
     status: "ok" | "missing" | "additional";
   }[];
+  /**
+   * The class's course as published with the list (docs/course-elevation.md
+   * §8). Read from the first runner of each class.
+   */
+  course?: ClassCourseForUpload;
+}
+
+/** A class's course in an uploaded start or result list. */
+export interface ClassCourseForUpload {
+  name: string;
+  /** Metres; 0 or absent = not stated. */
+  lengthM?: number;
+  /** Whole metres; 0 or absent = not stated. */
+  climbM?: number;
+}
+
+/**
+ * The class's course as Oxygen holds it: the course the class is assigned
+ * to (for a forked class the root, as the lists show it), its stored length
+ * and its stored climb whatever the climb's source.
+ */
+export function classCourseForUpload(
+  course: { name: string; lengthM: number; climbM: number } | null | undefined,
+): ClassCourseForUpload | undefined {
+  if (!course) return undefined;
+  if (!(course.lengthM > 0) && !(course.climbM > 0)) return undefined;
+  return { name: course.name, lengthM: course.lengthM, climbM: course.climbM };
+}
+
+/**
+ * `<Course>` of a ClassStart / ClassResult (IOF 3.0 SimpleRaceCourse:
+ * Name, Length, Climb in that order). Nothing when the class has neither
+ * a length nor a climb.
+ */
+function iofClassCourse(
+  course: ClassCourseForUpload | undefined,
+): { Course?: Record<string, unknown> } {
+  if (!course) return {};
+  const lengthM = Math.round(course.lengthM ?? 0);
+  const climbM = Math.round(course.climbM ?? 0);
+  if (lengthM <= 0 && climbM <= 0) return {};
+  return {
+    Course: {
+      ...(course.name ? { Name: course.name } : {}),
+      ...(lengthM > 0 ? { Length: lengthM } : {}),
+      ...(climbM > 0 ? { Climb: climbM } : {}),
+    },
+  };
 }
 
 /**
@@ -1395,6 +1443,7 @@ export async function uploadResults(
           Id: runners[0].classExtId,
           Name: runners[0].className,
         },
+        ...iofClassCourse(runners[0].course),
         PersonResult: runners.map((r) => {
           let family: string, given: string;
           if (r.name.includes(",")) {
@@ -1489,7 +1538,8 @@ export async function uploadResults(
 /**
  * Upload start list to Eventor.
  *
- * Carries name, class, club, card and start time per runner. Start numbers
+ * Carries name, class, club, card and start time per runner, and each
+ * class's course (length and climb) when it has one. Start numbers
  * and bibs are not included, and neither is status — that goes up with the
  * result upload.
  */
@@ -1536,6 +1586,7 @@ export async function uploadStartList(
           Id: runners[0].classExtId,
           Name: runners[0].className,
         },
+        ...iofClassCourse(runners[0].course),
         PersonStart: runners.map((r) => {
           let family: string, given: string;
           if (r.name.includes(",")) {
