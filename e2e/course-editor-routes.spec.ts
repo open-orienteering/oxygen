@@ -179,6 +179,18 @@ test.describe("computed route alternatives (docs/course-elevation.md §7.8)", ()
       await page.reload();
       await editorReady(page);
       await selectLeg(page, name, a, b);
+      // §7.5: the server found the pair's shortest legal route round the bar by itself; it is chosen, not removable,
+      // and the leg is read along it.
+      const auto = page.locator('[data-testid="editor-leg-route"][data-source="auto"]');
+      await expect(auto).toHaveAttribute("data-chosen", "true", { timeout: 45000 });
+      expect(Number(await auto.getAttribute("data-m"))).toBeGreaterThan(lineM + 2);
+      await expect(auto.getByTestId("editor-leg-route-remove")).toHaveCount(0);
+      await expect(page.getByTestId("editor-leg-elevation")).toHaveAttribute("data-routed", "true", { timeout: 15000 });
+      // The course along its routes: longer than its drawn length.
+      const totals = page.getByTestId("editor-course-route-totals");
+      await expect(totals).toBeVisible();
+      expect(Number(await totals.getAttribute("data-m"))).toBeGreaterThan(lineM);
+      expect(Number(await totals.getAttribute("data-routed"))).toBeGreaterThanOrEqual(1);
       const box = page.getByTestId("editor-leg-alternatives");
       await expect(box).toHaveAttribute("data-status", "idle");
       await page.getByTestId("editor-leg-alternatives-find").click();
@@ -187,6 +199,8 @@ test.describe("computed route alternatives (docs/course-elevation.md §7.8)", ()
       await expect(alts.first()).toBeVisible();
       const count = await alts.count();
       expect(count).toBeGreaterThanOrEqual(1);
+      // The times come once the course's legs are costed (§7.8).
+      await expect(alts.first()).toHaveAttribute("data-time", /^\d+$/, { timeout: 30000 });
       // No route crosses the bar: each is longer than the straight line by at least what the bar forces.
       const round = Math.hypot(len * 0.5, len * 0.33) * 2 * gm;
       for (let i = 0; i < count; i++) {
@@ -197,12 +211,15 @@ test.describe("computed route alternatives (docs/course-elevation.md §7.8)", ()
       await expect(page.getByTestId("editor-leg-alternatives-note")).toBeVisible();
       await expect(page.getByTestId("editor-route-alternative").first()).toBeAttached();
 
-      // The pace: a faster one shortens every time in proportion.
+      // The winner pace: a faster one shortens every time in proportion, and it is saved with the course.
       const before = Number(await alts.first().getAttribute("data-time"));
       const pace = page.getByTestId("editor-leg-alternatives-pace");
       await expect(pace).toHaveValue("6:00");
+      const paced = waitForTrpc(page, "course.update");
       await pace.fill("3:00");
       await pace.blur();
+      await paced;
+      expect((await trpcCall<{ name: string; winnerPaceSPerKm: number | null }[]>("course.list", undefined, false)).find((c) => c.name === name)?.winnerPaceSPerKm).toBe(180);
       await expect.poll(async () => Math.abs(Number(await alts.first().getAttribute("data-time")) - before / 2), { timeout: 5000 }).toBeLessThanOrEqual(1);
       await pace.fill("nonsense");
       await pace.blur();
@@ -213,10 +230,11 @@ test.describe("computed route alternatives (docs/course-elevation.md §7.8)", ()
       const saved = waitForTrpc(page, "legRoute.save");
       await alts.first().getByTestId("editor-leg-alternative-use").click();
       await saved;
-      const route = items(page).nth(1);
+      const route = page.locator('[data-testid="editor-leg-route"][data-source="computed"]');
       try {
-        await expect(route).toHaveAttribute("data-source", "computed", { timeout: 15000 });
-        await expect(route).toHaveAttribute("data-chosen", "true");
+        await expect(route).toHaveAttribute("data-chosen", "true", { timeout: 15000 });
+        // A person's choice: the automatic route stays in the list, not chosen.
+        await expect(auto).toHaveAttribute("data-chosen", "false");
         expect(Math.abs(Number(await route.getAttribute("data-m")) - altM)).toBeLessThanOrEqual(2);
         await expect(page.getByTestId("editor-leg-elevation")).toHaveAttribute("data-routed", "true", { timeout: 15000 });
       } finally {
