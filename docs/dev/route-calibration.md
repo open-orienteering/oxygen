@@ -68,6 +68,12 @@ track (the tests run made-up runners on made-up terrain).
   `shareUnder095`) means runners take ways the grid does not hold (a
   bridge, a passage); well over 1 means runners do not take the routes
   the model calls fastest.
+- `slope.fitted` and `slope.interval`: the slope numbers the fit found,
+  whether or not they are measured (the `model` block holds them only
+  when `slope.calibrated`).
+- A factor at 0.4 or 6 is the fit pressing on its limit: the model does
+  not hold for that class (wrong map, tracks off the ways), it is not a
+  speed.
 - `maps[].medianMissM`: metres between a control and where tracks pass
   it. Over about 10 m suggests the map's georeference is off.
 - `counts.rejected`: legs left out, per reason. No leg is left out for

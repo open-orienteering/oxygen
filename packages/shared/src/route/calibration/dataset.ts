@@ -10,7 +10,7 @@ import { costModelFromData, type CostModelData } from "../cost-model.js";
 import { findRoutes } from "../alternatives.js";
 import type { RoutePoint } from "../grid.js";
 import { legGridCovering, legWindow, routeFeaturesOfDocument, type BoxedRouteFeature } from "../leg.js";
-import { attributeLeg, featuresCost, factorsOf } from "./attribute.js";
+import { SNAP_DEFAULTS, attributeLeg, featuresCost, factorsOf } from "./attribute.js";
 import { median, runnerPaces, type FitObservation } from "./fit.js";
 import { splitTrack, type LegRejection, type SplitOptions } from "./legs.js";
 import { projectRecord, type TrackRecord, type TrackWarning } from "./record.js";
@@ -23,6 +23,8 @@ export interface CalibrationMap {
   bounds: PaperBounds;
   boundsMm: { minX: number; minY: number; maxX: number; maxY: number };
   groundMPerMm: number;
+  /** Ground metres a track is put on a way from (§7.9.3); 0 on a sprint map, where ways are areas. */
+  snapM: number;
 }
 
 export function calibrationMapOf(doc: MapDocument, heightAt: ((p: RoutePoint) => number | null) | null): CalibrationMap {
@@ -35,6 +37,7 @@ export function calibrationMapOf(doc: MapDocument, heightAt: ((p: RoutePoint) =>
     bounds: h.bounds,
     boundsMm: { minX: h.bounds.minX / u, minY: h.bounds.minY / u, maxX: h.bounds.maxX / u, maxY: h.bounds.maxY / u },
     groundMPerMm: h.mapScale / 1000,
+    snapM: h.library?.id.startsWith("ISSprOM") ? 0 : SNAP_DEFAULTS.snapM,
   };
 }
 
@@ -121,7 +124,7 @@ export function observeRecords(map: CalibrationMap, records: readonly TrackRecor
     const grid = legGridCovering(map.features, map.heightAt, { from: legs[0].from, to: legs[0].to, groundMPerMm: map.groundMPerMm }, cover);
     const kept: number[] = [];
     for (const l of legs) {
-      const f = attributeLeg(grid, l.points);
+      const f = attributeLeg(grid, l.points, { snapM: map.snapM });
       if (f.totalM <= 0) { bump("too-short"); continue; }
       if (f.blockedM / f.totalM > MAX_BLOCKED_SHARE) { bump("blocked"); continue; }
       blockedM += f.blockedM;

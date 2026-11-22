@@ -171,6 +171,11 @@ to change):
     (§7.9.4); no leg left out for being slow (§7.9.2); and at least
     five runs with a usable leg on each map, or no report (§7.9.6).
 
+36. **Tracks are put on the way they follow** on forest maps (§7.9.3),
+    after the first runs on real tracks (2026-11-22: 256 runs on two
+    maps) put paths at the lowest allowed factor: within 10 m for 40 m.
+    A fitted number whose interval touches a bound is not measured.
+
 ## 1. The profile
 
 ```ts
@@ -1034,6 +1039,18 @@ finder's own search differs where it refuses a diagonal squeezed
 between two uncrossable cells, which a track may take). Heights are the contour field
 of the map file (§3; §0.34); a step without a height is flat.
 
+**On the way it follows.** A watch puts a runner some metres beside
+where they ran (the median pass is about 4 m from its control), and a
+path is a cell wide: read where it lies, most path running is forest
+and the few metres that land on the path carry all its speed — the
+first runs on real tracks put paths at the lower bound. So on a forest
+map a stretch of track that stays within **10 m** of a road or path
+(paved, road, path, small path) for **40 m or more** is that way's,
+each sample taking the nearest way's class (`attributeLeg`'s `snapM`,
+`snapMinRunM`; §0.36). A crossing is too short to count. On a sprint
+map (ISSprOM), where the ways are areas, nothing is snapped. A route's
+cost is read without snapping, so the equality above holds for routes.
+
 A step in an uncrossable cell takes the class of the nearest passable
 cell and is counted; a leg with over a quarter of its metres there is
 left out (a georeference that is off, or a bridge or stairs the grid
@@ -1081,7 +1098,8 @@ value, what it cannot tell (maps sharing no class or runner, an ascent
 and a descent that always come together) stays spread and fails the
 interval. The generator is seeded: the same input gives the same
 output. A class is **measured** when its interval is within
-±15 % of its factor and the factor is not at a bound; the anchor is
+±15 % of its factor and neither the factor nor its interval is at a
+bound; the anchor is
 measured when another class is; the slope when up, down and (where
 fitted) steep down are each within ±30 % and none is at a bound or
 loose. A fit that has not settled within its rounds, or more than a
@@ -1124,7 +1142,8 @@ was kept; metres per grade bin; the validation; counts of maps,
 courses, tracks, legs kept, legs the model misses by a factor of two
 and legs left out per reason (a fixed list of reasons); per map — by
 its position on the command line — the median distance between a
-control and its pass and the share of metres on uncrossable cells. No
+control and its pass and the share of metres on uncrossable cells; the
+slope numbers the fit found with their intervals, measured or not. No
 coordinate, no time of day, no id, no name, no file name; a map's
 warnings and the reasons are fixed words. It says whether the fit
 settled (`converged`). Under five runs with a usable leg on any one
@@ -1182,7 +1201,7 @@ of top finishers and the rest is rule of thumb; or that all of it is.
 | `packages/shared/src/route/__tests__/route.test.ts` | §7.6: codes to classes, the default model, slope; the grid's fill, holes, ranks, bridge, barrier, heights, `openDisc`, `nearestPassable`. §7.7: the cost field (distance, a gap, enclosed, slope and the reversed field); alternatives (straight, straightened, round a lake on both sides, a path against thick forest, a hill, the bounds, no way, a crossing point, a control on an obstacle, determinism); at the search's cell size: one route in open terrain, a control on a building or a cliff with a wall between, an uncrossable area thinner than a cell, a passage between two buildings, the marks after straightening, a control beside a fence, the cost of a run downhill, a bridge over drawn banks |
 | `packages/shared/src/route/__tests__/leg.test.ts` | §7.6: a document's features by match or source code, a patch-hidden object, the course's out-of-bounds area, a leg's window and cell size. §7.5: the shortest legal route (the line, round a lake, no way). §7.8: a leg's cost along a polyline |
 | `packages/api/src/__tests__/integration/leg-routes-auto.test.ts` | §7.5: the worker's search, a course's pairs after its edit (chosen, shortest, the line as a row without points, the climb), nothing searched while the basis holds, the basis, a moved control, not edited or deleted by hand, a person's choice over a refresh, an out-of-bounds area, a marked-route leg, a free-order course. §7.8: the winner pace stored, listed, cleared, its bounds; an object drawn with named courses (§0.25), a leg through its crossing point, two edits in a row, a search that fails (the other pairs written, the climbs computed, the pair left for the next refresh), a route saved by hand while the search runs |
-| `packages/shared/src/route/calibration/__tests__/calibration.test.ts` | §7.9 on made-up terrain and runners (`world.ts`): the record (shape, `kept`, paper positions, warnings, no CRS); legs (2, 5 and 10 s fixes, a clock offset, no punch times, a control passed twice, each reason a leg is left out, a stop taken out, one and two wild fixes, a slow leg kept, a track from before the start to after the finish, a near miss); attribution (equal to the route's cost, the covering grid, uncrossable metres); the fit (the linear solve, factors recovered across paces and under ±20 % leg noise, a class three times slower, blown legs, a class that is most of every leg (settling, its interval, a fit cut short), control pairs that disagree, a class on one control pair, a wandered track, records sharing pairs, too little track, an anchor without forest, the slope, determinism); held-out legs, the finder check, a model of measured numbers only, the model as data, the report's strictness and that no input number is in it |
+| `packages/shared/src/route/calibration/__tests__/calibration.test.ts` | §7.9 on made-up terrain and runners (`world.ts`): the record (shape, `kept`, paper positions, warnings, no CRS); legs (2, 5 and 10 s fixes, a clock offset, no punch times, a control passed twice, each reason a leg is left out, a stop taken out, one and two wild fixes, a slow leg kept, a track from before the start to after the finish, a near miss); attribution (equal to the route's cost, the covering grid, a track beside a path, across one and leaving one, uncrossable metres); the fit (the linear solve, factors recovered across paces and under ±20 % leg noise, a class three times slower, blown legs, a class that is most of every leg (settling, its interval, a fit cut short), control pairs that disagree, a class on one control pair, a wandered track, records sharing pairs, too little track, an anchor without forest, the slope, determinism); held-out legs, the finder check, a model of measured numbers only, the model as data, the report's strictness and that no input number is in it |
 | `packages/api/src/__tests__/calibrate-cost-model.test.ts` | §7.9: the command's arguments; a run on `e2e/test.ocd` with made-up runners from a directory of records, its report and its lines as they come; a file that is no map, a record that does not parse, a missing map or record and a record that is not JSON named by position only; under five runs on a map no report |
 | `packages/web/src/lib/route/__tests__/finder.test.ts` | §7.8: the worker's state (a search needs its document), the document sent once and again when it changes, a message the worker cannot take, the legs' costs, dispose; §7.9: the model a search ran under |
 | `packages/web/src/lib/editor/__tests__/leg-alternatives.test.ts` | §7.8: the pace as typed, the clock, the pace on flat forest, the course along its routes, the list's kinds and times, the map's shapes, out-of-bounds objects as obstacles |
@@ -1219,8 +1238,11 @@ of top finishers and the rest is rule of thumb; or that all of it is.
   due (a course crossing itself) is cut at the first pass after the
   control before it, which can be the wrong one; a mistake is not told
   from slow ground in one leg, only weighed down across many; tracks
-  are not matched to the map's paths, so a chord between
-  two fixes cuts corners and can lie in the cell beside a path; slope
+  are put on a way only by nearness (§7.9.3): running in the forest
+  10 m beside a path for 40 m reads as the path, a chord between two
+  fixes still cuts corners, and on a sprint map (no snapping) a track
+  a few metres off reads the lawn or the building beside the street;
+  slope
   rests on the contour field only, not a ground model; the finder
   check does not say how far a runner's line was from the finder's
   routes, nor whether runners' choice between two routes follows the

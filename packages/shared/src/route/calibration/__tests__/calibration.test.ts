@@ -208,6 +208,34 @@ describe("attribution (§7.9.3)", () => {
     expect(attributeLeg(plain, [req.from, { x: 45, y: 15 }, req.to]).m[C.paved]).toBe(0);
   });
 
+  it("a track beside the path it follows is put on it; one that only crosses a path is not", () => {
+    // 1:10 000, 2.5 m cells: a path along y = 20 and a small path up x = 30.
+    const grid = buildRouteGrid({ bounds: { minX: 0, minY: 0, maxX: 60, maxY: 40 }, cellMm: 0.25, groundMPerMm: 10, features: [
+      { cls: C.path, kind: "line", parts: [[5, 20, 55, 20]] },
+      { cls: C.smallPath, kind: "line", parts: [[30, 2, 30, 12]] },
+    ] });
+    // 400 m along the path, 7 m to its side, as a watch would put it.
+    const beside = [{ x: 10, y: 20.7 }, { x: 50, y: 20.7 }];
+    const plain = attributeLeg(grid, beside);
+    expect(plain.m[C.path]).toBeLessThan(20);
+    expect(plain.m[C.forest]).toBeGreaterThan(380);
+    const snapped = attributeLeg(grid, beside, { snapM: 10 });
+    expect(snapped.m[C.path]).toBeGreaterThan(390);
+    expect(snapped.totalM).toBeCloseTo(plain.totalM, 6);
+    // 15 m to the side is not on it.
+    expect(attributeLeg(grid, [{ x: 10, y: 21.5 }, { x: 50, y: 21.5 }], { snapM: 10 }).m[C.path]).toBe(0);
+    // Straight across the small path: the 20 m within reach are under the 40 m a stretch needs.
+    const across = attributeLeg(grid, [{ x: 20, y: 7 }, { x: 40, y: 7 }], { snapM: 10 });
+    expect(across.m[C.smallPath]).toBeLessThan(6);
+    expect(across.m[C.forest]).toBeGreaterThan(190);
+    // Leaving the path half way: the stretch beside it is the path's, the rest forest.
+    const leaves = attributeLeg(grid, [{ x: 10, y: 20.5 }, { x: 30, y: 20.5 }, { x: 45, y: 35 }], { snapM: 10 });
+    expect(leaves.m[C.path]).toBeGreaterThan(195);
+    expect(leaves.m[C.path]).toBeLessThan(225);
+    // The test world is unsnapped; a forest map snaps by 10 m, a sprint map not at all.
+    expect(m.snapM).toBe(0);
+  });
+
   it("metres in an uncrossable cell take the nearest passable class and are counted", () => {
     const grid = buildRouteGrid({ bounds: { minX: 0, minY: 0, maxX: 40, maxY: 40 }, cellMm: 0.5, groundMPerMm: 10, features: [{ cls: C.blocked, kind: "area", parts: [[19, 0, 21, 0, 21, 40, 19, 40]] }] });
     const f = attributeLeg(grid, [{ x: 5, y: 20 }, { x: 35, y: 20 }]);

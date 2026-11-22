@@ -30,6 +30,7 @@ export const map = (heightAt: CalibrationMap["heightAt"] = null): CalibrationMap
   bounds: { minX: 0, minY: 0, maxX: 10000, maxY: 6000 },
   boundsMm: { minX: 0, minY: 0, maxX: 100, maxY: 60 },
   groundMPerMm: 10,
+  snapM: 0,
 });
 
 export const classAt = (p: RoutePoint): keyof CostModelData["classFactor"] => BLOCKS.find((b) => p.x >= b.box[0] && p.x < b.box[2] && p.y >= b.box[1] && p.y < b.box[3])?.cls ?? "forest";

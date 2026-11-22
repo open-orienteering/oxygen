@@ -46,6 +46,8 @@ export interface ClassSupport { metres: number; seconds: number; runners: number
 export interface FitResult {
   factors: number[];
   slope: SlopeData;
+  /** The 90 % interval of each fitted slope number; null where it is not fitted. */
+  slopeInterval: { up: [number, number] | null; down: [number, number] | null; steepDown: [number, number] | null };
   support: ClassSupport[];
   /** Enough track to fit the class. */
   supported: boolean[];
@@ -343,7 +345,8 @@ export function fitCostModel(obs: readonly FitObservation[], base: CostModelData
   for (const [i, c] of plan.fitted.entries()) {
     const lo = quantile(samples[i], 0.05), hi = quantile(samples[i], 0.95);
     interval[c] = [lo, hi];
-    calibrated[c] = converged && !loose[i] && (hi - lo) / 2 <= o.maxIntervalShare * factors[c] && factors[c] > FACTOR_MIN + 1e-9 && factors[c] < FACTOR_MAX - 1e-9;
+    // Not at a bound, and neither is its interval: a fit pressing on its limit is a model that does not hold, not a number.
+    calibrated[c] = converged && !loose[i] && (hi - lo) / 2 <= o.maxIntervalShare * factors[c] && lo > FACTOR_MIN + 1e-9 && hi < FACTOR_MAX - 1e-9;
   }
   // The anchor is measured as the others' reference, when anything was fitted against it.
   if (anchor !== null && plan.fitted.some((c) => calibrated[c])) calibrated[anchor] = true;
@@ -352,6 +355,8 @@ export function fitCostModel(obs: readonly FitObservation[], base: CostModelData
     const v = slopeSamples[key], at = slope[key];
     return v.length > 0 && !loose[plan.fitted.length + keys.indexOf(key)] && at > 1e-9 && at < slopeTop(key, slope.kneeGrade) - 1e-9 && (quantile(v, 0.95) - quantile(v, 0.05)) / 2 <= 2 * o.maxIntervalShare * at;
   };
+  const range = (key: SlopeKey): [number, number] | null => (keys.includes(key) && slopeSamples[key].length > 0 ? [quantile(slopeSamples[key], 0.05), quantile(slopeSamples[key], 0.95)] : null);
+  const slopeInterval = { up: range("up"), down: range("down"), steepDown: range("steepDown") };
   const slopeCalibrated = converged && plan.fitUp && plan.fitDown && settled("up") && settled("down") && (!plan.fitSteep || settled("steepDown"));
   // Legs the fitted model misses by more than a factor of two: a mistake, a stop the cleaning missed, a wrong cut.
   const paces = runnerPaces(obs, factors, slope);
@@ -361,7 +366,7 @@ export function fitCostModel(obs: readonly FitObservation[], base: CostModelData
     if (pace !== undefined && cost > 0 && Math.abs(Math.log(x.timeS / (pace * cost))) > Math.LN2) outliers++;
   }
   return {
-    factors, slope, support, supported, calibrated, interval, anchor,
+    factors, slope, slopeInterval, support, supported, calibrated, interval, anchor,
     slopeUpFitted: plan.fitUp, slopeDownFitted: plan.fitDown, slopeCalibrated, runners: runners.length, observations: obs.length, outliers, converged,
   };
 }
