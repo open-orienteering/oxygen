@@ -98,9 +98,35 @@ Decided in implementation of §7.1–7.4 (2026-11-22; told to the user):
     surface has the same shape" is a separate `CostModel` over classes
     and slope.
 22. **Alternatives are found on demand per leg** (Find routes), and an
-    alternative changes the climb only once someone uses it. §0.15's
-    automatic shortest legal route and §0.17's stored winner pace are
-    pending (§7.5 in "Pending").
+    alternative changes the climb only once someone uses it.
+
+Decided in implementation of §7.5 (2026-11-22; told to the user, open
+to change):
+
+23. **The automatic shortest legal route is searched on the server**,
+    in a worker thread after the edit has committed — not in the
+    browser (§0.21 holds for the alternatives a person asks for): the
+    official climb must not depend on someone opening the editor, and
+    imports get it too. Until a route lands the climb is read as
+    before; when it lands the climb is computed again.
+24. **A person's choice is the pin** (§0.15): choosing another route,
+    or the drawn line, takes the choice from the automatic route, and
+    a refresh never gives it back. The automatic route stays in the
+    list to be chosen again.
+25. **An out-of-bounds object closes a pair's way for the automatic
+    route when every course running the pair is drawn with it**
+    (scope *all*, or each of those courses named); an object scoped by
+    class is not read.
+26. **Map corrections do not start a search by themselves**: the routes
+    are brought up to date by the next course edit or the next opening
+    of the editor (as §0.13).
+27. **The winner pace is minutes per km of the course's length**
+    (§0.17). The winner's time — pace × length — is shared over the
+    legs by their costs under the model, which gives the pace on flat
+    forest that the alternatives are timed at. The course's time is
+    therefore pace × length by definition; metres and times are
+    derived in the editor, not stored (§0.9's "stored per control
+    pair" is the routes).
 
 ## 1. The profile
 
@@ -554,6 +580,7 @@ route:
 | `points` | the route's **interior** vertices, paper mm (`[{ x, y }]`, 1 to 2000): the ends are the controls' centres and follow a moved control, as a leg's bends do |
 | `source` | `drawn` (by hand) or `computed` (an alternative the search of §7.5 found and someone kept) |
 | `model` | the cost model a computed route was found with; NULL for a drawn one |
+| `auto_basis` | non-NULL: the pair's **automatic** route (§7.5) and a digest of what it was searched on; NULL: a person's route. A partial unique index allows one automatic row per pair. Its `points` may be empty: the drawn line is the shortest legal route |
 | `chosen` | the route the pair's climb is read along; a partial unique index allows one per pair. Two writers choosing for one pair at once: the second gets `CONFLICT` and tries again |
 
 A route belongs to the **pair, not to a course**: every course of the
@@ -621,7 +648,12 @@ without heights.
 
 - The list (`editor-leg-route`, `data-id`, `data-source`,
   `data-chosen`, `data-m`, `data-climb`): the **drawn line** first
-  (`data-id="line"`), then the pair's routes. Each states its metres
+  (`data-id="line"`), then the pair's routes. The automatic route
+  (§7.5) is `data-source="auto"`, named *Shortest legal route
+  (automatic)* and has no ✕; where it is the line itself it is not
+  listed and the line says so. The list is asked again every 8 s
+  while a course is open, so a route the server wrote appears, and
+  the course's climb with it. Each states its metres
   on the ground and, when the field is read, its own climb
   (`profileAlong` over that polyline alone, `≈` as in §4.4). A radio
   (`editor-leg-route-choose`) chooses one; choosing the drawn line
@@ -651,15 +683,54 @@ A chosen route's own climb in the list can differ from the leg's share
 of the course's climb (§4.5) by up to the threshold: the list reads the
 route alone, the course in one pass.
 
-### 7.5 Computed alternatives
+### 7.5 The automatic route and computed alternatives
 
-A leg selected can be **searched**: the editor finds the fastest route
-between its two controls under a cost model, up to two others that are
-nearly as fast and run somewhere else, and the shortest route that
-crosses nothing uncrossable — each with metres, climb and an estimated
-time (§0.9). An alternative can be kept as the pair's chosen route
-(§7.1 `source = 'computed'`, `model` the cost model's id). The search
-is `packages/shared/src/route/` (pure, no DOM); §7.6–7.8 describe it.
+**The automatic route** (`packages/api/src/leg-routes-auto.ts`,
+`leg-routes-auto-worker.ts`; §0.15, §0.23). Every directed pair that a
+live ordered course runs as a leg — a marked-route leg aside (§7.3) —
+has one automatic route: the **shortest way that crosses nothing
+uncrossable** (`shortestLegRoute`: the `shortest` model of §7.7 on the
+grid of §7.6, without heights). Where the straight line between the
+controls is legal the line is that route and the row has no points;
+without any way the row has none either.
+
+- **When.** After a mutation whose geometry rebuild marked climbs
+  (§6 "When") has committed and its climbs are written, after any
+  `courseObject.*` write, and from `course.refreshClimbs` (the
+  editor's catch-up): `enqueueAutoRoutes(event)`. One refresh per
+  event runs at a time, in the background; an event asked for again
+  meanwhile is refreshed once more after. The queue is in memory — a
+  restart loses it and the next edit asks again.
+- **What is searched.** The pair's **basis** is a digest of the
+  document hash, the map patch's version, the map scale, the two
+  controls' positions, the leg's crossing point, the out-of-bounds
+  objects that apply (§0.25) and `AUTO_ROUTE_VERSION`. A pair whose
+  stored basis is the current one is not searched. The others are
+  searched in one worker thread (the document decoded, patched and
+  classified once), so no search holds the request or the event loop.
+- **The row.** `source = 'computed'`, `model = 'shortest'`,
+  `auto_basis` the basis. A new row is **chosen unless a person chose
+  a route for the pair**; a refresh rewrites points and basis and
+  never `chosen` (§0.24). A chosen row that changed clears the
+  computed climb of the courses running the pair, and the climbs are
+  computed again (§7.3).
+- **By hand.** `legRoute.list` marks the row `auto`. `legRoute.save`
+  on it and `legRoute.delete` of it are `BAD_REQUEST`; `choose` works
+  as for any route.
+- `AUTO_LEG_ROUTES=off` in the environment turns the refresh off.
+
+Between an edit and the route's landing the climb is read along what
+is stored: a moved control's automatic route keeps its vertices with
+the ends moved, for the seconds the search takes.
+
+**Alternatives.** A leg selected can be **searched** by hand: the
+editor finds the fastest route between its two controls under a cost
+model, up to two others that are nearly as fast and run somewhere
+else, and the shortest legal route — each with metres, climb and an
+estimated time (§0.9). An alternative can be kept as the pair's chosen
+route (§7.1 `source = 'computed'`, `model` the cost model's id). The
+search is `packages/shared/src/route/` (pure, no DOM); §7.6–7.8
+describe it.
 
 ### 7.6 Cost classes and the grid
 
@@ -796,10 +867,21 @@ Under the Routes list (§7.4), on a desktop or tablet
   §7.4, and the estimated time `~m:ss` = cost × pace. The alternatives
   are drawn on the map, dashed, the pointed-at one solid
   (`editor-route-alternative`), screen only.
-- **Pace** (`editor-leg-alternatives-pace`, `m:ss` or decimal minutes
-  per km, 2:00–30:00): the pace on flat, runnable forest that the
-  costs are timed at; 6:00 by default, kept per course in this browser
-  (`oxygen.editor.routePace.<event>.<course>`).
+- **Winner pace** (`editor-leg-alternatives-pace`, `m:ss` or decimal
+  minutes per km, 2:00–30:00; §0.17, §0.27): the expected winner's
+  pace over the course's length, stored with the course
+  (`courses.winner_pace_s_per_km`, `course.update`
+  `winnerPaceSPerKm`, with the course's version token; not journaled,
+  as `climb_source`); 6:00 while none is typed. The worker costs every
+  leg of the course along the polyline it is read along
+  (`legPolylineCost`, the `costs` message); the pace on flat forest is
+  pace × length ÷ the sum of those costs (`flatPaceSPerKm`), and an
+  alternative's time is its cost at that pace. Until the costs are
+  known the list shows no times.
+- **The course along its routes** (`editor-course-route-totals`,
+  `data-m`, `data-time`, `data-routed`): under the Routes list, the
+  sum of the legs' metres along the routes they are read along and
+  the winner's time, pace × length.
 - **Use** (`editor-leg-alternative-use`) stores the alternative as the
   pair's chosen route (`legRoute.save`, `source: "computed"`, `model`
   the id of the model it was found under: `shortest` for the route
@@ -830,23 +912,28 @@ Under the Routes list (§7.4), on a desktop or tablet
 | `packages/web/src/lib/editor/__tests__/hover-dot.test.ts` | §5: the pointer's store |
 | `packages/shared/src/course/__tests__/leg-routes.test.ts` | §7.1, §7.3: a leg along its chosen route between its own ends, direction, a pair run twice, a marked route, the polyline's length, the stored points' bounds |
 | `packages/api/src/__tests__/integration/leg-routes.test.ts` | §7.2, §7.3: a saved route chosen and every course of the pair read along it, the length unchanged, direction, choose and unchoose, one chosen route per pair (and the index), new points, a typed climb and a marked route untouched, a control run to twice with one marked leg, a moved control, refusals, another event, a removed control, delete, the backup, the checkout snapshot |
-| `packages/web/src/lib/editor/__tests__/leg-routes.test.ts` | §7.4: the chosen routes by leg key, a pair's routes, a route's metres and climb, the list with the drawn line, the map's shapes, a draft's shapes |
+| `packages/web/src/lib/editor/__tests__/leg-routes.test.ts` | §7.4: the chosen routes by leg key, a pair's routes, a route's metres and climb, the list with the drawn line, the automatic route and the line as that route, the map's shapes, a draft's shapes |
 | `e2e/course-editor-routes.spec.ts` | §7.4 in the browser: a route drawn and saved, its numbers, the leg and the course read along it, the drawn line chosen back, removal; a draft's keys (Backspace, Enter, Escape). §7.8: alternatives round an out-of-bounds area, the pace, **Use** |
 | `packages/shared/src/route/__tests__/route.test.ts` | §7.6: codes to classes, the default model, slope; the grid's fill, holes, ranks, bridge, barrier, heights, `openDisc`, `nearestPassable`. §7.7: the cost field (distance, a gap, enclosed, slope and the reversed field); alternatives (straight, straightened, round a lake on both sides, a path against thick forest, a hill, the bounds, no way, a crossing point, a control on an obstacle, determinism); at the search's cell size: one route in open terrain, a control on a building or a cliff with a wall between, an uncrossable area thinner than a cell, a passage between two buildings, the marks after straightening, a control beside a fence, the cost of a run downhill, a bridge over drawn banks |
-| `packages/shared/src/route/__tests__/leg.test.ts` | §7.6: a document's features by match or source code, a patch-hidden object, the course's out-of-bounds area, a leg's window and cell size |
-| `packages/web/src/lib/route/__tests__/finder.test.ts` | §7.8: the worker's state (a search needs its document), the document sent once and again when it changes, a message the worker cannot take, dispose |
-| `packages/web/src/lib/editor/__tests__/leg-alternatives.test.ts` | §7.8: the pace as typed, the clock, the list's kinds and times, the map's shapes, out-of-bounds objects as obstacles |
+| `packages/shared/src/route/__tests__/leg.test.ts` | §7.6: a document's features by match or source code, a patch-hidden object, the course's out-of-bounds area, a leg's window and cell size. §7.5: the shortest legal route (the line, round a lake, no way). §7.8: a leg's cost along a polyline |
+| `packages/api/src/__tests__/integration/leg-routes-auto.test.ts` | §7.5: the worker's search, a course's pairs after its edit (chosen, shortest, the line as a row without points, the climb), nothing searched while the basis holds, the basis, a moved control, not edited or deleted by hand, a person's choice over a refresh, an out-of-bounds area, a marked-route leg, a free-order course. §7.8: the winner pace stored, listed, cleared, its bounds |
+| `packages/web/src/lib/route/__tests__/finder.test.ts` | §7.8: the worker's state (a search needs its document), the document sent once and again when it changes, a message the worker cannot take, the legs' costs, dispose |
+| `packages/web/src/lib/editor/__tests__/leg-alternatives.test.ts` | §7.8: the pace as typed, the clock, the pace on flat forest, the course along its routes, the list's kinds and times, the map's shapes, out-of-bounds objects as obstacles |
 | `packages/web/src/lib/editor/__tests__/profile-graph.test.ts` | §5: points and bounds, the leg at a distance, ticks, an axis that ends on ticks, the scale and its minimum span, the paths and their breaks, decimation, the height at a distance, label thinning, the kept preference |
 | `e2e/course-editor-profile.spec.ts` | §5 in the browser: the toggle, the panel under the map and above the rail's end, the controls, the summary, the kept preference, ✕; the pointer's readout, the dot on the map, a click selecting the leg |
 
 ## Pending in this chapter
 
-- §7.5, decided and not built: the course's sum of route metres, climb
-  and estimated time; the shortest legal route applied to every leg
-  without a pinned one (§0.15), so the official climb follows it
-  without a click per leg; the pace as the course's expected winner
-  pace stored with the course (§0.17) — it is a per-browser pace on
-  flat forest now.
+- §7.5: a map correction alone does not refresh the automatic routes
+  (§0.26); an out-of-bounds object scoped by class is not an obstacle
+  for them (§0.25); the refresh queue does not survive a restart; the
+  editor learns of a landed route by asking again, not by a push. A
+  pair no course runs any more keeps its automatic row until a
+  control of it is removed.
+- §7.8: the winner pace is the root course's; a variant or a copy of a
+  course does not get it. Per-leg and per-course times are not stored or exported; the
+  course's time is pace × length by definition until the model is
+  calibrated.
 - §7.6: bridges, underpasses, stairs and multi-level sprint areas are
   not modelled; passable cliffs, fences and walls cost nothing to
   cross; a symbol without a recognised code is unmapped forest; a

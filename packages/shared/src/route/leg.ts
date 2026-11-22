@@ -8,8 +8,8 @@ import { OBJECT_TYPE } from "../map-document/index.js";
 import type { EffectiveDocument } from "../map-document/patch.js";
 import { isAppliedMatch } from "../map-document/render-bridge.js";
 import { flattenObject } from "../terrain/graph/flatten.js";
-import { findRoutes, type RouteAlternative } from "./alternatives.js";
-import { costClassOfCode, type CostModel } from "./cost-model.js";
+import { findRoutes, routeCost, segmentCost, type RouteAlternative } from "./alternatives.js";
+import { SHORTEST_COST_MODEL, costClassOfCode, type CostModel } from "./cost-model.js";
 import { buildRouteGrid, type RouteFeature, type RoutePoint } from "./grid.js";
 
 /** A feature with its bounds, paper mm. */
@@ -92,15 +92,51 @@ export function legWindow(req: Pick<LegRouteRequest, "from" | "to" | "via">): { 
   return { bounds, cellMm: Math.max(ROUTE_CELL_MM, Math.sqrt(area / ROUTE_MAX_CELLS)) };
 }
 
+function legGrid(features: readonly BoxedRouteFeature[], heightAt: ((p: RoutePoint) => number | null) | null, req: LegRouteRequest) {
+  const { bounds, cellMm } = legWindow(req);
+  const inWindow = (f: BoxedRouteFeature) => f.box[2] >= bounds.minX && f.box[0] <= bounds.maxX && f.box[3] >= bounds.minY && f.box[1] <= bounds.maxY;
+  return buildRouteGrid({ bounds, cellMm, groundMPerMm: req.groundMPerMm, features: [...features, ...(req.extra ?? [])].filter(inWindow), heightAt });
+}
+
+/**
+ * The shortest legal route of a leg (docs/course-elevation.md §7.5): its
+ * interior vertices — none when the straight line crosses nothing
+ * uncrossable, the line being that route — or null when there is no way.
+ * Heights are not read: the shortest route is the same on any slope.
+ */
+export function shortestLegRoute(features: readonly BoxedRouteFeature[], req: Omit<LegRouteRequest, "alternatives">): RoutePoint[] | null {
+  const grid = legGrid(features, null, req);
+  const stops = [req.from, ...(req.via ?? []), req.to];
+  // The line itself, where it is legal: no search. Through a crossing point the obstacle is opened by the search.
+  if (stops.length === 2 && Number.isFinite(segmentCost(grid, SHORTEST_COST_MODEL, req.from, req.to))) return [];
+  const routes = findRoutes(grid, req.from, req.to, { model: SHORTEST_COST_MODEL, alternatives: 0, via: req.via });
+  const route = routes.find((r) => r.shortest) ?? routes[0];
+  return route ? route.points.slice(1, -1) : null;
+}
+
+/**
+ * What a leg costs along a given polyline (its drawn line or its chosen
+ * route), in the model's flat-forest metres (§7.7); a stretch over an
+ * uncrossable cell counts its length. The window is the polyline's.
+ */
+export function legPolylineCost(
+  features: readonly BoxedRouteFeature[],
+  heightAt: ((p: RoutePoint) => number | null) | null,
+  leg: { points: readonly RoutePoint[]; groundMPerMm: number; extra?: readonly BoxedRouteFeature[] },
+  model: CostModel,
+): number {
+  if (leg.points.length < 2) return 0;
+  const req = { from: leg.points[0], to: leg.points[leg.points.length - 1], via: leg.points.slice(1, -1), groundMPerMm: leg.groundMPerMm, extra: leg.extra };
+  return routeCost(legGrid(features, heightAt, req), model, leg.points);
+}
+
 export function findLegRoutes(
   features: readonly BoxedRouteFeature[],
   heightAt: ((p: RoutePoint) => number | null) | null,
   req: LegRouteRequest,
   model: CostModel,
 ): LegRouteResult {
-  const { bounds, cellMm } = legWindow(req);
-  const inWindow = (f: BoxedRouteFeature) => f.box[2] >= bounds.minX && f.box[0] <= bounds.maxX && f.box[3] >= bounds.minY && f.box[1] <= bounds.maxY;
-  const grid = buildRouteGrid({ bounds, cellMm, groundMPerMm: req.groundMPerMm, features: [...features, ...(req.extra ?? [])].filter(inWindow), heightAt });
+  const grid = legGrid(features, heightAt, req);
   const routes = findRoutes(grid, req.from, req.to, { model, alternatives: req.alternatives, via: req.via });
-  return { routes, cellMm, cells: grid.cols * grid.rows };
+  return { routes, cellMm: grid.cellMm, cells: grid.cols * grid.rows };
 }

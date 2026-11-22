@@ -504,6 +504,8 @@ model Course {
   lengthSource    String?  @map("length_source")
   /// Where `climbM` comes from: 'manual' (typed), 'file' (an imported file), 'computed' (from the map's height field along the course; reset by every geometry rebuild), NULL (no climb; with a climb: typed, written before the column) (docs/course-elevation.md §6).
   climbSource     String?  @map("climb_source")
+  /// The expected winner pace, seconds per km (docs/course-elevation.md §7.8); NULL: none typed.
+  winnerPaceSPerKm Int?    @map("winner_pace_s_per_km")
   /// Course-level description-sheet instructions (special rows + finish variant).
   /// Shape: { specials?: [{afterControlId, kind, lengthM?}], finish?: {kind, lengthM?} }.
   descriptionInstructions Json? @map("description_instructions")
@@ -675,6 +677,8 @@ model LegRoute {
   /// The cost model a computed route was found with; NULL for a drawn one.
   model         String?
   chosen        Boolean  @default(false)
+  /// Non-NULL: the pair's automatic route (the shortest legal one, docs/course-elevation.md §7.5) and what it was searched on.
+  autoBasis     String?  @map("auto_basis")
   createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt     DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 

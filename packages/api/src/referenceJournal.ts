@@ -85,6 +85,8 @@ export async function courseUpsertPayload(
       "lengthSource",
       // docs/course-elevation.md §6: likewise.
       "climbSource",
+      // §7.8: the winner pace likewise.
+      "winnerPaceSPerKm",
     ]),
     courseControls: ccs,
   };

@@ -20,7 +20,12 @@ export interface LegRouteRow {
   source: "drawn" | "computed";
   model: string | null;
   chosen: boolean;
+  /** The pair's automatic route (§7.5): the shortest legal one, written by the server; without points it is the drawn line. */
+  auto?: boolean;
 }
+
+/** An automatic row without points says the drawn line is the shortest legal route: it is not a route of its own. */
+export const isLineRow = (r: LegRouteRow): boolean => !!r.auto && r.points.length === 0;
 
 /** The chosen routes by the canvas's leg key (`"<from id>><to id>"`), for `course.routedLegs`. */
 export function chosenRouteMap(routes: readonly LegRouteRow[] | undefined): Map<string, Pt[]> {
@@ -31,7 +36,11 @@ export function chosenRouteMap(routes: readonly LegRouteRow[] | undefined): Map<
 
 /** The routes of one directed pair, as listed. */
 export const pairRoutes = (routes: readonly LegRouteRow[] | undefined, from: number, to: number): LegRouteRow[] =>
-  (routes ?? []).filter((r) => r.fromControlId === from && r.toControlId === to);
+  (routes ?? []).filter((r) => r.fromControlId === from && r.toControlId === to && !isLineRow(r));
+
+/** Whether the pair's automatic route is the drawn line itself (§7.5). */
+export const lineIsShortest = (routes: readonly LegRouteRow[] | undefined, from: number, to: number): boolean =>
+  (routes ?? []).some((r) => r.fromControlId === from && r.toControlId === to && isLineRow(r));
 
 /** A polyline's numbers (§7.4): metres on the ground, and climb and descent on its own when a field is read. */
 export interface RouteNumbers {
@@ -52,7 +61,8 @@ export function routeNumbers(points: readonly Pt[], mapScale: number, sampler: T
 /** One entry of the leg's Routes list: the drawn line (`id` null) or a stored route. */
 export interface RouteItem extends RouteNumbers {
   id: string | null;
-  source: "line" | "drawn" | "computed";
+  /** `auto`: the pair's automatic route, the shortest legal one; it is not removed by hand. */
+  source: "line" | "drawn" | "computed" | "auto";
   /** The one the leg's climb is read along. */
   chosen: boolean;
 }
@@ -62,8 +72,8 @@ export function routeItems(o: { line: readonly Pt[]; routes: readonly LegRouteRo
   if (o.line.length < 2) return [];
   const [from, to] = [o.line[0], o.line[o.line.length - 1]];
   return [
-    { id: null, source: "line", chosen: !o.routes.some((r) => r.chosen), ...routeNumbers(o.line, o.mapScale, o.sampler) },
-    ...o.routes.map((r): RouteItem => ({ id: r.id, source: r.source, chosen: r.chosen, ...routeNumbers(course.routePolyline(from, r.points, to), o.mapScale, o.sampler) })),
+    { id: null, source: "line", chosen: !o.routes.some((r) => r.chosen && !isLineRow(r)), ...routeNumbers(o.line, o.mapScale, o.sampler) },
+    ...o.routes.filter((r) => !isLineRow(r)).map((r): RouteItem => ({ id: r.id, source: r.auto ? "auto" : r.source, chosen: r.chosen, ...routeNumbers(course.routePolyline(from, r.points, to), o.mapScale, o.sampler) })),
   ];
 }
 
@@ -95,7 +105,7 @@ export function routeShapes(o: { from: Pt; to: Pt; routes: readonly LegRouteRow[
       ...d.points.map((p, i): ToolShape => ({ kind: "handle", x: p.x, y: p.y, testId: "editor-route-draft-point", data: { index: String(i) } })),
     ];
   }
-  return o.routes.map((r): ToolShape => ({
+  return o.routes.filter((r) => !isLineRow(r)).map((r): ToolShape => ({
     kind: "line", points: course.routePolyline(o.from, r.points, o.to), dashed: !r.chosen, color: ROUTE_COLOR, widthPx: r.chosen ? 2.5 : 1.5,
     testId: "editor-route-line", data: { id: r.id, chosen: r.chosen ? "true" : "false" },
   }));

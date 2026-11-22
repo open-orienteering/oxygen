@@ -2,7 +2,7 @@
 
 import { describe, it, expect } from "vitest";
 import type { TerrainSampler } from "@oxygen/shared/src/terrain/profile/index.js";
-import { chosenRouteMap, pairRoutes, routeItems, routeNumbers, routeShapes, type LegRouteRow } from "../leg-routes";
+import { chosenRouteMap, lineIsShortest, pairRoutes, routeItems, routeNumbers, routeShapes, type LegRouteRow } from "../leg-routes";
 
 const route = (id: string, from: number, to: number, chosen: boolean, points = [{ x: 5, y: 5 }]): LegRouteRow =>
   ({ id, fromControlId: from, toControlId: to, points, source: "drawn", model: null, chosen });
@@ -16,6 +16,20 @@ describe("leg routes in the editor (docs/course-elevation.md §7.4)", () => {
   it("the chosen routes by the canvas's leg key", () => {
     expect([...chosenRouteMap(routes)]).toEqual([["1>2", [{ x: 0, y: 10 }]], ["2>1", [{ x: 5, y: 5 }]]]);
     expect(chosenRouteMap(undefined).size).toBe(0);
+  });
+
+  it("the automatic route (§7.5): listed as its own kind; without points it is the drawn line and not a route", () => {
+    const auto: LegRouteRow = { ...route("s", 1, 2, true, [{ x: 5, y: 2 }]), source: "computed", model: "shortest", auto: true };
+    const items = routeItems({ line: [{ x: 0, y: 0 }, { x: 10, y: 0 }], routes: [auto], mapScale: 10000, sampler: null });
+    expect(items.map((i) => [i.id, i.source, i.chosen])).toEqual([[null, "line", false], ["s", "auto", true]]);
+    const line: LegRouteRow = { ...auto, points: [] };
+    expect(routeItems({ line: [{ x: 0, y: 0 }, { x: 10, y: 0 }], routes: [line], mapScale: 10000, sampler: null }).map((i) => [i.id, i.chosen])).toEqual([[null, true]]);
+    expect(pairRoutes([line, auto], 1, 2).map((r) => r.points.length)).toEqual([1]);
+    expect(lineIsShortest([line], 1, 2)).toBe(true);
+    expect(lineIsShortest([auto], 1, 2)).toBe(false);
+    expect(lineIsShortest([line], 2, 1)).toBe(false);
+    expect([...chosenRouteMap([line])]).toEqual([]);
+    expect(routeShapes({ from: { x: 0, y: 0 }, to: { x: 10, y: 0 }, routes: [line], draft: null, hover: null })).toEqual([]);
   });
 
   it("a pair's routes are its own direction's", () => {

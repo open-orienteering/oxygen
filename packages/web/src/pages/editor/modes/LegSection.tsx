@@ -48,6 +48,10 @@ export interface LegRoutesProps {
   drawing: { points: number } | null;
   /** A write is under way. */
   busy: boolean;
+  /** The pair's automatic route is the drawn line itself (§7.5). */
+  lineIsShortest: boolean;
+  /** The course along the routes its legs are read along (§7.8); null: not known. */
+  totals: { routeM: number; timeS: number | null; routed: number; pace: string } | null;
   onDraw: () => void;
   onDone: () => void;
   onCancel: () => void;
@@ -89,11 +93,11 @@ function LegAlternatives({ a, locked }: { a: LegAlternativesProps; locked: boole
         <>
           <ul className="space-y-0.5">
             {a.items.map((item) => (
-              <li key={item.index} data-testid="editor-leg-alternative" data-kind={item.kind} data-m={item.lengthM} data-climb={item.climbM ?? ""} data-time={item.timeS}
+              <li key={item.index} data-testid="editor-leg-alternative" data-kind={item.kind} data-m={item.lengthM} data-climb={item.climbM ?? ""} data-time={item.timeS ?? ""}
                 onMouseEnter={() => a.onPoint(item.index)} onMouseLeave={() => a.onPoint(null)}
                 className="flex items-center gap-1.5 rounded px-1 text-[11px] text-slate-600 hover:bg-orange-50">
                 <span className="flex-1">{t(`legAlternativeKind.${item.kind}`)}</span>
-                <span className="font-mono text-slate-700">{item.lengthM} m{item.climbM !== null && <> · {item.approx ? "≈ " : ""}{t("legRouteClimb", { m: item.climbM })}</>} · ~{formatClock(item.timeS)}</span>
+                <span className="font-mono text-slate-700">{item.lengthM} m{item.climbM !== null && <> · {item.approx ? "≈ " : ""}{t("legRouteClimb", { m: item.climbM })}</>} {item.timeS !== null && <> · ~{formatClock(item.timeS)}</>}</span>
                 <button type="button" data-testid="editor-leg-alternative-use" disabled={locked || item.interior.length === 0} onClick={() => a.onUse(item.index)}
                   title={item.interior.length === 0 ? t("legAlternativeIsLine") : undefined}
                   className={`${BUTTON} border-orange-200 text-orange-700 hover:bg-orange-50`}>{t("legAlternativeUse")}</button>
@@ -125,10 +129,10 @@ function LegRoutes({ r, readOnly }: { r: LegRoutesProps; readOnly: boolean }) {
             data-m={item.lengthM} data-climb={item.climbM ?? ""} className={`flex items-center gap-1.5 rounded px-1 ${item.chosen ? "bg-cyan-50" : ""}`}>
             <label className="flex flex-1 items-center gap-1.5 text-[11px] text-slate-600 cursor-pointer">
               <input type="radio" name="editor-leg-route" data-testid="editor-leg-route-choose" checked={item.chosen} disabled={locked} onChange={() => r.onChoose(item.id)} />
-              <span className="flex-1">{t(item.source === "line" ? "legRouteLine" : item.source === "computed" ? "legRouteComputed" : "legRouteDrawn")}</span>
+              <span className="flex-1">{t(item.source === "line" ? (r.lineIsShortest ? "legRouteLineShortest" : "legRouteLine") : item.source === "auto" ? "legRouteAuto" : item.source === "computed" ? "legRouteComputed" : "legRouteDrawn")}</span>
               <span className="font-mono text-slate-700">{item.lengthM} m{item.climbM !== null && <> · {item.approx ? "≈ " : ""}{t("legRouteClimb", { m: item.climbM })}</>}</span>
             </label>
-            {item.id !== null && (
+            {item.id !== null && item.source !== "auto" && (
               <button type="button" data-testid="editor-leg-route-remove" aria-label={t("legRouteRemove")} title={t("legRouteRemove")} disabled={locked}
                 onClick={() => r.onDelete(item.id!)} className="px-1 text-slate-400 hover:text-red-600 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed">✕</button>
             )}
@@ -146,6 +150,11 @@ function LegRoutes({ r, readOnly }: { r: LegRoutesProps; readOnly: boolean }) {
         </div>
       ) : (
         <p data-testid="editor-leg-routes-hint" className="text-[10px] text-slate-400">{t("legRoutesHint")}</p>
+      )}
+      {r.totals && !r.drawing && (
+        <p data-testid="editor-course-route-totals" data-m={r.totals.routeM} data-time={r.totals.timeS ?? ""} data-routed={r.totals.routed} className="text-[10px] text-slate-500">
+          {t(r.totals.timeS !== null ? "legRouteTotalsTime" : "legRouteTotals", { m: r.totals.routeM, time: r.totals.timeS !== null ? formatClock(r.totals.timeS) : "", pace: r.totals.pace, count: r.totals.routed })}
+        </p>
       )}
       {r.alternatives && !r.drawing && !readOnly && <LegAlternatives a={r.alternatives} locked={r.busy} />}
     </div>

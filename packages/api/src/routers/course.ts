@@ -37,6 +37,7 @@ import {
 import { parseOCDCourseData } from "../ocd-course-parser.js";
 import { isPpenContent, parsePpenCourseData } from "../ppen-course-parser.js";
 import { resolveImportAlignment } from "../course-import-align.js";
+import { enqueueAutoRoutes } from "../leg-routes-auto.js";
 import { MARK_SEQ_BASE, allocateStartFinishCode, codeHolder, publicControlId } from "./control.js";
 import { displayCode, isStartOrFinish } from "../control-id.js";
 import { courseChecksFor } from "../course-checks.js";
@@ -422,6 +423,7 @@ async function loadCourseDetail(
     length: c.lengthM,
     climb: c.climbM,
     climbSource: climbSourceOf(c),
+    winnerPaceSPerKm: c.winnerPaceSPerKm,
     numberOfMaps: c.numberOfMaps,
     orderMode: c.orderMode as CourseOrderMode,
     firstAsStart: c.firstAsStart,
@@ -526,6 +528,7 @@ export const courseRouter = router({
           length: c.lengthM,
           climb: c.climbM,
           climbSource: climbSourceOf(c),
+          winnerPaceSPerKm: c.winnerPaceSPerKm,
           numberOfMaps: c.numberOfMaps,
           orderMode: c.orderMode as CourseOrderMode,
           firstAsStart: c.firstAsStart,
@@ -757,6 +760,8 @@ export const courseRouter = router({
         name: z.string().min(1).optional(),
         length: z.number().int().optional(),
         climb: z.number().int().nullable().optional(),
+        /** The expected winner pace, seconds per km (docs/course-elevation.md §7.8); null clears it. */
+        winnerPaceSPerKm: z.number().int().min(courseShared.WINNER_PACE_MIN_S).max(courseShared.WINNER_PACE_MAX_S).nullable().optional(),
         numberOfMaps: z.number().int().optional(),
         orderMode: orderModeSchema.optional(),
         firstAsStart: z.boolean().optional(),
@@ -804,6 +809,7 @@ export const courseRouter = router({
         Object.assign(data, statedClimb(input.climb, "manual"));
         markClimbPending(ctx.event.id, [c.id]);
       }
+      if (input.winnerPaceSPerKm !== undefined) data.winnerPaceSPerKm = input.winnerPaceSPerKm;
       if (input.numberOfMaps !== undefined)
         data.numberOfMaps = input.numberOfMaps;
       if (input.orderMode !== undefined) data.orderMode = input.orderMode;
@@ -1220,7 +1226,10 @@ export const courseRouter = router({
    * the catch-up for heights that arrived after a course's last edit. Returns how many were written.
    */
   refreshClimbs: coursesEditRaceProcedure.mutation(async ({ ctx }) => {
-    return { written: await refreshComputedClimbs(ctx.db, ctx.event.id) };
+    const written = await refreshComputedClimbs(ctx.db, ctx.event.id);
+    // The catch-up of §7.5 too: routes searched on a map or a patch that has changed since.
+    enqueueAutoRoutes(ctx.db, ctx.event.id);
+    return { written };
   }),
 
   delete: coursesEditRaceProcedure

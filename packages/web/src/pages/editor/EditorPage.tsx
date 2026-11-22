@@ -90,8 +90,10 @@ import type { MapInfoInput } from "../../lib/editor/map-info";
 import { useCourseChecks } from "./useCourseChecks";
 import { useCourseElevation } from "./useCourseElevation";
 import { legElevation, lineClimbStatus } from "../../lib/editor/elevation";
-import { chosenRouteMap, pairRoutes, routeItems, routeShapes, type RouteDraft } from "../../lib/editor/leg-routes";
-import { DEFAULT_PACE_S_PER_KM, alternativeItems, alternativeShapes, formatClock, oobFeatures, paceStorageKey, parsePace } from "../../lib/editor/leg-alternatives";
+import { chosenRouteMap, pairRoutes, routeItems, routeShapes, type RouteDraft, lineIsShortest } from "../../lib/editor/leg-routes";
+/** How often the leg routes are asked again while a course is open: the server writes the automatic ones after an edit. */
+const AUTO_ROUTE_POLL_MS = 8000;
+import { DEFAULT_PACE_S_PER_KM, alternativeItems, alternativeShapes, courseRouteTotals, flatPaceSPerKm, formatClock, oobFeatures, parsePace } from "../../lib/editor/leg-alternatives";
 import { createRouteFinder } from "../../lib/route/finder";
 import { DEFAULT_COST_MODEL, SHORTEST_COST_MODEL, type RouteAlternative } from "@oxygen/shared/src/route/index.js";
 import { legAt, legBounds, readProfileOpen, writeProfileOpen } from "../../lib/editor/profile-graph";
@@ -488,7 +490,16 @@ export function EditorPage() {
   const legEditable = !!selectedLeg && !isMobile;
 
   // ─── Leg routes (docs/course-elevation.md §7.4): a route per directed control pair, one of them chosen ───
-  const legRoutes = trpc.legRoute.list.useQuery(undefined, { enabled: !!nameId && state.mode === "course" });
+  // The automatic routes (§7.5) land a moment after an edit, written by the server: the list is asked again while a course is open.
+  const legRoutes = trpc.legRoute.list.useQuery(undefined, { enabled: !!nameId && state.mode === "course", refetchInterval: selectedCourse ? AUTO_ROUTE_POLL_MS : false });
+  // A route that landed changed the stored climb of the courses running its pair.
+  const autoRoutesKey = useMemo(() => (legRoutes.data ?? []).filter((r) => r.auto).map((r) => `${r.id}:${r.chosen ? 1 : 0}:${r.points.length}:${r.points[0]?.x ?? ""}:${r.points[0]?.y ?? ""}`).join("|"), [legRoutes.data]);
+  const seenAutoRoutes = useRef<string | null>(null);
+  useEffect(() => {
+    if (!legRoutes.data) return;
+    if (seenAutoRoutes.current !== null && seenAutoRoutes.current !== autoRoutesKey) void utils.course.list.invalidate();
+    seenAutoRoutes.current = autoRoutesKey;
+  }, [autoRoutesKey, legRoutes.data, utils]);
   const chosenRoutes = useMemo(() => chosenRouteMap(legRoutes.data), [legRoutes.data]);
   const selectedLegFrom = selectedLeg?.from.id ?? null;
   const selectedLegTo = selectedLeg?.to.id ?? null;
@@ -1873,15 +1884,49 @@ export function EditorPage() {
       () => setAlternatives((now) => (now?.key === key ? { key, status: "error", routes: [] } : now)),
     );
   }, [alternativesKey, selectedLeg, mapDoc, mapScale, routeFinder, patchForDoc, elevationField, selectedLegVia, oobExtra]);
-  const [paceByCourse, setPaceByCourse] = useLocalStorage<number>(paceStorageKey(nameId ?? "", selectedCourse?.id ?? 0), DEFAULT_PACE_S_PER_KM);
+  // The course's expected winner pace (§7.8), stored with the course; the typed one shows at once.
+  const [typedPace, setTypedPace] = useState<{ courseId: number; s: number } | null>(null);
+  const winnerPace = (typedPace && typedPace.courseId === selectedCourse?.id ? typedPace.s : selectedCourse?.winnerPaceSPerKm) ?? DEFAULT_PACE_S_PER_KM;
   const setPaceText = useCallback((text: string): boolean => {
     const s = parsePace(text);
-    if (s !== null) setPaceByCourse(s);
-    return s !== null;
-  }, [setPaceByCourse]);
+    const course = selectedCourse;
+    if (s === null || !course) return false;
+    setTypedPace({ courseId: course.id, s });
+    void run(() => writes.setWinnerPace(course.id, s)).then((res) => {
+      if (res === undefined) setTypedPace((p) => (p && p.courseId === course.id && p.s === s ? null : p));
+      else void utils.course.list.invalidate();
+    });
+    return true;
+  }, [selectedCourse, run, writes, utils]);
+  // What each leg costs along the polyline it is read along: the winner's time is shared over the legs by these.
+  const costsKey = elevationLegs && mapDoc && mapScale && selectedCourse ? [
+    selectedCourse.id, mapDoc.hash, patchForDoc?.version ?? "0", elevationField?.key ?? "", oobKey,
+    elevationLegs.map((l) => l.points.map((p) => `${p.x},${p.y}`).join(" ")).join("/"),
+  ].join("|") : null;
+  const [legCosts, setLegCosts] = useState<{ key: string; costs: number[] } | null>(null);
+  useEffect(() => {
+    if (!costsKey || !elevationLegs || !mapDoc || !mapScale) return;
+    let live = true;
+    const key = costsKey;
+    // A moment after the last change: a drag of a control asks once.
+    const timer = setTimeout(() => {
+      routeFinder.costs({
+        doc: { key: `${mapDoc.hash}:${patchForDoc?.version ?? "0"}`, bytes: mapDoc.bytes, patch: patchForDoc?.patch ?? null },
+        field: elevationField,
+        req: { legs: elevationLegs.map((l) => ({ points: l.points.map((p) => ({ x: p.x, y: p.y })) })), groundMPerMm: mapScale / 1000, extra: oobExtra },
+      }).then((costs) => { if (live) setLegCosts({ key, costs }); }, () => undefined);
+    }, 400);
+    return () => { live = false; clearTimeout(timer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `costsKey` names everything the costs rest on
+  }, [costsKey, routeFinder]);
+  const flatPace = useMemo(
+    () => flatPaceSPerKm(winnerPace, selectedCourse?.length ?? 0, legCosts && legCosts.key === costsKey ? legCosts.costs : null),
+    [winnerPace, selectedCourse, legCosts, costsKey],
+  );
+  const routeTotals = useMemo(() => courseRouteTotals(elevationLegs, mapScale ?? null, selectedCourse?.length ?? null, winnerPace), [elevationLegs, mapScale, selectedCourse, winnerPace]);
   const alternativeList = useMemo(
-    () => (alternativesNow?.status === "done" && mapScale ? alternativeItems(alternativesNow.routes, mapScale, elevationSampler, paceByCourse) : []),
-    [alternativesNow, mapScale, elevationSampler, paceByCourse],
+    () => (alternativesNow?.status === "done" && mapScale ? alternativeItems(alternativesNow.routes, mapScale, elevationSampler, flatPace) : []),
+    [alternativesNow, mapScale, elevationSampler, flatPace],
   );
   const applyAlternative = useCallback((index: number) => {
     const a = alternativeList[index];
@@ -2727,9 +2772,11 @@ export function EditorPage() {
       elevation={selectedLegElevation}
       routes={legRouteItems && legRoutes.data ? {
         items: legRouteItems, drawing: routeDraft ? { points: routeDraft.points.length } : null, busy: routeBusy,
+        lineIsShortest: selectedLegFrom !== null && selectedLegTo !== null && lineIsShortest(legRoutes.data, selectedLegFrom, selectedLegTo),
+        totals: routeTotals ? { ...routeTotals, pace: formatClock(winnerPace) } : null,
         onDraw: startRoute, onDone: finishRoute, onCancel: () => setRouteDraft(null), onChoose: chooseLegRoute, onDelete: deleteLegRoute,
         alternatives: alternativesKey ? {
-          status: alternativesNow?.status ?? "idle", items: alternativeList, pace: formatClock(paceByCourse), onPace: setPaceText,
+          status: alternativesNow?.status ?? "idle", items: alternativeList, pace: formatClock(winnerPace), onPace: setPaceText,
           onFind: findAlternatives, onUse: applyAlternative, onPoint: setPointedAlternative,
         } : null,
       } : null}

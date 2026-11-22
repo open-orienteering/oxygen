@@ -47,7 +47,7 @@ describe("the route worker's state (docs/course-elevation.md §7.8)", () => {
     expect(handle({ type: "doc", key: "d", bytes: bytes(), patch: null })).toBeNull();
     const res = handle({ type: "find", id: 2, docKey: "d", fieldKey: null, req });
     expect(res).toMatchObject({ id: 2, ok: true });
-    if (res?.ok) for (const r of res.result.routes) expect(r.lengthM).toBeGreaterThan(26 * 15);
+    if (res?.ok && "result" in res) for (const r of res.result.routes) expect(r.lengthM).toBeGreaterThan(26 * 15);
     expect(handle({ type: "find", id: 3, docKey: "other", fieldKey: null, req })).toMatchObject({ ok: false });
     expect(handle({ type: "find", id: 4, docKey: "d", fieldKey: "f", req })).toMatchObject({ ok: false });
   });
@@ -77,6 +77,16 @@ describe("the finder (docs/course-elevation.md §7.8)", () => {
     broken = false;
     expect((await finder.find({ doc, field: null, req })).routes.length).toBeGreaterThan(0);
     expect(log).toEqual(["doc", "find"]);
+    finder.dispose();
+  });
+
+  it("costs the course's legs along their polylines", async () => {
+    const finder = createRouteFinder(() => fakeWorker([]));
+    const doc = { key: "d:0", bytes: bytes(), patch: null };
+    const costs = await finder.costs({ doc, field: null, req: { legs: [{ points: [{ x: 10, y: 40 }, { x: 36, y: 40 }] }, { points: [{ x: 10, y: 40 }] }], groundMPerMm: 15 } });
+    expect(costs).toHaveLength(2);
+    expect(costs[0]).toBeCloseTo(26 * 15, 0);
+    expect(costs[1]).toBe(0);
     finder.dispose();
   });
 

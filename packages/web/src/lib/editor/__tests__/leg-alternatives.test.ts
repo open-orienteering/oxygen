@@ -3,7 +3,7 @@
 import { describe, it, expect } from "vitest";
 import type { course } from "@oxygen/shared";
 import { BLOCKED } from "@oxygen/shared/src/route/index.js";
-import { alternativeItems, alternativeShapes, formatClock, oobFeatures, paceStorageKey, parsePace } from "../leg-alternatives";
+import { alternativeItems, alternativeShapes, courseRouteTotals, flatPaceSPerKm, formatClock, oobFeatures, parsePace } from "../leg-alternatives";
 
 describe("the pace (docs/course-elevation.md §7.8)", () => {
   it("minutes per km as a clock or a decimal; nothing else, and only a pace someone runs", () => {
@@ -15,12 +15,29 @@ describe("the pace (docs/course-elevation.md §7.8)", () => {
     for (const bad of ["", "abc", "5:75", "1:30", "45", "-5", "5:3"]) expect(parsePace(bad), bad).toBeNull();
   });
 
-  it("a clock from seconds; a key per event and course", () => {
+  it("a clock from seconds", () => {
     expect(formatClock(330)).toBe("5:30");
     expect(formatClock(59.6)).toBe("1:00");
     expect(formatClock(3725)).toBe("62:05");
     expect(formatClock(-3)).toBe("0:00");
-    expect(paceStorageKey("ev", 7)).toBe("oxygen.editor.routePace.ev.7");
+  });
+
+  it("the pace on flat forest: the winner's time for the course's length, shared over the legs by their costs", () => {
+    // 5 km at 6:00 is 1800 s; the legs cost 6000 flat metres: 300 s per flat km.
+    expect(flatPaceSPerKm(360, 5000, [2500, 3500])).toBe(300);
+    // An easier course (roads) is run at a slower flat pace for the same winner pace.
+    expect(flatPaceSPerKm(360, 5000, [2000, 2000])).toBe(450);
+    for (const none of [null, [], [0, 0], [Number.POSITIVE_INFINITY]]) expect(flatPaceSPerKm(360, 5000, none)).toBeNull();
+    expect(flatPaceSPerKm(360, 0, [100])).toBeNull();
+  });
+
+  it("the course along its routes: the metres on the ground, the winner's time, how many legs have a route", () => {
+    const legs = [{ points: [{ x: 0, y: 0 }, { x: 30, y: 0 }], routed: false }, { points: [{ x: 30, y: 0 }, { x: 30, y: 20 }, { x: 60, y: 20 }], routed: true }];
+    expect(courseRouteTotals(legs, 10000, 700, 360)).toEqual({ routeM: 800, timeS: 252, routed: 1 });
+    expect(courseRouteTotals(legs, 10000, null, 360)).toEqual({ routeM: 800, timeS: null, routed: 1 });
+    expect(courseRouteTotals(null, 10000, 700, 360)).toBeNull();
+    expect(courseRouteTotals([], 10000, 700, 360)).toBeNull();
+    expect(courseRouteTotals(legs, null, 700, 360)).toBeNull();
   });
 });
 
@@ -37,6 +54,8 @@ describe("the alternatives' list and shapes (docs/course-elevation.md §7.8)", (
     expect(items[0].interior).toEqual([{ x: 5, y: 5 }]);
     expect(items[1].interior).toEqual([]);
     expect(alternativeItems([{ ...routes[0], shortest: true }], 10000, null, 300)[0].kind).toBe("fastestShortest");
+    // Before the pace on flat forest is known: no time.
+    expect(alternativeItems(routes, 10000, null, null).map((i) => i.timeS)).toEqual([null, null, null]);
   });
 
   it("the map's shapes: dashed, the pointed-at one solid", () => {

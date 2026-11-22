@@ -14,6 +14,10 @@ export interface RoutePoint { x: number; y: number }
 export const LEG_ROUTE_MAX_POINTS = 2000;
 export const legRoutePointsSchema = z.array(z.object({ x: z.number().finite(), y: z.number().finite() }).strict()).min(1).max(LEG_ROUTE_MAX_POINTS);
 
+/** The expected winner pace of a course, seconds per km: 2:00 to 30:00 (§7.8). */
+export const WINNER_PACE_MIN_S = 120;
+export const WINNER_PACE_MAX_S = 1800;
+
 export const LEG_ROUTE_SOURCES = ["drawn", "computed"] as const;
 export type LegRouteSource = (typeof LEG_ROUTE_SOURCES)[number];
 

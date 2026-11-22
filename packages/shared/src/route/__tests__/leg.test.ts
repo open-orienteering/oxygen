@@ -2,7 +2,7 @@
 
 import { describe, it, expect } from "vitest";
 import { S, syntheticDoc } from "../../terrain/graph/__tests__/synthetic.js";
-import { BLOCKED, BLOCKED_SOFT, CLASS_INDEX, DEFAULT_COST_MODEL, ROUTE_CELL_MM, ROUTE_MAX_CELLS, boxedFeature, findLegRoutes, legWindow, routeFeaturesOfDocument } from "../index.js";
+import { BLOCKED, BLOCKED_SOFT, CLASS_INDEX, DEFAULT_COST_MODEL, ROUTE_CELL_MM, ROUTE_MAX_CELLS, boxedFeature, findLegRoutes, legPolylineCost, legWindow, routeFeaturesOfDocument, shortestLegRoute } from "../index.js";
 
 const rect = (x0: number, y0: number, x1: number, y1: number) => [x0, y0, x1, y0, x1, y1, x0, y1, x0, y0];
 
@@ -32,6 +32,31 @@ describe("a document's route features (docs/course-elevation.md §7.6)", () => {
     const hidden = new Uint8Array(doc.attrs.symbolIdx.length);
     hidden[Array.from(doc.attrs.symbolIdx).indexOf(S.water)] = 1;
     expect(routeFeaturesOfDocument({ ...doc, hidden }).map((x) => x.cls)).not.toContain(BLOCKED_SOFT);
+  });
+
+  it("the shortest legal route: no vertices where the line is legal, round the lake where it is not, null without a way", () => {
+    const features = routeFeaturesOfDocument(doc);
+    expect(shortestLegRoute(features, { from: { x: 10, y: 34 }, to: { x: 36, y: 34 }, groundMPerMm: 15 })).toEqual([]);
+    const req = { from: { x: 10, y: 20 }, to: { x: 36, y: 20 }, groundMPerMm: 15 };
+    const round = shortestLegRoute(features, req)!;
+    expect(round.length).toBeGreaterThan(0);
+    // The same route the full search marks shortest.
+    const full = findLegRoutes(features, null, req, DEFAULT_COST_MODEL).routes.find((r) => r.shortest)!;
+    const len = (pts: { x: number; y: number }[]) => pts.slice(1).reduce((m, p, i) => m + Math.hypot(p.x - pts[i].x, p.y - pts[i].y), 0);
+    expect(len([req.from, ...round, req.to]) * 15).toBeCloseTo(full.lengthM, 6);
+    // Walled in on every side.
+    const wall = boxedFeature(BLOCKED, "line", [[30, 14, 42, 14, 42, 26, 30, 26, 30, 14]]);
+    expect(shortestLegRoute(features, { ...req, extra: [wall] })).toBeNull();
+  });
+
+  it("a leg's cost along a polyline: its metres on flat forest, less on the road, the same as the search's for its route", () => {
+    const features = routeFeaturesOfDocument(doc);
+    expect(legPolylineCost(features, null, { points: [{ x: 6, y: 40 }, { x: 46, y: 40 }], groundMPerMm: 15 }, DEFAULT_COST_MODEL)).toBeCloseTo(600, 3);
+    expect(legPolylineCost(features, null, { points: [{ x: 6, y: 35 }, { x: 46, y: 35 }], groundMPerMm: 15 }, DEFAULT_COST_MODEL)).toBeLessThan(450);
+    const req = { from: { x: 10, y: 20 }, to: { x: 36, y: 20 }, groundMPerMm: 15 };
+    const [fastest] = findLegRoutes(features, null, req, DEFAULT_COST_MODEL).routes;
+    expect(legPolylineCost(features, null, { points: fastest.points, groundMPerMm: 15 }, DEFAULT_COST_MODEL)).toBeCloseTo(fastest.costM, 0);
+    expect(legPolylineCost(features, null, { points: [req.from], groundMPerMm: 15 }, DEFAULT_COST_MODEL)).toBe(0);
   });
 
   it("a leg across the lake runs round it; the course's out-of-bounds area closes one side", () => {

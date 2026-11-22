@@ -81,7 +81,7 @@ export interface EditorClient {
     setControlLabelOffset: { mutate(input: { id: number; controlId: number; offset: { dx: number; dy: number } | null }): Promise<{ version: string }> };
     /** Only `descriptionInstructions` is written through it here (§4); the structure goes through `setStructure`. */
     update: {
-      mutate(input: { id: number; descriptionInstructions: CourseDescriptionInstructions | null; baseVersion?: string }): Promise<{ version: string }>;
+      mutate(input: { id: number; descriptionInstructions?: CourseDescriptionInstructions | null; winnerPaceSPerKm?: number | null; baseVersion?: string }): Promise<{ version: string }>;
     };
   };
   control: {
@@ -200,6 +200,18 @@ export class EditorWrites {
     return this.serial("course", courseId, async () => {
       const res = await this.withToken("course", courseId, { fields: ["descriptionInstructions"] }, (baseVersion) =>
         this.client.course.update.mutate({ id: courseId, descriptionInstructions, baseVersion }),
+      );
+      this.versions.seed("course", courseId, res.version);
+      this.ownCourseVersions.add(res.version);
+      return res;
+    });
+  }
+
+  /** The course's expected winner pace, seconds per km (docs/course-elevation.md §7.8), through `course.update` with the course's token. */
+  setWinnerPace(courseId: number, winnerPaceSPerKm: number | null): Promise<{ version: string }> {
+    return this.serial("course", courseId, async () => {
+      const res = await this.withToken("course", courseId, { fields: ["winnerPaceSPerKm"] }, (baseVersion) =>
+        this.client.course.update.mutate({ id: courseId, winnerPaceSPerKm, baseVersion }),
       );
       this.versions.seed("course", courseId, res.version);
       this.ownCourseVersions.add(res.version);

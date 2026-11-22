@@ -5,7 +5,7 @@
  * obstacles, and the map's shapes.
  */
 
-import type { course } from "@oxygen/shared";
+import { course as courseShared, type course } from "@oxygen/shared";
 import { BLOCKED, boxedFeature, type BoxedRouteFeature, type RouteAlternative } from "@oxygen/shared/src/route/index.js";
 import type { TerrainSampler } from "@oxygen/shared/src/terrain/profile/index.js";
 import type { ToolShape } from "../../components/MapViewer";
@@ -13,11 +13,33 @@ import { routeNumbers, type RouteNumbers } from "./leg-routes";
 
 type Pt = { x: number; y: number };
 
-/** The pace a route's cost is timed at: seconds per kilometre of flat, runnable forest. */
+/** The course's expected winner pace while none is typed: seconds per kilometre of the course's length. */
 export const DEFAULT_PACE_S_PER_KM = 360;
-export const PACE_MIN_S_PER_KM = 120;
-export const PACE_MAX_S_PER_KM = 1800;
-export const paceStorageKey = (nameId: string, courseId: number): string => `oxygen.editor.routePace.${nameId}.${courseId}`;
+export const PACE_MIN_S_PER_KM = courseShared.WINNER_PACE_MIN_S;
+export const PACE_MAX_S_PER_KM = courseShared.WINNER_PACE_MAX_S;
+
+/**
+ * The pace on flat, runnable forest that makes the course's winner time
+ * come out (§7.8): the winner runs the course's length at the winner
+ * pace, and that time is shared over the legs by their costs. Null
+ * while the costs are not known or the course has no length.
+ */
+export function flatPaceSPerKm(winnerPaceSPerKm: number, courseLengthM: number, legCosts: readonly number[] | null): number | null {
+  if (!legCosts || legCosts.length === 0 || !(courseLengthM > 0)) return null;
+  const cost = legCosts.reduce((sum, c) => sum + c, 0);
+  return cost > 0 && Number.isFinite(cost) ? (winnerPaceSPerKm * courseLengthM) / cost : null;
+}
+
+/** The course along the routes its legs are read along (§7.8): the metres on the ground and the winner's time at the pace. */
+export function courseRouteTotals(legs: readonly { points: readonly Pt[]; routed: boolean }[] | null, mapScale: number | null, courseLengthM: number | null, winnerPaceSPerKm: number): { routeM: number; timeS: number | null; routed: number } | null {
+  if (!legs || legs.length === 0 || !mapScale) return null;
+  const mm = legs.reduce((sum, l) => sum + courseShared.routeLengthMm(l.points), 0);
+  return {
+    routeM: Math.round((mm * mapScale) / 1000),
+    timeS: courseLengthM && courseLengthM > 0 ? Math.round((winnerPaceSPerKm * courseLengthM) / 1000) : null,
+    routed: legs.filter((l) => l.routed).length,
+  };
+}
 
 /** `"5:30"`, `"5.5"` or `"5,5"` (minutes per km) → seconds per km; null when it is no pace. */
 export function parsePace(text: string): number | null {
@@ -38,19 +60,19 @@ export type AlternativeKind = "fastest" | "shortest" | "fastestShortest" | "alte
 export interface AlternativeItem extends RouteNumbers {
   index: number;
   kind: AlternativeKind;
-  /** The estimated time at the pace, seconds. */
-  timeS: number;
+  /** The estimated time at the pace, seconds; null while the pace on flat forest is not known. */
+  timeS: number | null;
   /** The route's interior vertices, as a stored route holds them. */
   interior: Pt[];
   points: Pt[];
 }
 
-/** The list (§7.8): each alternative with its own numbers and its time at `paceSPerKm`, the fastest first. */
-export function alternativeItems(routes: readonly RouteAlternative[], mapScale: number, sampler: TerrainSampler | null, paceSPerKm: number): AlternativeItem[] {
+/** The list (§7.8): each alternative with its own numbers and its time at `paceSPerKm` (on flat forest, `flatPaceSPerKm`), the fastest first. */
+export function alternativeItems(routes: readonly RouteAlternative[], mapScale: number, sampler: TerrainSampler | null, paceSPerKm: number | null): AlternativeItem[] {
   return routes.map((r, index) => ({
     index,
     kind: r.fastest && r.shortest ? "fastestShortest" : r.fastest ? "fastest" : r.shortest ? "shortest" : "alternative",
-    timeS: Number.isFinite(r.costM) ? Math.round((r.costM * paceSPerKm) / 1000) : 0,
+    timeS: paceSPerKm !== null && Number.isFinite(r.costM) ? Math.round((r.costM * paceSPerKm) / 1000) : null,
     interior: r.points.slice(1, -1),
     points: r.points,
     ...routeNumbers(r.points, mapScale, sampler),

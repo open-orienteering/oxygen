@@ -1,5 +1,6 @@
 import { initTRPC, TRPCError } from "@trpc/server";
 import { refreshMarkedClimbs } from "./course-climb.js";
+import { enqueueAutoRoutes } from "./leg-routes-auto.js";
 import { withClimbMarks } from "./course-climb-pending.js";
 import type { CreateFastifyContextOptions } from "@trpc/server/adapters/fastify";
 import type { PrismaClient } from "./generated/prisma/client.js";
@@ -166,13 +167,20 @@ const requireEvent = middleware(async ({ ctx, next }) => {
  * Chains authedProcedure: when AUTH_MODE is on, a known invited user is
  * required. Peer-to-peer journal shipping uses `peerProcedure` instead.
  */
-export const eventProcedure = authedProcedure.use(requireEvent).use(async ({ ctx, type, next }) => {
+export const eventProcedure = authedProcedure.use(requireEvent).use(async ({ ctx, type, path, next }) => {
   if (type !== "mutation") return next();
   // docs/course-elevation.md §6 "When": the climbs of the courses this mutation's geometry rebuilds marked are
   // computed after its transaction has committed, never inside it; a failure is logged, not the mutation's.
   // The marks are this request's own: no other request can take them before the edit has committed.
   const { result, marks } = await withClimbMarks(() => next());
   if (result.ok && marks.size > 0) await refreshMarkedClimbs(ctx.db, marks);
+  // §7.5: the automatic routes of the pairs the edit touched are searched in the background, after the climbs above
+  // (read along what is stored); the routes that land clear and compute the climbs again. An out-of-bounds object
+  // changes what a route may cross.
+  if (result.ok) {
+    for (const eventId of marks.keys()) enqueueAutoRoutes(ctx.db, eventId);
+    if (marks.size === 0 && path.startsWith("courseObject.")) enqueueAutoRoutes(ctx.db, ctx.event.id);
+  }
   return result;
 });
 

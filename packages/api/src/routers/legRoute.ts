@@ -27,16 +27,18 @@ export interface LegRouteWire {
   source: course.LegRouteSource;
   model: string | null;
   chosen: boolean;
+  /** The pair's automatic route (§7.5): written by the server, not edited or deleted by hand. Without points it is the drawn line. */
+  auto: boolean;
 }
 
-const ROW = { id: true, points: true, source: true, model: true, chosen: true, fromControlId: true, toControlId: true, from: { select: { seq: true, codes: true } }, to: { select: { seq: true, codes: true } } } as const;
+const ROW = { id: true, points: true, source: true, model: true, chosen: true, autoBasis: true, fromControlId: true, toControlId: true, from: { select: { seq: true, codes: true } }, to: { select: { seq: true, codes: true } } } as const;
 type Row = Prisma.LegRouteGetPayload<{ select: typeof ROW }>;
 
 function toWire(r: Row): LegRouteWire {
   const points = course.legRoutePointsSchema.safeParse(r.points);
   return {
     id: r.id, fromControlId: publicControlId(r.from), toControlId: publicControlId(r.to), points: points.success ? points.data : [],
-    source: r.source === "computed" ? "computed" : "drawn", model: r.model, chosen: r.chosen,
+    source: r.source === "computed" ? "computed" : "drawn", model: r.model, chosen: r.chosen, auto: r.autoBasis !== null,
   };
 }
 
@@ -104,6 +106,7 @@ export const legRouteRouter = router({
         const [from, to] = [await controlUuid(tx, eventId, input.fromControlId), await controlUuid(tx, eventId, input.toControlId)];
         const existing = input.id ? await findRoute(tx, eventId, input.id) : null;
         if (existing && (existing.fromControlId !== from || existing.toControlId !== to)) throw new TRPCError({ code: "BAD_REQUEST", message: "A route keeps its pair" });
+        if (existing?.autoBasis != null) throw new TRPCError({ code: "BAD_REQUEST", message: "The automatic route is not edited; draw another route" });
         const chosen = input.chosen ?? existing?.chosen ?? true;
         if (chosen) await tx.legRoute.updateMany({ where: { eventId, fromControlId: from, toControlId: to, chosen: true, ...(existing ? { id: { not: existing.id } } : {}) }, data: { chosen: false } });
         const data = { points: input.points, source: input.source, model: input.source === "computed" ? input.model ?? null : null, chosen };
@@ -137,6 +140,7 @@ export const legRouteRouter = router({
       const eventId = ctx.event.id;
       return ctx.db.$transaction(async (tx) => {
         const r = await findRoute(tx, eventId, input.id);
+        if (r.autoBasis !== null) throw new TRPCError({ code: "BAD_REQUEST", message: "The automatic route is not deleted; choose another route or the drawn line" });
         await tx.legRoute.delete({ where: { id: r.id } });
         if (r.chosen) await pairChanged(tx, eventId, r.fromControlId, r.toControlId);
         return { id: r.id };
