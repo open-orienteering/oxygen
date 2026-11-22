@@ -8,6 +8,9 @@ real runs with a local command (`course-elevation.md` §7.9).
 ## What you need
 
 - The **map file** of each race (`.ocd`, `.omap` or `.xmap`), georeferenced.
+  It must be the map itself: a course-setting file that only links its
+  base map holds no terrain, and every metre then reads as forest (the
+  command says so).
 - **Track records** for it: JSON files of courses (controls in WGS 84) and
   finishers' tracks with times (`course-elevation.md` §7.9.1). Where they
   come from is up to you; the command reads the neutral shape only. Pick

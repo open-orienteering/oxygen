@@ -62,9 +62,10 @@ export function parseCalibrationArgs(argv: readonly string[]): { ok: true; value
   return { ok: true, value };
 }
 
-async function recordFiles(path: string): Promise<string[]> {
-  if (!(await stat(path)).isDirectory()) return [path];
-  return (await readdir(path)).filter((f) => f.endsWith(".json")).sort().map((f) => join(path, f));
+/** The record files of a `--tracks` path; `named` when the file itself was given, not found in a directory. */
+async function recordFiles(path: string): Promise<{ path: string; named: boolean }[]> {
+  if (!(await stat(path)).isDirectory()) return [{ path, named: true }];
+  return (await readdir(path)).filter((f) => f.endsWith(".json")).sort().map((f) => ({ path: join(path, f), named: false }));
 }
 
 export interface CalibrationRun { code: 0 | 1; report: CalibrationReport | null; lines: string[] }
@@ -97,14 +98,15 @@ export async function runCalibration(args: CalibrationArgs, fit: FitOptions = {}
       return fail(`map ${m + 1}: unreadable`);
     }
     say(`map ${m + 1}: read, heights ${heights ? "from contours" : "none"}`);
-    let files: string[];
+    let files: { path: string; named: boolean }[];
     try {
       files = (await Promise.all(entry.tracks.map(recordFiles))).flat();
     } catch {
       return fail(`map ${m + 1}: a --tracks path is unreadable`);
     }
     const records: TrackRecord[] = [];
-    for (const [k, path] of files.entries()) {
+    let skipped = 0;
+    for (const [k, { path, named }] of files.entries()) {
       let raw: unknown;
       try {
         raw = JSON.parse(await readFile(path, "utf8"));
@@ -112,10 +114,14 @@ export async function runCalibration(args: CalibrationArgs, fit: FitOptions = {}
         return fail(`map ${m + 1}, record ${k + 1}: unreadable`);
       }
       const parsed = trackRecordSchema.safeParse(raw);
+      // A directory may hold other JSON beside its records: those are passed over and counted; a file named itself must be a record.
+      if (!parsed.success && !named) { skipped++; continue; }
       if (!parsed.success) return fail(`map ${m + 1}, record ${k + 1}: not a track record (${parsed.error.issues[0]?.path.join(".")}: ${parsed.error.issues[0]?.code})`);
       records.push(parsed.data);
     }
-    say(`map ${m + 1}: ${records.length} record${records.length === 1 ? "" : "s"}, reading the tracks…`);
+    if (map.features.length === 0) say(`map ${m + 1}: no terrain is recognised in the map file (a course-setting file without its base map?)`);
+    if (records.length === 0) return fail(`map ${m + 1}: no track record among its files`);
+    say(`map ${m + 1}: ${records.length} record${records.length === 1 ? "" : "s"}${skipped > 0 ? ` (${skipped} other JSON file${skipped === 1 ? "" : "s"} passed over)` : ""}, reading the tracks…`);
     // All of a map's records together: classes sharing a control pair share its grid and count it once.
     let set: MapObservations;
     try {
@@ -145,6 +151,7 @@ export async function runCalibration(args: CalibrationArgs, fit: FitOptions = {}
     return fail("the report could not be written to --out");
   }
   if (!report.converged) say("the fit did not settle within its rounds: nothing counts as measured");
+  if (report.classes.filter((c) => c.metres > 0).length <= 1) say("all track lies on one terrain class: nothing can be fitted; the map file probably lacks the base map");
   for (const c of report.classes) {
     if (c.metres === 0) continue;
     say(`${c.class.padEnd(14)} ${String(c.metres).padStart(7)} m ${String(c.runners).padStart(4)} runs ${String(c.legs).padStart(5)} legs ${String(c.pairs).padStart(4)} pairs  ${c.baseFactor.toFixed(2)} → ${c.factor.toFixed(2)}${c.interval ? ` [${c.interval[0].toFixed(2)}, ${c.interval[1].toFixed(2)}]` : ""}  ${c.calibrated ? (c.anchor ? "reference" : "measured") : c.kept ?? ""}`);

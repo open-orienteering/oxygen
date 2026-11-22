@@ -63,11 +63,14 @@ describe("route:calibrate", () => {
 
   it("imports the map, reads a directory of records and writes a report of aggregates", async () => {
     const out = join(dir, "report.json");
+    // Other JSON in the directory is passed over and counted, not a failure.
+    await writeFile(join(dir, "page.json"), JSON.stringify({ title: "x" }));
     const said: string[] = [];
     const run = await runCalibration({ maps: [{ map: MAP, tracks: [dir] }], out, id: "test-1", heights: true }, { minMetres: 200, minRunners: 4, minLegs: 8, minPairs: 2, resamples: 10 }, (line) => said.push(line));
     expect(run.code).toBe(0);
     // Each line as it is known, the same lines returned; nothing of the map but that it was read.
     expect(said).toEqual(run.lines);
+    expect(said.some((l) => /^map 1: 1 record \(\d+ other JSON files? passed over\), reading the tracks…$/.test(l))).toBe(true);
     expect(said[0]).toMatch(/^map 1: read, heights (from contours|none)$/);
     const report = calibrationReportSchema.parse(JSON.parse(await readFile(out, "utf8")));
     expect(report).toEqual(run.report);

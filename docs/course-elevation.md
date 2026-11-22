@@ -1135,7 +1135,10 @@ line as it is known and names maps and records by their position only:
 an unreadable file is "map 1: unreadable" or "map 1, record 3:
 unreadable", never its path or its parser's message; a record of the
 wrong shape is named with the schema key and the kind of fault, never
-a value.
+a value. In a `--tracks` directory other JSON files are passed over and
+counted; a file named itself must be a record. A map file in which no
+terrain is recognised, and a run whose track all lies on one class
+(a course-setting file without its base map), are said so.
 
 A model is **data** (`CostModelData`, §0.33): an id, the class factors,
 the slope's four numbers, the measured classes, the anchor. It holds
