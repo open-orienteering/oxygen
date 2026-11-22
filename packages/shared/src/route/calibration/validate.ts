@@ -7,7 +7,7 @@
 
 import type { CostModelData, SlopeData } from "../cost-model.js";
 import { factorsOf, featuresCost } from "./attribute.js";
-import { _fitOnce, fitPlan, median, quantile, runnerPaces, type FitObservation, type FitOptions, FIT_DEFAULTS } from "./fit.js";
+import { _fitOnce, fitPlan, median, quantile, runnerPaces, undirected, type FitObservation, type FitOptions, FIT_DEFAULTS } from "./fit.js";
 
 export interface PredictionError {
   /** Legs predicted. */
@@ -30,8 +30,10 @@ export const FOLDS = 5;
 
 /** The fold of each control pair: by sorted order, so nothing is random and no pair is on both sides. */
 export function foldsOf(obs: readonly FitObservation[], folds = FOLDS): Map<string, number> {
-  const pairs = [...new Set(obs.map((o) => o.pair))].sort();
-  return new Map(pairs.map((p, i) => [p, i % folds]));
+  const grounds = [...new Set(obs.map((o) => undirected(o.pair)))].sort();
+  const fold = new Map(grounds.map((p, i) => [p, i % folds]));
+  // A pair run both ways is one ground: both directions are held out together.
+  return new Map([...new Set(obs.map((o) => o.pair))].map((p) => [p, fold.get(undirected(p))!]));
 }
 
 function predict(train: readonly FitObservation[], test: readonly FitObservation[], factors: ArrayLike<number>, slope: SlopeData): number[] {

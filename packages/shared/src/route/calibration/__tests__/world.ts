@@ -38,7 +38,8 @@ export const classAt = (p: RoutePoint): keyof CostModelData["classFactor"] => BL
 export const TRUTH: CostModelData = { ...DEFAULT_COST_MODEL_DATA, id: "truth", classFactor: { ...DEFAULT_COST_MODEL_DATA.classFactor, paved: 0.5, open: 0.9, slow: 1.6 } };
 
 const row = (y: number, xs: number[]) => xs.map((x) => ({ x, y }));
-const XS = [5, 20, 35, 50, 65, 80, 95];
+/** Every 50 m: nine control pairs in each block, so a class rests on more than a few legs. */
+export const XS = Array.from({ length: 19 }, (_, i) => 5 + 5 * i);
 /** Paved row east, slow and open row west, forest row east. */
 export const LOOP: RoutePoint[] = [...row(15, XS), ...row(37, [...XS].reverse()), ...row(52, XS)];
 
@@ -73,7 +74,7 @@ export function run(controls: readonly RoutePoint[], runner: Runner, truth: Cost
   return { waypoints, punches };
 }
 
-const latLng = (p: RoutePoint) => {
+export const latLng = (p: RoutePoint) => {
   const q = paperToWgs84(frame, p.x * frame.unitsPerMm, p.y * frame.unitsPerMm)!;
   return { lat: q.lat, lng: q.lng };
 };

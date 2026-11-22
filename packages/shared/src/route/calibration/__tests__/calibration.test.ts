@@ -11,10 +11,10 @@ import { routeCost } from "../../alternatives.js";
 import { buildRouteGrid, type RoutePoint } from "../../grid.js";
 import { legGridCovering, legWindow } from "../../leg.js";
 import {
-  attributeLeg, buildReport, calibrationReportSchema, crossValidate, factorsOf, featuresCost, finderRatios, fitCostModel, foldsOf, modelDataOf, observeRecord,
+  attributeLeg, buildReport, calibrationReportSchema, crossValidate, factorsOf, featuresCost, finderRatios, fitCostModel, foldsOf, modelDataOf, observeRecord, observeRecords, undirected,
   projectRecord, solveLinear, splitTrack, trackRecordSchema, type PaperControl, type PaperTrack,
 } from "../index.js";
-import { LOOP, TRUTH, frame, map, record, run } from "./world.js";
+import { LOOP, TRUTH, XS, frame, latLng, map, record, run } from "./world.js";
 import { seeded } from "../fit.js";
 
 const C = CLASS_INDEX;
@@ -94,7 +94,7 @@ describe("legs (§7.9.2)", () => {
     expect(legs.map((l) => Math.round(l.timeS / 5) * 5)).toEqual([45, 45, 45, 45]);
   });
 
-  it("leaves out a leg with a missed control, a gap, a stop, an off-map point or a mistake, and drops a wild fix", () => {
+  it("leaves out a leg with a missed control, a gap, a stop, or an off-map point, and drops a wild fix or two", () => {
     // The track never comes near control 2.
     const missed = splitTrack(controls, made(2, (w) => { for (const q of w) if (Math.abs(q.p.x - 35) < 4) q.p = { x: q.p.x, y: q.p.y - 5 }; }), opts);
     expect(missed.rejected["control-missed"]).toBe(2);
@@ -109,6 +109,10 @@ describe("legs (§7.9.2)", () => {
     // One fix 300 m away: dropped, the leg kept.
     const wild = splitTrack(controls, made(2, (w) => { w[8].p = { x: w[8].p.x, y: w[8].p.y - 30 }; }), opts);
     expect(wild.legs).toHaveLength(4);
+    // Two wild fixes in a row, 300 m away: both dropped, the leg kept and its length the same.
+    const two = splitTrack(controls, made(2, (w) => { for (const i of [8, 9]) w[i].p = { x: w[i].p.x, y: w[i].p.y - 30 }; }), opts);
+    expect(two.legs).toHaveLength(4);
+    expect(two.legs[0].points.every((p) => Math.abs(p.y - 52) < 0.01)).toBe(true);
     // Standing for a minute in leg 2: over a fifth of the leg.
     const stand = splitTrack(controls, made(2, (w, p) => {
       const at = w.findIndex((q) => q.t > 100);
@@ -131,15 +135,43 @@ describe("legs (§7.9.2)", () => {
     expect(Math.abs(pause.legs[2].timeS - 45)).toBeLessThanOrEqual(4);
   });
 
-  it("a leg run far slower than the runner's others is a mistake", () => {
-    const rand = seeded(3);
+  it("a leg run four times slower than the runner's others is kept: slow ground and a mistake look alike here", () => {
     const long = Array.from({ length: 7 }, (_, i) => ({ x: 5 + 15 * i, y: 52 }));
     const cs: PaperControl[] = long.map((p, i) => ({ ...p, code: String(i), type: i === 0 ? "start" : i === 6 ? "finish" : "control" }));
-    const { waypoints, punches } = run(cs, { pace: 0.3 }, TRUTH, rand, 2, 3);
+    const { waypoints, punches } = run(cs, { pace: 0.3 }, TRUTH, seeded(3), 2, 3);
     const track: PaperTrack = { courseId: "1", points: waypoints.map((w) => w.p), timeS: waypoints.map((w) => w.t), startS: 0, finishS: punches[6], splits: punches.slice(1, -1).map((t, i) => ({ code: String(i + 1), atS: t })), ok: true };
     const { legs, rejected } = splitTrack(cs, track, opts);
-    expect(rejected.mistake).toBe(1);
-    expect(legs.map((l) => l.leg)).toEqual([0, 1, 2, 4, 5]);
+    expect(rejected).toEqual({});
+    expect(legs.map((l) => l.leg)).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(Math.abs(legs[3].timeS - 180)).toBeLessThanOrEqual(2);
+  });
+
+  it("a track that begins before the start and goes on after the finish is cut at the punches", () => {
+    const t = made(2, (w) => {
+      // Jogs out past control 1 to the start, waits there for 40 s; after the finish walks on and stands.
+      const before = [
+        ...Array.from({ length: 30 }, (_, i) => ({ t: -160 + 4 * i, p: { x: 35 - i, y: 52 } })),
+        ...Array.from({ length: 20 }, (_, i) => ({ t: -40 + 2 * i, p: { x: 5, y: 52 } })),
+      ];
+      const end = w[w.length - 1];
+      const after = [
+        ...Array.from({ length: 15 }, (_, i) => ({ t: end.t + 2 * (i + 1), p: { x: end.p.x, y: end.p.y } })),
+        ...Array.from({ length: 20 }, (_, i) => ({ t: end.t + 30 + 4 * (i + 1), p: { x: end.p.x - i, y: end.p.y } })),
+      ];
+      w.splice(0, 1, ...before, w[0]);
+      w.push(...after);
+    });
+    const { legs, rejected } = splitTrack(controls, t, opts);
+    expect(rejected).toEqual({});
+    expect(legs).toHaveLength(4);
+    for (const l of legs) expect(Math.abs(l.timeS - 45)).toBeLessThanOrEqual(2);
+  });
+
+  it("a pass 12 m beside a control counts; 20 m beside it does not", () => {
+    const beside = (mm: number) => splitTrack(controls, made(2, (w) => { for (const q of w) if (Math.abs(q.p.x - 35) < 4) q.p = { x: q.p.x, y: q.p.y - mm }; }), opts);
+    expect(beside(1.2).legs).toHaveLength(4);
+    expect(Math.round(Math.max(...beside(1.2).missM))).toBe(12);
+    expect(beside(2).rejected["control-missed"]).toBe(2);
   });
 });
 
@@ -217,8 +249,56 @@ describe("the fit (§7.9.4)", () => {
   });
 
   it("a tenth of the runners blowing a leg moves a factor little", () => {
-    const fit = fitCostModel(observeRecord(map(), trackRecordSchema.parse(record(20, { outliers: 0.3, noise: 0.03 })), 0, "a:", { mistakeFactor: 99 }).observations, DEFAULT_COST_MODEL_DATA, { resamples: 0 });
+    const fit = fitCostModel(observeRecord(map(), trackRecordSchema.parse(record(20, { outliers: 0.3, noise: 0.03 })), 0, "a:").observations, DEFAULT_COST_MODEL_DATA, { resamples: 0 });
     for (const c of ["paved", "open", "slow"] as const) expect(Math.abs(fit.factors[C[c]] / TRUTH.classFactor[c] - 1), c).toBeLessThan(0.05);
+  });
+
+  it("legs timed 20 % off either way do not pull the factors down", () => {
+    const fit = fitCostModel(observed(40, { noise: 0.2, seed: 11 }).observations, DEFAULT_COST_MODEL_DATA, { resamples: 0 });
+    for (const c of ["paved", "open", "slow"] as const) expect(Math.abs(fit.factors[C[c]] / TRUTH.classFactor[c] - 1), c).toBeLessThan(0.04);
+  });
+
+  it("ground three times slower than forest is measured, not cleaned away", () => {
+    const truth = { ...TRUTH, classFactor: { ...TRUTH.classFactor, slow: 3 } };
+    const set = observed(16, { truth });
+    expect(set.rejected).toEqual({});
+    const fit = fitCostModel(set.observations, DEFAULT_COST_MODEL_DATA, { resamples: 30 });
+    expect(Math.abs(fit.factors[C.slow] / 3 - 1)).toBeLessThan(0.04);
+    expect(fit.calibrated[C.slow]).toBe(true);
+    expect(fit.outliers).toBe(0);
+  });
+
+  it("a class on one control pair is not a terrain: its factor stays, however many ran it", () => {
+    // Paved row, then the open block in one 450 m leg back and forth, then forest.
+    const controls = [...XS.map((x) => ({ x, y: 15 })), { x: 50, y: 37 }, { x: 5, y: 37 }, { x: 50, y: 37 }, ...XS.map((x) => ({ x, y: 52 }))];
+    const set = observeRecord(map(), trackRecordSchema.parse(record(20, { controls })), 0, "a:");
+    const fit = fitCostModel(set.observations, DEFAULT_COST_MODEL_DATA, { resamples: 20 });
+    // The 450 m leg both ways, and the leg out of the block.
+    expect(fit.support[C.open]).toMatchObject({ runners: 20, legs: 60, pairs: 2 });
+    expect(fit.support[C.open].metres).toBeGreaterThan(15000);
+    expect(fit.supported[C.open]).toBe(false);
+    expect(fit.factors[C.open]).toBe(DEFAULT_COST_MODEL_DATA.classFactor.open);
+    expect(fit.supported[C.paved]).toBe(true);
+    // The same pair run both ways is one pair.
+    expect(undirected("a:1.00,2.00>3.00,4.00")).toBe(undirected("a:3.00,4.00>1.00,2.00"));
+    expect(undirected("a:1.00,2.00>3.00,4.00")).not.toBe(undirected("b:1.00,2.00>3.00,4.00"));
+  });
+
+  it("a track far outside its leg's window is left out as wandered; records of one map share their control pairs", () => {
+    const rec = record(3);
+    // Runner 0's fixes inside a forest leg (x 20 → 25, y 52) moved 300 m off the line.
+    const t0 = rec.tracks![0];
+    const at = 2 * XS.length + 3;
+    const [from, to] = [t0.result!.splitTimes![at - 1].timeMs!, t0.result!.splitTimes![at].timeMs!];
+    const far = latLng({ x: 22.5, y: 22 });
+    for (const w of t0.waypoints) if (w.timeMs - t0.raceStartMs! > from + 2000 && w.timeMs - t0.raceStartMs! < to - 2000) Object.assign(w, far);
+    const one = observeRecord(map(), trackRecordSchema.parse(rec), 0, "a:");
+    expect(one.rejected).toEqual({ wandered: 1 });
+    expect(one.observations).toHaveLength(3 * (LOOP.length - 1) - 1);
+    const both = observeRecords(map(), [trackRecordSchema.parse(record(3)), trackRecordSchema.parse(record(2, { seed: 9 }))], 10, "a:");
+    expect(both).toMatchObject({ tracks: 5, tracksUsed: 5, courses: 2 });
+    expect(both.pairs.size).toBe(LOOP.length - 1);
+    expect(new Set(both.observations.map((o) => o.runner))).toEqual(new Set([10, 11, 12, 13, 14]));
   });
 
   it("too little track keeps the rule of thumb; without forest the class with most track is the reference", () => {
@@ -227,7 +307,7 @@ describe("the fit (§7.9.4)", () => {
     expect(few.factors).toEqual(factorsOf(DEFAULT_COST_MODEL_DATA));
     expect(few.anchor).toBeNull();
     // Paved and open only.
-    const controls = [...[5, 20, 35, 50, 65, 80, 95].map((x) => ({ x, y: 15 })), ...[50, 35, 20, 5].map((x) => ({ x, y: 37 })), ...[5, 20, 35, 50, 65, 80, 95].map((x) => ({ x, y: 15 }))];
+    const controls = [...XS.map((x) => ({ x, y: 15 })), ...XS.filter((x) => x <= 50).reverse().map((x) => ({ x, y: 37 })), ...XS.map((x) => ({ x, y: 15 }))];
     const set = observeRecord(map(), trackRecordSchema.parse(record(16, { controls })), 0, "a:");
     // The two crossings between the rows are forest: too little to count here.
     const fit = fitCostModel(set.observations, DEFAULT_COST_MODEL_DATA, { resamples: 20, minLegs: 40 });
@@ -300,6 +380,17 @@ describe("validation and the report (§7.9.5–7.9.6)", () => {
     expect(sorted[sorted.length >> 1]).toBeLessThan(1.1);
   });
 
+  it("the model holds measured numbers only: a fitted factor or slope that did not settle stays the rule of thumb", () => {
+    const loose = { ...fit, calibrated: fit.calibrated.map((v, i) => v && i !== C.open), slope: { ...fit.slope, up: 9 }, slopeCalibrated: false };
+    const data = modelDataOf(loose, DEFAULT_COST_MODEL_DATA, "test-2", "made-up runners");
+    expect(data.classFactor.open).toBe(DEFAULT_COST_MODEL_DATA.classFactor.open);
+    expect(data.calibrated).not.toContain("open");
+    expect(data.classFactor.paved).toBeCloseTo(fit.factors[C.paved], 3);
+    expect(data.slope).toEqual(DEFAULT_COST_MODEL_DATA.slope);
+    const settled = modelDataOf({ ...loose, slopeCalibrated: true }, DEFAULT_COST_MODEL_DATA, "test-3", "made-up runners");
+    expect(settled.slope.up).toBe(9);
+  });
+
   it("the model as data: measured classes named, rounded, usable by the finder", () => {
     expect(model.calibrated).toEqual(expect.arrayContaining(["forest", "paved", "open", "slow"]));
     expect(model.anchor).toBe("forest");
@@ -317,6 +408,10 @@ describe("validation and the report (§7.9.5–7.9.6)", () => {
     expect(report.classes.map((c) => c.class)).toEqual(COST_CLASSES.filter((c) => !c.startsWith("blocked")));
     expect(report.classes.find((c) => c.class === "marsh")).toMatchObject({ kept: "no-track", calibrated: false, metres: 0 });
     expect(report.classes.find((c) => c.class === "forest")).toMatchObject({ kept: "anchor", anchor: true });
+    expect(report.classes.find((c) => c.class === "open")!.pairs).toBe(10);
+    expect(report.counts.outliers).toBe(fit.outliers);
+    expect(report.counts.rejected).toEqual({});
+    expect(() => calibrationReportSchema.parse({ ...report, counts: { ...report.counts, rejected: { "runner-7": 1 } } })).toThrow();
     for (const extra of [{ lat: 59.3 }, { participantId: 7 }, { name: "x" }, { file: "a.ocd" }]) {
       expect(() => calibrationReportSchema.parse({ ...report, ...extra })).toThrow();
       expect(() => calibrationReportSchema.parse({ ...report, counts: { ...report.counts, ...extra } })).toThrow();

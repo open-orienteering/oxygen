@@ -28,6 +28,10 @@ describe("cost classes (docs/course-elevation.md §7.6)", () => {
     expect(defaultSlopeFactor(-0.2)).toBeCloseTo(1.15, 9);
     expect(COST_MODELS["default-1"]).toBe(DEFAULT_COST_MODEL_DATA);
     for (const header of [undefined, null, { library: null }, { library: { id: "ISOM2017-2" } }, { library: { id: "ISSprOM2019-2" } }]) expect(currentCostModel(header).id).toBe("default-1");
+    const two = { s: { ...DEFAULT_COST_MODEL_DATA, id: "s" }, f: { ...DEFAULT_COST_MODEL_DATA, id: "f" } };
+    const pick = (id: string | null) => currentCostModel(id === null ? null : { library: { id } }, { sprint: "s", forest: "f" }, two).id;
+    expect([pick("ISSprOM2019-2"), pick("ISOM2017-2"), pick(null)]).toEqual(["s", "f", "f"]);
+    expect(currentCostModel(null, { sprint: "gone", forest: "gone" }, two).id).toBe("default-1");
     expect(costModelNote(DEFAULT_COST_MODEL)).toEqual({ id: "default-1", state: "none", classes: [] });
     const some = costModelFromData({ ...DEFAULT_COST_MODEL_DATA, id: "x", calibrated: ["paved", "open"], anchor: "paved" });
     expect(costModelNote(some)).toEqual({ id: "x", state: "partial", classes: ["paved", "open"] });

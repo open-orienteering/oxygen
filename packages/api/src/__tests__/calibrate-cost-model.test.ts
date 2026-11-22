@@ -63,8 +63,12 @@ describe("route:calibrate", () => {
 
   it("imports the map, reads a directory of records and writes a report of aggregates", async () => {
     const out = join(dir, "report.json");
-    const run = await runCalibration({ maps: [{ map: MAP, tracks: [dir] }], out, id: "test-1", heights: true }, { minMetres: 200, minRunners: 4, minLegs: 8, resamples: 10 });
+    const said: string[] = [];
+    const run = await runCalibration({ maps: [{ map: MAP, tracks: [dir] }], out, id: "test-1", heights: true }, { minMetres: 200, minRunners: 4, minLegs: 8, minPairs: 2, resamples: 10 }, (line) => said.push(line));
     expect(run.code).toBe(0);
+    // Each line as it is known, the same lines returned; nothing of the map but that it was read.
+    expect(said).toEqual(run.lines);
+    expect(said[0]).toMatch(/^map 1: read, heights (from contours|none)$/);
     const report = calibrationReportSchema.parse(JSON.parse(await readFile(out, "utf8")));
     expect(report).toEqual(run.report);
     expect(report.counts).toMatchObject({ maps: 1, courses: 1, tracks: 8, tracksUsed: 8, runners: 8 });
@@ -84,6 +88,34 @@ describe("route:calibrate", () => {
     await writeFile(bad, JSON.stringify({ courses: [{ id: 1, controls: [] }] }));
     const run = await runCalibration({ maps: [{ map: MAP, tracks: [bad] }], out, id: "x", heights: false });
     expect(run.code).toBe(1);
-    expect(run.lines.join(" ")).toMatch(/does not parse/);
+    expect(run.lines.join(" ")).toMatch(/map 1, record 1: not a track record/);
+  }, 120_000);
+
+  it("a missing map, a missing record and a record that is not JSON are named by position, never by path or content", async () => {
+    const out = join(dir, "none.json");
+    const secret = join(dir, "anna-andersson.json");
+    await writeFile(secret, "{ not json: Anna Andersson");
+    for (const [maps, line] of [
+      [[{ map: join(dir, "no-such-map.ocd"), tracks: [tracks] }], "map 1: unreadable"],
+      [[{ map: MAP, tracks: [join(dir, "no-such-dir")] }], "map 1: a --tracks path is unreadable"],
+      [[{ map: MAP, tracks: [tracks, secret] }], "map 1, record 2: unreadable"],
+    ] as const) {
+      const run = await runCalibration({ maps: maps.map((m) => ({ map: m.map, tracks: [...m.tracks] })), out, id: "x", heights: false });
+      expect(run.code).toBe(1);
+      expect(run.lines[run.lines.length - 1]).toBe(line);
+      expect(run.lines.join(" ")).not.toMatch(/anna|Anna|no-such|calibrate-/);
+    }
+  }, 120_000);
+
+  it("under five runs no report is written", async () => {
+    const few = join(dir, "few");
+    const record = JSON.parse(await readFile(tracks, "utf8"));
+    await writeFile(few, JSON.stringify({ ...record, kept: record.kept.slice(0, 4) }));
+    const out = join(dir, "few-report.json");
+    const run = await runCalibration({ maps: [{ map: MAP, tracks: [few] }], out, id: "x", heights: false });
+    expect(run.code).toBe(1);
+    expect(run.report).toBeNull();
+    expect(run.lines[run.lines.length - 1]).toMatch(/^4 runs with a usable leg: under 5 no report is written/);
+    await expect(readFile(out)).rejects.toThrow();
   }, 120_000);
 });

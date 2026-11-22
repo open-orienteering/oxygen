@@ -136,9 +136,13 @@ export const COST_MODELS: Readonly<Record<string, CostModelData>> = { [DEFAULT_C
 export const CURRENT_COST_MODEL_IDS: { sprint: string; forest: string } = { sprint: "default-1", forest: "default-1" };
 
 /** The model a map's routes are estimated under, by the document's symbol library. */
-export function currentCostModel(header?: { library?: { id: string } | null } | null): CostModel {
-  const id = header?.library?.id.startsWith("ISSprOM") ? CURRENT_COST_MODEL_IDS.sprint : CURRENT_COST_MODEL_IDS.forest;
-  return costModelFromData(COST_MODELS[id] ?? DEFAULT_COST_MODEL_DATA);
+export function currentCostModel(
+  header?: { library?: { id: string } | null } | null,
+  ids: { sprint: string; forest: string } = CURRENT_COST_MODEL_IDS,
+  models: Readonly<Record<string, CostModelData>> = COST_MODELS,
+): CostModel {
+  const id = header?.library?.id.startsWith("ISSprOM") ? ids.sprint : ids.forest;
+  return costModelFromData(models[id] ?? DEFAULT_COST_MODEL_DATA);
 }
 
 /** How much of a model is measured (§7.9): what the editor's note says of its times. */

@@ -27,7 +27,9 @@ pnpm --filter @oxygen/api route:calibrate \
 Each `--tracks` (one record, or a directory of `*.json` records) belongs
 to the `--map` before it. `--no-heights` skips the contour field (no slope
 is read). The run needs no database and no server and sends nothing
-anywhere. It prints a summary and writes the report.
+anywhere. It prints its progress and a summary and writes the report. A
+forest map with many classes takes minutes. Under five runs with a usable
+leg it writes nothing.
 
 ## What is private and what is not
 
@@ -41,25 +43,34 @@ track (the tests run made-up runners on made-up terrain).
 ## Reading the report
 
 - `classes[]`: per terrain class, what it rests on (`metres`, `runners`,
-  `legs`), the rule-of-thumb `baseFactor`, the fitted `factor` with its
-  90 % `interval`, and `calibrated`. `kept` says why a class kept the rule
-  of thumb: `no-track`, `little-track`, `not-settled` (the interval is too
-  wide) or `anchor` (the class the others are measured against).
+  `legs`, `pairs` — different control pairs), the rule-of-thumb
+  `baseFactor`, the fitted `factor` with its 90 % `interval`, and
+  `calibrated`. `kept` says why a class kept the rule of thumb:
+  `no-track`, `little-track` (under 2000 m, 10 runs, 30 legs or 8 control
+  pairs), `not-settled` (the interval is too wide) or `anchor` (the class
+  the others are measured against). The `model` block holds a fitted
+  factor only for a `calibrated` class; for the others it holds the rule
+  of thumb, whatever `factor` says here.
 - `alongTrack`: the error of predicted leg times on legs held out of the
   fit, for the fitted model and for the rule of thumb. The fitted one
   should be lower.
 - `againstFinder.median`: actual leg time over the finder's fastest route
-  at the runner's pace. Near 1 is good; well under 1 means runners find
-  faster ways than the finder (a bridge or passage the grid does not
-  hold); well over 1 means the finder is optimistic.
+  at the runner's pace. It is about 1 or more by construction, so it
+  cannot confirm a model; it is a smoke test. Well under 1 (or a large
+  `shareUnder095`) means runners take ways the grid does not hold (a
+  bridge, a passage); well over 1 means runners do not take the routes
+  the model calls fastest.
 - `maps[].medianMissM`: metres between a control and where tracks pass
   it. Over about 10 m suggests the map's georeference is off.
-- `counts.rejected`: legs left out, per reason.
+- `counts.rejected`: legs left out, per reason. No leg is left out for
+  being slow; `counts.outliers` are the legs the fitted model misses by
+  more than a factor of two (mistakes, mostly), which weigh little.
 
 ## Adopting a model
 
-When the report is good enough — the held-out error no worse than the
-rule of thumb, `againstFinder.median` between about 0.97 and 1.15 — copy
+When the report is good enough — the classes that matter `calibrated`,
+the held-out error clearly lower than the rule of thumb's, its `bias`
+near zero, and `againstFinder` showing nothing odd — copy
 its `model` block into `COST_MODELS` in
 `packages/shared/src/route/cost-model.ts` under its id and name the id in
 `CURRENT_COST_MODEL_IDS` for the map family it was fitted on (`sprint` or

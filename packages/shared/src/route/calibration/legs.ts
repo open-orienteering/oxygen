@@ -20,14 +20,13 @@ export interface SplitOptions {
   standMinS?: number;
   maxStandShare?: number;
   maxDroppedShare?: number;
-  mistakeFactor?: number;
 }
 
 export const SPLIT_DEFAULTS = {
-  controlReachM: 15, punchWindowS: 20, maxSpeedMps: 9, maxGapS: 20, standRadiusM: 3, standMinS: 10, maxStandShare: 0.2, maxDroppedShare: 0.1, mistakeFactor: 2.5,
+  controlReachM: 15, punchWindowS: 20, maxSpeedMps: 9, maxGapS: 20, standRadiusM: 3, standMinS: 10, maxStandShare: 0.2, maxDroppedShare: 0.1,
 } as const;
 
-export type LegRejection = "control-missed" | "gap" | "jitter" | "off-map" | "standing" | "mistake" | "too-short";
+export type LegRejection = "control-missed" | "gap" | "jitter" | "off-map" | "standing" | "too-short";
 
 export interface LegObservation {
   /** Index of the leg in the course: from control `leg` to control `leg + 1`. */
@@ -71,10 +70,16 @@ export function splitTrack(controls: readonly PaperControl[], track: PaperTrack,
   }
   const droppedAt: number[] = [];
   const speed = (a: { p: RoutePoint; t: number }, b: { p: RoutePoint; t: number }) => dist(a.p, b.p) / Math.max(1e-6, b.t - a.t);
-  pts = pts.filter((q, i, all) => {
-    const spike = i > 0 && i < all.length - 1 && speed(all[i - 1], q) > o.maxSpeedMps && speed(q, all[i + 1]) > o.maxSpeedMps;
-    if (spike) droppedAt.push(q.t);
-    return !spike;
+  // One wild fix, or two in a row: the fixes either side of them agree, they do not.
+  const wild = new Set<number>();
+  for (let i = 1; i + 1 < pts.length; i++) {
+    if (wild.has(i) || speed(pts[i - 1], pts[i]) <= o.maxSpeedMps) continue;
+    if (speed(pts[i], pts[i + 1]) > o.maxSpeedMps) wild.add(i);
+    else if (i + 2 < pts.length && speed(pts[i + 1], pts[i + 2]) > o.maxSpeedMps && speed(pts[i - 1], pts[i + 2]) <= o.maxSpeedMps) { wild.add(i); wild.add(i + 1); }
+  }
+  pts = pts.filter((q, i) => {
+    if (wild.has(i)) droppedAt.push(q.t);
+    return !wild.has(i);
   });
   const empty: SplitResult = { legs: [], rejected, missM: [] };
   if (pts.length < 2 || controls.length < 2) return empty;
@@ -98,14 +103,23 @@ export function splitTrack(controls: readonly PaperControl[], track: PaperTrack,
     const p = { x: a.p.x + dx * k, y: a.p.y + dy * k };
     return { seg: i, k, t: a.t + (b.t - a.t) * k, p, d: dist(p, c) };
   };
-  const nearestIn = (c: RoutePoint, t0: number, t1: number, fromSeg = 0): Pass | null => {
-    let best: Pass | null = null;
+  /**
+   * The pass between two times: the nearest approach, and among approaches as near as it within
+   * the standing radius — a runner waiting on the start line, or stopped at the finish — the one
+   * closest to `prefer`, the punch on the track's clock.
+   */
+  const nearestIn = (c: RoutePoint, t0: number, t1: number, fromSeg = 0, prefer = (t0 + t1) / 2): Pass | null => {
+    const found: Pass[] = [];
     for (let i = fromSeg; i + 1 < pts.length; i++) {
       if (pts[i + 1].t < t0) continue;
       if (pts[i].t > t1) break;
       const q = approach(c, i);
-      if (q.t >= t0 - 1e-9 && q.t <= t1 + 1e-9 && (!best || q.d < best.d)) best = q;
+      if (q.t >= t0 - 1e-9 && q.t <= t1 + 1e-9) found.push(q);
     }
+    if (found.length === 0) return null;
+    const nearest = Math.min(...found.map((q) => q.d));
+    let best: Pass | null = null;
+    for (const q of found) if (q.d <= nearest + o.standRadiusM && (!best || Math.abs(q.t - prefer) < Math.abs(best.t - prefer))) best = q;
     return best;
   };
   // One clock offset per track: the watch and the punching system are two clocks.
@@ -144,7 +158,9 @@ export function splitTrack(controls: readonly PaperControl[], track: PaperTrack,
   }
   const missM = pass.flatMap((q) => (q ? [q.d] : []));
 
-  const kept: (LegObservation & { straightM: number })[] = [];
+  // A leg is never left out for being slow: slow ground and a mistake look alike here, and the fit
+  // weighs down the legs its model cannot explain (§7.9.4).
+  const legs: LegObservation[] = [];
   for (let leg = 0; leg + 1 < controls.length; leg++) {
     const a = pass[leg], b = pass[leg + 1];
     if (!a || !b) { reject("control-missed"); continue; }
@@ -164,15 +180,7 @@ export function splitTrack(controls: readonly PaperControl[], track: PaperTrack,
       if (j > i && seg[j].t - seg[i].t >= o.standMinS) { standingS += seg[j].t - seg[i].t; i = j; } else i++;
     }
     if (standingS / total > o.maxStandShare) { reject("standing"); continue; }
-    kept.push({ leg, from: controls[leg], to: controls[leg + 1], points: seg.map((q) => q.p), timeS: total - standingS, standingS, straightM: dist(controls[leg], controls[leg + 1]) });
-  }
-  // A leg far slower over its straight distance than the runner's others is a mistake, not the terrain.
-  const paces = kept.filter((k) => k.straightM > 1).map((k) => k.timeS / k.straightM);
-  const typical = median(paces);
-  const legs: LegObservation[] = [];
-  for (const { straightM, ...k } of kept) {
-    if (paces.length >= 3 && straightM > 1 && k.timeS / straightM > o.mistakeFactor * typical) { reject("mistake"); continue; }
-    legs.push(k);
+    legs.push({ leg, from: controls[leg], to: controls[leg + 1], points: seg.map((q) => q.p), timeS: total - standingS, standingS });
   }
   return { legs, rejected, missM };
 }
