@@ -166,6 +166,8 @@ const SNAPSHOT_TABLES = [
   "courseMap",
   // Not in the results closure, but the venue's map draws them (08 §4.8).
   "courseObject",
+  // The setters' leg routes (docs/course-elevation.md §7): not journaled, so they travel here. After the controls.
+  "legRoute",
   "cardReadout",
   "card",
   "runner",

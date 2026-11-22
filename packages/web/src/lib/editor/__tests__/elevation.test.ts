@@ -39,14 +39,14 @@ describe("the line climb of the course-info rows (docs/course-elevation.md §4)"
 
 describe("the selected leg's numbers (docs/course-elevation.md §4.5)", () => {
   it("length, the leg's share of climb and descent, the net", () => {
-    expect(legElevation(ready(), 1)).toEqual({ lengthM: 600, climbM: 30, descentM: 31, netM: 0, basis: "ground", approx: false });
+    expect(legElevation(ready(), 1)).toEqual({ lengthM: 600, climbM: 30, descentM: 31, netM: 0, basis: "ground", approx: false, routed: false });
     expect(Object.is(legElevation(ready(), 1)?.netM, 0)).toBe(true);
   });
 
   it("a leg without data: nulls, approximate", () => {
     const p = profile();
     p.legs[0] = { offsetM: 0, profile: leg({ coverage: 0, confidence: 0, netM: null }), climbM: null, descentM: null };
-    expect(legElevation(ready(p), 0)).toEqual({ lengthM: 400, climbM: null, descentM: null, netM: null, basis: "ground", approx: true });
+    expect(legElevation(ready(p), 0)).toEqual({ lengthM: 400, climbM: null, descentM: null, netM: null, basis: "ground", approx: true, routed: false });
   });
 
   it("none unless ready and the leg exists", () => {

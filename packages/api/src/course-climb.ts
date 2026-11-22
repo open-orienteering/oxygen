@@ -16,7 +16,8 @@ import { decodeHeightField, type HeightField } from "@oxygen/shared/src/terrain/
 import { TERRAIN_VERSION } from "@oxygen/shared/src/terrain/field/index.js";
 import { courseProfile, fieldSampler, pickClimbField, type ClimbFieldPick, type PaperPoint, type TerrainSampler } from "@oxygen/shared/src/terrain/profile/index.js";
 import type { ClimbMarks } from "./course-climb-pending.js";
-import { editorCourseLayer, loadCourseSequences } from "./course-geometry.js";
+import { loadCourseSequences } from "./course-geometry.js";
+import { chosenLegRoutes, climbLegsOf } from "./leg-routes.js";
 import { emitCourseUpserted } from "./referenceJournal.js";
 import { eventPin } from "./map-store/event-document.js";
 import { HEIGHTFIELD_SOURCE, readHeightfield, terrainDescriptor } from "./map-store/heightfield.js";
@@ -115,7 +116,8 @@ export async function computeMissingClimbs(db: PrismaClient, eventId: bigint, co
       if (locked.length === 0) return 0;
       const found = (await loadCourseSequences(tx, eventId, [id])).get(id);
       if (!found || found.orderMode !== "ordered") return 0;
-      const legs = editorCourseLayer(id, found.seq, found.orderMode).derivation.courses[0]?.legs ?? [];
+      // Along the pair's chosen route where a leg has one (§7.3), else the drawn line.
+      const legs = climbLegsOf(id, found.seq, await chosenLegRoutes(tx, eventId));
       const climbM = computedClimbM(legs, sampler);
       if (climbM === null) return 0;
       await tx.course.update({ where: { id }, data: { climbM, climbSource: "computed" } });

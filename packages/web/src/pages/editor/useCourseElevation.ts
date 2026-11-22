@@ -7,7 +7,8 @@
  */
 
 import { useDeferredValue, useMemo } from "react";
-import { courseProfile, fieldSampler, pickClimbField, type ClimbTerrainLike, type PaperPoint } from "@oxygen/shared/src/terrain/profile/index.js";
+import { courseProfile, fieldSampler, pickClimbField, type ClimbTerrainLike, type PaperPoint, type TerrainSampler } from "@oxygen/shared/src/terrain/profile/index.js";
+import type { HeightField } from "@oxygen/shared/src/terrain/field/types.js";
 import { useHeightField } from "../../hooks/useHeightField";
 import type { CourseElevation } from "../../lib/editor/elevation";
 
@@ -16,12 +17,12 @@ export interface CourseElevationInput {
   terrain: ClimbTerrainLike | null | undefined;
   /** §4.1 holds: an ordered course is selected in Course mode's Course view. The field is asked for while it does. */
   active: boolean;
-  /** The course's legs as drawn; null until the viewer has derived them (or while it draws something else). */
+  /** The course's legs as they are read — each along its chosen route when it has one (§7.3), else as drawn; null until the viewer has derived them (or while it draws something else). */
   legs: readonly { points: readonly PaperPoint[] }[] | null;
   nameId: string | null;
 }
 
-export function useCourseElevation({ terrain, active, legs: liveLegs, nameId }: CourseElevationInput): { elevation: CourseElevation; retry: () => void } {
+export function useCourseElevation({ terrain, active, legs: liveLegs, nameId }: CourseElevationInput): { elevation: CourseElevation; sampler: TerrainSampler | null; field: { key: string; field: HeightField } | null; retry: () => void } {
   // The profile follows a drag one render behind: the drag's own frames come first.
   const legs = useDeferredValue(liveLegs);
   const pick = useMemo(() => pickClimbField(terrain), [terrain]);
@@ -42,5 +43,6 @@ export function useCourseElevation({ terrain, active, legs: liveLegs, nameId }: 
       datum: sampler.datum, groundMPerMm: sampler.groundMPerMm,
     };
   }, [wanted, pick, legs, state, sampler, profile]);
-  return { elevation, retry };
+  const keyed = useMemo(() => (field && pick ? { key: pick.url, field } : null), [field, pick]);
+  return { elevation, sampler, field: keyed, retry };
 }

@@ -27,6 +27,7 @@ export const WEIGHTS = {
   "course-editor-placing.spec.ts": 65, // P1/P4/P5 placing, F4 crossings, F27 placement loupe
   "course-editor-elevation.spec.ts": 60, // climb along the line, leg numbers, basis, retry; not yet measured in CI
   "course-editor-profile.spec.ts": 35, // the elevation profile panel; not yet measured in CI
+  "course-editor-routes.spec.ts": 40, // leg routes: draw, choose, remove; not yet measured in CI
   "field-mode.spec.ts": { mobile: 62 }, // OCAD+map, Field mode flows
   "registration-dialog.spec.ts": 46,
   "course-presence.spec.ts": 45,

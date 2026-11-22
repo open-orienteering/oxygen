@@ -65,6 +65,8 @@ export function editorCourseLayer(
   courseId: string,
   seq: GeometrySeqControl[],
   orderMode: "ordered" | "free_order" = "ordered",
+  /** `legStyle`: each leg carries its stored style too (the climb reads it, docs/course-elevation.md §7.3). */
+  options: { legStyle?: boolean } = {},
 ): course.CourseLayer {
   const sites = new Map<string, course.CourseSite>();
   for (const c of seq) sites.set(c.id, { id: c.id, code: c.code, kind: KIND[c.type], x: c.xMm, y: c.yMm });
@@ -73,6 +75,7 @@ export function editorCourseLayer(
     const leg: course.CourseLegProps = {};
     if (c.leg?.bends?.length) leg.bends = c.leg.bends;
     if (c.via) leg.crossing = { controlId: c.via.id };
+    if (options.legStyle && c.leg?.style) leg.style = c.leg.style;
     return Object.keys(leg).length ? leg : undefined;
   };
   return course.courseLayer({
