@@ -177,10 +177,9 @@ to change):
     A fitted number whose interval touches a bound is not measured.
 
 37. **Forest maps run under `forest-2026-1`** (§7.9.7): the three
-    numbers the first calibration settled. Put to the user as a choice
-    on 2026-11-22 (adopt the three; adopt them and the uphill number;
-    wait); implemented as recommended, to be reverted if he chooses to
-    wait.
+    numbers the first calibration settled. Decided with the user on
+    2026-11-22: adopt the three; the uphill number waits until the
+    slope settles.
 
 ## 1. The profile
 
