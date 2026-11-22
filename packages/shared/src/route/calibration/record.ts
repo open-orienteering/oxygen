@@ -52,19 +52,23 @@ export interface PaperTrack {
   splits: { code: string; atS: number }[];
   ok: boolean;
 }
+/** What a record and its map disagree on; in the report as these words only. */
+export const TRACK_WARNINGS = ["crs-differs", "scale-differs", "track-without-course"] as const;
+export type TrackWarning = (typeof TRACK_WARNINGS)[number];
+
 export interface ProjectedRecord {
   courses: Map<string, PaperControl[]>;
   tracks: PaperTrack[];
   /** Track points outside the map's bounds. */
   outside: number;
-  warnings: string[];
+  warnings: TrackWarning[];
 }
 
 /** The record on the map's paper, mm; throws `TrackProjectionError` `not-georeferenced` for a map without a usable CRS. */
 export function projectRecord(frame: PaperFrame, bounds: PaperBounds | null, record: TrackRecord): ProjectedRecord {
   if (!isGeoreferenced(frame)) throw new TrackProjectionError("not-georeferenced", "The map has no georeference, so tracks cannot be placed on it");
   const u = frame.unitsPerMm;
-  const warnings: string[] = [];
+  const warnings: TrackWarning[] = [];
   const crs = frame.georeferencing.crs;
   if (record.projectionEpsgCode && crs && String(record.projectionEpsgCode) !== String(crs.code)) warnings.push("crs-differs");
   if (record.map?.mapScale && Math.abs(record.map.mapScale - frame.mapScale) > 0.5) warnings.push("scale-differs");

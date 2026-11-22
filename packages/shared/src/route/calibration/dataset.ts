@@ -13,7 +13,7 @@ import { legGridCovering, legWindow, routeFeaturesOfDocument, type BoxedRouteFea
 import { attributeLeg, featuresCost, factorsOf } from "./attribute.js";
 import { median, runnerPaces, type FitObservation } from "./fit.js";
 import { splitTrack, type LegRejection, type SplitOptions } from "./legs.js";
-import { projectRecord, type TrackRecord } from "./record.js";
+import { projectRecord, type TrackRecord, type TrackWarning } from "./record.js";
 
 export interface CalibrationMap {
   features: readonly BoxedRouteFeature[];
@@ -45,6 +45,7 @@ export interface MapObservations {
   observations: FitObservation[];
   pairs: Map<string, PairLegs>;
   tracks: number;
+  /** Tracks with a leg among the observations. */
   tracksUsed: number;
   courses: number;
   rejected: Partial<Record<Rejection, number>>;
@@ -53,7 +54,7 @@ export interface MapObservations {
   /** Share of the kept legs' metres stepped in an uncrossable cell. */
   blockedShare: number;
   outside: number;
-  warnings: string[];
+  warnings: TrackWarning[];
 }
 
 export const MAX_BLOCKED_SHARE = 0.25;
@@ -78,8 +79,8 @@ export function observeRecords(map: CalibrationMap, records: readonly TrackRecor
   const bump = (k: Rejection, n = 1) => { rejected[k] = (rejected[k] ?? 0) + n; };
   const miss: number[] = [];
   const raw: { runner: number; pair: string; from: RoutePoint; to: RoutePoint; points: RoutePoint[]; timeS: number }[] = [];
-  const warnings = new Set<string>();
-  let tracks = 0, tracksUsed = 0, courses = 0, outside = 0;
+  const warnings = new Set<TrackWarning>();
+  let tracks = 0, courses = 0, outside = 0;
   for (const record of records) {
     const projected = projectRecord(map.frame, map.bounds, record);
     courses += projected.courses.size;
@@ -92,7 +93,6 @@ export function observeRecords(map: CalibrationMap, records: readonly TrackRecor
       const split = splitTrack(controls, track, { ...options, groundMPerMm: map.groundMPerMm, bounds: map.boundsMm });
       for (const [k, n] of Object.entries(split.rejected)) bump(k as LegRejection, n);
       miss.push(...split.missM);
-      let used = false;
       for (const leg of split.legs) {
         const from = { x: leg.from.x, y: leg.from.y }, to = { x: leg.to.x, y: leg.to.y };
         // A track far outside the leg's window grown once more by its pad is not a route of this leg:
@@ -102,9 +102,7 @@ export function observeRecords(map: CalibrationMap, records: readonly TrackRecor
         if (leg.points.some((p) => p.x < w.minX - pad || p.x > w.maxX + pad || p.y < w.minY - pad || p.y > w.maxY + pad)) { bump("wandered"); continue; }
         const key = (p: RoutePoint) => `${p.x.toFixed(2)},${p.y.toFixed(2)}`;
         raw.push({ runner, pair: `${pairPrefix}${key(from)}>${key(to)}`, from, to, points: leg.points, timeS: leg.timeS });
-        used = true;
       }
-      if (used) tracksUsed++;
     }
   }
   const byPair = new Map<string, typeof raw>();
@@ -134,7 +132,7 @@ export function observeRecords(map: CalibrationMap, records: readonly TrackRecor
     if (kept.length > 0) pairs.set(pair, { from: legs[0].from, to: legs[0].to, cover, observations: kept });
   }
   return {
-    observations, pairs, tracks, tracksUsed, courses, rejected,
+    observations, pairs, tracks, tracksUsed: new Set(observations.map((x) => x.runner)).size, courses, rejected,
     medianMissM: median(miss), blockedShare: totalM > 0 ? blockedM / totalM : 0, outside, warnings: [...warnings].sort(),
   };
 }

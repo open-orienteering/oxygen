@@ -115,7 +115,7 @@ describe("route:calibrate", () => {
     const run = await runCalibration({ maps: [{ map: MAP, tracks: [few] }], out, id: "x", heights: false });
     expect(run.code).toBe(1);
     expect(run.report).toBeNull();
-    expect(run.lines[run.lines.length - 1]).toMatch(/^4 runs with a usable leg: under 5 no report is written/);
+    expect(run.lines[run.lines.length - 1]).toMatch(/^map 1: under 5 runs with a usable leg; no report is written/);
     await expect(readFile(out)).rejects.toThrow();
   }, 120_000);
 });

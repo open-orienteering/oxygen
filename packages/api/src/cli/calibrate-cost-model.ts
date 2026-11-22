@@ -123,6 +123,8 @@ export async function runCalibration(args: CalibrationArgs, fit: FitOptions = {}
     } catch (err) {
       return fail(`map ${m + 1}: ${err instanceof TrackProjectionError ? err.message : "its tracks cannot be read"}`);
     }
+    // Per map too: its line and its row of the report would otherwise describe a few people.
+    if (set.tracksUsed < MIN_REPORT_RUNS) return fail(`map ${m + 1}: under ${MIN_REPORT_RUNS} runs with a usable leg; no report is written, its numbers would describe a few people`);
     runnerBase += set.tracks;
     sets.push(set);
     maps.push(map);
@@ -131,14 +133,18 @@ export async function runCalibration(args: CalibrationArgs, fit: FitOptions = {}
   const all = sets.flatMap((s) => s.observations);
   if (all.length === 0) return fail("no leg survived the cleaning");
   const runs = new Set(all.map((o) => o.runner)).size;
-  if (runs < MIN_REPORT_RUNS) return fail(`${runs} run${runs === 1 ? "" : "s"} with a usable leg: under ${MIN_REPORT_RUNS} no report is written, its numbers would describe a few people`);
   say(`fitting ${all.length} legs of ${runs} runs…`);
   const result = fitCostModel(all, DEFAULT_COST_MODEL_DATA, fit);
   const model = modelDataOf(result, DEFAULT_COST_MODEL_DATA, args.id, `${result.runners} runs, ${all.length} legs on ${sets.length} map${sets.length === 1 ? "" : "s"}`);
   say("checking held-out legs and the finder…");
   const finder = sets.flatMap((set, i) => finderRatios(maps[i], set, model));
-  const report = buildReport({ model, base: DEFAULT_COST_MODEL_DATA, fit: result, sets, alongTrack: result.supported.some(Boolean) ? crossValidate(all, DEFAULT_COST_MODEL_DATA, fit) : null, finder });
-  await writeFile(args.out, JSON.stringify(report, null, 2) + "\n");
+  const report = buildReport({ model, base: DEFAULT_COST_MODEL_DATA, fit: result, sets, alongTrack: result.supported.some(Boolean) ? crossValidate(all, DEFAULT_COST_MODEL_DATA, fit, { classes: result.calibrated, slope: result.slopeCalibrated }) : null, finder });
+  try {
+    await writeFile(args.out, JSON.stringify(report, null, 2) + "\n");
+  } catch {
+    return fail("the report could not be written to --out");
+  }
+  if (!report.converged) say("the fit did not settle within its rounds: nothing counts as measured");
   for (const c of report.classes) {
     if (c.metres === 0) continue;
     say(`${c.class.padEnd(14)} ${String(c.metres).padStart(7)} m ${String(c.runners).padStart(4)} runs ${String(c.legs).padStart(5)} legs ${String(c.pairs).padStart(4)} pairs  ${c.baseFactor.toFixed(2)} → ${c.factor.toFixed(2)}${c.interval ? ` [${c.interval[0].toFixed(2)}, ${c.interval[1].toFixed(2)}]` : ""}  ${c.calibrated ? (c.anchor ? "reference" : "measured") : c.kept ?? ""}`);

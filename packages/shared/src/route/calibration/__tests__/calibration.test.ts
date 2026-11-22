@@ -12,7 +12,7 @@ import { buildRouteGrid, type RoutePoint } from "../../grid.js";
 import { legGridCovering, legWindow } from "../../leg.js";
 import {
   attributeLeg, buildReport, calibrationReportSchema, crossValidate, factorsOf, featuresCost, finderRatios, fitCostModel, foldsOf, modelDataOf, observeRecord, observeRecords, undirected,
-  projectRecord, solveLinear, splitTrack, trackRecordSchema, type PaperControl, type PaperTrack,
+  N_CLASSES, N_GRADE_BINS, projectRecord, solveLinear, splitTrack, trackRecordSchema, type FitObservation, type LegFeatures, type PaperControl, type PaperTrack,
 } from "../index.js";
 import { LOOP, TRUTH, XS, frame, latLng, map, record, run } from "./world.js";
 import { seeded } from "../fit.js";
@@ -301,6 +301,58 @@ describe("the fit (§7.9.4)", () => {
     expect(new Set(both.observations.map((o) => o.runner))).toEqual(new Set([10, 11, 12, 13, 14]));
   });
 
+  /** Made-up legs straight as features: `mix` gives each control pair's metres per class. */
+  const madeUp = (runners: number, pairs: number, mix: (pair: number, rand: () => number) => Partial<Record<keyof typeof C, number>>, truth: Partial<Record<keyof typeof C, number>>, noise: number, seed: number, pairFactor: (pair: number) => number = () => 1) => {
+    const rand = seeded(seed);
+    const legs = Array.from({ length: pairs }, (_, p) => mix(p, rand));
+    const obs: FitObservation[] = [];
+    for (let r = 0; r < runners; r++) {
+      const pace = 0.3 * (0.8 + 0.5 * rand());
+      for (const [p, leg] of legs.entries()) {
+        const f: LegFeatures = { m: new Float64Array(N_CLASSES), up: new Float64Array(N_CLASSES), down: new Float64Array(N_CLASSES), steep: new Float64Array(N_CLASSES), gradeM: new Float64Array(N_GRADE_BINS), totalM: 0, blockedM: 0, heightM: 0 };
+        let cost = 0;
+        for (const [cls, metres] of Object.entries(leg) as [keyof typeof C, number][]) { f.m[C[cls]] = metres; f.totalM += metres; cost += metres * (truth[cls] ?? 1); }
+        obs.push({ runner: r, pair: `m:${p}>${p + 1000}`, timeS: pace * cost * (1 + noise * (rand() * 2 - 1)) * pairFactor(p), f });
+      }
+    }
+    return obs;
+  };
+
+  it("a class that is most of every leg is told from the runners' pace: the fit settles, and its interval holds what they ran by", () => {
+    // Path 70–95 % of each leg, the rest forest and slow ground: pace and the path factor are nearly one thing.
+    const truth = { path: 0.6, slow: 1.9 };
+    const obs = madeUp(30, 50, (_, rand) => {
+      const len = 200 + 400 * rand(), path = 0.7 + 0.25 * rand(), split = rand();
+      return { path: len * path, forest: len * (1 - path) * split, slow: len * (1 - path) * (1 - split) };
+    }, truth, 0.05, 21);
+    const fit = fitCostModel(obs, DEFAULT_COST_MODEL_DATA, { resamples: 60 });
+    expect(fit.converged).toBe(true);
+    expect(fit.anchor).toBe(C.forest);
+    for (const c of ["path", "slow"] as const) {
+      expect(Math.abs(fit.factors[C[c]] / truth[c] - 1), c).toBeLessThan(0.08);
+      const [lo, hi] = fit.interval[C[c]]!;
+      expect(lo, c).toBeLessThan(truth[c]);
+      expect(hi, c).toBeGreaterThan(truth[c]);
+    }
+    // Cut short, the fit says so and nothing is measured.
+    const short = fitCostModel(obs, DEFAULT_COST_MODEL_DATA, { resamples: 5, rounds: 1 });
+    expect(short.converged).toBe(false);
+    expect(short.calibrated.some(Boolean)).toBe(false);
+  });
+
+  it("a class whose eight control pairs disagree is not settled: pairs are drawn again, not only runs", () => {
+    const mix = (p: number) => (p < 8 ? { open: 300 } : { forest: 300 });
+    const even = fitCostModel(madeUp(20, 28, mix, { open: 0.9 }, 0.03, 4), DEFAULT_COST_MODEL_DATA, { resamples: 80 });
+    expect(even.calibrated[C.open]).toBe(true);
+    // The same class runs from half to one and a half times its factor from pair to pair: every runner
+    // agrees, so runs drawn again alone would call it settled.
+    const uneven = fitCostModel(madeUp(20, 28, mix, { open: 0.9 }, 0.03, 4, (p) => (p < 8 ? 0.5 + p / 7 : 1)), DEFAULT_COST_MODEL_DATA, { resamples: 80 });
+    expect(uneven.supported[C.open]).toBe(true);
+    const [lo, hi] = uneven.interval[C.open]!;
+    expect((hi - lo) / 2 / uneven.factors[C.open]).toBeGreaterThan(0.15);
+    expect(uneven.calibrated[C.open]).toBe(false);
+  });
+
   it("too little track keeps the rule of thumb; without forest the class with most track is the reference", () => {
     const few = fitCostModel(observed(4).observations, DEFAULT_COST_MODEL_DATA, { resamples: 0 });
     expect(few.supported.some(Boolean)).toBe(false);
@@ -340,6 +392,7 @@ describe("the fit (§7.9.4)", () => {
     }
     const fit = fitCostModel(set.observations, DEFAULT_COST_MODEL_DATA, { resamples: 20 });
     expect(fit.slopeUpFitted && fit.slopeDownFitted).toBe(true);
+    expect(fit.converged).toBe(true);
     expect(Math.abs(fit.slope.up - 5)).toBeLessThan(0.4);
     // Down 12 %: knee at 10 %, so down and steepDown are both in play; the factor at −12 % is what the data holds.
     const at = (s: typeof fit.slope) => 1 - s.down * 0.1 + s.steepDown * 0.02;

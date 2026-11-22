@@ -47,7 +47,13 @@ function predict(train: readonly FitObservation[], test: readonly FitObservation
   return rel;
 }
 
-export function crossValidate(obs: readonly FitObservation[], base: CostModelData, options: FitOptions = {}): { fitted: PredictionError; base: PredictionError } {
+/**
+ * `measured` names what the emitted model takes from a fit (the full
+ * fit's measured classes and slope, `modelDataOf`): each fold is then
+ * scored as that model would be — fitted numbers for those, the base
+ * model's for the rest. Without it a fold's whole fit is scored.
+ */
+export function crossValidate(obs: readonly FitObservation[], base: CostModelData, options: FitOptions = {}, measured?: { classes: readonly boolean[]; slope: boolean }): { fitted: PredictionError; base: PredictionError } {
   const o = { ...FIT_DEFAULTS, ...options };
   const fold = foldsOf(obs);
   const fitted: number[] = [], plain: number[] = [];
@@ -56,7 +62,9 @@ export function crossValidate(obs: readonly FitObservation[], base: CostModelDat
     if (train.length === 0 || test.length === 0) continue;
     const { plan } = fitPlan(train, o);
     const fit = _fitOnce(train, base, plan, o.rounds);
-    fitted.push(...predict(train, test, fit.factors, fit.slope));
+    const baseFactors = factorsOf(base);
+    const factors = measured ? fit.factors.map((v, c) => (measured.classes[c] ? v : baseFactors[c])) : fit.factors;
+    fitted.push(...predict(train, test, factors, measured && !measured.slope ? base.slope : fit.slope));
     plain.push(...predict(train, test, factorsOf(base), base.slope));
   }
   return { fitted: errorOf(fitted), base: errorOf(plain) };

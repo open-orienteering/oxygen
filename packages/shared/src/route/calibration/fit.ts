@@ -1,9 +1,9 @@
 /**
  * The cost model fitted to leg observations (docs/course-elevation.md
  * §7.9.4): leg time = the runner's pace × Σ metres × class factor ×
- * slope factor. Paces, class factors and the slope's numbers are fitted
- * in turn until they settle; a class without enough track keeps the
- * base model's factor.
+ * slope factor. Class factors and the slope's numbers are fitted
+ * together in log time with each run's pace taken out; a class without
+ * enough track keeps the base model's factor.
  */
 
 import { CLASS_INDEX, COST_CLASSES, isBlockedClass, type CostClass, type CostModelData, type SlopeData } from "../cost-model.js";
@@ -61,6 +61,8 @@ export interface FitResult {
   observations: number;
   /** Legs the fitted model misses by more than a factor of two; they weigh little in the fit. */
   outliers: number;
+  /** The fit settled within its rounds; when not, nothing is measured. */
+  converged: boolean;
 }
 
 export const median = (v: number[]): number => {
@@ -100,17 +102,13 @@ export function solveLinear(a: number[][], b: number[]): number[] | null {
 }
 
 /**
- * Least squares of `rows · x = y` within `[lo, hi]` per unknown, with
- * Huber weights from the residuals of `at`. An unknown the solution puts
- * outside its bounds is held at the bound and the others solved again.
+ * Weighted least squares of `rows · x = y` within `[lo, hi]` per
+ * unknown. An unknown the solution puts outside its bounds is held at
+ * the bound and the others solved again.
  */
-function robustSolve(rows: number[][], y: number[], at: number[], lo: number[], hi: number[]): number[] | null {
+function boundedSolve(rows: number[][], y: number[], w: number[], at: number[], lo: number[], hi: number[]): number[] | null {
   const n = at.length;
   if (n === 0) return [];
-  const res = rows.map((r, i) => y[i] - r.reduce((s, v, k) => s + v * at[k], 0));
-  const med = median(res);
-  const scale = 1.4826 * median(res.map((r) => Math.abs(r - med))) || 1e-9;
-  const w = res.map((r) => Math.min(1, (1.345 * scale) / Math.max(1e-12, Math.abs(r))));
   const held = new Map<number, number>();
   for (let pass = 0; pass <= n; pass++) {
     const free = at.map((_, j) => j).filter((j) => !held.has(j));
@@ -186,59 +184,70 @@ export function runnerPaces(obs: readonly FitObservation[], factors: ArrayLike<n
 
 interface Plan { fitted: number[]; fitUp: boolean; fitDown: boolean; fitSteep: boolean }
 
+type SlopeKey = "up" | "down" | "steepDown";
+/** The most a slope number may be: down keeps the factor at the knee above 0.4. */
+const slopeTop = (key: SlopeKey, kneeGrade: number) => (key === "up" ? 25 : key === "down" ? 0.6 / kneeGrade : 15);
+
 /**
  * The residual is in log time: log(actual) − log(pace × cost). A leg run
  * 20 % slow and one run 20 % fast then pull alike, and the noisy time is
- * on the left only. Each block is one Gauss–Newton step: the predicted
- * time's share of each unknown is the regressor.
+ * on the left only. A run's pace is an intercept of its own in log time,
+ * so it is taken out inside the step — every row centred on its run's
+ * weighted mean — instead of being fitted in turn with the factors:
+ * where one class is most of every leg, pace and its factor are nearly
+ * the same thing and taking turns crawls. Class factors and the slope's
+ * numbers are solved together, one Gauss–Newton step a round: an
+ * unknown's regressor is the derivative of log cost by it.
  */
-function fitOnce(obs: readonly FitObservation[], base: CostModelData, plan: Plan, rounds: number, start?: { factors: readonly number[]; slope: SlopeData }): { factors: number[]; slope: SlopeData } {
+function fitOnce(obs: readonly FitObservation[], base: CostModelData, plan: Plan, rounds: number, start?: { factors: readonly number[]; slope: SlopeData }): { factors: number[]; slope: SlopeData; converged: boolean } {
   const factors = start ? [...start.factors] : factorsOf(base);
   const slope = start ? { ...start.slope } : { ...base.slope };
-  const slopeKeys = [...(plan.fitUp ? ["up" as const] : []), ...(plan.fitDown ? ["down" as const] : []), ...(plan.fitSteep ? ["steepDown" as const] : [])];
-  if (plan.fitted.length === 0 && slopeKeys.length === 0) return { factors, slope };
-  const top = (key: (typeof slopeKeys)[number]) => (key === "up" ? 25 : key === "down" ? 0.6 / slope.kneeGrade : 15);
+  const keys: SlopeKey[] = [...(plan.fitUp ? ["up" as const] : []), ...(plan.fitDown ? ["down" as const] : []), ...(plan.fitSteep ? ["steepDown" as const] : [])];
+  const nF = plan.fitted.length;
+  if (nF + keys.length === 0) return { factors, slope, converged: true };
+  const lo = [...plan.fitted.map(() => FACTOR_MIN), ...keys.map(() => 0)];
+  const hi = [...plan.fitted.map(() => FACTOR_MAX), ...keys.map((k) => slopeTop(k, slope.kneeGrade))];
   for (let round = 0; round < rounds; round++) {
-    const before = [...factors, slope.up, slope.down, slope.steepDown];
-    if (plan.fitted.length > 0) {
-      const paces = runnerPaces(obs, factors, slope);
-      const rows: number[][] = [], y: number[] = [];
-      for (const o of obs) {
-        const pace = paces.get(o.runner);
-        const cost = featuresCost(o.f, factors, slope);
-        if (pace === undefined || !Number.isFinite(pace) || !(cost > 0) || !(o.timeS > 0)) continue;
-        const a = (c: number) => o.f.m[c] + slope.up * o.f.up[c] - slope.down * o.f.down[c] + slope.steepDown * o.f.steep[c];
-        const row = plan.fitted.map((c) => a(c) / cost);
-        rows.push(row);
-        y.push(Math.log(o.timeS / (pace * cost)) + row.reduce((sum, v, i) => sum + v * factors[plan.fitted[i]], 0));
-      }
-      const x = robustSolve(rows, y, plan.fitted.map((c) => factors[c]), plan.fitted.map(() => FACTOR_MIN), plan.fitted.map(() => FACTOR_MAX));
-      if (x) for (const [i, c] of plan.fitted.entries()) factors[c] = clamp(x[i], FACTOR_MIN, FACTOR_MAX);
-    }
-    if (slopeKeys.length > 0) {
-      const paces = runnerPaces(obs, factors, slope);
-      const rows: number[][] = [], y: number[] = [];
-      for (const o of obs) {
-        const pace = paces.get(o.runner);
-        const cost = featuresCost(o.f, factors, slope);
-        if (pace === undefined || !Number.isFinite(pace) || !(cost > 0) || !(o.timeS > 0)) continue;
+    const theta = [...plan.fitted.map((c) => factors[c]), ...keys.map((k) => slope[k])];
+    const rows: number[][] = [], z: number[] = [], r: number[] = [], runner: number[] = [];
+    for (const o of obs) {
+      const cost = featuresCost(o.f, factors, slope);
+      if (!(cost > 0) || !(o.timeS > 0)) continue;
+      const row = plan.fitted.map((c) => (o.f.m[c] + slope.up * o.f.up[c] - slope.down * o.f.down[c] + slope.steepDown * o.f.steep[c]) / cost);
+      if (keys.length > 0) {
         let up = 0, down = 0, steep = 0;
         for (let c = 0; c < N_CLASSES; c++) {
           if (o.f.m[c] === 0) continue;
           up += factors[c] * o.f.up[c]; down += factors[c] * o.f.down[c]; steep += factors[c] * o.f.steep[c];
         }
         const term = { up: up / cost, down: -down / cost, steepDown: steep / cost };
-        const row = slopeKeys.map((key) => term[key]);
-        rows.push(row);
-        y.push(Math.log(o.timeS / (pace * cost)) + row.reduce((sum, v, i) => sum + v * slope[slopeKeys[i]], 0));
+        for (const k of keys) row.push(term[k]);
       }
-      const x = robustSolve(rows, y, slopeKeys.map((key) => slope[key]), slopeKeys.map(() => 0), slopeKeys.map(top));
-      if (x) for (const [i, key] of slopeKeys.entries()) slope[key] = clamp(x[i], 0, top(key));
+      const res = Math.log(o.timeS / cost);
+      rows.push(row); r.push(res); runner.push(o.runner);
+      z.push(res + row.reduce((sum, v, i) => sum + v * theta[i], 0));
     }
-    const after = [...factors, slope.up, slope.down, slope.steepDown];
-    if (after.every((v, i) => Math.abs(v - before[i]) < 1e-4)) break;
+    // Huber weights from each leg's distance to its run's median: a blown leg weighs little.
+    const byRunner = new Map<number, number[]>();
+    for (const [i, id] of runner.entries()) (byRunner.get(id) ?? byRunner.set(id, []).get(id)!).push(i);
+    const e = new Array<number>(r.length).fill(0);
+    for (const idx of byRunner.values()) { const med = median(idx.map((i) => r[i])); for (const i of idx) e[i] = r[i] - med; }
+    const scale = 1.4826 * median(e.map(Math.abs)) || 1e-9;
+    const w = e.map((v) => Math.min(1, (1.345 * scale) / Math.max(1e-12, Math.abs(v))));
+    // The run's pace out: each row and its target less the run's weighted mean.
+    for (const idx of byRunner.values()) {
+      let sw = 0, mz = 0;
+      const mrow = new Array<number>(theta.length).fill(0);
+      for (const i of idx) { sw += w[i]; mz += w[i] * z[i]; for (let j = 0; j < mrow.length; j++) mrow[j] += w[i] * rows[i][j]; }
+      for (const i of idx) { z[i] -= mz / sw; for (let j = 0; j < mrow.length; j++) rows[i][j] -= mrow[j] / sw; }
+    }
+    const x = boundedSolve(rows, z, w, theta, lo, hi);
+    if (!x) return { factors, slope, converged: false };
+    for (const [i, c] of plan.fitted.entries()) factors[c] = clamp(x[i], lo[i], hi[i]);
+    for (const [i, k] of keys.entries()) slope[k] = clamp(x[nF + i], lo[nF + i], hi[nF + i]);
+    if (x.every((v, i) => Math.abs(clamp(v, lo[i], hi[i]) - theta[i]) < 1e-4)) return { factors, slope, converged: true };
   }
-  return { factors, slope };
+  return { factors, slope, converged: false };
 }
 
 /** A small seeded generator (mulberry32): the same input gives the same intervals. */
@@ -279,7 +288,7 @@ export function fitPlan(obs: readonly FitObservation[], options: FitOptions = {}
 export function fitCostModel(obs: readonly FitObservation[], base: CostModelData, options: FitOptions = {}): FitResult {
   const o = { ...FIT_DEFAULTS, ...options };
   const { support, supported, anchor, plan } = fitPlan(obs, o);
-  const { factors, slope } = fitOnce(obs, base, plan, o.rounds);
+  const { factors, slope, converged } = fitOnce(obs, base, plan, o.rounds);
   const runners = [...new Set(obs.map((x) => x.runner))];
   const byRunner = new Map<number, FitObservation[]>();
   for (const x of obs) (byRunner.get(x.runner) ?? byRunner.set(x.runner, []).get(x.runner)!).push(x);
@@ -300,7 +309,8 @@ export function fitCostModel(obs: readonly FitObservation[], base: CostModelData
           for (let j = 0; j < n; j++) drawn.push({ ...x, runner: i });
         }
       }
-      const fit = fitOnce(drawn, base, plan, Math.min(o.rounds, 12), { factors, slope });
+      // Each replica runs to the fit's own criterion: one stopped early would sit at the fit and look settled.
+      const fit = fitOnce(drawn, base, plan, o.rounds, { factors, slope });
       for (const [i, c] of plan.fitted.entries()) samples[i].push(fit.factors[c]);
       slopeSamples.up.push(fit.slope.up);
       slopeSamples.down.push(fit.slope.down);
@@ -312,13 +322,16 @@ export function fitCostModel(obs: readonly FitObservation[], base: CostModelData
   for (const [i, c] of plan.fitted.entries()) {
     const lo = quantile(samples[i], 0.05), hi = quantile(samples[i], 0.95);
     interval[c] = [lo, hi];
-    calibrated[c] = (hi - lo) / 2 <= o.maxIntervalShare * factors[c] && factors[c] > FACTOR_MIN + 1e-9 && factors[c] < FACTOR_MAX - 1e-9;
+    calibrated[c] = converged && (hi - lo) / 2 <= o.maxIntervalShare * factors[c] && factors[c] > FACTOR_MIN + 1e-9 && factors[c] < FACTOR_MAX - 1e-9;
   }
   // The anchor is measured as the others' reference, when anything was fitted against it.
   if (anchor !== null && plan.fitted.some((c) => calibrated[c])) calibrated[anchor] = true;
-  const settled = (v: number[], at: number) => v.length > 0 && (quantile(v, 0.95) - quantile(v, 0.05)) / 2 <= 2 * o.maxIntervalShare * Math.max(at, 1e-6);
-  const slopeCalibrated = plan.fitUp && plan.fitDown && settled(slopeSamples.up, slope.up) && settled(slopeSamples.down, slope.down)
-    && (!plan.fitSteep || settled(slopeSamples.steepDown, slope.steepDown));
+  // A slope number at its bound is not measured either, however still it sits there.
+  const settled = (key: SlopeKey) => {
+    const v = slopeSamples[key], at = slope[key];
+    return v.length > 0 && at > 1e-9 && at < slopeTop(key, slope.kneeGrade) - 1e-9 && (quantile(v, 0.95) - quantile(v, 0.05)) / 2 <= 2 * o.maxIntervalShare * at;
+  };
+  const slopeCalibrated = converged && plan.fitUp && plan.fitDown && settled("up") && settled("down") && (!plan.fitSteep || settled("steepDown"));
   // Legs the fitted model misses by more than a factor of two: a mistake, a stop the cleaning missed, a wrong cut.
   const paces = runnerPaces(obs, factors, slope);
   let outliers = 0;
@@ -328,7 +341,7 @@ export function fitCostModel(obs: readonly FitObservation[], base: CostModelData
   }
   return {
     factors, slope, support, supported, calibrated, interval, anchor,
-    slopeUpFitted: plan.fitUp, slopeDownFitted: plan.fitDown, slopeCalibrated, runners: runners.length, observations: obs.length, outliers,
+    slopeUpFitted: plan.fitUp, slopeDownFitted: plan.fitDown, slopeCalibrated, runners: runners.length, observations: obs.length, outliers, converged,
   };
 }
 

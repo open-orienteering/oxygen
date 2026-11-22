@@ -29,7 +29,9 @@ to the `--map` before it. `--no-heights` skips the contour field (no slope
 is read). The run needs no database and no server and sends nothing
 anywhere. It prints its progress and a summary and writes the report. A
 forest map with many classes takes minutes. Under five runs with a usable
-leg it writes nothing.
+leg on any one map it writes nothing. `--id` ends up in the report:
+give the model a neutral name (`sprint-2026-1`), not an event's or a
+club's.
 
 ## What is private and what is not
 
@@ -51,9 +53,11 @@ track (the tests run made-up runners on made-up terrain).
   the others are measured against). The `model` block holds a fitted
   factor only for a `calibrated` class; for the others it holds the rule
   of thumb, whatever `factor` says here.
+- `converged`: the fit settled. If `false`, nothing is measured; more
+  varied legs are needed.
 - `alongTrack`: the error of predicted leg times on legs held out of the
-  fit, for the fitted model and for the rule of thumb. The fitted one
-  should be lower.
+  fit, for the model as it would be adopted (measured numbers only) and
+  for the rule of thumb. The fitted one should be lower.
 - `againstFinder.median`: actual leg time over the finder's fastest route
   at the runner's pace. It is about 1 or more by construction, so it
   cannot confirm a model; it is a smoke test. Well under 1 (or a large

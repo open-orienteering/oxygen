@@ -9,6 +9,7 @@ import { COST_CLASSES, type CostClass, type CostModelData } from "../cost-model.
 import { GRADE_EDGES } from "./attribute.js";
 import { REJECTIONS, type MapObservations, type Rejection } from "./dataset.js";
 import { median, quantile, type FitResult } from "./fit.js";
+import { TRACK_WARNINGS } from "./record.js";
 import type { PredictionError } from "./validate.js";
 
 const passable = COST_CLASSES.filter((c) => c !== "blocked" && c !== "blockedSoft") as Exclude<CostClass, "blocked" | "blockedSoft">[];
@@ -43,6 +44,8 @@ export const calibrationReportSchema = z.strictObject({
     /** Why the base factor was kept, when it was. */
     kept: z.enum(["no-track", "little-track", "anchor", "not-settled"]).nullable(),
   })),
+  /** The fit settled within its rounds; when not, nothing is measured. */
+  converged: z.boolean(),
   slope: z.strictObject({ upFitted: z.boolean(), downFitted: z.boolean(), calibrated: z.boolean(), heightShare: num }),
   grades: z.array(z.strictObject({ from: num.nullable(), to: num.nullable(), metres: z.number().int() })),
   alongTrack: z.strictObject({ fitted: errorSchema, base: errorSchema }).nullable(),
@@ -55,7 +58,7 @@ export const calibrationReportSchema = z.strictObject({
     rejected: z.partialRecord(z.enum(REJECTIONS), z.number().int()),
   }),
   /** Per map, by position on the command line only. */
-  maps: z.array(z.strictObject({ medianMissM: num.nullable(), blockedShare: num, outsidePoints: z.number().int(), legs: z.number().int(), warnings: z.array(z.string()) })),
+  maps: z.array(z.strictObject({ medianMissM: num.nullable(), blockedShare: num, outsidePoints: z.number().int(), legs: z.number().int(), warnings: z.array(z.enum(TRACK_WARNINGS)) })),
 });
 export type CalibrationReport = z.infer<typeof calibrationReportSchema>;
 
@@ -101,6 +104,7 @@ export function buildReport(input: {
         kept: anchor ? "anchor" : fit.calibrated[i] ? null : s.metres === 0 ? "no-track" : !fit.supported[i] ? "little-track" : "not-settled",
       };
     }),
+    converged: fit.converged,
     slope: { upFitted: fit.slopeUpFitted, downFitted: fit.slopeDownFitted, calibrated: fit.slopeCalibrated, heightShare: totalM > 0 ? r3(heightM / totalM) : 0 },
     grades: gradeM.map((m, b) => ({ from: b === 0 ? null : GRADE_EDGES[b - 1], to: b === GRADE_EDGES.length ? null : GRADE_EDGES[b], metres: to10(m) })),
     alongTrack: input.alongTrack ? { fitted: err(input.alongTrack.fitted), base: err(input.alongTrack.base) } : null,
