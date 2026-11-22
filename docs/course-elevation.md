@@ -176,6 +176,12 @@ to change):
     maps) put paths at the lowest allowed factor: within 10 m for 40 m.
     A fitted number whose interval touches a bound is not measured.
 
+37. **Forest maps run under `forest-2026-1`** (§7.9.7): the three
+    numbers the first calibration settled. Put to the user as a choice
+    on 2026-11-22 (adopt the three; adopt them and the uphill number;
+    wait); implemented as recommended, to be reverted if he chooses to
+    wait.
+
 ## 1. The profile
 
 ```ts
@@ -1169,13 +1175,35 @@ repository keeps its models in `COST_MODELS`; `currentCostModel(header)`
 picks the map family's (§0.31), and the editor's search and leg costs
 run under it. A fitted model is adopted by adding the report's `model`
 under a new id and naming it in `CURRENT_COST_MODEL_IDS`; `default-1`
-stays, so a kept route's `model` keeps its meaning. No fitted model is
-adopted yet.
+stays, so a kept route's `model` keeps its meaning. The adopted models
+are in §7.9.7.
 
 The editor's note under the alternatives says how much is measured
 (`data-calibrated` = `none` | `partial` | `full`): the rule-of-thumb
 text; or that speeds on the named terrain are measured from GPS tracks
 of top finishers and the rest is rule of thumb; or that all of it is.
+
+#### 7.9.7 Adopted models
+
+| id | maps | measured | from |
+|---|---|---|---|
+| `default-1` | sprint (ISSprOM) | nothing | rule of thumb |
+| `forest-2026-1` | every other map | path 0.556 (0.53–0.62), small path 0.802 (0.76–0.84), marsh 1.073 (0.89–1.22), against forest 1 | 256 runs, 2565 legs of the best tenth of each class at four events on two forest maps, 2026-11-22 |
+
+`forest-2026-1` differs from `default-1` in those three factors only.
+What the same fit found and did not settle, and so is not in the model:
+uphill about 3.7 (2.9–4.4) against the rule of thumb's 7.5, downhill no
+gain (at its bound), open 0.86, rough open 0.95, slow 1.25, road 0.62,
+each with a range over ±15 %. The best quarter of each class gave the
+same three numbers within 0.02; leaving the night event out moved path
+and small path by under 0.02 and left marsh just unsettled. On
+held-out legs the model's median error equals the rule of thumb's
+(9.2 % against 9.1 %) and its 90th percentile is lower (25.8 % against
+27.8 %): what it changes is how routes rank against each other on
+paths and marsh, not a leg's time in forest. One sprint (49 runs)
+settled nothing: fixes every 5 s cut through buildings at 1:4000
+(11.5 % of the metres on uncrossable cells) and there was little
+forest to measure against.
 
 ## Tests
 
@@ -1226,9 +1254,10 @@ of top finishers and the rest is rule of thumb; or that all of it is.
   not modelled; passable cliffs, fences and walls cost nothing to
   cross; a symbol without a recognised code is unmapped forest; a
   passage narrower than a cell between two barriers is closed.
-- §7.7: no fitted model is adopted yet: every map runs under the rule
-  of thumb (`default-1`) until a calibration's model is checked in
-  (§7.9.6).
+- §7.7: sprint maps run under the rule of thumb (`default-1`): the one
+  sprint calibrated settled nothing (§7.9.7). Forest maps' slope, open
+  ground, slow and walk vegetation, roads, boulders and water are rule
+  of thumb too.
 - §7.9: a class with too little track is held at the rule of thumb
   during the fit, which leans on the classes sharing its legs; on a
   short sprint leg (under 80 m at 1:4000) a legal way round a long

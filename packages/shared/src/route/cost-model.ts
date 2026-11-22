@@ -130,10 +130,25 @@ export function costModelFromData(data: CostModelData): CostModel {
 export const DEFAULT_COST_MODEL: CostModel = costModelFromData(DEFAULT_COST_MODEL_DATA);
 
 /** The models the repository holds, by id: a kept route names the one it was found under. */
-export const COST_MODELS: Readonly<Record<string, CostModelData>> = { [DEFAULT_COST_MODEL_DATA.id]: DEFAULT_COST_MODEL_DATA };
+/**
+ * Forest maps, fitted 2026-11-22 (docs/course-elevation.md §7.9.7): path,
+ * small path and marsh measured against forest; everything else, the
+ * slope included, is the rule of thumb's.
+ */
+export const FOREST_2026_1: CostModelData = {
+  id: "forest-2026-1",
+  basedOn: "256 runs, 2565 legs on 2 maps",
+  classFactor: { ...DEFAULT_COST_MODEL_DATA.classFactor, path: 0.556, smallPath: 0.802, marsh: 1.073 },
+  slope: DEFAULT_SLOPE,
+  calibrated: ["forest", "path", "smallPath", "marsh"],
+  anchor: "forest",
+  slopeCalibrated: false,
+};
+
+export const COST_MODELS: Readonly<Record<string, CostModelData>> = { [DEFAULT_COST_MODEL_DATA.id]: DEFAULT_COST_MODEL_DATA, [FOREST_2026_1.id]: FOREST_2026_1 };
 
 /** The model of each map family (§7.9): sprint maps (ISSprOM) and forest maps are run differently. */
-export const CURRENT_COST_MODEL_IDS: { sprint: string; forest: string } = { sprint: "default-1", forest: "default-1" };
+export const CURRENT_COST_MODEL_IDS: { sprint: string; forest: string } = { sprint: "default-1", forest: FOREST_2026_1.id };
 
 /** The model a map's routes are estimated under, by the document's symbol library. */
 export function currentCostModel(

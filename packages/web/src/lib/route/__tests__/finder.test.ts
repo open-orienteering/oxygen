@@ -77,8 +77,8 @@ describe("the finder (docs/course-elevation.md §7.8)", () => {
     broken = false;
     const found = await finder.find({ doc, field: null, req });
     expect(found.routes.length).toBeGreaterThan(0);
-    // The map's model and how much of it is measured (§7.9): the rule of thumb until one is fitted.
-    expect(found.model).toEqual({ id: "default-1", state: "none", classes: [] });
+    // The map's model and how much of it is measured (§7.9): a forest map's is partly measured.
+    expect(found.model).toMatchObject({ id: "forest-2026-1", state: "partial" });
     expect(log).toEqual(["doc", "find"]);
     finder.dispose();
   });

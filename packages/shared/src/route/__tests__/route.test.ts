@@ -27,7 +27,14 @@ describe("cost classes (docs/course-elevation.md §7.6)", () => {
     expect(defaultSlopeFactor(-0.1)).toBeCloseTo(0.85, 9);
     expect(defaultSlopeFactor(-0.2)).toBeCloseTo(1.15, 9);
     expect(COST_MODELS["default-1"]).toBe(DEFAULT_COST_MODEL_DATA);
-    for (const header of [undefined, null, { library: null }, { library: { id: "ISOM2017-2" } }, { library: { id: "ISSprOM2019-2" } }]) expect(currentCostModel(header).id).toBe("default-1");
+    // Forest maps run under the model fitted from tracks (§7.9.7); sprint maps under the rule of thumb.
+    for (const header of [undefined, null, { library: null }, { library: { id: "ISOM2017-2" } }]) expect(currentCostModel(header).id).toBe("forest-2026-1");
+    expect(currentCostModel({ library: { id: "ISSprOM2019-2" } }).id).toBe("default-1");
+    expect(costModelNote(currentCostModel(null))).toEqual({ id: "forest-2026-1", state: "partial", classes: ["forest", "path", "smallPath", "marsh"] });
+    const forest = COST_MODELS["forest-2026-1"];
+    // Only what was measured differs from the rule of thumb.
+    for (const [c, v] of Object.entries(forest.classFactor)) expect(v === DEFAULT_COST_MODEL_DATA.classFactor[c as keyof typeof forest.classFactor], c).toBe(!["path", "smallPath", "marsh"].includes(c));
+    expect(forest.slope).toEqual(DEFAULT_COST_MODEL_DATA.slope);
     const two = { s: { ...DEFAULT_COST_MODEL_DATA, id: "s" }, f: { ...DEFAULT_COST_MODEL_DATA, id: "f" } };
     const pick = (id: string | null) => currentCostModel(id === null ? null : { library: { id } }, { sprint: "s", forest: "f" }, two).id;
     expect([pick("ISSprOM2019-2"), pick("ISOM2017-2"), pick(null)]).toEqual(["s", "f", "f"]);

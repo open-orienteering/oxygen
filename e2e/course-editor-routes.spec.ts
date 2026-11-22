@@ -217,8 +217,10 @@ test.describe("computed route alternatives (docs/course-elevation.md §7.8)", ()
       }
       expect(await alts.first().getAttribute("data-kind")).toMatch(/^fastest/);
       await expect(page.getByTestId("editor-leg-alternatives-note")).toBeVisible();
-      // No model is fitted from tracks yet (§7.9): the note says rule of thumb.
-      await expect(page.getByTestId("editor-leg-alternatives-note")).toHaveAttribute("data-calibrated", "none");
+      // A forest map's model is partly measured from tracks (§7.9.7): the note names the measured terrain.
+      const note = page.getByTestId("editor-leg-alternatives-note");
+      await expect(note).toHaveAttribute("data-calibrated", "partial");
+      await expect(note).toContainText(/GPS/);
       await expect(page.getByTestId("editor-route-alternative").first()).toBeAttached();
 
       // The winner pace: a faster one shortens every time in proportion, and it is saved with the course.
