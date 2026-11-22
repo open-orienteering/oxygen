@@ -75,7 +75,10 @@ describe("the finder (docs/course-elevation.md §7.8)", () => {
     const doc = { key: "d:0", bytes: bytes(), patch: null };
     await expect(finder.find({ doc, field: null, req })).rejects.toThrow(/cloned/);
     broken = false;
-    expect((await finder.find({ doc, field: null, req })).routes.length).toBeGreaterThan(0);
+    const found = await finder.find({ doc, field: null, req });
+    expect(found.routes.length).toBeGreaterThan(0);
+    // The map's model and how much of it is measured (§7.9): the rule of thumb until one is fitted.
+    expect(found.model).toEqual({ id: "default-1", state: "none", classes: [] });
     expect(log).toEqual(["doc", "find"]);
     finder.dispose();
   });

@@ -9,7 +9,7 @@
 import { mapDocument } from "@oxygen/shared";
 import type { HeightField } from "@oxygen/shared/src/terrain/field/types.js";
 import { fieldSampler } from "@oxygen/shared/src/terrain/profile/index.js";
-import { DEFAULT_COST_MODEL, findLegRoutes, legPolylineCost, routeFeaturesOfDocument, type BoxedRouteFeature, type LegRouteRequest, type LegRouteResult, type RoutePoint } from "@oxygen/shared/src/route/index.js";
+import { currentCostModel, findLegRoutes, legPolylineCost, routeFeaturesOfDocument, type BoxedRouteFeature, type LegRouteRequest, type CostModel, type LegRouteResult, type RoutePoint } from "@oxygen/shared/src/route/index.js";
 
 export type RouteWorkerRequest =
   /** The map document (and the event's patch on it) under `key`. */
@@ -34,12 +34,13 @@ export type RouteWorkerResponse =
 
 /** The worker's side: one document and one field held, a search answered. */
 export function createRouteWorkerState(): (msg: RouteWorkerRequest) => RouteWorkerResponse | null {
-  let doc: { key: string; features: BoxedRouteFeature[] } | null = null;
+  let doc: { key: string; features: BoxedRouteFeature[]; model: CostModel } | null = null;
   let field: { key: string; heightAt: (p: RoutePoint) => number | null } | null = null;
   return (msg) => {
     if (msg.type === "doc") {
       const decoded = mapDocument.decodeMapDocument(msg.bytes instanceof Uint8Array ? msg.bytes : new Uint8Array(msg.bytes));
-      doc = { key: msg.key, features: routeFeaturesOfDocument(mapDocument.applyPatch(decoded, msg.patch ?? undefined).document) };
+      // The model of the map's family (§7.9): sprint and forest maps are run differently.
+      doc = { key: msg.key, features: routeFeaturesOfDocument(mapDocument.applyPatch(decoded, msg.patch ?? undefined).document), model: currentCostModel(decoded.header) };
       return null;
     }
     if (msg.type === "field") {
@@ -52,9 +53,9 @@ export function createRouteWorkerState(): (msg: RouteWorkerRequest) => RouteWork
       const heightAt = msg.fieldKey !== null ? field!.heightAt : null;
       if (msg.type === "costs") {
         const { legs, groundMPerMm, extra } = msg.req;
-        return { id: msg.id, ok: true, costs: legs.map((leg) => legPolylineCost(doc!.features, heightAt, { points: leg.points, groundMPerMm, extra }, DEFAULT_COST_MODEL)) };
+        return { id: msg.id, ok: true, costs: legs.map((leg) => legPolylineCost(doc!.features, heightAt, { points: leg.points, groundMPerMm, extra }, doc!.model)) };
       }
-      return { id: msg.id, ok: true, result: findLegRoutes(doc.features, heightAt, msg.req, DEFAULT_COST_MODEL) };
+      return { id: msg.id, ok: true, result: findLegRoutes(doc.features, heightAt, msg.req, doc.model) };
     } catch (err) {
       return { id: msg.id, ok: false, error: err instanceof Error ? err.message : String(err) };
     }
@@ -77,7 +78,7 @@ export interface RouteSearchInput {
 
 export interface RouteFinder {
   find(input: RouteSearchInput): Promise<LegRouteResult>;
-  /** Each leg's cost along its polyline, in the default model's flat-forest metres. */
+  /** Each leg's cost along its polyline, in the map's model's flat-forest metres. */
   costs(input: Omit<RouteSearchInput, "req"> & { req: LegCostsRequest }): Promise<number[]>;
   /** Terminates the worker; a search in flight rejects. */
   dispose(): void;

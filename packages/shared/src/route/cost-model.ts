@@ -61,30 +61,94 @@ export interface CostModel {
   classFactor: readonly number[];
   /** Time per horizontal metre relative to flat, at `grade` = rise / run in the running direction. */
   slopeFactor(grade: number): number;
+  /** By class index: whether the factor is measured from tracks (§7.9). Absent: none is. */
+  calibratedClasses?: readonly boolean[];
+  /** Whether the slope's numbers are measured. */
+  slopeCalibrated?: boolean;
 }
 
-const FACTORS: Record<CostClass, number> = {
-  forest: 1, paved: 0.62, road: 0.65, path: 0.72, smallPath: 0.85, open: 0.8, roughOpen: 0.92, slow: 1.3, walk: 1.8, fight: 3.2,
-  marsh: 1.5, water: 2.2, boulders: 1.7, denseBoulders: 2.6, blockedSoft: Infinity, blocked: Infinity,
+/**
+ * The slope's shape (§7.7): up, `1 + up × grade`; down to the knee,
+ * `1 − down × |grade|`; steeper, from there `+ steepDown` per grade.
+ */
+export interface SlopeData { up: number; down: number; kneeGrade: number; steepDown: number }
+
+/** A cost model as data (§7.9): what a calibration writes and the repository keeps. */
+export interface CostModelData {
+  id: string;
+  /** What the numbers rest on, in words (a report's summary); empty for the rule of thumb. */
+  basedOn: string;
+  /** The passable classes' factors. */
+  classFactor: Record<Exclude<CostClass, "blocked" | "blockedSoft">, number>;
+  slope: SlopeData;
+  /** The classes whose factor is measured. */
+  calibrated: readonly CostClass[];
+  /** The class the others were fitted relative to, when measured. */
+  anchor?: CostClass;
+  slopeCalibrated: boolean;
+}
+
+export const slopeFactorOf = (s: SlopeData) => (grade: number): number => {
+  if (!Number.isFinite(grade)) return 1;
+  if (grade >= 0) return 1 + s.up * grade;
+  const g = -grade;
+  return g <= s.kneeGrade ? 1 - s.down * g : 1 - s.down * s.kneeGrade + s.steepDown * (g - s.kneeGrade);
 };
+
+export const DEFAULT_SLOPE: SlopeData = { up: 7.5, down: 1.5, kneeGrade: 0.1, steepDown: 3 };
 
 /**
  * Up: 100 m of climb costs about 750 m of flat. Down: faster to −10 %,
  * then slower again as it steepens.
  */
-export function defaultSlopeFactor(grade: number): number {
-  if (!Number.isFinite(grade)) return 1;
-  if (grade >= 0) return 1 + 7.5 * grade;
-  const g = -grade;
-  return g <= 0.1 ? 1 - 1.5 * g : 0.85 + 3 * (g - 0.1);
+export const defaultSlopeFactor = slopeFactorOf(DEFAULT_SLOPE);
+
+export const DEFAULT_COST_MODEL_DATA: CostModelData = {
+  id: "default-1",
+  basedOn: "",
+  classFactor: {
+    forest: 1, paved: 0.62, road: 0.65, path: 0.72, smallPath: 0.85, open: 0.8, roughOpen: 0.92, slow: 1.3, walk: 1.8, fight: 3.2,
+    marsh: 1.5, water: 2.2, boulders: 1.7, denseBoulders: 2.6,
+  },
+  slope: DEFAULT_SLOPE,
+  calibrated: [],
+  slopeCalibrated: false,
+};
+
+export function costModelFromData(data: CostModelData): CostModel {
+  const measured = new Set<CostClass>(data.calibrated);
+  return {
+    id: data.id,
+    calibrated: measured.size > 0,
+    classFactor: COST_CLASSES.map((c) => (c === "blocked" || c === "blockedSoft" ? Infinity : data.classFactor[c])),
+    slopeFactor: slopeFactorOf(data.slope),
+    calibratedClasses: COST_CLASSES.map((c) => measured.has(c)),
+    slopeCalibrated: data.slopeCalibrated,
+  };
 }
 
-export const DEFAULT_COST_MODEL: CostModel = {
-  id: "default-1",
-  calibrated: false,
-  classFactor: COST_CLASSES.map((c) => FACTORS[c]),
-  slopeFactor: defaultSlopeFactor,
-};
+export const DEFAULT_COST_MODEL: CostModel = costModelFromData(DEFAULT_COST_MODEL_DATA);
+
+/** The models the repository holds, by id: a kept route names the one it was found under. */
+export const COST_MODELS: Readonly<Record<string, CostModelData>> = { [DEFAULT_COST_MODEL_DATA.id]: DEFAULT_COST_MODEL_DATA };
+
+/** The model of each map family (§7.9): sprint maps (ISSprOM) and forest maps are run differently. */
+export const CURRENT_COST_MODEL_IDS: { sprint: string; forest: string } = { sprint: "default-1", forest: "default-1" };
+
+/** The model a map's routes are estimated under, by the document's symbol library. */
+export function currentCostModel(header?: { library?: { id: string } | null } | null): CostModel {
+  const id = header?.library?.id.startsWith("ISSprOM") ? CURRENT_COST_MODEL_IDS.sprint : CURRENT_COST_MODEL_IDS.forest;
+  return costModelFromData(COST_MODELS[id] ?? DEFAULT_COST_MODEL_DATA);
+}
+
+/** How much of a model is measured (§7.9): what the editor's note says of its times. */
+export type PassableClass = Exclude<CostClass, "blocked" | "blockedSoft">;
+export interface CostModelNote { id: string; state: "none" | "partial" | "full"; classes: PassableClass[] }
+export function costModelNote(model: CostModel): CostModelNote {
+  const passable = COST_CLASSES.filter((c): c is PassableClass => c !== "blocked" && c !== "blockedSoft");
+  const classes = passable.filter((c) => model.calibratedClasses?.[CLASS_INDEX[c]]);
+  return { id: model.id, state: classes.length === 0 ? "none" : classes.length === passable.length && model.slopeCalibrated ? "full" : "partial", classes };
+}
 
 /** Distance only: every passable cell costs its length (the shortest legal route). */
 export const SHORTEST_COST_MODEL: CostModel = {

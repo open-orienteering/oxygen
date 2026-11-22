@@ -11,6 +11,7 @@ import { useTranslation } from "react-i18next";
 import type { course } from "@oxygen/shared";
 import type { LegElevation } from "../../../lib/editor/elevation";
 import type { RouteItem } from "../../../lib/editor/leg-routes";
+import type { CostModelNote } from "@oxygen/shared/src/route/index.js";
 import { formatClock, type AlternativeItem } from "../../../lib/editor/leg-alternatives";
 import { DEFAULT_CORRIDOR, type LegPatch } from "../../../lib/editor/structure-edit";
 
@@ -72,6 +73,8 @@ export interface LegAlternativesProps {
   /** Store the alternative as the pair's chosen route. */
   onUse: (index: number) => void;
   onPoint: (index: number | null) => void;
+  /** How much of the speed model is measured from tracks (§7.9), and on which terrain. */
+  measured: Pick<CostModelNote, "state" | "classes">;
 }
 
 function LegAlternatives({ a, locked }: { a: LegAlternativesProps; locked: boolean }) {
@@ -104,7 +107,10 @@ function LegAlternatives({ a, locked }: { a: LegAlternativesProps; locked: boole
               </li>
             ))}
           </ul>
-          <p data-testid="editor-leg-alternatives-note" className="text-[10px] text-slate-400">{t("legAlternativesNote")}</p>
+          <p data-testid="editor-leg-alternatives-note" data-calibrated={a.measured.state} className="text-[10px] text-slate-400">
+            {a.measured.state === "none" ? t("legAlternativesNote")
+              : t(a.measured.state === "full" ? "legAlternativesNoteFull" : "legAlternativesNotePartial", { classes: a.measured.classes.map((c) => t(`costClass.${c}`)).join(", ") })}
+          </p>
         </>
       )}
     </div>

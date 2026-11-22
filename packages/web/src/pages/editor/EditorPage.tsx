@@ -93,7 +93,7 @@ import { legElevation, lineClimbStatus } from "../../lib/editor/elevation";
 import { chosenRouteMap, pairRoutes, routeItems, routeShapes, type RouteDraft, lineIsShortest } from "../../lib/editor/leg-routes";
 import { DEFAULT_PACE_S_PER_KM, alternativeItems, alternativeShapes, courseRouteTotals, flatPaceSPerKm, formatClock, oobFeatures, parsePace } from "../../lib/editor/leg-alternatives";
 import { createRouteFinder } from "../../lib/route/finder";
-import { DEFAULT_COST_MODEL, SHORTEST_COST_MODEL, type RouteAlternative } from "@oxygen/shared/src/route/index.js";
+import { DEFAULT_COST_MODEL, SHORTEST_COST_MODEL, type CostModelNote, type RouteAlternative } from "@oxygen/shared/src/route/index.js";
 import { legAt, legBounds, readProfileOpen, writeProfileOpen } from "../../lib/editor/profile-graph";
 import { pointAtDistance } from "@oxygen/shared/src/terrain/profile/index.js";
 import { ProfilePanel } from "./ProfilePanel";
@@ -1868,7 +1868,7 @@ export function EditorPage() {
     selectedLeg.fromPt.x, selectedLeg.fromPt.y, selectedLeg.toPt.x, selectedLeg.toPt.y, selectedLegVia?.x ?? "", selectedLegVia?.y ?? "",
     oobKey,
   ].join("|") : null;
-  const [alternatives, setAlternatives] = useState<{ key: string; status: "running" | "done" | "error"; routes: RouteAlternative[] } | null>(null);
+  const [alternatives, setAlternatives] = useState<{ key: string; status: "running" | "done" | "error"; routes: RouteAlternative[]; model?: CostModelNote } | null>(null);
   const alternativesNow = alternatives && alternatives.key === alternativesKey ? alternatives : null;
   const [pointedAlternative, setPointedAlternative] = useState<number | null>(null);
   useEffect(() => setPointedAlternative(null), [alternativesKey]);
@@ -1881,7 +1881,7 @@ export function EditorPage() {
       field: elevationField,
       req: { from: selectedLeg.fromPt, to: selectedLeg.toPt, ...(selectedLegVia ? { via: [selectedLegVia] } : {}), groundMPerMm: mapScale / 1000, extra: oobExtra },
     }).then(
-      (result) => setAlternatives((now) => (now?.key === key ? { key, status: "done", routes: result.routes } : now)),
+      (result) => setAlternatives((now) => (now?.key === key ? { key, status: "done", routes: result.routes, model: result.model } : now)),
       () => setAlternatives((now) => (now?.key === key ? { key, status: "error", routes: [] } : now)),
     );
   }, [alternativesKey, selectedLeg, mapDoc, mapScale, routeFinder, patchForDoc, elevationField, selectedLegVia, oobExtra]);
@@ -1931,8 +1931,8 @@ export function EditorPage() {
   );
   const applyAlternative = useCallback((index: number) => {
     const a = alternativeList[index];
-    if (a && selectedLeg && a.interior.length > 0) saveRouteNow({ fromControlId: selectedLeg.from.id, toControlId: selectedLeg.to.id, points: a.interior, source: "computed", model: a.kind === "shortest" ? SHORTEST_COST_MODEL.id : DEFAULT_COST_MODEL.id });
-  }, [alternativeList, selectedLeg, saveRouteNow]);
+    if (a && selectedLeg && a.interior.length > 0) saveRouteNow({ fromControlId: selectedLeg.from.id, toControlId: selectedLeg.to.id, points: a.interior, source: "computed", model: a.kind === "shortest" ? SHORTEST_COST_MODEL.id : alternativesNow?.model?.id ?? DEFAULT_COST_MODEL.id });
+  }, [alternativeList, selectedLeg, saveRouteNow, alternativesNow]);
   const alternativeMarkers = useMemo(() => (routeDraft ? [] : alternativeShapes(alternativeList, pointedAlternative)), [alternativeList, pointedAlternative, routeDraft]);
   const shownMarkers = useMemo(
     () => (routeMarkers.length + alternativeMarkers.length > 0 ? [...courseChecks.markers, ...alternativeMarkers, ...routeMarkers] : courseChecks.markers),
@@ -2787,6 +2787,7 @@ export function EditorPage() {
         alternatives: alternativesKey ? {
           status: alternativesNow?.status ?? "idle", items: alternativeList, pace: formatClock(winnerPace), onPace: setPaceText,
           onFind: findAlternatives, onUse: applyAlternative, onPoint: setPointedAlternative,
+          measured: alternativesNow?.model ? { state: alternativesNow.model.state, classes: alternativesNow.model.classes } : { state: "none", classes: [] },
         } : null,
       } : null}
       focusedBend={focusedBend}

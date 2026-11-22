@@ -128,6 +128,39 @@ to change):
     derived in the editor, not stored (§0.9's "stored per control
     pair" is the routes).
 
+Decided in implementation of §7.9 (2026-11-22; told to the user, open
+to change):
+
+28. **The cost model is calibrated outside the server**, by a local
+    command from neutral track records and the map file (§7.9). The
+    repository holds no tracks, names no track provider, and keeps
+    only a fitted model's numbers; the command's report is aggregates
+    only. Selecting whose tracks count (the user's "top 10 %") is done
+    before the command: it fits what it is given.
+29. **Calibration is per terrain class**: a model can be partly
+    measured, and the editor's note names the measured classes (this
+    replaces §0.16's single "marked uncalibrated"). A class counts as
+    measured from 2000 m of track, 10 runs and 30 legs holding 20 m or
+    more of it, when its 90 % interval is within ±15 % of the factor.
+30. **Factors are relative to forest; without forest in the data, to
+    the class with the most track**, which keeps its rule-of-thumb
+    factor. Classes without enough track keep theirs.
+31. **A model per map family**: sprint maps (ISSprOM) and forest maps
+    each have their current model (`currentCostModel`), since a sprint
+    is run differently from a forest race.
+32. **The course's time stays pace × length after calibration**
+    (§0.27): calibration changes how the time is shared over legs and
+    alternatives. The paces fitted are those of one event's finishers
+    and say nothing of another course's winner.
+33. **A model is data** — class factors and the slope's four numbers
+    of a fixed shape (`CostModelData`) — kept under an id; `default-1`
+    stays. This narrows §0.21's seam from any function to that shape.
+    Calibration does not change the automatic route or its basis
+    (§7.5): the shortest legal route reads no factor.
+34. **Slope is fitted against the contour field**, and only where the
+    tracks climb and descend enough on it; otherwise the rule of
+    thumb stays.
+
 ## 1. The profile
 
 ```ts
@@ -903,6 +936,144 @@ Under the Routes list (§7.4), on a desktop or tablet
   (`editor-leg-alternatives-none`).
 - A phone has no alternatives: its Leg section is read-only.
 
+### 7.9 Calibration from GPS tracks
+
+The cost model's numbers can be **measured**: fitted to GPS tracks of
+finishers on maps whose files are at hand (§0.28). The fit is a local
+command, `route:calibrate` (`packages/api/src/cli/calibrate-cost-model.ts`,
+runbook `docs/dev/route-calibration.md`), over the pure modules of
+`packages/shared/src/route/calibration/`. It needs no database and no
+server and sends nothing anywhere.
+
+#### 7.9.1 The track record
+
+The command reads a map file (OCAD or Mapper, imported as the server
+imports it, `map-import.md` §2) and **track records**, JSON
+(`trackRecordSchema`):
+
+- `courses[]`: `id` and `controls[]` in running order, each `code`,
+  `type` (`start` | `control` | `finish`) and `lat`, `lng` (WGS 84);
+- `tracks[]` (or `kept[]`): `courseId`, `raceStartMs`, `waypoints[]`
+  of `timeMs`, `lat`, `lng`, and `result` with `status`, `timeMs` and
+  `splitTimes[]` of `controlCode`, `timeMs`. `waypoints.timeMs` and
+  `raceStartMs` are on one clock; `result.timeMs` and the split times
+  are elapsed from the start. A track whose status is not `ok` is left
+  out.
+- `projectionEpsgCode` and `map.mapScale` are optional cross-checks: a
+  difference from the map file is a warning in the report.
+
+Any other key is dropped unread. A record says nothing of where it
+came from, and nothing in the repository knows. Points go onto the
+map's paper by the document's own georeference (`wgs84ToPaper`,
+`map-gps-tracks.md` §3.2); a map without a CRS proj4 knows cannot take
+tracks (`not-georeferenced`).
+
+#### 7.9.2 Legs
+
+A track is cut where it passes its course's controls (`splitTrack`):
+
+- **The pass** of a control is the track's nearest approach to it — a
+  point on a segment between two fixes, with its interpolated time —
+  within 20 s of the punch (the start, a split time, the finish), after
+  one clock offset per track: the median, over the controls, of pass
+  time minus punch time. Without punch times the passes are found in
+  course order, each after the one before. A pass further than 15 m
+  (ground) from its control is no pass, and the two legs it bounds are
+  left out.
+- **The leg's time** is the track's own time between two passes, so
+  distance and time come from one clock; the punch only picks the pass.
+- **Cleaning**, in this order: a fix whose time does not increase is
+  dropped; a fix that needs more than 9 m/s from both neighbours is
+  dropped, and a leg that lost over 10 % of its fixes is left out; a
+  leg with more than 20 s between two fixes, or a fix outside the
+  map's bounds, is left out; **standing** (under 3 m of movement over
+  10 s or more) is taken out of the leg's time, and a leg standing
+  over a fifth of its time is left out; a leg whose time over its
+  straight distance is over 2.5 times the runner's median is a mistake
+  and left out. Positions are not smoothed.
+
+Each reason's count is in the report.
+
+#### 7.9.3 Attribution
+
+A kept leg is read on **the finder's grid** (§7.6): `legGridCovering`,
+the leg's own cell size with the bounds grown to hold every track of
+that control pair, so all runners of a pair share one grid. The track
+is walked as the cost is (§7.7): half-cell steps, each step's metres
+halved between the classes of its two ends, the grade from the heights
+at its ends (`attributeLeg`). Per class the leg keeps its metres and
+three slope terms — metres × grade uphill, downhill to the knee, and
+beyond the knee — so that, weighted by a model's numbers, they are that
+polyline's cost under the model exactly. Heights are the contour field
+of the map file (§3; §0.34); a step without a height is flat.
+
+A step in an uncrossable cell takes the class of the nearest passable
+cell and is counted; a leg with over a quarter of its metres there is
+left out (a georeference that is off, or a bridge or stairs the grid
+does not hold).
+
+#### 7.9.4 The fit
+
+The model: **a leg's time = the runner's pace × Σ metres × class
+factor × slope factor** (§7.7). `fitCostModel` fits, in turn, until
+nothing moves by 10⁻⁴ (at most 50 rounds):
+
+1. each run's **pace**: the median over its legs of time ÷ cost;
+2. the **class factors** of the classes with enough track (§0.29), by
+   least squares on the relative error of each leg's predicted time,
+   with Huber weights (1.345 × the scaled median deviation);
+3. the slope's **up**, **down** and **steep down**, the same way, each
+   only when the tracks hold 1000 m steeper than 5 % that way (500 m
+   beyond the knee for steep down). The knee stays 10 %.
+
+One class is the **anchor** and keeps its factor (§0.30). Factors stay
+within 0.4–6; one at a bound is held there and the others solved
+again. A class without enough track keeps the base model's factor.
+Each fitted factor gets a **90 % interval** from 200 fits on runs drawn
+again with replacement, by a seeded generator: the same input gives
+the same output. A class is **measured** when its interval is within
+±15 % of its factor and the factor is not at a bound; the anchor is
+measured when another class is.
+
+#### 7.9.5 Validation
+
+- **Along the track.** Control pairs are held out a fifth at a time
+  (by sorted order, so no pair is on both sides and nothing is random),
+  the model fitted on the rest, and each held-out leg's time predicted
+  from its runner's pace on that runner's other legs. Reported: the
+  median and 90th percentile of the absolute relative error and its
+  bias, for the fitted model and for the base model.
+- **Against the finder.** Per control pair the fastest route under the
+  fitted model (§7.7); reported is each leg's actual time over that
+  route's time at the runner's pace — its median and the share under
+  0.95 (runners who found something faster than the finder did).
+
+#### 7.9.6 The report and the model
+
+The command writes one JSON report (`calibrationReportSchema`, strict)
+and prints the same summary. It holds **aggregates only**: the model's
+numbers; per class the metres (to 10 m), seconds, runs and legs it
+rests on, the factor, the base factor, the interval and why a factor
+was kept; metres per grade bin; the validation; counts of maps,
+courses, tracks, legs kept and legs left out per reason; per map — by
+its position on the command line — the median distance between a
+control and its pass and the share of metres on uncrossable cells. No
+coordinate, no time of day, no id, no name, no file name.
+
+A model is **data** (`CostModelData`, §0.33): an id, the class factors,
+the slope's four numbers, the measured classes, the anchor. The
+repository keeps its models in `COST_MODELS`; `currentCostModel(header)`
+picks the map family's (§0.31), and the editor's search and leg costs
+run under it. A fitted model is adopted by adding the report's `model`
+under a new id and naming it in `CURRENT_COST_MODEL_IDS`; `default-1`
+stays, so a kept route's `model` keeps its meaning. No fitted model is
+adopted yet.
+
+The editor's note under the alternatives says how much is measured
+(`data-calibrated` = `none` | `partial` | `full`): the rule-of-thumb
+text; or that speeds on the named terrain are measured from GPS tracks
+of top finishers and the rest is rule of thumb; or that all of it is.
+
 ## Tests
 
 | Test | Covers |
@@ -927,7 +1098,9 @@ Under the Routes list (§7.4), on a desktop or tablet
 | `packages/shared/src/route/__tests__/route.test.ts` | §7.6: codes to classes, the default model, slope; the grid's fill, holes, ranks, bridge, barrier, heights, `openDisc`, `nearestPassable`. §7.7: the cost field (distance, a gap, enclosed, slope and the reversed field); alternatives (straight, straightened, round a lake on both sides, a path against thick forest, a hill, the bounds, no way, a crossing point, a control on an obstacle, determinism); at the search's cell size: one route in open terrain, a control on a building or a cliff with a wall between, an uncrossable area thinner than a cell, a passage between two buildings, the marks after straightening, a control beside a fence, the cost of a run downhill, a bridge over drawn banks |
 | `packages/shared/src/route/__tests__/leg.test.ts` | §7.6: a document's features by match or source code, a patch-hidden object, the course's out-of-bounds area, a leg's window and cell size. §7.5: the shortest legal route (the line, round a lake, no way). §7.8: a leg's cost along a polyline |
 | `packages/api/src/__tests__/integration/leg-routes-auto.test.ts` | §7.5: the worker's search, a course's pairs after its edit (chosen, shortest, the line as a row without points, the climb), nothing searched while the basis holds, the basis, a moved control, not edited or deleted by hand, a person's choice over a refresh, an out-of-bounds area, a marked-route leg, a free-order course. §7.8: the winner pace stored, listed, cleared, its bounds; an object drawn with named courses (§0.25), a leg through its crossing point, two edits in a row, a search that fails (the other pairs written, the climbs computed, the pair left for the next refresh), a route saved by hand while the search runs |
-| `packages/web/src/lib/route/__tests__/finder.test.ts` | §7.8: the worker's state (a search needs its document), the document sent once and again when it changes, a message the worker cannot take, the legs' costs, dispose |
+| `packages/shared/src/route/calibration/__tests__/calibration.test.ts` | §7.9 on made-up terrain and runners (`world.ts`): the record (shape, `kept`, paper positions, warnings, no CRS); legs (2, 5 and 10 s fixes, a clock offset, no punch times, a control passed twice, each reason a leg is left out, a stop taken out, a mistake); attribution (equal to the route's cost, the covering grid, uncrossable metres); the fit (the linear solve, factors recovered across paces, blown legs, too little track, an anchor without forest, the slope, determinism); held-out legs, the finder check, the model as data, the report's strictness and that no input number is in it |
+| `packages/api/src/__tests__/calibrate-cost-model.test.ts` | §7.9: the command's arguments; a run on `e2e/test.ocd` with made-up runners from a directory of records, its report; a file that is no map, a record that does not parse |
+| `packages/web/src/lib/route/__tests__/finder.test.ts` | §7.8: the worker's state (a search needs its document), the document sent once and again when it changes, a message the worker cannot take, the legs' costs, dispose; §7.9: the model a search ran under |
 | `packages/web/src/lib/editor/__tests__/leg-alternatives.test.ts` | §7.8: the pace as typed, the clock, the pace on flat forest, the course along its routes, the list's kinds and times, the map's shapes, out-of-bounds objects as obstacles |
 | `packages/web/src/lib/editor/__tests__/profile-graph.test.ts` | §5: points and bounds, the leg at a distance, ticks, an axis that ends on ticks, the scale and its minimum span, the paths and their breaks, decimation, the height at a distance, label thinning, the kept preference |
 | `e2e/course-editor-profile.spec.ts` | §5 in the browser: the toggle, the panel under the map and above the rail's end, the controls, the summary, the kept preference, ✕; the pointer's readout, the dot on the map, a click selecting the leg |
@@ -945,14 +1118,22 @@ Under the Routes list (§7.4), on a desktop or tablet
   control of it is removed.
 - §7.8: the winner pace is the root course's; a variant or a copy of a
   course does not get it. Per-leg and per-course times are not stored or exported; the
-  course's time is pace × length by definition until the model is
-  calibrated.
+  course's time is pace × length by definition (§0.32).
 - §7.6: bridges, underpasses, stairs and multi-level sprint areas are
   not modelled; passable cliffs, fences and walls cost nothing to
   cross; a symbol without a recognised code is unmapped forest; a
   passage narrower than a cell between two barriers is closed.
-- §7.7: the cost model is uncalibrated (`default-1`); calibration from
-  GPS tracks replaces it behind `CostModel`.
+- §7.7: no fitted model is adopted yet: every map runs under the rule
+  of thumb (`default-1`) until a calibration's model is checked in
+  (§7.9.6).
+- §7.9: tracks are not matched to the map's paths, so a chord between
+  two fixes cuts corners and can lie in the cell beside a path; slope
+  rests on the contour field only, not a ground model; the finder
+  check does not say how far a runner's line was from the finder's
+  routes, nor whether runners' choice between two routes follows the
+  model's order; a route kept under an older model is not marked; the
+  note does not say how much of one route is unmeasured terrain; the
+  thresholds of §0.29 are not settings of the command.
 - §6: a climb is not recomputed when heights arrive later (a contour
   field derived, a DEM job done), on a Height data settings change or a
   `TERRAIN_VERSION` bump — until the course's next edit or its next

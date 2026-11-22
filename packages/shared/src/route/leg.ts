@@ -9,7 +9,7 @@ import type { EffectiveDocument } from "../map-document/patch.js";
 import { isAppliedMatch } from "../map-document/render-bridge.js";
 import { flattenObject } from "../terrain/graph/flatten.js";
 import { findRoutes, routeCost, segmentCost, type RouteAlternative } from "./alternatives.js";
-import { SHORTEST_COST_MODEL, costClassOfCode, type CostModel } from "./cost-model.js";
+import { SHORTEST_COST_MODEL, costClassOfCode, costModelNote, type CostModel, type CostModelNote } from "./cost-model.js";
 import { buildRouteGrid, type RouteFeature, type RoutePoint } from "./grid.js";
 
 /** A feature with its bounds, paper mm. */
@@ -70,6 +70,8 @@ export interface LegRouteResult {
   routes: RouteAlternative[];
   cellMm: number;
   cells: number;
+  /** The model the routes were found under, and how much of it is measured (§7.9). */
+  model: CostModelNote;
 }
 
 /** The finest cell, paper mm. */
@@ -92,11 +94,26 @@ export function legWindow(req: Pick<LegRouteRequest, "from" | "to" | "via">): { 
   return { bounds, cellMm: Math.max(ROUTE_CELL_MM, Math.sqrt(area / ROUTE_MAX_CELLS)) };
 }
 
-function legGrid(features: readonly BoxedRouteFeature[], heightAt: ((p: RoutePoint) => number | null) | null, req: LegRouteRequest) {
-  const { bounds, cellMm } = legWindow(req);
+/**
+ * The grid a leg is searched and costed on: `legWindow`'s cell size, its
+ * bounds grown to hold `cover` (a GPS track of the leg, §7.9) with 2 mm
+ * to spare. Without `cover` it is the leg's window.
+ */
+export function legGridCovering(
+  features: readonly BoxedRouteFeature[],
+  heightAt: ((p: RoutePoint) => number | null) | null,
+  req: Pick<LegRouteRequest, "from" | "to" | "via" | "groundMPerMm" | "extra">,
+  cover?: { minX: number; minY: number; maxX: number; maxY: number },
+) {
+  const { bounds: window, cellMm } = legWindow(req);
+  const bounds = cover
+    ? { minX: Math.min(window.minX, cover.minX - 2), minY: Math.min(window.minY, cover.minY - 2), maxX: Math.max(window.maxX, cover.maxX + 2), maxY: Math.max(window.maxY, cover.maxY + 2) }
+    : window;
   const inWindow = (f: BoxedRouteFeature) => f.box[2] >= bounds.minX && f.box[0] <= bounds.maxX && f.box[3] >= bounds.minY && f.box[1] <= bounds.maxY;
   return buildRouteGrid({ bounds, cellMm, groundMPerMm: req.groundMPerMm, features: [...features, ...(req.extra ?? [])].filter(inWindow), heightAt });
 }
+
+const legGrid = (features: readonly BoxedRouteFeature[], heightAt: ((p: RoutePoint) => number | null) | null, req: LegRouteRequest) => legGridCovering(features, heightAt, req);
 
 /**
  * The shortest legal route of a leg (docs/course-elevation.md §7.5): its
@@ -138,5 +155,5 @@ export function findLegRoutes(
 ): LegRouteResult {
   const grid = legGrid(features, heightAt, req);
   const routes = findRoutes(grid, req.from, req.to, { model, alternatives: req.alternatives, via: req.via });
-  return { routes, cellMm: grid.cellMm, cells: grid.cols * grid.rows };
+  return { routes, cellMm: grid.cellMm, cells: grid.cols * grid.rows, model: costModelNote(model) };
 }

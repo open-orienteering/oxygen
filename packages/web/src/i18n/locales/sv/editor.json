@@ -70,6 +70,9 @@
   "legAlternativesError": "Vägvalssökningen misslyckades. Försök igen.",
   "legAlternativesNone": "Ingen väg hittades mellan de här två kontrollerna som inte korsar något opasserbart.",
   "legAlternativesNote": "Tiderna är uppskattningar från en okalibrerad fartmodell: segrarens tid för banan i den farten fördelas över sträckorna efter hur stigar, vegetation och lutning vägs med tumregler. Broar, tunnlar och trappor är inte modellerade.",
+  "legAlternativesNotePartial": "Tiderna är uppskattningar. Farten på {{classes}} är uppmätt från GPS-spår av de bästa löparna; övrig terräng och lutning följer tumregler. Broar, tunnlar och trappor är inte modellerade.",
+  "legAlternativesNoteFull": "Tiderna är uppskattningar från fart uppmätt på GPS-spår av de bästa löparna ({{classes}}). Broar, tunnlar och trappor är inte modellerade.",
+  "costClass": {"forest": "skog", "paved": "hårdgjord yta", "road": "väg", "path": "stig", "smallPath": "liten stig", "open": "öppen mark", "roughOpen": "halvöppen mark", "slow": "skog, långsam löpning", "walk": "skog, svårlöpt", "fight": "skog, mycket svårlöpt", "marsh": "sankmark", "water": "grunt vatten", "boulders": "stenig mark", "denseBoulders": "blockmark"},
   "legAlternativeKind": {
     "fastest": "Snabbast",
     "shortest": "Kortast",

@@ -2,7 +2,7 @@
 
 import { describe, it, expect } from "vitest";
 import {
-  BLOCKED, BLOCKED_SOFT, CLASS_INDEX, DEFAULT_COST_MODEL, SHORTEST_COST_MODEL, buildRouteGrid, cellOf, costClassOfCode, costField, defaultSlopeFactor,
+  BLOCKED, BLOCKED_SOFT, CLASS_INDEX, COST_MODELS, DEFAULT_COST_MODEL, DEFAULT_COST_MODEL_DATA, costModelFromData, costModelNote, currentCostModel, SHORTEST_COST_MODEL, buildRouteGrid, cellOf, costClassOfCode, costField, defaultSlopeFactor,
   findRoutes, isBlockedClass, nearestPassable, openDisc, polylineCost, segmentCost, tracePath, type RouteFeature, type RouteGrid, type RoutePoint,
 } from "../index.js";
 
@@ -19,6 +19,23 @@ const A = { x: 5.25, y: 20.25 };
 const B = { x: 35.25, y: 20.25 };
 
 describe("cost classes (docs/course-elevation.md §7.6)", () => {
+  it("a model is data: the rule of thumb rebuilt from its numbers, by id, per map family; its note says what is measured (§7.9)", () => {
+    const rebuilt = costModelFromData(JSON.parse(JSON.stringify(DEFAULT_COST_MODEL_DATA)));
+    expect(rebuilt.classFactor).toEqual(DEFAULT_COST_MODEL.classFactor);
+    for (const g of [-0.4, -0.1, -0.05, 0, 0.03, 0.2, Number.NaN]) expect(rebuilt.slopeFactor(g)).toBe(defaultSlopeFactor(g));
+    expect(defaultSlopeFactor(0.1)).toBeCloseTo(1.75, 9);
+    expect(defaultSlopeFactor(-0.1)).toBeCloseTo(0.85, 9);
+    expect(defaultSlopeFactor(-0.2)).toBeCloseTo(1.15, 9);
+    expect(COST_MODELS["default-1"]).toBe(DEFAULT_COST_MODEL_DATA);
+    for (const header of [undefined, null, { library: null }, { library: { id: "ISOM2017-2" } }, { library: { id: "ISSprOM2019-2" } }]) expect(currentCostModel(header).id).toBe("default-1");
+    expect(costModelNote(DEFAULT_COST_MODEL)).toEqual({ id: "default-1", state: "none", classes: [] });
+    const some = costModelFromData({ ...DEFAULT_COST_MODEL_DATA, id: "x", calibrated: ["paved", "open"], anchor: "paved" });
+    expect(costModelNote(some)).toEqual({ id: "x", state: "partial", classes: ["paved", "open"] });
+    const all = costModelFromData({ ...DEFAULT_COST_MODEL_DATA, id: "y", calibrated: Object.keys(DEFAULT_COST_MODEL_DATA.classFactor) as never, slopeCalibrated: true });
+    expect(costModelNote(all).state).toBe("full");
+    expect(costModelNote(SHORTEST_COST_MODEL).state).toBe("none");
+  });
+
   it("a symbol code names its class; the decimals and unknown symbols", () => {
     expect(costClassOfCode("405")).toBe(C.forest);
     expect(costClassOfCode("410")).toBe(C.fight);

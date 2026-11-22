@@ -28,6 +28,7 @@
     "document:from-ocd": "tsx scripts/ocd-to-document.ts",
     "demo-map:enrich": "tsx scripts/demo-map/enrich-okartan.mjs",
     "map:rematch": "tsx src/cli/map-rematch.ts",
+    "route:calibrate": "tsx src/cli/calibrate-cost-model.ts",
     "dem:live-check": "tsx scripts/dem-live-check.ts"
   },
   "dependencies": {

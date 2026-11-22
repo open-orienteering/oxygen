@@ -70,6 +70,9 @@
   "legAlternativesError": "The route search failed. Try again.",
   "legAlternativesNone": "No way found between these two controls that crosses nothing uncrossable.",
   "legAlternativesNote": "Times are estimates from an uncalibrated speed model: the winner's time for the course at the pace is shared over the legs by how paths, vegetation and slope weigh by rule of thumb. Bridges, tunnels and stairs are not modelled.",
+  "legAlternativesNotePartial": "Times are estimates. Speeds on {{classes}} are measured from GPS tracks of top finishers; other terrain and slope are rule of thumb. Bridges, tunnels and stairs are not modelled.",
+  "legAlternativesNoteFull": "Times are estimates from speeds measured on GPS tracks of top finishers ({{classes}}). Bridges, tunnels and stairs are not modelled.",
+  "costClass": {"forest": "forest", "paved": "paved areas", "road": "roads", "path": "paths", "smallPath": "small paths", "open": "open land", "roughOpen": "rough open land", "slow": "slow running", "walk": "walk", "fight": "fight", "marsh": "marsh", "water": "shallow water", "boulders": "boulder fields", "denseBoulders": "dense boulder fields"},
   "legAlternativeKind": {
     "fastest": "Fastest",
     "shortest": "Shortest",
