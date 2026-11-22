@@ -53,8 +53,9 @@ track (the tests run made-up runners on made-up terrain).
   the others are measured against). The `model` block holds a fitted
   factor only for a `calibrated` class; for the others it holds the rule
   of thumb, whatever `factor` says here.
-- `converged`: the fit settled. If `false`, nothing is measured; more
-  varied legs are needed.
+- `converged`: the fit settled. If `false`, nothing is measured: the
+  tracks do not pin the numbers down (too few or too alike legs, or
+  terrain far outside the factors' range).
 - `alongTrack`: the error of predicted leg times on legs held out of the
   fit, for the model as it would be adopted (measured numbers only) and
   for the rule of thumb. The fitted one should be lower.

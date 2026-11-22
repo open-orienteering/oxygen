@@ -118,4 +118,21 @@ describe("route:calibrate", () => {
     expect(run.lines[run.lines.length - 1]).toMatch(/^map 1: under 5 runs with a usable leg; no report is written/);
     await expect(readFile(out)).rejects.toThrow();
   }, 120_000);
+
+  it("the floor holds for each map: a second map with four runs stops the report; a report that cannot be written names no path", async () => {
+    const few = join(dir, "few-2");
+    const record = JSON.parse(await readFile(tracks, "utf8"));
+    await writeFile(few, JSON.stringify({ ...record, kept: record.kept.slice(0, 4) }));
+    const out = join(dir, "two-report.json");
+    const run = await runCalibration({ maps: [{ map: MAP, tracks: [tracks] }, { map: MAP, tracks: [few] }], out, id: "x", heights: false }, { resamples: 5 });
+    expect(run.code).toBe(1);
+    expect(run.lines.filter((l) => l.startsWith("map 2:")).pop()).toMatch(/^map 2: under 5 runs with a usable leg/);
+    // The short map's own line (tracks, legs, control miss) is not printed.
+    expect(run.lines.some((l) => /^map 2: \d+ of/.test(l))).toBe(false);
+    await expect(readFile(out)).rejects.toThrow();
+    const nowhere = await runCalibration({ maps: [{ map: MAP, tracks: [tracks] }], out: join(dir, "no-such-dir", "r.json"), id: "x", heights: false }, { resamples: 5 });
+    expect(nowhere.code).toBe(1);
+    expect(nowhere.lines[nowhere.lines.length - 1]).toBe("the report could not be written to --out");
+    expect(nowhere.lines.join(" ")).not.toMatch(/no-such-dir|calibrate-/);
+  }, 120_000);
 });

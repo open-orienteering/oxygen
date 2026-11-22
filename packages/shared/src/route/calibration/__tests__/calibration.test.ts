@@ -12,7 +12,7 @@ import { buildRouteGrid, type RoutePoint } from "../../grid.js";
 import { legGridCovering, legWindow } from "../../leg.js";
 import {
   attributeLeg, buildReport, calibrationReportSchema, crossValidate, factorsOf, featuresCost, finderRatios, fitCostModel, foldsOf, modelDataOf, observeRecord, observeRecords, undirected,
-  N_CLASSES, N_GRADE_BINS, projectRecord, solveLinear, splitTrack, trackRecordSchema, type FitObservation, type LegFeatures, type PaperControl, type PaperTrack,
+  N_CLASSES, N_GRADE_BINS, gradeBin, projectRecord, solveLinear, splitTrack, trackRecordSchema, type FitObservation, type LegFeatures, type PaperControl, type PaperTrack,
 } from "../index.js";
 import { LOOP, TRUTH, XS, frame, latLng, map, record, run } from "./world.js";
 import { seeded } from "../fit.js";
@@ -353,6 +353,45 @@ describe("the fit (§7.9.4)", () => {
     expect(uneven.calibrated[C.open]).toBe(false);
   });
 
+  it("what the data cannot tell is not measured: maps that share no class or runner, runs of one leg, up and down that always come together", () => {
+    // Forest and path on one map; paved and open, by other runners, on another: only paved against open is in the data.
+    const here = madeUp(20, 30, (_, rand) => { const k = rand(); return { forest: 300 * k, path: 300 * (1 - k) }; }, { path: 0.6 }, 0.03, 2);
+    const there = madeUp(20, 30, (_, rand) => { const k = rand(); return { paved: 300 * k, open: 300 * (1 - k) }; }, { paved: 0.45, open: 0.58 }, 0.03, 3)
+      .map((x) => ({ ...x, runner: x.runner + 100, pair: `n${x.pair}` }));
+    const apart = fitCostModel([...here, ...there], DEFAULT_COST_MODEL_DATA, { resamples: 60 });
+    expect(apart.calibrated[C.path]).toBe(true);
+    expect(Math.abs(apart.factors[C.path] / 0.6 - 1)).toBeLessThan(0.04);
+    expect(apart.supported[C.paved] && apart.supported[C.open]).toBe(true);
+    expect(apart.calibrated[C.paved]).toBe(false);
+    expect(apart.calibrated[C.open]).toBe(false);
+    // Sixty runs of one leg each: nothing tells a run's pace from its leg's ground.
+    const single = madeUp(60, 30, (_, rand) => { const k = rand(); return { forest: 300 * k, path: 300 * (1 - k) }; }, { path: 0.5 }, 0.03, 5)
+      .filter((x) => x.pair === `m:${x.runner % 30}>${(x.runner % 30) + 1000}`);
+    const lone = fitCostModel(single, DEFAULT_COST_MODEL_DATA, { resamples: 40, minRunners: 1, minLegs: 1, minMetres: 100 });
+    expect(lone.supported[C.path]).toBe(true);
+    expect(lone.calibrated.some(Boolean)).toBe(false);
+    // Every hilly leg climbs 8 % for half its length and descends 8 % for the other: only up less down is in the data.
+    const rand = seeded(8);
+    const hills: FitObservation[] = [];
+    const shape = Array.from({ length: 30 }, () => ({ len: 200 + 300 * rand(), hilly: rand() < 0.6 }));
+    for (let r = 0; r < 20; r++) {
+      const pace = 0.3 * (0.8 + 0.5 * rand());
+      for (const [p, leg] of shape.entries()) {
+        const f: LegFeatures = { m: new Float64Array(N_CLASSES), up: new Float64Array(N_CLASSES), down: new Float64Array(N_CLASSES), steep: new Float64Array(N_CLASSES), gradeM: new Float64Array(N_GRADE_BINS), totalM: leg.len, blockedM: 0, heightM: leg.len };
+        f.m[C.forest] = leg.len;
+        if (leg.hilly) {
+          f.up[C.forest] = (leg.len / 2) * 0.08; f.down[C.forest] = (leg.len / 2) * 0.08;
+          f.gradeM[gradeBin(0.08)] = leg.len / 2; f.gradeM[gradeBin(-0.08)] = leg.len / 2;
+        } else f.gradeM[gradeBin(0)] = leg.len;
+        hills.push({ runner: r, pair: `h:${p}>${p + 1000}`, timeS: pace * featuresCost(f, factorsOf(DEFAULT_COST_MODEL_DATA), { up: 5, down: 0.8, kneeGrade: 0.1, steepDown: 2 }) * (1 + 0.03 * (rand() * 2 - 1)), f });
+      }
+    }
+    const tied = fitCostModel(hills, DEFAULT_COST_MODEL_DATA, { resamples: 60, minPairs: 1, minMetres: 1, minRunners: 1, minLegs: 1 });
+    expect(tied.slopeUpFitted && tied.slopeDownFitted).toBe(true);
+    expect(Math.abs(tied.slope.up - tied.slope.down - 4.2)).toBeLessThan(0.3);
+    expect(tied.slopeCalibrated).toBe(false);
+  });
+
   it("too little track keeps the rule of thumb; without forest the class with most track is the reference", () => {
     const few = fitCostModel(observed(4).observations, DEFAULT_COST_MODEL_DATA, { resamples: 0 });
     expect(few.supported.some(Boolean)).toBe(false);
@@ -423,6 +462,11 @@ describe("validation and the report (§7.9.5–7.9.6)", () => {
     expect(cv.fitted.legs).toBeGreaterThan(100);
     expect(cv.fitted.medianAbs).toBeLessThan(cv.base.medianAbs);
     expect(cv.fitted.medianAbs).toBeLessThan(0.06);
+    // Scored as the model that would be emitted: with nothing measured that is the rule of thumb itself.
+    const none = crossValidate(set.observations, DEFAULT_COST_MODEL_DATA, {}, { classes: COST_CLASSES.map(() => false), slope: false });
+    expect(none.fitted).toEqual(none.base);
+    const all = crossValidate(set.observations, DEFAULT_COST_MODEL_DATA, {}, { classes: COST_CLASSES.map(() => true), slope: true });
+    expect(all.fitted).toEqual(cv.fitted);
   });
 
   it("against the finder: runners on the straight, legal line take about the fastest route's time", () => {
@@ -463,6 +507,9 @@ describe("validation and the report (§7.9.5–7.9.6)", () => {
     expect(report.classes.find((c) => c.class === "forest")).toMatchObject({ kept: "anchor", anchor: true });
     expect(report.classes.find((c) => c.class === "open")!.pairs).toBe(10);
     expect(report.counts.outliers).toBe(fit.outliers);
+    expect(report.converged).toBe(true);
+    expect(() => calibrationReportSchema.parse({ ...report, maps: [{ ...report.maps[0], warnings: ["a-club-name"] }] })).toThrow();
+    expect(calibrationReportSchema.parse({ ...report, maps: [{ ...report.maps[0], warnings: ["track-without-course"] }] }).maps[0].warnings).toEqual(["track-without-course"]);
     expect(report.counts.rejected).toEqual({});
     expect(() => calibrationReportSchema.parse({ ...report, counts: { ...report.counts, rejected: { "runner-7": 1 } } })).toThrow();
     for (const extra of [{ lat: 59.3 }, { participantId: 7 }, { name: "x" }, { file: "a.ocd" }]) {

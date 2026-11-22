@@ -164,6 +164,12 @@ to change):
 34. **Slope is fitted against the contour field**, and only where the
     tracks climb and descend enough on it; otherwise the rule of
     thumb stays.
+35. **What "measured" also needs, and what is never cut** (after two
+    independent reviews of the tool, 2026-11-22): 8 different control
+    pairs per class and intervals over runs and pairs (in §0.29); a
+    fit that settled, with every interval's fits started off the fit
+    (§7.9.4); no leg left out for being slow (§7.9.2); and at least
+    five runs with a usable leg on each map, or no report (§7.9.6).
 
 ## 1. The profile
 
@@ -1056,19 +1062,34 @@ round until nothing moves by 10⁻⁴ (at most 50 rounds):
   leg's distance to its run's median, so a blown leg weighs little.
 
 One class is the **anchor** and keeps its factor (§0.30). Factors stay
-within 0.4–6, the slope's numbers within 0 and their tops; one at a
-bound is held there and the others solved again. A class without
+within 0.4–6, the slope's numbers within 0 and their tops (up 25, down
+0.6 ÷ the knee, steep down 15); one at a bound is held there and the
+others solved again. Steps are full for eight rounds and halved after
+(a full step between bounds can go round in circles). An unknown whose
+regressor is the same on every leg of each run that has it cannot be
+told from those runs' pace: it is **loose**, stays where it is, and is
+not measured. Two unknowns the data cannot tell apart stay near where
+they stand (a pull of 10⁻⁶ of the diagonal). A class without
 enough track keeps the base model's factor throughout. Each fitted
-number gets a **90 % interval** from 200 fits, each run to the same
-criterion, on **runs and control pairs** both drawn again with
-replacement (pairs that disagree about a class show it as runners
-that disagree do), by a seeded generator: the same input gives the
-same output. A class is **measured** when its interval is within
+number gets a **90 % interval** (a class's is reported; the slope's
+only decide whether it is measured) from 200 fits on **runs and
+control pairs** both drawn again with replacement (pairs that disagree
+about a class show it as runners that disagree do). Each of the 200
+starts a random way off the fit — every unknown times e^±0.3 — and runs
+to the same criterion: what the data pins down comes back to one
+value, what it cannot tell (maps sharing no class or runner, an ascent
+and a descent that always come together) stays spread and fails the
+interval. The generator is seeded: the same input gives the same
+output. A class is **measured** when its interval is within
 ±15 % of its factor and the factor is not at a bound; the anchor is
 measured when another class is; the slope when up, down and (where
-fitted) steep down are each within ±30 % and none is at a bound. A fit
-that has not settled within its rounds says so (`converged`) and
-measures nothing. Legs the fitted model misses by more than a factor
+fitted) steep down are each within ±30 % and none is at a bound or
+loose. A fit that has not settled within its rounds, or more than a
+twentieth of whose 200 have not, says so (`converged` false) and
+measures nothing; a system that cannot be solved counts as not
+settled. A 90 % interval is what it says: with pair-to-pair
+differences in the data, about one measured factor in ten lies outside
+its interval. Legs the fitted model misses by more than a factor
 of two are counted (`outliers`).
 
 #### 7.9.5 Validation
