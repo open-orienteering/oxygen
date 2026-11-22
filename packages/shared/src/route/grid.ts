@@ -109,19 +109,53 @@ function walkLine(g: RouteGrid, p: ArrayLike<number>, mark: (cell: number) => vo
   }
 }
 
-/** A ring whose mean width is under this many cells is walked along its outline. */
+/** An uncrossable area narrower than this many cells at a place has its outline walked there. */
 export const THIN_RING_CELLS = 1.5;
 
-/** A ring's mean width, paper mm: twice its area over its perimeter. */
-export function meanWidthMm(ring: ArrayLike<number>): number {
-  let area = 0, perimeter = 0;
-  const n = Math.floor(ring.length / 2);
-  for (let i = 0; i < n; i++) {
-    const j = (i + 1) % n;
-    area += ring[2 * i] * ring[2 * j + 1] - ring[2 * j] * ring[2 * i + 1];
-    perimeter += Math.hypot(ring[2 * j] - ring[2 * i], ring[2 * j + 1] - ring[2 * i + 1]);
+/** Even-odd: is the point inside the area's rings. */
+function insideParts(parts: readonly ArrayLike<number>[], x: number, y: number): boolean {
+  let inside = false;
+  for (const p of parts) {
+    const n = Math.floor(p.length / 2);
+    if (n < 3) continue;
+    for (let i = 0, j = n - 1; i < n; j = i++) {
+      const ay = p[2 * i + 1], by = p[2 * j + 1];
+      if ((ay > y) !== (by > y) && x < p[2 * i] + ((y - ay) / (by - ay)) * (p[2 * j] - p[2 * i])) inside = !inside;
+    }
   }
-  return perimeter > 0 ? Math.abs(area) / perimeter : 0;
+  return inside;
+}
+
+/**
+ * The stretches of an area's outline where the area is thinner than
+ * `widthMm`: a point `widthMm` in from the outline is outside again.
+ * Handed to `walk` as two-point lines; stretches off the grid are skipped.
+ */
+export function thinOutline(g: Pick<RouteGrid, "x0" | "y0" | "cellMm" | "cols" | "rows">, parts: readonly ArrayLike<number>[], widthMm: number, walk: (line: number[]) => void): void {
+  const step = g.cellMm / 2, eps = g.cellMm / 20;
+  const x1 = g.x0 + g.cols * g.cellMm, y1 = g.y0 + g.rows * g.cellMm;
+  for (const p of parts) {
+    const n = Math.floor(p.length / 2);
+    if (n < 2) continue;
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n;
+      const ax = p[2 * i], ay = p[2 * i + 1], bx = p[2 * j], by = p[2 * j + 1];
+      if ((ax < g.x0 && bx < g.x0) || (ay < g.y0 && by < g.y0) || (ax > x1 && bx > x1) || (ay > y1 && by > y1)) continue;
+      const len = Math.hypot(bx - ax, by - ay);
+      if (len === 0) continue;
+      const nx = -(by - ay) / len, ny = (bx - ax) / len;
+      const pieces = Math.max(1, Math.ceil(len / step));
+      for (let k = 0; k < pieces; k++) {
+        const t0 = k / pieces, t1 = (k + 1) / pieces, tm = (t0 + t1) / 2;
+        const mx = ax + (bx - ax) * tm, my = ay + (by - ay) * tm;
+        if (mx < g.x0 - step || my < g.y0 - step || mx > x1 + step || my > y1 + step) continue;
+        // The side the area is on, then the point `widthMm` into it.
+        const side = insideParts(parts, mx + nx * eps, my + ny * eps) ? 1 : insideParts(parts, mx - nx * eps, my - ny * eps) ? -1 : 0;
+        if (side !== 0 && insideParts(parts, mx + side * nx * widthMm, my + side * ny * widthMm)) continue;
+        walk([ax + (bx - ax) * t0, ay + (by - ay) * t0, ax + (bx - ax) * t1, ay + (by - ay) * t1]);
+      }
+    }
+  }
 }
 
 /**
@@ -135,16 +169,15 @@ export function buildRouteGrid(input: RouteGridInput): RouteGrid {
   const rows = Math.max(1, Math.ceil((bounds.maxY - bounds.minY) / cellMm));
   const g: RouteGrid = { x0: bounds.minX, y0: bounds.minY, cellMm, cols, rows, groundMPerMm: input.groundMPerMm, cls: new Uint8Array(cols * rows), heights: null };
   for (const f of input.features) if (f.kind === "area") fillArea(g, f.parts, f.cls);
-  // A thin uncrossable ring's outline too: one narrower than a cell holds no cell centre and would not be on the
-  // grid. A wide one is its filled cells alone, so the passage between two buildings stays as wide as it is drawn.
-  // Uncrossable water's bank lines are walked as well: a way laid over them afterwards is still a bridge.
+  // The outline of an uncrossable area where it is thin too: a stretch narrower than a cell holds no cell centre
+  // and would not be on the grid. Where it is wide it is its filled cells alone, so the passage between two
+  // buildings stays as wide as it is drawn. Uncrossable water's bank lines are walked as well: a way laid over
+  // them afterwards is still a bridge.
   const rank = (i: number, cls: number) => { if (CLASS_PRIORITY[cls] >= CLASS_PRIORITY[g.cls[i]]) g.cls[i] = cls; };
   for (const f of input.features) {
     if (!isBlockedClass(f.cls) || (f.kind === "line" && f.cls !== BLOCKED_SOFT)) continue;
-    for (const p of f.parts) {
-      if (p.length < 4 || (f.kind === "area" && meanWidthMm(p) >= THIN_RING_CELLS * cellMm)) continue;
-      walkLine(g, f.kind === "area" ? [...Array.from(p), p[0], p[1]] : p, (i) => rank(i, f.cls));
-    }
+    if (f.kind === "area") thinOutline(g, f.parts, THIN_RING_CELLS * cellMm, (l) => walkLine(g, l, (i) => rank(i, f.cls)));
+    else for (const p of f.parts) if (p.length >= 4) walkLine(g, p, (i) => rank(i, f.cls));
   }
   for (const f of input.features) {
     if (f.kind !== "line" || !WAY_CLASSES.has(f.cls)) continue;

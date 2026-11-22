@@ -39,3 +39,8 @@ if (hostIsLocal && port === "5432") {
 }
 
 process.env.DATABASE_URL = url;
+
+// docs/course-elevation.md §7.5: the automatic leg routes are written in the background after an edit. A test that
+// counts routes or reads a climb along the drawn line would race them, so they are off here; the file that tests
+// them (`leg-routes-auto.test.ts`) turns them on for itself.
+process.env.AUTO_LEG_ROUTES ??= "off";

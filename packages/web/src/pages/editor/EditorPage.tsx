@@ -91,8 +91,6 @@ import { useCourseChecks } from "./useCourseChecks";
 import { useCourseElevation } from "./useCourseElevation";
 import { legElevation, lineClimbStatus } from "../../lib/editor/elevation";
 import { chosenRouteMap, pairRoutes, routeItems, routeShapes, type RouteDraft, lineIsShortest } from "../../lib/editor/leg-routes";
-/** How often the leg routes are asked again while a course is open: the server writes the automatic ones after an edit. */
-const AUTO_ROUTE_POLL_MS = 8000;
 import { DEFAULT_PACE_S_PER_KM, alternativeItems, alternativeShapes, courseRouteTotals, flatPaceSPerKm, formatClock, oobFeatures, parsePace } from "../../lib/editor/leg-alternatives";
 import { createRouteFinder } from "../../lib/route/finder";
 import { DEFAULT_COST_MODEL, SHORTEST_COST_MODEL, type RouteAlternative } from "@oxygen/shared/src/route/index.js";
@@ -110,6 +108,9 @@ import { useLayoutMode } from "./modes/LayoutMode";
 import { useMapMode } from "./modes/MapMode";
 import { checkInbound, editorSearchFor, fetchIfIdle, parseEditorUrl, type EditorUrlState } from "../../lib/editor/url";
 import { useClassView } from "./modes/ClassView";
+
+/** How often the leg routes are asked again while a course is open: the server writes the automatic ones after an edit. */
+const AUTO_ROUTE_POLL_MS = 8000;
 
 type Pt = { x: number; y: number };
 type Structure = course.WireCourseStructure;
@@ -493,7 +494,7 @@ export function EditorPage() {
   // The automatic routes (§7.5) land a moment after an edit, written by the server: the list is asked again while a course is open.
   const legRoutes = trpc.legRoute.list.useQuery(undefined, { enabled: !!nameId && state.mode === "course", refetchInterval: selectedCourse ? AUTO_ROUTE_POLL_MS : false });
   // A route that landed changed the stored climb of the courses running its pair.
-  const autoRoutesKey = useMemo(() => (legRoutes.data ?? []).filter((r) => r.auto).map((r) => `${r.id}:${r.chosen ? 1 : 0}:${r.points.length}:${r.points[0]?.x ?? ""}:${r.points[0]?.y ?? ""}`).join("|"), [legRoutes.data]);
+  const autoRoutesKey = useMemo(() => (legRoutes.data ?? []).filter((r) => r.auto).map((r) => `${r.id}:${r.chosen ? 1 : 0}:${r.points.map((p) => `${p.x},${p.y}`).join(" ")}`).join("|"), [legRoutes.data]);
   const seenAutoRoutes = useRef<string | null>(null);
   useEffect(() => {
     if (!legRoutes.data) return;
@@ -1900,7 +1901,7 @@ export function EditorPage() {
   }, [selectedCourse, run, writes, utils]);
   // What each leg costs along the polyline it is read along: the winner's time is shared over the legs by these.
   const costsKey = elevationLegs && mapDoc && mapScale && selectedCourse ? [
-    selectedCourse.id, mapDoc.hash, patchForDoc?.version ?? "0", elevationField?.key ?? "", oobKey,
+    selectedCourse.id, mapDoc.hash, patchForDoc?.version ?? "0", mapScale, elevationField?.key ?? "", oobKey,
     elevationLegs.map((l) => l.points.map((p) => `${p.x},${p.y}`).join(" ")).join("/"),
   ].join("|") : null;
   const [legCosts, setLegCosts] = useState<{ key: string; costs: number[] } | null>(null);
@@ -1985,6 +1986,14 @@ export function EditorPage() {
     // A failed catch-up is tried again the next time this course's numbers change.
     refreshClimbsNow(undefined, { onError: () => { climbCaughtUp.current.delete(id); } });
   }, [canEdit, selectedCourse, computedShownM, pendingOps, refreshClimbsNow]);
+  // docs/course-elevation.md §7.5: a map or a map correction that changed since the last course edit — the
+  // automatic routes are brought up to date once per opening of the course mode.
+  const autoRoutesAsked = useRef(false);
+  useEffect(() => {
+    if (!canEdit || state.mode !== "course" || !selectedCourse || pendingOps > 0 || autoRoutesAsked.current) return;
+    autoRoutesAsked.current = true;
+    refreshClimbsNow();
+  }, [canEdit, state.mode, selectedCourse, pendingOps, refreshClimbsNow]);
   const profilePanel = useMemo(() => (profileShown && elevation.state === "ready" ? (
     <ProfilePanel profile={elevation.profile} datum={elevation.datum} basis={elevation.basis} legLabels={profileLabels.legs} boundLabels={profileLabels.bounds}
       selectedLeg={selectedLegIndex} onHover={hoverProfile} onSelectLeg={selectProfileLeg} onClose={toggleProfile} />

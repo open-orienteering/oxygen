@@ -42,6 +42,8 @@ const lengthOf = (points: { x: number; y: number }[], a: { x: number; y: number 
   [a, ...points, b].slice(1).reduce((mm, p, i, all) => mm + Math.hypot(p.x - (i === 0 ? a : all[i - 1]).x, p.y - (i === 0 ? a : all[i - 1]).y), 0);
 
 beforeAll(async () => {
+  // Off for the other integration files (`helpers/load-env.ts`).
+  process.env.AUTO_LEG_ROUTES = "on";
   resetClimbFields();
   ctx = await createTestEvent("leg_routes_auto");
   caller = makeCaller(ctx.event);
@@ -68,6 +70,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await drainAutoRoutes();
+  process.env.AUTO_LEG_ROUTES = "off";
   await ctx.cleanup();
   await disconnect();
 });
@@ -176,6 +179,89 @@ describe("automatic leg routes (docs/course-elevation.md §7.5)", () => {
     const free = await caller.course.create({ name: "Free", controlIds: [b, a], orderMode: "free_order" });
     expect(free.id).toBeGreaterThan(0);
     expect(await pair(b, a)).toEqual([]);
+  });
+
+  it("an object drawn with named courses closes the way only while every course running the pair is named (§0.25)", async () => {
+    const [before] = await pair(west, east);
+    const south = Math.min(...before.points.map((p) => p.y)) < 22;
+    const geometry = south ? [{ x: 28, y: 10 }, { x: 32, y: 10 }, { x: 32, y: 23 }, { x: 28, y: 23 }] : [{ x: 28, y: 37 }, { x: 32, y: 37 }, { x: 32, y: 50 }, { x: 28, y: 50 }];
+    const o = await caller.courseObject.create({ kind: "oob_area", geometry, props: {}, scope: { courses: [cross], classes: [] } });
+    expect((await pair(west, east))[0].points).not.toEqual(before.points);
+    // Another course runs the pair without the object: the way is open again.
+    const also = (await caller.course.create({ name: "Also across", controlIds: [west, east] })).id;
+    expect((await pair(west, east))[0].points).toEqual(before.points);
+    await caller.course.delete({ id: also });
+    await caller.courseObject.delete({ id: o.id });
+    expect((await pair(west, east))[0].points).toEqual(before.points);
+  });
+
+  it("a leg with a crossing point is routed through it", async () => {
+    const c = (await caller.control.create({ codes: "55", xpos: 20, ypos: 16 })).id;
+    const d = (await caller.control.create({ codes: "56", xpos: 40, ypos: 16 })).id;
+    const via = (await caller.control.create({ kind: "crossing_point", xpos: 30, ypos: 8 })).id;
+    const id = (await caller.course.create({ name: "Through", controlIds: [c, d] })).id;
+    expect((await pair(c, d))[0].points).toEqual([]);
+    const detail = await caller.course.detail({ id });
+    const structure = detail.structure as { items: { siteId: number; leg?: Record<string, unknown> }[] };
+    const items = structure.items.map((i) => (i.siteId === d ? { ...i, leg: { ...(i.leg ?? {}), crossing: { controlId: via } } } : i));
+    await caller.course.setStructure({ courseId: id, structure: { ...structure, items } as never });
+    const [r] = await pair(c, d);
+    expect(r.points.some((p) => Math.hypot(p.x - 30, p.y - 8) < 0.5)).toBe(true);
+  });
+
+  it("two edits in a row: the refresh asked for while one runs is run once more, and the routes end current", async () => {
+    await drainAutoRoutes();
+    void caller.control.update({ id: west, xpos: 14, ypos: 27 });
+    await caller.control.update({ id: west, xpos: 14, ypos: 30 });
+    await drainAutoRoutes();
+    expect(await refreshAutoRoutes(ctx.db, ctx.eventId)).toBe(0);
+  });
+
+  it("a search that fails leaves its pairs for the next refresh; the others are written and the climbs computed", async () => {
+    await drainAutoRoutes();
+    const [before] = await pair(west, east);
+    process.env.AUTO_LEG_ROUTES = "off";
+    try {
+      // Start → 51 and 51 → 52 are stale; the edit itself computed the climb along the old vertices.
+      await caller.control.update({ id: west, xpos: 14, ypos: 27 });
+      let calls = 0;
+      const search = async (data: Parameters<typeof searchAutoRoutes>[0]) => {
+        if (++calls === 1) throw new Error("search gave up");
+        return searchAutoRoutes(data);
+      };
+      await expect(refreshAutoRoutes(ctx.db, ctx.eventId, { chunk: 1, search })).rejects.toThrow(/gave up/);
+      expect(calls).toBe(2);
+      const [after] = await caller.legRoute.list().then((all) => all.filter((r) => r.fromControlId === west && r.toControlId === east));
+      expect(after.points).not.toEqual(before.points);
+      expect((await ctx.db.course.findFirstOrThrow({ where: { eventId: ctx.eventId, seq: cross } })).climbSource).toBe("computed");
+      // The pair whose search failed is the one left.
+      expect(await refreshAutoRoutes(ctx.db, ctx.eventId)).toBe(1);
+      expect(await refreshAutoRoutes(ctx.db, ctx.eventId)).toBe(0);
+      await caller.control.update({ id: west, xpos: 14, ypos: 30 });
+      expect(await refreshAutoRoutes(ctx.db, ctx.eventId)).toBe(2);
+    } finally {
+      process.env.AUTO_LEG_ROUTES = "on";
+    }
+  });
+
+  it("a route a person saves while the search runs stays the chosen one", async () => {
+    process.env.AUTO_LEG_ROUTES = "off";
+    try {
+      const e = (await caller.control.create({ codes: "57", xpos: 20, ypos: 46 })).id;
+      const f = (await caller.control.create({ codes: "58", xpos: 40, ypos: 46 })).id;
+      await caller.course.create({ name: "Meanwhile", controlIds: [e, f] });
+      let drawn = 0;
+      const search = async (data: Parameters<typeof searchAutoRoutes>[0]) => {
+        if (!drawn) drawn = (await caller.legRoute.save({ fromControlId: e, toControlId: f, points: [{ x: 30, y: 47 }] })).id;
+        return searchAutoRoutes(data);
+      };
+      await refreshAutoRoutes(ctx.db, ctx.eventId, { search });
+      const both = (await caller.legRoute.list()).filter((r) => r.fromControlId === e && r.toControlId === f);
+      expect(both.find((r) => r.id === drawn)).toMatchObject({ chosen: true, auto: false });
+      expect(both.find((r) => r.auto)).toMatchObject({ chosen: false });
+    } finally {
+      process.env.AUTO_LEG_ROUTES = "on";
+    }
   });
 });
 

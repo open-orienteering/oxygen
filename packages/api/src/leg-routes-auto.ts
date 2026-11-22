@@ -20,7 +20,6 @@ import { Prisma, type PrismaClient } from "./generated/prisma/client.js";
 import { clearComputedClimbs, editorCourseLayer, loadCourseSequences } from "./course-geometry.js";
 import { refreshComputedClimbs } from "./course-climb.js";
 import { storedObjectOf } from "./course-objects.js";
-import { coursesRunningPair } from "./leg-routes.js";
 import { eventPin } from "./map-store/event-document.js";
 import { eventPatchOnPin } from "./map-store/patches.js";
 import { workerBootstrap } from "./worker-bootstrap.js";
@@ -28,8 +27,10 @@ import { workerBootstrap } from "./worker-bootstrap.js";
 /** Bumped when the search changes what it finds: every automatic route is searched again. */
 export const AUTO_ROUTE_VERSION = 1;
 export const AUTO_ROUTE_MODEL = "shortest";
-/** A batch of searches may take this long before it is given up (a long leg is a few seconds). */
-export const AUTO_ROUTE_TIMEOUT_MS = 10 * 60_000;
+/** The pairs searched by one worker; its routes are written before the next is started. */
+export const AUTO_ROUTE_CHUNK = 20;
+/** One worker's searches may take this long before they are given up (a long leg is a few seconds). */
+export const AUTO_ROUTE_TIMEOUT_MS = 5 * 60_000;
 
 type Pt = course.RoutePoint;
 
@@ -58,6 +59,8 @@ interface Pair extends AutoRouteJob {
   fromId: string;
   toId: string;
   basis: string;
+  /** The courses running the pair. */
+  courses: string[];
 }
 
 const round = (v: number) => Math.round(v * 1000) / 1000;
@@ -119,7 +122,7 @@ async function pairsOf(db: PrismaClient, eventId: bigint): Promise<{ pairs: Pair
     // An object closes the pair's way when every course running the pair is drawn with it.
     const obstacles = objects.filter((o) => o.courses === null || [...p.courses].every((c) => o.courses!.has(c))).map((o) => o.obstacle);
     const job = { from: p.from, to: p.to, ...(p.via ? { via: p.via } : {}), obstacles };
-    pairs.push({ ...job, fromId: p.fromId, toId: p.toId, basis: autoRouteBasis({ documentHash: pin.documentHash, patchVersion, scale: pin.scale, ...job }) });
+    pairs.push({ ...job, fromId: p.fromId, toId: p.toId, courses: [...p.courses], basis: autoRouteBasis({ documentHash: pin.documentHash, patchVersion, scale: pin.scale, ...job }) });
   }
   return { pairs, documentHash: pin.documentHash, patch, scale: pin.scale };
 }
@@ -147,12 +150,22 @@ export function searchAutoRoutesInWorker(data: AutoRouteWorkerData, opts: { time
   });
 }
 
+export interface RefreshAutoRoutesOptions {
+  /** The searches of one chunk (tests); the worker thread by default. */
+  search?: (data: AutoRouteWorkerData) => Promise<(Pt[] | null)[]>;
+  chunk?: number;
+}
+
+const samePoints = (a: unknown, b: readonly Pt[]) => JSON.stringify(a) === JSON.stringify(b);
+
 /**
  * Brings the event's automatic routes up to date: searches every pair
- * whose basis changed, writes the rows and computes the climbs they
- * cleared. Returns the number of pairs written.
+ * whose basis changed, a chunk at a time, writes each chunk's rows and
+ * computes the climbs they cleared. A chunk that fails leaves its pairs
+ * for the next refresh; the others are still written, and the error is
+ * thrown at the end. Returns the number of pairs written.
  */
-export async function refreshAutoRoutes(db: PrismaClient, eventId: bigint): Promise<number> {
+export async function refreshAutoRoutes(db: PrismaClient, eventId: bigint, opts: RefreshAutoRoutesOptions = {}): Promise<number> {
   const found = await pairsOf(db, eventId);
   if (!found) return 0;
   const rows = await db.legRoute.findMany({ where: { eventId, autoBasis: { not: null } }, select: { fromControlId: true, toControlId: true, autoBasis: true } });
@@ -161,37 +174,59 @@ export async function refreshAutoRoutes(db: PrismaClient, eventId: bigint): Prom
   if (stale.length === 0) return 0;
   const doc = await db.mapDocument.findUnique({ where: { hash: found.documentHash }, select: { bytes: true } });
   if (!doc?.bytes) return 0;
-  const routes = await searchAutoRoutesInWorker({
-    bytes: new Uint8Array(doc.bytes), patch: found.patch, groundMPerMm: found.scale / 1000,
-    jobs: stale.map(({ from, to, via, obstacles }) => ({ from, to, ...(via ? { via } : {}), obstacles })),
-  });
-  let written = 0;
-  for (const [i, p] of stale.entries()) {
-    // No way at all: the line, as a pair without a route.
-    const points = (routes[i] ?? []).slice(0, course.LEG_ROUTE_MAX_POINTS).map((v) => ({ x: round(v.x), y: round(v.y) }));
-    try {
-      written += await db.$transaction(async (tx) => {
-        const pair = { eventId, fromControlId: p.fromId, toControlId: p.toId };
-        // The controls may be gone since the pairs were read.
-        if ((await tx.control.count({ where: { eventId, id: { in: [p.fromId, p.toId] }, removed: false } })) !== 2) return 0;
-        const existing = await tx.legRoute.findFirst({ where: { ...pair, autoBasis: { not: null } }, select: { id: true, chosen: true } });
-        const data = { points, source: "computed", model: AUTO_ROUTE_MODEL, autoBasis: p.basis };
-        let chosen = existing?.chosen ?? false;
-        if (existing) await tx.legRoute.update({ where: { id: existing.id }, data });
-        else {
-          // Chosen unless a person chose a route for the pair.
-          chosen = (await tx.legRoute.count({ where: { ...pair, chosen: true } })) === 0;
-          await tx.legRoute.create({ data: { ...pair, ...data, chosen } });
+  const search = opts.search ?? searchAutoRoutesInWorker;
+  const size = Math.max(1, opts.chunk ?? AUTO_ROUTE_CHUNK);
+  let written = 0, cleared = false;
+  let failure: unknown;
+  try {
+    for (let at = 0; at < stale.length; at += size) {
+      const chunk = stale.slice(at, at + size);
+      let routes: (Pt[] | null)[];
+      try {
+        routes = await search({
+          bytes: doc.bytes, patch: found.patch, groundMPerMm: found.scale / 1000,
+          jobs: chunk.map(({ from, to, via, obstacles }) => ({ from, to, ...(via ? { via } : {}), obstacles })),
+        });
+      } catch (err) {
+        failure ??= err;
+        continue;
+      }
+      for (const [i, p] of chunk.entries()) {
+        // No way at all: the line, as a pair without a route.
+        const points = (routes[i] ?? []).slice(0, course.LEG_ROUTE_MAX_POINTS).map((v) => ({ x: round(v.x), y: round(v.y) }));
+        try {
+          const done = await db.$transaction(async (tx) => {
+            const pair = { eventId, fromControlId: p.fromId, toControlId: p.toId };
+            // The controls may be gone since the pairs were read.
+            if ((await tx.control.count({ where: { eventId, id: { in: [p.fromId, p.toId] }, removed: false } })) !== 2) return null;
+            const existing = await tx.legRoute.findFirst({ where: { ...pair, autoBasis: { not: null } }, select: { id: true, chosen: true, points: true } });
+            const data = { points, source: "computed", model: AUTO_ROUTE_MODEL, autoBasis: p.basis };
+            let chosen = existing?.chosen ?? false;
+            if (existing) await tx.legRoute.update({ where: { id: existing.id }, data });
+            else {
+              // Chosen unless a person chose a route for the pair.
+              chosen = (await tx.legRoute.count({ where: { ...pair, chosen: true } })) === 0;
+              await tx.legRoute.create({ data: { ...pair, ...data, chosen } });
+            }
+            // The climb is read along another polyline only when the chosen route's vertices changed: a new row
+            // without points is the line the climb was read along already.
+            const changed = chosen && !samePoints(existing?.points ?? [], points);
+            if (changed) await clearComputedClimbs(tx, eventId, p.courses);
+            return { changed };
+          });
+          if (done) written++;
+          if (done?.changed) cleared = true;
+        } catch (err) {
+          // Two refreshes of one pair, a person choosing at the same moment, a control deleted meanwhile: the next refresh settles it.
+          if (!(err instanceof Prisma.PrismaClientKnownRequestError && ["P2002", "P2003", "P2025"].includes(err.code))) failure ??= err;
         }
-        if (chosen) await clearComputedClimbs(tx, eventId, await coursesRunningPair(tx, eventId, p.fromId, p.toId));
-        return 1;
-      });
-    } catch (err) {
-      // Two refreshes of one pair, or a person choosing at the same moment: the next refresh settles it.
-      if (!(err instanceof Prisma.PrismaClientKnownRequestError && (err.code === "P2002" || err.code === "P2003"))) throw err;
+      }
     }
+  } finally {
+    // Whatever stopped the loop, the climbs it cleared are computed again.
+    if (cleared) await refreshComputedClimbs(db, eventId);
   }
-  if (written > 0) await refreshComputedClimbs(db, eventId);
+  if (failure) throw failure;
   return written;
 }
 

@@ -405,6 +405,12 @@ outside the V8 heap, so `--max-old-space-size` does not bound them.
 `MAP_HEIGHTFIELD_MAX_CELLS` (default 60 000 000, which refuses nothing)
 lowers the cap on a smaller instance; a map over it gets no height field
 (`over-cap`) and no 3D.
+- **Automatic leg routes.** After a course edit the API searches the
+shortest legal route of each changed leg in a worker thread
+(`course-elevation.md` §7.5): one refresh per event at a time, 20 legs to
+a worker, each worker holding a decoded map document for the seconds it
+runs. `AUTO_LEG_ROUTES=off` turns the search off (the climb is then read
+along the drawn line or a route chosen by hand); unset, it is on.
 - **The render gate.** Each print also takes a permit of the process's
 render gate (`renderGate()` in `packages/api/src/map-render-limits.ts`,
 `MAP_RENDER_CONCURRENCY`, default 2, `deploy.sh` sets 3). Since E4a the

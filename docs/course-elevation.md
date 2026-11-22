@@ -706,18 +706,28 @@ without any way the row has none either.
   controls' positions, the leg's crossing point, the out-of-bounds
   objects that apply (§0.25) and `AUTO_ROUTE_VERSION`. A pair whose
   stored basis is the current one is not searched. The others are
-  searched in one worker thread (the document decoded, patched and
-  classified once), so no search holds the request or the event loop.
+  searched in worker threads, 20 pairs to a worker (the document
+  decoded, patched and classified once per worker), so no search holds
+  the request or the event loop. Each worker's routes are written
+  before the next starts; a worker that fails or runs past five
+  minutes leaves its pairs for the next refresh and the others go on.
 - **The row.** `source = 'computed'`, `model = 'shortest'`,
   `auto_basis` the basis. A new row is **chosen unless a person chose
   a route for the pair**; a refresh rewrites points and basis and
-  never `chosen` (§0.24). A chosen row that changed clears the
-  computed climb of the courses running the pair, and the climbs are
-  computed again (§7.3).
+  never `chosen` (§0.24). A chosen row whose vertices changed clears
+  the computed climb of the courses running the pair, and the climbs
+  are computed again when the refresh ends, also when it ends in an
+  error (§7.3). A new row without vertices, or a row searched again to
+  the same vertices, clears nothing.
 - **By hand.** `legRoute.list` marks the row `auto`. `legRoute.save`
   on it and `legRoute.delete` of it are `BAD_REQUEST`; `choose` works
   as for any route.
-- `AUTO_LEG_ROUTES=off` in the environment turns the refresh off.
+- `AUTO_LEG_ROUTES=off` in the environment turns the refresh off
+  (`docs/ops/deploy-gcp-cloud-run.md`); the integration tests run with
+  it off, except the file that tests it.
+- **The editor's catch-up.** The course mode asks once per opening
+  (`course.refreshClimbs`), so routes searched on a map or a map
+  correction that changed since are searched again (§0.26).
 
 Between an edit and the route's landing the climb is read along what
 is stored: a moved control's automatic route keeps its vertices with
@@ -765,14 +775,14 @@ read from):
    areas overlap, the cell takes the higher rank: forest < open <
    green < boulders, marsh, water < paved < uncrossable water <
    uncrossable.
-2. **Thin outlines and banks.** The outline of an uncrossable ring
-   whose mean width (twice its area over its perimeter) is under 1.5
-   cells marks the cells it touches too, so a wall drawn as an area
-   narrower than a cell (which holds no cell centre) still closes the
-   way. A wider ring is its filled cells alone: the passage between
-   two buildings stays as wide as it is drawn. Line objects of
-   `blockedSoft` (a bank drawn as a 301 line) mark their cells as
-   well.
+2. **Thin outlines and banks.** Where an uncrossable area is thinner
+   than 1.5 cells — a point that far in from its outline is outside
+   it again — the outline marks the cells it touches too, so a wall
+   drawn as an area narrower than a cell (which holds no cell centre),
+   or a lake's thin arm, still closes the way. Where the area is wider
+   it is its filled cells alone: the passage between two buildings
+   stays as wide as it is drawn. Line objects of `blockedSoft` (a bank
+   drawn as a 301 line) mark their cells as well.
 3. **Ways** — line objects of the path classes — then mark every cell
    they touch, over anything but `blocked`: a path over uncrossable
    water and its banks is a bridge, a path into a building opens
@@ -916,7 +926,7 @@ Under the Routes list (§7.4), on a desktop or tablet
 | `e2e/course-editor-routes.spec.ts` | §7.4 in the browser: a route drawn and saved, its numbers, the leg and the course read along it, the drawn line chosen back, removal; a draft's keys (Backspace, Enter, Escape). §7.5: the automatic route round an out-of-bounds area, chosen and not removable, unchosen once a person uses another. §7.8: alternatives round the area, their times, the winner pace saved with the course, the course along its routes, **Use** |
 | `packages/shared/src/route/__tests__/route.test.ts` | §7.6: codes to classes, the default model, slope; the grid's fill, holes, ranks, bridge, barrier, heights, `openDisc`, `nearestPassable`. §7.7: the cost field (distance, a gap, enclosed, slope and the reversed field); alternatives (straight, straightened, round a lake on both sides, a path against thick forest, a hill, the bounds, no way, a crossing point, a control on an obstacle, determinism); at the search's cell size: one route in open terrain, a control on a building or a cliff with a wall between, an uncrossable area thinner than a cell, a passage between two buildings, the marks after straightening, a control beside a fence, the cost of a run downhill, a bridge over drawn banks |
 | `packages/shared/src/route/__tests__/leg.test.ts` | §7.6: a document's features by match or source code, a patch-hidden object, the course's out-of-bounds area, a leg's window and cell size. §7.5: the shortest legal route (the line, round a lake, no way). §7.8: a leg's cost along a polyline |
-| `packages/api/src/__tests__/integration/leg-routes-auto.test.ts` | §7.5: the worker's search, a course's pairs after its edit (chosen, shortest, the line as a row without points, the climb), nothing searched while the basis holds, the basis, a moved control, not edited or deleted by hand, a person's choice over a refresh, an out-of-bounds area, a marked-route leg, a free-order course. §7.8: the winner pace stored, listed, cleared, its bounds |
+| `packages/api/src/__tests__/integration/leg-routes-auto.test.ts` | §7.5: the worker's search, a course's pairs after its edit (chosen, shortest, the line as a row without points, the climb), nothing searched while the basis holds, the basis, a moved control, not edited or deleted by hand, a person's choice over a refresh, an out-of-bounds area, a marked-route leg, a free-order course. §7.8: the winner pace stored, listed, cleared, its bounds; an object drawn with named courses (§0.25), a leg through its crossing point, two edits in a row, a search that fails (the other pairs written, the climbs computed, the pair left for the next refresh), a route saved by hand while the search runs |
 | `packages/web/src/lib/route/__tests__/finder.test.ts` | §7.8: the worker's state (a search needs its document), the document sent once and again when it changes, a message the worker cannot take, the legs' costs, dispose |
 | `packages/web/src/lib/editor/__tests__/leg-alternatives.test.ts` | §7.8: the pace as typed, the clock, the pace on flat forest, the course along its routes, the list's kinds and times, the map's shapes, out-of-bounds objects as obstacles |
 | `packages/web/src/lib/editor/__tests__/profile-graph.test.ts` | §5: points and bounds, the leg at a distance, ticks, an axis that ends on ticks, the scale and its minimum span, the paths and their breaks, decimation, the height at a distance, label thinning, the kept preference |
@@ -925,7 +935,10 @@ Under the Routes list (§7.4), on a desktop or tablet
 ## Pending in this chapter
 
 - §7.5: a map correction alone does not refresh the automatic routes
-  (§0.26); an out-of-bounds object scoped by class is not an obstacle
+  until the next course edit or opening of the course mode (§0.26); the
+  refreshes of several events are not capped together, and a refresh
+  cut off by a restart between its clear and its compute leaves those
+  climbs empty until the next edit or opening; an out-of-bounds object scoped by class is not an obstacle
   for them (§0.25); the refresh queue does not survive a restart; the
   editor learns of a landed route by asking again, not by a push. A
   pair no course runs any more keeps its automatic row until a

@@ -291,6 +291,17 @@ describe("route alternatives (docs/course-elevation.md §7.7)", () => {
         expect(findRoutes(fine([area(BLOCKED, strip)]), from, to, { model })).toEqual([]);
     });
 
+    it("a wide lake with a thin arm: the arm closes the way, the lake is not outlined", () => {
+      // A lake 20 mm wide with an arm 0.1 mm wide down to the edge: straight across the arm is not a way.
+      const lake = [20, 25, 40, 25, 40, 40, 20, 40];
+      const arm = [29.95, 0, 30.05, 0, 30.05, 25, 29.95, 25];
+      const shape = [20, 25, 29.95, 25, 29.95, 0, 30.05, 0, 30.05, 25, 40, 25, 40, 40, 20, 40];
+      for (const r of findRoutes(fine([area(BLOCKED, arm)]), from, to, { model })) for (const y of crossings(r.points, 30)) expect(y).toBeGreaterThan(25);
+      expect(findRoutes(fine([area(BLOCKED, shape)]), from, to, { model })).toEqual([]);
+      // The lake alone leaves the line at y 20 free, 5 mm from its bank.
+      expect(findRoutes(fine([area(BLOCKED, lake)]), from, to, { model })[0].lengthM).toBeCloseTo(400, 3);
+    });
+
     it("a passage between two buildings stays open, as narrow as two cells; a way through it too", () => {
       for (const gap of [0.4, 0.5]) {
         const walls = [area(BLOCKED, rect(25, 0, 35, 20)), area(BLOCKED, rect(25, 20 + gap, 35, 40))];

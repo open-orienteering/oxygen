@@ -182,8 +182,16 @@ test.describe("computed route alternatives (docs/course-elevation.md §7.8)", ()
       // §7.5: the server found the pair's shortest legal route round the bar by itself; it is chosen, not removable,
       // and the leg is read along it.
       const auto = page.locator('[data-testid="editor-leg-route"][data-source="auto"]');
-      await expect(auto).toHaveAttribute("data-chosen", "true", { timeout: 45000 });
-      expect(Number(await auto.getAttribute("data-m"))).toBeGreaterThan(lineM + 2);
+      await expect(auto).toBeVisible({ timeout: 45000 });
+      await expect.poll(async () => Number(await auto.getAttribute("data-m")), { timeout: 45000 }).toBeGreaterThan(lineM + 2);
+      // The pair is the earlier tests' too, and there a person chose the drawn line: that choice stays (§0.24) until
+      // the automatic route is chosen again.
+      if ((await auto.getAttribute("data-chosen")) !== "true") {
+        const chosen = waitForTrpc(page, "legRoute.choose");
+        await auto.getByTestId("editor-leg-route-choose").click();
+        await chosen;
+      }
+      await expect(auto).toHaveAttribute("data-chosen", "true", { timeout: 15000 });
       await expect(auto.getByTestId("editor-leg-route-remove")).toHaveCount(0);
       await expect(page.getByTestId("editor-leg-elevation")).toHaveAttribute("data-routed", "true", { timeout: 15000 });
       // The course along its routes: longer than its drawn length.
