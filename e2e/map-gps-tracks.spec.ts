@@ -17,6 +17,7 @@ import { readFileSync } from "node:fs";
 import { expect, test, type Page, type Request, type Response } from "@playwright/test";
 import { allControlsSheet, EDITOR_EVENT, editorReady, openEditor, printed, toPage, trpcCall, viewSettled } from "./helpers/editor";
 import { dropEventPatch, patchSymbolFor } from "./helpers/event-map-pin";
+import { reseed } from "./helpers/reseed";
 import { trpcProcedures, waitForTrpc } from "./helpers/trpc";
 
 type Pt = { x: number; y: number };
@@ -162,7 +163,12 @@ async function drawn(page: Page, id: string): Promise<Pt[]> {
 test.describe("GPS tracks in Map mode (docs/course-editor.md §13)", () => {
   test.describe.configure({ mode: "serial" });
 
-  test.beforeAll(clearTracks);
+  // A spec before this one may leave the event with a map and no placed controls (`ensureCoursesAndMap` then
+  // imports nothing): start from the seed, whatever ran before.
+  test.beforeAll(async () => {
+    await reseed();
+    await clearTracks();
+  });
   test.afterAll(clearTracks);
 
   test("import, drawn where the points project, locate, hide, rename, delete and undo, reload keeps them", async ({ page }) => {
