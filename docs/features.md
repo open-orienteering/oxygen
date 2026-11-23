@@ -76,11 +76,9 @@ Import the event, its entries and clubs from Eventor, or enter them by hand. Cla
 
 ## Terrain and GPS tracks
 
-![The map draped over the terrain in 3D](screenshots/map-3d.png)
+![The demo map and its showcase course draped over the terrain in 3D](screenshots/map-3d.png)
 
 With height data configured, the map can be draped over the terrain in 3D. GPS tracks imported as GPX or TCX are drawn on the map and on the terrain, and the Tracks page shows each stored route filtered to the runner's own course.
-
-![A GPS track on the terrain](screenshots/map-3d-track.png)
 
 [Maps, terrain and GPS tracks guide →](guide/maps.md)
 

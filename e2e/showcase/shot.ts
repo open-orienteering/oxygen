@@ -21,8 +21,8 @@ export const ROOT = path.resolve(__dirname, "..", "..");
 
 export const PRIVATE = process.env.SHOWCASE_PRIVATE === "1";
 export const EVENT = process.env.SHOWCASE_EVENT ?? "demo_competition";
-/** A course to feature, by name; the first course when unset. */
-export const COURSE = process.env.SHOWCASE_COURSE;
+/** A course to feature, by name: the demo's Showcase course (fork, loop, corridor) in a public run, else the first course. */
+export const COURSE = process.env.SHOWCASE_COURSE ?? (PRIVATE ? undefined : "Showcase");
 
 /** Environments that are not the machine the map lives on: CI and hosted shells. */
 const HOSTED = ["CI", "CLAUDE_CODE_REMOTE", "CODESPACES", "GITPOD_WORKSPACE_ID", "CLOUD_SHELL", "DEVSHELL_PROJECT_ID"];
@@ -110,7 +110,7 @@ export async function selectEvent(page: Page): Promise<void> {
   if (!res.ok()) throw new Error(`competition.select ${EVENT}: HTTP ${res.status()} ${(await res.text()).slice(0, 200)}`);
 }
 
-/** Pick the course to feature in the editor's course picker (SHOWCASE_COURSE, else the first). */
+/** Pick the course to feature in the editor's course picker (`COURSE`, else the first). */
 export async function pickCourse(page: Page): Promise<void> {
   const picker = page.getByTestId("editor-course-picker");
   const values = await picker.locator("option").evaluateAll((os) => os.map((o) => ({ v: (o as HTMLOptionElement).value, t: (o.textContent ?? "").trim() })));

@@ -76,7 +76,7 @@ A kiosk screen shows each finisher their name, class and time the moment the car
 Who has not started, who is in the forest, who has finished, and how far each course has come, live on a dashboard and a map.
 </td>
 <td valign="top">
-<a href="docs/guide/maps.md"><img src="docs/screenshots/map-3d-track.png" alt="A GPS track drawn on the map draped over the terrain in 3D"></a>
+<a href="docs/guide/maps.md"><img src="docs/screenshots/map-3d.png" alt="The demo map and its showcase course draped over the terrain in 3D"></a>
 <h3>Terrain and tracks in 3D</h3>
 With height data configured, see the map draped over the terrain, with GPS tracks (GPX or TCX) drawn on the ground.
 </td>

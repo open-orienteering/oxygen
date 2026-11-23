@@ -9,7 +9,7 @@ The pictures in the README, the [feature tour](../features.md) and the [guide pa
 | Showcase (`e2e/showcase/*.shot.ts`, `playwright.showcase.config.ts`) | The headline shots: course editor and its close-up, layout mode, the printed PDF, map mode and its close-up, Field mode on a phone, the card-reader dialog | `pnpm docs:showcase` |
 | Gallery (`docs/screenshots/capture.ts`) | One full-page shot per admin view: runners, start list, results, classes, kiosk, stations, Test Lab and more | `pnpm docs:screenshots` |
 
-New shots go into the showcase script; the gallery steps move into it over time ([plan](#plan)). The 3D shots (`map-3d.png`, `map-3d-track.png`) are taken by hand: the headless browser draws WebGL in software, which is too slow for the 3D view.
+New shots go into the showcase script; the gallery steps move into it over time ([plan](#plan)). The 3D shot (`map-3d.png`) is in it too: the demo map's terrain comes from its own contours, and the headless browser's software WebGL draws it in a few seconds. A public run features the demo's *Showcase* course (fork, butterfly loop, corridor) unless `SHOWCASE_COURSE` names another.
 
 ## Public shots from the demo
 
@@ -59,11 +59,10 @@ ln -s "$PWD/scripts/hooks/pre-commit-map-guard.sh" "$(git rev-parse --path-forma
 
 | Shots | Map |
 | --- | --- |
-| `course-editor`, `course-editor-closeup`, `course-editor-layout`, `course-map-print`, `course-editor-map-mode`, `map-closeup`, `field-mode`, `courses`, `dashboard` | The o-kartan demo map ([demo-map.md](../ops/demo-map.md)) |
+| `course-editor`, `course-editor-closeup`, `course-editor-layout`, `course-map-print`, `course-editor-map-mode`, `map-closeup`, `map-3d`, `field-mode`, `courses`, `dashboard` | The o-kartan demo map ([demo-map.md](../ops/demo-map.md)) |
 | `tracks` | A club map, with the club's permission (the demo has no GPS tracks) |
-| `map-3d`, `map-3d-track` | Taken by hand from a club map; to be retaken on the demo map |
 | `readers` and the other gallery shots | No map, or the demo map |
 
 ## Plan
 
-Still to come: the gallery steps move into the showcase script; a manifest lists every shot, its viewport and the docs that use it; images get a size budget; CI retakes the public shots on each release for review; the release runbook gains a "screenshots refreshed" step; and the 3D shots are retaken on the demo map (they need a GPU, so on a laptop).
+Still to come: the gallery steps move into the showcase script; a manifest lists every shot, its viewport and the docs that use it; images get a size budget; CI retakes the public shots on each release for review; the release runbook gains a "screenshots refreshed" step; and a GPS track on the terrain (the old `map-3d-track.png`, of another map, was dropped) comes back once the demo has GPS routes.
