@@ -18,8 +18,8 @@
  * and ground as the default with a GPS track shown.
  *
  * Headless Chromium draws WebGL2 with SwiftShader: pixels are compared with
- * one another, never with golden images. `MAP_3D_SHOT=1` writes the
- * showcase screenshot `docs/screenshots/map-3d.png`.
+ * one another, never with golden images. The docs' 3D screenshot is the
+ * showcase script's (e2e/showcase/map3d.shot.ts), on the o-kartan demo map.
  */
 
 import { test, expect, type Locator, type Page, type Request } from "@playwright/test";
@@ -209,7 +209,6 @@ test.describe("the viewer's 3D mode", () => {
       await expect(viewer).toHaveAttribute("data-surface-source", "contours");
       await expect(viewer.getByTestId("map-3d-surface-choice")).toHaveCount(0);
       await expect(viewer.getByTestId("map-dem-attribution")).toHaveCount(0);
-      if (process.env.MAP_3D_SHOT === "1") await viewer.screenshot({ path: "docs/screenshots/map-3d.png" });
     });
 
     await test.step("a right-drag orbits and tilts; the compass turns north up again", async () => {
@@ -571,7 +570,6 @@ test.describe("the viewer's 3D mode", () => {
       expect(routePixels(await canvasPixels(canvas))).toBeLessThan(withRoute / 10);
       await row.click();
       await expect(canvas).toHaveAttribute("data-terrain-lines", "1");
-      if (process.env.MAP_3D_SHOT === "1") await viewer.screenshot({ path: "docs/screenshots/map-3d-track.png" });
     });
 
     await test.step("back to 2D: the SVG path again", async () => {

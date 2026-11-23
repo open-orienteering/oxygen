@@ -28,7 +28,7 @@ The first run takes a minute while Docker pulls the image.
 
 Click **Web Preview** (the icon in the top-right of Cloud Shell) and select port **8080**.
 
-You'll land on the Demo Competition — a fully populated, anonymized showcase derived from a Swedish forest race: 5 classes, 169 runners across 38 clubs, completed runs with splits, and 2 700+ radio/finish punches. The map is **Puit de Laven**, a forest near Montpellier, France, by David Kaplan, published under CC0-1.0 ([see "The map"](#the-map)). The race's controls were moved onto it afterwards, so the courses are real but the terrain under them is not where the race was run. The map loads like any uploaded map (source, imported document, the event's pin), so the map, the courses and the overprint draw as on any event. The fixture currently has no GPS tracks, routes or saved course sheets; Layout mode's **Create sheet** makes one from the default template in one click (the showcase screenshot run does exactly that). Everything is pre-wired so you can explore:
+You'll land on the Demo Competition — a fully populated, anonymized showcase derived from a Swedish forest race: 5 classes, 169 runners across 38 clubs, completed runs with splits, and 2 700+ radio/finish punches. The map is a Swedish forest south of Stockholm from [o-kartan.se](https://o-kartan.se), licensed to the project, with invented boulders and landforms ([see "The map"](#the-map)). The race's controls were moved onto it afterwards, so the courses are real but the terrain under them is not where the race was run. The map loads like any uploaded map (source, imported document, the event's pin), so the map, the courses and the overprint draw as on any event. The fixture currently has no GPS tracks, routes or saved course sheets; Layout mode's **Create sheet** makes one from the default template in one click (the showcase screenshot run does exactly that). Everything is pre-wired so you can explore:
 
 - **Runners / Start list / Results** — full field with classes, clubs, start times and splits
 - **Courses** — controls and legs on the demo map
@@ -37,7 +37,7 @@ You'll land on the Demo Competition — a fully populated, anonymized showcase d
 
 ## Step 3: Reload the showcase (optional)
 
-The showcase fixture lives at `fixtures/showcase/showcase.sql`, with its map `puit-de-laven-demo.omap` beside it, and is loaded by `scripts/load-showcase.sh` / `pnpm showcase:load`. The load is idempotent — it cascade-deletes any existing `demo_competition` event before re-inserting, so re-running is safe:
+The showcase fixture lives at `fixtures/showcase/showcase.sql`, with its map in `fixtures/okartan/okartan-demo.ocd`, and is loaded by `scripts/load-showcase.sh` / `pnpm showcase:load`. The load is idempotent — it cascade-deletes any existing `demo_competition` event before re-inserting, so re-running is safe:
 
 ```bash
 # Reload into the Cloud Shell docker PostgreSQL
@@ -50,48 +50,41 @@ pnpm showcase:load
 
 ### The map
 
-The demo map is **Puit de Laven** by **David Kaplan**, from
-[github.com/dmkaplan2000/orienteering-maps](https://github.com/dmkaplan2000/orienteering-maps)
-(`puit-de-laven/puit-de-laven.omap`, commit `38f674c`), released under
-**CC0-1.0**, a public-domain dedication. Thank you for publishing it. It is
-an OpenOrienteering Mapper file at 1:10 000, georeferenced in UTM zone 31N,
-of a forest near Montpellier.
+The demo map is a cut of a Swedish forest south of Stockholm, bought from
+[o-kartan.se](https://o-kartan.se) by the project maintainer and licensed
+for any use, including publishing it here. o-kartan makes its maps
+automatically from Lantmäteriet's laser scan: OCAD 12, ISOM 2017-2,
+1:15 000, about 2.6 × 3.2 km. The demo version adds invented boulders,
+landforms and cliff tags, which are not surveyed. [demo-map.md](demo-map.md)
+has the source, the licence and how the invented detail is made:
 
-The published map has hardly any point features, so the demo adds some.
-**The 358 boulders, knolls, depressions and pits on the demo map are
-invented**: they sit at seeded random positions in forest and open land,
-clear of every line and of each other, and are not surveyed. Each one is
-tagged `oxygen-demo=injected` in the Mapper file, and the map's notes say
-so. The original is committed unchanged as
-`fixtures/showcase/puit-de-laven.omap`; the demo map
-`puit-de-laven-demo.omap` next to it is made from it by
+| File | What it is |
+|---|---|
+| `fixtures/okartan/okartan-original.ocd` | The map as bought |
+| `fixtures/okartan/okartan-demo.ocd` | The demo map: the original plus the invented detail |
 
-```bash
-node scripts/inject-demo-points.mjs        # seed 42; reproduces the committed file
-node scripts/patch-showcase-map.mjs        # after changing the seed or the plan: rewrite the demo map and re-pin the fixture
-```
+No club map, and no map from the source event, is in the fixture. Club
+maps of the same forest exist and stay out of git
+([screenshots/README.md, "Private maps"](../screenshots/README.md#private-maps)).
 
-(140 × 204 boulder, 30 × 205 large boulder, 18 × 207 boulder cluster,
-90 × 109 small knoll, 25 × 110 elongated knoll, 30 × 111 small depression,
-25 × 112 pit; `scripts/lib/inject-demo-points.mjs`). The placement was first
-made and approved with a Python script; the Node port reproduces Python's
-random generator, so the committed file is that approved placement byte
-for byte. `scripts/__tests__/demo-map.test.mjs` checks the original's
-hash against the upstream file, the demo map against the script's
-output, the counts, tags and note, and that nothing else in the map
-changes. No club map, and no map from the source event, is in the
-fixture.
+Until 2026-11 the demo used the CC0 Puit de Laven map by David Kaplan
+([github.com/dmkaplan2000/orienteering-maps](https://github.com/dmkaplan2000/orienteering-maps)).
+It stays in `fixtures/showcase/` as a test map: `puit-de-laven.omap` as
+published, and `puit-de-laven-demo.omap` with 358 invented point features
+from `node scripts/inject-demo-points.mjs` (seed 42,
+`scripts/lib/inject-demo-points.mjs`, tested by
+`scripts/__tests__/demo-map.test.mjs`).
 
 ### How the fixture holds the map
 
 The fixture is written for the current schema (v0.6.1 and later). The
-5 MB source and its 1.2 MB document would be over 12 MB of hex in the SQL,
+2 MB source and its document would be several MB of hex in the SQL,
 so the SQL carries **no map bytes**. It holds one `map_files` row that
 names the demo map by its source hash (`source_hash`, SHA-256 of
-`puit-de-laven-demo.omap`) with `document_hash` NULL. `load-showcase.sh`
+`okartan-demo.ocd`) with `document_hash` NULL. `load-showcase.sh`
 then does three things in order:
 
-1. checks that the committed `.omap` hashes to the fixture's
+1. checks that the committed `.ocd` hashes to the fixture's
    `source_hash`, and inserts its `map_sources` row (sent base64-encoded
    on psql's stdin, `ON CONFLICT DO NOTHING`);
 2. runs `showcase.sql`;
@@ -125,12 +118,28 @@ load) and the courses' stored `structure`, whose site ids named the source
 event's controls. It re-derives each course's `legs` / `length_m` the
 way the course editor does after a move (`length_source = 'derived'`).
 
-The first placement is a fit: the source race's control cloud turned a
-quarter turn and scaled ×1.36 (1.5 would keep the terrain lengths of the
-1:15 000 original) to fit the map 15 mm inside its edge
-(`node scripts/showcase-controls.mjs fit <a fixture with the source
-positions>`). It keeps the courses' shape, not the terrain: a control
-can stand on a path or in thicket. To place the controls by hand:
+The placement is made by `node scripts/showcase-controls.mjs fit <a
+fixture with positions> --max-scale 0.6`, run once on the fixture as it
+stood on the Puit de Laven map (whose positions were the source race
+turned a quarter turn and scaled ×1.36 at 1:10 000):
+
+- **Fit:** the control cloud is turned (each quarter turn is tried),
+  scaled by at most `--max-scale` and slid over the map in 2 mm steps.
+  The kept placement has no control in a forbidden area (water, fight,
+  cultivated land, paved areas, out-of-bounds, buildings) or within
+  12 mm (180 m) of the drawn map's edge, then the fewest legs through
+  uncrossable water, marsh, out-of-bounds or a building, then the most
+  controls on a feature, then the least movement. ×0.6 is the largest
+  scale at which the courses fit with at most two such legs; the courses
+  are about 0.8 of the source race's length (A 5.3 km).
+- **Snap:** each control moves to the nearest free boulder, knoll,
+  depression or pit within 6 mm (90 m) that is at least 4 mm (60 m) from
+  the controls already placed, and each start and finish onto the nearest
+  path or road.
+
+It keeps the courses' shape, not the course setter's intent: two legs
+still cross water, and a control may stand on a feature a setter would
+not pick. To place the controls by hand:
 
 1. Load the fixture into a database you can edit, with the app running
    on it, e.g. your local checkout:
@@ -138,9 +147,9 @@ can stand on a path or in thicket. To place the controls by hand:
    pnpm showcase:load        # dev database on :5432, then `pnpm dev`
    ```
 2. Open **Demo Competition → Courses** and move controls in the course
-   editor. Only move existing controls: adding one, or changing a course's
-   control sequence, is not captured (the race data is fixed), and
-   `apply` refuses a control the fixture does not have.
+   editor. A new control, or a change to a course's controls, is
+   captured by `showcase-course.mjs export` ([below](#the-showcase-course));
+   `apply` takes only the positions of the controls `showcase.sql` has.
 3. Capture the positions back into the fixture:
    ```bash
    DATABASE_URL='postgresql://oxygen:oxygen@localhost:5432/oxygen?schema=oxygen' \
@@ -155,21 +164,75 @@ can stand on a path or in thicket. To place the controls by hand:
 
 Repeat steps 2–3 as often as you like; `apply` is idempotent.
 
+### The showcase course
+
+Besides the race's five courses, the demo has a course named **Showcase**
+that is there to show the course editor: a three-way fork after control 2,
+a butterfly loop at control 6 (A and B, both orders), a corridor over
+the two legs into controls 13 and 14, an out-of-bounds area and a printed
+sheet. Its 3 fork branches times the loop's 2 orders give 6 variants
+(*Showcase AAB* … *Showcase CBA*). It has no runners. Its own controls
+have codes from 101 up, its start code 3 and its finish code 4; its last
+control is the race's 64. The race's start and finish have codes 5 and 6.
+
+It lives in `fixtures/showcase/showcase-course.sql`, which
+`load-showcase.sh` runs right after `showcase.sql`. The file is exported
+from a database, never edited by hand, and holds the event's whole course
+setup as the course editor left it, the race's courses included:
+
+1. `pnpm showcase:load` into a database you can edit, with the app on it,
+   and open **Demo Competition → Course Editor**.
+2. Edit the courses: move controls, change the fork or the loop, draw
+   objects, lay out the sheets, change a race course's controls.
+3. Point every course at its own start and finish and give the starts and
+   finishes codes, then write it all back:
+   ```bash
+   export DATABASE_URL='postgresql://oxygen:oxygen@localhost:5432/oxygen?schema=oxygen'
+   pnpm exec tsx scripts/showcase-start-finish.mts   # through the API
+   node scripts/showcase-course.mjs export          # writes showcase-course.sql
+   node scripts/showcase-controls.mjs export        # the race's positions, for its checks
+   node scripts/showcase-controls.mjs apply
+   pnpm test:scripts
+   ```
+
+`showcase-start-finish.mts` gives each live start and finish without a
+code the lowest free one in 3–10 (the rule `control.create` follows), then
+sets the *Showcase* course to start and finish at the start and finish
+that are not the race's (their `seq` is not in `showcase.sql`) and every
+other course at the race's, through `course.setStructure`, so lengths and
+variants follow. It stops if there is not exactly one of each.
+
+`export` writes every control and course of the event as an upsert on
+`id`, so the race's rows in `showcase.sql` take the editor's codes,
+positions, starts and sequences; every course's `course_controls` in place
+of `showcase.sql`'s; the course objects; the sheets (without the
+instance's print template); and the event's seq counters raised past
+every row, so the next control or course the editor creates takes a free
+`seq`. The race's results stay `showcase.sql`'s: a race course whose
+controls change no longer matches its runners' punches.
+
+`showcase-controls.json` and `showcase.sql` keep the race's positions
+for the placement checks (on a feature, clear of water and the edge);
+export them too after moving a race control. The first version of the
+showcase course was set by a script through the API and snapped onto the
+map's features.
+
 ### Tests
 
 | Level | File | Covers |
 |---|---|---|
-| Script | `scripts/__tests__/demo-map.test.mjs` | `PyRandom` against CPython's draws; the original's hash is the upstream file's; the injection reproduces the committed demo map byte for byte, deterministic, seed-dependent; per-symbol counts, every object tagged, only 110 rotated; nothing else changes (removing the objects and the note gives the original); the note; every feature inside the region, clear of lines, forbidden areas and other points |
-| Script | `scripts/__tests__/showcase-map.test.mjs` | the source facts; the import resolves EPSG:32631 at 1:10 000 and gives the pin's columns; the source-only `map_files` row, the E-demo block replaced; the committed fixture has no map bytes or dropped storage, one map, named by the hash of the injection's output on the upstream file, and nothing of the source map or its club |
-| Script | `scripts/__tests__/showcase-controls.test.mjs` | SQL value splitting; the fixture's 37 controls (unique `seq`), 5 courses, 62 course controls; the fit (one rotation and scale, inside the margin, unplaced kept, scale capped at 1.5, deterministic); the demo map's region and forbidden areas; `apply` (positions, `lat` / `lng` and `structure` NULL, legs and length re-derived, idempotent, mismatched files refused); the committed fixture holds the committed positions; `export` through a stub client |
-| Script | `scripts/__tests__/release-compose.test.mjs` | under `USE_DOCKER=1` the loader re-matches with the image's CLI and no host `pnpm` / Node; the source travels base64 on stdin |
-| Integration (api) | `packages/api/src/__tests__/integration/showcase-fixture.test.ts` | load as the loader does, pin, `course.mapMetadata`, control `lat` / `lng`, course sequences and lengths equal `rebuildCourseLengths`, a second load (`docs/map-storage.md` §10) |
+| Script | `scripts/__tests__/showcase-map.test.mjs` | the source is the committed `.ocd` (kind `ocad`); it imports at 1:15 000 and its document names this source; the source-only `map_files` row, the E-demo block replaced; the committed fixture has no map bytes or dropped storage, one map, named by the demo map's hash, which is on the public-map list beside the original's; nothing of the source map or its club, in the SQL or in the map's 8-bit and UTF-16 strings |
+| Script | `scripts/__tests__/showcase-controls.test.mjs` | SQL value splitting; the fixture's 37 controls (unique `seq`), 5 courses, 62 course controls; the fit (one rotation and scale, a fixed quarter turn, inside the margin, unplaced kept, scale capped, deterministic); snap (nearest free feature within reach, starts and finishes onto a path, `spacing` and one control per feature, a control with nothing in reach kept); place (no leg through the lake, nothing in it or near the edge, every control on a feature, the scale kept, deterministic); the course legs; the demo map's region, forbidden areas, features, paths and slanted edge; the committed positions on features (starts and finishes on paths), 60 m apart, clear of forbidden areas and the edge, with the two documented legs across water; `apply` (positions, `lat` / `lng` and `structure` NULL, legs and length re-derived, idempotent, mismatched files refused); the committed fixture holds the committed positions; `export` through a stub client |
+| Script | `scripts/__tests__/demo-map.test.mjs` | the Puit de Laven test map's injection (it is no longer the demo's map) |
+| Script | `scripts/__tests__/release-compose.test.mjs` | under `USE_DOCKER=1` the loader re-matches with the image's CLI and no host `pnpm` / Node; the source travels base64 on stdin; the map file is the o-kartan demo map, kind `ocad` |
+| Unit (api) | `packages/api/src/__tests__/demo-map-enrich.test.ts` | the demo map's invented detail ([demo-map.md](demo-map.md#tests)) |
+| Script | `scripts/__tests__/showcase-course.test.mjs` | a row's `json_populate_record` line reads back the same (quotes, backslashes; lat / lng cleared), controls and courses as upserts on `id`; `export` through a stub client (every control and course, the course controls replaced after the courses, objects, sheets without the instance template, the seq counters, no Showcase course refused); `withEnds` (another start or finish replaced, the leg into the finish kept, missing ends added, a control run as start or finish kept, a leading group); the committed file: the race's courses and controls, the Showcase course, its variants and sheet in the demo event, every control it names written by the file, every start and finish coded with no code shared, the Showcase course at its own start and finish and every other at the race's, no source names; the loader runs it after `showcase.sql` |
+| Integration (api) | `packages/api/src/__tests__/integration/showcase-fixture.test.ts` | load as the loader does, pin at 1:15 000 south of Stockholm, `course.mapMetadata`, control `lat` / `lng`, race courses from the coded race start to the race finish, lengths equal `rebuildCourseLengths`, the showcase course (both groups, 6 variants, corridor, out-of-bounds area, sheet, controls pinned), a second load (`docs/map-storage.md` §10) |
 
 ### Pending
 
-- The control positions are the first fit; hand placement in the course editor (above) is the user's.
+- The control positions are the automatic placement above; hand placement in the course editor is the user's, for the race's courses and the showcase course alike. The screenshots still feature course A until the showcase course is tweaked.
 - No GPS tracks, routes or printable course sheets in the fixture.
-- A real Swedish map that may be published, with invented detail, is ready to replace Puit de Laven: [demo-map.md](demo-map.md).
 
 ### Regenerate from your own Vinterserien data
 

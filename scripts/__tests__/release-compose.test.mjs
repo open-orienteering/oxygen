@@ -51,7 +51,8 @@ describe("published-image demo", () => {
     assert.ok(existsSync(path.join(ROOT, "packages/api/src/cli/map-rematch.ts")));
     // The source row travels on psql's stdin; the map file is the committed one.
     assert.match(loader, /decode\('[^\n]*\n\s*base64 < "\$MAP_FILE"/);
-    assert.match(loader, /puit-de-laven-demo\.omap/);
+    assert.match(loader, /MAP_FILE="\$REPO_ROOT\/fixtures\/okartan\/okartan-demo\.ocd"/);
+    assert.match(loader, /\nMAP_KIND="ocad" /, "map_sources.kind of the demo map (scripts/lib/showcase-map.mjs DEMO_MAP_KIND)");
   });
 
   it("installs OpenSSL before Prisma dependencies", () => {

@@ -82,7 +82,7 @@ node scripts/generate-test-ocd.mjs
 
 The writer lives in `scripts/lib/ocad-fixture.mjs` with the other generated
 OCAD fixtures. Do not commit a source map export. (The Demo Competition no
-longer uses a generated OCAD: its map is the CC0 Puit de Laven map, see
+longer uses a generated OCAD: its map is the o-kartan demo map, see
 `docs/ops/demo.md`, "The map".)
 
 The generator is deterministic (seeded PRNG): running it again without

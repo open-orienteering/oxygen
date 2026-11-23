@@ -17,7 +17,7 @@ export function BulkActionBar({ count, onDeselectAll, children }: BulkActionBarP
     if (count === 0) return null;
 
     return (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 animate-slide-up">
+        <div data-testid="bulk-action-bar" className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 animate-slide-up">
             <div className="bg-white border border-slate-200 shadow-2xl rounded-2xl px-6 py-3 flex items-center gap-8 min-w-[500px]">
                 <div className="flex items-center gap-3 pr-6 border-r border-slate-100 flex-shrink-0">
                     <div className="bg-blue-600 text-white w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shadow-sm">

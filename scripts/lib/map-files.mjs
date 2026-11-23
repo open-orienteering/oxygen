@@ -3,8 +3,9 @@
 //
 // A club's map is published only as raster images (screenshots), never as
 // its vector source. Only the maps listed here are public: the test maps the
-// suite draws, the CC0 Puit de Laven demo map (docs/ops/demo.md), and the
-// o-kartan.se demo map, bought with a licence for any use. Each is pinned by
+// suite draws, the CC0 Puit de Laven maps (test maps, the demo's map until
+// 2026-11), and the o-kartan.se demo map (docs/ops/demo-map.md), bought with a
+// licence for any use. Each is pinned by
 // its SHA-256, so a club map copied over one of them is caught too; a
 // deliberate change to one of these files updates its hash here.
 
