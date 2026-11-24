@@ -72,11 +72,9 @@ The claim holds as stated; I found no guard, spec text or Pending entry that cov
 - **Only starts and finishes keep their codes** (F32, docs/course-layer.md:1058-1062). The spec is silent on status, extra codes and name for ordinary controls, and descriptions and lat/lng are explicitly preserved when the file lacks them, so the reset is not a documented choice.
 - **The fields drive results.** resolveCourseExpectedPositions (:343-364) parses `ctrl.codes` into the accepted codes and turns Bad / Optional / BadNoTiming into `skipMatching` and NoTiming into `noTimingLeg`. It is called at readout (cardReadout.ts:235, 371, 635) and from lists.ts:144, event.ts:495 and eventor.ts:1587.
 
-After a re-import, a control previously marked Bad is required again, and punches from a second unit code no longer match.
+After a re-import, a control previously marked Bad is required again, and punches from a second unit code no lon
 
-The crossing-point branch (:1979-1986) has the same pattern, but it is harmless there because crossing points carry no codes.
-
-No import test asserts either preservation or reset of these fields.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -104,13 +102,9 @@ No import test asserts either preservation or reset of these fields.
 
 4. No warning anywhere. A grep for "setter" in shared/api/web files named check/valid/warn returns nothing. courseMap.list validates a setter sheet "alone (its controls are its group's)" (courseMap.ts:377, 523). The export `maps.pdf?setter=1` selects `kind: "setter"` rows and only errors when there are none (routes.ts:233-234, 270). It does not regenerate or compare against the scope.
 
-5. The UI row is `layoutSetterRow` = "Setter {{n}} · {{count}} controls" (SetterSection.tsx, en/editor.json:458-459), with no unassigned indicator.
+5. The UI row is `layoutSetterRow` = "Setter {{n}} · {{count}} controls
 
-6. Not covered by Pending. The only setter item in docs/course-layout.md "Pending in this chapter" is that Layout mode's canvas draws the view's controls over a setter sheet, not only its group, while "print and the lists are the group's". That makes this worse: a control added later can appear on screen over the setter sheet and still be absent from the printed PDF and the description block.
-
-Also affected by the same mechanism: a control that existed but was unplaced at generation and is placed later, and the Field-mode setter list (it reads the same group via `courseMap.list` `setter.controls`).
-
-Mitigating facts: the all-controls sheet and course sheets are live and do show the new control; the per-sheet count is visible; Regenerate fixes it. The "control is not put out in the forest" outcome is a possible consequence, not a certain one.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -142,19 +136,9 @@ The defect is real: an SVG carrying script passes validation, is stored unchange
 
 4. **Upload gate.** routers/graphics.ts:90 uses `coursesEditProcedure`; `scope: "club"` stores `eventId: null` (line 116) with no extra capability.
 
-5. **Serving.** routes.ts:508-526 requires only `courses.view` on any event, matches `OR: [{eventId: event.id}, {eventId: null}]`, and replies with `Content-Type: graphic.mime` and Cache-Control only. There is no CSP, nosniff, Content-Disposition or sandbox, and none in the API source or docker/nginx.conf, which proxies `/api` on the same origin as the SPA and `/trpc`.
+5. **Serving.** routes.ts:508-526 requires only `courses.view` on any event, matches `OR: [{eventId: event.id}, {eventId: null}]`, and 
 
-6. **Ambient identity.** In `AUTH_MODE=proxy`, restGuard.ts:29-31 takes the user from the proxy-injected header (default `x-forwarded-email`), so a top-level navigation is authenticated and the script can call `/trpc` as the victim.
-
-7. **Not excused elsewhere.** No guard, test or "Pending" note in docs/course-print.md or docs/course-maps.md covers this.
-
-**Limits that bear on severity:**
-- The app embeds graphics as `<img>` or rasterised PNG, which does not run script; the victim must open the raw graphic URL at top level (a same-origin link).
-- It only matters in proxy auth mode; with auth off, everyone already has full access.
-- The attacker must already hold `courses.edit` on an event.
-- The secondary claims (`href="//host/x"` and local file paths passing the external-reference regex) are consistent with the regex at graphics.ts:37, which only matches `https?:`. I did not test whether resvg resolves them.
-
-That makes it a privilege escalation from course editor to whatever the victim can do, needing one click: high, not critical.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -192,22 +176,9 @@ Both scenarios follow from the code; I found no guard that prevents either.
 
 **Duplicate name (b)**
 - `control.create` auto-names with the live count + 1 (control.ts:791-797).
-- The editor's Add start sends no name (`EditorPage.tsx:746`: `control.create {status:4,xpos,ypos}`).
-- So with Start 1 and Start 2, deleting Start 1 and adding a start gives a second "Start 2".
-- `course.update {startControlId}` stores only `start.name` (course.ts:833); the rewrite then picks the first match by seq ascending, which is the older start.
-- `startIdByName` is a Map keyed by name, so it collapses the two starts as well (course.ts:505-509).
+- The editor's Add
 
-**What I checked to disprove it**
-- No unique constraint on (event, name) for controls in the Prisma schema.
-- The Pending section of docs/course-layer.md does not list this.
-- §6.2 documents "a start is found by name in start_name" and the deleted-start case, but says nothing about rename or duplicate names.
-- `course.setStructure` -> `persistStructure` re-mirrors the current name (course-structure.ts:182), so courses saved through the new editor heal themselves. The linear shortcuts and `control.delete` do not.
-
-**Not verified**
-- The claim that the IOF export emits two controls with id "Start 2"; I did not read the export id logic. It does not affect the verdict.
-
-**Severity**
-Medium. The result is silently wrong (start, legs, length, print), but it needs an event with several starts plus either a start rename or a delete-then-add of a start, followed by a column-rewrite path. Nothing is lost and it is recoverable by re-picking the start.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -235,13 +206,9 @@ Medium. The result is silently wrong (start, legs, length, print), but it needs 
 - ocd-course-parser.ts:282-286: the only check is `fileData.length < 16`. No magic or content check. Objects outside symbols 700000-799999 are skipped (:317), so a plain map .ocd yields zero controls and zero courses.
 - iof-course-parser.ts:148-160: isArray lists only Control, Course, CourseControl and ClassCourseAssignment paths, so two <RaceCourseData> elements come back as a JS array. :198-201 only checks truthiness; `raceCourseData.Control ?? []` (:208) and the Course read (:235) are then undefined on the array, giving empty lists. parseIOFCourseDataWithGeometry is an alias of the same function (:386). This follows from fast-xml-parser's standard repeated-element behaviour; I did not execute it.
 
-4. UI: CourseImportDialog.tsx:30 `useState(true)` for replaceAll; :494 `disabled={importMutation.isPending}` only; :504 label is importCount with preview.courses.length, so "Import 0 courses" is clickable. handleImport (:106-113) sends replaceAll with no confirmation. The server default is false (course.ts:1825), so only the dialog path defaults to wiping.
+4. UI: CourseImportDialog.tsx:30 `use
 
-5. Not listed as pending: no matching entry found in docs/course-*.md or docs/map-*.md.
-
-Not verified: the claimed downstream effect that readout evaluates runners against no course once class.courseId is null. I did not trace the readout path.
-
-Severity reasoning: the damage is soft-delete (removed=true) plus nulled class.courseId. Courses and controls come back by re-importing the right file (the import reactivates rows by name), but class-to-course assignments must be redone unless the file carries them. It needs an operator to pick the wrong file and click Import despite a preview showing 0 courses and 0 controls. That is an unusual case with a recoverable outcome, so medium rather than high.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -274,9 +241,9 @@ The flattening is proven from the code; the only unverified link is that real OC
 - **Contrast:** the Purple Pen parser throws "has branching <next> links (relay/variation courses are not supported)" at ppen-course-parser.ts:269-274, and docs/system/ppen-import-export.md:132 documents that limit. No equivalent exists for OCD.
 - **Not documented as pending:** no "Pending" section in docs/map-*.md or docs/course-*.md mentions OCD course variations. docs/guide/maps.md:7 describes OCD import with no caveat.
 - **No test coverage:** packages/api/src/__tests__/ocd-course-parser.test.ts covers map scale, leg lengths and authored geometry only.
-- **Format assumption:** the token meanings (l/b/p leg variation, r/v/q relay variation, k/w crossing points, g map change) match the published OCAD course-string description as I recall it, and the parser's own s/c/f/C/E use agrees with that description.
+- **Format assumpt
 
-Severity is medium, not high. The failure is certain only for the less common case of an OCAD course-setting file with leg or relay variations; linear courses are unaffected. The result is visible at import (the course lists both fork controls and has an inflated length) and on the printed map, so it is likely to be noticed before race day. If it is not noticed, every runner on that course would be marked MP.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -313,14 +280,9 @@ All three drop sites exist as claimed and none reports anything.
 3. IOF parser (iof-course-parser.ts)
 - Lines 151-159: `isArray` forces arrays only for Control, Course, CourseControl and ClassCourseAssignment under RaceCourseData. Repeated `<Control>` children inside one CourseControl therefore arrive as a plain JS array.
 - Lines 171-177: `safeStr` falls through to `String(val)`, giving "31,32".
-- Line 273: that string becomes `controlId`; it is not in `controlIdMap`, so course.ts:2265 drops the row.
+- Line 273: that string becomes `controlId`; it is not in `c
 
-Not refuted elsewhere: no Pending section in docs/course-*.md or docs/map-*.md lists this as unimplemented. The only related documented skip is crossing_point / map_issue items (docs/course-layer.md:184), which is intentional and separate.
-
-Severity is medium, not high. The trigger needs an unusual file:
-- OCD: a course record naming a code that no 701/702/703/706 object resolves to and no ordinal 703 label rescues. OCAD codes are normally short alphanumerics that the regex at line 328 accepts, and OCAD does not normally leave a course referencing a control with no object.
-- IOF: a CourseControl with several `<Control>` children is schema-legal but rare in exporter output.
-When it does trigger, the consequence is serious (a control missing from the course, so punch evaluation and printed output are wrong) and the only visible sign is a lower control count. The claimed downstream effect on results was not traced; it follows from the stored course lacking the control.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -352,13 +314,9 @@ The claim holds; I found no guard anywhere on the path.
 
 3. Dialog pre-fill (CourseImportDialog.tsx:45-51). The initial mapping takes `m.matched ? m.dbClassId : 0` for every match type, so the substring match is pre-selected. Key order is file course order (non-integer keys keep insertion order), so 'D10' then 'D1' leaves class D10 on course 'D1'. In the reverse file order the result happens to be right.
 
-4. Several ClassCourseAssignment rows for one class. The parser (iof-course-parser.ts:297-305) keeps every row. Oxygen's own export writes one assignment per variant for a class on a root (course-export.ts:230-248; course-layer.md:2040 "a class on the root assigned to each"). Re-importing that file gives the class an exact match under each variant course, and it ends on the last variant, with no amber marker since every match is exact.
+4. Several ClassCourseAssignment rows for one class. The parser (iof-course-parser.ts:297-305) keeps every row. Oxygen's own export writes one assignment per variant for a class on a root (course-expor
 
-Mitigations that exist but do not remove the defect:
-- The substring row is tinted amber with a tooltip (CourseImportDialog.tsx:390-404), and the fallback shows an amber banner. Nothing says the same class is selected under two courses.
-- docs/course-layer.md:1090 and 2518 document that an imported CourseFamily stays separate linear courses (no group inference, F9). That covers the loss of forking, not the class silently landing on one variant; no "Pending" section mentions it.
-
-Severity is medium, not high. Case (2) needs a file with no class assignments, a course name that is a prefix or substring of another class's name, and that course's own class missing from the event; the row is visibly flagged as heuristic. Case (1) needs a forked or multi-course class, where import is already documented as not rebuilding the fork. When it does happen the effect is real: the whole class is evaluated against the wrong course until someone corrects the class's course, which is a one-field fix and not data loss.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -385,9 +343,9 @@ The claim holds; I could not find a guard, a Pending entry or a decision that co
 - **Count is the whole class.** `countOf` (line 149) = all runners of the class + vacancies, so every runner of a forked class gets a copy of the first-alternative block.
 - **The UI always takes this branch.** `descriptionSheetsUrl` (export-menu.ts:129-133) is "always explicit classes".
 - **`courses=<variant seq>` side claim also holds.** Lines 180-188 accept any course seq with no parent filter; `own = classes.filter(c => c.courseId === course.id)` is empty for a child, so the header has no class and the count is 0 (I did not locate the floor-to-1 code, but §6.4 states "at least 1").
-- **Spec is silent.** §6.4 says the rows "are the sheet's by construction" and has no per-variant rule; the Pending section's only description-sheet item (line 2020) is about staying API-only. maps.pdf, by contrast, prints per variant with per-runner counts (routes.ts:139-215, §4.6). Decision row F11 (decisions/slice-f.md:9) does not mention variants.
+- **Spec is silent.** §6.4 says the rows "are the sheet's by construction" and has no per
 
-Severity: medium, not high. It only affects classes on a course with variations (forked/butterfly), and the description block printed on each runner's variant map page is correct; only the loose sheets are wrong, with nothing in the label warning the organiser.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -421,12 +379,9 @@ Every step of the claim holds in the code.
 
 Two points count against the claim's framing, and neither removes the defect.
 
-- **The silent drop is specified, not accidental.** docs/course-print.md §8.2 item 5 says the warnings "go to the log at `warn`; the PDF is still served"; §8.5 and §8.6 repeat it for the device. Decision log slice-j.md:16 item (6) records "Deleting a placed graphic: specified as before J2 (image objects report `IMAGE_MISSING`), no in-use check (not asked)". Tests assert it (print-job.test.ts:113-115, worker.test.ts:124-125). It is not listed under any "Pending" section.
-- **Deletion is not one careless click.** GraphicPicker.tsx:86-96 needs a second click, with a club-specific confirm text (`graphicsDeleteClubConfirm`).
+- **The silent drop is specified, not accidental.** docs/course-print.md §8.2 item 5 says the warnings "go to the log at `warn`; the PDF is still served"; §8.5 and §8.6 repeat it for the device. Decision log slice-j.md:16 item (6) rec
 
-What is not covered anywhere is the J18 interaction. docs/course-layer.md:1354-1366 describes the hide flags and says nothing about a graphic that fails to load. Those decisions predate J18 (user 2026-11-19), which turned "a logo is missing" into "a control marking is missing".
-
-**Severity: medium.** It needs an unusual combination: an attached image with the hide flags set, plus a deleted graphic, a failed `print.png` fetch or a resvg failure. The control's legs and description are still drawn, and a setter proofing the PDF would see the gap. It is a consequence of a documented design choice, not a likely failure in normal use.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -457,9 +412,9 @@ The tie part is proven; the no-timing part is only partly true.
 
 **noTiming flag never set (confirmed, dead UI).** The class select at lists.ts:95 is `{ name, seq, courseId }`, and neither `result.push` sets `noTiming`. `ResultEntry.noTiming` (types.ts:623) is therefore always undefined, so `isNoTiming` at ResultsPage.tsx:101 is always false and the badge at line 109 and the italic styling at 165/168 can never show.
 
-**"No-timing classes are ranked" (overstated).** A normal readout in a noTiming class does not leave the runner OK: computeStatus turns OK into RunnerStatus.NoTiming when classNoTiming is set (readout.ts:571-572, fed from cardReadout.ts:263). In resultList such a runner fails `e.status === 1` and takes the else branch: place 0, runningTime 0, no winner row. Ranking of a no-timing class only happens when runners there hold status OK by another route, for example a manual status edit or the class being flagged noTiming after the readouts. The claimed "beginners' class shown with places 1..n and an amber winner row" is not the normal outcome.
+**"No-timing classes are ranked" (overstated).** A normal readout in a noTiming class does not leave the runner OK: computeStatus turns OK into RunnerStatus.NoTiming when classNoTiming is set (readout.ts:571-572, fed from c
 
-**Severity.** The tie defect gives a wrong place on the on-screen results list for an exact tie within a class, which is uncommon but real. The Eventor upload and receipts are correct, so official results are not corrupted. That is medium, not high.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -492,12 +447,9 @@ The ordering and the missing guard are proved from the code; the duplicate half 
 **What the claim overstates**
 - A second `runner.create` for the same card is rejected: runner.ts:420 calls `assertCardNotTaken`, which throws CONFLICT when a non-removed runner in the event has that `cardNo` (:146-166).
 - The dialog swallows that message and shows the generic `registrationFailed` (:634-637), so the operator sees "failed" for a runner who is in fact registered.
-- A real duplicate row is created only when no card number is entered: `assertCardNotTaken` returns early for `cardNo` null or <= 0 (:152), and there is no name-based duplicate check in `create`.
+- A real duplicate row is crea
 
-**Not established**
-- Whether a given printer NAKs bulk OUT indefinitely when out of paper or cover-open, rather than buffering a small receipt or returning an error, is hardware-dependent. An unplug or power-off rejects the transfer and is handled.
-
-Severity is medium, not high: it needs an unusual printer state plus opt-in receipt printing, the duplicate needs a card-less registration, and the result is a recoverable duplicate entry or a misleading error, not lost data.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -525,11 +477,9 @@ Severity is medium, not high: it needs an unusual printer state plus opt-in rece
 
 4. escpos.ts:394-401: `const lastSplit = data.splits[data.splits.length - 1]; const finSplitDs = (lastSplit && lastSplit.status !== "missing") ? lastSplit.splitTime : 0;` and the pace uses `lastSplit.legLength`. So the bold Fin row repeats the last control's split (leg INTO the last control) and its pace; star-raster.ts:534-541 is an identical copy. With a missing last control finSplitDs = 0 so the Fin split prints blank and pace '-'.
 
-Claimed scenario holds: course 31-32-33, 33 punched 2:10 after 32, finish 0:25 later -> row '3. 33 2:10' then 'Fin 2:10' with the 32->33 pace. The Fin clock time and cumulative (total running time) on the same row are correct (finishTime / runningTime), so the true run-in is only derivable by subtracting cum times.
+Claimed scenario holds: course 31-32-33, 33 punched 2:10 after 32, finish 0:25 later -> row '3. 33 2:10' then 'Fin 2:10' with the 32->33 pace. The Fin clock time and cumulative (total running time) on the same row ar
 
-Not refuted by any guard: the legs array does carry the finish leg at legs[controlCount] (cardReadout.ts:105-108) but finishReceipt only indexes legs[idx] for control positions, so it is never sent. No docs/map-*.md or course-*.md Pending entry covers receipt Fin rows. Free-order courses are affected too (matches emitted in punch order, missing ones last, so Fin split is often blank or the last-punched control's split).
-
-Severity: wrong figure on every printed finish receipt with splits (normal use), but it is an informational runner receipt; official result, running time, finish clock, status and placing are all correct. I rate it medium rather than high: one wrong split/pace cell on a courtesy printout, no effect on results or stored data.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -558,15 +508,9 @@ The non-holder write is proven from the code; the two claimed consequences are r
 - When a chosen automatic route's vertices change, it calls `clearComputedClimbs` (leg-routes-auto.ts:214), which sets `climbM: 0, climbSource: null` on `courses` (course-geometry.ts:321-327). It then calls `refreshComputedClimbs` (line 227), and `computeMissingClimbs` updates the course and calls `emitCourseUpserted` (course-climb.ts:123-125).
 - `courseUpsertPayload` carries the full row plus all `course_controls`, with `climbSource` stripped (referenceJournal.ts:72-95).
 - The venue's shipper pulls peer entries through `ingestJournalEntries` (shipper.ts:232-241). The only skip is by entry id (events.ts:98-105); there is no HLC or version comparison.
-- `applyReferenceUpsert` upserts the row, forces `climbSource: null`, and replaces `course_controls` wholesale (events.ts:870-893).
-- `course.refreshClimbs` is lease-guarded (`coursesEditRaceProcedure`, course.ts:1231), but a refresh already running at checkout has no re-check, so the in-flight case holds too.
+- `applyReferenceUpsert` upserts the row, forces `climbSo
 
-**What narrows it**
-- An entry is journaled only for courses whose cloud row is still `climb_source = 'computed'`, or open with `climbM = 0`. Once the venue has shipped any upsert of a course, the cloud holds its climb as typed and `clearComputedClimbs` no longer touches it.
-- Consequence (2), the sequence revert, therefore needs the venue's first unshipped edit of that course to fall inside one sync interval (default 5 s, nodeIdentity.ts:50-53) of a cloud refresh that changes a chosen route on one of its pairs. The shipper pushes before it pulls (shipper.ts:186-262), so the cloud ends with the venue's order and the venue with the cloud's stale one: the nodes diverge silently.
-- Consequence (1), the climb held as typed and going stale on the venue, is the limitation already listed in docs/course-elevation.md Pending (lines 1344-1347: "a node that received a computed climb from a peer treats it as typed and does not recompute it on its own edits"). What is new is the direction, cloud to lease holder, which turns the holder's own computed climbs into typed ones.
-- A non-holder journaling `course.upserted` is not new in kind: `refreshDerivedCourses` after a map change does it too (event-map.ts:66-80). This change makes it happen on every out-of-bounds edit that moves a chosen route.
-- Nothing in the Pending section covers the missing lease check on the refresh, so it is not excused as "not implemented".
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -599,17 +543,9 @@ The mechanism is real, but the claim overstates the move and placement parts.
 - **Nothing stops the loop on unmount.** The effect cleanup at useFieldOutbox.ts:132 only clears the interval and the visibility listener. There is no AbortController or mounted check in either file, so a running `for(;;)` keeps sending.
 - **Navigation is in-app.** The only `location.reload` calls are in service-worker update, version check and session recovery; switching events never reloads the page.
 - **Server trusts the header.** `ctx.event` comes solely from the header (trpc.ts:57-60). `getControlByCode(ctx.db, ctx.event.id, id)` (control.ts:156-181) looks the control up by punch code within that event, so code 31 from event A resolves to B's control 31.
-- **Check-offs land in B.** `control.check` (control.ts:1075-1089) takes no token and sets `checkedAt` / `checkedBy` on B's control. The drain then treats it as sent and deletes A's entry (control-outbox.ts:354), so A's check-off is silently lost as well.
-- **At `/`** there is no header, so `requireEvent` returns BAD_REQUEST and the entry is marked `failed`, as claimed.
+- **Check-offs land in B.** `control.check` (control.ts:1075-1089) takes no token and sets `checkedAt` / `checkedBy` on B's control. The drain then trea
 
-**What is overstated**
-- **Moves are mostly blocked.** An entry normally carries A's token. The server compares it to B's row version (control.ts:999-1001) and returns CONFLICT; with no base journal entry in B, `differing` is null, and `conflictDecision` (conflict.ts:51-55) returns `moved` unless B's control sits exactly at the entry's `from`. The usual result is a bogus `conflict` entry in A's outbox showing B's position as "theirs", not a write to B.
-- **Retry does not make a move tokenless.** `retry()` clears `baseVersion`, but `withToken` falls back to `this.versions.get(kind, id)` (write-client.ts:174), and that book is seeded from A's control list (EditorPage.tsx:207). A move overwrites B only when B's control is at the same `from` position (e.g. B copied from A, which rebases onto B's token and writes) or the book has no token for that id.
-- **Not an authorization bypass.** `control.check` is `coursesReviewRaceProcedure` and `control.update` checks `courses.edit` (control.ts:919-924) against the event in the header. The user must already hold those capabilities in B. This is a misdirected write by an authorized user, a correctness defect rather than a security breach.
-- **`placeQueue`, `instructionsQueue`, `nudgeQueue`, `serial`:** these are promise chains with no unmount guard (EditorPage.tsx:1392 confirmed), so the same mechanism applies, but only to writes already queued in the moment of navigation. Not traced end to end, nor was the LayoutMode `prepareOfflinePrint` path.
-
-**Trigger window**
-The user must leave the editor and open another event (several clicks) while a drain is still running. That needs many queued entries and a slow link, which is the outbox's intended situation but still unusual. Nothing in the "Pending" sections of docs/course-editor.md covers this.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -637,16 +573,9 @@ The mechanism holds as claimed for Course mode; I found no guard that defeats it
 - **The book is re-seeded from every refetch.** `EditorPage.tsx:205-208` seeds from `course.list`, `control.list`, `courseObject.list` and `course.detail`. `packages/web/src/lib/version-book.ts` keeps the highest token seen. `docs/course-editor.md` §11 says the 5 s `useExternalChanges` poll invalidates these queries.
 - **The server only compares the token.** `packages/api/src/routers/course.ts:892` and `:1017` call `assertCourseVersion` with `input.baseVersion`, so an old snapshot on B's current token is accepted.
 - **Nothing ties undo entries to a version.** The external-change effect (`EditorPage.tsx:241-250`) only sets the amber notice. `runUndo`/`runRedo` (2192-2205) run the closure unconditionally. `packages/web/src/lib/undo-stack.ts` has no invalidation, and `undoStack.remove` is called only for Map-mode promote (line 414).
-- **Control-move undo is the same.** `EditorPage.tsx:818` writes the old `xpos`/`ypos`/description through `updateControl` on the fresh token.
-- **Layout mode is the same.** `packages/web/src/pages/editor/modes/LayoutMode.tsx:247` records `save(w, prev)`; `save` reads `versions.get(...)` at send time (217, 221), and the book is re-seeded from each `resolveSheet` result (201-205).
-- **Not listed as pending.** The spec does not mention this case. §3 says a structure conflict is "never merged ... the user redoes the edit", which this path sidesteps once the reload has landed.
+- **Control-move undo is the same.** `EditorPage.tsx:818` writes th
 
-Limits on the claim:
-- It only happens once A's client has refetched (poll of about 5 s). An undo before that still carries the stale token and is refused correctly.
-- A is not uninformed: the amber "changed elsewhere" line is showing, and A sees the result of the undo. "Silently" is true only in that no conflict is raised and B is not told until B's own poll shows the notice.
-- For Layout mode I did not trace what triggers a `resolveSheet` refetch after another setter's write, so that variant is proven in mechanism but not in trigger.
-
-Severity: this is a lost update that needs two setters editing the same course (or control, or sheet) at the same time, plus an undo/redo across the other's change. That is an unusual case, and the overwritten work is visible and can be redone, so medium rather than high.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -682,9 +611,9 @@ Wrong in the claim:
 - The create mutation (962-964) does show its error: ControlsPage.tsx:1042-1046 renders `createMutation.error.message`.
 
 Limits on the scenario:
-- With react-query's default networkMode 'online', a mutation fired while the browser reports offline is paused and sent on reconnect, not rejected. The silent failure therefore needs a real rejection: a server error, a refused token or lease, or a fetch failure while `navigator.onLine` is still true.
-- The stale value lasts only while the expanded row is mounted; collapsing and reopening it, or reloading, shows the true status.
-- I did not trace whether control status actually changes result evaluation; the severity does not rest on that.
+- With react-que
+
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -712,11 +641,9 @@ Limits on the scenario:
 
 4. No guard blocks the second edit. pendingOps is passed as `busy` only to the inspector context (2032), and ActionBar uses busy only to disable Delete (ActionBar.tsx:86,114). CourseSection's onMove / onRemove / onOrderMode (2679-2681), useAsRole / append / removeFromCourse (2045-2047), writeLeg (563-567), editGroup (633), leg gaps (1530) and numberHidden (2806) all call applyStructure directly with no pendingOps check.
 
-5. Both undo entries record prev = S0 (line 476), so undo cannot restore the intended S0-minus-both state.
+5. Both undo entries record prev = S0 (line 476), so undo cannot restore the intended S0-minus-both sta
 
-6. The docs do not cover this. course-editor.md:284-289 and the bugfix doc describe serial as fixing token staleness only. The "second edit builds on the first" guarantee (course-editor.md:408-411) is stated for instructions, which have their own queue. The stated rationale for localStructure (253-255, placements building on the predecessor's result) only holds for writes that are awaited in sequence, such as the placement chain. I found no "Pending" entry covering this.
-
-Severity: high is overstated; medium. It needs two structure edits on the same course within one round trip, so it is rare on a LAN and realistic only on a slow link or with very fast clicks. It happens in course setting, not during a live event. The loss is one edit, and it is visible once the refetch redraws the course (the removed control reappears), although no notice is shown. The setter can redo it by hand.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -745,9 +672,9 @@ Reproduction output:
 - Symmetric down case, also wrong: `1 30 31 [41 42|] 32 9`, down on the anchor 31 (moveVisit(1,2)) -> `1 30 [41 31 42|] 32 9`.
 - Control: with a one-control alternative `1 31 [41|] 32 9`, up on 32 -> `1 31 32 [41|] 9` (stays top-level), which is why the existing tests do not show it.
 
-This contradicts docs/course-editor.md:2081-2083 ("↑ / ↓ and a dragged row keep their level (moveVisit): a top-level row passes a group without entering it") and the slotBefore header comment (lines 139-141: "↑ / ↓ past a group never pull a control into it"). The behaviour is stated as implemented, not listed as pending. Tests at structure-edit.test.ts:144-147 never move a top-level row to a slot between two rows of one alternative (line 144 swaps 33/32 after the group, line 146 uses an all-empty group, line 147 moves an alternative's own row).
+This contradicts docs/course-editor.md:2081-2083 ("↑ / ↓ and a dragged row keep their level (moveVisit): a top-level row passes a group without entering it") and the slotBefore header comment (lines 139-141: "↑ / ↓ past a group never pull a control into it"). The behaviour is stated as implemented, not listed as pending. Tests at structure-edit.test.ts:144-147 never move a top-lev
 
-Severity: an ordinary inspector action (up arrow on the row after a fork whose active alternative has two or more controls, the usual shape of a fork) silently changes which runners visit a control. Mitigations: it is a course-planning edit, the row visibly lands inside the group in the inspector, and it can be moved back or undone; no stored data is corrupted beyond the single edit. Hence medium rather than high.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -784,13 +711,9 @@ Trace for structure `1 31 [A:41 | B:] 32 9`, loop=true, B active:
 
 Later placements also go into A: `afterPlaced` advances `insertAt` to 2, where `prev` is 77 (A) and `next` is 41 (A), so line 161 picks A index 1.
 
-Nothing in the K path guards against this. `slotBefore` receives only a position and cannot tell a leg click on 31→41 from the K-with-focus position; both are at = 1.
+Nothing in the K path guards against this. `slotBefore` receives only a p
 
-The `drawnPetal` exception is deliberate for leg clicks: the unit test at structure-edit.test.ts:213-218 asserts `1 31 [|40 42] 31 9`, and docs/course-editor.md:2077-2079 documents it. The same doc at 2113-2116 says that activating an alternative "claims K: armed with nothing selected, the chain starts at the end of that alternative (alternativeEndAt), so successive placements fill it". For an empty petal of a loop with another petal drawn, that promise is broken.
-
-It is not listed as pending: the only "petal" mentions in docs/course-editor.md are lines 2077-2078. The existing `alternativeEndAt` test (sequence.test.ts:108) covers only a non-loop group, and the e2e test (e2e/course-editor.spec.ts:783-844) fills B before ticking Loop, so this order of steps is untested.
-
-Severity is medium, not high. The misplacement is immediately visible in the inspector (the row appears under A and B's count stays 0), it is undoable, and nothing is corrupted. Workarounds exist: drag the row onto tab B (`moveToAlternative`, which targets the label directly), or fill B before ticking Loop. Once B has one control, `alternativeEndAt` uses B's own rows and K works. It only bites when a petal is empty while another petal of the same loop is drawn, though that is a natural authoring order for a butterfly.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -813,10 +736,9 @@ Severity is medium, not high. The misplacement is immediately visible in the ins
 1. course.ts:1939-1950 reads all controls of the event with `where: { eventId }` (removed rows included) and no orderBy. Lines 1957-1960 key each code first-wins (`if (!controlByKey.has(code)) set`) with no regard to `removed`. Contrast courseByName at 2149-2154, which explicitly replaces a removed entry with a live one.
 2. The precondition state is reachable through normal use: control.delete (control.ts:1100-1103) writes only `removed: true` and leaves `codes`; control.create (control.ts:780) calls assertCodeFree -> codeHolder (356-365), which filters `removed: false`, so a new live control with the same code is accepted and inserted as a new row. control.restore's own comments (1185-1187 'when several deleted rows share a code', 1209 'The code may have been reused by a new control in the meantime') acknowledge this state and guard it with a CONFLICT check. The schema has no unique constraint on codes (only [eventId, seq]).
 3. On a match, course.ts:2067-2113 writes baseData with `removed: false`, `codes`, and the file's xpos/ypos via a plain control.update. The only code-free check (2102) is gated on `isEnd` (start/finish); a regular control gets none. So if the removed row is the one in the map, it is revived while the live row with the same code stays live -> two live rows with code 45. The import's courses reference the revived row via controlIdMap (2115).
-4. Which row wins depends on unordered scan order, so it is not guaranteed, but the older removed row coming first is the likely case in Postgres heap order (it was written before the new row was inserted), and nothing in the code makes the live row win.
-5. Downstream: getControlByCode (control.ts:162-173) is an unordered findFirst on live rows by code, so update/delete on 'control 45' picks an arbitrary one of the two.
-6. Not handled elsewhere: with replaceAll the wipe at 1928-1931 removes all rows first, so the duplicate does not arise on that path (only one is revived); the claim is correctly limited to imports without replaceAll. I found no 'Pending' entry in docs/course-*.md or docs/map-*.md covering this.
-Not verified: the claim's statements about uuidsOfPublicIds/controlSeqToId scan order and the map rendering two circles; they follow plausibly from two live rows but I did not read those functions.
+4. Which row wins depends on unordered scan order, so it is not guaranteed, but the older removed row coming first i
+
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -855,11 +777,9 @@ The mechanics are as claimed.
 
 What narrows the claim:
 
-- **No deterministic failure after the wipe.** There is no `throw` in course.ts between 1937 and 2400. The F32 `BAD_REQUEST` at 1911 fires before the wipe. Imported courses are linear, so `assertMaterialisable` is not expected to fire. The trigger is therefore only a process kill, DB connection drop or timeout during a window of a few seconds in an operator-initiated admin action.
-- **Recovery is cheap.** A re-run restores rows by name (same UUIDs). The dialog rebuilds `classMapping` from the file's class assignments by auto-match (CourseImportDialog.tsx:41-51) and keeps file and mapping in state after a failed mutation. A successful `replaceAll` also nulls every class not in the mapping, so "previous mapping not recoverable" is a property of `replaceAll` itself; only hand-made mappings are truly lost.
-- **"Every finisher without a course" is overstated:** it applies only until the re-run, and not to runners with a variant pointer.
+- **No deterministic failure after the wipe.** There
 
-Severity: medium. It needs an unusual coincidence (crash inside a seconds-long window of a deliberate operator action), is immediately visible to the operator as a failed import, and is repaired by re-running. Doing a full reference replace during live readout is itself unusual.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -889,17 +809,9 @@ The malformed-code part of the claim holds; the empty-code part is only partly a
 - **The two id resolvers disagree.** firstCode (control-display.ts:7-11) uses parseInt on the first part, so "31a" and "031" give publicControlId 31. getControlByCode (control.ts:161-173) and codesHolding (341-348) match exact strings ('31', '31;…', '…;31;…', '…;31'), so neither finds "31a" or "031".
 - **Consequence for the row.** A lookup by id 31 falls through to `seq: 31` (control.ts:176-184). seq is a DB-assigned sequence unrelated to the code (create only sets it for code-less marks, 820-824), so the result is another row or NOT_FOUND. The row cannot be opened, updated or deleted through the id the API itself reports.
 - **Duplicate check is bypassed.** codeHolder's seq fallback (control.ts:363-364) requires `firstCode === 0`, which is false for "31a". Code 31 therefore reads as free and a second control 31 can be created.
-- **"31; 32" variant.** The stored space means `endsWith ';32'` misses, so 32 is not seen as held.
-- **Reachable from the normal UI.** ControlsPage.tsx:733-734 sends the raw input value on blur with no trim or validation (handleSave at 696-698). EditorPage.tsx:2470-2476 trims only and refuses empty.
+- **"31; 32" variant.** The stored space means `endsWith '
 
-**Where the claim is overstated**
-- **Clearing to "" is documented as allowed** for a start or finish: docs/course-layer.md:983-984 ("clearing it to "" stays allowed — the legacy shape") and the test at start-finish-codes.test.ts:129-136. In that case the resolvers agree (firstCode is 0, so the seq fallback applies) and the seq counts as held.
-- **"" on a normal control is a real gap.** update has no kind check, create refuses the same input, and the docs sentence covers only starts and finishes. I did not trace the "every runner is a missing punch" consequence into the matching code.
-- **Not a wrong-results bug for malformed codes.** The Controls page matching parses codes with parseInt after trim (ControlsPage.tsx:1145, 1655), so "31a" still reads as 31 there.
-
-**Not listed as pending.** No "Pending" section in docs/course-*.md or docs/map-*.md mentions validation of codes on update.
-
-**Severity: medium.** It needs a typo or stray character in the Controls page code field. The result is a control row that can no longer be addressed by its public id (so it cannot be repaired from the UI) and a possible duplicate code. There is no data loss and no failure in normal use.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -925,9 +837,9 @@ Sheet side: `resolveMapLayout` filters unpositioned rows only for all-controls/s
 
 Spec: §3.5 says the sequence runs "over the first course's control items"; §3.3 says an unpositioned site is "skipped, legs connecting the remaining items". Neither states that a skipped site gives up its number, and no "Pending" section lists this. No test pins the positioned-only numbering (derive.test.ts:26 covers legs only).
 
-Checks: NUMBER_UNPLACED runs only when `input.derivation` is set (checks.ts:362-370), and course-layer.md l.1588 states the server's `course.checks` omits it (derivation null). The editor does report it, and all checks are advisory, so nothing blocks printing.
+Checks: NUMBER_UNPLACED runs only when `input.derivation` is set (checks.ts:362-370), and course-layer.md 
 
-Severity reasoning: the mismatch is real and yields a misleading printed map, but it needs a course that still holds an unplaced control at print time. That map is already visibly defective (control 33 has no circle and the leg runs 32 to 34), and the editor flags the control. That is an unusual case rather than normal use, so medium, not high.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -959,14 +871,9 @@ What the code does:
 - Keys are label-derived: shared/src/course/variants.ts:205-207 and :235 (`p.key + order.join("")`). syncVariants looks children up by key (course-variants.ts:131, 149). A rename B→C therefore drops '<root> B' and creates a new row for C with the same controls.
 - No guard exists: none of the syncVariants callers (course.ts:744, 956, 1031, 1215, 1246, 2283; control.ts:1139) checks for raced runners, and the editor exposes renameAlternative / removeAlternative / setLoop (docs/course-editor.md:358, 2105).
 
-Not a Pending item: the Pending section of course-layer.md (2508-2520) does not list it. The spec does describe the null-then-deal as intended (course-layer.md:2152-2158; course-controls-and-matching.md:373) but has no carve-out for raced runners, while the same chapter says a variant is pre-set before the race and a raced runner "is never re-dealt" (course-controls-and-matching.md:345-347, 390-393). So the code matches the letter of §12.3 and contradicts the stated principle.
+Not a Pending item: the Pending section of course-layer.md (2508-2520) does not list it. The spec does describe the null-then-deal as intended (course-layer.md:2152-2158; course-controls-and-matching.md:373) but has no carve-out for raced runners, while the same chapter says a var
 
-Where the claim overstates:
-1. Result lists do not flip to missing punch by themselves. lists.ts uses the stored `r.status` (`runnerStatusToValue(r.status)`, ~:170); only runningTimeAdjustment is recomputed against `r.courseId ?? class.courseId` (:150-166). What does go wrong for a mis-dealt finisher: performReadout (cardReadout.ts:195, 248-257) recomputes status against the new variant, so the readout view, receipt and split times (race.ts:156) show MP and wrong legs; the Eventor export's splits use the new variant (eventor.ts:1612-1632); and a card re-read that applies the result (cardReadout.ts:802-850) would persist the wrong status.
-2. "Half land on a different variant" does not hold for the simple cases. Traced by hand: in a one-group rename with a balanced pool, every nulled runner goes to the new empty variant (the least populated), which has the same controls. With two groups and an original start-order round-robin deal, the re-deal in start order also reproduces the mapping. Mismatches appear when the pool is unbalanced, or variants were set by the desk, by a random deal, by registration-time assignVariant or by acceptVariant, or when several keys change at once.
-3. For remove-alternative and loop toggle, the old variant's controls no longer exist as a live course, so some reassignment is unavoidable; a locked rule alone would not fix those.
-
-Severity: medium, not high. It needs a setter to change a forked root's key set after runners have finished — an unusual mid-event action — and stored statuses are not corrupted directly. The trace is one runner.updated journal entry per runner.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -991,10 +898,9 @@ Severity: medium, not high. It needs a setter to change a forked root's key set 
 3. No DB backstop: the Control model has `codes String @default("")` (a ';'-separated string) with only `@@unique([eventId, seq])` and `@@index([eventId, removed])`. No unique index on codes, and none is possible as-is for multi-code strings.
 4. No serialising middleware: coursesEditRaceProcedure = raceProcedure + requireCapability (trpc.ts:316); raceProcedure only calls assertRaceWritable (trpc.ts:194-198). No per-event lock or queue.
 5. Client picks the code itself: EditorPage.tsx:735-744 computes `nextSeriesControlCode(allocation, used, activeSeriesId)` from its local list and sends `control.create.mutate({ codes: String(code), ... })`. Two editors with the same list pick the same code, so the collision is by construction, not coincidence, whenever two setters add a control before either sees the other's write.
-6. restore: control.ts:1188-1202 finds the removed row by codes OR `seq: input.id`; the live-duplicate check at :1210-1222 tests only `codeStr` (the id passed in), not the other codes of the found row (removed '31;131' revives while a live row holds 131), and not the row's codes at all when it was matched by seq. It also omits the code-less-seq holder case that codeHolder covers (:361-362). The check is on ctx.db before the transaction at :1227.
-7. Consequence is real: getControlByCode (:162) is an unordered findFirst, so after a duplicate every id-addressed call (update, delete, lastChange) resolves to an arbitrary one of the two rows. CODE_DUPLICATE in packages/shared/src/course/checks.ts:316 is an advisory check, so it flags the state but does not prevent it.
+6. restore: control.ts:1188-1202 finds the removed row by codes OR `seq: input.id`; the live-duplicate che
 
-Not found: any docs "Pending" entry declaring this unimplemented, or any test covering concurrent creates with an explicit code.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -1031,11 +937,9 @@ The claim holds as stated.
   - lists.ts:133-136 and :240 load by id / `include` with no filter.
   - classRouter.ts:51-58 (detail) and :107-146 (list, `include: { course: … }`) still return the deleted course's seq, name and control count.
 - **Readers that hide it.** `getCourseBySeq` (course.ts:244, :261), `course.list` (:286), :1352 and :1722-1727 all filter `removed: false`. The Eventor push is documented as "removed courses apart" (docs/course-elevation.md:1227).
-- **No guard in the UI.** CoursesPage.tsx:251-255 shows only `window.confirm('Remove course "{{name}}"?')`, with no warning that classes use it.
-- **No restore.** There is no `course.restore` procedure in course.ts. The only way back is an import that re-activates a course by name (course.ts:2147-2229).
-- **Not documented as pending.** Nothing in the "Pending in this chapter" section of docs/course-layer.md covers this.
+- **No guard in the UI.** CoursesPage.tsx:251-255 shows only `window.confirm('Re
 
-**Severity: medium, not high.** Nothing is lost or corrupted, and results stay computed against the course the runners actually ran, which is arguably the safer failure. The operator can still reassign the class, since `class.update` accepts a new course or null. The real harm is inconsistent state after a deliberate, confirmed delete of an in-use course: the class looks assigned to a course that no other view shows, exports and Eventor omit it, and it cannot be undone.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -1065,9 +969,9 @@ The code behaviour is proven; how often OCAD leaves deleted course objects in a 
 - **Offset 30 is the status byte, by the repo's own usage.** packages/api/scripts/demo-map/enrich-ocad.mjs:359 writes `out0.writeUInt8(0, e + 30); // status 0: deleted` and line 387 writes `1` as "status normal". docs/ops/demo-map.md:45-47 relies on readers honouring it.
 - **Deleted entries do keep pos/len/sym.** fixtures/okartan/okartan-demo.ocd has 138 entries with status 0 and non-zero filePos, len and sym (symbols 201003 and 202000). readObjectIndex returns all of them; they are harmless there only because they are not 7xx symbols.
 - **Downstream effect.** Control positions are first-wins (`if (!controlObjs.has(code))` at lines 512 and 518), so a stale 701/702/706 object earlier in the index beats the re-placed one. The 704/705/707/708/709/711 branches push features with no further filter.
-- **No existing handling.** No guard in course.ts:227, and nothing under a "Pending" section of docs/course-*.md or docs/map-*.md mentions object status.
+- **No existing handling.** No guard in course.ts:227, and nothing under a "Pending" section of docs/co
 
-What I could not prove: no fixture has a deleted or hidden 7xx object (e2e/test.ocd is 30/30 status 1), so the claimed scenario depends on OCAD course-setting files retaining such entries. The claim's reference to ocad-source.ts:290 is the symbol status, not the object status; it is only an analogy.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -1098,11 +1002,9 @@ The defect is real: the control bank's type comes only from the code's first let
 - **The exact ids are available:** parseRecord reads the `s`/`f` tokens into `startId`/`finishId` (lines 257-258), and they are added to `allCodes` at 568-569, but are not consulted for the bank type. The object symbol (SYM_START / SYM_FINISH) is kept in `controlLabels[].sym` and also unused for typing.
 - **Per-course typing is correct but does not rescue it:** lines 658-660 type by position (first = Start, last = Finish), yet the import builds structure items from `siteId` alone (course.ts:2262-2277; `linearStructure` only copies items). A site's role therefore comes from the control row written from the bank type.
 - **Effect of a finish id such as Z1 (course.ts:2005-2023, 2130-2137):** the row is created with status ok (value 0), name "" and codes "Z1", so no "Mål 1" finish site exists and the course's last item is a regular control. The `legs` string and `startName` still come out right because they use the position-based per-course type (2166-2168, 2185).
-- **Converse case:** a regular control coded F5, M12 or S7 gets status finish/start, name "Mål 5" etc., its own code is dropped (`codes = ""`, then a 3-30 code is allocated), and `circleGaps`/cuts are omitted (parser line 636 only attaches cuts to type Control). Two such codes with the same numeric suffix would merge by name.
-- **Line 578:** the same prefixes exclude S/M/F-coded regular controls from the 702000-circle position fallback, so an unresolved one stays at (0,0). This only matters when the object text carries no code.
-- **Not documented as pending:** docs/course-layer.md "Starts and finishes on import (F32)" only says file ids like `S1`, `STA1`, `Start 1` are name keys; nothing lists the prefix rule as a known limitation. The parser test file has no case for other prefixes.
+- **Converse case:** a regular control coded F5, M12 or S7 gets status fin
 
-Severity: medium rather than high. Swedish (S1/M1) and English (S1/F1) OCAD ids and the parser's own STA1/FIN1 fallbacks all work, and OCAD control codes are normally numeric, so the converse case is rare. The failure needs a file from another OCAD language or with renamed start/finish ids. It writes wrong control rows (wrong role, non-numeric punch code) silently, though the import preview would show `finishControls: 0` (course.ts:1797).
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -1136,11 +1038,9 @@ The claim holds as stated.
 - **Unit ignored.** The parser reads `MapPosition` `@_x`/`@_y` and never reads `@_unit` (iof-course-parser.ts:219-226), so `unit="px"` is taken as mm.
 - **Correct lat/lng does not rescue it.** `controlCoordinates` recomputes lat/lng from `xpos`/`ypos` through the event CRS whenever they are non-zero (course.ts:1396-1401), so the wrong paper position overrides the file's correct `Position`.
 - **Preview is silent.** The dialog only reacts to `transformed` and `mismatch` (CourseImportDialog.tsx:40, 237, 250); `unknown` shows nothing.
-- **Comment is inaccurate for OCD.** The comment at course.ts:1866-1868 says alignment has already put the coordinates into the event map's paper space; for OCD, alignment is a no-op.
+- **Comment is inaccurate for OCD.** The comment at course.ts:1866-1868 says alignment has already put the c
 
-This is a documented design choice rather than an oversight: docs/system/ppen-import-export.md:67 says "`unknown` | Nothing to check; unchanged behaviour (IOF XML and OCAD always land here)", and the header of course-import-align.ts:17-18 says the same. It is not listed under any "Pending" section of docs/map-*.md or docs/course-*.md, so the refutation rule does not apply.
-
-Severity is medium, not higher. It needs a course file authored against a different map file, scale or paper origin than the event's map. A file set on the event's own map imports correctly, including Oxygen's own IOF export, which writes raw paper mm. The misplacement is silent at import, but a 1.5x displacement is visible in the course editor and on any proof before printing. Nothing is lost: re-importing, or importing with `skipPositions`, recovers.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -1171,10 +1071,9 @@ The mechanism is real, but it is a documented design heuristic rather than an ov
 
 Against the claim:
 
-- **Documented as intended:** `ppen-import-export.md:65` lists "Source map unavailable, but positions land on the event map -> aligned ... covers a renamed copy of the same file". Lines 80-82 say a PDF/Bitmap `.ppen` "either lands plausibly on the event map or gets the mismatch warning".
-- **Not listed as Pending:** it is not under any "Pending" section of `docs/map-*.md` or `docs/course-*.md`, so that does not refute it.
-- **Narrow trigger:** it needs a different file name, no library match, and an origin offset small enough to keep the centroid on the map. An OCAD partial-map export normally keeps the parent's georeference, in which case `aligned` is correct.
-- **Visible and recoverable:** the misplacement shows in the course editor on the map before printing, and re-importing or re-placing fixes it. Nothing is lost beyond overwritten positions of existing controls.
+- **Documented as intended:** `ppen-import-export.md:65` lists "Source map unavailable, but positions land on the event map -> aligned ... covers a
+
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -1211,14 +1110,9 @@ The mechanism is as claimed.
 
 Mitigations that limit the impact:
 
-- Export falls back to the derived length when the stored one is 0 (course-export.ts:213-219).
-- The Eventor sync overwrites non-derived lengths.
-- Any course edit re-derives length and legs.
-- The value is recomputable from the positions; no competitor or result data is touched.
+- Export falls back to the derived length when the stored one is 0 (course-export.ts:213-219)
 
-Display paths read `lengthM` raw and would show 0: lists.ts:255, classRouter.ts:77, cardReadout.ts:310, race.ts:75.
-
-The trigger is unusual. Purple Pen, OCAD and Condes write `<Length>` for ordinary courses. Oxygen's own exporter omits Length only when both the stored and the computed length are already 0 (iof-course-export.ts:132), and omits LegLength only for free-order courses, whose legs are not meaningful. An Oxygen round trip therefore does not turn a 5,400 m course into 0; it takes a third-party or hand-trimmed file that has positions but no Length.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -1248,9 +1142,9 @@ The claim holds on every point I checked.
 - **Re-import overwrites the stored mode.** course.ts:2218 writes `orderMode: pc.orderMode ?? "ordered"` on the existing course matched by name, and :2259 builds an ordered structure with legs. Nothing in that path warns or guards.
 - **Readout depends on it.** readout.ts:316-329 only uses the free-order matcher when `orderMode === "free_order"`, so a course flipped to ordered is matched in sequence.
 - **Climb.** The parser returns `climb: 0`; course.ts:2217 only writes climb when it is above 0, so an existing stored climb survives, as the claim says. I did not separately grep the exporter for a climb field; the parts of it I read write none.
-- **Docs.** ppen-import-export.md:109 says "Every course is a kind="normal" course", and the "not supported" list (:130-141) covers score courses on import but not the loss of free order on export or round trip. free-order-courses.md:99 lists only "Purple Pen kind="score" import" as out of scope. No Pending section covers it.
+- **Docs.** ppen-import-export.md:109 says "Every course is a kind="normal" course", and the "not supported" list (:130-141) covers score courses on import but not the l
 
-**Severity: medium, not high.** The direct effect is a `.ppen` that Purple Pen shows with legs and sequence numbers for a free-order course, which is a visible, undocumented fidelity loss. The MP outcome needs an unusual chain: a free-order course, exported to `.ppen`, re-imported over the same event after runners have started. The mode can be set back in the UI and results are re-evaluated from punches, so nothing is lost permanently.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -1276,11 +1170,9 @@ The claim holds as a test-coverage gap.
 - No IOF XML fixture file is in the repo. The find for *.xml outside node_modules returned nothing; the only course fixtures are e2e/test.ocd, e2e/test-data.ocd, e2e/colour-layers.ocd, fixtures/okartan/*.ocd and two .ppen files (which feed the Purple Pen parser, not the IOF reader). The only creator strings in tests are "Oxygen" and "Eventor" (the latter in an unrelated Eventor length test); none from OCAD, Condes or Purple Pen.
 - OCD parser: ocd-course-parser.test.ts reads only e2e/test.ocd (:8, :44); the scale tests (:28-40) use synthetic buffers. The integration tests (course-import-coords, course-import-structure, course-import-class-fallback, course-export) all reuse the same e2e/test.ocd.
 - A grep of the tests for several RaceCourseData, unknown control references, missing Length, deleted OCD objects and forked OCD records found nothing; the only "fork" hits are the export-side forked() helper in iof-course-export.test.ts:252.
-- One listed gap is visibly unguarded in code: the isArray list (iof-course-parser.ts:151-159) does not include CourseData.RaceCourseData, so a file with two RaceCourseData elements makes raceCourseData an array and raceCourseData.Control (:208) undefined, giving zero controls with no error. No test covers this.
+- One listed gap is visibly unguarded in code: the isArray list (iof-course-parser.ts:151-159) does not include CourseData.RaceCourseData, so a file with two RaceCourseDat
 
-Limits: I did not check each of the ten listed behaviours individually (for example zero courses with replaceAll, or one class under several courses, may have partial integration coverage in course-variants.test.ts or ppen-import.test.ts), and I did not verify the claimed scenario that the other import findings "passed the current suite", since the suite cannot run here. The parseTagValue point is partly softened by the hand-written foreign-file test and the round trips, which would catch some option changes.
-
-Severity: this is missing tests, not a behavioural defect in itself, so medium (real maintenance cost; lets real-file import bugs through unnoticed).
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -1310,17 +1202,9 @@ Part 2 (dying worker reused) is reproduced.
 - Repro, unknown key (awaits `document.bytes()`): `exit` fires during the await while `slot.fail` is null; the request then posts to the dead worker and only settles at its own full timeout ("print exceeded 3000 ms" at 3358 ms; 10 min in production). One worker was started in total in both runs.
 - During that wait it holds `slot.busy` and the only print-gate permit (PRINT_WORKERS default 1, line 28), so maps.pdf, print.png (routes.ts:556, 601, 604) and SVG upload trim (routers/graphics.ts:107) queue behind it.
 - `askWorker` (lines 185-192) has the same pattern; it posts synchronously, so a queued raster/trim fails at once with the exit error.
-- This contradicts the spec, docs/course-print.md:925-927: "the worker is terminated and the request fails; the next one starts a fresh worker." It is not listed under Pending (line 1964 onward).
-- No test covers the timeout path; print-worker.test.ts:141-150 only covers `resetPrintWorkers`, which nulls `slot.worker` itself.
+- This contradicts the spec, docs/course-print.md:925-927: "the worker is terminated and the request fails; the next one starts a fresh worker." I
 
-Part 1 (fixed whole-job timer) is true from the code, but it is documented design.
-- The timer is armed once at line 106; the `page` branch at line 112 only calls `onPage`.
-- docs/course-print.md:925-926 states the 10 min request timeout deliberately ("as the import worker"), so this half is a design limit rather than a spec violation.
-- It is reachable in principle: docs lines 1941-1946 give 0.28-0.81 s compose plus 1.3-3.5 s write per Club-full A3 page on the dev machine as "the per-page cost the worker now carries". At the 200-composed-page cap that is roughly 320-860 s against a 600 s limit.
-- Those timings predate C13 frame culling and were not re-measured, so the claim's "page 170 at 10:00" is an extrapolation, not a measurement.
-- The device path's watchdog is per-message (docs lines 1171-1174, 60 s silence), and jobs above the device cost limit go to maps.pdf, so the largest jobs are the ones under the fixed cap.
-
-Severity: medium. Part 2 only triggers after a 10-minute timeout with another request already queued at that moment, which is an unusual case. Nothing is lost or corrupted, and the pool recovers after one failed request or one further 10-minute stall. Part 1 needs a near-cap job on a heavy map or slow machine.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -1344,12 +1228,9 @@ Severity: medium. Part 2 only triggers after a 10-minute timeout with another re
 2. /home/user/oxygen/packages/shared/src/course-maps/resolve-layout.ts:350-376 calls buildDescriptionSheet with eventName, classNames, courseName, lengthM, climbM, orderMode, controls, instructions, finishLengthM, crossings, exchanges - no startDescription. A repo-wide grep for `startDescription` finds only description-rows.ts:94/239 and MapViewer.tsx:3612, so no print path supplies it.
 3. The data is at hand: `input.course.start` is a LayoutControlSource (resolve-layout.ts:80) whose `description` field is the controls.description JSONB (line 48-49); line 318 already reads `input.course?.start` for the overlay. descriptions-pdf.ts:152-166 passes `start: ends.start` taken from full `db.control.findMany` rows, so the description is loaded and then dropped.
 4. The print renderer would draw it if present: /home/user/oxygen/packages/shared/src/print/description.ts:232-238 draws the start pictogram and then falls through to `if (!row.description) return; ... C..H cellContent` for the start row too. So the only gap is the missing argument.
-5. The editor does show it: /home/user/oxygen/packages/web/src/components/MapViewer.tsx:3584-3612 passes `startDescription: startOverlay?.description ?? null`, and 3847-3856 renders 'Start: triangle in column A, optional C-H description'.
-6. A setter can give a start a description: /home/user/oxygen/packages/web/src/pages/editor/ActionBar.tsx:113 offers the 'description' action for any selected non-mark control including start/finish (the startFinish guards above it do not cover it), and control.update (packages/api/src/routers/control.ts:890-952) accepts a description regardless of kind.
-7. The test pins the gap only by omission: /home/user/oxygen/packages/shared/src/__tests__/resolve-layout.test.ts:76 expects `{ kind: "start", code: "", description: null, symbolKey: "start" }` with a start fixture that has no description, so it does not assert that a described start is dropped.
-8. Not listed as pending: docs/course-maps.md:381-388 states print and the editor's on-map sheet are 'the same sheet' / 'identical block'; no Pending entry about the start row's description was found in docs/course-print.md or docs/course-maps.md.
+5. The editor does show it: /home/user/oxygen/packages/web/src/components/MapViewer.tsx:3584-3612 passes `startDescription: startOverlay?.description ?? null`, and 3847-3856 renders 'Start: triangle in column A, optional C-H description
 
-Severity: medium, not high. A start description is optional and only exists when the setter enters one by hand (control.ts:800-806 skips autodetect for auto-named starts), so the default flow is unaffected; nothing about results or timing is wrong. When it is set, the printed sheet silently differs from what was proofed on screen.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -1374,10 +1255,9 @@ Severity: medium, not high. A start description is optional and only exists when
 3. The column cannot arrive another way: `PrintMapRow.course.courseControls` is typed `{ control, labelDx?, labelDy? }` (sheet-rows.ts:54) and `layoutControlsFromCourseControls` (resolve-layout.ts:145-158) maps only the label offset, although mapRowInclude (routes.ts:45-48) loads full course_controls rows.
 4. The layer would honour the flag if it were passed: derive.ts:277 skips the number when `e.item.numberHidden`, and 281-286 hides code labels for a single structure. The editor canvas passes it (course-layer-request.ts:249 from `hiddenNumbers`), so screen and paper disagree.
 5. Variant pages go through the same courseInputOfLayout with the child's structure (sheet-rows.ts:106), so they drop it too, even though materialiseVariants keeps the flag (variants.ts:97).
-6. Not documented as pending: course-print.md §5.2 says a course sheet item carries "`role` = its type, each item's whole stored leg" and is silent on numberHidden; its Pending section (line 1964 on) does not mention it. course-layer.md Pending says the layer reads numberHidden since D1. The only documented "ignored" case is All variations (course-print.md:414, course-layer.md §12.7).
-7. No test covers it: resolve-sheet tests have no numberHidden case, and the E2E (course-editor-tools.spec.ts:279) only asserts the checkbox and canvas.
+6. Not documented as pending: course-print.md §5.2 says a course sheet item carries "`role` = its type, each item's whole stored leg" and is silent on numberHidden; its Pending section (line 1964 on) does not mention it. course-layer.md Pending says the layer reads numberHidden sin
 
-Severity: medium, not high. The printed map shows a number the setter chose to hide, which is a legibility defect on a rarely used per-control option. Numbering, descriptions, punching and results are unaffected, and moving the label offset is a workaround. The claim's "overlapping on every runner's map" applies only to courses where the option was used.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -1416,15 +1296,9 @@ The server-side mechanism is real; the claimed click scenario is overstated beca
 **What does not hold (the scenario):**
 - Export ▾ sets `busy` and disables the button for the whole download (ExportMenu.tsx:93,126).
 - The Courses page does the same through `guarded` and `overview.busy` (useCourseMapsOverview.tsx:81-94; CoursesPage.tsx:510,563,576,623,677).
-- All exports go through a per-tab queue, one at a time (client.ts:313-346), and use `fetch` with no cancel UI.
-- So "clicks twice more, then cancels and picks one course" cannot happen in one tab. Stacking abandoned jobs needs a page reload or close followed by a retry, several tabs, several users, or direct URL hits.
+- 
 
-**Reach and bounds:**
-- The server path is reached for big jobs: the device composes only up to 8/24/64 A4-equivalents (capability.ts:37-45), so a 150-page export does go to `maps.pdf` (client.ts:284).
-- Each abandoned job is bounded at 10 minutes.
-- Composing runs in a worker thread, so the event loop (card readout) is not blocked. Only other prints, logo rasters and SVG uploads are delayed.
-
-The "holds one of the two render-gate permits" point is immaterial: since E4a nothing else takes the render gate (course-print.md:937-940).
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -1452,14 +1326,9 @@ Part (a) is proven from the code.
 
 Part (b) is structurally real but I could not prove it happens in practice.
 - The gate at race.ts:213-216 uses the matcher's card-derived status, while `total` (race.ts:251, baseWhere status ok) counts persisted rows only. Kiosk recordFinish (KioskPage.tsx:744) writes finish time without status (race.ts:346-347). So before applyResult commits, the runner is not in `total`: rank N with total N-1, or total 0 -> null for a first finisher.
-- DeviceManager.tsx:498-505 does broadcast before awaiting applyResult. But the print path needs several sequential round trips first: kiosk findByCard, then kiosk finishReceipt, then a broadcast to the admin tab, then a fresh finishReceipt fetch there (CompetitionShell.tsx:280). applyResult is a single mutation started immediately, so it normally wins. The window is real when applyResult is slow or fails (catch at DeviceManager.tsx:519 queues it offline while the server stays reachable).
-- The "queued offline" variant is weaker than claimed: when navigator.onLine is false the server receipt fetch fails too.
+- DeviceManager.tsx:498-505 does broadcast before awaiting applyResult. But the print path needs several sequential round trips first: kio
 
-noTiming class: race.ts finishReceipt selects only `id, classId` (line 152) and never checks `class.noTiming`, so a position is computed and printed for no-timing classes. True as stated; lists.ts resultList does not check it either.
-
-Midnight: overstated. A negative raw time already zeroes `r.timing.runningTime` (cardReadout.ts:252-254), so the gate at race.ts:215 fails. That is a general cross-midnight timing limitation, not specific to receipt position.
-
-Severity: medium, not high. Official results (lists.ts) are correct. The wrong value is the informational position on the finish receipt and kiosk screen, and only on courses with NoTiming/BadNoTiming legs where deductions reorder runners, or in a narrow timing race.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -1489,9 +1358,9 @@ The defect is real: no guard handles a finish that wraps past midnight.
 
 Nothing upstream prevents the case. timeConvert.ts documents midnight-crossing events as supported ("Handles wraparound for events crossing midnight") and `__tests__/timeConvert.test.ts:51-77` tests it. No docs/map-*.md or docs/course-*.md "Pending" section covers this; it is not map/course work.
 
-One part of the claim is overstated. "The stored ZeroTime-relative values subtract correctly" holds only for rows written by MeOS. Oxygen's own writers use `toRelative` (`abs - zeroTime`, no wrap), so a 00:20 finish is stored as 12000 - 792000 = -780000 while the 23:30 start is +54000. Subtracting those also gives a negative number.
+One part of the claim is overstated. "The stored ZeroTime-relative values subtract correctly" holds only for rows written by MeOS. Oxygen's own writers use `toRelative` (`abs - zeroTime`, no wrap), so a 00:20 finish is stored as 12000 - 792000 = -780000 whil
 
-Severity is medium, not high: it gives a wrong result (an OK runner with no time or place), but only when an individual run straddles local midnight, which is unusual. No data is corrupted; stored times are untouched and the error is visible on the list.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -1514,10 +1383,9 @@ Severity is medium, not high: it gives a wrong result (an OK runner with no time
 1. lists.ts:50-52 builds `meosNow` from `now.getHours()/getMinutes()/getSeconds()` on the API process; lists.ts:69-72 sets `hasStarted` when `meosNow >= toAbsolute(r.startTime, zeroTime)`. Start times are event-local deciseconds since midnight, so the comparison is only right when the process timezone equals the event's.
 2. No timezone is configured anywhere for the container: the Dockerfile is `FROM node:24-slim` with ENV lines only for OXYGEN_BUILD_ID, OXYGEN_DEPLOY_REF, OXYGEN_VERSION, NODE_ENV, PORT, HOST, WEB_DIST_DIR; docker-compose.host-db.yml's api environment has DATABASE_URL, PORT, HOST, NODE_OPTIONS, AUTH_*, OXYGEN_ADMIN_EMAILS, LEADER_LEASE_SCOPE and no TZ, and mounts no /etc/localtime. A grep for TZ/tzdata/localtime across Dockerfile, docker/, all compose files (including venue and release), scripts, docs and AGENTS.md found nothing. node:24-slim (Debian) defaults to UTC, so getHours() returns UTC hours in every Docker deployment in the repo. I did not run a container to observe this; it rests on the image default.
 3. Consumer: packages/web/src/lib/structured-search/anchors/start-list-anchors.ts:160-161 — `in-forest` = `hasStarted || hasPunches`, `not-started` = `!hasStarted && !hasPunches`. So in CEST a runner with a 10:00 start and no punches stays 'not started' until 12:00 local (1 hour off in winter).
-4. The same pattern is wider than the claim states: event.ts:401/437 (dashboard in-forest status count), runner.ts:355/368 (runner list status filter), timeConvert.ts:45 `nowMeosTime` (documented as feeding EntryTime), and race.ts:87-93 `serverTime.deciseconds`, whose own doc comment says 'in the event's local timezone'. serverTime.deciseconds is displayed as the clock on StartStation.tsx:53 and FinishStation.tsx:257 and drives the start kiosk countdown `runner.startTime - currentTime` (StartStation.tsx:140), which would be off by the UTC offset.
-5. Limits on the damage: recorded finish times are not affected — FinishStation.tsx:221-226 takes the time from the browser clock, not the server. The start-list filter still catches anyone with a radio punch or readout via `hasPunches`. Nothing is stored wrongly by the lists.ts path; it is a derived, read-time flag.
-6. Not a Pending item: this is not map/course spec territory, and no doc mentions a timezone requirement for deployment.
-Not checked: whether a real production host injects TZ outside the repo (e.g. an operator's .env or a cloud run setting); nothing in the repo does.
+4. The same pattern is wider than the claim states: event.ts:401/437 (dashboard in-forest status count), runner.ts:355/368 (runner list status filter), timeConv
+
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -1545,11 +1413,9 @@ Not checked: whether a real production host injects TZ outside the repo (e.g. an
 
 4. Unfinished runners are in the list. resultList's where clause is only eventId + removed:false (lists.ts:80-83), so status-Unknown runners are returned and are the rows these filters are meant to split.
 
-5. Tests do not cover it. new-anchors.test.ts:453-503 hand-builds ResultEntry fixtures with hasPunches/hasStarted set, so the anchor passes its tests while the API never supplies the fields.
+5. Tests do not cover it. new-anchors.test.ts:453-503 hand-builds ResultEntry fixtures with hasPunches/hasStarted set, so the anchor passes its tests while the API never su
 
-6. Not a documented pending item. docs/bugfixes/cancellation-handling.md:41,115,126 describes these filters as working features; the only map-*/course-* 'Pending' relevance is none.
-
-Severity reasoning: the claimed scenario holds as stated (in-forest is empty; all unfinished runners, including those with radio punches or past their start time, show under not-started). I rate it medium rather than high: no stored data or published results are wrong, only one client-side filter view on the Results page. The same in-forest/not-started split works on the start list (start-list-anchors.ts:160-161 with lists.ts:68-69), in the server-side runner list filter (runner.ts:367-382) and in the dashboard counts (event.ts:436-445), so the operator has working alternatives. The risk is an operator trusting an empty 'in forest' result at event close as meaning nobody is still out, which is a safety-relevant check, but it is one filter among several ways to get that answer.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -1579,15 +1445,9 @@ The divergence is real, but the claim's headline scenario (card read twice) does
 - Standalone run of that function: with the free punch the adjustment is 1000 ds; card-only it is 0. The receipt and kiosk would show a time 1:40 shorter than the result list, and since the list sorts on its own `runningTime` (lists.ts:181-187), placing can change.
 - `addPunch` (cardReadout.ts:1295-1325) writes such manual punches to the `punch` table, so the state is reachable through the normal UI.
 - The stored status comes from the readout (free punches included), so the runner is OK in the list while the time is unadjusted.
-- Not listed as pending: docs/course-controls-and-matching.md:303 states `resultList` computes the adjustment as implemented.
+- Not listed as pending: docs/course-controls-and-matching.md:303 states `resultList` co
 
-**What is overstated**
-- "A rental card is read twice, leaving two card rows" does not happen through the readout path. storeReadout (cardReadout.ts:556-581) does `findFirst` by `eventId + cardNo + removed:false` and updates the existing row.
-- The schema has only `@@index([eventId, cardNo])`, no unique constraint, so duplicates are possible, but only from other writers: `scripts/migrate-mysql-to-pg.ts:611` (MeOS import), `testLab.ts:159`, or two concurrent first reads of the same card.
-- A third divergence the claim does not name: a runner whose `cardId` points at a card with a different number than the current `runner.cardNo` gets different cards in the two paths.
-
-**Severity**
-Medium. It needs a course with a NoTiming leg (or BadNoTiming) and either a no-timing control supplied only as a free punch, or duplicate card rows from migration or a race. When it occurs the result list shows a wrong time and possibly a wrong placing, but nothing is corrupted.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -1617,11 +1477,9 @@ The path is live: PrinterContext.tsx:187-188 and 208-209 use buildFinishReceipt 
 
 Limits on the claim:
 - Swedish å ä ö Å Ä Ö, and also æ é ü ñ and similar, share positions in both code pages and print correctly under PC437. Only Ø, ø and the accented capitals at 0xB5-0xB7, 0xD3, 0xD6, 0xE0, 0xE2, 0xE9 are wrong.
-- The part about å ä ö being at risk on generic printers with another power-on code page is speculative and was not proven.
-- I did not check whether "class results" are printed through this encoder; only the finish and registration receipts were traced.
-- The effect is a wrong glyph on a paper receipt. Stored data and results are untouched.
+- The part about å ä ö being at risk on generic printers with another power-on code page is speculat
 
-Severity: medium. It is a cosmetic misprint limited to names or clubs with Ø/ø or certain accented capitals (Norwegian and Danish runners), in software aimed at Swedish events.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -1652,11 +1510,9 @@ The claim holds as stated.
 - **Own status ignored:** `computeLocalReadout` computes `status` at lines 88-97 but calls `computePosition` unconditionally at 109-114. The only guard is `selfRunningTime <= 0`. An over-max-time runner (computeStatus returns OverMaxTime when `runningTime > classMaxTime`, shared/readout.ts:564) still gets a position.
 - **Printed unguarded:** FinishStation.tsx:197-203 passes `position` and the top five as `classResults` with `rank: i + 1`. Both printer back ends print the line on `if (data.position)` alone (escpos.ts:421-423, star-raster.ts:557-559).
 - **Online path does it correctly:** race.ts:212-216 computes a position only when `r.timing.status === 1`, and counts only peers with `status = 'ok'` (race.ts:224-250). The offline path therefore diverges from the server; it is not intended behaviour.
-- **Scenario check:** a cached mispunched runner at 30:00 and an OK runner finishing offline at 32:00 gives `withTimes = [MP 30:00, self 32:00]`, so rank 2, total 2, with the mispunched runner listed first.
+- **Scenario check:** a cached mispunched runner at 30:00 and an OK runner finishing offline at 32:00 gives `withTimes = [MP 30:00, self 32:00]`,
 
-The tie point is also true but minor: `rank: i + 1` numbers equal times 1, 2, while `position.rank` shares ranks.
-
-Limits on impact: this needs the station offline, a receipt printer connected, and a non-OK runner with a time in the same class (or the runner themselves over max time). It affects only the printed courtesy receipt. Nothing wrong is persisted: only the `finish.recorded` event is queued, and official results are computed server-side by `computeClassPlacements`, which is status-aware.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -1694,13 +1550,9 @@ Not proven:
 - Whether `transferOut` actually stays pending on paper-out. That depends on the printer NAKing the bulk OUT endpoint once its input buffer is full. A text ESC/POS receipt of 1-2 KB may fit in the buffer and resolve 'ok' even with no paper. In that case `printing` clears normally and the receipt prints when paper is loaded. A hang is more likely with the large Star raster jobs or logo rasters. The claim itself says it was not verified on hardware.
 
 Overstated:
-- "Forever" is wrong. The pending promise settles when paper is reloaded and the printer drains, or when the printer is unplugged or powered off (the transfer then rejects, `finally` runs, and :164-170 marks it disconnected). A page reload also clears it.
-- There is no application-level queue. The "backlog" is only the automatic prints from later readouts, which pend at the USB level.
-- The reprint guard only blocks while the transfer is pending. Reprint could not succeed in that state anyway.
+- "Forever" is wrong. The pending promi
 
-Not listed under any Pending section; the map and course specs do not cover receipt printing.
-
-Severity medium: it needs a hardware fault condition, the effect is limited to receipt printing (timing and results are untouched), and it recovers by itself when the printer is serviced. The real defect is that the operator gets no feedback.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -1729,11 +1581,9 @@ The claim holds for value-level coverage, but two details are overstated.
 
 **What is overstated**
 - "No test covers" is too strong. e2e/phase2.spec.ts:196-237 loads the Start List and Results pages, which call these endpoints. It asserts class headings, the Place/Time/Behind headers, OK and MP badges, and that at least one cell matches `+m:ss`. That is a smoke test of the output; it asserts no place value, tie, adjustment, class filter or ZeroTime conversion.
-- `computeClassPlacements` is not unused. packages/api/src/routers/eventor.ts:1656 calls it for the Eventor upload, and the comment at :1651 says it is shared with web/admin clients. It is only unused by lists.ts, so the result list and the Eventor upload compute placings with two different implementations and only the second is unit-tested.
-- The variant-accept.test.ts:204 call was missed by the claim, though it is another `variantKey`-only assertion.
+- `computeClassPlacements` is not unused. packages/api/src/routers/eventor.ts:1656 calls it for the Eventor upload, and the comment at :1651 says it is shared with web/admin clients. It is only unused by lists.ts, so the result list and the Eventor upload compute placings with two different implementations and only the second is unit-te
 
-**Severity**
-Medium. A test gap is not itself a wrong result; it is a maintenance cost and lets real defects in the result list go unnoticed.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -1769,17 +1619,9 @@ The defect is real, but narrower than the claimed scenario.
 
 4. The follow-up compute cannot repair it. Line 227 calls `refreshComputedClimbs(db, eventId)` for the whole event, but computeMissingClimbs only takes courses matching OPEN_CLIMB (climbM = 0 and source not 'computed', course-climb.ts:89, 100, 111-116). The late course already has a non-zero 'computed' climb, so it is skipped.
 
-5. The rerun does not repair it either. The edit sets `again` (line 242), but the rerun's pairsOf yields the same basis for the pair: autoRouteBasis (lines 70-76) hashes document, patch, scale, endpoints, via and obstacles, not the course set. The pair is not stale (line 173), so nothing is searched or cleared.
+5. The rerun does not repair it either. The edit sets `again` (line 242), but the rerun's pairsOf yields the same basis for the pair: autoRouteBasis (lines 70-76) hashes document, patch, scale, endpoints, via a
 
-6. The manual paths do it correctly: legRoute.ts:60 calls coursesRunningPair inside the transaction.
-
-Correction to the claimed scenario: if the fork creates a pair that no course ran before (as "31>32" suggests), the running refresh never had it. The rerun finds no row for it, searches it with a fresh course set that includes A1..A4, and clears them correctly. The bug needs the new course to gain a pair that is already in the running refresh's stale list and not yet written: for example a copied course, a new course sharing legs with imported ones, or variants that keep the parent's common legs.
-
-The same hole exists when a pair has an old chosen automatic route that the refresh is about to replace.
-
-The wrong climb stays as 'computed' until something else clears that course: a geometry edit, a map change, a manual route choice on one of its pairs, or a later refresh that changes one of its routes.
-
-Severity is medium, not high. It needs an edit inside the refresh window on a shared pending pair. The result is a wrong climb figure on some courses, with no data loss and no wrong race results, but it is silent and can reach print and export.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -1815,15 +1657,9 @@ The defect is real, but the claimed trigger (the 5 s poll) is mostly not how it 
 - It is not listed under Pending in docs/course-editor.md. The "Tokens" paragraph (around line 279) documents the three seed sources without addressing the mismatch.
 
 **Where the claim is overstated**
-- The poll invalidates the whole `course` router in one tick (useExternalChanges.ts:10-19, 73-80), and the client uses `httpBatchLink` (main.tsx:46). `course.list` and `course.detail` therefore travel in one HTTP request and settle together, and a network failure fails both. The same holds for `invalidate()` (EditorPage.tsx:323-333).
-- "List answered, detail still in flight" from the poll therefore needs a per-procedure server error on `detail` only. That is rare.
+- The poll invalidates the whole `course` router in one tick (useExternalChanges.ts:10-19, 73-80), and the client uses `httpBatchLink` (main.tsx:46). `course.list` and `course.detail` therefore travel in one HTTP request and settle together, and a network failure fails both. The same holds for `inval
 
-**Triggers that do exist**
-1. List-only invalidations at EditorPage.tsx:501 (an auto route landed, on a separate 8 s poll), 517 (`afterRouteWrite`), 1898, 1977 (`refreshClimbs`) and 2487. Each refetches `course.list` without `course.detail`. If B wrote the course since A's last detail fetch and A's 5 s counter poll has not fired yet, the token moves to v6 while the detail stays v5, for up to about 5 s.
-2. Cached detail on course switch. `gcTime` is 24 h, `staleTime` 5 s, and the cache is persisted (main.tsx:18-26). The poll does not refetch an inactive `course.detail`. On reselecting a course A opened earlier, `detail.data` is immediately the cached v5 structure while the refetch is in flight; with `retry: 1`, a failed refetch keeps the stale data. `course.list`, always active, has already seeded v6. An edit in that window is built on v5 and sent with v6.
-
-**Outcome**
-B's structure change is overwritten with no CONFLICT and no "refresh" notice. The D11 "changed elsewhere" banner (EditorPage.tsx:238-249) may appear because the list version moved, but it does not block the edit.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -1855,15 +1691,9 @@ Simulation output (two overlapping undos, then two sequential redos):
 - slow delete: `future:[B,A]`, after redos `S1`
 - fast delete: `future:[A,B]`, after redos `S2` (correct)
 
-So the scramble happens whenever `control.delete` is not faster than the queued `setStructure`. The client uses `httpBatchLink` (packages/web/src/main.tsx:46), and the two requests are issued within a few microtasks of each other, so they will often share a batch; I did not trace how the link orders batched replies. In the bad case the redo runs A (restore control, write S2) then B (write S1): the course ends at S1 without the placed control, the control is left restored but outside the course, and `past` is `[A, B]`, so later undos are misordered too.
+So the scramble happens whenever `control.delete` is not faster than the queued `setStructure`. The client uses `httpBatchLink` (packages/web/src/main.tsx:46), and the two requests are issued within a fe
 
-docs/bugfixes/editor-overlapping-course-writes.md covers only the per-row token problem with a double Ctrl+Z, not stack ordering. I did not search the Pending sections of docs/course-*.md in full; a grep of docs/course-editor.md for undo/redo serialisation found nothing.
-
-Limits on the claim:
-- The undo phase itself is correct; only a later redo goes wrong.
-- It needs adjacent entries with different await counts (for example placement over a structure edit) and a second keypress inside one network round trip.
-- The wrong result is visible on screen at once and can be repaired by hand; nothing is lost on the server beyond one course structure write.
-- I did not verify the Layout-mode part of the claim.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -1889,15 +1719,9 @@ Every step of the claim holds, and I found no guard that prevents it.
 2. A root's `course_controls` hold only the first alternative of each group: `persistStructure` writes `splitStructure(course.structureControlItems(s))` (course-structure.ts:148, 188-190), and `structureControlItems` is documented as "a group by its first alternative" (shared/src/course/structure.ts:211). A control only in alternative B, or only a leg `crossing`, is therefore not in the root's `controls`.
 3. Each variant gets its own flat `course_controls` through `syncVariants` -> `persistStructure` (course-variants.ts:158-164), so the variant row does match the filter at EditorPage.tsx:868-869. That filter has no `parentCourseId` check.
 4. The server delete skips variant rows (`if (row.parentCourseId) continue`, control.ts:1131) and prunes the root in every alternative (control.ts:1132-1139). It reaches the root through `coursesNamingInStructure` even though the client did not snapshot it.
-5. The undo runs `writeStructure(c.id, c.structure)` for each snapshot (EditorPage.tsx:874-877) -> `writes.setStructure` -> `course.setStructure`, which calls `assertNotVariant(c)` right after the lookup (course.ts:982-983) and throws PRECONDITION_FAILED "COURSE_IS_VARIANT" (course-variants.ts:71-78). There is no client-side filter in write-client.ts.
-6. `UndoStack.undo` pops the entry before awaiting it and a throw drops it (undo-stack.ts:73-75). `run` catches and only sets the error line (EditorPage.tsx:336-361). The `for` loop at line 876 stops at the first throw, so later courses are not restored.
-7. `control.restore` only un-removes the control; it re-attaches nothing to course structures (control.ts:1227-1244).
+5. The undo runs `writeStructure(c.id, c.structure)` for each snapshot (EditorPage.tsx:874-877) -> `writes.setStructure` -> `course.setStructure`, which calls `assertNotVariant(c)` right after the lookup (course.ts:982-983) and throws PRECONDITION_FAILED "COURSE_IS_VARIANT" (course-variants.ts:71-78). There is no client-side filter in 
 
-The defect is wider than the claim states. Every variant contains the spine controls, so deleting any control on a course with variations puts variant rows in `affected`, and the undo always throws at the first variant. `course.list` is ordered by name (course.ts:467) and variants are named `${root.name} ${key}` (course-variants.ts:137), so the root sorts before its variants. When the control is in a first alternative or the spine, the root is restored (which re-materialises its variants) before the throw; courses sorting after the first variant are still left without the control, and the undo/redo entry is lost. In the claimed case (control only in a non-first alternative, or a crossing) the root is never snapshotted, so its alternative is not restored even if the loop did not throw.
-
-Not a documented gap: docs/course-layer.md:2211 and 2511 list COURSE_IS_VARIANT as the intended refusal for writes on a child, and nothing in a Pending section covers delete-undo with variants. The E2E row at docs/course-editor.md:3272 covers delete + Ctrl+Z only for plain courses.
-
-Severity: medium, not higher. It needs an event with variation courses plus delete-then-undo. The failure is not silent (an error line shows), and nothing beyond the confirmed delete is destroyed; the setter must re-add the control by hand. The risk is that a missed re-add prints a course without the control.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -1925,13 +1749,9 @@ The mismatch is real and nothing guards it.
 
 3. The two states are independent: state.ts:110-114, the `variant` action in Class view sets `variantKey` alone; state.ts:107-109, the `class` action and `view: "class"` leave `activeAlternatives` untouched (it is only cleared on a course change, line 200). So both claimed routes produce a mismatch: Variant ▾ "B" in Class view (canvas B, rows A), or tab B activated in Course view and then Class view opened (canvas first variant, rows B).
 
-4. Clicks are live in Class view: line 2164 passes `onLegClick` for every view except `all` and `all-variations`; `handleLegClick` (835-840) calls `insertIndexForLeg(rows, legIndex)` with the drawn leg index (MapViewer.tsx:1753/2173 pass `leg.index` of the drawn overlay, which is the override). `selectedLeg` (482-489) excludes only `all`/`all-variations` and resolves `legForInsert(rows, insertAt)` -> `itemAtPath(explicit, leg.path)`; docs/course-editor.md:914 explicitly says a selected leg exists "in Course or Class view".
+4. Clicks are live in Class view: line 2164 passes `onLegClick` for every view except `all` and `all-variations`; `handleLegClick` (835-840) calls `insertIndexForLeg(rows, legIndex)` with the drawn leg index (MapViewer.tsx:1753/2173 pass `leg.index` of the drawn overlay, which is the override). `selectedLeg` (482-489) excludes only `all`/`all-variations` and resolves `legForInsert(rows, insertAt)` -> `itemAtPath(explicit, 
 
-5. Effect, with A = 31,32 and B = 41,42,43 drawn as B, rows as A: drawn leg 42->43 is leg index 2 (S->41 = 0). `insertIndexForLeg` picks positioned rows[3] of the A path, which is the control after the fork (or the finish), so the insert/bend/gap goes on the fork's exit leg, not 42->43. With equal-length alternatives the index matches but the path still names the A item, so the edit lands in the alternative that is not on screen.
-
-Not excused by the docs: the Pending entry at course-editor.md:3423-3426 is only about the phone lacking Variant ▾; §12 (2152-2165) specifies drawing one variant in Class view and says nothing about edits resolving through another path.
-
-Limits on the claim: the default case is consistent (no Variant ▾ pick, no non-first tab activated: first key vs first alternatives), so it needs a course with variation groups, Class view, and a non-default variant or tab. The sequence list in the inspector also follows `rows`, so the wrong target is visible there, and the edit is undoable. The claim's "printed variant differs from what was edited" is true but is a wrong-leg edit the setter can see and undo, not silent corruption.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -1957,15 +1777,9 @@ Limits on the claim: the default case is consistent (no Variant ▾ pick, no non
 
 3. Second gesture really is issued with the old token. `commit` (LayoutMode.tsx:241-248) sets `local` with at=+Infinity, so `stored` (162) becomes the new snapshot at once and a second `change` (257) is accepted and sent while write 1 is in flight; VersionBook (/home/user/oxygen/packages/web/src/lib/version-book.ts:27-40) still holds the pre-write token.
 
-4. Server refuses strictly. /home/user/oxygen/packages/api/src/routers/courseMap.ts saveLayout: `SELECT version ... FOR UPDATE` then `now !== BigInt(input.baseVersion)` -> versionConflict (about lines 776-783); same check in courseMap.update (about 727-733). The row lock makes write 2 wait for write 1's commit and then see the new version, so the refusal is deterministic, not a race.
+4. Server refuses strictly. /home/user/oxygen/packages/api/src/routers/courseMap.ts saveLayout: `SELECT version ... FOR UPDATE` then `now !== BigInt(input.baseVersion)` -> versionConflict (about li
 
-5. Consequence on the client. save's catch (LayoutMode.tsx:224-231) throws EditorConflict{kind:"refresh"}; `run` turns it into the refresh notice (EditorPage.tsx:354) and returns undefined; `commit` then does `setLocal(null)` and returns without recording (246), so the second gesture is reverted and has no undo entry. For a double Ctrl+Z, UndoStack.undo pops the entry before awaiting and a throw drops it (/home/user/oxygen/packages/web/src/lib/... UndoStack `undo`: `const entry = this.past.pop(); await entry.undo(); // a throw drops the entry`), so the second undo entry is lost.
-
-6. SheetActions.rename (/home/user/oxygen/packages/web/src/pages/editor/layout/SheetActions.tsx:60-76) has the same read-token-then-send shape against courseMap.update on the same "sheet" row, so a rename overlapping a layout write collides too.
-
-7. The bugfix doc describes exactly this mechanism for courses ("A user who presses Ctrl+Z twice faster than a reply comes back gets the same refusal") and its fix (EditorWrites.serial) was not extended to sheets/templates.
-
-Limits of the claim: the two writes must hit the same row (a sheet-scope write and a template-scope write do not collide). The first write always lands; only the later gesture is lost, visibly, with a notice telling the user to redo. No silent loss, no corruption. The print-scale field does commit on blur (layout/fields.tsx:23), so the stated scenario is reachable, but it needs two commits within one round trip; Layout mode has no key-repeat gesture (no arrow nudges) that would trigger it on a fast link. Double Ctrl+Z is the most likely trigger and permanently drops one undo entry.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -1991,12 +1805,9 @@ The defect is real for crossing points and map-issue points; the start/finish pa
 - **Code-less rows exist by design.** `control.create` documents "crossing and map-issue points are code-less" (control.ts:721-726) and gives them only a seq above MARK_SEQ_BASE (control.ts:818-824). The IOF import creates crossing points with `codes: ""` (packages/api/src/routers/course.ts:1981).
 - **No guard on the target code.** With an explicit target, `matchedControl` is found by id (ControlsPage.tsx:1141-1142) and `targetCode = parseInt(matchedControl.codes.split(";")[0].trim(), 10)` (1170) is used unchecked. It goes to `reader.programControl({ code: targetCode, ... })` (1212-1220).
 - **NaN becomes code 0.** `programControl` does not validate `config.code` (packages/web/src/lib/webserial.ts:891-963). `encodeStationCode` does `code & 0xff` and `(code >> 2) & 0xc0` (packages/web/src/lib/si-protocol.ts:1389-1390), and the byte is written at webserial.ts:978 (`buf[SYSVAL.STATION_CODE - 0x10] = codeByte`). Node run: `parseInt("")` gives NaN, `NaN & 0xff` gives 0, `(NaN >> 2) & 0xc0` gives 0.
-- **Mode and result.** A crossing point has normal status, so `stationMode` stays undefined (ControlsPage.tsx:1186-1203) and the unit becomes CONTROL/BC_CONTROL with code 0. Power-off runs if enabled (1226-1236), and the result row is pushed with `success: true, code: NaN` (1253-1264).
-- **Only the record step errors.** `recordMutation.mutate` receives `programmedCode: NaN`. `JSON.stringify` turns that into null, which `z.number().int().optional()` rejects (control.ts:1579), so only `recordProgrammingFailed` is shown, after the station is already written.
-- **Start/finish overstated.** Since F32, a start or finish created without a code is allocated one in 3-30 (control.ts:826-828; import at course.ts:2106 and 2133; update at control.ts:1042-1044). "Start 1" / "Mål 1" are therefore normally not code-less; only legacy rows could be.
-- **Not listed as pending.** No "Pending" entry in docs/map-*.md or docs/course-*.md covers the programming panel; the only mention is the picker ordering in docs/guide/event-setup.md:40.
+- **Mode and result.** A 
 
-Severity is medium, not high: it needs the organiser to explicitly pick a point that has no physical station as the target (auto mode never matches a code-less row, since `[NaN].includes(readCode)` is false). The mis-programmed unit is recoverable by reprogramming, and an error banner does appear, though it contradicts the green result row.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -2024,9 +1835,9 @@ The claim holds; nothing on the client or server catches a mistyped token.
 - **Server makes truncation more likely to succeed:** `controlSeqToId` (course.ts:279-300) matches the first code and then falls back to `seq === publicId`. A truncated value such as 4 can therefore resolve to an unrelated control by internal seq even when no control has code 4. Otherwise the user gets "Control 4 not found" (line 298), which names a value they never typed.
 - **Create path:** line 1098 has the identical expression. Line 1100, `parseInt(numberOfMaps, 10) || 1`, turns a typed 0 into 1, although the input declares `min={0}` (line 1157) and the server accepts 0 (schema default 0, course.ts:601).
 
-Mitigations are weak. After the save the field re-renders from server data (`setEditControls(null)`, line 963), so the missing code is visible in the field, but no message is shown. The field is disabled for courses with variations and for read-only variants (line 952), so only plain courses are affected.
+Mitigations are weak. After the save the field re-renders from server data (`setEditControls(nu
 
-Severity: medium. It needs a typing mistake, but the result is a silently wrong course definition that feeds printing and punch evaluation. It is not high, because it does not occur in normal correct use and the saved value is shown straight away.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -2057,13 +1868,9 @@ The claim holds as written.
 - **No timeout anywhere on the path.** The `httpBatchLink` in main.tsx:45-65 passes no AbortSignal. `eventScopedTrpcFetch` -> `fetchJsonApi` -> `venueAwareFetch` (trpc.ts:40-63, node-discovery.ts:218-227) is a bare `fetch(input, init)`. The Workbox `/trpc/` route with `networkTimeoutSeconds: 3` (vite.config.ts:66-70) declares no method, so it covers GET only; mutations are POST and bypass it.
 - **Later writes also stay unpersisted.** `waiting` is read from the store (line 112), which is still empty, so a second nudge of the same control goes direct and chains behind the hung one in `EditorWrites.serial` (write-client.ts:155-162, 233). Moves of other controls during the hang are equally unpersisted.
 - **No unload guard.** There is no `pagehide` or `beforeunload` handler in pages/editor or lib/offline.
-- **Not a documented gap.** The Pending list (course-editor.md:3553-3582) covers no drain outside the editor, uncapped retries of entries already pending, and others, but not this window. §9 says the outbox "survives a reload and a browser restart" and §3 says moves "that could not go out wait in the device's outbox"; neither is true for a move whose request has not yet rejected.
+- **Not a documented gap.** The Pending list (course-editor.md:3553-3582) covers no drain outside the editor, uncapped retries of entries already pending, and others, but not this window. §9 says the outbox "survives a reload and a browser restart" and §3 says moves "that could not go out wait in the device's outbox"; neither is true for a move whose
 
-**Limits on the scenario, which is why I rate it medium, not high:**
-- Loss needs two things together: a request that hangs rather than failing, and the page being discarded, closed or reloaded before the fetch rejects.
-- If the tab survives (a plain screen lock and resume), the fetch eventually rejects with a TypeError, which becomes a TRPCClientError without `data`, and the write is queued then.
-- During the window the save indicator shows `saving`, not `saved`, so the state is not misreported.
-- The loss is bounded to the moves and check-offs made in that window. Nothing on the server is corrupted.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -2094,9 +1901,9 @@ The defect is real, but the claimed downstream consequence is overstated.
 
 Limits on the impact:
 - Re-import into Oxygen does not recreate the class. The import reads `dbClasses` with `removed: false` (course.ts:1721-1724), and an unmatched name becomes `matched: false, matchType: 'none'` (course.ts:1754-1761).
-- A mis-match is possible only through the substring fallback (course.ts:180-188), and only when another live class's normalised name contains or is contained in the deleted name. That could attach the deleted class's course to that live class, and it is visible in the import preview.
-- For external consumers (Eventor, OCAD, Purple Pen) the file carries a stale ClassCourseAssignment for a class that no longer exists.
-- Only arises when a class is deleted while still assigned to a live course and the courses are then exported.
+- A mis-match is possible only through the substring fallback (course.ts:180-188), and only when another live class's normalised name contains or is contained in the deleted name. That could attach the deleted class's course to that live class, and it is visible in 
+
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -2116,9 +1923,9 @@ Limits on the impact:
 
 <details><summary>Verifier's evidence</summary>
 
-(1) numberHidden loss: proven. course.update with controlIds reads the existing course_controls selecting only controlId/labelDx/labelDy (course.ts:895-898), deletes all rows (:912) and recreates them with courseId, position, controlId and the label offset only (:914-924). The schema default for number_hidden is false (schema.prisma:557), so every recreated row is unhidden. rewriteStructureFromColumns (course-structure.ts:244-258) then sets structure to NULL and rebuilds it via loadExplicitStructure -> structureFromColumns, which takes numberHidden only from the course_controls rows (:221-224, :66). carryLegs (:81-97) carries `leg` from the previous structure and nothing else, so the old structure's numberHidden is not restored. No guard prevents this for an ordinary course: only variants and roots with variation groups are refused (course.ts:787-802). The Courses page calls this path on every control-code save (CoursesPage.tsx:803-808), and the editor sets the flag through setStructure (docs/course-editor.md:905-906). The spec does not sanction the drop: course-layer.md:882-885 describes the linear shortcut as keeping an item's leg and is silent on numberHidden, and the Pending section (2485 onwards) does not list it. Label offsets are deliberately carried over the same delete/recreate, which makes the missing flag an oversight. A course.update without controlIds (start/finish, orderMode) does not delete the rows and keeps the flag, so the loss is limited to sequence edits. It is also coarse: even a control that stays in the sequence loses its flag.
-(2) Repeated full reads: proven. controlSeqToId (course.ts:278-300) runs control.findMany for all live controls of the event on every call, and is called once per id inside Promise.all in course.create (:611-616) and course.update (:853-858). A 30-control save issues 30 identical queries, outside the transaction. setControlLabelOffset (:1107) calls it once, so there is no N-fold cost there; the claim's mention of that line is only another call site.
-(3) Duplication: proven. uuidsOfPublicIds (course-structure.ts:288-300) does the same first-code-else-seq resolution in a single query and is already imported in course.ts (:87) and used at :992. Minor behavioural difference: controlSeqToId compares the trimmed first code as a string, uuidsOfPublicIds uses parseInt.
+(1) numberHidden loss: proven. course.update with controlIds reads the existing course_controls selecting only controlId/labelDx/labelDy (course.ts:895-898), deletes all rows (:912) and recreates them with courseId, position, controlId and the label offset only (:914-924). The schema default for number_hidden is false (schema.prisma:557), so every recreated row is unhidden. rewriteStructureFromColumns (course-structure.ts:244-258) then sets structure to NULL and rebuilds it via loadExplicitStructure -> structureFromColumns, which takes numberHidden only from the course_controls rows (:221-224, :66). carryLegs (:81-97) carries `leg` from the previous structure and nothing else, so the old structure's numberHidden is not restored. No guard prevents this for an ordinary course: only variants and roots with variation groups are refused (course.ts:787-802). The Courses page calls this path on every control-code save (CoursesPage.tsx:803-808), and the editor sets the flag through setStructure (docs/course-editor.md:905-906). The spec does not sanction the drop: course-layer.md:882-885 describes the linear shortcut as keeping an item's leg and is silent on numberHidden, and the Pending section (2485 onwards) does not list it. Label offsets are deliberately carried over the same delete/recreate, which makes the missing flag an oversight. A course.update without controlIds (start/finish, orderMode) does not delete the rows and keeps the flag, so the loss is limited to sequence edits. 
+
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -2144,7 +1951,9 @@ Affected element reads: IOF rc.Id (215), rc.Name (236), cc.Control (257, 273), C
 
 Consequence on import: routers/course.ts:2149-2154 builds courseByName from the stored names, lowercased, and 2193 looks up pc.name.toLowerCase(). A stored course '007' (course names are free strings, z.string().min(1) at course.ts:598/676/760; the export writes Name: course.name verbatim at iof-course-export.ts:130) comes back from the parser as '7', misses the lookup, and a second course is created. Class matching (findBestClassMatch, course.ts:165-175) compares against the coerced '100' for a class '1E2', so it does not match.
 
-Limits on the claim: control ids are coerced the same way in the definition and in the reference within one file, so course-to-control linking inside a file still works; only matching against stored controls with a zero-padded or hex-like code would be affected, and real punch codes (31-255) have no such form. Purely alphabetic or mixed names (H21, D16, 'Bana 1', A, B) and plain integers without leading zeros are unaffected. The trigger needs an all-numeric-looking name with a leading zero, a trailing decimal zero, an exponent form, a leading '+', or a hex form. Not listed as pending in docs/map-*.md or docs/course-*.md (grep found nothing).
+Limits on the claim: control ids are coerced the same way in the definition and in the reference within one file, so course-to-control linking inside a file still works; only matching against
+
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -2177,15 +1986,9 @@ The claim holds as stated; I found no guard that prevents it.
 - **Crossing points:** the lookup is `existingControls.find(...)` on the same pre-loop array (1976); a repeated Id creates a second `crossing_point` row (1993-1998).
 - **Courses:** `courseByName` is built once (2148-2153) and not updated after `course.create` (2233-2250); a second course with the same name (case-insensitively) creates a second row, and `courseIdMap.set(pc.name, ...)` keeps the last.
 - **No dedup upstream:** the IOF parser pushes every `<Control>` and `<Course>` without checking ids or names (iof-course-parser.ts:208-229, 233-293). The pre-write check at course.ts:1897-1917 only refuses codes held by a live start/finish.
-- **No DB constraint:** controls have only `@@unique([eventId, seq])` (schema.prisma:483); courses have `[eventId, seq]` and `[parentCourseId, variantKey]` (539-540). No migration adds a unique index on control codes or course names.
-- **Not documented as pending:** nothing in docs/course-*.md or docs/map-*.md lists duplicate ids in an import file as unimplemented.
+- **No DB constraint:** controls have only `@@unique([eventId, seq])`
 
-Limits on the claim's reach:
-- OCD imports cannot produce duplicate control ids: that parser keys controls and courses by Map (ocd-course-parser.ts:213, 293). It could still yield two courses whose names differ only by case.
-- I did not check the Purple Pen parser for dedup.
-- Re-importing the same file does not add more rows: both duplicates then resolve to an existing row via the snapshot.
-- The trigger is a malformed file (repeated Control Id or Course Name), which standard exporters do not write.
-- I did not trace the claimed downstream ambiguity in `controlSeqToId` or matching; the duplicate live rows themselves are proven.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -2211,9 +2014,9 @@ Both halves hold in the code.
 
 2. Unplaced last control. `endControl` (resolve-layout.ts:253-254) returns null for a finish at (0,0), but course controls are not filtered: `rawControls = input.course?.controls` (line 290; the placed filter at 287-289 is only the all-controls/setter branch) and `layoutControlsFromCourseControls` (145-158) passes every row through. With the last control at (0,0), `lastControl` is truthy and the distance is measured from the map origin.
 
-Not refuted by the specs: no 'Pending' entry covers this. The docs only say 'measured last-control -> finish distance' (course-editor.md:394-395, course-maps.md:384-385, course-print.md:686-687) and are silent on bends, so the straight line is arguably the documented behaviour for an unbent leg; the defect is the silent mismatch with the bends rule.
+Not refu
 
-Mitigations that limit severity: an explicit finish length in the description instructions overrides the measured value (`finish.lengthM ?? measured`); the figure is informational on the description sheet and does not affect results or timing; a course with an unplaced control already prints visibly wrong (circle and legs drawn at the origin), so the wrong finish distance there is a secondary symptom.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -2239,14 +2042,9 @@ The claim holds for crossings, proved from the code.
 - **The printed path includes them.** `sheetInputForMapRow` passes `crossings: layoutCrossings(row.course.structure ?? null, ctx.allControls)` (sheet-rows.ts:252). It is the input for courseMap.resolved (courseMap.ts:521, :564) and for `sheetForMapRow` (sheet-rows.ts:307).
 - **Crossings add rows.** resolve-layout.ts:370 forwards `input.course.crossings` to `buildDescriptionSheet`. `mergeDerivedSpecials` (description-rows.ts:144-165) pushes one 13.3/13.4 special per distinct anchor unless a hand-placed row of the same kind already sits at that anchor. Each special becomes a row (description-rows.ts:242-268).
 - **The undercount reaches the check.** `list` sets `descriptionRowCount: layout.descriptionRows.length` (courseMap.ts:386) and passes it to `validateCourseMap` (:403). validate.ts:168-191 sizes the block from that count for `description_outside_page`. Two crossing legs with no hand-placed 13.3 make the list's block two cells shorter than the printed one.
-- **Variant part also holds structurally.** `list` always uses the root row's `course.courseControls` and `descriptionInstructions`, while a variant page swaps in the child's via `rowForVariant` (sheet-rows.ts:98-115). The `variants` passed at :401 feed only the `control_outside_frame` check, not the row count. I did not verify that the root's controls are specifically the "first alternative".
+- **Variant part also holds structurally.** `list` always uses the root row's `course.courseControls` and `descriptionInstructions`, while a variant page swaps in the child's via `rowForVariant` (sheet-rows.ts:98-115). The `variants` pass
 
-Mitigations that limit the impact:
-- The layout editor validates client-side with the correct count from courseMap.resolved (LayoutMode.tsx:470, fed by courseMap.ts:268), so the issue is flagged there.
-- The list validation only drives the overview's issue count and `printStatus` "ready"/"issues" (useCourseMapsOverview.tsx:64-69). I found no print gate on it.
-- The failure needs a description block within one or two cell heights of the printable margin plus derived crossing rows (or a longer variant).
-
-The effect is a false "ready" status in the overview in an unusual configuration. There is no data loss and the printed output is not altered by this bug. The duplicated input assembly is a real drift risk.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -2275,11 +2073,9 @@ The claim holds for every server-backed path; "dead" is overstated for the class
 - Docs promise both: docs/ops/receipt-printer-setup.md:295-296 shows "SIAC 8007045 / Battery: 2.98V 2024-02-12 OK" and a class top list on the sample receipt; docs/system/registration-and-readout.md:659 lists "Class results table" on the kiosk readout screen. These are not map/course chapters, so no "Pending" section excuses them.
 
 Corrections to the claim:
-- Class results are not fully dead. The offline finish-station path builds `classResults` from localResult (FinishStation.tsx:198-203, fed by lib/offline/local-readout.ts:116 and :262), so the escpos/star-raster class-results blocks are reachable when offline.
-- The SIAC block is dead everywhere: no call site ever sets a non-null `siac`.
-- The test file is packages/web/src/lib/__tests__/escpos.test.ts (not receipt-printer/__tests__); the SIAC test is at :153.
+- Class results are not fully dead. The offline finish-station path builds `classResults` from localResult (FinishStation.tsx:198-203, fed by lib/offline/local-readout.ts:116 and :262), so the escpos/star-raster class-r
 
-Severity: medium, not high. This is a missing feature with dead code and a doc mismatch. Times, status and position are correct, and battery voltage is still visible to the organiser on the Cards page (CardsPage.tsx). The practical cost is that the runner gets no low-battery line on the receipt and the kiosk and online receipts lack the top list.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -2327,7 +2123,9 @@ One correction to the claim's wording: the order follows each class's winning ti
 
 Start list: class order is the order of the lowest `startNo` per class (or of whichever column the user sorts by), not `sortIndex`. It is stable over time, unlike the results page, but still not the class sort order. The same-name merge applies there too.
 
-Limits on impact: placings and times inside each class are correct. The same-name merge needs two classes with identical names in one event, which is unusual. I did not check whether class creation or import paths reject duplicate names at the application level; the schema does not.
+Limits on impact: placings and times inside each class are correct. The same-name merge needs two classes with identical names in one event,
+
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -2358,9 +2156,9 @@ The claim holds for direct (non-queued) notices.
 
 Two limits on the claim:
 - The specific "hide number" path was not traced, but every editor write goes through `run`, so any successful write triggers it.
-- "Discarding the choice" amounts to an implicit Keep theirs. The server state stays consistent (their position); what is lost is one unsaved drag on the user's side, plus the informational refresh notice.
+-
 
-Severity: medium, not higher. It needs a concurrent edit of the same control and the user acting elsewhere before answering. Nothing stored is corrupted, and the control is redrawn at their position after the invalidate.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -2386,9 +2184,9 @@ Call frequency is as claimed for the editor: EditorPage.tsx:323-325 invalidates 
 
 The runnerCount sub-claim is only partly right:
 - Variant children: not shown. Runners are summed through class.courseId (control.ts:600-610), and classes sit on the root course (course-variants.ts:261), not on children, so child rows add map entries but no runners.
-- Removed courses: plausible. course.delete (course.ts:1235-1250) sets removed: true without clearing class.courseId or deleting course_controls, so a class still pointing at a removed course keeps contributing its runners. The import replaceAll path does clear class.courseId (course.ts:1932-1935).
+- Removed courses: plausible. course.delete (course.ts:1235-1250) sets removed: true without clearing class.cou
 
-Severity: the claimed scenario (150 events, ~120,000 rows) is hypothetical. Each row is two UUIDs; a sequential scan plus Prisma deserialisation of that size is on the order of a few hundred milliseconds and tens of MB transient, per call. That is a latency cost that grows with instance history, not a failure or wrong result. A typical instance with a handful of events sees a few thousand rows. I rate it low, not higher.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -2427,17 +2225,9 @@ The mechanism is real, but the claim's two headline examples do not actually ove
 - The course-name field is 3 cells: 7.5 em.
 
 **The claim's examples, measured with Liberation Sans Bold advances**
-- 'H21, D21, H20, D20, H18, D18, H35, D35' is about 18.6 em. It fits within 20 em (about 44.6 of 48 mm at 6 mm cells).
-- 'Stockholm City Cup 2026 - deltävling 3' is about 18.4 em. It fits within 19.05 em, barely.
-- 'Öppen motion 5' is about 7.6 em against 7.5 em. It touches or just crosses the column rule, by about 0.25 mm.
+- 'H21, D21, H20, D20, H18, D18, H35, D35' is 
 
-**Where it does overflow**
-- Nine or more three-character classes on one course.
-- A few long class names, e.g. 'Öppen motion 5, Öppen motion 7, Inskolning' at about 22 em.
-- Event names over roughly 37-40 characters.
-- Course names over roughly 12-13 characters in the 3-cell field.
-
-The claim's "roughly 34 bold characters" capacity is slightly pessimistic; about 36-40 mixed characters fit.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -2475,14 +2265,9 @@ The three code facts hold, but the behaviour is what the spec says and the scena
 - It is not listed under a Pending section. docs/course-layout.md:917-920 only lists the named per-runner map and a spare count in the menus.
 
 **Where the scenario is overstated**
-- `WITHDRAWN_STATUSES` is only `RunnerStatus.Cancel` (types.ts:60-62). DNS runners are counted by both exports, so "2 withdrawn (DNS reported)" is wrong; only cancelled entries get a surplus map.
-- `vacantCount` is a count of reserved places, not runners. The specified mechanism for extra maps is `spare=`, which applies per page.
-- The only UI entry using `copies=runners` is "One map per runner" on a root (export-menu.ts:75-82). Its label shows the assigned-runner count and it is disabled at 0, so the unassigned omission is visible as a lower number, though not flagged explicitly. `classes=…&copies=runners` is reachable only by hand-written URL.
+- `WITHDRAWN_STATUSES` is only `RunnerStatus.Cancel` (types.ts:60-62). DNS runners are cou
 
-**Net effect**
-- A few surplus maps for cancelled entries.
-- No vacancy maps without `spare=`.
-- Runners on a forked course with no variant yet get no map and no warning. No single variant page could be chosen for them anyway.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -2519,11 +2304,9 @@ What holds:
 - Nothing in docs/map-*.md or docs/course-*.md lists this as pending.
 
 What does not hold:
-- `invalidate()` is a React Query call local to the browser that performed the readout. ResultsPage has no `refetchInterval`, and there is no WebSocket, SSE or subscription pushing invalidations to other clients. Three other laptops showing Results do not refetch on someone else's readout; they refetch only on mount, on window focus after the 5 s staleTime (main.tsx:22), or on their own mutations.
-- So a readout triggers at most one recomputation, and only if the reading browser itself has the Results page mounted (an inactive query is only marked stale). "Three full recomputations and three full re-renders per readout" is wrong.
-- The per-request work is bounded: about 43 + N_courses indexed queries and an in-memory match of roughly 2,000 short punch lists. My estimate is on the order of 100 ms at the claimed scale, not a failure.
+- `invalidate()` is a React Query call local to the browser that performed the readout. ResultsPage has no `refetchInterval`, and there is no WebSocket, SSE or subscription pushing invalidations to other clients. Three other laptops showing Results do not refetch on someone else's readout; they refetch only on mount, on window focus after the
 
-The real defect is avoidable per-request work that grows with event size: a sequential N+1 over courses and matching for courses that have no no-timing position. No wrong results and no failure in normal use.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -2552,13 +2335,7 @@ The mechanism is as claimed.
 
 It is not covered by the spec's Pending. That section names only "a refresh cut off by a restart between its clear and its compute". The spec body states the behaviour as implemented ("the climbs are computed again when the refresh ends"), but the same section and the file header promise "until it lands the climb is read as before" and "Between an edit and the route's landing the climb is read along what is stored", which the multi-chunk window contradicts.
 
-What limits the impact:
-- No wrong value is ever stored, only an absence, and it self-heals at the end of the refresh, including when the refresh ends in an error (the finally).
-- Any edit of the course, or opening it in the editor (course.refreshClimbs, EditorPage.tsx:1977-1996), recomputes it earlier.
-- A new row without vertices clears nothing, so only pairs whose straight line is blocked trigger a clear.
-- "Minutes" is an upper bound, not the typical case. Sprint legs are short, so the window is small (pad = max(10 mm, half the leg), 0.25 mm cells, leg.ts:79-93), around tens of thousands of cells per pair. A few hundred sprint pairs is more likely tens of seconds, though this was not measured. The 5-minute figure is a per-chunk timeout, not an expected duration. Multi-minute windows need many long blocked legs (forest maps near the 1.2 million cell cap, "a long leg is a few seconds").
-
-The harm needs an export, print, Eventor push or checkout to fall inside that window right after a bulk change. The climb is then missing, not wrong.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -2589,13 +2366,9 @@ The mechanism is real, but no trigger was found and the claimed cost is overstat
 
 **What weakens it**
 - Chunk-level failure is the specified and tested behaviour. `docs/course-elevation.md` §7.5 says: "a worker that fails or runs past five minutes leaves its pairs for the next refresh and the others go on." The test at leg-routes-auto.test.ts:220 covers it. Only the permanent poison-pair consequence is unaddressed; it is not in the Pending list.
-- No concrete trigger exists in the code. There is no `throw` anywhere in `packages/shared/src/route/*.ts`. Each search window is capped at `ROUTE_MAX_CELLS = 1_200_000` by coarsening the cells (leg.ts:80, 94), and the comment at auto.ts:33 puts a long leg at a few seconds, so 20 searches sit far below the 5 minute limit. A straight legal line returns without any search (leg.ts:137).
-- "Burning up to 5 minutes on every edit" applies only to the timeout path. A throwing job fails as soon as it is reached. The search runs in a worker thread, so the API event loop is not blocked either way.
-- The impact is a fallback, not corruption: the 19 chunk-mates keep the climb read along the drawn line, which is the behaviour before this feature. Other chunks are still written and their climbs recomputed (auto.ts:225-228).
-- A refresh is triggered only by climb-marking edits, `courseObject.*` writes and `course.refreshClimbs` (trpc.ts:181-182, course.ts:1231), one per event at a time.
+- No concrete trigger exists in the code. There is no `throw` anywhere in `packages/shared/src/route/*.ts`. Each searc
 
-**Severity**
-Low: this is a robustness gap (no per-pair isolation, weak observability) whose trigger is hypothetical, i.e. it needs a future bug in the search or malformed geometry. If such a trigger were shown, it would be medium.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -2638,14 +2411,9 @@ The mechanism is real, but it is the specified design and the claimed impact is 
 - The Pending section (course-elevation.md:1298-1306) lists the missing cross-event cap and that a correction alone does not trigger a refresh. It does not list this over-invalidation.
 
 **What limits the impact**
-- The spec states this basis outright (course-elevation.md:764-768: "the map patch's version" is part of the basis; "decoded, patched and classified once per worker"). It is a coarse but deliberate invalidation key, not a slip.
-- The work runs in a worker thread off the event loop, one chunk at a time, one refresh per event (the `running` map, leg-routes-auto.ts:236-256). Requests are not blocked.
-- Each search is bounded: the leg window is capped at `ROUTE_MAX_CELLS = 1_200_000` (packages/shared/src/route/leg.ts:80-94), and the code comment at leg-routes-auto.ts:32 says a long leg takes a few seconds.
-- Results stay correct: a pair searched again to the same vertices clears no climbs (leg-routes-auto.ts:211-215).
-- "Many minutes at 100%" is one core, and only for an event with a great many distinct pairs. The "refreshes of several events in parallel" multiplier is a separate item already in Pending.
+- The spec states this basis outrig
 
-**Severity**
-Low: wasted background CPU on one core after a map correction. No wrong results, no blocked request, no data at risk.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -2675,10 +2443,9 @@ The core claim holds: failures of these mutations are not reported.
 Real triggers: network/5xx failure, lease or capability refusal from `coursesEditRaceProcedure` (trpc.ts:316), NOT_FOUND when the course was removed elsewhere (course.ts:240-252), and zod rejection (clearing the name: `name: z.string().min(1)` at course.ts:760 makes a blanked name snap back silently).
 
 Two of the claim's examples are wrong:
-- "Renamed to an existing name" does not fail. `course.update` writes `data.name = input.name` (course.ts:805) with no duplicate check, and the Course model has no unique on name (only `@@unique([eventId, seq])` and `@@unique([parentCourseId, variantKey])`). The CONFLICT "already exists" at course.ts:690 is in create only.
-- COURSE_IS_VARIANT is unreachable from the inline detail: variants render `readOnly`, inputs are `disabled={readOnly}` and `handleSave` returns early (784).
+- "Renamed to an existing name" does not fail. `course.update` writes `data.name = input.name` (course.ts:805) with no duplicate check, and the Course model has no unique on name (only `@@unique([eventId, s
 
-Severity is low rather than high or medium: nothing is lost or corrupted, and the UI keeps showing the true stored state (old numbers, selection still in place, field reverted). The defect is missing feedback on a failure that originates elsewhere. With the browser fully offline, React Query's default networkMode pauses the mutation rather than failing it, so the "weak connection" case is narrower than stated.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -2709,13 +2476,9 @@ What holds:
 
 What weakens the claim:
 - The `editor` prop is not the only reason the memo fails. `toolbar` (EditorPage.tsx:2523) and `overlay` (2941) are plain un-memoized JSX passed to MapPanel at 3012-3013, so MapPanel would re-render on every page render even with a stable `editor`. Stabilising `editor` alone would not restore the memo.
-- The churn is known and designed around. MapPanel.tsx:452-455 says "that object is rebuilt on every editor render (a hover with an armed tool, a selection)" and keys its effect on `hasEditor`. MapViewer.tsx:1126 says "the editor object itself changes with every tool hover" and derives stable primitives for the layer request. MapViewer holds the tool in a ref (796) for its handlers.
-- MapViewer is a plain function component (563), not memoized, so the visible cost is a React reconcile of the viewer subtree, not a map-layer refetch or re-request.
-- With an armed tool, the per-hover re-render is functionally required: the binding's `shapes` (ghost, polygon rubber band) depend on `hover` and are drawn by MapViewer at 3233-3235. `onHover` also dedupes identical snapped points (1350-1356).
-- The 5 s presence re-render is one reconcile per 5 s, which is negligible.
-- "Pointer lag on a tablet or old laptop" is asserted without measurement, and I found nothing in the code that proves it.
+- The churn is known and designed around. MapPanel.tsx:452-455 says "that object is rebuilt on every editor render (a hover with an armed tool, a selection)"
 
-So this is a real violation of a documented memo contract and avoidable per-render work, but not a demonstrated user-visible failure. I rate it low, not the medium-or-higher the scenario implies.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -2741,10 +2504,9 @@ Mechanics as claimed: syncClassPool -> liveChildren(child) returns [] so the cla
 
 What weakens the claim's impact:
 1. A child is a complete ordinary linear course (own course_controls, legs, length), so a class on it behaves as a plain non-forked class. No pool and cleared per-runner variants are the coherent outcome for that; runners fall back to the class course.
-2. The dangling pointer is not specific to variants. course.delete (course.ts:1235-1251) soft-deletes a plain course without touching classes that use it either; only importCourses replaceAll nulls class.courseId (course.ts:1932-1934). A class on a removed course is an existing tolerated state; the removed row and its course_controls remain, so evaluation still has a control sequence. The difference here is that it happens silently as a side effect of editing the root's structure.
-3. docs/course-layer.md Pending (2508-2511) already says 'a variant is still an ordinary course in every other course list', i.e. the picker exposure is acknowledged. It does not say class assignment to a variant is refused or unimplemented, so I did not treat it as refuting; but the spec invariant at 2183/2270 ('classes point at the root') is only a description, not an enforced rule.
+2. The dangling pointer is not specific to variants. course.delete (course.ts:1235-1251) soft-deletes a plain course without touching classes that use it either; only importCourses replaceAll nulls class.courseId (course.ts:1932-1934). A class on a removed course is an exis
 
-Not verified: the claim's print statement ('a class prints its root') and what result/readout code does with a class whose course is removed; I did not trace those readers.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -2773,11 +2535,9 @@ The code facts hold, but the claimed scenario is partly wrong and the visible ef
 
 **What is overstated or wrong**
 - "A kiosk asking for a course seq that was just deleted gets the entire event" is false. Deletion is soft and `(eventId, seq)` is unique, so the unfiltered `findFirst` still finds the deleted course and returns that course's data. The whole-event fallback only happens for a seq that never existed in the event; the web clients take the seq from the class/course lists (CompetitionDashboard.tsx:90-102), so that needs a hand-made or cross-event request.
-- A control that exists only on a deleted course gets `total: 0` unless a runner or non-removed class still points at that course (1524-1528). The dashboard sums totals (CompetitionDashboard.tsx:20-22) and MapPanel ignores rows with `total` 0 (MapPanel.tsx:334-335), so a `total: 0` row changes nothing on screen. The count only shifts when a class or runner still references the deleted course, since `delete` does not clear `class.courseId`.
-- "Includes variant children" is not a defect for live variants: runners carry the variant's id in `runner.courseId` (classRouter.ts:427-439), so their bindings must be included. Only removed variants are stray, with the same `total: 0` outcome.
-- The bulk updates only reach removed rows if the client sends a removed seq (stale list or a race with a delete). The rows stay `removed: true`; the harm is a needless write and journal entry.
+- A control that exists only on a deleted course gets `total: 0` unless a runner or non-remove
 
-No data loss, no wrong results, nothing in the punch/result path. The realistic effect is a slightly off progress percentage on the dashboard when a class still points at a deleted course.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -2811,11 +2571,9 @@ What does not hold:
 
 Why this is low, not a security breach:
 - The write is limited to class.course_id within the caller's own event; no other class field is reachable.
-- Mapping courses to classes is the documented course-setter workflow: docs/course-import-class-fallback.md describes the import dialog's class dropdown as the course setter's tool, and both web callers pass linkClassId automatically via matchCourselessClass.
-- docs/system/authentication.md does not reserve class-to-course assignment for event.manage.
-- It is still a real inconsistency: the same field has two gates, and a second write path omits the pool sync.
+- Mapping courses to classes is the documented course-setter workflow: docs/course-import-class-fallback.md describes the impo
 
-Not listed under any "Pending" section that I found.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -2872,7 +2630,9 @@ The factual core holds; the claimed impact is unproven.
 - Nothing in the repo catches it: the parser reads only `Control/MapPosition` (iof-course-parser.ts:219-227) and never reads the Map corners (grep for `MapPositionTopLeft` finds only the writer, one doc line and one test). The only test assertion is that the element is absent for an empty event (iof-course-export.test.ts:154).
 - It is not listed as pending: docs/system/iof-coursedata-export.md:39 documents the corners as "bounding box of the exported controls", and the code comment at lines 171-173 says they stand in for image corners because no image is shipped. No guard, flip or Pending entry covers the orientation.
 
-Severity is low, not the "mirrors or shifts the course" the claim implies as a likely outcome. No consumer was shown to place courses by these corners. The corners are an admitted placeholder (control bounding box, not a map image extent), so a consumer that did trust them as image corners would misplace the course whichever way y ran. The control coordinates themselves are correct and consistent with Oxygen's importer. This is a labelling inconsistency in a placeholder element with a speculative interoperability effect.
+Severity is low, not the "mirrors or shifts the course" the claim implies as a likely outcome. No consumer was shown to place courses by these corners. The corners are an admitted placeholder (control bounding box, not a map image extent), so
+
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -2908,12 +2668,9 @@ The facts are real, but the claimed scenario is overstated.
 
 **Overstated or wrong in the claim**
 - **The 40 MB scenario cannot happen.** 40 MB of binary is about 53.3 MB of base64, which exceeds the 50 MB body limit and is rejected with a 413. The largest .ocd that gets through is about 37 MB.
-- **The second decode is conditional.** The `ocad2geojson` `readOcad` fallback (course.ts:1873-1883) runs only when `loadEventCrs` returns null, meaning the event has no base map yet. With a map present, the buffer is decoded once per request.
-- **The measured blocking at the limit is small.** For a 37 MB payload, the base64 decode took 33 ms and `JSON.parse` of the roughly 49 MB body took 57 ms. The custom parser only walks the object index and the 7xxxxx course symbols, which is linear. That is on the order of 100-200 ms of event-loop stall, not a meaningful delay to card readouts. Only the conditional `readOcad` full-file parse could be heavier; I did not measure it because `node_modules` is absent.
-- **The RangeError needs a narrow truncation.** The file must be cut within 3 bytes of an index block offset, or within 8 bytes after a course object's 56-byte header. Other truncations are skipped by the existing guards. The result is an ugly error message on an already-invalid file, with no data written, since the parse precedes any DB write.
-- **The endpoints are not open.** Both sit behind `coursesEditProcedure` / `coursesEditRaceProcedure`, so this is not an unauthenticated DoS.
+- **The s
 
-Not listed under any "Pending" section as far as the claim's scope goes; I did not search docs/map-*.md or docs/course-*.md exhaustively for an upload-size note.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -2941,7 +2698,9 @@ All three factual parts hold; the harmful scenario is theoretical only.
 
 3. Debug script: packages/api/src/test-full-parser.ts is 15 lines that read 'e2e/test.ocd' and console.log control lookups. Nothing imports it. tsconfig has `include: ["src"]` and excludes only `src/**/__tests__`, build is `tsc`, and the Dockerfile copies packages/api/ into the runtime image, so it is compiled to dist/test-full-parser.js and shipped. It is never executed (CMD is node packages/api/dist/index.js).
 
-Against the claimed scenario: on e2e/test.ocd (OCAD 2018; string types present: 2 x5, 9 x5, 1039 x1) the heuristic matched only the five type-2 course records, so there is no misimport in the fixture. A bogus course needs a non-course record that carries both an s and an f field with a head not starting with '<' (conceivably an older-format type-1 control record with a size and a column-F symbol); I found no file or test demonstrating this, so it is unproven in practice.
+Against the claimed scenario: on e2e/test.ocd (OCAD 2018
+
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -3009,12 +2768,9 @@ The mechanics are as claimed, but the behaviour is specified and tested, and the
 **What weakens the claim**
 - This is the documented convention, not an oversight. docs/course-print.md §8.1 line 842 says 'any other composer error | 400 with its message'; §8.2 line 929 says a worker error is 'a 400, §8.1'; line 1095 says a worker that dies or the 10 min timeout is '400 { error } with the message (maps.pdf's convention, §8.1)'. The test 'any composer error is a 400; there is no other path to fall back to' (course-maps.test.ts:633-643) pins it.
 - The spec only covers composer and worker errors. DB errors falling into the same 400 are an unspecified side effect of the catch-all.
-- The 'no retry / no fallback' consequence is wrong. client.ts:280 throws on any `!res.ok`, and §8.6 line 1404 says 'a 4xx / 5xx stays the export's error'. A 500 would be handled identically by the device client.
-- Server faults are not invisible. Both handlers call `req.log.error(error)` (routes.ts:465, 492). Only status-code-based 5xx dashboards miss them.
-- Both routes require `courses.view` (routes.ts:429, 480), so internal messages reach authenticated organisers only, and no secrets are involved.
+- The 'no retry / no fallback' consequence is wrong. client.ts:280 throws on any `!res.ok`, and §8.6 line 1404 says 'a 4xx / 5xx stays the exp
 
-**Net**
-A real but small engineering inconsistency: wrong status class for server faults, raw messages to organisers, and a mismatch with descriptions-pdf.ts. It causes no wrong output, no data loss and no change in client behaviour, so severity is low, not higher.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -3049,12 +2805,9 @@ Sibling UI code already treats negative as 'rental, fee unknown': RunnerInlineDe
 
 How a negative value gets stored:
 - No in-app UI writes one. RegistrationDialog.tsx:631 sends `rentalFee > 0 ? rentalFee : 0`, and the event fee is validated `min(0)` (routers/event.ts:970).
-- packages/api/scripts/migrate-mysql-to-pg.ts:687 copies the MeOS `CardFee` verbatim (`Number(r.CardFee) || 0`), so a MeOS-migrated event can carry the sentinel.
-- runner.create and runner.update accept any integer (`z.number().int()`, runner.ts:189 and :211), so a direct API call can store one.
+- packages/ap
 
-There is no DB constraint on the column (schema.prisma:836), and nothing about this appears under a 'Pending' section.
-
-Severity is low to medium; I chose low. It needs migrated or API-written data plus a manual reprint, the result is two wrong lines on a printed receipt, the total is right, and no stored data changes. The wrong lines are on a customer-facing receipt, which is the argument for medium.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -3089,19 +2842,9 @@ Heights for a 250 x 1000 logo, 60 controls, QR code:
 - Runner block and status block with separators: about 120
 - Splits: header 24 + 60 x 24 + finish row 24 + separator 12 = 1500
 - Position and 5 class results with separator: about 156
-- QR (label 24 + 4 + about 185 + 24): about 240
-- Footer: 120
+- QR (label 24 + 4 + 
 
-Total is about 3,300 dots, under 4096, so the receipt prints in full. It does not end mid-splits.
-
-**What it actually takes to truncate**
-- With a 1:4 portrait logo: roughly 90 or more controls.
-- With 60 controls: a logo taller than about 1,800 dots at 250 wide, i.e. aspect ratio beyond about 1:7.
-- With no logo: about 140 controls.
-
-When it does overflow, the content lost first is the tail (timestamp, footer, QR), not the splits. The logo height being unbounded also wastes paper on ESC/POS (escpos.ts:320, 495), which is the more likely practical effect of a portrait logo.
-
-Not listed under any "Pending" section of docs/map-*.md or docs/course-*.md (receipts are outside those specs).
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -3138,7 +2881,9 @@ With the UI in Swedish, a mispunched runner's receipt therefore reads `Start: ..
 
 One detail of the claimed scenario I did not verify: whether the time prints as `-` for a mispunch depends on `formatRunningTime`, which I did not read. It does not affect the defect.
 
-Severity: this is cosmetic. Times, status and splits are all correct, and the English terms are understandable to the runner. Nothing fails. I rate it low.
+Severity: this is cosmetic. Times, status and splits are all correct, and
+
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -3162,10 +2907,9 @@ Severity: this is cosmetic. Times, status and splits are all correct, and the En
 2. That assumption is false for free order: packages/shared/src/readout.ts:417-455 (matchFreeOrder) walks punches in card order and pushes ok matches in punch order with `controlIndex: claimedCi`; its doc comment says "Ok matches are emitted in punch (chronological) order". Missing positions are appended afterwards (457-470). So for a reversed run the array index idx is unrelated to the course position, and `legs[idx]` is the stored leg into position idx, not into the control punched.
 3. The legs array can be non-empty for a free_order course, so the guard in the printers (`legLength > 0`, escpos.ts:387) does not hide it:
  - course-geometry.ts:293-296: "Free-order courses have no meaningful legs — leave lengthM / legs alone"; `if (orderMode !== "free_order" && mapScale)` only skips rewriting, it does not clear. A course switched from ordered to free order (routers/course.ts:815 and 1182, followed by rebuildCourseLengths at 945 / 1206) keeps the legs string derived while it was ordered.
- - routers/course.ts:2164-2170 builds `legsStr` from the parsed file's per-control legLength for every course and writes it at 2219/2239 together with `orderMode: pc.orderMode`, with no free-order exception (only the geometry features are filtered at 2175).
-4. Printers compute pace per row from `split.legLength` and `split.splitTime` (escpos.ts:387-389, star-raster.ts:527-529), so each row shows a min/km figure from a leg that was not the one run.
-5. Second half of the claim (ordered courses): race.ts:181 returns for `positionMode === "skipped"` after idx has advanced, and the printers print `controlIndex + 1` (escpos.ts:376), so the printed numbering jumps over skipped positions. True as stated; whether the gap is unwanted is a matter of taste (the number is still the real course position), and legs[idx] stays correctly aligned in the ordered case.
-Limits on the claim: no leg length is meaningful for a free-order run at all (the runner did not run a planned leg), so the real fault is that pace is printed for free-order courses whenever a legs string is stored, not only that the pairing is off. Results, status, split and cumulative times are unaffected (they come from the matcher, not from idx). Nothing in docs/course-*.md or docs/map-*.md "Pending" sections lists receipt pace for free order as not implemented.
+ - routers/course.ts:2164-2170 builds `legsStr` from the parsed file's per-control legLength for every course and writes it at 2219/2239 together with `orderMode: pc.orderMode`, with no free-order 
+
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -3196,10 +2940,9 @@ The mechanical facts hold.
 Three things make the claim overstated.
 
 1. The dialog does not say the mode was changed. devices.json:125-126 reads "Mode change sent" and "Now power-cycle the printer ... It will re-enumerate as a {{mode}} device." The claim's "says the mode was changed" is only half right; the body text does still promise the new mode.
-2. Recording straight after the send is the documented design: docs/ops/printer-mode-management.md:50-52 shows Send -> Record -> Notify.
-3. Read-back is not generally possible. docs/ops/printer-mode-management.md:352-363 says fn=4 reads work only in Printer Class mode; in Virtual COM mode the IN endpoint streams a status pattern and the response never arrives. webusb.ts:426-427 adds that fn=2 "typically triggers a soft reset". So verification could cover at most the Printer Class -> Virtual COM direction, and might fail even there.
+2. Recording straight after the send is the documented design: docs/ops/printer-
 
-Consequence if the write is ignored: after the power-cycle the printer re-enumerates with the old PID, which the dialog reads from the USB descriptor, so the operator sees the unchanged mode. The stale borrowed-printer warning lives in localStorage and has a dismiss handler (PrinterSettingsDialog.tsx:120-124). No data loss and no effect on results; the write is already wrapped in the fn=1/fn=2 envelope that addresses the known silent-ignore case.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -3233,24 +2976,9 @@ The redundancy is real; the claimed impact is overstated.
 - The only production caller of `shortestLegRoute` is the auto-route worker (leg-routes-auto-worker.ts:20), one call per searched pair; via legs call `searchStretch` once per stretch (alternatives.ts:260).
 - Nothing in "Pending in this chapter" of docs/course-elevation.md covers this, so it is not a documented not-yet-implemented item.
 
-**Why the impact is smaller than claimed**
+**Why the impact is smal
 
-Timing of the copied Dijkstra:
-
-| Cells | Full pass | Stopped at target |
-|---|---|---|
-| 51,200 | 15 ms | 11 ms |
-| 320,000 | 87 ms | 57 ms |
-| 1,201,250 | 259 ms | 140 ms |
-
-- The 1.2 million figure is a cap (`ROUTE_MAX_CELLS`, leg.ts:80), not the typical size. The window is the leg's box padded by max(10 mm, half the leg length) at 0.25 mm cells (leg.ts:86-95), so a 40 mm sprint leg gives roughly 50,000 cells.
-- The wasted second pass is therefore about 15 ms for a typical sprint pair and at most about 0.26 s at the cap. For a few hundred pairs that is seconds, about a minute in the worst case, not "minutes doubled".
-- Stopping at the target saved only 30-45% of one pass in this geometry, because the window is centred on the leg.
-- A legal straight line skips the search entirely (leg.ts:128).
-- The work runs in worker threads off the event loop (docs/course-elevation.md §7.5 "What is searched"), so no request is held.
-- Climbs are not generally empty during the refresh: the climb is read along the stored route meanwhile (§7.5, "for the seconds the search takes"). Only a chosen row whose vertices changed clears climbs until the refresh ends.
-
-No wrong results follow from this; it is wasted background CPU.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -3276,7 +3004,9 @@ The flag does change the course's ends: course-structure.ts:60-69 drops the sepa
 
 The sibling procedure handles it explicitly: course.ts:1202-1205 "The course's ends moved: a computed climb no longer holds" -> clearComputedClimbs, covered by course-climb.test.ts:210-213 for bulkUpdate only. Spec docs/course-elevation.md:567 lists only course.bulkUpdate for this trigger; it is not under a Pending section. No self-heal: refreshClimbs computes only for courses that have no climb (course.ts:1225-1226 doc), so the stale value persists until a geometry edit or map change.
 
-Limiting factors for severity: no web code sends firstAsStart/lastAsFinish to course.update or bulkUpdate (grep of packages/web/src shows only reads: CoursesPage.tsx:525-541, course-overlay-ids.ts, course-anchors.ts), so this is reachable only by a direct API client today. The effect is a climb figure off by one leg's ascent, not corrupted data. The same call also leaves the derived legs string and length_m stale (rebuildCourseLengths skipped entirely), which predates this PR.
+Limiting factors for severity: no web code sends firstAsStart/las
+
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -3306,10 +3036,9 @@ The claim is accurate as stated.
 - Not listed as pending: docs/course-elevation.md "Pending in this chapter" does not mention this.
 
 Limits on the cost, which is why I rate it low:
-- Only open courses are iterated (climb 0 and not computed, line 99-100); courses with a typed or imported climb are skipped.
-- The function returns before the loop when the event has no climb sampler (lines 105-106), so events without a stored height field pay nothing.
-- Each read is one query on `leg_routes`, which has an index leading on `eventId` (schema.prisma:689). The result is N-fold redundant read and parse work, not quadratic growth, and it produces no wrong result.
-- Realistic added latency is probably tens of milliseconds to a second or two on the worst mutations (large import, map change); I did not measure it.
+- Only open courses are ite
+
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
@@ -3366,10 +3095,9 @@ Mitigations that limit the impact:
 - Nothing is lost or silently overwritten. The server refuses the write and the user is told it was not saved.
 - run's finally block calls invalidate(), and the refetched control.list re-seeds the book (EditorPage.tsx:207), so the missing seed heals on reload and a redo of the edit works.
 - A failed outbox entry keeps Retry / Discard; retry re-queues on the book's newest token (control-outbox.ts:267).
-- The window is narrow: a second write by another user to the same control must land between the server's CONFLICT answer and the immediate re-send, roughly one round trip. Writes from the same client are serialised per row, so only another client can trigger it.
-- The spec says "re-sent once" (course-editor.md:303, 305, 1801) and does not say what a second conflict should produce, so the single re-send matches the spec; the gap is the unclassified error. It is not listed under any Pending section.
+- The 
 
-Severity: low. It is a rare race whose result is a less helpful message and a manual redo or Retry, with no wrong data.
+(cut here; the full evidence is in /mnt/project-files/reviews/09-courses-printing-raw.json)
 
 </details>
 
