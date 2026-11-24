@@ -83,7 +83,13 @@ export async function switchCacheScope(
   suspended++;
   try {
     const cache = queryClient.getQueryCache();
-    for (const q of cache.findAll({ predicate: (q) => !isGlobalKey(q.queryKey) })) cache.remove(q);
+    // A query a mounted component observes is reset in place, not removed:
+    // removing it would leave the observer on a dead Query object that never
+    // updates again. Unobserved ones are simply dropped.
+    for (const q of cache.findAll({ predicate: (q) => !isGlobalKey(q.queryKey) })) {
+      if (q.getObserversCount() > 0) q.reset();
+      else cache.remove(q);
+    }
     if (blob && ownerOfPersisted(blob) === nameId) {
       // Queries only: paused mutations are already live in the mutation cache.
       hydrate(queryClient, {
@@ -98,4 +104,6 @@ export async function switchCacheScope(
   } finally {
     suspended--;
   }
+  // Mounted queries lost their data in the reset: fetch them for the new event.
+  void queryClient.refetchQueries({ type: "active", predicate: (q) => !isGlobalKey(q.queryKey) && q.state.data === undefined });
 }
