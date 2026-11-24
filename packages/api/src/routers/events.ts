@@ -283,7 +283,7 @@ async function resolveRunner(
   db: PrismaClient,
   eventId: bigint,
   payload: Record<string, unknown>,
-): Promise<{ id: string; finishTime: number } | null> {
+): Promise<{ id: string; finishTime: number; status: string } | null> {
   const cardNo =
     typeof payload.cardNo === "number" && payload.cardNo > 0
       ? payload.cardNo
@@ -291,7 +291,7 @@ async function resolveRunner(
   if (cardNo != null) {
     const byCard = await db.runner.findFirst({
       where: { eventId, cardNo, removed: false },
-      select: { id: true, finishTime: true },
+      select: { id: true, finishTime: true, status: true },
     });
     if (byCard) return byCard;
   }
@@ -303,7 +303,7 @@ async function resolveRunner(
   if (seq != null) {
     return db.runner.findFirst({
       where: { eventId, seq, removed: false },
-      select: { id: true, finishTime: true },
+      select: { id: true, finishTime: true, status: true },
     });
   }
 
@@ -358,7 +358,8 @@ async function applyEvent(
           where: { id: runner.id },
           data: {
             finishTime: toRelative(finishTime, zeroTime),
-            status: "ok",
+            // A DQ or a hand-set status is never turned into OK by a finish.
+            ...(runner.status === "unknown" ? { status: "ok" as const } : {}),
             finishManual: true,
           },
         });
@@ -381,7 +382,7 @@ async function applyEvent(
           data: {
             finishTime: finishTime > 0 ? toRelative(finishTime, zeroTime) : 0,
             finishManual: finishTime > 0,
-            ...(typeof status === "number"
+            ...(typeof status === "number" && runner.status !== "dq"
               ? { status: valueToRunnerStatus(status) }
               : {}),
           },

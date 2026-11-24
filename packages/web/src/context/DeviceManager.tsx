@@ -342,7 +342,7 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
 
       // Initial entry — before we know if runner is in DB
       const entry: RecentCard = isDuplicate
-        ? { ...existing, timestamp: new Date(), ownerData: readout.ownerData ?? existing.ownerData, actionResolved: false }
+        ? { ...existing, timestamp: new Date(), ownerData: readout.ownerData ?? existing.ownerData, actionResolved: false, applyHold: undefined }
         : {
             id,
             cardNumber: readout.cardNumber,

@@ -20,7 +20,7 @@ const AUTO_DISMISS_MS = 10000;
 
 export function CardNotification() {
   const { t } = useTranslation("race");
-  const { currentCard, isOnCardReadoutPage, confirmApply, dismissApply } = useDeviceManager();
+  const { currentCard, recentCards, isOnCardReadoutPage, confirmApply, dismissApply } = useDeviceManager();
   const navigate = useNavigate();
   const location = useLocation();
   const { openRegistration } = useRegistrationDialog();
@@ -52,8 +52,13 @@ export function CardNotification() {
 
   // RES-01: the server kept the stored result. Shown on every page, until the
   // operator decides (a held read must not time out unseen).
-  const hold = currentCard?.applyHold;
-  if (currentCard && hold) {
+  // A later card must not hide it: fall back to the newest held card in the list.
+  const heldCard = currentCard?.applyHold
+    ? currentCard
+    : recentCards.find((c) => c.applyHold?.outcome === "needsConfirmation");
+  const hold = heldCard?.applyHold;
+  if (heldCard && hold) {
+    const currentCard = heldCard;
     const name = currentCard.runnerName ?? String(currentCard.cardNumber);
     const asks = hold.outcome === "needsConfirmation";
     return (

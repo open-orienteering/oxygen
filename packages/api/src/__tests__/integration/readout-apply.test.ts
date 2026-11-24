@@ -102,7 +102,9 @@ describe("guarded readout apply", () => {
       await f.caller.runner.update({ id: f.seq, status: RunnerStatus.DQ });
       for (const confirmed of [false, true]) {
         const r = await readAndApply(f, goodRead(f.cardNo), { confirmed });
-        expect(r.outcome).toBe("protected");
+        // The evaluation itself reports the DQ, so the read agrees with the
+        // row ("unchanged"); a different value would be "protected".
+        expect(["unchanged", "protected"]).toContain(r.outcome);
         expect((await f.row()).status).toBe("dq");
       }
     } finally {
@@ -121,7 +123,15 @@ describe("guarded readout apply", () => {
       await f.caller.runner.update({ id: f.seq, status: RunnerStatus.OK });
       expect((await f.row()).statusManual).toBe(true);
       const r = await readAndApply(f, mp);
-      expect(r.outcome).toBe("protected");
+      expect(["unchanged", "protected"]).toContain(r.outcome);
+      expect((await f.row()).status).toBe("ok");
+      const direct = await f.caller.cardReadout.applyResult({
+        runnerId: f.seq,
+        status: RunnerStatus.MissingPunch,
+        finishTime: 384_000,
+        startTime: 360_000,
+      });
+      expect(direct.outcome).toBe("protected");
       expect((await f.row()).status).toBe("ok");
     } finally {
       await f.ctx.cleanup();
@@ -293,6 +303,98 @@ describe("result.applied ingest", () => {
       });
       expect(res.failed).toHaveLength(0);
       expect((await f.row()).status).toBe("dq");
+    } finally {
+      await f.ctx.cleanup();
+    }
+  });
+});
+
+describe("review follow-ups", () => {
+  it("a not-fresh read of a runner without a result asks and writes nothing", async () => {
+    const f = await build("ra-stale-noresult");
+    try {
+      const r = await f.caller.cardReadout.applyResult({
+        runnerId: f.seq,
+        status: RunnerStatus.OK,
+        finishTime: 384_000,
+        startTime: 360_000,
+        punchesFresh: false,
+      });
+      expect(r.outcome).toBe("needsConfirmation");
+      expect((await f.row()).status).toBe("unknown");
+    } finally {
+      await f.ctx.cleanup();
+    }
+  });
+
+  it("journals the applied result with the written times (negative start survives)", async () => {
+    const f = await build("ra-negative");
+    try {
+      // ZeroTime-relative start before zero: absolute = zeroTime - 3000.
+      const zero = f.ctx.event.zeroTime;
+      const start = zero - 3000;
+      const r = await f.caller.cardReadout.applyResult({
+        runnerId: f.seq,
+        status: RunnerStatus.OK,
+        finishTime: zero + 30_000,
+        startTime: start,
+      });
+      expect(r.outcome).toBe("applied");
+      expect(r.startTime).toBe(start);
+      const entry = await f.ctx.db.journalEntry.findFirstOrThrow({
+        where: { eventId: f.ctx.eventId, type: "result.applied" },
+      });
+      expect((entry.payload as { startTime: number }).startTime).toBe(start);
+    } finally {
+      await f.ctx.cleanup();
+    }
+  });
+
+  it("a queued finish.recorded does not turn a DQ into OK", async () => {
+    const f = await build("ra-finish-dq");
+    try {
+      await f.caller.runner.update({ id: f.seq, status: RunnerStatus.DQ });
+      await f.caller.events.push({
+        events: [
+          {
+            id: randomUUID(),
+            type: "finish.recorded" as never,
+            competitionId: f.ctx.event.nameId,
+            stationId: "station-A",
+            timestamp: 1_700_000_000_000,
+            payload: { cardNo: f.cardNo, runnerId: f.seq, finishTime: 384_000 },
+          },
+        ],
+      });
+      const row = await f.row();
+      expect(row.status).toBe("dq");
+      expect(row.finishManual).toBe(true);
+    } finally {
+      await f.ctx.cleanup();
+    }
+  });
+
+  it("a resent unchanged status sets no manual flag; clearing a status clears it", async () => {
+    const f = await build("ra-flags");
+    try {
+      await f.caller.runner.update({ id: f.seq, status: RunnerStatus.OK });
+      expect((await f.row()).statusManual).toBe(true);
+      await f.caller.runner.update({ id: f.seq, status: RunnerStatus.Unknown });
+      expect((await f.row()).statusManual).toBe(false);
+      await f.caller.runner.update({ id: f.seq, status: RunnerStatus.Unknown });
+      expect((await f.row()).statusManual).toBe(false);
+    } finally {
+      await f.ctx.cleanup();
+    }
+  });
+
+  it("bulk DNS marks the status as hand-set", async () => {
+    const f = await build("ra-bulk-dns");
+    try {
+      await f.caller.runner.bulkDns({ ids: [f.seq] });
+      const row = await f.row();
+      expect(row.status).toBe("dns");
+      expect(row.statusManual).toBe(true);
     } finally {
       await f.ctx.cleanup();
     }

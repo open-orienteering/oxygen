@@ -162,7 +162,7 @@ export function manualFlagsFor(
   if (typeof fields.finishTime === "number") {
     const ft = fields.finishTime;
     const rel = ft > 0 ? toRelative(ft, zeroTime) : ft;
-    if (rel !== current.finishTime) out.finishManual = rel > 0;
+    if (rel !== current.finishTime) out.finishManual = rel !== 0;
   }
   return out;
 }

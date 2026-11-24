@@ -3,7 +3,7 @@
  * (work package 2, RES-01 / SI-10; docs/system/registration-and-readout.md §3a).
  *
  * Pure: the server (`applyResult`, backup push, `result.applied` ingest) and
- * the offline path in the web client use the same decision. Conservative by
+ * the ingest of queued `result.applied` entries use the same decision (the web offline path does not yet). Conservative by
  * design: a DQ or a hand-set status/finish is never overwritten by a read,
  * and a read that would replace a result with a worse one asks the operator.
  */
@@ -53,7 +53,7 @@ function hasResultStatus(status: number): boolean {
 
 /** True when the runner row already carries a result worth protecting. */
 export function hasStoredResult(c: Pick<ReadoutGuardCurrent, "status" | "finishTime">): boolean {
-  return hasResultStatus(c.status) || c.finishTime > 0;
+  return hasResultStatus(c.status) || c.finishTime !== 0;
 }
 
 /**
@@ -74,6 +74,14 @@ export function decideReadoutApply(
     finishTime: current.finishTime,
     startTime: current.startTime,
   };
+  // The read agrees with what is stored: nothing to protect or ask about.
+  if (
+    next.status === current.status &&
+    next.finishTime === current.finishTime &&
+    next.startTime === current.startTime
+  ) {
+    return { outcome: "unchanged", write: keep };
+  }
   if (current.status === RunnerStatus.DQ) {
     return { outcome: "protected", reason: "dq", write: keep };
   }
@@ -93,28 +101,23 @@ export function decideReadoutApply(
   }
 
   let finishTime = next.finishTime;
-  if (current.finishManual && current.finishTime > 0) {
+  if (current.finishManual && current.finishTime !== 0) {
     // A keyed-in finish stays; the read may still fill the status in.
     finishTime = current.finishTime;
   }
 
-  if (!confirmed && hasStoredResult(current)) {
+  if (!confirmed) {
+    // A read the reader marks as not fresh (an old card's punches) asks even
+    // when the runner has no result yet: it would write last week's times.
     if (next.punchesFresh === false) {
       return { outcome: "needsConfirmation", reason: "stale-punches", write: keep };
     }
-    if (finishTime === 0 && next.status !== current.status) {
-      return { outcome: "needsConfirmation", reason: "no-finish", write: keep };
-    }
-    if (finishTime === 0 && current.finishTime > 0) {
+    if (hasStoredResult(current) && finishTime === 0) {
       return { outcome: "needsConfirmation", reason: "no-finish", write: keep };
     }
   }
 
-  const write = {
-    status: next.status,
-    finishTime,
-    startTime: next.startTime,
-  };
+  const write = { status: next.status, finishTime, startTime: next.startTime };
   if (
     write.status === current.status &&
     write.finishTime === current.finishTime &&

@@ -72,4 +72,20 @@ describe("decideReadoutApply", () => {
     const cur = { ...base, status: S.MissingPunch, finishTime: 5000, startTime: 1000 };
     expect(decideReadoutApply(cur, ok).outcome).toBe("apply");
   });
+
+  it("asks about a not-fresh read even when the runner has no result yet", () => {
+    const d = decideReadoutApply(base, { ...ok, punchesFresh: false });
+    expect(d.outcome).toBe("needsConfirmation");
+    expect(d.reason).toBe("stale-punches");
+  });
+
+  it("does not ask when a not-fresh read agrees with the stored result", () => {
+    const cur = { ...base, status: S.OK, finishTime: 5000, startTime: 1000 };
+    expect(decideReadoutApply(cur, { ...ok, punchesFresh: false }).outcome).toBe("unchanged");
+  });
+
+  it("treats a negative (before ZeroTime) start as a stored value", () => {
+    const cur = { ...base, status: S.OK, finishTime: 5000, startTime: -3000 };
+    expect(decideReadoutApply(cur, { ...ok, startTime: -3000 }).outcome).toBe("unchanged");
+  });
 });

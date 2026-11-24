@@ -32,6 +32,10 @@ Storing a card, evaluating it and writing the result happened in different place
 - Status after a manual finish with no card: online leaves it `unknown`, the offline `finish.recorded` sets `ok` (as before); not unified.
 - WEB-52, SI-09, a "push all pending" button for backups, per-type capabilities on `events.push` (API-12) and `card_readouts` header-time columns are left out.
 
+- The kiosk and the printed receipt of a held read show the stored result; the offline client (projection) does not run the guard yet, so an offline re-read of a DQ shows OK locally until sync (the server then keeps the DQ).
+- Eventor sync, `runner.create` and `runner.updated` replay on a peer holding the same value do not set the manual flags (RES-02 and package 5 territory).
+- `applyResultGuarded` reads then writes without a row lock; a DQ committed in that instant can be overwritten.
+
 ## Tests
 
 `readout-guard.test.ts`, `readout-policy.test.ts` (unit); `readout-apply.test.ts` (integration: DQ, hand-set status, cleared card, not-fresh read, manual finish, `FINISH_EXISTS`, backup push, `result.applied` ingest); `e2e/finish-station.spec.ts`.

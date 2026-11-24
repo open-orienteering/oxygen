@@ -255,7 +255,7 @@ export async function performReadout(
   // A finish keyed in by hand (Finish Station, runner edit) stands in for a
   // missing finish punch, so a card without one does not erase it (SI-10).
   const finishTime =
-    punchFinishTime === 0 && runner.finishManual && runner.finishTime > 0
+    punchFinishTime === 0 && runner.finishManual && runner.finishTime !== 0
       ? toAbsolute(runner.finishTime, zeroTime)
       : punchFinishTime;
 
@@ -264,7 +264,12 @@ export async function performReadout(
   const runningTime = Math.max(0, rawRunningTime - runningTimeAdjustment);
 
   const dbStatusNumeric = runnerStatusToValue(runner.status);
-  const status = computeStatus({
+  // A DQ or hand-set result is what the runner has: receipts and the kiosk
+  // show it, not the card's own verdict (RES-01).
+  const statusIsFixed =
+    runner.status === "dq" ||
+    (runner.statusManual && dbStatusNumeric !== RunnerStatus.Unknown);
+  const status = statusIsFixed ? dbStatusNumeric : computeStatus({
     finishTime,
     startTime,
     missingCount,
@@ -583,7 +588,10 @@ export async function storeReadoutImpl(
       status: runnerStatusToValue(linkedForHold.status),
       finishTime: linkedForHold.finishTime,
     }) &&
-    (allInputPunches.length === 0 || input.punchesFresh === false);
+    (allInputPunches.length === 0 ||
+      input.punchesFresh === false ||
+      // a fresh read without a finish would downgrade a finished runner
+      !allInputPunches.some((p) => p.controlCode === 2));
   const card = existingCard
     ? await db.card.update({
         where: { id: existingCard.id },
@@ -789,7 +797,9 @@ export async function applyResultGuarded(
     },
     next.confirmed,
   );
-  const abs = (v: number) => (v > 0 ? toAbsolute(v, zeroTime) : 0);
+  // Stored times are ZeroTime-relative and may be negative (a start before
+  // ZeroTime, a night event): only 0 means "none".
+  const abs = (v: number) => (v !== 0 ? toAbsolute(v, zeroTime) : 0);
   const written = {
     status: decision.write.status,
     finishTime: abs(decision.write.finishTime),
@@ -991,15 +1001,15 @@ export const cardReadoutRouter = router({
     .mutation(async ({ ctx, input }) => {
       const runner = await ctx.db.runner.findFirst({
         where: { eventId: ctx.event.id, seq: input.runnerId, removed: false },
-        select: { id: true, classId: true, cardNo: true, courseId: true, status: true },
+        select: { id: true, classId: true, cardNo: true, courseId: true, status: true, statusManual: true },
       });
       if (!runner) {
         throw new TRPCError({ code: "NOT_FOUND", message: `Runner ${input.runnerId} not found` });
       }
-      if (runner.status === "dq") {
+      if (runner.status === "dq" || runner.statusManual) {
         throw new TRPCError({
           code: "PRECONDITION_FAILED",
-          message: "RESULT_PROTECTED: a disqualified runner's result is changed by hand, not by a variant switch",
+          message: "RESULT_PROTECTED: a disqualified or hand-set result is changed by hand, not by a variant switch",
         });
       }
       const eventId = ctx.event.id;

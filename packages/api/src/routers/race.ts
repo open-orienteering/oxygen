@@ -350,7 +350,7 @@ export const raceRouter = router({
       }
       const zeroTime = ctx.event.zeroTime;
       const finishRel = finishAbs > 0 ? toRelative(finishAbs, zeroTime) : 0;
-      if (r.finishTime > 0 && finishRel !== r.finishTime && !input.allowOverwrite) {
+      if (r.finishTime !== 0 && finishRel !== r.finishTime && !input.allowOverwrite) {
         throw new TRPCError({
           code: "CONFLICT",
           message: `FINISH_EXISTS: the runner already has a finish (${toAbsolute(r.finishTime, zeroTime)})`,
@@ -358,8 +358,11 @@ export const raceRouter = router({
       }
       // A finish keyed in here is "by hand": a later card read without a
       // finish punch keeps it (SI-10).
-      const data: Record<string, unknown> = { finishTime: finishRel, finishManual: finishRel > 0 };
-      if (input.status != null) data.status = valueToRunnerStatus(input.status);
+      const data: Record<string, unknown> = { finishTime: finishRel, finishManual: finishRel !== 0 };
+      if (input.status != null) {
+        data.status = valueToRunnerStatus(input.status);
+        data.statusManual = input.status !== 0;
+      }
       // Table write + journal entry commit or roll back together.
       await ctx.db.$transaction(async (tx) => {
         await tx.runner.update({ where: { id: r.id }, data });

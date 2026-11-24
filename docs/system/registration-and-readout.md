@@ -33,7 +33,7 @@ SI Card Inserted
 └─────────┬────────────┘
           │
           ├──── action = "register" ──────▶ RegistrationDialog
-          ├──── action = "readout"  ──────▶ Kiosk readout screen + auto-apply
+          ├──── action = "readout"  ──────▶ Kiosk readout screen + guarded apply
           └──── action = "pre-start" ─────▶ Kiosk pre-start screen
 ```
 
@@ -196,7 +196,7 @@ Based on the DB lookup result:
 | Condition | Action | Meaning |
 |-----------|--------|---------|
 | No runner found for this CardNo | `register` | New runner — open registration dialog |
-| Runner found, punches match course OR has existing result | `readout` | Show result on kiosk, auto-apply |
+| Runner found, punches match course OR has existing result | `readout` | Show result on kiosk, apply under the guards (§2f) |
 | Runner found, no matching punches, no existing result | `pre-start` | Runner is registered but hasn't raced yet |
 
 "Has existing result" means `Status > 0` excluding DNS (20) and Cancel (21), which are pre-race statuses.
@@ -231,7 +231,7 @@ The assigned (draw) start time takes priority over the card start punch — the 
 
 ### 2g. Kiosk Broadcast
 
-If a kiosk window is paired (same competition), DeviceManager sends the card data via BroadcastChannel and, once the result is written, a `readout-applied` message. The kiosk then refetches `cardReadout.readout`, `runner.findByCard` and `race.finishReceipt`. The kiosk never writes a finish itself (WEB-72): it has no `race.recordFinish` call. See §7 for the kiosk protocol.
+If a kiosk window is paired (same competition), DeviceManager sends the card data via BroadcastChannel and, after every online apply attempt (written, held or protected), a `readout-applied` message (not sent on the offline path). The kiosk then refetches `cardReadout.readout`, `runner.findByCard` and `race.finishReceipt`. The kiosk never writes a finish itself (WEB-72): it has no `race.recordFinish` call. See §7 for the kiosk protocol.
 
 ---
 
@@ -282,14 +282,18 @@ Every readout — stale or fresh — is saved to `oxygen_card_readouts` (raw SQL
 1. **DQ is never overwritten**, not even when confirmed.
 2. **A hand-set status** (`runners.status_manual`, set by `runner.update`, the status buttons and bulk DNS, only when the value really changes) is protected. A hand-set DNS, Cancel or Not competing asks instead, since the runner may have started after all.
 3. **A hand-keyed finish** (`runners.finish_manual`, set by the Finish Station, `finish.recorded`/`finish.adjusted` and a changed `finishTime` in `runner.update`) is kept: `performReadout` uses it when the card has no finish punch (SI-10), and the guard never replaces it with a card's finish.
-4. **A worse read asks** (`needsConfirmation`): the reader says the punches are not fresh, or the runner has a result and the new read has no finish. `confirmed` lets it through.
-5. **Identical values** are `unchanged`.
+4. **A worse read asks** (`needsConfirmation`): the reader says the punches are not fresh (even when the runner has no result yet, so last week's punches never write times), or the runner has a result and the new read has no finish. `confirmed` lets it through.
+5. **Identical values** are `unchanged` and checked first (a re-read that agrees with the stored result never asks and writes nothing).
 
-**The card row is held too.** `storeReadoutImpl` always logs the read in `card_readouts`, but when the runner already has a result and the read is empty (cleared hire card) or not fresh, `cards.punches_raw` keeps the earlier punches and `storeReadout` returns `cardHeld: true`. Receipts and re-evaluation then still show the result the runner earned.
+**The card row is held too.** `storeReadoutImpl` always logs the read in `card_readouts`, but when the runner already has a result and the read is empty (cleared hire card), not fresh, or has no finish, `cards.punches_raw` keeps the earlier punches and `storeReadout` returns `cardHeld: true`. The evaluation then reproduces the stored result, so such a read is `unchanged` and does not ask. A held read is only in the readout log; to replace the result with it, correct the runner by hand. `performReadout` reports the stored status for a DQ or hand-set result, so receipts and the kiosk show what the runner has.
+
+**Known gap:** a hand-keyed finish wins over a finish punch in the stored result, while the readout view still times the runner from the punch; the operator corrects the finish on the runner (documented in the bugfix note).
 
 **Offline.** The queued `result.applied` goes through the same guard on ingest. An entry without `confirmed: true` that the guard holds is not applied (the entry stays in the journal); the server's own journaled entries carry `confirmed: true` because the decision was made there. Consequence: a held read that arrives only through the offline queue is not prompted to anyone; the card detail shows the stored result, and re-reading the card online asks.
 
 ### 3d. oCard Write Guards
+
+> Historical (MeOS era): §3d–§3f describe the retired oCard layer. The current rule is §3a-guard above; a full rewrite of §3 is RES-28.
 
 Three conditions must ALL be true to write to `oCard`:
 
@@ -651,6 +655,7 @@ Channel name: `oxygen-kiosk-{competitionNameId}` — scoped to a specific compet
 | `registration-complete` | Admin → Kiosk | Registration submitted successfully | `{ runner: { name, className, startTime, ... } }` |
 | `kiosk-reset` | Admin → Kiosk | Reset to idle (dialog closed, ESC, sticky clear) | — |
 | `kiosk-ping` | Both directions | Heartbeat (every 5s during registration) | `{ from: "admin" \| "kiosk" }` |
+| `readout-applied` | Admin → kiosk | After an online apply attempt; the kiosk refetches readout, runner and receipt | `{ cardNumber }` |
 | `kiosk-print-receipt` | Kiosk → Admin | Kiosk needs receipt printed | `{ runnerId }` |
 
 ### 7c. Kiosk State Machine
