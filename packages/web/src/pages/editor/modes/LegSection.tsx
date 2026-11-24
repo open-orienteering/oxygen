@@ -12,7 +12,7 @@ import type { course } from "@oxygen/shared";
 import type { LegElevation } from "../../../lib/editor/elevation";
 import type { RouteItem } from "../../../lib/editor/leg-routes";
 import type { CostModelNote } from "@oxygen/shared/src/route/index.js";
-import { formatClock, type AlternativeItem } from "../../../lib/editor/leg-alternatives";
+import { alternativeColor, formatClock, type AlternativeItem } from "../../../lib/editor/leg-alternatives";
 import { DEFAULT_CORRIDOR, type LegPatch } from "../../../lib/editor/structure-edit";
 
 /** The wire form's leg: `crossing.controlId` is a public id (course-layer.md §6.1). */
@@ -34,6 +34,8 @@ export interface LegSectionProps {
   /** The leg's routes (docs/course-elevation.md §7.4); null or absent: no Routes block. */
   routes?: LegRoutesProps | null;
   focusedBend: number | null;
+  /** What can be done with the leg (docs/course-editor.md §6.7): in the section, never over the map; null: none (a phone). */
+  actions?: { onAddBend: (corner: boolean) => void; onInsert: () => void; onVariation: (() => void) | null } | null;
   /** A phone: everything shown, nothing editable. */
   readOnly: boolean;
   onPatch: (patch: LegPatch) => void;
@@ -51,8 +53,6 @@ export interface LegRoutesProps {
   busy: boolean;
   /** The pair's automatic route is the drawn line itself (§7.5). */
   lineIsShortest: boolean;
-  /** The course along the routes its legs are read along (§7.8); null: not known. */
-  totals: { routeM: number; timeS: number | null; routed: number; pace: string } | null;
   onDraw: () => void;
   onDone: () => void;
   onCancel: () => void;
@@ -66,13 +66,14 @@ export interface LegRoutesProps {
 export interface LegAlternativesProps {
   status: "idle" | "running" | "done" | "error";
   items: readonly AlternativeItem[];
-  /** The pace the times are at, as typed (`m:ss` per km). */
-  pace: string;
-  onPace: (text: string) => boolean;
+  /** Search again (the search itself starts when the leg is selected, §7.8). */
   onFind: () => void;
   /** Store the alternative as the pair's chosen route. */
   onUse: (index: number) => void;
   onPoint: (index: number | null) => void;
+  /** The alternative lit on the map (pointed at, or picked by a press). */
+  active: number | null;
+  onPick: (index: number) => void;
   /** How much of the speed model is measured from tracks (§7.9), and on which terrain. */
   measured: Pick<CostModelNote, "state" | "classes">;
 }
@@ -82,36 +83,29 @@ function LegAlternatives({ a, locked }: { a: LegAlternativesProps; locked: boole
   return (
     <div data-testid="editor-leg-alternatives" data-status={a.status} className="space-y-1">
       <div className="flex items-center gap-2">
-        <button type="button" data-testid="editor-leg-alternatives-find" disabled={locked || a.status === "running"} onClick={a.onFind}
-          className={`${BUTTON} border-orange-200 text-orange-700 hover:bg-orange-50`}>{t(a.status === "running" ? "legAlternativesSearching" : "legAlternativesFind")}</button>
-        <label className="ml-auto flex items-center gap-1 text-[10px] text-slate-500">{t("legAlternativesPace")}
-          <input data-testid="editor-leg-alternatives-pace" className="w-12 px-1 py-0.5 rounded border border-slate-200 bg-white text-[11px] font-mono" defaultValue={a.pace} key={a.pace}
-            onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
-            onBlur={(e) => { if (!a.onPace(e.target.value)) e.target.value = a.pace; }} />
-        </label>
+        <span className="text-[11px] text-slate-500">{t("legAlternatives")}</span>
+        {a.status === "running" && <span data-testid="editor-leg-alternatives-searching" className="text-[10px] text-slate-400">{t("legAlternativesSearching")}</span>}
+        <button type="button" data-testid="editor-leg-alternatives-find" aria-label={t("legAlternativesFind")} title={t("legAlternativesFind")} disabled={locked || a.status === "running"} onClick={a.onFind}
+          className="ml-auto px-1 text-slate-400 hover:text-orange-700 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed">↻</button>
       </div>
       {a.status === "error" && <p data-testid="editor-leg-alternatives-error" className="text-[10px] text-red-600">{t("legAlternativesError")}</p>}
       {a.status === "done" && a.items.length === 0 && <p data-testid="editor-leg-alternatives-none" className="text-[10px] text-amber-700">{t("legAlternativesNone")}</p>}
       {a.status === "done" && a.items.length > 0 && (
-        <>
           <ul className="space-y-0.5">
             {a.items.map((item) => (
               <li key={item.index} data-testid="editor-leg-alternative" data-kind={item.kind} data-m={item.lengthM} data-climb={item.climbM ?? ""} data-time={item.timeS ?? ""}
-                onMouseEnter={() => a.onPoint(item.index)} onMouseLeave={() => a.onPoint(null)}
-                className="flex items-center gap-1.5 rounded px-1 text-[11px] text-slate-600 hover:bg-orange-50">
+                data-active={a.active === item.index ? "true" : "false"}
+                onMouseEnter={() => a.onPoint(item.index)} onMouseLeave={() => a.onPoint(null)} onClick={() => a.onPick(item.index)}
+                className={`flex items-center gap-1.5 rounded px-1 text-[11px] text-slate-600 cursor-pointer ${a.active === item.index ? "bg-slate-100" : "hover:bg-slate-50"}`}>
+                <span aria-hidden className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ background: alternativeColor(item.index) }} />
                 <span className="flex-1">{t(`legAlternativeKind.${item.kind}`)}</span>
                 <span className="font-mono text-slate-700">{item.lengthM} m{item.climbM !== null && <> · {item.approx ? "≈ " : ""}{t("legRouteClimb", { m: item.climbM })}</>} {item.timeS !== null && <> · ~{formatClock(item.timeS)}</>}</span>
-                <button type="button" data-testid="editor-leg-alternative-use" disabled={locked || item.interior.length === 0} onClick={() => a.onUse(item.index)}
+                <button type="button" data-testid="editor-leg-alternative-use" disabled={locked || item.interior.length === 0} onClick={(e) => { e.stopPropagation(); a.onUse(item.index); }}
                   title={item.interior.length === 0 ? t("legAlternativeIsLine") : undefined}
                   className={`${BUTTON} border-orange-200 text-orange-700 hover:bg-orange-50`}>{t("legAlternativeUse")}</button>
               </li>
             ))}
           </ul>
-          <p data-testid="editor-leg-alternatives-note" data-calibrated={a.measured.state} className="text-[10px] text-slate-400">
-            {a.measured.state === "none" ? t("legAlternativesNote")
-              : t(a.measured.state === "full" ? "legAlternativesNoteFull" : "legAlternativesNotePartial", { classes: a.measured.classes.map((c) => t(`costClass.${c}`)).join(", ") })}
-          </p>
-        </>
       )}
     </div>
   );
@@ -154,14 +148,7 @@ function LegRoutes({ r, readOnly }: { r: LegRoutesProps; readOnly: boolean }) {
             <button type="button" data-testid="editor-leg-route-cancel" onClick={r.onCancel} className={`${BUTTON} border-slate-200 text-slate-600 hover:bg-slate-50`}>{t("legRouteCancel")}</button>
           </div>
         </div>
-      ) : (
-        <p data-testid="editor-leg-routes-hint" className="text-[10px] text-slate-400">{t("legRoutesHint")}</p>
-      )}
-      {r.totals && !r.drawing && (
-        <p data-testid="editor-course-route-totals" data-m={r.totals.routeM} data-time={r.totals.timeS ?? ""} data-routed={r.totals.routed} className="text-[10px] text-slate-500">
-          {t(r.totals.timeS !== null ? "legRouteTotalsTime" : "legRouteTotals", { m: r.totals.routeM, time: r.totals.timeS !== null ? formatClock(r.totals.timeS) : "", pace: r.totals.pace, count: r.totals.routed })}
-        </p>
-      )}
+      ) : null}
       {r.alternatives && !r.drawing && !readOnly && <LegAlternatives a={r.alternatives} locked={r.busy} />}
     </div>
   );
@@ -202,7 +189,6 @@ function LegNumbers({ e }: { e: LegElevation }) {
         {cell("editor-leg-descent", t("legDescent"), e.descentM, `${approx}${e.descentM} m`)}
         {cell("editor-leg-net", t("legNet"), e.netM, e.netM === null ? "" : signed(e.netM))}
       </dl>
-      {e.basis === "contours" && <p data-testid="editor-leg-elevation-note" className="text-[10px] text-slate-400">{t("elevationContoursNote")}</p>}
     </div>
   );
 }
@@ -212,13 +198,23 @@ export function LegSection(p: LegSectionProps) {
   const { leg, readOnly } = p;
   const bends = leg.bends ?? [];
   const corridor = leg.corridor;
+  const routesShown = !!p.routes && (leg.style ?? "line") !== "marked_route";
   const setCorridor = (next: Partial<Corridor>) => { if (corridor) p.onPatch({ corridor: { ...corridor, ...next } }); };
   return (
     <div data-testid="editor-leg" data-readonly={readOnly ? "true" : "false"} className="px-2.5 py-1.5 space-y-2">
       <div className="font-medium text-slate-700">{t("legTitle", { leg: p.title })}</div>
       {readOnly && <p data-testid="editor-leg-readonly" className="text-[11px] text-amber-700">{t("legReadOnly")}</p>}
+      {p.actions && (
+        <div data-testid="editor-leg-actions" className="flex flex-wrap gap-1.5">
+          <button type="button" data-testid="editor-leg-add-bend" title={t("legAddBendTitle")} onClick={(e) => p.actions!.onAddBend(e.altKey)} className={`${BUTTON} border-purple-200 text-purple-700 hover:bg-purple-50`}>{t("legAddBend")}</button>
+          <button type="button" data-testid="editor-leg-insert" title={t("legInsertTitle")} onClick={p.actions.onInsert} className={`${BUTTON} border-purple-200 text-purple-700 hover:bg-purple-50`}>{t("legInsert")}</button>
+          {p.actions.onVariation && (
+            <button type="button" data-testid="editor-leg-variation" onClick={p.actions.onVariation} className={`${BUTTON} border-purple-200 text-purple-700 hover:bg-purple-50`}>{t("actionCreateVariation")}</button>
+          )}
+        </div>
+      )}
       {p.elevation && <LegNumbers e={p.elevation} />}
-      {p.routes && (leg.style ?? "line") !== "marked_route" && <LegRoutes r={p.routes} readOnly={readOnly} />}
+      {routesShown && <LegRoutes r={p.routes!} readOnly={readOnly} />}
 
       <label className="block text-[11px] text-slate-500">{t("legStyle")}
         <select data-testid="editor-leg-style" className={FIELD} disabled={readOnly} value={leg.style ?? "line"}
@@ -228,9 +224,6 @@ export function LegSection(p: LegSectionProps) {
           <option value="none">{t("legStyleNone")}</option>
         </select>
       </label>
-      {corridor && (leg.style ?? "line") === "line" && (
-        <p data-testid="editor-leg-style-corridor-note" className="-mt-1.5 text-[10px] text-slate-400">{t("legStyleCorridorNote")}</p>
-      )}
 
       <div>
         <div className="text-[11px] text-slate-500">{t("legBends")}</div>
@@ -263,8 +256,6 @@ export function LegSection(p: LegSectionProps) {
             })}
           </ul>
         )}
-        {/* Without bends: how to add one; with bends: the gestures on them (F16): a leg without bends keeps its height. */}
-        {!readOnly && <p data-testid="editor-leg-bends-hint" className="text-[10px] text-slate-400">{t(bends.length === 0 ? "legBendsHint" : "legBendsEditHint")}</p>}
       </div>
 
       <div data-testid="editor-leg-corridor" className="space-y-1">
@@ -294,7 +285,6 @@ export function LegSection(p: LegSectionProps) {
             </label>
           </div>
         )}
-        {corridor && !readOnly && <p data-testid="editor-leg-corridor-opacity-hint" className="text-[10px] text-slate-400">{t("legCorridorOpacityHint")}</p>}
       </div>
 
       <div data-testid="editor-leg-crossing" data-site-id={leg.crossing?.controlId ?? ""} className="space-y-0.5">
@@ -318,6 +308,24 @@ export function LegSection(p: LegSectionProps) {
           </label>
         )}
       </div>
+
+      {/* Everything that only explains (docs/course-editor.md §6.7 "Inspector"): one closed disclosure, so the panel is numbers and controls. */}
+      <details data-testid="editor-leg-info" className="text-[10px] text-slate-400">
+        <summary className="cursor-pointer select-none text-[11px] text-slate-500 hover:text-slate-700">{t("legInfo")}</summary>
+        <div className="mt-1 space-y-1">
+          {p.elevation?.basis === "contours" && <p data-testid="editor-leg-elevation-note">{t("elevationContoursNote")}</p>}
+          {routesShown && <p data-testid="editor-leg-routes-hint">{t("legRoutesHint")}</p>}
+          {routesShown && p.routes?.alternatives && (
+            <p data-testid="editor-leg-alternatives-note" data-calibrated={p.routes.alternatives.measured.state}>
+              {p.routes.alternatives.measured.state === "none" ? t("legAlternativesNote")
+                : t(p.routes.alternatives.measured.state === "full" ? "legAlternativesNoteFull" : "legAlternativesNotePartial", { classes: p.routes.alternatives.measured.classes.map((c) => t(`costClass.${c}`)).join(", ") })}
+            </p>
+          )}
+          {!readOnly && <p data-testid="editor-leg-bends-hint">{t(bends.length === 0 ? "legBendsHint" : "legBendsEditHint")}</p>}
+          {corridor && (leg.style ?? "line") === "line" && <p data-testid="editor-leg-style-corridor-note">{t("legStyleCorridorNote")}</p>}
+          {corridor && !readOnly && <p data-testid="editor-leg-corridor-opacity-hint">{t("legCorridorOpacityHint")}</p>}
+        </div>
+      </details>
     </div>
   );
 }

@@ -12,6 +12,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { IconStats } from "../../components/map-icons";
+import { formatClock } from "../../lib/editor/leg-alternatives";
 import { checksBadge, courseInfoRows, saveIndicator, type SaveState, type StatusInput } from "../../lib/editor/status";
 
 const DOT = { ok: "bg-emerald-500", busy: "bg-slate-300 animate-pulse", alert: "bg-red-500", wait: "bg-amber-500" } as const;
@@ -34,7 +35,18 @@ export function SaveIndicator({ save }: { save: SaveState }) {
 
 export interface ProfileToggle { open: boolean; onToggle: () => void }
 
-export function StatsButton({ status, onRetryElevation, profile }: { status: Omit<StatusInput, "scale">; onRetryElevation?: () => void; profile?: ProfileToggle | null }) {
+/** The course's expected winner pace (docs/course-elevation.md §7.8): a setting of the course, typed here. */
+export interface PaceSetting {
+  /** `m:ss` per km: the typed pace, or the default while none is typed. */
+  text: string;
+  isDefault: boolean;
+  readOnly: boolean;
+  onPace: (text: string) => boolean;
+  /** The course along the routes its legs are read along; null: not known. */
+  totals: { routeM: number; timeS: number | null; routed: number } | null;
+}
+
+export function StatsButton({ status, onRetryElevation, profile, pace }: { status: Omit<StatusInput, "scale">; onRetryElevation?: () => void; profile?: ProfileToggle | null; pace?: PaceSetting | null }) {
   const { t } = useTranslation("editor");
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
@@ -94,6 +106,23 @@ export function StatsButton({ status, onRetryElevation, profile }: { status: Omi
           {line?.state === "unavailable" && onRetryElevation && rows.some((r) => r.id === "climb" && r.data.state === "unavailable") && (
             <button type="button" data-testid="editor-stats-elevation-retry" onClick={onRetryElevation}
               className="mt-1 rounded-md border border-slate-200 px-2 py-0.5 text-[11px] text-slate-600 hover:bg-slate-50 cursor-pointer">{t("elevationRetry")}</button>
+          )}
+          {/* docs/course-elevation.md §7.8: the winner pace is the course's, and the times of every leg rest on it. */}
+          {pace && (
+            <div data-testid="editor-stats-pace" data-default={pace.isDefault ? "true" : "false"} className="mt-1 border-t border-slate-100 pt-1">
+              <label className="flex items-center gap-1.5 whitespace-nowrap">{t("winnerPace")}
+                <input data-testid="editor-stats-pace-input" disabled={pace.readOnly} defaultValue={pace.text} key={pace.text} inputMode="numeric"
+                  className="w-12 px-1 py-0.5 rounded border border-slate-200 bg-white text-[11px] font-mono disabled:bg-slate-50"
+                  onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                  onBlur={(e) => { if (!pace.onPace(e.target.value)) e.target.value = pace.text; }} />
+                <span className="text-slate-400">{t(pace.isDefault ? "winnerPaceUnitDefault" : "winnerPaceUnit")}</span>
+              </label>
+              {pace.totals && (
+                <p data-testid="editor-course-route-totals" data-m={pace.totals.routeM} data-time={pace.totals.timeS ?? ""} data-routed={pace.totals.routed} className="text-[10px] text-slate-500 max-w-[16rem]">
+                  {t(pace.totals.timeS !== null ? "legRouteTotalsTime" : "legRouteTotals", { m: pace.totals.routeM, time: pace.totals.timeS !== null ? formatClock(pace.totals.timeS) : "", pace: pace.text, count: pace.totals.routed })}
+                </p>
+              )}
+            </div>
           )}
           {/* docs/course-elevation.md §5: the profile panel under the map. */}
           {profile && (

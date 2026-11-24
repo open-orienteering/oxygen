@@ -18,6 +18,7 @@ import {
   panBy,
   PAPER_MAX_PX_PER_MM,
   pxPerMapMm,
+  revealView,
   viewportRotationDeg,
   zoomAt,
   type PaperViewport,
@@ -202,5 +203,29 @@ describe("overlay and GL canvas agree", () => {
       expect(Math.abs(glX - overlay.x)).toBeLessThan(0.5);
       expect(Math.abs(glY - overlay.y)).toBeLessThan(0.5);
     }
+  });
+});
+
+describe("revealView: bring points into sight only when they are not (docs/course-elevation.md §5)", () => {
+  const vp: PaperViewport = { centreX: 100_000, centreY: 100_000, pxPerUm: 0.004 };
+  const ctx: ViewportContext = { w: 800, h: 600, frame: null };
+  const toScreen = (x: number, y: number) => mmToInner(vp, ctx, x, y);
+
+  it("nothing moves when every point is inside the margin", () => {
+    expect(revealView(vp, [{ x: 90, y: 95 }, { x: 110, y: 105 }], toScreen, 800, 600, 32)).toBeNull();
+    expect(revealView(vp, [], toScreen, 800, 600, 32)).toBeNull();
+  });
+
+  it("a leg out of sight is centred at the same zoom", () => {
+    const out = revealView(vp, [{ x: 400, y: 100 }, { x: 420, y: 120 }], toScreen, 800, 600, 32)!;
+    expect(out).toEqual({ centreX: 410_000, centreY: 110_000, pxPerUm: 0.004 });
+    // One end in sight, the other not: it moves too.
+    expect(revealView(vp, [{ x: 100, y: 100 }, { x: 300, y: 100 }], toScreen, 800, 600, 32)).not.toBeNull();
+  });
+
+  it("a leg longer than the view is zoomed out to fit", () => {
+    const out = revealView(vp, [{ x: 0, y: 100 }, { x: 1000, y: 100 }], toScreen, 800, 600, 32)!;
+    expect(out.centreX).toBe(500_000);
+    expect(out.pxPerUm).toBeCloseTo((600 - 64) / 1_000_000, 9);
   });
 });

@@ -34,8 +34,14 @@ export async function appendClear(page: Page, exclude: string[] = []): Promise<s
 
 /** Drop the selection's action bar (Escape only when there is one: with nothing selected, Escape drops the course). */
 export async function dropSelection(page: Page): Promise<void> {
-  if ((await page.getByTestId("editor-action-bar").count()) > 0) await page.keyboard.press("Escape");
+  // A selected leg has no bar (§6.7): its inspector section stands for it.
+  // (A focused bend takes the first Escape, the leg the next; never one more: that would drop the course, §3.)
+  for (let i = 0; i < 3 && (await page.getByTestId("editor-action-bar").count()) + (await page.getByTestId("editor-leg").count()) > 0; i++) {
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(50);
+  }
   await expect(page.getByTestId("editor-action-bar")).toHaveCount(0);
+  await expect(page.getByTestId("editor-leg")).toHaveCount(0);
 }
 
 /**
@@ -130,7 +136,7 @@ export async function legClickPoint(page: Page, name: string, a: Site, b: Site):
   const legClearance = (q: Pt) => Math.min(Infinity, ...others.flatMap((poly) => poly.slice(1).map((v, i) => seg(q, poly[i], v))));
   // Sites in paper mm; another leg within 2 mm counts as a site at 0 (never pick a point it shares).
   const clearance = (q: Pt) => Math.min(...marks.map((m) => Math.hypot(q.x - m.x, q.y - m.y)), legClearance(q) > 2 ? Infinity : 0);
-  // The middle half of the leg only: Add bend here puts the bend where the leg was clicked, and a smooth bend's
+  // The middle half of the leg only: Add bend puts the bend where the leg was clicked, and a smooth bend's
   // handles are a sixth of the chord (F16), so a bend nearer an end than that has a handle reaching past the control
   // and the leg's outline is no longer the straight three points (in-order run: a bend at 12 % of 86 → 61).
   const ab2 = (b.mm.x - a.mm.x) ** 2 + (b.mm.y - a.mm.y) ** 2;

@@ -346,6 +346,19 @@ describe("armed and area bindings", () => {
     });
     const ids = b.shapes!.map((s) => s.testId);
     expect(ids).toEqual(expect.arrayContaining(["editor-ghost-label", "editor-ghost-description", "editor-leg-length"]));
+    // Outside the paper-sized ring, whatever the zoom.
+    expect(b.shapes!.find((s) => s.testId === "editor-ghost-label")).toMatchObject({ x: 4 + 2.5 * 0.75, y: 2 + 2.5 * 0.75 });
+    // A new control's number and code are the layer's own label there (§6.1): no second one.
+    const onLayer = placeBinding({
+      ghost: { at: { x: 4, y: 2 }, radiusMm: 2.5, role: "control", label: "3-47", labelOnLayer: true, description: "boulder", legs: [], legLabel: null },
+      provisionalDrawn: true, onHover: vi.fn(), onPlace: vi.fn(), onExit: vi.fn(), touch: null,
+    });
+    expect(onLayer.shapes!.map((s) => s.testId)).toEqual(["editor-ghost-description"]);
+    const noLayer = placeBinding({
+      ghost: { at: { x: 4, y: 2 }, radiusMm: 2.5, role: "control", label: "3-47", labelOnLayer: true, description: null, legs: [], legLabel: null },
+      provisionalDrawn: false, onHover: vi.fn(), onPlace: vi.fn(), onExit: vi.fn(), touch: null,
+    });
+    expect(noLayer.shapes!.map((s) => s.testId)).toContain("editor-ghost-label");
     expect(ids).not.toContain("editor-ghost");
     expect(ids).not.toContain("editor-pending-leg");
     expect(b.shapes!.filter((s) => s.kind === "circle")).toEqual([]);
@@ -608,7 +621,9 @@ describe("V on a selected leg: bend handles (docs/course-editor.md §6.7)", () =
   it("draws the leg's outline through its bends and a handle per bend", () => {
     const leg = legOpts({ focused: 0 });
     const b = selectBinding(selectOpts({ leg }));
-    expect(b.shapes!.find((s) => s.testId === "editor-leg-outline")).toMatchObject({ kind: "line", points: [{ x: 0, y: 0 }, { x: 20, y: 10 }, { x: 40, y: 0 }], dashed: true });
+    expect(b.shapes!.find((s) => s.testId === "editor-leg-outline")).toMatchObject({ kind: "line", points: [{ x: 0, y: 0 }, { x: 20, y: 10 }, { x: 40, y: 0 }], widthPx: 3, casingPx: 3 });
+    // Lit, not dashed: the selection is the leg itself.
+    expect((b.shapes!.find((s) => s.testId === "editor-leg-outline") as { dashed?: boolean }).dashed).toBeUndefined();
     expect(b.shapes!.filter((s) => s.testId === "editor-bend-handle")).toEqual([
       expect.objectContaining({ kind: "handle", x: 20, y: 10, active: true, data: { index: "0", focused: "true" } }),
     ]);
@@ -642,7 +657,62 @@ describe("V on a selected leg: bend handles (docs/course-editor.md §6.7)", () =
     b.onPointerDrag!({ x: 25, y: 12 });
     b.onPointerUp!(null);
     expect(o.leg!.onBendsChange).not.toHaveBeenCalled();
-    expect(b.onPointerDown!(ptr(30, 5))).toBe(false);
+    expect(b.onPointerDown!(ptr(30, 12))).toBe(false);
+  });
+
+  it("the leg's line is not taken with Shift or Ctrl held, nor under an object or a number (§6.7)", () => {
+    const o = selectOpts({ leg: legOpts({ bends: [], onPress: vi.fn() }) });
+    const b = selectBinding(o);
+    const kind = () => (o.gesture.current as { kind?: string } | null)?.kind;
+    b.onPointerDown!({ ...ptr(10, 0.4), shift: true });
+    expect(kind()).not.toBe("bend-new");
+    o.gesture.current = null;
+    b.onPointerDown!({ ...ptr(10, 0.4), ctrl: true });
+    expect(kind()).not.toBe("bend-new");
+    o.gesture.current = null;
+    b.onPointerDown!({ ...ptr(10, 0.4), target: { kind: "number", id: "1" } } as never);
+    expect(kind()).not.toBe("bend-new");
+  });
+
+  it("a drag from the leg's own line makes a bend at the press and moves it: one write (§6.7)", () => {
+    const o = selectOpts({ leg: legOpts({ bends: [], onBendsDraft: vi.fn(), onPress: vi.fn() }) });
+    const b = selectBinding(o);
+    // 4 px off the straight leg: within the line's 5 px.
+    expect(b.onPointerDown!(ptr(10, 0.4))).toBe(true);
+    expect(o.gesture.current).toMatchObject({ kind: "bend-new" });
+    // Within 3 px: still a click.
+    b.onPointerDrag!({ x: 10.1, y: 0.5 });
+    expect(o.gesture.current).toMatchObject({ kind: "bend-new" });
+    b.onPointerDrag!({ x: 12, y: 6 });
+    expect(o.gesture.current).toMatchObject({ kind: "bend", index: 0, moved: true });
+    expect(o.leg!.onBendsDraft).toHaveBeenLastCalledWith([expect.objectContaining({ x: 12, y: 6 })]);
+    expect(o.leg!.onBendsChange).not.toHaveBeenCalled();
+    selectBinding(o).onPointerUp!({ x: 13, y: 7 });
+    expect(o.leg!.onBendsChange).toHaveBeenCalledTimes(1);
+    expect(o.leg!.onBendsChange).toHaveBeenCalledWith([expect.objectContaining({ x: 13, y: 7 })]);
+    expect(o.leg!.onBendFocus).toHaveBeenCalledWith(0);
+    expect(o.leg!.onPress).not.toHaveBeenCalled();
+  });
+
+  it("a press on the leg's line without a drag is a click on the leg; Alt makes the new bend a corner; an end's control is not the line", () => {
+    const o = selectOpts({ leg: legOpts({ bends: [], onPress: vi.fn() }) });
+    const b = selectBinding(o);
+    expect(b.onPointerDown!(ptr(10, 0))).toBe(true);
+    b.onPointerUp!({ x: 10, y: 0 });
+    expect(o.leg!.onPress).toHaveBeenCalledWith({ x: 10, y: 0 });
+    expect(o.leg!.onBendsChange).not.toHaveBeenCalled();
+    // A cancelled press is nothing.
+    expect(b.onPointerDown!(ptr(10, 0))).toBe(true);
+    b.onPointerUp!(null);
+    expect(o.leg!.onPress).toHaveBeenCalledTimes(1);
+    // Alt: no handles on the made bend.
+    expect(b.onPointerDown!(ptr(10, 0, { alt: true }))).toBe(true);
+    b.onPointerDrag!({ x: 10, y: 5 });
+    b.onPointerUp!({ x: 10, y: 5 });
+    expect(o.leg!.onBendsChange).toHaveBeenLastCalledWith([{ x: 10, y: 5 }]);
+    // Within the ring of the leg's first control, or on a site: the viewer's.
+    expect(b.onPointerDown!(ptr(1, 0))).toBe(false);
+    expect(b.onPointerDown!(ptr(10, 0, { target: { kind: "site", id: "31" } }))).toBe(false);
   });
 
   it("the drag snaps the bend", () => {
@@ -874,10 +944,20 @@ describe("V on a selected leg: touch (docs/course-editor.md §6.7, §10; F23)", 
   it("a touch press takes a bend at 10 px and declines it at 16 px; the mouse's reach stays 7 px", () => {
     const corner = legOpts({ bends: [{ x: 20, y: 10 }] });
     expect(selectBinding(selectOpts({ leg: corner })).onPointerDown!(touch(21, 10))).toBe(true);
+    // 16 px from the bend and from the line: declined.
     const o = selectOpts({ leg: corner });
-    expect(selectBinding(o).onPointerDown!(touch(21.6, 10))).toBe(false);
+    expect(selectBinding(o).onPointerDown!(touch(20, 11.6))).toBe(false);
     expect(o.gesture.current).toBeNull();
-    expect(selectBinding(selectOpts({ leg: corner })).onPointerDown!(ptr(21, 10))).toBe(false);
+    // 10 px from the bend with a mouse: not the bend (7 px), and 9 px from the line: not the line (5 px).
+    expect(selectBinding(selectOpts({ leg: corner })).onPointerDown!(ptr(20, 11))).toBe(false);
+  });
+
+  it("a finger within 14 px of the selected leg's line starts a bend there", () => {
+    const o = selectOpts({ leg: legOpts({ bends: [] }) });
+    expect(selectBinding(o).onPointerDown!(touch(20, 1.3))).toBe(true);
+    expect(o.gesture.current).toMatchObject({ kind: "bend-new" });
+    const far = selectOpts({ leg: legOpts({ bends: [] }) });
+    expect(selectBinding(far).onPointerDown!(touch(20, 1.5))).toBe(false);
   });
 
   it("a touch press takes a grip at 10 px (off the bend's reach)", () => {

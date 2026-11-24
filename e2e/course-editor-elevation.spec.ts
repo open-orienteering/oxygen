@@ -9,7 +9,7 @@
 
 import { expect, test, type Page } from "@playwright/test";
 import { reseed } from "./helpers/reseed";
-import { coveredBy, drag, editorReady, legPieces, mapScale, site, sites, statsRow, toPage, trpcCall } from "./helpers/editor";
+import { coveredBy, drag, editorReady, emptyPoint, legPieces, mapScale, site, sites, statsRow, toPage, trpcCall } from "./helpers/editor";
 import { waitForTrpc } from "./helpers/trpc";
 import { type Pt, desktopOnly, selectLeg, twoControlCourse } from "./helpers/course-editor-spec";
 import { DEM_PROVIDER } from "./helpers/dem-field";
@@ -87,6 +87,12 @@ test.describe("the computed climb (docs/course-elevation.md §4)", () => {
     // A straight leg on a plane only rises or only falls.
     expect(Math.abs((await num(page, "editor-leg-climb")) - Math.max(0, net))).toBeLessThanOrEqual(2);
     expect(Math.abs((await num(page, "editor-leg-descent")) - Math.max(0, -net))).toBeLessThanOrEqual(2);
+    // The sequence states the same climb on the leg's row (§5).
+    const seqClimb = page.locator('[data-testid="editor-seq-climb"]');
+    await expect.poll(async () => (await seqClimb.evaluateAll((els) => els.map((el) => Number(el.getAttribute("data-m"))))).includes(await num(page, "editor-leg-climb")), { timeout: 10000 }).toBe(true);
+    await expect(seqClimb.first()).toContainText("↑");
+    // The notes sit under the panel's info disclosure.
+    await page.getByTestId("editor-leg-info").locator("summary").click();
     await expect(page.getByTestId("editor-leg-elevation-note")).toBeVisible();
 
     // b moved sideways: the course's climb follows its new place.
@@ -112,6 +118,18 @@ test.describe("the computed climb (docs/course-elevation.md §4)", () => {
       await page.getByTestId("editor-undo").click();
       await undone;
     }
+  });
+
+  test("placing a control: the label on the pending leg states its metres and its climb", async ({ page }) => {
+    await servePlane(page, "contours");
+    await twoControlCourse(page, "CE placing climb");
+    await expect.poll(() => statsRow(page, "climb", "state"), { timeout: 20000 }).toBe("ready");
+    await page.keyboard.press("k");
+    await expect(page.getByTestId("editor-tool-K")).toHaveAttribute("aria-pressed", "true");
+    const p = await emptyPoint(page, 60);
+    await page.mouse.move(p.x, p.y);
+    await expect(page.getByTestId("editor-leg-length").first()).toHaveText(/^\d+ m · (≈ )?↑ \d+ m$/, { timeout: 10000 });
+    await page.keyboard.press("Escape");
   });
 
   test("a ground model: the numbers carry no disclaimer and state the provider's notice", async ({ page }) => {

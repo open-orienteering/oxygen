@@ -20,10 +20,15 @@ type Bend = PathVertex;
 /** The leg's polyline: `a`, the bends' path flattened as the layer does (F13), `b`. */
 const polyline = (a: Pt, b: Pt, via: readonly Bend[]): Pt[] => course.legPolylineOf(a, via, b);
 
-/** "123 m", rounded to the metre, along the bends `via`; null without a scale. */
-export function legLengthLabel(a: Pt, b: Pt, mapScale: number | null | undefined, via: readonly Bend[] = []): string | null {
+/** The climb along a leg's polyline, when heights are read (docs/course-elevation.md §4.5): whole metres. */
+export type LegClimbOf = (points: readonly Pt[]) => { m: number; approx: boolean } | null;
+
+/** "123 m", rounded to the metre, along the bends `via`, and with heights "123 m · ↑ 8 m"; null without a scale. */
+export function legLengthLabel(a: Pt, b: Pt, mapScale: number | null | undefined, via: readonly Bend[] = [], climbOf?: LegClimbOf | null): string | null {
   if (!mapScale) return null;
-  return `${Math.round(legLengthM(course.legLengthMm(polyline(a, b, via)), mapScale))} m`;
+  const pts = polyline(a, b, via);
+  const climb = climbOf?.(pts) ?? null;
+  return `${Math.round(legLengthM(course.legLengthMm(pts), mapScale))} m${climb ? ` · ${climb.approx ? "≈ " : ""}↑ ${climb.m} m` : ""}`;
 }
 
 /** Where the label sits: the leg's midpoint, paper mm — half way along its bends `via`. */
@@ -57,6 +62,7 @@ export function dragLegShapes(
   id: string,
   mapScale: number | null | undefined,
   bendsInto: ReadonlyArray<readonly Bend[] | undefined> = [],
+  climbOf?: LegClimbOf | null,
 ): ToolShape[] {
   const out: ToolShape[] = [];
   const at = pos.get(id);
@@ -73,13 +79,15 @@ export function dragLegShapes(
     const before = drawn(i - 1, -1);
     if (before) {
       const via = bendsInto[i] ?? [];
-      out.push(legLengthShape(before.p, at, legLengthLabel(before.p, at, mapScale, via)!, via));
+      out.push(legLengthShape(before.p, at, legLengthLabel(before.p, at, mapScale, via, climbOf)!, via));
     }
     const after = drawn(i + 1, 1);
     if (after) {
       // The leg out runs at → bends → after; labelled from the far end, as before (handles swap, F13).
       const via = course.reverseBends(bendsInto[after.i]);
-      out.push(legLengthShape(after.p, at, legLengthLabel(after.p, at, mapScale, via)!, via));
+      // The climb is the leg's own direction's: at → after.
+      const climb = climbOf ? (pts: readonly Pt[]) => climbOf([...pts].reverse()) : null;
+      out.push(legLengthShape(after.p, at, legLengthLabel(after.p, at, mapScale, via, climb)!, via));
     }
   });
   return out;

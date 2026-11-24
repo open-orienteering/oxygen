@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CourseProfile, PolylineProfile } from "@oxygen/shared/src/terrain/profile/index.js";
-import { legElevation, lineClimbStatus, shownM, type CourseElevation } from "../elevation";
+import { legElevation, lineClimbStatus, sequenceLegClimbs, shownM, type CourseElevation } from "../elevation";
 
 const leg = (over: Partial<PolylineProfile> = {}): PolylineProfile => ({ lengthM: 400, samples: [], climbM: 12.4, descentM: 3.6, netM: 8.8, coverage: 1, confidence: 1, ...over });
 const profile = (over: Partial<CourseProfile> = {}): CourseProfile => ({
@@ -53,5 +53,21 @@ describe("the selected leg's numbers (docs/course-elevation.md §4.5)", () => {
     expect(legElevation({ state: "loading" }, 0)).toBeNull();
     expect(legElevation(ready(), null)).toBeNull();
     expect(legElevation(ready(), 7)).toBeNull();
+  });
+});
+
+describe("the climb of the leg into each row of the sequence (docs/course-elevation.md §4.5)", () => {
+  const pt = { x: 1, y: 1 };
+  it("leg k runs into the (k + 1)-th positioned row; unpositioned rows and the first have none", () => {
+    const rows = [{ pt }, { pt: null }, { pt }, { pt }];
+    expect(sequenceLegClimbs(rows, ready())).toEqual([null, null, { m: 12, approx: false }, { m: 30, approx: false }]);
+  });
+
+  it("a leg without data is a dash, a thin one approximate; nothing while heights are not read", () => {
+    const p = profile();
+    p.legs[0] = { ...p.legs[0], climbM: null, profile: leg({ coverage: 0.5 }) };
+    expect(sequenceLegClimbs([{ pt }, { pt }, { pt }], ready(p))).toEqual([null, { m: null, approx: true }, { m: 30, approx: false }]);
+    expect(sequenceLegClimbs([{ pt }, { pt }], { state: "loading" })).toEqual([null, null]);
+    expect(sequenceLegClimbs([{ pt }, { pt }], { state: "none" })).toEqual([null, null]);
   });
 });

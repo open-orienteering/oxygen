@@ -97,8 +97,8 @@ Decided in implementation of §7.1–7.4 (2026-11-22; told to the user):
     costs, which a visibility graph does not model. §1's "a later cost
     surface has the same shape" is a separate `CostModel` over classes
     and slope.
-22. **Alternatives are found on demand per leg** (Find routes), and an
-    alternative changes the climb only once someone uses it.
+22. **An alternative changes the climb only once someone uses it.**
+    (Alternatives were found on demand, by *Find routes*, until row 39.)
 
 Decided in implementation of §7.5 (2026-11-22; told to the user, open
 to change):
@@ -187,6 +187,26 @@ to change):
     the two list imports are the only ones Oxygen uses). The user asked
     for the upload on 2026-11-22. Not yet tried against Test-Eventor:
     whether Eventor keeps and shows the climb is not known.
+
+39. **Alternatives are searched when a leg is selected** (§7.8), not on
+    a button: the user's review of 2026-11-23. Supersedes row 22's
+    *Find routes*; **Use** still decides what the climb is read along.
+
+40. **The winner pace is typed with the course** (the course-info
+    popover, §7.8), not in the Leg section: same review. It was always
+    stored per course.
+
+41. **The profile is found at the end of the sequence list**, in small,
+    and a click there opens the panel (§5); the leg's climb stands in
+    each row of the list and on the label of a leg being placed or
+    dragged: same review.
+
+42. **A selected leg is the leg lit, and its routes labelled on the
+    map** (§7.8; `course-editor.md` §6.7): no ring at the click and no
+    bar over the map; a bend is made by dragging the leg's line. The
+    user chose this on 2026-11-23 over a docked bar and over a
+    double-click menu. A press on an alternative's label picks it and
+    **Use** stores it: one press does not rewrite a climb.
 
 ## 1. The profile
 
@@ -431,8 +451,9 @@ the course's climb, §2), **Descent** (`editor-leg-descent`) and **Net**
 (`editor-leg-net`: the end's height minus the start's, signed), each
 in whole metres with `data-m`; a dash where the leg has no data. `≈`
 on climb and descent when less than 99.5 % of the leg has data or less
-than 80 % is confident. With basis `contours` the disclaimer is repeated
-under them (`editor-leg-elevation-note`). The leg is found among the
+than 80 % is confident. With basis `contours` the disclaimer
+(`editor-leg-elevation-note`) is one of the notes under the section's
+**About this panel** (`course-editor.md` §6.7). The leg is found among the
 course's derived legs by its insert position
 (`insertIndexForLeg`). These numbers are shown under a typed course
 climb too: they are the leg's, not the course's stated value.
@@ -448,10 +469,12 @@ model), `pages/editor/ProfilePanel.tsx` (the panel, plain SVG),
 the tool rail scrolls when the window is too short for both. Desktop and
 tablet only: the phone has no panel. It is shown when it is **open** and
 §4's state is `ready`. The profile follows a drag one render behind
-(`useDeferredValue`). It is opened and closed by *Show / Hide elevation
-profile* in the course-info popover (`editor-stats-profile-toggle`,
-`aria-pressed`; offered only in state `ready`, under a typed climb too)
-and closed by its ✕ (`editor-profile-close`). Open or closed is kept on
+(`useDeferredValue`). It is opened and closed by a click on the profile
+in small at the end of the sequence list (below), by *Show / Hide
+elevation profile* in the course-info popover
+(`editor-stats-profile-toggle`, `aria-pressed`; offered only in state
+`ready`, under a typed climb too) and closed by its ✕
+(`editor-profile-close`). Open or closed is kept on
 the device (`localStorage` `oxygen.editor.profilePanel`, `open` /
 `closed`; closed by default).
 
@@ -495,8 +518,37 @@ viewer's marker layer, `data-x` / `data-y` paper mm, `data-leg`;
 store the viewer's dot subscribes to (`lib/editor/hover-dot.ts`), so a
 moving pointer redraws the dot and the readout, not the page. A
 **click** selects the leg under the pointer, as a click on the leg on
-the map does (the Leg section, the action bar's leg actions at that
-place). The pointer leaving removes the readout and the dot.
+the map does (the Leg section). **The map follows only when it has
+to**: if every point of the leg's line is already at least 32 px inside
+the map's frame, nothing moves; otherwise the view is centred on the
+leg at the same zoom, and zoomed out only as far as a leg longer than
+the frame needs (`revealView`, the viewer's `viewRequest.reveal`). The
+dot is 7 px with a white ring and a shadow, so it reads on any map
+colour. The pointer leaving removes the readout and the dot.
+
+**In small** (`ProfileMini`, `editor-profile-mini`, `aria-pressed`):
+at the end of the sequence list (`course-editor.md` §4), 40 px high,
+the course's line over its area, the selected leg shaded
+(`editor-profile-mini-selected`), and *↑ 38 m · ↓ 37 m*
+(`editor-profile-mini-summary`). A click opens and closes the panel
+under the map: this is where the profile is found (§0.41). Desktop and
+tablet, in state `ready`.
+
+**In the sequence list** each row shows the climb of the leg into it
+beside the leg's metres (`editor-seq-climb`, `data-m`: *↑18*, `≈` as
+above, a dash where the leg has no data), in state `ready`
+(`sequenceLegClimbs`): the leg's share of the course's climb (§2),
+read along its chosen route where it has one (§7.3), under a typed
+course climb too. While heights load or cannot be read the rows show
+metres only.
+
+**While a control is placed or dragged** the leg's length label on the
+map (`editor-leg-length`, `course-editor.md` §6.1) carries the climb of
+that leg alone along its line: *123 m · ↑ 8 m* (`legLengthLabel`,
+`routeNumbers` over the straight line or the bends; `≈` as above), in
+state `ready`. It is the leg's own climb, which can differ from its
+later share of the course's climb by up to the threshold (§2), and from
+its climb along a route.
 
 ## 6. The course's stored climb
 
@@ -729,10 +781,13 @@ without heights.
   back. The draft ends when the selection leaves the leg. The keys are
   the draft's only bare: with Ctrl, Cmd or Alt they are the browser's,
   and Enter on a focused button or link presses it. Nothing is saved
-  while a route write is under way.
+  while a route write is under way. While drawing, the block says
+  only *n points · Enter saves · Esc cancels*; what a route is and
+  how it is shared is one of the notes under **About this panel**
+  (`editor-leg-routes-hint`, `course-editor.md` §6.7).
 - The selected leg's stored routes are drawn on the map, screen only
-  (`editor-route-line`, `data-chosen`): the chosen one solid, the
-  others dashed.
+  (`editor-route-line`, `data-chosen`), over a white casing: the
+  chosen one solid and 4 px, the others dashed and 2.5 px.
 - With a chosen route the leg's numbers (§4.5) are the route's: the
   first cell is labelled **Route** instead of **Length**
   (`editor-leg-elevation` `data-routed="true"`).
@@ -923,46 +978,75 @@ Under the Routes list (§7.4), on a desktop or tablet
 (`editor-leg-alternatives`, `data-status` `idle` / `running` / `done` /
 `error`):
 
-- **Find routes** (`editor-leg-alternatives-find`) runs the search in
-  a web worker (`lib/route/finder.ts`, `route-worker-entry.ts`; the
-  worker keeps the document's classified features and the height
-  field between searches). The course's out-of-bounds objects in view
-  are obstacles. Without a height field the search runs without
-  slopes. A result belongs to the leg as it stood — its ends, its
-  crossing point, the document, the patch, the field, the
-  out-of-bounds objects — and is dropped when any of them changes.
+- **The search starts by itself** (§0.39) 300 ms after a leg is
+  selected or its ends settle, in a web worker (`lib/route/finder.ts`,
+  `route-worker-entry.ts`; the worker keeps the document's classified
+  features and the height field between searches). Not on a phone,
+  not for a marked-route leg, and not before the map document is
+  loaded. The worker cannot be interrupted: one search runs and the
+  latest one asked waits behind it, replacing any other that waited;
+  a result that is no longer the selected leg's is not shown. The last
+  20 results are kept, so a leg selected again shows its routes at
+  once. While it runs the block says *Searching…*
+  (`editor-leg-alternatives-searching`); ↻
+  (`editor-leg-alternatives-find`) searches again, past the kept
+  result. The course's out-of-bounds objects in view are obstacles.
+  Without a height field the search runs without slopes. A result
+  belongs to the leg as it stood — its ends, its crossing point, the
+  document, the patch, the field, the out-of-bounds objects — and is
+  dropped when any of them changes.
 - The list (`editor-leg-alternative`, `data-kind` `fastest` /
   `shortest` / `fastestShortest` / `alternative`, `data-m`,
-  `data-climb`, `data-time`): metres, the route's own climb as in
-  §7.4, and the estimated time `~m:ss` = cost × pace. The alternatives
-  are drawn on the map, dashed, the pointed-at one solid
-  (`editor-route-alternative`), screen only.
-- **Winner pace** (`editor-leg-alternatives-pace`, `m:ss` or decimal
-  minutes per km, 2:00–30:00; §0.17, §0.27): the expected winner's
-  pace over the course's length, stored with the course
-  (`courses.winner_pace_s_per_km`, `course.update`
-  `winnerPaceSPerKm`, with the course's version token; not journaled,
-  as `climb_source`); 6:00 while none is typed. The worker costs every
-  leg of the course along the polyline it is read along
-  (`legPolylineCost`, the `costs` message); the pace on flat forest is
-  pace × length ÷ the sum of those costs (`flatPaceSPerKm`), and an
-  alternative's time is its cost at that pace. Until the costs are
-  known the list shows no times.
-- **The course along its routes** (`editor-course-route-totals`,
-  `data-m`, `data-time`, `data-routed`): under the Routes list, the
-  sum of the legs' metres along the routes they are read along and
-  the winner's time, pace × length.
-- **Use** (`editor-leg-alternative-use`) stores the alternative as the
-  pair's chosen route (`legRoute.save`, `source: "computed"`, `model`
-  the id of the model it was found under: `shortest` for the route
-  that is only the shortest, else the id of the model the search ran
-  under, §7.9.6 — `default-1` until a model is adopted). An
-  alternative that is the straight line cannot be stored: the drawn
-  line is that route.
-- A note says the times are estimates from an uncalibrated model
-  (`editor-leg-alternatives-note`); no route found says so
-  (`editor-leg-alternatives-none`).
+  `data-climb`, `data-time`, `data-active`): a dot in the route's
+  colour, metres, the route's own climb as in §7.4, and the estimated
+  time `~m:ss` = cost × pace.
+- **On the map**, screen only: each alternative is a solid line 4 px
+  wide over a white casing, in its own colour (orange, blue, green,
+  brown, in the list's order; `editor-route-alternative`,
+  `data-index`, `data-kind`, `data-active`), with a label
+  (`editor-route-alternative-label`, `data-index`, `data-m`,
+  `data-climb`, `data-time`, `data-active`) reading
+  *412 m · ↑ 18 m · ~3:05* — the climb only when heights are read, the
+  time only once the costs are known. A label sits on its own route,
+  in its middle part (20–80 % along), where it is farthest from the
+  other alternatives (`alternativeLabelAnchors`); labels that would
+  still overlap on screen are moved apart, and one off screen is not
+  shown. Pointing at a label or a list row, or pressing one, makes
+  that alternative **active**: its line is 6 px and drawn last, the
+  others fade to 45 %. A press keeps it active until it is pressed
+  again or the leg changes. The active label carries **Use**
+  (`editor-route-alternative-label-use`). The lines themselves take no
+  press: the map under them stays the map.
+- **Use** (the label's, or the row's `editor-leg-alternative-use`)
+  stores the alternative as the pair's chosen route (`legRoute.save`,
+  `source: "computed"`, `model` the id of the model it was found
+  under: `shortest` for the route that is only the shortest, else the
+  id of the model the search ran under, §7.9.6). An alternative that
+  is the straight line cannot be stored: the drawn line is that route.
+- No route found says so (`editor-leg-alternatives-none`); a failed
+  search says so (`editor-leg-alternatives-error`) and ↻ tries again.
+- What the times rest on (`editor-leg-alternatives-note`,
+  `data-calibrated`) is one of the notes under the section's
+  **About this panel** (`course-editor.md` §6.7).
 - A phone has no alternatives: its Leg section is read-only.
+
+**Winner pace** is the course's, not the leg's (§0.40): the course-info
+popover (`course-editor.md` §2) has a row *Winner pace* `m:ss` *min/km*
+(`editor-stats-pace`, `data-default`; the field
+`editor-stats-pace-input`, `m:ss` or decimal minutes per km,
+2:00–30:00; §0.17, §0.27) for an ordered course in Course view. It is
+the expected winner's pace over the course's length, stored with the
+course (`courses.winner_pace_s_per_km`, `course.update`
+`winnerPaceSPerKm`, with the course's version token; not journaled, as
+`climb_source`); 6:00 and marked *(default)* while none is typed. The
+worker costs every leg of the course along the polyline it is read
+along (`legPolylineCost`, the `costs` message); the pace on flat forest
+is pace × length ÷ the sum of those costs (`flatPaceSPerKm`), and an
+alternative's time is its cost at that pace. Until the costs are known
+no times are shown. Under the row, **the course along its routes**
+(`editor-course-route-totals`, `data-m`, `data-time`, `data-routed`):
+the sum of the legs' metres along the routes they are read along and
+the winner's time, pace × length.
 
 ### 7.9 Calibration from GPS tracks
 
@@ -1264,7 +1348,7 @@ only when a person presses the button.
 | `packages/shared/src/terrain/profile/__tests__/pick.test.ts` | §3: the order over every descriptor state |
 | `packages/web/src/lib/editor/__tests__/elevation.test.ts` | §4.3–4.5: what a state shows, rounding, the share, approximate, a leg's numbers and a leg without data |
 | `packages/web/src/lib/editor/__tests__/status.test.ts` "the climb row is one number" | §4.4: the order typed · computed · stored · words, the phone's short text |
-| `e2e/course-editor-elevation.spec.ts` | §4 in the browser on a synthetic plane field: the computed climb and its notes, a leg's numbers, a moved control, a ground model's attribution, a failed read and **Try again**, a typed climb, free order and the all-controls view, a map without a field |
+| `e2e/course-editor-elevation.spec.ts` | §4 in the browser on a synthetic plane field: the computed climb and its notes, a leg's numbers, a moved control, a ground model's attribution, the sequence row's climb (§5), the climb on the placing label (§4.5), the notes under the info disclosure, a failed read and **Try again**, a typed climb, free order and the all-controls view, a map without a field |
 | `e2e/course-editor-phone.spec.ts` "the computed climb on a phone" | §4.4 "Phone" |
 | `packages/api/src/__tests__/course-climb.test.ts` | §6: a stated climb's source, the read rule, the field's row source, the climb to store (partial, flat, no legs) |
 | `packages/api/src/__tests__/integration/course-climb.test.ts` | §6: computed after a create commits, cleared and recomputed by a move, the journal payload and token, both journal entries of an edit, typed wins and clears back, a climb without a source, a typed source over an empty climb, clone, free order, bulk end moves and bulk climb, `refreshClimbs`, marks not taken by another request while the edit is open, a climb applied from the journal, a field not stored, the column's constraint |
@@ -1275,18 +1359,22 @@ only when a person presses the button.
 | `packages/shared/src/course/__tests__/leg-routes.test.ts` | §7.1, §7.3: a leg along its chosen route between its own ends, direction, a pair run twice, a marked route, the polyline's length, the stored points' bounds |
 | `packages/api/src/__tests__/integration/leg-routes.test.ts` | §7.2, §7.3: a saved route chosen and every course of the pair read along it, the length unchanged, direction, choose and unchoose, one chosen route per pair (and the index), new points, a typed climb and a marked route untouched, a control run to twice with one marked leg, a moved control, refusals, another event, a removed control, delete, the backup, the checkout snapshot |
 | `packages/web/src/lib/editor/__tests__/leg-routes.test.ts` | §7.4: the chosen routes by leg key, a pair's routes, a route's metres and climb, the list with the drawn line, the automatic route and the line as that route, the map's shapes, a draft's shapes |
-| `e2e/course-editor-routes.spec.ts` | §7.4 in the browser: a route drawn and saved, its numbers, the leg and the course read along it, the drawn line chosen back, removal; a draft's keys (Backspace, Enter, Escape). §7.5: the automatic route round an out-of-bounds area, chosen and not removable, unchosen once a person uses another. §7.8: alternatives round the area, their times, the winner pace saved with the course, the course along its routes, **Use** |
+| `e2e/course-editor-routes.spec.ts` | §7.4 in the browser: a route drawn and saved, its numbers, the leg and the course read along it, the drawn line chosen back, removal; a draft's keys (Backspace, Enter, Escape). §7.5: the automatic route round an out-of-bounds area, chosen and not removable, unchosen once a person uses another. §7.8: alternatives found on selecting the leg, their lines and labels on the map (a press picks one), their times, the winner pace typed in the course popover and saved with the course, the course along its routes, **Use** on the picked route's label (the list row's **Use** is the same handler, not pressed here) |
 | `packages/shared/src/route/__tests__/route.test.ts` | §7.6: codes to classes, the default model, slope; the grid's fill, holes, ranks, bridge, barrier, heights, `openDisc`, `nearestPassable`. §7.7: the cost field (distance, a gap, enclosed, slope and the reversed field); alternatives (straight, straightened, round a lake on both sides, a path against thick forest, a hill, the bounds, no way, a crossing point, a control on an obstacle, determinism); at the search's cell size: one route in open terrain, a control on a building or a cliff with a wall between, an uncrossable area thinner than a cell, a passage between two buildings, the marks after straightening, a control beside a fence, the cost of a run downhill, a bridge over drawn banks |
 | `packages/shared/src/route/__tests__/leg.test.ts` | §7.6: a document's features by match or source code, a patch-hidden object, the course's out-of-bounds area, a leg's window and cell size. §7.5: the shortest legal route (the line, round a lake, no way). §7.8: a leg's cost along a polyline |
 | `packages/api/src/__tests__/integration/leg-routes-auto.test.ts` | §7.5: the worker's search, a course's pairs after its edit (chosen, shortest, the line as a row without points, the climb), nothing searched while the basis holds, the basis, a moved control, not edited or deleted by hand, a person's choice over a refresh, an out-of-bounds area, a marked-route leg, a free-order course. §7.8: the winner pace stored, listed, cleared, its bounds; an object drawn with named courses (§0.25), a leg through its crossing point, two edits in a row, a search that fails (the other pairs written, the climbs computed, the pair left for the next refresh), a route saved by hand while the search runs |
 | `packages/shared/src/route/calibration/__tests__/calibration.test.ts` | §7.9 on made-up terrain and runners (`world.ts`): the record (shape, `kept`, paper positions, warnings, no CRS); legs (2, 5 and 10 s fixes, a clock offset, no punch times, a control passed twice, each reason a leg is left out, a stop taken out, one and two wild fixes, a slow leg kept, a track from before the start to after the finish, a near miss); attribution (equal to the route's cost, the covering grid, a track beside a path, across one and leaving one, uncrossable metres); the fit (the linear solve, factors recovered across paces and under ±20 % leg noise, a class three times slower, blown legs, a class that is most of every leg (settling, its interval, a fit cut short), control pairs that disagree, a class on one control pair, a wandered track, records sharing pairs, too little track, an anchor without forest, the slope, determinism); held-out legs, the finder check, a model of measured numbers only, the model as data, the report's strictness and that no input number is in it |
 | `packages/api/src/__tests__/calibrate-cost-model.test.ts` | §7.9: the command's arguments; a run on `e2e/test.ocd` with made-up runners from a directory of records, its report and its lines as they come; a file that is no map, a record that does not parse, a missing map or record and a record that is not JSON named by position only; under five runs on a map no report |
 | `packages/web/src/lib/route/__tests__/finder.test.ts` | §7.8: the worker's state (a search needs its document), the document sent once and again when it changes, a message the worker cannot take, the legs' costs, dispose; §7.9: the model a search ran under |
-| `packages/web/src/lib/editor/__tests__/leg-alternatives.test.ts` | §7.8: the pace as typed, the clock, the pace on flat forest, the course along its routes, the list's kinds and times, the map's shapes, out-of-bounds objects as obstacles |
+| `packages/web/src/lib/editor/__tests__/leg-alternatives.test.ts` | §7.8: the pace as typed, the clock, the pace on flat forest, the course along its routes, the list's kinds and times, the map's shapes (colours, the picked one on top), the labels' text and anchors, out-of-bounds objects as obstacles |
 | `packages/web/src/lib/editor/__tests__/profile-graph.test.ts` | §5: points and bounds, the leg at a distance, ticks, an axis that ends on ticks, the scale and its minimum span, the paths and their breaks, decimation, the height at a distance, label thinning, the kept preference |
 | `packages/api/src/__tests__/eventor-upload.test.ts` "states each class's course with its length and climb" | §8: the element in both lists, its place and order, the class's first runner, a missing length, a missing climb, a rounded climb, no element; the pushed start list read back by the sync's parser |
 | `packages/api/src/__tests__/integration/eventor-push-courses.test.ts` | §8: the class's course from the database in both pushes, a computed and a typed climb, no climb, an empty course, a removed course, a class without a course, a forked class stating its root whatever its runner's variant, a dry run of each |
-| `e2e/course-editor-profile.spec.ts` | §5 in the browser: the toggle, the panel under the map and above the rail's end, the controls, the summary, the kept preference, ✕; the pointer's readout, the dot on the map, a click selecting the leg |
+| `packages/web/src/lib/editor/__tests__/elevation.test.ts` "the climb of the leg into each row of the sequence" | §4.5, §5: a climb per sequence row, a row without a leg, a leg without data |
+| `packages/web/src/lib/editor/__tests__/leg-length.test.ts` | §4.5: the placing and dragging label with the climb ("123 m · ↑ 8 m"), approximate, the leg out read in its own direction |
+| `packages/web/src/lib/__tests__/map-labels.test.ts` | §7.8: the labels on the map kept apart, the first in its place, moved off a handle or grip, one off screen left out |
+| `packages/web/src/lib/__tests__/map-viewport.test.ts` "revealView" | §5: no view change when the segment is inside the viewport, a pan when it is outside, a zoom out when it does not fit |
+| `e2e/course-editor-profile.spec.ts` | §5 in the browser: the toggle, the panel under the map and above the rail's end, the controls, the summary, the kept preference, ✕; the pointer's readout, the dot on the map, a click selecting the leg; the mini profile at the end of the sequence, its summary, opening and closing the panel, the selected leg marked |
 
 ## Pending in this chapter
 
@@ -1304,6 +1392,20 @@ only when a person presses the button.
   editor learns of a landed route by asking again, not by a push. A
   pair no course runs any more keeps its automatic row until a
   control of it is removed.
+- §7.8: an alternative's line on the map is not pressable (its label
+  and its list row are); the search runs on a selected leg only, not
+  for the whole course; a phone has no alternatives (§7.8). A
+  search that never answers leaves the list at *Searching…* (there is no
+  time limit), and a leg selected twice while its search runs is
+  searched twice. The labels are placed as if all were 150 px wide and
+  are only moved down (off each other and off the tool's handles and
+  grips, which a label must not cover); a leg under the profile panel's or the
+  inspector's edge counts as in sight for the reveal (§5). The winner pace is typed in the editor only: the Courses page
+  has no field for it.
+- §4.5, §5: the sequence has no climb in its footer (the course's is
+  in the popover and on the mini profile); the placing label states the
+  climb of the straight leg, not of a route; revealing a leg picked in
+  the profile is not tested in the browser.
 - §7.8: the winner pace is the root course's; a variant or a copy of a
   course does not get it. Per-leg and per-course times are not stored or exported; the
   course's time is pace × length by definition (§0.32).

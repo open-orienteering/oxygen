@@ -30,7 +30,7 @@ import { course as courseShared, type ControlDescription, type ControlKind, type
 import { trpc } from "../../lib/trpc";
 import { MapPanel } from "../../components/MapPanel";
 import { ControlDescriptionEditor } from "../../components/ControlDescriptionEditor";
-import type { EditorDescriptionSuggestion, EditorToolBinding, MapViewerEditorProps, ToolPointer } from "../../components/MapViewer";
+import type { EditorDescriptionSuggestion, EditorToolBinding, MapLabel, MapViewerEditorProps, ToolPointer } from "../../components/MapViewer";
 import { useCoursePresence } from "../../hooks/useCoursePresence";
 import { clockTime, courseChangedElsewhere } from "../../lib/editor/presence";
 import { PresenceChips } from "./PresenceChips";
@@ -60,7 +60,7 @@ import { snapIndexForDocument } from "../../lib/editor/snap";
 import { pickIndexForDocument } from "../../lib/editor/symbol-pick";
 import { groupOfSymbol, swatchUrl, symbolGroups, type SymbolGroup } from "../../lib/editor/symbol-groups";
 import { deleteVertex, vertexRule, type Vertex } from "../../lib/editor/geometry-edit";
-import { legLengthLabel } from "../../lib/editor/leg-length";
+import { legLengthLabel, type LegClimbOf } from "../../lib/editor/leg-length";
 import { EditorConflict, EditorWrites, type EditorClient } from "../../lib/editor/write-client";
 import { instructionsOnCourse, type Instructions } from "../../lib/editor/instructions";
 import { areaTool, editorReducer, escapeHasWork, initialEditorState, type EditorTool } from "../../lib/editor/state";
@@ -89,14 +89,14 @@ import type { SaveState, StatusInput } from "../../lib/editor/status";
 import type { MapInfoInput } from "../../lib/editor/map-info";
 import { useCourseChecks } from "./useCourseChecks";
 import { useCourseElevation } from "./useCourseElevation";
-import { legElevation, lineClimbStatus } from "../../lib/editor/elevation";
-import { chosenRouteMap, pairRoutes, routeItems, routeShapes, type RouteDraft, lineIsShortest } from "../../lib/editor/leg-routes";
-import { DEFAULT_PACE_S_PER_KM, alternativeItems, alternativeShapes, courseRouteTotals, flatPaceSPerKm, formatClock, oobFeatures, parsePace } from "../../lib/editor/leg-alternatives";
+import { legElevation, lineClimbStatus, sequenceLegClimbs } from "../../lib/editor/elevation";
+import { chosenRouteMap, pairRoutes, routeItems, routeNumbers, routeShapes, type RouteDraft, lineIsShortest } from "../../lib/editor/leg-routes";
+import { DEFAULT_PACE_S_PER_KM, alternativeColor, alternativeItems, alternativeLabelAnchors, alternativeLabelText, alternativeShapes, courseRouteTotals, flatPaceSPerKm, formatClock, oobFeatures, parsePace } from "../../lib/editor/leg-alternatives";
 import { createRouteFinder } from "../../lib/route/finder";
 import { DEFAULT_COST_MODEL, SHORTEST_COST_MODEL, type CostModelNote, type RouteAlternative } from "@oxygen/shared/src/route/index.js";
 import { legAt, legBounds, readProfileOpen, writeProfileOpen } from "../../lib/editor/profile-graph";
 import { pointAtDistance } from "@oxygen/shared/src/terrain/profile/index.js";
-import { ProfilePanel } from "./ProfilePanel";
+import { ProfileMini, ProfilePanel } from "./ProfilePanel";
 import { createHoverDotStore } from "../../lib/editor/hover-dot";
 import type { EditorCheck } from "../../lib/editor/checks";
 import { CourseSection, MultiSection, SelectionSection } from "./modes/CourseMode";
@@ -489,6 +489,8 @@ export function EditorPage() {
   }, [state.phantom, state.mode, state.view, structure, rows, explicit]);
   /** Leg editing is desktop and tablet; the phone shows the section read-only (08 §5.5). */
   const legEditable = !!selectedLeg && !isMobile;
+  /** Desktop and tablet: a selected leg draws no click ring and opens no action bar (§6.7). */
+  const legQuiet = legEditable;
 
   // ─── Leg routes (docs/course-elevation.md §7.4): a route per directed control pair, one of them chosen ───
   // The automatic routes (§7.5) land a moment after an edit, written by the server: the list is asked again while a course is open.
@@ -597,14 +599,19 @@ export function EditorPage() {
   const focusBend = useCallback((index: number | null) => {
     setBendFocus(index === null || !selectedLeg ? null : { itemIndex: selectedLeg.itemIndex, index });
   }, [selectedLeg]);
-  /** *Add bend here* (§6.7, F16): a smooth bend on the leg at the phantom; Alt held on the click, a corner. Focused. */
-  const addBend = useCallback((e?: { altKey?: boolean }) => {
-    const p = state.phantom;
-    if (!selectedLeg || !p) return;
-    const { bends, index } = insertBendAt(selectedLeg.fromPt, selectedLeg.props.bends, selectedLeg.toPt, { x: p.x, y: p.y }, !!e?.altKey);
+  /** **Add bend** in the Leg section and `B` (§6.7): a focused bend half way along the leg's longest straight part. */
+  const addBendMid = useCallback((corner = false) => {
+    if (!selectedLeg || !legEditable) return;
+    const pts = courseShared.legPolylineOf(selectedLeg.fromPt, selectedLeg.props.bends ?? [], selectedLeg.toPt);
+    let at = pts[0], longest = -1;
+    for (let i = 1; i < pts.length; i++) {
+      const d = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+      if (d > longest) { longest = d; at = { x: (pts[i].x + pts[i - 1].x) / 2, y: (pts[i].y + pts[i - 1].y) / 2 }; }
+    }
+    const { bends, index } = insertBendAt(selectedLeg.fromPt, selectedLeg.props.bends, selectedLeg.toPt, at, corner);
     writeLeg({ bends });
     setBendFocus({ itemIndex: selectedLeg.itemIndex, index });
-  }, [state.phantom, selectedLeg, writeLeg]);
+  }, [selectedLeg, legEditable, writeLeg]);
   /** The bend row's **Smooth** / **Corner** (§6.7, tablets): one write. */
   const setBendCurve = useCallback((index: number, kind: "smooth" | "corner") => {
     if (!selectedLeg) return;
@@ -781,13 +788,15 @@ export function EditorPage() {
 
   // ─── Gestures (stable: they flow through MapPanel's memo) ─
   /** The objects drawn in the view and whether `V` is the tool, for the map click (J7: a click inside an image selects it). */
-  const clickContext = useRef<{ objects: readonly CourseObject[]; select: boolean }>({ objects: [], select: false });
+  const clickContext = useRef<{ objects: readonly CourseObject[]; select: boolean; legQuiet: boolean }>({ objects: [], select: false, legQuiet: false });
   const handleMapClick = useCallback((pt: Pt) => {
     setRadioSwapOffer(null);
     const c = clickContext.current;
     // An image takes no press (a drag inside it pans); a click inside it, off every other target, selects it (§5, §7).
     const image = c.select ? imageAt(c.objects, pt) : null;
     if (image) return dispatch({ type: "select-object", id: image.id });
+    // Off a selected leg the click only deselects (§6.7): no ring, no bar to dismiss.
+    if (c.legQuiet) return dispatch({ type: "escape" });
     dispatch({ type: "map-click", x: pt.x, y: pt.y });
   }, []);
 
@@ -1047,7 +1056,7 @@ export function EditorPage() {
     const raw = objects.find((x) => x.id === id);
     return raw ? shownObject(raw, sitePos) ?? raw : undefined;
   };
-  clickContext.current = { objects: objectsInView, select: state.mode === "course" && state.tool.kind === "select" };
+  clickContext.current = { objects: objectsInView, select: state.mode === "course" && state.tool.kind === "select", legQuiet };
   const rawSelectedObject = state.selectedObjectId !== null ? objects.find((o) => o.id === state.selectedObjectId) ?? null : null;
   // J10: an attached object whose control is not drawn in the view is not selectable: it is dropped from the selection.
   const selectedObject = useMemo(() => (rawSelectedObject ? shownObject(rawSelectedObject, sitePos) : null), [rawSelectedObject, sitePos]);
@@ -1566,6 +1575,8 @@ export function EditorPage() {
     return created.current.get(id)?.pt ?? null;
   }, [coordsById]);
 
+  /** The climb along a leg's line while it is placed or dragged (docs/course-elevation.md §4.5): set once heights are read, below. */
+  const legClimbRef = useRef<LegClimbOf | null>(null);
   const ghost = useMemo(() => {
     if (!placing || !hover) return null;
     const reuseId = hover.target?.kind === "site" ? Number(hover.target.id) : null;
@@ -1583,9 +1594,9 @@ export function EditorPage() {
     const label = reuse !== null
       ? t("ghostReuse", { code })
       : isVisitTool(placing.tool)
-        ? [info.number !== null ? String(info.number) : null, nextCode !== null ? String(nextCode) : null].filter(Boolean).join(" · ")
+        ? [info.number !== null ? String(info.number) : null, nextCode !== null ? String(nextCode) : null].filter(Boolean).join("-")
         : t(placing.tool === "start" ? "kindStart" : placing.tool === "crossing" ? "kind_crossing_point" : "kindFinish");
-    const legLabel = info.legs[0] ? legLengthLabel(info.legs[0][0], info.legs[0][1], mapScale) : null;
+    const legLabel = info.legs[0] ? legLengthLabel(info.legs[0][0], info.legs[0][1], mapScale, [], legClimbRef.current) : null;
     // §6.8: the ghost 710 turns along the selected leg's segment nearest the cursor; north without a leg.
     let angleDeg: number | undefined;
     if (crossing && placing.insertAt !== null) {
@@ -1601,20 +1612,22 @@ export function EditorPage() {
       }
     }
     const role = crossing ? "crossing_point" as const : isVisitTool(placing.tool) ? "control" as const : placing.tool as "start" | "finish";
-    return { at, radiusMm, role, angleDeg, label, description: reuse === null && !crossing ? ghostDescription : null, legs: info.legs, legMm: info.legMm, legLabel, reuse };
+    return { at, radiusMm, role, angleDeg, label, labelOnLayer: reuse === null && isVisitTool(placing.tool), description: reuse === null && !crossing ? ghostDescription : null, legs: info.legs, legMm: info.legMm, legLabel, reuse };
   }, [placing, hover, kindOfLatest, siteKindOf, isMark, ptOf, rows, explicit, courseInfo, coordsById, t, nextCode, ghostDescription, mapScale]);
 
   // The visit the click would write, drawn by the layer (§6.1): one course request per hover. Keyed by
   // primitives: the ghost itself changes with every course reply (its radius), which must not re-request.
   const ghostX = ghost?.at.x, ghostY = ghost?.at.y, ghostReuse = ghost?.reuse ?? null;
+  const ghostLayerLabel = ghost?.labelOnLayer ? ghost.label : "";
   const provisional = useMemo((): ProvisionalVisit | null => {
     // A crossing point is no visit (§6.8): the layer draws nothing provisional for it.
     if (!placing || placing.tool === "crossing" || placing.insertAt === null || ghostX === undefined || ghostY === undefined) return null;
     return {
       role: placing.tool === "exchange" ? "map_exchange" : placing.tool, insertAt: placing.insertAt, pt: { x: ghostX, y: ghostY },
       ...(ghostReuse !== null ? { reuseId: String(ghostReuse) } : { code: nextCode !== null ? String(nextCode) : "" }),
+      ...(ghostLayerLabel ? { label: ghostLayerLabel } : {}),
     };
-  }, [placing, ghostX, ghostY, ghostReuse, nextCode]);
+  }, [placing, ghostX, ghostY, ghostReuse, nextCode, ghostLayerLabel]);
 
   const sitesForTools = useMemo(() => sites.filter((x) => x.mapX !== 0 || x.mapY !== 0)
     .map((x) => ({ id: x.id, x: x.mapX, y: x.mapY, kind: kindOf(x.id) })), [sites, kindOf]);
@@ -1753,6 +1766,7 @@ export function EditorPage() {
           leg: legEditable && selectedLeg ? {
             from: selectedLeg.fromPt, to: selectedLeg.toPt, bends: selectedLeg.props.bends ?? [], focused: focusedBend,
             onBendsChange: writeLegBends, onBendsDraft: draftLegBends, onBendFocus: focusBend, snap,
+            onPress: (pt) => { const at = state.phantom?.insertAt; setBendFocus(null); if (at != null) dispatch({ type: "leg-click", x: pt.x, y: pt.y, insertAt: at }); },
           } : null,
         });
     }
@@ -1834,7 +1848,12 @@ export function EditorPage() {
   // Each leg along its pair's chosen route when it has one (§7.3), else as drawn.
   const elevationLegs = useMemo(() => (drawnLegs ? courseShared.routedLegs(drawnLegs, chosenRoutes) : null), [drawnLegs, chosenRoutes]);
   const { elevation, sampler: elevationSampler, field: elevationField, retry: retryElevation } = useCourseElevation({ terrain: mapMetadata.data?.terrain, active: elevationActive, legs: elevationLegs, nameId: nameId ?? null });
-  /** The selected leg among the course's derived legs. */
+  /** The climb along a polyline for the placing and dragging labels (docs/course-elevation.md §4.5). */
+  const legClimb = useMemo((): LegClimbOf | null => (elevation.state === "ready" && elevationSampler && mapScale ? (pts) => {
+    const n = routeNumbers(pts, mapScale, elevationSampler);
+    return n.climbM === null ? null : { m: n.climbM, approx: n.approx };
+  } : null), [elevation.state, elevationSampler, mapScale]);
+  legClimbRef.current = legClimb;
   const selectedLegIndex = useMemo(() => {
     const insertAt = state.phantom?.insertAt;
     return selectedLeg && insertAt != null && elevationLegs ? legIndexForInsert(rows, insertAt) : null;
@@ -1871,23 +1890,54 @@ export function EditorPage() {
   const [alternatives, setAlternatives] = useState<{ key: string; status: "running" | "done" | "error"; routes: RouteAlternative[]; model?: CostModelNote } | null>(null);
   const alternativesNow = alternatives && alternatives.key === alternativesKey ? alternatives : null;
   const [pointedAlternative, setPointedAlternative] = useState<number | null>(null);
-  useEffect(() => setPointedAlternative(null), [alternativesKey]);
-  const findAlternatives = useCallback(() => {
+  /** The alternative a press on its label or its row picked: it stays lit, with **Use** on its label. */
+  const [pickedAlternative, setPickedAlternative] = useState<number | null>(null);
+  useEffect(() => { setPointedAlternative(null); setPickedAlternative(null); }, [alternativesKey]);
+  const activeAlternative = pointedAlternative ?? pickedAlternative;
+  // One search runs at a time and the latest asked waits behind it (the worker has no cancel); a leg searched before
+  // shows its result at once.
+  const altCache = useRef(new Map<string, { routes: RouteAlternative[]; model?: CostModelNote }>());
+  const altBusy = useRef(false);
+  const altQueued = useRef<(() => void) | null>(null);
+  const findAlternatives = useCallback((again = false) => {
     if (!alternativesKey || !selectedLeg || !mapDoc || !mapScale) return;
     const key = alternativesKey;
+    const cached = again ? undefined : altCache.current.get(key);
+    if (cached) { setAlternatives({ key, status: "done", ...cached }); return; }
     setAlternatives({ key, status: "running", routes: [] });
-    routeFinder.find({
+    const ask = {
       doc: { key: `${mapDoc.hash}:${patchForDoc?.version ?? "0"}`, bytes: mapDoc.bytes, patch: patchForDoc?.patch ?? null },
       field: elevationField,
       req: { from: selectedLeg.fromPt, to: selectedLeg.toPt, ...(selectedLegVia ? { via: [selectedLegVia] } : {}), groundMPerMm: mapScale / 1000, extra: oobExtra },
-    }).then(
-      (result) => setAlternatives((now) => (now?.key === key ? { key, status: "done", routes: result.routes, model: result.model } : now)),
-      () => setAlternatives((now) => (now?.key === key ? { key, status: "error", routes: [] } : now)),
-    );
+    };
+    const job = () => {
+      altBusy.current = true;
+      const next = () => { altBusy.current = false; const queued = altQueued.current; altQueued.current = null; queued?.(); };
+      routeFinder.find(ask).then(
+        (result) => {
+          altCache.current.set(key, { routes: result.routes, model: result.model });
+          if (altCache.current.size > 20) altCache.current.delete(altCache.current.keys().next().value!);
+          setAlternatives((now) => (now?.key === key ? { key, status: "done", routes: result.routes, model: result.model } : now));
+          next();
+        },
+        () => { setAlternatives((now) => (now?.key === key ? { key, status: "error", routes: [] } : now)); next(); },
+      );
+    };
+    if (altBusy.current) altQueued.current = job; else job();
   }, [alternativesKey, selectedLeg, mapDoc, mapScale, routeFinder, patchForDoc, elevationField, selectedLegVia, oobExtra]);
+  // docs/course-elevation.md §7.8: the search starts by itself a moment after a leg is selected (or its ends settle).
+  const findAlternativesRef = useRef(findAlternatives);
+  findAlternativesRef.current = findAlternatives;
+  const autoSearch = !!alternativesKey && !isMobile && (selectedLeg?.props.style ?? "line") !== "marked_route";
+  useEffect(() => {
+    if (!autoSearch) return;
+    const timer = setTimeout(() => findAlternativesRef.current(), 300);
+    return () => clearTimeout(timer);
+  }, [alternativesKey, autoSearch]);
   // The course's expected winner pace (§7.8), stored with the course; the typed one shows at once.
   const [typedPace, setTypedPace] = useState<{ courseId: number; s: number } | null>(null);
   const winnerPace = (typedPace && typedPace.courseId === selectedCourse?.id ? typedPace.s : selectedCourse?.winnerPaceSPerKm) ?? DEFAULT_PACE_S_PER_KM;
+  const winnerPaceIsDefault = !(typedPace && typedPace.courseId === selectedCourse?.id) && selectedCourse?.winnerPaceSPerKm == null;
   const setPaceText = useCallback((text: string): boolean => {
     const s = parsePace(text);
     const course = selectedCourse;
@@ -1933,7 +1983,21 @@ export function EditorPage() {
     const a = alternativeList[index];
     if (a && selectedLeg && a.interior.length > 0) saveRouteNow({ fromControlId: selectedLeg.from.id, toControlId: selectedLeg.to.id, points: a.interior, source: "computed", model: a.kind === "shortest" ? SHORTEST_COST_MODEL.id : alternativesNow?.model?.id ?? DEFAULT_COST_MODEL.id });
   }, [alternativeList, selectedLeg, saveRouteNow, alternativesNow]);
-  const alternativeMarkers = useMemo(() => (routeDraft ? [] : alternativeShapes(alternativeList, pointedAlternative)), [alternativeList, pointedAlternative, routeDraft]);
+  const alternativeMarkers = useMemo(() => (routeDraft ? [] : alternativeShapes(alternativeList, activeAlternative)), [alternativeList, activeAlternative, routeDraft]);
+  const applyAlternativeRef = useRef<(index: number) => void>(() => undefined);
+  applyAlternativeRef.current = applyAlternative;
+  const useLabel = t("legAlternativeUse"), isLineTitle = t("legAlternativeIsLine");
+  const alternativeLabels = useMemo((): MapLabel[] => {
+    if (routeDraft || alternativeList.length === 0) return [];
+    const anchors = alternativeLabelAnchors(alternativeList);
+    return alternativeList.map((a, i): MapLabel => ({
+      x: anchors[i].x, y: anchors[i].y, text: alternativeLabelText(a), color: alternativeColor(a.index), active: a.index === activeAlternative,
+      testId: "editor-route-alternative-label", data: { index: String(a.index), kind: a.kind, m: String(a.lengthM), climb: a.climbM === null ? "" : String(a.climbM), time: a.timeS === null ? "" : String(a.timeS) },
+      onPress: () => setPickedAlternative((now) => (now === a.index ? null : a.index)),
+      onPoint: (over) => setPointedAlternative((now) => (over ? a.index : now === a.index ? null : now)),
+      action: legEditable ? { label: useLabel, testId: "editor-route-alternative-label-use", disabled: routeBusy || a.interior.length === 0, title: a.interior.length === 0 ? isLineTitle : undefined, onPress: () => applyAlternativeRef.current(a.index) } : null,
+    }));
+  }, [alternativeList, activeAlternative, routeDraft, legEditable, routeBusy, useLabel, isLineTitle]);
   const shownMarkers = useMemo(
     () => (routeMarkers.length + alternativeMarkers.length > 0 ? [...courseChecks.markers, ...alternativeMarkers, ...routeMarkers] : courseChecks.markers),
     [courseChecks.markers, routeMarkers, alternativeMarkers],
@@ -1967,7 +2031,10 @@ export function EditorPage() {
     setRadioSwapOffer(null);
     setBendFocus(null);
     dispatch({ type: "leg-click", x: at.pt.x, y: at.pt.y, insertAt: insertIndexForLeg(rows, leg) });
-  }, [profilePlace, rows]);
+    // §5: the map follows only when the leg is not in sight.
+    const reveal = elevationLegs?.[leg]?.points.map((q) => ({ x: q.x, y: q.y }));
+    if (reveal?.length) setViewRequest((v) => ({ key: (v?.key ?? 0) + 1, reveal }));
+  }, [profilePlace, rows, elevationLegs]);
   const profileLabels = useMemo(() => {
     const marks = routeMarks(rows);
     return { legs: marks.legs, bounds: marks.bounds.map((b) => (b.kind === "control" ? b.label : t(b.kind === "start" ? "profileStart" : "profileFinish"))) };
@@ -2016,7 +2083,8 @@ export function EditorPage() {
     const mark = coord ? isMark(coord.id) : false;
     return courseActions(
       {
-        phantom: state.phantom ? { insertAt: state.phantom.insertAt } : null,
+        // A selected leg opens no bar on desktop and tablet (§6.7): its actions are the Leg section's.
+        phantom: state.phantom && !legQuiet ? { insertAt: state.phantom.insertAt } : null,
         selected: coord ? {
           id: coord.id,
           role,
@@ -2030,12 +2098,8 @@ export function EditorPage() {
         course: selectedCourse && structure ? selectedCourse.name : null,
         codesReady: !!controlList.data,
         busy: pendingOps > 0,
-        legEdit: legEditable,
-        variationHere,
       },
       {
-        addBend,
-        createVariation,
         insert: () => { const p = state.phantom; if (p) void createControl({ x: p.x, y: p.y }, p.insertAt); },
         addToCourse: () => { const p = state.phantom; if (p) void createControl({ x: p.x, y: p.y }, sequenceIds.length); },
         add: () => { const p = state.phantom; if (p) void createControl({ x: p.x, y: p.y }, null); },
@@ -2056,7 +2120,7 @@ export function EditorPage() {
     );
   }, [state.tool.kind, state.selectedControlId, state.phantom, coordsById, kindOf, sequenceIds, ends, selectedCourse, structure, controlRowsById,
     radioSwapOffer, controlList.data, pendingOps, createControl, createRoleControl, applyStructure, resetLabel, handleRadio,
-    confirmSwap, declineSwap, handleDelete, tc, legEditable, addBend, isMark, variationHere, createVariation, memberIds]);
+    confirmSwap, declineSwap, handleDelete, tc, isMark, memberIds]);
 
   const contextInfo = useMemo(() => {
     const sel = state.selectedControlId;
@@ -2121,6 +2185,7 @@ export function EditorPage() {
     const leg = itemOfRow(i)?.leg;
     return { bends: leg?.bends, via: crossingPt(leg) };
   }, meterDraft), mapScale), [rows, itemOfRow, mapScale, crossingPt, meterDraft]);
+  const sequenceClimbs = useMemo(() => sequenceLegClimbs(rows, elevation), [rows, elevation]);
   const totalMeters = useMemo(() => legMeters.reduce<number>((sum, m) => sum + (m ?? 0), 0), [legMeters]);
 
   // Offline, Field mode queues its moves and check-offs (§9 "Offline", D9c); `+` (a create) still needs a connection.
@@ -2137,7 +2202,8 @@ export function EditorPage() {
   const toolActive = state.tool.kind !== "select";
   const editor: MapViewerEditorProps = useMemo(() => ({
     selectedControlId: state.selectedControlId !== null ? String(state.selectedControlId) : null,
-    phantom: state.phantom ? { x: state.phantom.x, y: state.phantom.y } : null,
+    // A selected leg is lit as a leg (§6.7): no ring at the click.
+    phantom: state.phantom && !legQuiet ? { x: state.phantom.x, y: state.phantom.y } : null,
     contextActions,
     // An active tool opens no action bar (§6): nothing in it, not even the info line and badges.
     contextInfo: toolActive ? null : contextInfo,
@@ -2172,10 +2238,12 @@ export function EditorPage() {
     onCourseInfo: setCourseInfo,
     markers: shownMarkers,
     hoverDot: profileDot,
+    mapLabels: alternativeLabels,
+    legClimb,
     layout: classLayout,
     courseOverride,
     legDraft: shownLegDraft,
-  }), [profileDot, shownLegDraft, classLayout, shownMarkers, isMobile, fix, sheetPx, fieldMoveEnd, state.selectedControlId, state.phantom, contextActions, contextInfo, srrBadge, radioOn, suggestions, tc, courseControlIds, toolActive,
+  }), [alternativeLabels, legClimb, profileDot, shownLegDraft, classLayout, shownMarkers, isMobile, fix, sheetPx, fieldMoveEnd, state.selectedControlId, state.phantom, contextActions, contextInfo, srrBadge, radioOn, suggestions, tc, courseControlIds, toolActive,
     courseView, selectedCourse, moveWarnings, moveEpoch, handleMapClick, handleLabelMoveEnd, handleSelect,
     handleDismiss, handleLegClick, shownBinding, placementLoupe, snapIndex, snap, draftObjects, draftFast, viewRequest, provisional, courseOverride, state.view]);
 
@@ -2329,6 +2397,10 @@ export function EditorPage() {
       } else if (plain && key === "L") {
         // F27: the placement loupe toggle (§6 key table, §10 "Loupe").
         togglePlacementLoupe();
+      } else if (plain && key === "B" && legEditable && state.tool.kind === "select") {
+        // §6.7: a bend on the selected leg.
+        e.preventDefault();
+        addBendMid(false);
       } else if (plain && key === "V") {
         exitTool();
       } else if (plain && (key === "S" || key === "K" || key === "M")) {
@@ -2375,7 +2447,7 @@ export function EditorPage() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [descControlId, runUndo, runRedo, undoStack, state, handleDelete, deleteControls, deleteObject, duplicateObject, pasteObject, deleteObjectsMany, duplicateObjectsMany, multiObjects, canEdit, nameId, propDrafts, selectedObject, focusedVertex, drafts, setDraft, cropMode, updateObject, setChain, exitTool, finishArea,
-    stepSelection, armPlace, setTool, canGap, fitView, areaOpen, canTonerSaver, startArea, layoutKey, mapKey, selectedLeg, focusedBend, legEditable, writeLeg, addCorridor, selectionGroup, redraw, togglePlacementLoupe]);
+    stepSelection, armPlace, setTool, canGap, fitView, areaOpen, canTonerSaver, startArea, layoutKey, mapKey, selectedLeg, focusedBend, legEditable, addBendMid, writeLeg, addCorridor, selectionGroup, redraw, togglePlacementLoupe]);
 
   // ─── The URL (docs/course-editor.md §1 "URL"; F31) ─────────
   // Read once, then taken step by step as the data that checks each param loads: Layout's sheet or template
@@ -2583,6 +2655,9 @@ export function EditorPage() {
       status={status}
       onRetryElevation={retryElevation}
       profile={elevation.state === "ready" ? { open: profileOpen, onToggle: toggleProfile } : null}
+      pace={elevationActive && selectedCourse ? {
+        text: formatClock(winnerPace), isDefault: winnerPaceIsDefault, readOnly: !canEdit, onPace: setPaceText, totals: routeTotals,
+      } : null}
       map={mapInfoInput}
     />
   );
@@ -2672,6 +2747,8 @@ export function EditorPage() {
       course={selectedCourse && structure ? { id: selectedCourse.id, name: selectedCourse.name, orderMode: structure.orderMode } : null}
       rows={rows}
       legMeters={legMeters}
+      legClimbs={sequenceClimbs}
+      profileMini={!isMobile && elevation.state === "ready" ? <ProfileMini profile={elevation.profile} selectedLeg={selectedLegIndex} open={profileOpen} onToggle={toggleProfile} /> : null}
       totalMeters={totalMeters}
       suggestions={suggestionsForNew}
       onCreate={handleCreateCourse}
@@ -2782,15 +2859,16 @@ export function EditorPage() {
       routes={legRouteItems && legRoutes.data ? {
         items: legRouteItems, drawing: routeDraft ? { points: routeDraft.points.length } : null, busy: routeBusy,
         lineIsShortest: selectedLegFrom !== null && selectedLegTo !== null && lineIsShortest(legRoutes.data, selectedLegFrom, selectedLegTo),
-        totals: routeTotals ? { ...routeTotals, pace: formatClock(winnerPace) } : null,
         onDraw: startRoute, onDone: finishRoute, onCancel: () => setRouteDraft(null), onChoose: chooseLegRoute, onDelete: deleteLegRoute,
         alternatives: alternativesKey ? {
-          status: alternativesNow?.status ?? "idle", items: alternativeList, pace: formatClock(winnerPace), onPace: setPaceText,
-          onFind: findAlternatives, onUse: applyAlternative, onPoint: setPointedAlternative,
+          status: alternativesNow?.status ?? "idle", items: alternativeList,
+          onFind: () => findAlternatives(true), onUse: applyAlternative, onPoint: setPointedAlternative,
+          active: activeAlternative, onPick: (index) => setPickedAlternative((now) => (now === index ? null : index)),
           measured: alternativesNow?.model ? { state: alternativesNow.model.state, classes: alternativesNow.model.classes } : { state: "none", classes: [] },
         } : null,
       } : null}
       focusedBend={focusedBend}
+      actions={legEditable ? { onAddBend: addBendMid, onInsert: () => armPlace("control"), onVariation: variationHere ? createVariation : null } : null}
       readOnly={!legEditable}
       onPatch={writeLeg}
       onFocusBend={focusBend}

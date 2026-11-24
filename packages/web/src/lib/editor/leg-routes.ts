@@ -106,7 +106,7 @@ export function routeShapes(o: { from: Pt; to: Pt; routes: readonly LegRouteRow[
     ];
   }
   return o.routes.filter((r) => !isLineRow(r)).map((r): ToolShape => ({
-    kind: "line", points: course.routePolyline(o.from, r.points, o.to), dashed: !r.chosen, color: ROUTE_COLOR, widthPx: r.chosen ? 2.5 : 1.5,
+    kind: "line", points: course.routePolyline(o.from, r.points, o.to), dashed: !r.chosen, color: ROUTE_COLOR, widthPx: r.chosen ? 4 : 2.5, casingPx: r.chosen ? 3 : 2,
     testId: "editor-route-line", data: { id: r.id, chosen: r.chosen ? "true" : "false" },
   }));
 }

@@ -60,6 +60,32 @@ test.describe("the elevation profile (docs/course-elevation.md §5)", () => {
     await expect(page.getByTestId("editor-profile")).toHaveCount(0);
   });
 
+  test("the mini profile at the end of the sequence shows the course's climb and opens and closes the panel", async ({ page }) => {
+    await servePlane(page, "contours");
+    await twoControlCourse(page, "CE profile mini");
+    await expect.poll(() => statsRow(page, "climb", "state"), { timeout: 20000 }).toBe("ready");
+    const mini = page.getByTestId("editor-profile-mini");
+    await expect(mini).toBeVisible({ timeout: 15000 });
+    await expect(mini).toHaveAttribute("aria-pressed", "false");
+    await expect(page.getByTestId("editor-profile-mini-summary")).toContainText(`↑ ${await statsRow(page, "climb", "m")} m`);
+    // It sits under the sequence's rows.
+    const last = (await page.getByTestId("editor-leg-meters").last().boundingBox())!, box = (await mini.boundingBox())!;
+    expect(box.y).toBeGreaterThanOrEqual(last.y + last.height - 1);
+
+    await mini.click();
+    await expect(page.getByTestId("editor-profile-line")).toBeVisible({ timeout: 15000 });
+    await expect(mini).toHaveAttribute("aria-pressed", "true");
+    // A leg selected in the big graph is marked in the small one.
+    const graph = (await page.getByTestId("editor-profile-graph").boundingBox())!;
+    await page.mouse.click(graph.x + graph.width / 2, graph.y + graph.height / 2);
+    await expect(page.getByTestId("editor-profile-mini-selected")).toBeAttached();
+    await page.keyboard.press("Escape");
+
+    await mini.click();
+    await expect(page.getByTestId("editor-profile")).toHaveCount(0);
+    await expect(mini).toHaveAttribute("aria-pressed", "false");
+  });
+
   test("in a short window the tool rail scrolls and ends above the panel", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 520 });
     await servePlane(page, "contours");

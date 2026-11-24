@@ -91,11 +91,61 @@ export function oobFeatures(objects: readonly course.CourseObject[]): BoxedRoute
 }
 
 export const ALTERNATIVE_COLOR = "#c2410c";
+/** One colour per alternative, in the list's order: told apart from each other, from the course purple and from the stored routes' cyan. */
+export const ALTERNATIVE_COLORS = ["#c2410c", "#1d4ed8", "#15803d", "#854d0e"] as const;
+export const alternativeColor = (index: number): string => ALTERNATIVE_COLORS[index % ALTERNATIVE_COLORS.length];
 
-/** The alternatives on the map, screen only: dashed, the pointed-at one solid. */
+/** The alternatives on the map, screen only: solid over a white casing; with one active, it is wider and the others fade. */
 export function alternativeShapes(items: readonly AlternativeItem[], active: number | null): ToolShape[] {
-  return items.map((a): ToolShape => ({
-    kind: "line", points: a.points, dashed: a.index !== active, color: ALTERNATIVE_COLOR, widthPx: a.index === active ? 3 : 2,
-    testId: "editor-route-alternative", data: { index: String(a.index), kind: a.kind },
-  }));
+  const shape = (a: AlternativeItem): ToolShape => ({
+    kind: "line", points: a.points, color: alternativeColor(a.index), widthPx: a.index === active ? 6 : 4, casingPx: 3,
+    ...(active !== null && a.index !== active ? { opacity: 0.45 } : {}),
+    testId: "editor-route-alternative", data: { index: String(a.index), kind: a.kind, active: a.index === active ? "true" : "false" },
+  });
+  // The active one last: over the others.
+  return [...items.filter((a) => a.index !== active), ...items.filter((a) => a.index === active)].map(shape);
+}
+
+/** "412 m · ↑ 18 m · ~3:05": what a route is, on the map; climb and time only when known. */
+export function alternativeLabelText(a: Pick<AlternativeItem, "lengthM" | "climbM" | "approx" | "timeS">): string {
+  return [`${a.lengthM} m`, a.climbM !== null ? `${a.approx ? "≈ " : ""}↑ ${a.climbM} m` : null, a.timeS !== null ? `~${formatClock(a.timeS)}` : null].filter(Boolean).join(" · ");
+}
+
+/**
+ * Where each alternative's label sits (paper mm): the point of its middle part (20–80 % along) farthest from every
+ * other alternative, so the labels of routes that share their ends stand apart; alone, its midpoint.
+ */
+export function alternativeLabelAnchors(items: readonly Pick<AlternativeItem, "points">[]): Pt[] {
+  const along = (pts: readonly Pt[], n: number): Pt[] => {
+    const seg = pts.slice(1).map((q, i) => Math.hypot(q.x - pts[i].x, q.y - pts[i].y));
+    const total = seg.reduce((s, d) => s + d, 0);
+    if (total === 0) return [pts[0]];
+    const out: Pt[] = [];
+    for (let k = 0; k < n; k++) {
+      let left = total * (0.2 + (0.6 * k) / Math.max(1, n - 1));
+      let i = 0;
+      while (i < seg.length - 1 && left > seg[i]) { left -= seg[i]; i++; }
+      const f = seg[i] > 0 ? Math.min(1, left / seg[i]) : 0;
+      out.push({ x: pts[i].x + (pts[i + 1].x - pts[i].x) * f, y: pts[i].y + (pts[i + 1].y - pts[i].y) * f });
+    }
+    return out;
+  };
+  const toSegment = (p: Pt, a: Pt, b: Pt): number => {
+    const dx = b.x - a.x, dy = b.y - a.y, len = dx * dx + dy * dy;
+    const f = len > 0 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len)) : 0;
+    return Math.hypot(p.x - (a.x + dx * f), p.y - (a.y + dy * f));
+  };
+  const toLine = (p: Pt, pts: readonly Pt[]): number => pts.slice(1).reduce((m, q, i) => Math.min(m, toSegment(p, pts[i], q)), Infinity);
+  return items.map((item, k) => {
+    if (item.points.length < 2) return item.points[0] ?? { x: 0, y: 0 };
+    const cands = along(item.points, 13);
+    const others = items.filter((_, j) => j !== k && items[j].points.length >= 2);
+    if (others.length === 0) return cands[Math.floor(cands.length / 2)];
+    let best = cands[0], bestD = -1;
+    for (const c of cands) {
+      const d = Math.min(...others.map((o) => toLine(c, o.points)));
+      if (d > bestD) { best = c; bestD = d; }
+    }
+    return best;
+  });
 }

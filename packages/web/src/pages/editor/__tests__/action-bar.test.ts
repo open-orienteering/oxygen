@@ -1,9 +1,9 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { courseActions, type ActionContext, type ActionHandlers } from "../ActionBar";
 
 const noop = () => undefined;
 const on: ActionHandlers = {
-  insert: noop, addBend: noop, addToCourse: noop, add: noop, addStart: noop, addFinish: noop, addMapIssue: noop, useAsRole: noop, append: noop,
+  insert: noop, addToCourse: noop, add: noop, addStart: noop, addFinish: noop, addMapIssue: noop, useAsRole: noop, append: noop,
   removeFromCourse: noop, resetLabel: noop, radio: noop, confirmSwap: noop, declineSwap: noop, description: noop, delete: noop,
 };
 const label = (k: string, o?: Record<string, string>) => (o?.name ? `${k}:${o.name}` : k);
@@ -27,25 +27,8 @@ describe("courseActions (the legacy popover's entries, docs/course-editor.md §4
     expect(ids({ selected: sel({ mark: true }), course: "Lång" })).toEqual(["delete"]);
   });
 
-  it("Add bend here hands the click's Alt to the page: Alt inserts a corner (§6.7, F16)", () => {
-    const addBend = vi.fn();
-    const entry = courseActions({ ...base, phantom: { insertAt: 2 }, course: "Lång", legEdit: true }, { ...on, addBend }, label).find((a) => a.id === "add-bend")!;
-    entry.onClick({ altKey: true });
-    expect(addBend).toHaveBeenCalledWith({ altKey: true });
-  });
-
-  it("a leg: insert, and add bend where the leg can be edited (§6.7)", () => {
+  it("a leg: insert only — its bends and variation are the Leg section's (§6.7)", () => {
     expect(ids({ phantom: { insertAt: 2 }, course: "Lång" })).toEqual(["insert"]);
-    expect(ids({ phantom: { insertAt: 2 }, course: "Lång", legEdit: true })).toEqual(["insert", "add-bend"]);
-  });
-
-  it("a top-level leg: Create variation here, after add bend (§12, F7)", () => {
-    const withCreate: ActionHandlers = { ...on, createVariation: noop };
-    const list = (ctx: Partial<ActionContext>) => courseActions({ ...base, ...ctx }, withCreate, label).map((a) => a.id);
-    expect(list({ phantom: { insertAt: 2 }, course: "Lång", legEdit: true, variationHere: true })).toEqual(["insert", "add-bend", "create-variation"]);
-    // Inside or across a group, or on a phone (the page says no): not offered.
-    expect(list({ phantom: { insertAt: 2 }, course: "Lång", legEdit: true })).toEqual(["insert", "add-bend"]);
-    expect(list({ phantom: { insertAt: null }, course: "Lång", variationHere: true })).not.toContain("create-variation");
   });
 
   it("a control on the course", () => {

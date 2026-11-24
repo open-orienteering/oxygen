@@ -154,3 +154,61 @@ export function ProfilePanel(p: ProfilePanelProps) {
     </section>
   );
 }
+
+const MINI_HEIGHT = 40;
+const MINI_BOX = { left: 2, right: 2, top: 4, bottom: 2 };
+
+export interface ProfileMiniProps {
+  profile: CourseProfile;
+  selectedLeg: number | null;
+  /** The panel under the map is open. */
+  open: boolean;
+  onToggle: () => void;
+}
+
+/**
+ * The profile in small at the end of the sequence list (docs/course-elevation.md §5): the course's line, the selected
+ * leg shaded, climb and descent; a click opens and closes the panel under the map.
+ */
+export function ProfileMini(p: ProfileMiniProps) {
+  const { t } = useTranslation("editor");
+  const wrap = useRef<HTMLButtonElement>(null);
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    const el = wrap.current;
+    if (!el) return;
+    setWidth(el.clientWidth);
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => setWidth(el.clientWidth));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const drawn = useMemo(() => {
+    if (width <= 20) return null;
+    const points = profilePoints(p.profile);
+    const scale = graphScale(points, p.profile.lengthM, { width, height: MINI_HEIGHT, ...MINI_BOX });
+    const baseline = MINI_HEIGHT - MINI_BOX.bottom;
+    return { scale, baseline, bounds: legBounds(p.profile), paths: graphPaths(decimate(points, p.profile.lengthM, Math.floor(width - MINI_BOX.left - MINI_BOX.right)), scale, baseline) };
+  }, [p.profile, width]);
+  const sel = drawn && p.selectedLeg !== null && p.selectedLeg < drawn.bounds.length - 1 ? p.selectedLeg : null;
+  const label = t(p.open ? "profileHide" : "profileShow");
+  return (
+    <button ref={wrap} type="button" data-testid="editor-profile-mini" aria-pressed={p.open} aria-label={label} title={label} onClick={p.onToggle}
+      className={`relative block w-full shrink-0 border-t border-slate-100 cursor-pointer ${p.open ? "bg-purple-50" : "bg-white hover:bg-slate-50"}`} style={{ height: MINI_HEIGHT }}>
+      {drawn && (
+        <svg width={width} height={MINI_HEIGHT} aria-hidden className="block">
+          {sel !== null && (
+            <rect data-testid="editor-profile-mini-selected" data-leg={sel} x={drawn.scale.x(drawn.bounds[sel])} y={0}
+              width={Math.max(1, drawn.scale.x(drawn.bounds[sel + 1]) - drawn.scale.x(drawn.bounds[sel]))} height={MINI_HEIGHT} fill={LINE} opacity={0.14} />
+          )}
+          <path d={drawn.paths.area} fill={LINE} opacity={0.14} />
+          <path d={drawn.paths.line} fill="none" stroke={LINE} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
+        </svg>
+      )}
+      <span data-testid="editor-profile-mini-summary" className="pointer-events-none absolute left-2 top-0.5 rounded bg-white/80 px-1 text-[10px] text-slate-600 tabular-nums">
+        {t("profileMiniSummary", { up: shownM(p.profile.climbM), down: shownM(p.profile.descentM) })}
+      </span>
+      <span aria-hidden className="pointer-events-none absolute right-2 top-0.5 text-[10px] text-slate-400">{p.open ? "▾" : "▴"}</span>
+    </button>
+  );
+}

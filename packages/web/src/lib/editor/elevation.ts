@@ -84,3 +84,18 @@ export function legElevation(e: CourseElevation, legIndex: number | null, routed
     routed,
   };
 }
+
+/**
+ * The climb of the leg into each row of the sequence list (docs/course-elevation.md §4.5): leg k of the profile runs
+ * into the (k + 1)-th positioned row. null: no leg into the row, or heights not read (the course's row says why);
+ * `m` null: the leg has no data.
+ */
+export function sequenceLegClimbs(rows: readonly { pt: unknown }[], e: CourseElevation): Array<{ m: number | null; approx: boolean } | null> {
+  let placed = -1;
+  return rows.map((r) => {
+    if (r.pt === null || r.pt === undefined) return null;
+    placed++;
+    const leg = legElevation(e, placed - 1);
+    return placed === 0 || !leg ? null : { m: leg.climbM, approx: leg.approx };
+  });
+}

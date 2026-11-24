@@ -59,6 +59,8 @@ export interface ProvisionalVisit {
   pt: Pt;
   /** An existing site reused at the visit: spliced by its id, no site added. */
   reuseId?: string;
+  /** What the layer writes beside the new control instead of its number alone: "13-96", number and code (§6.1). */
+  label?: string;
   /** The new site's code (the next code of the allocation). */
   code?: string;
 }
@@ -273,7 +275,8 @@ export function courseLayerRequest(input: CourseRequestInput): CourseLayerReques
   const allControls = sites.some((s) => !onCourse.has(s.id) && !isMark(s));
   // F15: the All-variations spine's numbers (no other draw carries labels).
   const labelled = highlighted.filter((c) => c.labels);
-  const labels = labelled.length > 0 ? Object.assign({}, ...labelled.map((c) => c.labels)) as Record<string, string> : undefined;
+  const pvLabel = pv && provisionalDrawn(pv) && pv.label ? { [PROVISIONAL_SITE_ID]: pv.label } : null;
+  const labels = labelled.length > 0 || pvLabel ? Object.assign({}, ...labelled.map((c) => c.labels), pvLabel ?? {}) as Record<string, string> : undefined;
   const sequence = input.sequenceLabels && !!single && (single.orderMode ?? "ordered") === "ordered";
   return {
     structure: structures.length === 0 ? null : structures,

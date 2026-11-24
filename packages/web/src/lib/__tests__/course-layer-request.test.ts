@@ -126,6 +126,13 @@ describe("the editor's provisional visit (docs/course-editor.md §6.1)", () => {
   const visit = (over: Partial<ProvisionalVisit>): ProvisionalVisit => ({ role: "control", insertAt: 0, pt: at, code: "47", ...over });
   const items = (r: ReturnType<typeof courseLayerRequest>) => structures(r)[0].items.map((i) => i.siteId);
 
+  it("the new control's label is the page's number and code; a reused site has none (§6.1)", () => {
+    const r = courseLayerRequest(base({ provisional: visit({ insertAt: 1, label: "2-47" }) }));
+    expect(r.viewOptions.labels).toEqual({ [P]: "2-47" });
+    expect(courseLayerRequest(base({ provisional: visit({ insertAt: 1 }) })).viewOptions.labels).toBeUndefined();
+    expect(courseLayerRequest(base({ provisional: visit({ insertAt: 1, reuseId: "2", label: "2-47" }) })).viewOptions.labels).toBeUndefined();
+  });
+
   it("a control at the insertion point: a site at the cursor and an item before the control-sequence position", () => {
     const r = courseLayerRequest(base({ provisional: visit({ insertAt: 1 }) }));
     expect(items(r)).toEqual(["S", "1", P, "2", "F"]);

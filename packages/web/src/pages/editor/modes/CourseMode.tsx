@@ -25,6 +25,10 @@ export interface CourseSectionProps {
   course: { id: number; name: string; orderMode: "ordered" | "free_order" } | null;
   rows: DisplayRow[];
   legMeters: Array<number | null>;
+  /** The climb of the leg into each row (docs/course-elevation.md §4.5); absent or null entries: not shown. */
+  legClimbs?: Array<{ m: number | null; approx: boolean } | null>;
+  /** The mini elevation profile shown after the sequence (docs/course-elevation.md §5). */
+  profileMini?: React.ReactNode;
   totalMeters: number;
   /** Create a course (name suggestions: classes without a course). */
   suggestions: string[];
@@ -97,6 +101,7 @@ export function CourseSection(p: CourseSectionProps) {
           <ol data-testid="editor-sequence" className="min-h-0 overflow-y-auto border-t border-slate-100 py-1">
             {p.rows.map((row, i) => {
               const legM = p.legMeters[i];
+              const legClimb = p.legClimbs?.[i] ?? null;
               const isControl = row.kind === "control";
               // §12: a loop's repeated anchor visit is no item — no drag, no ↑ / ↓, no ✕.
               const movable = isControl && !row.path.anchorVisit;
@@ -162,7 +167,16 @@ export function CourseSection(p: CourseSectionProps) {
                   {p.radioIds.has(row.id) && (
                     <span data-testid="editor-radio-badge" className="px-1 rounded-full text-[9px] bg-sky-100 text-sky-800">{t("editor.radioBadge")}</span>
                   )}
-                  {ordered && legM != null && <span className="ml-auto text-slate-400 tabular-nums" data-testid="editor-leg-meters">{legM} m</span>}
+                  {ordered && legM != null && (
+                    <span className="ml-auto flex items-baseline gap-1.5 text-slate-400 tabular-nums">
+                      {legClimb && (
+                        <span data-testid="editor-seq-climb" data-m={legClimb.m ?? ""} title={te("seqClimbTitle")}>
+                          {legClimb.m === null ? "–" : `${legClimb.approx ? "≈" : ""}↑${legClimb.m}`}
+                        </span>
+                      )}
+                      <span data-testid="editor-leg-meters">{legM} m</span>
+                    </span>
+                  )}
                   {movable && (
                     <span className={`flex gap-0.5 ${ordered && legM != null ? "" : "ml-auto"} opacity-60 group-hover:opacity-100`}>
                       {ordered && (
@@ -184,6 +198,7 @@ export function CourseSection(p: CourseSectionProps) {
               ];
             })}
           </ol>
+          {p.profileMini}
           <div className="px-2.5 py-1 border-t border-slate-100 text-slate-500 flex gap-2" data-testid="editor-course-total">
             <span>{t("controlCount", { count: controls })}</span>
             {ordered && <span>{(p.totalMeters / 1000).toFixed(1)} km</span>}

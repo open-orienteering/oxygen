@@ -1640,7 +1640,7 @@ and `bends` real, F2 `corridor`, F4 `crossing` (§10.3).
   (§8.3). `bendSegmentAt(a, bends, b, pt)` → `{ index, t, dist, point }`
   is the bend segment nearest a point by flattened distance (ties to the
   lower index; `t` the segment's own parameter): where a crossing point
-  joins (§3.2) (the editor's *Add bend here* finds its segment with
+  joins (§3.2) (the editor's new bend finds its segment with
   `nearestEdge` on the vertex path since F16, `course-editor.md` §6.7). `reverseBends` runs a leg backwards (the
   vertices reversed, each one's `hIn` and `hOut` swapped).
 - **Dashes** are laid by `symbolise` along each piece as one path, so a
@@ -1942,7 +1942,7 @@ three slice-F site kinds are drawn at once.
   of the course it splits (§11).
 - **Routing** (`LegProps.crossing { controlId, section? }`): the crossing
   point joins the leg's polyline on its segment nearest the site
-  (`routedBends`, the editor's *Add bend here* rule; on a curved leg the
+  (`routedBends`, the editor's *Add bend* rule; on a curved leg the
   segment whose flattened curve is nearest, and the point joins as a
   corner — F13, §3.2), so the leg runs
   `previous site → bends before → crossing → bends after → site`. The

@@ -461,7 +461,7 @@ test.describe("F5: map exchange (docs/course-editor.md §6.9)", () => {
     await arm(page, "X");
     const spot = await emptyPoint(page, 40);
     await page.mouse.move(spot.x, spot.y);
-    await expect(page.getByTestId("editor-ghost-label")).toHaveText(/^2 · \d+$/, { timeout: 10000 });
+    await expect(page.locator('[data-testid="course-label"][data-site-id="provisional"]')).toHaveAttribute("data-text", /^2-\d+$/, { timeout: 10000 });
     const saved = waitForTrpc(page, "course.setStructure");
     const x = await place(page, spot);
     await saved;

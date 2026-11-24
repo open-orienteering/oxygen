@@ -30,6 +30,16 @@ describe("leg length label (docs/course-editor.md §6.1)", () => {
     expect(dragLegShapes(["S", "1"], pos, "1", 10000)[0]).toMatchObject({ testId: "editor-leg-length" });
   });
 
+  it("with heights the label carries the leg's climb, read in the leg's own direction (docs/course-elevation.md §4.5)", () => {
+    const climbOf = (pts: readonly { x: number; y: number }[]) => ({ m: Math.round(Math.max(0, pts[pts.length - 1].x - pts[0].x + (pts[pts.length - 1].y - pts[0].y))), approx: false });
+    expect(legLengthLabel({ x: 0, y: 0 }, { x: 10, y: 0 }, 10000, [], climbOf)).toBe("100 m · ↑ 10 m");
+    expect(legLengthLabel({ x: 0, y: 0 }, { x: 10, y: 0 }, 10000, [], () => ({ m: 4, approx: true }))).toBe("100 m · ≈ ↑ 4 m");
+    expect(legLengthLabel({ x: 0, y: 0 }, { x: 10, y: 0 }, 10000, [], () => null)).toBe("100 m");
+    const pos = new Map(Object.entries({ S: { x: 0, y: 0 }, 1: { x: 10, y: 0 }, 2: { x: 10, y: 10 } }));
+    // Into 1 from S: +10; out of 1 to 2: +10 (not the −10 of the far end read first).
+    expect(dragLegShapes(["S", "1", "2"], pos, "1", 10000, [], climbOf).map((s) => (s.kind === "text" ? s.text : ""))).toEqual(["100 m · ↑ 10 m", "100 m · ↑ 10 m"]);
+  });
+
   it("measures and labels a bent leg along its bends (course-layer.md §10.1, F1)", () => {
     // (0,0) → (0,30) → (40,30): 30 + 40 mm = 700 m at 1:10 000; half way is 5 mm past the bend.
     const via = [{ x: 0, y: 30 }];

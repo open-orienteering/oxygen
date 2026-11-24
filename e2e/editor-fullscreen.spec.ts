@@ -87,7 +87,7 @@ test("fullscreen locks Escape once; hovering with an armed tool does not re-lock
   for (let i = 1; i < 8; i++) spots.push(await emptyPoint(page, 30, spots));
   for (const p of spots) {
     await page.mouse.move(p.x, p.y);
-    await expect(page.getByTestId("editor-ghost-label")).toBeAttached({ timeout: 10000 });
+    await expect(page.getByTestId("editor-ghost-label").or(page.locator('[data-testid="course-label"][data-site-id="provisional"]')).first()).toBeAttached({ timeout: 10000 });
   }
   expect(await lockCounts(page)).toEqual({ lock: 1, unlock: 0 });
 

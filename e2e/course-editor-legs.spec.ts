@@ -26,7 +26,7 @@ test.beforeEach(async ({ page }) => {
 
 test.setTimeout(120_000);
 
-// F3 (docs/course-editor.md §6.7): the Leg section, bend handles, Add bend here, Corridor on selected leg. Its own
+// F3 (docs/course-editor.md §6.7): the Leg section, bend handles, Add bend, Corridor on selected leg. Its own
 // describe, so the parallel rows' edits above merge cleanly.
 test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.7)", () => {
   desktopOnly();
@@ -63,7 +63,7 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
     await expect.poll(() => styleOf(page, name, a, b), { timeout: 15000 }).toBe("line");
   });
 
-  test("Add bend here, a dragged bend handle: the leg passes through it and its metres grow; Delete removes it", async ({ page }) => {
+  test("Add bend, a dragged bend handle: the leg passes through it and its metres grow; Delete removes it", async ({ page }) => {
     const { name, a, b } = await twoControlCourse(page, "F3 bend");
     const legRow = () => controlRows(page).nth(1).getByTestId("editor-leg-meters");
     const metres = async () => Number(((await legRow().textContent()) ?? "").replace(/[^\d]/g, ""));
@@ -72,7 +72,7 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
     await selectLeg(page, name, a, b);
 
     const added = waitForTrpc(page, "course.setStructure");
-    await page.getByTestId("editor-action-bar").getByTestId("editor-action-add-bend").click();
+    await page.getByTestId("editor-leg-add-bend").click();
     await added;
     await expect.poll(async () => (await toolShapes(page, "editor-bend-handle")).length, { timeout: 15000 }).toBe(1);
     await expect(page.getByTestId("editor-leg-bend")).toHaveCount(1);
@@ -114,6 +114,50 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
     await expect(controlRows(page)).toHaveCount(2);
   });
 
+  test("a selected leg is only highlighted: no ring, no floating bar; dragging its line makes a bend; B adds another", async ({ page }) => {
+    const { name, a, b } = await twoControlCourse(page, "F3 drag bend");
+    const mid = await selectLeg(page, name, a, b);
+    await expect.poll(async () => (await toolShapes(page, "editor-leg-outline")).length, { timeout: 10000 }).toBe(1);
+    await expect(page.getByTestId("editor-phantom")).toHaveCount(0);
+    await expect(page.getByTestId("editor-action-bar")).toHaveCount(0);
+    await expect(page.getByTestId("editor-leg-actions")).toBeVisible();
+
+    // A press on the line, dragged off it: one bend, one write on release, the leg passes through where it was let go.
+    const from = await toPage(page, mid);
+    const pa = await toPage(page, a.mm), pb = await toPage(page, b.mm);
+    const len = Math.hypot(pb.x - pa.x, pb.y - pa.y);
+    const n = { x: -(pb.y - pa.y) / len, y: (pb.x - pa.x) / len };
+    const off = (v: Pt) => [v, turned(v, 30), turned(v, -30)];
+    const made = waitForTrpc(page, "course.setStructure");
+    await drag(page, from, await dragEndOnMap(page, from, [...off(n), ...off({ x: -n.x, y: -n.y })], 60));
+    await made;
+    await expect.poll(async () => (await toolShapes(page, "editor-bend-handle")).length, { timeout: 15000 }).toBe(1);
+    await expect(page.getByTestId("editor-leg-bend")).toHaveCount(1);
+    const bend = (await toolShapes(page, "editor-bend-handle"))[0];
+    expect(Math.hypot(bend.x - mid.x, bend.y - mid.y)).toBeGreaterThan(1);
+    // The leg stays selected.
+    await expect(page.getByTestId("editor-leg")).toContainText(`${a.code} → ${b.code}`);
+
+    // B: a second bend.
+    const added = waitForTrpc(page, "course.setStructure");
+    await page.keyboard.press("b");
+    await added;
+    await expect(page.getByTestId("editor-leg-bend")).toHaveCount(2);
+
+    // A click on empty map only deselects: no ring and no bar come back.
+    await clickMap(page, await emptyPoint(page, 60));
+    await expect(page.getByTestId("editor-leg")).toHaveCount(0);
+    await expect(page.getByTestId("editor-phantom")).toHaveCount(0);
+    await expect(page.getByTestId("editor-action-bar")).toHaveCount(0);
+    await expect(controlRows(page)).toHaveCount(2);
+
+    // Insert control arms K at the leg.
+    await selectLeg(page, name, a, b);
+    await page.getByTestId("editor-leg-insert").click();
+    await expect(page.getByTestId("editor-tool-K")).toHaveAttribute("aria-pressed", "true");
+    await page.keyboard.press("Escape");
+  });
+
   // F16 (§6.7, §7; user answer Q2): bends follow F18's convention — smooth by default, Alt for sharp.
   /** The stored bends of the course's one leg with props (a → b), from `course.list`. */
   async function storedBends(courseId: string): Promise<{ x: number; y: number; hIn?: Pt; hOut?: Pt }[]> {
@@ -123,7 +167,7 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
   }
   const outlinePoints = async (page: Page) => (await toolShapes(page, "editor-leg-outline"))[0]?.data.points?.split(" ").length ?? 0;
 
-  test("F16: Add bend here is smooth (two grips, the leg unchanged); a grip curves it mirrored, Alt breaks the pair; Alt-click a corner; Smooth; undo; one page", async ({ page }) => {
+  test("F16: Add bend is smooth (two grips, the leg unchanged); a grip curves it mirrored, Alt breaks the pair; Alt-click a corner; Smooth; undo; one page", async ({ page }) => {
     // The grips a sixth of the chord from the bend: at 120 px on screen, 20 px — clear of the handle's press.
     const { name, a, b } = await twoControlCourse(page, "F16 smooth", { minChordPx: 120 });
     const courseId = await page.getByTestId("editor-course-picker").inputValue();
@@ -133,9 +177,9 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
     const before = await metres();
     await selectLeg(page, name, a, b);
 
-    // Add bend here: one write; the bend is smooth, its handles from its neighbours (the sites): hOut = (b − a) / 6.
+    // Add bend: one write; the bend is smooth, its handles from its neighbours (the sites): hOut = (b − a) / 6.
     const added = waitForTrpc(page, "course.setStructure");
-    await page.getByTestId("editor-action-bar").getByTestId("editor-action-add-bend").click();
+    await page.getByTestId("editor-leg-add-bend").click();
     await added;
     await expect.poll(async () => (await storedBends(courseId)).length, { timeout: 15000 }).toBe(1);
     const [bend] = await storedBends(courseId);
@@ -230,12 +274,12 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
     }
   });
 
-  test("F16: Alt held on Add bend here inserts a corner: no handles, no grips, Smooth offered", async ({ page }) => {
+  test("F16: Alt held on Add bend inserts a corner: no handles, no grips, Smooth offered", async ({ page }) => {
     const { name, a, b } = await twoControlCourse(page, "F16 corner");
     const courseId = await page.getByTestId("editor-course-picker").inputValue();
     await selectLeg(page, name, a, b);
     const added = waitForTrpc(page, "course.setStructure");
-    await page.getByTestId("editor-action-bar").getByTestId("editor-action-add-bend").click({ modifiers: ["Alt"] });
+    await page.getByTestId("editor-leg-add-bend").click({ modifiers: ["Alt"] });
     await added;
     await expect.poll(async () => (await storedBends(courseId)).length, { timeout: 15000 }).toBe(1);
     const [bend] = await storedBends(courseId);
@@ -365,7 +409,9 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
       // F14: inside the corridor the leg's line is gone, the edge is drawn; the Style note says so.
       await expect.poll(() => inkAt(page, centre, "purple"), { timeout: 30000 }).toBe(0);
       expect(await inkAt(page, edge, "purple"), "the corridor's edge").toBeGreaterThan(0);
+      await page.getByTestId("editor-leg-info").locator("summary").click();
       await expect(page.getByTestId("editor-leg-style-corridor-note")).toBeVisible();
+      await page.getByTestId("editor-leg-info").locator("summary").click();
       // F19: narrowed below the circles' width, each circle opens towards the leg, drawn on its far side; the edge
       // meets it at both junctions.
       const narrowed = waitForTrpc(page, "course.setStructure");
@@ -409,7 +455,9 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
       const narrowBand = along([1, -1].flatMap((side) => [0.8, 1.6, 2.4, 3.2, 4.2].map((d) => side * (narrowHalf + d))));
       await expect.poll(() => inkAt(page, narrowBand, "map"), { timeout: 30000 }).toBe(0);
       await expect(opacity).toHaveValue("100");
+      await page.getByTestId("editor-leg-info").locator("summary").click();
       await expect(page.getByTestId("editor-leg-corridor-opacity-hint")).toBeVisible();
+      await page.getByTestId("editor-leg-info").locator("summary").click();
       const veiled = waitForTrpc(page, "course.setStructure");
       await opacity.fill("50");
       await opacity.press("Enter");
@@ -469,7 +517,7 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
     page.on("request", (r) => { if (r.url().includes("course.setStructure")) writes.push(r.url()); });
     await selectLeg(page, name, a, b);
     const added = waitForTrpc(page, "course.setStructure");
-    await page.getByTestId("editor-action-bar").getByTestId("editor-action-add-bend").click();
+    await page.getByTestId("editor-leg-add-bend").click();
     await added;
     await expect.poll(async () => (await storedBends(courseId)).length, { timeout: 15000 }).toBe(1);
     await viewSettled(page);
@@ -752,7 +800,7 @@ test.describe("F3: legs — styles, bends, corridors (docs/course-editor.md §6.
     // the cursor; one write on release, then none.
     await selectLeg(page, name, a, b);
     const added = waitForTrpc(page, "course.setStructure");
-    await page.getByTestId("editor-action-bar").getByTestId("editor-action-add-bend").click();
+    await page.getByTestId("editor-leg-add-bend").click();
     await added;
     await expect.poll(async () => (await storedBends(courseId)).length, { timeout: 15000 }).toBe(1);
     await viewSettled(page);
@@ -1016,7 +1064,7 @@ test.describe("F23: bend drags on a tablet (docs/course-editor.md §6.7, §10)",
     await expect(controlRows(page)).toHaveCount(2, { timeout: 15000 });
     const a = await site(page, ca), b = await site(page, cb);
 
-    // A tap on the leg selects it (the viewer's leg target on touch); Add bend here: smooth, two grips.
+    // A tap on the leg selects it (the viewer's leg target on touch); Add bend: smooth, two grips.
     await viewSettled(page);
     const mid = await legTapPoint(page, name, a, b);
     await expect(async () => {
@@ -1026,7 +1074,7 @@ test.describe("F23: bend drags on a tablet (docs/course-editor.md §6.7, §10)",
     }).toPass({ timeout: 30000 });
     await expect(page.getByTestId("editor-leg")).not.toHaveAttribute("data-readonly", "true");
     const added = waitForTrpc(page, "course.setStructure");
-    await page.getByTestId("editor-action-bar").getByTestId("editor-action-add-bend").click();
+    await page.getByTestId("editor-leg-add-bend").click();
     await added;
     await expect.poll(async () => (await storedBends(courseId)).length, { timeout: 15000 }).toBe(1);
     await expect.poll(async () => (await toolShapes(page, "editor-bend-grip")).length, { timeout: 15000 }).toBe(2);

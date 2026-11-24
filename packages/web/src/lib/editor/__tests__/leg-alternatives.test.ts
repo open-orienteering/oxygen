@@ -3,7 +3,8 @@
 import { describe, it, expect } from "vitest";
 import type { course } from "@oxygen/shared";
 import { BLOCKED } from "@oxygen/shared/src/route/index.js";
-import { alternativeItems, alternativeShapes, courseRouteTotals, flatPaceSPerKm, formatClock, oobFeatures, parsePace } from "../leg-alternatives";
+import type { ToolShape } from "../../../components/MapViewer";
+import { alternativeColor, alternativeItems, alternativeLabelAnchors, alternativeLabelText, alternativeShapes, courseRouteTotals, flatPaceSPerKm, formatClock, oobFeatures, parsePace } from "../leg-alternatives";
 
 describe("the pace (docs/course-elevation.md §7.8)", () => {
   it("minutes per km as a clock or a decimal; nothing else, and only a pace someone runs", () => {
@@ -58,10 +59,30 @@ describe("the alternatives' list and shapes (docs/course-elevation.md §7.8)", (
     expect(alternativeItems(routes, 10000, null, null).map((i) => i.timeS)).toEqual([null, null, null]);
   });
 
-  it("the map's shapes: dashed, the pointed-at one solid", () => {
-    const shapes = alternativeShapes(alternativeItems(routes, 10000, null, 300), 1);
-    expect(shapes.map((s) => (s as { dashed?: boolean }).dashed)).toEqual([true, false, true]);
-    expect(shapes[0]).toMatchObject({ kind: "line", testId: "editor-route-alternative", data: { index: "0", kind: "fastest" } });
+  it("the map's shapes: solid and cased, a colour each; the active one wider, last and the others faded", () => {
+    const items = alternativeItems(routes, 10000, null, 300);
+    const idle = alternativeShapes(items, null) as Extract<ToolShape, { kind: "line" }>[];
+    expect(idle.map((s) => [s.data!.index, s.widthPx, s.casingPx, s.opacity, s.dashed])).toEqual([["0", 4, 3, undefined, undefined], ["1", 4, 3, undefined, undefined], ["2", 4, 3, undefined, undefined]]);
+    expect(new Set(idle.map((s) => s.color)).size).toBe(3);
+    expect(idle[0]).toMatchObject({ kind: "line", testId: "editor-route-alternative", data: { index: "0", kind: "fastest", active: "false" } });
+    const active = alternativeShapes(items, 1) as Extract<ToolShape, { kind: "line" }>[];
+    expect(active.map((s) => [s.data!.index, s.widthPx, s.opacity])).toEqual([["0", 4, 0.45], ["2", 4, 0.45], ["1", 6, undefined]]);
+    expect(active[2].color).toBe(alternativeColor(1));
+  });
+
+  it("a label reads length, climb and time, each only when known", () => {
+    expect(alternativeLabelText({ lengthM: 412, climbM: 18, approx: false, timeS: 185 })).toBe("412 m · ↑ 18 m · ~3:05");
+    expect(alternativeLabelText({ lengthM: 412, climbM: 18, approx: true, timeS: null })).toBe("412 m · ≈ ↑ 18 m");
+    expect(alternativeLabelText({ lengthM: 412, climbM: null, approx: false, timeS: 60 })).toBe("412 m · ~1:00");
+  });
+
+  it("labels sit on their own route where it is farthest from the others; a single route's at its middle", () => {
+    const north = [{ x: 0, y: 0 }, { x: 5, y: 4 }, { x: 10, y: 0 }], south = [{ x: 0, y: 0 }, { x: 5, y: -4 }, { x: 10, y: 0 }];
+    const [a, b] = alternativeLabelAnchors([{ points: north }, { points: south }]);
+    expect(a.y).toBeCloseTo(4, 1);
+    expect(b.y).toBeCloseTo(-4, 1);
+    expect(alternativeLabelAnchors([{ points: [{ x: 0, y: 0 }, { x: 10, y: 0 }] }])[0]).toEqual({ x: 5, y: 0 });
+    expect(alternativeLabelAnchors([{ points: [{ x: 3, y: 3 }] }])[0]).toEqual({ x: 3, y: 3 });
   });
 
   it("the course's out-of-bounds objects are uncrossable: areas, and 708 lines only", () => {

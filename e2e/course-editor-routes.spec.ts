@@ -45,7 +45,6 @@ test.describe("leg routes (docs/course-elevation.md §7.4)", () => {
     const gm = (await mapScale(page)) / 1000;
     await expect.poll(() => statsRow(page, "climb", "state"), { timeout: 20000 }).toBe("ready");
     const lineClimb = Number(await statsRow(page, "climb", "m"));
-    await page.getByTestId("editor-stats").click();
 
     await selectLeg(page, name, a, b);
     // Without a route: the drawn line alone, chosen.
@@ -93,7 +92,6 @@ test.describe("leg routes (docs/course-elevation.md §7.4)", () => {
       const expected = lineClimb + (routeClimb - straightClimb);
       if (Math.abs(routeClimb - straightClimb) >= 3) {
         await expect.poll(async () => Math.abs(Number(await statsRow(page, "climb", "m")) - expected), { timeout: 15000 }).toBeLessThanOrEqual(3);
-        await page.getByTestId("editor-stats").click();
       }
 
       // The drawn line chosen back: the route stays in the list, the leg is read along its line again.
@@ -105,7 +103,6 @@ test.describe("leg routes (docs/course-elevation.md §7.4)", () => {
       await expect(page.getByTestId("editor-leg-elevation")).toHaveAttribute("data-routed", "false", { timeout: 15000 });
       await expect(page.locator('[data-testid="editor-route-line"][data-chosen="false"]')).toBeAttached();
       await expect.poll(async () => Number(await statsRow(page, "climb", "m")), { timeout: 15000 }).toBe(lineClimb);
-      await page.getByTestId("editor-stats").click();
 
       // And the route again.
       const chosen = waitForTrpc(page, "legRoute.choose");
@@ -162,7 +159,7 @@ test.describe("leg routes (docs/course-elevation.md §7.4)", () => {
 test.describe("computed route alternatives (docs/course-elevation.md §7.8)", () => {
   desktopOnly();
 
-  test("Find routes lists alternatives round an out-of-bounds area with metres and an estimated time; Use stores one as the chosen route", async ({ page }) => {
+  test("selecting a leg lists alternatives round an out-of-bounds area with metres and an estimated time; Use stores one as the chosen route", async ({ page }) => {
     await servePlane(page, "contours");
     const { name, a, b } = await twoControlCourse(page, "CE alternatives", { minChordPx: 120 });
     const gm = (await mapScale(page)) / 1000;
@@ -195,13 +192,16 @@ test.describe("computed route alternatives (docs/course-elevation.md §7.8)", ()
       await expect(auto.getByTestId("editor-leg-route-remove")).toHaveCount(0);
       await expect(page.getByTestId("editor-leg-elevation")).toHaveAttribute("data-routed", "true", { timeout: 15000 });
       // The course along its routes: longer than its drawn length.
+      // It is the course's, beside the winner pace in the course-info popover (§7.8).
+      await page.getByTestId("editor-stats").click();
       const totals = page.getByTestId("editor-course-route-totals");
       await expect(totals).toBeVisible();
       expect(Number(await totals.getAttribute("data-m"))).toBeGreaterThan(lineM);
       expect(Number(await totals.getAttribute("data-routed"))).toBeGreaterThanOrEqual(1);
+      await expect(page.getByTestId("editor-stats-pace")).toHaveAttribute("data-default", "true");
+      await page.getByTestId("editor-stats").click();
+      // The search started by itself when the leg was selected: no button to press.
       const box = page.getByTestId("editor-leg-alternatives");
-      await expect(box).toHaveAttribute("data-status", "idle");
-      await page.getByTestId("editor-leg-alternatives-find").click();
       await expect(box).toHaveAttribute("data-status", "done", { timeout: 60000 });
       const alts = page.getByTestId("editor-leg-alternative");
       await expect(alts.first()).toBeVisible();
@@ -216,16 +216,41 @@ test.describe("computed route alternatives (docs/course-elevation.md §7.8)", ()
         expect(Number(await alts.nth(i).getAttribute("data-time"))).toBeGreaterThan(0);
       }
       expect(await alts.first().getAttribute("data-kind")).toMatch(/^fastest/);
-      await expect(page.getByTestId("editor-leg-alternatives-note")).toBeVisible();
-      // A forest map's model is partly measured from tracks (§7.9.7): the note names the measured terrain.
+      // What only explains is under "About this panel": closed until asked for.
       const note = page.getByTestId("editor-leg-alternatives-note");
+      await expect(note).toBeHidden();
+      await page.getByTestId("editor-leg-info").locator("summary").click();
+      await expect(note).toBeVisible();
+      // A forest map's model is partly measured from tracks (§7.9.7): the note names the measured terrain.
       await expect(note).toHaveAttribute("data-calibrated", "partial");
       await expect(note).toContainText(/GPS/);
+      await page.getByTestId("editor-leg-info").locator("summary").click();
+      // On the map: a cased line per alternative and a label with its metres and time; nothing floats over the leg.
       await expect(page.getByTestId("editor-route-alternative").first()).toBeAttached();
+      await expect(page.getByTestId("editor-phantom")).toHaveCount(0);
+      await expect(page.getByTestId("editor-action-bar")).toHaveCount(0);
+      const labels = page.getByTestId("editor-route-alternative-label");
+      // One label per alternative whose anchor is in sight.
+      await expect(page.locator('[data-testid="editor-route-alternative-label"][data-index="0"]')).toBeVisible({ timeout: 10000 });
+      expect(await labels.count()).toBeLessThanOrEqual(count);
+      const label0 = page.locator('[data-testid="editor-route-alternative-label"][data-index="0"]');
+      await expect(label0).toHaveAttribute("data-m", (await alts.first().getAttribute("data-m"))!);
+      await expect(label0).toContainText(/^\d+ m( · (≈ )?↑ \d+ m)? · ~\d+:\d\d/);
+      // A press on a label picks its route: lit on the map and in the list, Use on the label.
+      await label0.locator("button").first().click();
+      await expect(label0).toHaveAttribute("data-active", "true");
+      await expect(alts.first()).toHaveAttribute("data-active", "true");
+      await expect(page.locator('[data-testid="editor-route-alternative"][data-index="0"]')).toHaveAttribute("data-active", "true");
+      await expect(page.getByTestId("editor-route-alternative-label-use")).toBeVisible();
+      await label0.locator("button").first().click();
+      await page.mouse.move(5, 5);
+      await expect(label0).toHaveAttribute("data-active", "false");
 
       // The winner pace: a faster one shortens every time in proportion, and it is saved with the course.
       const before = Number(await alts.first().getAttribute("data-time"));
-      const pace = page.getByTestId("editor-leg-alternatives-pace");
+      await expect(page.getByTestId("editor-leg-alternatives-pace")).toHaveCount(0);
+      await page.getByTestId("editor-stats").click();
+      const pace = page.getByTestId("editor-stats-pace-input");
       await expect(pace).toHaveValue("6:00");
       const paced = waitForTrpc(page, "course.update");
       await pace.fill("3:00");
@@ -236,11 +261,15 @@ test.describe("computed route alternatives (docs/course-elevation.md §7.8)", ()
       await pace.fill("nonsense");
       await pace.blur();
       await expect(pace).toHaveValue("3:00");
+      await page.keyboard.press("Escape");
+      await expect(page.getByTestId("editor-stats-popover")).toHaveCount(0);
 
       // Use: the alternative becomes the pair's chosen route, marked computed; the leg is read along it.
       const altM = Number(await alts.first().getAttribute("data-m"));
       const saved = waitForTrpc(page, "legRoute.save");
-      await alts.first().getByTestId("editor-leg-alternative-use").click();
+      // On the map: the picked route's label carries Use.
+      await label0.locator("button").first().click();
+      await page.getByTestId("editor-route-alternative-label-use").click();
       await saved;
       const route = page.locator('[data-testid="editor-leg-route"][data-source="computed"]');
       try {
