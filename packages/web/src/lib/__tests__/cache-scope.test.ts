@@ -69,6 +69,55 @@ describe("switchCacheScope", () => {
   });
 });
 
+describe("switchCacheScope: races and global queries", () => {
+  it("the owner marker is never garbage-collected", async () => {
+    const { qc, switchTo } = setup();
+    await switchTo("a");
+    const marker = qc.getQueryCache().find({ queryKey: [...CACHE_OWNER_KEY] });
+    expect(marker?.gcTime).toBe(Infinity);
+  });
+
+  it("the last caller wins: A to B to A leaves A in place", async () => {
+    const { qc, switchTo } = setup();
+    await switchTo("a");
+    qc.setQueryData(RUNNERS, [{ id: 1 }]);
+    const toB = switchTo("b"); // still flushing when the user goes back
+    const toA = switchTo("a");
+    await Promise.all([toB, toA]);
+    expect(cacheOwner(qc)).toBe("a");
+    expect(qc.getQueryData(RUNNERS)).toEqual([{ id: 1 }]);
+  });
+
+  it("A to B to C ends on C even if B's blob read finishes last", async () => {
+    const { qc, switchTo } = setup();
+    await switchTo("a");
+    await Promise.all([switchTo("b"), switchTo("c")]);
+    expect(cacheOwner(qc)).toBe("c");
+  });
+
+  it("keeps user queries across a switch and leaves them out of event blobs", async () => {
+    const { qc, store, switchTo } = setup();
+    await switchTo("a");
+    qc.setQueryData([["users", "me"], { type: "query" }], { user: { id: "u" } });
+    await switchTo("b");
+    expect(qc.getQueryData([["users", "me"], { type: "query" }])).toEqual({ user: { id: "u" } });
+    const blob = await store.get(blobKey("a"));
+    expect(JSON.stringify(blob)).not.toContain("users");
+  });
+
+  it("does not write a persisted snapshot while the cache is being swapped", async () => {
+    const { m, qc, switchTo } = setup();
+    await switchTo("a");
+    qc.setQueryData(RUNNERS, [{ id: 1 }]);
+    const before = m.get(blobKey("a"));
+    await switchTo("b");
+    const after = m.get(blobKey("a"));
+    // The flush wrote A's full data; nothing afterwards truncated it.
+    expect(JSON.stringify(after)).toContain('"id":1');
+    expect(before === undefined || JSON.stringify(after).length > 50).toBe(true);
+  });
+});
+
 describe("per-event persister", () => {
   it("two events never share a persisted key", async () => {
     const { m, persister, qc, switchTo } = setup();

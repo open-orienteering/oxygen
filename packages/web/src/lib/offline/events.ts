@@ -8,7 +8,7 @@ import type {
   RunnerRegisteredPayload,
 } from "./db";
 import { offlineDb } from "./db";
-import { type Hlc, HLC_ZERO, tickHlc } from "@oxygen/shared";
+import { type Hlc, HLC_ZERO, tickHlc, compareHlc } from "@oxygen/shared";
 
 let stationId: string | null = null;
 
@@ -46,7 +46,7 @@ function getNextHlc(): Hlc {
     const stored = readStorage(HLC_STORAGE_KEY);
     if (stored) {
       const parsed = JSON.parse(stored) as Hlc;
-      if (!memoryHlc || parsed.physical >= memoryHlc.physical) last = parsed;
+      if (!memoryHlc || compareHlc(parsed, memoryHlc) >= 0) last = parsed;
     }
   } catch {
     /* corrupt clock → keep the in-memory one (or restart from zero) */

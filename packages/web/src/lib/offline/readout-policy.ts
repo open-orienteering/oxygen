@@ -4,21 +4,24 @@
  */
 import type { SICardReadout } from "../si-protocol";
 
-/** How a readout got (or did not get) saved. */
+/** How a readout got (or did not get) . */
 export type SaveState =
   /** Stored on the server. */
-  | "saved"
-  /** Server unreachable: queued in this device's outbox, drains later. */
-  | "queued"
-  /** Neither stored nor queued (storage failure). The card must be read again. */
-  | "not-saved"
+  | ""
+  /** Server unreachable:  in this device's outbox, drains later. */
+  | ""
+  /** Neither stored nor  (storage failure). The card must be read again. */
+  | ""
   /** No event could be determined from the URL, so there was nowhere to queue it. */
-  | "no-competition";
+  | "no-competition"
+  /** The store or queue write is still in flight (a re-insert meanwhile is a duplicate). */
+  | "saving";
 
 export interface DedupCandidate {
   readout?: SICardReadout;
   competitionId?: string | null;
   persisted?: boolean;
+  saveState?: SaveState;
 }
 
 /** Two readouts of the same card with identical punch data. */
@@ -37,7 +40,7 @@ export function readoutsMatch(a: SICardReadout, b: SICardReadout): boolean {
 
 /**
  * A re-read is a duplicate only when the earlier one is the same card data in
- * the SAME event and was actually stored or queued. A read that never reached
+ * the SAME event and was actually stored or . A read that never reached
  * the server or the outbox is retried on the next insert (MC-05 / SI-16 / SYNC-03).
  */
 export function findDuplicate<T extends DedupCandidate>(
@@ -48,7 +51,7 @@ export function findDuplicate<T extends DedupCandidate>(
   return recent.find(
     (c) =>
       c.readout !== undefined &&
-      c.persisted === true &&
+      (c.persisted === true || c.saveState === "saving") &&
       (c.competitionId ?? null) === competitionId &&
       readoutsMatch(c.readout, readout),
   );

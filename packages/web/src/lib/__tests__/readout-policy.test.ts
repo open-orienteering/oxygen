@@ -30,6 +30,12 @@ describe("findDuplicate", () => {
     expect(findDuplicate([stored], readout(), null)).toBeUndefined();
   });
 
+  it("a read still being saved counts as a duplicate (no double queueing)", () => {
+    expect(
+      findDuplicate([{ ...stored, persisted: false, saveState: "saving" as const }], readout(), "a"),
+    ).toBeDefined();
+  });
+
   it("different punch data is not a duplicate", () => {
     expect(
       findDuplicate([stored], readout({ punches: [{ controlCode: 32, time: 300 }] as never }), "a"),

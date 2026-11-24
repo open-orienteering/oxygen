@@ -2,7 +2,7 @@ import { get, set, del } from "idb-keyval";
 import type { PersistedClient, Persister } from "@tanstack/react-query-persist-client";
 import { activeEventNameId } from "../trpc";
 import type { QueryClient } from "@tanstack/react-query";
-import { ownerOfPersisted, switchCacheScope } from "./cache-scope";
+import { ownerOfPersisted, persistSuspended, switchCacheScope } from "./cache-scope";
 
 const LEGACY_KEY = "oxygen-query-cache";
 const PREFIX = "oxygen-query-cache:";
@@ -36,6 +36,7 @@ export function createIdbPersister(
 ): Persister {
   return {
     persistClient: async (client: PersistedClient) => {
+      if (persistSuspended()) return;
       await store.set(blobKey(ownerOfPersisted(client)), client);
     },
     restoreClient: async () => {

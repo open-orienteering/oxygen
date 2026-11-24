@@ -242,7 +242,6 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
   const [isOnCardReadoutPage, setIsOnCardReadoutPage] = useState(false);
   const [lastDetectedCardNo, setLastDetectedCardNo] = useState<number | null>(null);
 
-  const [competitionNameId, setCompetitionNameIdState] = useState<string | null>(null);
   const competitionNameIdRef = useRef<string | null>(null);
   const kioskChannelRef = useRef<KioskChannel | null>(null);
   // Legacy refs kept as no-ops for interface compat
@@ -263,7 +262,6 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
 
   // Manage kiosk BroadcastChannel lifecycle
   const setCompetitionNameId = useCallback((nameId: string | null) => {
-    setCompetitionNameIdState(nameId);
     competitionNameIdRef.current = nameId;
     if (kioskChannelRef.current) {
       kioskChannelRef.current.close();
@@ -338,6 +336,7 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
             readout,
             competitionId: competition,
             persisted: false,
+            saveState: "saving",
           };
 
       setCurrentCard(entry);
@@ -438,9 +437,13 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
               STORE_TIMEOUT_MS,
             );
             serverPunchesRelevant = storeResult.punchesRelevant ?? true;
-          } catch {
+          } catch (err) {
             console.warn("[DeviceManager] Failed to store readout on server — queuing offline event");
-            storeFailed = true;
+            // Only an unreachable or too-slow server skips the server fetch. A
+            // server that answered with an error (a kiosk key refused for
+            // writes, a lease refusal) can still resolve the card: the kiosk
+            // key may call cardReadout.readout.
+            storeFailed = (err as { data?: { code?: string } } | null)?.data?.code === undefined;
             saveState = await queueCardRead();
           }
         } else {
@@ -449,7 +452,7 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
         }
       }
       const persisted = isDuplicate || saveState === "saved" || saveState === "queued";
-      const savedEntry: RecentCard = { ...entry, persisted, saveState: isDuplicate ? entry.saveState : saveState };
+      const savedEntry: RecentCard = isDuplicate ? { ...entry } : { ...entry, persisted, saveState };
       setCurrentCard(savedEntry);
       setRecentCards((prev) => {
         const next = prev.map((c) => (c.id === id ? savedEntry : c));

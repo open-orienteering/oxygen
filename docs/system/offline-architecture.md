@@ -360,8 +360,9 @@ Stations are clients, not replicas. When a station loses its node
   was computed from. See `registration-and-readout.md` §2c.
 - **The kiosk route drains its own outbox** and queues `card.read` (and, when
   the device may write results, `result.applied`) under the event in the URL.
-  Queue writes are awaited: a failed IndexedDB write is shown to the operator,
-  never reported as saved.
+  Queue writes are awaited: a failed IndexedDB write is never reported as
+  saved. The standalone kiosk and the Finish Station show a notice; the admin
+  shell logs it (a visible notice there is a follow-up).
 - `computeLocalReadout` (the client-side readout fallback) remains for
   blip-mode card reads, with parity to the server path asserted by tests.
 

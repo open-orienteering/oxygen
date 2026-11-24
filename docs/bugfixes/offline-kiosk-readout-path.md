@@ -26,6 +26,10 @@ With the network down, a standalone kiosk stored and queued nothing while still 
 
 - A kiosk-key-only device stays display-only (decision D11): its `card.read` waits on the device until an operator signs in.
 - `card.read` is not journaled before the store call (SI-29's full form); the 8 s cap and the server's dedup cover a late delivery. Dexie `blocked` / `versionchange` handlers and `navigator.storage.persist()` (SYNC-24) are a follow-up.
+- A `not-saved` / `no-competition` notice exists on the standalone kiosk and the Finish Station only; the admin shell and card-readout page log it. A failed `result.applied` queue write is logged, not shown.
+- `restoreBlobFor` ignores the 24 h `maxAge` on an in-session event switch (a reload applies it). WEB-01's list-page error state and a delayed-response E2E are not done.
+- A key-only kiosk that is online now queues every read as `card.read` (its writes are refused) and the badge says an operator must sign in; it still resolves results from the server.
+- The kiosk and an admin tab in one browser profile both drain one outbox; the server ingest is idempotent, per-tab bookkeeping is not coordinated.
 - `result.applied` replay still maps only OK, MP and DNF (SYNC-06, another package).
 
 ## Tests
