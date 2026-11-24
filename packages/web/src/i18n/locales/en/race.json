@@ -92,5 +92,17 @@
   "otherVariantMatch": "Punches match variant <b>{{key}}</b> ({{course}}) completely",
   "acceptVariant": "Accept variant {{key}}",
   "acceptVariantOffline": "Needs the server",
-  "finishNotSaved": "Finish was not saved on this device. Try again."
+  "finishNotSaved": "Finish was not saved on this device. Try again.",
+  "applyHoldAsk": "This read would replace the stored result ({{reason}}). Replace it?",
+  "applyHoldKept": "The stored result was kept ({{reason}}). Change it on the runner if it is wrong.",
+  "applyHoldReplace": "Replace result",
+  "applyHoldKeep": "Keep result",
+  "applyHoldDismiss": "OK",
+  "applyHoldReason_dq": "disqualified",
+  "applyHoldReason_manual-status": "status set by hand",
+  "applyHoldReason_manual-finish": "finish set by hand",
+  "applyHoldReason_no-finish": "no finish on the card",
+  "applyHoldReason_stale-punches": "the punches look like an old card's",
+  "replaceFinish": "Replace finish {{time}} with now",
+  "applyHoldReason": "see the runner"
 }

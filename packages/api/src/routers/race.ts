@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, kioskOrRaceOperateProcedure, kioskOrRaceOperateRaceProcedure, raceOperateProcedure } from "../trpc.js";
+import { router, kioskOrRaceOperateProcedure, raceOperateRaceProcedure, raceOperateProcedure } from "../trpc.js";
 import { toAbsolute, toRelative } from "../timeConvert.js";
 import {
   runnerStatusToValue,
@@ -317,7 +317,7 @@ export const raceRouter = router({
    * running time, and status. Caller can pass either `id` or
    * `runnerId` (legacy field name; kept for compatibility).
    */
-  recordFinish: kioskOrRaceOperateRaceProcedure
+  recordFinish: raceOperateRaceProcedure
     .input(
       z
         .object({
@@ -326,6 +326,13 @@ export const raceRouter = router({
           finishTimeAbsolute: z.number().int().optional(),
           finishTime: z.number().int().optional(),
           status: z.number().int().optional(),
+          /**
+           * Replace a finish the runner already has with a different time
+           * (WEB-53). Without it the call is refused with `FINISH_EXISTS`,
+           * so the Finish Station asks first, even when its cached runner
+           * row is stale.
+           */
+          allowOverwrite: z.boolean().optional().default(false),
         })
         .refine((x) => (x.id ?? x.runnerId) != null, {
           message: "id or runnerId required",
@@ -336,14 +343,22 @@ export const raceRouter = router({
       const finishAbs = input.finishTimeAbsolute ?? input.finishTime ?? 0;
       const r = await ctx.db.runner.findFirst({
         where: { eventId: ctx.event.id, seq, removed: false },
-        select: { id: true, cardNo: true },
+        select: { id: true, cardNo: true, finishTime: true },
       });
       if (!r) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Runner not found" });
       }
       const zeroTime = ctx.event.zeroTime;
       const finishRel = finishAbs > 0 ? toRelative(finishAbs, zeroTime) : 0;
-      const data: Record<string, unknown> = { finishTime: finishRel };
+      if (r.finishTime > 0 && finishRel !== r.finishTime && !input.allowOverwrite) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `FINISH_EXISTS: the runner already has a finish (${toAbsolute(r.finishTime, zeroTime)})`,
+        });
+      }
+      // A finish keyed in here is "by hand": a later card read without a
+      // finish punch keeps it (SI-10).
+      const data: Record<string, unknown> = { finishTime: finishRel, finishManual: finishRel > 0 };
       if (input.status != null) data.status = valueToRunnerStatus(input.status);
       // Table write + journal entry commit or roll back together.
       await ctx.db.$transaction(async (tx) => {

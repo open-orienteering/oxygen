@@ -142,6 +142,31 @@ export async function buildRunnerUpdateData(
   return data;
 }
 
+/**
+ * Which hand-set flags a runner patch implies (RES-01 / SI-10). A status or
+ * finish the patch actually changes is "by hand": `statusManual` /
+ * `finishManual` then stop a later card read from overwriting it. Setting
+ * the status back to unknown, or the finish to 0, clears the flag. A form
+ * that resends the stored value changes nothing, so it sets no flag.
+ */
+export function manualFlagsFor(
+  fields: Record<string, unknown>,
+  zeroTime: number,
+  current: { status: string; finishTime: number },
+): { statusManual?: boolean; finishManual?: boolean } {
+  const out: { statusManual?: boolean; finishManual?: boolean } = {};
+  if (typeof fields.status === "number") {
+    const next = valueToRunnerStatus(fields.status);
+    if (next !== current.status) out.statusManual = next !== "unknown";
+  }
+  if (typeof fields.finishTime === "number") {
+    const ft = fields.finishTime;
+    const rel = ft > 0 ? toRelative(ft, zeroTime) : ft;
+    if (rel !== current.finishTime) out.finishManual = rel > 0;
+  }
+  return out;
+}
+
 /** Throw CONFLICT if `cardNo` is already used by another runner in this event. */
 async function assertCardNotTaken(
   db: import("../generated/prisma/client.js").PrismaClient,
@@ -539,6 +564,8 @@ export const runnerRouter = router({
         fields,
       );
 
+      Object.assign(data, manualFlagsFor(fields, ctx.event.zeroTime, r));
+
       // Portable patch for the journal: the raw (absolute-ds / seq / numeric)
       // input fields, minus the routing keys. A peer replays it through this
       // same mutation, so it must NOT carry the DB-shaped `data` values.
@@ -620,7 +647,7 @@ export const runnerRouter = router({
       await ctx.db.$transaction(async (tx) => {
         await tx.runner.updateMany({
           where: { id: { in: rows.map((r) => r.id) } },
-          data: { status: "dns" },
+          data: { status: "dns", statusManual: true },
         });
         for (const r of rows) {
           await appendJournal(tx, {
@@ -676,6 +703,7 @@ export const runnerRouter = router({
       }
       if (input.status !== undefined) {
         data.status = valueToRunnerStatus(input.status);
+        data.statusManual = input.status !== 0;
         journalFields.status = input.status;
       }
       if (input.startTime !== undefined) {

@@ -23,6 +23,9 @@ import {
   computeStatus,
   computeMatchScore,
   findMatchingVariants,
+  decideReadoutApply,
+  hasStoredResult,
+  type ReadoutGuardReason,
   voltsFromMeos,
   RunnerStatus,
   type OtherVariantMatch,
@@ -242,12 +245,19 @@ export async function performReadout(
     extraPunches,
     startTime,
     cardStartTime,
-    finishTime,
+    finishTime: punchFinishTime,
     missingCount,
     runningTimeAdjustment,
   } = matchPunchesToCourse(allPunches, expectedPositions, runnerStartTime, {
     orderMode: course?.orderMode ?? "ordered",
   });
+
+  // A finish keyed in by hand (Finish Station, runner edit) stands in for a
+  // missing finish punch, so a card without one does not erase it (SI-10).
+  const finishTime =
+    punchFinishTime === 0 && runner.finishManual && runner.finishTime > 0
+      ? toAbsolute(runner.finishTime, zeroTime)
+      : punchFinishTime;
 
   const rawRunningTime =
     finishTime !== 0 && startTime !== 0 ? finishTime - startTime : 0;
@@ -556,15 +566,35 @@ export async function storeReadoutImpl(
   const existingCard = await db.card.findFirst({
     where: { eventId, cardNo: input.cardNo, removed: false },
   });
+  // RES-01: a read that would replace a stored result's punches with an empty
+  // or not-fresh card (cleared hire card, an old card's punches) is held: the
+  // log row keeps it, `cards.punches_raw` keeps the punches the result came
+  // from, so receipts and re-evaluation stay correct. `applyResult` then asks
+  // the operator (the same decision, `decideReadoutApply`).
+  const linkedForHold = existingCard?.punchesRaw
+    ? await db.runner.findFirst({
+        where: { eventId, cardNo: input.cardNo, removed: false },
+        select: { status: true, finishTime: true },
+      })
+    : null;
+  const cardHeld =
+    !!linkedForHold &&
+    hasStoredResult({
+      status: runnerStatusToValue(linkedForHold.status),
+      finishTime: linkedForHold.finishTime,
+    }) &&
+    (allInputPunches.length === 0 || input.punchesFresh === false);
   const card = existingCard
     ? await db.card.update({
         where: { id: existingCard.id },
-        data: {
-          readoutId: readout.id,
-          readCount: existingCard.readCount + 1,
-          voltageMv,
-          punchesRaw,
-        },
+        data: cardHeld
+          ? { readCount: existingCard.readCount + 1, voltageMv }
+          : {
+              readoutId: readout.id,
+              readCount: existingCard.readCount + 1,
+              voltageMv,
+              punchesRaw,
+            },
         select: { id: true, seq: true },
       })
     : await db.card.create({
@@ -686,10 +716,113 @@ export async function storeReadoutImpl(
     cardId: card.seq,
     readAt: readout.readAt.toISOString(),
     linkedRunnerId: runner?.seq ?? null,
+    linkedRunnerUuid: runner?.id ?? null,
     punchesRelevant,
     matchScore,
+    /** The card row kept its earlier punches (see RES-01 above). */
+    cardHeld,
     sheetRow,
   };
+}
+
+// ─── Guarded apply ─────────────────────────────────────────
+
+export interface ApplyResultOutcome {
+  /** false when nothing was written (held for confirmation or protected). */
+  ok: boolean;
+  outcome: "applied" | "unchanged" | "needsConfirmation" | "protected";
+  reason?: ReadoutGuardReason;
+  /** What the runner row holds now (absolute deciseconds, numeric status). */
+  status: number;
+  finishTime: number;
+  startTime: number;
+}
+
+/**
+ * The one server step that writes a readout's result to the runner row
+ * (work package 2, RES-01 / SI-10 / SI-11): runs `decideReadoutApply` against
+ * the stored row, writes only what it allows and journals `result.applied`
+ * only when the row changed. Used by `applyResult`, `pushReadoutBackup` and
+ * the offline `result.applied` ingest (`journal: false` there, the entry is
+ * already in the journal). Transaction-safe.
+ */
+export async function applyResultGuarded(
+  db: Db,
+  eventId: bigint,
+  zeroTime: number,
+  runnerUuid: string,
+  next: {
+    status: number;
+    finishTime: number; // absolute deciseconds
+    startTime: number; // absolute deciseconds
+    punchesFresh?: boolean;
+    confirmed: boolean;
+  },
+  opts: { journal?: boolean } = {},
+): Promise<ApplyResultOutcome> {
+  const runner = await db.runner.findUniqueOrThrow({
+    where: { id: runnerUuid },
+    select: {
+      seq: true,
+      cardNo: true,
+      status: true,
+      finishTime: true,
+      startTime: true,
+      statusManual: true,
+      finishManual: true,
+    },
+  });
+  const toRel = (v: number) => (v > 0 ? toRelative(v, zeroTime) : 0);
+  const decision = decideReadoutApply(
+    {
+      status: runnerStatusToValue(runner.status),
+      finishTime: runner.finishTime,
+      startTime: runner.startTime,
+      statusManual: runner.statusManual,
+      finishManual: runner.finishManual,
+    },
+    {
+      status: next.status,
+      finishTime: toRel(next.finishTime),
+      startTime: toRel(next.startTime),
+      punchesFresh: next.punchesFresh,
+    },
+    next.confirmed,
+  );
+  const abs = (v: number) => (v > 0 ? toAbsolute(v, zeroTime) : 0);
+  const written = {
+    status: decision.write.status,
+    finishTime: abs(decision.write.finishTime),
+    startTime: abs(decision.write.startTime),
+  };
+  if (decision.outcome === "needsConfirmation" || decision.outcome === "protected") {
+    return { ok: false, outcome: decision.outcome, reason: decision.reason, ...written };
+  }
+  if (decision.outcome === "unchanged") {
+    return { ok: true, outcome: "unchanged", ...written };
+  }
+  await db.runner.update({
+    where: { id: runnerUuid },
+    data: {
+      status: valueToRunnerStatus(decision.write.status),
+      finishTime: decision.write.finishTime,
+      startTime: decision.write.startTime,
+    },
+  });
+  if (opts.journal ?? true) {
+    await appendJournal(db, {
+      eventId,
+      type: "result.applied",
+      payload: {
+        cardNo: runner.cardNo ?? null,
+        runnerId: runner.seq,
+        ...written,
+        // The decision is made here; peers replay it as decided.
+        confirmed: true,
+      },
+    });
+  }
+  return { ok: true, outcome: "applied", ...written };
 }
 
 // ─── Router ────────────────────────────────────────────────
@@ -743,7 +876,7 @@ export const cardReadoutRouter = router({
         return r;
       });
       pushToGoogleSheet(ctx.db, ctx.event.id, result.sheetRow);
-      const { sheetRow: _sheetRow, ...response } = result;
+      const { sheetRow: _sheetRow, linkedRunnerUuid: _uuid, ...response } = result;
       return response;
     }),
 
@@ -809,6 +942,10 @@ export const cardReadoutRouter = router({
         status: z.number().int(),
         finishTime: z.number().int(), // absolute deciseconds
         startTime: z.number().int(), // absolute deciseconds
+        /** The reader's "punches are fresh" verdict (RES-01). */
+        punchesFresh: z.boolean().optional(),
+        /** The operator accepted replacing the stored result (never a DQ). */
+        confirmed: z.boolean().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -818,7 +955,7 @@ export const cardReadoutRouter = router({
           seq: input.runnerId,
           removed: false,
         },
-        select: { id: true, status: true, transferFlags: true, cardNo: true },
+        select: { id: true },
       });
       if (!runner) {
         throw new TRPCError({
@@ -826,32 +963,16 @@ export const cardReadoutRouter = router({
           message: `Runner ${input.runnerId} not found`,
         });
       }
-      const zeroTime = ctx.event.zeroTime;
-      // Table write + journal entry commit or roll back together.
-      await ctx.db.$transaction(async (tx) => {
-        await tx.runner.update({
-          where: { id: runner.id },
-          data: {
-            status: valueToRunnerStatus(input.status),
-            finishTime:
-              input.finishTime > 0 ? toRelative(input.finishTime, zeroTime) : 0,
-            startTime:
-              input.startTime > 0 ? toRelative(input.startTime, zeroTime) : 0,
-          },
-        });
-        await appendJournal(tx, {
-          eventId: ctx.event.id,
-          type: "result.applied",
-          payload: {
-            cardNo: runner.cardNo ?? null,
-            runnerId: input.runnerId,
-            status: input.status,
-            finishTime: input.finishTime,
-            startTime: input.startTime,
-          },
-        });
-      });
-      return { ok: true as const };
+      // Guard, table write and journal entry commit or roll back together.
+      return ctx.db.$transaction((tx) =>
+        applyResultGuarded(tx, ctx.event.id, ctx.event.zeroTime, runner.id, {
+          status: input.status,
+          finishTime: input.finishTime,
+          startTime: input.startTime,
+          punchesFresh: input.punchesFresh,
+          confirmed: input.confirmed ?? false,
+        }),
+      );
     }),
 
   /**
@@ -870,10 +991,16 @@ export const cardReadoutRouter = router({
     .mutation(async ({ ctx, input }) => {
       const runner = await ctx.db.runner.findFirst({
         where: { eventId: ctx.event.id, seq: input.runnerId, removed: false },
-        select: { id: true, classId: true, cardNo: true, courseId: true },
+        select: { id: true, classId: true, cardNo: true, courseId: true, status: true },
       });
       if (!runner) {
         throw new TRPCError({ code: "NOT_FOUND", message: `Runner ${input.runnerId} not found` });
+      }
+      if (runner.status === "dq") {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "RESULT_PROTECTED: a disqualified runner's result is changed by hand, not by a variant switch",
+        });
       }
       const eventId = ctx.event.id;
       const zeroTime = ctx.event.zeroTime;
@@ -931,6 +1058,7 @@ export const cardReadoutRouter = router({
             status,
             finishTime,
             startTime,
+            confirmed: true,
           },
         });
         return { ok: true as const, courseId: variant.seq, variantKey: variant.variantKey, status };
@@ -1624,6 +1752,20 @@ export const cardReadoutRouter = router({
             pushedReadoutId: r.readoutId,
           },
         });
+        // SI-11: apply the result as a live readout would, under the same
+        // guards (never over a DQ or hand-set result; a worse read is held).
+        let apply: ApplyResultOutcome | null = null;
+        if (r.linkedRunnerUuid && r.punchesRelevant) {
+          const computed = await performReadout(tx, eventId, zeroTime, r.linkedRunnerUuid);
+          if (computed) {
+            apply = await applyResultGuarded(tx, eventId, zeroTime, r.linkedRunnerUuid, {
+              status: computed.timing.status,
+              finishTime: computed.timing.finishTime,
+              startTime: computed.timing.startTime,
+              confirmed: false,
+            });
+          }
+        }
         await appendJournal(tx, {
           eventId,
           type: "card.read",
@@ -1641,10 +1783,11 @@ export const cardReadoutRouter = router({
             readAt: readAt.getTime(),
           },
         });
-        return r;
+        return { ...r, apply };
       });
       pushToGoogleSheet(ctx.db, eventId, result.sheetRow);
       return {
+        apply: result.apply,
         ok: true as const,
         alreadyPushed: false as const,
         pushedReadoutId: result.readoutId,

@@ -35,8 +35,8 @@ import {
   type ReferenceUpsertPayload,
   type ReferenceImportedPayload,
 } from "@oxygen/shared";
-import { storeReadoutImpl } from "./cardReadout.js";
-import { buildRunnerUpdateData } from "./runner.js";
+import { storeReadoutImpl, applyResultGuarded } from "./cardReadout.js";
+import { buildRunnerUpdateData, manualFlagsFor } from "./runner.js";
 import { appendJournal } from "../journalEmit.js";
 import { isRaceWritable } from "../sync/lease.js";
 import { assignVariant } from "../variants.js";
@@ -359,6 +359,7 @@ async function applyEvent(
           data: {
             finishTime: toRelative(finishTime, zeroTime),
             status: "ok",
+            finishManual: true,
           },
         });
       }
@@ -379,6 +380,7 @@ async function applyEvent(
           where: { id: runner.id },
           data: {
             finishTime: finishTime > 0 ? toRelative(finishTime, zeroTime) : 0,
+            finishManual: finishTime > 0,
             ...(typeof status === "number"
               ? { status: valueToRunnerStatus(status) }
               : {}),
@@ -389,28 +391,26 @@ async function applyEvent(
     }
 
     case "result.applied": {
-      const { status, finishTime, startTime } = event.payload as {
+      const { status, finishTime, startTime, confirmed } = event.payload as {
         status: number;
         finishTime: number;
         startTime: number;
+        confirmed?: boolean;
       };
       const runner = await resolveRunner(db, eventId, event.payload);
       if (runner) {
-        await db.runner.update({
-          where: { id: runner.id },
-          data: {
-            finishTime: toRelative(finishTime, zeroTime),
-            startTime: toRelative(startTime, zeroTime),
-            status:
-              status === 1
-                ? "ok"
-                : status === 3
-                  ? "missing_punch"
-                  : status === 4
-                    ? "dnf"
-                    : "unknown",
-          },
-        });
+        // Same guard as a live apply (RES-01): a queued result never
+        // overwrites a DQ or a hand-set result, and a worse read waits for
+        // the operator unless the entry says it was confirmed. The entry is
+        // already in the journal, so nothing is re-journaled here.
+        await applyResultGuarded(
+          db,
+          eventId,
+          zeroTime,
+          runner.id,
+          { status, finishTime, startTime, confirmed: confirmed === true },
+          { journal: false },
+        );
       }
       break;
     }
@@ -545,6 +545,7 @@ async function applyEvent(
         // the variant and deals one of the new class's pool (F6b);
         // server-emitted class changes always carry the pick.
         const before = await db.runner.findUniqueOrThrow({ where: { id: runner.id }, select: { classId: true } });
+        Object.assign(data, manualFlagsFor(fields, zeroTime, await db.runner.findUniqueOrThrow({ where: { id: runner.id }, select: { status: true, finishTime: true } })));
         const classChanged = data.classId !== undefined && data.classId !== before.classId;
         if (classChanged && !("courseId" in fields)) data.courseId = null;
         if (Object.keys(data).length > 0) {

@@ -201,24 +201,37 @@ Based on the DB lookup result:
 
 "Has existing result" means `Status > 0` excluding DNS (20) and Cancel (21), which are pre-race statuses.
 
-### 2f. Auto-Apply Result
+### 2f. Apply the Result (guarded)
 
-When action is `readout`, DeviceManager automatically writes the result to the database:
+When action is `readout`, DeviceManager asks the server to write the result:
 
 ```typescript
 applyResult.mutateAsync({
   runnerId,
-  status,        // 1=OK, 2=DNF, 3=MP
-  finishTime,    // deciseconds
-  startTime,     // deciseconds
+  status,        // numeric RunnerStatus
+  finishTime,    // absolute deciseconds
+  startTime,     // absolute deciseconds
+  punchesFresh,  // the client freshness verdict (§2b)
+  confirmed,     // true only after the operator accepted a held read
 })
 ```
 
-This persists `Status`, `FinishTime`, and `StartTime` to `oRunner`. The assigned (draw) start time takes priority over the card start punch — the card punch is only used for punch-start events where no draw start is assigned.
+The server runs one guard, `decideReadoutApply` (§3a), and answers with `{ ok, outcome, reason }`:
+
+| `outcome` | Meaning |
+|-----------|---------|
+| `applied` | The runner row changed; `result.applied` is journaled. |
+| `unchanged` | Same values already stored; nothing written, nothing journaled. |
+| `needsConfirmation` | The read would replace the stored result with a worse one. Nothing is written; the operator is asked (banner `apply-hold-banner`, "Replace result" / "Keep result"). |
+| `protected` | The stored result is a DQ or hand-set; nothing is written, even when confirmed. The operator changes it on the runner. |
+
+The assigned (draw) start time takes priority over the card start punch — the card punch is only used for punch-start events where no draw start is assigned.
+
+**Latest card wins on screen (SI-17).** Each read mints an id and stores it in `latestCardIdRef`. After any await, the pipeline updates `currentCard` only while that card is still current (`nextCurrentCard`) and broadcasts to the kiosk only while it is the latest (`isLatestCard`). A slow earlier card still stores, applies and updates the recent list.
 
 ### 2g. Kiosk Broadcast
 
-If a kiosk window is paired (same competition), DeviceManager sends the card data via BroadcastChannel. See §5 for the full kiosk protocol.
+If a kiosk window is paired (same competition), DeviceManager sends the card data via BroadcastChannel and, once the result is written, a `readout-applied` message. The kiosk then refetches `cardReadout.readout`, `runner.findByCard` and `race.finishReceipt`. The kiosk never writes a finish itself (WEB-72): it has no `race.recordFinish` call. See §7 for the kiosk protocol.
 
 ---
 
@@ -261,6 +274,20 @@ This is deliberately generous — a single misconfigured control or accidental p
 ### 3c. Backup to History Table
 
 Every readout — stale or fresh — is saved to `oxygen_card_readouts` (raw SQL table, not Prisma). This provides a forensic record of every card scan, useful for post-race debugging. Deduplication: if the most recent entry for this card has identical punch data, the existing row is updated rather than inserting a duplicate.
+
+### 3a-guard. Applying a result: the guards
+
+`packages/shared/src/readout-guard.ts` (`decideReadoutApply`) is the one decision, used by `applyResult`, `pushReadoutBackup` and the offline `result.applied` ingest (`applyResultGuarded` in `cardReadout.ts`). Rules, in order:
+
+1. **DQ is never overwritten**, not even when confirmed.
+2. **A hand-set status** (`runners.status_manual`, set by `runner.update`, the status buttons and bulk DNS, only when the value really changes) is protected. A hand-set DNS, Cancel or Not competing asks instead, since the runner may have started after all.
+3. **A hand-keyed finish** (`runners.finish_manual`, set by the Finish Station, `finish.recorded`/`finish.adjusted` and a changed `finishTime` in `runner.update`) is kept: `performReadout` uses it when the card has no finish punch (SI-10), and the guard never replaces it with a card's finish.
+4. **A worse read asks** (`needsConfirmation`): the reader says the punches are not fresh, or the runner has a result and the new read has no finish. `confirmed` lets it through.
+5. **Identical values** are `unchanged`.
+
+**The card row is held too.** `storeReadoutImpl` always logs the read in `card_readouts`, but when the runner already has a result and the read is empty (cleared hire card) or not fresh, `cards.punches_raw` keeps the earlier punches and `storeReadout` returns `cardHeld: true`. Receipts and re-evaluation then still show the result the runner earned.
+
+**Offline.** The queued `result.applied` goes through the same guard on ingest. An entry without `confirmed: true` that the guard holds is not applied (the entry stays in the journal); the server's own journaled entries carry `confirmed: true` because the decision was made there. Consequence: a held read that arrives only through the offline queue is not prompted to anyone; the card detail shows the stored result, and re-reading the card online asks.
 
 ### 3d. oCard Write Guards
 
@@ -912,7 +939,7 @@ Last-line-of-defence when Oxygen itself is broken (server bug, hardware died, et
 2. **Read backup**. The panel detects the station's operating mode from SYS_VAL `0x71`. If it's M_READOUT (`0x05`), the panel calls `parseReadoutBackupBuffer()` on the raw flash and ships the parsed records to `cardReadout.importReadoutBackups`.
 3. **Status line** in the panel: *"Imported N of M cards (K duplicates) → review on Backup Punches"*. The duplicates count is silent dedup via the `(eventId, punchesHash)` unique constraint — re-importing the same flash is always safe.
 4. **Review** on `/:nameId/backup-punches` → "Card readouts" tab. Each row shows: cardNo, cardType, runner (if registered), punch count, start/finish, match-status badge. Match-statuses are: `pushed` (already replayed), `pending` (ready to push), `no_runner` (cardNo not registered).
-5. **Push** rows individually. Push calls `pushReadoutBackup` which reuses `storeReadoutImpl` — the same core that powers a live `storeReadout`. The runner gets the same card upsert, runner link, result computation, and Google Sheets webhook as if the readout had just happened live. Idempotent: re-pushing the same row returns the existing `pushedReadoutId` without doing the work again.
+5. **Push** rows individually. Push calls `pushReadoutBackup` which reuses `storeReadoutImpl` — the same core that powers a live `storeReadout`. The runner gets the same card upsert, runner link, result computation (written with the guards of §3a-guard in the same transaction, `apply` in the response) and Google Sheets webhook as if the readout had just happened live. A held or protected row shows its `apply.outcome` and nothing is written for it. Idempotent: re-pushing the same row returns the existing `pushedReadoutId` without doing the work again.
 
 **Storage shape:**
 
@@ -927,7 +954,7 @@ Last-line-of-defence when Oxygen itself is broken (server bug, hardware died, et
 
 The `@@unique([eventId, punchesHash])` constraint means re-imports of the same flash or imports from multiple stations that happen to share a card-readout are deduped silently. Operators do not need to be careful about double-importing.
 
-**Why a separate table** (vs reusing `card_readouts` with a flag): backup readouts have different lifecycle states (imported / reviewed / pushed) and bigger metadata (raw bytes, slot identity). Keeping them separate lets `applyResult` continue to fire unconditionally on every `card_readouts` row — no new branches, no new foot-guns. Cleanup is also a one-liner: `DELETE FROM card_readout_backups WHERE event_id = X`.
+**Why a separate table** (vs reusing `card_readouts` with a flag): backup readouts have different lifecycle states (imported / reviewed / pushed) and bigger metadata (raw bytes, slot identity). Keeping them separate keeps the live readout path free of staging states. Cleanup is also a one-liner: `DELETE FROM card_readout_backups WHERE event_id = X`.
 
 **Wire-format details** (slot byte layouts, marker bytes, slot sizes per card type, paging) are in [`docs/si-protocol/readout-backup-format.md`](../si-protocol/readout-backup-format.md), with the reference pcap + Config+ ground-truth file checked in alongside.
 

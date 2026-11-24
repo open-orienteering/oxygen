@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { canApplyResults, findDuplicate, readoutsMatch, withTimeout } from "../offline/readout-policy";
+import { canApplyResults, findDuplicate, readoutsMatch, withTimeout, nextCurrentCard, isLatestCard } from "../offline/readout-policy";
 import { isAuthRefusal } from "../offline/sync";
 import type { SICardReadout } from "../si-protocol";
 
@@ -66,5 +66,28 @@ describe("isAuthRefusal", () => {
     expect(isAuthRefusal({ data: { code: "FORBIDDEN" } })).toBe(true);
     expect(isAuthRefusal(new TypeError("Failed to fetch"))).toBe(false);
     expect(isAuthRefusal(null)).toBe(false);
+  });
+});
+
+describe("SI-17: a slow earlier card never overwrites the current one", () => {
+  type C = { id: string; name: string };
+  const a: C = { id: "A", name: "Runner A" };
+  const b: C = { id: "B", name: "Runner B" };
+
+  it("keeps card B on screen when card A's pipeline finishes afterwards", () => {
+    // B was read after A: the screen holds B. A's late update must not win.
+    expect(nextCurrentCard<C>(b, "A", { ...a, name: "A resolved" })).toBe(b);
+  });
+
+  it("lets a card update itself while it is current", () => {
+    expect(nextCurrentCard<C>(b, "B", { ...b, name: "B resolved" })).toEqual({ id: "B", name: "B resolved" });
+  });
+
+  it("broadcasts to the kiosk only for the latest card", () => {
+    // Interleaved: A read, then B read; A finishes last.
+    let latest: string | null = "A";
+    latest = "B";
+    expect(isLatestCard(latest, "A")).toBe(false);
+    expect(isLatestCard(latest, "B")).toBe(true);
   });
 });
