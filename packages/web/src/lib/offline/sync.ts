@@ -6,6 +6,23 @@ const BATCH_SIZE = 50;
 let draining = false;
 
 /**
+ * Why the last drain stopped. "auth" = the server refused the push (a device
+ * with only a kiosk key, or a session that ended): the entries stay pending on
+ * this device until an operator signs in, which is not a network error and
+ * must not look like one (D11, SYNC-03).
+ */
+let blockedReason: "auth" | null = null;
+export function getDrainBlockedReason(): "auth" | null {
+  return blockedReason;
+}
+
+/** tRPC UNAUTHORIZED / FORBIDDEN from a failed push. */
+export function isAuthRefusal(err: unknown): boolean {
+  const code = (err as { data?: { code?: string } } | null)?.data?.code;
+  return code === "UNAUTHORIZED" || code === "FORBIDDEN";
+}
+
+/**
  * Drain the pending event queue, sending events to the server in order.
  * Called when connectivity is restored.
  *
@@ -16,6 +33,7 @@ export async function drainEventQueue(competitionId?: string): Promise<number> {
   draining = true;
 
   let syncedCount = 0;
+  blockedReason = null;
 
   try {
     while (true) {
@@ -61,7 +79,8 @@ export async function drainEventQueue(competitionId?: string): Promise<number> {
           }
         }
       } catch (err) {
-        // Network error — stop draining, will retry later
+        // Network error or refusal — stop draining, will retry later
+        if (isAuthRefusal(err)) blockedReason = "auth";
         console.warn("[offline-sync] Failed to push events, will retry later:", err);
         break;
       }

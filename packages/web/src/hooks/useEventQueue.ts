@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useOnlineStatus } from "./useOnlineStatus";
 import { usePageVisible } from "./usePageVisible";
 import { getPendingCount, getFailedCount, retryAllFailedEvents } from "../lib/offline/events";
-import { drainEventQueue, cleanupSyncedEvents } from "../lib/offline/sync";
+import { drainEventQueue, cleanupSyncedEvents, getDrainBlockedReason } from "../lib/offline/sync";
 import { trpc } from "../lib/trpc";
 import { usePerformanceSensitive } from "../lib/performance-mode";
 
@@ -22,6 +22,8 @@ export function useEventQueue(competitionId?: string) {
   const [pendingCount, setPendingCount] = useState(0);
   const [failedCount, setFailedCount] = useState(0);
   const [syncing, setSyncing] = useState(false);
+  /** The server refuses this device's push: the entries wait for an operator to sign in. */
+  const [needsSignIn, setNeedsSignIn] = useState(false);
   const utils = trpc.useUtils();
 
   // Poll pending count. The 2s cadence is only useful while the user can
@@ -54,6 +56,7 @@ export function useEventQueue(competitionId?: string) {
       setSyncing(true);
       try {
         const count = await drainEventQueue(competitionId);
+        if (!cancelled) setNeedsSignIn(getDrainBlockedReason() === "auth");
         if (!cancelled && count > 0) {
           // Refresh pending count
           const remaining = await getPendingCount(competitionId);
@@ -86,6 +89,7 @@ export function useEventQueue(competitionId?: string) {
     setSyncing(true);
     try {
       await drainEventQueue(competitionId);
+      setNeedsSignIn(getDrainBlockedReason() === "auth");
       const remaining = await getPendingCount(competitionId);
       setPendingCount(remaining);
       setFailedCount(await getFailedCount(competitionId));
@@ -106,6 +110,7 @@ export function useEventQueue(competitionId?: string) {
     pendingCount,
     failedCount,
     syncing,
+    needsSignIn,
     isOnline,
     manualDrain,
     retryFailed,

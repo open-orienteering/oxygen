@@ -8,38 +8,63 @@ import type {
   RunnerRegisteredPayload,
 } from "./db";
 import { offlineDb } from "./db";
-import { type Hlc, HLC_ZERO, tickHlc } from "@oxygen/shared";
+import { type Hlc, HLC_ZERO, tickHlc, compareHlc } from "@oxygen/shared";
 
 let stationId: string | null = null;
 
 const HLC_STORAGE_KEY = "oxygen-hlc";
 
+/** In-memory fallbacks for when site storage is blocked or full (SYNC-24). */
+let memoryHlc: Hlc | null = null;
+
+function readStorage(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeStorage(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* blocked or full: the in-memory copy still keeps the clock monotonic */
+  }
+}
+
 /**
  * Stamp the next HLC for a locally-emitted entry, advancing the device's
  * persisted clock. A per-device monotonic sort key — the server folds
- * received stamps into its own clock on ingestion.
+ * received stamps into its own clock on ingestion. Storage failures fall back
+ * to an in-memory clock: losing the entry over a blocked localStorage would be
+ * far worse than a clock that restarts after a reload.
  */
 function getNextHlc(): Hlc {
-  let last: Hlc = HLC_ZERO;
+  let last: Hlc = memoryHlc ?? HLC_ZERO;
   try {
-    const stored = localStorage.getItem(HLC_STORAGE_KEY);
-    if (stored) last = JSON.parse(stored) as Hlc;
+    const stored = readStorage(HLC_STORAGE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored) as Hlc;
+      if (!memoryHlc || compareHlc(parsed, memoryHlc) >= 0) last = parsed;
+    }
   } catch {
-    /* corrupt clock → restart from zero */
+    /* corrupt clock → keep the in-memory one (or restart from zero) */
   }
   const next = tickHlc(last, Date.now());
-  localStorage.setItem(HLC_STORAGE_KEY, JSON.stringify(next));
+  memoryHlc = next;
+  writeStorage(HLC_STORAGE_KEY, JSON.stringify(next));
   return next;
 }
 
 function getStationId(): string {
   if (!stationId) {
-    const stored = localStorage.getItem("oxygen-station-id");
+    const stored = readStorage("oxygen-station-id");
     if (stored) {
       stationId = stored;
     } else {
       stationId = crypto.randomUUID();
-      localStorage.setItem("oxygen-station-id", stationId);
+      writeStorage("oxygen-station-id", stationId);
     }
   }
   return stationId;

@@ -7,7 +7,7 @@
 
 import { describe, it, expect } from "vitest";
 import { QueryClient } from "@tanstack/react-query";
-import { computeCardReadout, courseOf } from "../offline/local-readout";
+import { computeCardReadout, courseOf, lookupRunnerByCard } from "../offline/local-readout";
 import { RunnerStatus } from "@oxygen/shared";
 
 const pos = (code: number) => ({ codes: [code], skipMatching: false, noTimingLeg: false });
@@ -98,5 +98,51 @@ describe("computeCardReadout: another variant matched (F6c)", () => {
     expect(ok.otherVariantMatches).toEqual([]);
     const plain = computeCardReadout({ cardNo: 512, ...bPunches }, client([runner(6, 512, 11)]))!;
     expect(plain.otherVariantMatches).toEqual([]);
+  });
+});
+
+describe("cache lookup (MC-19 / BLD-24)", () => {
+  const runners = [runner(1, 111, 10)];
+  const readout = {
+    cardNo: 111,
+    startTime: 36000,
+    finishTime: 39600,
+    punches: [
+      { controlCode: 31, time: 36600 },
+      { controlCode: 32, time: 37200 },
+      { controlCode: 34, time: 37800 },
+    ],
+  };
+
+  it("ignores a filtered runner.list ({search}) cached before the full list", () => {
+    const qc = new QueryClient();
+    qc.setQueryData([["competition", "dashboard"], { type: "query" }], dashboard);
+    qc.setQueryData([["runner", "list"], { input: { search: "zz" }, type: "query" }], []);
+    qc.setQueryData([["runner", "list"], { type: "query" }], runners);
+    expect(computeCardReadout(readout, qc)?.runner.id).toBe(1);
+  });
+
+  it("skips a query that has no data yet", () => {
+    const qc = new QueryClient();
+    qc.setQueryData([["competition", "dashboard"], { type: "query" }], dashboard);
+    qc.getQueryCache().build(qc, { queryKey: [["runner", "list"], { input: {}, type: "query" }] });
+    qc.setQueryData([["runner", "list"], { type: "query" }], runners);
+    expect(computeCardReadout(readout, qc)?.runner.id).toBe(1);
+  });
+
+  it("with only a filtered list cached there is no local result", () => {
+    const qc = new QueryClient();
+    qc.setQueryData([["competition", "dashboard"], { type: "query" }], dashboard);
+    qc.setQueryData([["runner", "list"], { input: { search: "a" }, type: "query" }], runners);
+    expect(computeCardReadout(readout, qc)).toBeNull();
+  });
+
+  it("returns nothing when the cache belongs to another event", () => {
+    const qc = client(runners);
+    qc.setQueryData(["oxygen", "cacheOwner"], "event-a");
+    expect(computeCardReadout(readout, qc, "event-a")?.runner.id).toBe(1);
+    expect(computeCardReadout(readout, qc, "event-b")).toBeNull();
+    expect(lookupRunnerByCard(111, qc, "event-b")).toBeUndefined();
+    expect(computeCardReadout(readout, qc, null)).toBeNull();
   });
 });

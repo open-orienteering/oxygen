@@ -18,7 +18,9 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { useParams } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 import { trpc } from "../lib/trpc";
+import { ensureEventCache } from "../lib/offline/persister";
 import { ClubLogo } from "../components/ClubLogo";
 import { KioskAccessGate } from "../components/KioskAccessGate";
 
@@ -113,9 +115,16 @@ function StartScreenPageBody() {
     }, []);
 
     // Select competition
+    const queryClient = useQueryClient();
     const selectMutation = trpc.competition.select.useMutation();
     useEffect(() => {
-        if (nameId) selectMutation.mutate({ nameId });
+        if (!nameId) return;
+        let cancelled = false;
+        // The cache belongs to one event (MC-04).
+        void ensureEventCache(queryClient, nameId).then(() => {
+            if (!cancelled) selectMutation.mutate({ nameId });
+        });
+        return () => { cancelled = true; };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [nameId]);
 

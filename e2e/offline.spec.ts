@@ -12,6 +12,9 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { API_BASE } from "./helpers/api-base";
+import { getMockWebSerialScript } from "./helpers/mock-webserial";
+import { connectMockSerialReader } from "./helpers/reader";
+import { reseed } from "./helpers/reseed";
 
 const COMPETITION_NAME = "My example tävling";
 const NAMEID = "itest";
@@ -400,5 +403,100 @@ test.describe("Offline Support", () => {
     await page.evaluate(() =>
       localStorage.removeItem("oxygen-offline-projection"),
     );
+  });
+});
+
+// ─── Offline readout paths (BLD-23; SYNC-03, MC-04, SYNC-24) ──────────────
+
+declare global {
+  interface Window {
+    __siMock: { insertCard(cardNumber: number, punches?: Array<{ controlCode: number; time: number }>): boolean };
+  }
+}
+
+test.describe("Offline readout", () => {
+  test.beforeAll(async () => {
+    await reseed();
+  });
+  test.afterAll(async () => {
+    await reseed();
+  });
+
+  test("a card read in the admin shell with the network down is queued, then drains", async ({
+    page,
+    context,
+    request,
+  }) => {
+    await page.addInitScript(getMockWebSerialScript());
+    await selectCompetition(page);
+    await warmStationCache(page);
+    await page.goto(`/${NAMEID}/card-readout`);
+    await connectMockSerialReader(page, 5000);
+    // The card-readout page prefetches the runner list and dashboard.
+    await page.waitForTimeout(1500);
+
+    await context.setOffline(true);
+    const cardNo = 500803; // a seeded runner (Monica Henriksson)
+    await page.evaluate((cardNo) => window.__siMock.insertCard(cardNo, []), cardNo);
+
+    await expect(async () => {
+      const events = await getAllEvents(page);
+      const read = events.find((e) => e.type === "card.read" && (e.payload as { cardNo?: number }).cardNo === cardNo);
+      expect(read).toBeDefined();
+      expect(read!.status).toBe("pending");
+    }).toPass({ timeout: 10000 });
+
+    await context.setOffline(false);
+    await expect(async () => {
+      expect(await getPendingEventCount(page)).toBe(0);
+    }).toPass({ intervals: [1000, 1000, 2000, 2000, 3000], timeout: 20000 });
+    const synced = (await getAllEvents(page)).find(
+      (e) => e.type === "card.read" && (e.payload as { cardNo?: number }).cardNo === cardNo,
+    );
+    expect(synced!.status).toBe("synced");
+    void request;
+  });
+
+  test("Finish Station offline: Finish queues finish.recorded and drains", async ({ page, context }) => {
+    await selectCompetition(page);
+    await warmStationCache(page);
+    await page.goto(`/${NAMEID}/finish-station`);
+    const cardInput = page.locator('input[type="number"]').first();
+    await expect(cardInput).toBeVisible({ timeout: 10000 });
+    await page.waitForTimeout(1500);
+    // Look the runner up online first so the lookup result is in the cache.
+    await cardInput.fill("500803");
+    await expect(page.getByText("Monica Henriksson")).toBeVisible({ timeout: 10000 });
+
+    await context.setOffline(true);
+    await page.getByRole("button", { name: "Record Finish" }).click();
+
+    await expect(async () => {
+      const events = await getAllEvents(page);
+      const fin = events.find((e) => e.type === "finish.recorded");
+      expect(fin).toBeDefined();
+      expect(fin!.status).toBe("pending");
+    }).toPass({ timeout: 10000 });
+
+    await context.setOffline(false);
+    await expect(async () => {
+      expect(await getPendingEventCount(page)).toBe(0);
+    }).toPass({ intervals: [1000, 1000, 2000, 2000, 3000], timeout: 20000 });
+  });
+
+  test("opening another event offline never shows the previous event's runners", async ({ page, context }) => {
+    await selectCompetition(page);
+    await warmStationCache(page);
+    await expect(page.getByText("Monica Henriksson")).toBeVisible({ timeout: 10000 });
+
+    // Event B has never been opened in this browser profile.
+    await context.setOffline(true);
+    await page.evaluate(() => {
+      window.history.pushState({}, "", "/itest_multirace/runners");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    await page.waitForTimeout(2000);
+    await expect(page.getByText("Monica Henriksson")).toHaveCount(0);
+    await context.setOffline(false);
   });
 });

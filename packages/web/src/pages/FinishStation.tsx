@@ -150,22 +150,29 @@ export function FinishStation() {
 
   // nameId is defined near the top (projection reads + event emission).
 
-  const handleOfflineFinish = useCallback(() => {
+  const handleOfflineFinish = useCallback(async () => {
     if (!lookup.data?.found) return;
     const runner = lookup.data.runner;
     const now = new Date();
     const finishTime =
       (now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()) * 10;
 
-    // Emit event to local queue
-    emitEvent("finish.recorded", nameId, {
-      runnerId: runner.id,
-      finishTime,
-      cardNo: runner.cardNo,
-    });
+    // Emit event to local queue. Awaited: if IndexedDB refuses the write the
+    // operator must be told, not shown a success and a receipt (SYNC-24).
+    try {
+      await emitEvent("finish.recorded", nameId, {
+        runnerId: runner.id,
+        finishTime,
+        cardNo: runner.cardNo,
+      });
+    } catch (err) {
+      console.error("[FinishStation] Could not queue the finish", err);
+      setLastAction({ type: "error", message: t("finishNotSaved"), time: Date.now() });
+      return;
+    }
 
     // Compute result locally for receipt
-    const localResult = computeLocalReadout(runner.id, finishTime, queryClient);
+    const localResult = computeLocalReadout(runner.id, finishTime, queryClient, nameId);
     const runningTime = localResult?.timing.runningTime ?? 0;
 
     setLastAction({

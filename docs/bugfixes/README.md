@@ -62,6 +62,7 @@ Notes whose code no longer exists (mostly the raster tile pipeline, deleted in s
 
 | Note | Added |
 | --- | --- |
+| [Offline and kiosk readouts lost or applied to the wrong runner](offline-kiosk-readout-path.md) | 2026-11-24 |
 | [SIAC readouts with a battery value rejected by `storeReadout`](readout-battery-millivolts.md) | 2026-11-18 |
 | [Programmed controls never reached the Controls list](control-programming-battery-units.md) | 2026-08-25 |
 | [Radio-equipped check stations never got autosend](check-station-autosend.md) | 2026-08-25 |

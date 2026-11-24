@@ -91,5 +91,6 @@
   "markNotReturned": "Ångra inlämning",
   "otherVariantMatch": "Stämplingarna stämmer helt med variant <b>{{key}}</b> ({{course}})",
   "acceptVariant": "Godkänn variant {{key}}",
-  "acceptVariantOffline": "Kräver servern"
+  "acceptVariantOffline": "Kräver servern",
+  "finishNotSaved": "Målgången sparades inte på den här enheten. Försök igen."
 }

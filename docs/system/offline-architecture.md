@@ -353,6 +353,16 @@ Stations are clients, not replicas. When a station loses its node
 - A station never merges foreign entries, runs no HLC resolution, and has
   no relay role. Prolonged fully-standalone CRUD is not a station's job —
   that's the venue node.
+- **The query cache belongs to one event** (`lib/offline/cache-scope.ts`):
+  one persisted blob per event, an owner marker in the cache, flushed and
+  swapped on every event switch. Offline reads never mix events, and a
+  readout computed locally is only queued against the event whose cache it
+  was computed from. See `registration-and-readout.md` §2c.
+- **The kiosk route drains its own outbox** and queues `card.read` (and, when
+  the device may write results, `result.applied`) under the event in the URL.
+  Queue writes are awaited: a failed IndexedDB write is never reported as
+  saved. The standalone kiosk and the Finish Station show a notice; the admin
+  shell logs it (a visible notice there is a follow-up).
 - `computeLocalReadout` (the client-side readout fallback) remains for
   blip-mode card reads, with parity to the server path asserted by tests.
 

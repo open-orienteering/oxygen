@@ -465,3 +465,117 @@ test.describe("Standalone mode: re-read after idle", () => {
     await expect(kioskPage.getByText("Completed")).toBeVisible();
   });
 });
+
+// ─── Standalone kiosk with the network down (SYNC-03 / SI-02 / SI-03 / MC-05) ──
+//
+// The standalone kiosk route sits outside CompetitionShell. With the server
+// unreachable it used to store and queue nothing, never queue result.applied,
+// and mark the card a duplicate so a re-read was skipped as well.
+
+test.describe("Standalone kiosk: network down", () => {
+  const createdRunnerIds: number[] = [];
+
+  test.afterAll(async ({ request }) => {
+    for (const id of createdRunnerIds) {
+      try {
+        await request.post(`${API_BASE}/trpc/runner.delete`, { headers: COMP_HEADERS, data: { id } });
+      } catch {
+        // Best-effort cleanup
+      }
+    }
+  });
+
+  /** The offline outbox of this browser profile, read straight from IndexedDB. */
+  async function outbox(page: Page) {
+    return page.evaluate(
+      () =>
+        new Promise<Array<{ type: string; status: string; competitionId: string; payload: Record<string, unknown> }>>(
+          (resolve, reject) => {
+            const open = indexedDB.open("oxygen-offline");
+            open.onerror = () => reject(open.error);
+            open.onsuccess = () => {
+              const db = open.result;
+              if (!db.objectStoreNames.contains("events")) return resolve([]);
+              const all = db.transaction("events").objectStore("events").getAll();
+              all.onsuccess = () => resolve(all.result);
+              all.onerror = () => reject(all.error);
+            };
+          },
+        ),
+    );
+  }
+
+  async function resolveNameId(context: BrowserContext): Promise<string> {
+    const helperPage = await context.newPage();
+    await helperPage.goto("/");
+    await helperPage.getByText(COMPETITION_NAME).click();
+    await expect(helperPage.getByRole("link", { name: "Dashboard" })).toBeVisible({ timeout: 10000 });
+    const nameId = getNameId(helperPage);
+    await helperPage.close();
+    return nameId;
+  }
+
+  async function openStandaloneKiosk(context: BrowserContext, nameId: string): Promise<Page> {
+    const kioskPage = await context.newPage();
+    await kioskPage.addInitScript(getMockWebSerialScript());
+    await kioskPage.addInitScript(
+      ({ nameId }) => {
+        localStorage.setItem(
+          `oxygen-kiosk-settings-${nameId}`,
+          JSON.stringify({ standalone: true, autoResetSeconds: 5, requireClearCheck: false, writeToCard: false }),
+        );
+      },
+      { nameId },
+    );
+    // The station sync prefetches the runner list once the event is selected.
+    const warmed = context.waitForEvent("response", {
+      predicate: (r) => r.url().includes("runner.list"),
+      timeout: KIOSK_TAB_READY_TIMEOUT,
+    });
+    await kioskPage.goto(`/${nameId}/kiosk`);
+    await expect(kioskPage.getByText("Insert your SI card")).toBeVisible({ timeout: KIOSK_TAB_READY_TIMEOUT });
+    await warmed;
+    await connectMockSerialReader(kioskPage, 5000);
+    return kioskPage;
+  }
+
+  test("offline read is queued with its result, shown locally, and drains after reconnect", async ({
+    context,
+    request,
+  }) => {
+    const nameId = await resolveNameId(context);
+    const classId = await getClassId(request, "Öppen 2");
+    const cardNo = 2800061;
+    const runner = await createRunner(request, "E2E OfflineKiosk", cardNo, classId, 363000);
+    createdRunnerIds.push(runner.id);
+    const punches = COURSE_2_CONTROLS.map((code, i) => ({ controlCode: code, time: 36600 + i * 120 }));
+
+    const kioskPage = await openStandaloneKiosk(context, nameId);
+    await context.setOffline(true);
+
+    await kioskPage.evaluate(({ cardNo, punches }) => window.__siMock.insertCard(cardNo, punches), { cardNo, punches });
+
+    // Resolved from the cached runner list, without the server.
+    await expect(kioskPage.getByRole("heading", { name: "E2E OfflineKiosk" })).toBeVisible({ timeout: 10000 });
+
+    // Both entries are in this browser's outbox, under the event of the URL.
+    await expect(async () => {
+      const events = (await outbox(kioskPage)).filter((e) => e.payload.cardNo === cardNo);
+      expect(events.map((e) => e.type).sort()).toEqual(["card.read", "result.applied"]);
+      expect(events.every((e) => e.competitionId === nameId && e.status === "pending")).toBe(true);
+    }).toPass({ timeout: 10000 });
+    await expect(kioskPage.getByTestId("kiosk-sync-badge")).toHaveAttribute("data-pending", "2");
+
+    // Network back: the kiosk drains its own outbox and the result lands.
+    await context.setOffline(false);
+    await expect(kioskPage.getByTestId("kiosk-sync-badge")).toHaveCount(0, { timeout: 30000 });
+    await expect(async () => {
+      const resp = await request.get(
+        `${API_BASE}/trpc/runner.getById?input=${encodeURIComponent(JSON.stringify({ id: runner.id }))}`,
+        { headers: COMP_HEADERS },
+      );
+      const body = await resp.json();
+      expect(body?.result?.data?.status ?? body?.result?.data?.json?.status).toBe(1);
+    }).toPass({ timeout: 15000 });
+  });
+});
