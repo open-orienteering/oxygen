@@ -35,8 +35,8 @@ import {
   type ReferenceUpsertPayload,
   type ReferenceImportedPayload,
 } from "@oxygen/shared";
-import { storeReadoutImpl } from "./cardReadout.js";
-import { buildRunnerUpdateData } from "./runner.js";
+import { storeReadoutImpl, applyResultGuarded } from "./cardReadout.js";
+import { buildRunnerUpdateData, manualFlagsFor } from "./runner.js";
 import { appendJournal } from "../journalEmit.js";
 import { isRaceWritable } from "../sync/lease.js";
 import { assignVariant } from "../variants.js";
@@ -283,7 +283,7 @@ async function resolveRunner(
   db: PrismaClient,
   eventId: bigint,
   payload: Record<string, unknown>,
-): Promise<{ id: string; finishTime: number } | null> {
+): Promise<{ id: string; finishTime: number; status: string } | null> {
   const cardNo =
     typeof payload.cardNo === "number" && payload.cardNo > 0
       ? payload.cardNo
@@ -291,7 +291,7 @@ async function resolveRunner(
   if (cardNo != null) {
     const byCard = await db.runner.findFirst({
       where: { eventId, cardNo, removed: false },
-      select: { id: true, finishTime: true },
+      select: { id: true, finishTime: true, status: true },
     });
     if (byCard) return byCard;
   }
@@ -303,7 +303,7 @@ async function resolveRunner(
   if (seq != null) {
     return db.runner.findFirst({
       where: { eventId, seq, removed: false },
-      select: { id: true, finishTime: true },
+      select: { id: true, finishTime: true, status: true },
     });
   }
 
@@ -358,7 +358,9 @@ async function applyEvent(
           where: { id: runner.id },
           data: {
             finishTime: toRelative(finishTime, zeroTime),
-            status: "ok",
+            // A DQ or a hand-set status is never turned into OK by a finish.
+            ...(runner.status === "unknown" ? { status: "ok" as const } : {}),
+            finishManual: true,
           },
         });
       }
@@ -379,7 +381,8 @@ async function applyEvent(
           where: { id: runner.id },
           data: {
             finishTime: finishTime > 0 ? toRelative(finishTime, zeroTime) : 0,
-            ...(typeof status === "number"
+            finishManual: finishTime > 0,
+            ...(typeof status === "number" && runner.status !== "dq"
               ? { status: valueToRunnerStatus(status) }
               : {}),
           },
@@ -389,28 +392,26 @@ async function applyEvent(
     }
 
     case "result.applied": {
-      const { status, finishTime, startTime } = event.payload as {
+      const { status, finishTime, startTime, confirmed } = event.payload as {
         status: number;
         finishTime: number;
         startTime: number;
+        confirmed?: boolean;
       };
       const runner = await resolveRunner(db, eventId, event.payload);
       if (runner) {
-        await db.runner.update({
-          where: { id: runner.id },
-          data: {
-            finishTime: toRelative(finishTime, zeroTime),
-            startTime: toRelative(startTime, zeroTime),
-            status:
-              status === 1
-                ? "ok"
-                : status === 3
-                  ? "missing_punch"
-                  : status === 4
-                    ? "dnf"
-                    : "unknown",
-          },
-        });
+        // Same guard as a live apply (RES-01): a queued result never
+        // overwrites a DQ or a hand-set result, and a worse read waits for
+        // the operator unless the entry says it was confirmed. The entry is
+        // already in the journal, so nothing is re-journaled here.
+        await applyResultGuarded(
+          db,
+          eventId,
+          zeroTime,
+          runner.id,
+          { status, finishTime, startTime, confirmed: confirmed === true },
+          { journal: false },
+        );
       }
       break;
     }
@@ -545,6 +546,7 @@ async function applyEvent(
         // the variant and deals one of the new class's pool (F6b);
         // server-emitted class changes always carry the pick.
         const before = await db.runner.findUniqueOrThrow({ where: { id: runner.id }, select: { classId: true } });
+        Object.assign(data, manualFlagsFor(fields, zeroTime, await db.runner.findUniqueOrThrow({ where: { id: runner.id }, select: { status: true, finishTime: true } })));
         const classChanged = data.classId !== undefined && data.classId !== before.classId;
         if (classChanged && !("courseId" in fields)) data.courseId = null;
         if (Object.keys(data).length > 0) {

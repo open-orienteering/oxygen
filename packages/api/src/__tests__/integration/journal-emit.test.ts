@@ -102,8 +102,8 @@ describe("recordFinish journaling (Step 2a)", () => {
   });
 
   it("mints strictly increasing HLCs across consecutive mutations", async () => {
-    await caller.race.recordFinish({ id: runnerSeq, finishTimeAbsolute: 371000 });
-    await caller.race.recordFinish({ id: runnerSeq, finishTimeAbsolute: 372000 });
+    await caller.race.recordFinish({ id: runnerSeq, finishTimeAbsolute: 371000, allowOverwrite: true });
+    await caller.race.recordFinish({ id: runnerSeq, finishTimeAbsolute: 372000, allowOverwrite: true });
     const entries = await ctx.db.journalEntry.findMany({
       where: { eventId: ctx.eventId, type: "finish.adjusted" },
       orderBy: { hlc: "asc" },

@@ -30,11 +30,15 @@ Dedicated register-only stations for the arena — designed to run on cheap tabl
 
 ![Finish station — recent finishers feed](../screenshots/finish-station.png)
 
+A runner who already has a finish is not overwritten by one Enter: the button reads **Replace finish HH:MM:SS with now** and plain Enter does nothing. A double Enter records one finish. A finish keyed in here is kept when the runner's card has no finish punch.
+
 ## Card readout
 
 A dedicated readout workflow for organizers — type a card number (or scan one with a reader) and see the full splits table immediately, with status, course match, and per-control timing. On a forked course, a mispunch whose punches match another variant completely shows **Accept variant XX** (the red exit; see [system/registration-and-readout.md](../system/registration-and-readout.md) §4f).
 
 ![Card readout with splits](../screenshots/card-readout.png)
+
+**Re-reading a card never silently changes a result.** A disqualified runner or a status you set by hand stays as it is (a banner says so). A read that would replace a result with a worse one, such as a cleared hire card with no finish or punches that look like an old card's, asks first: **Replace result** or **Keep result**. Pushing a readout-station backup now writes the result too, under the same rules.
 
 ## Backup punches
 

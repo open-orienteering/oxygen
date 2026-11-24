@@ -469,11 +469,14 @@ test.describe("Offline readout", () => {
     await expect(page.getByText("Monica Henriksson")).toBeVisible({ timeout: 10000 });
 
     await context.setOffline(true);
-    await page.getByRole("button", { name: "Record Finish" }).click();
+    // A seeded runner that already has a finish gets the explicit replace
+    // button (WEB-53); its offline write is a runner patch, a first finish
+    // is `finish.recorded`.
+    await page.getByTestId("record-finish").click();
 
     await expect(async () => {
       const events = await getAllEvents(page);
-      const fin = events.find((e) => e.type === "finish.recorded");
+      const fin = events.find((e) => e.type === "finish.recorded" || e.type === "runner.updated");
       expect(fin).toBeDefined();
       expect(fin!.status).toBe("pending");
     }).toPass({ timeout: 10000 });

@@ -82,6 +82,16 @@ export interface KioskCardReadingMessage {
   cardNumber: number;
 }
 
+/**
+ * Sent by the admin tab once a readout's result has been written (or the
+ * offline event queued). The kiosk tab refetches the readout, the runner and
+ * the receipt then: it never writes a finish itself (WEB-72).
+ */
+export interface KioskReadoutAppliedMessage {
+  type: "readout-applied";
+  cardNumber: number;
+}
+
 export interface KioskResetMessage {
   type: "kiosk-reset";
 }
@@ -117,6 +127,7 @@ export type KioskMessage =
   | KioskRegistrationStateMessage
   | KioskRegistrationCompleteMessage
   | KioskResetMessage
+  | KioskReadoutAppliedMessage
   | KioskCardRemovedMessage
   | KioskPingMessage
   | KioskPrintReceiptMessage

@@ -32,7 +32,7 @@ import { ReaderConnectionDialog } from "../components/ReaderConnectionDialog";
 import type { SICardReadout, SICardOwnerData } from "../lib/si-protocol";
 import { trpc, activeEventNameId } from "../lib/trpc";
 import { useCurrentUser } from "./CurrentUserContext";
-import { canApplyResults, findDuplicate, readoutsMatch as sameReadout, withTimeout, type SaveState } from "../lib/offline/readout-policy";
+import { canApplyResults, findDuplicate, isLatestCard, nextCurrentCard, readoutsMatch as sameReadout, withTimeout, type ApplyHold, type SaveState } from "../lib/offline/readout-policy";
 import { KioskChannel, recentCardToKioskMessage } from "../lib/kiosk-channel";
 import { RunnerStatus, meosFromVolts, runnerStatusLabel, type RunnerStatusValue } from "@oxygen/shared";
 import { emitEvent } from "../lib/offline/events";
@@ -77,6 +77,11 @@ export interface RecentCard {
   persisted?: boolean;
   /** How the readout was saved; "not-saved" / "no-competition" ask the operator to read the card again. */
   saveState?: SaveState;
+  /**
+   * The server did not write this read's result (RES-01): the stored result
+   * is protected (DQ, hand-set) or a worse read waits for the operator.
+   */
+  applyHold?: ApplyHold;
 }
 
 interface DeviceManagerState {
@@ -111,6 +116,10 @@ interface DeviceManagerState {
   currentCard: RecentCard | null;
   recentCards: RecentCard[];
   clearRecentCards: () => void;
+  /** Replace the stored result with the held read (the operator confirmed). */
+  confirmApply: (cardId: string) => Promise<void>;
+  /** Keep the stored result: drop the held read. */
+  dismissApply: (cardId: string) => void;
   isOnCardReadoutPage: boolean;
   setIsOnCardReadoutPage: (v: boolean) => void;
   /** Set the active competition nameId for kiosk BroadcastChannel */
@@ -250,6 +259,8 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
 
   const { authEnabled, user } = useCurrentUser();
   const canApplyRef = useRef(true);
+  /** Id of the card read last (SI-17). */
+  const latestCardIdRef = useRef<string | null>(null);
   canApplyRef.current = canApplyResults(authEnabled, user !== null);
 
   const storeReadout = trpc.cardReadout.storeReadout.useMutation();
@@ -319,11 +330,19 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
       const isDuplicate = !!existing;
 
       const id = isDuplicate ? existing.id : `${readout.cardNumber}-${Date.now()}`;
+      latestCardIdRef.current = id;
+      // SI-17: after an await only the latest card may touch the screen.
+      const showCurrent = (card: RecentCard) => setCurrentCard((prev) => nextCurrentCard(prev, id, card));
+      const toKiosk = (card: RecentCard) => {
+        if (kioskChannelRef.current && isLatestCard(latestCardIdRef.current, id)) {
+          kioskChannelRef.current.send(recentCardToKioskMessage(card));
+        }
+      };
       const raceData = isPunchDataFresh(readout);
 
       // Initial entry — before we know if runner is in DB
       const entry: RecentCard = isDuplicate
-        ? { ...existing, timestamp: new Date(), ownerData: readout.ownerData ?? existing.ownerData, actionResolved: false }
+        ? { ...existing, timestamp: new Date(), ownerData: readout.ownerData ?? existing.ownerData, actionResolved: false, applyHold: undefined }
         : {
             id,
             cardNumber: readout.cardNumber,
@@ -453,7 +472,7 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
       }
       const persisted = isDuplicate || saveState === "saved" || saveState === "queued";
       const savedEntry: RecentCard = isDuplicate ? { ...entry } : { ...entry, persisted, saveState };
-      setCurrentCard(savedEntry);
+      showCurrent(savedEntry);
       setRecentCards((prev) => {
         const next = prev.map((c) => (c.id === id ? savedEntry : c));
         recentCardsRef.current = next;
@@ -524,7 +543,7 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
           isRentalCard: result.found ? result.isRentalCard : undefined,
         };
 
-        setCurrentCard(updated);
+        showCurrent(updated);
         setRecentCards((prev) => {
           const next = prev.map((c) => (c.id === id ? updated : c));
           recentCardsRef.current = next;
@@ -532,19 +551,34 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
         });
 
         // Broadcast to kiosk window (paired mode)
-        if (kioskChannelRef.current) {
-          kioskChannelRef.current.send(recentCardToKioskMessage(updated));
-        }
+        toKiosk(updated);
 
         // Apply computed result to oRunner (readout station step)
         if (action === "readout" && result.found && navigator.onLine) {
           try {
-            await applyResult.mutateAsync({
+            const payload = {
               runnerId: result.runner.id,
               status: result.timing.status,
               finishTime: result.timing.finishTime,
               startTime: result.timing.startTime,
-            });
+              punchesFresh: raceData,
+            };
+            const applied = await applyResult.mutateAsync(payload);
+            if (!applied.ok) {
+              // RES-01: the server kept the stored result. Ask the operator.
+              const held: RecentCard = {
+                ...updated,
+                applyHold: { outcome: applied.outcome as ApplyHold["outcome"], reason: applied.reason, payload },
+              };
+              showCurrent(held);
+              setRecentCards((prev) => {
+                const next = prev.map((c) => (c.id === id ? held : c));
+                recentCardsRef.current = next;
+                return next;
+              });
+            }
+            // The kiosk (paired mode) refetches once the result is written.
+            kioskChannelRef.current?.send({ type: "readout-applied", cardNumber: readout.cardNumber });
             // Invalidate caches so results/runner lists recalculate placements
             // for ALL runners in the class, not just the one just read out.
             // Also invalidate findByCard so ReadoutScreen sees the updated
@@ -600,15 +634,13 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
             runningTime: localResult.timing.runningTime,
           };
 
-          setCurrentCard(offlineResolved);
+          showCurrent(offlineResolved);
           setRecentCards((prev) => {
             const next = prev.map((c) => (c.id === id ? offlineResolved : c));
             recentCardsRef.current = next;
             return next;
           });
-          if (kioskChannelRef.current) {
-            kioskChannelRef.current.send(recentCardToKioskMessage(offlineResolved));
-          }
+          toKiosk(offlineResolved);
 
           // Emit result.applied for later sync. The competition comes from the
           // URL (the old closure value was always null, so this never ran:
@@ -638,15 +670,13 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
             className: cachedRunner?.className,
             clubName: cachedRunner?.clubName,
           };
-          setCurrentCard(fallback);
+          showCurrent(fallback);
           setRecentCards((prev) => {
             const next = prev.map((c) => (c.id === id ? fallback : c));
             recentCardsRef.current = next;
             return next;
           });
-          if (kioskChannelRef.current) {
-            kioskChannelRef.current.send(recentCardToKioskMessage(fallback));
-          }
+          toKiosk(fallback);
         }
       }
     },
@@ -721,6 +751,40 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
     recentCardsRef.current = [];
     setCurrentCard(null);
   }, []);
+
+  const setHold = useCallback((cardId: string, hold: ApplyHold | undefined) => {
+    const patch = (c: RecentCard): RecentCard => ({ ...c, applyHold: hold });
+    setCurrentCard((prev) => (prev?.id === cardId ? patch(prev) : prev));
+    setRecentCards((prev) => {
+      const next = prev.map((c) => (c.id === cardId ? patch(c) : c));
+      recentCardsRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const dismissApply = useCallback((cardId: string) => setHold(cardId, undefined), [setHold]);
+
+  const confirmApply = useCallback(
+    async (cardId: string) => {
+      const card = recentCardsRef.current.find((c) => c.id === cardId);
+      const hold = card?.applyHold;
+      if (!card || !hold || hold.outcome !== "needsConfirmation") return;
+      try {
+        const res = await applyResult.mutateAsync({ ...hold.payload, confirmed: true });
+        if (res.ok) setHold(cardId, undefined);
+        else setHold(cardId, { ...hold, outcome: res.outcome as ApplyHold["outcome"], reason: res.reason });
+        utils.runner.list.invalidate();
+        utils.lists.resultList.invalidate();
+        utils.cardReadout.readout.invalidate({ cardNo: card.cardNumber });
+        utils.runner.findByCard.invalidate({ cardNo: card.cardNumber });
+        kioskChannelRef.current?.send({ type: "readout-applied", cardNumber: card.cardNumber });
+      } catch (err) {
+        console.error("[DeviceManager] Could not apply the confirmed result", err);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [setHold],
+  );
 
   // ── Wire up event listeners ─────────────────────────────
 
@@ -857,6 +921,8 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
     currentCard,
     recentCards,
     clearRecentCards,
+    confirmApply,
+    dismissApply,
     isOnCardReadoutPage,
     setIsOnCardReadoutPage,
     setCompetitionNameId,

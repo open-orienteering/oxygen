@@ -539,6 +539,9 @@ describe("kiosk key", () => {
     await expect(
       kiosk.cardReadout.applyResult({ runnerId: 1, status: 1, finishTime: 1, startTime: 1 }),
     ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    await expect(
+      kiosk.race.recordFinish({ id: 1, finishTimeAbsolute: 360_000 }),
+    ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
     await expect(kiosk.events.push({ events: [] })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
   });
 

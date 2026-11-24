@@ -782,6 +782,12 @@ model Runner {
   startTime     Int          @default(0) @map("start_time")
   finishTime    Int          @default(0) @map("finish_time")
   status        RunnerStatus @default(unknown)
+  /// Package 2 (RES-01): the status was set by hand (runner edit, status
+  /// button, bulk DNS), so a card re-read never overwrites it silently.
+  statusManual  Boolean      @default(false) @map("status_manual")
+  /// The finish time was keyed in by hand (Finish Station, runner edit);
+  /// a card without a finish punch must not erase it.
+  finishManual  Boolean      @default(false) @map("finish_manual")
 
   bib         String @default("")
   birthYear   Int    @default(0) @map("birth_year") @db.SmallInt

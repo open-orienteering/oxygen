@@ -87,6 +87,7 @@ export function KioskPage() {
 }
 
 function KioskPageBody() {
+  const utils = trpc.useUtils();
   const { t } = useTranslation("kiosk");
   const { nameId } = useParams<{ nameId: string }>();
   const queryClient = useQueryClient();
@@ -293,6 +294,13 @@ function KioskPageBody() {
           clearTimeout(resetTimerRef.current);
           setScreen({ mode: "registration-complete", runner: msg.runner });
           scheduleReset(20);
+          break;
+
+        case "readout-applied":
+          // The admin tab wrote the result: refetch what the screen shows.
+          utils.cardReadout.readout.invalidate({ cardNo: msg.cardNumber });
+          utils.runner.findByCard.invalidate({ cardNo: msg.cardNumber });
+          utils.race.finishReceipt.invalidate();
           break;
 
         case "kiosk-reset":
@@ -760,8 +768,6 @@ function ReadoutScreen({
   onPrint: (runnerId: number) => void;
 }) {
   const { t } = useTranslation("kiosk");
-  const utils = trpc.useUtils();
-  const finishRecordedRef = useRef(false);
   const printedRef = useRef(false);
 
   // 1. Check DB state for this runner
@@ -769,33 +775,6 @@ function ReadoutScreen({
     { cardNo: card.cardNumber },
     { enabled: card.cardNumber > 0 },
   );
-
-  // 2. Record finish if needed (card has finish punch but DB has no finish time)
-  const recordFinish = trpc.race.recordFinish.useMutation();
-
-  useEffect(() => {
-    if (finishRecordedRef.current) return;
-    if (!dbRunner.data) return;
-    if (dbRunner.data.finishTime > 0) return; // already finished
-
-    // Card's finish time is in seconds since midnight — convert to deciseconds
-    const cardFinishDeci = card.finishTime ? card.finishTime * 10 : 0;
-    if (cardFinishDeci <= 0) return; // no finish punch on card
-
-    finishRecordedRef.current = true;
-    const runnerIdForReceipt = dbRunner.data.id;
-    recordFinish.mutate(
-      { runnerId: dbRunner.data.id, finishTime: cardFinishDeci },
-      {
-        onSuccess: () => {
-          // Invalidate so readout and receipt pick up the new finish time
-          utils.cardReadout.readout.invalidate({ cardNo: card.cardNumber });
-          utils.runner.findByCard.invalidate({ cardNo: card.cardNumber });
-          utils.race.finishReceipt.invalidate({ runnerId: runnerIdForReceipt });
-        },
-      },
-    );
-  }, [dbRunner.data, card.finishTime]);
 
   // 3. Fetch full readout + receipt data
   const readout = trpc.cardReadout.readout.useQuery(
@@ -837,8 +816,7 @@ function ReadoutScreen({
     // storeReadout runs, before applyResult has written to oRunner.FinishTime.
     const hasFinish =
       (dbRunner.data.finishTime > 0) ||
-      (receipt.data.timing.finishTime > 0) ||
-      finishRecordedRef.current;
+      (receipt.data.timing.finishTime > 0);
     if (!hasFinish) return;
 
     printedRef.current = true;

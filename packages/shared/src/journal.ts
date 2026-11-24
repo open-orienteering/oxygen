@@ -141,6 +141,13 @@ export interface ResultAppliedPayload {
   status: number;
   finishTime: number;
   startTime: number;
+  /**
+   * The applying node (or the operator, offline) already decided this
+   * result may replace the stored one. Without it the ingest runs the
+   * readout guard (`decideReadoutApply`): a DQ, a hand-set status or a
+   * worse read is refused or held. A DQ is protected even when confirmed.
+   */
+  confirmed?: boolean;
 }
 
 export interface RunnerRegisteredPayload {

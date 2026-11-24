@@ -82,3 +82,32 @@ export function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
     );
   });
 }
+
+
+/**
+ * SI-17: a slow earlier card must not overwrite the current card, or the
+ * kiosk, after a later card was read. `prev` is what the screen holds now;
+ * `id` the card whose pipeline just finished an await.
+ */
+export function nextCurrentCard<T extends { id: string }>(prev: T | null, id: string, next: T): T | null {
+  return prev?.id === id ? next : prev;
+}
+
+/** Only the latest card's pipeline may broadcast to the kiosk. */
+export function isLatestCard(latestId: string | null, id: string): boolean {
+  return latestId === id;
+}
+
+/** Why a result was not written, as the readout path reports it. */
+export interface ApplyHold {
+  outcome: "needsConfirmation" | "protected";
+  reason?: string;
+  /** What the operator is asked to accept (absolute deciseconds, numeric status). */
+  payload: {
+    runnerId: number;
+    status: number;
+    finishTime: number;
+    startTime: number;
+    punchesFresh?: boolean;
+  };
+}
