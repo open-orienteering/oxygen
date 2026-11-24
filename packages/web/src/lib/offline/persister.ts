@@ -13,7 +13,7 @@ export const blobKey = (owner: string | null) => `${PREFIX}${owner ?? GLOBAL}`;
 const LAST_KEY = `${PREFIX}last-owner`;
 
 export interface KeyValueStore {
-  get(key: string): Promise<any>;
+  get(key: string): Promise<unknown>;
   set(key: string, value: unknown): Promise<void>;
   del(key: string): Promise<void>;
 }
@@ -49,7 +49,7 @@ export function createIdbPersister(
     restoreClient: async () => {
       void store.del(LEGACY_KEY).catch(() => {});
       const event = currentEvent() ?? ((await store.get(LAST_KEY)) as string | undefined) ?? null;
-      return store.get(blobKey(event)) as Promise<PersistedClient | undefined>;
+      return (await store.get(blobKey(event))) as PersistedClient | undefined;
     },
     removeClient: async () => {
       await store.del(blobKey(currentEvent()));
