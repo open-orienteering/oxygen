@@ -30,7 +30,9 @@ import {
 } from "../lib/reader-bt";
 import { ReaderConnectionDialog } from "../components/ReaderConnectionDialog";
 import type { SICardReadout, SICardOwnerData } from "../lib/si-protocol";
-import { trpc } from "../lib/trpc";
+import { trpc, activeEventNameId } from "../lib/trpc";
+import { useCurrentUser } from "./CurrentUserContext";
+import { canApplyResults, findDuplicate, readoutsMatch as sameReadout, withTimeout, type SaveState } from "../lib/offline/readout-policy";
 import { KioskChannel, recentCardToKioskMessage } from "../lib/kiosk-channel";
 import { RunnerStatus, meosFromVolts, runnerStatusLabel, type RunnerStatusValue } from "@oxygen/shared";
 import { emitEvent } from "../lib/offline/events";
@@ -69,6 +71,12 @@ export interface RecentCard {
   /** Owner data read from the SI card (SI10/SIAC only) */
   ownerData?: SICardOwnerData | null;
   readout?: SICardReadout;
+  /** Event (URL nameId) the readout was taken in; a re-read in another event is not a duplicate. */
+  competitionId?: string | null;
+  /** Stored on the server or queued in the outbox. Only then is a re-read a duplicate. */
+  persisted?: boolean;
+  /** How the readout was saved; "not-saved" / "no-competition" ask the operator to read the card again. */
+  saveState?: SaveState;
 }
 
 interface DeviceManagerState {
@@ -122,6 +130,8 @@ interface DeviceManagerState {
 }
 
 const MAX_RECENT = 20;
+/** Longest the server store may take before the readout is queued instead (SI-29). */
+const STORE_TIMEOUT_MS = 8000;
 
 // ─── Remembered Reader BTs ─────────────────────────────────
 // Chromium's getDevices() returns every device this origin was ever granted;
@@ -215,23 +225,6 @@ export function isPunchDataFresh(readout: SICardReadout): boolean {
   return true; // DOW matches or unavailable → assume fresh (server validates further)
 }
 
-/**
- * Check if two card readouts have identical punch data.
- * If all punches, start/finish/check times match exactly, the card hasn't changed.
- */
-function readoutsMatch(a: SICardReadout, b: SICardReadout): boolean {
-  if (a.cardNumber !== b.cardNumber) return false;
-  if (a.startTime !== b.startTime) return false;
-  if (a.finishTime !== b.finishTime) return false;
-  if (a.checkTime !== b.checkTime) return false;
-  if (a.punches.length !== b.punches.length) return false;
-  for (let i = 0; i < a.punches.length; i++) {
-    if (a.punches[i].controlCode !== b.punches[i].controlCode) return false;
-    if (a.punches[i].time !== b.punches[i].time) return false;
-  }
-  return true;
-}
-
 // ─── Provider ──────────────────────────────────────────────
 
 export function DeviceManagerProvider({ children }: { children: ReactNode }) {
@@ -255,6 +248,10 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
   // Legacy refs kept as no-ops for interface compat
   const pendingConfirmCardNoRef = useRef<number | null>(null);
   const pendingConfirmCallbackRef = useRef<(() => void) | null>(null);
+
+  const { authEnabled, user } = useCurrentUser();
+  const canApplyRef = useRef(true);
+  canApplyRef.current = canApplyResults(authEnabled, user !== null);
 
   const storeReadout = trpc.cardReadout.storeReadout.useMutation();
   const applyResult = trpc.cardReadout.applyResult.useMutation();
@@ -315,9 +312,12 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
       // Deduplicate: if same card with identical punch data already exists,
       // reuse the entry (update timestamp) but still re-resolve action from DB
       // (runner may have been registered since last read).
-      const existing = recentCardsRef.current.find(
-        (c) => c.readout && readoutsMatch(c.readout, readout),
-      );
+      // The event comes from the URL, the same source as the x-competition-id
+      // header, so a queued entry always lands where an online store would
+      // have. (The old ref was only set by CompetitionShell; the standalone
+      // kiosk route never set it: SYNC-03 / SI-03.)
+      const competition = activeEventNameId();
+      const existing = findDuplicate(recentCardsRef.current, readout, competition);
       const isDuplicate = !!existing;
 
       const id = isDuplicate ? existing.id : `${readout.cardNumber}-${Date.now()}`;
@@ -336,6 +336,8 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
             hasRaceData: raceData,
             ownerData: readout.ownerData ?? null,
             readout,
+            competitionId: competition,
+            persisted: false,
           };
 
       setCurrentCard(entry);
@@ -347,93 +349,125 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
         });
       } else {
         setRecentCards((prev) => {
-          const next = [entry, ...prev].slice(0, MAX_RECENT);
+          // An earlier identical read that never got saved is replaced, not stacked.
+          const next = [
+            entry,
+            ...prev.filter((c) => !(c.readout && !c.persisted && sameReadout(c.readout, readout))),
+          ].slice(0, MAX_RECENT);
           recentCardsRef.current = next;
           return next;
         });
       }
 
+      // Queue the card read in this device's outbox. True only when the entry
+      // really is in IndexedDB: the UI must not claim a save that did not
+      // happen (SYNC-24), and a read that was not saved must not count as a
+      // duplicate of the next insert (SI-16).
+      const queueCardRead = async (): Promise<SaveState> => {
+        if (!competition) {
+          console.warn("[DeviceManager] No event in the URL: cannot queue the card read");
+          return "no-competition";
+        }
+        try {
+          await emitEvent("card.read", competition, toOfflineCardReadPayload(readout, raceData));
+          return "queued";
+        } catch (err) {
+          console.error("[DeviceManager] Could not queue the card read", err);
+          return "not-saved";
+        }
+      };
+
       // Store card data on the server (skip if duplicate — already stored)
       let serverPunchesRelevant = true;
-      if (!isDuplicate && navigator.onLine) {
-        try {
-          // SI readouts use seconds-since-midnight; the API contract is
-          // absolute deciseconds, so multiply by 10 on the way out.
-          const storeResult = await storeReadout.mutateAsync({
-            cardNo: readout.cardNumber,
-            punches: readout.punches.map((p) => ({
-              controlCode: p.controlCode,
-              time: p.time * 10,
-              ...(p.subSecond != null ? { subSecond: p.subSecond } : {}),
-            })),
-            checkTime:
-              readout.checkTime !== null && readout.checkTime !== undefined
-                ? readout.checkTime * 10
-                : undefined,
-            startTime:
-              readout.startTime !== null && readout.startTime !== undefined
-                ? readout.startTime * 10
-                : undefined,
-            finishTime:
-              readout.finishTime !== null && readout.finishTime !== undefined
-                ? readout.finishTime * 10
-                : undefined,
-            cardType: readout.cardType,
-            punchesFresh: raceData,
-            // SICardReadout carries volts; the API takes integer mV (MeOS).
-            batteryVoltage: meosFromVolts(readout.batteryVoltage) ?? undefined,
-            ownerData: readout.ownerData
-              ? {
-                  firstName: readout.ownerData.firstName,
-                  lastName: readout.ownerData.lastName,
-                  sex: readout.ownerData.sex,
-                  dateOfBirth: readout.ownerData.dateOfBirth,
-                  club: readout.ownerData.club,
-                  phone: readout.ownerData.phone,
-                  email: readout.ownerData.email,
-                  country: readout.ownerData.country,
-                }
-              : undefined,
-            metadata: readout.metadata
-              ? {
-                  batteryDate: readout.metadata.batteryDate,
-                  productionDate: readout.metadata.productionDate,
-                  hardwareVersion: readout.metadata.hardwareVersion,
-                  softwareVersion: readout.metadata.softwareVersion,
-                  clearCount: readout.metadata.clearCount,
-                }
-              : undefined,
-          });
-          serverPunchesRelevant = storeResult.punchesRelevant ?? true;
-        } catch {
-          console.warn("[DeviceManager] Failed to store readout on server — queuing offline event");
-          if (competitionNameIdRef.current) {
-            emitEvent(
-              "card.read",
-              competitionNameIdRef.current,
-              toOfflineCardReadPayload(readout, raceData),
+      let storeFailed = false;
+      let saveState: SaveState = "saved";
+      if (!isDuplicate) {
+        if (navigator.onLine) {
+          try {
+            // SI readouts use seconds-since-midnight; the API contract is
+            // absolute deciseconds, so multiply by 10 on the way out.
+            // An 8 s cap (SI-29): on a black-holed network the call can hang
+            // for minutes; the server dedups a late delivery against the
+            // queued entry.
+            const storeResult = await withTimeout(
+              storeReadout.mutateAsync({
+                cardNo: readout.cardNumber,
+                punches: readout.punches.map((p) => ({
+                  controlCode: p.controlCode,
+                  time: p.time * 10,
+                  ...(p.subSecond != null ? { subSecond: p.subSecond } : {}),
+                })),
+                checkTime:
+                  readout.checkTime !== null && readout.checkTime !== undefined
+                    ? readout.checkTime * 10
+                    : undefined,
+                startTime:
+                  readout.startTime !== null && readout.startTime !== undefined
+                    ? readout.startTime * 10
+                    : undefined,
+                finishTime:
+                  readout.finishTime !== null && readout.finishTime !== undefined
+                    ? readout.finishTime * 10
+                    : undefined,
+                cardType: readout.cardType,
+                punchesFresh: raceData,
+                // SICardReadout carries volts; the API takes integer mV (MeOS).
+                batteryVoltage: meosFromVolts(readout.batteryVoltage) ?? undefined,
+                ownerData: readout.ownerData
+                  ? {
+                      firstName: readout.ownerData.firstName,
+                      lastName: readout.ownerData.lastName,
+                      sex: readout.ownerData.sex,
+                      dateOfBirth: readout.ownerData.dateOfBirth,
+                      club: readout.ownerData.club,
+                      phone: readout.ownerData.phone,
+                      email: readout.ownerData.email,
+                      country: readout.ownerData.country,
+                    }
+                  : undefined,
+                metadata: readout.metadata
+                  ? {
+                      batteryDate: readout.metadata.batteryDate,
+                      productionDate: readout.metadata.productionDate,
+                      hardwareVersion: readout.metadata.hardwareVersion,
+                      softwareVersion: readout.metadata.softwareVersion,
+                      clearCount: readout.metadata.clearCount,
+                    }
+                  : undefined,
+              }),
+              STORE_TIMEOUT_MS,
             );
+            serverPunchesRelevant = storeResult.punchesRelevant ?? true;
+          } catch {
+            console.warn("[DeviceManager] Failed to store readout on server — queuing offline event");
+            storeFailed = true;
+            saveState = await queueCardRead();
           }
-        }
-      } else if (!isDuplicate && !navigator.onLine) {
-        // Offline — queue the card read event immediately
-        if (competitionNameIdRef.current) {
-          emitEvent(
-            "card.read",
-            competitionNameIdRef.current,
-            toOfflineCardReadPayload(readout, raceData),
-          );
+        } else {
+          // Offline — queue the card read event immediately
+          saveState = await queueCardRead();
         }
       }
+      const persisted = isDuplicate || saveState === "saved" || saveState === "queued";
+      const savedEntry: RecentCard = { ...entry, persisted, saveState: isDuplicate ? entry.saveState : saveState };
+      setCurrentCard(savedEntry);
+      setRecentCards((prev) => {
+        const next = prev.map((c) => (c.id === id ? savedEntry : c));
+        recentCardsRef.current = next;
+        return next;
+      });
 
       // Invalidate cache and resolve from server (only when online)
-      if (navigator.onLine) {
+      const useServer = navigator.onLine && !storeFailed;
+      if (useServer) {
         await utils.cardReadout.readout.invalidate({ cardNo: readout.cardNumber });
       }
 
       // Resolve runner info and determine action (always — even for duplicates)
       try {
-        const result = navigator.onLine
+        // A failed store means the server is unreachable (or too slow): resolve
+        // from the local cache instead of waiting out a second request (SI-15).
+        const result = useServer
           ? await utils.cardReadout.readout.fetch({ cardNo: readout.cardNumber })
           : null;
 
@@ -473,7 +507,7 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
         }
 
         const updated: RecentCard = {
-          ...entry,
+          ...savedEntry,
           action,
           actionResolved: true,
           hasRaceData: result.found
@@ -517,14 +551,18 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
             utils.runner.findByCard.invalidate({ cardNo: readout.cardNumber });
           } catch {
             console.warn("[DeviceManager] Failed to apply readout result — queuing offline event");
-            if (competitionNameIdRef.current) {
-              emitEvent("result.applied", competitionNameIdRef.current, {
-                runnerId: result.runner.id,
-                cardNo: result.runner.cardNo,
-                status: result.timing.status,
-                finishTime: result.timing.finishTime,
-                startTime: result.timing.startTime,
-              });
+            if (competition && canApplyRef.current) {
+              try {
+                await emitEvent("result.applied", competition, {
+                  runnerId: result.runner.id,
+                  cardNo: result.runner.cardNo,
+                  status: result.timing.status,
+                  finishTime: result.timing.finishTime,
+                  startTime: result.timing.startTime,
+                });
+              } catch (err) {
+                console.error("[DeviceManager] Could not queue the result", err);
+              }
             }
           }
         }
@@ -538,6 +576,7 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
             finishTime: readout.finishTime ?? undefined,
           },
           queryClient,
+          competition,
         );
 
         if (localResult && localResult.punchesRelevant) {
@@ -547,7 +586,7 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
             : undefined;
 
           const offlineResolved: RecentCard = {
-            ...entry,
+            ...savedEntry,
             action: "readout",
             actionResolved: true,
             hasRaceData: true,
@@ -568,21 +607,28 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
             kioskChannelRef.current.send(recentCardToKioskMessage(offlineResolved));
           }
 
-          // Emit result.applied event for later sync
-          if (competitionNameId) {
-            emitEvent("result.applied", competitionNameId, {
-              runnerId: localResult.runner.id,
-              cardNo: localResult.runner.cardNo,
-              status: localResult.timing.status,
-              finishTime: localResult.timing.finishTime,
-              startTime: localResult.timing.startTime,
-            });
+          // Emit result.applied for later sync. The competition comes from the
+          // URL (the old closure value was always null, so this never ran:
+          // SI-02 / MC-06) and only a device that may write results queues it
+          // (D11: a kiosk-key-only device queues just its card.read).
+          if (competition && canApplyRef.current) {
+            try {
+              await emitEvent("result.applied", competition, {
+                runnerId: localResult.runner.id,
+                cardNo: localResult.runner.cardNo,
+                status: localResult.timing.status,
+                finishTime: localResult.timing.finishTime,
+                startTime: localResult.timing.startTime,
+              });
+            } catch (err) {
+              console.error("[DeviceManager] Could not queue the result", err);
+            }
           }
         } else {
           // No cached data or runner not found — check if runner exists in cache at all
-          const cachedRunner = lookupRunnerByCard(readout.cardNumber, queryClient);
+          const cachedRunner = lookupRunnerByCard(readout.cardNumber, queryClient, competition);
           const fallback: RecentCard = {
-            ...entry,
+            ...savedEntry,
             actionResolved: true,
             action: cachedRunner ? "pre-start" : "register",
             runnerName: cachedRunner?.name,

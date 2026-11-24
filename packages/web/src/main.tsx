@@ -6,7 +6,7 @@ import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client
 import { httpBatchLink } from "@trpc/client";
 import { eventScopedTrpcFetch, trpc } from "./lib/trpc";
 import { cloudOwnedApart } from "./lib/trpc-links";
-import { createIdbPersister } from "./lib/offline/persister";
+import { queryCachePersister } from "./lib/offline/persister";
 import { startNodeDiscovery } from "./lib/node-discovery";
 import { dropLegacyCaches } from "./lib/legacy-caches";
 import { CurrentUserProvider } from "./context/CurrentUserContext";
@@ -26,7 +26,7 @@ const queryClient = new QueryClient({
   },
 });
 
-const persister = createIdbPersister();
+const persister = queryCachePersister;
 
 // In dev, Vite proxies /trpc → localhost:3002.
 // In Docker, nginx proxies /trpc → localhost:3001.

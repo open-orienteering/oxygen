@@ -19,7 +19,7 @@ function getApiUrl() {
 
 const RESERVED_EVENT_SLUGS = new Set(["admin", "library", "settings"]);
 
-function activeEventNameId(): string | null {
+export function activeEventNameId(): string | null {
   const match = window.location.pathname.match(/^\/([^/]+)/);
   const nameId = match?.[1];
   return nameId && !RESERVED_EVENT_SLUGS.has(nameId) ? nameId : null;

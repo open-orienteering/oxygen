@@ -9,6 +9,8 @@ import {
   Link,
 } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import { useQueryClient } from "@tanstack/react-query";
+import { ensureEventCache } from "../lib/offline/persister";
 import { usePageVisible } from "../hooks/usePageVisible";
 import {
   attemptSessionReload,
@@ -133,6 +135,7 @@ function CompetitionShellInner() {
   // caches. Hosted in a sibling component so the query subscription's
   // re-renders never cascade into the routed page tree.
   const utils = trpc.useUtils();
+  const queryClient = useQueryClient();
   const { setCompetitionNameId, getKioskChannel } = useDeviceManager();
   const { print: printerPrint } = usePrinter();
   // Keep the offline Dexie snapshot cache warm when the flag is on.
@@ -231,27 +234,16 @@ function CompetitionShellInner() {
     if (nameId) {
       setReady(false);
       setCompetitionNameId(nameId);
-      if (navigator.onLine) {
-        void (async () => {
-          // Event-scoped tRPC procedures have `undefined` input, so their
-          // React Query keys do not contain nameId. Clear map data rather than
-          // briefly mounting the next event with the previous event's bounds,
-          // controls and tile-load state.
-          await Promise.all([
-            utils.course.mapFileInfo.reset(),
-            utils.course.mapMetadata.reset(),
-            utils.course.controlCoordinates.reset(),
-            utils.course.list.reset(),
-            utils.class.list.reset(),
-          ]);
-          await utils.invalidate();
-          if (!cancelled) selectMutation.mutate({ nameId });
-        })();
-      } else {
-        // Offline: skip cache invalidation (we need that data!) and try select
-        // (will fail and trigger onError fallback to cached data)
-        selectMutation.mutate({ nameId });
-      }
+      void (async () => {
+        // The persisted cache belongs to one event (MC-04): flush the old
+        // event's data, drop it from memory and load this event's. This also
+        // replaces the per-query resets that used to cover the map data. It
+        // runs offline too: an event never opened on this device then starts
+        // empty instead of showing the previous event's runners.
+        await ensureEventCache(queryClient, nameId);
+        if (navigator.onLine) await utils.invalidate();
+        if (!cancelled) selectMutation.mutate({ nameId });
+      })();
     }
     return () => {
       cancelled = true;

@@ -202,6 +202,14 @@ URLs. The web client sends `x-kiosk-key`. Middleware accepts a matching key
 **or** a logged-in user with the relevant capability (`kioskOrCapProcedure`).
 Identity-less devices without a key see an error pane (`kiosk-key-required`).
 
+A key-only device is **display-only** apart from its own outbox: it cannot call
+`cardReadout.storeReadout`, `cardReadout.applyResult` or `events.push` (all need
+a signed-in user), and it does not queue `result.applied`. A standalone kiosk
+that loses the server keeps its `card.read` entries on the device; they are sent
+when an operator signs in on the same browser profile. A venue box runs with
+auth off, where none of this applies. Pinned by a test in
+`permissions.test.ts`.
+
 The key covers everything the kiosk renders after a readout, including the
 course map: the read-only course/map procedures (`course.list`,
 `mapMetadata`, `mapFileInfo`, `controlCoordinates`,

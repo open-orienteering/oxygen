@@ -8,6 +8,7 @@
  */
 
 import type { QueryClient } from "@tanstack/react-query";
+import { cacheOwner } from "./cache-scope";
 import {
   matchPunchesToCourse,
   computeStatus,
@@ -56,7 +57,9 @@ export function computeLocalReadout(
   runnerId: number,
   finishTime: number,
   queryClient: QueryClient,
+  nameId?: string | null,
 ): LocalReadoutResult | null {
+  if (!cacheBelongsTo(queryClient, nameId)) return null;
   // Get cached data from React Query
   // These are the shapes returned by tRPC queries, accessed via their cache keys
   const dashboard = findCachedQuery<DashboardData>(queryClient, "competition.dashboard");
@@ -158,12 +161,14 @@ export interface CardReadoutInput {
 export function computeCardReadout(
   input: CardReadoutInput,
   queryClient: QueryClient,
+  nameId?: string | null,
 ): (LocalReadoutResult & {
   matchScore: number;
   punchesRelevant: boolean;
   /** The other pooled variants the punches validate fully against (F6c); on MP only. */
   otherVariantMatches: OtherVariantMatch[];
 }) | null {
+  if (!cacheBelongsTo(queryClient, nameId)) return null;
   const dashboard = findCachedQuery<DashboardData>(queryClient, "competition.dashboard");
   const runners = findCachedQuery<RunnerListData>(queryClient, "runner.list");
 
@@ -295,7 +300,9 @@ export function computeCardReadout(
 export function lookupRunnerByCard(
   cardNo: number,
   queryClient: QueryClient,
+  nameId?: string | null,
 ): RunnerItem | undefined {
+  if (!cacheBelongsTo(queryClient, nameId)) return undefined;
   const runners = findCachedQuery<RunnerListData>(queryClient, "runner.list");
   return runners?.find((r: RunnerItem) => r.cardNo === cardNo);
 }
@@ -317,17 +324,39 @@ export function courseOf(
 
 // ─── Cache access helpers ───────────────────────────────────
 
+/**
+ * The cached value of an event-scoped query with no input. tRPC keys are
+ * `[["runner","list"], {type:"query"}]` for `undefined` input and
+ * `[..., {input, type}]` otherwise, so a filtered `runner.list({search})`
+ * result (a subset) must never be taken for the full list (MC-19 / BLD-24).
+ * `undefined`/`{}` inputs qualify; entries without data are skipped; the
+ * freshest wins.
+ */
 function findCachedQuery<T>(queryClient: QueryClient, key: string): T | undefined {
-  // React Query + tRPC stores queries with array keys like [["competition","dashboard"], ...]
-  const allQueries = queryClient.getQueryCache().getAll();
-  const match = allQueries.find((q) => {
+  let best: { at: number; data: T } | undefined;
+  for (const q of queryClient.getQueryCache().getAll()) {
     const k = q.queryKey;
-    if (Array.isArray(k) && Array.isArray(k[0])) {
-      return k[0].join(".") === key;
+    if (!Array.isArray(k) || !Array.isArray(k[0]) || k[0].join(".") !== key) continue;
+    const opts = k[1] as { input?: unknown } | undefined;
+    const input = opts?.input;
+    const noInput =
+      input === undefined ||
+      (typeof input === "object" && input !== null && Object.keys(input).length === 0);
+    if (!noInput || q.state.data === undefined) continue;
+    if (!best || q.state.dataUpdatedAt > best.at) {
+      best = { at: q.state.dataUpdatedAt, data: q.state.data as T };
     }
-    return false;
-  });
-  return match?.state.data as T | undefined;
+  }
+  return best?.data;
+}
+
+/**
+ * True when the cache may be read for `nameId`: it is claimed by that event.
+ * Callers that know the event pass it; a cache owned by another event (or by
+ * none) yields no local result rather than the wrong runner (MC-04).
+ */
+export function cacheBelongsTo(queryClient: QueryClient, nameId: string | null | undefined): boolean {
+  return nameId === undefined || (nameId !== null && cacheOwner(queryClient) === nameId);
 }
 
 // ─── Cached data type shapes (matching tRPC query responses) ──

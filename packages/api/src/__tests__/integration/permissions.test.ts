@@ -520,6 +520,28 @@ describe("kiosk key", () => {
     });
   });
 
+  it("a key-only device cannot store readouts, apply results or push its outbox (D11)", async () => {
+    // Pins the offline-readout design: a kiosk-key-only device keeps its
+    // card.read entries in its own outbox and an operator drains them. No
+    // server surface was widened for it (docs/system/authentication.md).
+    const key = "kiosk-secret-token-cccc";
+    await ctx.db.event.update({ where: { id: ctx.eventId }, data: { kioskKey: key } });
+    const event = { ...ctx.event, kioskKey: key };
+    const kiosk = makeCaller(event, {
+      user: null,
+      authEnabled: true,
+      identityEmail: null,
+      kioskKey: key,
+    });
+    await expect(
+      kiosk.cardReadout.storeReadout({ cardNo: 999001, punches: [] }),
+    ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    await expect(
+      kiosk.cardReadout.applyResult({ runnerId: 1, status: 1, finishTime: 1, startTime: 1 }),
+    ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    await expect(kiosk.events.push({ events: [] })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+  });
+
   it("key-only devices can read the map data set MapPanel needs, but not edit", async () => {
     // The kiosk shows the runner's course on the map after a readout —
     // all of MapPanel's queries must accept a kiosk key (mirrors the

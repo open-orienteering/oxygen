@@ -18,6 +18,10 @@ Mispunch — the runner sees exactly what went wrong:
 
 ![Kiosk readout — mispunch](../screenshots/kiosk-mispunch.png)
 
+### When the network drops at the kiosk
+
+A standalone kiosk keeps working without the server. A card read is saved on the device, the result is shown from the data the kiosk already holds, and a small amber badge counts the reads waiting to be sent. They are sent by themselves when the connection is back. If a read could not be saved at all, a red notice asks you to insert the card again. A kiosk opened with a kiosk key only (no one signed in, login required) keeps the reads on the device until an operator signs in there; the badge says so.
+
 ## Start and finish stations
 
 Dedicated register-only stations for the arena — designed to run on cheap tablets and survive flaky Wi-Fi. Both stations work offline: mutations queue locally and drain when connectivity returns.

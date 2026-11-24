@@ -128,7 +128,9 @@ Supported card types: SI5, SI6, SI8, SI9, SI10, SI11, SIAC, pCard, tCard.
 
 ### 2a. Deduplication
 
-If the same card with identical punch data is scanned within a short window, the duplicate is detected by `readoutsMatch()` (compares card number, start/finish/check times, and punch sequences). Duplicates reuse the existing entry ID instead of creating a new pipeline run.
+A re-read is a duplicate (`findDuplicate` in `lib/offline/readout-policy.ts`) only when an earlier entry in the recent-cards list has identical data (`readoutsMatch()`: card number, start/finish/check times, punch sequence), was taken in the **same event** (`competitionId`, from the URL), and was **persisted**, that is stored on the server or queued in this device's outbox. There is no time window. A duplicate reuses the entry ID and is not stored again, but its action is still re-resolved (the runner may have been registered meanwhile).
+
+A read that reached neither the server nor the outbox (`saveState` `not-saved` or `no-competition`) is never a duplicate: the next insert of the same card tries again and replaces the failed entry. The same card data in another event is a new read.
 
 ### 2b. Client-Side Freshness Check
 
@@ -161,6 +163,22 @@ storeReadout.mutateAsync({
 ```
 
 The server always backs up the data to `oxygen_card_readouts` (forensic history), but only writes to `oCard` (the MeOS-compatible table) if strict guards pass. See §3 below.
+
+#### 2c-1. When the server is unreachable or too slow
+
+The event is the first path segment of the URL (`activeEventNameId()`, the same source as the `x-competition-id` header), so the standalone kiosk and start screens, which sit outside `CompetitionShell`, queue under the right event. `storeReadout` is capped at 8 s; the call failing, timing out or the browser being offline all take the same path:
+
+1. `card.read` is written to the local outbox (`emitEvent`, awaited). Success sets `saveState: "queued"`. If there is no event in the URL, or IndexedDB refuses the write, nothing was saved: `saveState` is `no-competition` or `not-saved`, `persisted` stays false, and the standalone kiosk shows a red notice ("Card was not saved. Insert it again.").
+2. The server fetch of §2d is skipped (a failed store means the server cannot be relied on). The result is computed locally from the cached runner list and dashboard (`computeCardReadout`), which only reads a cache that belongs to this event (§2c-3).
+3. If a runner is found, `result.applied` is queued too (awaited, failure logged). It is queued only when `canApplyResults(authEnabled, signedIn)` holds, i.e. auth is off (venue box) or an operator is signed in. A device that has only a kiosk key (auth on, nobody signed in) queues `card.read` alone: it stays display-only for everything but its own readout entries (decision D11).
+
+#### 2c-2. Draining
+
+The kiosk route mounts its own `useEventQueue(nameId)` and shows `data-testid="kiosk-sync-badge"` while entries are pending or rejected. A refusal from the server (`UNAUTHORIZED` / `FORBIDDEN`, a kiosk-key-only device under auth) is not a network error: entries stay pending and the badge reads "saved on this device. An operator must sign in to send them". Nothing widens what a kiosk key can call; `storeReadout`, `applyResult` and `events.push` still need a signed-in user.
+
+#### 2c-3. The cache belongs to one event
+
+Event-scoped tRPC queries have `undefined` input, so their query keys do not name the event. The persisted query cache therefore has an owner (marker query `["oxygen","cacheOwner"]`) and one IndexedDB blob per event (`oxygen-query-cache:<nameId>`; `lib/offline/cache-scope.ts`, `persister.ts`). `CompetitionShell`, `KioskPage` and `StartScreenPage` call `ensureEventCache` before selecting the event: it flushes the outgoing event's blob, clears the queries (never the mutation cache), and loads the incoming event's blob if there is one. An event never opened on this device starts empty offline. Local readout lookups read only exact-key, no-input queries (a filtered `runner.list({search})` is never taken for the full list) and return nothing if the cache owner is not the event being read. The cache of earlier versions had no owner and is dropped on first load: stations re-warm once while online.
 
 ### 2d. Fetch Readout Data
 
@@ -681,7 +699,7 @@ Registration goes directly to `registration-waiting` (no `card-done` transition)
 The kiosk can operate independently with its own SI reader (no admin window needed). In standalone mode:
 
 - Kiosk creates its own DeviceManager connection
-- Card events are processed locally
+- Card events are processed locally; with the server unreachable they are queued and drained by the kiosk itself (§2c-1, §2c-2)
 - State transitions follow the same logic
 - Registration dialog can still be opened (kiosk acts as both admin and display)
 

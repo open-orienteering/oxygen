@@ -11,7 +11,9 @@ import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { QRCodeSVG } from "qrcode.react";
+import { useQueryClient } from "@tanstack/react-query";
 import { trpc } from "../lib/trpc";
+import { ensureEventCache } from "../lib/offline/persister";
 import { formatMeosTime, formatRunningTime, RunnerStatus } from "@oxygen/shared";
 import {
   KioskChannel,
@@ -28,6 +30,7 @@ import { shouldProcessStandaloneCard } from "../lib/kiosk-standalone-routing";
 import { getClubLogoUrl } from "../lib/club-logo";
 import { SiCardAnimation } from "../components/SiCardAnimation";
 import { useStationSync } from "../hooks/useStationSync";
+import { useEventQueue } from "../hooks/useEventQueue";
 import { KioskAccessGate } from "../components/KioskAccessGate";
 
 // Registration-waiting watchdog timeout. E2E hook: tests override via
@@ -86,6 +89,7 @@ export function KioskPage() {
 function KioskPageBody() {
   const { t } = useTranslation("kiosk");
   const { nameId } = useParams<{ nameId: string }>();
+  const queryClient = useQueryClient();
   const [screen, setScreen] = useState<KioskScreen>({ mode: "idle" });
   const [settings, setSettingsState] = useState<KioskSettings>(() =>
     loadSettings(nameId ?? ""),
@@ -119,12 +123,25 @@ function KioskPageBody() {
       : undefined;
 
   useEffect(() => {
-    if (nameId) selectMutation.mutate({ nameId });
+    if (!nameId) return;
+    let cancelled = false;
+    // The cache belongs to one event (MC-04); claim it before selecting so the
+    // standalone readout path never computes from another event's runners.
+    void ensureEventCache(queryClient, nameId).then(() => {
+      if (!cancelled) selectMutation.mutate({ nameId });
+    });
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nameId]);
 
   // Standalone mode: use DeviceManager for SI reader
   const { currentCard, readerStatus, openReaderDialog, supported, lastDetectedCardNo } = useDeviceManager();
+  // The kiosk route sits outside CompetitionShell, so it drains its own outbox
+  // (SYNC-03): readouts taken while the server was unreachable go out when it
+  // is back, and the operator sees how many are waiting.
+  const { pendingCount, failedCount, needsSignIn } = useEventQueue(nameId);
 
   const updateSettings = useCallback(
     (partial: Partial<KioskSettings>) => {
@@ -385,6 +402,20 @@ function KioskPageBody() {
           {competitionName || nameId}
         </div>
         <div className="flex items-center gap-2">
+          {(pendingCount > 0 || failedCount > 0) && (
+            <span
+              data-testid="kiosk-sync-badge"
+              data-pending={pendingCount}
+              data-failed={failedCount}
+              className="text-xs px-2 py-1 rounded bg-amber-600/30 text-amber-200"
+            >
+              {failedCount > 0
+                ? t("syncFailed", { count: failedCount })
+                : needsSignIn
+                  ? t("syncNeedsSignIn", { count: pendingCount })
+                  : t("syncPending", { count: pendingCount })}
+            </span>
+          )}
           {settings.standalone && supported && (
             <button
               data-testid="reader-menu"
@@ -420,6 +451,18 @@ function KioskPageBody() {
           </button>
         </div>
       </div>
+
+      {/* A read that reached neither the server nor this device's outbox */}
+      {settings.standalone &&
+        (currentCard?.saveState === "not-saved" || currentCard?.saveState === "no-competition") && (
+          <div
+            role="alert"
+            data-testid="kiosk-not-saved"
+            className="px-4 py-2 bg-red-700 text-white text-center text-sm"
+          >
+            {currentCard.saveState === "no-competition" ? t("noCompetition") : t("notSaved")}
+          </div>
+        )}
 
       {/* Settings panel */}
       {showSettings && (
