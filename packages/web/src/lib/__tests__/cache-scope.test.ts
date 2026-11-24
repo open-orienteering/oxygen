@@ -26,7 +26,7 @@ function setup() {
   const persister = createIdbPersister(store, () => null);
   const qc = new QueryClient();
   const switchTo = (nameId: string) =>
-    switchCacheScope(qc, nameId, persister, async (n) => store.get(blobKey(n)));
+    switchCacheScope(qc, nameId, persister, async (n) => (await store.get(blobKey(n))) as PersistedClient | undefined);
   return { m, store, persister, qc, switchTo };
 }
 

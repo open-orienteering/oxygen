@@ -60,7 +60,8 @@ export function createIdbPersister(
 export const queryCachePersister = createIdbPersister();
 
 /** Blob of one event, for `switchCacheScope`. */
-export const restoreBlobFor = (nameId: string) => idbStore.get(blobKey(nameId));
+export const restoreBlobFor = async (nameId: string) =>
+  (await idbStore.get(blobKey(nameId))) as PersistedClient | undefined;
 
 
 /** Make the live cache belong to this event (flush the old one, load this one's). */
