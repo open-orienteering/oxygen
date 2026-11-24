@@ -85,9 +85,8 @@ describe("SI-17: a slow earlier card never overwrites the current one", () => {
 
   it("broadcasts to the kiosk only for the latest card", () => {
     // Interleaved: A read, then B read; A finishes last.
-    let latest: string | null = "A";
-    latest = "B";
-    expect(isLatestCard(latest, "A")).toBe(false);
-    expect(isLatestCard(latest, "B")).toBe(true);
+    const latestAfterBothReads = "B";
+    expect(isLatestCard(latestAfterBothReads, "A")).toBe(false);
+    expect(isLatestCard(latestAfterBothReads, "B")).toBe(true);
   });
 });

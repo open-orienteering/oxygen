@@ -768,7 +768,6 @@ function ReadoutScreen({
   onPrint: (runnerId: number) => void;
 }) {
   const { t } = useTranslation("kiosk");
-  const utils = trpc.useUtils();
   const printedRef = useRef(false);
 
   // 1. Check DB state for this runner
