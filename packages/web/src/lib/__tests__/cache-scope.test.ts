@@ -15,7 +15,7 @@ function memoryStore() {
   const m = new Map<string, PersistedClient>();
   const store: KeyValueStore = {
     get: async (k) => m.get(k),
-    set: async (k, v) => void m.set(k, v),
+    set: async (k, v) => void m.set(k, v as PersistedClient),
     del: async (k) => void m.delete(k),
   };
   return { m, store };
@@ -131,7 +131,7 @@ describe("per-event persister", () => {
         { queryKey: [...CACHE_OWNER_KEY], dehydratedAt: 0, queryHash: JSON.stringify(CACHE_OWNER_KEY), state: { data: "b" } as never },
       ] },
     });
-    expect([...m.keys()].sort()).toEqual([blobKey("a"), blobKey("b")]);
+    expect([...m.keys()].filter((k) => !k.endsWith("last-owner")).sort()).toEqual([blobKey("a"), blobKey("b")]);
   });
 
   it("a write is filed under the owner recorded in the cache, not the URL", async () => {
@@ -144,6 +144,6 @@ describe("per-event persister", () => {
         { queryKey: [...CACHE_OWNER_KEY], dehydratedAt: 0, queryHash: "x", state: { data: "a" } as never },
       ] },
     });
-    expect([...m.keys()]).toEqual([blobKey("a")]);
+    expect([...m.keys()].filter((k) => !k.endsWith("last-owner"))).toEqual([blobKey("a")]);
   });
 });

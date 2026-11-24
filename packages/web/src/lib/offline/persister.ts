@@ -10,14 +10,16 @@ const GLOBAL = "_global";
 
 export const blobKey = (owner: string | null) => `${PREFIX}${owner ?? GLOBAL}`;
 
+const LAST_KEY = `${PREFIX}last-owner`;
+
 export interface KeyValueStore {
-  get(key: string): Promise<PersistedClient | undefined>;
-  set(key: string, value: PersistedClient): Promise<void>;
+  get(key: string): Promise<any>;
+  set(key: string, value: unknown): Promise<void>;
   del(key: string): Promise<void>;
 }
 
 const idbStore: KeyValueStore = {
-  get: (k) => get<PersistedClient>(k),
+  get: (k) => get(k),
   set: (k, v) => set(k, v),
   del: (k) => del(k),
 };
@@ -37,11 +39,17 @@ export function createIdbPersister(
   return {
     persistClient: async (client: PersistedClient) => {
       if (persistSuspended()) return;
-      await store.set(blobKey(ownerOfPersisted(client)), client);
+      const owner = ownerOfPersisted(client);
+      await store.set(blobKey(owner), client);
+      // Pages outside an event (the selector) restore whatever was persisted last:
+      // it carries the freshest shared queries (event list, session) and its own
+      // owner marker, so an event page still switches away from it.
+      if (owner) await store.set(LAST_KEY, owner);
     },
     restoreClient: async () => {
       void store.del(LEGACY_KEY).catch(() => {});
-      return store.get(blobKey(currentEvent()));
+      const event = currentEvent() ?? ((await store.get(LAST_KEY)) as string | undefined) ?? null;
+      return store.get(blobKey(event)) as Promise<PersistedClient | undefined>;
     },
     removeClient: async () => {
       await store.del(blobKey(currentEvent()));

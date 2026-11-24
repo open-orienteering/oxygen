@@ -4,14 +4,14 @@
  */
 import type { SICardReadout } from "../si-protocol";
 
-/** How a readout got (or did not get) . */
+/** How a readout got (or did not get) saved. */
 export type SaveState =
   /** Stored on the server. */
-  | ""
-  /** Server unreachable:  in this device's outbox, drains later. */
-  | ""
-  /** Neither stored nor  (storage failure). The card must be read again. */
-  | ""
+  | "saved"
+  /** Server unreachable: queued in this device's outbox, drains later. */
+  | "queued"
+  /** Neither stored nor queued (storage failure). The card must be read again. */
+  | "not-saved"
   /** No event could be determined from the URL, so there was nowhere to queue it. */
   | "no-competition"
   /** The store or queue write is still in flight (a re-insert meanwhile is a duplicate). */
