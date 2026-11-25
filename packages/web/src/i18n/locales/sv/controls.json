@@ -227,5 +227,6 @@
     "clearAll": "Rensa allt",
     "cancel": "Avbryt",
     "save": "Spara"
-  }
+  },
+  "backupReadIncomplete": "Backupläsningen blev ofullständig vid 0x{{address}}; ingenting rensades. Anslut stationen igen och läs på nytt."
 }

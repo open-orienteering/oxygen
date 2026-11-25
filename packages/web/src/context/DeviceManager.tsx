@@ -19,6 +19,7 @@ import {
 } from "react";
 import {
   SIReaderConnection,
+  type SerialPortLike,
   type SIReaderStatus,
 } from "../lib/webserial";
 import { ReaderHub, type ReaderInfo } from "../lib/reader-hub";
@@ -130,6 +131,12 @@ interface DeviceManagerState {
   setPendingConfirmCardNo: (cardNo: number | null, onConfirm?: () => void) => void;
   /** Last card number detected (fires before full readout completes) */
   lastDetectedCardNo: number | null;
+  /**
+   * The newest read that failed (SI-05): the card was detected but could not
+   * be read completely. `seq` increments per failure so the same card failing
+   * twice is two events. Null until the first failure.
+   */
+  lastReadFailure: { seq: number; cardNumber: number; reason: string } | null;
   /**
    * The USB SI station used for station programming operations. With several
    * USB stations this is the first one; with none, an unconnected instance
@@ -250,6 +257,8 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
   const [recentCards, setRecentCards] = useState<RecentCard[]>([]);
   const [isOnCardReadoutPage, setIsOnCardReadoutPage] = useState(false);
   const [lastDetectedCardNo, setLastDetectedCardNo] = useState<number | null>(null);
+  const [lastReadFailure, setLastReadFailure] = useState<DeviceManagerState["lastReadFailure"]>(null);
+  const readFailureSeqRef = useRef(0);
 
   const competitionNameIdRef = useRef<string | null>(null);
   const kioskChannelRef = useRef<KioskChannel | null>(null);
@@ -818,6 +827,24 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
       addRecentCard(readout);
     };
 
+    const onCardReadFailed = (e: Event) => {
+      const failure = (e as CustomEvent).detail as { cardNumber: number; reason: string };
+      // Not a read card: no Recent Cards row, nothing sent to the server. The
+      // operator banner and the kiosk tell the runner to insert the card again.
+      setLastDetectedCardNo(null);
+      setLastReadFailure({
+        seq: ++readFailureSeqRef.current,
+        cardNumber: failure.cardNumber,
+        reason: failure.reason,
+      });
+      if (kioskChannelRef.current) {
+        kioskChannelRef.current.send({
+          type: "card-read-failed",
+          cardNumber: failure.cardNumber,
+        });
+      }
+    };
+
     const onCardRemoved = (e: Event) => {
       // With several readers, only the reader that reported the last insert
       // may clear the kiosk's "do not remove the card" screen.
@@ -835,12 +862,17 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
     conn.addEventListener("si:card-detected", onCardDetected);
     conn.addEventListener("si:card-readout", onCardReadout);
     conn.addEventListener("si:card-removed", onCardRemoved);
+    conn.addEventListener("si:card-read-failed", onCardReadFailed);
     conn.addEventListener("hub:readers-changed", onReadersChanged);
     setReaders(conn.snapshot());
 
-    // Reopen every USB station this origin was granted before (no picker).
+    // Reopen every USB station this origin was granted before (no picker), on
+    // load and again whenever the browser reports a granted port plugged in
+    // (a reader that was unplugged mid-event comes back without a click).
     let cancelled = false;
-    if (serialSupported) {
+    const attaching = new Set<SerialPortLike>();
+    const attachGranted = () => {
+      if (!serialSupported) return;
       SIReaderConnection.grantedPorts()
         .then(async (ports) => {
           for (const port of ports) {
@@ -848,19 +880,33 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
             const held = conn
               .list()
               .some((r) => r instanceof SIReaderConnection && r.holdsPort(port));
-            if (held) continue;
-            const idle = conn
+            if (held || attaching.has(port)) continue;
+            // An idle or errored connection is reused before another is added.
+            const free = conn
               .list()
-              .find((r) => r instanceof SIReaderConnection && r.status === "idle");
-            const reader = (idle as SIReaderConnection | undefined) ?? new SIReaderConnection();
+              .find(
+                (r) =>
+                  r instanceof SIReaderConnection &&
+                  (r.status === "idle" || r.status === "error"),
+              );
+            const reader = (free as SIReaderConnection | undefined) ?? new SIReaderConnection();
             conn.add(reader);
-            await reader.attach(port).catch(() => {
-              // Port busy (another tab) or unplugged; the row stays in error.
-            });
+            attaching.add(port);
+            await reader
+              .attach(port)
+              .catch(() => {
+                // Port busy (another tab) or unplugged; the row stays in error.
+              })
+              .finally(() => attaching.delete(port));
           }
         })
         .catch(() => {});
-    }
+    };
+    const serialEvents = serialSupported
+      ? (navigator as Navigator & { serial?: EventTarget }).serial
+      : undefined;
+    serialEvents?.addEventListener?.("connect", attachGranted);
+    attachGranted();
 
     // Reader BTs remembered from an earlier visit: wait for each to advertise
     // (the next card inserted wakes it) and reconnect without a picker.
@@ -890,6 +936,8 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
       conn.removeEventListener("si:card-detected", onCardDetected);
       conn.removeEventListener("si:card-readout", onCardReadout);
       conn.removeEventListener("si:card-removed", onCardRemoved);
+      conn.removeEventListener("si:card-read-failed", onCardReadFailed);
+      serialEvents?.removeEventListener?.("connect", attachGranted);
     };
   }, [getHub, addRecentCard, serialSupported]);
 
@@ -929,6 +977,7 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
     getKioskChannel,
     setPendingConfirmCardNo,
     lastDetectedCardNo,
+    lastReadFailure,
     getReaderConnection: getConnection,
   };
 

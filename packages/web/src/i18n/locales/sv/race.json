@@ -104,5 +104,6 @@
   "applyHoldReason_no-finish": "ingen målstämpling på brickan",
   "applyHoldReason_stale-punches": "stämplingarna ser ut att vara från en gammal bricka",
   "replaceFinish": "Ersätt måltid {{time}} med nu",
-  "applyHoldReason": "se löparen"
+  "applyHoldReason": "se löparen",
+  "notifReadFailed": "Bricka {{number}} lästes inte: sätt i den igen"
 }

@@ -37,6 +37,8 @@ import { KioskAccessGate } from "../components/KioskAccessGate";
 // localStorage (set in an init script, i.e. before this module loads) so
 // they don't have to wait out the full production timeout — see
 // registration-dialog.spec.ts.
+/** How long "card not read" stays up before the kiosk returns to idle. */
+const READ_FAILED_SECONDS = 8;
 const WATCHDOG_MS = Number(localStorage.getItem("oxygenKioskWatchdogMs") ?? 15_000);
 
 // ─── Types ──────────────────────────────────────────────────
@@ -44,6 +46,7 @@ const WATCHDOG_MS = Number(localStorage.getItem("oxygenKioskWatchdogMs") ?? 15_0
 type KioskScreen =
   | { mode: "idle" }
   | { mode: "reading"; cardNumber: number }
+  | { mode: "read-failed"; cardNumber: number }
   | { mode: "card-done"; cardNumber: number; next: KioskScreen }
   | { mode: "readout"; card: KioskCardReadoutMessage["card"] }
   | { mode: "pre-start"; card: KioskCardReadoutMessage["card"] }
@@ -138,7 +141,7 @@ function KioskPageBody() {
   }, [nameId]);
 
   // Standalone mode: use DeviceManager for SI reader
-  const { currentCard, readerStatus, openReaderDialog, supported, lastDetectedCardNo } = useDeviceManager();
+  const { currentCard, readerStatus, openReaderDialog, supported, lastDetectedCardNo, lastReadFailure } = useDeviceManager();
   // The kiosk route sits outside CompetitionShell, so it drains its own outbox
   // (SYNC-03): readouts taken while the server was unreachable go out when it
   // is back, and the operator sees how many are waiting.
@@ -195,7 +198,13 @@ function KioskPageBody() {
   useEffect(() => {
     const prev = prevScreenModeRef.current;
     prevScreenModeRef.current = screen.mode;
-    if (prev === "reading" && screen.mode !== "reading" && screen.mode !== "idle") {
+    // No beep when the read failed: the reader did not beep either.
+    if (
+      prev === "reading" &&
+      screen.mode !== "reading" &&
+      screen.mode !== "idle" &&
+      screen.mode !== "read-failed"
+    ) {
       playReadoutBeep();
     }
   }, [screen.mode]);
@@ -245,6 +254,15 @@ function KioskPageBody() {
             clearTimeout(resetTimerRef.current);
             return { mode: "reading", cardNumber: msg.cardNumber };
           });
+          break;
+
+        case "card-read-failed":
+          // Only the reading/idle screens give way: a result or a
+          // registration in progress is not disturbed by a failed read.
+          if (screenRef.current.mode === "reading" || screenRef.current.mode === "idle") {
+            setScreen({ mode: "read-failed", cardNumber: msg.cardNumber });
+            scheduleReset(READ_FAILED_SECONDS);
+          }
           break;
 
         case "card-readout":
@@ -334,12 +352,32 @@ function KioskPageBody() {
 
   useEffect(() => {
     if (!settings.standalone) return;
-    if (lastDetectedCardNo == null || lastDetectedCardNo === lastDetectedRef.current) return;
+    if (lastDetectedCardNo == null) {
+      // The same card inserted again after a removal or a failed read must
+      // show the reading screen again.
+      lastDetectedRef.current = null;
+      return;
+    }
+    if (lastDetectedCardNo === lastDetectedRef.current) return;
     lastDetectedRef.current = lastDetectedCardNo;
 
     clearTimeout(resetTimerRef.current);
     setScreen({ mode: "reading", cardNumber: lastDetectedCardNo });
   }, [lastDetectedCardNo, settings.standalone]);
+
+  // ── Standalone mode: a card the reader could not read (SI-05) ──
+
+  const lastFailureSeqRef = useRef(0);
+
+  useEffect(() => {
+    if (!settings.standalone || !lastReadFailure) return;
+    if (lastReadFailure.seq === lastFailureSeqRef.current) return;
+    lastFailureSeqRef.current = lastReadFailure.seq;
+    if (screenRef.current.mode === "reading" || screenRef.current.mode === "idle") {
+      setScreen({ mode: "read-failed", cardNumber: lastReadFailure.cardNumber });
+      scheduleReset(READ_FAILED_SECONDS);
+    }
+  }, [lastReadFailure, settings.standalone, scheduleReset]);
 
   // ── Standalone mode: react to DeviceManager card events ───
 
@@ -472,6 +510,17 @@ function KioskPageBody() {
           </div>
         )}
 
+      {/* The USB reader was unplugged or its port failed (SI-18) */}
+      {settings.standalone && supported && readerStatus === "error" && (
+        <div
+          role="alert"
+          data-testid="kiosk-reader-disconnected"
+          className="px-4 py-2 bg-red-700 text-white text-center text-sm"
+        >
+          {t("readerDisconnected")}
+        </div>
+      )}
+
       {/* Settings panel */}
       {showSettings && (
         <KioskSettingsPanel
@@ -483,7 +532,7 @@ function KioskPageBody() {
 
       {/* Main content area */}
       <div className="flex-1 flex items-center justify-center px-4 py-4">
-        {(screen.mode === "idle" || screen.mode === "reading" || screen.mode === "card-done") ? (
+        {(screen.mode === "idle" || screen.mode === "reading" || screen.mode === "read-failed" || screen.mode === "card-done") ? (
           <div className="text-center">
             {/* Competition branding — always visible to keep layout stable */}
             <div className="mb-4">
@@ -518,6 +567,7 @@ function KioskPageBody() {
             <div className="min-h-[220px]">
               {screen.mode === "idle" && <IdleContent />}
               {screen.mode === "reading" && <ReadingContent cardNumber={screen.cardNumber} />}
+              {screen.mode === "read-failed" && <ReadFailedContent cardNumber={screen.cardNumber} />}
               {screen.mode === "card-done" && <CardDoneContent cardNumber={screen.cardNumber} />}
             </div>
           </div>
@@ -680,6 +730,28 @@ function ReadingContent({ cardNumber }: { cardNumber: number }) {
         {t("cardNumber", { number: cardNumber })}
       </div>
     </>
+  );
+}
+
+// ─── Read Failed Content (the card could not be read, SI-05) ─
+
+function ReadFailedContent({ cardNumber }: { cardNumber: number }) {
+  const { t } = useTranslation("kiosk");
+  return (
+    <div data-testid="kiosk-read-failed">
+      <div className="mb-4 flex items-center justify-center gap-3">
+        <div className="inline-flex items-center justify-center w-10 h-10 rounded-full bg-red-500/20 border-4 border-red-400">
+          <svg className="w-6 h-6 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </div>
+        <h1 className="text-4xl font-black text-red-400">{t("cardNotRead")}</h1>
+      </div>
+      <p className="text-2xl text-white mb-4">{t("cardNotReadHint")}</p>
+      <div className="text-xl text-slate-400 font-mono">
+        {t("cardNumber", { number: cardNumber })}
+      </div>
+    </div>
   );
 }
 

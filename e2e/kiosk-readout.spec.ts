@@ -25,7 +25,7 @@ declare global {
       insertCard(
         cardNumber: number,
         punches?: Array<{ controlCode: number; time: number }>,
-        options?: { hasFinish?: boolean },
+        options?: { hasFinish?: boolean; silentBlocks?: number[] },
       ): boolean;
       removeCard(): boolean;
       isConnected(): boolean;
@@ -122,6 +122,21 @@ test.describe("Kiosk Readout Station Flow", () => {
         // Best-effort cleanup
       }
     }
+  });
+
+  test("a card that cannot be read completely tells the runner to insert it again", async ({ context }) => {
+    const { adminPage, kioskPage } = await setupAdminAndKiosk(context);
+
+    await adminPage.evaluate(() =>
+      window.__siMock.insertCard(2800077, [{ controlCode: 81, time: 36360 }], { silentBlocks: [1] }),
+    );
+
+    await expect(kioskPage.getByText("Reading card...")).toBeVisible({ timeout: 10000 });
+    await expect(kioskPage.getByTestId("kiosk-read-failed")).toBeVisible({ timeout: 15000 });
+    await expect(kioskPage.getByTestId("kiosk-read-failed")).toContainText(
+      "Insert your card again and wait for the beep.",
+    );
+    await expect(adminPage.getByTestId("card-read-failed-banner")).toBeVisible();
   });
 
   test("OK readout updates kiosk and persists runner status to DB", async ({ context, request }) => {

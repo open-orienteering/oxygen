@@ -227,5 +227,6 @@
     "clearAll": "Clear all",
     "cancel": "Cancel",
     "save": "Save"
-  }
+  },
+  "backupReadIncomplete": "Backup read incomplete at 0x{{address}}; nothing was cleared. Reconnect the station and read again."
 }

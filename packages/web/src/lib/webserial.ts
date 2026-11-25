@@ -179,9 +179,11 @@ const SI5_READOUT_FRAME_LEN = 130;
  * whole record of the event.
  */
 export class BackupReadIncompleteError extends Error {
-  constructor(public readonly address: number) {
+  readonly address: number;
+  constructor(address: number) {
     super(`Backup read incomplete at 0x${address.toString(16)}`);
     this.name = "BackupReadIncompleteError";
+    this.address = address;
   }
 }
 

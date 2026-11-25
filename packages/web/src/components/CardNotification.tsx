@@ -20,7 +20,8 @@ const AUTO_DISMISS_MS = 10000;
 
 export function CardNotification() {
   const { t } = useTranslation("race");
-  const { currentCard, recentCards, isOnCardReadoutPage, confirmApply, dismissApply } = useDeviceManager();
+  const { currentCard, recentCards, isOnCardReadoutPage, confirmApply, dismissApply, lastReadFailure } =
+    useDeviceManager();
   const navigate = useNavigate();
   const location = useLocation();
   const { openRegistration } = useRegistrationDialog();
@@ -30,6 +31,23 @@ export function CardNotification() {
   const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const onCardPage = location.pathname.includes("/card-readout");
+
+  // A card the reader could not read (SI-05): a red banner on every page, gone
+  // after the usual delay. No Recent Cards row exists for it.
+  // Shown until it is dismissed, times out, or a card is read after it.
+  const [failureSeq, setFailureSeq] = useState<number | null>(null);
+  const failureTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const cardAtFailureRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!lastReadFailure) return;
+    cardAtFailureRef.current = currentCard?.id ?? null;
+    setFailureSeq(lastReadFailure.seq);
+    clearTimeout(failureTimerRef.current);
+    failureTimerRef.current = setTimeout(() => setFailureSeq(null), AUTO_DISMISS_MS);
+    return () => clearTimeout(failureTimerRef.current);
+    // Only a new failure restarts it: a card read later hides it (below).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastReadFailure]);
 
   useEffect(() => {
     if (!currentCard || onCardPage || isOnCardReadoutPage) return;
@@ -95,6 +113,35 @@ export function CardNotification() {
               {asks ? t("applyHoldKeep") : t("applyHoldDismiss")}
             </button>
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (
+    lastReadFailure &&
+    failureSeq === lastReadFailure.seq &&
+    (currentCard?.id ?? null) === cardAtFailureRef.current
+  ) {
+    return (
+      <div
+        role="alert"
+        className="bg-red-700 text-white px-4 py-3 shadow-lg animate-slide-down"
+        data-testid="card-read-failed-banner"
+      >
+        <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
+          <div className="text-sm">
+            {t("notifReadFailed", { number: lastReadFailure.cardNumber })}
+          </div>
+          <button
+            onClick={() => setFailureSeq(null)}
+            className="p-1 text-white/70 hover:text-white transition-colors cursor-pointer"
+            aria-label="Dismiss"
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
         </div>
       </div>
     );

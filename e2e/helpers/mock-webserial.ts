@@ -7,6 +7,9 @@
  * Usage from tests:
  *   await page.evaluate(() => window.__siMock.insertCard(cardNumber, punches));
  *   await page.evaluate(() => window.__siMock.removeCard());
+ *
+ * insertCard options: { hasFinish, ownerData, silentBlocks: [1] } — blocks the
+ * mock never answers, so the reader gives up on the card (card-read-failed).
  */
 
 // This is executed in the browser context via addInitScript
@@ -204,6 +207,8 @@ export function getMockWebSerialScript(): string {
   let currentPunches = [];
   let currentHasFinish = true;
   let currentOwnerData = null; // { firstName, lastName, club, ... }
+  // Block numbers the mock never answers (a card that cannot be read completely)
+  let currentSilentBlocks = [];
   let pendingBlockRequests = [];
 
   // Check if a card number corresponds to an SI10/SI11/SIAC card
@@ -296,6 +301,7 @@ export function getMockWebSerialScript(): string {
             if (bytes[i] === 0xEF && cardInserted && i + 2 < bytes.length) {
               // LEN byte is at i+1, BLOCK_NUM at i+2
               const blockNum = bytes[i + 2];
+              if (currentSilentBlocks.indexOf(blockNum) !== -1) continue;
               setTimeout(() => {
                 const blockData = buildReadoutBlock(currentCardNumber, currentPunches, blockNum, currentHasFinish);
                 const response = buildReadoutResponseFrame(blockData, blockNum);
@@ -344,6 +350,7 @@ export function getMockWebSerialScript(): string {
       currentPunches = punches || [];
       currentHasFinish = options && options.hasFinish === false ? false : true;
       currentOwnerData = (options && options.ownerData) || null;
+      currentSilentBlocks = (options && options.silentBlocks) || [];
 
       // Send detection frame
       const detFrame = buildDetectionFrame(cardNumber);
@@ -374,6 +381,7 @@ export function getMockWebSerialScript(): string {
       currentPunches = [];
       currentHasFinish = true;
       currentOwnerData = null;
+      currentSilentBlocks = [];
       writtenData = [];
       readController = null;
     }

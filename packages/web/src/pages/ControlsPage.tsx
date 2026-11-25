@@ -35,6 +35,7 @@ import {
   createControlAnchors,
   buildControlOrdinals,
 } from "../lib/structured-search/anchors/control-anchors";
+import { BackupReadIncompleteError } from "../lib/webserial";
 import { ControlStatusHelp } from "../components/ControlStatusHelp";
 
 // ─── Types ────────────────────────────────────────────────
@@ -1575,7 +1576,25 @@ function ReadoutPanel({
     // a control station (look up the control and import punches) or a
     // readout station (stage the parsed card readouts for the BackupPunches
     // page's Card readouts tab; no control-code match needed).
-    const backup = await reader.readBackupMemory(stationData.rawData);
+    let backup: Awaited<ReturnType<typeof reader.readBackupMemory>>;
+    try {
+      backup = await reader.readBackupMemory(stationData.rawData);
+    } catch (err) {
+      if (!(err instanceof BackupReadIncompleteError)) throw err;
+      // A page was missing: what arrived is not the whole record, so nothing
+      // is imported and nothing is cleared. Marking the serial as seen keeps
+      // auto mode from re-reading the same station in a loop; reading it
+      // again by hand stays possible.
+      lastReadSerial.current = stationData.serialNo;
+      setResults((prev) => [{
+        code, punchCount: 0, newPunches: 0,
+        batteryVoltage: stationData.batteryVoltage,
+        success: false,
+        error: t("backupReadIncomplete", { address: err.address.toString(16) }),
+        timestamp: new Date(),
+      }, ...prev].slice(0, 20));
+      return;
+    }
 
     let newPunches = 0;
     let punchCount = 0;
