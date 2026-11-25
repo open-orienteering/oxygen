@@ -67,7 +67,7 @@ import {
 import { storeReadoutImpl, applyResultGuarded } from "./cardReadout.js";
 import { buildRunnerUpdateData, manualFlagsFor } from "./runner.js";
 import { appendJournal } from "../journalEmit.js";
-import { isRaceWritable, isStaleHolder, mayWriteEventData, writeRefusalError } from "../sync/lease.js";
+import { getActiveLease, isRaceWritable, isStaleHolder, mayWriteEventData, writeRefusalError } from "../sync/lease.js";
 import { assignVariant } from "../variants.js";
 import { valueToRunnerStatus } from "../statusConvert.js";
 import { foldServerHlc } from "../serverClock.js";
@@ -412,6 +412,36 @@ export async function markJournalShipped(
   return res.count;
 }
 
+let warnedNoPeerNodeId = false;
+
+/**
+ * The delivery mark is one bit per entry, not per peer, so only the node the
+ * entries are meant for may consume them: the holder of the event's active
+ * lease. A powered-on box that no longer holds the event (checked in, taken
+ * over) must not pull and ack what the current holder is waiting for. A
+ * caller that names no node (a box older than the `x-oxygen-node-id`
+ * header) cannot be told apart: it is served while a lease is active, with
+ * one warning per process. Without an active lease nobody takes delivery.
+ */
+async function peerIsDeliveryTarget(
+  db: PrismaClient,
+  event: EventRef,
+  peerNodeId: string | null | undefined,
+): Promise<boolean> {
+  const lease = await getActiveLease(db, event.id);
+  if (!lease) return false;
+  if (!peerNodeId) {
+    if (!warnedNoPeerNodeId) {
+      warnedNoPeerNodeId = true;
+      console.warn(
+        `[events] a peer pulled "${event.nameId}" without a node id (older box): it is served as the holder "${lease.holderNodeId}"; upgrade it so a stale copy cannot consume the holder's entries.`,
+      );
+    }
+    return true;
+  }
+  return peerNodeId === lease.holderNodeId;
+}
+
 export const eventsRouter = router({
   /**
    * Journal ingestion sink. Not an `eventProcedure`: it authenticates itself.
@@ -542,6 +572,9 @@ export const eventsRouter = router({
   unshipped: peerProcedure
     .input(z.object({ limit: z.number().int().min(1).max(500).default(200) }))
     .query(async ({ ctx, input }) => {
+      if (!(await peerIsDeliveryTarget(ctx.db, ctx.event, ctx.peerNodeId))) {
+        return { entries: [], hasMore: false };
+      }
       return listUnshippedJournalEntries(ctx.db, ctx.event, input.limit);
     }),
 
@@ -549,6 +582,12 @@ export const eventsRouter = router({
   ackShipped: peerProcedure
     .input(z.object({ ids: z.array(z.string().uuid()).max(500) }))
     .mutation(async ({ ctx, input }) => {
+      if (!(await peerIsDeliveryTarget(ctx.db, ctx.event, ctx.peerNodeId))) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only the node that holds the event's lease takes delivery of its entries.",
+        });
+      }
       const marked = await markJournalShipped(ctx.db, ctx.event.id, input.ids);
       return { marked };
     }),

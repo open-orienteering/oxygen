@@ -234,6 +234,7 @@ export async function shipEventOnce(
   event: EventRef,
   peerId: string,
   transport: PeerTransport,
+  opts: { pull?: boolean } = {},
 ): Promise<ShipStats> {
   const stats: ShipStats = { pushed: 0, pulled: 0, errors: [] };
 
@@ -262,6 +263,10 @@ export async function shipEventOnce(
   }
 
   // ── Pull ──
+  // Only the lease holder pulls: the peer's delivery mark is one bit, so a
+  // copy that no longer holds the event must not consume the entries meant
+  // for the current holder.
+  if (opts.pull === false) return stats;
   let legacy = false;
   for (;;) {
     let page: { entries: JournalPage["entries"]; hasMore: boolean };
@@ -389,7 +394,8 @@ export async function shipAllOnce(
   for (const ev of events) {
     try {
       if (peer) await releaseIfTakenOver(db, ev, peer);
-      const stats = await shipEventOnce(db, ev, peerId, transport);
+      const holds = (await getActiveLease(db, ev.id))?.holderNodeId === nodeId();
+      const stats = await shipEventOnce(db, ev, peerId, transport, { pull: holds });
       if (stats.errors.length > 0) {
         console.error(
           `[shipper] ${ev.nameId}: ${stats.errors.length} entr(ies) failed to ship — stream blocked until resolved:`,
