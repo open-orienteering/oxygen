@@ -8,13 +8,15 @@
  * total order consistent across nodes with skewed wall clocks.
  *
  * The pure tick/fold logic lives in `@oxygen/shared/hlc.ts`; this module only
- * owns the process-wide mutable state. In-memory is sufficient: HLC physical
- * time is anchored to the wall clock, so after a restart the next tick is
- * already ≥ everything this node emitted before (barring a backwards wall
- * clock step, which the fold-on-receive path re-corrects on first contact).
+ * owns the process-wide mutable state. The clock is in memory, and a restart
+ * starts it at zero: the next tick is ≥ everything this node emitted before
+ * only while the wall clock has not stepped back, and entries ingested from
+ * a peer with a faster clock sit above it. `seedServerClock` therefore folds
+ * the journal's highest stamp in at startup (review SYNC-01), so a stamp
+ * minted after a restart never sorts behind an entry already journaled.
  */
 
-import { type Hlc, HLC_ZERO, tickHlc, receiveHlc } from "@oxygen/shared";
+import { type Hlc, HLC_ZERO, tickHlc, receiveHlc, decodeHlc } from "@oxygen/shared";
 
 let clock: Hlc = HLC_ZERO;
 
@@ -27,6 +29,15 @@ export function nextServerHlc(now: number = Date.now()): Hlc {
 /** Fold a received stamp into the node clock (`local = max(local, incoming)`). */
 export function foldServerHlc(incoming: Hlc): void {
   clock = receiveHlc(clock, incoming);
+}
+
+/**
+ * Fold the highest HLC already in this node's journal into the clock (call
+ * once at startup). `null` (an empty journal) changes nothing.
+ */
+export function seedServerClock(maxEncodedHlc: bigint | null): void {
+  if (maxEncodedHlc === null || maxEncodedHlc <= 0n) return;
+  foldServerHlc(decodeHlc(maxEncodedHlc));
 }
 
 /** Test-only: reset the process clock to zero. */

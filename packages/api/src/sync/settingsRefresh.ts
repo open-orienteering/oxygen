@@ -14,6 +14,7 @@
  * venue can run its own Eventor sync while online.
  */
 
+import { knownFields } from "./knownFields.js";
 import type { EventRef, PrismaClient } from "../db.js";
 import { getActiveLease, type LeasePeer } from "./lease.js";
 import { nodeId } from "./nodeIdentity.js";
@@ -48,7 +49,7 @@ export async function refreshCloudOwnedSettings(
 
   const row = await peer.exportSettings(event.nameId);
   const data = Object.fromEntries(
-    Object.entries(row).filter(
+    Object.entries(knownFields("event", row)).filter(
       ([k, v]) => !EXCLUDED_FIELDS.has(k) && v !== undefined,
     ),
   );

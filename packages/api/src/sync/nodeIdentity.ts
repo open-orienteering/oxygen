@@ -64,3 +64,10 @@ export function syncSettingsRefreshMs(): number {
 
 /** Request header carrying the shared secret on node-to-node calls. */
 export const SYNC_SECRET_HEADER = "x-oxygen-sync-secret";
+
+/**
+ * Request header carrying the calling node's `NODE_ID` on node-to-node calls,
+ * so the receiving node can tell a stale holder's delivery from a current one
+ * (review SYNC-08). Informational: it grants nothing.
+ */
+export const SYNC_NODE_ID_HEADER = "x-oxygen-node-id";

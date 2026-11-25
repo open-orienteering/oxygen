@@ -15,6 +15,7 @@ import type { PrismaClient, Prisma } from "./generated/prisma/client.js";
 import { prisma } from "./db.js";
 import { rebuildCourseLengths } from "./course-geometry.js";
 import { emitCourseUpserted } from "./referenceJournal.js";
+import { mayWriteEventData } from "./sync/lease.js";
 import type { WGS84Bounds } from "./map-projection.js";
 import { meridianStalenessFromDetection } from "./map-north.js";
 import { synchronizePositionedControlCoordinates } from "./event-crs.js";
@@ -64,6 +65,20 @@ async function documentStaleness(db: Db, documentHash: string | null): Promise<n
  * legs string follows the new scale.
  */
 async function refreshDerivedCourses(db: Db, eventId: bigint): Promise<void> {
+  // The map change itself stays cloud-owned and goes ahead; the course rows
+  // it would re-derive belong to the node that holds the lease (a venue box
+  // during a checkout), so the cloud neither writes nor journals them (the
+  // write guard, review D8). Nothing re-derives them later on its own: the
+  // box's map refresh (`mapRefresh.ts`) does not call `rebuildCourseLengths`,
+  // so a derived length stays stale until its course is next edited
+  // (docs/bugfixes/venue-shipping-and-lease.md, "Left out").
+  const verdict = await mayWriteEventData(db, eventId);
+  if (!verdict.ok) {
+    console.info(
+      `[event-map] event ${eventId}: derived course lengths not refreshed on this node (${verdict.reason}${verdict.holder ? ` "${verdict.holder}"` : ""}); the holder re-derives them.`,
+    );
+    return;
+  }
   const derived = await db.course.findMany({
     where: { eventId, removed: false, lengthSource: "derived" },
     select: { id: true },

@@ -190,7 +190,7 @@ leased-out event is unsupported (it is a pre-race operation in practice).
 ### Consequence: checkin is cheap
 
 Because non-journaled data is never written on the venue, **checkin is
-just a journal-watermark barrier** (all venue entries shipped and acked
+just a delivery barrier** (every venue journal entry shipped and acked
 before the cloud resumes writing). There is no snapshot-export step, no
 reconciliation, no diffing. See [The lease](#the-lease).
 
@@ -242,8 +242,8 @@ peer's shipper, the pull side of the shipper):
   server log) and ends the batch: the entries after it are in neither list.
   Several types are last-write-wins, so applying the later ones now and the
   failed one on a retry would flip their order. The sender keeps the rest
-  pending and sends them next round (the shipper advances its watermark
-  contiguously). The batch-stopping codes are `JOURNAL_BATCH_STOPPING_CODES`
+  pending and sends them next round (the shipper marks delivery over a
+  contiguous prefix). The batch-stopping codes are `JOURNAL_BATCH_STOPPING_CODES`
   in `@oxygen/shared` (`APPLY_FAILED`, `INVALID_PAYLOAD`,
   `ROW_IN_OTHER_EVENT`), read by the server and the station drain alike.
   Refusals decided before an entry is touched (`FORBIDDEN`,
@@ -295,35 +295,141 @@ early keeps the ordering honest.
 One row per checked-out event: `event_lease (event_id, holder_node_id,
 acquired_at, released_at, forced)`.
 
-- **`checkout`** — requires the venue to be fully shipped-up-to-date.
-  The initial transfer is a snapshot import of the event (rows copied
-  over, `seq` values preserved — explicit `seq` on insert is supported by
-  the `allocate_event_seq()` trigger) plus journal-from-there. From this
-  point the cloud rejects race-critical writes for the event. The
-  snapshot also carries the event's pinned map — its `map_files` row and
-  the source and document blobs by hash, fetched in slices through
-  `lease.exportBlob` and checked against their SHA-256 — so the box
-  serves `/api/map-documents/:hash` to its kiosk and stations
-  ([map-storage.md](../map-storage.md) §7.2).
+- **`checkout`** — run on the box. The initial transfer is a snapshot
+  import of the event (rows copied over, `seq` values preserved) plus
+  journal-from-there. From this point the cloud rejects race-critical writes
+  for the event. The snapshot also carries the event's pinned map — its
+  `map_files` row and the source and document blobs by hash, fetched in
+  slices through `lease.exportBlob` and checked against their SHA-256 — so
+  the box serves `/api/map-documents/:hash` to its kiosk and stations
+  ([map-storage.md](../map-storage.md) §7.2). Details below.
 - **`checkin`** — a barrier: all venue journal entries shipped and acked,
-  then the lease is released and the cloud resumes writing. Nothing else
-  to reconcile (see [ownership](#ownership-follows-the-journal)).
+  then the lease is released on both nodes and the cloud resumes writing.
+  Nothing else to reconcile (see [ownership](#ownership-follows-the-journal)).
+  Details below.
 - **`forceTakeover`** — explicit operator confirmation for the
-  venue-box-died case. Recovery point = last shipped watermark. A revived
-  box's un-shipped entries drain through `events.push` with conflicts
-  logged — a rare, loud path by design.
+  venue-box-died case, run on the node that wants control back. Recovery
+  point = the last entry the box delivered. A revived box notices the
+  takeover and stops writing (see [Takeover detection](#takeover-detection)).
 - **`status`** — powers the UI badge (lease holder, connection mode,
-  shipping lag).
+  shipping lag; the pending count is shown also when the box holds no
+  lease but still has undelivered entries).
+
+#### Checkout: what it refuses, and how it survives a restart
+
+Checkout replaces the box's copy of the event, so it refuses before it
+touches anything (message prefix = code, the way `PATCH_STALE` is):
+
+- **Who:** with login on, `event.manage` on the box's existing copy of the
+  event, or an instance admin when the box does not hold the event yet.
+- `CHECKOUT_LEASE_HELD` — this box still holds the lease: check in first.
+- `CHECKOUT_LOCAL_EVENT` — the event was created on this box and never
+  checked out from the cloud (no `journal_sync_state` row for the peer).
+- `CHECKOUT_UNSHIPPED` — journal entries of the box's copy are not on the
+  cloud. A final ship cycle runs first (a network error is tolerated), so a
+  healthy link leaves nothing behind.
+- `GRAPHIC_ID_CLASH` — a graphic id of the snapshot is held by another event
+  on the box ([map-storage.md](../map-storage.md) §7.2). Checked right after
+  the snapshot is exported, before any blob is fetched.
+
+The two data-loss refusals take `discardLocal: true` and the clash takes
+`replaceClashingGraphics: true`; the Venue panel asks the operator to
+confirm and re-calls with the flag (a discard is logged with its count).
+Nothing is written before every check passed.
+
+The sequence is restart-safe. The peer lease is taken inside the rollback
+scope, so any later failure releases it; if even that release fails the log
+names the remedy (retry the checkout — `acquire` is idempotent for the same
+holder — or force a takeover on the cloud). The sync-state row that scopes
+the shipper to the event and the local lease are written **in the import
+transaction**, so a crash leaves the whole checkout or none of it. The
+box's readout backups (`card_readout_backups`, the only copy of what a
+station's flash held) are carried over a re-checkout; tracks, routes and
+event permissions are not.
+
+**Snapshot consistency.** On `acquire` the cloud marks every journal entry
+it already holds as delivered (their effects are in the snapshot, so the box
+must not pull them), then reads the whole snapshot — tables, counters,
+journal head, maps, graphics — in one `REPEATABLE READ` transaction. An
+entry committed between the mark and the read stays unmarked: the box's
+first pull delivers it even when the snapshot already holds its effect, and
+applying it a second time is a no-op (`runner.registered` and
+`punch.recorded` skip a row they already have).
+
+#### Checkin, restart-safe
+
+While the barrier runs an in-memory marker (`sync/leaseState.ts`) makes the
+box refuse race writes for the event: a write landing after the count would
+never reach the cloud. Peer `release` is idempotent for the holder that
+already released (the first reply was lost), and a peer that no longer lists
+this box as holder (taken over, or the lease moved on) does not strand the
+box: every entry is delivered, so it releases locally, marked forced, and
+answers `peerAlreadyReleased`. A checkin on a box that already let go (it
+released itself after a takeover) ships what is left and answers
+`alreadyReleased`; it refuses while entries are still pending.
+
+#### Takeover detection
+
+A box that was taken over while it was dead or offline must not keep acting
+as the writer. On every shipper cycle, for each event where the box holds
+the local lease, it asks the cloud `lease.holder`. When the answer is another
+node, or nobody, the box releases its own lease (forced), logs an error, and
+**keeps shipping its backlog**. From then on `mayWriteEventData` refuses
+race writes on the box (below). A cloud that cannot be reached, or one older
+than `lease.holder`, changes nothing.
+
+On the cloud, peer calls carry the caller's `NODE_ID` (`x-oxygen-node-id`).
+When a node whose lease ended in a force takeover pushes entries later, the
+cloud still applies them (the journal is the record) but logs one
+`[lease] stale-holder entry …` warning per newly applied entry. It does
+**not** resolve conflicts: an old value from that backlog can overwrite a
+correction made on the cloud after the takeover (see the bugfix note's
+"Left out").
+
+#### Who may write an event's race and course data
+
+One guard answers it: `mayWriteEventData(db, eventId)` in `sync/lease.ts`.
+It is the guard behind `raceProcedure` (`assertRaceWritable`) and
+`isRaceWritable`, and **any background writer of race or course data must
+call it** rather than re-deriving the rule (a job that emits course
+entries asks before each chunk and skips, not throws, when it may not
+write). It refuses with:
+
+| Reason | When |
+|---|---|
+| `held-elsewhere` | another node holds the active lease |
+| `checking-in` | this process's checkin barrier is running for the event |
+| `checked-in` | on a **venue** box: the event has lease history but this box does not hold the active lease (checked in, or taken over) |
+
+The cloud with no lease, and any event without lease rows (a box-local
+event), stay writable ("no lease: the node you talk to is the writer").
+
+Background writers that call it today: the derived-course refresh after a
+map change on the cloud (`event-map.ts`, `refreshDerivedCourses`). While a
+venue box holds the lease it neither re-derives nor journals the course
+rows (info log, no error): the map change itself stays cloud-owned and goes
+ahead, and the holder re-derives lengths with its next course write. The
+other request-path course emitters (MC-36) are still review package 15.
+`events.push` with a user (a station draining its outbox) is refused for the
+whole request with `PRECONDITION_FAILED` when the answer is `checked-in` or
+`checking-in`, so the station keeps its outbox and drains to the cloud once
+repointed; it is still accepted when the lease is `held-elsewhere` (the
+sink must take entries on every node), and the node-secret path is never
+guarded.
 
 ### `seq` allocation during a lease
 
 Per-event `seq` values (the human-friendly URL ids) are minted by the
 `allocate_event_seq()` trigger from `event_seqs`. **The leaseholder is the
 only allocator while the lease is active.** The checkout snapshot carries
-the `event_seqs` counters to the venue; the follower (cloud) applies
-shipped entries with explicit `seq` values (the trigger honors supplied
-values), so it never re-allocates and collisions cannot occur. At checkin
-the counters travel back with the barrier.
+the `event_seqs` counters to the venue (merged with `GREATEST` into what
+the insert trigger already set); the follower (cloud) applies shipped
+entries with explicit `seq` values (the trigger honors supplied values), so
+it never re-allocates and collisions cannot occur. Counters do not travel
+back at checkin: `allocate_event_seq()` itself advances `event_seqs` past
+any explicit `seq` it sees, so after the shipped venue rows land the cloud's
+next create takes the next free number. The migration repaired counters that
+lagged behind their rows.
 
 ### Single-copy durability window
 
@@ -349,8 +455,38 @@ box dies. Mitigations, in order of importance:
 - **Node identity:** `NODE_ID` / `NODE_ROLE` (`cloud` | `venue`), peer
   URL, and a shared secret via env config (`SYNC_PEER_URL`,
   `SYNC_SHARED_SECRET`, `SYNC_INTERVAL_MS`).
-- **`events.since`** — paginated pull in canonical `(hlc, id)` order,
-  guarded by the shared secret (`peerProcedure`); stations never call it.
+- **Delivery mark.** `journal.pushed_at` is NULL until the entry has been
+  delivered to the other node; `journal.ingest_seq` is the local arrival
+  order. Shipping works on the mark, not on a position in the HLC order,
+  because an entry can reach a node late with an old HLC (a station outbox
+  draining after the clock moved on), and an HLC watermark skips it for
+  good. Entries a node ingested *from* its peer are created already marked,
+  so nothing is echoed back. The mark is one bit per entry, not per peer,
+  so only the **holder of the event's active lease** may consume the other
+  node's entries: `events.unshipped` serves, and `events.ackShipped`
+  accepts, only a caller whose `x-oxygen-node-id` is that holder (an empty
+  page, or `FORBIDDEN`, otherwise; with no active lease nobody is served),
+  and the box's `shipAllOnce` pulls only for events it holds the local
+  lease on. A powered-on copy that was checked in or taken over only pushes
+  its backlog. A caller that sends no node id is refused the same way
+  (`unshipped` and `ackShipped` are as new as the header; an older box
+  pulls through the read-only `events.since`), and a refused pull is warned
+  once per event and node. A peer's `events.push` marks its entries
+  delivered only when the pusher is the active holder (or nobody holds the
+  event): a stale box that drains its backlog to the cloud leaves them
+  unmarked, so the current holder pulls them.
+  The migration backfills the mark by one rule (see the SQL comment): an
+  entry received before the acquire time of the event's latest lease is
+  delivered, everything after it stays NULL and ships once (a redundant
+  push or pull is harmless, a wrong "delivered" mark loses entries); an
+  event without leases starts clean, a cloud whose leases are all released
+  is all delivered.
+- **`events.unshipped`** and **`events.ackShipped`** (shared secret,
+  `peerProcedure`; stations never call them) — the peer's next page of
+  entries it has not delivered, in arrival order, and the confirmation that
+  marks them. **`events.since`** (paginated pull in `(hlc, id)` order)
+  remains for a peer that predates them: the shipper falls back to it on
+  `NOT_FOUND` and logs one warning per process.
 - **`events.push`** accepts the same secret as the peer's credential: a node
   presenting `x-oxygen-sync-secret` needs no user (the cloud behind an
   invite-only proxy accepts the box's push even when its service account is
@@ -361,12 +497,17 @@ box dies. Mitigations, in order of importance:
   because the origin node already authorised the write. Without a secret the
   caller is a station and the capability table applies
   ([authentication.md](authentication.md#journal-push)).
-- **Shipper worker** (venue side): push local entries above the peer
-  watermark to the peer's `events.push`; pull cloud-originated entries
-  (e.g. ROC punches) via `events.since`; apply idempotently through the
-  same `ingestJournalEntries` path the push endpoint uses.
-  `journal_sync_state` stores per-peer `(hlc, id)` cursors for both
-  directions.
+- **Shipper worker** (venue side): push local unmarked entries, oldest
+  arrival first, to the peer's `events.push`, and mark the acked prefix;
+  pull cloud-originated entries (e.g. ROC punches) via `events.unshipped`,
+  apply them idempotently through the same `ingestJournalEntries` path the
+  push endpoint uses, then `ackShipped`. It ships only events that have a
+  `journal_sync_state` row for the peer (written by checkout), so an event
+  created on the box is never offered to the cloud. The `(hlc, id)` cursors
+  in `journal_sync_state` are legacy, used only against a peer without
+  `events.unshipped`. At startup the node clock is raised to the highest
+  journal HLC, so a restart cannot issue an entry that sorts behind what the
+  node already holds.
 - The **follower applies register entries verbatim** — the leaseholder
   already made every decision; the replica does not re-resolve conflicts.
   `runner.updated` replays its portable field patch through the same
@@ -374,15 +515,18 @@ box dies. Mitigations, in order of importance:
   conflict validation. Append-only types apply on any node via their
   dedupe keys (`punch.recorded` checks `(cardNo, controlCode, time)`
   before insert; `card.read` uses the ±60 s readout window).
-- Watermarks advance only after contiguous application: entries are
-  applied in HLC order per peer, so a watermark never skips past an
-  unapplied entry. A permanently failing entry therefore **blocks its
-  event's stream and logs loudly every cycle** — deliberate; quarantine
-  tooling arrives with the lease UI (Step 4).
-- Entries a node ingested from its peer are pushed back once as the
-  watermark passes them (no origin tracking); the peer acks them by id
-  without re-applying. One round of wasted bandwidth per entry, zero
-  correctness cost.
+- The mark advances only over a **contiguous prefix**: a page is walked in
+  order and stops at the first entry the peer did not ack, so a failed entry
+  is retried every cycle and nothing behind it is skipped. A permanently
+  failing entry therefore **blocks its event's stream and logs loudly every
+  cycle** — deliberate; quarantine tooling arrives with the lease UI
+  (Step 4). A page that marked nothing ends the loop.
+- **Version skew.** A row from the peer keeps only the columns this schema
+  has (`sync/knownFields.ts`, from the generated Prisma model): in the
+  checkout snapshot's tables and event row, the settings refresh and the map
+  refresh. The dropped names are logged once. The snapshot and `lease.holder`
+  carry the newest migration name; a checkout from a peer on another schema
+  warns and returns `peerSchema` / `localSchema`.
 
 ## Write routing summary
 
@@ -551,16 +695,16 @@ LAN node.
 
 ## Retention and compaction
 
-Two long-lived nodes with explicit watermarks make retention simple:
+Two long-lived nodes with explicit delivery marks make retention simple:
 
 | Store | Prune when |
 |---|---|
 | Station outbox | entry durably acked by its node (as today, 24h grace) |
-| Venue journal | below the cloud-ack watermark, after checkin |
+| Venue journal | entries marked delivered (`pushed_at`), after checkin |
 | Cloud journal | never during the event; archival policy after results are final (the journal is the audit log) |
 
 Deferred until after venue packaging lands; mechanically it is
-`DELETE … WHERE hlc < floor`.
+`DELETE … WHERE pushed_at IS NOT NULL AND hlc < floor`.
 
 ## Known traps
 

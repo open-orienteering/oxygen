@@ -1082,10 +1082,19 @@ model JournalEntry {
   clientTimestamp DateTime @map("client_timestamp") @db.Timestamptz(6)
   payload         Json
   receivedAt      DateTime @default(now()) @map("received_at") @db.Timestamptz(6)
+  /// Local arrival order (BIGSERIAL). The shipper walks unshipped rows in
+  /// this order; the HLC order is for applying, not for delivery.
+  ingestSeq       BigInt   @default(autoincrement()) @map("ingest_seq")
+  /// When the other node last acknowledged this entry (or it came from
+  /// there). NULL = not yet delivered. The partial index
+  /// `journal_unshipped_idx (event_id, ingest_seq) WHERE pushed_at IS NULL`
+  /// lives in SQL only, as the `event_lease` partial index does.
+  pushedAt        DateTime? @map("pushed_at") @db.Timestamptz(6)
 
   event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
 
   @@index([eventId, hlc])
+  @@index([hlc])
   @@index([eventId, clientTimestamp(sort: Desc)])
   @@index([eventId, type])
   @@map("journal")
@@ -1116,8 +1125,10 @@ model EventLease {
 
 /// Per-peer journal-shipping watermarks (pivot Step 3). One row per
 /// (peer, event); cursors are (hlc, id) pairs because encoded HLCs can tie
-/// across stations. A watermark only advances after contiguous application,
-/// so it never skips past an unshipped/unapplied entry.
+/// across stations. The pushed/pulled cursors are legacy: shipping now uses
+/// `journal.pushed_at` / `journal.ingest_seq`; the cursors are read only
+/// against a peer without `events.unshipped`. The row itself marks "this
+/// event is checked out against this peer" (it scopes `shipAllOnce`).
 model JournalSyncState {
   /// Peer identifier — the normalized SYNC_PEER_URL of the peer node.
   peerId  String @map("peer_id")

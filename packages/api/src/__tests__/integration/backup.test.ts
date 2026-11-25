@@ -27,6 +27,7 @@ import { runRematch } from "../../map-store/rematch.js";
 const FIXTURE = resolve(__dirname, "../../../../../e2e/test.ocd");
 const RESTORE_SCRIPT = resolve(__dirname, "../../../scripts/restore-map-blobs.sql");
 const LEGACY_RESTORE_SCRIPT = resolve(__dirname, "../../../scripts/restore-legacy-map-files.sql");
+const SEQS_RESTORE_SCRIPT = resolve(__dirname, "../../../scripts/restore-event-seqs.sql");
 const TRACKS_RESTORE_SCRIPT = resolve(__dirname, "../../../scripts/restore-map-gps-tracks.sql");
 const suffix = randomBytes(4).toString("hex");
 const sha256 = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
@@ -191,6 +192,39 @@ describe("per-event dump", () => {
 
   it("omits previews", () => {
     expect(splitBackupSections(dump).has("map_previews")).toBe(false);
+  });
+});
+
+describe("restore-event-seqs.sql", () => {
+  // The other sections restore first: their rows made the trigger create the
+  // counters, so the dump's counters merge instead of colliding.
+  it("merges the dump's counters with GREATEST, never lowers one, and is idempotent", async () => {
+    for (const [tableName, nextSeq] of [["runners", 50], ["classes", 3], ["teams", 9]] as const) {
+      await source.db.eventSeq.upsert({
+        where: { eventId_tableName: { eventId: source.eventId, tableName } },
+        create: { eventId: source.eventId, tableName, nextSeq },
+        update: { nextSeq },
+      });
+    }
+    const res = await server.inject({ method: "GET", url: `/api/backup/event?name=${source.nameId}` });
+    const csv = splitBackupSections(res.body).get("event_seqs")!;
+    const at = join(dir, "event-seqs");
+    mkdirSync(at);
+    writeFileSync(join(at, "event_seqs.csv"), csv);
+
+    // What the trigger made while the other sections restored.
+    await target.db.eventSeq.createMany({
+      data: [
+        { eventId: target.eventId, tableName: "runners", nextSeq: 60 },
+        { eventId: target.eventId, tableName: "classes", nextSeq: 2 },
+      ],
+    });
+    psqlRestore(at, target.eventId, SEQS_RESTORE_SCRIPT);
+    const read = async () =>
+      Object.fromEntries((await target.db.eventSeq.findMany({ where: { eventId: target.eventId } })).map((r) => [r.tableName, r.nextSeq]));
+    expect(await read()).toMatchObject({ runners: 60, classes: 3, teams: 9 });
+    psqlRestore(at, target.eventId, SEQS_RESTORE_SCRIPT);
+    expect(await read()).toMatchObject({ runners: 60, classes: 3, teams: 9 });
   });
 });
 

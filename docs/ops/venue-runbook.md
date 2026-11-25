@@ -79,6 +79,31 @@ background: [`system/offline-architecture.md`](../system/offline-architecture.md
    while it is online. A course object imported with **Import courses**
    on the box, or a map uploaded on the box, is replaced by the cloud's
    at the next refresh — do those on the cloud.
+   Checking out again over a copy the box already holds replaces it, so
+   the box asks first when that would lose something. The Venue panel
+   shows a confirmation, and **Continue** repeats the checkout with the
+   override:
+   - *Journal entries the cloud has not received* (`CHECKOUT_UNSHIPPED`):
+     the box first tries a last ship cycle, so this appears only when the
+     uplink is down or an entry is stuck. Continuing discards them. Prefer
+     fixing the uplink and trying again. Right after upgrading a box that
+     already holds an event, it re-pushes its journal once (the delivery
+     marks are backfilled conservatively), so this can fire on a checked-in
+     box until one ship cycle has run: wait a minute and try again.
+   - *The event was created on this box* (`CHECKOUT_LOCAL_EVENT`):
+     continuing replaces it with the cloud's copy.
+   - *A graphic of the cloud's copy has the same id as another event's
+     graphic on this box* (`GRAPHIC_ID_CLASH`): continuing replaces the
+     other event's graphic. Nothing was written before you confirmed.
+   - *This box still holds the lease* (`CHECKOUT_LEASE_HELD`): check in
+     first; there is no override.
+   A checkout that fails halfway frees the cloud's lease again; if the
+   box could not reach the cloud to do that, the log says so, and
+   pressing **Check out** again is safe (taking the lease twice as the
+   same box is a no-op). The box also keeps the card-readout backups it
+   holds over a re-checkout. With login on, a checkout needs the event's
+   **Event admin** (or an instance admin for an event the box does not
+   have yet).
 2. The shell shows the green **Venue mode** badge. From this moment the
    cloud rejects race-critical writes for this event with "checked out to
    `<node>`".
@@ -146,8 +171,19 @@ again; the box can be shut down.
 2. Point stations back at the cloud (clear the venue URL, or they fall
    back automatically within 15 s).
 3. Station outboxes retain unacked entries and drain them into the cloud.
-4. If the box revives, its unshipped journal entries drain through
-   `events.push` idempotently; conflicts are logged loudly on the cloud.
+4. If the box revives, it notices within one shipper cycle (about
+   `SYNC_INTERVAL_MS`, 5 s) that the cloud no longer lists it as holder,
+   releases its own lease and logs `the lease … was taken over`. From
+   then on the box refuses race writes for the event ("This copy was
+   checked in or taken over; race writes go to the cloud"), and a station
+   that still pushes to it keeps its outbox and drains to the cloud once
+   repointed. The box's unshipped journal entries drain into the cloud
+   idempotently, and the cloud logs `stale-holder entry …` for each one it
+   applies. These entries are applied as they are: if the same runner was
+   corrected on the cloud after the takeover, the older value from the box
+   can overwrite the correction, so check the stale-holder lines in the
+   cloud log against what was edited. Press **Check in** on the revived box
+   when its pending count is 0 to clear its panel.
 
 ## Troubleshooting
 
@@ -157,4 +193,7 @@ again; the box can be shut down.
 | "checked out to venue-…" on a station | That device is talking to the cloud — set the venue URL or use the LAN UI |
 | Permission prompt never appears (Chrome) | `chrome://flags` LNA not disabled; URL really is private-range or `.local` |
 | Stations can't reach the box at all | Firewall on the box (allow 3001/8080), station on the same LAN/VLAN |
-| `checkin` refuses | It's the barrier working: fix connectivity, watch the pending count drain, retry |
+| `checkin` refuses | It's the barrier working: fix connectivity, watch the pending count drain, retry. While it runs the box refuses race writes for the event, so do not retry in a loop during a race |
+| Race writes on the box answer "checked in or taken over" | The box no longer holds the lease (checked in, or the cloud took over). Check the event on the cloud; check out again if the box should be the writer |
+| Checkout says "journal entries not yet on the cloud" | Fix the uplink and retry; continue only if those entries do not matter |
+| Box log: `ignoring column(s) this schema does not have` / checkout result `peerSchema` ≠ `localSchema` | The box and cloud run different versions. It still works; update the older one before the event |

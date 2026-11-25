@@ -67,7 +67,7 @@ import {
 import { storeReadoutImpl, applyResultGuarded } from "./cardReadout.js";
 import { buildRunnerUpdateData, manualFlagsFor } from "./runner.js";
 import { appendJournal } from "../journalEmit.js";
-import { isRaceWritable } from "../sync/lease.js";
+import { getActiveLease, isRaceWritable, isStaleHolder, mayWriteEventData, writeRefusalError } from "../sync/lease.js";
 import { assignVariant } from "../variants.js";
 import { valueToRunnerStatus } from "../statusConvert.js";
 import { foldServerHlc } from "../serverClock.js";
@@ -154,6 +154,14 @@ export interface IngestOptions {
   knownGate?: JournalGate;
   /** Stamp this actor on every journal row instead of the wire `actorId`. */
   actorId?: string | null;
+  /**
+   * The entries come from the peer node (its push, or this node's own pull).
+   * The journal row of an entry ingested here is created already marked
+   * delivered (`pushed_at`), so it is never shipped back; an entry this node
+   * already holds is marked the same way. A follow-up this node journals in
+   * the same transaction is its own decision and stays unmarked.
+   */
+  fromPeer?: boolean;
 }
 
 /** Interactive-transaction limits: `reference.imported` can be hundreds of upserts. */
@@ -197,7 +205,11 @@ export async function ingestJournalEntries(
       if (existing?.eventId === event.id) {
         const refusal = opts.knownGate?.(entry);
         if (refusal) failed.push({ id: entry.id, ...refusal });
-        else synced.push(entry.id);
+        else {
+          // The peer has it, so it needs no delivery in this direction.
+          if (opts.fromPeer) await markJournalShipped(db, event.id, [entry.id]);
+          synced.push(entry.id);
+        }
         continue;
       }
       const refusal = opts.gate?.(entry);
@@ -236,6 +248,7 @@ export async function ingestJournalEntries(
             schemaVersion: entry.schemaVersion ?? 1,
             clientTimestamp: new Date(entry.timestamp),
             payload: entry.payload as never,
+            ...(opts.fromPeer ? { pushedAt: new Date() } : {}),
           },
         });
         const outcome = await applyEvent(tx, event.id, event.zeroTime, entry);
@@ -261,7 +274,10 @@ export async function ingestJournalEntries(
         .findUnique({ where: { id: entry.id }, select: { eventId: true } })
         .catch(() => null);
       if (landed) {
-        if (landed.eventId === event.id) synced.push(entry.id);
+        if (landed.eventId === event.id) {
+          if (opts.fromPeer) await markJournalShipped(db, event.id, [entry.id]).catch(() => {});
+          synced.push(entry.id);
+        }
         else failed.push({ id: entry.id, error: "ENTRY_IN_OTHER_EVENT" });
         continue;
       }
@@ -337,22 +353,97 @@ export async function listJournalEntriesSince(
   const page = hasMore ? rows.slice(0, limit) : rows;
   const last = page.at(-1);
   return {
-    entries: page.map((r) => ({
-      id: r.id,
-      type: r.type as WireJournalEntry["type"],
-      competitionId: event.nameId,
-      stationId: r.stationId,
-      timestamp: r.clientTimestamp.getTime(),
-      hlc: decodeHlc(r.hlc),
-      schemaVersion: r.schemaVersion,
-      actorId: r.actorId,
-      payload: (r.payload ?? {}) as Record<string, unknown>,
-    })),
+    entries: page.map((r) => toWireEntry(event, r)),
     nextCursor: last
       ? { hlc: last.hlc.toString(), id: last.id }
       : { ...cursor },
     hasMore,
   };
+}
+
+type JournalRow = Awaited<ReturnType<PrismaClient["journalEntry"]["findMany"]>>[number];
+
+function toWireEntry(event: EventRef, r: JournalRow): JournalPage["entries"][number] {
+  return {
+    id: r.id,
+    type: r.type as WireJournalEntry["type"],
+    competitionId: event.nameId,
+    stationId: r.stationId,
+    timestamp: r.clientTimestamp.getTime(),
+    hlc: decodeHlc(r.hlc),
+    schemaVersion: r.schemaVersion,
+    actorId: r.actorId,
+    payload: (r.payload ?? {}) as Record<string, unknown>,
+  };
+}
+
+/**
+ * The next page of entries not yet delivered to the other node
+ * (`pushed_at IS NULL`), in this node's arrival order (`ingest_seq`). Shipping
+ * is by delivery mark, not by HLC position: an entry that arrives late with
+ * an old HLC is still unmarked, so it still ships (review MC-02).
+ */
+export async function listUnshippedJournalEntries(
+  db: PrismaClient,
+  event: EventRef,
+  limit: number,
+): Promise<{ entries: JournalPage["entries"]; hasMore: boolean }> {
+  const rows = await db.journalEntry.findMany({
+    where: { eventId: event.id, pushedAt: null },
+    orderBy: { ingestSeq: "asc" },
+    take: limit + 1,
+  });
+  const hasMore = rows.length > limit;
+  const page = hasMore ? rows.slice(0, limit) : rows;
+  return { entries: page.map((r) => toWireEntry(event, r)), hasMore };
+}
+
+/** Mark entries as delivered to the other node. Idempotent; never un-marks. */
+export async function markJournalShipped(
+  db: PrismaClient,
+  eventId: bigint,
+  ids: string[],
+): Promise<number> {
+  if (ids.length === 0) return 0;
+  const res = await db.journalEntry.updateMany({
+    where: { eventId, id: { in: ids }, pushedAt: null },
+    data: { pushedAt: new Date() },
+  });
+  return res.count;
+}
+
+const warnedRefusals = new Set<string>();
+
+/** Test seam: warn again. */
+export function _resetDeliveryRefusalWarnings(): void {
+  warnedRefusals.clear();
+}
+
+/**
+ * The delivery mark is one bit per entry, not per peer, so only the node the
+ * entries are meant for may consume them: the holder of the event's active
+ * lease. A powered-on box that no longer holds the event (checked in, taken
+ * over) must not pull and ack what the current holder is waiting for. Fails
+ * closed: `unshipped` and `ackShipped` are as new as the `x-oxygen-node-id`
+ * header (an older box pulls through read-only `since`), so a caller that
+ * names no node, or not the holder, is refused. Without an active lease
+ * nobody takes delivery. A refusal is warned once per (event, node).
+ */
+async function peerIsDeliveryTarget(
+  db: PrismaClient,
+  event: EventRef,
+  peerNodeId: string | null | undefined,
+): Promise<boolean> {
+  const lease = await getActiveLease(db, event.id);
+  if (lease && peerNodeId && peerNodeId === lease.holderNodeId) return true;
+  const key = `${event.id}:${peerNodeId ?? ""}`;
+  if (!warnedRefusals.has(key)) {
+    warnedRefusals.add(key);
+    console.warn(
+      `[events] node "${peerNodeId ?? "(no node id)"}" pulled "${event.nameId}" but is not the lease holder (${lease ? `"${lease.holderNodeId}"` : "no active lease"}): refused.`,
+    );
+  }
+  return false;
 }
 
 export const eventsRouter = router({
@@ -383,9 +474,25 @@ export const eventsRouter = router({
       let actorId: string | null | undefined;
       let actor: string | null = null;
 
+      let staleHolder = false;
+      // Whether the entries of a peer push are marked delivered (`pushed_at`):
+      // only when the pusher is the active holder (the other node then has
+      // them) or nobody holds the event. A stale box's backlog stays unmarked
+      // so the current holder pulls it.
+      let markDelivered = false;
       if (ectx.syncSecret) {
         assertNodeSecret(ectx.syncSecret);
+        staleHolder = await isStaleHolder(ectx.db, ectx.event.id, ectx.peerNodeId);
+        const active = await getActiveLease(ectx.db, ectx.event.id);
+        markDelivered = !active || (!!ectx.peerNodeId && active.holderNodeId === ectx.peerNodeId);
       } else {
+        // A copy that handed the event back (or lost it to a takeover) is no
+        // longer where race data is written: refuse the whole request so the
+        // station keeps its outbox and drains to the cloud once repointed.
+        // `held-elsewhere` is not refused: the holder's copy is elsewhere,
+        // but this sink must still take entries (the shipper relays them).
+        const verdict = await mayWriteEventData(ectx.db, ectx.event.id);
+        if (!verdict.ok && verdict.reason !== "held-elsewhere") throw writeRefusalError(verdict);
         if (ectx.authEnabled && !ectx.user) {
           throw new TRPCError({ code: "UNAUTHORIZED", message: "Not authenticated" });
         }
@@ -406,24 +513,48 @@ export const eventsRouter = router({
         }
       }
 
+      // Entries a force-taken-over holder delivers late are applied (the
+      // journal is the record), but each one is named: a correction made
+      // after the takeover can be overwritten by its older value.
+      const alreadyHeld = staleHolder
+        ? new Set(
+            (
+              await ectx.db.journalEntry.findMany({
+                where: { id: { in: input.events.map((e) => e.id) } },
+                select: { id: true },
+              })
+            ).map((r) => r.id),
+          )
+        : null;
+
       const { synced, failed } = await runWithActor(actor, () =>
         ingestJournalEntries(ectx.db, ectx.event, input.events, {
           gate,
           knownGate: wrongCompetition,
           actorId,
+          // A push by the holder (or with no holder): the entries are already at the peer.
+          fromPeer: markDelivered ? true : undefined,
         }),
       );
+      if (alreadyHeld) {
+        const byId = new Map(input.events.map((e) => [e.id, e]));
+        for (const id of synced) {
+          if (alreadyHeld.has(id)) continue;
+          console.warn(
+            `[lease] stale-holder entry ${id} ${byId.get(id)?.type ?? "?"} applied after force takeover (from node "${ectx.peerNodeId}")`,
+          );
+        }
+      }
       // serverTimeMs lets the client detect a skewed local clock (see the
       // clock-skew banner). It is the cloud's wall clock at response time.
       return { synced, failed, serverTimeMs: Date.now() };
     }),
 
   /**
-   * Node-to-node paginated journal pull (pivot Step 3). The venue's shipper
-   * calls this on the cloud to fetch entries it doesn't have (e.g. ROC
-   * punches ingested at the cloud during a lease) — and vice versa when the
-   * cloud is configured to dial a venue. Guarded by the shared sync secret;
-   * stations never call this.
+   * Node-to-node paginated journal pull by `(hlc, id)` position. Read-only
+   * (marks nothing), kept for a venue box older than `unshipped`, which
+   * dials the cloud (the cloud never dials a venue). Guarded by the shared
+   * sync secret; stations never call this.
    */
   since: peerProcedure
     .input(
@@ -440,6 +571,35 @@ export const eventsRouter = router({
         { hlc: input.afterHlc, id: input.afterId },
         input.limit,
       );
+    }),
+
+  /**
+   * Node-to-node pull by delivery mark: the next page of entries this node
+   * has not yet delivered to its peer, in arrival order. The peer applies
+   * them, then confirms with `ackShipped`. Replaces `since` for a peer that
+   * knows it (`since` stays for an older box).
+   */
+  unshipped: peerProcedure
+    .input(z.object({ limit: z.number().int().min(1).max(500).default(200) }))
+    .query(async ({ ctx, input }) => {
+      if (!(await peerIsDeliveryTarget(ctx.db, ctx.event, ctx.peerNodeId))) {
+        return { entries: [], hasMore: false };
+      }
+      return listUnshippedJournalEntries(ctx.db, ctx.event, input.limit);
+    }),
+
+  /** The peer applied these entries: mark them delivered so `unshipped` stops offering them. */
+  ackShipped: peerProcedure
+    .input(z.object({ ids: z.array(z.string().uuid()).max(500) }))
+    .mutation(async ({ ctx, input }) => {
+      if (!(await peerIsDeliveryTarget(ctx.db, ctx.event, ctx.peerNodeId))) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only the node that holds the event's lease takes delivery of its entries.",
+        });
+      }
+      const marked = await markJournalShipped(ctx.db, ctx.event.id, input.ids);
+      return { marked };
     }),
 });
 

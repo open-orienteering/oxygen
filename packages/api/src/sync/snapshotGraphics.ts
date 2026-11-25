@@ -221,6 +221,9 @@ export async function fetchSnapshotGraphics(
     if (g.club || opts.heldEventId !== undefined) {
       const held = await db.graphic.findUnique({ where: { id: BigInt(g.id) }, select: { eventId: true, data: true } });
       if (holdsGraphic(g, held, opts.heldEventId)) continue;
+      // Another event on this box owns the id: the refresh skips it
+      // (`mirrorSnapshotGraphics`), so its bytes are not fetched either.
+      if (opts.heldEventId !== undefined && held?.eventId != null && held.eventId !== opts.heldEventId) continue;
     }
     out.bytes.set(g.id, await fetchGraphic(g, fetchSlice));
     out.fetchedBytes += g.sizeBytes;
@@ -228,12 +231,61 @@ export async function fetchSnapshotGraphics(
   return out;
 }
 
+export interface GraphicClash {
+  id: string;
+  eventId: bigint;
+  eventName: string;
+}
+
+/**
+ * Of the local rows holding a travelling graphic id, those owned by an event
+ * other than `localEventId` (the copy of the event being checked out, or
+ * null when this box holds none). A club-library row (`eventId` NULL) is not
+ * a clash: it is replaced as before (docs/map-storage.md §7.2, G18).
+ */
+export function selectGraphicClashes(
+  rows: ReadonlyArray<{ id: bigint; eventId: bigint | null; eventName: string }>,
+  localEventId: bigint | null,
+): GraphicClash[] {
+  return rows
+    .filter((r): r is typeof r & { eventId: bigint } => r.eventId !== null && r.eventId !== localEventId)
+    .map((r) => ({ id: r.id.toString(), eventId: r.eventId, eventName: r.eventName }));
+}
+
+/** The refusal for a graphic id another event on this box owns (decision D10). */
+export function graphicClashError(clashes: readonly GraphicClash[]): TRPCError {
+  const ids = clashes.map((c) => c.id).join(", ");
+  const names = [...new Set(clashes.map((c) => `"${c.eventName}"`))].join(", ");
+  return new TRPCError({
+    code: "CONFLICT",
+    message: `GRAPHIC_ID_CLASH: graphic ${ids} on this box belongs to ${names}; checking out would replace it`,
+  });
+}
+
+/** Local graphics under a travelling id that another event on this box owns. Reads only. */
+export async function findGraphicClashes(
+  db: Db,
+  graphics: readonly SnapshotGraphic[],
+  localEventId: bigint | null,
+): Promise<GraphicClash[]> {
+  if (graphics.length === 0) return [];
+  const rows = await db.graphic.findMany({
+    where: { id: { in: graphics.map((g) => BigInt(g.id)) }, eventId: { not: null } },
+    select: { id: true, eventId: true, event: { select: { name: true } } },
+  });
+  return selectGraphicClashes(
+    rows.map((r) => ({ id: r.id, eventId: r.eventId, eventName: r.event?.name ?? "" })),
+    localEventId,
+  );
+}
+
 /**
  * Insert the graphics inside the snapshot transaction, after the event
  * row, each under the cloud's id. A local row in a travelling id's place
  * (one a box uploaded itself, outside a checkout) is replaced: the box's
  * `graphics` mirror the cloud by id, since the layout JSON references them
- * by number. The id sequence is then moved past the largest id, so a later
+ * by number. A row owned by another event on the box is the exception: it
+ * refuses with `GRAPHIC_ID_CLASH` unless `replaceOtherEvents`. The id sequence is then moved past the largest id, so a later
  * local upload does not collide.
  */
 export async function importSnapshotGraphics(
@@ -241,7 +293,16 @@ export async function importSnapshotGraphics(
   eventId: bigint,
   graphics: readonly SnapshotGraphic[],
   blobs: SnapshotGraphicBlobs,
+  opts: { replaceOtherEvents?: boolean } = {},
 ): Promise<number> {
+  // A row another event owns is not replaced unasked (decision D10): the
+  // checkout asked first, so this is the defence, and the lease-time refresh,
+  // which has nobody to ask, never sets the flag.
+  if (!opts.replaceOtherEvents) {
+    const written = graphics.filter((g) => blobs.bytes.has(g.id));
+    const clashes = await findGraphicClashes(tx, written, eventId);
+    if (clashes.length > 0) throw graphicClashError(clashes);
+  }
   let written = 0;
   for (const g of graphics) {
     const bytes = blobs.bytes.get(g.id);
@@ -280,6 +341,9 @@ export interface GraphicMirrorCounts {
   deleted: number;
 }
 
+/** Clashes already warned about in this process, `eventId:graphicId`: a refresh runs every cycle. */
+const warnedClashes = new Set<string>();
+
 /**
  * Make a live event's graphics equal to the export's (the refresh during a
  * lease, docs/map-storage.md §7.2), inside its transaction: a graphic whose
@@ -295,9 +359,24 @@ export async function mirrorSnapshotGraphics(
   blobs: SnapshotGraphicBlobs,
 ): Promise<GraphicMirrorCounts> {
   const counts: GraphicMirrorCounts = { written: 0, updated: 0, deleted: 0 };
-  const fetched = graphics.filter((g) => blobs.bytes.has(g.id));
+  // A graphic id another event on this box owns is left alone (decision D10).
+  // The checkout asked the operator; a refresh has nobody to ask, and
+  // throwing would roll back the whole map refresh every cycle, so it skips
+  // that graphic, says so, and applies the rest.
+  const clashes = await findGraphicClashes(tx, graphics, eventId);
+  const clashing = new Set(clashes.map((c) => c.id));
+  for (const c of clashes) {
+    const key = `${eventId}:${c.id}`;
+    if (warnedClashes.has(key)) continue;
+    warnedClashes.add(key);
+    console.warn(
+      `[refresh] graphic clash: graphic ${c.id} on this box belongs to "${c.eventName}", not to this event; the cloud's copy was not applied (GRAPHIC_ID_CLASH). Check the graphic out explicitly to replace it.`,
+    );
+  }
+  const live = graphics.filter((g) => !clashing.has(g.id));
+  const fetched = live.filter((g) => blobs.bytes.has(g.id));
   if (fetched.length > 0) counts.written = await importSnapshotGraphics(tx, eventId, fetched, blobs);
-  for (const g of graphics) {
+  for (const g of live) {
     if (blobs.bytes.has(g.id)) continue;
     const held = await tx.graphic.findUnique({ where: { id: BigInt(g.id) }, select: { name: true, mime: true } });
     if (!held) {
