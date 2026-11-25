@@ -116,7 +116,18 @@ interface SICardReadout {
 }
 ```
 
-3. **`si:card-removed`** — Card physically removed from the reader.
+3. **`si:card-read-failed`** — A detected card could not be read completely: `{ cardNumber, cardType, reason: "timeout" | "removed" | "bad-block" | "parse", blocksReceived, blocksExpected }`. No `si:card-readout` follows, no ACK is sent (the station does not beep, which is what tells the runner at the reader that the card was not taken) and nothing reaches the server. The hub adds `readerId`.
+4. **`si:card-removed`** — Card physically removed from the reader. After a read that was still open, `si:card-read-failed` (reason `removed`) comes first.
+
+**How the serial reader reads a card** (`webserial.ts`, SI-04/05/13):
+
+- A card is read in `BLOCKS_TO_READ[type]` blocks: SI5 1 (`0xB1`, frame of 130 bytes: station code + 128), SI8/SI9/pCard always 2, large cards 4 + the punch blocks the counter calls for (up to 8). The old "block 0 is enough up to 24 punches" shortcut is gone: the punch slots of an SI8 start at image byte 136, in block 1.
+- A frame is used only when its CRC is valid. A block must be 131 bytes (`0xEF`) with `data[2]` equal to the block asked for. A damaged or wrong block, or one that does not arrive within 2 s, is asked for once more; the second failure of the same block fails the read. A repeat of a block already taken is ignored.
+- The card is parsed only when every block arrived and the parse is not null (a tCard, series 6, is not decoded and fails as `parse`). Only then is the ACK sent and `si:card-readout` emitted.
+- A fatal stream error (reader unplugged) fails the open read, rejects the pending command, releases the port and leaves the status `error`; the port can be attached again when the browser reports it (`navigator.serial` `connect` event). A recoverable stream error goes back to `reading`.
+- The Reader BT sends the same event when it gives up on a card (it already sent Feedback "error").
+
+Card memory layouts and the blank-slot rule are in [`docs/si-protocol/card-layouts.md`](../si-protocol/card-layouts.md).
 
 Supported card types: SI5, SI6, SI8, SI9, SI10, SI11, SIAC, pCard, tCard.
 
@@ -664,6 +675,7 @@ Channel name: `oxygen-kiosk-{competitionNameId}` — scoped to a specific compet
 |---------|-----------|------|---------|
 | `card-reading` | Admin → Kiosk | Card physically detected | `{ cardNumber }` |
 | `card-readout` | Admin → Kiosk | Card fully read, action determined | `{ card: { action, runnerName, status, runningTime, ... } }` |
+| `card-read-failed` | Admin → Kiosk | The reader could not read the card completely | `{ cardNumber }` |
 | `card-removed` | Admin → Kiosk | Card removed from reader | — |
 | `registration-state` | Admin → Kiosk | Form data changed (heartbeat, every 2s) | `{ form: { name, className, ... }, ready }` |
 | `registration-complete` | Admin → Kiosk | Registration submitted successfully | `{ runner: { name, className, startTime, ... } }` |
@@ -704,11 +716,17 @@ Channel name: `oxygen-kiosk-{competitionNameId}` — scoped to a specific compet
 
 Registration goes directly to `registration-waiting` (no `card-done` transition), since the admin needs to fill the form.
 
+`card-read-failed` takes `reading` (or `idle`) to `read-failed`, which returns to `idle` after 8 seconds (or at the next `card-reading`). It never replaces a result or a registration screen, and it plays no beep. In standalone mode the kiosk reacts to `lastReadFailure` from DeviceManager instead of the message.
+
 ### 7d. Kiosk Screens
 
 **Idle** — Competition name, animated SI card slot, "Insert Card" prompt, live clock.
 
 **Reading** — Animated spinner, "Do Not Remove Card" warning, card number display.
+
+**Read failed** — Red cross, "Card not read", "Insert your card again and wait for the beep." (sv: "Brickan lästes inte", "Sätt i brickan igen och vänta på pipet."), card number. The operator tab shows a red, auto-dismissing banner "Card {{number}} was not read: insert it again" (`card-read-failed-banner`); there is no Recent Cards row.
+
+**Reader disconnected** — On a standalone kiosk whose USB reader is gone (aggregate status `error`) a full-width red bar "Reader disconnected" (`kiosk-reader-disconnected`) shows above the content.
 
 **Card Done** — Success checkmark animation, 2-second transition to result screen.
 
@@ -960,13 +978,15 @@ Last-line-of-defence when Oxygen itself is broken (server bug, hardware died, et
 4. **Review** on `/:nameId/backup-punches` → "Card readouts" tab. Each row shows: cardNo, cardType, runner (if registered), punch count, start/finish, match-status badge. Match-statuses are: `pushed` (already replayed), `pending` (ready to push), `no_runner` (cardNo not registered).
 5. **Push** rows individually. Push calls `pushReadoutBackup` which reuses `storeReadoutImpl` — the same core that powers a live `storeReadout`. The runner gets the same card upsert, runner link, result computation (written with the guards of §3a-guard in the same transaction, `apply` in the response) and Google Sheets webhook as if the readout had just happened live. A held or protected row shows its `apply.outcome` and nothing is written for it. Idempotent: re-pushing the same row returns the existing `pushedReadoutId` without doing the work again.
 
+**Read failures and clearing (SI-06):** the walk fetches every page and checks its echoed address and length; a page that cannot be fetched after four attempts throws `BackupReadIncompleteError`. The panel then imports nothing, clears nothing and shows "Backup read incomplete at 0x…; nothing was cleared" (also in auto mode, which marks the station as seen so it does not loop). "Clear after read" runs strictly after a complete read **and**, when there are records, a successful import; a failed import leaves the station as it was. Slots the parser could not decode (for example a tCard) are logged and skipped; they are not reported to the panel yet, so check the imported count against the station's before relying on the clear (follow-up in [si-card-protocol-followups](../bugfixes/si-card-protocol-followups.md)). Page data that does not look like an SI5 image (punch pointer above 37, series above 4) is skipped instead of being filed as a card.
+
 **Storage shape:**
 
 `card_readout_backups` is a staging table — not the same as the live `card_readouts`. Each row carries:
 
 - `station_serial`, `slot_address` — where in flash the slot was found (debug)
 - `card_no`, `card_type`, `punches`, `start_time`, `finish_time`, `check_time`, `clear_time`, `owner_data` — the parsed card readout, in the same shape `storeReadout` accepts
-- `punches_hash` — `sha256(cardNo + sorted-by-time controlCode:time list)`, the dedup key
+- `punches_hash` — `sha256(cardNo + sorted-by-time controlCode:time list)`, the dedup key (the list is sorted only for the hash, so equal reads hash equally; matching uses the card's own order, §4b)
 - `original_read_at` — populated from the 4-byte slot header if/when that decodes; currently NULL
 - `imported_at`, `pushed_at`, `pushed_readout_id` — lifecycle markers
 - `raw_bytes` — original slot bytes, kept by default for forensics
