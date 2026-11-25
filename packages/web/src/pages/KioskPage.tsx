@@ -32,6 +32,7 @@ import { SiCardAnimation } from "../components/SiCardAnimation";
 import { useStationSync } from "../hooks/useStationSync";
 import { useEventQueue } from "../hooks/useEventQueue";
 import { KioskAccessGate } from "../components/KioskAccessGate";
+import { shouldShowStandaloneReadFailure } from "../lib/read-failure";
 
 // Registration-waiting watchdog timeout. E2E hook: tests override via
 // localStorage (set in an init script, i.e. before this module loads) so
@@ -373,11 +374,13 @@ function KioskPageBody() {
     if (!settings.standalone || !lastReadFailure) return;
     if (lastReadFailure.seq === lastFailureSeqRef.current) return;
     lastFailureSeqRef.current = lastReadFailure.seq;
-    if (screenRef.current.mode === "reading" || screenRef.current.mode === "idle") {
+    // lastDetectedCardNo is the committed detection of the same render, so a
+    // detection of another card in the same tick wins over the failure.
+    if (shouldShowStandaloneReadFailure(lastReadFailure, lastDetectedCardNo, screenRef.current.mode)) {
       setScreen({ mode: "read-failed", cardNumber: lastReadFailure.cardNumber });
       scheduleReset(READ_FAILED_SECONDS);
     }
-  }, [lastReadFailure, settings.standalone, scheduleReset]);
+  }, [lastReadFailure, lastDetectedCardNo, settings.standalone, scheduleReset]);
 
   // ── Standalone mode: react to DeviceManager card events ───
 

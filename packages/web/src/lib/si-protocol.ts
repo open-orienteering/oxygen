@@ -1897,6 +1897,12 @@ export function parseReadoutBackupBufferDetailed(
       off += STEP;
     }
   }
+  // A partial tail (buffer length not a multiple of the step) is never
+  // walked above; anything but erased flash (0xEE) in it is an undecoded slot.
+  if (off < buf.length && !isEmptyBackupChunk(buf.subarray(off))) {
+    siLog(`ReadoutBackup @0x${(baseAddr + off).toString(16)}: non-empty partial tail, skipping`);
+    skip(off, buf.length - off, "overrun");
+  }
   return { records, skipped };
 }
 

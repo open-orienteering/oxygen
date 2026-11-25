@@ -229,5 +229,7 @@
     "save": "Spara"
   },
   "backupReadIncomplete": "Backupläsningen blev ofullständig vid 0x{{address}}; ingenting rensades. Anslut stationen igen och läs på nytt.",
-  "backupSlotsSkipped": "{{count}} plats(er) på stationen kunde inte läsas (vid {{addresses}}); ingenting rensades. Behåll stationen och be om hjälp."
+  "backupSlotsSkipped": "{{count}} plats(er) på stationen kunde inte läsas (vid {{addresses}}); ingenting rensades. Behåll stationen och be om hjälp.",
+  "clearSkippedConfirm": "Den senaste avläsningen lämnade {{count}} plats(er) på stationen inte avkodade. Rensning förstör den enda kopian. Rensa ändå?",
+  "clearAnyway": "Rensa ändå"
 }

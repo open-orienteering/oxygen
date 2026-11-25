@@ -1541,6 +1541,10 @@ function ReadoutPanel({
   const [autoMode, setAutoMode] = useState(false);
   const [autoPowerOff, setAutoPowerOff] = useState(false);
   const [autoClear, setAutoClear] = useState(false);
+  // Slots the last read could not decode. Manual "Clear memory" asks first
+  // while this is above zero: the clear would destroy the only copy.
+  const [lastSkippedCount, setLastSkippedCount] = useState(0);
+  const [confirmClear, setConfirmClear] = useState(false);
 
   // Restore direct mode on unmount (navigation away, panel toggle, etc.)
   useEffect(() => {
@@ -1680,10 +1684,16 @@ function ReadoutPanel({
       return;
     }
 
+    const skippedCount = flow.skippedSlots.length;
+    setLastSkippedCount(skippedCount);
+    setConfirmClear(false);
     if (beep) {
-      await reader.beep(1);
+      // Three beeps instead of the success beep when slots were not decoded.
+      await reader.beep(skippedCount > 0 ? 3 : 1);
     }
-    if (autoPowerOff) {
+    // A station that was read with undecoded slots stays on so the operator
+    // sees the warning and the card data is not lost to a power cycle.
+    if (autoPowerOff && skippedCount === 0) {
       try {
         await reader.powerOffStation();
         poweredOff = true;
@@ -1693,7 +1703,6 @@ function ReadoutPanel({
     }
     lastReadSerial.current = stationData.serialNo;
 
-    const skippedCount = flow.skippedSlots.length;
     setResults((prev) => [{
       code,
       punchCount: flow.imported.punchCount,
@@ -1797,12 +1806,18 @@ function ReadoutPanel({
     };
   }, [autoMode, connected, getReaderConnection, readStation]);
 
-  const handleClearMemory = async () => {
+  const handleClearMemory = async (confirmed = false) => {
+    if (lastSkippedCount > 0 && !confirmed) {
+      setConfirmClear(true);
+      return;
+    }
+    setConfirmClear(false);
     try {
       const reader = getReaderConnection();
       setBusy(true);
       setError(null);
       await reader.clearBackupMemory();
+      setLastSkippedCount(0);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Clear failed");
     } finally {
@@ -1863,7 +1878,7 @@ function ReadoutPanel({
                 {busy ? t("reading") : t("readLocalMemory")}
               </button>
               <button
-                onClick={handleClearMemory}
+                onClick={() => handleClearMemory()}
                 disabled={busy || autoMode}
                 className="px-3 py-1.5 text-sm bg-orange-600 text-white rounded-lg hover:bg-orange-700 disabled:opacity-50 cursor-pointer"
               >
@@ -1932,17 +1947,37 @@ function ReadoutPanel({
         <div className="text-sm text-red-600 bg-red-50 px-3 py-2 rounded-lg mb-3">{error}</div>
       )}
 
+      {confirmClear && (
+        <div role="alertdialog" className="text-sm text-amber-900 bg-amber-50 border border-amber-300 px-3 py-2 rounded-lg mb-3">
+          <p className="mb-2">{t("clearSkippedConfirm", { count: lastSkippedCount })}</p>
+          <div className="flex gap-2">
+            <button
+              onClick={() => handleClearMemory(true)}
+              className="px-3 py-1 text-sm bg-orange-600 text-white rounded-lg hover:bg-orange-700 cursor-pointer"
+            >
+              {t("clearAnyway")}
+            </button>
+            <button
+              onClick={() => setConfirmClear(false)}
+              className="px-3 py-1 text-sm bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300 cursor-pointer"
+            >
+              {t("cancel")}
+            </button>
+          </div>
+        </div>
+      )}
+
       {results.length > 0 && (
         <div className="space-y-1.5 max-h-48 overflow-y-auto">
           {results.map((r, i) => (
             <div
               key={i}
               className={`flex items-center justify-between px-3 py-2 rounded-lg text-sm ${
-                r.success ? "bg-white" : "bg-red-50"
+                !r.success ? "bg-red-50" : r.warning ? "bg-amber-50" : "bg-white"
               }`}
             >
               <div className="flex items-center gap-2">
-                <span className={`w-2 h-2 rounded-full ${r.success ? "bg-green-500" : "bg-red-500"}`} />
+                <span className={`w-2 h-2 rounded-full ${!r.success ? "bg-red-500" : r.warning ? "bg-amber-500" : "bg-green-500"}`} />
                 {r.code > 0 && <span className="font-mono font-bold">{r.code}</span>}
                 {r.success ? (
                   r.code === 0 && r.cleared ? (

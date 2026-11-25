@@ -229,5 +229,7 @@
     "save": "Save"
   },
   "backupReadIncomplete": "Backup read incomplete at 0x{{address}}; nothing was cleared. Reconnect the station and read again.",
-  "backupSlotsSkipped": "{{count}} slot(s) on the station could not be read (at {{addresses}}); nothing was cleared. Keep the station and ask for help."
+  "backupSlotsSkipped": "{{count}} slot(s) on the station could not be read (at {{addresses}}); nothing was cleared. Keep the station and ask for help.",
+  "clearSkippedConfirm": "The last read left {{count}} slot(s) on the station undecoded. Clearing the memory destroys the only copy of them. Clear anyway?",
+  "clearAnyway": "Clear anyway"
 }

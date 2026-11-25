@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { runBackupFlow } from "../backup-readout";
 import { BackupReadIncompleteError, type BackupResult } from "../webserial";
-import { failureConcernsCurrentDetection } from "../read-failure";
+import { failureConcernsCurrentDetection, shouldShowStandaloneReadFailure } from "../read-failure";
 
 const readoutBackup = (skipped: number): BackupResult => ({
   mode: "readout",
@@ -95,5 +95,27 @@ describe("failureConcernsCurrentDetection", () => {
   });
   it("another reader: does not", () => {
     expect(failureConcernsCurrentDetection("b", "a")).toBe(false);
+  });
+});
+
+describe("shouldShowStandaloneReadFailure (standalone kiosk wiring)", () => {
+  const own = { cardNumber: 1, concernsCurrentDetection: true };
+  it("shows the failure of the detected card on a reading screen", () => {
+    expect(shouldShowStandaloneReadFailure(own, null, "reading")).toBe(true);
+    expect(shouldShowStandaloneReadFailure(own, 1, "reading")).toBe(true);
+    expect(shouldShowStandaloneReadFailure(own, null, "idle")).toBe(true);
+  });
+  it("ignores a failure on another reader while card B is being read", () => {
+    const other = { cardNumber: 1, concernsCurrentDetection: false };
+    expect(shouldShowStandaloneReadFailure(other, 2, "reading")).toBe(false);
+    expect(shouldShowStandaloneReadFailure(other, null, "reading")).toBe(false);
+  });
+  it("ignores failed:A when detected:B arrived in the same tick (stale screen)", () => {
+    // screenRef still says "reading A"/"idle", but card B is detected now.
+    expect(shouldShowStandaloneReadFailure(own, 2, "reading")).toBe(false);
+    expect(shouldShowStandaloneReadFailure(own, 2, "idle")).toBe(false);
+  });
+  it("does not replace a result screen", () => {
+    expect(shouldShowStandaloneReadFailure(own, null, "readout")).toBe(false);
   });
 });

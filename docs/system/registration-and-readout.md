@@ -978,4 +978,33 @@ Last-line-of-defence when Oxygen itself is broken (server bug, hardware died, et
 4. **Review** on `/:nameId/backup-punches` → "Card readouts" tab. Each row shows: cardNo, cardType, runner (if registered), punch count, start/finish, match-status badge. Match-statuses are: `pushed` (already replayed), `pending` (ready to push), `no_runner` (cardNo not registered).
 5. **Push** rows individually. Push calls `pushReadoutBackup` which reuses `storeReadoutImpl` — the same core that powers a live `storeReadout`. The runner gets the same card upsert, runner link, result computation (written with the guards of §3a-guard in the same transaction, `apply` in the response) and Google Sheets webhook as if the readout had just happened live. A held or protected row shows its `apply.outcome` and nothing is written for it. Idempotent: re-pushing the same row returns the existing `pushedReadoutId` without doing the work again.
 
-**Read failures and clearing (SI-06):** the walk fetches every page and checks its echoed address and length; a page that cannot be fetched after four attempts throws `BackupReadIncompleteError`. The panel then imports nothing, clears nothing and shows "Backup read incomplete at 0x…; nothing was cleared" (also in auto mode, which marks the station as seen so it does not loop). "Clear after read" runs strictly after a complete read **and**, when there are records, a successful import; a failed import leaves the station as it was. Slots the parser could not decode (for example a tCard, or an SI8+ slot whose parser returns null) are not dropped silently: `parseReadoutBackupBufferDetailed` returns them with address and raw bytes, `BackupResult.skippedSlots` carries them to the panel, and while any exists the panel does **not** clear the station and shows a warning ("N slot(s) on the station could not be read (at 0x…); nothing was cleared"). The raw bytes are written to the console log; they are not uploaded, because a row with no punches would be promotable as an empty readout (see the follow-ups). The decision itself (read, import, clear) is `runBackupFlow` in `lib/backup-readout.ts`.  does **not** clear the station and shows a warning ("N slot(s) on the station could not be read (at 0x…); nothing was cleared"). The raw bytes are written to the console log; they are not uploaded, because a row with no punches would be promotable as an empty readout (see the follow-ups). The decision itself (read, import, clear) is `runBackupFlow` in `lib/backup-readout.ts`. 
+**Read failures and clearing (SI-06):** the walk fetches every page and checks its echoed address and length; a page that cannot be fetched after four attempts throws `BackupReadIncompleteError`. The panel then imports nothing, clears nothing and shows "Backup read incomplete at 0x…; nothing was cleared" (also in auto mode, which marks the station as seen so it does not loop). "Clear after read" runs strictly after a complete read **and**, when there are records, a successful import; a failed import leaves the station as it was. Slots the parser could not decode (for example a tCard, or an SI8+ slot whose parser returns null) are not dropped silently: `parseReadoutBackupBufferDetailed` returns them with address and raw bytes, `BackupResult.skippedSlots` carries them to the panel, and while any exists the panel does **not** clear the station and shows a warning ("N slot(s) on the station could not be read (at 0x…); nothing was cleared"). The raw bytes are written to the console log; they are not uploaded, because a row with no punches would be promotable as an empty readout (see the follow-ups). The decision itself (read, import, clear) is `runBackupFlow` in `lib/backup-readout.ts`.
+
+**Storage shape:**
+
+`card_readout_backups` is a staging table — not the same as the live `card_readouts`. Each row carries:
+
+- `station_serial`, `slot_address` — where in flash the slot was found (debug)
+- `card_no`, `card_type`, `punches`, `start_time`, `finish_time`, `check_time`, `clear_time`, `owner_data` — the parsed card readout, in the same shape `storeReadout` accepts
+- `punches_hash` — `sha256(cardNo + sorted-by-time controlCode:time list)`, the dedup key (the list is sorted only for the hash, so equal reads hash equally; matching uses the card's own order, §4b)
+- `original_read_at` — populated from the 4-byte slot header if/when that decodes; currently NULL
+- `imported_at`, `pushed_at`, `pushed_readout_id` — lifecycle markers
+- `raw_bytes` — original slot bytes, kept by default for forensics
+
+The `@@unique([eventId, punchesHash])` constraint means re-imports of the same flash or imports from multiple stations that happen to share a card-readout are deduped silently. Operators do not need to be careful about double-importing.
+
+**Why a separate table** (vs reusing `card_readouts` with a flag): backup readouts have different lifecycle states (imported / reviewed / pushed) and bigger metadata (raw bytes, slot identity). Keeping them separate keeps the live readout path free of staging states. Cleanup is also a one-liner: `DELETE FROM card_readout_backups WHERE event_id = X`.
+
+**Wire-format details** (slot byte layouts, marker bytes, slot sizes per card type, paging) are in [`docs/si-protocol/readout-backup-format.md`](../si-protocol/readout-backup-format.md), with the reference pcap + Config+ ground-truth file checked in alongside.
+
+**Out of scope** (intentionally — these belong to a separate larger rewrite):
+- Programming a station's operating-mode byte from Oxygen (writing `0x05` to SYS_VAL `0x71`). Operators continue to use Config+ to set a station as readout.
+- Untangling `ControlStatus` (the enum currently conflates *course role* like `ok`/`bad`/`multiple` with *physical operating mode* like `start`/`finish`/`check`/`clear`). Readout mode isn't represented at all today; that's part of the bigger cleanup.
+
+**Key files:**
+- `packages/web/src/lib/si-protocol.ts` — `parseReadoutBackupBuffer()`, `parseReadoutBackupBufferDetailed()` (also returns the skipped slots), `isReadoutMode()`
+- `packages/web/src/lib/backup-readout.ts` — `runBackupFlow()`, the read-import-clear decision
+- `packages/web/src/lib/webserial.ts` — `readBackupMemory()` (mode-aware)
+- `packages/api/src/routers/cardReadout.ts` — `importReadoutBackups`, `listReadoutBackups`, `pushReadoutBackup`, plus the extracted `storeReadoutImpl` helper
+- `packages/web/src/pages/ControlsPage.tsx` → `ReadoutPanel` — mode-aware import path
+- `packages/web/src/pages/BackupPunchesPage.tsx` — "Card readouts" tab

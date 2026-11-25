@@ -137,7 +137,14 @@ interface DeviceManagerState {
    * be read completely. `seq` increments per failure so the same card failing
    * twice is two events. Null until the first failure.
    */
-  lastReadFailure: { seq: number; cardNumber: number; reason: string } | null;
+  lastReadFailure: {
+    seq: number;
+    cardNumber: number;
+    reason: string;
+    readerId?: string;
+    /** False when another reader than the current detection's failed. */
+    concernsCurrentDetection: boolean;
+  } | null;
   /**
    * The USB SI station used for station programming operations. With several
    * USB stations this is the first one; with none, an unconnected instance
@@ -836,15 +843,18 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
       };
       // Not a read card: no Recent Cards row, nothing sent to the server. The
       // operator banner and the kiosk tell the runner to insert the card again.
+      // With several readers, a failure on another reader than the one that
+      // reported the current detection must not reset that detection or turn
+      // the kiosk's "reading" screen into an error for the wrong card.
+      const concerns = failureConcernsCurrentDetection(failure.readerId, conn.lastDetectionReaderId);
       setLastReadFailure({
         seq: ++readFailureSeqRef.current,
         cardNumber: failure.cardNumber,
         reason: failure.reason,
+        readerId: failure.readerId,
+        concernsCurrentDetection: concerns,
       });
-      // With several readers, a failure on another reader than the one that
-      // reported the current detection must not reset that detection or turn
-      // the kiosk's "reading" screen into an error for the wrong card.
-      if (!failureConcernsCurrentDetection(failure.readerId, conn.lastDetectionReaderId)) {
+      if (!concerns) {
         return;
       }
       setLastDetectedCardNo(null);

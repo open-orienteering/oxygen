@@ -711,6 +711,28 @@ describe("readout-station backup walk", () => {
     expect(numbersOf(result.records as never)).toEqual(ALL_SEVEN);
   });
 
+  it("a slot that cannot be decoded (tCard) is returned on skippedSlots, not dropped", async () => {
+    const h = await makeReader(
+      serveBackup({
+        page: (addr) => {
+          if (addr !== 0x1280) return undefined;
+          const pg = flash(addr, 0x80);
+          pg[24] = 0x06; pg[25] = 0x5d; pg[26] = 0xc3; pg[27] = 0x40; // tCard range
+          return buildCommand(
+            CMD.GET_BACKUP,
+            [0x00, 0x0f, (addr >> 16) & 0xff, (addr >> 8) & 0xff, addr & 0xff, ...pg],
+            true,
+          );
+        },
+      }),
+    );
+    const result = await finish(h.conn.readBackupMemory(readoutStationSysVal(BACKUP_END)));
+    if (result.mode !== "readout") throw new Error("expected readout mode");
+    expect(result.skippedSlots).toHaveLength(1);
+    expect(result.skippedSlots[0].slotAddress).toBe(0x1280);
+    expect(numbersOf(result.records as never)).not.toContain(2220164);
+  });
+
   it("a reply of the wrong length is retried, then the page is accepted", async () => {
     const h = await makeReader(
       serveBackup({
@@ -792,6 +814,32 @@ describe("serial stream errors and reconnect", () => {
     h.port.push(det8(2220164, 0x02));
     await settle();
     expect(h.readouts).toHaveLength(1);
+  });
+
+  it("a late close of the dropped port does not null a port attached meanwhile", async () => {
+    const h = await makeReader((p) => serveCard(p, SI8_2220164()));
+    // The first close() of the dropped port hangs until released.
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const origClose = h.port.close.bind(h.port);
+    let closes = 0;
+    h.port.close = async () => {
+      if (closes++ === 0) await gate;
+      await origClose();
+    };
+    h.port.errorFatal();
+    await settle();
+    // The read loop is now waiting in port.close(); a new port is attached.
+    const second = new FakeSerialPort();
+    serveCard(second, SI8_2220164());
+    const attached = h.conn.attach(second);
+    await settle();
+    await attached;
+    expect(h.conn.holdsPort(second)).toBe(true);
+    release();
+    await settle();
+    expect(h.conn.holdsPort(second)).toBe(true);
+    expect(h.conn.status).toBe("reading");
   });
 
   describe("connect() with the picker", () => {

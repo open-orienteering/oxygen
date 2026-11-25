@@ -272,6 +272,22 @@ describe("parseReadoutBackupBuffer (M_READOUT slot layout)", () => {
       expect(skipped.map((x) => [x.slotAddress, x.reason])).toEqual([[0xe00, "not-si5"]]);
     });
 
+    it("a non-empty partial tail (0xC0-byte buffer) is reported as overrun", () => {
+      const buf = new Uint8Array(0xc0).fill(0xee);
+      buf.set([1, 2, 3, 4], 0x80 + 0x10);
+      const { records, skipped } = parseReadoutBackupBufferDetailed(buf, 0x100);
+      expect(records).toEqual([]);
+      expect(skipped).toHaveLength(1);
+      expect(skipped[0].slotAddress).toBe(0x180);
+      expect(skipped[0].reason).toBe("overrun");
+      expect(skipped[0].rawBytesHex.length).toBe(0x40 * 2);
+    });
+
+    it("an erased partial tail is not reported", () => {
+      const buf = new Uint8Array(0xc0).fill(0xee);
+      expect(parseReadoutBackupBufferDetailed(buf, 0x100).skipped).toEqual([]);
+    });
+
     it("the unmodified capture has nothing skipped", () => {
       expect(
         parseReadoutBackupBufferDetailed(READOUT_BACKUP_FIXTURE, READOUT_BACKUP_FIXTURE_BASE_ADDR).skipped,
