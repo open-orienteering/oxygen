@@ -468,9 +468,13 @@ box dies. Mitigations, in order of importance:
   page, or `FORBIDDEN`, otherwise; with no active lease nobody is served),
   and the box's `shipAllOnce` pulls only for events it holds the local
   lease on. A powered-on copy that was checked in or taken over only pushes
-  its backlog. A caller that sends no node id (a box older than the header)
-  cannot be told apart: it is served while a lease is active, with one
-  warning per process.
+  its backlog. A caller that sends no node id is refused the same way
+  (`unshipped` and `ackShipped` are as new as the header; an older box
+  pulls through the read-only `events.since`), and a refused pull is warned
+  once per event and node. A peer's `events.push` marks its entries
+  delivered only when the pusher is the active holder (or nobody holds the
+  event): a stale box that drains its backlog to the cloud leaves them
+  unmarked, so the current holder pulls them.
   The migration backfills the mark by one rule (see the SQL comment): an
   entry received before the acquire time of the event's latest lease is
   delivered, everything after it stays NULL and ships once (a redundant

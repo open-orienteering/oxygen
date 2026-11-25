@@ -153,8 +153,11 @@ export async function assertRaceWritable(
 export async function acquireLease(
   db: PrismaClient | Prisma.TransactionClient,
   eventId: bigint,
-  holderNodeId: string,
+  holderNodeIdRaw: string,
 ): Promise<ActiveLease> {
+  // The node-id header is trimmed on the way in (trpc.ts): store the same
+  // form so whitespace can never cause a holder mismatch.
+  const holderNodeId = holderNodeIdRaw.trim();
   try {
     const row = await db.eventLease.create({
       data: { eventId, holderNodeId },

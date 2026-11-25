@@ -29,8 +29,9 @@
  * the same.
  *
  * The shipper is enabled by setting `SYNC_PEER_URL` (+ the shared secret).
- * In the target topology the venue dials the cloud; the cloud runs no
- * shipper. Transport is injectable for the two-node integration harness.
+ * The venue dials the cloud; the cloud runs no shipper and never dials a
+ * venue. It only answers: `events.push` from the venue, and `events.unshipped`
+ * / `events.ackShipped` for the venue that holds the event's lease. Transport is injectable for the two-node integration harness.
  */
 
 import {

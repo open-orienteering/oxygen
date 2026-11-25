@@ -68,7 +68,10 @@ async function refreshDerivedCourses(db: Db, eventId: bigint): Promise<void> {
   // The map change itself stays cloud-owned and goes ahead; the course rows
   // it would re-derive belong to the node that holds the lease (a venue box
   // during a checkout), so the cloud neither writes nor journals them (the
-  // write guard, review D8). The next course write on the holder re-derives.
+  // write guard, review D8). Nothing re-derives them later on its own: the
+  // box's map refresh (`mapRefresh.ts`) does not call `rebuildCourseLengths`,
+  // so a derived length stays stale until its course is next edited
+  // (docs/bugfixes/venue-shipping-and-lease.md, "Left out").
   const verdict = await mayWriteEventData(db, eventId);
   if (!verdict.ok) {
     console.info(

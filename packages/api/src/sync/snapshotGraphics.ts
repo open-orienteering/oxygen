@@ -221,6 +221,9 @@ export async function fetchSnapshotGraphics(
     if (g.club || opts.heldEventId !== undefined) {
       const held = await db.graphic.findUnique({ where: { id: BigInt(g.id) }, select: { eventId: true, data: true } });
       if (holdsGraphic(g, held, opts.heldEventId)) continue;
+      // Another event on this box owns the id: the refresh skips it
+      // (`mirrorSnapshotGraphics`), so its bytes are not fetched either.
+      if (opts.heldEventId !== undefined && held?.eventId != null && held.eventId !== opts.heldEventId) continue;
     }
     out.bytes.set(g.id, await fetchGraphic(g, fetchSlice));
     out.fetchedBytes += g.sizeBytes;
@@ -338,6 +341,9 @@ export interface GraphicMirrorCounts {
   deleted: number;
 }
 
+/** Clashes already warned about in this process, `eventId:graphicId`: a refresh runs every cycle. */
+const warnedClashes = new Set<string>();
+
 /**
  * Make a live event's graphics equal to the export's (the refresh during a
  * lease, docs/map-storage.md §7.2), inside its transaction: a graphic whose
@@ -360,6 +366,9 @@ export async function mirrorSnapshotGraphics(
   const clashes = await findGraphicClashes(tx, graphics, eventId);
   const clashing = new Set(clashes.map((c) => c.id));
   for (const c of clashes) {
+    const key = `${eventId}:${c.id}`;
+    if (warnedClashes.has(key)) continue;
+    warnedClashes.add(key);
     console.warn(
       `[refresh] graphic clash: graphic ${c.id} on this box belongs to "${c.eventName}", not to this event; the cloud's copy was not applied (GRAPHIC_ID_CLASH). Check the graphic out explicitly to replace it.`,
     );

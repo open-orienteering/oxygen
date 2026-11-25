@@ -69,7 +69,7 @@ import {
   listJournalEntriesSince,
   listUnshippedJournalEntries,
   markJournalShipped,
-  _resetNoPeerNodeIdWarning,
+  _resetDeliveryRefusalWarnings,
 } from "../../routers/events.js";
 import { nodeId } from "../../sync/nodeIdentity.js";
 import type { EventRef } from "../../db.js";
@@ -1561,7 +1561,12 @@ describe("a box follows the cloud's map rows during a lease (G19)", () => {
       await dbB.courseMap.update({ where: { id: sheetBId }, data: { overrides: { scale: 6100 }, version: SHEET_VERSION_2 } });
       const res = await refresh();
       expect(res).not.toBeNull();
+      // The clashing graphic's bytes are not even fetched.
+      expect(res!.fetchedBytes).toBe(0);
       expect((await sheetOnBox()).overrides).toEqual({ scale: 6100 });
+      await refresh();
+      // One warning per graphic per process, not one per cycle.
+      expect(warn.mock.calls.map((c) => c.join(" ")).filter((m) => m.includes("graphic clash"))).toHaveLength(1);
       const row = await ctx.db.graphic.findUniqueOrThrow({ where: { id: eventGraphicId } });
       expect(row.eventId).toBe(other.eventId);
       expect(Buffer.from(row.data).equals(otherBytes)).toBe(true);
@@ -2103,24 +2108,61 @@ describe("the delivery mark belongs to the current holder (H2)", () => {
     }
   });
 
-  it("with no active lease nothing is served or acked; a box that sends no node id is served while a lease is held, with one warning", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    _resetNoPeerNodeIdWarning();
-    try {
-      const id = await cloudEntry();
-      const anyBox = makeCaller(ctx.event, { syncSecret: "test-sync-secret", peerNodeId: "venue-b" });
-      expect((await anyBox.events.unshipped({ limit: 50 })).entries).toEqual([]);
-      await expect(anyBox.events.ackShipped({ ids: [id] })).rejects.toMatchObject({ code: "FORBIDDEN" });
+  it("with no active lease nothing is served or acked; a caller that sends no node id is refused even while a lease is held", async () => {
+    const id = await cloudEntry();
+    const anyBox = makeCaller(ctx.event, { syncSecret: "test-sync-secret", peerNodeId: "venue-b" });
+    expect((await anyBox.events.unshipped({ limit: 50 })).entries).toEqual([]);
+    await expect(anyBox.events.ackShipped({ ids: [id] })).rejects.toMatchObject({ code: "FORBIDDEN" });
 
-      await acquireLease(ctx.db, ctx.eventId, "venue-b");
-      const oldBox = makeCaller(ctx.event, { syncSecret: "test-sync-secret" });
-      expect((await oldBox.events.unshipped({ limit: 50 })).entries.map((e) => e.id)).toContain(id);
-      await oldBox.events.unshipped({ limit: 50 });
-      expect(warn.mock.calls.map((c) => c.join(" ")).filter((m) => m.includes("without a node id")).length).toBe(1);
+    await acquireLease(ctx.db, ctx.eventId, "venue-b");
+    try {
+      const noHeader = makeCaller(ctx.event, { syncSecret: "test-sync-secret" });
+      expect((await noHeader.events.unshipped({ limit: 50 })).entries).toEqual([]);
+      await expect(noHeader.events.ackShipped({ ids: [id] })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    } finally {
+      await releaseLease(ctx.db, ctx.eventId).catch(() => {});
+    }
+  });
+
+  it("a refused non-holder pull is warned once per event and node", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    _resetDeliveryRefusalWarnings();
+    await acquireLeaseForPeer(ctx.db, ctx.eventId, "venue-b");
+    try {
+      const stale = makeCaller(ctx.event, { syncSecret: "test-sync-secret", peerNodeId: "venue-a" });
+      await stale.events.unshipped({ limit: 5 });
+      await stale.events.unshipped({ limit: 5 });
+      const other = makeCaller(ctx.event, { syncSecret: "test-sync-secret", peerNodeId: "venue-c" });
+      await other.events.unshipped({ limit: 5 });
+      const msgs = warn.mock.calls.map((c) => c.join(" ")).filter((m) => m.includes("not the lease holder"));
+      expect(msgs).toHaveLength(2);
+      expect(msgs[0]).toContain("venue-a");
     } finally {
       warn.mockRestore();
       await releaseLease(ctx.db, ctx.eventId).catch(() => {});
     }
+  });
+
+  it("a pushed entry is marked delivered only by the lease holder (or with no lease); a stale box's backlog stays for the holder to pull", async () => {
+    await acquireLeaseForPeer(ctx.db, ctx.eventId, "venue-b");
+    try {
+      const fromA = entryFor("venue-a");
+      const a = makeCaller(ctx.event, { syncSecret: "test-sync-secret", peerNodeId: "venue-a" });
+      expect((await a.events.push({ events: [fromA] })).synced).toEqual([fromA.id]);
+      expect((await ctx.db.journalEntry.findUniqueOrThrow({ where: { id: fromA.id } })).pushedAt).toBeNull();
+      const b = makeCaller(ctx.event, { syncSecret: "test-sync-secret", peerNodeId: "venue-b" });
+      expect((await b.events.unshipped({ limit: 50 })).entries.map((e) => e.id)).toContain(fromA.id);
+
+      const fromB = entryFor("venue-b");
+      await b.events.push({ events: [fromB] });
+      expect((await ctx.db.journalEntry.findUniqueOrThrow({ where: { id: fromB.id } })).pushedAt).not.toBeNull();
+    } finally {
+      await releaseLease(ctx.db, ctx.eventId);
+    }
+    const noLease = entryFor("venue-a");
+    const a2 = makeCaller(ctx.event, { syncSecret: "test-sync-secret", peerNodeId: "venue-a" });
+    await a2.events.push({ events: [noLease] });
+    expect((await ctx.db.journalEntry.findUniqueOrThrow({ where: { id: noLease.id } })).pushedAt).not.toBeNull();
   });
 
   it("shipAllOnce pushes the backlog of a copy this node no longer holds but pulls nothing for it", async () => {

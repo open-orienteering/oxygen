@@ -86,7 +86,10 @@ background: [`system/offline-architecture.md`](../system/offline-architecture.md
    - *Journal entries the cloud has not received* (`CHECKOUT_UNSHIPPED`):
      the box first tries a last ship cycle, so this appears only when the
      uplink is down or an entry is stuck. Continuing discards them. Prefer
-     fixing the uplink and trying again.
+     fixing the uplink and trying again. Right after upgrading a box that
+     already holds an event, it re-pushes its journal once (the delivery
+     marks are backfilled conservatively), so this can fire on a checked-in
+     box until one ship cycle has run: wait a minute and try again.
    - *The event was created on this box* (`CHECKOUT_LOCAL_EVENT`):
      continuing replaces it with the cloud's copy.
    - *A graphic of the cloud's copy has the same id as another event's

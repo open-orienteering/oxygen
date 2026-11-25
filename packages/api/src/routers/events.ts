@@ -412,21 +412,22 @@ export async function markJournalShipped(
   return res.count;
 }
 
-let warnedNoPeerNodeId = false;
+const warnedRefusals = new Set<string>();
 
 /** Test seam: warn again. */
-export function _resetNoPeerNodeIdWarning(): void {
-  warnedNoPeerNodeId = false;
+export function _resetDeliveryRefusalWarnings(): void {
+  warnedRefusals.clear();
 }
 
 /**
  * The delivery mark is one bit per entry, not per peer, so only the node the
  * entries are meant for may consume them: the holder of the event's active
  * lease. A powered-on box that no longer holds the event (checked in, taken
- * over) must not pull and ack what the current holder is waiting for. A
- * caller that names no node (a box older than the `x-oxygen-node-id`
- * header) cannot be told apart: it is served while a lease is active, with
- * one warning per process. Without an active lease nobody takes delivery.
+ * over) must not pull and ack what the current holder is waiting for. Fails
+ * closed: `unshipped` and `ackShipped` are as new as the `x-oxygen-node-id`
+ * header (an older box pulls through read-only `since`), so a caller that
+ * names no node, or not the holder, is refused. Without an active lease
+ * nobody takes delivery. A refusal is warned once per (event, node).
  */
 async function peerIsDeliveryTarget(
   db: PrismaClient,
@@ -434,17 +435,15 @@ async function peerIsDeliveryTarget(
   peerNodeId: string | null | undefined,
 ): Promise<boolean> {
   const lease = await getActiveLease(db, event.id);
-  if (!lease) return false;
-  if (!peerNodeId) {
-    if (!warnedNoPeerNodeId) {
-      warnedNoPeerNodeId = true;
-      console.warn(
-        `[events] a peer pulled "${event.nameId}" without a node id (older box): it is served as the holder "${lease.holderNodeId}"; upgrade it so a stale copy cannot consume the holder's entries.`,
-      );
-    }
-    return true;
+  if (lease && peerNodeId && peerNodeId === lease.holderNodeId) return true;
+  const key = `${event.id}:${peerNodeId ?? ""}`;
+  if (!warnedRefusals.has(key)) {
+    warnedRefusals.add(key);
+    console.warn(
+      `[events] node "${peerNodeId ?? "(no node id)"}" pulled "${event.nameId}" but is not the lease holder (${lease ? `"${lease.holderNodeId}"` : "no active lease"}): refused.`,
+    );
   }
-  return peerNodeId === lease.holderNodeId;
+  return false;
 }
 
 export const eventsRouter = router({
@@ -476,9 +475,16 @@ export const eventsRouter = router({
       let actor: string | null = null;
 
       let staleHolder = false;
+      // Whether the entries of a peer push are marked delivered (`pushed_at`):
+      // only when the pusher is the active holder (the other node then has
+      // them) or nobody holds the event. A stale box's backlog stays unmarked
+      // so the current holder pulls it.
+      let markDelivered = false;
       if (ectx.syncSecret) {
         assertNodeSecret(ectx.syncSecret);
         staleHolder = await isStaleHolder(ectx.db, ectx.event.id, ectx.peerNodeId);
+        const active = await getActiveLease(ectx.db, ectx.event.id);
+        markDelivered = !active || (!!ectx.peerNodeId && active.holderNodeId === ectx.peerNodeId);
       } else {
         // A copy that handed the event back (or lost it to a takeover) is no
         // longer where race data is written: refuse the whole request so the
@@ -526,8 +532,8 @@ export const eventsRouter = router({
           gate,
           knownGate: wrongCompetition,
           actorId,
-          // A peer node's push: the entries are already at the peer.
-          fromPeer: ectx.syncSecret ? true : undefined,
+          // A push by the holder (or with no holder): the entries are already at the peer.
+          fromPeer: markDelivered ? true : undefined,
         }),
       );
       if (alreadyHeld) {
@@ -545,11 +551,10 @@ export const eventsRouter = router({
     }),
 
   /**
-   * Node-to-node paginated journal pull (pivot Step 3). The venue's shipper
-   * calls this on the cloud to fetch entries it doesn't have (e.g. ROC
-   * punches ingested at the cloud during a lease) — and vice versa when the
-   * cloud is configured to dial a venue. Guarded by the shared sync secret;
-   * stations never call this.
+   * Node-to-node paginated journal pull by `(hlc, id)` position. Read-only
+   * (marks nothing), kept for a venue box older than `unshipped`, which
+   * dials the cloud (the cloud never dials a venue). Guarded by the shared
+   * sync secret; stations never call this.
    */
   since: peerProcedure
     .input(
