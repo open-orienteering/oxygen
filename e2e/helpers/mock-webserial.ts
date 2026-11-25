@@ -45,17 +45,35 @@ export function getMockWebSerialScript(): string {
     ]);
   }
 
+  // Series byte (block 0 offset 24, low nibble) per card number range.
+  // 1=SI9, 2=SI8, 4=pCard, 15=SI10/SI11/SIAC (docs/si-protocol/card-layouts.md).
+  function seriesOf(cardNumber) {
+    if (isLargeCard(cardNumber)) return 0x0F;
+    if (cardNumber >= 4000000 && cardNumber <= 4999999) return 0x04;
+    if (cardNumber >= 1000000 && cardNumber <= 1999999) return 0x01;
+    return 0x02;
+  }
+
   function buildDetectionFrame(cardNumber) {
     // SI8+ detection (0xE8): station(2) + series(1) + cardNumber(3)
     const cn3 = (cardNumber >> 16) & 0xFF;
     const cn2 = (cardNumber >> 8) & 0xFF;
     const cn1 = cardNumber & 0xFF;
-    const series = cardNumber >= 8000001 ? 0x0F : 0x02;
-    return buildFrame(0xE8, [0x00, 0x7D, series, cn3, cn2, cn1]);
+    return buildFrame(0xE8, [0x00, 0x7D, seriesOf(cardNumber), cn3, cn2, cn1]);
   }
 
   function buildCardRemovedFrame() {
     return buildFrame(0xE7, [0x00, 0x7D, 0x00, 0x00, 0x00, 0x00]);
+  }
+
+  // First punch slot (byte offset in the concatenated 256-byte image) and
+  // capacity of the small card layouts. SI8 is 136 / 30 (captured), SI9 56 / 50
+  // and pCard 176 / 20 (MeOS layout).
+  function smallLayout(cardNumber) {
+    const series = seriesOf(cardNumber);
+    if (series === 0x01) return { first: 56, max: 50 };
+    if (series === 0x04) return { first: 176, max: 20 };
+    return { first: 136, max: 30 };
   }
 
   function buildReadoutBlock(cardNumber, punches, blockNum, hasFinish) {
@@ -65,10 +83,50 @@ export function getMockWebSerialScript(): string {
 
     const large = isLargeCard(cardNumber);
 
+    if (!large) {
+      // === SI8 / SI9 / pCard: two blocks, one 256-byte image ===
+      const image = new Uint8Array(256);
+      image.fill(0xEE);
+      // Header and owner area (bytes 0-first punch) are zero, as on a real SI8
+      for (let i = 0; i < smallLayout(cardNumber).first; i++) image[i] = 0;
+      image[24] = seriesOf(cardNumber);
+      image[25] = (cardNumber >> 16) & 0xFF;
+      image[26] = (cardNumber >> 8) & 0xFF;
+      image[27] = cardNumber & 0xFF;
+      image[22] = punches.length;
+      image[10] = (36000 >> 8) & 0xFF; // check 10:00:00
+      image[11] = 36000 & 0xFF;
+      if (punches.length > 0 || hasFinish) {
+        image[14] = (36300 >> 8) & 0xFF; // start 10:05:00
+        image[15] = 36300 & 0xFF;
+      } else {
+        image[14] = 0xEE;
+        image[15] = 0xEE;
+      }
+      if (hasFinish) {
+        image[18] = (38700 >> 8) & 0xFF; // finish 10:45:00
+        image[19] = 38700 & 0xFF;
+      } else {
+        image[18] = 0xEE;
+        image[19] = 0xEE;
+      }
+      const layout = smallLayout(cardNumber);
+      for (let i = 0; i < Math.min(punches.length, layout.max); i++) {
+        const p = punches[i];
+        const off = layout.first + i * 4;
+        image[off] = 0; // PTD
+        image[off + 1] = p.controlCode;
+        image[off + 2] = (p.time >> 8) & 0xFF;
+        image[off + 3] = p.time & 0xFF;
+      }
+      return image.slice(blockNum * 128, blockNum * 128 + 128);
+    }
+
     if (blockNum === 0) {
-      // === Block 0: Header (same layout for SI8 and SI10) ===
+      // === Block 0: Header (same offsets for SI8 and SI10) ===
       // Clear first 32 bytes (header area)
       for (let i = 0; i < 32; i++) block[i] = 0;
+      block[24] = seriesOf(cardNumber);
       // Card number at offsets 25-27
       block[25] = (cardNumber >> 16) & 0xFF;
       block[26] = (cardNumber >> 8) & 0xFF;
@@ -95,25 +153,13 @@ export function getMockWebSerialScript(): string {
         block[19] = 0xEE;
       }
 
-      if (large) {
-        // SI10/SIAC: personal data starts at offset 32 (not punches)
-        const personalBytes = buildPersonalDataBytes(currentOwnerData);
-        for (let i = 0; i < Math.min(personalBytes.length, 96) && i + 32 < 128; i++) {
-          block[32 + i] = personalBytes[i];
-        }
-        // Terminate personal data with 0xEE (already filled)
-      } else {
-        // SI8: punches start at offset 32
-        for (let i = 0; i < Math.min(punches.length, 24); i++) {
-          const p = punches[i];
-          const off = 32 + i * 4;
-          block[off] = 0; // PTD
-          block[off + 1] = p.controlCode;
-          block[off + 2] = (p.time >> 8) & 0xFF;
-          block[off + 3] = p.time & 0xFF;
-        }
+      // SI10/SIAC: personal data starts at offset 32 (not punches)
+      const personalBytes = buildPersonalDataBytes(currentOwnerData);
+      for (let i = 0; i < Math.min(personalBytes.length, 96) && i + 32 < 128; i++) {
+        block[32 + i] = personalBytes[i];
       }
-    } else if (large && blockNum >= 1 && blockNum <= 3) {
+      // Terminate personal data with 0xEE (already filled)
+    } else if (blockNum >= 1 && blockNum <= 3) {
       // === SI10 Blocks 1-3: Personal data continuation ===
       // Personal data that overflows from block 0 offset 32 (96 bytes)
       const personalBytes = buildPersonalDataBytes(currentOwnerData);
@@ -123,21 +169,10 @@ export function getMockWebSerialScript(): string {
       for (let i = 0; i < 128 && blockStart + i < remaining.length; i++) {
         block[i] = remaining[blockStart + i];
       }
-    } else if (large && blockNum >= 4) {
+    } else if (blockNum >= 4) {
       // === SI10 Blocks 4-7: Punches ===
       const punchBlockIdx = blockNum - 4; // 0-3
       const punchStart = punchBlockIdx * 32; // 32 punches per block
-      for (let i = 0; i < 32 && punchStart + i < punches.length; i++) {
-        const p = punches[punchStart + i];
-        const off = i * 4;
-        block[off] = 0; // PTD
-        block[off + 1] = p.controlCode;
-        block[off + 2] = (p.time >> 8) & 0xFF;
-        block[off + 3] = p.time & 0xFF;
-      }
-    } else if (!large && blockNum >= 1) {
-      // === SI8 Blocks 1+: More punches ===
-      const punchStart = 24 + (blockNum - 1) * 32; // block 0 has 24, rest have 32
       for (let i = 0; i < 32 && punchStart + i < punches.length; i++) {
         const p = punches[punchStart + i];
         const off = i * 4;

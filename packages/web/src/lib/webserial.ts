@@ -25,6 +25,7 @@ import {
   STATION_MODE,
   resolveProgrammingMode,
   supportsFullReadout,
+  BLOCKS_TO_READ,
   buildCommand,
   buildSetSysVal,
   buildSetDirectMode,
@@ -540,7 +541,9 @@ export class SIReaderConnection extends EventTarget implements SIReader {
     this.pendingCardNumber = detection.cardNumber;
     this.pendingBlocks = [];
     this.pendingBlockIndex = 0;
-    this.pendingTotalBlocks = 1; // Start with just block 0
+    // Small cards: BLOCKS_TO_READ blocks (SI5 1, SI8/SI9/pCard 2). Large cards
+    // start at the full 8 and shrink after block 0 reveals the punch count.
+    this.pendingTotalBlocks = BLOCKS_TO_READ[cardType] ?? 1;
 
     await this.requestBlock(cardType, 0);
     this.resetBlockTimeout();
@@ -603,20 +606,10 @@ export class SIReaderConnection extends EventTarget implements SIReader {
         );
         // blocks 0-3 (personal) + blocks 4..(4+N-1) (punches)
         this.pendingTotalBlocks = 4 + punchBlocksNeeded;
-      } else {
-        // SI8/SI9/pCard/tCard: punches start at block 0 offset 32
-        const punchSlotsInBlock0 = 24; // (128 - 32) / 4
-        const punchSlotsPerExtraBlock = 32; // 128 / 4
-
-        if (punchCount > punchSlotsInBlock0) {
-          const extraPunches = punchCount - punchSlotsInBlock0;
-          const extraBlocks = Math.ceil(
-            extraPunches / punchSlotsPerExtraBlock,
-          );
-          this.pendingTotalBlocks = 1 + extraBlocks;
-        }
-        // Otherwise pendingTotalBlocks stays at 1 — block 0 is enough
       }
+      // SI8/SI9/pCard: the punch area spans blocks 0 and 1 whatever the counter
+      // says (slots start at image byte 56/136/176), so both blocks are always
+      // read; pendingTotalBlocks was set from BLOCKS_TO_READ.
     }
 
     if (this.pendingBlockIndex < this.pendingTotalBlocks) {

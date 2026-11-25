@@ -89,6 +89,47 @@ export const BLOCKS_TO_READ: Record<string, number> = {
   SIAC: 8,
 };
 
+/**
+ * Memory layout of the punch area per card series, keyed by the low nibble of
+ * block 0 byte 24. Offsets are into the concatenated card image (block 0 at 0).
+ * Evidence per row: docs/si-protocol/card-layouts.md.
+ */
+export interface SICardLayout {
+  firstPunch: number;
+  recordSize: number;
+  maxPunches: number;
+}
+
+export const SI_CARD_LAYOUT: Record<number, SICardLayout> = {
+  1: { firstPunch: 56, recordSize: 4, maxPunches: 50 }, // SI9
+  2: { firstPunch: 136, recordSize: 4, maxPunches: 30 }, // SI8
+  4: { firstPunch: 176, recordSize: 4, maxPunches: 20 }, // pCard
+  15: { firstPunch: 512, recordSize: 4, maxPunches: 128 }, // SI10 / SI11 / SIAC
+};
+
+/** Series nibble implied by the card-number range, for cards with an unknown series byte. */
+const SERIES_BY_TYPE: Partial<Record<SICardType, number>> = {
+  SI9: 1,
+  SI8: 2,
+  pCard: 4,
+  SI10: 15,
+  SI11: 15,
+  SIAC: 15,
+};
+
+/**
+ * Layout for a block 0, or null when the card cannot be decoded safely
+ * (tCard, or a series and number range that match nothing).
+ */
+function resolveCardLayout(b0: Uint8Array, cardNumber: number): SICardLayout | null {
+  const series = b0[24] & 0x0f;
+  if (series === 6) return null; // tCard: record format not known, fail safe
+  const direct = SI_CARD_LAYOUT[series];
+  if (direct) return direct;
+  const viaType = SERIES_BY_TYPE[getCardType(cardNumber)];
+  return viaType !== undefined ? SI_CARD_LAYOUT[viaType] : null;
+}
+
 export function getCardType(cardNumber: number): SICardType {
   if (cardNumber < 1) return "Unknown";
   if (cardNumber <= 499999) return "SI5";
@@ -411,6 +452,33 @@ export function parsePunchRecord(
   if (time === null) return null;
 
   return { controlCode, time };
+}
+
+/**
+ * Decode one 4-byte punch slot of an SI8+ card image.
+ *
+ * Slots are consumed by position, never skipped: the card stores records at
+ * fixed offsets and the counter byte can include blank slots (a real SI8 had
+ * counter 27 with records 1-5 blank). The caller advances one slot per call
+ * whatever this returns.
+ *
+ *   - EEEEEEEE or 00000000 -> blank, null
+ *   - control code 0       -> null (not a punch)
+ *   - code with time EEEE  -> kept as { controlCode, time: 0 }
+ *   - otherwise            -> the punch
+ */
+export function parsePunchSlot(data: Uint8Array, offset: number): SIPunch | null {
+  if (offset + 4 > data.length) return null;
+  const b0 = data[offset];
+  const b1 = data[offset + 1];
+  const b2 = data[offset + 2];
+  const b3 = data[offset + 3];
+  if (b0 === 0xee && b1 === 0xee && b2 === 0xee && b3 === 0xee) return null;
+  if (b0 === 0 && b1 === 0 && b2 === 0 && b3 === 0) return null;
+  const controlCode = ((b0 & 0xc0) << 2) | b1;
+  if (controlCode === 0) return null;
+  const time = parsePunchTime(data, offset + 2);
+  return { controlCode, time: time ?? 0 };
 }
 
 // ─── CP850 decoding ────────────────────────────────────────
@@ -803,23 +871,26 @@ export function resolveSI5Times(
 }
 
 /**
- * Parse SI8/SI9/pCard/tCard card data from readout blocks.
- * These cards have punches starting at block 0 offset 32.
+ * Parse SI8/SI9/pCard card data from two readout blocks (256 bytes).
  *
- * Block 0 layout (SI8/SI9):
+ * Block 0 header (all card series from SI8 up):
  *   [4-7]   Clear station + time
  *   [8-11]  Check station + time
  *   [12-15] Start station + time
  *   [16-19] Finish station + time
- *   [22]    Number of punches
- *   [24]    Card series byte (0x02=SI8, 0x01=SI9, etc.)
+ *   [22]    Punch counter (can include blank slots)
+ *   [24]    Series, low nibble (1=SI9, 2=SI8, 4=pCard, 6=tCard, 15=SI10/11/SIAC)
  *   [25-27] Card number (3 bytes, big-endian)
- *   [32+]   Punch records (4 bytes each, up to 24 in block 0)
+ *   [32..]  Owner data area, NOT punches
  *
- * Block 1+: Punch records (32 per block)
+ * Punch slots are 4 bytes each, starting at a series-specific offset into the
+ * concatenated image (SI_CARD_LAYOUT): SI9 56, SI8 136, pCard 176. The reader
+ * transfers the card in 128-byte blocks, so blocks 0 and 1 are joined first.
+ * tCard (series 6) is not decoded; the result is null so the caller reports a
+ * failed read instead of wrong punches.
  */
 export function parseSI8CardData(blocks: Uint8Array[]): SICardReadout | null {
-  if (blocks.length === 0 || blocks[0].length < 128) return null;
+  if (blocks.length < 2 || blocks[0].length < 128 || blocks[1].length < 128) return null;
 
   const b0 = blocks[0];
 
@@ -829,6 +900,10 @@ export function parseSI8CardData(blocks: Uint8Array[]): SICardReadout | null {
     cn = (b0[24] << 16) | (b0[25] << 8) | b0[26];
     if (cn === 0) return null;
   }
+
+  const layout = resolveCardLayout(b0, cn);
+  // Large cards need eight blocks and go through parseSI10CardData.
+  if (!layout || layout.firstPunch + layout.maxPunches * layout.recordSize > 256) return null;
 
   const cardType = getCardType(cn);
   const punchCount = b0[22];
@@ -843,24 +918,14 @@ export function parseSI8CardData(blocks: Uint8Array[]): SICardReadout | null {
   const checkDayOfWeek = checkTime != null ? parseDayOfWeek(b0[8]) : null;
   const finishDayOfWeek = finishTime != null ? parseDayOfWeek(b0[16]) : null;
 
-  // Parse punches — SI8: block 0 offset 32, then block 1+ offset 0
+  const image = new Uint8Array(256);
+  image.set(b0.subarray(0, 128), 0);
+  image.set(blocks[1].subarray(0, 128), 128);
+  const slots = Math.min(punchCount, layout.maxPunches);
   const punches: SIPunch[] = [];
-  for (let bi = 0; bi < blocks.length && punches.length < punchCount; bi++) {
-    const block = blocks[bi];
-    const startOffset = bi === 0 ? 32 : 0;
-    const punchesInBlock = Math.floor((block.length - startOffset) / 4);
-
-    for (
-      let pi = 0;
-      pi < punchesInBlock && punches.length < punchCount;
-      pi++
-    ) {
-      const offset = startOffset + pi * 4;
-      const punch = parsePunchRecord(block, offset);
-      if (punch) {
-        punches.push(punch);
-      }
-    }
+  for (let k = 0; k < slots; k++) {
+    const punch = parsePunchSlot(image, layout.firstPunch + k * layout.recordSize);
+    if (punch) punches.push(punch);
   }
 
   return {
@@ -917,31 +982,22 @@ export function parseSI10CardData(
   const personalBlocks = allBlocks.slice(0, Math.min(allBlocks.length, 4));
   const ownerData = parseSI10PersonalData(personalBlocks);
 
-  // Parse punches from blocks 4+ (each block holds 32 punches at 4 bytes each)
+  // Punch slot k lives in block 4 + floor(k/32) at offset (k%32)*4. The
+  // counter can include blank slots and records beyond it are stale, so read
+  // exactly min(counter, 128) slots and consume blanks by position.
+  const slots = Math.min(punchCount, SI_CARD_LAYOUT[15].maxPunches);
+  const neededBlocks = slots === 0 ? 0 : 4 + Math.floor((slots - 1) / 32) + 1;
+  if (allBlocks.length < neededBlocks) return null;
   const punches: SIPunch[] = [];
-  for (
-    let bi = 4;
-    bi < allBlocks.length && punches.length < punchCount;
-    bi++
-  ) {
-    const block = allBlocks[bi];
-    const punchesInBlock = Math.floor(block.length / 4);
-    for (
-      let pi = 0;
-      pi < punchesInBlock && punches.length < punchCount;
-      pi++
-    ) {
-      const punch = parsePunchRecord(block, pi * 4);
-      if (punch) {
-        punches.push(punch);
-      }
-    }
+  for (let k = 0; k < slots; k++) {
+    const block = allBlocks[4 + (k >> 5)];
+    if (!block || block.length < 128) return null;
+    const punch = parsePunchSlot(block, (k % 32) * 4);
+    if (punch) punches.push(punch);
   }
 
   // Extract battery voltage from block 3, offset 71 (SIAC only).
-  // The raw byte encodes voltage as: V = 1.9 + raw * 0.09
   // This may be from a previous measurement; 0xEE = no data.
-  // Extract battery voltage from block 3, offset 71 (SIAC only).
   // The raw byte encodes voltage as: V = 1.9 + raw * 0.09
   let batteryVoltage: number | null = null;
   let metadata: SICardMetadata | null = null;
