@@ -38,8 +38,11 @@ export function CardNotification() {
   const [failureSeq, setFailureSeq] = useState<number | null>(null);
   const failureTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const cardAtFailureRef = useRef<string | null>(null);
+  // A failure that was already there when this mounted is not replayed.
+  const mountFailureSeqRef = useRef(lastReadFailure?.seq ?? null);
   useEffect(() => {
     if (!lastReadFailure) return;
+    if (lastReadFailure.seq === mountFailureSeqRef.current) return;
     cardAtFailureRef.current = currentCard?.id ?? null;
     setFailureSeq(lastReadFailure.seq);
     clearTimeout(failureTimerRef.current);

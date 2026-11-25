@@ -368,12 +368,15 @@ function KioskPageBody() {
 
   // ── Standalone mode: a card the reader could not read (SI-05) ──
 
-  const lastFailureSeqRef = useRef(0);
+  // Starts at the failure already present on mount, so a failure from before
+  // the kiosk opened (or before it went standalone) is not replayed.
+  const lastFailureSeqRef = useRef(lastReadFailure?.seq ?? 0);
 
   useEffect(() => {
-    if (!settings.standalone || !lastReadFailure) return;
+    if (!lastReadFailure) return;
     if (lastReadFailure.seq === lastFailureSeqRef.current) return;
     lastFailureSeqRef.current = lastReadFailure.seq;
+    if (!settings.standalone) return;
     // lastDetectedCardNo is the committed detection of the same render, so a
     // detection of another card in the same tick wins over the failure.
     if (shouldShowStandaloneReadFailure(lastReadFailure, lastDetectedCardNo, screenRef.current.mode)) {

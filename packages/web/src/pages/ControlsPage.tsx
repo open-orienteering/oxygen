@@ -1576,6 +1576,7 @@ function ReadoutPanel({
     reader: ReturnType<typeof getReaderConnection>,
     stationData: { stationCode: number; batteryVoltage: number; serialNo: number; rawData: Uint8Array },
   ) => {
+    setConfirmClear(false);
     const code = stationData.stationCode;
 
     // The read -> import -> clear decision lives in runBackupFlow: the station
@@ -1948,11 +1949,12 @@ function ReadoutPanel({
       )}
 
       {confirmClear && (
-        <div role="alertdialog" className="text-sm text-amber-900 bg-amber-50 border border-amber-300 px-3 py-2 rounded-lg mb-3">
+        <div role="alertdialog" aria-label={t("clearAnyway")} className="text-sm text-amber-900 bg-amber-50 border border-amber-300 px-3 py-2 rounded-lg mb-3">
           <p className="mb-2">{t("clearSkippedConfirm", { count: lastSkippedCount })}</p>
           <div className="flex gap-2">
             <button
               onClick={() => handleClearMemory(true)}
+              disabled={busy || autoMode}
               className="px-3 py-1 text-sm bg-orange-600 text-white rounded-lg hover:bg-orange-700 cursor-pointer"
             >
               {t("clearAnyway")}
