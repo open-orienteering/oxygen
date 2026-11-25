@@ -1094,6 +1094,7 @@ model JournalEntry {
   event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
 
   @@index([eventId, hlc])
+  @@index([hlc])
   @@index([eventId, clientTimestamp(sort: Desc)])
   @@index([eventId, type])
   @@map("journal")
