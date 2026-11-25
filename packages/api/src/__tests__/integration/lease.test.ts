@@ -27,9 +27,10 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { TRPCError } from "@trpc/server";
 import { execSync } from "child_process";
 import { Client } from "pg";
-import { PrismaClient } from "../../generated/prisma/client.js";
+import { Prisma, PrismaClient } from "../../generated/prisma/client.js";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { createHash, randomBytes, randomUUID } from "crypto";
 import { readFileSync } from "fs";
@@ -45,6 +46,7 @@ import {
   acquireLease,
   acquireLeaseForPeer,
   releaseLease,
+  releaseLeaseForPeer,
   getActiveLease,
   assertRaceWritable,
   exportEventSnapshot,
@@ -942,6 +944,289 @@ describe("checkout → write → checkin lifecycle", () => {
       await undoCheckout();
     }
   });
+
+describe("checkout guard and restart safety (API-07, SYNC-18)", () => {
+  const deadTransport = (): PeerTransport => ({
+    push: async () => ({ synced: [], failed: [{ id: "x", error: "offline" }] }),
+    unshipped: async () => ({ entries: [], hasMore: false }),
+    ack: async () => {},
+  });
+
+  async function checkedOutVenue() {
+    await caller.lease.checkout({ nameId: CHECKOUT_NAME });
+    const local = await ctx.db.event.findUniqueOrThrow({
+      where: { nameId: CHECKOUT_NAME },
+      select: { id: true, nameId: true, zeroTime: true },
+    });
+    return { local, venue: makeCaller({ id: local.id, nameId: local.nameId, zeroTime: local.zeroTime }) };
+  }
+
+  let writeSeq = 0;
+  /** A race-entry the venue journals (a new runner), unique per call. */
+  async function venueWrite(venue: ReturnType<typeof makeCaller>, localId: bigint) {
+    const cls = await ctx.db.class.findFirstOrThrow({ where: { eventId: localId }, select: { seq: true } });
+    await venue.runner.create({ name: `Guard ${writeSeq}`, classId: cls.seq, cardNo: 8_100_000 + writeSeq++ });
+  }
+
+  /** The venue loses the box's lease on both sides without shipping (the failure a re-checkout must not paper over). */
+  async function dropLeasesWithoutShipping(localId: bigint) {
+    await releaseLease(ctx.db, localId, { forced: true });
+    await releaseLease(dbB, eventB.id, { forced: true });
+  }
+
+  afterAll(async () => {
+    _setPeerTransportFactory(() => transportToB());
+    _setLeasePeerFactory(() => leasePeerToB());
+  });
+
+  it("refuses a checkout while this box still holds the lease", async () => {
+    await checkedOutVenue();
+    try {
+      await expect(caller.lease.checkout({ nameId: CHECKOUT_NAME })).rejects.toMatchObject({
+        code: "PRECONDITION_FAILED",
+        message: expect.stringMatching(/^CHECKOUT_LEASE_HELD/),
+      });
+    } finally {
+      await undoCheckout();
+    }
+  });
+
+  it("a re-checkout with unshipped entries and no link is refused; nothing is touched; discardLocal overrides", async () => {
+    const { local, venue } = await checkedOutVenue();
+    await venueWrite(venue, local.id);
+    await dropLeasesWithoutShipping(local.id);
+    const journalBefore = await ctx.db.journalEntry.count({ where: { eventId: local.id } });
+
+    _setPeerTransportFactory(() => deadTransport());
+    try {
+      await expect(caller.lease.checkout({ nameId: CHECKOUT_NAME })).rejects.toMatchObject({
+        code: "PRECONDITION_FAILED",
+        message: expect.stringMatching(/^CHECKOUT_UNSHIPPED: \d+ journal entries/),
+      });
+      expect(await ctx.db.journalEntry.count({ where: { eventId: local.id } })).toBe(journalBefore);
+      expect(await getActiveLease(dbB, eventB.id)).toBeNull();
+      expect((await ctx.db.event.findUniqueOrThrow({ where: { nameId: CHECKOUT_NAME } })).id).toBe(local.id);
+
+      const res = await caller.lease.checkout({ nameId: CHECKOUT_NAME, discardLocal: true });
+      expect(res.ok).toBe(true);
+      expect((await ctx.db.event.findUniqueOrThrow({ where: { nameId: CHECKOUT_NAME } })).id).not.toBe(local.id);
+    } finally {
+      _setPeerTransportFactory(() => transportToB());
+      await undoCheckout();
+    }
+  });
+
+  it("a re-checkout ships what it can first: entries that reach the cloud do not block it", async () => {
+    const { local, venue } = await checkedOutVenue();
+    await venueWrite(venue, local.id);
+    await dropLeasesWithoutShipping(local.id);
+    try {
+      expect((await caller.lease.checkout({ nameId: CHECKOUT_NAME })).ok).toBe(true);
+      expect(await dbB.runner.count({ where: { eventId: eventB.id, name: { startsWith: "Guard " } } })).toBeGreaterThan(0);
+    } finally {
+      await undoCheckout();
+    }
+  });
+
+  it("an event created on this box is not replaced unless discardLocal", async () => {
+    await ctx.db.event.deleteMany({ where: { nameId: CHECKOUT_NAME } });
+    await ctx.db.event.create({
+      data: { nameId: CHECKOUT_NAME, name: "Box-made", date: new Date("2026-01-01T00:00:00Z"), kind: "competition" },
+    });
+    try {
+      await expect(caller.lease.checkout({ nameId: CHECKOUT_NAME })).rejects.toMatchObject({
+        message: expect.stringMatching(/^CHECKOUT_LOCAL_EVENT/),
+      });
+      expect(await getActiveLease(dbB, eventB.id)).toBeNull();
+      expect((await caller.lease.checkout({ nameId: CHECKOUT_NAME, discardLocal: true })).ok).toBe(true);
+    } finally {
+      await undoCheckout();
+    }
+  });
+
+  it("with auth on, a checkout needs an admin for a new event and event.manage for an existing one", async () => {
+    const row = await ctx.db.user.create({
+      data: { email: `stranger-${mapSuffix}@lease.example`, displayName: "Stranger", active: true },
+    });
+    const stranger = { id: row.id, email: row.email, displayName: "Stranger", isAdmin: false, active: true };
+    const authed = makeCaller(null, { authEnabled: true, authMode: "dev", user: stranger });
+    await expect(authed.lease.checkout({ nameId: CHECKOUT_NAME })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    const admin = makeCaller(null, { authEnabled: true, authMode: "dev", user: { ...stranger, isAdmin: true } });
+    try {
+      expect((await admin.lease.checkout({ nameId: CHECKOUT_NAME })).ok).toBe(true);
+      await dropLeasesWithoutShipping((await ctx.db.event.findUniqueOrThrow({ where: { nameId: CHECKOUT_NAME } })).id);
+      await expect(authed.lease.checkout({ nameId: CHECKOUT_NAME })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    } finally {
+      await undoCheckout();
+      await ctx.db.user.delete({ where: { id: row.id } }).catch(() => {});
+    }
+  });
+
+  it("readout backups survive a re-checkout", async () => {
+    const { local } = await checkedOutVenue();
+    await ctx.db.cardReadoutBackup.create({
+      data: {
+        eventId: local.id,
+        slotAddress: 4,
+        cardNo: 8_000_001,
+        punches: [{ controlCode: 31, time: 1000 }],
+        punchesHash: `bk-${mapSuffix}`,
+        ownerData: Prisma.DbNull,
+      },
+    });
+    await ctx.db.journalEntry.updateMany({ where: { eventId: local.id }, data: { pushedAt: new Date() } });
+    await dropLeasesWithoutShipping(local.id);
+    try {
+      await caller.lease.checkout({ nameId: CHECKOUT_NAME });
+      const now = await ctx.db.event.findUniqueOrThrow({ where: { nameId: CHECKOUT_NAME }, select: { id: true } });
+      const kept = await ctx.db.cardReadoutBackup.findMany({ where: { eventId: now.id } });
+      expect(kept.map((b) => b.cardNo)).toEqual([8_000_001]);
+    } finally {
+      await undoCheckout();
+    }
+  });
+
+  it("acquiring twice as the same holder returns the same lease; another holder still conflicts", async () => {
+    const first = await acquireLease(ctx.db, ctx.eventId, "venue-twice");
+    try {
+      const again = await acquireLease(ctx.db, ctx.eventId, "venue-twice");
+      expect(again.id).toBe(first.id);
+      await expect(acquireLease(ctx.db, ctx.eventId, "venue-other")).rejects.toMatchObject({ code: "CONFLICT" });
+    } finally {
+      await releaseLease(ctx.db, ctx.eventId);
+    }
+  });
+
+  it("peer release is idempotent for the holder that already released", async () => {
+    await acquireLease(ctx.db, ctx.eventId, "venue-idem");
+    await releaseLeaseForPeer(ctx.db, ctx.eventId, "venue-idem");
+    await releaseLeaseForPeer(ctx.db, ctx.eventId, "venue-idem");
+    await expect(releaseLeaseForPeer(ctx.db, ctx.eventId, "venue-nobody")).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+  });
+
+  it("a checkout that dies after the peer took the lease (export throws, release also fails) can simply be retried", async () => {
+    _setLeasePeerFactory(() => ({
+      ...leasePeerToB(),
+      exportSnapshot: async () => {
+        throw new Error("link dropped");
+      },
+      release: async () => {
+        throw new Error("link still down");
+      },
+    }));
+    try {
+      await expect(caller.lease.checkout({ nameId: CHECKOUT_NAME })).rejects.toThrow("link dropped");
+      expect((await getActiveLease(dbB, eventB.id))?.holderNodeId).toBe("cloud"); // stranded on the peer
+      expect(await ctx.db.event.findUnique({ where: { nameId: CHECKOUT_NAME } })).toBeNull();
+    } finally {
+      _setLeasePeerFactory(() => leasePeerToB());
+    }
+    try {
+      expect((await caller.lease.checkout({ nameId: CHECKOUT_NAME })).ok).toBe(true);
+    } finally {
+      await undoCheckout();
+    }
+  });
+
+  it("an acquire whose reply is lost is rolled back, not left holding", async () => {
+    _setLeasePeerFactory(() => ({
+      ...leasePeerToB(),
+      acquire: async (nameId, holder) => {
+        await leasePeerToB().acquire(nameId, holder);
+        throw new Error("reply lost");
+      },
+    }));
+    try {
+      await expect(caller.lease.checkout({ nameId: CHECKOUT_NAME })).rejects.toThrow("reply lost");
+      expect(await getActiveLease(dbB, eventB.id)).toBeNull();
+    } finally {
+      _setLeasePeerFactory(() => leasePeerToB());
+    }
+  });
+
+  it("a failing afterImport rolls the whole import back: the existing local event is untouched", async () => {
+    const { local } = await checkedOutVenue();
+    await dropLeasesWithoutShipping(local.id);
+    const snapshot = await exportEventSnapshot(dbB, eventB);
+    const runnersBefore = await ctx.db.runner.count({ where: { eventId: local.id } });
+    try {
+      await expect(
+        importEventSnapshot(ctx.db, snapshot, undefined, undefined, {
+          afterImport: async () => {
+            throw new Error("boom after import");
+          },
+        }),
+      ).rejects.toThrow("boom after import");
+      const still = await ctx.db.event.findUniqueOrThrow({ where: { nameId: CHECKOUT_NAME }, select: { id: true } });
+      expect(still.id).toBe(local.id);
+      expect(await ctx.db.runner.count({ where: { eventId: local.id } })).toBe(runnersBefore);
+    } finally {
+      await undoCheckout();
+    }
+  });
+
+  it("checkin whose peer release reply was lost: the retry succeeds", async () => {
+    const { local, venue } = await checkedOutVenue();
+    _setLeasePeerFactory(() => ({
+      ...leasePeerToB(),
+      release: async (nameId, holder) => {
+        await leasePeerToB().release(nameId, holder);
+        throw new Error("reply lost");
+      },
+    }));
+    try {
+      await expect(venue.lease.checkin()).rejects.toThrow("reply lost");
+      expect(await getActiveLease(dbB, eventB.id)).toBeNull();
+      expect((await getActiveLease(ctx.db, local.id))?.holderNodeId).toBe("cloud");
+      _setLeasePeerFactory(() => leasePeerToB());
+      expect((await venue.lease.checkin()).ok).toBe(true);
+      expect(await getActiveLease(ctx.db, local.id)).toBeNull();
+    } finally {
+      _setLeasePeerFactory(() => leasePeerToB());
+      await undoCheckout();
+    }
+  });
+
+  it("checkin when the peer says the lease is held by another node releases locally and reports it", async () => {
+    const { local, venue } = await checkedOutVenue();
+    _setLeasePeerFactory(() => ({
+      ...leasePeerToB(),
+      release: async () => {
+        throw new TRPCError({ code: "CONFLICT", message: 'Lease is held by "someone-else", not "cloud".' });
+      },
+    }));
+    try {
+      const res = await venue.lease.checkin();
+      expect(res).toMatchObject({ ok: true, peerAlreadyReleased: true });
+      expect(await getActiveLease(ctx.db, local.id)).toBeNull();
+      expect((await ctx.db.eventLease.findFirstOrThrow({ where: { eventId: local.id }, orderBy: { id: "desc" } })).forced).toBe(true);
+    } finally {
+      _setLeasePeerFactory(() => leasePeerToB());
+      await undoCheckout();
+    }
+  });
+
+  it("race writes are refused on the box while its checkin barrier runs, and are guarded again by the lease afterwards", async () => {
+    const { local, venue } = await checkedOutVenue();
+    let during: unknown = "not run";
+    _setPeerTransportFactory(() => ({
+      ...transportToB(),
+      push: async (n, entries) => {
+        during = await assertRaceWritable(ctx.db, local.id).then(() => "writable", (e: TRPCError) => e.code);
+        return transportToB().push(n, entries);
+      },
+    }));
+    try {
+      await venueWrite(venue, local.id);
+      expect((await venue.lease.checkin()).ok).toBe(true);
+      expect(during).toBe("PRECONDITION_FAILED");
+      await assertRaceWritable(ctx.db, local.id); // the barrier is over and no lease remains
+    } finally {
+      _setPeerTransportFactory(() => transportToB());
+      await undoCheckout();
+    }
+  });
+});
 });
 
 describe("a box follows the cloud's map rows during a lease (G19)", () => {

@@ -21,8 +21,9 @@ import { TRPCError } from "@trpc/server";
 import { createTRPCClient, httpLink, type TRPCClient } from "@trpc/client";
 import type { AppRouter } from "../routers/index.js";
 import type { EventRef, PrismaClient } from "../db.js";
-import type { Prisma } from "../generated/prisma/client.js";
+import { Prisma } from "../generated/prisma/client.js";
 import { nodeId, SYNC_SECRET_HEADER } from "./nodeIdentity.js";
+import { isCheckingIn } from "./leaseState.js";
 import { makeSyncHeaders } from "./googleIdToken.js";
 import {
   applyTokens,
@@ -64,8 +65,9 @@ export async function getActiveLease(
   return row;
 }
 
-/** Whether this node may originate race-critical writes for the event (no lease, or it holds it). */
+/** Whether this node may originate race-critical writes (no lease, or it holds it, and no checkin barrier is running). */
 export async function isRaceWritable(db: PrismaClient | Prisma.TransactionClient, eventId: bigint): Promise<boolean> {
+  if (isCheckingIn(eventId)) return false;
   const lease = await getActiveLease(db, eventId);
   return !lease || lease.holderNodeId === nodeId();
 }
@@ -78,6 +80,12 @@ export async function assertRaceWritable(
   db: PrismaClient,
   eventId: bigint,
 ): Promise<void> {
+  if (isCheckingIn(eventId)) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "Event is being checked in — race-critical writes resume on the cloud once the checkin finishes.",
+    });
+  }
   const lease = await getActiveLease(db, eventId);
   if (lease && lease.holderNodeId !== nodeId()) {
     throw new TRPCError({
@@ -90,7 +98,7 @@ export async function assertRaceWritable(
 // ─── Acquire / release ──────────────────────────────────────
 
 export async function acquireLease(
-  db: PrismaClient,
+  db: PrismaClient | Prisma.TransactionClient,
   eventId: bigint,
   holderNodeId: string,
 ): Promise<ActiveLease> {
@@ -105,6 +113,9 @@ export async function acquireLease(
     // double-checkout race into a constraint violation.
     if ((err as { code?: string }).code === "P2002") {
       const current = await getActiveLease(db, eventId);
+      // The same holder asking again (a retried checkout whose first attempt
+      // died after the peer took the lease) is not a conflict.
+      if (current && current.holderNodeId === holderNodeId) return current;
       throw new TRPCError({
         code: "CONFLICT",
         message: `Event is already checked out to "${current?.holderNodeId ?? "unknown"}".`,
@@ -133,6 +144,27 @@ export async function acquireLeaseForPeer(
     data: { pushedAt: new Date() },
   });
   return lease;
+}
+
+/**
+ * The cloud side of a checkin. Idempotent for the caller: when the lease was
+ * already released by this holder (the first reply was lost), answer ok.
+ */
+export async function releaseLeaseForPeer(
+  db: PrismaClient,
+  eventId: bigint,
+  holderNodeId: string,
+): Promise<void> {
+  const active = await getActiveLease(db, eventId);
+  if (!active) {
+    const latest = await db.eventLease.findFirst({
+      where: { eventId },
+      orderBy: { id: "desc" },
+      select: { holderNodeId: true },
+    });
+    if (latest?.holderNodeId === holderNodeId) return;
+  }
+  await releaseLease(db, eventId, { expectedHolder: holderNodeId });
 }
 
 export async function releaseLease(
@@ -325,6 +357,17 @@ export async function exportEventSnapshot(
   );
 }
 
+export interface ImportOptions {
+  /**
+   * Runs inside the import transaction once the event is in place: whatever
+   * must commit with it or not at all (the checkout's sync-state row and
+   * local lease), so a crash leaves either the whole checkout or none of it.
+   */
+  afterImport?: (tx: Prisma.TransactionClient, eventId: bigint) => Promise<void>;
+  /** Replace graphics owned by another event on this box (`GRAPHIC_ID_CLASH` otherwise). */
+  replaceOtherEvents?: boolean;
+}
+
 /**
  * Import a checkout snapshot, replacing any existing local copy of the
  * event (identified by `nameId`; the cascade wipes children, seqs, journal
@@ -341,6 +384,7 @@ export async function importEventSnapshot(
   snapshot: EventSnapshot,
   blobs?: SnapshotBlobs,
   graphicBlobs?: SnapshotGraphicBlobs,
+  opts: ImportOptions = {},
 ): Promise<EventRef> {
   // A v0.6.0 exporter still sends the columns E5 dropped.
   const { id: _dropId, ...eventData } = withoutDroppedFields("event", snapshot.event);
@@ -348,11 +392,26 @@ export async function importEventSnapshot(
 
   const localId = await db.$transaction(
     async (tx) => {
+      // Readout-backup staging rows are server-local and not in the snapshot,
+      // but they are the only copy of what a station's flash held: carry
+      // them over a re-checkout.
+      const backups = await tx.cardReadoutBackup.findMany({
+        where: { event: { nameId } },
+      });
       await tx.event.deleteMany({ where: { nameId } });
       const created = await tx.event.create({
         data: eventData as never,
         select: { id: true },
       });
+      if (backups.length > 0) {
+        await tx.cardReadoutBackup.createMany({
+          data: backups.map((b) => ({
+            ...b,
+            eventId: created.id,
+            ownerData: b.ownerData === null ? Prisma.DbNull : b.ownerData,
+          })) as Prisma.CardReadoutBackupCreateManyInput[],
+        });
+      }
 
       for (const t of SNAPSHOT_TABLES) {
         const rows = snapshot.tables[t] ?? [];
@@ -394,6 +453,8 @@ export async function importEventSnapshot(
           ON CONFLICT (event_id, table_name)
           DO UPDATE SET next_seq = GREATEST(oxygen.event_seqs.next_seq, EXCLUDED.next_seq)`;
       }
+
+      await opts.afterImport?.(tx, created.id);
 
       return created.id;
     },
