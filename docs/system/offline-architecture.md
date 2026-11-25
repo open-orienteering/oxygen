@@ -403,6 +403,13 @@ write). It refuses with:
 
 The cloud with no lease, and any event without lease rows (a box-local
 event), stay writable ("no lease: the node you talk to is the writer").
+
+Background writers that call it today: the derived-course refresh after a
+map change on the cloud (`event-map.ts`, `refreshDerivedCourses`). While a
+venue box holds the lease it neither re-derives nor journals the course
+rows (info log, no error): the map change itself stays cloud-owned and goes
+ahead, and the holder re-derives lengths with its next course write. The
+other request-path course emitters (MC-36) are still review package 15.
 `events.push` with a user (a station draining its outbox) is refused for the
 whole request with `PRECONDITION_FAILED` when the answer is `checked-in` or
 `checking-in`, so the station keeps its outbox and drains to the cloud once
@@ -454,7 +461,22 @@ box dies. Mitigations, in order of importance:
   because an entry can reach a node late with an old HLC (a station outbox
   draining after the clock moved on), and an HLC watermark skips it for
   good. Entries a node ingested *from* its peer are created already marked,
-  so nothing is echoed back.
+  so nothing is echoed back. The mark is one bit per entry, not per peer,
+  so only the **holder of the event's active lease** may consume the other
+  node's entries: `events.unshipped` serves, and `events.ackShipped`
+  accepts, only a caller whose `x-oxygen-node-id` is that holder (an empty
+  page, or `FORBIDDEN`, otherwise; with no active lease nobody is served),
+  and the box's `shipAllOnce` pulls only for events it holds the local
+  lease on. A powered-on copy that was checked in or taken over only pushes
+  its backlog. A caller that sends no node id (a box older than the header)
+  cannot be told apart: it is served while a lease is active, with one
+  warning per process.
+  The migration backfills the mark by one rule (see the SQL comment): an
+  entry received before the acquire time of the event's latest lease is
+  delivered, everything after it stays NULL and ships once (a redundant
+  push or pull is harmless, a wrong "delivered" mark loses entries); an
+  event without leases starts clean, a cloud whose leases are all released
+  is all delivered.
 - **`events.unshipped`** and **`events.ackShipped`** (shared secret,
   `peerProcedure`; stations never call them) — the peer's next page of
   entries it has not delivered, in arrival order, and the confirmation that

@@ -10,7 +10,7 @@
  *  - first-finish-wins.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { randomUUID, randomBytes } from "node:crypto";
 import { SYSTEM_GROUP_IDS, decideReadoutApply, RunnerStatus } from "@oxygen/shared";
 import {
@@ -578,6 +578,20 @@ describe("events.push: reference upserts stay inside their event", () => {
   afterAll(async () => {
     await a.cleanup();
     await b.cleanup();
+  });
+
+  it("drops a column this schema lacks (a newer peer) and applies the known ones", async () => {
+    const id = randomUUID();
+    const entry = wire(a.event, "class.upserted", { id, seq: 0, fields: { name: "From newer peer", futureColumn: 7, eventId: 999999 } });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect((await caller.events.push({ events: [entry] })).synced).toEqual([entry.id]);
+    } finally {
+      warn.mockRestore();
+    }
+    const row = await a.db.class.findUniqueOrThrow({ where: { id } });
+    expect(row.name).toBe("From newer peer");
+    expect(row.eventId).toBe(a.eventId);
   });
 
   // 11

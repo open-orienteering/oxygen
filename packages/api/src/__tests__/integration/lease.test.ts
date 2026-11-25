@@ -70,6 +70,7 @@ import {
   listUnshippedJournalEntries,
   markJournalShipped,
 } from "../../routers/events.js";
+import { nodeId } from "../../sync/nodeIdentity.js";
 import type { EventRef } from "../../db.js";
 import { importAndStoreOcad } from "../../map-store/documents.js";
 import { exportBlobSlice } from "../../sync/snapshotMaps.js";
@@ -1131,6 +1132,26 @@ describe("checkout guard and restart safety (API-07, SYNC-18)", () => {
     }
   });
 
+  it("a clear refusal of the acquire (NOT_FOUND) is not rolled back: no release is sent, no alarming log", async () => {
+    const release = vi.fn(async () => {});
+    _setLeasePeerFactory(() => ({
+      ...leasePeerToB(),
+      acquire: async () => {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Event not found" });
+      },
+      release,
+    }));
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(caller.lease.checkout({ nameId: CHECKOUT_NAME })).rejects.toMatchObject({ code: "NOT_FOUND" });
+      expect(release).not.toHaveBeenCalled();
+      expect(err).not.toHaveBeenCalled();
+    } finally {
+      err.mockRestore();
+      _setLeasePeerFactory(() => leasePeerToB());
+    }
+  });
+
   it("an acquire whose reply is lost is rolled back, not left holding", async () => {
     _setLeasePeerFactory(() => ({
       ...leasePeerToB(),
@@ -1524,6 +1545,34 @@ describe("a box follows the cloud's map rows during a lease (G19)", () => {
     expect(Buffer.from((await ctx.db.graphic.findUniqueOrThrow({ where: { id: eventGraphicId } })).data).equals(NEW_SVG)).toBe(true);
     await dbB.graphic.update({ where: { id: eventGraphicId }, data: { name: original.name, data: original.data, sizeBytes: original.sizeBytes } });
     await refresh();
+  });
+
+  it("a graphic id another event on the box owns is skipped with a warning; the rest of the refresh still applies (D10, MC-32)", async () => {
+    const other = await createTestEvent("lease_clash");
+    const originalB = await dbB.graphic.findUniqueOrThrow({ where: { id: eventGraphicId } });
+    const sheetBefore = await sheetOnB();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // On the box the id belongs to another event; on the cloud its bytes and a sheet change.
+    await ctx.db.graphic.update({ where: { id: eventGraphicId }, data: { eventId: other.eventId } });
+    const otherBytes = Buffer.from((await ctx.db.graphic.findUniqueOrThrow({ where: { id: eventGraphicId } })).data);
+    try {
+      await dbB.graphic.update({ where: { id: eventGraphicId }, data: { data: NEW_SVG, sizeBytes: NEW_SVG.length } });
+      await dbB.courseMap.update({ where: { id: sheetBId }, data: { overrides: { scale: 6100 }, version: SHEET_VERSION_2 } });
+      const res = await refresh();
+      expect(res).not.toBeNull();
+      expect((await sheetOnBox()).overrides).toEqual({ scale: 6100 });
+      const row = await ctx.db.graphic.findUniqueOrThrow({ where: { id: eventGraphicId } });
+      expect(row.eventId).toBe(other.eventId);
+      expect(Buffer.from(row.data).equals(otherBytes)).toBe(true);
+      expect(warn.mock.calls.map((c) => c.join(" ")).some((m) => m.includes("GRAPHIC_ID_CLASH") || m.includes("graphic clash"))).toBe(true);
+    } finally {
+      warn.mockRestore();
+      await ctx.db.graphic.update({ where: { id: eventGraphicId }, data: { eventId: box.id } });
+      await dbB.graphic.update({ where: { id: eventGraphicId }, data: { name: originalB.name, data: originalB.data, sizeBytes: originalB.sizeBytes } });
+      await dbB.courseMap.update({ where: { id: sheetBId }, data: { overrides: sheetBefore.overrides as Prisma.InputJsonValue, version: sheetBefore.version } });
+      await refresh();
+      await other.cleanup();
+    }
   });
 
   it("the mirror is exact: a course object and a map file the box wrote itself go at the next refresh", async () => {
@@ -2015,6 +2064,97 @@ describe("layout writes on a venue box are forwarded to the cloud (G18)", () => 
       expect(local).toEqual([]);
     } finally {
       await box.close();
+    }
+  });
+});
+
+describe("the delivery mark belongs to the current holder (H2)", () => {
+  const entryFor = (stationId: string) => ({
+    id: randomUUID(),
+    type: "punch.recorded",
+    competitionId: ctx.nameId,
+    stationId,
+    timestamp: Date.now(),
+    payload: { cardNo: 800300, controlCode: 41, time: 363000 },
+  });
+
+  async function cloudEntry(): Promise<string> {
+    const e = entryFor("cloud-reader");
+    await ingestJournalEntries(ctx.db, ctx.event, [e], {});
+    return e.id;
+  }
+
+  it("events.unshipped and ackShipped serve only the active holder; a stale box gets nothing and cannot ack", async () => {
+    await acquireLeaseForPeer(ctx.db, ctx.eventId, "venue-b");
+    try {
+      const id = await cloudEntry();
+      const stale = makeCaller(ctx.event, { syncSecret: "test-sync-secret", peerNodeId: "venue-a" });
+      expect((await stale.events.unshipped({ limit: 50 })).entries).toEqual([]);
+      await expect(stale.events.ackShipped({ ids: [id] })).rejects.toMatchObject({ code: "FORBIDDEN" });
+      expect((await ctx.db.journalEntry.findUniqueOrThrow({ where: { id } })).pushedAt).toBeNull();
+
+      const holder = makeCaller(ctx.event, { syncSecret: "test-sync-secret", peerNodeId: "venue-b" });
+      expect((await holder.events.unshipped({ limit: 50 })).entries.map((e) => e.id)).toContain(id);
+      expect((await holder.events.ackShipped({ ids: [id] })).marked).toBe(1);
+      expect((await holder.events.unshipped({ limit: 50 })).entries.map((e) => e.id)).not.toContain(id);
+    } finally {
+      await releaseLease(ctx.db, ctx.eventId);
+    }
+  });
+
+  it("with no active lease nothing is served or acked; a box that sends no node id is served while a lease is held, with one warning", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const id = await cloudEntry();
+      const anyBox = makeCaller(ctx.event, { syncSecret: "test-sync-secret", peerNodeId: "venue-b" });
+      expect((await anyBox.events.unshipped({ limit: 50 })).entries).toEqual([]);
+      await expect(anyBox.events.ackShipped({ ids: [id] })).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+      await acquireLease(ctx.db, ctx.eventId, "venue-b");
+      const oldBox = makeCaller(ctx.event, { syncSecret: "test-sync-secret" });
+      expect((await oldBox.events.unshipped({ limit: 50 })).entries.map((e) => e.id)).toContain(id);
+      await oldBox.events.unshipped({ limit: 50 });
+      expect(warn.mock.calls.map((c) => c.join(" ")).filter((m) => m.includes("no node id")).length).toBe(1);
+    } finally {
+      warn.mockRestore();
+      await releaseLease(ctx.db, ctx.eventId).catch(() => {});
+    }
+  });
+
+  it("shipAllOnce pushes the backlog of a copy this node no longer holds but pulls nothing for it", async () => {
+    await ctx.db.journalSyncState.upsert({
+      where: { peerId_eventId: { peerId: PEER_URL, eventId: ctx.eventId } },
+      create: { peerId: PEER_URL, eventId: ctx.eventId },
+      update: {},
+    });
+    const calls = { push: 0, unshipped: 0 };
+    const transport: PeerTransport = {
+      push: async (_n, entries) => {
+        calls.push += entries.length;
+        return { synced: entries.map((e) => e.id), failed: [] };
+      },
+      unshipped: async () => {
+        calls.unshipped++;
+        return { entries: [], hasMore: false };
+      },
+      ack: async () => {},
+    };
+    try {
+      await cloudEntry();
+      // Checked in / taken over: lease history, no active lease.
+      await acquireLease(ctx.db, ctx.eventId, nodeId());
+      await releaseLease(ctx.db, ctx.eventId, { forced: true });
+      await shipAllOnce(ctx.db, PEER_URL, transport);
+      expect(calls.push).toBeGreaterThan(0);
+      expect(calls.unshipped).toBe(0);
+
+      // The holder pulls.
+      await acquireLease(ctx.db, ctx.eventId, nodeId());
+      await shipAllOnce(ctx.db, PEER_URL, transport);
+      expect(calls.unshipped).toBe(1);
+    } finally {
+      await ctx.db.eventLease.deleteMany({ where: { eventId: ctx.eventId } });
+      await ctx.db.journalSyncState.deleteMany({ where: { eventId: ctx.eventId } });
     }
   });
 });

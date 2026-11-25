@@ -178,7 +178,11 @@ shaped the original layout was retired in May 2026
 - `oxygen.set_updated_at()` keeps `updated_at` current on every UPDATE.
 - `oxygen.allocate_event_seq()` fills `seq` from `oxygen.event_seqs` on
   INSERT. Passing an explicit `seq` value is allowed (and is how the
-  migration tool preserves legacy IDs).
+  migration tool preserves legacy IDs, and how a checkout snapshot carries
+  the cloud's seqs); an explicit value also raises the table's counter to
+  at least `seq + 1` (never lowers it), so the next implicit insert cannot
+  collide. Restoring rows therefore creates the counters: merge a dump's
+  `event_seqs` with `GREATEST`, never `\copy` it over them.
 
 ### Conventions
 

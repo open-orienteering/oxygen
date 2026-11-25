@@ -5,7 +5,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { mayWriteEventData } from "../sync/lease.js";
-import { beginCheckin, endCheckin } from "../sync/leaseState.js";
+import { beginCheckin, endCheckin, isCheckingIn } from "../sync/leaseState.js";
 
 const EVENT = 7n;
 
@@ -76,5 +76,22 @@ describe("mayWriteEventData", () => {
       ok: false,
       reason: "checking-in",
     });
+  });
+});
+
+describe("the checkin barrier counts per event", () => {
+  it("stays up until every overlapping checkin of the event has ended", () => {
+    beginCheckin(EVENT);
+    beginCheckin(EVENT);
+    expect(isCheckingIn(EVENT)).toBe(true);
+    endCheckin(EVENT);
+    expect(isCheckingIn(EVENT)).toBe(true);
+    endCheckin(EVENT);
+    expect(isCheckingIn(EVENT)).toBe(false);
+    endCheckin(EVENT); // an extra end never goes negative
+    beginCheckin(EVENT);
+    expect(isCheckingIn(EVENT)).toBe(true);
+    endCheckin(EVENT);
+    expect(isCheckingIn(EVENT)).toBe(false);
   });
 });

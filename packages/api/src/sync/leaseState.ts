@@ -7,14 +7,19 @@
  * restart ends a barrier, and the retry starts a new one.
  */
 
-const checkingIn = new Set<bigint>();
+// A count per event, not a set: two overlapping checkins of one event (a
+// double click, a retry racing the first) must not let the first one to finish
+// reopen race writes under the second barrier.
+const checkingIn = new Map<bigint, number>();
 
 export function beginCheckin(eventId: bigint): void {
-  checkingIn.add(eventId);
+  checkingIn.set(eventId, (checkingIn.get(eventId) ?? 0) + 1);
 }
 
 export function endCheckin(eventId: bigint): void {
-  checkingIn.delete(eventId);
+  const n = (checkingIn.get(eventId) ?? 0) - 1;
+  if (n > 0) checkingIn.set(eventId, n);
+  else checkingIn.delete(eventId);
 }
 
 export function isCheckingIn(eventId: bigint): boolean {
