@@ -42,7 +42,7 @@ import {
   type SnapshotGraphic,
   type SnapshotGraphicBlobs,
 } from "./snapshotGraphics.js";
-import { withoutDroppedFields } from "./dropped-columns.js";
+import { knownFields } from "./knownFields.js";
 import type { MapRows } from "./mapRefresh.js";
 
 // ─── Active lease + write guard ─────────────────────────────
@@ -302,7 +302,8 @@ function importRows(
   rows: Record<string, unknown>[],
   snapshot: EventSnapshot,
 ): Record<string, unknown>[] {
-  if (t === "course") return rows.map((r) => withoutDroppedFields("course", r));
+  // Columns the peer has and this schema lacks (a newer cloud) are ignored.
+  rows = rows.map((r) => knownFields(t, r));
   const templateIds = new Set((snapshot.tables.mapTemplate ?? []).map((r) => String(r.id)));
   const knownTemplate = (v: unknown) => (typeof v === "string" && templateIds.has(v) ? v : null);
   if (t === "class") {
@@ -325,7 +326,26 @@ function delegate(db: PrismaClient | Prisma.TransactionClient, table: SnapshotTa
   };
 }
 
+/**
+ * The newest applied migration of this node's database: what a peer compares
+ * to see that the two run different versions (review SYNC-17). Null when it
+ * cannot be read (a database without the Prisma bookkeeping table).
+ */
+export async function schemaName(db: PrismaClient | Prisma.TransactionClient): Promise<string | null> {
+  try {
+    const rows = await db.$queryRaw<Array<{ migration_name: string }>>`
+      SELECT migration_name FROM oxygen._prisma_migrations
+      WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL
+      ORDER BY migration_name DESC LIMIT 1`;
+    return rows[0]?.migration_name ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export interface EventSnapshot {
+  /** The exporter's newest migration (`schemaName`). Absent from an exporter that predates it. */
+  schema?: string | null;
   event: Record<string, unknown>;
   tables: Record<SnapshotTable, Record<string, unknown>[]>;
   seqs: Array<{ tableName: string; nextSeq: number }>;
@@ -394,6 +414,7 @@ export async function exportEventSnapshot(
       });
 
       return {
+        schema: await schemaName(tx),
         event: eventRow as unknown as Record<string, unknown>,
         tables,
         seqs,
@@ -439,8 +460,9 @@ export async function importEventSnapshot(
   graphicBlobs?: SnapshotGraphicBlobs,
   opts: ImportOptions = {},
 ): Promise<EventRef> {
-  // A v0.6.0 exporter still sends the columns E5 dropped.
-  const { id: _dropId, ...eventData } = withoutDroppedFields("event", snapshot.event);
+  // A peer of another version may send columns this schema lacks (the
+  // v0.6.0 exporter's E5 columns, a newer cloud's additions).
+  const { id: _dropId, ...eventData } = knownFields("event", snapshot.event);
   const nameId = String(eventData.nameId);
 
   const localId = await db.$transaction(
@@ -474,7 +496,7 @@ export async function importEventSnapshot(
           // travel verbatim.
           await (tx[t] as unknown as {
             createMany(a: { data: Record<string, unknown>[] }): Promise<unknown>;
-          }).createMany({ data: rows });
+          }).createMany({ data: rows.map((r) => knownFields(t, r)) });
           continue;
         }
         await (tx[t] as unknown as {
@@ -558,7 +580,7 @@ export interface LeasePeer {
    * Who holds the peer's active lease for the event (null: none). Optional:
    * a peer that predates it answers NOT_FOUND, which callers treat as "unknown".
    */
-  holder?(nameId: string): Promise<{ holderNodeId: string | null }>;
+  holder?(nameId: string): Promise<{ holderNodeId: string | null; schema?: string | null }>;
   /** The peer's full event row — the settings-refresh source. */
   exportSettings(nameId: string): Promise<Record<string, unknown>>;
   /** One slice of a map blob the event pins (docs/map-storage.md §7.2). */

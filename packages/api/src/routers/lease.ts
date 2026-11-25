@@ -33,6 +33,7 @@ import {
   importEventSnapshot,
   shippingStatus,
   makeLeasePeer,
+  schemaName,
 } from "../sync/lease.js";
 import { shipEventOnce, makePeerTransport } from "../sync/shipper.js";
 import { beginCheckin, endCheckin } from "../sync/leaseState.js";
@@ -182,7 +183,7 @@ export const leaseRouter = router({
   /** Who holds the active lease, for a peer that wants to know whether it still does (takeover detection). */
   holder: peerProcedure.query(async ({ ctx }) => {
     const lease = await getActiveLease(ctx.db, ctx.event.id);
-    return { holderNodeId: lease?.holderNodeId ?? null };
+    return { holderNodeId: lease?.holderNodeId ?? null, schema: await schemaName(ctx.db) };
   }),
 
   exportSnapshot: peerProcedure.query(async ({ ctx }) => {
@@ -278,6 +279,16 @@ export const leaseRouter = router({
         peerAcquired = true;
 
         const snapshot = await peer.exportSnapshot(input.nameId);
+        // Different versions: rows still import (unknown columns are
+        // ignored), but say so, so a box that lags the cloud is noticed.
+        const localSchema = await schemaName(db);
+        const peerSchema = snapshot.schema ?? null;
+        const schemaDiffers = peerSchema !== null && localSchema !== null && peerSchema !== localSchema;
+        if (schemaDiffers) {
+          console.warn(
+            `[lease] checkout of ${input.nameId}: the cloud's schema (${peerSchema}) differs from this box's (${localSchema}); unknown columns are ignored. Update the older node.`,
+          );
+        }
         // A graphic id another event on this box owns is not replaced
         // unasked (decision D10): refuse before any bytes are fetched.
         if (snapshot.graphics && !input.replaceClashingGraphics) {
@@ -324,6 +335,7 @@ export const leaseRouter = router({
         return {
           ok: true as const,
           eventId: Number(event.id),
+          ...(schemaDiffers ? { peerSchema, localSchema } : {}),
           imported: Object.fromEntries(
             Object.entries(snapshot.tables).map(([t, rows]) => [t, rows.length]),
           ),

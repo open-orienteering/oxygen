@@ -19,7 +19,7 @@ import { mapDocument } from "@oxygen/shared";
 import { Prisma, type PrismaClient } from "../generated/prisma/client.js";
 import { getBlob, getBlobSize, type BlobTable } from "../map-store/blob-store.js";
 import { SOURCE_SLICE_BYTES, sliceRanges } from "../map-store/source-routes.js";
-import { withoutDroppedFields } from "./dropped-columns.js";
+import { knownFields } from "./knownFields.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -433,8 +433,9 @@ export async function createSnapshotMapFiles(
     if (!blobs.sources.has(sourceHash) && (await getBlobSize(tx, "map_sources", sourceHash)) === null) {
       throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Checkout: map source ${sourceHash} is missing on this node.` });
     }
-    // A v0.6.0 exporter still sends the columns E5 dropped.
-    const row: Record<string, unknown> = { ...withoutDroppedFields("mapFile", f), eventId, clubMapVersionId: null };
+    // A peer of another version may send columns this schema lacks (the
+    // v0.6.0 exporter's E5 columns, a newer one's additions).
+    const row: Record<string, unknown> = { ...knownFields("mapFile", f), eventId, clubMapVersionId: null };
     await tx.mapFile.create({ data: withDbNulls(row, NULLABLE_JSON_FILE_FIELDS) as never });
   }
 }

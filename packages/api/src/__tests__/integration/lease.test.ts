@@ -51,6 +51,7 @@ import {
   assertRaceWritable,
   exportEventSnapshot,
   importEventSnapshot,
+  schemaName,
   _setLeasePeerFactory,
   type LeasePeer,
 } from "../../sync/lease.js";
@@ -1838,6 +1839,82 @@ describe("a box that is no longer the holder stops writing (SYNC-08)", () => {
       expect(warn.mock.calls.map((c) => c.join(" ")).filter((m) => m.includes("stale-holder entry"))).toHaveLength(2);
     } finally {
       warn.mockRestore();
+    }
+  });
+});
+
+describe("a peer of another version (SYNC-17)", () => {
+  const warnQuiet = () => vi.spyOn(console, "warn").mockImplementation(() => {});
+
+  it("checks out from a newer cloud whose rows carry columns this schema lacks, and reports the schema difference", async () => {
+    const warn = warnQuiet();
+    _setLeasePeerFactory(() => ({
+      ...leasePeerToB(),
+      exportSnapshot: async () => {
+        const snap = await exportEventSnapshot(dbB, eventB);
+        const extra = { columnFromTheFuture: "x", anotherOne: 3 };
+        return {
+          ...snap,
+          schema: "29991231000000_from_the_future",
+          event: { ...snap.event, ...extra },
+          tables: Object.fromEntries(
+            Object.entries(snap.tables).map(([t, rows]) => [t, rows.map((r) => ({ ...r, ...extra }))]),
+          ) as typeof snap.tables,
+        };
+      },
+    }));
+    try {
+      const res = await caller.lease.checkout({ nameId: CHECKOUT_NAME });
+      expect(res).toMatchObject({ ok: true, peerSchema: "29991231000000_from_the_future" });
+      expect(res.localSchema).toEqual(expect.stringMatching(/^\d{8,}_/));
+      const local = await ctx.db.event.findUniqueOrThrow({ where: { nameId: CHECKOUT_NAME }, select: { id: true } });
+      expect(await ctx.db.runner.count({ where: { eventId: local.id } })).toBe(await dbB.runner.count({ where: { eventId: eventB.id } }));
+      expect(await ctx.db.course.count({ where: { eventId: local.id } })).toBeGreaterThan(0);
+      expect(warn.mock.calls.map((c) => c.join(" ")).join("\n")).toContain("columnFromTheFuture");
+    } finally {
+      warn.mockRestore();
+      _setLeasePeerFactory(() => leasePeerToB());
+      await undoCheckout();
+    }
+  });
+
+  it("a checkout from a peer on the same schema reports no difference", async () => {
+    try {
+      const res = await caller.lease.checkout({ nameId: CHECKOUT_NAME });
+      expect(res).not.toHaveProperty("peerSchema");
+      expect((await exportEventSnapshot(dbB, eventB)).schema).toEqual(await schemaName(ctx.db));
+    } finally {
+      await undoCheckout();
+    }
+  });
+
+  it("lease.holder reports this node's schema", async () => {
+    const peerCaller = makeCaller(ctx.event, { syncSecret: "test-sync-secret" });
+    expect((await peerCaller.lease.holder()).schema).toEqual(await schemaName(ctx.db));
+  });
+
+  it("a settings refresh with a column this schema lacks still applies the known ones", async () => {
+    await caller.lease.checkout({ nameId: CHECKOUT_NAME });
+    const warn = warnQuiet();
+    try {
+      const local = await ctx.db.event.findUniqueOrThrow({
+        where: { nameId: CHECKOUT_NAME },
+        select: { id: true, nameId: true, zeroTime: true },
+      });
+      const refreshed = await refreshCloudOwnedSettings(ctx.db, local, {
+        ...leasePeerToB(),
+        exportSettings: async () => ({
+          ...((await dbB.event.findUniqueOrThrow({ where: { id: eventB.id } })) as unknown as Record<string, unknown>),
+          finishReceiptMessage: "Skew ok",
+          settingFromTheFuture: true,
+        }),
+      });
+      expect(refreshed).toBe(true);
+      expect((await ctx.db.event.findUniqueOrThrow({ where: { id: local.id }, select: { finishReceiptMessage: true } })).finishReceiptMessage).toBe("Skew ok");
+    } finally {
+      warn.mockRestore();
+      await undoCheckout();
+      await dbB.event.update({ where: { id: eventB.id }, data: { finishReceiptMessage: "" } });
     }
   });
 });
