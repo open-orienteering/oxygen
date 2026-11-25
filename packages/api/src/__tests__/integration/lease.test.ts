@@ -825,6 +825,41 @@ describe("checkout → write → checkin lifecycle", () => {
     expect(await getActiveLease(dbB, eventB.id)).toBeNull();
   });
 
+  it("a runner created on the venue ships to the cloud, and the cloud's next create takes the next seq (DB-01)", async () => {
+    await caller.lease.checkout({ nameId: CHECKOUT_NAME });
+    const local = await ctx.db.event.findUniqueOrThrow({
+      where: { nameId: CHECKOUT_NAME },
+      select: { id: true, nameId: true, zeroTime: true },
+    });
+    const venue = makeCaller({ id: local.id, nameId: local.nameId, zeroTime: local.zeroTime });
+    const cls = await ctx.db.class.findFirstOrThrow({ where: { eventId: local.id }, select: { seq: true } });
+    await venue.runner.create({ name: "Venue Vera", classId: cls.seq, cardNo: 800301 });
+    const created = await ctx.db.runner.findFirstOrThrow({ where: { eventId: local.id, cardNo: 800301 } });
+    expect((await venue.lease.checkin()).ok).toBe(true);
+
+    const onB = await dbB.runner.findFirstOrThrow({ where: { eventId: eventB.id, cardNo: 800301 } });
+    expect(onB.seq).toBe(created.seq);
+    // Back on the cloud (B), a plain create continues past the shipped seq.
+    const next = await dbB.runner.create({
+      data: { eventId: eventB.id, name: "Cloud Clara", cardNo: 800302 },
+    });
+    expect(next.seq).toBeGreaterThan(created.seq);
+  });
+
+  it("a re-checkout after that checkin accepts a venue create again (DB-01)", async () => {
+    await caller.lease.checkout({ nameId: CHECKOUT_NAME });
+    const local = await ctx.db.event.findUniqueOrThrow({
+      where: { nameId: CHECKOUT_NAME },
+      select: { id: true, nameId: true, zeroTime: true },
+    });
+    const venue = makeCaller({ id: local.id, nameId: local.nameId, zeroTime: local.zeroTime });
+    const cls = await ctx.db.class.findFirstOrThrow({ where: { eventId: local.id }, select: { seq: true } });
+    await venue.runner.create({ name: "Venue Ville", classId: cls.seq, cardNo: 800303 });
+    const rows = await ctx.db.runner.findMany({ where: { eventId: local.id }, select: { seq: true } });
+    expect(new Set(rows.map((r) => r.seq)).size).toBe(rows.length);
+    expect((await venue.lease.checkin()).ok).toBe(true);
+  });
+
   it("re-checkout replaces the map rows and fetches no blob it already holds", async () => {
     const before = await ctx.db.mapDocument.findUniqueOrThrow({ where: { hash: documentHash }, select: { createdAt: true } });
     const res = await caller.lease.checkout({ nameId: CHECKOUT_NAME });

@@ -353,11 +353,15 @@ export async function importEventSnapshot(
 
       // Seq counters travel with the lease — the holder is the only
       // allocator, so the importing node continues exactly where the
-      // exporter stopped.
-      if (snapshot.seqs.length > 0) {
-        await tx.eventSeq.createMany({
-          data: snapshot.seqs.map((s) => ({ ...s, eventId: created.id })),
-        });
+      // exporter stopped. `allocate_event_seq()` already advanced the
+      // counters past the explicit seq values just inserted; the exporter's
+      // counter wins only when it is higher (it may have burnt values).
+      for (const s of snapshot.seqs) {
+        await tx.$executeRaw`
+          INSERT INTO oxygen.event_seqs (event_id, table_name, next_seq)
+          VALUES (${created.id}, ${s.tableName}, ${s.nextSeq})
+          ON CONFLICT (event_id, table_name)
+          DO UPDATE SET next_seq = GREATEST(oxygen.event_seqs.next_seq, EXCLUDED.next_seq)`;
       }
 
       return created.id;
