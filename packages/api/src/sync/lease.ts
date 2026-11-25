@@ -381,32 +381,22 @@ export async function importEventSnapshot(
 export interface ShippingStatus {
   /** Local journal entries not yet acked by the peer. */
   pendingPush: number;
-  /** When the watermark row last moved (≈ last successful ship). */
+  /** When an entry was last delivered to (or received from) the peer. */
   lastShipAt: string | null;
 }
 
 export async function shippingStatus(
   db: PrismaClient,
   eventId: bigint,
-  peerId: string,
+  _peerId: string,
 ): Promise<ShippingStatus> {
-  const state = await db.journalSyncState.findUnique({
-    where: { peerId_eventId: { peerId, eventId } },
-  });
-  const pushedHlc = state?.pushedHlc ?? 0n;
-  const pushedId = state?.pushedId ?? "";
-  const pendingPush = await db.journalEntry.count({
-    where: {
-      eventId,
-      OR: [
-        { hlc: { gt: pushedHlc } },
-        ...(pushedId ? [{ hlc: pushedHlc, id: { gt: pushedId } }] : []),
-      ],
-    },
-  });
+  const [pendingPush, last] = await Promise.all([
+    db.journalEntry.count({ where: { eventId, pushedAt: null } }),
+    db.journalEntry.aggregate({ where: { eventId }, _max: { pushedAt: true } }),
+  ]);
   return {
     pendingPush,
-    lastShipAt: state?.updatedAt.toISOString() ?? null,
+    lastShipAt: last._max.pushedAt?.toISOString() ?? null,
   };
 }
 

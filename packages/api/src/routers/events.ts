@@ -154,6 +154,14 @@ export interface IngestOptions {
   knownGate?: JournalGate;
   /** Stamp this actor on every journal row instead of the wire `actorId`. */
   actorId?: string | null;
+  /**
+   * The entries come from the peer node (its push, or this node's own pull).
+   * The journal row of an entry ingested here is created already marked
+   * delivered (`pushed_at`), so it is never shipped back; an entry this node
+   * already holds is marked the same way. A follow-up this node journals in
+   * the same transaction is its own decision and stays unmarked.
+   */
+  fromPeer?: boolean;
 }
 
 /** Interactive-transaction limits: `reference.imported` can be hundreds of upserts. */
@@ -197,7 +205,11 @@ export async function ingestJournalEntries(
       if (existing?.eventId === event.id) {
         const refusal = opts.knownGate?.(entry);
         if (refusal) failed.push({ id: entry.id, ...refusal });
-        else synced.push(entry.id);
+        else {
+          // The peer has it, so it needs no delivery in this direction.
+          if (opts.fromPeer) await markJournalShipped(db, event.id, [entry.id]);
+          synced.push(entry.id);
+        }
         continue;
       }
       const refusal = opts.gate?.(entry);
@@ -236,6 +248,7 @@ export async function ingestJournalEntries(
             schemaVersion: entry.schemaVersion ?? 1,
             clientTimestamp: new Date(entry.timestamp),
             payload: entry.payload as never,
+            ...(opts.fromPeer ? { pushedAt: new Date() } : {}),
           },
         });
         const outcome = await applyEvent(tx, event.id, event.zeroTime, entry);
@@ -261,7 +274,10 @@ export async function ingestJournalEntries(
         .findUnique({ where: { id: entry.id }, select: { eventId: true } })
         .catch(() => null);
       if (landed) {
-        if (landed.eventId === event.id) synced.push(entry.id);
+        if (landed.eventId === event.id) {
+          if (opts.fromPeer) await markJournalShipped(db, event.id, [entry.id]).catch(() => {});
+          synced.push(entry.id);
+        }
         else failed.push({ id: entry.id, error: "ENTRY_IN_OTHER_EVENT" });
         continue;
       }
@@ -337,22 +353,63 @@ export async function listJournalEntriesSince(
   const page = hasMore ? rows.slice(0, limit) : rows;
   const last = page.at(-1);
   return {
-    entries: page.map((r) => ({
-      id: r.id,
-      type: r.type as WireJournalEntry["type"],
-      competitionId: event.nameId,
-      stationId: r.stationId,
-      timestamp: r.clientTimestamp.getTime(),
-      hlc: decodeHlc(r.hlc),
-      schemaVersion: r.schemaVersion,
-      actorId: r.actorId,
-      payload: (r.payload ?? {}) as Record<string, unknown>,
-    })),
+    entries: page.map((r) => toWireEntry(event, r)),
     nextCursor: last
       ? { hlc: last.hlc.toString(), id: last.id }
       : { ...cursor },
     hasMore,
   };
+}
+
+type JournalRow = Awaited<ReturnType<PrismaClient["journalEntry"]["findMany"]>>[number];
+
+function toWireEntry(event: EventRef, r: JournalRow): JournalPage["entries"][number] {
+  return {
+    id: r.id,
+    type: r.type as WireJournalEntry["type"],
+    competitionId: event.nameId,
+    stationId: r.stationId,
+    timestamp: r.clientTimestamp.getTime(),
+    hlc: decodeHlc(r.hlc),
+    schemaVersion: r.schemaVersion,
+    actorId: r.actorId,
+    payload: (r.payload ?? {}) as Record<string, unknown>,
+  };
+}
+
+/**
+ * The next page of entries not yet delivered to the other node
+ * (`pushed_at IS NULL`), in this node's arrival order (`ingest_seq`). Shipping
+ * is by delivery mark, not by HLC position: an entry that arrives late with
+ * an old HLC is still unmarked, so it still ships (review MC-02).
+ */
+export async function listUnshippedJournalEntries(
+  db: PrismaClient,
+  event: EventRef,
+  limit: number,
+): Promise<{ entries: JournalPage["entries"]; hasMore: boolean }> {
+  const rows = await db.journalEntry.findMany({
+    where: { eventId: event.id, pushedAt: null },
+    orderBy: { ingestSeq: "asc" },
+    take: limit + 1,
+  });
+  const hasMore = rows.length > limit;
+  const page = hasMore ? rows.slice(0, limit) : rows;
+  return { entries: page.map((r) => toWireEntry(event, r)), hasMore };
+}
+
+/** Mark entries as delivered to the other node. Idempotent; never un-marks. */
+export async function markJournalShipped(
+  db: PrismaClient,
+  eventId: bigint,
+  ids: string[],
+): Promise<number> {
+  if (ids.length === 0) return 0;
+  const res = await db.journalEntry.updateMany({
+    where: { eventId, id: { in: ids }, pushedAt: null },
+    data: { pushedAt: new Date() },
+  });
+  return res.count;
 }
 
 export const eventsRouter = router({
@@ -411,6 +468,8 @@ export const eventsRouter = router({
           gate,
           knownGate: wrongCompetition,
           actorId,
+          // A peer node's push: the entries are already at the peer.
+          fromPeer: ectx.syncSecret ? true : undefined,
         }),
       );
       // serverTimeMs lets the client detect a skewed local clock (see the
@@ -440,6 +499,26 @@ export const eventsRouter = router({
         { hlc: input.afterHlc, id: input.afterId },
         input.limit,
       );
+    }),
+
+  /**
+   * Node-to-node pull by delivery mark: the next page of entries this node
+   * has not yet delivered to its peer, in arrival order. The peer applies
+   * them, then confirms with `ackShipped`. Replaces `since` for a peer that
+   * knows it (`since` stays for an older box).
+   */
+  unshipped: peerProcedure
+    .input(z.object({ limit: z.number().int().min(1).max(500).default(200) }))
+    .query(async ({ ctx, input }) => {
+      return listUnshippedJournalEntries(ctx.db, ctx.event, input.limit);
+    }),
+
+  /** The peer applied these entries: mark them delivered so `unshipped` stops offering them. */
+  ackShipped: peerProcedure
+    .input(z.object({ ids: z.array(z.string().uuid()).max(500) }))
+    .mutation(async ({ ctx, input }) => {
+      const marked = await markJournalShipped(ctx.db, ctx.event.id, input.ids);
+      return { marked };
     }),
 });
 

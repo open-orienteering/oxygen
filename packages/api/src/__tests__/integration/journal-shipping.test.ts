@@ -26,12 +26,16 @@ import { makeCaller } from "../helpers/caller.js";
 import { encodeHlc } from "@oxygen/shared";
 import {
   shipEventOnce,
+  shipAllOnce,
   type PeerTransport,
 } from "../../sync/shipper.js";
 import {
   ingestJournalEntries,
   listJournalEntriesSince,
+  listUnshippedJournalEntries,
+  markJournalShipped,
 } from "../../routers/events.js";
+import { shippingStatus } from "../../sync/lease.js";
 import type { EventRef } from "../../db.js";
 
 const PEER_ID = "test-peer";
@@ -42,6 +46,18 @@ let dbB: PrismaClient; // node B
 let eventB: EventRef;
 let classSeq: number;
 let transport: PeerTransport;
+
+/** In-process transport to node B, calling what the HTTP endpoints call. */
+function makeTransport(): PeerTransport {
+  return {
+    push: (_nameId, entries) => ingestJournalEntries(dbB, eventB, entries, { fromPeer: true }),
+    unshipped: (_nameId, limit) => listUnshippedJournalEntries(dbB, eventB, limit),
+    ack: async (_nameId, ids) => {
+      await markJournalShipped(dbB, eventB.id, ids);
+    },
+    since: (_nameId, cursor, limit) => listJournalEntriesSince(dbB, eventB, cursor, limit),
+  };
+}
 
 /** Create (if needed) + migrate the node-B database in the test container. */
 async function provisionNodeB(): Promise<string> {
@@ -101,11 +117,7 @@ beforeAll(async () => {
   const clsA = await caller.class.create({ name: "H21" });
   classSeq = clsA.id;
 
-  transport = {
-    push: (nameId, entries) => ingestJournalEntries(dbB, eventB, entries),
-    since: (nameId, cursor, limit) =>
-      listJournalEntriesSince(dbB, eventB, cursor, limit),
-  };
+  transport = makeTransport();
 }, 60_000);
 
 afterAll(async () => {
@@ -294,22 +306,23 @@ describe("pull direction: peer-originated entries converge locally", () => {
     expect(entryA).not.toBeNull();
   });
 
-  it("echoing the pulled entry back to B is harmless (id dedupe)", async () => {
-    const before = await dbB.journalEntry.count({
-      where: { eventId: eventB.id },
-    });
-    // Next cycle pushes A's copy of the pulled entry back to B — B must
-    // ack it as already-known without duplicating anything.
-    const stats = await shipEventOnce(ctx.db, ctx.event, PEER_ID, transport);
+  it("a pulled entry is not pushed back to its sender", async () => {
+    const pushed: string[] = [];
+    const counting: PeerTransport = {
+      ...transport,
+      push: async (n, entries) => {
+        pushed.push(...entries.map((e) => e.id));
+        return transport.push(n, entries);
+      },
+    };
+    const stats = await shipEventOnce(ctx.db, ctx.event, PEER_ID, counting);
     expect(stats.errors).toEqual([]);
-    const after = await dbB.journalEntry.count({
-      where: { eventId: eventB.id },
-    });
-    expect(after).toBe(before);
+    expect(pushed).toEqual([]);
     const punchesB = await dbB.punch.count({
       where: { eventId: eventB.id, controlCode: 33 },
     });
     expect(punchesB).toBeLessThanOrEqual(1);
+    expect((await shippingStatus(ctx.db, ctx.eventId, PEER_ID)).pendingPush).toBe(0);
   });
 
   it("dedupes the same physical punch arriving under two entry ids", async () => {
@@ -346,8 +359,8 @@ describe("pull direction: peer-originated entries converge locally", () => {
   });
 });
 
-describe("watermark contiguity", () => {
-  it("a failing entry blocks its stream; the watermark never skips it", async () => {
+describe("delivery-mark contiguity", () => {
+  it("a failing entry blocks its stream; the mark never skips it", async () => {
     // Drain everything so the poison entry is the head of the stream.
     await shipEventOnce(ctx.db, ctx.event, PEER_ID, transport);
 
@@ -384,14 +397,12 @@ describe("watermark contiguity", () => {
     const stats = await shipEventOnce(ctx.db, ctx.event, PEER_ID, transport);
     expect(stats.errors.length).toBeGreaterThan(0);
 
-    // The push watermark stopped strictly before the poison entry.
-    const state = await ctx.db.journalSyncState.findUnique({
-      where: {
-        peerId_eventId: { peerId: PEER_ID, eventId: ctx.eventId },
-      },
-    });
-    expect(state).not.toBeNull();
-    expect(state!.pushedHlc).toBeLessThan(poisonHlc);
+    // The poison entry and the good one behind it stay undelivered.
+    const goodMarked = await ctx.db.journalEntry.findUniqueOrThrow({ where: { id: goodId } });
+    expect(goodMarked.pushedAt).toBeNull();
+    expect(
+      (await ctx.db.journalEntry.findUniqueOrThrow({ where: { id: poisonId } })).pushedAt,
+    ).toBeNull();
 
     // Clean the poison entry up; the stream resumes on the next cycle.
     await ctx.db.journalEntry.delete({ where: { id: poisonId } });
@@ -403,6 +414,137 @@ describe("watermark contiguity", () => {
     expect(goodOnB).not.toBeNull();
   });
 });
+
+describe("shipping by delivery mark (review MC-02, MC-23)", () => {
+  /** A punch entry stamped `ageMs` before now, created directly on a node. */
+  async function lateEntry(db: PrismaClient, eventId: bigint, ageMs: number, code: number) {
+    const id = randomUUID();
+    await db.journalEntry.create({
+      data: {
+        id,
+        eventId,
+        type: "punch.recorded",
+        stationId: "late-station",
+        hlc: encodeHlc({ physical: Date.now() - ageMs, logical: 0 }),
+        schemaVersion: 1,
+        clientTimestamp: new Date(Date.now() - ageMs),
+        payload: { cardNo: 700100, controlCode: code, time: 365000 + code, origin: "online_input" },
+      },
+    });
+    return id;
+  }
+
+  it("an entry arriving late with an HLC below the newest shipped one still ships", async () => {
+    await shipEventOnce(ctx.db, ctx.event, PEER_ID, transport);
+    expect((await shippingStatus(ctx.db, ctx.eventId, PEER_ID)).pendingPush).toBe(0);
+
+    const id = await lateEntry(ctx.db, ctx.eventId, 60_000, 71);
+    expect((await shippingStatus(ctx.db, ctx.eventId, PEER_ID)).pendingPush).toBe(1);
+
+    const stats = await shipEventOnce(ctx.db, ctx.event, PEER_ID, transport);
+    expect(stats.errors).toEqual([]);
+    expect(stats.pushed).toBe(1);
+    expect(await dbB.journalEntry.findUnique({ where: { id } })).not.toBeNull();
+    expect((await shippingStatus(ctx.db, ctx.eventId, PEER_ID)).pendingPush).toBe(0);
+  });
+
+  it("the same in the pull direction: a late entry on B reaches A", async () => {
+    await shipEventOnce(ctx.db, ctx.event, PEER_ID, transport);
+    const id = await lateEntry(dbB, eventB.id, 60_000, 72);
+    const stats = await shipEventOnce(ctx.db, ctx.event, PEER_ID, transport);
+    expect(stats.errors).toEqual([]);
+    expect(stats.pulled).toBe(1);
+    expect(await ctx.db.journalEntry.findUnique({ where: { id } })).not.toBeNull();
+    expect(
+      (await dbB.journalEntry.findUniqueOrThrow({ where: { id } })).pushedAt,
+    ).not.toBeNull();
+  });
+
+  it("an entry received from the peer is created marked delivered", async () => {
+    const id = await lateEntry(dbB, eventB.id, 1_000, 73);
+    await shipEventOnce(ctx.db, ctx.event, PEER_ID, transport);
+    const row = await ctx.db.journalEntry.findUniqueOrThrow({ where: { id } });
+    expect(row.pushedAt).not.toBeNull();
+  });
+
+  it("legacy peer: a transport whose unshipped answers NOT_FOUND pulls through since", async () => {
+    await shipEventOnce(ctx.db, ctx.event, PEER_ID, transport);
+    const id = await lateEntry(dbB, eventB.id, 0, 74);
+    const legacy: PeerTransport = {
+      ...transport,
+      unshipped: async () => {
+        throw Object.assign(new Error("No procedure found"), { code: "NOT_FOUND" });
+      },
+    };
+    const stats = await shipEventOnce(ctx.db, ctx.event, PEER_ID, legacy);
+    expect(stats.errors).toEqual([]);
+    expect(stats.pulled).toBeGreaterThanOrEqual(1);
+    expect(await ctx.db.journalEntry.findUnique({ where: { id } })).not.toBeNull();
+  });
+
+  it("a failed ack is not an error: the entry is offered again and applies once", async () => {
+    const id = await lateEntry(dbB, eventB.id, 0, 75);
+    const failing: PeerTransport = { ...transport, ack: async () => { throw new Error("link lost"); } };
+    await expect(shipEventOnce(ctx.db, ctx.event, PEER_ID, failing)).rejects.toThrow("link lost");
+    expect(await ctx.db.journalEntry.count({ where: { id } })).toBe(1);
+    const stats = await shipEventOnce(ctx.db, ctx.event, PEER_ID, transport);
+    expect(stats.errors).toEqual([]);
+    expect(
+      await ctx.db.punch.count({ where: { eventId: ctx.eventId, cardNo: 700100, controlCode: 75 } }),
+    ).toBe(1);
+    expect((await dbB.journalEntry.findUniqueOrThrow({ where: { id } })).pushedAt).not.toBeNull();
+  });
+
+  it("events.unshipped and events.ackShipped sit behind the shared secret and mark delivery", async () => {
+    await expect(caller.events.unshipped({ limit: 5 })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    const peer = makeCaller(ctx.event, { syncSecret: "test-sync-secret" });
+    const id = await lateEntry(ctx.db, ctx.eventId, 0, 76);
+    const page = await peer.events.unshipped({ limit: 500 });
+    expect(page.entries.map((e) => e.id)).toContain(id);
+    expect((await peer.events.ackShipped({ ids: [id] })).marked).toBe(1);
+    const after = await peer.events.unshipped({ limit: 500 });
+    expect(after.entries.map((e) => e.id)).not.toContain(id);
+  });
+});
+
+describe("shipAllOnce scope (review MC-23)", () => {
+  it("ships only events with a sync-state row for the peer", async () => {
+    const seen: string[] = [];
+    const spy: PeerTransport = {
+      ...transport,
+      push: async (nameId, entries) => {
+        seen.push(nameId);
+        return { synced: entries.map((e) => e.id), failed: [] };
+      },
+      unshipped: async (nameId) => {
+        seen.push(nameId);
+        return { entries: [], hasMore: false };
+      },
+    };
+    await lateEntry2();
+    const peer = "scope-peer";
+    await shipAllOnce(ctx.db, peer, spy);
+    expect(seen).not.toContain(ctx.nameId); // no sync-state row for this peer yet
+    await ctx.db.journalSyncState.create({ data: { peerId: peer, eventId: ctx.eventId } });
+    await shipAllOnce(ctx.db, peer, spy);
+    expect(seen).toContain(ctx.nameId);
+  });
+});
+
+async function lateEntry2() {
+  await ctx.db.journalEntry.create({
+    data: {
+      id: randomUUID(),
+      eventId: ctx.eventId,
+      type: "punch.recorded",
+      stationId: "scope",
+      hlc: encodeHlc({ physical: Date.now(), logical: 0 }),
+      schemaVersion: 1,
+      clientTimestamp: new Date(),
+      payload: { cardNo: 700100, controlCode: 77, time: 366000, origin: "online_input" },
+    },
+  });
+}
 
 describe("events.since endpoint guard", () => {
   it("rejects calls without the shared secret", async () => {

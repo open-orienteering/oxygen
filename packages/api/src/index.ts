@@ -12,6 +12,7 @@ import { appRouter, type AppRouter } from "./routers/index.js";
 export type { AppRouter };
 import { createContext } from "./trpc.js";
 import { disconnectAll, prisma } from "./db.js";
+import { seedServerClock } from "./serverClock.js";
 import { backgroundSupervisor } from "./background/supervisor.js";
 import { registerVenueForwarder } from "./sync/venueForwarder.js";
 import { SYNC_SECRET_HEADER } from "./sync/nodeIdentity.js";
@@ -119,6 +120,9 @@ async function main() {
   registerMapSourceRoutes(server);
   registerMapUploadRoutes(server);
   startImportJobEngine(prisma());
+  // The node clock restarts at zero: fold in the journal's highest stamp
+  // before the first request can mint one (review SYNC-01).
+  seedServerClock((await prisma().journalEntry.aggregate({ _max: { hlc: true } }))._max.hlc);
   // DEM fetch is opt-in (docs/map-terrain.md §7.0 answer 4, §7.8): Settings →
   // Height data over the MAP_DEM_* environment, re-read before each engine kick.
   installDemConfigSource(process.env);

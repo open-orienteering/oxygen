@@ -61,6 +61,8 @@ import { refreshCloudOwnedSettings } from "../../sync/settingsRefresh.js";
 import {
   ingestJournalEntries,
   listJournalEntriesSince,
+  listUnshippedJournalEntries,
+  markJournalShipped,
 } from "../../routers/events.js";
 import type { EventRef } from "../../db.js";
 import { importAndStoreOcad } from "../../map-store/documents.js";
@@ -154,7 +156,12 @@ function jsonLeasePeerToB(): LeasePeer {
 
 function transportToB(): PeerTransport {
   return {
-    push: (_nameId, entries) => ingestJournalEntries(dbB, eventB, entries),
+    // As `events.push` on the node-secret path: the entries are from the peer.
+    push: (_nameId, entries) => ingestJournalEntries(dbB, eventB, entries, { fromPeer: true }),
+    unshipped: (_nameId, limit) => listUnshippedJournalEntries(dbB, eventB, limit),
+    ack: async (_nameId, ids) => {
+      await markJournalShipped(dbB, eventB.id, ids);
+    },
     since: (_nameId, cursor, limit) =>
       listJournalEntriesSince(dbB, eventB, cursor, limit),
   };
@@ -798,11 +805,8 @@ describe("checkout → write → checkin lifecycle", () => {
     // Barrier: with a dead transport, checkin must refuse.
     _setPeerTransportFactory(() => ({
       push: async () => ({ synced: [], failed: [{ id: "x", error: "offline" }] }),
-      since: async () => ({
-        entries: [],
-        nextCursor: { hlc: "0", id: "" },
-        hasMore: false,
-      }),
+      unshipped: async () => ({ entries: [], hasMore: false }),
+      ack: async () => {},
     }));
     await expect(leaseCaller.lease.checkin()).rejects.toMatchObject({
       code: "PRECONDITION_FAILED",

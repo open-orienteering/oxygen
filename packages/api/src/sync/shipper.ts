@@ -3,24 +3,30 @@
  *
  * Background worker that keeps this node's journal converged with its peer:
  *
- *   - **Push**: local entries above the peer's push watermark go to the
- *     peer's `events.push` (the same idempotent sink stations drain into).
- *   - **Pull**: peer entries above the pull watermark come back via
- *     `events.since` and are ingested through the exact same
- *     `ingestJournalEntries` path, so a pulled entry and a pushed entry have
- *     identical apply semantics.
+ *   - **Push**: local entries not yet delivered (`journal.pushed_at IS NULL`,
+ *     in local arrival order, `ingest_seq`) go to the peer's `events.push`
+ *     (the same idempotent sink stations drain into), and are marked
+ *     delivered once the peer acks them.
+ *   - **Pull**: the peer's undelivered entries come back via
+ *     `events.unshipped`, are ingested through the exact same
+ *     `ingestJournalEntries` path (so a pulled entry and a pushed entry have
+ *     identical apply semantics) and confirmed with `events.ackShipped`.
  *
- * Watermarks live in `journal_sync_state`, keyed by `(peer_id, event_id)`,
- * as `(hlc, id)` cursors. **A watermark only advances contiguously**: the
- * batch is walked in canonical order and stops at the first failure, so a
- * failed entry is retried every cycle and nothing behind it is skipped. A
- * permanently failing entry therefore blocks its event's stream and logs
- * loudly every cycle — deliberate (single-copy durability beats silent
- * gaps); operator tooling for quarantine arrives with the lease UI (Step 4).
+ * Delivery is a mark on the row, not a position in the HLC order: an entry
+ * that reaches a node late with an old HLC (a station's outbox draining
+ * after the clock moved on) is still unmarked, so it still ships. **A mark
+ * only advances over a contiguous prefix**: the page is walked in order and
+ * stops at the first failure, so a failed entry is retried every cycle and
+ * nothing behind it is skipped. A permanently failing entry therefore blocks
+ * its event's stream and logs loudly every cycle: deliberate (single-copy
+ * durability beats silent gaps).
  *
- * Entries this node ingested *from* the peer are pushed back on the next
- * cycle (no origin tracking) — the peer skips them by id, so the echo costs
- * one round of bandwidth per entry and nothing else.
+ * Entries this node ingested *from* the peer are created already marked, so
+ * nothing is echoed back.
+ *
+ * Against a peer that predates `events.unshipped` the pull falls back to the
+ * old `(hlc, id)` cursor in `journal_sync_state` (`events.since`); the push is
+ * the same.
  *
  * The shipper is enabled by setting `SYNC_PEER_URL` (+ the shared secret).
  * In the target topology the venue dials the cloud; the cloud runs no
@@ -35,13 +41,15 @@ import {
 import type { AppRouter } from "../routers/index.js";
 import {
   ingestJournalEntries,
-  listJournalEntriesSince,
+  listUnshippedJournalEntries,
+  markJournalShipped,
   type JournalCursor,
   type JournalPage,
   type WireJournalEntry,
 } from "../routers/events.js";
 import { prisma, type EventRef, type PrismaClient } from "../db.js";
 import { encodeHlc } from "@oxygen/shared";
+import { TRPCClientError } from "@trpc/client";
 import {
   SYNC_SECRET_HEADER,
   syncIntervalMs,
@@ -63,11 +71,27 @@ export interface PeerTransport {
     nameId: string,
     entries: WireJournalEntry[],
   ): Promise<{ synced: string[]; failed: Array<{ id: string; error: string }> }>;
-  since(
+  /** The peer's next page of entries it has not delivered to this node. */
+  unshipped(
+    nameId: string,
+    limit: number,
+  ): Promise<{ entries: JournalPage["entries"]; hasMore: boolean }>;
+  /** Tell the peer these entries are applied here (it marks them delivered). */
+  ack(nameId: string, ids: string[]): Promise<void>;
+  /** Legacy pull for a peer without `unshipped` (an older box or cloud). */
+  since?(
     nameId: string,
     cursor: JournalCursor,
     limit: number,
   ): Promise<JournalPage>;
+}
+
+/** The peer answered that it has no such procedure (it is older than this node). */
+export function isProcedureMissing(err: unknown): boolean {
+  if (err instanceof TRPCClientError) {
+    return (err.data as { code?: string } | undefined)?.code === "NOT_FOUND";
+  }
+  return (err as { code?: string } | null)?.code === "NOT_FOUND";
 }
 
 /**
@@ -107,6 +131,12 @@ export function httpPeerTransport(
         events: entries,
       });
       return { synced: res.synced, failed: res.failed };
+    },
+    async unshipped(nameId, limit) {
+      return clientFor(nameId).events.unshipped.query({ limit });
+    },
+    async ack(nameId, ids) {
+      await clientFor(nameId).events.ackShipped.mutate({ ids });
     },
     async since(nameId, cursor, limit) {
       return clientFor(nameId).events.since.query({
@@ -177,10 +207,23 @@ export interface ShipStats {
   errors: string[];
 }
 
+/** Warn once per process that the peer predates `events.unshipped`. */
+let warnedLegacyPeer = false;
+
+/** Ids of the longest prefix of `entries` that `acked` contains. */
+function ackedPrefix(entries: Array<{ id: string }>, acked: Set<string>): string[] {
+  const ids: string[] = [];
+  for (const e of entries) {
+    if (!acked.has(e.id)) break;
+    ids.push(e.id);
+  }
+  return ids;
+}
+
 /**
- * Push all local entries above the push watermark to the peer, then pull all
- * peer entries above the pull watermark and apply them locally. Exported for
- * the integration harness; the background worker loops it over all events.
+ * Push all undelivered local entries to the peer, then pull all the peer's
+ * undelivered entries and apply them locally. Exported for the integration
+ * harness; the background worker loops it over the events it ships.
  */
 export async function shipEventOnce(
   db: PrismaClient,
@@ -192,31 +235,16 @@ export async function shipEventOnce(
 
   // ── Push ──
   for (;;) {
-    const state = await getSyncState(db, peerId, event.id);
-    const page = await listJournalEntriesSince(
-      db,
-      event,
-      { hlc: state.pushedHlc.toString(), id: state.pushedId },
-      PUSH_BATCH,
-    );
+    const page = await listUnshippedJournalEntries(db, event, PUSH_BATCH);
     if (page.entries.length === 0) break;
 
     const res = await transport.push(event.nameId, page.entries);
-    const syncedIds = new Set(res.synced);
-
-    // Contiguous advance: walk the batch in canonical order, stop at the
-    // first entry the peer did not ack.
-    let lastAcked: (typeof page.entries)[number] | undefined;
-    for (const entry of page.entries) {
-      if (!syncedIds.has(entry.id)) break;
-      lastAcked = entry;
-      stats.pushed++;
-    }
-    if (lastAcked) {
-      await saveSyncState(db, peerId, event.id, {
-        pushedHlc: encodeHlc(lastAcked.hlc),
-        pushedId: lastAcked.id,
-      });
+    // Contiguous advance: walk the batch in order, stop at the first entry
+    // the peer did not ack.
+    const ids = ackedPrefix(page.entries, new Set(res.synced));
+    if (ids.length > 0) {
+      await markJournalShipped(db, event.id, ids);
+      stats.pushed += ids.length;
     }
     if (res.failed.length > 0) {
       stats.errors.push(
@@ -224,20 +252,67 @@ export async function shipEventOnce(
       );
       break; // Failed entry blocks the stream; retried next cycle.
     }
-    if (!page.hasMore) break;
+    // Nothing (or only part of the page) was acked: the next page would be
+    // the same entries again.
+    if (ids.length < page.entries.length || !page.hasMore) break;
   }
 
   // ── Pull ──
+  let legacy = false;
+  for (;;) {
+    let page: { entries: JournalPage["entries"]; hasMore: boolean };
+    try {
+      page = await transport.unshipped(event.nameId, PULL_BATCH);
+    } catch (err) {
+      if (!isProcedureMissing(err) || !transport.since) throw err;
+      if (!warnedLegacyPeer) {
+        warnedLegacyPeer = true;
+        console.warn(
+          "[shipper] peer has no events.unshipped (older version): pulling by HLC cursor; upgrade the peer to ship late entries reliably.",
+        );
+      }
+      legacy = true;
+      break;
+    }
+    if (page.entries.length === 0) break;
+
+    const res = await ingestJournalEntries(db, event, page.entries, { fromPeer: true });
+    const ids = ackedPrefix(page.entries, new Set(res.synced));
+    if (ids.length > 0) {
+      stats.pulled += ids.length;
+      await transport.ack(event.nameId, ids);
+    }
+    if (res.failed.length > 0) {
+      stats.errors.push(
+        ...res.failed.map((f) => `pull ${f.id}: ${f.error}`),
+      );
+      break;
+    }
+    if (ids.length < page.entries.length || !page.hasMore) break;
+  }
+  if (legacy) await legacyPull(db, event, peerId, transport, stats);
+
+  return stats;
+}
+
+/** The pre-delivery-mark pull: `(hlc, id)` cursor in `journal_sync_state`, `events.since` on the peer. */
+async function legacyPull(
+  db: PrismaClient,
+  event: EventRef,
+  peerId: string,
+  transport: PeerTransport,
+  stats: ShipStats,
+): Promise<void> {
   for (;;) {
     const state = await getSyncState(db, peerId, event.id);
-    const page = await transport.since(
+    const page = await transport.since!(
       event.nameId,
       { hlc: state.pulledHlc.toString(), id: state.pulledId },
       PULL_BATCH,
     );
     if (page.entries.length === 0) break;
 
-    const res = await ingestJournalEntries(db, event, page.entries);
+    const res = await ingestJournalEntries(db, event, page.entries, { fromPeer: true });
     const syncedIds = new Set(res.synced);
 
     let lastApplied: (typeof page.entries)[number] | undefined;
@@ -260,8 +335,6 @@ export async function shipEventOnce(
     }
     if (!page.hasMore) break;
   }
-
-  return stats;
 }
 
 /** One full cycle: ship every non-removed local event. */
@@ -270,8 +343,11 @@ export async function shipAllOnce(
   peerId: string,
   transport: PeerTransport,
 ): Promise<void> {
+  // Only events checked out against this peer (checkout writes the
+  // sync-state row). An event this box created or kept for itself is not
+  // sent to the cloud, and its slug is never asked of the cloud (review MC-23).
   const events = await db.event.findMany({
-    where: { removed: false },
+    where: { removed: false, journalSyncStates: { some: { peerId } } },
     select: { id: true, nameId: true, zeroTime: true },
   });
   for (const ev of events) {
