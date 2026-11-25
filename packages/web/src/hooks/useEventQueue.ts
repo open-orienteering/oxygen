@@ -1,8 +1,8 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useOnlineStatus } from "./useOnlineStatus";
 import { usePageVisible } from "./usePageVisible";
-import { getPendingCount, getFailedCount, retryAllFailedEvents } from "../lib/offline/events";
-import { drainEventQueue, cleanupSyncedEvents, getDrainBlockedReason, type DrainBlockedReason } from "../lib/offline/sync";
+import { getPendingCount, getFailedCount, retryAllFailedEvents, subscribeEnqueue } from "../lib/offline/events";
+import { drainEventQueue, cleanupSyncedEvents, getDrainBlockedReason, countHeldEvents, type DrainBlockedReason } from "../lib/offline/sync";
 import { createAutoDrain } from "../lib/offline/auto-drain";
 import { trpc } from "../lib/trpc";
 import { usePerformanceSensitive } from "../lib/performance-mode";
@@ -24,6 +24,8 @@ export function useEventQueue(competitionId?: string) {
   /** Pending entries of every event on this device: another event's entries drain too (each under its own header). */
   const [totalPending, setTotalPending] = useState(0);
   const [failedCount, setFailedCount] = useState(0);
+  /** Pending entries held back behind a failed entry of the open event. */
+  const [heldCount, setHeldCount] = useState(0);
   const [syncing, setSyncing] = useState(false);
   /** The server refuses this device's push: the entries wait for an operator to sign in. */
   const [needsSignIn, setNeedsSignIn] = useState(false);
@@ -45,6 +47,7 @@ export function useEventQueue(competitionId?: string) {
       setPendingCount(filtered);
       setTotalPending(total);
       setFailedCount(await getFailedCount(competitionId));
+      setHeldCount(competitionId ? await countHeldEvents(competitionId) : 0);
     };
     refresh();
     if (!pollingActive) return;
@@ -58,8 +61,9 @@ export function useEventQueue(competitionId?: string) {
     setSyncing(true);
     try {
       const count = await drainEventQueue();
-      setNeedsSignIn(getDrainBlockedReason(competitionId) === "auth");
-      setBlockedReason(getDrainBlockedReason(competitionId));
+      const reason = getDrainBlockedReason(competitionId);
+      setNeedsSignIn(reason === "auth");
+      setBlockedReason(reason);
       if (count > 0) {
         // Refresh pending count
         const remaining = await getPendingCount(competitionId);
@@ -82,6 +86,8 @@ export function useEventQueue(competitionId?: string) {
     controller?.resume();
     return () => controller?.stop();
   }, []);
+  // An entry queued on this page drains at once (not when the next poll sees it).
+  useEffect(() => subscribeEnqueue(() => autoDrain.current?.enqueued()), []);
   useEffect(() => {
     autoDrain.current?.update({ online: isOnline, total: totalPending, scope: competitionId });
   }, [isOnline, totalPending, competitionId]);
@@ -97,11 +103,13 @@ export function useEventQueue(competitionId?: string) {
     setSyncing(true);
     try {
       await drainEventQueue(competitionId);
-      setNeedsSignIn(getDrainBlockedReason(competitionId) === "auth");
-      setBlockedReason(getDrainBlockedReason(competitionId));
+      const reason = getDrainBlockedReason(competitionId);
+      setNeedsSignIn(reason === "auth");
+      setBlockedReason(reason);
       const remaining = await getPendingCount(competitionId);
       setPendingCount(remaining);
       setFailedCount(await getFailedCount(competitionId));
+      setHeldCount(competitionId ? await countHeldEvents(competitionId) : 0);
       await utils.invalidate();
     } finally {
       setSyncing(false);
@@ -118,6 +126,7 @@ export function useEventQueue(competitionId?: string) {
   return {
     pendingCount,
     failedCount,
+    heldCount,
     syncing,
     needsSignIn,
     blockedReason,

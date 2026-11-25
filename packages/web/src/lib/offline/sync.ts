@@ -1,4 +1,4 @@
-import type { Capability } from "@oxygen/shared";
+import { compareHlc, isBatchStoppingCode, type Capability, type Hlc } from "@oxygen/shared";
 import { offlineDb, type OxygenEvent } from "./db";
 import { trpcClientForEvent } from "../trpc";
 import { recordClockSkew } from "./clock-skew";
@@ -24,14 +24,26 @@ export function getDrainBlockedReason(competitionId: string | undefined): DrainB
 }
 
 /**
- * Failure codes after which the server stopped the batch (the entries behind
- * the failed one came back in neither list). A pending entry ordered behind
- * one of these in the same competition is held until the operator retries or
- * discards the failed entry, so a later finish / result never applies before
- * a failed registration. A refusal that does not stop the server (FORBIDDEN,
- * COMPETITION_MISMATCH, ...) holds nothing.
+ * A failed entry whose code is in `JOURNAL_BATCH_STOPPING_CODES`
+ * (`@oxygen/shared`, the set the server stops its batch at) holds the pending
+ * entries ordered behind it in the same competition until the operator
+ * retries or discards it, so a later finish / result never applies before a
+ * failed registration. A refusal that does not stop the server (FORBIDDEN,
+ * COMPETITION_MISMATCH, ENTRY_IN_OTHER_EVENT) holds nothing, and neither does
+ * an entry the server's schema check rejected on its own (`rejectedBySchema`:
+ * nothing was applied, so nothing depends on it).
  */
-const BATCH_STOPPING_CODES: ReadonlySet<string> = new Set(["APPLY_FAILED", "INVALID_PAYLOAD"]);
+function holdsLaterEntries(e: OxygenEvent): boolean {
+  return !e.rejectedBySchema && isBatchStoppingCode(e.error);
+}
+
+/** Send order and hold boundary: the HLC, the wall clock only for entries without one. */
+function orderKey(e: OxygenEvent): Hlc {
+  return e.hlc ?? { physical: e.timestamp, logical: 0 };
+}
+function compareEntries(a: OxygenEvent, b: OxygenEvent): number {
+  return compareHlc(orderKey(a), orderKey(b)) || a.timestamp - b.timestamp;
+}
 
 /** tRPC UNAUTHORIZED / FORBIDDEN from a failed push. */
 export function isAuthRefusal(err: unknown): boolean {
@@ -140,7 +152,9 @@ export interface EventDrainerDeps {
 
 export function createEventDrainer({ store, pushFor, now = Date.now }: EventDrainerDeps) {
   /** Competitions with a drain running. A drain of B never waits for A (MC-01). */
-  const draining = new Set<string>();
+  const draining = new Map<string, Promise<void>>();
+  /** Competitions asked for another pass while draining. */
+  const rerun = new Set<string>();
 
   async function markFailure(
     failure: PushResult["failed"][number],
@@ -152,6 +166,7 @@ export function createEventDrainer({ store, pushFor, now = Date.now }: EventDrai
       status: "failed",
       error: failure.error,
       capability: failure.capability,
+      rejectedBySchema: undefined,
       attempts: event.attempts + 1,
     });
   }
@@ -186,6 +201,11 @@ export function createEventDrainer({ store, pushFor, now = Date.now }: EventDrai
       try {
         const result = await push({ events: [serializeEvent(event)] });
         synced += (await applyResult(result)).synced;
+        // The server stopped at this entry (an apply failure): the ones
+        // behind it wait, exactly as after a stopped batch.
+        if (result.failed.some((f) => isBatchStoppingCode(f.error))) {
+          return { synced, stop: true, stopAll: false };
+        }
       } catch (err) {
         const kind = classifyPushError(err);
         if (kind === "bad-request") {
@@ -194,6 +214,9 @@ export function createEventDrainer({ store, pushFor, now = Date.now }: EventDrai
             status: "failed",
             error: "INVALID_PAYLOAD",
             capability: undefined,
+            // Nothing was applied and it can never succeed: it must not hold
+            // the entries behind it (see `holdsLaterEntries`).
+            rejectedBySchema: true,
             attempts: (current?.attempts ?? event.attempts) + 1,
           });
           continue;
@@ -207,19 +230,24 @@ export function createEventDrainer({ store, pushFor, now = Date.now }: EventDrai
   }
 
   /**
-   * The pending entries that may go out: those ordered before the earliest
-   * failed entry the server stopped a batch at. Everything behind it waits
-   * until that entry is retried (it is pending again, so it goes first) or
-   * discarded.
+   * The pending entries that may go out, in HLC order: those ordered before
+   * the earliest failed entry the server stopped a batch at. Everything
+   * behind it waits until that entry is retried (it is pending again, so it
+   * goes first) or discarded.
    */
-  async function sendable(competitionId: string): Promise<OxygenEvent[]> {
-    const pending = await store.pending(competitionId);
-    const stops = (await store.failed(competitionId))
-      .filter((e) => e.error && BATCH_STOPPING_CODES.has(e.error))
-      .map((e) => e.timestamp);
-    if (stops.length === 0) return pending;
-    const limit = Math.min(...stops);
-    return pending.filter((e) => e.timestamp < limit);
+  async function split(competitionId: string): Promise<{ sendable: OxygenEvent[]; held: OxygenEvent[] }> {
+    const pending = [...(await store.pending(competitionId))].sort(compareEntries);
+    const stops = (await store.failed(competitionId)).filter(holdsLaterEntries).sort(compareEntries);
+    if (stops.length === 0) return { sendable: pending, held: [] };
+    const limit = orderKey(stops[0]);
+    const before = (e: OxygenEvent) => compareHlc(orderKey(e), limit) < 0;
+    return { sendable: pending.filter(before), held: pending.filter((e) => !before(e)) };
+  }
+  const sendable = async (competitionId: string) => (await split(competitionId)).sendable;
+
+  /** How many pending entries wait behind a failed one. */
+  async function countHeld(competitionId: string): Promise<number> {
+    return (await split(competitionId)).held.length;
   }
 
   async function drainOne(competitionId: string): Promise<Step> {
@@ -236,7 +264,7 @@ export function createEventDrainer({ store, pushFor, now = Date.now }: EventDrai
         synced += applied.synced;
         // The server stopped its batch at a failed entry: the rest of this
         // competition waits behind it (see `sendable`).
-        if (result.failed.some((f) => BATCH_STOPPING_CODES.has(f.error))) {
+        if (result.failed.some((f) => isBatchStoppingCode(f.error))) {
           return { synced, stop: true, stopAll: false };
         }
         // An answer that settled nothing would repeat forever.
@@ -262,25 +290,49 @@ export function createEventDrainer({ store, pushFor, now = Date.now }: EventDrai
    * Drain the pending queue in order, every competition's entries under that
    * competition's own header. With a `competitionId` only that one drains.
    * Returns the number of entries synced.
+   *
+   * A request for a competition that is already draining does not start a
+   * second drain: it asks the running one for another pass (the running one
+   * may be past the point where it would see the new work, e.g. a Discard
+   * right at its last iteration) and waits for it.
    */
   async function drain(competitionId?: string): Promise<number> {
     const ids = competitionId
       ? [competitionId]
       : [...new Set((await store.pending()).map((e) => e.competitionId))];
     let syncedCount = 0;
+    const waiting: Array<Promise<unknown>> = [];
     for (const id of ids) {
-      if (draining.has(id)) continue;
-      draining.add(id);
-      blockedReasons.delete(id);
+      const running = draining.get(id);
+      if (running) {
+        rerun.add(id);
+        waiting.push(running);
+        continue;
+      }
+      const pass = runCompetition(id);
+      draining.set(id, pass.then(() => undefined, () => undefined));
       try {
-        const step = await drainOne(id);
+        const step = await pass;
         syncedCount += step.synced;
         if (step.stopAll) break;
       } finally {
         draining.delete(id);
       }
     }
+    await Promise.all(waiting);
     return syncedCount;
+  }
+
+  async function runCompetition(id: string): Promise<Step> {
+    let total = 0;
+    while (true) {
+      rerun.delete(id);
+      blockedReasons.delete(id);
+      const step = await drainOne(id);
+      total += step.synced;
+      if (step.stopAll) return { synced: total, stop: true, stopAll: true };
+      if (!rerun.has(id)) return { synced: total, stop: false, stopAll: false };
+    }
   }
 
   /** Delete synced entries older than 24 hours; pending and failed stay. */
@@ -290,7 +342,7 @@ export function createEventDrainer({ store, pushFor, now = Date.now }: EventDrai
     return old.length;
   }
 
-  return { drain, cleanupSynced };
+  return { drain, cleanupSynced, countHeld };
 }
 
 const dexieDrainer = createEventDrainer({
@@ -301,6 +353,9 @@ const dexieDrainer = createEventDrainer({
 
 /** Drain the pending event queue; called when connectivity is restored. */
 export const drainEventQueue = dexieDrainer.drain;
+
+/** Pending entries of one competition held behind a failed entry (for the sync panel). */
+export const countHeldEvents = dexieDrainer.countHeld;
 
 /** Clean up old synced events (older than 24 hours). */
 export const cleanupSyncedEvents = dexieDrainer.cleanupSynced;

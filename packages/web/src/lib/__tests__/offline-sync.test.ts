@@ -109,10 +109,11 @@ describe("event drain", () => {
     });
     const a = drainer.drain("a");
     expect(await drainer.drain("b")).toBe(1);
-    // A is locked: a second drain of A does nothing.
-    expect(await drainer.drain("a")).toBe(0);
+    // A is locked: a second drain of A starts nothing of its own (it waits for the running one).
+    const second = drainer.drain("a");
     releaseA();
     expect(await a).toBe(1);
+    expect(await second).toBe(0);
   });
 
   it("4. marks synced and failed, bumps attempts, stores the code and capability", async () => {
@@ -168,7 +169,12 @@ describe("event drain", () => {
     };
     const drainer = createEventDrainer({ store, pushFor: () => push });
     expect(await drainer.drain()).toBe(49);
-    expect(store.rows.get(badId)).toMatchObject({ status: "failed", error: "INVALID_PAYLOAD", attempts: 1 });
+    expect(store.rows.get(badId)).toMatchObject({
+      status: "failed",
+      error: "INVALID_PAYLOAD",
+      rejectedBySchema: true,
+      attempts: 1,
+    });
     expect([...store.rows.values()].filter((e) => e.status === "synced")).toHaveLength(49);
   });
 
@@ -282,12 +288,138 @@ describe("event drain", () => {
     expect(sent).toEqual([[retry.reg.id, retry.finish.id]]);
   });
 
-  it("12. a refusal that does not stop the server (FORBIDDEN) holds nothing back", async () => {
-    const denied = entry("a", { status: "failed", error: "FORBIDDEN" });
+  it("12. a refusal that does not stop the server holds nothing back", async () => {
+    for (const code of ["FORBIDDEN", "COMPETITION_MISMATCH", "ENTRY_IN_OTHER_EVENT"]) {
+      const denied = entry("a", { status: "failed", error: code });
+      const next = entry("a");
+      const store = memoryStore([denied, next]);
+      const drainer = createEventDrainer({ store, pushFor: () => acceptAll });
+      expect(await drainer.drain()).toBe(1);
+    }
+  });
+
+  it("12b. ROW_IN_OTHER_EVENT stops the server's batch, so it ends the pass and holds later entries", async () => {
+    const bad = entry("a");
+    const later = entry("a");
+    const store = memoryStore([bad, later]);
+    const sent: string[][] = [];
+    const push: PushFn = async ({ events }) => {
+      sent.push(events.map((e) => e.id));
+      return { synced: [], failed: [{ id: bad.id, error: "ROW_IN_OTHER_EVENT" }] };
+    };
+    const drainer = createEventDrainer({ store, pushFor: () => push });
+    expect(await drainer.drain()).toBe(0);
+    expect(sent).toEqual([[bad.id, later.id]]);
+    expect(store.rows.get(bad.id)?.status).toBe("failed");
+    expect(store.rows.get(later.id)?.status).toBe("pending");
+    expect(await drainer.countHeld("a")).toBe(1);
+    sent.length = 0;
+    expect(await drainer.drain()).toBe(0);
+    expect(sent).toEqual([]);
+  });
+
+  it("12c. a schema-rejected entry holds nothing back (even though its code is INVALID_PAYLOAD)", async () => {
+    const rejected = entry("a", { status: "failed", error: "INVALID_PAYLOAD", rejectedBySchema: true });
     const next = entry("a");
-    const store = memoryStore([denied, next]);
+    const store = memoryStore([rejected, next]);
     const drainer = createEventDrainer({ store, pushFor: () => acceptAll });
+    expect(await drainer.countHeld("a")).toBe(0);
     expect(await drainer.drain()).toBe(1);
+    // The same code from an apply (no flag) does hold.
+    const applied = entry("a", { status: "failed", error: "INVALID_PAYLOAD" });
+    const store2 = memoryStore([applied, entry("a")]);
+    const d2 = createEventDrainer({ store: store2, pushFor: () => acceptAll });
+    expect(await d2.drain()).toBe(0);
+  });
+
+  it("12d. [schema-bad A, R -> APPLY_FAILED, F]: the one-by-one pass stops at R, F is never pushed", async () => {
+    const a = entry("a");
+    const r = entry("a");
+    const f = entry("a", { type: "finish.recorded" });
+    const store = memoryStore([a, r, f]);
+    const sent: string[][] = [];
+    const push: PushFn = async ({ events }) => {
+      sent.push(events.map((e) => e.id));
+      if (events.length === 0) return { synced: [], failed: [] }; // the probe
+      if (events.length > 1) throw trpcError("BAD_REQUEST");
+      if (events[0].id === a.id) throw trpcError("BAD_REQUEST");
+      if (events[0].id === r.id) return { synced: [], failed: [{ id: r.id, error: "APPLY_FAILED" }] };
+      return acceptAll({ events });
+    };
+    const drainer = createEventDrainer({ store, pushFor: () => push });
+    expect(await drainer.drain()).toBe(0);
+    expect(sent.flat().filter((id) => id === f.id)).toHaveLength(1); // only in the first batch
+    expect(sent).toEqual([[a.id, r.id, f.id], [], [a.id], [r.id]]);
+    expect(store.rows.get(a.id)).toMatchObject({ status: "failed", rejectedBySchema: true });
+    expect(store.rows.get(r.id)).toMatchObject({ status: "failed", error: "APPLY_FAILED" });
+    expect(store.rows.get(f.id)?.status).toBe("pending");
+    // Later drains: F stays held behind R; A (schema) does not matter.
+    sent.length = 0;
+    expect(await drainer.drain()).toBe(0);
+    expect(sent).toEqual([]);
+  });
+
+  it("12e. entries go out and are held in HLC order, not wall-clock order (clock stepped back)", async () => {
+    // R failed at physical 5000. The clock then stepped back: G has an earlier
+    // wall clock but a later HLC, so it is behind R and must be held.
+    const r = entry("a", { status: "failed", error: "APPLY_FAILED", timestamp: 5000, hlc: { physical: 5000, logical: 0 } });
+    const g = entry("a", { timestamp: 3000, hlc: { physical: 5000, logical: 1 } });
+    const before = entry("a", { timestamp: 9000, hlc: { physical: 4000, logical: 0 } });
+    const noHlc = entry("a", { timestamp: 4500 });
+    const store = memoryStore([r, g, before, noHlc]);
+    const sent: string[][] = [];
+    const push: PushFn = async (input) => {
+      sent.push(input.events.map((e) => e.id));
+      return acceptAll(input);
+    };
+    const drainer = createEventDrainer({ store, pushFor: () => push });
+    expect(await drainer.drain()).toBe(2);
+    // `before` (HLC 4000) and the HLC-less entry (wall clock 4500), in that order.
+    expect(sent).toEqual([[before.id, noHlc.id]]);
+    expect(store.rows.get(g.id)?.status).toBe("pending");
+    expect(await drainer.countHeld("a")).toBe(1);
+  });
+
+  it("12f. entries are pushed in HLC order within a batch", async () => {
+    const late = entry("a", { timestamp: 1000, hlc: { physical: 2000, logical: 0 } });
+    const early = entry("a", { timestamp: 9000, hlc: { physical: 1000, logical: 0 } });
+    const store = memoryStore([late, early]);
+    const sent: string[][] = [];
+    const drainer = createEventDrainer({
+      store,
+      pushFor: () => async (input) => {
+        sent.push(input.events.map((e) => e.id));
+        return acceptAll(input);
+      },
+    });
+    await drainer.drain();
+    expect(sent).toEqual([[early.id, late.id]]);
+  });
+
+  it("12g. a drain requested while one runs makes it pass again (Discard at the last iteration)", async () => {
+    const first = entry("a");
+    const store = memoryStore([first]);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let calls = 0;
+    const drainer = createEventDrainer({
+      store,
+      pushFor: () => async (input) => {
+        calls++;
+        if (calls === 1) await gate;
+        return acceptAll(input);
+      },
+    });
+    const running = drainer.drain("a");
+    await new Promise((r) => setTimeout(r, 0));
+    // The operator discards a failed entry; its drain request hits the lock.
+    const held = entry("a", { timestamp: 99999 });
+    store.rows.set(held.id, held);
+    const requested = drainer.drain("a");
+    release();
+    expect(await running).toBe(2);
+    expect(await requested).toBe(0);
+    expect(store.rows.get(held.id)?.status).toBe("synced");
   });
 
   it("13. the blocked reason is kept per competition", async () => {

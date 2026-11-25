@@ -1,8 +1,5 @@
 import { Client } from "pg";
-
-const E2E_DATABASE_URL =
-  process.env.E2E_DATABASE_URL ??
-  `postgresql://oxygen:oxygen@localhost:5433/${process.env.E2E_DB_NAME ?? "oxygen_e2e"}?schema=oxygen`;
+import { E2E_DATABASE_URL } from "./reseed";
 
 /**
  * Change the card number of the runner holding `from` in event `nameId`,
@@ -27,6 +24,16 @@ export async function setRunnerCardNo(nameId: string, from: number, to: number):
            AND event_id = (SELECT id FROM events WHERE name_id = $1)`,
       [nameId, from, to],
     );
+    // Idempotent: a second call (or a retried test) finds the number already set.
+    if (res.rowCount === 0) {
+      const done = await client.query(
+        `SELECT 1 FROM runners
+           WHERE card_no = $2 AND removed = false
+             AND event_id = (SELECT id FROM events WHERE name_id = $1)`,
+        [nameId, to],
+      );
+      if (done.rowCount === 1) return;
+    }
     if (res.rowCount !== 1) throw new Error(`setRunnerCardNo: ${res.rowCount} runners for card ${from}`);
   } finally {
     await client.end();

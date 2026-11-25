@@ -1,12 +1,16 @@
 /**
  * When the event queue drains by itself.
  *
- * A drain starts when work arrives (the device-wide pending count grows),
- * when the device comes back online, or when the open competition changes,
- * never while one is already running: work that arrives meanwhile is
- * picked up by one more run right after. Entries another competition left
- * blocked (auth, event, server) keep the total above zero without growing
- * it, so they do not retrigger on every poll, and a new entry still does.
+ * A drain starts when an entry is queued (`enqueued()`, driven by the
+ * enqueue signal in `events.ts`, not by a count: an entry queued while the
+ * previous one drains leaves the polled count unchanged), when the device
+ * comes back online, or when the open competition changes, never while one
+ * is already running: work that arrives meanwhile is picked up by one more
+ * run right after. Growth of the polled device-wide count still starts a
+ * drain (entries queued by another tab raise no signal here). Entries
+ * another competition left blocked (auth, event, server) keep the total
+ * above zero without growing it and raise no signal, so they do not
+ * retrigger on every poll, and a new entry still does.
  */
 export interface AutoDrainState {
   online: boolean;
@@ -22,6 +26,7 @@ export function createAutoDrain(run: () => Promise<void>) {
   let stopped = false;
   let lastTotal = 0;
   let lastKey: string | null = null;
+  let online = false;
 
   function start(): void {
     if (stopped) return;
@@ -42,12 +47,17 @@ export function createAutoDrain(run: () => Promise<void>) {
   }
 
   return {
-    update({ online, total, scope }: AutoDrainState): void {
-      const key = `${online}|${scope ?? ""}`;
+    /** An entry was queued on this page. */
+    enqueued(): void {
+      if (online) start();
+    },
+    update({ online: isOnline, total, scope }: AutoDrainState): void {
+      online = isOnline;
+      const key = `${isOnline}|${scope ?? ""}`;
       const fire = total > lastTotal || key !== lastKey;
       lastTotal = total;
       lastKey = key;
-      if (online && total > 0 && fire) start();
+      if (isOnline && total > 0 && fire) start();
     },
     stop(): void {
       stopped = true;

@@ -131,6 +131,7 @@
   "offlineMapsPartialError": "Nätet försvann medan kartorna sparades; vissa exporter är inte sparade.",
   "offlineMapsFailed": "Kartorna kunde inte sparas på den här enheten.",
   "offlineMapsNotOnline": "Kartorna kan bara sparas med nätanslutning.",
+  "heldBehindFailed": "{{count}} väntar bakom en misslyckad post",
   "retryAll": "Försök alla igen",
   "syncBlocked": {
     "auth": "Synk blockerad: logga in för att skicka de väntande posterna.",

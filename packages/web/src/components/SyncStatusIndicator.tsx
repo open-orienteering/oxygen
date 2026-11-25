@@ -158,7 +158,7 @@ function OfflineMapsBlock({ nameId, maps }: { nameId: string; maps: EventOffline
 export function SyncStatusIndicator({ competitionId }: { competitionId?: string }) {
   const { t } = useTranslation("common");
   const isOnline = useOnlineStatus();
-  const { pendingCount, failedCount, syncing, manualDrain, blockedReason, retryFailed } =
+  const { pendingCount, failedCount, heldCount, syncing, manualDrain, blockedReason, retryFailed } =
     useEventQueue(competitionId);
   const queryClient = useQueryClient();
   const [showPanel, setShowPanel] = useState(false);
@@ -304,6 +304,15 @@ export function SyncStatusIndicator({ competitionId }: { competitionId?: string 
               </div>
             )}
 
+            {heldCount > 0 && (
+              <div
+                data-testid="sync-held"
+                className="px-4 py-2 border-b border-slate-100 bg-amber-50 text-xs text-amber-800"
+              >
+                {t("heldBehindFailed", { count: heldCount })}
+              </div>
+            )}
+
             {blockedReason && pendingCount > 0 && (
               <div
                 data-testid="sync-blocked"
@@ -355,6 +364,7 @@ export function SyncStatusIndicator({ competitionId }: { competitionId?: string 
                           onClick={async () => {
                             await retryFailedEvent(e.id);
                             setFailedEvents(await getFailedEvents(competitionId));
+                            void manualDrain();
                           }}
                           className="px-2 py-0.5 text-[11px] font-medium rounded bg-slate-700 text-white hover:bg-slate-800 cursor-pointer"
                         >

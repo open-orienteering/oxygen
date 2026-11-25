@@ -704,6 +704,20 @@ describe("events.push: reference upserts stay inside their event", () => {
     expect(res2.failed).toEqual([{ id: punch.id, error: "ROW_IN_OTHER_EVENT" }]);
     expect(await a.db.punch.count({ where: { eventId: a.eventId, cardNo: 92003 } })).toBe(0);
   });
+
+  // 22b
+  it("ROW_IN_OTHER_EVENT stops the batch like any apply failure: the entry behind it is in neither list", async () => {
+    const aClass = (await a.db.class.findFirstOrThrow({ where: { eventId: a.eventId }, select: { seq: true } })).seq;
+    const bRunner = await b.db.runner.create({
+      data: { eventId: b.eventId, name: "B runner 2", classId: bClass, cardNo: 92011 },
+    });
+    const bad = wire(a.event, "runner.registered", { tempId: bRunner.id, name: "Thief", classId: aClass, cardNo: 92012 });
+    const later = wire(a.event, "runner.registered", { name: "Later", classId: aClass, cardNo: 92013 });
+    const res = await caller.events.push({ events: [bad, later] });
+    expect(res.synced).toEqual([]);
+    expect(res.failed).toEqual([{ id: bad.id, error: "ROW_IN_OTHER_EVENT" }]);
+    expect(await a.db.runner.count({ where: { eventId: a.eventId, cardNo: 92013 } })).toBe(0);
+  });
 });
 
 describe("events.push: one transaction per entry, stop at the first apply failure", () => {

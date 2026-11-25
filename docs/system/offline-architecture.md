@@ -243,13 +243,12 @@ peer's shipper, the pull side of the shipper):
   Several types are last-write-wins, so applying the later ones now and the
   failed one on a retry would flip their order. The sender keeps the rest
   pending and sends them next round (the shipper advances its watermark
-  contiguously). The station drain ends that competition's pass at an
-  `APPLY_FAILED` / `INVALID_PAYLOAD` answer and holds every pending entry
-  ordered (by timestamp) behind a failed entry with one of those codes until
-  the operator retries it (it goes first again) or discards it (Discard
-  drains straight away); other competitions keep draining. Refusals
-  decided before an entry is touched (`FORBIDDEN`, `COMPETITION_MISMATCH`,
-  `ENTRY_IN_OTHER_EVENT`) never stop the batch.
+  contiguously). The batch-stopping codes are `JOURNAL_BATCH_STOPPING_CODES`
+  in `@oxygen/shared` (`APPLY_FAILED`, `INVALID_PAYLOAD`,
+  `ROW_IN_OTHER_EVENT`), read by the server and the station drain alike.
+  Refusals decided before an entry is touched (`FORBIDDEN`,
+  `COMPETITION_MISMATCH`, `ENTRY_IN_OTHER_EVENT`) never stop the batch. The
+  station-side consequences are under "The station drain" below.
 - **Gate, then apply.** `events.push` hands the ingest a per-entry gate: the
   entry's `competitionId` must be the request's event, and on the user path
   the entry's capability must be held (table in
@@ -458,7 +457,30 @@ projection table, because the canvas reads the cache.
   event. The auto-drain (`useEventQueue`) therefore drains every event's
   pending entries, not only the open event's.
 - **One lock per competition.** A drain of event A never makes a drain of
-  event B return early; a second drain of the same event does nothing.
+  event B return early. A second drain request for the same event starts
+  nothing of its own: it asks the running drain for one more pass and waits
+  for it (so a Discard or Retry that hits the lock during the last iteration
+  is not lost).
+- **When the auto-drain starts.** On an enqueue signal (`emitEvent` and
+  `retryFailedEvent` bump a module-level sequence and notify
+  `subscribeEnqueue` listeners in `lib/offline/events.ts`; `createAutoDrain`
+  in `auto-drain.ts` listens), when the device goes online, and when the open
+  competition changes; never while a drain runs (work arriving meanwhile gets
+  one more pass). The polled pending count is not the trigger, since an entry
+  queued while the previous one drains leaves it unchanged; growth of it still
+  starts a drain (another tab queued entries), and entries stuck behind a
+  blocked reason raise no signal, so they never retrigger it.
+- **Order and the hold rule.** Entries go out ordered by HLC (`compareHlc`;
+  the wall-clock `timestamp` only for an entry without an `hlc`), so a clock
+  stepped back does not reorder them. A failed entry whose code is batch-
+  stopping (`APPLY_FAILED`, `INVALID_PAYLOAD`, `ROW_IN_OTHER_EVENT`) ends that
+  competition's pass when the server answers it, and holds every pending entry
+  ordered behind it until it is retried (it goes first again) or discarded;
+  both drain at once. `FORBIDDEN`, `COMPETITION_MISMATCH` and
+  `ENTRY_IN_OTHER_EVENT` hold nothing. An entry that failed as a schema 400
+  (`INVALID_PAYLOAD` with `rejectedBySchema: true` on the row) was never
+  applied and can never succeed, so it holds nothing either. While entries are
+  held the sync panel says "N waiting behind a failed entry".
 - **Three blocked reasons**, shown as a "Sync blocked" line in the Sync
   Status panel while entries wait (`getDrainBlockedReason(competitionId)`, kept per competition): `auth`
   (the whole request was `UNAUTHORIZED` / `FORBIDDEN`: sign in), `event`

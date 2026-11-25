@@ -94,6 +94,11 @@ export interface OxygenEvent {
   error?: string;
   /** The role a `FORBIDDEN` refusal asks for. */
   capability?: string;
+  /**
+   * The server answered BAD_REQUEST for this entry alone: it can never be
+   * accepted, and nothing was applied, so it holds no later entry back.
+   */
+  rejectedBySchema?: boolean;
   attempts: number;
 }
 

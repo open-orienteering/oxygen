@@ -131,6 +131,7 @@
   "offlineMapsPartialError": "The network went while storing; some exports are not stored.",
   "offlineMapsFailed": "The maps could not be stored on this device.",
   "offlineMapsNotOnline": "Storing the maps needs the network.",
+  "heldBehindFailed": "{{count}} waiting behind a failed entry",
   "retryAll": "Retry all",
   "syncBlocked": {
     "auth": "Sync blocked: sign in to send the waiting entries.",

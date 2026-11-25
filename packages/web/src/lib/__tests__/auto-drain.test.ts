@@ -23,13 +23,54 @@ describe("auto drain", () => {
     expect(h.runs()).toBe(1);
   });
 
-  it("a new entry drains even when other entries are stuck pending", async () => {
+  it("a new entry drains even when other entries are stuck pending, and stuck entries alone never retrigger", async () => {
     const h = harness();
     h.drain.update(st(2)); // 2 stuck behind auth / event / server
     await h.finish();
     h.drain.update(st(2)); // poll, nothing new
+    h.drain.update(st(2));
     expect(h.runs()).toBe(1);
-    h.drain.update(st(3)); // the operator queues one for the open event
+    h.drain.update(st(2)); // the operator queues one: the signal fires before the poll sees it
+    h.drain.enqueued();
+    expect(h.runs()).toBe(2);
+  });
+
+  it("one entry synced, a new one queued before the next poll (same count): it still drains", async () => {
+    const h = harness();
+    h.drain.update(st(1)); // poll sees entry 1
+    expect(h.runs()).toBe(1);
+    await h.finish(); // entry 1 syncs
+    h.drain.enqueued(); // entry 2 queued; the polled count is still 1
+    expect(h.runs()).toBe(2);
+    await h.finish();
+    h.drain.update(st(1)); // the poll now sees entry 2 alone: same count, no new trigger
+    expect(h.runs()).toBe(2);
+  });
+
+  it("a signal while a drain runs asks for one more run right after; offline or stopped it does nothing", async () => {
+    const h = harness();
+    h.drain.update(st(1));
+    h.drain.enqueued();
+    h.drain.enqueued();
+    expect(h.runs()).toBe(1);
+    await h.finish();
+    expect(h.runs()).toBe(2);
+    await h.finish();
+    h.drain.update(st(1, { online: false }));
+    h.drain.enqueued();
+    expect(h.runs()).toBe(2);
+    h.drain.update(st(1));
+    await h.finish();
+    h.drain.stop();
+    h.drain.enqueued();
+    expect(h.runs()).toBe(3);
+  });
+
+  it("a count that grows without a signal (another tab queued it) still drains", async () => {
+    const h = harness();
+    h.drain.update(st(2));
+    await h.finish();
+    h.drain.update(st(3));
     expect(h.runs()).toBe(2);
   });
 

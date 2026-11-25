@@ -14,9 +14,11 @@
  * must name this request's competition (`COMPETITION_MISMATCH` otherwise),
  * and an entry id already journaled under another event is refused
  * (`ENTRY_IN_OTHER_EVENT`). A refusal puts the entry in `failed[]` with a
- * stable `JournalRefusalCode` and never stops the batch; an apply exception
- * does stop it (later entries stay with the sender, so last-write-wins
- * types are never applied out of order).
+ * stable `JournalRefusalCode`. A gate refusal (`COMPETITION_MISMATCH`,
+ * `FORBIDDEN`) or `ENTRY_IN_OTHER_EVENT` never stops the batch; an apply
+ * exception (`APPLY_FAILED`, `INVALID_PAYLOAD`, `ROW_IN_OTHER_EVENT`, i.e.
+ * `JOURNAL_BATCH_STOPPING_CODES`) does stop it (later entries stay with the
+ * sender, so last-write-wins types are never applied out of order).
  *
  * Entries are applied over Postgres via Prisma. Race-state entries resolve the
  * runner by `(eventId, cardNo)` so an offline-created runner can be matched
@@ -58,6 +60,7 @@ import {
   type Capability,
   type Hlc,
   type JournalRefusalCode,
+  type JournalBatchStoppingCode,
   type ReferenceUpsertPayload,
   type ReferenceImportedPayload,
 } from "@oxygen/shared";
@@ -270,7 +273,8 @@ export async function ingestJournalEntries(
   return { synced, failed };
 }
 
-function failureCode(err: unknown): JournalRefusalCode {
+/** What an apply exception answers; every one of these stops the batch (`JOURNAL_BATCH_STOPPING_CODES`). */
+function failureCode(err: unknown): JournalBatchStoppingCode {
   if (err instanceof JournalApplyError) return err.code;
   if (err instanceof Prisma.PrismaClientValidationError) return "INVALID_PAYLOAD";
   return "APPLY_FAILED";
