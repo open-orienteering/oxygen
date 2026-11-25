@@ -185,7 +185,9 @@ class→course, control codes/status) are inside the results closure and are
 
 The remaining non-journaled reference writer is the Eventor entry sync,
 which is cloud-owned and forwarded from venues; running it against a
-leased-out event is unsupported (it is a pre-race operation in practice).
+leased-out event is refused (`EVENT_CHECKED_OUT`, any active lease: the
+cloud is then not the writer and the sync is not journaled). It is a
+pre-race operation in practice; see [eventor-sync.md](eventor-sync.md).
 
 ### Consequence: checkin is cheap
 

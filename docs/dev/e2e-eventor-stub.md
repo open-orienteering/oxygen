@@ -74,6 +74,8 @@ resolves against the base's *directory*, so an override of
 |--------|------|----------|
 | `GET` | `/organisation/apiKey` | `Organisation` 1234 / "E2E Test Club" |
 | `GET` | `/events` | `EventList` with three events dated **today** |
+| `GET` | `/eventclasses`, `/entries`, `/export/classes`, `/results/event`, `/starts/event/iofxml` for event `90001` only | the sync spec's event: classes H21 / H35 and entries per scenario |
+| `POST` | `/__scenario/<n>` (no `ApiKey`) | switches event 90001 between scenario 1 (Andersson card 500001, Berg) and 2 (Andersson card 500002, Berg gone, Carlsson entered) |
 | any | anything else | `404` naming the method and path |
 | any | request with no `ApiKey` header | `403` (maps to `EventorAuthError`) |
 

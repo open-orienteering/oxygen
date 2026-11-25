@@ -39,4 +39,6 @@ Older course notes that share the prefix: [course-maps.md](course-maps.md), [cou
 | [research/vector-map-pipeline/](research/vector-map-pipeline/) | Frozen research record, decision logs, and the [work queue](research/vector-map-pipeline/SLICES.md) |
 | [screenshots/](screenshots/) | Feature screenshots and how they are made, including private club-map shots ([screenshots/README.md](screenshots/README.md)); the demo fixtures are in `fixtures/showcase/` at the repository root |
 
+The Eventor import and re-sync rules are in [system/eventor-sync.md](system/eventor-sync.md).
+
 `node scripts/check-doc-links.mjs` checks that every Markdown link and every `docs/…` path in the repository resolves.
