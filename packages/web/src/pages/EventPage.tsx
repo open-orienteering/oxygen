@@ -363,7 +363,9 @@ function EventorSyncPanel({
   const syncErrorText = (message: string) =>
     message.startsWith("EVENT_CHECKED_OUT")
       ? t("syncCheckedOut")
-      : message.startsWith("EVENTOR_PREVIEW_CHANGED")
+      : message.startsWith("EVENTOR_PREVIEW_REQUIRED")
+        ? t("syncPreviewRequired")
+        : message.startsWith("EVENTOR_PREVIEW_CHANGED")
         ? t("syncPreviewChanged")
         : message.startsWith("EVENTOR_EMPTY_RESPONSE")
         ? t("syncEmptyResponse")

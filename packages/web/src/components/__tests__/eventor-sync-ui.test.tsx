@@ -13,7 +13,7 @@ import { applyFilters } from "../../lib/structured-search/filter";
 const base = {
   runners: {
     added: 0, updated: 0, reinstated: 0, wouldCancel: 0, heldBack: 0, keptLocal: 0,
-    classChangeBlocked: 0, cardConflicts: 0, duplicateEntries: 0, skippedNoId: 0,
+    classChangeBlocked: 0, cardConflicts: 0, duplicateEntries: 0, skippedNoId: 0, skippedResultsOnly: 0,
   },
   classes: { added: 0, updated: 0, keptLocal: 0, detailsIncomplete: false },
   clubs: { added: 0, updated: 0 },
@@ -47,6 +47,15 @@ describe("SyncCounts", () => {
     expect(html).toContain("Bo Berg");
     expect(html).toContain("3");
     expect(html).toContain("4");
+  });
+});
+
+describe("SyncCounts wording", () => {
+  it("uses the singular form for a count of one", () => {
+    const html = renderToStaticMarkup(<SyncCounts result={withRunners({ added: 1, skippedResultsOnly: 2 })} title="T" testId="x" />);
+    expect(html).toContain("1 runner added");
+    expect(html).not.toContain("1 runners");
+    expect(html).toContain("2 people");
   });
 });
 

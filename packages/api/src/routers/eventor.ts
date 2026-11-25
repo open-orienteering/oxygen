@@ -497,6 +497,7 @@ async function planEventorSync(
     cardNo: r.cardNo,
     cardId: r.cardId,
     classEventorId: r.classId ? (eventorIdByLocalId.get(r.classId) ?? null) : null,
+    classLocalOnly: r.classId != null && (eventorIdByLocalId.get(r.classId) ?? null) === null,
     eventorClubId: r.eventorClubId === null ? null : Number(r.eventorClubId),
     clubName: r.clubName,
     birthYear: r.birthYear,
@@ -552,6 +553,7 @@ async function applyRunnerPlan(
       where: { id: u.id },
       data: {
         ...(d.name !== undefined ? { name: d.name } : {}),
+        ...(d.eventorPersonId !== undefined ? { eventorPersonId: BigInt(d.eventorPersonId) } : {}),
         ...(d.cardNo !== undefined ? { cardNo: d.cardNo } : {}),
         ...(d.classEventorId !== undefined
           ? { classId: classIdByEventorId.get(d.classEventorId) ?? undefined }
@@ -997,6 +999,7 @@ export const eventorRouter = router({
 
       const classPlan = planClassSync({ existing: [], eventor: classes });
       const runnerPlan = planRunnerSync({
+        firstImport: true,
         eventorEventId: input.eventId,
         existing: [],
         cardOwners: [],
@@ -1143,6 +1146,14 @@ export const eventorRouter = router({
     )
     .mutation(async ({ ctx, input }): Promise<EventorSyncResult> => {
       const db = ctx.db;
+      // An apply is always bound to a preview (an old client without the field
+      // would otherwise apply blind).
+      if (!input.dryRun && input.confirmCancelIds === undefined) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "EVENTOR_PREVIEW_REQUIRED: Preview the sync first, then apply it.",
+        });
+      }
       await refuseWhileCheckedOut(db, ctx.event.id);
       const event = await db.event.findUnique({
         where: { id: ctx.event.id },
@@ -1171,7 +1182,7 @@ export const eventorRouter = router({
           where: {
             eventId: ctx.event.id,
             removed: false,
-            eventorPersonId: { not: null },
+            OR: [{ eventorPersonId: { not: null } }, { eventorEntryId: { not: null } }],
             status: { not: "cancel" },
           },
         });
@@ -1217,8 +1228,8 @@ export const eventorRouter = router({
             results,
             clubNameByEventorId: clubSync.clubNameByEventorId,
           });
-          if (input.confirmCancelIds) {
-            const seen = new Set(input.confirmCancelIds);
+          {
+            const seen = new Set(input.confirmCancelIds ?? []);
             if (plan.runnerPlan.cancels.some((r) => !seen.has(r.id))) {
               throw new TRPCError({
                 code: "PRECONDITION_FAILED",

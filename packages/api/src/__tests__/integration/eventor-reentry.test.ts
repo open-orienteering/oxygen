@@ -41,6 +41,7 @@ import {
 import { setSetting } from "../../db.js";
 import { createTestEvent, disconnect } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
+import { applySync } from "../helpers/eventor-sync.js";
 import { eventorKeyStore } from "../../eventorKeyStore.js";
 
 const EVENTOR_EVENT_ID = 99_001;
@@ -139,7 +140,7 @@ describe("eventor.sync re-entry status reset", () => {
       vi.mocked(fetchEntries).mockResolvedValue([]);
       vi.mocked(fetchResults).mockResolvedValue([]);
 
-      await makeCaller(ctx.event).eventor.sync();
+      await applySync(makeCaller(ctx.event));
 
       const after = await ctx.db.course.findUnique({
         where: { id: course.id },
@@ -168,7 +169,7 @@ describe("eventor.sync re-entry status reset", () => {
       vi.mocked(fetchEntries).mockResolvedValue([]);
       vi.mocked(fetchResults).mockResolvedValue([]);
 
-      await makeCaller(ctx.event).eventor.sync();
+      await applySync(makeCaller(ctx.event));
 
       const after = await ctx.db.course.findUnique({ where: { id: course.id }, select: { lengthM: true } });
       expect(after?.lengthM).toBe(2480);
@@ -208,7 +209,7 @@ describe("eventor.sync re-entry status reset", () => {
       vi.mocked(fetchEntries).mockResolvedValue([]);
       vi.mocked(fetchResults).mockResolvedValue([]);
 
-      await makeCaller(ctx.event).eventor.sync();
+      await applySync(makeCaller(ctx.event));
 
       const after = await ctx.db.course.findUnique({
         where: { id: course.id },
@@ -262,7 +263,7 @@ describe("eventor.sync re-entry status reset", () => {
       vi.mocked(fetchResults).mockResolvedValue([]);
 
       const caller = makeCaller(ctx.event);
-      await caller.eventor.sync();
+      await applySync(caller);
 
       const after = await ctx.db.runner.findUnique({
         where: { id: runner.id },
@@ -320,7 +321,7 @@ describe("eventor.sync re-entry status reset", () => {
       vi.mocked(fetchResults).mockResolvedValue([]);
 
       const caller = makeCaller(ctx.event);
-      await caller.eventor.sync();
+      await applySync(caller);
 
       const after = await ctx.db.runner.findUnique({
         where: { id: runner.id },
@@ -369,7 +370,7 @@ describe("eventor.sync re-entry status reset", () => {
       vi.mocked(fetchResults).mockResolvedValue([]);
 
       const caller = makeCaller(ctx.event);
-      await caller.eventor.sync();
+      await applySync(caller);
 
       const after = await ctx.db.runner.findUnique({
         where: { id: runner.id },
@@ -426,7 +427,7 @@ describe("eventor.sync re-entry status reset", () => {
         makeEntry(CLASS_BASE, PERSON_BASE + 11, "New Two", 700_102, "H21"),
       ]);
       vi.mocked(fetchResults).mockResolvedValue([]);
-      await caller.eventor.sync();
+      await applySync(caller);
 
       const runners = await ctx.db.runner.findMany({
         where: { eventId: ctx.eventId, removed: false },

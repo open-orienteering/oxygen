@@ -135,5 +135,6 @@
   "eventorValue": "Eventor: {{value}}",
   "useEventorValue": "Use Eventor's value",
   "eventorGoneBanner": "This runner is no longer in Eventor's entry list. The runner was left as is because a card was read or a result exists.",
-  "eventorUseFailed": "Could not use Eventor's value: {{message}}"
+  "eventorUseFailed": "Could not use Eventor's value: {{message}}",
+  "eventorGoneCancelledBanner": "This runner is no longer in Eventor's entry list, so the sync marked her as withdrawn."
 }

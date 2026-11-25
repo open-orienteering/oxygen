@@ -124,8 +124,10 @@ function plan(
   entries: EntryInput[],
   results: ResultInput[] = [],
   cards: Array<{ ownerKey: string; cardNo: number | null }> = existing.map((r) => ({ ownerKey: r.id, cardNo: r.cardNo })),
+  firstImport = false,
 ) {
   return planRunnerSync({
+    firstImport,
     eventorEventId: 99,
     existing,
     cardOwners: cards,
@@ -341,8 +343,65 @@ describe("planRunnerSync: creates", () => {
       personId: 1, personName: "x", birthYear: 0, sex: "", nationality: "", organisationId: 0,
       organisationName: "", classId: 10, cardNo: 0, startTime: 360000, finishTime: 372000, status: 1, bib: "5",
     } satisfies ResultInput;
-    const p = plan([], [entry(1)], [result]);
+    const p = plan([], [entry(1)], [result], [], true);
     expect(p.creates[0]).toMatchObject({ startTime: 360000, finishTime: 372000, status: "ok", bib: "5" });
+  });
+});
+
+describe("planRunnerSync: a re-sync never writes results (rule 4)", () => {
+  const result = {
+    personId: 1, personName: "x", birthYear: 0, sex: "", nationality: "", organisationId: 0,
+    organisationName: "", classId: 10, cardNo: 0, startTime: 360000, finishTime: 372000, status: 1, bib: "5",
+  } satisfies ResultInput;
+  it("creates a new entry with no times, status unknown and no bib", () => {
+    const p = plan([], [entry(1)], [result]);
+    expect(p.creates[0]).toMatchObject({ startTime: 0, finishTime: 0, status: "unknown", bib: "" });
+  });
+  it("creates a no-timing entry as no_timing", () => {
+    const p = plan([], [entry(1, { noTiming: true })], [result]);
+    expect(p.creates[0].status).toBe("no_timing");
+  });
+  it("does not create a results-only person, and counts her", () => {
+    const p = plan([], [], [result]);
+    expect(p.creates).toEqual([]);
+    expect(p.counts.skippedResultsOnly).toBe(1);
+  });
+  it("still creates a results-only person on the first import", () => {
+    const p = plan([], [], [result], [], true);
+    expect(p.creates).toHaveLength(1);
+    expect(p.counts.skippedResultsOnly).toBe(0);
+  });
+});
+
+describe("planRunnerSync: an entry that gains a person id (M1)", () => {
+  it("updates the entry-keyed runner and backfills the person id instead of duplicating her", () => {
+    const existing = runner(0, { id: "rx", eventorPersonId: null, eventorEntryId: 777, snapshot: { ...SNAP, name: "Person 5" }, name: "Person 5" });
+    const p = plan([existing], [entry(5, { eventorEntryId: 777 })]);
+    expect(p.creates).toEqual([]);
+    expect(p.cancels).toEqual([]);
+    expect(p.updates.find((u) => u.id === "rx")?.data.eventorPersonId).toBe(5);
+  });
+});
+
+describe("planRunnerSync: local-only class and club (L1)", () => {
+  it("does not move a runner the desk put into a class without an Eventor id", () => {
+    const existing = runner(1, { classEventorId: null, classLocalOnly: true, snapshot: { ...SNAP, class_eventor_id: null } });
+    const p = plan([existing], [entry(1)]);
+    expect(p.updates.find((u) => u.data.classEventorId !== undefined)).toBeUndefined();
+  });
+  it("still places a runner who had no class at all", () => {
+    const existing = runner(1, { classEventorId: null, snapshot: { ...SNAP, class_eventor_id: null } });
+    const p = plan([existing], [entry(1)]);
+    expect(p.updates[0].data.classEventorId).toBe(10);
+  });
+  it("does not give a runner a club Eventor knows when the desk typed another name", () => {
+    const existing = runner(1, { clubName: "Desk Club", snapshot: { ...SNAP, club_eventor_id: null, club_name: "" } });
+    const p = planRunnerSync({
+      firstImport: false, eventorEventId: 99, existing: [existing], cardOwners: [],
+      entries: [entry(1, { organisationId: 7, organisationName: "OK New" })], results: [],
+      knownClassEventorIds: new Set([10]), clubNameByEventorId: new Map([[7, "OK New"]]),
+    });
+    expect(p.updates.find((u) => u.data.eventorClubId !== undefined)).toBeUndefined();
   });
 });
 
@@ -398,6 +457,13 @@ describe("runnerEventorDiff", () => {
   it("lists the fields Eventor last said otherwise", () => {
     const d = runnerEventorDiff(local, { ...SNAP, card_no: 5 });
     expect(d.map((x) => x.field)).toEqual(["name", "cardNo", "classId"]);
+  });
+  it("reports a club renamed locally under the same Eventor id (L7)", () => {
+    const d = runnerEventorDiff(
+      { ...local, name: "Person 1", classEventorId: 10, eventorClubId: 7, clubName: "My Club" },
+      { ...SNAP, club_eventor_id: 7, club_name: "OK Old" },
+    );
+    expect(d).toEqual([{ field: "club", local: "My Club", eventor: "OK Old" }]);
   });
   it("ignores fields Eventor had no opinion on and a missing snapshot", () => {
     expect(runnerEventorDiff(local, null)).toEqual([]);

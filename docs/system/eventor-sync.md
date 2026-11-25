@@ -35,8 +35,8 @@ Eventor has no opinion               ->  keep local, snapshot unchanged
 | Field | Rule |
 |---|---|
 | name, birth year, sex, nationality | the rule above |
-| club (`eventor_club_id` + `club_name`, as a pair) | the rule, on Eventor's club id |
-| class | the rule; not applied to a runner who has started (a card read, a finish time, a result status, or a start time): counted as `classChangeBlocked`, the difference stays visible |
+| club (`eventor_club_id` + `club_name`, as a pair) | the rule, on Eventor's club id; not applied to a runner whose club name was typed at the desk (no Eventor id, name differs from the snapshot's). The runner page also shows a club renamed locally under the same Eventor id |
+| class | the rule; not applied to a runner who has started (a card read, a finish time, a result status, or a start time): counted as `classChangeBlocked`, the difference stays visible; also not applied to a runner moved at the desk into a class that has no Eventor id |
 | card | the rule on the **entry's** card (a result's card is not preferred on re-sync); a runner with a card read-out keeps hers; a card another runner holds is kept as is and counted (`cardConflicts`); the snapshot takes Eventor's card, so the difference stays visible as "Eventor: X" and nothing is written. A new runner whose Eventor card is held by someone else is created without a card, with Eventor's card in the snapshot. Card swaps are not resolved |
 | fee, paid, taxable, rank, entry date/time, entry source | filled only when empty |
 | start time, finish time, status, start number, bib | **never written on re-sync** |
@@ -47,7 +47,7 @@ position is not a start number and is not read at all.
 ### Presence (runners missing from Eventor)
 
 A person counts as present when they are in the entry list **or** the result
-list (a results-only late entry is not withdrawn). A missing runner is
+list (a results-only late entry is not withdrawn). **Only the first import takes results**: a re-sync creates a new entry with times 0, status Unknown (No timing in a no-timing class) and no bib, and does not create a person who is only in the results (counted as `skippedResultsOnly`, shown in the dialog). A missing runner is
 
 - **cancelled** (status Cancelled, snapshot `present: false`) when nothing has
   happened to them locally;
@@ -55,7 +55,7 @@ list (a results-only late entry is not withdrawn). A missing runner is
   status: only the snapshot is marked `present: false`, the runner page says
   "gone from Eventor", the sync reports it.
 
-A runner is identified by Eventor person id, or by entry id (`runners.eventor_entry_id`) when the entry has no person id; a second entry of the same person is counted (`duplicateEntries`), an entry with neither id is skipped and counted (`skippedNoId`). A club renamed in Eventor under the same id updates the runner's club name when it still equals the snapshot's.
+A runner is identified by Eventor person id, or by entry id (`runners.eventor_entry_id`) when the entry has no person id; an entry that later gains a person id is matched by its entry id, and the person id is filled in; a second entry of the same person is counted (`duplicateEntries`), an entry with neither id is skipped and counted (`skippedNoId`). A club renamed in Eventor under the same id updates the runner's club name when it still equals the snapshot's.
 
 A runner the sync cancelled itself is **reinstated** (status back to Unknown or
 No timing) when Eventor lists them again with no result. Only the sync's own
@@ -91,7 +91,7 @@ snapshot travels in a venue checkout like any column.
 
 ## `eventor.sync`
 
-`sync({ dryRun?, confirmCancelIds? })` (event admin). The sync takes a per-event advisory lock (`event-locks.ts`, also taken by `acquireLease`), so a checkout and a sync never interleave; the lease is re-checked after the lock.
+`sync({ dryRun?, confirmCancelIds? })` (event admin). An apply (`dryRun` false) **must** carry `confirmCancelIds` (the preview's `cancelIds`); without it the call is refused with `EVENTOR_PREVIEW_REQUIRED`, so an old client cannot apply blind. The sync takes a per-event advisory lock (`event-locks.ts`, also taken by `acquireLease`), so a checkout and a sync never interleave; the lease is re-checked after the lock.
 
 1. **Refused while the event is checked out** (`EVENT_CHECKED_OUT`, any active
    lease, the holder's too): the sync is not journaled, so a venue would never
@@ -113,7 +113,8 @@ snapshot travels in a venue checkout like any column.
   classes: { added, updated, keptLocal, detailsIncomplete },
   clubs: { added, updated },
   runners: { added, updated, keptLocal, wouldCancel, heldBack, reinstated,
-             classChangeBlocked, cardConflicts, duplicateEntries, skippedNoId },
+             classChangeBlocked, cardConflicts, duplicateEntries, skippedNoId,
+             skippedResultsOnly },
   cancelIds: string[],                                      // runners cancelled / to cancel
   samples: { wouldCancel: string[], heldBack: string[] } }  // at most 20 names each
 ```

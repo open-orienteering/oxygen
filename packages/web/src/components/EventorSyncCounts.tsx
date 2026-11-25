@@ -35,6 +35,7 @@ export function SyncCounts({
   add("cardConflicts", r.cardConflicts, t("syncCardConflicts", { count: r.cardConflicts }));
   add("duplicateEntries", r.duplicateEntries, t("syncDuplicateEntries", { count: r.duplicateEntries }));
   add("skippedNoId", r.skippedNoId, t("syncSkippedNoId", { count: r.skippedNoId }), true);
+  add("skippedResultsOnly", r.skippedResultsOnly, t("syncSkippedResultsOnly", { count: r.skippedResultsOnly }));
   add("classesAdded", result.classes.added, t("classesAdded", { count: result.classes.added }));
   add("classesUpdated", result.classes.updated, t("classesUpdated", { count: result.classes.updated }));
   add("classesKept", result.classes.keptLocal, t("syncClassesKept", { count: result.classes.keptLocal }));

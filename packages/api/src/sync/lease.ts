@@ -187,7 +187,8 @@ export async function acquireLease(
       throw err;
     }
   };
-  return "$transaction" in db ? db.$transaction(take) : take(db);
+  // A sync may hold the lock for up to its own 60 s: wait for it, do not error.
+  return "$transaction" in db ? db.$transaction(take, { timeout: 90_000, maxWait: 10_000 }) : take(db);
 }
 
 /**

@@ -240,6 +240,14 @@ export function runnerEventorDiff(
   if (snap.club_eventor_id != null && snap.club_eventor_id !== local.eventorClubId) {
     out.push({ field: "club", local: local.clubName, eventor: snap.club_name ?? "" });
   }
+  if (
+    snap.club_eventor_id != null &&
+    snap.club_eventor_id === local.eventorClubId &&
+    snap.club_name &&
+    snap.club_name !== local.clubName
+  ) {
+    out.push({ field: "club", local: local.clubName, eventor: snap.club_name });
+  }
   if (snap.birth_year && snap.birth_year !== local.birthYear) {
     out.push({ field: "birthYear", local: local.birthYear, eventor: snap.birth_year });
   }
@@ -443,6 +451,8 @@ export interface ExistingRunner {
   eventorPersonId: number | null;
   /** The Eventor entry id; the match key when there is no person id. */
   eventorEntryId: number | null;
+  /** In a class that has no Eventor id (made or moved to at the desk). */
+  classLocalOnly?: boolean;
   removed: boolean;
   name: string;
   cardNo: number | null;
@@ -470,6 +480,8 @@ export interface ExistingRunner {
 
 export interface RunnerData {
   name?: string;
+  /** Backfilled when an entry that had no person id gains one. */
+  eventorPersonId?: number;
   cardNo?: number | null;
   /** Eventor id of the (known) class to move the runner to. */
   classEventorId?: number;
@@ -538,12 +550,19 @@ export interface RunnerPlan {
     duplicateEntries: number;
     /** Entries or results with neither a person id nor an entry id: nothing to match on. */
     skippedNoId: number;
+    /** Persons only in the results, not created by a re-sync (only the first import takes results). */
+    skippedResultsOnly: number;
   };
 }
 
 const CANCEL = "cancel";
 
 export function planRunnerSync(input: {
+  /**
+   * true only for the first import of an event, which alone may write times,
+   * status and bib from the results (docs/system/eventor-sync.md, rule 4).
+   */
+  firstImport?: boolean;
   /** Stamped as `entry_source` on runners that have none. */
   eventorEventId: number;
   /** Every Eventor-linked runner of the event, removed ones included. */
@@ -566,6 +585,15 @@ export function planRunnerSync(input: {
     const k = keyOf(r.eventorPersonId, r.eventorEntryId);
     if (k) byKey.set(k, r);
   }
+  // Runners created from an entry without a person id: found by entry id when
+  // the entry later gains a person id.
+  const byEntryNoPerson = new Map<number, ExistingRunner>();
+  for (const r of input.existing) {
+    if ((r.eventorPersonId == null || r.eventorPersonId <= 0) && r.eventorEntryId != null && r.eventorEntryId > 0) {
+      byEntryNoPerson.set(r.eventorEntryId, r);
+    }
+  }
+  const firstImport = input.firstImport === true;
   const resultsByPerson = new Map<number, ResultInput>();
   for (const r of input.results) {
     if (r.personId > 0 && !resultsByPerson.has(r.personId)) resultsByPerson.set(r.personId, r);
@@ -586,6 +614,7 @@ export function planRunnerSync(input: {
       cardConflicts: 0,
       duplicateEntries: 0,
       skippedNoId: 0,
+      skippedResultsOnly: 0,
     },
   };
   const c = plan.counts;
@@ -607,8 +636,16 @@ export function planRunnerSync(input: {
       continue;
     }
     seen.add(key);
-    const result = entry.personId > 0 ? resultsByPerson.get(entry.personId) : undefined;
-    const found = byKey.get(key);
+    const result = firstImport && entry.personId > 0 ? resultsByPerson.get(entry.personId) : undefined;
+    let found = byKey.get(key);
+    let backfillPerson = false;
+    if (!found && entry.personId > 0 && entry.eventorEntryId > 0) {
+      found = byEntryNoPerson.get(entry.eventorEntryId);
+      if (found) {
+        backfillPerson = true;
+        seen.add(`e${entry.eventorEntryId}`);
+      }
+    }
 
     if (!found) {
       const ownerKey =
@@ -684,7 +721,11 @@ export function planRunnerSync(input: {
     {
       const next = entry.organisationId > 0 ? entry.organisationId : undefined;
       const m = mergeField<number | null>(found.eventorClubId, prev.club_eventor_id, next);
-      if (m.write && next !== undefined) {
+      const localOnlyClub =
+        found.eventorClubId == null && found.clubName !== "" && found.clubName !== (prev.club_name ?? "");
+      if (m.write && next !== undefined && localOnlyClub) {
+        kept = true;
+      } else if (m.write && next !== undefined) {
         const name = clubName(next, entry.organisationName);
         data.eventorClubId = next;
         data.clubName = name;
@@ -712,7 +753,10 @@ export function planRunnerSync(input: {
     {
       const next = knownClass(entry.classId);
       const m = mergeField<number | null>(found.classEventorId, prev.class_eventor_id, next);
-      if (m.write && next !== undefined) {
+      if (m.write && next !== undefined && found.classLocalOnly) {
+        // Moved at the desk into a class Eventor does not know: not undone.
+        kept = true;
+      } else if (m.write && next !== undefined) {
         if (hasLocalActivity(found) || found.startTime > 0) {
           c.classChangeBlocked++;
           kept = true;
@@ -750,6 +794,8 @@ export function planRunnerSync(input: {
       }
     }
 
+    if (backfillPerson) data.eventorPersonId = entry.personId;
+
     // Fill-if-empty fields.
     if (found.entrySource === 0) data.entrySource = clampInt32(input.eventorEventId);
     if (found.entryDate === 0 && entry.entryDate) data.entryDate = entry.entryDate;
@@ -785,6 +831,11 @@ export function planRunnerSync(input: {
       if (!found.removed && found.snapshot?.present === false) {
         pushUpdate(plan, found, {}, { ...found.snapshot, present: true }, now);
       }
+      continue;
+    }
+    if (!firstImport) {
+      // Only the first import takes results: no times or status from a re-sync.
+      c.skippedResultsOnly++;
       continue;
     }
     plan.creates.push(
@@ -904,8 +955,8 @@ function buildCreate(claim: ReturnType<typeof makeCardNoClaimer>, a: {
   rank: number;
   now: string;
 }): RunnerCreate {
-  // claimed null = no card in Eventor, or another runner holds it: the next
-  // sync tries again (the snapshot says "none").
+  // claimed null = no card in Eventor, or another runner holds it. The snapshot
+  // keeps Eventor's card either way, so a held card shows as a difference.
   const cardNo = claim(a.requestedCard, a.ownerKey);
   return {
     personId: a.personId,

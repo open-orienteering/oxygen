@@ -48,9 +48,9 @@ test.describe("Eventor sync", () => {
       await page.getByTestId("eventor-sync-button").click();
       const preview = page.getByTestId("eventor-sync-preview");
       await expect(preview).toBeVisible({ timeout: 15000 });
-      await expect(preview).toContainText("1 runners added");
-      await expect(preview).toContainText("1 runners will be marked as withdrawn");
-      await expect(preview).toContainText("1 runners keep local edits");
+      await expect(preview).toContainText("1 runner added");
+      await expect(preview).toContainText("1 runner will be marked as withdrawn");
+      await expect(preview).toContainText("1 runner keeps local edits");
       await expect(preview).toContainText("Berg");
       expect((await runners()).map((r) => r.name).sort()).toEqual(["Andersson, Anna", "Berg, Bo"]);
 

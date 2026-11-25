@@ -53,10 +53,7 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
   };
 
   const useEventorValueMutation = trpc.runner.useEventorValue.useMutation({
-    onSuccess: () => {
-      utils.runner.getById.invalidate({ id: runnerId });
-      utils.runner.list.invalidate();
-    },
+    onSuccess: invalidateAll,
   });
   const updateMutation = trpc.runner.update.useMutation({
     onSuccess: invalidateAll,
@@ -161,7 +158,7 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
               data-testid="eventor-gone-banner"
               className="mb-3 px-3 py-1.5 rounded-md bg-sky-50 border border-sky-200 text-xs text-sky-800"
             >
-              {t("eventorGoneBanner")}
+              {t(r.status === RunnerStatus.Cancel ? "eventorGoneCancelledBanner" : "eventorGoneBanner")}
             </div>
           )}
 

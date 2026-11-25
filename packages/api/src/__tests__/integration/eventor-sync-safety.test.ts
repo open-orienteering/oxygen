@@ -38,6 +38,7 @@ import {
 import { setSetting } from "../../db.js";
 import { createTestEvent, disconnect, type TestEventContext } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
+import { applySync } from "../helpers/eventor-sync.js";
 import { eventorKeyStore } from "../../eventorKeyStore.js";
 import { lockEventLeaseAndSync } from "../../event-locks.js";
 import { acquireLease } from "../../sync/lease.js";
@@ -113,14 +114,14 @@ describe("eventor.sync keeps what the desk did", () => {
     await withEvent("evt01", async (ctx) => {
       const caller = makeCaller(ctx.event);
       mockEventor({ entries: [entry(P + 1, "Finished Runner"), entry(P + 2, "Other Runner")] });
-      await caller.eventor.sync();
+      await applySync(caller);
       // The club swaps the entry; she still runs and is read out OK.
       await ctx.db.runner.updateMany({
         where: { eventId: ctx.eventId, eventorPersonId: BigInt(P + 1) },
         data: { status: "ok", finishTime: 36000 },
       });
       mockEventor({ entries: [entry(P + 2, "Other Runner")] });
-      const res = await caller.eventor.sync();
+      const res = await applySync(caller);
 
       const r = await runnerOf(ctx, P + 1);
       expect(r.status).toBe("ok");
@@ -135,9 +136,9 @@ describe("eventor.sync keeps what the desk did", () => {
     await withEvent("evt01-empty", async (ctx) => {
       const caller = makeCaller(ctx.event);
       mockEventor({ entries: [entry(P + 1, "A"), entry(P + 2, "B")] });
-      await caller.eventor.sync();
+      await applySync(caller);
       mockEventor({ entries: [] });
-      await expect(caller.eventor.sync()).rejects.toThrow(/EVENTOR_EMPTY_RESPONSE/);
+      await expect(applySync(caller)).rejects.toThrow(/EVENTOR_EMPTY_RESPONSE/);
       const statuses = await ctx.db.runner.findMany({ where: { eventId: ctx.eventId }, select: { status: true } });
       expect(statuses.map((s) => s.status)).toEqual(["unknown", "unknown"]);
     });
@@ -147,13 +148,13 @@ describe("eventor.sync keeps what the desk did", () => {
     await withEvent("evt01-cancel", async (ctx) => {
       const caller = makeCaller(ctx.event);
       mockEventor({ entries: [entry(P + 1, "Withdrawn"), entry(P + 2, "Stays")] });
-      await caller.eventor.sync();
+      await applySync(caller);
       mockEventor({ entries: [entry(P + 2, "Stays")] });
-      const res = await caller.eventor.sync();
+      const res = await applySync(caller);
       expect(res.runners.wouldCancel).toBe(1);
       expect((await runnerOf(ctx, P + 1)).status).toBe("cancel");
       mockEventor({ entries: [entry(P + 1, "Withdrawn"), entry(P + 2, "Stays")] });
-      const back = await caller.eventor.sync();
+      const back = await applySync(caller);
       expect(back.runners.reinstated).toBe(1);
       expect((await runnerOf(ctx, P + 1)).status).toBe("unknown");
     });
@@ -162,13 +163,76 @@ describe("eventor.sync keeps what the desk did", () => {
   it("API-10: a results-only runner survives the second sync (was: cancelled on every later sync)", async () => {
     await withEvent("api10", async (ctx) => {
       const caller = makeCaller(ctx.event);
+      // Imported from the results by the first import: person id, snapshot present.
+      await ctx.db.runner.create({
+        data: {
+          eventId: ctx.eventId, name: "Late Entry", eventorPersonId: BigInt(P + 9), entrySource: EVENTOR_EVENT_ID,
+          eventorSnapshot: { name: "Late Entry", present: true },
+        },
+      });
       mockEventor({ entries: [entry(P + 1, "Entered")], results: [result(P + 9, { personName: "Late Entry" })] });
-      await caller.eventor.sync();
-      expect((await runnerOf(ctx, P + 9)).status).toBe("unknown");
-      await caller.eventor.sync();
+      await applySync(caller);
+      await applySync(caller);
       const r = await runnerOf(ctx, P + 9);
       expect(r.status).toBe("unknown");
       expect(r.removed).toBe(false);
+    });
+  });
+
+  it("M2: a re-sync creates new entries without result data and skips results-only persons", async () => {
+    await withEvent("m2", async (ctx) => {
+      const caller = makeCaller(ctx.event);
+      mockEventor({
+        entries: [entry(P + 1, "New Entry")],
+        results: [
+          result(P + 1, { startTime: 360000, finishTime: 372000, status: 1, bib: "7" }),
+          result(P + 9, { personName: "Results Only", startTime: 361000, finishTime: 373000, status: 1 }),
+        ],
+      });
+      const res = await applySync(caller);
+      const r = await runnerOf(ctx, P + 1);
+      expect(r).toMatchObject({ startTime: 0, finishTime: 0, status: "unknown", bib: "" });
+      expect(await ctx.db.runner.count({ where: { eventId: ctx.eventId, eventorPersonId: BigInt(P + 9) } })).toBe(0);
+      expect(res.runners.skippedResultsOnly).toBe(1);
+    });
+  });
+
+  it("M3: an apply without the previewed cancel ids is refused and writes nothing", async () => {
+    await withEvent("m3", async (ctx) => {
+      const caller = makeCaller(ctx.event);
+      mockEventor({ entries: [entry(P + 1, "X")] });
+      await expect(caller.eventor.sync()).rejects.toThrow(/EVENTOR_PREVIEW_REQUIRED/);
+      await expect(caller.eventor.sync({ dryRun: false })).rejects.toThrow(/EVENTOR_PREVIEW_REQUIRED/);
+      expect(await ctx.db.runner.count({ where: { eventId: ctx.eventId } })).toBe(0);
+    });
+  });
+
+  it("M1: an entry that gains a person id updates her runner and does not duplicate or cancel her", async () => {
+    await withEvent("m1", async (ctx) => {
+      const caller = makeCaller(ctx.event);
+      mockEventor({ entries: [entry(0, "No Person Yet", { eventorEntryId: 880_001 })] });
+      await applySync(caller);
+      const first = await ctx.db.runner.findFirstOrThrow({ where: { eventId: ctx.eventId, eventorEntryId: 880_001n } });
+      expect(first.eventorPersonId).toBeNull();
+      mockEventor({ entries: [entry(P + 5, "No Person Yet", { eventorEntryId: 880_001 })] });
+      const res = await applySync(caller);
+      const rows = await ctx.db.runner.findMany({ where: { eventId: ctx.eventId } });
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ id: first.id, status: "unknown", eventorPersonId: BigInt(P + 5) });
+      expect(res.runners.wouldCancel).toBe(0);
+    });
+  });
+
+  it("L1: a runner moved at the desk into a class without an Eventor id stays there", async () => {
+    await withEvent("l1", async (ctx) => {
+      const caller = makeCaller(ctx.event);
+      mockEventor({ entries: [entry(P + 1, "Mover")] });
+      await applySync(caller);
+      const local = await ctx.db.class.create({ data: { eventId: ctx.eventId, name: "Desk class" } });
+      await ctx.db.runner.updateMany({ where: { eventId: ctx.eventId }, data: { classId: local.id } });
+      mockEventor({ entries: [entry(P + 1, "Mover")] });
+      await applySync(caller);
+      expect((await runnerOf(ctx, P + 1)).classId).toBe(local.id);
     });
   });
 
@@ -176,9 +240,9 @@ describe("eventor.sync keeps what the desk did", () => {
     await withEvent("evt02-card", async (ctx) => {
       const caller = makeCaller(ctx.event);
       mockEventor({ entries: [entry(P + 1, "No Card", { cardNo: 0 })] });
-      await caller.eventor.sync();
+      await applySync(caller);
       await ctx.db.runner.updateMany({ where: { eventId: ctx.eventId }, data: { cardNo: 888_001 } });
-      const res = await caller.eventor.sync();
+      const res = await applySync(caller);
       expect((await runnerOf(ctx, P + 1)).cardNo).toBe(888_001);
       expect(res.runners.updated).toBe(0);
     });
@@ -188,10 +252,10 @@ describe("eventor.sync keeps what the desk did", () => {
     await withEvent("evt02-card-diff", async (ctx) => {
       const caller = makeCaller(ctx.event);
       mockEventor({ entries: [entry(P + 1, "Card Runner", { cardNo: 100_001 })] });
-      await caller.eventor.sync();
+      await applySync(caller);
       await ctx.db.runner.updateMany({ where: { eventId: ctx.eventId }, data: { cardNo: 888_002 } });
       mockEventor({ entries: [entry(P + 1, "Card Runner", { cardNo: 100_002 })] });
-      const res = await caller.eventor.sync();
+      const res = await applySync(caller);
       expect(res.runners.keptLocal).toBe(1);
       const r = await runnerOf(ctx, P + 1);
       expect(r.cardNo).toBe(888_002);
@@ -206,7 +270,7 @@ describe("eventor.sync keeps what the desk did", () => {
     await withEvent("evt02-class", async (ctx) => {
       const caller = makeCaller(ctx.event);
       mockEventor({ entries: [entry(P + 1, "Moved Locally"), entry(P + 2, "Moved By Eventor")] });
-      await caller.eventor.sync();
+      await applySync(caller);
       const clsB = await ctx.db.class.findFirstOrThrow({ where: { eventId: ctx.eventId, eventorId: BigInt(CLASS_B) } });
       const clsA = await ctx.db.class.findFirstOrThrow({ where: { eventId: ctx.eventId, eventorId: BigInt(CLASS_A) } });
       await ctx.db.runner.updateMany({
@@ -216,7 +280,7 @@ describe("eventor.sync keeps what the desk did", () => {
       mockEventor({
         entries: [entry(P + 1, "Moved Locally"), entry(P + 2, "Moved By Eventor", { classId: CLASS_B })],
       });
-      await caller.eventor.sync();
+      await applySync(caller);
       expect((await runnerOf(ctx, P + 1)).classId).toBe(clsB.id);
       expect((await runnerOf(ctx, P + 2)).classId).toBe(clsB.id);
       expect(clsA.id).not.toBe(clsB.id);
@@ -227,11 +291,11 @@ describe("eventor.sync keeps what the desk did", () => {
     await withEvent("evt02-started", async (ctx) => {
       const caller = makeCaller(ctx.event);
       mockEventor({ entries: [entry(P + 1, "Started")] });
-      await caller.eventor.sync();
+      await applySync(caller);
       const before = await runnerOf(ctx, P + 1);
       await ctx.db.runner.update({ where: { id: before.id }, data: { startTime: 1200 } });
       mockEventor({ entries: [entry(P + 1, "Started", { classId: CLASS_B })] });
-      const res = await caller.eventor.sync();
+      const res = await applySync(caller);
       expect(res.runners.classChangeBlocked).toBe(1);
       expect((await runnerOf(ctx, P + 1)).classId).toBe(before.classId);
     });
@@ -241,9 +305,9 @@ describe("eventor.sync keeps what the desk did", () => {
     await withEvent("evt02-applies", async (ctx) => {
       const caller = makeCaller(ctx.event);
       mockEventor({ entries: [entry(P + 1, "Old Name", { cardNo: 0 })] });
-      await caller.eventor.sync();
+      await applySync(caller);
       mockEventor({ entries: [entry(P + 1, "New Name", { cardNo: 123_456, birthYear: 1985 })] });
-      const res = await caller.eventor.sync();
+      const res = await applySync(caller);
       const r = await runnerOf(ctx, P + 1);
       expect(r).toMatchObject({ name: "New Name", cardNo: 123_456, birthYear: 1985 });
       expect(res.runners.updated).toBe(1);
@@ -254,9 +318,9 @@ describe("eventor.sync keeps what the desk did", () => {
     await withEvent("evt02-blank", async (ctx) => {
       const caller = makeCaller(ctx.event);
       mockEventor({ entries: [entry(P + 1, "Had Card", { cardNo: 321_000 })] });
-      await caller.eventor.sync();
+      await applySync(caller);
       mockEventor({ entries: [entry(P + 1, "Had Card", { cardNo: 0 })] });
-      await caller.eventor.sync();
+      await applySync(caller);
       expect((await runnerOf(ctx, P + 1)).cardNo).toBe(321_000);
     });
   });
@@ -274,7 +338,7 @@ describe("eventor.sync keeps what the desk did", () => {
         },
       });
       mockEventor({ entries: [entry(P + 1, "Original Name", { cardNo: 100_005 })] });
-      const res = await caller.eventor.sync();
+      const res = await applySync(caller);
       const r = await runnerOf(ctx, P + 1);
       expect(r).toMatchObject({ name: "Corrected Name", cardNo: 777_001 });
       expect(res.runners.keptLocal).toBe(1);
@@ -286,7 +350,7 @@ describe("eventor.sync keeps what the desk did", () => {
     await withEvent("res02", async (ctx) => {
       const caller = makeCaller(ctx.event);
       mockEventor({ entries: [entry(P + 1, "Timed", { cardNo: 150_001 })] });
-      await caller.eventor.sync();
+      await applySync(caller);
       await ctx.db.runner.updateMany({
         where: { eventId: ctx.eventId },
         data: { startTime: 36000, finishTime: 72000, status: "ok", startNo: 42 },
@@ -296,7 +360,7 @@ describe("eventor.sync keeps what the desk did", () => {
         entries: [entry(P + 1, "Timed", { cardNo: 150_001 })],
         results: [result(P + 1, { startTime: 360000, finishTime: 372000, status: 5, bib: "H4", cardNo: 150_001 })],
       });
-      const res = await caller.eventor.sync();
+      const res = await applySync(caller);
       const r = await runnerOf(ctx, P + 1);
       expect(r).toMatchObject({ startTime: 36000, finishTime: 72000, status: "ok", startNo: 42, bib: "" });
       expect(res.runners.updated).toBe(0);
@@ -307,10 +371,10 @@ describe("eventor.sync keeps what the desk did", () => {
     await withEvent("evt03", async (ctx) => {
       const caller = makeCaller(ctx.event);
       mockEventor({ classes: [cls(CLASS_A, "Inskolning", true)], entries: [] });
-      await caller.eventor.sync();
+      await applySync(caller);
       expect((await ctx.db.class.findFirstOrThrow({ where: { eventId: ctx.eventId } })).noTiming).toBe(true);
       mockEventor({ classes: [{ ...cls(CLASS_A, "Inskolning"), noTiming: undefined }], entries: [] });
-      const res = await caller.eventor.sync();
+      const res = await applySync(caller);
       expect((await ctx.db.class.findFirstOrThrow({ where: { eventId: ctx.eventId } })).noTiming).toBe(true);
       expect(res.classes.detailsIncomplete).toBe(true);
     });
@@ -320,9 +384,9 @@ describe("eventor.sync keeps what the desk did", () => {
     await withEvent("evt03-name", async (ctx) => {
       const caller = makeCaller(ctx.event);
       mockEventor({ classes: [cls(CLASS_A, "H21")] });
-      await caller.eventor.sync();
+      await applySync(caller);
       await ctx.db.class.updateMany({ where: { eventId: ctx.eventId }, data: { name: "Elit" } });
-      const res = await caller.eventor.sync();
+      const res = await applySync(caller);
       expect((await ctx.db.class.findFirstOrThrow({ where: { eventId: ctx.eventId } })).name).toBe("Elit");
       expect(res.classes.keptLocal).toBe(0); // Eventor did not change it: nothing to keep
     });
@@ -334,7 +398,7 @@ describe("eventor.sync preview and lease", () => {
     await withEvent("dryrun", async (ctx) => {
       const caller = makeCaller(ctx.event);
       mockEventor({ entries: [entry(P + 1, "Gone Soon"), entry(P + 2, "Stays")] });
-      await caller.eventor.sync();
+      await applySync(caller);
       mockEventor({
         entries: [entry(P + 2, "Stays"), entry(P + 3, "New One", { cardNo: 400_001 })],
         classes: [cls(CLASS_A, "H21"), cls(CLASS_B, "H35"), cls(41_003, "D21")],
@@ -352,7 +416,7 @@ describe("eventor.sync preview and lease", () => {
       expect(preview.samples.wouldCancel).toEqual(["Gone Soon"]);
       expect(preview.classes.added).toBe(1);
 
-      const applied = await caller.eventor.sync();
+      const applied = await applySync(caller);
       expect({ ...applied, dryRun: true }).toEqual(preview);
       expect((await ctx.db.runner.count({ where: { eventId: ctx.eventId } }))).toBe(3);
     });
@@ -363,13 +427,13 @@ describe("eventor.sync preview and lease", () => {
       const caller = makeCaller(ctx.event);
       mockEventor({ entries: [entry(P + 1, "Leased")] });
       await ctx.db.eventLease.create({ data: { eventId: ctx.eventId, holderNodeId: "venue-box" } });
-      await expect(caller.eventor.sync()).rejects.toThrow(/EVENT_CHECKED_OUT/);
+      await expect(applySync(caller)).rejects.toThrow(/EVENT_CHECKED_OUT/);
       await expect(caller.eventor.sync({ dryRun: true })).rejects.toThrow(/EVENT_CHECKED_OUT/);
       expect(await ctx.db.runner.count({ where: { eventId: ctx.eventId } })).toBe(0);
       await expect(caller.eventor.pushStartList({ dryRun: true })).resolves.toEqual({ runnerCount: 0 });
       // Released again: the sync works.
       await ctx.db.eventLease.updateMany({ where: { eventId: ctx.eventId }, data: { releasedAt: new Date() } });
-      await expect(caller.eventor.sync()).resolves.toMatchObject({ runners: { added: 1 } });
+      await expect(applySync(caller)).resolves.toMatchObject({ runners: { added: 1 } });
     });
   });
 
@@ -377,9 +441,9 @@ describe("eventor.sync preview and lease", () => {
     await withEvent("deleted", async (ctx) => {
       const caller = makeCaller(ctx.event);
       mockEventor({ entries: [entry(P + 1, "Deleted Locally")] });
-      await caller.eventor.sync();
+      await applySync(caller);
       await ctx.db.runner.updateMany({ where: { eventId: ctx.eventId }, data: { removed: true } });
-      await caller.eventor.sync();
+      await applySync(caller);
       expect(await ctx.db.runner.count({ where: { eventId: ctx.eventId } })).toBe(1);
     });
   });
@@ -390,7 +454,7 @@ describe("runner.useEventorValue", () => {
     await withEvent("use-value", async (ctx) => {
       const caller = makeCaller(ctx.event);
       mockEventor({ entries: [entry(P + 1, "Use Mine", { cardNo: 100_010 }), entry(P + 2, "Other", { cardNo: 100_011 })] });
-      await caller.eventor.sync();
+      await applySync(caller);
       const r = await runnerOf(ctx, P + 1);
       await ctx.db.runner.update({ where: { id: r.id }, data: { cardNo: 888_010, name: "Typo Name" } });
 
@@ -423,7 +487,7 @@ describe("eventor.sync: bound to its preview, serialised with checkout, entries 
     await withEvent("preview-bound", async (ctx) => {
       const caller = makeCaller(ctx.event);
       mockEventor({ entries: [entry(P + 1, "Seen"), entry(P + 2, "Unseen"), entry(P + 3, "Stays")] });
-      await caller.eventor.sync();
+      await applySync(caller);
       mockEventor({ entries: [entry(P + 3, "Stays")] });
       const preview = await caller.eventor.sync({ dryRun: true });
       expect(preview.cancelIds).toHaveLength(2);
@@ -446,19 +510,19 @@ describe("eventor.sync: bound to its preview, serialised with checkout, entries 
     await withEvent("manual-cancel", async (ctx) => {
       const caller = makeCaller(ctx.event);
       mockEventor({ entries: [entry(P + 1, "Held"), entry(P + 2, "Other")] });
-      await caller.eventor.sync();
+      await applySync(caller);
       await ctx.db.runner.updateMany({
         where: { eventId: ctx.eventId, eventorPersonId: BigInt(P + 1) },
         data: { status: "ok", finishTime: 100 },
       });
       mockEventor({ entries: [entry(P + 2, "Other")] }); // held back: present false
-      await caller.eventor.sync();
+      await applySync(caller);
       await ctx.db.runner.updateMany({
         where: { eventId: ctx.eventId, eventorPersonId: BigInt(P + 1) },
         data: { status: "cancel" }, // the desk cancels her by hand
       });
       mockEventor({ entries: [entry(P + 1, "Held"), entry(P + 2, "Other")] });
-      const res = await caller.eventor.sync();
+      const res = await applySync(caller);
       expect(res.runners.reinstated).toBe(0);
       expect((await runnerOf(ctx, P + 1)).status).toBe("cancel");
     });
@@ -468,9 +532,9 @@ describe("eventor.sync: bound to its preview, serialised with checkout, entries 
     await withEvent("card-conflict-create", async (ctx) => {
       const caller = makeCaller(ctx.event);
       mockEventor({ entries: [entry(P + 1, "Holder", { cardNo: 444_001 })] });
-      await caller.eventor.sync();
+      await applySync(caller);
       mockEventor({ entries: [entry(P + 1, "Holder", { cardNo: 444_001 }), entry(P + 2, "Loser", { cardNo: 444_001 })] });
-      const res = await caller.eventor.sync();
+      const res = await applySync(caller);
       expect(res.runners.cardConflicts).toBe(1);
       const loser = await runnerOf(ctx, P + 2);
       expect(loser.cardNo).toBeNull();
@@ -483,14 +547,14 @@ describe("eventor.sync: bound to its preview, serialised with checkout, entries 
     await withEvent("no-person-id", async (ctx) => {
       const caller = makeCaller(ctx.event);
       mockEventor({ entries: [entry(0, "Guest Runner", { eventorEntryId: 5_001 }), entry(P + 1, "Normal")] });
-      const first = await caller.eventor.sync();
+      const first = await applySync(caller);
       expect(first.runners.added).toBe(2);
-      const second = await caller.eventor.sync();
+      const second = await applySync(caller);
       expect(second.runners).toMatchObject({ added: 0, wouldCancel: 0 });
       expect(await ctx.db.runner.count({ where: { eventId: ctx.eventId } })).toBe(2);
       // Gone from Eventor: cancelled like any other.
       mockEventor({ entries: [entry(P + 1, "Normal")] });
-      const third = await caller.eventor.sync();
+      const third = await applySync(caller);
       expect(third.runners.wouldCancel).toBe(1);
       const guest = await ctx.db.runner.findFirstOrThrow({ where: { eventId: ctx.eventId, eventorEntryId: 5_001n } });
       expect(guest.status).toBe("cancel");
@@ -503,7 +567,7 @@ describe("eventor.sync: bound to its preview, serialised with checkout, entries 
       mockEventor({
         entries: [entry(P + 1, "Twice"), entry(P + 1, "Twice", { eventorEntryId: 9_999 }), entry(0, "Nobody", { eventorEntryId: 0 })],
       });
-      const res = await caller.eventor.sync();
+      const res = await applySync(caller);
       expect(res.runners).toMatchObject({ added: 1, duplicateEntries: 1, skippedNoId: 1 });
     });
   });
@@ -528,7 +592,7 @@ describe("eventor.sync: bound to its preview, serialised with checkout, entries 
       await acquiring;
       expect(acquired).toBe(true);
       mockEventor({ entries: [entry(P + 1, "X")] });
-      await expect(makeCaller(ctx.event).eventor.sync()).rejects.toThrow(/EVENT_CHECKED_OUT/);
+      await expect(applySync(makeCaller(ctx.event))).rejects.toThrow(/EVENT_CHECKED_OUT/);
     });
   });
 });
