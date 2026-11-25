@@ -113,7 +113,6 @@
   "never": "Never",
   "registrationConfig": "Registration Config",
   "liveresultsConfig": "LiveResults Config",
-
   "competitionInfo": "Event Info",
   "dataSync": "Data Sync",
   "eventorLinked": "Eventor Linked",
@@ -137,7 +136,7 @@
   "syncClassesClubsDetail": "Names, age limits, sort order, club contact info",
   "specialStatusHandling": "Special status handling",
   "syncWithdrawn": "Withdrawn (Återbud)",
-  "syncWithdrawnDetail": "Runners who disappear from Eventor and have no race result are automatically marked as Cancelled",
+  "syncWithdrawnDetail": "Runners who disappear from Eventor are marked as Cancelled, unless they have a card read, a finish time or a result status; those are left as they are",
   "syncNoTiming": "NoTiming",
   "syncNoTimingDetail": "Classes with TimePresentation=false in Eventor are imported with StatusNoTiming — they appear in start lists but results are not timed",
   "whatGetsPushedToEventor": "What gets pushed to Eventor",
@@ -264,11 +263,9 @@
   "vatExempt": "VAT exempt (Momsbefriad)",
   "friskvardNote": "Print friskvardsbidrag note on receipts",
   "results": "Results",
-
   "databaseBackup": "Event backup",
   "databaseBackupDescription": "Download a .sql dump of this event only — its courses, classes, runners, cards, punches, readouts, map and tiles, and tracks. Other events and the shared runner and club directories are not included. Restorable with psql.",
   "downloadBackup": "Download backup",
-
   "googleSheetsBackup": "Google Sheets Backup",
   "googleSheetsDescription": "Automatically push each card readout to a Google Sheet as a cloud backup.",
   "webhookUrl": "Apps Script URL",
@@ -287,7 +284,6 @@
   "setupStep6": "6. Copy the URL and paste it above",
   "copyScript": "Copy Apps Script",
   "copied": "Copied!",
-
   "forbiddenTitle": "You don't have access to this page",
   "forbiddenBody": "Ask an event admin to grant you a role for this event.",
   "managerBadge": "Manager",
@@ -310,5 +306,21 @@
   "kioskKeyHeading": "Kiosk key",
   "kioskKeyHelp": "Append this key to kiosk and start-screen URLs on devices that have no signed-in user.",
   "kioskKeyRegenerate": "Generate / rotate key",
-  "kioskKeyCopy": "Copy kiosk URL"
+  "kioskKeyCopy": "Copy kiosk URL",
+  "syncPreviewTitle": "Preview: nothing has been changed yet",
+  "syncApply": "Apply",
+  "syncCancel": "Cancel",
+  "syncWouldCancel": "{{count}} runners will be marked as withdrawn",
+  "syncHeldBack": "{{count}} runners are gone from Eventor but have a card read or a result, so they are left as they are",
+  "syncReinstated": "{{count}} withdrawn runners are back in Eventor and are reinstated",
+  "syncKeptLocal": "{{count}} runners keep local edits that differ from Eventor",
+  "syncClassBlocked": "{{count}} class moves skipped for runners who have started",
+  "syncCardConflicts": "{{count}} card changes skipped because the card is used by another runner",
+  "syncClassesKept": "{{count}} classes keep local edits that differ from Eventor",
+  "syncWouldCancelNames": "Will be withdrawn: {{names}}",
+  "syncCancelledNames": "Withdrawn: {{names}}",
+  "syncHeldBackNames": "Gone from Eventor, left as they are: {{names}}",
+  "syncDetailsIncomplete": "Class details incomplete: Eventor did not say which classes are untimed, so that setting was left as it is.",
+  "syncCheckedOut": "This event is checked out to a venue. Check it in before syncing from Eventor.",
+  "syncEmptyResponse": "Eventor returned an empty list for an event that has runners here. Nothing was changed; try again later."
 }

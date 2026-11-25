@@ -126,5 +126,14 @@
   "flagOC": "Utom tävlan",
   "flagNT": "Utan tidtagning",
   "flagPayBefore": "Betala före resultat",
-  "variant": "Variant"
+  "variant": "Variant",
+  "eventor": "Eventor",
+  "eventorDiffers": "Skiljer sig från Eventor",
+  "eventorGone": "Borta från Eventor",
+  "eventorBadgeDiffers": "≠ Eventor",
+  "eventorBadgeGone": "Ej i Eventor",
+  "eventorValue": "Eventor: {{value}}",
+  "useEventorValue": "Använd Eventors värde",
+  "eventorGoneBanner": "Löparen finns inte längre i Eventors anmälningslista. Löparen har lämnats som den är eftersom en bricka lästs av eller ett resultat finns.",
+  "eventorUseFailed": "Kunde inte använda Eventors värde: {{message}}"
 }

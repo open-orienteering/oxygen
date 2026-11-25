@@ -9,6 +9,7 @@ import {
   TransferFlags,
   hasTransferFlag,
   type RunnerStatusValue,
+  type RunnerEventorDiff,
 } from "@oxygen/shared";
 import { PunchTable } from "./PunchTable";
 import { OtherVariantBanner } from "./OtherVariantBanner";
@@ -50,6 +51,12 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
     utils.cardReadout.readoutByRunner.invalidate({ runnerId });
   };
 
+  const useEventorValueMutation = trpc.eventor.useEventorValue.useMutation({
+    onSuccess: () => {
+      utils.runner.getById.invalidate({ id: runnerId });
+      utils.runner.list.invalidate();
+    },
+  });
   const updateMutation = trpc.runner.update.useMutation({
     onSuccess: invalidateAll,
   });
@@ -111,6 +118,19 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
   if (!runner.data) return null;
 
   const r = runner.data;
+  const diffByField = new Map((r.eventorDiff ?? []).map((d) => [d.field, d]));
+  const marker = (field: RunnerEventorDiff["field"]) => {
+    const d = diffByField.get(field);
+    if (!d) return null;
+    return (
+      <EventorMarker
+        diff={d}
+        pending={useEventorValueMutation.isPending}
+        error={useEventorValueMutation.isError ? useEventorValueMutation.error.message : null}
+        onUse={() => useEventorValueMutation.mutate({ runnerId, field })}
+      />
+    );
+  };
   const runningTime =
     r.finishTime > 0 && r.startTime > 0 ? r.finishTime - r.startTime : 0;
 
@@ -131,31 +151,49 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
             )}
           </div>
 
+          {r.goneFromEventor && (
+            <div
+              data-testid="eventor-gone-banner"
+              className="mb-3 px-3 py-1.5 rounded-md bg-sky-50 border border-sky-200 text-xs text-sky-800"
+            >
+              {t("eventorGoneBanner")}
+            </div>
+          )}
+
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-x-6 gap-y-3">
             {/* Editable fields */}
-            <EditField
-              label={t("name")}
-              value={r.name}
-              onChange={(v) => debouncedSave("name", v)}
-            />
-            <SelectField
-              label={t("class")}
-              runnerId={runnerId}
-              field="classId"
-              currentValue={r.classId}
-              debouncedSave={debouncedSave}
-            />
+            <div>
+              <EditField
+                label={t("name")}
+                value={r.name}
+                onChange={(v) => debouncedSave("name", v)}
+              />
+              {marker("name")}
+            </div>
+            <div>
+              <SelectField
+                label={t("class")}
+                runnerId={runnerId}
+                field="classId"
+                currentValue={r.classId}
+                debouncedSave={debouncedSave}
+              />
+              {marker("classId")}
+            </div>
             <VariantSelectField
               classId={r.classId}
               courseId={r.courseId}
               onChange={(courseId) => updateMutation.mutate({ id: runnerId, courseId })}
             />
-            <SelectClubField
-              label={t("club")}
-              runnerId={runnerId}
-              currentValue={r.clubId}
-              debouncedSave={debouncedSave}
-            />
+            <div>
+              <SelectClubField
+                label={t("club")}
+                runnerId={runnerId}
+                currentValue={r.clubId}
+                debouncedSave={debouncedSave}
+              />
+              {marker("club")}
+            </div>
             <div>
               <label className="flex items-center gap-1.5 text-xs text-slate-500 mb-1">
                 {t("siCard")}
@@ -167,6 +205,7 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
                 type="number"
                 onChange={(v) => debouncedSave("cardNo", parseInt(v, 10) || 0)}
               />
+              {marker("cardNo")}
             </div>
             <EditField
               label={t("startTime")}
@@ -211,29 +250,34 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
               onChange={(v) => debouncedSave("bib", v)}
               className="hidden sm:block"
             />
-            <EditField
-              label={t("birthYear")}
-              value={r.birthYear > 0 ? String(r.birthYear) : ""}
-              type="number"
-              onChange={(v) =>
-                debouncedSave("birthYear", parseInt(v, 10) || 0)
-              }
-              className="hidden sm:block"
-            />
+            <div className="hidden sm:block">
+              <EditField
+                label={t("birthYear")}
+                value={r.birthYear > 0 ? String(r.birthYear) : ""}
+                type="number"
+                onChange={(v) =>
+                  debouncedSave("birthYear", parseInt(v, 10) || 0)
+                }
+              />
+              {marker("birthYear")}
+            </div>
             <div className="hidden sm:block">
               <label className="block text-xs text-slate-500 mb-1">{t("sex")}</label>
               <SexSelect
                 value={r.sex}
                 onChange={(v) => debouncedSave("sex", v)}
               />
+              {marker("sex")}
             </div>
-            <EditField
-              label={t("nationality")}
-              value={r.nationality}
-              onChange={(v) => debouncedSave("nationality", v)}
-              placeholder="e.g. SWE"
-              className="hidden sm:block"
-            />
+            <div className="hidden sm:block">
+              <EditField
+                label={t("nationality")}
+                value={r.nationality}
+                onChange={(v) => debouncedSave("nationality", v)}
+                placeholder="e.g. SWE"
+              />
+              {marker("nationality")}
+            </div>
             <EditField
               label={t("phone")}
               value={r.phone}
@@ -354,6 +398,42 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
         </div>
       </td>
     </tr>
+  );
+}
+
+/**
+ * "Eventor: X" with a one-click "Use Eventor's value", under a field whose
+ * value differs from what Eventor last said (docs/system/eventor-sync.md).
+ */
+function EventorMarker({
+  diff,
+  onUse,
+  pending,
+  error,
+}: {
+  diff: RunnerEventorDiff;
+  onUse: () => void;
+  pending: boolean;
+  error: string | null;
+}) {
+  const { t } = useTranslation("runners");
+  return (
+    <div
+      data-testid={`eventor-marker-${diff.field}`}
+      className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-sky-700"
+    >
+      <span>{t("eventorValue", { value: String(diff.eventor ?? "") })}</span>
+      <button
+        type="button"
+        onClick={onUse}
+        disabled={pending}
+        data-testid={`eventor-use-${diff.field}`}
+        className="underline hover:text-sky-900 disabled:opacity-50 cursor-pointer"
+      >
+        {t("useEventorValue")}
+      </button>
+      {error && <span className="text-red-600">{t("eventorUseFailed", { message: error })}</span>}
+    </div>
   );
 }
 

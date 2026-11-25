@@ -113,7 +113,6 @@
   "never": "Aldrig",
   "registrationConfig": "Anmälningsinställningar",
   "liveresultsConfig": "LiveResults-inställningar",
-
   "competitionInfo": "Tävlingsinfo",
   "dataSync": "Datasynkronisering",
   "eventorLinked": "Eventor länkad",
@@ -137,7 +136,7 @@
   "syncClassesClubsDetail": "Namn, åldersgränser, sorteringsordning, klubbkontaktinfo",
   "specialStatusHandling": "Speciell statushantering",
   "syncWithdrawn": "Återbud",
-  "syncWithdrawnDetail": "Löpare som försvinner från Eventor och inte har tävlingsresultat markeras automatiskt som avbrutna",
+  "syncWithdrawnDetail": "Löpare som försvinner från Eventor markeras som avbrutna, om de inte har en brickavläsning, en måltid eller en resultatstatus; de lämnas som de är",
   "syncNoTiming": "Utan tidtagning",
   "syncNoTimingDetail": "Klasser med TimePresentation=false i Eventor importeras med StatusNoTiming — de syns i startlistor men tidtas inte",
   "whatGetsPushedToEventor": "Vad skickas till Eventor",
@@ -264,11 +263,9 @@
   "vatExempt": "Momsbefriad",
   "friskvardNote": "Skriv ut friskvårdsbidragstext på kvitton",
   "results": "Resultat",
-
   "databaseBackup": "Tävlingsbackup",
   "databaseBackupDescription": "Ladda ner en .sql-dump av endast denna tävling — dess banor, klasser, deltagare, brickor, stämplingar, avläsningar, karta och kartrutor samt spår. Andra tävlingar och de gemensamma deltagar- och klubbregistren ingår inte. Återställbar med psql.",
   "downloadBackup": "Ladda ner backup",
-
   "googleSheetsBackup": "Google Sheets-backup",
   "googleSheetsDescription": "Skicka varje brickavläsning automatiskt till ett Google Sheet som molnbackup.",
   "webhookUrl": "Apps Script-URL",
@@ -287,7 +284,6 @@
   "setupStep6": "6. Kopiera URL:en och klistra in den ovan",
   "copyScript": "Kopiera Apps Script",
   "copied": "Kopierat!",
-
   "forbiddenTitle": "Du har inte åtkomst till den här sidan",
   "forbiddenBody": "Be en tävlingsadministratör att tilldela dig en roll för tävlingen.",
   "managerBadge": "Administratör",
@@ -310,5 +306,21 @@
   "kioskKeyHeading": "Kiosknyckel",
   "kioskKeyHelp": "Lägg till nyckeln på kiosk- och startskärms-URL:er för enheter utan inloggad användare.",
   "kioskKeyRegenerate": "Skapa / byt nyckel",
-  "kioskKeyCopy": "Kopiera kiosk-URL"
+  "kioskKeyCopy": "Kopiera kiosk-URL",
+  "syncPreviewTitle": "Förhandsgranskning: inget har ändrats ännu",
+  "syncApply": "Verkställ",
+  "syncCancel": "Avbryt",
+  "syncWouldCancel": "{{count}} löpare markeras som återbud",
+  "syncHeldBack": "{{count}} löpare saknas i Eventor men har en brickavläsning eller ett resultat och lämnas som de är",
+  "syncReinstated": "{{count}} återbudsmarkerade löpare finns i Eventor igen och återställs",
+  "syncKeptLocal": "{{count}} löpare behåller lokala ändringar som skiljer sig från Eventor",
+  "syncClassBlocked": "{{count}} klassbyten hoppades över för löpare som har startat",
+  "syncCardConflicts": "{{count}} brickbyten hoppades över eftersom brickan används av en annan löpare",
+  "syncClassesKept": "{{count}} klasser behåller lokala ändringar som skiljer sig från Eventor",
+  "syncWouldCancelNames": "Markeras som återbud: {{names}}",
+  "syncCancelledNames": "Återbud: {{names}}",
+  "syncHeldBackNames": "Saknas i Eventor, lämnas som de är: {{names}}",
+  "syncDetailsIncomplete": "Klassuppgifterna är ofullständiga: Eventor svarade inte vilka klasser som är utan tidtagning, så den inställningen lämnades som den är.",
+  "syncCheckedOut": "Tävlingen är utcheckad till en arena. Checka in den innan du synkar från Eventor.",
+  "syncEmptyResponse": "Eventor svarade med en tom lista för en tävling som har löpare här. Inget ändrades; försök igen senare."
 }

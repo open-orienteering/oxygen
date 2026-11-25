@@ -314,6 +314,15 @@ export function RunnerManagement() {
                       <td className="px-4 py-2.5 text-slate-400 tabular-nums">{runner.startNo > 0 ? runner.startNo : "-"}</td>
                       <td className="px-4 py-2.5 font-medium text-blue-700 hover:text-blue-900">
                         {runner.name}
+                        {(runner.differsFromEventor || runner.goneFromEventor) && (
+                          <span
+                            title={runner.goneFromEventor ? t("eventorGone") : t("eventorDiffers")}
+                            data-testid="eventor-diff-badge"
+                            className="ml-2 align-middle text-[10px] font-semibold px-1.5 py-0.5 rounded bg-sky-50 text-sky-700 border border-sky-200"
+                          >
+                            {runner.goneFromEventor ? t("eventorBadgeGone") : t("eventorBadgeDiffers")}
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-2.5 text-slate-600 hidden sm:table-cell">
                         <span className="inline-flex items-center gap-1.5">
