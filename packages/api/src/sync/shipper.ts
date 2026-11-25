@@ -52,13 +52,16 @@ import { encodeHlc } from "@oxygen/shared";
 import { TRPCClientError } from "@trpc/client";
 import {
   SYNC_SECRET_HEADER,
+  SYNC_NODE_ID_HEADER,
+  nodeId,
   syncIntervalMs,
   syncPeerUrl,
   syncSettingsRefreshMs,
   syncSharedSecret,
 } from "./nodeIdentity.js";
 import { makeSyncHeaders } from "./googleIdToken.js";
-import { makeLeasePeer } from "./lease.js";
+import { getActiveLease, makeLeasePeer, releaseLease, type LeasePeer } from "./lease.js";
+import { isCheckingIn } from "./leaseState.js";
 import { refreshCloudOwnedSettings } from "./settingsRefresh.js";
 import { refreshCloudOwnedMaps } from "./mapRefresh.js";
 
@@ -116,6 +119,7 @@ export function httpPeerTransport(
             headers: makeSyncHeaders({
               "x-event-id": nameId,
               [SYNC_SECRET_HEADER]: secret,
+              [SYNC_NODE_ID_HEADER]: nodeId(),
             }),
           }),
         ],
@@ -337,11 +341,43 @@ async function legacyPull(
   }
 }
 
+/**
+ * Takeover detection (review SYNC-08): this box thinks it holds the lease,
+ * but the peer says someone else does (a force takeover while the box was
+ * dead or off the network), or nobody. The box lets go locally, marked
+ * forced, so it stops originating race data; its backlog keeps shipping. A
+ * peer that cannot be asked (offline, or older than `lease.holder`) changes
+ * nothing.
+ */
+async function releaseIfTakenOver(
+  db: PrismaClient,
+  ev: EventRef,
+  peer: LeasePeer,
+): Promise<void> {
+  if (!peer.holder || isCheckingIn(ev.id)) return;
+  const mine = await getActiveLease(db, ev.id);
+  if (!mine || mine.holderNodeId !== nodeId()) return;
+  let answer: { holderNodeId: string | null };
+  try {
+    answer = await peer.holder(ev.nameId);
+  } catch {
+    return;
+  }
+  if (answer.holderNodeId === nodeId()) return;
+  // The lease may have been released meanwhile (a checkin on this box).
+  if (!(await getActiveLease(db, ev.id))) return;
+  await releaseLease(db, ev.id, { forced: true }).catch(() => {});
+  console.error(
+    `[lease] ${ev.nameId}: the cloud says the lease is ${answer.holderNodeId ? `held by "${answer.holderNodeId}"` : "free"}: this event was taken over. Releasing the local lease; race writes on this copy are refused from now on and the backlog keeps shipping.`,
+  );
+}
+
 /** One full cycle: ship every non-removed local event. */
 export async function shipAllOnce(
   db: PrismaClient,
   peerId: string,
   transport: PeerTransport,
+  peer?: LeasePeer,
 ): Promise<void> {
   // Only events checked out against this peer (checkout writes the
   // sync-state row). An event this box created or kept for itself is not
@@ -352,6 +388,7 @@ export async function shipAllOnce(
   });
   for (const ev of events) {
     try {
+      if (peer) await releaseIfTakenOver(db, ev, peer);
       const stats = await shipEventOnce(db, ev, peerId, transport);
       if (stats.errors.length > 0) {
         console.error(
@@ -430,12 +467,13 @@ export function startShipper(): void {
   if (timer) return;
 
   const transport = makePeerTransport(peerUrl, secret);
+  const leasePeer = makeLeasePeer(peerUrl, secret);
   const tick = () => {
     if (busy) return; // Skip overlapping ticks.
     busy = true;
     void (async () => {
       try {
-        await shipAllOnce(prisma(), peerUrl, transport);
+        await shipAllOnce(prisma(), peerUrl, transport, leasePeer);
         if (Date.now() - lastSettingsRefresh >= syncSettingsRefreshMs()) {
           lastSettingsRefresh = Date.now();
           await refreshAllSettingsOnce(prisma(), peerUrl, secret);

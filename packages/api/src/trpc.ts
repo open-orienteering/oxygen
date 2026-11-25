@@ -4,6 +4,7 @@ import type { PrismaClient } from "./generated/prisma/client.js";
 import { prisma, resolveEvent, type EventRef } from "./db.js";
 import {
   SYNC_SECRET_HEADER,
+  SYNC_NODE_ID_HEADER,
   syncSharedSecret,
 } from "./sync/nodeIdentity.js";
 import { assertRaceWritable } from "./sync/lease.js";
@@ -31,6 +32,8 @@ export interface Context {
   event: EventRef | null;
   /** Node-to-node shared secret from the request, if any (see peerProcedure). */
   syncSecret?: string | null;
+  /** `NODE_ID` the calling peer announced (`x-oxygen-node-id`), if any. */
+  peerNodeId?: string | null;
   /** Invited user matching the proxy identity, or null. */
   user: AuthUser | null;
   /** Parsed identity email even when the user is not invited. */
@@ -57,6 +60,8 @@ export async function createContext(
   const event = nameId ? await resolveEvent(nameId) : null;
   const secretRaw = opts.req.headers[SYNC_SECRET_HEADER];
   const syncSecret = (Array.isArray(secretRaw) ? secretRaw[0] : secretRaw) ?? null;
+  const peerRaw = opts.req.headers[SYNC_NODE_ID_HEADER];
+  const peerNodeId = (Array.isArray(peerRaw) ? peerRaw[0] : peerRaw)?.trim() || null;
   const kioskRaw = opts.req.headers[KIOSK_KEY_HEADER];
   const kioskKey = (Array.isArray(kioskRaw) ? kioskRaw[0] : kioskRaw)?.trim() || null;
 
@@ -76,6 +81,7 @@ export async function createContext(
   return {
     event,
     syncSecret,
+    peerNodeId,
     user,
     identityEmail,
     authEnabled: enabled,

@@ -15,7 +15,7 @@ import { disconnectAll, prisma } from "./db.js";
 import { seedServerClock } from "./serverClock.js";
 import { backgroundSupervisor } from "./background/supervisor.js";
 import { registerVenueForwarder } from "./sync/venueForwarder.js";
-import { SYNC_SECRET_HEADER } from "./sync/nodeIdentity.js";
+import { SYNC_NODE_ID_HEADER, SYNC_SECRET_HEADER } from "./sync/nodeIdentity.js";
 import { authHeaderName } from "./auth.js";
 import { registerBackupRoute } from "./backup.js";
 import { registerCourseExportRoute } from "./course-export.js";
@@ -68,6 +68,7 @@ async function main() {
       "x-competition-id",
       "x-event-id",
       SYNC_SECRET_HEADER,
+      SYNC_NODE_ID_HEADER,
       authHeaderName(),
       "x-kiosk-key",
     ],

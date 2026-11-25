@@ -67,7 +67,7 @@ import {
 import { storeReadoutImpl, applyResultGuarded } from "./cardReadout.js";
 import { buildRunnerUpdateData, manualFlagsFor } from "./runner.js";
 import { appendJournal } from "../journalEmit.js";
-import { isRaceWritable } from "../sync/lease.js";
+import { isRaceWritable, isStaleHolder, mayWriteEventData, writeRefusalError } from "../sync/lease.js";
 import { assignVariant } from "../variants.js";
 import { valueToRunnerStatus } from "../statusConvert.js";
 import { foldServerHlc } from "../serverClock.js";
@@ -440,9 +440,18 @@ export const eventsRouter = router({
       let actorId: string | null | undefined;
       let actor: string | null = null;
 
+      let staleHolder = false;
       if (ectx.syncSecret) {
         assertNodeSecret(ectx.syncSecret);
+        staleHolder = await isStaleHolder(ectx.db, ectx.event.id, ectx.peerNodeId);
       } else {
+        // A copy that handed the event back (or lost it to a takeover) is no
+        // longer where race data is written: refuse the whole request so the
+        // station keeps its outbox and drains to the cloud once repointed.
+        // `held-elsewhere` is not refused: the holder's copy is elsewhere,
+        // but this sink must still take entries (the shipper relays them).
+        const verdict = await mayWriteEventData(ectx.db, ectx.event.id);
+        if (!verdict.ok && verdict.reason !== "held-elsewhere") throw writeRefusalError(verdict);
         if (ectx.authEnabled && !ectx.user) {
           throw new TRPCError({ code: "UNAUTHORIZED", message: "Not authenticated" });
         }
@@ -463,6 +472,20 @@ export const eventsRouter = router({
         }
       }
 
+      // Entries a force-taken-over holder delivers late are applied (the
+      // journal is the record), but each one is named: a correction made
+      // after the takeover can be overwritten by its older value.
+      const alreadyHeld = staleHolder
+        ? new Set(
+            (
+              await ectx.db.journalEntry.findMany({
+                where: { id: { in: input.events.map((e) => e.id) } },
+                select: { id: true },
+              })
+            ).map((r) => r.id),
+          )
+        : null;
+
       const { synced, failed } = await runWithActor(actor, () =>
         ingestJournalEntries(ectx.db, ectx.event, input.events, {
           gate,
@@ -472,6 +495,15 @@ export const eventsRouter = router({
           fromPeer: ectx.syncSecret ? true : undefined,
         }),
       );
+      if (alreadyHeld) {
+        const byId = new Map(input.events.map((e) => [e.id, e]));
+        for (const id of synced) {
+          if (alreadyHeld.has(id)) continue;
+          console.warn(
+            `[lease] stale-holder entry ${id} ${byId.get(id)?.type ?? "?"} applied after force takeover (from node "${ectx.peerNodeId}")`,
+          );
+        }
+      }
       // serverTimeMs lets the client detect a skewed local clock (see the
       // clock-skew banner). It is the cloud's wall clock at response time.
       return { synced, failed, serverTimeMs: Date.now() };

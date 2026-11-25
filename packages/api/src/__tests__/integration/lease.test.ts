@@ -26,7 +26,7 @@
  * nothing race-critical is touched.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { TRPCError } from "@trpc/server";
 import { execSync } from "child_process";
 import { Client } from "pg";
@@ -57,6 +57,7 @@ import {
 import {
   _setPeerTransportFactory,
   refreshAllSettingsOnce,
+  shipAllOnce,
   shipEventOnce,
   type PeerTransport,
 } from "../../sync/shipper.js";
@@ -140,6 +141,7 @@ function leasePeerToB(): LeasePeer {
       await releaseLease(dbB, eventB.id, { expectedHolder: holder });
     },
     exportSnapshot: async () => exportEventSnapshot(dbB, eventB),
+    holder: async () => ({ holderNodeId: (await getActiveLease(dbB, eventB.id))?.holderNodeId ?? null }),
     exportSettings: async () =>
       (await dbB.event.findUniqueOrThrow({
         where: { id: eventB.id },
@@ -1689,6 +1691,153 @@ describe("a box follows the cloud's map rows during a lease (G19)", () => {
       _setLeasePeerFactory(() => leasePeerToB());
       // Refreshes of one event queue: this one returns after the held one finished.
       await refresh();
+    }
+  });
+});
+
+describe("a box that is no longer the holder stops writing (SYNC-08)", () => {
+  async function checkedOutVenue() {
+    await caller.lease.checkout({ nameId: CHECKOUT_NAME });
+    const local = await ctx.db.event.findUniqueOrThrow({
+      where: { nameId: CHECKOUT_NAME },
+      select: { id: true, nameId: true, zeroTime: true },
+    });
+    return { local, venue: makeCaller({ id: local.id, nameId: local.nameId, zeroTime: local.zeroTime }) };
+  }
+
+  async function withVenueRole<T>(fn: () => Promise<T>): Promise<T> {
+    const previous = process.env.NODE_ROLE;
+    process.env.NODE_ROLE = "venue";
+    try {
+      return await fn();
+    } finally {
+      if (previous === undefined) delete process.env.NODE_ROLE;
+      else process.env.NODE_ROLE = previous;
+    }
+  }
+
+  const punchEntry = () => ({
+    id: randomUUID(),
+    type: "punch.recorded",
+    competitionId: CHECKOUT_NAME,
+    stationId: "station-x",
+    timestamp: Date.now(),
+    payload: { cardNo: 800200, controlCode: 77, time: 361000 },
+  });
+
+  it("lease.holder answers who holds the lease, behind the shared secret", async () => {
+    const peerCaller = makeCaller(ctx.event, { syncSecret: "test-sync-secret" });
+    expect(await peerCaller.lease.holder()).toMatchObject({ holderNodeId: null });
+    await acquireLease(ctx.db, ctx.eventId, "venue-h");
+    try {
+      expect(await peerCaller.lease.holder()).toMatchObject({ holderNodeId: "venue-h" });
+      await expect(caller.lease.holder()).rejects.toBeTruthy();
+    } finally {
+      await releaseLease(ctx.db, ctx.eventId, { forced: true });
+    }
+  });
+
+  it("a revived box that was taken over releases itself, keeps shipping its backlog and refuses new race writes", async () => {
+    const { local, venue } = await checkedOutVenue();
+    try {
+      await venue.runner.create({ name: "Backlog Berit", classId: 1, cardNo: 8_300_001 });
+      // The cloud takes over without the box's cooperation.
+      await releaseLease(dbB, eventB.id, { forced: true });
+
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        await shipAllOnce(ctx.db, PEER_URL, transportToB(), leasePeerToB());
+        expect(err.mock.calls.flat().join(" ")).toContain("taken over");
+      } finally {
+        err.mockRestore();
+      }
+      expect(await getActiveLease(ctx.db, local.id)).toBeNull();
+      const last = await ctx.db.eventLease.findFirstOrThrow({ where: { eventId: local.id }, orderBy: { id: "desc" } });
+      expect(last.forced).toBe(true);
+      // The backlog reached the cloud in the same pass.
+      expect(await dbB.runner.count({ where: { eventId: eventB.id, cardNo: 8_300_001 } })).toBe(1);
+
+      await withVenueRole(async () => {
+        await expect(venue.race.recordFinish({ id: 1, finishTimeAbsolute: 366000 })).rejects.toMatchObject({
+          code: "PRECONDITION_FAILED",
+          message: expect.stringContaining("checked in or taken over"),
+        });
+      });
+      // A checkin on the revived box is an idempotent no-op, not an error.
+      expect(await venue.lease.checkin()).toMatchObject({ ok: true, alreadyReleased: true });
+    } finally {
+      await undoCheckout();
+    }
+  });
+
+  it("an unreachable peer, or one that still lists this box, changes nothing", async () => {
+    const { local } = await checkedOutVenue();
+    try {
+      await shipAllOnce(ctx.db, PEER_URL, transportToB(), {
+        ...leasePeerToB(),
+        holder: async () => {
+          throw new Error("offline");
+        },
+      });
+      expect((await getActiveLease(ctx.db, local.id))?.holderNodeId).toBe("cloud");
+      await shipAllOnce(ctx.db, PEER_URL, transportToB(), leasePeerToB());
+      expect((await getActiveLease(ctx.db, local.id))?.holderNodeId).toBe("cloud");
+    } finally {
+      await undoCheckout();
+    }
+  });
+
+  it("a user push to a checked-in venue copy is refused whole and writes nothing; a held-elsewhere copy still accepts it", async () => {
+    const { local, venue } = await checkedOutVenue();
+    try {
+      expect((await venue.lease.checkin()).ok).toBe(true);
+      const before = await ctx.db.journalEntry.count({ where: { eventId: local.id } });
+      await withVenueRole(async () => {
+        await expect(venue.events.push({ events: [punchEntry()] })).rejects.toMatchObject({
+          code: "PRECONDITION_FAILED",
+        });
+        // The node-secret path (the other node's shipper) stays open.
+        const peerVenue = makeCaller(
+          { id: local.id, nameId: local.nameId, zeroTime: local.zeroTime },
+          { syncSecret: "test-sync-secret" },
+        );
+        expect((await peerVenue.events.push({ events: [punchEntry()] })).synced).toHaveLength(1);
+      });
+      expect(await ctx.db.journalEntry.count({ where: { eventId: local.id } })).toBe(before + 1);
+    } finally {
+      await undoCheckout();
+    }
+  });
+
+  it("the cloud warns for every entry a force-taken-over holder still delivers, and applies them", async () => {
+    await acquireLease(ctx.db, ctx.eventId, "venue-stale");
+    await releaseLease(ctx.db, ctx.eventId, { forced: true });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const entry = (cardNo: number) => ({
+        id: randomUUID(),
+        type: "punch.recorded",
+        competitionId: ctx.nameId,
+        stationId: "venue-stale",
+        timestamp: Date.now(),
+        payload: { cardNo, controlCode: 56, time: 362000 },
+      });
+      const stale = makeCaller(ctx.event, { syncSecret: "test-sync-secret", peerNodeId: "venue-stale" });
+      const e1 = entry(800101);
+      const res = await stale.events.push({ events: [e1, entry(800102)] });
+      expect(res.synced).toHaveLength(2);
+      const stalls = warn.mock.calls.map((c) => c.join(" ")).filter((m) => m.includes("stale-holder entry"));
+      expect(stalls).toHaveLength(2);
+      expect(stalls[0]).toContain(e1.id);
+      // A replay is not newly applied: no further warning.
+      await stale.events.push({ events: [e1] });
+      expect(warn.mock.calls.map((c) => c.join(" ")).filter((m) => m.includes("stale-holder entry"))).toHaveLength(2);
+      // A node that never held the lease is not stale.
+      const other = makeCaller(ctx.event, { syncSecret: "test-sync-secret", peerNodeId: "venue-never" });
+      await other.events.push({ events: [entry(800103)] });
+      expect(warn.mock.calls.map((c) => c.join(" ")).filter((m) => m.includes("stale-holder entry"))).toHaveLength(2);
+    } finally {
+      warn.mockRestore();
     }
   });
 });

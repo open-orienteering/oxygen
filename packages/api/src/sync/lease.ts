@@ -22,7 +22,7 @@ import { createTRPCClient, httpLink, type TRPCClient } from "@trpc/client";
 import type { AppRouter } from "../routers/index.js";
 import type { EventRef, PrismaClient } from "../db.js";
 import { Prisma } from "../generated/prisma/client.js";
-import { nodeId, SYNC_SECRET_HEADER } from "./nodeIdentity.js";
+import { nodeId, nodeRole, SYNC_NODE_ID_HEADER, SYNC_SECRET_HEADER } from "./nodeIdentity.js";
 import { isCheckingIn } from "./leaseState.js";
 import { makeSyncHeaders } from "./googleIdToken.js";
 import {
@@ -65,34 +65,87 @@ export async function getActiveLease(
   return row;
 }
 
-/** Whether this node may originate race-critical writes (no lease, or it holds it, and no checkin barrier is running). */
-export async function isRaceWritable(db: PrismaClient | Prisma.TransactionClient, eventId: bigint): Promise<boolean> {
-  if (isCheckingIn(eventId)) return false;
+export type WriteRefusal = "held-elsewhere" | "checked-in" | "checking-in";
+export type WriteVerdict = { ok: true } | { ok: false; reason: WriteRefusal; holder?: string };
+
+/**
+ * The single guard: may THIS node originate race or course data for the
+ * event? Every writer outside a request that already went through
+ * `raceProcedure` (background jobs that emit course data, a push from a
+ * station) asks here rather than re-deriving the rule.
+ *
+ * - Another node holds the active lease: no (`held-elsewhere`).
+ * - A checkin barrier of this process is running: no (`checking-in`).
+ * - On a venue box, the event has lease history but this box does not hold
+ *   the active lease: no (`checked-in`). The box handed the event back (or
+ *   lost it to a takeover); its copy is no longer the writer. A box-local
+ *   event with no lease rows stays writable, as does any event on the cloud
+ *   without a lease ("no lease: the node you talk to is the writer").
+ */
+export async function mayWriteEventData(
+  db: PrismaClient | Prisma.TransactionClient,
+  eventId: bigint,
+): Promise<WriteVerdict> {
+  if (isCheckingIn(eventId)) return { ok: false, reason: "checking-in" };
   const lease = await getActiveLease(db, eventId);
-  return !lease || lease.holderNodeId === nodeId();
+  if (lease) {
+    return lease.holderNodeId === nodeId()
+      ? { ok: true }
+      : { ok: false, reason: "held-elsewhere", holder: lease.holderNodeId };
+  }
+  if (nodeRole() === "venue" && (await db.eventLease.count({ where: { eventId } })) > 0) {
+    return { ok: false, reason: "checked-in" };
+  }
+  return { ok: true };
 }
 
 /**
- * Throw the typed "checked out" error when this node is not the holder of
- * an active lease. The backbone of `raceProcedure` — see trpc.ts.
+ * Whether `peerNodeId` is a node whose lease on the event ended in a forced
+ * takeover and which no longer holds it: what it still delivers is a late
+ * backlog the cloud applies but names in its log.
+ */
+export async function isStaleHolder(
+  db: PrismaClient | Prisma.TransactionClient,
+  eventId: bigint,
+  peerNodeId: string | null | undefined,
+): Promise<boolean> {
+  if (!peerNodeId) return false;
+  const active = await getActiveLease(db, eventId);
+  if (active?.holderNodeId === peerNodeId) return false;
+  const last = await db.eventLease.findFirst({
+    where: { eventId, holderNodeId: peerNodeId },
+    orderBy: { id: "desc" },
+    select: { releasedAt: true, forced: true },
+  });
+  return last?.releasedAt != null && last.forced;
+}
+
+/** Whether this node may originate race-critical writes (see `mayWriteEventData`). */
+export async function isRaceWritable(db: PrismaClient | Prisma.TransactionClient, eventId: bigint): Promise<boolean> {
+  return (await mayWriteEventData(db, eventId)).ok;
+}
+
+/** The typed refusal for a verdict that is not ok. */
+export function writeRefusalError(v: Extract<WriteVerdict, { ok: false }>): TRPCError {
+  const message =
+    v.reason === "checking-in"
+      ? "Event is being checked in — race-critical writes resume on the cloud once the checkin finishes."
+      : v.reason === "checked-in"
+        ? "This copy was checked in or taken over; race writes go to the cloud."
+        : `Event is checked out to node "${v.holder}" — race-critical writes must go to that node.`;
+  return new TRPCError({ code: "PRECONDITION_FAILED", message });
+}
+
+/**
+ * Throw the typed "checked out" error when this node may not write the
+ * event's race data. The backbone of `raceProcedure` — see trpc.ts.
  */
 export async function assertRaceWritable(
   db: PrismaClient,
   eventId: bigint,
 ): Promise<void> {
-  if (isCheckingIn(eventId)) {
-    throw new TRPCError({
-      code: "PRECONDITION_FAILED",
-      message: "Event is being checked in — race-critical writes resume on the cloud once the checkin finishes.",
-    });
-  }
-  const lease = await getActiveLease(db, eventId);
-  if (lease && lease.holderNodeId !== nodeId()) {
-    throw new TRPCError({
-      code: "PRECONDITION_FAILED",
-      message: `Event is checked out to node "${lease.holderNodeId}" — race-critical writes must go to that node.`,
-    });
-  }
+  const v = await mayWriteEventData(db, eventId);
+  if (!v.ok) throw writeRefusalError(v);
 }
 
 // ─── Acquire / release ──────────────────────────────────────
@@ -501,6 +554,11 @@ export interface LeasePeer {
   acquire(nameId: string, holderNodeId: string): Promise<void>;
   release(nameId: string, holderNodeId: string): Promise<void>;
   exportSnapshot(nameId: string): Promise<EventSnapshot>;
+  /**
+   * Who holds the peer's active lease for the event (null: none). Optional:
+   * a peer that predates it answers NOT_FOUND, which callers treat as "unknown".
+   */
+  holder?(nameId: string): Promise<{ holderNodeId: string | null }>;
   /** The peer's full event row — the settings-refresh source. */
   exportSettings(nameId: string): Promise<Record<string, unknown>>;
   /** One slice of a map blob the event pins (docs/map-storage.md §7.2). */
@@ -523,6 +581,7 @@ export function httpLeasePeer(baseUrl: string, secret: string): LeasePeer {
             headers: makeSyncHeaders({
               "x-event-id": nameId,
               [SYNC_SECRET_HEADER]: secret,
+              [SYNC_NODE_ID_HEADER]: nodeId(),
             }),
           }),
         ],
@@ -546,6 +605,9 @@ export function httpLeasePeer(baseUrl: string, secret: string): LeasePeer {
         string,
         unknown
       >;
+    },
+    async holder(nameId) {
+      return clientFor(nameId).lease.holder.query();
     },
     async exportBlob(nameId, input) {
       return clientFor(nameId).lease.exportBlob.query(input);

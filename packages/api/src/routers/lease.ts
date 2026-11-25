@@ -179,6 +179,12 @@ export const leaseRouter = router({
       return { ok: true as const };
     }),
 
+  /** Who holds the active lease, for a peer that wants to know whether it still does (takeover detection). */
+  holder: peerProcedure.query(async ({ ctx }) => {
+    const lease = await getActiveLease(ctx.db, ctx.event.id);
+    return { holderNodeId: lease?.holderNodeId ?? null };
+  }),
+
   exportSnapshot: peerProcedure.query(async ({ ctx }) => {
     return exportEventSnapshot(ctx.db, ctx.event);
   }),
@@ -362,6 +368,27 @@ export const leaseRouter = router({
   checkin: manageProcedure.mutation(async ({ ctx }) => {
     const { peerUrl, secret } = requirePeer();
     const lease = await getActiveLease(ctx.db, ctx.event.id);
+    if (!lease) {
+      // A box that already let go (it released itself after a takeover, or an
+      // earlier checkin got that far) has nothing left to do: report it, so a
+      // retried or late checkin is not an error.
+      const latest = await ctx.db.eventLease.findFirst({
+        where: { eventId: ctx.event.id },
+        orderBy: { id: "desc" },
+        select: { holderNodeId: true },
+      });
+      if (latest?.holderNodeId === nodeId()) {
+        const stats = await shipEventOnce(ctx.db, ctx.event, peerUrl, makePeerTransport(peerUrl, secret));
+        const { pendingPush } = await shippingStatus(ctx.db, ctx.event.id, peerUrl);
+        if (pendingPush > 0) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `${pendingPush} journal entr(ies) of this released copy are not yet on the cloud (${stats.errors.length} error(s)). Fix connectivity and retry.`,
+          });
+        }
+        return { ok: true as const, pushed: stats.pushed, alreadyReleased: true as const };
+      }
+    }
     if (!lease || lease.holderNodeId !== nodeId()) {
       throw new TRPCError({
         code: "PRECONDITION_FAILED",
