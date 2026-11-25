@@ -92,6 +92,14 @@ psql "$DATABASE_URL" -v event_id=$NEW_ID -f <repo>/packages/api/scripts/restore-
 #    the original id to NEW_ID, then re-import it (there is no committed
 #    helper for these yet):
 psql "$DATABASE_URL" -c "\copy oxygen.<table> FROM '<table>.csv' WITH (FORMAT csv, HEADER true)"
+
+# 7. The seq counters, last. Restoring the tables above made the
+#    allocate_event_seq() trigger create a counter per table (at the
+#    highest seq + 1), so a plain \copy of event_seqs would hit its
+#    primary key. This merges the dump's counters in, keeping the higher
+#    of the two (a counter can be ahead of the rows: deleted rows keep
+#    their numbers). Skip `event_seqs` in step 6.
+psql "$DATABASE_URL" -v event_id=$NEW_ID -f <repo>/packages/api/scripts/restore-event-seqs.sql
 ```
 
 After the import, refresh the Oxygen UI and the event reappears in the picker with all data intact.

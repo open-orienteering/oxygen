@@ -81,6 +81,15 @@ function errorCode(err: unknown): string | undefined {
   return data?.code;
 }
 
+/** Codes of an `acquire` refusal that leave the peer's lease untouched. */
+const CLEAR_REFUSALS = new Set(["CONFLICT", "NOT_FOUND", "UNAUTHORIZED", "FORBIDDEN", "BAD_REQUEST"]);
+
+/** False for a typed refusal; true for a transport failure or any other error whose outcome is unknown. */
+export function acquireMayHaveSucceeded(err: unknown): boolean {
+  const code = errorCode(err);
+  return !(code && CLEAR_REFUSALS.has(code));
+}
+
 async function resolveLocalEvent(db: ReturnType<typeof prisma>, nameId: string) {
   const row = await db.event.findUnique({
     where: { nameId },
@@ -124,7 +133,7 @@ async function assertCheckoutMayReplace(
   }
   // One last ship cycle, so a healthy link leaves nothing behind.
   try {
-    await shipEventOnce(db, local, peerUrl, makePeerTransport(peerUrl, secret));
+    await shipEventOnce(db, local, peerUrl, makePeerTransport(peerUrl, secret), { pull: false });
   } catch (err) {
     console.warn(`[lease] pre-checkout ship of ${local.nameId} failed (peer unreachable?): ${errMessage(err)}`);
   }
@@ -271,9 +280,12 @@ export const leaseRouter = router({
         try {
           await peer.acquire(input.nameId, nodeId());
         } catch (err) {
-          // Someone else holds it: nothing of ours to roll back.
-          if (errorCode(err) === "CONFLICT") throw err;
-          peerAcquired = true; // outcome unknown (reply lost): roll back below
+          // A clear refusal (someone else holds it, no such event, bad
+          // credentials): the peer took nothing, nothing of ours to roll
+          // back. Anything else (a lost reply, a 5xx) is an unknown
+          // outcome: roll back below.
+          if (!acquireMayHaveSucceeded(err)) throw err;
+          peerAcquired = true;
           throw err;
         }
         peerAcquired = true;
@@ -390,7 +402,7 @@ export const leaseRouter = router({
         select: { holderNodeId: true },
       });
       if (latest?.holderNodeId === nodeId()) {
-        const stats = await shipEventOnce(ctx.db, ctx.event, peerUrl, makePeerTransport(peerUrl, secret));
+        const stats = await shipEventOnce(ctx.db, ctx.event, peerUrl, makePeerTransport(peerUrl, secret), { pull: false });
         const { pendingPush } = await shippingStatus(ctx.db, ctx.event.id, peerUrl);
         if (pendingPush > 0) {
           throw new TRPCError({
