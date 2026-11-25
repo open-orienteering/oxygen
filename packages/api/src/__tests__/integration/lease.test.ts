@@ -1227,6 +1227,74 @@ describe("checkout guard and restart safety (API-07, SYNC-18)", () => {
     }
   });
 });
+
+describe("a graphic id another event owns (D10, MC-32)", () => {
+  const OTHER_BYTES = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 3 3"><!--other-${mapSuffix}--></svg>`);
+  const plantOtherEventsGraphic = () =>
+    ctx.db.graphic.create({
+      data: { id: eventGraphicId, eventId: ctx.eventId, name: "other.svg", mime: "image/svg+xml", data: OTHER_BYTES, sizeBytes: OTHER_BYTES.length },
+    });
+  const removePlanted = () => ctx.db.graphic.deleteMany({ where: { id: eventGraphicId, eventId: ctx.eventId } });
+
+  it("refuses the checkout, keeps the other event's bytes, frees the peer lease and writes nothing", async () => {
+    await plantOtherEventsGraphic();
+    try {
+      await expect(caller.lease.checkout({ nameId: CHECKOUT_NAME })).rejects.toMatchObject({
+        code: "CONFLICT",
+        message: expect.stringMatching(new RegExp(`^GRAPHIC_ID_CLASH: graphic ${eventGraphicId} on this box belongs to "Test Event lease`)),
+      });
+      const row = await ctx.db.graphic.findUniqueOrThrow({ where: { id: eventGraphicId } });
+      expect(row.eventId).toBe(ctx.eventId);
+      expect(Buffer.from(row.data).equals(OTHER_BYTES)).toBe(true);
+      expect(await getActiveLease(dbB, eventB.id)).toBeNull();
+      expect(await ctx.db.event.findUnique({ where: { nameId: CHECKOUT_NAME } })).toBeNull();
+    } finally {
+      await removePlanted();
+    }
+  });
+
+  it("replaceClashingGraphics: true replaces it, as G18 says", async () => {
+    await plantOtherEventsGraphic();
+    try {
+      const res = await caller.lease.checkout({ nameId: CHECKOUT_NAME, replaceClashingGraphics: true });
+      expect(res.ok).toBe(true);
+      const local = await ctx.db.event.findUniqueOrThrow({ where: { nameId: CHECKOUT_NAME }, select: { id: true } });
+      const row = await ctx.db.graphic.findUniqueOrThrow({ where: { id: eventGraphicId } });
+      expect(row.eventId).toBe(local.id);
+      expect(Buffer.from(row.data).equals(EVENT_SVG)).toBe(true);
+    } finally {
+      await undoCheckout();
+      await removePlanted();
+    }
+  });
+
+  it("a re-checkout over its own copy of the graphic is no clash", async () => {
+    await caller.lease.checkout({ nameId: CHECKOUT_NAME });
+    const local = await ctx.db.event.findUniqueOrThrow({ where: { nameId: CHECKOUT_NAME }, select: { id: true } });
+    await releaseLease(ctx.db, local.id, { forced: true });
+    await releaseLease(dbB, eventB.id, { forced: true });
+    await ctx.db.journalEntry.updateMany({ where: { eventId: local.id }, data: { pushedAt: new Date() } });
+    try {
+      expect((await caller.lease.checkout({ nameId: CHECKOUT_NAME })).ok).toBe(true);
+    } finally {
+      await undoCheckout();
+    }
+  });
+
+  it("the import itself refuses when the flag is not set (the lease-time refresh never sets it)", async () => {
+    await plantOtherEventsGraphic();
+    try {
+      const snapshot = await exportEventSnapshot(dbB, eventB);
+      const bytes = new Map(snapshot.graphics!.map((g) => [g.id, g.id === String(eventGraphicId) ? EVENT_SVG : CLUB_PNG]));
+      await expect(
+        importEventSnapshot(ctx.db, snapshot, undefined, { bytes, fetchedBytes: 0 }),
+      ).rejects.toMatchObject({ message: expect.stringMatching(/^GRAPHIC_ID_CLASH/) });
+      expect(await ctx.db.event.findUnique({ where: { nameId: CHECKOUT_NAME } })).toBeNull();
+    } finally {
+      await removePlanted();
+    }
+  });
+});
 });
 
 describe("a box follows the cloud's map rows during a lease (G19)", () => {

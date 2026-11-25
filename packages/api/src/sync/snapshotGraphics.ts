@@ -228,12 +228,61 @@ export async function fetchSnapshotGraphics(
   return out;
 }
 
+export interface GraphicClash {
+  id: string;
+  eventId: bigint;
+  eventName: string;
+}
+
+/**
+ * Of the local rows holding a travelling graphic id, those owned by an event
+ * other than `localEventId` (the copy of the event being checked out, or
+ * null when this box holds none). A club-library row (`eventId` NULL) is not
+ * a clash: it is replaced as before (docs/map-storage.md §7.2, G18).
+ */
+export function selectGraphicClashes(
+  rows: ReadonlyArray<{ id: bigint; eventId: bigint | null; eventName: string }>,
+  localEventId: bigint | null,
+): GraphicClash[] {
+  return rows
+    .filter((r): r is typeof r & { eventId: bigint } => r.eventId !== null && r.eventId !== localEventId)
+    .map((r) => ({ id: r.id.toString(), eventId: r.eventId, eventName: r.eventName }));
+}
+
+/** The refusal for a graphic id another event on this box owns (decision D10). */
+export function graphicClashError(clashes: readonly GraphicClash[]): TRPCError {
+  const ids = clashes.map((c) => c.id).join(", ");
+  const names = [...new Set(clashes.map((c) => `"${c.eventName}"`))].join(", ");
+  return new TRPCError({
+    code: "CONFLICT",
+    message: `GRAPHIC_ID_CLASH: graphic ${ids} on this box belongs to ${names}; checking out would replace it`,
+  });
+}
+
+/** Local graphics under a travelling id that another event on this box owns. Reads only. */
+export async function findGraphicClashes(
+  db: Db,
+  graphics: readonly SnapshotGraphic[],
+  localEventId: bigint | null,
+): Promise<GraphicClash[]> {
+  if (graphics.length === 0) return [];
+  const rows = await db.graphic.findMany({
+    where: { id: { in: graphics.map((g) => BigInt(g.id)) }, eventId: { not: null } },
+    select: { id: true, eventId: true, event: { select: { name: true } } },
+  });
+  return selectGraphicClashes(
+    rows.map((r) => ({ id: r.id, eventId: r.eventId, eventName: r.event?.name ?? "" })),
+    localEventId,
+  );
+}
+
 /**
  * Insert the graphics inside the snapshot transaction, after the event
  * row, each under the cloud's id. A local row in a travelling id's place
  * (one a box uploaded itself, outside a checkout) is replaced: the box's
  * `graphics` mirror the cloud by id, since the layout JSON references them
- * by number. The id sequence is then moved past the largest id, so a later
+ * by number. A row owned by another event on the box is the exception: it
+ * refuses with `GRAPHIC_ID_CLASH` unless `replaceOtherEvents`. The id sequence is then moved past the largest id, so a later
  * local upload does not collide.
  */
 export async function importSnapshotGraphics(
@@ -241,7 +290,16 @@ export async function importSnapshotGraphics(
   eventId: bigint,
   graphics: readonly SnapshotGraphic[],
   blobs: SnapshotGraphicBlobs,
+  opts: { replaceOtherEvents?: boolean } = {},
 ): Promise<number> {
+  // A row another event owns is not replaced unasked (decision D10): the
+  // checkout asked first, so this is the defence, and the lease-time refresh,
+  // which has nobody to ask, never sets the flag.
+  if (!opts.replaceOtherEvents) {
+    const written = graphics.filter((g) => blobs.bytes.has(g.id));
+    const clashes = await findGraphicClashes(tx, written, eventId);
+    if (clashes.length > 0) throw graphicClashError(clashes);
+  }
   let written = 0;
   for (const g of graphics) {
     const bytes = blobs.bytes.get(g.id);

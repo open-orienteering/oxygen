@@ -40,7 +40,12 @@ import {
   exportBlobInput,
   fetchSnapshotBlobs,
 } from "../sync/snapshotMaps.js";
-import { exportPeerBlobSlice, fetchSnapshotGraphics } from "../sync/snapshotGraphics.js";
+import {
+  exportPeerBlobSlice,
+  fetchSnapshotGraphics,
+  findGraphicClashes,
+  graphicClashError,
+} from "../sync/snapshotGraphics.js";
 import { exportMapRows } from "../sync/mapRefresh.js";
 import {
   nodeId,
@@ -267,6 +272,12 @@ export const leaseRouter = router({
         peerAcquired = true;
 
         const snapshot = await peer.exportSnapshot(input.nameId);
+        // A graphic id another event on this box owns is not replaced
+        // unasked (decision D10): refuse before any bytes are fetched.
+        if (snapshot.graphics && !input.replaceClashingGraphics) {
+          const clashes = await findGraphicClashes(db, snapshot.graphics, local?.id ?? null);
+          if (clashes.length > 0) throw graphicClashError(clashes);
+        }
         // Map blobs before the transaction: network reads, verified by hash.
         const blobs = snapshot.maps
           ? await fetchSnapshotBlobs(db, snapshot.maps, (table, hash, start, length) =>
@@ -284,6 +295,7 @@ export const leaseRouter = router({
           // shipper to this event) and the local lease. Journal-from-there:
           // the snapshot holds history, and the cloud marked its journal
           // delivered when it handed out the lease, so pulls start clean.
+          replaceOtherEvents: input.replaceClashingGraphics === true,
           afterImport: async (tx, eventId) => {
             await tx.journalSyncState.upsert({
               where: { peerId_eventId: { peerId: peerUrl, eventId } },

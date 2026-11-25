@@ -433,7 +433,9 @@ export async function importEventSnapshot(
 
       // Graphics by the cloud's id: the layout rows reference them by number.
       if (snapshot.graphics && graphicBlobs) {
-        await importSnapshotGraphics(tx, created.id, snapshot.graphics, graphicBlobs);
+        await importSnapshotGraphics(tx, created.id, snapshot.graphics, graphicBlobs, {
+          replaceOtherEvents: opts.replaceOtherEvents,
+        });
       }
 
       // Content-addressed blobs (append-only) and the event's map pins.
