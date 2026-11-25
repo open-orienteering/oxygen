@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { STATION_FRAMES_PCAP } from "./fixtures/station-frames-pcap";
 import {
   calculateCRC,
   buildCommand,
@@ -16,6 +17,7 @@ import {
   extractFrame,
   parseCardDetection,
   parsePunchRecord,
+  parsePunchSlot,
   parsePunchTime,
   parseDayOfWeek,
   parseSI5CardData,
@@ -1806,5 +1808,52 @@ describe("resolveProgrammingMode", () => {
         currentProto: busy | PROTO_AUTOSEND,
       }).protoByte,
     ).toBe(busy);
+  });
+});
+
+// ─── Frame CRC (SI-13) ─────────────────────────────────────
+
+describe("extractFrame CRC on frames captured from a real station", () => {
+  it.each([
+    ["SET_MS reply (3 data bytes)", 0],
+    ["GET_SYS_VAL reply (131 data bytes, odd)", 1],
+    ["GET_BACKUP reply page 1 (133 data bytes, odd)", 2],
+    ["GET_BACKUP reply page 2 (133 data bytes, odd)", 3],
+  ])("%s has a valid CRC", (_name, idx) => {
+    const raw = STATION_FRAMES_PCAP[idx];
+    const result = extractFrame(raw);
+    expect(result).not.toBeNull();
+    expect(result!.frame.crcValid).toBe(true);
+    expect(result!.frame.data.length).toBe(raw[2]);
+    expect(result!.remaining.length).toBe(0);
+  });
+
+  it("a flipped data byte makes the CRC invalid", () => {
+    const raw = Uint8Array.from(STATION_FRAMES_PCAP[2]);
+    raw[40] ^= 0x01;
+    const result = extractFrame(raw)!;
+    expect(result.frame.crcValid).toBe(false);
+  });
+
+  it("extended frame with a bad CRC resyncs one byte on instead of eating its length", () => {
+    // Noise "STX FF 81 05" claims a 5-byte extended frame; a good frame follows.
+    const good = buildCommand(0xf0, [0x01], false);
+    const noisy = Uint8Array.from([0x02, 0xff, 0x81, 0x05, 0x00, 0x00, ...good]);
+    const result = extractFrame(noisy)!;
+    expect(result.frame.cmd).toBe(0xf0);
+    expect(result.frame.crcValid).toBe(true);
+  });
+});
+
+describe("parsePunchSlot", () => {
+  it("blank (all EE or all 00), code 0 and short input give null", () => {
+    expect(parsePunchSlot(Uint8Array.of(0xee, 0xee, 0xee, 0xee), 0)).toBeNull();
+    expect(parsePunchSlot(Uint8Array.of(0, 0, 0, 0), 0)).toBeNull();
+    expect(parsePunchSlot(Uint8Array.of(0x01, 0x00, 0x00, 0x10), 0)).toBeNull();
+    expect(parsePunchSlot(Uint8Array.of(0, 31, 0), 0)).toBeNull();
+  });
+  it("a code with an empty time is kept at time 0, a full record is decoded", () => {
+    expect(parsePunchSlot(Uint8Array.of(0x00, 45, 0xee, 0xee), 0)).toEqual({ controlCode: 45, time: 0 });
+    expect(parsePunchSlot(Uint8Array.of(0x1c, 0x48, 0xa1, 0x29), 0)).toEqual({ controlCode: 72, time: 41257 });
   });
 });

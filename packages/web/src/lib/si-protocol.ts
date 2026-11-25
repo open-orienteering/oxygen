@@ -290,10 +290,18 @@ export function extractFrame(
     const calcCrc = calculateCRC(crcData);
     const recvCrc = (buf[4 + len] << 8) | buf[5 + len];
 
+    // The extended form has no ETX to prove the length byte was sane, so a
+    // CRC mismatch means the STX was noise or the length was damaged. Do not
+    // swallow `len` bytes of whatever follows (a real frame may start inside
+    // them): skip this STX and look for the next one.
+    if (calcCrc !== recvCrc) {
+      return extractFrame(buffer.subarray(stxIdx + 1));
+    }
+
     // Consume optional ETX
     const consumed = buf.length > frameLen && buf[frameLen] === ETX ? frameLen + 1 : frameLen;
     return {
-      frame: { cmd, data, isExtended: true, crcValid: calcCrc === recvCrc },
+      frame: { cmd, data, isExtended: true, crcValid: true },
       remaining: buffer.subarray(stxIdx + consumed),
     };
   }
@@ -1818,8 +1826,17 @@ export function parseReadoutBackupBuffer(
       off += slotSize;
     } else {
       // Try SI5: parse the 128-byte chunk and accept iff cardNumber > 0.
+      // Anything that is not an SI8+ slot lands here, including owner text and
+      // leftovers of a damaged slot. Accept only what a real SI5 image looks
+      // like: punch pointer (byte 23) at most 37, series (byte 6) 0-4, and a
+      // number in the SI5 range. Everything else is skipped, not filed as a card.
+      if (chunk[23] > 37 || chunk[6] > 4) {
+        siLog(`ReadoutBackup @0x${(baseAddr + off).toString(16)}: not an SI5 image, skipping`);
+        off += STEP;
+        continue;
+      }
       const card = parseSI5CardData([chunk], now);
-      if (card && card.cardNumber > 0) {
+      if (card && card.cardNumber > 0 && card.cardType === "SI5") {
         records.push({
           slotAddress: baseAddr + off,
           readAtRaw: new Uint8Array(chunk.subarray(0, 4)),

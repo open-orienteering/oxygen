@@ -217,6 +217,22 @@ describe("parseReadoutBackupBuffer (M_READOUT slot layout)", () => {
     expect(() => parseReadoutBackupBuffer(garbage)).not.toThrow();
   });
 
+  it("owner text in an unclaimed chunk is not emitted as an SI5 card", () => {
+    // 0x80 bytes of personal data, no SI8+ marker: the SI5 branch must reject it.
+    const text = "Marcus;Kempe;male;19790314;Skogsluffarnas OK;marcus@example.org;0046708956221;Lagmansplan 3;12838;Skarpnack;SWE;";
+    const chunk = new Uint8Array(0x80).fill(0xee);
+    for (let i = 0; i < text.length && i < 0x80; i++) chunk[i] = text.charCodeAt(i);
+    expect(parseReadoutBackupBuffer(chunk, 0x100)).toEqual([]);
+  });
+
+  it("an SI5 chunk with an implausible punch pointer is skipped", () => {
+    const sl = READOUT_BACKUP_FIXTURE.slice(0xd00, 0xd80); // card 452242
+    expect(parseReadoutBackupBuffer(sl, 0xe00)).toHaveLength(1);
+    const damaged = Uint8Array.from(sl);
+    damaged[23] = 0x80;
+    expect(parseReadoutBackupBuffer(damaged, 0xe00)).toEqual([]);
+  });
+
   it("returns empty array on all-EE buffer", () => {
     const empty = new Uint8Array(512).fill(0xee);
     expect(parseReadoutBackupBuffer(empty)).toEqual([]);

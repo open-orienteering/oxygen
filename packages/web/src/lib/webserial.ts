@@ -103,6 +103,17 @@ export interface SICardReadoutEvent extends CustomEvent {
 export interface SITransmitPunchEvent extends CustomEvent {
   detail: SITransmitPunch;
 }
+export type SICardReadFailureReason = "timeout" | "removed" | "bad-block" | "parse";
+export interface SICardReadFailure {
+  cardNumber: number;
+  cardType: SICardType;
+  reason: SICardReadFailureReason;
+  blocksReceived: number;
+  blocksExpected: number;
+}
+export interface SICardReadFailedEvent extends CustomEvent {
+  detail: SICardReadFailure;
+}
 export interface SIStatusEvent extends CustomEvent {
   detail: { status: SIReaderStatus };
 }
@@ -157,6 +168,23 @@ const SERIAL_OPTIONS: SerialOptionsLike = {
 /** Timeout waiting for a single block response */
 const BLOCK_TIMEOUT_MS = 2000;
 
+/** A readout block frame: station code (2) + block number (1) + 128 data bytes. */
+const READOUT_BLOCK_FRAME_LEN = 131;
+/** SI5 readout frame (0xB1): station code (2) + 128 data bytes, no block number. */
+const SI5_READOUT_FRAME_LEN = 130;
+
+/**
+ * Thrown by a readout-station backup read that could not fetch every page.
+ * Nothing may be cleared after this: the pages that did arrive are not the
+ * whole record of the event.
+ */
+export class BackupReadIncompleteError extends Error {
+  constructor(public readonly address: number) {
+    super(`Backup read incomplete at 0x${address.toString(16)}`);
+    this.name = "BackupReadIncompleteError";
+  }
+}
+
 // ─── Connection class ──────────────────────────────────────
 
 let nextSerialReaderId = 1;
@@ -184,6 +212,8 @@ export class SIReaderConnection extends EventTarget implements SIReader {
   private pendingBlocks: Uint8Array[] = [];
   private pendingBlockIndex = 0;
   private pendingTotalBlocks = 0;
+  /** Re-requests used for the block being waited on (one allowed). */
+  private pendingBlockRetries = 0;
   private blockTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
   // Mode tracking — true when BSM8 is in remote mode (coupling coil)
@@ -230,15 +260,24 @@ export class SIReaderConnection extends EventTarget implements SIReader {
       throw new Error("WebSerial not supported in this browser");
     }
 
-    this.setStatus("connecting");
+    // A reader that is already connected stays untouched while the picker is
+    // open: cancelling must not strand it.
+    const hadPort = this.port !== null;
+    if (!hadPort) this.setStatus("connecting");
+    let port: SerialPortLike;
     try {
-      const port = await (navigator as Navigator & { serial: NavigatorSerialLike }).serial.requestPort();
-      await this.connectToPort(port);
+      port = await (navigator as Navigator & { serial: NavigatorSerialLike }).serial.requestPort();
     } catch (err) {
       // A cancelled picker (NotFoundError) is not a reader fault.
       const cancelled = err instanceof Error && err.name === "NotFoundError";
-      this.port = null;
-      this.setStatus(cancelled ? "idle" : "error");
+      if (!hadPort) this.setStatus(cancelled ? "idle" : "error");
+      throw err;
+    }
+    try {
+      await this.connectToPort(port);
+    } catch (err) {
+      await this.disconnect();
+      this.setStatus("error");
       throw err;
     }
   }
@@ -255,7 +294,7 @@ export class SIReaderConnection extends EventTarget implements SIReader {
       await this.connectToPort(ports[0]);
       return true;
     } catch {
-      this.setStatus("idle");
+      await this.disconnect();
       return false;
     }
   }
@@ -269,7 +308,7 @@ export class SIReaderConnection extends EventTarget implements SIReader {
     try {
       await this.connectToPort(port);
     } catch (err) {
-      this.port = null;
+      await this.disconnect();
       this.setStatus("error");
       throw err;
     }
@@ -281,6 +320,10 @@ export class SIReaderConnection extends EventTarget implements SIReader {
   }
 
   private async connectToPort(port: SerialPortLike): Promise<void> {
+    // Release a port still held (a second connect, or a reader that died
+    // without a clean close) so it is not left open with nobody reading it.
+    if (this.port) await this.disconnect();
+    this.setStatus("connecting");
     this.port = port;
     await port.open(SERIAL_OPTIONS);
     this.setStatus("connected");
@@ -320,6 +363,9 @@ export class SIReaderConnection extends EventTarget implements SIReader {
     );
     // Response: [0x00, station_id, echoed_offset, ...128 bytes SYS_VAL]
     const P = 3; // data payload offset
+    if (resp.data.length < P + SYSVAL.FEEDBACK + 1 || resp.data.length < P + SYSVAL.PROTO + 1) {
+      throw new Error(`SYS_VAL reply too short (${resp.data.length} bytes)`);
+    }
 
     const station = parseStationInfo(resp.data);
     if (station) {
@@ -382,9 +428,18 @@ export class SIReaderConnection extends EventTarget implements SIReader {
     }
     this.port = null;
     this.buffer = new Uint8Array(0);
-    this.pendingCardType = null;
-    this.pendingBlocks = [];
+    this.clearReadoutState();
+    this.rejectPendingCommand(new Error("Reader disconnected"));
     this.setStatus("idle");
+  }
+
+  /** Fail the command being waited on, if any (the port it was sent to is gone). */
+  private rejectPendingCommand(err: Error): void {
+    const resolver = this.commandResolver;
+    if (!resolver) return;
+    this.commandResolver = null;
+    clearTimeout(resolver.timeoutId);
+    resolver.reject(err);
   }
 
   // ── Write ──────────────────────────────────────────────
@@ -402,15 +457,29 @@ export class SIReaderConnection extends EventTarget implements SIReader {
   // ── Read loop ──────────────────────────────────────────
 
   private async startReadLoop(): Promise<void> {
-    if (!this.port?.readable) return;
+    // Work on the port captured here: a later connect() may swap this.port
+    // while this loop is still unwinding.
+    const port = this.port;
+    if (!port?.readable) return;
     this.reading = true;
     this.setStatus("reading");
 
-    while (this.port.readable && this.reading) {
-      this.reader = this.port.readable.getReader();
+    let errored = false;
+    let lastStream: ReadableStream<Uint8Array> | null = null;
+    while (port.readable && this.reading && this.port === port) {
+      // The browser hands out a fresh stream after a recoverable error. The
+      // same errored stream again means it did not recover.
+      if (port.readable === lastStream) break;
+      lastStream = port.readable;
+      const reader = port.readable.getReader();
+      this.reader = reader;
+      if (errored) {
+        errored = false;
+        this.setStatus("reading");
+      }
       try {
         while (this.reading) {
-          const { value, done } = await this.reader!.read();
+          const { value, done } = await reader.read();
           if (done) break;
           if (value) {
             this.appendToBuffer(value);
@@ -419,18 +488,38 @@ export class SIReaderConnection extends EventTarget implements SIReader {
         }
       } catch (err) {
         console.error("[SIReader] read error:", err);
-        if (this.reading) {
-          // Unexpected disconnect
+        if (this.reading && this.port === port) {
+          // Recoverable if the port offers a new stream; reported until then.
+          errored = true;
           this.setStatus("error");
         }
       } finally {
         try {
-          this.reader?.releaseLock();
+          reader.releaseLock();
         } catch {
           /* ignore */
         }
-        this.reader = null;
+        if (this.reader === reader) this.reader = null;
       }
+    }
+
+    // Left the loop while still meant to be reading: the port is gone for good
+    // (unplugged, or a fatal stream error). Do not leave the state machine
+    // half-way: fail the open read and command, release the port, so a later
+    // attach() of the same port starts clean.
+    if (this.reading && this.port === port) {
+      this.reading = false;
+      this.failReadout("removed");
+      this.rejectPendingCommand(new Error("Reader disconnected"));
+      this.buffer = new Uint8Array(0);
+      this._inRemoteMode = false;
+      try {
+        await port.close();
+      } catch {
+        /* already gone */
+      }
+      this.port = null;
+      this.setStatus("error");
     }
   }
 
@@ -457,6 +546,20 @@ export class SIReaderConnection extends EventTarget implements SIReader {
   }
 
   private handleFrame(frame: SIParsedFrame): void {
+    // A frame whose CRC does not match was damaged on the wire. Nothing in it
+    // can be trusted, so it is dropped; a pending readout block is asked for
+    // again straight away (that is its one retry), a pending command times out
+    // and is retried by its caller as before.
+    if (!frame.crcValid) {
+      siWarn(
+        `Dropped frame with bad CRC cmd=0x${frame.cmd.toString(16)} len=${frame.data.length}`,
+      );
+      if (this.pendingCardType && isReadoutResponse(frame.cmd)) {
+        this.retryOrFail("bad-block");
+      }
+      return;
+    }
+
     // Check if this frame satisfies a pending command response
     if (this.checkCommandResponse(frame)) return;
 
@@ -474,13 +577,18 @@ export class SIReaderConnection extends EventTarget implements SIReader {
           new CustomEvent("si:card-detected", { detail: detection }),
         );
         // Auto-send readout commands
-        this.initiateReadout(detection);
+        this.initiateReadout(detection).catch((err) => {
+          siWarn("Readout start failed:", err);
+          this.failReadout("bad-block");
+        });
       }
       return;
     }
 
     // Card removed
     if (frame.cmd === CMD.CARD_REMOVED) {
+      // Card lifted before the read finished: report it, the card was not read.
+      if (this.pendingCardType) this.failReadout("removed");
       this.dispatchEvent(
         new CustomEvent("si:card-removed", { detail: {} }),
       );
@@ -489,7 +597,10 @@ export class SIReaderConnection extends EventTarget implements SIReader {
 
     // Readout response
     if (isReadoutResponse(frame.cmd)) {
-      this.handleReadoutBlock(frame);
+      this.handleReadoutBlock(frame).catch((err) => {
+        siWarn("Readout block failed:", err);
+        this.failReadout("bad-block");
+      });
       return;
     }
 
@@ -507,6 +618,9 @@ export class SIReaderConnection extends EventTarget implements SIReader {
   // ── Readout state machine ──────────────────────────────
 
   private async initiateReadout(detection: SICardDetection): Promise<void> {
+    // A new card while the previous read is still open: the old one is gone.
+    if (this.pendingCardType) this.failReadout("removed");
+
     // Auto-restore direct mode if stuck in remote (e.g. after programming/readout)
     if (this._inRemoteMode) {
       try {
@@ -519,7 +633,7 @@ export class SIReaderConnection extends EventTarget implements SIReader {
     const { cardType } = detection;
 
     if (!supportsFullReadout(cardType)) {
-      // SI5/SI6 detection only — emit a minimal readout with just the card number
+      // SI6 detection only — emit a minimal readout with just the card number
       const partial: SICardReadout = {
         cardNumber: detection.cardNumber,
         cardType: detection.cardType,
@@ -536,27 +650,84 @@ export class SIReaderConnection extends EventTarget implements SIReader {
       return;
     }
 
-    // Start with block 0 — we'll decide how many more to read based on punch count
     this.pendingCardType = cardType;
     this.pendingCardNumber = detection.cardNumber;
     this.pendingBlocks = [];
     this.pendingBlockIndex = 0;
+    this.pendingBlockRetries = 0;
     // Small cards: BLOCKS_TO_READ blocks (SI5 1, SI8/SI9/pCard 2). Large cards
     // start at the full 8 and shrink after block 0 reveals the punch count.
     this.pendingTotalBlocks = BLOCKS_TO_READ[cardType] ?? 1;
 
-    await this.requestBlock(cardType, 0);
     this.resetBlockTimeout();
+    await this.requestBlock(cardType, 0);
   }
 
+  /** Timer for the block being waited on: ask once more, then give up. */
   private resetBlockTimeout(): void {
     if (this.blockTimeoutId) clearTimeout(this.blockTimeoutId);
     this.blockTimeoutId = setTimeout(() => {
-      if (this.pendingCardType) {
-        // Timed out waiting for a block — emit what we have
-        this.finalizeReadout();
-      }
+      this.blockTimeoutId = null;
+      if (this.pendingCardType) this.retryOrFail("timeout");
     }, BLOCK_TIMEOUT_MS);
+  }
+
+  /**
+   * Re-request the block being waited on, once per block. The second failure
+   * of the same block fails the whole read.
+   */
+  private retryOrFail(reason: SICardReadFailureReason): void {
+    const cardType = this.pendingCardType;
+    if (!cardType) return;
+    if (this.pendingBlockRetries >= 1) {
+      this.failReadout(reason);
+      return;
+    }
+    this.pendingBlockRetries++;
+    siWarn(
+      `Readout block ${this.pendingBlockIndex} of card ${this.pendingCardNumber}: ${reason}, asking again`,
+    );
+    this.resetBlockTimeout();
+    this.requestBlock(cardType, this.pendingBlockIndex).catch((err) => {
+      siWarn("Readout re-request failed:", err);
+      this.failReadout("bad-block");
+    });
+  }
+
+  private clearReadoutState(): void {
+    if (this.blockTimeoutId) {
+      clearTimeout(this.blockTimeoutId);
+      this.blockTimeoutId = null;
+    }
+    this.pendingCardType = null;
+    this.pendingCardNumber = 0;
+    this.pendingBlocks = [];
+    this.pendingBlockIndex = 0;
+    this.pendingTotalBlocks = 0;
+    this.pendingBlockRetries = 0;
+  }
+
+  /**
+   * Give up on the card being read. No ACK is sent (the station does not beep,
+   * which tells the runner at the reader the card was not taken) and no
+   * readout event is emitted; `si:card-read-failed` tells the UI to say so.
+   */
+  private failReadout(reason: SICardReadFailureReason): void {
+    const cardType = this.pendingCardType;
+    if (!cardType) return;
+    const detail: SICardReadFailure = {
+      cardNumber: this.pendingCardNumber,
+      cardType,
+      reason,
+      blocksReceived: this.pendingBlocks.length,
+      blocksExpected: this.pendingTotalBlocks,
+    };
+    siWarn(
+      `Card ${detail.cardNumber} (${cardType}) not read: ${reason}, ` +
+        `${detail.blocksReceived}/${detail.blocksExpected} blocks`,
+    );
+    this.clearReadoutState();
+    this.dispatchEvent(new CustomEvent("si:card-read-failed", { detail }));
   }
 
   private async requestBlock(
@@ -574,66 +745,72 @@ export class SIReaderConnection extends EventTarget implements SIReader {
       `Readout block cmd=0x${frame.cmd.toString(16)} type=${this.pendingCardType} len=${frame.data.length} first32=[${Array.from(frame.data.slice(0, 32)).map((b) => "0x" + b.toString(16).padStart(2, "0")).join(", ")}]`,
     );
 
-    // The readout response data format (BSF8 mode):
-    //   StationCode(2) + BlockNumber(1) + BlockData(128) = 131 bytes
-    // For shorter responses, extract the last 128 bytes.
+    // Frame shapes (extended protocol):
+    //   SI8+ (0xEF): StationCode(2) + BlockNumber(1) + BlockData(128) = 131 bytes
+    //   SI5  (0xB1): StationCode(2) + BlockData(128)                   = 130 bytes
+    // Anything else is not a block of this card: drop it and ask again.
     let blockData: Uint8Array;
-    if (frame.data.length >= 128) {
-      // Always take the last 128 bytes — this handles all prefix variants:
-      // 131 bytes: StationCode(2) + BN(1) + BlockData(128)
-      // 130 bytes: StationCode(2) + BlockData(128)
-      // 129 bytes: BN(1) + BlockData(128)
-      // 128 bytes: BlockData(128)
-      blockData = frame.data.slice(frame.data.length - 128);
+    if (this.pendingCardType === "SI5") {
+      if (frame.cmd !== CMD.SI5_READ || frame.data.length !== SI5_READOUT_FRAME_LEN) {
+        this.retryOrFail("bad-block");
+        return;
+      }
+      blockData = frame.data.slice(2);
     } else {
-      return; // too short
+      if (frame.cmd !== CMD.SI8_READ || frame.data.length !== READOUT_BLOCK_FRAME_LEN) {
+        this.retryOrFail("bad-block");
+        return;
+      }
+      const blockNumber = frame.data[2];
+      // A repeat of a block already taken (late answer to a re-request): ignore.
+      if (blockNumber < this.pendingBlockIndex) return;
+      if (blockNumber !== this.pendingBlockIndex) {
+        this.retryOrFail("bad-block");
+        return;
+      }
+      blockData = frame.data.slice(3);
     }
 
     this.pendingBlocks.push(blockData);
     this.pendingBlockIndex++;
+    this.pendingBlockRetries = 0;
 
-    // After block 0: decide how many more blocks to read based on card type
-    if (this.pendingBlockIndex === 1 && this.pendingBlocks.length === 1) {
-      const punchCount = blockData[22]; // punch count byte in SI8+ block 0
-
-      if (isLargeCardType(this.pendingCardType)) {
-        // SI10/SI11/SIAC: blocks 0-3 = header + personal data, blocks 4-7 = punches
-        // Always read blocks 0-3 for personal data
-        const punchSlotsPerBlock = 32; // 128 / 4
-        const punchBlocksNeeded = Math.min(
-          4,
-          Math.max(1, Math.ceil(punchCount / punchSlotsPerBlock)),
-        );
-        // blocks 0-3 (personal) + blocks 4..(4+N-1) (punches)
-        this.pendingTotalBlocks = 4 + punchBlocksNeeded;
-      }
-      // SI8/SI9/pCard: the punch area spans blocks 0 and 1 whatever the counter
-      // says (slots start at image byte 56/136/176), so both blocks are always
-      // read; pendingTotalBlocks was set from BLOCKS_TO_READ.
+    // After block 0 of a large card the punch count says how many punch blocks
+    // follow: blocks 0-3 are header + personal data, blocks 4.. hold 32 slots each.
+    if (
+      this.pendingBlockIndex === 1 &&
+      isLargeCardType(this.pendingCardType)
+    ) {
+      const punchCount = blockData[22];
+      const punchBlocksNeeded = Math.min(
+        4,
+        Math.max(1, Math.ceil(punchCount / 32)),
+      );
+      this.pendingTotalBlocks = 4 + punchBlocksNeeded;
     }
+    // SI8/SI9/pCard: the punch area spans blocks 0 and 1 whatever the counter
+    // says (slots start at image byte 56/136/176), so both blocks are always
+    // read; pendingTotalBlocks was set from BLOCKS_TO_READ.
 
     if (this.pendingBlockIndex < this.pendingTotalBlocks) {
-      // Request next block
-      await this.requestBlock(this.pendingCardType, this.pendingBlockIndex);
       this.resetBlockTimeout();
+      await this.requestBlock(this.pendingCardType, this.pendingBlockIndex);
     } else {
       this.finalizeReadout();
     }
   }
 
   private finalizeReadout(): void {
-    if (this.blockTimeoutId) {
-      clearTimeout(this.blockTimeoutId);
-      this.blockTimeoutId = null;
-    }
+    const cardType = this.pendingCardType;
+    if (!cardType) return;
 
-    if (this.pendingBlocks.length === 0) {
-      this.pendingCardType = null;
+    // Never parse a partial card: a half-read SI8 would look like a card with
+    // fewer punches and be filed as a (wrong) result.
+    if (this.pendingBlocks.length !== this.pendingTotalBlocks) {
+      this.failReadout("bad-block");
       return;
     }
 
-    // Use the correct parser based on card type
-    const cardType = this.pendingCardType!;
     let readout;
     if (cardType === "SI5") {
       readout = parseSI5CardData(this.pendingBlocks);
@@ -643,30 +820,29 @@ export class SIReaderConnection extends EventTarget implements SIReader {
       readout = parseSI8CardData(this.pendingBlocks);
     }
 
-    const cardNumber = this.pendingCardNumber;
-    this.pendingCardType = null;
-    this.pendingCardNumber = 0;
-    this.pendingBlocks = [];
-    this.pendingBlockIndex = 0;
-    this.pendingTotalBlocks = 0;
-
-    if (readout) {
-      // Use the card number from the detection event as the source of truth
-      if (cardNumber > 0) {
-        readout.cardNumber = cardNumber;
-      }
-
-      if (readout.batteryVoltage) {
-        siLog(`Battery voltage: ${readout.batteryVoltage.toFixed(2)}V`);
-      }
-
-      // Send ACK to station — triggers built-in feedback (beep + LED blink)
-      this.write(new Uint8Array([ACK])).catch(() => {});
-
-      this.dispatchEvent(
-        new CustomEvent("si:card-readout", { detail: readout }),
-      );
+    if (!readout) {
+      this.failReadout("parse");
+      return;
     }
+
+    const cardNumber = this.pendingCardNumber;
+    this.clearReadoutState();
+
+    // Use the card number from the detection event as the source of truth
+    if (cardNumber > 0) {
+      readout.cardNumber = cardNumber;
+    }
+
+    if (readout.batteryVoltage) {
+      siLog(`Battery voltage: ${readout.batteryVoltage.toFixed(2)}V`);
+    }
+
+    // Send ACK to station — triggers built-in feedback (beep + LED blink)
+    this.write(new Uint8Array([ACK])).catch(() => {});
+
+    this.dispatchEvent(
+      new CustomEvent("si:card-readout", { detail: readout }),
+    );
   }
 
   // ── Station programming ──────────────────────────────────
@@ -674,6 +850,8 @@ export class SIReaderConnection extends EventTarget implements SIReader {
   /** Pending command response resolver for request/response flow */
   private commandResolver: {
     cmd: number;
+    /** When set, a frame it rejects is dropped and the command keeps waiting. */
+    accept?: (frame: SIParsedFrame) => boolean;
     resolve: (frame: SIParsedFrame) => void;
     reject: (err: Error) => void;
     timeoutId: ReturnType<typeof setTimeout>;
@@ -684,6 +862,7 @@ export class SIReaderConnection extends EventTarget implements SIReader {
     data: Uint8Array,
     expectedCmd: number,
     timeoutMs = 3000,
+    accept?: (frame: SIParsedFrame) => boolean,
   ): Promise<SIParsedFrame> {
     // Cancel any previous pending command
     if (this.commandResolver) {
@@ -702,7 +881,7 @@ export class SIReaderConnection extends EventTarget implements SIReader {
         );
       }, timeoutMs);
 
-      this.commandResolver = { cmd: expectedCmd, resolve, reject, timeoutId };
+      this.commandResolver = { cmd: expectedCmd, accept, resolve, reject, timeoutId };
       this.write(data).catch((err) => {
         clearTimeout(timeoutId);
         this.commandResolver = null;
@@ -741,6 +920,12 @@ export class SIReaderConnection extends EventTarget implements SIReader {
   /** Check if a frame matches a pending command response */
   private checkCommandResponse(frame: SIParsedFrame): boolean {
     if (this.commandResolver && frame.cmd === this.commandResolver.cmd) {
+      // A late answer to an earlier request (another address, wrong length):
+      // swallow it and keep waiting for the one this command asked for.
+      if (this.commandResolver.accept && !this.commandResolver.accept(frame)) {
+        siWarn(`Discarded unexpected 0x${frame.cmd.toString(16)} reply (${frame.data.length} bytes)`);
+        return true;
+      }
       clearTimeout(this.commandResolver.timeoutId);
       const resolver = this.commandResolver;
       this.commandResolver = null;
@@ -1108,6 +1293,13 @@ export class SIReaderConnection extends EventTarget implements SIReader {
       const adr2 = (readAddr >> 16) & 0xff;
       const adr1 = (readAddr >> 8) & 0xff;
       const adr0 = readAddr & 0xff;
+      // The reply echoes the address: [0x00, station, adr2, adr1, adr0, ...count bytes].
+      // A late answer to an earlier page must never be taken for this one.
+      const isThisPage = (f: SIParsedFrame): boolean =>
+        f.data.length === 5 + count &&
+        f.data[2] === adr2 &&
+        f.data[3] === adr1 &&
+        f.data[4] === adr0;
 
       let resp: SIParsedFrame | null = null;
       for (let attempt = 0; attempt < 4; attempt++) {
@@ -1123,6 +1315,7 @@ export class SIReaderConnection extends EventTarget implements SIReader {
             buildGetBackup(adr2, adr1, adr0, count, false),
             CMD.GET_BACKUP,
             1500,
+            isThisPage,
           );
           break;
         } catch (err) {
@@ -1131,9 +1324,9 @@ export class SIReaderConnection extends EventTarget implements SIReader {
       }
 
       if (!resp) {
-        siWarn(`Backup page at 0x${readAddr.toString(16)} failed after all retries, skipping`);
-        readAddr += count;
-        continue;
+        // A gap would silently drop punches, and the caller may be about to
+        // erase the station. Fail the whole read instead.
+        throw new BackupReadIncompleteError(readAddr);
       }
 
       raw.push(resp.data);
@@ -1204,18 +1397,15 @@ export class SIReaderConnection extends EventTarget implements SIReader {
       return empty;
     }
 
-    const { raw } = await this._walkBackupPages(endAddr);
+    const { raw, pageAddresses } = await this._walkBackupPages(endAddr);
     // Strip the 5-byte response header [0x00, station_code, adr2, adr1, adr0]
-    // and concatenate the rest into a single contiguous flash buffer.
-    let totalLen = 0;
-    for (const page of raw) totalLen += Math.max(0, page.length - 5);
-    const buffer = new Uint8Array(totalLen);
-    let off = 0;
-    for (const page of raw) {
-      if (page.length <= 5) continue;
-      const bytes = page.subarray(5);
-      buffer.set(bytes, off);
-      off += bytes.length;
+    // and place each page at its own address, so the buffer offsets are flash
+    // addresses (the slot walker steps by 0x80 from 0x100). Unfilled bytes
+    // stay 0xEE, the empty-flash sentinel.
+    const totalLen = endAddr - 0x100;
+    const buffer = new Uint8Array(totalLen).fill(0xee);
+    for (let i = 0; i < raw.length; i++) {
+      buffer.set(raw[i].subarray(5), pageAddresses[i] - 0x100);
     }
     const records = parseReadoutBackupBuffer(buffer, 0x100);
     siLog(`Backup read complete: ${records.length} readout-mode records (from ${totalLen} flash bytes)`);
