@@ -58,7 +58,7 @@ list (a results-only late entry is not withdrawn). **Only the first import takes
 A runner is identified by Eventor person id, or by entry id (`runners.eventor_entry_id`) when the entry has no person id; an entry that later gains a person id is matched by its entry id, and the person id is filled in; a second entry of the same person is counted (`duplicateEntries`), an entry with neither id is skipped and counted (`skippedNoId`). A club renamed in Eventor under the same id updates the runner's club name when it still equals the snapshot's.
 
 A runner the sync cancelled itself is **reinstated** (status back to Unknown or
-No timing) when Eventor lists them again with no result. Only the sync's own
+No timing) when Eventor lists them again (a re-sync ignores Eventor's results). Only the sync's own
 cancel is undone (the snapshot carries `cancelled_by_sync: true`, cleared on reinstate): a runner cancelled by hand, or by a sync that predates the
 snapshot, stays cancelled. A runner deleted at the desk is never brought back.
 

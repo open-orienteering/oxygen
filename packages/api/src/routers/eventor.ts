@@ -497,7 +497,8 @@ async function planEventorSync(
     cardNo: r.cardNo,
     cardId: r.cardId,
     classEventorId: r.classId ? (eventorIdByLocalId.get(r.classId) ?? null) : null,
-    classLocalOnly: r.classId != null && (eventorIdByLocalId.get(r.classId) ?? null) === null,
+    // Only a live local class with no Eventor id; a removed class is not "local".
+    classLocalOnly: r.classId != null && eventorIdByLocalId.has(r.classId) && eventorIdByLocalId.get(r.classId) === null,
     eventorClubId: r.eventorClubId === null ? null : Number(r.eventorClubId),
     clubName: r.clubName,
     birthYear: r.birthYear,

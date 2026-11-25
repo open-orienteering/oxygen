@@ -642,6 +642,7 @@ export function planRunnerSync(input: {
     if (!found && entry.personId > 0 && entry.eventorEntryId > 0) {
       found = byEntryNoPerson.get(entry.eventorEntryId);
       if (found) {
+        byEntryNoPerson.delete(entry.eventorEntryId);
         backfillPerson = true;
         seen.add(`e${entry.eventorEntryId}`);
       }
