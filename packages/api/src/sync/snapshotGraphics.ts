@@ -353,9 +353,21 @@ export async function mirrorSnapshotGraphics(
   blobs: SnapshotGraphicBlobs,
 ): Promise<GraphicMirrorCounts> {
   const counts: GraphicMirrorCounts = { written: 0, updated: 0, deleted: 0 };
-  const fetched = graphics.filter((g) => blobs.bytes.has(g.id));
+  // A graphic id another event on this box owns is left alone (decision D10).
+  // The checkout asked the operator; a refresh has nobody to ask, and
+  // throwing would roll back the whole map refresh every cycle, so it skips
+  // that graphic, says so, and applies the rest.
+  const clashes = await findGraphicClashes(tx, graphics, eventId);
+  const clashing = new Set(clashes.map((c) => c.id));
+  for (const c of clashes) {
+    console.warn(
+      `[refresh] graphic clash: graphic ${c.id} on this box belongs to "${c.eventName}", not to this event; the cloud's copy was not applied (GRAPHIC_ID_CLASH). Check the graphic out explicitly to replace it.`,
+    );
+  }
+  const live = graphics.filter((g) => !clashing.has(g.id));
+  const fetched = live.filter((g) => blobs.bytes.has(g.id));
   if (fetched.length > 0) counts.written = await importSnapshotGraphics(tx, eventId, fetched, blobs);
-  for (const g of graphics) {
+  for (const g of live) {
     if (blobs.bytes.has(g.id)) continue;
     const held = await tx.graphic.findUnique({ where: { id: BigInt(g.id) }, select: { name: true, mime: true } });
     if (!held) {

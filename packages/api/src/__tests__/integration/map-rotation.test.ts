@@ -16,6 +16,7 @@ import {
 import { makeCaller } from "../helpers/caller.js";
 import { uploadEventMap } from "../helpers/upload-map.js";
 import { parseOcadMapMetadata } from "../helpers/ocad-oracle.js";
+import { acquireLease, releaseLease } from "../../sync/lease.js";
 import { loadEventCrs } from "../../event-crs.js";
 import { mapMmToWgs84 } from "../../map-projection.js";
 
@@ -113,6 +114,28 @@ describe("course.setMapRotation", () => {
     } finally {
       await caller.course.setMapRotation({ degrees: 0 });
     }
+  });
+
+  it("while a venue box holds the lease, the map change goes ahead but no course row is re-derived or journaled (D8)", async () => {
+    await ctx.db.control.createMany({ data: [{ eventId: ctx.eventId, codes: "51", xpos: 10, ypos: 10 }, { eventId: ctx.eventId, codes: "52", xpos: 40, ypos: 10 }] });
+    const derived = await caller.course.create({ name: "Held", controlIds: [51, 52] });
+    const row = await ctx.db.course.findFirstOrThrow({ where: { eventId: ctx.eventId, seq: derived.id } });
+    await ctx.db.course.update({ where: { id: row.id }, data: { legs: "stale;" } });
+    const journaled = () => ctx.db.journalEntry.count({ where: { eventId: ctx.eventId, type: "course.upserted" } });
+    const before = await journaled();
+    await acquireLease(ctx.db, ctx.eventId, "venue-d8");
+    try {
+      const res = await caller.course.setMapRotation({ degrees: 4 });
+      expect(res.rotationCorrection).toBe(4);
+      expect((await ctx.db.course.findUniqueOrThrow({ where: { id: row.id } })).legs).toBe("stale;");
+      expect(await journaled()).toBe(before);
+    } finally {
+      await releaseLease(ctx.db, ctx.eventId);
+      await caller.course.setMapRotation({ degrees: 0 });
+    }
+    // Without the lease the same change re-derives and journals again.
+    expect((await ctx.db.course.findUniqueOrThrow({ where: { id: row.id } })).legs).not.toBe("stale;");
+    expect(await journaled()).toBeGreaterThan(before);
   });
 
   it("rejects when no map is uploaded", async () => {
