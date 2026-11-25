@@ -35,7 +35,7 @@ import {
   listUnshippedJournalEntries,
   markJournalShipped,
 } from "../../routers/events.js";
-import { shippingStatus } from "../../sync/lease.js";
+import { acquireLease, releaseLease, shippingStatus } from "../../sync/lease.js";
 import type { EventRef } from "../../db.js";
 
 const PEER_ID = "test-peer";
@@ -497,13 +497,19 @@ describe("shipping by delivery mark (review MC-02, MC-23)", () => {
 
   it("events.unshipped and events.ackShipped sit behind the shared secret and mark delivery", async () => {
     await expect(caller.events.unshipped({ limit: 5 })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
-    const peer = makeCaller(ctx.event, { syncSecret: "test-sync-secret" });
-    const id = await lateEntry(ctx.db, ctx.eventId, 0, 76);
-    const page = await peer.events.unshipped({ limit: 500 });
-    expect(page.entries.map((e) => e.id)).toContain(id);
-    expect((await peer.events.ackShipped({ ids: [id] })).marked).toBe(1);
-    const after = await peer.events.unshipped({ limit: 500 });
-    expect(after.entries.map((e) => e.id)).not.toContain(id);
+    // Only the node that holds the lease takes delivery (review H2).
+    await acquireLease(ctx.db, ctx.eventId, "venue-peer");
+    try {
+      const peer = makeCaller(ctx.event, { syncSecret: "test-sync-secret", peerNodeId: "venue-peer" });
+      const id = await lateEntry(ctx.db, ctx.eventId, 0, 76);
+      const page = await peer.events.unshipped({ limit: 500 });
+      expect(page.entries.map((e) => e.id)).toContain(id);
+      expect((await peer.events.ackShipped({ ids: [id] })).marked).toBe(1);
+      const after = await peer.events.unshipped({ limit: 500 });
+      expect(after.entries.map((e) => e.id)).not.toContain(id);
+    } finally {
+      await releaseLease(ctx.db, ctx.eventId);
+    }
   });
 });
 

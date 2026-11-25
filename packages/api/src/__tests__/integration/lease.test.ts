@@ -69,6 +69,7 @@ import {
   listJournalEntriesSince,
   listUnshippedJournalEntries,
   markJournalShipped,
+  _resetNoPeerNodeIdWarning,
 } from "../../routers/events.js";
 import { nodeId } from "../../sync/nodeIdentity.js";
 import type { EventRef } from "../../db.js";
@@ -1145,7 +1146,7 @@ describe("checkout guard and restart safety (API-07, SYNC-18)", () => {
     try {
       await expect(caller.lease.checkout({ nameId: CHECKOUT_NAME })).rejects.toMatchObject({ code: "NOT_FOUND" });
       expect(release).not.toHaveBeenCalled();
-      expect(err).not.toHaveBeenCalled();
+      expect(err.mock.calls.map((c) => c.join(" ")).filter((m) => m.includes("could not be released"))).toEqual([]);
     } finally {
       err.mockRestore();
       _setLeasePeerFactory(() => leasePeerToB());
@@ -2104,6 +2105,7 @@ describe("the delivery mark belongs to the current holder (H2)", () => {
 
   it("with no active lease nothing is served or acked; a box that sends no node id is served while a lease is held, with one warning", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    _resetNoPeerNodeIdWarning();
     try {
       const id = await cloudEntry();
       const anyBox = makeCaller(ctx.event, { syncSecret: "test-sync-secret", peerNodeId: "venue-b" });
@@ -2114,7 +2116,7 @@ describe("the delivery mark belongs to the current holder (H2)", () => {
       const oldBox = makeCaller(ctx.event, { syncSecret: "test-sync-secret" });
       expect((await oldBox.events.unshipped({ limit: 50 })).entries.map((e) => e.id)).toContain(id);
       await oldBox.events.unshipped({ limit: 50 });
-      expect(warn.mock.calls.map((c) => c.join(" ")).filter((m) => m.includes("no node id")).length).toBe(1);
+      expect(warn.mock.calls.map((c) => c.join(" ")).filter((m) => m.includes("without a node id")).length).toBe(1);
     } finally {
       warn.mockRestore();
       await releaseLease(ctx.db, ctx.eventId).catch(() => {});

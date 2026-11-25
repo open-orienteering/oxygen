@@ -414,6 +414,11 @@ export async function markJournalShipped(
 
 let warnedNoPeerNodeId = false;
 
+/** Test seam: warn again. */
+export function _resetNoPeerNodeIdWarning(): void {
+  warnedNoPeerNodeId = false;
+}
+
 /**
  * The delivery mark is one bit per entry, not per peer, so only the node the
  * entries are meant for may consume them: the holder of the event's active
