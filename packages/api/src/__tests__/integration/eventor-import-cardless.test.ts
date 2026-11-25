@@ -126,7 +126,6 @@ function makeResult(
     startTime: 0,
     finishTime: 0,
     status: 0,
-    startNo: 0,
     bib: "",
   };
 }

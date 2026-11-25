@@ -501,6 +501,21 @@ export interface RunnerInfo {
    * contains NoTiming or BadNoTiming positions.
    */
   runningTimeAdjustment?: number;
+  /**
+   * The runner's current value differs from what Eventor last said
+   * (docs/system/eventor-sync.md); the row badge and the `eventor` filter.
+   */
+  differsFromEventor?: boolean;
+  /** The last Eventor sync saw the runner missing from Eventor. */
+  goneFromEventor?: boolean;
+}
+
+/** One field where a runner differs from Eventor's last value. */
+export interface RunnerEventorDiff {
+  field: "name" | "cardNo" | "classId" | "club" | "birthYear" | "sex" | "nationality";
+  /** Shown values (a class by name, a club by name). */
+  local: string | number | null;
+  eventor: string | number | null;
 }
 
 /** Runner detail (for editing) */
@@ -532,6 +547,10 @@ export interface RunnerDetail {
   courseId: number;
   /** The variant's key when `courseId` is a materialised variant, else null. */
   variantKey: string | null;
+  /** Where the runner differs from Eventor's last value (empty without a sync snapshot). */
+  eventorDiff?: RunnerEventorDiff[];
+  /** The last Eventor sync saw the runner missing from Eventor. */
+  goneFromEventor?: boolean;
 }
 
 /** Input for creating/updating a runner */

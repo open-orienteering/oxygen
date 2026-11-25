@@ -8,12 +8,13 @@ import {
   kioskOrRaceOperateProcedure,
 } from "../trpc.js";
 import { toAbsolute, toRelative, nowMeosDate, nowMeosTime } from "../timeConvert.js";
-import { RunnerStatus, type RunnerDetail, type RunnerInfo } from "@oxygen/shared";
+import { RunnerStatus, type RunnerDetail, type RunnerInfo, type RunnerEventorDiff } from "@oxygen/shared";
 import {
   runnerStatusToValue,
   valueToRunnerStatus,
 } from "../statusConvert.js";
 import { appendJournal } from "../journalEmit.js";
+import { asRunnerSnapshot, runnerEventorDiff } from "../eventor-merge.js";
 import { assertInPool, assignVariant, poolOf } from "../variants.js";
 
 /**
@@ -33,7 +34,7 @@ export function normalizeBirthYear(val: number): number {
  * Resolve a runner by its per-event seq. Returns the row (incl. id UUID,
  * which is needed for Prisma writes), or throws NOT_FOUND.
  */
-async function getRunnerBySeq(
+export async function getRunnerBySeq(
   db: import("../generated/prisma/client.js").PrismaClient,
   eventId: bigint,
   seq: number,
@@ -245,6 +246,155 @@ const runnerUpdateSchema = z.object({
   courseId: z.number().int().positive().nullable().optional(),
 });
 
+/**
+ * Where a runner differs from Eventor's last value, for the list badge and
+ * filter (docs/system/eventor-sync.md). `undefined` keys keep the JSON small
+ * for runners that were never synced.
+ */
+function eventorFlags(
+  r: {
+    name: string; cardNo: number | null; eventorClubId: bigint | null; clubName: string;
+    birthYear: number; sex: string; nationality: string; eventorSnapshot: unknown;
+  },
+  classEventorId: bigint | null,
+): { differsFromEventor?: boolean; goneFromEventor?: boolean } {
+  const snap = asRunnerSnapshot(r.eventorSnapshot);
+  if (!snap) return {};
+  const diff = runnerEventorDiff(
+    {
+      name: r.name,
+      cardNo: r.cardNo,
+      classEventorId: classEventorId === null ? null : Number(classEventorId),
+      eventorClubId: r.eventorClubId === null ? null : Number(r.eventorClubId),
+      clubName: r.clubName,
+      birthYear: r.birthYear,
+      sex: r.sex,
+      nationality: r.nationality,
+    },
+    snap,
+  );
+  return {
+    ...(diff.length > 0 ? { differsFromEventor: true } : {}),
+    ...(snap.present === false ? { goneFromEventor: true } : {}),
+  };
+}
+
+/** `eventorDiff` and `goneFromEventor` of the runner detail; classes shown by name. */
+async function eventorDetail(
+  db: import("../generated/prisma/client.js").PrismaClient,
+  eventId: bigint,
+  r: Parameters<typeof eventorFlags>[0] & { classId: string | null },
+  cls: { name: string } | null,
+): Promise<{ eventorDiff?: RunnerEventorDiff[]; goneFromEventor?: boolean }> {
+  const snap = asRunnerSnapshot(r.eventorSnapshot);
+  if (!snap) return {};
+  const local = r.classId
+    ? await db.class.findUnique({ where: { id: r.classId }, select: { eventorId: true } })
+    : null;
+  const diff = runnerEventorDiff(
+    {
+      name: r.name,
+      cardNo: r.cardNo,
+      classEventorId: local?.eventorId == null ? null : Number(local.eventorId),
+      eventorClubId: r.eventorClubId === null ? null : Number(r.eventorClubId),
+      clubName: r.clubName,
+      birthYear: r.birthYear,
+      sex: r.sex,
+      nationality: r.nationality,
+    },
+    snap,
+  );
+  const eventorClass = diff.find((d) => d.field === "classId");
+  const eventorClassRow =
+    eventorClass && typeof eventorClass.eventor === "number"
+      ? await db.class.findFirst({
+          where: { eventId, eventorId: BigInt(eventorClass.eventor), removed: false },
+          select: { name: true },
+        })
+      : null;
+  return {
+    eventorDiff: diff.map((d) =>
+      d.field === "classId"
+        ? { ...d, local: cls?.name ?? "", eventor: eventorClassRow?.name ?? String(d.eventor) }
+        : d,
+    ),
+    ...(snap.present === false ? { goneFromEventor: true } : {}),
+  };
+}
+
+/**
+ * Apply an edit to a runner and journal it, in one transaction. The body of
+ * `runner.update`, shared with `eventor.useEventorValue` so "use Eventor's
+ * value" is an ordinary, journaled edit. `fields` is the portable (absolute
+ * deciseconds, seq-keyed) input shape of `runner.update`.
+ */
+export async function updateRunnerFields(
+  ctx: { db: import("../generated/prisma/client.js").PrismaClient; event: { id: bigint; zeroTime: number } },
+  seq: number,
+  fields: Record<string, unknown>,
+): Promise<{ ok: true }> {
+  const r = await getRunnerBySeq(ctx.db, ctx.event.id, seq);
+
+  const cardNo =
+    fields.cardNo === undefined ? undefined : (fields.cardNo as number | null);
+  if (cardNo != null && cardNo !== r.cardNo) {
+    await assertCardNotTaken(ctx.db, ctx.event.id, cardNo, r.id);
+  }
+
+  const data = await buildRunnerUpdateData(
+    ctx.db,
+    ctx.event.id,
+    ctx.event.zeroTime,
+    fields,
+  );
+
+  Object.assign(data, manualFlagsFor(fields, ctx.event.zeroTime, r));
+
+  // Portable patch for the journal: the raw (absolute-ds / seq / numeric)
+  // input fields, minus the routing keys. A peer replays it through this
+  // same mutation, so it must NOT carry the DB-shaped `data` values.
+  const journalFields: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(fields)) {
+    if (k === "id" || k === "data" || v === undefined) continue;
+    journalFields[k] = v;
+  }
+
+  // The runner's variant (F6b): a course seq must be in the (new)
+  // class's pool; a class change clears it and `null` asks for one —
+  // both re-dealt from the pool below, the pick journaled as the seq.
+  const targetClassId = (data.classId as string | undefined) ?? r.classId;
+  const classChanged = data.classId !== undefined && data.classId !== r.classId;
+  let redeal = false;
+  if (fields.courseId === null || (classChanged && typeof fields.courseId !== "number")) {
+    data.courseId = null;
+    redeal = true;
+  }
+
+  // Table write + journal entry commit or roll back together.
+  await ctx.db.$transaction(async (tx) => {
+    if (typeof fields.courseId === "number") {
+      // Read the pool in the write's transaction (a racing edit may drop the variant).
+      const pool = targetClassId ? await poolOf(tx, targetClassId) : [];
+      data.courseId = assertInPool(pool, fields.courseId).id;
+    }
+    await tx.runner.update({ where: { id: r.id }, data });
+    if (redeal) {
+      const v = targetClassId ? await assignVariant(tx, targetClassId, r.id) : null;
+      journalFields.courseId = v?.seq ?? null;
+    }
+    await appendJournal(tx, {
+      eventId: ctx.event.id,
+      type: "runner.updated",
+      payload: {
+        cardNo: r.cardNo ?? null, // pre-edit card resolves the peer row
+        runnerId: seq, // seq
+        fields: journalFields,
+      },
+    });
+  });
+  return { ok: true };
+}
+
 // ─── Router ────────────────────────────────────────────────
 
 export const runnerRouter = router({
@@ -307,6 +457,7 @@ export const runnerRouter = router({
         transferFlags: r.transferFlags,
         courseId: own?.seq ?? 0,
         variantKey: own?.variantKey ?? null,
+        ...(await eventorDetail(ctx.db, ctx.event.id, r, cls)),
       };
     }),
 
@@ -377,7 +528,7 @@ export const runnerRouter = router({
 
       const runners = await ctx.db.runner.findMany({
         where,
-        include: { class: { select: { name: true, seq: true } }, course: { select: { seq: true } } },
+        include: { class: { select: { name: true, seq: true, eventorId: true } }, course: { select: { seq: true } } },
         orderBy: [{ class: { sortIndex: "asc" } }, { startNo: "asc" }],
       });
 
@@ -441,6 +592,7 @@ export const runnerRouter = router({
           sex: r.sex,
           bib: r.bib,
           transferFlags: r.transferFlags,
+          ...eventorFlags(r, r.class?.eventorId ?? null),
         }),
       );
     }),
@@ -553,71 +705,12 @@ export const runnerRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const r = await getRunnerBySeq(ctx.db, ctx.event.id, input.id);
       // Merge legacy `data: { ... }` wrapper with the flat shape.
       const fields = { ...input, ...(input.data ?? {}) } as Record<
         string,
         unknown
       >;
-
-      const cardNo =
-        fields.cardNo === undefined ? undefined : (fields.cardNo as number | null);
-      if (cardNo != null && cardNo !== r.cardNo) {
-        await assertCardNotTaken(ctx.db, ctx.event.id, cardNo, r.id);
-      }
-
-      const data = await buildRunnerUpdateData(
-        ctx.db,
-        ctx.event.id,
-        ctx.event.zeroTime,
-        fields,
-      );
-
-      Object.assign(data, manualFlagsFor(fields, ctx.event.zeroTime, r));
-
-      // Portable patch for the journal: the raw (absolute-ds / seq / numeric)
-      // input fields, minus the routing keys. A peer replays it through this
-      // same mutation, so it must NOT carry the DB-shaped `data` values.
-      const journalFields: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(fields)) {
-        if (k === "id" || k === "data" || v === undefined) continue;
-        journalFields[k] = v;
-      }
-
-      // The runner's variant (F6b): a course seq must be in the (new)
-      // class's pool; a class change clears it and `null` asks for one —
-      // both re-dealt from the pool below, the pick journaled as the seq.
-      const targetClassId = (data.classId as string | undefined) ?? r.classId;
-      const classChanged = data.classId !== undefined && data.classId !== r.classId;
-      let redeal = false;
-      if (fields.courseId === null || (classChanged && typeof fields.courseId !== "number")) {
-        data.courseId = null;
-        redeal = true;
-      }
-
-      // Table write + journal entry commit or roll back together.
-      await ctx.db.$transaction(async (tx) => {
-        if (typeof fields.courseId === "number") {
-          // Read the pool in the write's transaction (a racing edit may drop the variant).
-          const pool = targetClassId ? await poolOf(tx, targetClassId) : [];
-          data.courseId = assertInPool(pool, fields.courseId).id;
-        }
-        await tx.runner.update({ where: { id: r.id }, data });
-        if (redeal) {
-          const v = targetClassId ? await assignVariant(tx, targetClassId, r.id) : null;
-          journalFields.courseId = v?.seq ?? null;
-        }
-        await appendJournal(tx, {
-          eventId: ctx.event.id,
-          type: "runner.updated",
-          payload: {
-            cardNo: r.cardNo ?? null, // pre-edit card resolves the peer row
-            runnerId: input.id, // seq
-            fields: journalFields,
-          },
-        });
-      });
-      return { ok: true };
+      return updateRunnerFields(ctx, input.id, fields);
     }),
 
   /** Soft-delete a runner. */

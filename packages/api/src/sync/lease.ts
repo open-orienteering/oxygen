@@ -294,6 +294,8 @@ export type TokenTable = (typeof TOKEN_TABLES)[number];
 export const NULLABLE_JSON_SHEET_FIELDS = ["windowCenter"] as const;
 /** `course_objects` columns typed `Json?` (J10's `attach`). */
 export const NULLABLE_JSON_OBJECT_FIELDS = ["attach"] as const;
+/** `runners` / `classes` column typed `Json?` (the Eventor sync snapshot). */
+const NULLABLE_JSON_EVENTOR_FIELDS = ["eventorSnapshot"] as const;
 
 /**
  * Rows of a snapshot table as the importer inserts them: exact tokens, a
@@ -310,8 +312,15 @@ function importRows(
   const templateIds = new Set((snapshot.tables.mapTemplate ?? []).map((r) => String(r.id)));
   const knownTemplate = (v: unknown) => (typeof v === "string" && templateIds.has(v) ? v : null);
   if (t === "class") {
-    return rows.map((r) => ("sheetTemplateId" in r ? { ...r, sheetTemplateId: knownTemplate(r.sheetTemplateId) } : r));
+    // `eventor_snapshot` (docs/system/eventor-sync.md) is a nullable JSON column.
+    return rows.map((r) =>
+      withDbNulls(
+        "sheetTemplateId" in r ? { ...r, sheetTemplateId: knownTemplate(r.sheetTemplateId) } : r,
+        NULLABLE_JSON_EVENTOR_FIELDS,
+      ),
+    );
   }
+  if (t === "runner") return rows.map((r) => withDbNulls(r, NULLABLE_JSON_EVENTOR_FIELDS));
   if ((TOKEN_TABLES as readonly string[]).includes(t)) {
     const exact = applyTokens(rows, snapshot.versions?.[t as TokenTable]);
     if (t === "courseObject") return exact.map((r) => withDbNulls(r, NULLABLE_JSON_OBJECT_FIELDS));
