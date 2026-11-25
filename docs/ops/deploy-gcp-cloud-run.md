@@ -226,7 +226,14 @@ IAP protects *all* ingress, including the venue box's journal shipping
 (`SYNC_PEER_URL` pointing at the cloud). The venue box authenticates as a
 service account; the shipper attaches an OIDC ID token when
 `SYNC_GOOGLE_AUDIENCE` is set (see `packages/api/src/sync/googleIdToken.ts`).
-The existing `SYNC_SHARED_SECRET` still applies as the app-level check.
+`SYNC_SHARED_SECRET` is the app-level credential for both directions: the
+box presents it on `events.push` as well as on `events.since`, and the cloud
+accepts a push that carries it without a signed-in user (the cloud runs
+`AUTH_MODE=proxy`, and the service account need not be an invited member).
+A missing or wrong secret now fails the push loudly (`UNAUTHORIZED`, or
+`PRECONDITION_FAILED` when the cloud has no `SYNC_SHARED_SECRET` set) and the
+shipper logs it every cycle; before, a secret-only push was rejected for lack
+of a user while the pull looked healthy. IAP still needs the ID token above.
 
 One-time setup:
 

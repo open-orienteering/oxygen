@@ -15,7 +15,7 @@
 import { execSync } from "child_process";
 import { Client } from "pg";
 
-const E2E_DATABASE_URL =
+export const E2E_DATABASE_URL =
   process.env.E2E_DATABASE_URL ??
   `postgresql://oxygen:oxygen@localhost:5433/${process.env.E2E_DB_NAME ?? "oxygen_e2e"}?schema=oxygen`;
 

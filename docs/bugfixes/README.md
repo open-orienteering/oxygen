@@ -62,6 +62,7 @@ Notes whose code no longer exists (mostly the raster tile pipeline, deleted in s
 
 | Note | Added |
 | --- | --- |
+| [The journal sink trusted whatever it was sent](journal-sink-hardening.md) | 2026-11-25 |
 | [Offline and kiosk readouts lost or applied to the wrong runner](offline-kiosk-readout-path.md) | 2026-11-24 |
 | [A re-read or a manual finish overwrote the stored result](readout-overwrites-result.md) | 2026-11-24 |
 | [SIAC readouts with a battery value rejected by `storeReadout`](readout-battery-millivolts.md) | 2026-11-18 |
@@ -110,6 +111,7 @@ Notes whose code no longer exists (mostly the raster tile pipeline, deleted in s
 
 | Note | Added |
 | --- | --- |
+| [webserial.spec readout tests held by the readout guard (SI6 card, no finish)](webserial-spec-held-by-readout-guard.md) | 2026-11-25 |
 | [`map-multicourse.spec.ts` left its imported courses behind](e2e-map-multicourse-leaves-courses.md) | 2026-11-14 |
 | [E2E flakes in `course-editor-legs.spec.ts`: presence chips moved the map, an apex on another leg](course-editor-legs-flakes.md) | 2026-11-13 |
 | [F7's control into B was placed under the inspector](f7-offleg-under-inspector.md) | 2026-11-11 |

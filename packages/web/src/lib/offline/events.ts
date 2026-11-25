@@ -90,6 +90,40 @@ function createEvent(
   };
 }
 
+// ─── Enqueue signal ─────────────────────────────────────────
+//
+// The auto-drain must start when an entry is queued, not when a poll happens
+// to see the pending count grow (an entry queued while the previous one drains
+// leaves the count unchanged). Every queueing bumps a module-level sequence
+// and tells the listeners.
+
+let enqueueSeq = 0;
+const enqueueListeners = new Set<() => void>();
+
+/** Monotonic count of entries queued (or requeued) by this page since load. */
+export function getEnqueueSeq(): number {
+  return enqueueSeq;
+}
+
+/** Call `listener` after every queued entry; returns the unsubscribe. */
+export function subscribeEnqueue(listener: () => void): () => void {
+  enqueueListeners.add(listener);
+  return () => {
+    enqueueListeners.delete(listener);
+  };
+}
+
+function signalEnqueue(): void {
+  enqueueSeq++;
+  for (const listener of [...enqueueListeners]) {
+    try {
+      listener();
+    } catch {
+      /* a listener must not break queueing */
+    }
+  }
+}
+
 /**
  * Store an event in the local IndexedDB queue.
  * Returns the event (with generated id) for optimistic UI updates.
@@ -101,6 +135,7 @@ export async function emitEvent(
 ): Promise<OxygenEvent> {
   const event = createEvent(type, competitionId, payload);
   await offlineDb.events.add(event);
+  signalEnqueue();
   return event;
 }
 
@@ -184,7 +219,13 @@ export async function getFailedCount(competitionId?: string): Promise<number> {
 
 /** Requeue a failed entry — the next drain retries it. */
 export async function retryFailedEvent(eventId: string): Promise<void> {
-  await offlineDb.events.update(eventId, { status: "pending", error: undefined });
+  await offlineDb.events.update(eventId, {
+    status: "pending",
+    error: undefined,
+    capability: undefined,
+    rejectedBySchema: undefined,
+  });
+  signalEnqueue();
 }
 
 /** Requeue every failed entry (optionally for one event). */

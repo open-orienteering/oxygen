@@ -543,6 +543,18 @@ describe("kiosk key", () => {
       kiosk.race.recordFinish({ id: 1, finishTimeAbsolute: 360_000 }),
     ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
     await expect(kiosk.events.push({ events: [] })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    await expect(
+      kiosk.events.push({
+        events: [{
+          id: "00000000-0000-4000-8000-000000000abc",
+          type: "card.read",
+          competitionId: event.nameId,
+          stationId: "kiosk",
+          timestamp: 1_700_000_000_000,
+          payload: { cardNo: 999002, punches: [] },
+        }],
+      }),
+    ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
   });
 
   it("key-only devices can read the map data set MapPanel needs, but not edit", async () => {
@@ -583,5 +595,32 @@ describe("kiosk key", () => {
     await expect(wrong.course.list()).rejects.toMatchObject({
       code: "UNAUTHORIZED",
     });
+  });
+});
+
+describe("runner registration needs Race crew, edit and delete stay Event admin", () => {
+  it("race crew can runner.create but not runner.update / runner.delete", async () => {
+    const cls = await callerFor(admin).class.create({ name: "Crew-reg" });
+    const created = await callerFor(crew).runner.create({
+      name: "Desk Dana",
+      classId: cls.id,
+      clubName: "OK",
+    });
+    expect(created.id).toBeGreaterThan(0);
+    await expect(
+      callerFor(crew).runner.update({ id: created.id, name: "Renamed" }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(callerFor(crew).runner.delete({ id: created.id })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    // The queued equivalent (events.push runner.registered) follows the same rule.
+    await callerFor(admin).runner.delete({ id: created.id });
+  });
+
+  it("a member without a race grant cannot runner.create", async () => {
+    const cls = await callerFor(admin).class.create({ name: "Member-reg" });
+    await expect(
+      callerFor(member).runner.create({ name: "Nope", classId: cls.id, clubName: "OK" }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 });

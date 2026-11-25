@@ -70,7 +70,6 @@
   "buildVersion": "Build",
   "imageVersion": "Image",
   "commitVersion": "Commit",
-
   "testLab": "Testlabb",
   "testLabDescription": "Generera testdata och simulera tävlingar för stresstestning. Arbeta genom de fyra stegen i ordning — varje steg beror på det föregående.",
   "classes": "Klasser",
@@ -96,7 +95,6 @@
   "elapsed": "förflutit",
   "more": "Mer...",
   "less": "Mindre",
-
   "structuredSearchHintTypeToSearch": "Skriv för att söka...",
   "structuredSearchHintNumber": "Ange ett nummer — t.ex. >25 eller <60:00",
   "structuredSearchPlaceholder": "Sök eller filtrera — | för ELLER, ! för INTE",
@@ -108,7 +106,6 @@
   "structuredSearchPendingNot": "Nästa filter du lägger till blir negerat",
   "structuredSearchOrInProgress": "Nästa filter du lägger till kombineras med ELLER",
   "searchOrFilter": "Sök eller filtrera...",
-
   "timeAgo_justNow": "just nu",
   "timeAgo_minuteAgo": "1 min sedan",
   "timeAgo_minutesAgo": "{{count}} min sedan",
@@ -133,5 +130,26 @@
   "offlineMapsStoring": "Sparar kartor… {{done}}/{{total}}",
   "offlineMapsPartialError": "Nätet försvann medan kartorna sparades; vissa exporter är inte sparade.",
   "offlineMapsFailed": "Kartorna kunde inte sparas på den här enheten.",
-  "offlineMapsNotOnline": "Kartorna kan bara sparas med nätanslutning."
+  "offlineMapsNotOnline": "Kartorna kan bara sparas med nätanslutning.",
+  "heldBehindFailed": "{{count}} väntar bakom en misslyckad post",
+  "retryAll": "Försök alla igen",
+  "syncBlocked": {
+    "auth": "Synk blockerad: logga in för att skicka de väntande posterna.",
+    "event": "Synk blockerad: servern känner inte till den här tävlingen.",
+    "server": "Synk blockerad: servern svarar inte som den ska. Tryck på Synka nu för att försöka igen."
+  },
+  "capabilityRole": {
+    "race.operate": "Tävlingsfunktionär",
+    "event.manage": "Tävlingsadmin",
+    "courses.edit": "Banläggare"
+  },
+  "refusal": {
+    "COMPETITION_MISMATCH": "Posten hör till en annan tävling än den den skickades till.",
+    "FORBIDDEN": "Behörighet saknas: {{role}}",
+    "FORBIDDEN_unknown": "Behörighet saknas.",
+    "ENTRY_IN_OTHER_EVENT": "En post med samma id finns redan i en annan tävling.",
+    "ROW_IN_OTHER_EVENT": "Posten pekar på data som hör till en annan tävling.",
+    "INVALID_PAYLOAD": "Posten är felaktig och godtogs inte.",
+    "APPLY_FAILED": "Servern kunde inte tillämpa posten."
+  }
 }

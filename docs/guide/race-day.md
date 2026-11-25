@@ -24,7 +24,7 @@ A standalone kiosk keeps working without the server. A card read is saved on the
 
 ## Start and finish stations
 
-Dedicated register-only stations for the arena — designed to run on cheap tablets and survive flaky Wi-Fi. Both stations work offline: mutations queue locally and drain when connectivity returns.
+Dedicated register-only stations for the arena — designed to run on cheap tablets and survive flaky Wi-Fi. Both stations work offline: mutations queue locally and drain when connectivity returns. The Sync Status panel lists entries the server refused (for example a missing Race crew role) with the reason, and offers Retry, Retry all and Discard; a "Sync blocked" line says when the queue waits for a sign-in or for the server.
 
 ![Start station — pre-start timer and card scan](../screenshots/start-station.png)
 

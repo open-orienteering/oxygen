@@ -122,7 +122,10 @@ path to the load balancer.
    themselves.
 
 Journal mutations that run inside tRPC stamp `actor_id` with the user's UUID.
-Background jobs, ROC pullers, and peer `events.push` leave `actor_id` null.
+So does a station's `events.push` when auth is on: the signed-in user is the
+actor whatever `actorId` the wire entry carries. Background jobs and ROC
+pullers leave `actor_id` null; a peer node's push (node secret) keeps the
+entry's own `actorId`, the origin node's attribution.
 
 ## Venue nodes
 
@@ -150,6 +153,10 @@ UUIDs (`SYSTEM_GROUP_IDS` in `@oxygen/shared`):
 | Course setter | `event.view`, `courses.view`, `courses.edit`, `courses.review` |
 | Race crew | `event.view`, `race.operate`, `results.view` |
 | Member | `event.view`, `results.view` |
+
+Race crew registers runners (`runner.create` needs `race.operate`, like a
+station's queued `runner.registered`); editing a runner (`runner.update`,
+`bulkUpdate`) and deleting one stay Event admin.
 
 Instance admins receive every capability on every event. `AUTH_MODE=off`
 bypasses checks (all capabilities).
@@ -204,7 +211,8 @@ Identity-less devices without a key see an error pane (`kiosk-key-required`).
 
 A key-only device is **display-only** apart from its own outbox: it cannot call
 `cardReadout.storeReadout`, `cardReadout.applyResult`, `race.recordFinish` or
-`events.push` (all need a signed-in user; `recordFinish` was kiosk-key callable
+`events.push` (all need a signed-in user, or the node secret for a peer;
+`recordFinish` was kiosk-key callable
 until work package 2, which closed API-13), and it does not queue `result.applied`. A standalone kiosk
 that loses the server keeps its `card.read` entries on the device; they are sent
 when an operator signs in on the same browser profile. A venue box runs with
@@ -237,11 +245,64 @@ uploader or instance admin. Tiles and previews are rendered views and stay
 on the existing capability / invited-user gates — they are not the source
 file. See [system/club-library.md](club-library.md#ocad-source-files).
 
-`events.push` (venue journal) stays on `eventProcedure` without an extra
-capability check. Instance `users` and Eventor API-key admin are
+`events.push` (the journal sink) is not an `eventProcedure`; see
+[Journal push](#journal-push). Instance `users` and Eventor API-key admin are
 `adminProcedure`: `eventor.validateKey`, `eventor.setKey` and
 `eventor.clearKey` back the **Settings → Eventor** tab
 (`/settings?tab=eventor`), which is hidden from members like the Users
 and Maintenance tabs. `eventor.keyStatus` / `eventor.getKey` are
 `authedProcedure` — they only say whether a key exists, and the import
 panel and registration dialog need that for any invited user.
+
+## Journal push
+
+`events.push` is the sink for a station's outbox drain and for a peer node's
+shipper. It authenticates itself (`publicEventProcedure`, not
+`authedProcedure`), in this order:
+
+1. **A node secret is presented** (`x-oxygen-sync-secret`). A wrong secret is
+   `UNAUTHORIZED` (compared in constant time, like the kiosk key and
+   `events.since`); a secret presented to a node with no `SYNC_SHARED_SECRET`
+   is `PRECONDITION_FAILED`. Neither falls through to the user path, so a
+   misconfigured box shows a clear error instead of every entry coming back
+   `FORBIDDEN`. A valid secret is a peer node: no user needed (it works on an
+   invite-only cloud), every entry type is accepted.
+2. **No secret.** With auth on a signed-in user is required (`UNAUTHORIZED`
+   otherwise; a kiosk key alone cannot push, D11). Each entry then needs the
+   capability its type maps to (`journalCapabilities.ts`); with auth off every
+   capability is held.
+
+| Entry type | Capability |
+|---|---|
+| `card.read`, `result.applied`, `finish.recorded`, `finish.adjusted`, `start.recorded`, `punch.recorded` / `removed` / `updated`, `runner.registered` | `race.operate` |
+| `start.adjusted`, `runner.updated`, `runner.deleted`, `class.upserted` | `event.manage` |
+| `course.upserted`, `control.upserted`, `reference.imported` | `courses.edit` (`reference.imported` with a non-empty `classes[]` also needs `event.manage`: it writes whole class rows) |
+| any other type | refused |
+
+The table mirrors the online procedures: a queued entry is never a way around
+the gate of the call it replaces. One exception: a `runner.updated` whose
+`fields` is exactly `{ finishTime }` (the finish station's confirmed
+overwrite, online `race.recordFinish`) needs only `race.operate`.
+
+An entry whose id is already journaled under this event answers `synced`
+before the capability check (a role revoked since does not turn an applied
+entry red); the competition check still applies to it.
+
+A refusal does not fail the request. The entry comes back in `failed[]` as
+`{ id, error, capability? }` with a stable code and the batch carries on, so
+one missing role does not block the rest of a queue; nothing was written, the
+entry stays on the sender, and once the role is granted the same id syncs.
+
+| `error` | Meaning |
+|---|---|
+| `FORBIDDEN` | the user lacks `capability` |
+| `COMPETITION_MISMATCH` | the entry's `competitionId` is not the request's event (both paths) |
+| `ENTRY_IN_OTHER_EVENT` | the entry id is already journaled under another event |
+| `ROW_IN_OTHER_EVENT` | the entry addresses a row (runner, punch, class, course, control) of another event |
+| `INVALID_PAYLOAD` | malformed payload, or a reference to a row outside the event |
+| `APPLY_FAILED` | the apply threw; the message is only in the server log |
+
+An empty `events` array answers `{ synced: [], failed: [], serverTimeMs }` for
+any signed-in user (the clients' clock probe). Details of the ingest
+(transaction, ordering) are in
+[offline-architecture.md](offline-architecture.md#the-journal).

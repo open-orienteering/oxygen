@@ -21,6 +21,7 @@ import { TRPCError } from "@trpc/server";
 import { createTRPCClient, httpLink, type TRPCClient } from "@trpc/client";
 import type { AppRouter } from "../routers/index.js";
 import type { EventRef, PrismaClient } from "../db.js";
+import type { Prisma } from "../generated/prisma/client.js";
 import { nodeId, SYNC_SECRET_HEADER } from "./nodeIdentity.js";
 import { makeSyncHeaders } from "./googleIdToken.js";
 import {
@@ -53,7 +54,7 @@ export interface ActiveLease {
 }
 
 export async function getActiveLease(
-  db: PrismaClient,
+  db: PrismaClient | Prisma.TransactionClient,
   eventId: bigint,
 ): Promise<ActiveLease | null> {
   const row = await db.eventLease.findFirst({
@@ -64,7 +65,7 @@ export async function getActiveLease(
 }
 
 /** Whether this node may originate race-critical writes for the event (no lease, or it holds it). */
-export async function isRaceWritable(db: PrismaClient, eventId: bigint): Promise<boolean> {
+export async function isRaceWritable(db: PrismaClient | Prisma.TransactionClient, eventId: bigint): Promise<boolean> {
   const lease = await getActiveLease(db, eventId);
   return !lease || lease.holderNodeId === nodeId();
 }

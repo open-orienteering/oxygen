@@ -264,6 +264,47 @@ export interface JournalPayloads {
   "reference.imported": ReferenceImportedPayload;
 }
 
+// ─── Push refusal codes ──────────────────────────────────────
+
+/**
+ * Stable codes a node returns in `events.push` → `failed[].error`. Raw
+ * exception text stays in the server log. Older servers may still answer
+ * free text, so clients must render unknown strings as-is.
+ */
+export const JOURNAL_REFUSAL_CODES = [
+  "COMPETITION_MISMATCH",
+  "FORBIDDEN",
+  "ENTRY_IN_OTHER_EVENT",
+  "ROW_IN_OTHER_EVENT",
+  "INVALID_PAYLOAD",
+  "APPLY_FAILED",
+] as const;
+
+export type JournalRefusalCode = (typeof JOURNAL_REFUSAL_CODES)[number];
+
+/**
+ * The refusal codes after which a node stops applying a pushed batch: the
+ * entries behind the failed one come back in neither list. They are the codes
+ * an apply throws (`failureCode` in `events.ts`); the gate refusals
+ * (`COMPETITION_MISMATCH`, `FORBIDDEN`) and `ENTRY_IN_OTHER_EVENT` never stop
+ * a batch. Server and station drain both read this one set.
+ */
+export const JOURNAL_BATCH_STOPPING_CODES = [
+  "APPLY_FAILED",
+  "INVALID_PAYLOAD",
+  "ROW_IN_OTHER_EVENT",
+] as const satisfies readonly JournalRefusalCode[];
+
+export type JournalBatchStoppingCode = (typeof JOURNAL_BATCH_STOPPING_CODES)[number];
+
+export function isBatchStoppingCode(value: unknown): value is JournalBatchStoppingCode {
+  return typeof value === "string" && (JOURNAL_BATCH_STOPPING_CODES as readonly string[]).includes(value);
+}
+
+export function isJournalRefusalCode(value: unknown): value is JournalRefusalCode {
+  return typeof value === "string" && (JOURNAL_REFUSAL_CODES as readonly string[]).includes(value);
+}
+
 // ─── Wire envelope ───────────────────────────────────────────
 
 /**

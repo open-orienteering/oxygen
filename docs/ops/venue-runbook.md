@@ -12,7 +12,9 @@ background: [`system/offline-architecture.md`](../system/offline-architecture.md
 - A LAN that the box and every station device share (a travel Wi-Fi router
   is fine; internet on that LAN is optional but recommended for shipping).
 - The cloud node reachable over HTTPS, with `SYNC_SHARED_SECRET` set in its
-  environment.
+  environment. The same value authorises the box's push to the cloud as well
+  as its pull; if it is missing or different the shipper logs
+  `UNAUTHORIZED` / `PRECONDITION_FAILED` every cycle and nothing ships.
 - Chrome 142+ on station devices that will use the cloud-served PWA against
   the box (see [Transport](#transport-how-stations-reach-the-box)).
 
@@ -23,7 +25,7 @@ background: [`system/offline-architecture.md`](../system/offline-architecture.md
    ```bash
    VENUE_NODE_ID=venue-myclub-1          # stable, unique per box
    SYNC_PEER_URL=https://oxygen.example.com
-   SYNC_SHARED_SECRET=<same value as on the cloud>
+   SYNC_SHARED_SECRET=<same value as on the cloud: it authorises push and pull>
    CLOUD_WEB_ORIGIN=https://oxygen.example.com
    ```
 

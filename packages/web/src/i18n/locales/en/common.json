@@ -70,7 +70,6 @@
   "buildVersion": "Build",
   "imageVersion": "Image",
   "commitVersion": "Commit",
-
   "testLab": "Test Lab",
   "testLabDescription": "Generate test data and simulate races for stress testing. Work through the four stages in order — each stage depends on the previous one.",
   "classes": "Classes",
@@ -96,7 +95,6 @@
   "elapsed": "elapsed",
   "more": "More...",
   "less": "Less",
-
   "structuredSearchHintTypeToSearch": "Type to search...",
   "structuredSearchHintNumber": "Enter a number — e.g. >25 or <60:00",
   "structuredSearchPlaceholder": "Search or filter — | for OR, ! for NOT",
@@ -108,7 +106,6 @@
   "structuredSearchPendingNot": "The next filter you add will be negated",
   "structuredSearchOrInProgress": "The next filter you add will be combined with OR",
   "searchOrFilter": "Search or filter...",
-
   "timeAgo_justNow": "just now",
   "timeAgo_minuteAgo": "1 min ago",
   "timeAgo_minutesAgo": "{{count}} min ago",
@@ -133,5 +130,26 @@
   "offlineMapsStoring": "Storing maps… {{done}}/{{total}}",
   "offlineMapsPartialError": "The network went while storing; some exports are not stored.",
   "offlineMapsFailed": "The maps could not be stored on this device.",
-  "offlineMapsNotOnline": "Storing the maps needs the network."
+  "offlineMapsNotOnline": "Storing the maps needs the network.",
+  "heldBehindFailed": "{{count}} waiting behind a failed entry",
+  "retryAll": "Retry all",
+  "syncBlocked": {
+    "auth": "Sync blocked: sign in to send the waiting entries.",
+    "event": "Sync blocked: the server does not know this event.",
+    "server": "Sync blocked: the server is not answering properly. Press Sync now to try again."
+  },
+  "capabilityRole": {
+    "race.operate": "Race crew",
+    "event.manage": "Event admin",
+    "courses.edit": "Course setter"
+  },
+  "refusal": {
+    "COMPETITION_MISMATCH": "The entry belongs to a different competition than the one it was sent to.",
+    "FORBIDDEN": "Missing permission: {{role}}",
+    "FORBIDDEN_unknown": "Missing permission.",
+    "ENTRY_IN_OTHER_EVENT": "An entry with this id already exists in another event.",
+    "ROW_IN_OTHER_EVENT": "The entry points at data that belongs to another event.",
+    "INVALID_PAYLOAD": "The entry is malformed and was not accepted.",
+    "APPLY_FAILED": "The server could not apply the entry."
+  }
 }
