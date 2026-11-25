@@ -81,6 +81,7 @@ function runner(personId: number, over: Partial<ExistingRunner> = {}): ExistingR
   return {
     id: `r${personId}`,
     eventorPersonId: personId,
+    eventorEntryId: null,
     removed: false,
     name: `Person ${personId}`,
     cardNo: null,
@@ -158,7 +159,7 @@ describe("planRunnerSync: card", () => {
     expect(p.updates[0]?.data.cardNo).toBeUndefined();
     expect(p.counts.keptLocal).toBe(1);
   });
-  it("keeps the local card and the snapshot when another runner holds Eventor's card", () => {
+  it("keeps the local card but records Eventor's card when another runner holds it", () => {
     const p = plan(
       [runner(1, { cardNo: null, snapshot: SNAP })],
       [entry(1, { cardNo: 5 })],
@@ -166,13 +167,16 @@ describe("planRunnerSync: card", () => {
       [{ ownerKey: "other", cardNo: 5 }],
     );
     expect(p.counts.cardConflicts).toBe(1);
-    expect(p.updates.find((u) => u.id === "r1")?.snapshot?.card_no ?? null).toBeNull();
+    // Eventor's card is in the snapshot, so the runner shows as differing.
+    expect(p.updates.find((u) => u.id === "r1")?.snapshot?.card_no).toBe(5);
     expect(p.updates.find((u) => u.id === "r1")?.data.cardNo).toBeUndefined();
   });
   it("claims cards per entry id on create and drops the second owner (EVT-09)", () => {
     const p = plan([], [entry(1, { cardNo: 5 }), entry(2, { cardNo: 5 })]);
     expect(p.creates.map((c) => c.cardNo)).toEqual([5, null]);
-    expect(p.creates[1].snapshot.card_no).toBeNull();
+    // The loser keeps Eventor's card in the snapshot (shown as a difference) and is counted.
+    expect(p.creates[1].snapshot.card_no).toBe(5);
+    expect(p.counts.cardConflicts).toBe(1);
   });
 });
 
@@ -229,7 +233,7 @@ describe("planRunnerSync: presence", () => {
   it("cancels a missing runner without activity and marks the snapshot", () => {
     const p = plan([runner(1, { snapshot: SNAP })], [entry(2)]);
     expect(p.cancels.map((r) => r.id)).toEqual(["r1"]);
-    expect(p.cancels[0].snapshot.present).toBe(false);
+    expect(p.cancels[0].snapshot).toMatchObject({ present: false, cancelled_by_sync: true });
   });
   it("holds back a missing runner who has finished (EVT-01)", () => {
     const p = plan([runner(1, { snapshot: SNAP, status: "ok", finishTime: 5 })], [entry(2)]);
@@ -261,20 +265,67 @@ describe("planRunnerSync: presence", () => {
     expect(p.updates).toEqual([]);
   });
   it("reinstates only a runner the sync cancelled itself", () => {
-    const own = plan([runner(1, { status: "cancel", snapshot: { ...SNAP, present: false } })], [entry(1)]);
+    const own = plan([runner(1, { status: "cancel", snapshot: { ...SNAP, present: false, cancelled_by_sync: true } })], [entry(1)]);
     expect(own.updates[0].data.status).toBe("unknown");
+    expect(own.updates[0].snapshot?.cancelled_by_sync).toBeUndefined();
     expect(own.counts.reinstated).toBe(1);
     const manual = plan([runner(1, { status: "cancel", snapshot: SNAP })], [entry(1)]);
     expect(manual.updates.find((u) => u.data.status)).toBeUndefined();
+    // Held back (present: false, but not cancelled by the sync) and then cancelled by hand.
+    const heldThenManual = plan([runner(1, { status: "cancel", snapshot: { ...SNAP, present: false } })], [entry(1)]);
+    expect(heldThenManual.updates.find((u) => u.data.status)).toBeUndefined();
     const legacy = plan([runner(1, { status: "cancel" })], [entry(1)]);
     expect(legacy.updates.find((u) => u.data.status)).toBeUndefined();
   });
   it("reinstates into no_timing for a no-timing entry", () => {
     const p = plan(
-      [runner(1, { status: "cancel", snapshot: { ...SNAP, present: false } })],
+      [runner(1, { status: "cancel", snapshot: { ...SNAP, present: false, cancelled_by_sync: true } })],
       [entry(1, { noTiming: true })],
     );
     expect(p.updates[0].data.status).toBe("no_timing");
+  });
+});
+
+describe("planRunnerSync: entries without a person id and duplicates (EVT-09)", () => {
+  it("creates a runner for an entry without a person id, keyed on the entry id", () => {
+    const p = plan([], [entry(0, { personName: "No Person", eventorEntryId: 777, cardNo: 9 })]);
+    expect(p.creates).toHaveLength(1);
+    expect(p.creates[0]).toMatchObject({ personId: 0, eventorEntryId: 777, name: "No Person" });
+  });
+  it("matches that runner on re-sync by entry id instead of creating it again, and does not cancel her", () => {
+    const existing = runner(0, { id: "rx", eventorPersonId: null, eventorEntryId: 777, snapshot: { ...SNAP, name: "No Person" } });
+    const p = plan([existing], [entry(0, { personName: "No Person", eventorEntryId: 777 })]);
+    expect(p.creates).toEqual([]);
+    expect(p.cancels).toEqual([]);
+  });
+  it("cancels an entry-keyed runner whose entry disappeared", () => {
+    const existing = runner(0, { id: "rx", eventorPersonId: null, eventorEntryId: 777 });
+    const p = plan([existing], [entry(2)]);
+    expect(p.cancels.map((r) => r.id)).toEqual(["rx"]);
+  });
+  it("counts a second entry of the same person and an entry with neither id", () => {
+    const p = plan([], [entry(1), entry(1, { eventorEntryId: 99 }), entry(0, { eventorEntryId: 0 })]);
+    expect(p.creates).toHaveLength(1);
+    expect(p.counts.duplicateEntries).toBe(1);
+    expect(p.counts.skippedNoId).toBe(1);
+  });
+});
+
+describe("planRunnerSync: club rename", () => {
+  it("follows a club renamed in Eventor under the same id while the local name is the snapshot's", () => {
+    const base = { ...SNAP, club_eventor_id: 7, club_name: "OK Old" };
+    const run = (clubName: string) =>
+      planRunnerSync({
+        eventorEventId: 99,
+        existing: [runner(1, { eventorClubId: 7, clubName, snapshot: base })],
+        cardOwners: [],
+        entries: [entry(1, { organisationId: 7, organisationName: "OK New" })],
+        results: [],
+        knownClassEventorIds: new Set([10]),
+        clubNameByEventorId: new Map([[7, "OK New"]]),
+      });
+    expect(run("OK Old").updates[0].data).toMatchObject({ clubName: "OK New" });
+    expect(run("My Edit").updates.find((u) => u.data.clubName)).toBeUndefined();
   });
 });
 

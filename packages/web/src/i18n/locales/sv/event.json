@@ -322,5 +322,8 @@
   "syncHeldBackNames": "Saknas i Eventor, lämnas som de är: {{names}}",
   "syncDetailsIncomplete": "Klassuppgifterna är ofullständiga: Eventor svarade inte vilka klasser som är utan tidtagning, så den inställningen lämnades som den är.",
   "syncCheckedOut": "Tävlingen är utcheckad till en arena. Checka in den innan du synkar från Eventor.",
-  "syncEmptyResponse": "Eventor svarade med en tom lista för en tävling som har löpare här. Inget ändrades; försök igen senare."
+  "syncEmptyResponse": "Eventor svarade med en tom lista för en tävling som har löpare här. Inget ändrades; försök igen senare.",
+  "syncPreviewChanged": "Vilka löpare som skulle avanmälas har ändrats sedan förhandsgranskningen. Inget ändrades; förhandsgranska synkningen igen.",
+  "syncDuplicateEntries": "{{count}} upprepade anmälningar för samma person räknades en gång",
+  "syncSkippedNoId": "{{count}} anmälningar hoppades över eftersom Eventor saknade person- och anmälnings-id"
 }

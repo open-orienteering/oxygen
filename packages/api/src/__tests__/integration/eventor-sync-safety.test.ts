@@ -39,6 +39,9 @@ import { setSetting } from "../../db.js";
 import { createTestEvent, disconnect, type TestEventContext } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
 import { eventorKeyStore } from "../../eventorKeyStore.js";
+import { lockEventLeaseAndSync } from "../../event-locks.js";
+import { acquireLease } from "../../sync/lease.js";
+import { prisma } from "../../db.js";
 
 const EVENTOR_EVENT_ID = 99_201;
 const CLASS_A = 41_001;
@@ -382,7 +385,7 @@ describe("eventor.sync preview and lease", () => {
   });
 });
 
-describe("eventor.useEventorValue", () => {
+describe("runner.useEventorValue", () => {
   it("sets the field to Eventor's last value as a journaled edit, and refuses a card another runner holds", async () => {
     await withEvent("use-value", async (ctx) => {
       const caller = makeCaller(ctx.event);
@@ -391,7 +394,7 @@ describe("eventor.useEventorValue", () => {
       const r = await runnerOf(ctx, P + 1);
       await ctx.db.runner.update({ where: { id: r.id }, data: { cardNo: 888_010, name: "Typo Name" } });
 
-      await caller.eventor.useEventorValue({ runnerId: r.seq, field: "cardNo" });
+      await caller.runner.useEventorValue({ runnerId: r.seq, field: "cardNo" });
       expect((await runnerOf(ctx, P + 1)).cardNo).toBe(100_010);
       expect(
         await ctx.db.journalEntry.count({ where: { eventId: ctx.eventId, type: "runner.updated" } }),
@@ -406,11 +409,126 @@ describe("eventor.useEventorValue", () => {
         where: { eventId: ctx.eventId, eventorPersonId: BigInt(P + 2) },
         data: { cardNo: 100_010 },
       });
-      await expect(caller.eventor.useEventorValue({ runnerId: r.seq, field: "cardNo" })).rejects.toMatchObject({
+      await expect(caller.runner.useEventorValue({ runnerId: r.seq, field: "cardNo" })).rejects.toMatchObject({
         code: "CONFLICT",
       });
-      await caller.eventor.useEventorValue({ runnerId: r.seq, field: "name" });
+      await caller.runner.useEventorValue({ runnerId: r.seq, field: "name" });
       expect((await runnerOf(ctx, P + 1)).name).toBe("Use Mine");
+    });
+  });
+});
+
+describe("eventor.sync: bound to its preview, serialised with checkout, entries without a person id", () => {
+  it("apply refuses a runner to cancel that the preview did not show (EVENTOR_PREVIEW_CHANGED), and applies a smaller set", async () => {
+    await withEvent("preview-bound", async (ctx) => {
+      const caller = makeCaller(ctx.event);
+      mockEventor({ entries: [entry(P + 1, "Seen"), entry(P + 2, "Unseen"), entry(P + 3, "Stays")] });
+      await caller.eventor.sync();
+      mockEventor({ entries: [entry(P + 3, "Stays")] });
+      const preview = await caller.eventor.sync({ dryRun: true });
+      expect(preview.cancelIds).toHaveLength(2);
+      const seen = await runnerOf(ctx, P + 1);
+
+      // Only one of the two was previewed: refused, nothing cancelled.
+      await expect(caller.eventor.sync({ confirmCancelIds: [seen.id] })).rejects.toThrow(/EVENTOR_PREVIEW_CHANGED/);
+      expect((await runnerOf(ctx, P + 2)).status).toBe("unknown");
+
+      // A previewed set that is larger than what would happen is fine.
+      mockEventor({ entries: [entry(P + 2, "Unseen"), entry(P + 3, "Stays")] });
+      const res = await caller.eventor.sync({ confirmCancelIds: preview.cancelIds });
+      expect(res.runners.wouldCancel).toBe(1);
+      expect((await runnerOf(ctx, P + 1)).status).toBe("cancel");
+      expect((await runnerOf(ctx, P + 2)).status).toBe("unknown");
+    });
+  });
+
+  it("a manual cancel of a held-back runner is not undone when she reappears", async () => {
+    await withEvent("manual-cancel", async (ctx) => {
+      const caller = makeCaller(ctx.event);
+      mockEventor({ entries: [entry(P + 1, "Held"), entry(P + 2, "Other")] });
+      await caller.eventor.sync();
+      await ctx.db.runner.updateMany({
+        where: { eventId: ctx.eventId, eventorPersonId: BigInt(P + 1) },
+        data: { status: "ok", finishTime: 100 },
+      });
+      mockEventor({ entries: [entry(P + 2, "Other")] }); // held back: present false
+      await caller.eventor.sync();
+      await ctx.db.runner.updateMany({
+        where: { eventId: ctx.eventId, eventorPersonId: BigInt(P + 1) },
+        data: { status: "cancel" }, // the desk cancels her by hand
+      });
+      mockEventor({ entries: [entry(P + 1, "Held"), entry(P + 2, "Other")] });
+      const res = await caller.eventor.sync();
+      expect(res.runners.reinstated).toBe(0);
+      expect((await runnerOf(ctx, P + 1)).status).toBe("cancel");
+    });
+  });
+
+  it("a taken card on a new runner is counted, kept out, and shown as a difference", async () => {
+    await withEvent("card-conflict-create", async (ctx) => {
+      const caller = makeCaller(ctx.event);
+      mockEventor({ entries: [entry(P + 1, "Holder", { cardNo: 444_001 })] });
+      await caller.eventor.sync();
+      mockEventor({ entries: [entry(P + 1, "Holder", { cardNo: 444_001 }), entry(P + 2, "Loser", { cardNo: 444_001 })] });
+      const res = await caller.eventor.sync();
+      expect(res.runners.cardConflicts).toBe(1);
+      const loser = await runnerOf(ctx, P + 2);
+      expect(loser.cardNo).toBeNull();
+      const detail = await caller.runner.getById({ id: loser.seq });
+      expect(detail.eventorDiff).toEqual([{ field: "cardNo", local: null, eventor: 444_001 }]);
+    });
+  });
+
+  it("EVT-09: an entry without a person id gets a runner, matched by entry id on the next sync (was: dropped)", async () => {
+    await withEvent("no-person-id", async (ctx) => {
+      const caller = makeCaller(ctx.event);
+      mockEventor({ entries: [entry(0, "Guest Runner", { eventorEntryId: 5_001 }), entry(P + 1, "Normal")] });
+      const first = await caller.eventor.sync();
+      expect(first.runners.added).toBe(2);
+      const second = await caller.eventor.sync();
+      expect(second.runners).toMatchObject({ added: 0, wouldCancel: 0 });
+      expect(await ctx.db.runner.count({ where: { eventId: ctx.eventId } })).toBe(2);
+      // Gone from Eventor: cancelled like any other.
+      mockEventor({ entries: [entry(P + 1, "Normal")] });
+      const third = await caller.eventor.sync();
+      expect(third.runners.wouldCancel).toBe(1);
+      const guest = await ctx.db.runner.findFirstOrThrow({ where: { eventId: ctx.eventId, eventorEntryId: 5_001n } });
+      expect(guest.status).toBe("cancel");
+    });
+  });
+
+  it("a second entry of one person and an entry with no id at all are counted, not silently dropped", async () => {
+    await withEvent("dups-counted", async (ctx) => {
+      const caller = makeCaller(ctx.event);
+      mockEventor({
+        entries: [entry(P + 1, "Twice"), entry(P + 1, "Twice", { eventorEntryId: 9_999 }), entry(0, "Nobody", { eventorEntryId: 0 })],
+      });
+      const res = await caller.eventor.sync();
+      expect(res.runners).toMatchObject({ added: 1, duplicateEntries: 1, skippedNoId: 1 });
+    });
+  });
+
+  it("a checkout waits for a running sync transaction and the sync sees the lease afterwards (lock order)", async () => {
+    await withEvent("lock-order", async (ctx) => {
+      let acquired = false;
+      let release!: () => void;
+      const held = new Promise<void>((r) => (release = r));
+      const holder = prisma().$transaction(async (tx) => {
+        await lockEventLeaseAndSync(tx, ctx.eventId);
+        await held;
+      });
+      await new Promise((r) => setTimeout(r, 200));
+      const acquiring = acquireLease(prisma(), ctx.eventId, "venue-x").then(() => {
+        acquired = true;
+      });
+      await new Promise((r) => setTimeout(r, 400));
+      expect(acquired).toBe(false); // waits for the lock
+      release();
+      await holder;
+      await acquiring;
+      expect(acquired).toBe(true);
+      mockEventor({ entries: [entry(P + 1, "X")] });
+      await expect(makeCaller(ctx.event).eventor.sync()).rejects.toThrow(/EVENT_CHECKED_OUT/);
     });
   });
 });

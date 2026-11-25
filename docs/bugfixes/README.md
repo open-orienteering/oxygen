@@ -96,6 +96,7 @@ Notes whose code no longer exists (mostly the raster tile pipeline, deleted in s
 | [LiveResults radio codes, shared tavid, hashed login](liveresults-radio-codes-and-shared-tavid.md) | 2026-08-25 |
 | [Eventor re-sync cancelled finished runners and reverted desk edits](eventor-resync-data-loss.md) | 2026-11-26 |
 | [Eventor import was not atomic and wrote absolute times](eventor-import-atomic.md) | 2026-11-26 |
+| [Eventor sync follow-ups: review items left as they are](eventor-sync-followups.md) | 2026-11-26 |
 | [Eventor course lengths in IOF CourseData export](eventor-course-lengths.md) | 2026-08-25 |
 | [Eventor import fails on cardless runners (unique constraint on `event_id, card_no`)](eventor-import-cardless-runners.md) | 2026-08-13 |
 

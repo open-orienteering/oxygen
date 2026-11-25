@@ -11,6 +11,7 @@ import {
   type RunnerStatusValue,
   type RunnerEventorDiff,
 } from "@oxygen/shared";
+import { EventorMarker } from "./EventorMarker";
 import { PunchTable } from "./PunchTable";
 import { OtherVariantBanner } from "./OtherVariantBanner";
 import { ClubLogo } from "./ClubLogo";
@@ -51,7 +52,7 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
     utils.cardReadout.readoutByRunner.invalidate({ runnerId });
   };
 
-  const useEventorValueMutation = trpc.eventor.useEventorValue.useMutation({
+  const useEventorValueMutation = trpc.runner.useEventorValue.useMutation({
     onSuccess: () => {
       utils.runner.getById.invalidate({ id: runnerId });
       utils.runner.list.invalidate();
@@ -126,7 +127,11 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
       <EventorMarker
         diff={d}
         pending={useEventorValueMutation.isPending}
-        error={useEventorValueMutation.isError ? useEventorValueMutation.error.message : null}
+        error={
+          useEventorValueMutation.isError && useEventorValueMutation.variables?.field === d.field
+            ? useEventorValueMutation.error.message
+            : null
+        }
         onUse={() => useEventorValueMutation.mutate({ runnerId, field })}
       />
     );
@@ -398,42 +403,6 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
         </div>
       </td>
     </tr>
-  );
-}
-
-/**
- * "Eventor: X" with a one-click "Use Eventor's value", under a field whose
- * value differs from what Eventor last said (docs/system/eventor-sync.md).
- */
-function EventorMarker({
-  diff,
-  onUse,
-  pending,
-  error,
-}: {
-  diff: RunnerEventorDiff;
-  onUse: () => void;
-  pending: boolean;
-  error: string | null;
-}) {
-  const { t } = useTranslation("runners");
-  return (
-    <div
-      data-testid={`eventor-marker-${diff.field}`}
-      className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-sky-700"
-    >
-      <span>{t("eventorValue", { value: String(diff.eventor ?? "") })}</span>
-      <button
-        type="button"
-        onClick={onUse}
-        disabled={pending}
-        data-testid={`eventor-use-${diff.field}`}
-        className="underline hover:text-sky-900 disabled:opacity-50 cursor-pointer"
-      >
-        {t("useEventorValue")}
-      </button>
-      {error && <span className="text-red-600">{t("eventorUseFailed", { message: error })}</span>}
-    </div>
   );
 }
 

@@ -146,3 +146,38 @@ describe("meosEntryToDate", () => {
     expect(meosEntryToDate(18991231, 0)).toBeNull(); // year < 1900
   });
 });
+
+import { toRelativeWrapped, zeroTimeForResults } from "../timeConvert.js";
+
+describe("toRelativeWrapped (Eventor clock times)", () => {
+  it("keeps the 'no time' sentinel", () => {
+    expect(toRelativeWrapped(0, 324000)).toBe(0);
+  });
+  it("a start before ZeroTime wraps instead of going negative", () => {
+    const rel = toRelativeWrapped(288000, 324000); // 08:00 against 09:00
+    expect(rel).toBeGreaterThan(0);
+    expect(toAbsolute(rel, 324000)).toBe(288000);
+  });
+  it("a time exactly at ZeroTime is not 'no time'", () => {
+    const rel = toRelativeWrapped(324000, 324000);
+    expect(rel).not.toBe(0);
+    expect(Math.abs(toAbsolute(rel, 324000) - 324000)).toBeLessThanOrEqual(1);
+  });
+  it("a finish after midnight stays positive and reads back", () => {
+    const rel = toRelativeWrapped(18000, 828000); // 00:30 against 23:00
+    expect(rel).toBeGreaterThan(0);
+    expect(toAbsolute(rel, 828000)).toBe(18000);
+  });
+});
+
+describe("zeroTimeForResults", () => {
+  it("is the hour before the earliest start", () => {
+    expect(zeroTimeForResults([360000, 372500, 0], 324000)).toBe(324000); // 10:00 -> 09:00
+    expect(zeroTimeForResults([295000], 324000)).toBe(252000); // 08:11 -> 07:00
+  });
+  it("never goes below midnight and defaults without starts", () => {
+    expect(zeroTimeForResults([20000], 324000)).toBe(0);
+    expect(zeroTimeForResults([0, 0], 324000)).toBe(324000);
+    expect(zeroTimeForResults([], 324000)).toBe(324000);
+  });
+});

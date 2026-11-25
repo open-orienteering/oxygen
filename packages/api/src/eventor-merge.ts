@@ -134,6 +134,8 @@ export interface RunnerSnapshot {
   nationality?: string;
   /** false once the sync saw the runner missing from Eventor. */
   present?: boolean;
+  /** The sync itself cancelled her (not the desk): only then is she reinstated. */
+  cancelled_by_sync?: boolean;
   synced_at?: string;
 }
 
@@ -437,7 +439,10 @@ export interface ResultInput {
 
 export interface ExistingRunner {
   id: string;
-  eventorPersonId: number;
+  /** null for a runner created from an entry that had no person id. */
+  eventorPersonId: number | null;
+  /** The Eventor entry id; the match key when there is no person id. */
+  eventorEntryId: number | null;
   removed: boolean;
   name: string;
   cardNo: number | null;
@@ -529,6 +534,10 @@ export interface RunnerPlan {
     reinstated: number;
     classChangeBlocked: number;
     cardConflicts: number;
+    /** A second entry of a person already in this pass (only the first is used). */
+    duplicateEntries: number;
+    /** Entries or results with neither a person id nor an entry id: nothing to match on. */
+    skippedNoId: number;
   };
 }
 
@@ -550,7 +559,13 @@ export function planRunnerSync(input: {
 }): RunnerPlan {
   const now = (input.now ?? new Date()).toISOString();
   const claimCardNo = makeCardNoClaimer(input.cardOwners);
-  const byPersonId = new Map(input.existing.map((r) => [r.eventorPersonId, r]));
+  const keyOf = (personId: number | null, entryId: number | null): string | null =>
+    personId != null && personId > 0 ? `p${personId}` : entryId != null && entryId > 0 ? `e${entryId}` : null;
+  const byKey = new Map<string, ExistingRunner>();
+  for (const r of input.existing) {
+    const k = keyOf(r.eventorPersonId, r.eventorEntryId);
+    if (k) byKey.set(k, r);
+  }
   const resultsByPerson = new Map<number, ResultInput>();
   for (const r of input.results) {
     if (r.personId > 0 && !resultsByPerson.has(r.personId)) resultsByPerson.set(r.personId, r);
@@ -569,10 +584,12 @@ export function planRunnerSync(input: {
       reinstated: 0,
       classChangeBlocked: 0,
       cardConflicts: 0,
+      duplicateEntries: 0,
+      skippedNoId: 0,
     },
   };
   const c = plan.counts;
-  const seen = new Set<number>();
+  const seen = new Set<string>();
   const knownClass = (id: number): number | undefined =>
     id > 0 && input.knownClassEventorIds.has(id) ? id : undefined;
   const clubName = (id: number, fallback: string) =>
@@ -580,10 +597,18 @@ export function planRunnerSync(input: {
 
   // ── Entries ──
   for (const entry of input.entries) {
-    if (entry.personId <= 0 || seen.has(entry.personId)) continue;
-    seen.add(entry.personId);
-    const result = resultsByPerson.get(entry.personId);
-    const found = byPersonId.get(entry.personId);
+    const key = keyOf(entry.personId, entry.eventorEntryId);
+    if (!key) {
+      c.skippedNoId++;
+      continue;
+    }
+    if (seen.has(key)) {
+      c.duplicateEntries++;
+      continue;
+    }
+    seen.add(key);
+    const result = entry.personId > 0 ? resultsByPerson.get(entry.personId) : undefined;
+    const found = byKey.get(key);
 
     if (!found) {
       const ownerKey =
@@ -666,8 +691,20 @@ export function planRunnerSync(input: {
       }
       if (m.kept) kept = true;
       if (next !== undefined) {
+        const name = clubName(next, entry.organisationName);
+        // The club was renamed in Eventor under the same id: follow it while the
+        // local name is still the one the last sync stored.
+        if (
+          !m.write &&
+          found.eventorClubId === next &&
+          prev.club_name !== undefined &&
+          found.clubName === prev.club_name &&
+          name !== found.clubName
+        ) {
+          data.clubName = name;
+        }
         snap.club_eventor_id = next;
-        snap.club_name = clubName(next, entry.organisationName);
+        snap.club_name = name;
       }
     }
 
@@ -700,8 +737,11 @@ export function planRunnerSync(input: {
             data.cardNo = next;
             snap.card_no = next;
           } else {
+            // Another runner holds Eventor's card: kept as is, but Eventor's card is
+            // recorded so the runner shows as differing. Swaps are not resolved here.
             c.cardConflicts++;
-            kept = true; // snapshot not advanced: a later sync tries again
+            kept = true;
+            snap.card_no = next;
           }
         } else {
           if (m.kept) kept = true;
@@ -720,10 +760,11 @@ export function planRunnerSync(input: {
     if (found.rank === 0 && entry.rankingScore > 0) data.rank = Math.round(entry.rankingScore);
 
     // Presence: only the sync's own cancel is undone.
-    if (found.status === CANCEL && !result && prev.present === false) {
+    if (found.status === CANCEL && !result && prev.cancelled_by_sync === true) {
       data.status = entry.noTiming ? "no_timing" : "unknown";
       c.reinstated++;
     }
+    if (found.status !== CANCEL || data.status !== undefined) delete snap.cancelled_by_sync;
     snap.present = true;
 
     if (kept) c.keptLocal++;
@@ -732,9 +773,14 @@ export function planRunnerSync(input: {
 
   // ── Results-only persons: seen (never cancelled), created when new ──
   for (const result of input.results) {
-    if (result.personId <= 0 || seen.has(result.personId)) continue;
-    seen.add(result.personId);
-    const found = byPersonId.get(result.personId);
+    if (result.personId <= 0) {
+      c.skippedNoId++;
+      continue;
+    }
+    const key = `p${result.personId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const found = byKey.get(key);
     if (found) {
       if (!found.removed && found.snapshot?.present === false) {
         pushUpdate(plan, found, {}, { ...found.snapshot, present: true }, now);
@@ -775,16 +821,24 @@ export function planRunnerSync(input: {
 
   // ── Missing from Eventor ──
   for (const r of input.existing) {
-    if (r.removed || seen.has(r.eventorPersonId)) continue;
+    const k = keyOf(r.eventorPersonId, r.eventorEntryId);
+    if (r.removed || (k && seen.has(k))) continue;
     if (r.status === CANCEL) continue; // already out; a manual cancel stays manual
     const snap: RunnerSnapshot = { ...(r.snapshot ?? {}), present: false, synced_at: now };
     if (hasLocalActivity(r)) {
       plan.heldBack.push({ id: r.id, name: r.name, snapshot: snap });
       c.heldBack++;
     } else {
-      plan.cancels.push({ id: r.id, name: r.name, snapshot: snap });
+      // Marked so that only a cancel made here is ever undone here.
+      plan.cancels.push({ id: r.id, name: r.name, snapshot: { ...snap, cancelled_by_sync: true } });
       c.wouldCancel++;
     }
+  }
+
+  // A new runner whose card another runner holds keeps Eventor's card in the
+  // snapshot (so the difference shows) and is counted; it is not resolved here.
+  for (const cr of plan.creates) {
+    if (cr.snapshot.card_no != null && cr.cardNo !== cr.snapshot.card_no) c.cardConflicts++;
   }
 
   return plan;
@@ -876,7 +930,7 @@ function buildCreate(claim: ReturnType<typeof makeCardNoClaimer>, a: {
     rank: a.rank,
     snapshot: {
       name: a.name,
-      card_no: cardNo,
+      card_no: normalizeCardNo(a.requestedCard),
       class_eventor_id: a.classEventorId,
       club_eventor_id: a.eventorClubId,
       club_name: a.clubName,

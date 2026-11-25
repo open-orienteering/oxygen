@@ -208,7 +208,7 @@ beforeAll(async () => {
   });
   eventB = { id: rowB.id, nameId: rowB.nameId, zeroTime: rowB.zeroTime };
   const clsB = await dbB.class.create({
-    data: { eventId: eventB.id, name: "D21" },
+    data: { eventId: eventB.id, name: "D21", eventorSnapshot: { name: "D21", no_timing: null } },
     select: { id: true, seq: true },
   });
   await dbB.runner.create({
@@ -218,6 +218,8 @@ beforeAll(async () => {
       classId: clsB.id,
       cardNo: 800200,
       clubName: "OK Source",
+      // The Eventor sync snapshot (docs/system/eventor-sync.md) travels with the row.
+      eventorSnapshot: { name: "Snapshot Stina", card_no: 800201, present: true },
     },
   });
   await dbB.punch.create({
@@ -604,6 +606,9 @@ describe("checkout → write → checkin lifecycle", () => {
     });
     expect(runnerA!.id).toBe(runnerB!.id);
     expect(runnerA!.seq).toBe(runnerB!.seq);
+    expect(runnerA!.eventorSnapshot).toEqual({ name: "Snapshot Stina", card_no: 800201, present: true });
+    const classA = await ctx.db.class.findFirstOrThrow({ where: { eventId: localEvent!.id, name: "D21" } });
+    expect(classA.eventorSnapshot).toEqual({ name: "D21", no_timing: null });
     const seqRows = await ctx.db.eventSeq.findMany({
       where: { eventId: localEvent!.id },
     });

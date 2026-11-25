@@ -14,7 +14,12 @@ import {
   valueToRunnerStatus,
 } from "../statusConvert.js";
 import { appendJournal } from "../journalEmit.js";
-import { asRunnerSnapshot, runnerEventorDiff } from "../eventor-merge.js";
+import {
+  EVENTOR_DIFF_FIELDS,
+  asRunnerSnapshot,
+  runnerEventorDiff,
+  type EventorDiffField,
+} from "../eventor-merge.js";
 import { assertInPool, assignVariant, poolOf } from "../variants.js";
 
 /**
@@ -711,6 +716,81 @@ export const runnerRouter = router({
         unknown
       >;
       return updateRunnerFields(ctx, input.id, fields);
+    }),
+
+  /**
+   * "Use Eventor's value": set one field of a runner to what Eventor last
+   * said (the runner's snapshot). An ordinary, journaled runner edit, so it
+   * works on a venue box too (this is a `runner.` procedure, not the
+   * cloud-owned `eventor.` ones).
+   */
+  useEventorValue: manageRaceProcedure
+    .input(
+      z.object({
+        runnerId: z.number().int(),
+        field: z.enum(EVENTOR_DIFF_FIELDS as unknown as [EventorDiffField, ...EventorDiffField[]]),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const r = await getRunnerBySeq(ctx.db, ctx.event.id, input.runnerId);
+      const snap = asRunnerSnapshot(r.eventorSnapshot);
+      if (!snap) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "No Eventor value is recorded for this runner yet; sync from Eventor first.",
+        });
+      }
+      const fields: Record<string, unknown> = {};
+      switch (input.field) {
+        case "name":
+          if (snap.name) fields.name = snap.name;
+          break;
+        case "cardNo":
+          if (snap.card_no != null) fields.cardNo = snap.card_no;
+          break;
+        case "classId": {
+          if (snap.class_eventor_id == null) break;
+          const cls = await ctx.db.class.findFirst({
+            where: {
+              eventId: ctx.event.id,
+              eventorId: BigInt(snap.class_eventor_id),
+              removed: false,
+            },
+            select: { seq: true },
+          });
+          if (!cls) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "Eventor's class does not exist in this event.",
+            });
+          }
+          fields.classId = cls.seq;
+          break;
+        }
+        case "club":
+          if (snap.club_eventor_id != null) {
+            fields.eventorClubId = snap.club_eventor_id;
+            fields.clubName = snap.club_name ?? "";
+          }
+          break;
+        case "birthYear":
+          if (snap.birth_year) fields.birthYear = snap.birth_year;
+          break;
+        case "sex":
+          if (snap.sex) fields.sex = snap.sex;
+          break;
+        case "nationality":
+          if (snap.nationality) fields.nationality = snap.nationality;
+          break;
+      }
+      if (Object.keys(fields).length === 0) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Eventor has no value for this field.",
+        });
+      }
+      // A card another runner holds is a CONFLICT (assertCardNotTaken).
+      return updateRunnerFields(ctx, input.runnerId, fields);
     }),
 
   /** Soft-delete a runner. */

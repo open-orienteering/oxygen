@@ -22,14 +22,13 @@ import {
   authedProcedure,
   adminProcedure,
   manageProcedure,
-  manageRaceProcedure,
 } from "../trpc.js";
 import { getSetting, setSetting, prisma, sanitizeNameId, isReservedEventSlug } from "../db.js";
 import type { Prisma, PrismaClient } from "../generated/prisma/client.js";
 import { getActiveLease } from "../sync/lease.js";
+import { lockEventLeaseAndSync } from "../event-locks.js";
 import { firstFreeEventSlug, yearOf } from "../event-slug.js";
 import {
-  EVENTOR_DIFF_FIELDS,
   asClassSnapshot,
   asRunnerSnapshot,
   clampInt32,
@@ -38,7 +37,6 @@ import {
   planClassSync,
   planRunnerSync,
   type ClassPlan,
-  type EventorDiffField,
   type ExistingClass,
   type ExistingRunner,
   type RunnerCreate,
@@ -81,8 +79,7 @@ import {
   type ParsedPunch,
   RunnerStatus,
 } from "@oxygen/shared";
-import { toAbsolute, toRelative } from "../timeConvert.js";
-import { getRunnerBySeq, updateRunnerFields } from "./runner.js";
+import { toAbsolute, toRelativeWrapped, zeroTimeForResults } from "../timeConvert.js";
 import { resolveCourseExpectedPositions } from "./course.js";
 import { reconcileVariants } from "../variants.js";
 import type {
@@ -98,6 +95,8 @@ import {
 
 /** Interactive-transaction limits (as events.ts ingest): a sync/import is many writes. */
 const SYNC_TX_OPTIONS = { timeout: 60_000, maxWait: 10_000 } as const;
+/** `events.zero_time` default (09:00). */
+const DEFAULT_ZERO_TIME = 324000;
 const IMPORT_TX_OPTIONS = { timeout: 120_000, maxWait: 10_000 } as const;
 
 /**
@@ -384,7 +383,7 @@ async function createRunners(
     eventorClubId: c.eventorClubId !== null ? BigInt(c.eventorClubId) : null,
     name: c.name,
     cardNo: c.cardNo,
-    eventorPersonId: BigInt(c.personId),
+    eventorPersonId: c.personId > 0 ? BigInt(c.personId) : null,
     eventorEntryId: c.eventorEntryId !== null ? BigInt(c.eventorEntryId) : null,
     entrySource: clampInt32(args.eventorEventId),
     birthYear: c.birthYear,
@@ -394,8 +393,8 @@ async function createRunners(
     entryTime: c.entryTime,
     // Eventor reports clock times; the columns hold ZeroTime-relative ones
     // (review RES-02). A start number is never taken from a result (EVT-04).
-    startTime: toRelative(c.startTime, args.zeroTime),
-    finishTime: toRelative(c.finishTime, args.zeroTime),
+    startTime: toRelativeWrapped(c.startTime, args.zeroTime),
+    finishTime: toRelativeWrapped(c.finishTime, args.zeroTime),
     status: c.status as Prisma.RunnerCreateManyInput["status"],
     bib: c.bib,
     feeCents: c.feeCents,
@@ -416,6 +415,8 @@ export interface EventorSyncResult {
   clubs: { added: number; updated: number };
   runners: RunnerPlan["counts"];
   samples: { wouldCancel: string[]; heldBack: string[] };
+  /** Ids of the runners cancelled (or, in a preview, to be); the apply call sends them back. */
+  cancelIds: string[];
 }
 
 const SAMPLE_LIMIT = 20;
@@ -456,7 +457,10 @@ async function planEventorSync(
   }
 
   const runners = await db.runner.findMany({
-    where: { eventId: args.eventId, eventorPersonId: { not: null } },
+    where: {
+      eventId: args.eventId,
+      OR: [{ eventorPersonId: { not: null } }, { eventorEntryId: { not: null } }],
+    },
     select: {
       id: true,
       name: true,
@@ -480,12 +484,14 @@ async function planEventorSync(
       taxableCents: true,
       rank: true,
       eventorPersonId: true,
+      eventorEntryId: true,
       eventorSnapshot: true,
     },
   });
   const existing: ExistingRunner[] = runners.map((r) => ({
     id: r.id,
-    eventorPersonId: Number(r.eventorPersonId),
+    eventorPersonId: r.eventorPersonId === null ? null : Number(r.eventorPersonId),
+    eventorEntryId: r.eventorEntryId === null ? null : Number(r.eventorEntryId),
     removed: r.removed,
     name: r.name,
     cardNo: r.cardNo,
@@ -607,6 +613,7 @@ function syncResult(
       wouldCancel: plan.runnerPlan.cancels.slice(0, SAMPLE_LIMIT).map((r) => r.name),
       heldBack: plan.runnerPlan.heldBack.slice(0, SAMPLE_LIMIT).map((r) => r.name),
     },
+    cancelIds: plan.runnerPlan.cancels.map((r) => r.id),
   };
 }
 
@@ -1012,6 +1019,9 @@ export const eventorRouter = router({
               eventorEnv: input.env,
               organizerName: input.organiserName ?? "",
               organizerEventorId: input.organiserId ?? 0,
+              // A run event's start times set its ZeroTime (an hour before the
+              // earliest), so none lands on or before it (review RES-02).
+              zeroTime: zeroTimeForResults(results.map((r) => r.startTime), DEFAULT_ZERO_TIME),
             },
             select: { id: true, nameId: true, zeroTime: true },
           });
@@ -1118,7 +1128,19 @@ export const eventorRouter = router({
    * venue: the cloud is then not the writer and the sync is not journaled.
    */
   sync: manageProcedure
-    .input(z.object({ dryRun: z.boolean().default(false) }).default({ dryRun: false }))
+    .input(
+      z
+        .object({
+          dryRun: z.boolean().default(false),
+          /**
+           * The runners the operator saw in the preview as "will be marked as
+           * withdrawn". The apply may cancel fewer, never one that is not in
+           * this list (EVENTOR_PREVIEW_CHANGED).
+           */
+          confirmCancelIds: z.array(z.string()).optional(),
+        })
+        .default({ dryRun: false }),
+    )
     .mutation(async ({ ctx, input }): Promise<EventorSyncResult> => {
       const db = ctx.db;
       await refuseWhileCheckedOut(db, ctx.event.id);
@@ -1183,6 +1205,9 @@ export const eventorRouter = router({
       //    leaves the event as it was.
       const result = await db.$transaction(
         async (tx) => {
+          // Ordered against a checkout: whoever takes this lock second sees the
+          // other's result, so the lease is checked after taking it.
+          await lockEventLeaseAndSync(tx, ctx.event.id);
           await refuseWhileCheckedOut(tx, ctx.event.id);
           const plan = await planEventorSync(tx, {
             eventId: ctx.event.id,
@@ -1192,6 +1217,16 @@ export const eventorRouter = router({
             results,
             clubNameByEventorId: clubSync.clubNameByEventorId,
           });
+          if (input.confirmCancelIds) {
+            const seen = new Set(input.confirmCancelIds);
+            if (plan.runnerPlan.cancels.some((r) => !seen.has(r.id))) {
+              throw new TRPCError({
+                code: "PRECONDITION_FAILED",
+                message:
+                  "EVENTOR_PREVIEW_CHANGED: Eventor's data changed since the preview; some runners would now be withdrawn that you did not see. Preview again.",
+              });
+            }
+          }
           const classIdByEventorId = await applyClassPlan(
             tx,
             ctx.event.id,
@@ -1221,80 +1256,6 @@ export const eventorRouter = router({
         SYNC_TX_OPTIONS,
       );
       return result;
-    }),
-
-  /**
-   * "Use Eventor's value": set one field of a runner to what Eventor last
-   * said (the runner's snapshot). An ordinary, journaled runner edit, so a
-   * venue box sees it too.
-   */
-  useEventorValue: manageRaceProcedure
-    .input(
-      z.object({
-        runnerId: z.number().int(),
-        field: z.enum(EVENTOR_DIFF_FIELDS as unknown as [EventorDiffField, ...EventorDiffField[]]),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const r = await getRunnerBySeq(ctx.db, ctx.event.id, input.runnerId);
-      const snap = asRunnerSnapshot(r.eventorSnapshot);
-      if (!snap) {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message: "No Eventor value is recorded for this runner yet; sync from Eventor first.",
-        });
-      }
-      const fields: Record<string, unknown> = {};
-      switch (input.field) {
-        case "name":
-          if (snap.name) fields.name = snap.name;
-          break;
-        case "cardNo":
-          if (snap.card_no != null) fields.cardNo = snap.card_no;
-          break;
-        case "classId": {
-          if (snap.class_eventor_id == null) break;
-          const cls = await ctx.db.class.findFirst({
-            where: {
-              eventId: ctx.event.id,
-              eventorId: BigInt(snap.class_eventor_id),
-              removed: false,
-            },
-            select: { seq: true },
-          });
-          if (!cls) {
-            throw new TRPCError({
-              code: "BAD_REQUEST",
-              message: "Eventor's class does not exist in this event.",
-            });
-          }
-          fields.classId = cls.seq;
-          break;
-        }
-        case "club":
-          if (snap.club_eventor_id != null) {
-            fields.eventorClubId = snap.club_eventor_id;
-            fields.clubName = snap.club_name ?? "";
-          }
-          break;
-        case "birthYear":
-          if (snap.birth_year) fields.birthYear = snap.birth_year;
-          break;
-        case "sex":
-          if (snap.sex) fields.sex = snap.sex;
-          break;
-        case "nationality":
-          if (snap.nationality) fields.nationality = snap.nationality;
-          break;
-      }
-      if (Object.keys(fields).length === 0) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "Eventor has no value for this field.",
-        });
-      }
-      // A card another runner holds is a CONFLICT (assertCardNotTaken).
-      return updateRunnerFields(ctx, input.runnerId, fields);
     }),
 
   // ───────────── Global club / runner directory ─────────────

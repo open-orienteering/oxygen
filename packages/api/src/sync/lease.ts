@@ -18,6 +18,7 @@
  */
 
 import { TRPCError } from "@trpc/server";
+import { lockEventLeaseAndSync } from "../event-locks.js";
 import { createTRPCClient, httpLink, type TRPCClient } from "@trpc/client";
 import type { AppRouter } from "../routers/index.js";
 import type { EventRef, PrismaClient } from "../db.js";
@@ -158,27 +159,35 @@ export async function acquireLease(
   // The node-id header is trimmed on the way in (trpc.ts): store the same
   // form so whitespace can never cause a holder mismatch.
   const holderNodeId = holderNodeIdRaw.trim();
-  try {
-    const row = await db.eventLease.create({
-      data: { eventId, holderNodeId },
-      select: { id: true, holderNodeId: true, acquiredAt: true, forced: true },
-    });
-    return row;
-  } catch (err) {
-    // The partial unique index (one active lease per event) turns a
-    // double-checkout race into a constraint violation.
-    if ((err as { code?: string }).code === "P2002") {
-      const current = await getActiveLease(db, eventId);
+  const take = async (tx: Prisma.TransactionClient): Promise<ActiveLease> => {
+    // Serialised against the Eventor sync (its transaction holds the same
+    // lock and re-checks the lease), and against a second checkout.
+    await lockEventLeaseAndSync(tx, eventId);
+    const current = await getActiveLease(tx, eventId);
+    if (current) {
       // The same holder asking again (a retried checkout whose first attempt
       // died after the peer took the lease) is not a conflict.
-      if (current && current.holderNodeId === holderNodeId) return current;
+      if (current.holderNodeId === holderNodeId) return current;
       throw new TRPCError({
         code: "CONFLICT",
-        message: `Event is already checked out to "${current?.holderNodeId ?? "unknown"}".`,
+        message: `Event is already checked out to "${current.holderNodeId}".`,
       });
     }
-    throw err;
-  }
+    try {
+      return await tx.eventLease.create({
+        data: { eventId, holderNodeId },
+        select: { id: true, holderNodeId: true, acquiredAt: true, forced: true },
+      });
+    } catch (err) {
+      // The partial unique index (one active lease per event) stays the last
+      // line of defence for a writer that did not take the lock.
+      if ((err as { code?: string }).code === "P2002") {
+        throw new TRPCError({ code: "CONFLICT", message: "Event is already checked out." });
+      }
+      throw err;
+    }
+  };
+  return "$transaction" in db ? db.$transaction(take) : take(db);
 }
 
 /**

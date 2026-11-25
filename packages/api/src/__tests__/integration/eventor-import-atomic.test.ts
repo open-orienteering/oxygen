@@ -214,6 +214,59 @@ describe("eventor.importEvent", () => {
   });
 });
 
+describe("eventor.importEvent: times of any hour (RES-02)", () => {
+  const timed = (personId: number, start: number, finish: number) =>
+    result(personId, { startTime: start, finishTime: finish, status: 1 });
+
+  async function readBack(res: { eventId: number; nameId: string }) {
+    const event = await prisma().event.findUniqueOrThrow({ where: { id: BigInt(res.eventId) } });
+    const caller = makeCaller({
+      id: event.id, nameId: event.nameId, zeroTime: event.zeroTime, date: event.date, kioskKey: event.kioskKey,
+    });
+    return { event, list: await caller.runner.list() };
+  }
+
+  it("an early start (before the 09:00 default) reads back as it was (was: negative relative time)", async () => {
+    mockEventor([entry(P + 1, "Early")], [timed(P + 1, 270000, 285000)]); // 07:30 - 07:55
+    const res = await importAs(uniqueName("early"));
+    createdNameIds.push(res.nameId);
+    const { event, list } = await readBack(res);
+    expect(event.zeroTime).toBe(216000); // 06:00: the hour of the earliest start (07:30), minus one
+    expect(list[0].startTime).toBe(270000);
+    expect(list[0].finishTime).toBe(285000);
+  });
+
+  it("a start exactly at the default ZeroTime is not 'no time' (was: stored as 0)", async () => {
+    mockEventor([entry(P + 1, "Nine")], [timed(P + 1, 324000, 340000)]);
+    const res = await importAs(uniqueName("nine"));
+    createdNameIds.push(res.nameId);
+    const { list } = await readBack(res);
+    expect(list[0].startTime).toBe(324000);
+    const row = await prisma().runner.findFirstOrThrow({ where: { eventId: BigInt(res.eventId) } });
+    expect(row.startTime).toBeGreaterThan(0);
+  });
+
+  it("a finish after midnight reads back and stays after the start", async () => {
+    mockEventor([entry(P + 1, "Night")], [timed(P + 1, 828000, 18000)]); // 23:00 - 00:30
+    const res = await importAs(uniqueName("night"));
+    createdNameIds.push(res.nameId);
+    const { list } = await readBack(res);
+    expect(list[0].startTime).toBe(828000);
+    expect(list[0].finishTime).toBe(18000);
+    const row = await prisma().runner.findFirstOrThrow({ where: { eventId: BigInt(res.eventId) } });
+    expect(row.finishTime).toBeGreaterThan(row.startTime);
+  });
+
+  it("an entry without a person id is imported (was: dropped)", async () => {
+    mockEventor([entry(0, "No Person Id", { eventorEntryId: 123_456 })]);
+    const res = await importAs(uniqueName("nopid"));
+    createdNameIds.push(res.nameId);
+    expect(res.runnerCount).toBe(1);
+    const row = await prisma().runner.findFirstOrThrow({ where: { eventId: BigInt(res.eventId) } });
+    expect(row).toMatchObject({ eventorPersonId: null, eventorEntryId: 123_456n });
+  });
+});
+
 describe("event.create", () => {
   it("EVT-11: a name only a deleted event holds gets a year suffix (was: raw unique violation)", async () => {
     const name = uniqueName("create");

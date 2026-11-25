@@ -247,7 +247,7 @@ describe("eventor.sync re-entry status reset", () => {
           status: "cancel",
           // The sync's own cancel (review package 5): only a runner it
           // cancelled itself, and so marked absent, is reinstated.
-          eventorSnapshot: { present: false },
+          eventorSnapshot: { present: false, cancelled_by_sync: true },
           eventorPersonId: BigInt(PERSON_BASE),
           entrySource: EVENTOR_EVENT_ID,
         },
@@ -298,7 +298,7 @@ describe("eventor.sync re-entry status reset", () => {
           cardNo: 700_002,
           classId: cls.id,
           status: "cancel",
-          eventorSnapshot: { present: false },
+          eventorSnapshot: { present: false, cancelled_by_sync: true },
           eventorPersonId: BigInt(PERSON_BASE + 1),
           entrySource: EVENTOR_EVENT_ID,
         },

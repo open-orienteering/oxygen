@@ -322,5 +322,8 @@
   "syncHeldBackNames": "Gone from Eventor, left as they are: {{names}}",
   "syncDetailsIncomplete": "Class details incomplete: Eventor did not say which classes are untimed, so that setting was left as it is.",
   "syncCheckedOut": "This event is checked out to a venue. Check it in before syncing from Eventor.",
-  "syncEmptyResponse": "Eventor returned an empty list for an event that has runners here. Nothing was changed; try again later."
+  "syncEmptyResponse": "Eventor returned an empty list for an event that has runners here. Nothing was changed; try again later.",
+  "syncPreviewChanged": "The runners that would be cancelled changed since the preview. Nothing was changed; preview the sync again.",
+  "syncDuplicateEntries": "{{count}} repeated entries for the same person were counted once",
+  "syncSkippedNoId": "{{count}} entries skipped because Eventor gave no person or entry id"
 }
