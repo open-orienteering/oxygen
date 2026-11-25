@@ -191,6 +191,21 @@ describe("event drain", () => {
     expect((await store.pending()).length).toBe(2);
   });
 
+  it("6c. BAD_REQUEST, passing probe, single pushes that settle nothing: the pass ends", async () => {
+    const store = memoryStore([entry("a"), entry("a")]);
+    let calls = 0;
+    const push: PushFn = async ({ events }) => {
+      calls += 1;
+      if (calls > 50) throw new Error("drain did not stop");
+      if (events.length > 1) throw trpcError("BAD_REQUEST");
+      return { synced: [], failed: [] };
+    };
+    const drainer = createEventDrainer({ store, pushFor: () => push });
+    expect(await drainer.drain()).toBe(0);
+    expect((await store.pending()).length).toBe(2);
+    expect(calls).toBeLessThan(10);
+  });
+
   it("7. a server error leaves everything pending, blocked as server", async () => {
     const store = memoryStore([entry("a")]);
     const drainer = createEventDrainer({

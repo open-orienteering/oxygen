@@ -197,10 +197,13 @@ export function createEventDrainer({ store, pushFor, now = Date.now }: EventDrai
       return { synced: 0, stop: true, stopAll: false };
     }
     let synced = 0;
+    let settled = 0;
     for (const event of events) {
       try {
         const result = await push({ events: [serializeEvent(event)] });
-        synced += (await applyResult(result)).synced;
+        const applied = await applyResult(result);
+        synced += applied.synced;
+        settled += applied.settled;
         // The server stopped at this entry (an apply failure): the ones
         // behind it wait, exactly as after a stopped batch.
         if (result.failed.some((f) => isBatchStoppingCode(f.error))) {
@@ -219,6 +222,7 @@ export function createEventDrainer({ store, pushFor, now = Date.now }: EventDrai
             rejectedBySchema: true,
             attempts: (current?.attempts ?? event.attempts) + 1,
           });
+          settled += 1;
           continue;
         }
         if (kind === "network") return { synced, stop: true, stopAll: true };
@@ -226,6 +230,8 @@ export function createEventDrainer({ store, pushFor, now = Date.now }: EventDrai
         return { synced, stop: true, stopAll: false };
       }
     }
+    // Answers that settled nothing would send the same batch again forever.
+    if (settled === 0) return { synced, stop: true, stopAll: false };
     return { synced, stop: false, stopAll: false };
   }
 
@@ -310,13 +316,16 @@ export function createEventDrainer({ store, pushFor, now = Date.now }: EventDrai
         continue;
       }
       const pass = runCompetition(id);
-      draining.set(id, pass.then(() => undefined, () => undefined));
+      const marker = pass.then(() => undefined, () => undefined);
+      draining.set(id, marker);
       try {
         const step = await pass;
         syncedCount += step.synced;
         if (step.stopAll) break;
       } finally {
-        draining.delete(id);
+        // runCompetition already removed it when it settled; only remove our
+        // own marker, never a pass started since.
+        if (draining.get(id) === marker) draining.delete(id);
       }
     }
     await Promise.all(waiting);
@@ -330,8 +339,17 @@ export function createEventDrainer({ store, pushFor, now = Date.now }: EventDrai
       blockedReasons.delete(id);
       const step = await drainOne(id);
       total += step.synced;
-      if (step.stopAll) return { synced: total, stop: true, stopAll: true };
-      if (!rerun.has(id)) return { synced: total, stop: false, stopAll: false };
+      if (step.stopAll) {
+        draining.delete(id);
+        return { synced: total, stop: true, stopAll: true };
+      }
+      if (!rerun.has(id)) {
+        // Leave the lock in the same tick as the "no re-run" decision, so a
+        // request arriving now starts its own pass instead of waiting on
+        // this settled one.
+        draining.delete(id);
+        return { synced: total, stop: step.stop, stopAll: false };
+      }
     }
   }
 
