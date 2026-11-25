@@ -683,6 +683,10 @@ model Class {
   longName  String  @default("") @map("long_name")
   courseId  String? @map("course_id") @db.Uuid
   eventorId BigInt? @map("eventor_id")
+  /// What the last Eventor import/sync stored for this class (name, sex, age
+  /// limits, no_timing, sort_index, class_type); NULL before the first sync
+  /// after the snapshot was introduced. docs/system/eventor-sync.md.
+  eventorSnapshot Json? @map("eventor_snapshot")
 
   lowAge    Int    @default(0) @map("low_age") @db.SmallInt
   highAge   Int    @default(0) @map("high_age") @db.SmallInt
@@ -801,6 +805,11 @@ model Runner {
   entrySource     Int     @default(0) @map("entry_source")
   eventorPersonId BigInt? @map("eventor_person_id")
   eventorEntryId  BigInt? @map("eventor_entry_id")
+  /// What the last Eventor import/sync stored or saw for this runner (name,
+  /// card_no, class_eventor_id, club_eventor_id, club_name, birth_year, sex,
+  /// nationality, present, synced_at); NULL for a runner that predates it.
+  /// docs/system/eventor-sync.md.
+  eventorSnapshot Json?   @map("eventor_snapshot")
 
   feeCents     Int     @default(0) @map("fee_cents")
   cardFeeCents Int     @default(0) @map("card_fee_cents")

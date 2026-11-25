@@ -57,4 +57,11 @@ describe("makeCardNoClaimer", () => {
     // Cardless input ignores the fallback — no card in Eventor means no card.
     expect(claim(0, "me", 123)).toBeNull();
   });
+
+  it("keeps the claim of an entry-keyed owner stable between create and sync (EVT-09)", () => {
+    const claim = makeCardNoClaimer();
+    expect(claim(500, "entry:77")).toBe(500);
+    expect(claim(500, "person:9")).toBeNull();
+    expect(claim(500, "entry:77")).toBe(500);
+  });
 });

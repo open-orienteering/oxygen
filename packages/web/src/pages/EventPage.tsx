@@ -15,6 +15,7 @@ import { VenueLeasePanel } from "../components/VenueLease";
 import { PermissionsPanel } from "../components/PermissionsPanel";
 import { useCapabilities } from "../context/CapabilitiesContext";
 import { downloadSameOriginFile } from "../lib/download-api";
+import { SyncCounts } from "../components/EventorSyncCounts";
 
 export function EventPage() {
   const { t } = useTranslation("event");
@@ -349,9 +350,26 @@ function EventorSyncPanel({
 }) {
   const { t } = useTranslation("event");
   const timeAgo = useTimeAgo();
+  // The sync is previewed first (dry run: same counts, nothing written), then
+  // applied on confirm (docs/system/eventor-sync.md).
+  const previewMutation = trpc.eventor.sync.useMutation();
   const syncMutation = trpc.eventor.sync.useMutation({
-    onSuccess: () => onSynced(),
+    onSuccess: () => {
+      previewMutation.reset();
+      onSynced();
+    },
   });
+  const syncError = syncMutation.error ?? previewMutation.error;
+  const syncErrorText = (message: string) =>
+    message.startsWith("EVENT_CHECKED_OUT")
+      ? t("syncCheckedOut")
+      : message.startsWith("EVENTOR_PREVIEW_REQUIRED")
+        ? t("syncPreviewRequired")
+        : message.startsWith("EVENTOR_PREVIEW_CHANGED")
+        ? t("syncPreviewChanged")
+        : message.startsWith("EVENTOR_EMPTY_RESPONSE")
+        ? t("syncEmptyResponse")
+        : message;
   const pushResultsMutation = trpc.eventor.pushResults.useMutation();
   const pushStartListMutation = trpc.eventor.pushStartList.useMutation();
 
@@ -396,11 +414,15 @@ function EventorSyncPanel({
 
         <div className="flex flex-col sm:flex-row gap-2">
           <button
-            onClick={() => syncMutation.mutate()}
-            disabled={syncMutation.isPending || !apiKeyConfigured}
+            onClick={() => {
+              syncMutation.reset();
+              previewMutation.mutate({ dryRun: true });
+            }}
+            data-testid="eventor-sync-button"
+            disabled={syncMutation.isPending || previewMutation.isPending || !apiKeyConfigured}
             className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors cursor-pointer flex items-center gap-2 whitespace-nowrap"
           >
-            {syncMutation.isPending ? (
+            {syncMutation.isPending || previewMutation.isPending ? (
               <>
                 <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                 {t("syncing")}
@@ -457,27 +479,48 @@ function EventorSyncPanel({
         </div>
       </div>
 
-      {syncMutation.isSuccess && syncMutation.data && (
-        <div className="mt-3 p-3 bg-white rounded-lg border border-blue-100 text-xs text-slate-600">
-          <span className="font-medium text-green-700">{t("syncComplete")}</span>{" "}
-          {syncMutation.data.runnersAdded > 0 && <span>{t("runnersAdded", { count: syncMutation.data.runnersAdded })}, </span>}
-          {syncMutation.data.runnersUpdated > 0 && <span>{t("runnersUpdated", { count: syncMutation.data.runnersUpdated })}, </span>}
-          {syncMutation.data.cancelledCount > 0 && <span className="text-amber-700">{t("cancelledCount", { count: syncMutation.data.cancelledCount })}, </span>}
-          {syncMutation.data.classesAdded > 0 && <span>{t("classesAdded", { count: syncMutation.data.classesAdded })}, </span>}
-          {syncMutation.data.classesUpdated > 0 && <span>{t("classesUpdated", { count: syncMutation.data.classesUpdated })}, </span>}
-          {syncMutation.data.clubsAdded > 0 && <span>{t("clubsAdded", { count: syncMutation.data.clubsAdded })}, </span>}
-          {syncMutation.data.clubsUpdated > 0 && <span>{t("clubsUpdated", { count: syncMutation.data.clubsUpdated })}, </span>}
-          {syncMutation.data.runnersAdded === 0 &&
-            syncMutation.data.runnersUpdated === 0 &&
-            syncMutation.data.cancelledCount === 0 &&
-            syncMutation.data.classesAdded === 0 &&
-            syncMutation.data.clubsAdded === 0 && <span>{t("everythingUpToDate")}</span>}
-        </div>
+      {previewMutation.data && !syncMutation.isSuccess && (
+        <SyncCounts
+          result={previewMutation.data}
+          title={t("syncPreviewTitle")}
+          testId="eventor-sync-preview"
+        >
+          <div className="mt-3 flex gap-2">
+            <button
+              onClick={() => syncMutation.mutate({ confirmCancelIds: previewMutation.data?.cancelIds ?? [] })}
+              disabled={syncMutation.isPending}
+              data-testid="eventor-sync-confirm"
+              className="px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 cursor-pointer"
+            >
+              {t("syncApply")}
+            </button>
+            <button
+              onClick={() => previewMutation.reset()}
+              disabled={syncMutation.isPending}
+              data-testid="eventor-sync-cancel"
+              className="px-3 py-1.5 bg-white text-slate-600 text-xs font-medium rounded-lg border border-slate-200 hover:bg-slate-50 disabled:opacity-50 cursor-pointer"
+            >
+              {t("syncCancel")}
+            </button>
+          </div>
+        </SyncCounts>
       )}
 
-      {syncMutation.isError && (
-        <div className="mt-3 p-3 bg-red-50 rounded-lg border border-red-100 text-xs text-red-600">
-          {t("syncFailed", { message: syncMutation.error.message })}
+      {syncMutation.isSuccess && syncMutation.data && (
+        <SyncCounts
+          result={syncMutation.data}
+          title={t("syncComplete")}
+          testId="eventor-sync-result"
+          done
+        />
+      )}
+
+      {syncError && (
+        <div
+          data-testid="eventor-sync-error"
+          className="mt-3 p-3 bg-red-50 rounded-lg border border-red-100 text-xs text-red-600"
+        >
+          {t("syncFailed", { message: syncErrorText(syncError.message) })}
         </div>
       )}
 

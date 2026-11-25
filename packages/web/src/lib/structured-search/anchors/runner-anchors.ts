@@ -486,5 +486,23 @@ export function createRunnerAnchors(
         return matchTime(runningTime, op, value);
       },
     },
+    {
+      key: "eventor",
+      label: getLabel("eventor"),
+      type: "enum",
+      operators: ["eq"],
+      defaultOperator: "eq",
+      color: "sky",
+      suggest: () => [
+        { key: "differs", label: getLabel("eventorDiffers") },
+        { key: "gone", label: getLabel("eventorGone") },
+      ],
+      match: (item, _op, value) => {
+        const v = value.toLowerCase();
+        if (v === "differs") return item.differsFromEventor === true;
+        if (v === "gone") return item.goneFromEventor === true;
+        return false;
+      },
+    },
   ];
 }

@@ -33,6 +33,7 @@ import type {
 import { clearSheetsCache, testGoogleSheetPush } from "../sheetsBackup.js";
 import { runnerStatusToValue, valueToRunnerStatus } from "../statusConvert.js";
 import { ttlMemo } from "../ttl-memo.js";
+import { firstFreeEventSlug, yearOf } from "../event-slug.js";
 
 /**
  * `pg_database_size()` stats every file under the database directory,
@@ -261,9 +262,24 @@ export const eventRouter = router({
           message: `An event with slug "${slug}" already exists.`,
         });
       }
+      // The slug is unique over soft-deleted events too (MC-27): a name only a
+      // deleted event holds gets the year (then a counter) instead of a raw
+      // unique violation (EVT-11).
+      const free = existing
+        ? await firstFreeEventSlug(prisma(), slug, [
+            ...(yearOf(input.date) ? [yearOf(input.date) as string] : []),
+            ...Array.from({ length: 20 }, (_, i) => String(i + 2)),
+          ])
+        : slug;
+      if (!free) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `An event with slug "${slug}" already exists.`,
+        });
+      }
       const created = await prisma().event.create({
         data: {
-          nameId: slug,
+          nameId: free,
           name: input.name,
           date: new Date(input.date),
           kind: input.kind,

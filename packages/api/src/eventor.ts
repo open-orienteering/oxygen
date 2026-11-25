@@ -72,7 +72,12 @@ export interface EventorEventClass {
   highAge: number;   // 0 = no upper age limit
   sequence: number;  // Eventor sort order
   classType: string; // e.g. "Åldersklasser", "Öppna klasser"
-  noTiming: boolean; // resultListMode == "UnorderedNoTimes"
+  /**
+   * resultListMode == "UnorderedNoTimes". `undefined` = Eventor gave no
+   * answer (the export/classes enrichment failed or came back empty): "no
+   * opinion", never "not no-timing" (review EVT-03).
+   */
+  noTiming?: boolean;
   /** Published class-course length from Eventor's IOF 3.0 start list. */
   courseLengthM?: number;
 }
@@ -133,7 +138,6 @@ export interface EventorResult {
   startTime: number;    // deciseconds from midnight
   finishTime: number;   // deciseconds from midnight
   status: number;       // MeOS status code
-  startNo: number;      // result position (used as startNo/bib equivalent)
   bib: string;          // BibNumber string from result, e.g. "123" or "H4"
 }
 
@@ -566,7 +570,7 @@ export async function fetchEventClasses(
         highAge: safeInt(ec["@_highAge"] ?? 0),
         sequence: safeInt(ec["@_sequence"] ?? 0),
         classType: safeStr(classTypeObj?.Name ?? ""),
-        noTiming: false,
+        noTiming: undefined,
       };
     },
   );
@@ -576,12 +580,15 @@ export async function fetchEventClasses(
   await Promise.all([
     fetchNoTimingClassNames(apiKey, eventId, env)
       .then((noTimingNames) => {
-        for (const cls of classes) {
-          if (noTimingNames.has(cls.name)) cls.noTiming = true;
-        }
+        for (const cls of classes) cls.noTiming = noTimingNames.has(cls.name);
       })
-      .catch(() => {
-        // export/classes unavailable — noTiming stays false
+      .catch((err) => {
+        // export/classes unavailable: noTiming stays undefined ("no opinion"),
+        // so a sync never clears a stored flag on a failed request (EVT-03).
+        console.warn(
+          `[eventor] export/classes unavailable for event ${eventId}; class no-timing flags left as they are:`,
+          err instanceof Error ? err.message : err,
+        );
       }),
     fetchStartListCourseLengths(apiKey, eventId, env)
       .then((lengths) => {
@@ -665,7 +672,11 @@ async function fetchNoTimingClassNames(
 
   const parsed = parser.parse(xml);
   const classList = parsed.ClassList;
-  if (!classList || !classList.Class) return new Set();
+  // An absent list is an odd 200, not "no class is no-timing": the caller
+  // treats the throw as "unknown" (EVT-03).
+  if (!classList || !classList.Class) {
+    throw new Error("export/classes returned no ClassList");
+  }
 
   const classes = Array.isArray(classList.Class)
     ? classList.Class
@@ -968,8 +979,8 @@ export async function fetchResults(
       const statusStr = safeStr(statusObj["@_value"] ?? "");
       const status = EVENTOR_STATUS_MAP[statusStr] ?? 0;
 
-      // Position and bib
-      const resultPosition = safeInt(result.ResultPosition ?? 0);
+      // The bib only: `<ResultPosition>` is the finishing place, not a start
+      // number (review EVT-04), so it is not read at all.
       const bib = safeStr(result.BibNumber ?? "");
 
       results.push({
@@ -987,7 +998,6 @@ export async function fetchResults(
         startTime,
         finishTime,
         status,
-        startNo: resultPosition,
         bib,
       });
     }

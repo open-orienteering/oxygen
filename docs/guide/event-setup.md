@@ -11,7 +11,7 @@ The event page is mission control for external integrations. Everything the Swed
   initializes the label on import but later syncs cannot overwrite it; raw
   Eventor classification remains separate for reporting. See
   [system/event-types.md](../system/event-types.md).
-- **Eventor sync** — import entries, classes, clubs, competitors, and published class-course lengths; upload start lists and results in the IOF XML formats Eventor expects.
+- **Eventor sync** — import entries, classes, clubs, competitors, and published class-course lengths; upload start lists and results in the IOF XML formats Eventor expects. **Sync from Eventor** first shows a preview (runners and classes added or changed, who would be marked as withdrawn, who is kept because they already have a card read or a result) and applies it only when you confirm. A re-sync never undoes what you did at the desk: a card, class, name or club you changed stays, and a runner whose value now differs from Eventor's shows "Eventor: X" with **Use Eventor's value** on the runner page; the runner search finds them with `eventor:differs` (or `eventor:gone` for runners no longer in Eventor). Times, status and start numbers are never touched by a re-sync. A sync is refused while the event is checked out to a venue. See [system/eventor-sync.md](../system/eventor-sync.md).
 - **Global Runner Database** — download the federation-wide runner directory for fast name/card lookup at registration.
 - **Club sync** — pull club metadata and logos.
 - **LiveResults** — push live splits to [liveresultat.se](https://liveresultat.se) on a configurable interval.

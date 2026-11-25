@@ -46,6 +46,7 @@ import {
 import { prisma, setSetting } from "../../db.js";
 import { createTestEvent, disconnect } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
+import { applySync } from "../helpers/eventor-sync.js";
 import { eventorKeyStore } from "../../eventorKeyStore.js";
 
 const EVENTOR_EVENT_ID = 99_100;
@@ -126,7 +127,6 @@ function makeResult(
     startTime: 0,
     finishTime: 0,
     status: 0,
-    startNo: 0,
     bib: "",
   };
 }
@@ -284,7 +284,7 @@ describe("eventor.sync card number handling", () => {
       vi.mocked(fetchResults).mockResolvedValue([]);
 
       const caller = makeCaller(ctx.event);
-      await caller.eventor.sync();
+      await applySync(caller);
 
       const runners = await ctx.db.runner.findMany({
         where: { eventId: ctx.eventId },
@@ -326,7 +326,7 @@ describe("eventor.sync card number handling", () => {
       vi.mocked(fetchResults).mockResolvedValue([]);
 
       const caller = makeCaller(ctx.event);
-      await caller.eventor.sync();
+      await applySync(caller);
 
       const runners = await ctx.db.runner.findMany({
         where: { eventId: ctx.eventId },

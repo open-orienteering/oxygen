@@ -9,7 +9,9 @@ import {
   TransferFlags,
   hasTransferFlag,
   type RunnerStatusValue,
+  type RunnerEventorDiff,
 } from "@oxygen/shared";
+import { EventorMarker } from "./EventorMarker";
 import { PunchTable } from "./PunchTable";
 import { OtherVariantBanner } from "./OtherVariantBanner";
 import { ClubLogo } from "./ClubLogo";
@@ -50,6 +52,9 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
     utils.cardReadout.readoutByRunner.invalidate({ runnerId });
   };
 
+  const useEventorValueMutation = trpc.runner.useEventorValue.useMutation({
+    onSuccess: invalidateAll,
+  });
   const updateMutation = trpc.runner.update.useMutation({
     onSuccess: invalidateAll,
   });
@@ -111,6 +116,23 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
   if (!runner.data) return null;
 
   const r = runner.data;
+  const diffByField = new Map((r.eventorDiff ?? []).map((d) => [d.field, d]));
+  const marker = (field: RunnerEventorDiff["field"]) => {
+    const d = diffByField.get(field);
+    if (!d) return null;
+    return (
+      <EventorMarker
+        diff={d}
+        pending={useEventorValueMutation.isPending}
+        error={
+          useEventorValueMutation.isError && useEventorValueMutation.variables?.field === d.field
+            ? useEventorValueMutation.error.message
+            : null
+        }
+        onUse={() => useEventorValueMutation.mutate({ runnerId, field })}
+      />
+    );
+  };
   const runningTime =
     r.finishTime > 0 && r.startTime > 0 ? r.finishTime - r.startTime : 0;
 
@@ -131,31 +153,49 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
             )}
           </div>
 
+          {r.goneFromEventor && (
+            <div
+              data-testid="eventor-gone-banner"
+              className="mb-3 px-3 py-1.5 rounded-md bg-sky-50 border border-sky-200 text-xs text-sky-800"
+            >
+              {t(r.status === RunnerStatus.Cancel ? "eventorGoneCancelledBanner" : "eventorGoneBanner")}
+            </div>
+          )}
+
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-x-6 gap-y-3">
             {/* Editable fields */}
-            <EditField
-              label={t("name")}
-              value={r.name}
-              onChange={(v) => debouncedSave("name", v)}
-            />
-            <SelectField
-              label={t("class")}
-              runnerId={runnerId}
-              field="classId"
-              currentValue={r.classId}
-              debouncedSave={debouncedSave}
-            />
+            <div>
+              <EditField
+                label={t("name")}
+                value={r.name}
+                onChange={(v) => debouncedSave("name", v)}
+              />
+              {marker("name")}
+            </div>
+            <div>
+              <SelectField
+                label={t("class")}
+                runnerId={runnerId}
+                field="classId"
+                currentValue={r.classId}
+                debouncedSave={debouncedSave}
+              />
+              {marker("classId")}
+            </div>
             <VariantSelectField
               classId={r.classId}
               courseId={r.courseId}
               onChange={(courseId) => updateMutation.mutate({ id: runnerId, courseId })}
             />
-            <SelectClubField
-              label={t("club")}
-              runnerId={runnerId}
-              currentValue={r.clubId}
-              debouncedSave={debouncedSave}
-            />
+            <div>
+              <SelectClubField
+                label={t("club")}
+                runnerId={runnerId}
+                currentValue={r.clubId}
+                debouncedSave={debouncedSave}
+              />
+              {marker("club")}
+            </div>
             <div>
               <label className="flex items-center gap-1.5 text-xs text-slate-500 mb-1">
                 {t("siCard")}
@@ -167,6 +207,7 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
                 type="number"
                 onChange={(v) => debouncedSave("cardNo", parseInt(v, 10) || 0)}
               />
+              {marker("cardNo")}
             </div>
             <EditField
               label={t("startTime")}
@@ -211,29 +252,34 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
               onChange={(v) => debouncedSave("bib", v)}
               className="hidden sm:block"
             />
-            <EditField
-              label={t("birthYear")}
-              value={r.birthYear > 0 ? String(r.birthYear) : ""}
-              type="number"
-              onChange={(v) =>
-                debouncedSave("birthYear", parseInt(v, 10) || 0)
-              }
-              className="hidden sm:block"
-            />
+            <div className="hidden sm:block">
+              <EditField
+                label={t("birthYear")}
+                value={r.birthYear > 0 ? String(r.birthYear) : ""}
+                type="number"
+                onChange={(v) =>
+                  debouncedSave("birthYear", parseInt(v, 10) || 0)
+                }
+              />
+              {marker("birthYear")}
+            </div>
             <div className="hidden sm:block">
               <label className="block text-xs text-slate-500 mb-1">{t("sex")}</label>
               <SexSelect
                 value={r.sex}
                 onChange={(v) => debouncedSave("sex", v)}
               />
+              {marker("sex")}
             </div>
-            <EditField
-              label={t("nationality")}
-              value={r.nationality}
-              onChange={(v) => debouncedSave("nationality", v)}
-              placeholder="e.g. SWE"
-              className="hidden sm:block"
-            />
+            <div className="hidden sm:block">
+              <EditField
+                label={t("nationality")}
+                value={r.nationality}
+                onChange={(v) => debouncedSave("nationality", v)}
+                placeholder="e.g. SWE"
+              />
+              {marker("nationality")}
+            </div>
             <EditField
               label={t("phone")}
               value={r.phone}

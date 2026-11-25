@@ -17,6 +17,31 @@ export function toRelative(absoluteDs: number, zeroTime: number): number {
 }
 
 /**
+ * `toRelative` for Eventor clock times: the result is wrapped into 0..24 h
+ * (what `toAbsolute` undoes), so a finish after midnight stays positive and a
+ * clock time that equals ZeroTime is not mistaken for "no time" (a runner's
+ * relative 0). Returns 0 for the "no time" sentinel.
+ */
+export function toRelativeWrapped(absoluteDs: number, zeroTime: number): number {
+  if (absoluteDs <= 0) return 0;
+  const rel = (((absoluteDs - zeroTime) % DAY_DS) + DAY_DS) % DAY_DS;
+  return rel === 0 ? 1 : rel;
+}
+
+/**
+ * ZeroTime for an event imported with results: one hour before the earliest
+ * start, rounded down to the hour, never below midnight. Without a start the
+ * default (09:00) stays.
+ */
+export function zeroTimeForResults(startTimes: Iterable<number>, fallback: number): number {
+  let earliest = Infinity;
+  for (const t of startTimes) if (t > 0 && t < earliest) earliest = t;
+  if (!Number.isFinite(earliest)) return fallback;
+  const hour = 36000;
+  return Math.max(0, Math.floor(earliest / hour) * hour - hour);
+}
+
+/**
  * Convert a ZeroTime-relative time from DB storage to absolute deciseconds
  * since midnight. Handles wraparound for events crossing midnight.
  * Returns 0 for sentinel "no time" values.
