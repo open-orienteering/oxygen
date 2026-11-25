@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { parseReadoutBackupBuffer, type ReadoutBackupRecord } from "../si-protocol";
+import {
+  parseReadoutBackupBuffer,
+  parseReadoutBackupBufferDetailed,
+  type ReadoutBackupRecord,
+} from "../si-protocol";
 import {
   READOUT_BACKUP_FIXTURE,
   READOUT_BACKUP_FIXTURE_BASE_ADDR,
@@ -236,5 +240,42 @@ describe("parseReadoutBackupBuffer (M_READOUT slot layout)", () => {
   it("returns empty array on all-EE buffer", () => {
     const empty = new Uint8Array(512).fill(0xee);
     expect(parseReadoutBackupBuffer(empty)).toEqual([]);
+  });
+
+  describe("slots that cannot be decoded are reported, not dropped", () => {
+    // Slot at 0x1280 (SI8 2220164) from the capture, still carrying the marker.
+    const si8 = READOUT_BACKUP_FIXTURE.slice(0x1180, 0x1280);
+
+    it("a tCard slot before a real SI8 slot is skipped with its address and raw bytes", () => {
+      const tcard = Uint8Array.from(si8);
+      tcard[24] = 0x06; // series 6: no decoder, fails safe
+      tcard[25] = 0x5d; tcard[26] = 0xc3; tcard[27] = 0x40; // 6144832: tCard range
+      const buf = new Uint8Array(0x200);
+      buf.set(tcard, 0);
+      buf.set(si8, 0x100);
+      const { records, skipped } = parseReadoutBackupBufferDetailed(buf, 0x100);
+      expect(records.map((r) => r.card.cardNumber)).toEqual([2220164]);
+      expect(records[0].slotAddress).toBe(0x200);
+      expect(skipped).toHaveLength(1);
+      expect(skipped[0].slotAddress).toBe(0x100);
+      expect(skipped[0].reason).toBe("parse-failed");
+      expect(skipped[0].rawBytesHex).toBe(
+        Array.from(tcard).map((b) => b.toString(16).padStart(2, "0")).join(""),
+      );
+    });
+
+    it("an SI5-range chunk with an implausible punch pointer is reported as skipped", () => {
+      const sl = Uint8Array.from(READOUT_BACKUP_FIXTURE.slice(0xd00, 0xd80));
+      sl[23] = 0x80;
+      const { records, skipped } = parseReadoutBackupBufferDetailed(sl, 0xe00);
+      expect(records).toEqual([]);
+      expect(skipped.map((x) => [x.slotAddress, x.reason])).toEqual([[0xe00, "not-si5"]]);
+    });
+
+    it("the unmodified capture has nothing skipped", () => {
+      expect(
+        parseReadoutBackupBufferDetailed(READOUT_BACKUP_FIXTURE, READOUT_BACKUP_FIXTURE_BASE_ADDR).skipped,
+      ).toEqual([]);
+    });
   });
 });

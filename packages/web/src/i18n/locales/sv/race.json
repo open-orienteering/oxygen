@@ -105,5 +105,6 @@
   "applyHoldReason_stale-punches": "stämplingarna ser ut att vara från en gammal bricka",
   "replaceFinish": "Ersätt måltid {{time}} med nu",
   "applyHoldReason": "se löparen",
-  "notifReadFailed": "Bricka {{number}} lästes inte: sätt i den igen"
+  "notifReadFailed": "Bricka {{number}} lästes inte: sätt i den igen",
+  "notifDismiss": "Stäng"
 }

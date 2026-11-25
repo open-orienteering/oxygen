@@ -8,6 +8,7 @@
  * competition switches.
  */
 
+import { failureConcernsCurrentDetection } from "../lib/read-failure";
 import {
   createContext,
   useContext,
@@ -828,15 +829,25 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
     };
 
     const onCardReadFailed = (e: Event) => {
-      const failure = (e as CustomEvent).detail as { cardNumber: number; reason: string };
+      const failure = (e as CustomEvent).detail as {
+        cardNumber: number;
+        reason: string;
+        readerId?: string;
+      };
       // Not a read card: no Recent Cards row, nothing sent to the server. The
       // operator banner and the kiosk tell the runner to insert the card again.
-      setLastDetectedCardNo(null);
       setLastReadFailure({
         seq: ++readFailureSeqRef.current,
         cardNumber: failure.cardNumber,
         reason: failure.reason,
       });
+      // With several readers, a failure on another reader than the one that
+      // reported the current detection must not reset that detection or turn
+      // the kiosk's "reading" screen into an error for the wrong card.
+      if (!failureConcernsCurrentDetection(failure.readerId, conn.lastDetectionReaderId)) {
+        return;
+      }
+      setLastDetectedCardNo(null);
       if (kioskChannelRef.current) {
         kioskChannelRef.current.send({
           type: "card-read-failed",

@@ -228,5 +228,6 @@
     "cancel": "Avbryt",
     "save": "Spara"
   },
-  "backupReadIncomplete": "Backupläsningen blev ofullständig vid 0x{{address}}; ingenting rensades. Anslut stationen igen och läs på nytt."
+  "backupReadIncomplete": "Backupläsningen blev ofullständig vid 0x{{address}}; ingenting rensades. Anslut stationen igen och läs på nytt.",
+  "backupSlotsSkipped": "{{count}} plats(er) på stationen kunde inte läsas (vid {{addresses}}); ingenting rensades. Behåll stationen och be om hjälp."
 }

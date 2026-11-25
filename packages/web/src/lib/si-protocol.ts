@@ -1740,6 +1740,28 @@ export interface ReadoutBackupRecord {
   card: SICardReadout;
 }
 
+/** A non-empty backup slot that could not be decoded into a card readout. */
+export interface SkippedBackupSlot {
+  /** Flash address of the slot (or 128-byte chunk) that was skipped. */
+  slotAddress: number;
+  /** Why it was skipped. */
+  reason: "parse-failed" | "not-si5" | "no-siid" | "overrun";
+  /** The raw bytes of the slot, hex encoded, so nothing is lost. */
+  rawBytesHex: string;
+}
+
+export interface ReadoutBackupParseResult {
+  records: ReadoutBackupRecord[];
+  /** Non-empty slots that were not decoded. Never erase the station while this is non-empty. */
+  skipped: SkippedBackupSlot[];
+}
+
+function bytesToHex(b: Uint8Array): string {
+  let out = "";
+  for (let i = 0; i < b.length; i++) out += b[i].toString(16).padStart(2, "0");
+  return out;
+}
+
 /**
  * Parse a readout-station backup-memory buffer into card readout records.
  *
@@ -1768,7 +1790,29 @@ export function parseReadoutBackupBuffer(
   baseAddr: number = 0x100,
   now?: Date,
 ): ReadoutBackupRecord[] {
+  return parseReadoutBackupBufferDetailed(buf, baseAddr, now).records;
+}
+
+/**
+ * Same walk as `parseReadoutBackupBuffer`, but also reports every non-empty
+ * slot that could not be decoded (address + raw bytes). The caller must not
+ * erase the station's flash while any slot was skipped: the erase would
+ * destroy the only copy of a card that was never imported.
+ */
+export function parseReadoutBackupBufferDetailed(
+  buf: Uint8Array,
+  baseAddr: number = 0x100,
+  now?: Date,
+): ReadoutBackupParseResult {
   const records: ReadoutBackupRecord[] = [];
+  const skipped: SkippedBackupSlot[] = [];
+  const skip = (off: number, len: number, reason: SkippedBackupSlot["reason"]) => {
+    skipped.push({
+      slotAddress: baseAddr + off,
+      reason,
+      rawBytesHex: bytesToHex(buf.subarray(off, Math.min(off + len, buf.length))),
+    });
+  };
   const STEP = 0x80;
   let off = 0;
   while (off + STEP <= buf.length) {
@@ -1788,6 +1832,7 @@ export function parseReadoutBackupBuffer(
         : cnPrimary;
       if (cn === 0) {
         siLog(`ReadoutBackup @0x${(baseAddr + off).toString(16)}: SI8+ marker but no SIID, skipping`);
+        skip(off, STEP, "no-siid");
         off += STEP;
         continue;
       }
@@ -1796,6 +1841,7 @@ export function parseReadoutBackupBuffer(
       const slotSize = slotBlocks * 128;
       if (off + slotSize > buf.length) {
         console.warn(`[SI] ReadoutBackup @0x${(baseAddr + off).toString(16)}: slot would overrun buffer (need ${slotSize}, have ${buf.length - off}), skipping`);
+        skip(off, STEP, "overrun");
         off += STEP;
         continue;
       }
@@ -1822,6 +1868,7 @@ export function parseReadoutBackupBuffer(
         });
       } else {
         console.warn(`[SI] ReadoutBackup @0x${(baseAddr + off).toString(16)}: SI8+ slot parser returned null for cardNo=${cn} (${cardType})`);
+        skip(off, slotSize, "parse-failed");
       }
       off += slotSize;
     } else {
@@ -1832,6 +1879,7 @@ export function parseReadoutBackupBuffer(
       // number in the SI5 range. Everything else is skipped, not filed as a card.
       if (chunk[23] > 37 || chunk[6] > 4) {
         siLog(`ReadoutBackup @0x${(baseAddr + off).toString(16)}: not an SI5 image, skipping`);
+        skip(off, STEP, "not-si5");
         off += STEP;
         continue;
       }
@@ -1843,11 +1891,13 @@ export function parseReadoutBackupBuffer(
           rawBytes: new Uint8Array(chunk),
           card,
         });
+      } else {
+        skip(off, STEP, "not-si5");
       }
       off += STEP;
     }
   }
-  return records;
+  return { records, skipped };
 }
 
 /** True if every byte in the chunk is 0xEE (the empty-flash sentinel). */

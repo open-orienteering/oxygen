@@ -501,12 +501,102 @@ describe("card readout through the serial reader", () => {
   it("a card of a layout that cannot be decoded (tCard) fails the read as parse", async () => {
     const blocks = SI8_2220164();
     blocks[0][24] = 0x06;
+    blocks[0][25] = (6123456 >> 16) & 0xff;
+    blocks[0][26] = (6123456 >> 8) & 0xff;
+    blocks[0][27] = 6123456 & 0xff;
     const h = await makeReader((p) => serveCard(p, blocks));
     h.port.push(det8(6123456, 0x06));
     await settle();
     expect(h.failures.map((f) => f.reason)).toEqual(["parse"]);
     expect(h.readouts).toEqual([]);
     expect(h.port.ackCount()).toBe(0);
+  });
+
+  it("a block 0 of another card is asked for once more, then the read succeeds", async () => {
+    const blocks = SI8_2220164();
+    const other = blocks[0].slice();
+    other[27] ^= 0x01; // card number differs in its last byte
+    const h = await makeReader((p) =>
+      serveCard(p, blocks, {
+        block: (bn, attempt) =>
+          bn === 0 && attempt === 1
+            ? buildCommand(CMD.SI8_READ, [0x00, 0x7d, 0, ...other], true)
+            : undefined,
+      }),
+    );
+    h.port.push(det8(2220164, 0x02));
+    await settle();
+    expect(h.port.blockRequests()).toEqual([0, 0, 1]);
+    expect(h.readouts).toHaveLength(1);
+    expect(h.readouts[0].cardNumber).toBe(2220164);
+  });
+
+  it("a block 0 that stays of another card fails the read as bad-block", async () => {
+    const blocks = SI8_2220164();
+    blocks[0][27] ^= 0x01;
+    const h = await makeReader((p) => serveCard(p, blocks));
+    h.port.push(det8(2220164, 0x02));
+    await settle();
+    expect(h.port.blockRequests()).toEqual([0, 0]);
+    expect(h.failures.map((f) => f.reason)).toEqual(["bad-block"]);
+    expect(h.readouts).toEqual([]);
+    expect(h.port.ackCount()).toBe(0);
+  });
+
+  it("a large card with more than 32 punches reads blocks 0-5 live (SIAC, 40 punches)", async () => {
+    const blocks = SIAC_8007045();
+    blocks[0][22] = 40;
+    const rec = (k: number): number[] => {
+      const secs = T(10, 0, 0) + k * 60;
+      return [0x00, 31 + k, (secs >> 8) & 0xff, secs & 0xff];
+    };
+    blocks[4] = new Uint8Array(128).fill(0xee);
+    blocks[5] = new Uint8Array(128).fill(0xee);
+    for (let k = 0; k < 40; k++) {
+      (k < 32 ? blocks[4] : blocks[5]).set(rec(k), (k % 32) * 4);
+    }
+    const h = await makeReader((p) => serveCard(p, blocks));
+    h.port.push(det8(8007045, 0x0f));
+    await settle();
+    expect(h.port.blockRequests()).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(h.failures).toEqual([]);
+    expect(h.readouts).toHaveLength(1);
+    const punches = h.readouts[0].punches;
+    expect(punches).toHaveLength(40);
+    expect(punches[0]).toEqual({ controlCode: 31, time: T(10, 0, 0) });
+    expect(punches[32]).toEqual({ controlCode: 63, time: T(10, 32, 0) });
+    expect(punches[39]).toEqual({ controlCode: 70, time: T(10, 39, 0) });
+    expect(h.port.ackCount()).toBe(1);
+  });
+
+  it("a new card detected while a read is open: the old read fails first, then the new one is announced", async () => {
+    const blocksA = SI8_2220164();
+    const blocksB = SI8_2164102();
+    let which: "A" | "B" = "A";
+    const h = await makeReader((p) =>
+      serveCard(p, blocksA, {
+        block: (bn) => {
+          if (which === "A") return bn === 1 ? null : undefined;
+          return buildCommand(CMD.SI8_READ, [0x00, 0x7d, bn, ...blocksB[bn]], true);
+        },
+      }),
+    );
+    const order: string[] = [];
+    h.conn.addEventListener("si:card-read-failed", (e) =>
+      order.push(`failed:${(e as CustomEvent<SICardReadFailure>).detail.cardNumber}`),
+    );
+    h.conn.addEventListener("si:card-detected", (e) =>
+      order.push(`detected:${(e as CustomEvent<{ cardNumber: number }>).detail.cardNumber}`),
+    );
+    h.port.push(det8(2220164, 0x02));
+    await settle();
+    which = "B";
+    h.port.push(det8(2164102, 0x02));
+    await settle();
+    expect(order).toEqual(["detected:2220164", "failed:2220164", "detected:2164102"]);
+    expect(h.failures).toHaveLength(1);
+    expect(h.readouts.map((r) => r.cardNumber)).toEqual([2164102]);
+    expect(h.port.ackCount()).toBe(1);
   });
 
   it("card removed mid-read: card-read-failed (removed) before card-removed", async () => {
@@ -596,14 +686,13 @@ describe("readout-station backup walk", () => {
     expect(numbersOf(result.records as never)).toEqual(ALL_SEVEN);
   });
 
-  it("a page that never answers rejects the read and nothing is erased", async () => {
+  it("a page that never answers rejects the read with the address of the gap", async () => {
     const h = await makeReader(serveBackup({ page: (addr) => (addr === 0x300 ? null : undefined) }));
     const caught = h.conn.readBackupMemory(readoutStationSysVal(BACKUP_END)).catch((e) => e);
     await vi.advanceTimersByTimeAsync(4 * 1500 + 200);
     const err = await caught;
     expect(err).toBeInstanceOf(BackupReadIncompleteError);
     expect((err as BackupReadIncompleteError).address).toBe(0x300);
-    expect(h.port.commands().some((c) => c.cmd === CMD.ERASE_BACKUP)).toBe(false);
   });
 
   it("a late reply for an earlier page is discarded, not taken for the next page", async () => {
@@ -665,17 +754,25 @@ describe("serial stream errors and reconnect", () => {
     expect(h.conn.holdsPort(h.port)).toBe(false);
   });
 
-  it("a fatal error rejects a command that was waiting for its answer", async () => {
+  it("a fatal error rejects a command that was waiting, at once", async () => {
+    // clearBackupMemory's first command (SET_MS) is a single-shot wait without
+    // retries: only rejectPendingCommand can end it before its 3 s timeout.
     let silent = false;
     const h = await makeReader((p) => {
-      p.responder = (f) => silent && f.cmd === CMD.GET_SYSTEM_VALUE;
+      p.responder = (f) => silent && f.cmd === CMD.SET_MS;
     });
     silent = true;
-    const pending = h.conn.readConnectedStation().catch((e) => e);
+    const pending = h.conn.clearBackupMemory().then(
+      () => null,
+      (e: unknown) => e,
+    );
     await settle();
     h.port.errorFatal();
-    // The wake loop retries a rejected probe, so give it its 10 attempts.
-    expect(await finish(pending)).toBeInstanceOf(Error);
+    // Far less than the command's own 3 s timeout.
+    await vi.advanceTimersByTimeAsync(100);
+    const err = await pending;
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe("Reader disconnected");
   });
 
   it("after a fatal error, attach(samePort) works again and writes reach the port", async () => {

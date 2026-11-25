@@ -40,7 +40,7 @@ import {
   parseStationInfo,
   parseTimeDrift,
   parseBackupPage,
-  parseReadoutBackupBuffer,
+  parseReadoutBackupBufferDetailed,
   isControlMode,
   isReadoutMode,
   stationModeLabel,
@@ -53,6 +53,7 @@ import {
   type StationInfo,
   type BackupRecord,
   type ReadoutBackupRecord,
+  type SkippedBackupSlot,
 } from "./si-protocol";
 import type {
   SIReader,
@@ -79,6 +80,8 @@ export type BackupResult =
   | {
       mode: "readout";
       records: ReadoutBackupRecord[];
+      /** Non-empty slots that could not be decoded; the station must not be erased. */
+      skippedSlots: SkippedBackupSlot[];
       stationSerial: number;
       stationCode: number;
     };
@@ -520,8 +523,12 @@ export class SIReaderConnection extends EventTarget implements SIReader {
       } catch {
         /* already gone */
       }
-      this.port = null;
-      this.setStatus("error");
+      // A new port may have been attached while the close was pending: it is
+      // not ours to null or to mark as errored.
+      if (this.port === port) {
+        this.port = null;
+        this.setStatus("error");
+      }
     }
   }
 
@@ -575,6 +582,10 @@ export class SIReaderConnection extends EventTarget implements SIReader {
         siLog(
           `Detected card #${detection.cardNumber} type=${detection.cardType}`,
         );
+        // A new card while the previous read is still open: the old one is
+        // gone. Fail it first, so its failure event cannot arrive after (and
+        // be mistaken for a failure of) the card detected now.
+        if (this.pendingCardType) this.failReadout("removed");
         this.dispatchEvent(
           new CustomEvent("si:card-detected", { detail: detection }),
         );
@@ -620,9 +631,6 @@ export class SIReaderConnection extends EventTarget implements SIReader {
   // ── Readout state machine ──────────────────────────────
 
   private async initiateReadout(detection: SICardDetection): Promise<void> {
-    // A new card while the previous read is still open: the old one is gone.
-    if (this.pendingCardType) this.failReadout("removed");
-
     // Auto-restore direct mode if stuck in remote (e.g. after programming/readout)
     if (this._inRemoteMode) {
       try {
@@ -771,6 +779,17 @@ export class SIReaderConnection extends EventTarget implements SIReader {
         return;
       }
       blockData = frame.data.slice(3);
+      // Block 0 carries the card number (bytes 25-27, 3 bytes big-endian). A
+      // block of another card (swapped in mid-read) must not be mixed in.
+      if (
+        blockNumber === 0 &&
+        this.pendingCardNumber > 0 &&
+        ((blockData[25] << 16) | (blockData[26] << 8) | blockData[27]) !==
+          (this.pendingCardNumber & 0xffffff)
+      ) {
+        this.retryOrFail("bad-block");
+        return;
+      }
     }
 
     this.pendingBlocks.push(blockData);
@@ -1392,6 +1411,7 @@ export class SIReaderConnection extends EventTarget implements SIReader {
       const empty: BackupResult = {
         mode: "readout",
         records: [],
+        skippedSlots: [],
         stationSerial: info.serialNo,
         stationCode: info.stationCode,
       };
@@ -1409,11 +1429,15 @@ export class SIReaderConnection extends EventTarget implements SIReader {
     for (let i = 0; i < raw.length; i++) {
       buffer.set(raw[i].subarray(5), pageAddresses[i] - 0x100);
     }
-    const records = parseReadoutBackupBuffer(buffer, 0x100);
-    siLog(`Backup read complete: ${records.length} readout-mode records (from ${totalLen} flash bytes)`);
+    const { records, skipped } = parseReadoutBackupBufferDetailed(buffer, 0x100);
+    for (const s of skipped) {
+      siWarn(`Backup slot @0x${s.slotAddress.toString(16)} not decoded (${s.reason}): ${s.rawBytesHex}`);
+    }
+    siLog(`Backup read complete: ${records.length} readout-mode records, ${skipped.length} skipped (from ${totalLen} flash bytes)`);
     const result: BackupResult = {
       mode: "readout",
       records,
+      skippedSlots: skipped,
       stationSerial: info.serialNo,
       stationCode: info.stationCode,
     };

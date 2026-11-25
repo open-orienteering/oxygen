@@ -35,7 +35,7 @@ import {
   createControlAnchors,
   buildControlOrdinals,
 } from "../lib/structured-search/anchors/control-anchors";
-import { BackupReadIncompleteError } from "../lib/webserial";
+import { runBackupFlow } from "../lib/backup-readout";
 import { ControlStatusHelp } from "../components/ControlStatusHelp";
 
 // ─── Types ────────────────────────────────────────────────
@@ -1520,6 +1520,8 @@ interface ReadoutResult {
   error?: string;
   poweredOff?: boolean;
   cleared?: boolean;
+  /** Shown under the row, e.g. slots that were not decoded (nothing was cleared). */
+  warning?: string;
   timestamp: Date;
 }
 
@@ -1572,15 +1574,84 @@ function ReadoutPanel({
   ) => {
     const code = stationData.stationCode;
 
-    // Read backup memory first. The result's `mode` tells us whether this is
+    // The read -> import -> clear decision lives in runBackupFlow: the station
+    // is erased only after a complete read, a decoded record for every slot
+    // and a successful import. The result's `mode` tells us whether this is
     // a control station (look up the control and import punches) or a
     // readout station (stage the parsed card readouts for the BackupPunches
     // page's Card readouts tab; no control-code match needed).
-    let backup: Awaited<ReturnType<typeof reader.readBackupMemory>>;
-    try {
-      backup = await reader.readBackupMemory(stationData.rawData);
-    } catch (err) {
-      if (!(err instanceof BackupReadIncompleteError)) throw err;
+    let poweredOff = false;
+    const flow = await runBackupFlow({
+      read: () => reader.readBackupMemory(stationData.rawData),
+      autoClear,
+      clear: () => reader.clearBackupMemory(),
+      importBackup: async (backup) => {
+        if (backup.mode === "readout") {
+          // Each record carries a full card image; we ship them to the server
+          // which stages them in `card_readout_backups` for review.
+          const records = backup.records.map((r) => ({
+            slotAddress: r.slotAddress,
+            cardNo: r.card.cardNumber,
+            cardType: r.card.cardType,
+            punches: r.card.punches.map((p) => ({
+              controlCode: p.controlCode,
+              // SI card times are seconds-since-midnight; the server stores
+              // punches in deciseconds (same unit as live storeReadout).
+              time: p.time * 10,
+            })),
+            startTime: r.card.startTime != null ? r.card.startTime * 10 : null,
+            finishTime: r.card.finishTime != null ? r.card.finishTime * 10 : null,
+            checkTime: r.card.checkTime != null ? r.card.checkTime * 10 : null,
+            clearTime: r.card.clearTime != null ? r.card.clearTime * 10 : null,
+            ownerData: r.card.ownerData
+              ? (r.card.ownerData as unknown as Record<string, unknown>)
+              : undefined,
+            rawBytesHex: Array.from(r.rawBytes)
+              .map((b) => b.toString(16).padStart(2, "0"))
+              .join(""),
+          }));
+          let inserted = 0;
+          let duplicates = 0;
+          if (records.length > 0) {
+            const result = await importReadoutBackupsMutation.mutateAsync({
+              stationSerial: stationData.serialNo,
+              records,
+            });
+            inserted = result.inserted;
+            duplicates = result.duplicates;
+          }
+          return { punchCount: records.length, newPunches: inserted, duplicates };
+        }
+
+        // Control-mode backup: look up the control by its station code first.
+        const matchedControl = controls.find((c) => {
+          const codes = c.codes.split(";").map((s) => parseInt(s.trim(), 10));
+          return codes.includes(code);
+        });
+        if (!matchedControl) return null;
+
+        const records = backup.records;
+        let newPunches = 0;
+        if (records.length > 0) {
+          const punches = records.map((r) => ({
+            cardNo: r.cardNo,
+            punchTime: r.punchTimeSecs * 10, // seconds → deciseconds for MeOS
+            punchDatetime: r.punchDatetime,
+            subSecond: r.subSecond,
+          }));
+          const result = await new Promise<{ count: number }>((resolve, reject) => {
+            importMutation.mutate(
+              { controlId: matchedControl.id, stationSerial: stationData.serialNo, punches },
+              { onSuccess: resolve, onError: reject },
+            );
+          });
+          newPunches = result.count;
+        }
+        return { punchCount: records.length, newPunches, duplicates: 0 };
+      },
+    });
+
+    if (flow.outcome === "incomplete") {
       // A page was missing: what arrived is not the whole record, so nothing
       // is imported and nothing is cleared. Marking the serial as seen keeps
       // auto mode from re-reading the same station in a loop; reading it
@@ -1590,92 +1661,13 @@ function ReadoutPanel({
         code, punchCount: 0, newPunches: 0,
         batteryVoltage: stationData.batteryVoltage,
         success: false,
-        error: t("backupReadIncomplete", { address: err.address.toString(16) }),
+        error: t("backupReadIncomplete", { address: flow.error.address.toString(16) }),
         timestamp: new Date(),
       }, ...prev].slice(0, 20));
       return;
     }
-
-    let newPunches = 0;
-    let punchCount = 0;
-    let duplicates = 0;
-    let cleared = false;
-    let poweredOff = false;
-
-    if (backup.mode === "readout") {
-      // Readout-station backup recovery. Each record carries a full card
-      // image; we ship them to the server which stages them in
-      // `card_readout_backups` for review on the Backup Punches page.
-      const records = backup.records.map((r) => ({
-        slotAddress: r.slotAddress,
-        cardNo: r.card.cardNumber,
-        cardType: r.card.cardType,
-        punches: r.card.punches.map((p) => ({
-          controlCode: p.controlCode,
-          // SI card times are seconds-since-midnight; the server stores
-          // punches in deciseconds (same unit as live storeReadout).
-          time: p.time * 10,
-        })),
-        startTime: r.card.startTime != null ? r.card.startTime * 10 : null,
-        finishTime: r.card.finishTime != null ? r.card.finishTime * 10 : null,
-        checkTime: r.card.checkTime != null ? r.card.checkTime * 10 : null,
-        clearTime: r.card.clearTime != null ? r.card.clearTime * 10 : null,
-        ownerData: r.card.ownerData
-          ? (r.card.ownerData as unknown as Record<string, unknown>)
-          : undefined,
-        rawBytesHex: Array.from(r.rawBytes)
-          .map((b) => b.toString(16).padStart(2, "0"))
-          .join(""),
-      }));
-      punchCount = records.length;
-      if (records.length > 0) {
-        const result = await importReadoutBackupsMutation.mutateAsync({
-          stationSerial: stationData.serialNo,
-          records,
-        });
-        newPunches = result.inserted;
-        duplicates = result.duplicates;
-      }
-      // Clear / power-off are still wired but skip the control-side actions.
-      if (autoClear) {
-        try {
-          await reader.clearBackupMemory();
-          cleared = true;
-        } catch {
-          console.warn("Failed to clear backup memory after read");
-        }
-      }
-      if (beep) {
-        await reader.beep(1);
-      }
-      if (autoPowerOff) {
-        try {
-          await reader.powerOffStation();
-          poweredOff = true;
-        } catch {
-          // Ignore
-        }
-      }
-      lastReadSerial.current = stationData.serialNo;
-      setResults((prev) => [{
-        code, punchCount, newPunches, duplicates,
-        batteryVoltage: stationData.batteryVoltage,
-        success: true,
-        mode: "readout" as const,
-        poweredOff,
-        cleared,
-        timestamp: new Date(),
-      }, ...prev].slice(0, 20));
-      return;
-    }
-
-    // Control-mode backup: look up the control by its station code first.
-    const matchedControl = controls.find((c) => {
-      const codes = c.codes.split(";").map((s) => parseInt(s.trim(), 10));
-      return codes.includes(code);
-    });
-
-    if (!matchedControl) {
+    if (flow.outcome === "import-failed") throw flow.error;
+    if (flow.outcome === "not-imported") {
       // Mark this serial as "seen" so the auto-poll loop doesn't keep
       // emitting the same error on every probe cycle.
       lastReadSerial.current = stationData.serialNo;
@@ -1688,42 +1680,9 @@ function ReadoutPanel({
       return;
     }
 
-    // Control-mode backup: existing punch-import path.
-    const records = backup.records;
-    punchCount = records.length;
-    if (records.length > 0) {
-      const punches = records.map((r) => ({
-        cardNo: r.cardNo,
-        punchTime: r.punchTimeSecs * 10, // seconds → deciseconds for MeOS
-        punchDatetime: r.punchDatetime,
-        subSecond: r.subSecond,
-      }));
-
-      const result = await new Promise<{ count: number }>((resolve, reject) => {
-        importMutation.mutate(
-          { controlId: matchedControl.id, stationSerial: stationData.serialNo, punches },
-          { onSuccess: resolve, onError: reject },
-        );
-      });
-      newPunches = result.count;
-    }
-
-    // Clear backup memory after read (if auto-clear is enabled)
-    if (autoClear) {
-      try {
-        await reader.clearBackupMemory();
-        cleared = true;
-      } catch {
-        console.warn("Failed to clear backup memory after read");
-      }
-    }
-
-    // Beep
     if (beep) {
       await reader.beep(1);
     }
-
-    // Power off if enabled
     if (autoPowerOff) {
       try {
         await reader.powerOffStation();
@@ -1732,18 +1691,25 @@ function ReadoutPanel({
         // Ignore power-off failure
       }
     }
-
     lastReadSerial.current = stationData.serialNo;
 
+    const skippedCount = flow.skippedSlots.length;
     setResults((prev) => [{
       code,
-      punchCount,
-      newPunches,
+      punchCount: flow.imported.punchCount,
+      newPunches: flow.imported.newPunches,
+      ...(flow.backup.mode === "readout" ? { duplicates: flow.imported.duplicates } : {}),
       batteryVoltage: stationData.batteryVoltage,
       success: true,
-      mode: "control" as const,
+      mode: flow.backup.mode,
       poweredOff,
-      cleared,
+      cleared: flow.cleared,
+      warning: skippedCount > 0
+        ? t("backupSlotsSkipped", {
+            count: skippedCount,
+            addresses: flow.skippedSlots.map((s) => `0x${s.slotAddress.toString(16)}`).join(", "),
+          })
+        : undefined,
       timestamp: new Date(),
     }, ...prev].slice(0, 20));
   }, [controls, beep, autoPowerOff, autoClear, importMutation, importReadoutBackupsMutation, t]);
@@ -1998,6 +1964,7 @@ function ReadoutPanel({
                 ) : (
                   <span className="text-red-600">{r.error}</span>
                 )}
+                {r.warning && <span className="text-amber-700 font-medium">{r.warning}</span>}
               </div>
               <div className="flex items-center gap-3 text-xs text-slate-500">
                 <span className={`font-mono ${r.batteryVoltage < 2.5 ? "text-red-600 font-bold" : ""}`}>
