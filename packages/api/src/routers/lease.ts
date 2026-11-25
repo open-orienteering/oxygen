@@ -24,6 +24,7 @@ import {
 import { prisma } from "../db.js";
 import {
   acquireLease,
+  acquireLeaseForPeer,
   releaseLease,
   getActiveLease,
   exportEventSnapshot,
@@ -88,7 +89,7 @@ export const leaseRouter = router({
   acquire: peerProcedure
     .input(z.object({ holderNodeId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
-      const lease = await acquireLease(ctx.db, ctx.event.id, input.holderNodeId);
+      const lease = await acquireLeaseForPeer(ctx.db, ctx.event.id, input.holderNodeId);
       return { ok: true as const, acquiredAt: lease.acquiredAt.toISOString() };
     }),
 

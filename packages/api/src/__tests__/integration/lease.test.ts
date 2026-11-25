@@ -43,6 +43,7 @@ import {
 import { makeCaller } from "../helpers/caller.js";
 import {
   acquireLease,
+  acquireLeaseForPeer,
   releaseLease,
   getActiveLease,
   assertRaceWritable,
@@ -54,6 +55,7 @@ import {
 import {
   _setPeerTransportFactory,
   refreshAllSettingsOnce,
+  shipEventOnce,
   type PeerTransport,
 } from "../../sync/shipper.js";
 import { canonicalJson, exportMapRows, refreshCloudOwnedMaps, refreshWrites } from "../../sync/mapRefresh.js";
@@ -130,7 +132,7 @@ async function provisionNodeB(): Promise<string> {
 function leasePeerToB(): LeasePeer {
   return {
     acquire: async (_nameId, holder) => {
-      await acquireLease(dbB, eventB.id, holder);
+      await acquireLeaseForPeer(dbB, eventB.id, holder);
     },
     release: async (_nameId, holder) => {
       await releaseLease(dbB, eventB.id, { expectedHolder: holder });
@@ -890,6 +892,53 @@ describe("checkout → write → checkin lifecycle", () => {
       expect(club).toMatchObject({ eventId: null, name: `club-${mapSuffix}.png` });
       expect(Buffer.from(club.data).equals(CLUB_PNG)).toBe(true);
     } finally {
+      await undoCheckout();
+    }
+  });
+
+  it("an entry committed on the cloud between acquire and export reaches the box exactly once (MC-22)", async () => {
+    const wire = (code: number, id = randomUUID()) => ({
+      id,
+      type: "punch.recorded" as const,
+      competitionId: CHECKOUT_NAME,
+      stationId: "roc-mc22",
+      timestamp: Date.now(),
+      hlc: { physical: Date.now(), logical: 0 },
+      schemaVersion: 1,
+      payload: { cardNo: 800200, controlCode: code, time: 372000 + code, origin: "online_input" },
+    });
+    // History before the checkout: baked into the snapshot, never pulled.
+    const before = wire(61);
+    await ingestJournalEntries(dbB, eventB, [before]);
+    // Lands on the cloud after the lease is taken, before the snapshot is read.
+    const during = wire(62);
+    _setLeasePeerFactory(() => ({
+      ...leasePeerToB(),
+      exportSnapshot: async () => {
+        await ingestJournalEntries(dbB, eventB, [during]);
+        return exportEventSnapshot(dbB, eventB);
+      },
+    }));
+    try {
+      await caller.lease.checkout({ nameId: CHECKOUT_NAME });
+      const local = await ctx.db.event.findUniqueOrThrow({
+        where: { nameId: CHECKOUT_NAME },
+        select: { id: true, nameId: true, zeroTime: true },
+      });
+      expect((await dbB.journalEntry.findUniqueOrThrow({ where: { id: before.id } })).pushedAt).not.toBeNull();
+      expect((await dbB.journalEntry.findUniqueOrThrow({ where: { id: during.id } })).pushedAt).toBeNull();
+
+      const stats = await shipEventOnce(ctx.db, local, PEER_URL, transportToB());
+      expect(stats.errors).toEqual([]);
+      expect(stats.pulled).toBe(1);
+      expect(await ctx.db.journalEntry.findUnique({ where: { id: before.id } })).toBeNull();
+      expect(await ctx.db.journalEntry.findUnique({ where: { id: during.id } })).not.toBeNull();
+      const punches = await ctx.db.punch.findMany({
+        where: { eventId: local.id, cardNo: 800200, controlCode: { in: [61, 62] } },
+      });
+      expect(punches.map((p) => p.controlCode).sort()).toEqual([61, 62]);
+    } finally {
+      _setLeasePeerFactory(() => leasePeerToB());
       await undoCheckout();
     }
   });

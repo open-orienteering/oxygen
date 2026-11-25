@@ -114,6 +114,27 @@ export async function acquireLease(
   }
 }
 
+/**
+ * The cloud side of a checkout: take the lease, then mark every entry already
+ * in the journal as delivered. Their effects are in the snapshot the box is
+ * about to read, so the box must not pull them. Marking runs before the
+ * snapshot is read; an entry committed after it stays unmarked and reaches
+ * the box through its first pull even when the snapshot already holds its
+ * effect (applying it twice is a no-op, review MC-22).
+ */
+export async function acquireLeaseForPeer(
+  db: PrismaClient,
+  eventId: bigint,
+  holderNodeId: string,
+): Promise<ActiveLease> {
+  const lease = await acquireLease(db, eventId, holderNodeId);
+  await db.journalEntry.updateMany({
+    where: { eventId, pushedAt: null },
+    data: { pushedAt: new Date() },
+  });
+  return lease;
+}
+
 export async function releaseLease(
   db: PrismaClient,
   eventId: bigint,
@@ -212,7 +233,7 @@ function importRows(
 }
 
 /** Delegate lookup that keeps Prisma's per-model types out of the loop. */
-function delegate(db: PrismaClient, table: SnapshotTable) {
+function delegate(db: PrismaClient | Prisma.TransactionClient, table: SnapshotTable) {
   return db[table] as unknown as {
     findMany(args: { where: { eventId: bigint } }): Promise<Record<string, unknown>[]>;
     createMany(args: { data: Record<string, unknown>[] }): Promise<unknown>;
@@ -249,49 +270,59 @@ export async function exportEventSnapshot(
   db: PrismaClient,
   event: EventRef,
 ): Promise<EventSnapshot> {
-  const eventRow = await db.event.findUniqueOrThrow({
-    where: { id: event.id },
-  });
+  // One snapshot of the database for every read: tables, counters, journal
+  // head and the map and graphic parts all describe the same moment, so a
+  // write committing mid-export can show up in one part and not another
+  // (review MC-22). REPEATABLE READ does not block writers.
+  return db.$transaction(
+    async (tx) => {
+      const eventRow = await tx.event.findUniqueOrThrow({
+        where: { id: event.id },
+      });
 
-  const tables = {} as EventSnapshot["tables"];
-  for (const t of SNAPSHOT_TABLES) {
-    if (t === "courseControl") {
-      tables[t] = await db.courseControl.findMany({
-        where: { course: { eventId: event.id } },
-      }) as unknown as Record<string, unknown>[];
-      continue;
-    }
-    if (t === "classCoursePool") {
-      tables[t] = await db.classCoursePool.findMany({
-        where: { class: { eventId: event.id } },
-      }) as unknown as Record<string, unknown>[];
-      continue;
-    }
-    tables[t] = await delegate(db, t).findMany({ where: { eventId: event.id } });
-  }
+      const tables = {} as EventSnapshot["tables"];
+      for (const t of SNAPSHOT_TABLES) {
+        if (t === "courseControl") {
+          tables[t] = await tx.courseControl.findMany({
+            where: { course: { eventId: event.id } },
+          }) as unknown as Record<string, unknown>[];
+          continue;
+        }
+        if (t === "classCoursePool") {
+          tables[t] = await tx.classCoursePool.findMany({
+            where: { class: { eventId: event.id } },
+          }) as unknown as Record<string, unknown>[];
+          continue;
+        }
+        tables[t] = await delegate(tx, t).findMany({ where: { eventId: event.id } });
+      }
 
-  const seqs = await db.eventSeq.findMany({
-    where: { eventId: event.id },
-    select: { tableName: true, nextSeq: true },
-  });
+      const seqs = await tx.eventSeq.findMany({
+        where: { eventId: event.id },
+        select: { tableName: true, nextSeq: true },
+      });
 
-  const head = await db.journalEntry.findFirst({
-    where: { eventId: event.id },
-    orderBy: [{ hlc: "desc" }, { id: "desc" }],
-    select: { hlc: true, id: true },
-  });
+      const head = await tx.journalEntry.findFirst({
+        where: { eventId: event.id },
+        orderBy: [{ hlc: "desc" }, { id: "desc" }],
+        select: { hlc: true, id: true },
+      });
 
-  return {
-    event: eventRow as unknown as Record<string, unknown>,
-    tables,
-    seqs,
-    journalCursor: head
-      ? { hlc: head.hlc.toString(), id: head.id }
-      : { hlc: "0", id: "" },
-    maps: await exportSnapshotMaps(db, event.id),
-    versions: Object.fromEntries(TOKEN_TABLES.map((t) => [t, tokenMapOf(tables[t])])),
-    graphics: await exportSnapshotGraphics(db, event.id),
-  };
+      return {
+        event: eventRow as unknown as Record<string, unknown>,
+        tables,
+        seqs,
+        // Kept for a box that still pulls by HLC cursor.
+        journalCursor: head
+          ? { hlc: head.hlc.toString(), id: head.id }
+          : { hlc: "0", id: "" },
+        maps: await exportSnapshotMaps(tx, event.id),
+        versions: Object.fromEntries(TOKEN_TABLES.map((t) => [t, tokenMapOf(tables[t])])),
+        graphics: await exportSnapshotGraphics(tx, event.id),
+      };
+    },
+    { isolationLevel: "RepeatableRead", timeout: 60_000 },
+  );
 }
 
 /**
