@@ -90,7 +90,10 @@ export interface OxygenEvent {
   actorId?: string | null;
   payload: EventPayload;
   status: "pending" | "synced" | "failed";
+  /** Why the server refused it: a journal refusal code (older servers: free text). */
   error?: string;
+  /** The role a `FORBIDDEN` refusal asks for. */
+  capability?: string;
   attempts: number;
 }
 

@@ -25,7 +25,7 @@
  * token does not either (a structure edit and a field move never conflict).
  */
 
-import type { Prisma, PrismaClient } from "./generated/prisma/client.js";
+import { Prisma, type PrismaClient } from "./generated/prisma/client.js";
 import { encodeHlc, type ReferenceUpsertPayload } from "@oxygen/shared";
 import { appendJournal } from "./journalEmit.js";
 import { nextServerHlc } from "./serverClock.js";
@@ -34,6 +34,57 @@ type Db = PrismaClient | Prisma.TransactionClient;
 
 const STRIP = new Set(["id", "eventId", "seq", "createdAt", "updatedAt"]);
 const CLASS_LAYOUT_FIELDS = ["printScale", "sheetTemplateId"] as const;
+/** Derived (E6): travels with the checkout snapshot, not the journal. */
+const COURSE_DERIVED_FIELDS = ["lengthSource"] as const;
+
+export type ReferenceEntity = "control" | "course" | "class";
+
+/**
+ * What the receiving side accepts in a `*.upserted` entry's `fields`, per
+ * entity, derived from the same model and exclusions as `portableFields`
+ * above so emitter and receiver cannot drift:
+ *   - `fields`: the scalar columns that may be written (never `id`,
+ *     `eventId`, `seq`, `createdAt`, `updatedAt`, nor the layout / derived
+ *     columns the emitter strips); any other key in a payload is dropped;
+ *   - `bigint`: columns that travel as decimal strings;
+ *   - `json`: nullable JSON columns (a `null` must become `Prisma.JsonNull`);
+ *   - `refs`: columns that point at another row of the same event, which the
+ *     receiver checks belong to the event before the write.
+ */
+export interface ReferenceEntityRule {
+  fields: ReadonlySet<string>;
+  bigint: ReadonlySet<string>;
+  json: ReadonlySet<string>;
+  refs: ReadonlyArray<{ column: string; table: "control" | "course" }>;
+}
+
+function portableColumns(all: Record<string, string>, extraStrip: readonly string[] = []) {
+  return new Set(Object.values(all).filter((k) => !STRIP.has(k) && !extraStrip.includes(k)));
+}
+
+export const REFERENCE_ENTITIES: Record<ReferenceEntity, ReferenceEntityRule> = {
+  control: {
+    fields: portableColumns(Prisma.ControlScalarFieldEnum),
+    bigint: new Set(["version"]),
+    json: new Set(["description", "circleGaps"]),
+    refs: [],
+  },
+  course: {
+    fields: portableColumns(Prisma.CourseScalarFieldEnum, COURSE_DERIVED_FIELDS),
+    bigint: new Set(["version"]),
+    json: new Set(["descriptionInstructions", "structure"]),
+    refs: [
+      { column: "finishControlId", table: "control" },
+      { column: "parentCourseId", table: "course" },
+    ],
+  },
+  class: {
+    fields: portableColumns(Prisma.ClassScalarFieldEnum, CLASS_LAYOUT_FIELDS),
+    bigint: new Set(["eventorId"]),
+    json: new Set(["qualification"]),
+    refs: [{ column: "courseId", table: "course" }],
+  },
+};
 
 function portableFields(
   row: Record<string, unknown>,
@@ -80,10 +131,8 @@ export async function courseUpsertPayload(
   return {
     id: row.id,
     seq: row.seq,
-    fields: portableFields(row as unknown as Record<string, unknown>, [
-      // Derived (E6): travels with the snapshot, not the journal.
-      "lengthSource",
-    ]),
+    // lengthSource is derived (E6): it travels with the snapshot, not the journal.
+    fields: portableFields(row as unknown as Record<string, unknown>, COURSE_DERIVED_FIELDS),
     courseControls: ccs,
   };
 }

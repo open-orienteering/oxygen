@@ -585,3 +585,30 @@ describe("kiosk key", () => {
     });
   });
 });
+
+describe("runner registration needs Race crew, edit and delete stay Event admin", () => {
+  it("race crew can runner.create but not runner.update / runner.delete", async () => {
+    const cls = await callerFor(admin).class.create({ name: "Crew-reg" });
+    const created = await callerFor(crew).runner.create({
+      name: "Desk Dana",
+      classId: cls.id,
+      clubName: "OK",
+    });
+    expect(created.id).toBeGreaterThan(0);
+    await expect(
+      callerFor(crew).runner.update({ id: created.id, name: "Renamed" }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(callerFor(crew).runner.delete({ id: created.id })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    // The queued equivalent (events.push runner.registered) follows the same rule.
+    await callerFor(admin).runner.delete({ id: created.id });
+  });
+
+  it("a member without a race grant cannot runner.create", async () => {
+    const cls = await callerFor(admin).class.create({ name: "Member-reg" });
+    await expect(
+      callerFor(member).runner.create({ name: "Nope", classId: cls.id, clubName: "OK" }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+});

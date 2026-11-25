@@ -170,8 +170,10 @@ export const eventProcedure = authedProcedure.use(requireEvent);
  * Event-scoped procedure for race-critical mutations (the journaled set).
  * Adds the single-writer lease guard: when the event is checked out to
  * another node, the mutation fails with a typed PRECONDITION_FAILED before
- * any write happens. `events.push` is NOT guarded — it is the journal
- * ingestion sink and must accept shipped/drained entries on every node.
+ * any write happens. `events.push` is NOT guarded and is not an
+ * `eventProcedure` at all (`publicEventProcedure`: node secret or signed-in
+ * user, then a per-entry capability check) — it is the journal ingestion
+ * sink and must accept shipped/drained entries on every node.
  */
 export const raceProcedure = eventProcedure.use(async ({ ctx, next }) => {
   const ectx = ctx as EventContext;
@@ -180,14 +182,36 @@ export const raceProcedure = eventProcedure.use(async ({ ctx, next }) => {
 });
 
 /**
- * Event-scoped procedure reserved for node-to-node calls (journal shipping).
- * Requires `SYNC_SHARED_SECRET` to be configured on this node AND presented
- * by the caller in the `x-oxygen-sync-secret` header. Without a configured
- * secret every call is refused — peering is opt-in.
- *
- * Does not require a human user — machine identity is the shared secret.
+ * Event-scoped, no user gate: the base of procedures that decide their own
+ * authentication (`events.push`: node secret or signed-in user; the kiosk
+ * variants). Unlike `eventProcedure` it does not chain `authedProcedure`, so
+ * a request authenticated only by the node secret passes on an invite-only
+ * node.
  */
-export const peerProcedure = publicProcedure.use(requireEvent).use(async ({ ctx, next }) => {
+export const publicEventProcedure = publicProcedure.use(requireEvent);
+
+/**
+ * Whether a presented node secret equals this node's `SYNC_SHARED_SECRET`
+ * (length check, then `timingSafeEqual`, like `kioskKeyMatches`). False when
+ * either side is empty.
+ */
+export function syncSecretMatches(
+  presented: string | null | undefined,
+  expected: string | null | undefined = syncSharedSecret(),
+): boolean {
+  if (!presented || !expected) return false;
+  const a = Buffer.from(presented);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
+/**
+ * The node-secret check shared by `peerProcedure` and `events.push`. Throws
+ * `PRECONDITION_FAILED` when this node has no `SYNC_SHARED_SECRET` (peering
+ * is opt-in) and `UNAUTHORIZED` when the presented secret is wrong.
+ */
+export function assertNodeSecret(presented: string | null | undefined): void {
   const expected = syncSharedSecret();
   if (!expected) {
     throw new TRPCError({
@@ -195,12 +219,26 @@ export const peerProcedure = publicProcedure.use(requireEvent).use(async ({ ctx,
       message: "Node-to-node sync is not configured on this node (no SYNC_SHARED_SECRET)",
     });
   }
-  if (ctx.syncSecret !== expected) {
+  if (!syncSecretMatches(presented, expected)) {
     throw new TRPCError({
       code: "UNAUTHORIZED",
       message: "Invalid or missing node sync secret",
     });
   }
+}
+
+/**
+ * Event-scoped procedure reserved for node-to-node calls (journal pull).
+ * Requires `SYNC_SHARED_SECRET` to be configured on this node AND presented
+ * by the caller in the `x-oxygen-sync-secret` header. Without a configured
+ * secret every call is refused — peering is opt-in.
+ *
+ * Does not require a human user — machine identity is the shared secret.
+ * `events.push` accepts the same secret as an alternative to a signed-in
+ * user (see `assertNodeSecret`).
+ */
+export const peerProcedure = publicEventProcedure.use(async ({ ctx, next }) => {
+  assertNodeSecret(ctx.syncSecret);
   return next();
 });
 

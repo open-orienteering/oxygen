@@ -1,5 +1,5 @@
 import { createTRPCReact } from "@trpc/react-query";
-import { createTRPCClient, httpBatchLink } from "@trpc/client";
+import { createTRPCClient, httpBatchLink, httpLink } from "@trpc/client";
 import type { AppRouter } from "@oxygen/api";
 import { rejectHtmlApiResponse } from "./html-api-response";
 import { venueAwareFetch } from "./node-discovery";
@@ -44,22 +44,52 @@ async function fetchJsonApi(
   return rejectHtmlApiResponse(await venueAwareFetch(input, init));
 }
 
-export function eventScopedTrpcFetch(
-  input: RequestInfo | URL,
-  init?: RequestInit,
-): Promise<Response> {
-  const nameId = activeEventNameId();
-  if (typeof input === "string") {
-    return fetchJsonApi(scopeTrpcUrl(input, nameId), init);
+/** A fetch scoped to the event `getNameId` names (the URL's, or one fixed id). */
+export function makeEventScopedFetch(getNameId: () => string | null) {
+  return (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const nameId = getNameId();
+    if (typeof input === "string") {
+      return fetchJsonApi(scopeTrpcUrl(input, nameId), init);
+    }
+    if (input instanceof URL) {
+      return fetchJsonApi(new URL(scopeTrpcUrl(input.href, nameId)), init);
+    }
+    if (!nameId) return fetchJsonApi(input, init);
+    return fetchJsonApi(
+      new Request(scopeTrpcUrl(input.url, nameId), input),
+      init,
+    );
+  };
+}
+
+export const eventScopedTrpcFetch = makeEventScopedFetch(activeEventNameId);
+
+const eventClients = new Map<string, ReturnType<typeof createEventClient>>();
+
+function createEventClient(nameId: string) {
+  return createTRPCClient<AppRouter>({
+    links: [
+      httpLink({
+        url: getApiUrl(),
+        fetch: makeEventScopedFetch(() => nameId),
+        headers: () => ({ "x-competition-id": nameId }),
+      }),
+    ],
+  });
+}
+
+/**
+ * A vanilla client pinned to one event: header and `?event=` come from
+ * `nameId`, never from the page URL. The outbox drain uses it so an entry
+ * always reaches the competition it was made in (MC-01, BLD-04).
+ */
+export function trpcClientForEvent(nameId: string) {
+  let client = eventClients.get(nameId);
+  if (!client) {
+    client = createEventClient(nameId);
+    eventClients.set(nameId, client);
   }
-  if (input instanceof URL) {
-    return fetchJsonApi(new URL(scopeTrpcUrl(input.href, nameId)), init);
-  }
-  if (!nameId) return fetchJsonApi(input, init);
-  return fetchJsonApi(
-    new Request(scopeTrpcUrl(input.url, nameId), input),
-    init,
-  );
+  return client;
 }
 
 export const trpcVanillaClient = createTRPCClient<AppRouter>({

@@ -1,6 +1,12 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, viewProcedure, manageRaceProcedure, kioskOrRaceOperateProcedure } from "../trpc.js";
+import {
+  router,
+  viewProcedure,
+  manageRaceProcedure,
+  raceOperateRaceProcedure,
+  kioskOrRaceOperateProcedure,
+} from "../trpc.js";
 import { toAbsolute, toRelative, nowMeosDate, nowMeosTime } from "../timeConvert.js";
 import { RunnerStatus, type RunnerDetail, type RunnerInfo } from "@oxygen/shared";
 import {
@@ -43,7 +49,7 @@ async function getRunnerBySeq(
 
 /** Resolve a class seq to its UUID. */
 async function classSeqToId(
-  db: import("../generated/prisma/client.js").PrismaClient,
+  db: import("../generated/prisma/client.js").PrismaClient | import("../generated/prisma/client.js").Prisma.TransactionClient,
   eventId: bigint,
   seq: number,
 ): Promise<string> {
@@ -66,7 +72,7 @@ async function classSeqToId(
  * so a shipped entry replays through exactly the same translation.
  */
 export async function buildRunnerUpdateData(
-  db: import("../generated/prisma/client.js").PrismaClient,
+  db: import("../generated/prisma/client.js").PrismaClient | import("../generated/prisma/client.js").Prisma.TransactionClient,
   eventId: bigint,
   zeroTime: number,
   fields: Record<string, unknown>,
@@ -439,7 +445,10 @@ export const runnerRouter = router({
       );
     }),
 
-  create: manageRaceProcedure
+  // Registration is a race-crew job (a station's queued `runner.registered`
+  // needs `race.operate`, so the online path must not be stricter). Edit and
+  // delete stay Event admin. docs/system/authentication.md.
+  create: raceOperateRaceProcedure
     .input(runnerCreateSchema)
     .mutation(async ({ ctx, input }) => {
       await assertCardNotTaken(ctx.db, ctx.event.id, input.cardNo);

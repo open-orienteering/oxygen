@@ -218,6 +218,53 @@ state is never reconstructed by replaying the journal.
   endpoint stations' outboxes already drain into. Node-to-node shipping
   reuses it unchanged.
 
+### Ingest (`ingestJournalEntries`)
+
+The one path every incoming entry takes (`events.push` for stations and a
+peer's shipper, the pull side of the shipper):
+
+- **One transaction per entry.** The journal row is inserted first, then the
+  table writes, then the follow-up the apply decided on (a station
+  registration's variant deal and its own `runner.updated` entry). Any
+  failure rolls all of it back, so a retry re-runs the whole entry; before
+  this, a lost follow-up was never repeated because the retry hit the
+  idempotency check. The journal row going in first makes two concurrent
+  ingests of one id serialize on the primary key: the loser sees the winner's
+  row and reports `synced`. Post-commit effects (the Google Sheets push of a
+  `card.read`) run after the commit, on the singleton client.
+- **Idempotency is per event.** An id already journaled under the same event
+  is `synced`; under another event it is refused as `ENTRY_IN_OTHER_EVENT`.
+  Row ids inside payloads follow the same rule: a `tempId` or punch `id` that
+  belongs to another event is `ROW_IN_OTHER_EVENT`, never a "duplicate".
+- **Stop at the first apply failure.** An exception while applying puts that
+  entry in `failed[]` with a stable code (`INVALID_PAYLOAD`,
+  `ROW_IN_OTHER_EVENT` or `APPLY_FAILED`; the exception text stays in the
+  server log) and ends the batch: the entries after it are in neither list.
+  Several types are last-write-wins, so applying the later ones now and the
+  failed one on a retry would flip their order. The sender keeps the rest
+  pending and sends them next round (the shipper advances its watermark
+  contiguously; the station drain re-queries its pending entries). Refusals
+  decided before an entry is touched (`FORBIDDEN`, `COMPETITION_MISMATCH`,
+  `ENTRY_IN_OTHER_EVENT`) never stop the batch.
+- **Gate, then apply.** `events.push` hands the ingest a per-entry gate: the
+  entry's `competitionId` must be the request's event, and on the user path
+  the entry's capability must be held (table in
+  [authentication.md](authentication.md#journal-push)). The shipper's pull
+  path passes no gate.
+- **Reference upserts** (`class` / `course` / `control.upserted`,
+  `reference.imported`) are untrusted input: a row id that exists in another
+  event is refused; `fields` passes a per-entity allow-list shared with the
+  emitter (`REFERENCE_ENTITIES` in `referenceJournal.ts`, never `id`,
+  `eventId`, `seq`, timestamps); **a key outside the list is dropped and
+  logged once**, not an error, so a newer node with an extra column still
+  syncs with an older one (the column itself does not travel until both run
+  the new code); decimal-string BigInts (`version`, a class's `eventorId`) are
+  converted back; every row the payload points at (course controls, pool
+  courses, finish control, parent course, a class's course) must belong to
+  the event (`INVALID_PAYLOAD`). Child link rows are replaced on the entry's
+  transaction, so a failing insert no longer leaves a course without
+  controls, and `reference.imported` is atomic as a whole.
+
 ### Clock-skew detection
 
 On every successful push, the server returns `serverTimeMs`; the client
@@ -301,6 +348,16 @@ box dies. Mitigations, in order of importance:
   `SYNC_SHARED_SECRET`, `SYNC_INTERVAL_MS`).
 - **`events.since`** — paginated pull in canonical `(hlc, id)` order,
   guarded by the shared secret (`peerProcedure`); stations never call it.
+- **`events.push`** accepts the same secret as the peer's credential: a node
+  presenting `x-oxygen-sync-secret` needs no user (the cloud behind an
+  invite-only proxy accepts the box's push even when its service account is
+  not a member), a wrong secret is `UNAUTHORIZED`, a secret sent to a node
+  without `SYNC_SHARED_SECRET` is `PRECONDITION_FAILED`. The secret is
+  compared in constant time. The push is still checked per entry for its
+  competition (`COMPETITION_MISMATCH`); only the capability check is skipped,
+  because the origin node already authorised the write. Without a secret the
+  caller is a station and the capability table applies
+  ([authentication.md](authentication.md#journal-push)).
 - **Shipper worker** (venue side): push local entries above the peer
   watermark to the peer's `events.push`; pull cloud-originated entries
   (e.g. ROC punches) via `events.since`; apply idempotently through the
@@ -383,6 +440,38 @@ deleted control) is kept as a failed entry with Retry / Discard; nothing
 is dropped silently. Its own-writes overlay patches the editor's query
 cache (`course.controlCoordinates`, `control.list`) rather than a
 projection table, because the canvas reads the cache.
+
+### The station drain (client side of `events.push`)
+
+`lib/offline/sync.ts` empties the `events` outbox into `events.push`.
+
+- **The header comes from the entries, not the URL.** Pending entries are
+  grouped by `competitionId`, and each group goes through
+  `trpcClientForEvent(competitionId)` (`lib/trpc.ts`): its
+  `x-competition-id` header and `?event=` cache scope are that event's,
+  whatever page is open. Switching event mid-drain, or draining an event's
+  entries from another event's page, can no longer file them under the wrong
+  event. The auto-drain (`useEventQueue`) therefore drains every event's
+  pending entries, not only the open event's.
+- **One lock per competition.** A drain of event A never makes a drain of
+  event B return early; a second drain of the same event does nothing.
+- **Three blocked reasons**, shown as a "Sync blocked" line in the Sync
+  Status panel while entries wait (`getDrainBlockedReason()`): `auth`
+  (the whole request was `UNAUTHORIZED` / `FORBIDDEN`: sign in), `event`
+  (the batch was `BAD_REQUEST` and an empty probe push under the same header
+  was refused too: the server does not know this event), `server`
+  (5xx, or an HTML answer from a proxy). Entries stay `pending` in all
+  three. No response at all (offline) shows no reason. A `BAD_REQUEST` whose
+  probe passes means one entry is malformed: the batch is resent one entry
+  at a time and only the bad one is marked `failed` (`INVALID_PAYLOAD`).
+- **Refusals.** A node answers a refused entry as `{ id, error, capability? }`
+  in `failed`, with `error` a `JournalRefusalCode` (`@oxygen/shared`). The
+  code and `capability` are stored on the outbox row and shown translated in
+  the rejected panel ("Missing permission: Race crew" for `FORBIDDEN`). Text
+  from an older server that is not a known code is shown as sent.
+- **Retry all** (`sync-retry-all`) requeues every failed entry of the open
+  event and drains again, for the case where a role was granted after a
+  refusal and the whole queue is red. Per-entry Retry and Discard remain.
 
 ## Transport: Local Network Access (no TLS certificates)
 

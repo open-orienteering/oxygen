@@ -62,6 +62,7 @@ Notes whose code no longer exists (mostly the raster tile pipeline, deleted in s
 
 | Note | Added |
 | --- | --- |
+| [The journal sink trusted whatever it was sent](journal-sink-hardening.md) | 2026-11-25 |
 | [Offline and kiosk readouts lost or applied to the wrong runner](offline-kiosk-readout-path.md) | 2026-11-24 |
 | [A re-read or a manual finish overwrote the stored result](readout-overwrites-result.md) | 2026-11-24 |
 | [SIAC readouts with a battery value rejected by `storeReadout`](readout-battery-millivolts.md) | 2026-11-18 |

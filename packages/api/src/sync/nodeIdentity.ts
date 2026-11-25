@@ -16,8 +16,9 @@
  *                           the journal shipper. The venue dials the cloud —
  *                           the cloud normally has no peer configured.
  *   - `SYNC_SHARED_SECRET`  shared bearer for node-to-node calls. Guards
- *                           `events.since` (the pull side); must be set on
- *                           both nodes for shipping to work.
+ *                           `events.since` (the pull side) and authorises a
+ *                           peer's `events.push` (no user needed); must be
+ *                           set on both nodes for shipping to work.
  *   - `SYNC_INTERVAL_MS`    shipper cadence (default 5000).
  *
  * Read lazily so tests (and the migration tool) can adjust `process.env`

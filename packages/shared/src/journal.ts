@@ -264,6 +264,28 @@ export interface JournalPayloads {
   "reference.imported": ReferenceImportedPayload;
 }
 
+// ─── Push refusal codes ──────────────────────────────────────
+
+/**
+ * Stable codes a node returns in `events.push` → `failed[].error`. Raw
+ * exception text stays in the server log. Older servers may still answer
+ * free text, so clients must render unknown strings as-is.
+ */
+export const JOURNAL_REFUSAL_CODES = [
+  "COMPETITION_MISMATCH",
+  "FORBIDDEN",
+  "ENTRY_IN_OTHER_EVENT",
+  "ROW_IN_OTHER_EVENT",
+  "INVALID_PAYLOAD",
+  "APPLY_FAILED",
+] as const;
+
+export type JournalRefusalCode = (typeof JOURNAL_REFUSAL_CODES)[number];
+
+export function isJournalRefusalCode(value: unknown): value is JournalRefusalCode {
+  return typeof value === "string" && (JOURNAL_REFUSAL_CODES as readonly string[]).includes(value);
+}
+
 // ─── Wire envelope ───────────────────────────────────────────
 
 /**

@@ -543,6 +543,14 @@ IF input.cardNo > 0:
 
 This ensures the FK is set at registration time, even if the card was scanned before the runner was created.
 
+**Who may register.** `runner.create` needs `race.operate` (Race crew), the same
+capability a station's queued `runner.registered` needs through `events.push`;
+`runner.update`, `bulkUpdate` and `delete` stay `event.manage` (Event admin). The
+input still carries `status`, `finishTime` and the fee fields (`fee`, `paid`,
+`payMode`, `cardFee`): race crew can already set a result through `applyResult` /
+`recordFinish`, and the registration desk has to record payment, so nothing is
+stripped for them. See [authentication.md](authentication.md#journal-push).
+
 ### 5b. runner.update — Auto-Populate Times on Status→OK
 
 When an admin manually changes a runner's status to OK (e.g., correcting a DNF), the server automatically derives StartTime and FinishTime from the runner's oCard:

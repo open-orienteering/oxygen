@@ -339,6 +339,23 @@ test.describe("Offline Support", () => {
     await expect(page.getByTestId("sync-failed-panel")).toContainText(
       "punch.recorded",
     );
+    // The refusal is shown as text, not as the raw code. An older server's
+    // free text would show as sent, so accept either translated code.
+    const failedPanel = page.getByTestId("sync-failed-panel");
+    await expect(failedPanel).not.toContainText(/INVALID_PAYLOAD|APPLY_FAILED/);
+    await expect(failedPanel).toContainText(
+      /malformed|could not apply|felaktig|kunde inte tillämpa/i,
+    );
+
+    // Retry all requeues it; the drain fails it again, so attempts reach 2.
+    await page.getByTestId("sync-retry-all").click();
+    await expect(async () => {
+      const events = await getAllEvents(page);
+      const poison = events.find((e) => e.type === "punch.recorded");
+      expect(poison?.status).toBe("failed");
+      expect((poison as unknown as { attempts: number }).attempts).toBe(2);
+    }).toPass({ intervals: [500, 1000, 2000], timeout: 15000 });
+    await expect(failedPanel).toBeVisible();
 
     // Discard it (deliberate operator action behind a confirm).
     page.on("dialog", (dialog) => dialog.accept());
@@ -485,6 +502,72 @@ test.describe("Offline readout", () => {
     await expect(async () => {
       expect(await getPendingEventCount(page)).toBe(0);
     }).toPass({ intervals: [1000, 1000, 2000, 2000, 3000], timeout: 20000 });
+  });
+
+  test("a queued entry reaches its own competition after switching", async ({
+    page,
+    request,
+  }) => {
+    const runnerName = "E2E Switched Runner " + Date.now();
+    await selectCompetition(page);
+
+    const classes = await (
+      await request.get(`${API_BASE}/trpc/class.list`, {
+        headers: { "x-competition-id": NAMEID },
+      })
+    ).json();
+    const classSeq = (classes?.result?.data as Array<{ id: number }>)[0].id;
+
+    // A pending registration made in `itest`, injected while the page shows
+    // the other event: its header must come from the entry, not the URL.
+    await page.evaluate(() => {
+      window.history.pushState({}, "", "/itest_multirace/runners");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    await page.evaluate(
+      async ({ name, classId }) => {
+        const db = await new Promise<IDBDatabase>((resolve, reject) => {
+          const req = indexedDB.open("oxygen-offline");
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        });
+        await new Promise<void>((resolve, reject) => {
+          const tx = db.transaction("events", "readwrite");
+          tx.objectStore("events").put({
+            id: crypto.randomUUID(),
+            type: "runner.registered",
+            competitionId: "itest",
+            stationId: "e2e-switch",
+            timestamp: Date.now(),
+            hlc: { physical: Date.now(), logical: 0 },
+            schemaVersion: 1,
+            actorId: null,
+            payload: { tempId: crypto.randomUUID(), name, classId, cardNo: null },
+            status: "pending",
+            attempts: 0,
+          });
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error);
+        });
+        db.close();
+      },
+      { name: runnerName, classId: classSeq },
+    );
+
+    await expect(async () => {
+      expect(await getPendingEventCount(page)).toBe(0);
+    }).toPass({ intervals: [1000, 2000, 2000, 3000], timeout: 20000 });
+
+    expect(await runnerExistsInDb(request, runnerName)).toBe(true);
+    const other = await (
+      await request.get(`${API_BASE}/trpc/runner.list`, {
+        headers: { "x-competition-id": "itest_multirace" },
+      })
+    ).json();
+    const otherRunners = (other?.result?.data ?? []) as Array<{ name: string }>;
+    expect(otherRunners.some((r) => r.name === runnerName)).toBe(false);
+
+    await deleteRunnerByName(request, runnerName);
   });
 
   test("opening another event offline never shows the previous event's runners", async ({ page, context }) => {

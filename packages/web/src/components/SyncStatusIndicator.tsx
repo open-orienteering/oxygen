@@ -8,6 +8,8 @@ import {
   retryFailedEvent,
   discardFailedEvent,
 } from "../lib/offline/events";
+import { isJournalRefusalCode } from "@oxygen/shared";
+import type { TFunction } from "i18next";
 import type { OxygenEvent } from "../lib/offline/db";
 import {
   useOfflineProjectionEnabled,
@@ -154,10 +156,24 @@ function OfflineMapsBlock({ nameId, maps }: { nameId: string; maps: EventOffline
   );
 }
 
+/** The text for a refused entry: a known code is translated, anything else (an older server) shows as sent. */
+export function refusalText(
+  t: TFunction<"common">,
+  error: string,
+  capability?: string,
+): string {
+  if (!isJournalRefusalCode(error)) return error;
+  if (error === "FORBIDDEN") {
+    const role = capability ? t(`capabilityRole.${capability}` as "retry", { defaultValue: capability }) : "";
+    return role ? t("refusal.FORBIDDEN", { role }) : t("refusal.FORBIDDEN_unknown");
+  }
+  return t(`refusal.${error}`);
+}
+
 export function SyncStatusIndicator({ competitionId }: { competitionId?: string }) {
   const { t } = useTranslation("common");
   const isOnline = useOnlineStatus();
-  const { pendingCount, failedCount, syncing, manualDrain } =
+  const { pendingCount, failedCount, syncing, manualDrain, blockedReason, retryFailed } =
     useEventQueue(competitionId);
   const queryClient = useQueryClient();
   const [showPanel, setShowPanel] = useState(false);
@@ -291,6 +307,7 @@ export function SyncStatusIndicator({ competitionId }: { competitionId?: string 
                   </div>
                   {isOnline && (
                     <button
+                      data-testid="sync-now"
                       onClick={(e) => { e.stopPropagation(); manualDrain(); }}
                       disabled={syncing}
                       className="px-3 py-1.5 text-xs font-medium bg-amber-600 text-white rounded-lg hover:bg-amber-700 disabled:opacity-50 cursor-pointer"
@@ -299,6 +316,15 @@ export function SyncStatusIndicator({ competitionId }: { competitionId?: string 
                     </button>
                   )}
                 </div>
+              </div>
+            )}
+
+            {blockedReason && pendingCount > 0 && (
+              <div
+                data-testid="sync-blocked"
+                className="px-4 py-2 border-b border-slate-100 bg-amber-50 text-xs text-amber-800"
+              >
+                {t(`syncBlocked.${blockedReason}`)}
               </div>
             )}
 
@@ -314,6 +340,16 @@ export function SyncStatusIndicator({ competitionId }: { competitionId?: string 
                 <div className="text-xs font-semibold text-red-800 uppercase tracking-wider mb-2">
                   {t("rejectedEvents")}
                 </div>
+                <button
+                  data-testid="sync-retry-all"
+                  onClick={async () => {
+                    await retryFailed();
+                    setFailedEvents(await getFailedEvents(competitionId));
+                  }}
+                  className="mb-2 px-2 py-0.5 text-[11px] font-medium rounded bg-slate-700 text-white hover:bg-slate-800 cursor-pointer"
+                >
+                  {t("retryAll")}
+                </button>
                 <div className="space-y-2 max-h-48 overflow-y-auto">
                   {failedEvents.map((e) => (
                     <div key={e.id} className="text-xs bg-white rounded-lg border border-red-200 px-2.5 py-2">
@@ -324,7 +360,9 @@ export function SyncStatusIndicator({ competitionId }: { competitionId?: string 
                         </span>
                       </div>
                       {e.error && (
-                        <div className="text-red-700 mt-1 break-words">{e.error}</div>
+                        <div data-testid={`sync-error-${e.id}`} className="text-red-700 mt-1 break-words">
+                          {refusalText(t, e.error, e.capability)}
+                        </div>
                       )}
                       <div className="flex gap-2 mt-1.5">
                         <button
