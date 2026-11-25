@@ -399,7 +399,13 @@ Steps:
    "41-36120.0;42-36240.0;2-36720.0;" → [{type:41, time:361200}, {type:42, time:362400}, ...]
    ```
    Times are converted from `seconds.tenths` to deciseconds.
-5. **Merge and sort** card punches + free punches by time
+5. **Merge in card order** (`mergePunchesInCardOrder` in `@oxygen/shared`): the card's punches
+   keep the order the card lists them in; each free punch (radio, manual, backup memory) is
+   inserted by time before the first card control punch with a strictly later time, or appended
+   after the last one; free punches without a time go last. The merged list is **not** sorted by
+   time: a card's clock can be wrong (a unit an hour behind, a wrap past midnight) and sorting would
+   move that punch out of its place and report a missing control. The same merge feeds the Eventor
+   result export.
 6. **Match to course** via `matchPunchesToCourse()`
 
 ### 4c. matchPunchesToCourse Algorithm
@@ -407,7 +413,7 @@ Steps:
 Sequential matching of actual punches against expected course controls:
 
 ```
-Input:  allPunches (sorted by time), courseControls (expected order), fallbackStartTime
+Input:  allPunches (card order, free punches merged by time), courseControls (expected order), fallbackStartTime
 Output: matches[], extraPunches[], startTime, finishTime, missingCount
 
 For each expected control:
@@ -866,7 +872,7 @@ DeviceManager.addRecentCard()
     │       └── performReadout()
     │               ├── Load oCard punches (runner-linked)
     │               ├── Load free punches (oPunch / radio)
-    │               ├── Merge + sort by time
+    │               ├── Merge in card order (free punches slotted in by time)
     │               ├── matchPunchesToCourse()
     │               └── return { timing, controls, status }
     │

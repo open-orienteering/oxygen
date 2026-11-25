@@ -104,6 +104,38 @@ export interface StatusInput {
 // ─── Punch Parsing ──────────────────────────────────────────
 
 /**
+ * Merge free punches (radio, manual, online input, backup memory) into a card's
+ * punch list for matching, keeping the card's own order.
+ *
+ * The card lists its punches in the order they were made; its clock may be
+ * wrong (an hour behind, or wrapped past midnight), so sorting the card's
+ * punches by time can reorder them and turn a clean run into a missing
+ * punch. Card punches therefore stay where the card put them. Each free
+ * punch (ascending time) goes before the first card *control* punch with a
+ * strictly later, non-zero time, else at the end; free punches without a time
+ * (0) are appended last. The special check/start/finish punches do not count
+ * as insert positions: a stored card lists start and finish ahead of the
+ * controls, and a radio punch must not land in front of the controls it
+ * follows. Does not modify its inputs.
+ */
+export function mergePunchesInCardOrder<T extends { type: number; time: number }>(
+  cardPunches: readonly T[],
+  freePunches: readonly T[],
+): T[] {
+  const isSpecial = (p: T) =>
+    p.type === PUNCH_START || p.type === PUNCH_FINISH || p.type === PUNCH_CHECK;
+  const merged = [...cardPunches];
+  const timed = freePunches.filter((p) => p.time !== 0).sort((a, b) => a.time - b.time);
+  for (const free of timed) {
+    const at = merged.findIndex((p) => !isSpecial(p) && p.time !== 0 && p.time > free.time);
+    if (at === -1) merged.push(free);
+    else merged.splice(at, 0, free);
+  }
+  for (const free of freePunches) if (free.time === 0) merged.push(free);
+  return merged;
+}
+
+/**
  * Parse MeOS card punch string: "{type}-{seconds}.{tenths}[@unit][#origin];"
  */
 export function parsePunches(punchString: string): ParsedPunch[] {

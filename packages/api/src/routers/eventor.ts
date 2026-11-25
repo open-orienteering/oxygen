@@ -74,6 +74,7 @@ import {
 } from "../statusConvert.js";
 import {
   parsePunches,
+  mergePunchesInCardOrder,
   matchPunchesToCourse,
   computeClassPlacements,
   type ParsedPunch,
@@ -1681,9 +1682,7 @@ export const eventorRouter = router({
           time: p.time !== 0 ? toAbsolute(p.time, event.zeroTime) : 0,
           source: "free" as const,
         }));
-        const merged = [...cardPunches, ...freePunches].sort(
-          (a, b) => a.time - b.time,
-        );
+        const merged = mergePunchesInCardOrder(cardPunches, freePunches);
         const fallbackStart = toAbsolute(r.startTime, event.zeroTime);
         const course = courseById.get(courseId);
         const matched = matchPunchesToCourse(merged, positions, fallbackStart, {
