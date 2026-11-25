@@ -276,13 +276,17 @@ shipper. It authenticates itself (`publicEventProcedure`, not
 |---|---|
 | `card.read`, `result.applied`, `finish.recorded`, `finish.adjusted`, `start.recorded`, `punch.recorded` / `removed` / `updated`, `runner.registered` | `race.operate` |
 | `start.adjusted`, `runner.updated`, `runner.deleted`, `class.upserted` | `event.manage` |
-| `course.upserted`, `control.upserted`, `reference.imported` | `courses.edit` |
+| `course.upserted`, `control.upserted`, `reference.imported` | `courses.edit` (`reference.imported` with a non-empty `classes[]` also needs `event.manage`: it writes whole class rows) |
 | any other type | refused |
 
 The table mirrors the online procedures: a queued entry is never a way around
 the gate of the call it replaces. One exception: a `runner.updated` whose
 `fields` is exactly `{ finishTime }` (the finish station's confirmed
 overwrite, online `race.recordFinish`) needs only `race.operate`.
+
+An entry whose id is already journaled under this event answers `synced`
+before the capability check (a role revoked since does not turn an applied
+entry red); the competition check still applies to it.
 
 A refusal does not fail the request. The entry comes back in `failed[]` as
 `{ id, error, capability? }` with a stable code and the batch carries on, so

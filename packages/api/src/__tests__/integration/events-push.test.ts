@@ -485,6 +485,65 @@ describe("events.push: capabilities, competition, secret", () => {
     expect(row?.finishTime).toBeGreaterThan(0);
   });
 
+  it("reference.imported with classes needs event.manage as well as courses.edit", async () => {
+    const cls = () => ({ id: randomUUID(), seq: 0, fields: { name: `Imp ${randomUUID().slice(0, 4)}` } });
+    const withClasses = wire(a.event, "reference.imported", { controls: [], courses: [], classes: [cls()] });
+    const noClasses = wire(a.event, "reference.imported", {
+      controls: [{ id: randomUUID(), seq: 0, fields: { name: "imp only ctl" } }],
+      courses: [],
+      classes: [],
+    });
+    const res = await asCaller(setter).events.push({ events: [withClasses, noClasses] });
+    expect(res.failed).toEqual([{ id: withClasses.id, error: "FORBIDDEN", capability: "event.manage" }]);
+    expect(res.synced).toEqual([noClasses.id]);
+    expect(await a.db.journalEntry.count({ where: { id: withClasses.id } })).toBe(0);
+
+    const adminRes = await asCaller(admin).events.push({ events: [withClasses] });
+    expect(adminRes.synced).toEqual([withClasses.id]);
+  });
+
+  it("an id already journaled under this event answers synced without the gate; a mismatching competitionId is still refused", async () => {
+    const e = wire(a.event, "runner.registered", { name: "Known Kim", classId: aClass, cardNo: 91904 });
+    expect((await asCaller(crew).events.push({ events: [e] })).synced).toEqual([e.id]);
+    // `member` holds no race.operate (a role revoked since): the id is already applied.
+    const again = await asCaller(member).events.push({ events: [e] });
+    expect(again).toMatchObject({ synced: [e.id], failed: [] });
+    const wrong = { ...e, competitionId: "elsewhere" };
+    const res = await asCaller(member).events.push({ events: [wrong] });
+    expect(res.synced).toEqual([]);
+    expect(res.failed).toEqual([{ id: e.id, error: "COMPETITION_MISMATCH" }]);
+    // A new id is still gated.
+    const fresh = wire(a.event, "runner.registered", { name: "Fresh", classId: aClass, cardNo: 91905 });
+    const g = await asCaller(member).events.push({ events: [fresh] });
+    expect(g.failed[0]).toMatchObject({ error: "FORBIDDEN", capability: "race.operate" });
+  });
+
+  it("a kiosk key with no user cannot push entries when auth is on", async () => {
+    const e = wire(a.event, "finish.recorded", { cardNo: 1, finishTime: 1 });
+    await expect(
+      asCaller(null, { kioskKey: "some-kiosk-key-value" }).events.push({ events: [e] }),
+    ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    expect(await a.db.journalEntry.count({ where: { id: e.id } })).toBe(0);
+  });
+
+  it("with auth off and no secret, a non-station entry type applies", async () => {
+    const e = wire(a.event, "course.upserted", { id: randomUUID(), seq: 0, fields: { name: "auth-off course" } });
+    const res = await makeCaller(a.event).events.push({ events: [e] });
+    expect(res).toMatchObject({ synced: [e.id], failed: [] });
+  });
+
+  it("a secret presented to a node with no SYNC_SHARED_SECRET is PRECONDITION_FAILED with entries too", async () => {
+    delete process.env.SYNC_SHARED_SECRET;
+    try {
+      const e = wire(a.event, "finish.recorded", { cardNo: 1, finishTime: 1 });
+      await expect(
+        asCaller(null, { syncSecret: SECRET }).events.push({ events: [e] }),
+      ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    } finally {
+      process.env.SYNC_SHARED_SECRET = SECRET;
+    }
+  });
+
   // Q3
   it("stamps the signed-in user as the journal actor; a peer keeps the wire actor", async () => {
     const wireActor = randomUUID();

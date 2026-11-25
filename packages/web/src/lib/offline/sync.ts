@@ -17,10 +17,21 @@ const BATCH_SIZE = 50;
  */
 export type DrainBlockedReason = "auth" | "event" | "server";
 
-let blockedReason: DrainBlockedReason | null = null;
-export function getDrainBlockedReason(): DrainBlockedReason | null {
-  return blockedReason;
+/** Per competition: one competition's block says nothing about another's. */
+const blockedReasons = new Map<string, DrainBlockedReason>();
+export function getDrainBlockedReason(competitionId: string | undefined): DrainBlockedReason | null {
+  return (competitionId && blockedReasons.get(competitionId)) || null;
 }
+
+/**
+ * Failure codes after which the server stopped the batch (the entries behind
+ * the failed one came back in neither list). A pending entry ordered behind
+ * one of these in the same competition is held until the operator retries or
+ * discards the failed entry, so a later finish / result never applies before
+ * a failed registration. A refusal that does not stop the server (FORBIDDEN,
+ * COMPETITION_MISMATCH, ...) holds nothing.
+ */
+const BATCH_STOPPING_CODES: ReadonlySet<string> = new Set(["APPLY_FAILED", "INVALID_PAYLOAD"]);
 
 /** tRPC UNAUTHORIZED / FORBIDDEN from a failed push. */
 export function isAuthRefusal(err: unknown): boolean {
@@ -69,6 +80,8 @@ export type PushFn = (input: { events: PushEntry[] }) => Promise<PushResult>;
 export interface EventStore {
   /** Pending entries ordered by timestamp, optionally for one competition. */
   pending(competitionId?: string): Promise<OxygenEvent[]>;
+  /** Failed entries of one competition. */
+  failed(competitionId: string): Promise<OxygenEvent[]>;
   get(id: string): Promise<OxygenEvent | undefined>;
   update(id: string, patch: Partial<OxygenEvent>): Promise<void>;
   bulkDelete(ids: string[]): Promise<void>;
@@ -80,6 +93,13 @@ export const dexieEventStore: EventStore = {
     let query = offlineDb.events.where("status").equals("pending");
     if (competitionId) query = query.and((e) => e.competitionId === competitionId);
     return query.sortBy("timestamp");
+  },
+  async failed(competitionId) {
+    return offlineDb.events
+      .where("status")
+      .equals("failed")
+      .and((e) => e.competitionId === competitionId)
+      .toArray();
   },
   get: (id) => offlineDb.events.get(id),
   async update(id, patch) {
@@ -158,7 +178,7 @@ export function createEventDrainer({ store, pushFor, now = Date.now }: EventDrai
       // Even an empty batch is refused under this header: the server does not
       // know the event. Nothing is wrong with the entries.
       if (isNetworkFailure(probeErr)) return { synced: 0, stop: true, stopAll: true };
-      blockedReason = classifyPushError(probeErr) === "auth" ? "auth" : "event";
+      blockedReasons.set(competitionId, classifyPushError(probeErr) === "auth" ? "auth" : "event");
       return { synced: 0, stop: true, stopAll: false };
     }
     let synced = 0;
@@ -179,17 +199,33 @@ export function createEventDrainer({ store, pushFor, now = Date.now }: EventDrai
           continue;
         }
         if (kind === "network") return { synced, stop: true, stopAll: true };
-        blockedReason = kind === "auth" ? "auth" : "server";
+        blockedReasons.set(competitionId, kind === "auth" ? "auth" : "server");
         return { synced, stop: true, stopAll: false };
       }
     }
     return { synced, stop: false, stopAll: false };
   }
 
+  /**
+   * The pending entries that may go out: those ordered before the earliest
+   * failed entry the server stopped a batch at. Everything behind it waits
+   * until that entry is retried (it is pending again, so it goes first) or
+   * discarded.
+   */
+  async function sendable(competitionId: string): Promise<OxygenEvent[]> {
+    const pending = await store.pending(competitionId);
+    const stops = (await store.failed(competitionId))
+      .filter((e) => e.error && BATCH_STOPPING_CODES.has(e.error))
+      .map((e) => e.timestamp);
+    if (stops.length === 0) return pending;
+    const limit = Math.min(...stops);
+    return pending.filter((e) => e.timestamp < limit);
+  }
+
   async function drainOne(competitionId: string): Promise<Step> {
     let synced = 0;
     while (true) {
-      const events = (await store.pending(competitionId)).slice(0, BATCH_SIZE);
+      const events = (await sendable(competitionId)).slice(0, BATCH_SIZE);
       if (events.length === 0) break;
 
       try {
@@ -198,6 +234,11 @@ export function createEventDrainer({ store, pushFor, now = Date.now }: EventDrai
         console.log(`[offline-sync] Push result: ${result.synced.length} synced, ${result.failed.length} failed`);
         const applied = await applyResult(result);
         synced += applied.synced;
+        // The server stopped its batch at a failed entry: the rest of this
+        // competition waits behind it (see `sendable`).
+        if (result.failed.some((f) => BATCH_STOPPING_CODES.has(f.error))) {
+          return { synced, stop: true, stopAll: false };
+        }
         // An answer that settled nothing would repeat forever.
         if (applied.settled === 0) break;
       } catch (err) {
@@ -210,7 +251,7 @@ export function createEventDrainer({ store, pushFor, now = Date.now }: EventDrai
           if (step.stop) return { synced, stop: true, stopAll: step.stopAll };
           continue;
         }
-        blockedReason = kind === "auth" ? "auth" : "server";
+        blockedReasons.set(competitionId, kind === "auth" ? "auth" : "server");
         return { synced, stop: true, stopAll: false };
       }
     }
@@ -223,7 +264,6 @@ export function createEventDrainer({ store, pushFor, now = Date.now }: EventDrai
    * Returns the number of entries synced.
    */
   async function drain(competitionId?: string): Promise<number> {
-    blockedReason = null;
     const ids = competitionId
       ? [competitionId]
       : [...new Set((await store.pending()).map((e) => e.competitionId))];
@@ -231,6 +271,7 @@ export function createEventDrainer({ store, pushFor, now = Date.now }: EventDrai
     for (const id of ids) {
       if (draining.has(id)) continue;
       draining.add(id);
+      blockedReasons.delete(id);
       try {
         const step = await drainOne(id);
         syncedCount += step.synced;

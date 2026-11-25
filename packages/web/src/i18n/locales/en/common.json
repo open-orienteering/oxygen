@@ -135,7 +135,7 @@
   "syncBlocked": {
     "auth": "Sync blocked: sign in to send the waiting entries.",
     "event": "Sync blocked: the server does not know this event.",
-    "server": "Sync blocked: the server is not answering properly. Will retry."
+    "server": "Sync blocked: the server is not answering properly. Press Sync now to try again."
   },
   "capabilityRole": {
     "race.operate": "Race crew",

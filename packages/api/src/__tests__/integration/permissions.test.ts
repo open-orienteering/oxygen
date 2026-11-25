@@ -543,6 +543,18 @@ describe("kiosk key", () => {
       kiosk.race.recordFinish({ id: 1, finishTimeAbsolute: 360_000 }),
     ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
     await expect(kiosk.events.push({ events: [] })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    await expect(
+      kiosk.events.push({
+        events: [{
+          id: "00000000-0000-4000-8000-000000000abc",
+          type: "card.read",
+          competitionId: event.nameId,
+          stationId: "kiosk",
+          timestamp: 1_700_000_000_000,
+          payload: { cardNo: 999002, punches: [] },
+        }],
+      }),
+    ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
   });
 
   it("key-only devices can read the map data set MapPanel needs, but not edit", async () => {

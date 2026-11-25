@@ -17,6 +17,10 @@
  * is the finish station's confirmed overwrite (online `race.recordFinish`,
  * `race.operate`), so it needs only `race.operate`.
  *
+ * A `reference.imported` that carries classes writes whole class rows, so on
+ * this path it needs `event.manage` as well as `courses.edit`
+ * (`capabilitiesForEntry` lists every capability an entry needs).
+ *
  * `null` means the type is not known here and the entry is refused.
  * Node-to-node pushes carry the shared secret instead and skip this map.
  */
@@ -66,4 +70,25 @@ export function capabilityForEntry(entry: {
     }
   }
   return BY_TYPE.get(entry.type) ?? null;
+}
+
+/**
+ * Every capability the entry needs, the one `capabilityForEntry` names first.
+ * `reference.imported` with a non-empty `classes[]` also needs `event.manage`.
+ * `null` for an unknown type.
+ */
+export function capabilitiesForEntry(entry: {
+  type: string;
+  payload: Record<string, unknown>;
+}): Capability[] | null {
+  const primary = capabilityForEntry(entry);
+  if (!primary) return null;
+  if (
+    entry.type === "reference.imported" &&
+    Array.isArray(entry.payload.classes) &&
+    entry.payload.classes.length > 0
+  ) {
+    return [primary, "event.manage"];
+  }
+  return [primary];
 }

@@ -17,6 +17,9 @@ function memoryStore(rows: OxygenEvent[]): EventStore & { rows: Map<string, Oxyg
         .filter((e) => e.status === "pending" && (!competitionId || e.competitionId === competitionId))
         .sort((a, b) => a.timestamp - b.timestamp);
     },
+    async failed(competitionId) {
+      return [...map.values()].filter((e) => e.status === "failed" && e.competitionId === competitionId);
+    },
     async get(id) {
       return map.get(id);
     },
@@ -140,7 +143,7 @@ describe("event drain", () => {
       },
     });
     expect(await net.drain()).toBe(0);
-    expect(getDrainBlockedReason()).toBeNull();
+    expect(getDrainBlockedReason("a")).toBeNull();
     expect((await store.pending()).length).toBe(2);
 
     const auth = createEventDrainer({
@@ -150,7 +153,7 @@ describe("event drain", () => {
       },
     });
     await auth.drain();
-    expect(getDrainBlockedReason()).toBe("auth");
+    expect(getDrainBlockedReason("a")).toBe("auth");
     expect((await store.pending()).length).toBe(2);
   });
 
@@ -178,7 +181,7 @@ describe("event drain", () => {
       },
     });
     expect(await drainer.drain()).toBe(0);
-    expect(getDrainBlockedReason()).toBe("event");
+    expect(getDrainBlockedReason("a")).toBe("event");
     expect((await store.pending()).length).toBe(2);
   });
 
@@ -191,7 +194,7 @@ describe("event drain", () => {
       },
     });
     await drainer.drain();
-    expect(getDrainBlockedReason()).toBe("server");
+    expect(getDrainBlockedReason("a")).toBe("server");
     expect((await store.pending()).length).toBe(1);
   });
 
@@ -227,5 +230,77 @@ describe("event drain", () => {
     const drainer = createEventDrainer({ store, pushFor: () => acceptAll, now: () => now });
     expect(await drainer.cleanupSynced()).toBe(1);
     expect(store.rows.size).toBe(3);
+  });
+
+  it("10. an APPLY_FAILED answer ends that competition's pass: later entries stay pending, other competitions still drain", async () => {
+    const reg = entry("a");
+    const finish = entry("a", { type: "finish.recorded" });
+    const other = entry("b");
+    const store = memoryStore([reg, finish, other]);
+    const sent: string[][] = [];
+    const push: PushFn = async ({ events }) => {
+      sent.push(events.map((e) => e.id));
+      // The server stops its batch at the failed registration.
+      if (events[0].id === reg.id) return { synced: [], failed: [{ id: reg.id, error: "APPLY_FAILED" }] };
+      return acceptAll({ events });
+    };
+    const drainer = createEventDrainer({ store, pushFor: () => push });
+    expect(await drainer.drain()).toBe(1);
+    expect(store.rows.get(reg.id)?.status).toBe("failed");
+    expect(store.rows.get(finish.id)?.status).toBe("pending");
+    expect(store.rows.get(other.id)?.status).toBe("synced");
+
+    // A later drain does not push the finish ahead of the failed registration.
+    sent.length = 0;
+    expect(await drainer.drain()).toBe(0);
+    expect(sent).toEqual([]);
+  });
+
+  it("11. retrying or discarding the failed entry releases the entries behind it", async () => {
+    const mk = () => {
+      const reg = entry("a", { status: "failed", error: "APPLY_FAILED" });
+      const finish = entry("a", { type: "finish.recorded" });
+      return { reg, finish, store: memoryStore([reg, finish]) };
+    };
+    const sent: string[][] = [];
+    const push: PushFn = async (input) => {
+      sent.push(input.events.map((e) => e.id));
+      return acceptAll(input);
+    };
+
+    const discard = mk();
+    const d1 = createEventDrainer({ store: discard.store, pushFor: () => push });
+    expect(await d1.drain()).toBe(0);
+    await discard.store.bulkDelete([discard.reg.id]);
+    expect(await d1.drain()).toBe(1);
+
+    const retry = mk();
+    sent.length = 0;
+    const d2 = createEventDrainer({ store: retry.store, pushFor: () => push });
+    await retry.store.update(retry.reg.id, { status: "pending", error: undefined });
+    expect(await d2.drain()).toBe(2);
+    expect(sent).toEqual([[retry.reg.id, retry.finish.id]]);
+  });
+
+  it("12. a refusal that does not stop the server (FORBIDDEN) holds nothing back", async () => {
+    const denied = entry("a", { status: "failed", error: "FORBIDDEN" });
+    const next = entry("a");
+    const store = memoryStore([denied, next]);
+    const drainer = createEventDrainer({ store, pushFor: () => acceptAll });
+    expect(await drainer.drain()).toBe(1);
+  });
+
+  it("13. the blocked reason is kept per competition", async () => {
+    const store = memoryStore([entry("a"), entry("b")]);
+    const drainer = createEventDrainer({
+      store,
+      pushFor: (c) => async (input) => {
+        if (c === "a") throw trpcError("UNAUTHORIZED");
+        return acceptAll(input);
+      },
+    });
+    await drainer.drain();
+    expect(getDrainBlockedReason("a")).toBe("auth");
+    expect(getDrainBlockedReason("b")).toBeNull();
   });
 });

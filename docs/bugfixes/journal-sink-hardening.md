@@ -21,6 +21,7 @@ Server (`packages/api/src/routers/events.ts`, `journalCapabilities.ts`, `trpc.ts
 - Without a secret, a signed-in user is needed when login is on, and each entry needs the capability its online action needs (table in [authentication.md](../system/authentication.md)). `runner.registered` needs Race crew, and the online `runner.create` was lowered to Race crew to match; editing and deleting runners stay Event admin. A finish-station overwrite (`runner.updated` with only `finishTime`) needs Race crew.
 - Every entry's `competitionId` must equal the request's event; idempotency is per event.
 - Refusals come back per entry in `failed` with a stable code (`COMPETITION_MISMATCH`, `FORBIDDEN` + capability, `ENTRY_IN_OTHER_EVENT`, `ROW_IN_OTHER_EVENT`, `INVALID_PAYLOAD`, `APPLY_FAILED`) and stay retryable; they never stop the batch.
+- `reference.imported` with a non-empty `classes[]` needs `event.manage` as well as `courses.edit` (it writes whole class rows). An id already journaled under this event answers `synced` before the gate (the competition check still applies).
 - Each entry is one transaction: journal row, apply, variant follow-up. An apply failure stops the batch so later entries keep their order; the rest go out next round.
 - Reference upserts refuse rows of another event, allow-list fields from the Prisma models (unknown keys dropped and logged), coerce BigInt columns, and check that every referenced control, course and class belongs to the event.
 - With login on, the journal `actorId` is the signed-in user, not the wire value.
@@ -28,6 +29,7 @@ Server (`packages/api/src/routers/events.ts`, `journalCapabilities.ts`, `trpc.ts
 Station (`packages/web/src/lib/offline/sync.ts`, `lib/trpc.ts`, `SyncStatusIndicator.tsx`):
 
 - Pending entries are grouped by `competitionId` and each group is pushed through a client whose header is that competition, never the URL. Drains lock per competition, and the auto-drain covers every competition with pending entries.
+- Ordering rule: when an answer carries `APPLY_FAILED` or `INVALID_PAYLOAD` (the server stopped its batch), that competition's pass ends, and entries ordered behind a failed entry with one of those codes are not pushed until it is retried or discarded (Discard drains at once). Other competitions keep draining. The blocked reason is kept per competition, and the auto-drain also fires when a new entry arrives while others are stuck.
 - A schema 400 is probed and resent one by one so only the bad entry is marked failed; an unknown event, auth failures and 5xx keep entries pending and show "sync blocked" with the reason.
 - Failed rows show a translated text per code ("Missing permission: Race crew"), and a Retry all button re-queues them after a role is granted.
 
@@ -41,4 +43,6 @@ Tests: `events-push.test.ts` (competition, capabilities, secret path, reference 
 - **Entries that resolve no runner** (unknown runner, missing class) are still journaled as `synced` with nothing applied. A real silent-loss path, but outside this package's findings and it changes what peers accept; worth its own finding.
 - **Shipper HLC cursor and checkout over unshipped entries** (MC-02, API-07): package 4.
 - **Per-type zod schemas on the wire**: larger than the allow-list and risks version skew between nodes; the allow-list plus `INVALID_PAYLOAD` covers the security side.
+- **Permanent refusals on the node-to-node shipper** (`ENTRY_IN_OTHER_EVENT`, `ROW_IN_OTHER_EVENT`, `INVALID_PAYLOAD`) stop that event's shipping stream at the entry until it is resolved, and show only in the server log. A status or alarm UI is left for the shipper package (4).
+- **`runner.create` at Race crew** still accepts `status`, `finishTime`, `fee`, `paid` and `startNo`. Accepted: Race crew can set finish and status elsewhere, and the desk records payment.
 - **No E2E signs in as Race crew and drains an outbox**; capability refusals are covered by integration and web unit tests.

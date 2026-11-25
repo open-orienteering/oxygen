@@ -8,8 +8,7 @@ import {
   retryFailedEvent,
   discardFailedEvent,
 } from "../lib/offline/events";
-import { isJournalRefusalCode } from "@oxygen/shared";
-import type { TFunction } from "i18next";
+import { refusalText } from "../lib/refusal-text";
 import type { OxygenEvent } from "../lib/offline/db";
 import {
   useOfflineProjectionEnabled,
@@ -154,20 +153,6 @@ function OfflineMapsBlock({ nameId, maps }: { nameId: string; maps: EventOffline
       {error && <div role="alert" className="mt-1 text-xs text-red-600">{error}</div>}
     </div>
   );
-}
-
-/** The text for a refused entry: a known code is translated, anything else (an older server) shows as sent. */
-export function refusalText(
-  t: TFunction<"common">,
-  error: string,
-  capability?: string,
-): string {
-  if (!isJournalRefusalCode(error)) return error;
-  if (error === "FORBIDDEN") {
-    const role = capability ? t(`capabilityRole.${capability}` as "retry", { defaultValue: capability }) : "";
-    return role ? t("refusal.FORBIDDEN", { role }) : t("refusal.FORBIDDEN_unknown");
-  }
-  return t(`refusal.${error}`);
 }
 
 export function SyncStatusIndicator({ competitionId }: { competitionId?: string }) {
@@ -381,6 +366,8 @@ export function SyncStatusIndicator({ competitionId }: { competitionId?: string 
                             if (window.confirm(t("discardEventConfirm"))) {
                               await discardFailedEvent(e.id);
                               setFailedEvents(await getFailedEvents(competitionId));
+                              // Entries held behind the discarded one go out now.
+                              void manualDrain();
                             }
                           }}
                           className="px-2 py-0.5 text-[11px] font-medium rounded bg-red-600 text-white hover:bg-red-700 cursor-pointer"

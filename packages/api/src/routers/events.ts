@@ -45,7 +45,7 @@ import {
 } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { runWithActor } from "../auth.js";
-import { capabilityForEntry } from "../journalCapabilities.js";
+import { capabilitiesForEntry } from "../journalCapabilities.js";
 import { REFERENCE_ENTITIES, type ReferenceEntity } from "../referenceJournal.js";
 import { toRelative } from "../timeConvert.js";
 import {
@@ -140,8 +140,15 @@ export interface JournalFailure {
 }
 
 export interface IngestOptions {
-  /** Admission check run before anything is read or written for an entry. */
+  /** Admission check run before anything is written for an entry that is new to this event. */
   gate?: JournalGate;
+  /**
+   * The part of the admission check that still applies to an id already
+   * journaled under this event (the competition check). Such an id answers
+   * `synced` without the gate, so a revoked role does not turn an entry that
+   * is already applied red on the station.
+   */
+  knownGate?: JournalGate;
   /** Stamp this actor on every journal row instead of the wire `actorId`. */
   actorId?: string | null;
 }
@@ -177,21 +184,26 @@ export async function ingestJournalEntries(
   const failed: JournalFailure[] = [];
 
   for (const entry of entries) {
-    const refusal = opts.gate?.(entry);
-    if (refusal) {
-      failed.push({ id: entry.id, ...refusal });
-      continue;
-    }
-
     try {
-      // Idempotency check — same UUID in the same event returns success.
+      // Idempotency check — same UUID in the same event returns success,
+      // before the capability gate (the entry is already applied).
       const existing = await db.journalEntry.findUnique({
         where: { id: entry.id },
         select: { eventId: true },
       });
+      if (existing?.eventId === event.id) {
+        const refusal = opts.knownGate?.(entry);
+        if (refusal) failed.push({ id: entry.id, ...refusal });
+        else synced.push(entry.id);
+        continue;
+      }
+      const refusal = opts.gate?.(entry);
+      if (refusal) {
+        failed.push({ id: entry.id, ...refusal });
+        continue;
+      }
       if (existing) {
-        if (existing.eventId === event.id) synced.push(entry.id);
-        else failed.push({ id: entry.id, error: "ENTRY_IN_OTHER_EVENT" });
+        failed.push({ id: entry.id, error: "ENTRY_IN_OTHER_EVENT" });
         continue;
       }
 
@@ -348,7 +360,7 @@ export const eventsRouter = router({
    *      no user.
    *   2. Otherwise, with auth on, a signed-in user is required (a kiosk key
    *      alone stays display-only, decision D11) and each entry needs the
-   *      capability `capabilityForEntry` names; a missing one puts that entry
+   *      capabilities `capabilitiesForEntry` names; a missing one puts that entry
    *      in `failed[]` as `FORBIDDEN` and the rest still apply. With auth off
    *      every capability is held.
    * Both paths refuse an entry whose `competitionId` is not this request's
@@ -382,17 +394,20 @@ export const eventsRouter = router({
           gate = (e) => {
             const mismatch = wrongCompetition(e);
             if (mismatch) return mismatch;
-            const needed = capabilityForEntry(e);
-            if (needed && caps.has(needed)) return null;
-            return needed
-              ? { error: "FORBIDDEN", capability: needed }
-              : { error: "FORBIDDEN" };
+            const needed = capabilitiesForEntry(e);
+            if (!needed) return { error: "FORBIDDEN" };
+            const missing = needed.find((c) => !caps.has(c));
+            return missing ? { error: "FORBIDDEN", capability: missing } : null;
           };
         }
       }
 
       const { synced, failed } = await runWithActor(actor, () =>
-        ingestJournalEntries(ectx.db, ectx.event, input.events, { gate, actorId }),
+        ingestJournalEntries(ectx.db, ectx.event, input.events, {
+          gate,
+          knownGate: wrongCompetition,
+          actorId,
+        }),
       );
       // serverTimeMs lets the client detect a skewed local clock (see the
       // clock-skew banner). It is the cloud's wall clock at response time.

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { capabilityForEntry } from "../journalCapabilities.js";
+import { capabilityForEntry, capabilitiesForEntry } from "../journalCapabilities.js";
 
 const cap = (type: string, payload: Record<string, unknown> = {}) =>
   capabilityForEntry({ type, payload });
@@ -52,5 +52,20 @@ describe("capabilityForEntry", () => {
 
   it("does not apply the finishTime exception to other types", () => {
     expect(cap("runner.deleted", { fields: { finishTime: 1 } })).toBe("event.manage");
+  });
+});
+
+describe("capabilitiesForEntry", () => {
+  it("lists one capability for most types", () => {
+    expect(capabilitiesForEntry({ type: "card.read", payload: {} })).toEqual(["race.operate"]);
+    expect(capabilitiesForEntry({ type: "nope", payload: {} })).toBeNull();
+  });
+
+  it("reference.imported needs event.manage too once it carries classes", () => {
+    expect(capabilitiesForEntry({ type: "reference.imported", payload: { classes: [] } })).toEqual(["courses.edit"]);
+    expect(capabilitiesForEntry({ type: "reference.imported", payload: { classes: [{}] } })).toEqual([
+      "courses.edit",
+      "event.manage",
+    ]);
   });
 });

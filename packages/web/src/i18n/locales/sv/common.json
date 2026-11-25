@@ -135,7 +135,7 @@
   "syncBlocked": {
     "auth": "Synk blockerad: logga in för att skicka de väntande posterna.",
     "event": "Synk blockerad: servern känner inte till den här tävlingen.",
-    "server": "Synk blockerad: servern svarar inte som den ska. Försöker igen."
+    "server": "Synk blockerad: servern svarar inte som den ska. Tryck på Synka nu för att försöka igen."
   },
   "capabilityRole": {
     "race.operate": "Tävlingsfunktionär",

@@ -243,7 +243,11 @@ peer's shipper, the pull side of the shipper):
   Several types are last-write-wins, so applying the later ones now and the
   failed one on a retry would flip their order. The sender keeps the rest
   pending and sends them next round (the shipper advances its watermark
-  contiguously; the station drain re-queries its pending entries). Refusals
+  contiguously). The station drain ends that competition's pass at an
+  `APPLY_FAILED` / `INVALID_PAYLOAD` answer and holds every pending entry
+  ordered (by timestamp) behind a failed entry with one of those codes until
+  the operator retries it (it goes first again) or discards it (Discard
+  drains straight away); other competitions keep draining. Refusals
   decided before an entry is touched (`FORBIDDEN`, `COMPETITION_MISMATCH`,
   `ENTRY_IN_OTHER_EVENT`) never stop the batch.
 - **Gate, then apply.** `events.push` hands the ingest a per-entry gate: the
@@ -456,7 +460,7 @@ projection table, because the canvas reads the cache.
 - **One lock per competition.** A drain of event A never makes a drain of
   event B return early; a second drain of the same event does nothing.
 - **Three blocked reasons**, shown as a "Sync blocked" line in the Sync
-  Status panel while entries wait (`getDrainBlockedReason()`): `auth`
+  Status panel while entries wait (`getDrainBlockedReason(competitionId)`, kept per competition): `auth`
   (the whole request was `UNAUTHORIZED` / `FORBIDDEN`: sign in), `event`
   (the batch was `BAD_REQUEST` and an empty probe push under the same header
   was refused too: the server does not know this event), `server`
