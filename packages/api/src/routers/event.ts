@@ -51,9 +51,10 @@ async function timingDataPresent(
   eventId: bigint,
 ): Promise<boolean> {
   const [finished, teamsFinished, punches, cards, readouts] = await Promise.all([
-    db.runner.count({ where: { eventId, removed: false, finishTime: { not: 0 } } }),
+    // Removed rows too: their starts shift with ZeroTime, their finishes would not.
+    db.runner.count({ where: { eventId, finishTime: { not: 0 } } }),
     db.team.count({ where: { eventId, finishTime: { not: 0 } } }),
-    db.punch.count({ where: { eventId, removed: false } }),
+    db.punch.count({ where: { eventId } }),
     db.card.count({ where: { eventId } }),
     db.cardReadout.count({ where: { eventId } }),
   ]);

@@ -46,8 +46,9 @@ export function computePosition(
 ): PositionResult | null {
   if (selfRunningTime <= 0) return null;
 
+  // A finish before a daytime start has no running time (0): not ranked.
   const withTimes = runners
-    .filter((r) => r.finishTime > 0 && r.startTime > 0)
+    .filter((r) => r.finishTime > 0 && r.startTime > 0 && runningTimeDs(r.startTime, r.finishTime) > 0)
     .map((r) => ({
       name: r.name,
       clubId: r.clubId,
@@ -122,7 +123,9 @@ export function computeClassPlacements(
       (r) =>
         r.status === RunnerStatus.OK &&
         r.finishTime > 0 &&
-        r.startTime > 0,
+        r.startTime > 0 &&
+        // A finish before a daytime start has no running time: not ranked.
+        runningTimeDs(r.startTime, r.finishTime) > 0,
     )
     .map((r) => ({ ...r, runningTime: adjustedRunningTime(r) }))
     .sort((a, b) => a.runningTime - b.runningTime);

@@ -111,6 +111,15 @@ describe("ZeroTime at creation and in the settings (RES-04)", () => {
     expect((await caller.event.getTimeSettings()).timeZone).toBe("Europe/Oslo");
   });
 
+  it("a removed runner's finish also locks ZeroTime", async () => {
+    const ctx = await event("zt-locked-removed");
+    const caller = await freshCaller(ctx);
+    const cls = await classWithCourse(caller, ctx, "D21");
+    const r = await caller.runner.create({ name: "R", classId: cls.seq, cardNo: 81_011, startTime: 10 * H, finishTime: 11 * H });
+    await ctx.db.runner.updateMany({ where: { eventId: ctx.eventId, seq: r.id as number }, data: { removed: true } });
+    expect((await caller.event.getTimeSettings()).zeroTimeLocked).toBe(true);
+  });
+
   it("refuses while a lease is held", async () => {
     const ctx = await event("zt-lease");
     const caller = await freshCaller(ctx);
@@ -367,6 +376,6 @@ describe("running time across midnight (RES-16)", () => {
     expect(wrong?.position).toBeNull();
     const right = await caller.race.finishReceipt({ runnerId: b.id as number });
     // The wrong run is not counted as a (23:55) result in the class.
-    expect(right?.position).toEqual({ rank: 1, total: 2 });
+    expect(right?.position).toEqual({ rank: 1, total: 1 });
   });
 });

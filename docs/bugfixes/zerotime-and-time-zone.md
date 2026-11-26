@@ -65,7 +65,8 @@ relative 0 doubles as "no time". Around that:
   interval of at least 1 s unless the class is a mass start.
 - `runningTimeDs` (midnight-safe up to 12 h; a finish before a daytime start
   stays 0) for running times in the readout, result
-  lists, the receipt rank, LiveResults and the Eventor upload.
+  lists, the receipt rank, LiveResults and the Eventor upload. A runner with
+  running time 0 is not ranked and does not count in the receipt total.
 - Vitest pins `TZ` (API in UTC, shared and web in Europe/Stockholm); Playwright
   runs the browser in Europe/Stockholm and the API in UTC.
 

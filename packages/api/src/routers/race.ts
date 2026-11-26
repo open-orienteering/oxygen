@@ -203,8 +203,8 @@ export const raceRouter = router({
       // running time?". Postgres can answer both halves of that
       // question with a parameterised filtered count using the
       // existing `(event_id, class_id, removed)` index path, so we
-      // push the computation down: one count for the rank, one for
-      // the total. Two trivial index-only counts beat a 5 000-row
+      // push the computation down: one query counts the rank and the
+      // total. A filtered count on the class index beats a 5 000-row
       // fetch + JS sort on every kiosk readout.
       let position: { rank: number; total: number } | null = null;
       if (
@@ -216,44 +216,32 @@ export const raceRouter = router({
         const myRunningTime = runningTimeDs(r.timing.startTime, r.timing.finishTime);
 
         if (myRunningTime > 0) {
-          // OK-status, valid-time peers in the same class.
-          const baseWhere = {
-            eventId: ctx.event.id,
-            removed: false,
-            classId: runner.classId,
-            status: valueToRunnerStatus(1),
-            // Relative times: negative before ZeroTime (RES-05).
-            finishTime: { not: 0 },
-            startTime: { not: 0 },
-          } as const;
-
-          const [strictlyFaster, total] = await Promise.all([
-            // Rank = strictly-faster peers + 1 (ties share a rank).
-            // `finishTime - startTime` isn't directly indexed; in the
-            // common case where `startTime` is the same across the
-            // class (mass start or per-class draw) the planner can
-            // still use the (event_id, class_id, removed) index and
-            // filter on the projection cheaply.
-            ctx.db.$queryRaw<Array<{ count: bigint }>>`
-              SELECT COUNT(*)::bigint AS count
+          // OK-status peers in the same class with a running time. The CASE
+          // is runningTimeDs in SQL: a wrap past midnight counts up to 12 h,
+          // and a finish before a daytime start has no time (not ranked).
+          const counts = await ctx.db.$queryRaw<Array<{ faster: bigint; total: bigint }>>`
+            SELECT
+              COUNT(*) FILTER (WHERE rt BETWEEN 1 AND ${myRunningTime} - 1)::bigint AS faster,
+              COUNT(*) FILTER (WHERE rt >= 1)::bigint AS total
+            FROM (
+              SELECT CASE
+                       WHEN finish_time >= start_time THEN finish_time - start_time
+                       WHEN finish_time - start_time + 864000 <= 432000 THEN finish_time - start_time + 864000
+                       ELSE 0
+                     END AS rt
               FROM oxygen.runners
               WHERE event_id = ${ctx.event.id}
                 AND class_id = ${runner.classId}::uuid
                 AND removed = false
                 AND status = 'ok'::oxygen.runner_status
+                -- Relative times: negative before ZeroTime (RES-05).
                 AND finish_time <> 0
                 AND start_time <> 0
-                -- runningTimeDs in SQL: a wrap past midnight counts up to 12 h.
-                AND (CASE
-                       WHEN finish_time >= start_time THEN finish_time - start_time
-                       WHEN finish_time - start_time + 864000 <= 432000 THEN finish_time - start_time + 864000
-                       ELSE 0
-                     END) BETWEEN 1 AND ${myRunningTime} - 1
-            `,
-            ctx.db.runner.count({ where: baseWhere }),
-          ]);
-
-          const rank = Number(strictlyFaster[0]?.count ?? 0n) + 1;
+            ) peers
+          `;
+          const total = Number(counts[0]?.total ?? 0n);
+          // Rank = strictly-faster peers + 1 (ties share a rank).
+          const rank = Number(counts[0]?.faster ?? 0n) + 1;
           position = total > 0 ? { rank, total } : null;
         }
       }
