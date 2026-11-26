@@ -70,14 +70,22 @@ export function dateInZone(epochMs: number, timeZone: string): number {
   return p.year * 10000 + p.month * 100 + p.day;
 }
 
+/** Longest run read as crossing midnight (12 h). */
+export const MAX_MIDNIGHT_RUN_DS = DAY_DS / 2;
+
 /**
  * Running time from two absolute clock times (deciseconds since midnight).
  * 0 when either is missing (0). A finish earlier than the start is read as a
- * run across midnight, so 23:30 → 00:20 is 50 minutes, not 0.
+ * run across midnight (23:30 → 00:20 is 50 minutes) only when that gives at
+ * most 12 h; otherwise it is a wrong start or finish (a finish five minutes
+ * before a daytime start) and gives 0, so the runner gets no result instead
+ * of a 23:55 run.
  */
 export function runningTimeDs(startAbs: number, finishAbs: number): number {
   if (startAbs <= 0 || finishAbs <= 0) return 0;
-  return (((finishAbs - startAbs) % DAY_DS) + DAY_DS) % DAY_DS;
+  if (finishAbs >= startAbs) return finishAbs - startAbs;
+  const wrapped = finishAbs - startAbs + DAY_DS;
+  return wrapped <= MAX_MIDNIGHT_RUN_DS ? wrapped : 0;
 }
 
 /**

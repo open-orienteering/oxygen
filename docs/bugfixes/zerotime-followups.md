@@ -37,5 +37,12 @@ out, so they are decisions, not oversights.
 9. **Other device-local clocks.** Receipt timestamps, SI station clock
    programming and the runner search's running-time filter still use the
    device's own zone; at a venue the device is in the event's zone.
-10. **SI-34 (negative `punches_raw` encoding)** and the Test Lab writing
+10. **Offline and replayed edits at ZeroTime.** The ZeroTime check runs on the
+    server's own mutations. A start typed in the Registration dialog while
+    offline, or a `runner.updated` / `start.adjusted` entry replayed through
+    `events.push`, is converted unchecked (the client does not know ZeroTime).
+11. **Entries from older nodes.** A backup punch journaled by a node from
+    before this release (no `backupRow` / `pushedFrom` flag) still lands as a
+    live punch on the receiving node, as it always did.
+12. **SI-34 (negative `punches_raw` encoding)** and the Test Lab writing
     absolute `punches_raw` (area 01) are separate items.

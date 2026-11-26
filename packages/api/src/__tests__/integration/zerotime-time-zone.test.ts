@@ -18,6 +18,7 @@ import { createTestEvent, disconnect, type TestEventContext } from "../helpers/t
 import { makeCaller } from "../helpers/caller.js";
 import { prisma } from "../../db.js";
 import { runningTimeDs, timeOfDayDs } from "@oxygen/shared";
+import { randomUUID } from "node:crypto";
 
 const H = 36_000;
 const MIN = 600;
@@ -117,6 +118,9 @@ describe("ZeroTime at creation and in the settings (RES-04)", () => {
     await expect(caller.event.setTimeSettings({ zeroTime: 8 * H, timeZone: "Europe/Stockholm" })).rejects.toThrow(
       /checked out/,
     );
+    // The zone alone may change under a lease.
+    await caller.event.setTimeSettings({ zeroTime: 9 * H, timeZone: "Europe/Oslo" });
+    expect((await caller.event.getTimeSettings()).timeZone).toBe("Europe/Oslo");
   });
 
   it("refuses a move that puts a drawn start on the new ZeroTime", async () => {
@@ -294,8 +298,75 @@ describe("backup-memory punches (RES-08)", () => {
   });
 });
 
+describe("backup punches through the journal (RES-08)", () => {
+  function wire(nameId: string, payload: Record<string, unknown>) {
+    return {
+      id: randomUUID(),
+      type: "punch.recorded" as never,
+      competitionId: nameId,
+      stationId: "venue",
+      timestamp: 1_700_000_000_000,
+      payload,
+    };
+  }
+
+  it("a peer stores the import as evidence and the push as a manual mirror", async () => {
+    const ctx = await event("zt-journal");
+    const caller = await freshCaller(ctx);
+    const backupId = randomUUID();
+    const mirrorId = randomUUID();
+    const base = { cardNo: 87_001, controlCode: 32, time: 10 * H + 15 * MIN, origin: "backup_memory" };
+    await caller.events.push({ events: [wire(ctx.nameId, { ...base, id: backupId, backupRow: true })] });
+    let rows = await ctx.db.punch.findMany({ where: { eventId: ctx.eventId } });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ id: backupId, source: "backup_memory", isOriginal: true, time: 1 * H + 15 * MIN });
+
+    await caller.events.push({ events: [wire(ctx.nameId, { ...base, id: mirrorId, pushedFrom: backupId })] });
+    rows = await ctx.db.punch.findMany({ where: { eventId: ctx.eventId }, orderBy: { importedAt: "asc" } });
+    expect(rows).toHaveLength(2);
+    expect(rows.find((r) => r.id === backupId)).toMatchObject({ source: "backup_memory", isOriginal: false });
+    expect(rows.find((r) => r.id === mirrorId)).toMatchObject({ source: "manual", time: 1 * H + 15 * MIN });
+  });
+
+  it("an entry from an older node (no flag) still lands as a live punch", async () => {
+    const ctx = await event("zt-journal-legacy");
+    const caller = await freshCaller(ctx);
+    await caller.events.push({
+      events: [wire(ctx.nameId, { id: randomUUID(), cardNo: 87_002, controlCode: 33, time: 10 * H, origin: "backup_memory" })],
+    });
+    const rows = await ctx.db.punch.findMany({ where: { eventId: ctx.eventId } });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].source).toBe("card");
+  });
+
+  it("an import exactly at ZeroTime is kept as a time, not 'no time'", async () => {
+    const ctx = await event("zt-backup-zero");
+    const caller = await freshCaller(ctx);
+    const ctrl = await ctx.db.control.create({ data: { eventId: ctx.eventId, codes: "40", name: "" } });
+    await caller.control.importBackupPunches({ controlId: ctrl.seq, punches: [{ cardNo: 87_003, punchTime: 9 * H }] });
+    const row = await ctx.db.punch.findFirstOrThrow({ where: { eventId: ctx.eventId } });
+    expect(row.time).toBe(1);
+  });
+});
+
 describe("running time across midnight (RES-16)", () => {
   it("23:30 → 00:20 is 50 minutes", () => {
     expect(runningTimeDs(23 * H + 30 * MIN, 20 * MIN)).toBe(50 * MIN);
+  });
+
+  it("a finish before a daytime start gives no result, not a 23:55 run", async () => {
+    const ctx = await event("zt-neg");
+    const caller = await freshCaller(ctx);
+    const cls = await classWithCourse(caller, ctx, "X");
+    const a = await caller.runner.create({ name: "Wrong", classId: cls.seq, cardNo: 88_001, startTime: 11 * H });
+    const b = await caller.runner.create({ name: "Right", classId: cls.seq, cardNo: 88_002, startTime: 10 * H });
+    await caller.runner.update({ id: a.id as number, finishTime: 10 * H + 55 * MIN, status: 1 });
+    await caller.runner.update({ id: b.id as number, finishTime: 10 * H + 40 * MIN, status: 1 });
+    const wrong = await caller.race.finishReceipt({ runnerId: a.id as number });
+    expect(wrong?.runningTime).toBe(0);
+    expect(wrong?.position).toBeNull();
+    const right = await caller.race.finishReceipt({ runnerId: b.id as number });
+    // The wrong run is not counted as a (23:55) result in the class.
+    expect(right?.position).toEqual({ rank: 1, total: 2 });
   });
 });

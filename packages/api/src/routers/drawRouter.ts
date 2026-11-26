@@ -25,7 +25,7 @@ const classDrawConfigSchema = z
   })
   // An interval of 0 would give the whole class one start time; only a mass
   // start may do that (RES-13).
-  .refine((c) => c.method === "simultaneous" || c.interval >= 1, {
+  .refine((c) => c.method === "simultaneous" || c.interval >= 10, {
     message: "The start interval must be at least one second unless the class has a mass start",
     path: ["interval"],
   });

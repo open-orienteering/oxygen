@@ -348,7 +348,7 @@
   "zeroTime": "Zero time",
   "timeZone": "Time zone",
   "zeroTimeHelp": "All race times are counted from the zero time. Keep it before the first start: a start exactly at the zero time cannot be stored. Moving it keeps drawn start times.",
-  "zeroTimeLockedHelp": "The zero time is fixed now that the race has timing data (or the event is checked out to a venue). The time zone sets the clock of the stations.",
+  "zeroTimeLockedHelp": "The zero time is fixed now that the race has timing data (or the event is checked out to a venue). The time zone can still change; it sets the clock of the stations.",
   "timeSettingsSaved": "Time settings saved",
   "plannedFirstStart": "Planned first start",
   "plannedFirstStartHelp": "Sets the zero time one hour earlier. Both can be changed in the event settings before the race."

@@ -46,6 +46,9 @@ describe("runningTimeDs", () => {
     // 23:30 → 00:20 is 50 minutes.
     expect(runningTimeDs(23.5 * 36000, 20 * 600)).toBe(50 * 600);
   });
+  it("a finish before a daytime start is an error, not a 23:55 run", () => {
+    expect(runningTimeDs(11 * 36000, 10 * 36000 + 55 * 600)).toBe(0);
+  });
   it("is 0 without a start or finish", () => {
     expect(runningTimeDs(0, 378000)).toBe(0);
     expect(runningTimeDs(360000, 0)).toBe(0);

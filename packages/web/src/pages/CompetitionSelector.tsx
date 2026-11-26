@@ -503,20 +503,14 @@ function CreateCompetitionForm({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim() || firstStartDs === null) return;
-    let timeZone: string | undefined;
-    try {
-      timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
-    } catch {
-      timeZone = undefined;
-    }
     createMutation.mutate({
       name: name.trim(),
       date,
       kind,
       kindCustom: kind === "other" ? kindCustom.trim() : "",
+      // The time zone takes the server default (Europe/Stockholm); it is
+      // changed under Event Info.
       ...(firstStartDs > 0 ? { firstStart: firstStartDs } : {}),
-      // The organiser's own zone; changeable later in the event settings.
-      ...(timeZone ? { timeZone } : {}),
     });
   };
 

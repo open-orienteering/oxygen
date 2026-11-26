@@ -10,7 +10,8 @@
 --      and time as a backup row with is_original = false), first, while the
 --      backup rows still carry the old value to match on;
 --   2. the backup rows themselves.
--- Rows with time 0 ("no time") stay. A node that only received the rows
+-- Rows with time 0 ("no time") stay. A punch exactly at ZeroTime becomes 1
+-- (one tenth later), not 0, which would read as "no time". A node that only received the rows
 -- through the journal stored them differently and is not touched here
 -- (docs/bugfixes/zerotime-followups.md).
 --
@@ -18,7 +19,7 @@
 -- go on writing new backup rows in the old base until it is replaced).
 
 UPDATE "oxygen"."punches" AS m
-   SET "time" = m."time" - e."zero_time"
+   SET "time" = CASE WHEN m."time" = e."zero_time" THEN 1 ELSE m."time" - e."zero_time" END
   FROM "oxygen"."events" AS e
  WHERE e."id" = m."event_id"
    AND m."source" = 'manual'
@@ -34,7 +35,7 @@ UPDATE "oxygen"."punches" AS m
    );
 
 UPDATE "oxygen"."punches" AS b
-   SET "time" = b."time" - e."zero_time"
+   SET "time" = CASE WHEN b."time" = e."zero_time" THEN 1 ELSE b."time" - e."zero_time" END
   FROM "oxygen"."events" AS e
  WHERE e."id" = b."event_id"
    AND b."source" = 'backup_memory'

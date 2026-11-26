@@ -571,6 +571,17 @@ function aggregateConfig(
   };
 }
 
+/**
+ * A backup unit's clock time (absolute ds) as a stored punch time. Units
+ * punch whole seconds and ZeroTime is on the hour, so a punch at exactly
+ * ZeroTime is likely; it is kept one tenth later instead of becoming relative
+ * 0, "no time" (RES-08).
+ */
+function backupRelative(absoluteDs: number, zeroTime: number): number {
+  const rel = toRelative(absoluteDs, zeroTime);
+  return rel === 0 && absoluteDs > 0 ? 1 : rel;
+}
+
 export const controlRouter = router({
   list: coursesViewProcedure.query(async ({ ctx }): Promise<ControlInfo[]> => {
     const eventId = ctx.event.id;
@@ -1880,7 +1891,7 @@ export const controlRouter = router({
         controlCode: p.controlCode ?? fallbackControlCode,
         controlId: controlUuid,
         unitId: unitRow?.id ?? null,
-        time: toRelative(p.time ?? p.punchTime ?? 0, ctx.event.zeroTime),
+        time: backupRelative(p.time ?? p.punchTime ?? 0, ctx.event.zeroTime),
         punchedAt: p.punchedAt
           ? new Date(p.punchedAt)
           : p.punchDatetime
@@ -1905,6 +1916,8 @@ export const controlRouter = router({
                     ? toAbsolute(row.time, ctx.event.zeroTime)
                     : 0,
                 origin: "backup_memory",
+                // Evidence only on every node until pushed (RES-08).
+                backupRow: true,
               },
             });
           }

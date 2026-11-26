@@ -959,7 +959,8 @@ Absolute time → Stored (relative to ZeroTime 09:00:00)
 - **The API always speaks absolute times**; the web UI never sees relative values.
 - **Running time** is `runningTimeDs(startAbs, finishAbs)` from
   `@oxygen/shared`: a finish earlier than the start is a run across midnight
-  (23:30 → 00:20 is 50 minutes), and 0 means a time is missing.
+  (23:30 → 00:20 is 50 minutes) when that gives at most 12 h; otherwise it is
+  a wrong time and gives 0 (no result). 0 also means a time is missing.
   `computeClassPlacements` and `computePosition` take absolute times only.
 
 **Sentinels.** Relative `0` means "no time". A start before ZeroTime is
@@ -982,14 +983,16 @@ starts away from it:
   refuses a start on ZeroTime or at/after 24:00 (`blockers` in the preview).
 - `event.setTimeSettings` moves ZeroTime before the race: stored start times
   and class first starts shift by old − new so every drawn start keeps its
-  clock time. It is refused once a finish, punch or read card exists, and while
-  a lease is held (the venue owns ZeroTime then).
+  clock time. Moving it is refused once a finish, punch or read card exists,
+  and while the event is checked out to a venue (anywhere: check in first).
+  The time zone alone can change at any time.
 
 **Event time zone.** `events.time_zone` (IANA, default `Europe/Stockholm`) is
 the zone of every "now" and every date: `race.serverTime`, has-started, the
 in-forest counts, entry stamps (`nowMeosDate` / `nowMeosTime`). Never use
-`Date#getHours` on the server: the Docker and Cloud Run images run in UTC (the
-images set `TZ=Europe/Stockholm` only for backup file names and logs). The
+`Date#getHours` on the server: the process zone is not the event's (the
+images set `TZ=Europe/Stockholm`, but one cloud instance serves events in any
+zone, and the test stacks run the API in UTC). The
 stations (start, finish, kiosk, start screen) use `useEventClock`: it asks
 `race.serverTime` every 30 s, keeps the offset from the device clock and the
 zone, and ticks locally, so the clock keeps running offline and the finish
@@ -998,6 +1001,8 @@ stamp is the event's time of day even on a laptop set to another zone.
 **Backup-memory punches** (`source = 'backup_memory'`) are stored relative like
 every other punch and are evidence only: readout, the Eventor upload and
 LiveResults ignore them until they are pushed, which adds a `manual` mirror.
+A backup punch exactly at ZeroTime is stored as 1, not 0. In the journal the
+import carries `backupRow: true` and the push `pushedFrom: <backup row id>`.
 The migration `20261126150100_fix_backup_punch_time_base` repaired rows stored
 as clock time before.
 

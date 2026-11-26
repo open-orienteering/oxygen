@@ -249,6 +249,11 @@ function EventTypeEditor({
 
 // ─── Zero time and time zone (RES-04, RES-06) ───────────────
 
+/** HH:MM:SS, with 00:00:00 for midnight (`formatMeosTime` prints "-" for 0). */
+function formatClock(ds: number): string {
+  return ds > 0 ? formatMeosTime(ds) : "00:00:00";
+}
+
 function timeZoneOptions(): string[] {
   try {
     return (Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf?.("timeZone") ?? [];
@@ -281,16 +286,17 @@ function EventTimeSettings({ canManage }: { canManage: boolean }) {
 
   if (!settings.data) return null;
   const s = settings.data;
-  const zeroShown = zeroText ?? formatMeosTime(s.zeroTime);
+  const zeroShown = zeroText ?? formatClock(s.zeroTime);
   const zoneShown = zone ?? s.timeZone;
-  const zeroDs = parseClockTime(zeroShown);
+  // A locked zero time is not edited, so it never blocks saving the zone.
+  const zeroDs = s.zeroTimeLocked ? s.zeroTime : parseClockTime(zeroShown);
   const zoneValid = isValidTimeZone(zoneShown.trim());
   const dirty = (zeroDs !== null && zeroDs !== s.zeroTime) || zoneShown.trim() !== s.timeZone;
 
   if (!canManage) {
     return (
       <div className="mt-3 text-sm text-slate-600" data-testid="event-time-settings">
-        <span className="font-medium">{t("zeroTime")}:</span> {formatMeosTime(s.zeroTime)} ·{" "}
+        <span className="font-medium">{t("zeroTime")}:</span> {formatClock(s.zeroTime)} ·{" "}
         <span className="font-medium">{t("timeZone")}:</span> {s.timeZone}
       </div>
     );

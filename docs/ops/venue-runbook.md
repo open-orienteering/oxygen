@@ -61,7 +61,7 @@ background: [`system/offline-architecture.md`](../system/offline-architecture.md
 
 0. Before checking out, check the event's **zero time** and **time zone**
    under Event Info. The zero time must lie before the first start, and it
-   cannot be changed while the box holds the lease. The time zone sets the
+   cannot be changed while the box holds the lease (the time zone can). The time zone sets the
    station clocks; the box's own `TZ` (default `Europe/Stockholm` in the
    compose file) only names backup files and log lines.
 1. On any admin device, open the event's **Event page → Venue mode** panel

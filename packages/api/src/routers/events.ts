@@ -931,19 +931,22 @@ async function applyEvent(
     }
 
     case "punch.recorded": {
-      const { id, cardNo, controlCode, time, origin, pushedFrom } = event.payload as {
+      const { id, cardNo, controlCode, time, origin, pushedFrom, backupRow } = event.payload as {
         id?: string;
         cardNo: number;
         controlCode: number;
         time: number;
         origin?: string;
         pushedFrom?: string;
+        backupRow?: boolean;
       };
-      // An imported backup-memory row stays evidence on every node; its
-      // pushed mirror is a `manual` punch and flips the backup row (RES-08).
+      // An imported backup-memory row (`backupRow: true`) stays evidence on
+      // every node; its pushed mirror (`pushedFrom`) is a `manual` punch and
+      // flips the backup row (RES-08). An entry from an older node carries
+      // neither and lands as a live punch, as it always did.
       const pushedFromId =
         typeof pushedFrom === "string" && UUID_RE.test(pushedFrom) ? pushedFrom : null;
-      const isBackupRow = origin === "backup_memory" && !pushedFromId;
+      const isBackupRow = origin === "backup_memory" && backupRow === true && !pushedFromId;
       // Journal entries cross node boundaries — validate before the dedupe
       // lookup, where an undefined field would silently drop the filter.
       if (

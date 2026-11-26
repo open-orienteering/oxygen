@@ -243,7 +243,12 @@ export const raceRouter = router({
                 AND status = 'ok'::oxygen.runner_status
                 AND finish_time <> 0
                 AND start_time <> 0
-                AND (((finish_time - start_time) % 864000) + 864000) % 864000 < ${myRunningTime}
+                -- runningTimeDs in SQL: a wrap past midnight counts up to 12 h.
+                AND (CASE
+                       WHEN finish_time >= start_time THEN finish_time - start_time
+                       WHEN finish_time - start_time + 864000 <= 432000 THEN finish_time - start_time + 864000
+                       ELSE 0
+                     END) BETWEEN 1 AND ${myRunningTime} - 1
             `,
             ctx.db.runner.count({ where: baseWhere }),
           ]);

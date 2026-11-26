@@ -18,7 +18,7 @@ relative 0 doubles as "no time". Around that:
   stored, and the start screen, the in-forest counts, `hasStarted`,
   LiveResults, the Eventor placements and the receipt rank tested `> 0`.
 - **Station clocks and "has started" used the server process's zone (RES-06).**
-  The Docker and Cloud Run images run in UTC, so in a Swedish summer the start
+  Cloud Run and the Docker images ran in UTC, so in a Swedish summer the start
   station showed 08:00 at 10:00, and the stations froze without network
   (they showed the last polled value, or 00:00 before the first answer).
 - **Backup-memory punches were stored as clock time (RES-08).** Every reader
@@ -39,7 +39,8 @@ relative 0 doubles as "no time". Around that:
   and sets ZeroTime one hour before it. New `event.getTimeSettings` /
   `event.setTimeSettings` and an Event Info card edit ZeroTime and the time
   zone; moving ZeroTime shifts stored starts so clock times stay, and is
-  refused once timing data exists or under a lease.
+  refused once timing data exists or while the event is checked out (the zone
+  alone can always change). New events take the default zone.
 - `toRelativeChecked` refuses a human-entered time exactly at ZeroTime
   (`ZERO_TIME_COLLISION`); the draw proposes ZeroTime + 1 h and refuses a start
   on ZeroTime or past midnight (`blockers` in the preview, Apply disabled).
@@ -52,7 +53,9 @@ relative 0 doubles as "no time". Around that:
   and logs.
 - Backup punches are stored relative, listed as clock time, and ignored by the
   readout, the Eventor upload and LiveResults until pushed. The journal entry
-  of a push carries `pushedFrom`, so a peer stores the mirror as `manual`.
+  of an import carries `backupRow: true` and of a push `pushedFrom`, so a peer
+  keeps the import as evidence and stores the mirror as `manual`. A backup
+  punch exactly at ZeroTime is stored as 1.
   Migration `20261126150100_fix_backup_punch_time_base` repairs existing rows
   and their mirrors on the node that imported them.
 - Strict parsers in `@oxygen/shared`: `parseClockTime` (`H:MM`, `H:MM:SS`,
@@ -60,7 +63,8 @@ relative 0 doubles as "no time". Around that:
   are `H:MM` for max time, `M:SS` for intervals). Runner start and finish save
   on blur or Enter only; invalid input is red and unsaved. The draw requires an
   interval of at least 1 s unless the class is a mass start.
-- `runningTimeDs` (midnight-safe) for running times in the readout, result
+- `runningTimeDs` (midnight-safe up to 12 h; a finish before a daytime start
+  stays 0) for running times in the readout, result
   lists, the receipt rank, LiveResults and the Eventor upload.
 - Vitest pins `TZ` (API in UTC, shared and web in Europe/Stockholm); Playwright
   runs the browser in Europe/Stockholm and the API in UTC.

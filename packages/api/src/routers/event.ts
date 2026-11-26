@@ -50,13 +50,14 @@ async function timingDataPresent(
   db: Prisma.TransactionClient,
   eventId: bigint,
 ): Promise<boolean> {
-  const [finished, punches, cards, readouts] = await Promise.all([
+  const [finished, teamsFinished, punches, cards, readouts] = await Promise.all([
     db.runner.count({ where: { eventId, removed: false, finishTime: { not: 0 } } }),
+    db.team.count({ where: { eventId, finishTime: { not: 0 } } }),
     db.punch.count({ where: { eventId, removed: false } }),
     db.card.count({ where: { eventId } }),
     db.cardReadout.count({ where: { eventId } }),
   ]);
-  return finished + punches + cards + readouts > 0;
+  return finished + teamsFinished + punches + cards + readouts > 0;
 }
 
 /**
@@ -367,19 +368,22 @@ export const eventRouter = router({
       const eventId = ctx.event.id;
       return ctx.db.$transaction(async (tx) => {
         await lockEventLeaseAndSync(tx, eventId);
-        if (await getActiveLease(tx, eventId)) {
-          throw new TRPCError({
-            code: "PRECONDITION_FAILED",
-            message: "The event is checked out to a venue; change its time settings there or after check-in.",
-          });
-        }
         const row = await tx.event.findUniqueOrThrow({
           where: { id: eventId },
           select: { zeroTime: true },
         });
         const oldZero = row.zeroTime;
         const newZero = input.zeroTime;
+        // The time zone alone shifts no data and may change at any time (a
+        // checked-out venue gets it with the next settings refresh).
         if (newZero !== oldZero) {
+          if (await getActiveLease(tx, eventId)) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message:
+                "The zero time cannot be moved while the event is checked out to a venue. Check it in first.",
+            });
+          }
           if (await timingDataPresent(tx, eventId)) {
             throw new TRPCError({
               code: "PRECONDITION_FAILED",
@@ -390,11 +394,12 @@ export const eventRouter = router({
           const delta = oldZero - newZero;
           // Relative 0 is "no time" and 1 is "drawn, no time": neither moves,
           // and no real time may land on either.
+          // Removed rows shift too, so they are checked too.
           const collide = await tx.runner.count({
-            where: { eventId, removed: false, startTime: { in: [-delta, 1 - delta], notIn: [0, 1] } },
+            where: { eventId, startTime: { in: [-delta, 1 - delta], notIn: [0, 1] } },
           });
           const collideClass = await tx.class.count({
-            where: { eventId, removed: false, firstStart: { in: [-delta, 1 - delta], not: 0 } },
+            where: { eventId, firstStart: { in: [-delta, 1 - delta], not: 0 } },
           });
           const collideTeam = await tx.team.count({
             where: { eventId, startTime: { in: [-delta, 1 - delta], notIn: [0, 1] } },

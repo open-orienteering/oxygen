@@ -486,7 +486,16 @@ export function TimeField({
 
   const commit = () => {
     const trimmed = text.trim();
-    const ds = trimmed === "" ? 0 : parseClockTime(trimmed);
+    // Tabbing through changes nothing (a stored time with tenths would
+    // otherwise be truncated to whole seconds and journaled).
+    if (trimmed === shown) {
+      setEditing(false);
+      setInvalid(false);
+      return;
+    }
+    const parsed = trimmed === "" ? 0 : parseClockTime(trimmed);
+    // 00:00:00 is "no time" in the API: only an empty field clears.
+    const ds = trimmed !== "" && parsed === 0 ? null : parsed;
     if (ds === null) {
       setInvalid(true);
       return;

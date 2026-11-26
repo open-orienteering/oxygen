@@ -153,3 +153,24 @@ test("the start station clock keeps ticking without the server (RES-06)", async 
   await expect(async () => expect(await clock.textContent()).not.toBe(before)).toPass({ timeout: 5000 });
   expect(before).not.toBe("00:00:00");
 });
+
+test("a new event's zero time is one hour before the planned first start (RES-04)", async ({ page, request }) => {
+  const uniqueName = `E2E Zero ${Date.now()}`;
+  const nameId = uniqueName.replace(/[^a-zA-Z0-9]/g, "_");
+  await page.goto("/");
+  await page.getByRole("button", { name: /New Event/ }).click();
+  await page.getByPlaceholder(/Klubbmästerskap/).fill(uniqueName);
+  const firstStart = page.getByTestId("new-event-first-start");
+  await expect(firstStart).toHaveValue("10:00");
+  await firstStart.fill("8:3");
+  await expect(page.getByRole("button", { name: "Create" })).toBeDisabled();
+  await firstStart.fill("08:30");
+  await page.getByRole("button", { name: "Create" }).click();
+  await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible({ timeout: 15000 });
+
+  await page.goto(`/${nameId}/event`);
+  await expect(page.getByTestId("event-zero-time")).toHaveValue("07:00:00", { timeout: 10000 });
+  const res = await request.get(`${API_BASE}/trpc/event.getTimeSettings`, { headers: { "x-competition-id": nameId } });
+  expect((await res.json()).result.data).toMatchObject({ zeroTime: 7 * H, timeZone: "Europe/Stockholm" });
+  await request.post(`${API_BASE}/trpc/event.delete`, { data: { nameId } });
+});

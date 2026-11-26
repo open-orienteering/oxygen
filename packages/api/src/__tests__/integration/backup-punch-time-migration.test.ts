@@ -63,6 +63,8 @@ beforeAll(async () => {
   // An un-pushed backup punch at 11:00, and one with no time.
   await punch("unpushed", "backup_memory", 11 * H, true, 32);
   await punch("zero", "backup_memory", 0, true, 33);
+  // A backup punch exactly at ZeroTime (08:00).
+  await punch("atZero", "backup_memory", 8 * H, true, 35);
   // Correct rows that must stay: a card punch, a manual punch with no backup twin.
   await punch("card", "card", 2 * H);
   await punch("manualOnly", "manual", 3 * H, true, 34);
@@ -85,6 +87,7 @@ describe("fix_backup_punch_time_base migration", () => {
     expect(await timeOf("mirror")).toBe(2 * H + 9000);
     expect(await timeOf("unpushed")).toBe(3 * H);
     expect(await timeOf("zero")).toBe(0);
+    expect(await timeOf("atZero")).toBe(1);
     expect(await timeOf("card")).toBe(2 * H);
     expect(await timeOf("manualOnly")).toBe(3 * H);
   });
