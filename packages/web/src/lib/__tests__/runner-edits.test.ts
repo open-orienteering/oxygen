@@ -38,6 +38,12 @@ describe("validateRunnerEdits (WEB-08)", () => {
     expect(validateRunnerEdits({ classId: 0 })).toEqual({ data: {}, errors: { classId: "classRequired" } });
   });
 
+  it("refuses a negative or out-of-range card number, but not 0 (no card)", () => {
+    expect(validateRunnerEdits({ cardNo: -5 }).errors).toEqual({ cardNo: "invalidCardNo" });
+    expect(validateRunnerEdits({ cardNo: 3_000_000_000 }).errors).toEqual({ cardNo: "invalidCardNo" });
+    expect(validateRunnerEdits({ cardNo: 0 })).toEqual({ data: { cardNo: 0 }, errors: {} });
+  });
+
   it("still sends the valid edits beside an invalid one", () => {
     expect(validateRunnerEdits({ name: "", cardNo: 42, classId: 3 })).toEqual({
       data: { cardNo: 42, classId: 3 },

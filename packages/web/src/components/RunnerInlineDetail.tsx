@@ -92,6 +92,7 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
   const pendingRef = useRef<PendingEdits>({});
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inFlightRef = useRef(false);
+  const inFlightPromiseRef = useRef<Promise<void> | null>(null);
   const [saving, setSaving] = useState(false);
   const [lastSaved, setLastSaved] = useState<number>(0);
   // A refused save (WEB-08) stays on screen until the next successful one.
@@ -118,31 +119,36 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
     }
     inFlightRef.current = true;
     setSaving(true);
-    updateMutation.mutate(
-      { id: runnerId, data: data as UpdateData },
-      {
-        onSuccess: () => {
+    // `mutateAsync`, not per-call callbacks: its promise settles even after
+    // the row closed, so the close-time save can wait for it (no reordering).
+    const p = updateMutation
+      .mutateAsync({ id: runnerId, data: data as UpdateData })
+      .then(
+        () => {
           setSaveError(null);
           setLastSaved(Date.now());
         },
-        onError: (err) => {
-          setSaveError(saveErrorText(err.message));
+        (err: unknown) => {
+          setSaveError(saveErrorText(err instanceof Error ? err.message : String(err)));
           setLastSaved(0);
+          // Back to the stored value, except where newer text is already
+          // queued: that edit goes out next and must stay on screen.
           setResetEpochs((prev) => {
             const next = { ...prev };
-            for (const f of fields) next[f] = (next[f] ?? 0) + 1;
+            for (const f of fields) if (!(f in pendingRef.current)) next[f] = (next[f] ?? 0) + 1;
             return next;
           });
           utils.runner.getById.invalidate({ id: runnerId });
         },
-        onSettled: () => {
-          inFlightRef.current = false;
-          if (timerRef.current) return; // still typing: the timer flushes
-          if (Object.keys(pendingRef.current).length > 0) flushRef.current();
-          else setSaving(false);
-        },
-      },
-    );
+      )
+      .finally(() => {
+        inFlightRef.current = false;
+        if (inFlightPromiseRef.current === p) inFlightPromiseRef.current = null;
+        if (timerRef.current) return; // still typing: the timer flushes
+        if (Object.keys(pendingRef.current).length > 0) flushRef.current();
+        else setSaving(false);
+      });
+    inFlightPromiseRef.current = p;
   };
   const flushRef = useRef(flush);
   useLayoutEffect(() => {
@@ -179,8 +185,9 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
     const { data } = validateRunnerEdits(pendingRef.current);
     pendingRef.current = {};
     if (Object.keys(data).length === 0) return;
-    utils.client.runner.update
-      .mutate({ id: runnerId, data: data as UpdateData })
+    // After the save still in flight, so an older value cannot land last.
+    (inFlightPromiseRef.current ?? Promise.resolve())
+      .then(() => utils.client.runner.update.mutate({ id: runnerId, data: data as UpdateData }))
       .then(invalidateAll, (err: unknown) => console.error("Runner edit not saved on close:", err));
   };
   const unmountFlushRef = useRef(unmountFlush);
@@ -225,9 +232,11 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
       />
     );
   };
-  // The three punch edits share one error line above the table.
-  const punchError =
-    addPunchMutation.error ?? removePunchMutation.error ?? updatePunchTimeMutation.error;
+  // The three punch edits share one error line above the table: the latest
+  // punch edit's outcome, so a later success clears an earlier failure.
+  const punchError = [addPunchMutation, removePunchMutation, updatePunchTimeMutation]
+    .filter((m) => m.submittedAt > 0)
+    .sort((a, b) => b.submittedAt - a.submittedAt)[0]?.error;
   const runningTime =
     r.finishTime > 0 && r.startTime > 0 ? r.finishTime - r.startTime : 0;
 
@@ -316,6 +325,7 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
                 onChange={(v) => edit("cardNo", parseInt(v, 10) || 0)}
                 onCommit={flushNow}
                 resetEpoch={resetEpochs.cardNo}
+                error={fieldErrors.cardNo && t(fieldErrors.cardNo)}
               />
               {marker("cardNo")}
             </div>
@@ -325,6 +335,7 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
               value={r.startTime}
               invalidText={t("invalidClockTime")}
               onCommit={(ds) => edit("startTime", ds, true)}
+              resetEpoch={resetEpochs.startTime}
             />
             <TimeField
               label={t("finishTime")}
@@ -332,6 +343,7 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
               value={r.finishTime}
               invalidText={t("invalidClockTime")}
               onCommit={(ds) => edit("finishTime", ds, true)}
+              resetEpoch={resetEpochs.finishTime}
             />
             <ReadonlyField
               label={t("runningTime")}
@@ -620,6 +632,7 @@ export function TimeField({
   onCommit,
   invalidText,
   testId,
+  resetEpoch = 0,
 }: {
   label: string;
   /** Absolute deciseconds; 0 = no time. */
@@ -627,6 +640,8 @@ export function TimeField({
   onCommit: (ds: number) => void;
   invalidText: string;
   testId?: string;
+  /** Changes when the server refused this time: show the stored one again. */
+  resetEpoch?: number;
 }) {
   const shown = value > 0 ? formatMeosTime(value) : "";
   const [text, setText] = useState(shown);
@@ -640,6 +655,17 @@ export function TimeField({
       setInvalid(false);
     }
   }, [shown, editing]);
+
+  const shownRef = useRef(shown);
+  useLayoutEffect(() => {
+    shownRef.current = shown;
+  });
+  useEffect(() => {
+    if (resetEpoch === 0) return;
+    setText(shownRef.current);
+    setEditing(false);
+    setInvalid(false);
+  }, [resetEpoch]);
 
   const commit = () => {
     const trimmed = text.trim();
@@ -762,7 +788,9 @@ function SelectField({
       <label className="block text-xs text-slate-500 mb-1">{label}</label>
       <SearchableSelect
         value={currentValue}
-        onChange={(v) => onSave(field, Number(v))}
+        onChange={(v) => {
+          if (Number(v) !== currentValue) onSave(field, Number(v));
+        }}
         placeholder="-"
         searchPlaceholder={t("searchClasses")}
         options={[

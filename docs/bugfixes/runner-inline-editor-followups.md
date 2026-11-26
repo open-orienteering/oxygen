@@ -17,3 +17,14 @@ and left for later, with the reason.
 - **Club and variant refusals.** They go through the same save and show the
   same message, but the selects derive their label from the stored value, so
   there is no field to mark red.
+- **Edits queued behind an offline save are lost on close.** While offline
+  the save in flight is paused and kept (mutations are persisted), but edits
+  sent by closing the row go through the tRPC client and fail to fetch; they
+  are only logged.
+- **Bib on a peer still on an older build.** A node from before package 11
+  ignores `fields.bib` when it replays a `runner.updated`, so bibs differ
+  until both nodes run this version.
+- **One refusal refuses the whole batch.** Edits queued together go in one
+  `runner.update`; if one field is refused (a taken card) the others in that
+  save are not stored either and show their stored value again. Blur normally
+  sends each field alone, so this needs a save in flight at the time.

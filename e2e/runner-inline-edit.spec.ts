@@ -78,6 +78,42 @@ test("an edit is stored when the row is closed right after typing", async ({ pag
   });
 });
 
+test("closing the row while a save is in flight keeps the later edit", async ({ page, request }) => {
+  const id = await newRunner(request, "In Flight Runner", 9_910_061);
+  await page.goto(`/itest/runners?runner=${id}`);
+  const name = page.getByTestId("runner-name");
+  await expect(name).toBeVisible({ timeout: 10000 });
+
+  // Hold the first save so the next edit queues behind it.
+  const update = /\/trpc\/[^?]*runner\.update/;
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  let held = false;
+  await page.route(update, async (route) => {
+    if (!held) {
+      held = true;
+      await gate;
+    }
+    await route.continue();
+  });
+
+  const first = page.waitForRequest(update);
+  await name.fill("In Flight Renamed");
+  await name.press("Enter");
+  await first;
+  await page.getByTestId("runner-bib").fill("B9");
+  await page.keyboard.press("Tab"); // queued: the name save is still held
+  await page.getByRole("cell", { name: /In Flight R/ }).first().click();
+  await expect(name).toBeHidden();
+  release();
+
+  await expect(async () => {
+    const r = await stored(request, id);
+    expect(r.name).toBe("In Flight Renamed");
+    expect(r.bib).toBe("B9");
+  }).toPass({ timeout: 10000 });
+});
+
 test("a card held by another runner is refused with a message and the field reverts (WEB-08)", async ({
   page,
   request,

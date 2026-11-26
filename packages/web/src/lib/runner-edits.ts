@@ -21,11 +21,12 @@ export function mergePendingEdits(
   return { ...pending, [field]: value };
 }
 
-export type RunnerEditError = "nameRequired" | "classRequired";
+export type RunnerEditError = "nameRequired" | "classRequired" | "invalidCardNo";
 
 /**
  * Split pending edits into what may be sent and what the server would refuse
- * anyway (WEB-08): a blank name (`min(1)`) and class 0 ("-", NOT_FOUND). The
+ * anyway (WEB-08): a blank name (`min(1)`), class 0 ("-", NOT_FOUND) and a
+ * negative or out-of-range card number (`nonnegative()`, int4). The
  * invalid keys are dropped from `data`, so the valid edits beside them still
  * save; `errors` maps each dropped field to its i18n key.
  */
@@ -40,6 +41,12 @@ export function validateRunnerEdits(pending: PendingEdits): {
       errors.name = "nameRequired";
     } else if (field === "classId" && (typeof value !== "number" || !(value > 0))) {
       errors.classId = "classRequired";
+    } else if (
+      field === "cardNo" &&
+      value !== null &&
+      (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0 || value > 2_147_483_647)
+    ) {
+      errors.cardNo = "invalidCardNo";
     } else {
       data[field] = value;
     }
