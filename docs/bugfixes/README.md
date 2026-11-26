@@ -82,6 +82,7 @@ Notes whose code no longer exists (mostly the raster tile pipeline, deleted in s
 
 | Note | Added |
 | --- | --- |
+| [Draw safety: a redraw rewrote started runners, the draw was not atomic, and Apply differed from the preview](draw-safety.md) | 2026-11-26 |
 | [Demo Competition courses read no controls](showcase-stale-course-structure.md) | 2026-11-07 |
 | [Runner search failed in given-name order](runner-name-search-order.md) | 2026-09-19 |
 | [`OXYGEN_ADMIN_EMAILS` silently did nothing for existing accounts](bootstrap-admin-not-reconciled.md) | 2026-09-02 |
