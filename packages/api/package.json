@@ -28,6 +28,7 @@
     "document:from-ocd": "tsx scripts/ocd-to-document.ts",
     "demo-map:enrich": "tsx scripts/demo-map/enrich-okartan.mjs",
     "map:rematch": "tsx src/cli/map-rematch.ts",
+    "event:restore": "tsx src/cli/restore-event.ts",
     "dem:live-check": "tsx scripts/dem-live-check.ts"
   },
   "dependencies": {

@@ -72,5 +72,41 @@ services:
       retries: 12
       start_period: 20s
 
+  # Automatic whole-database backups (docs/ops/backup-restore.md
+  # "Automatic backups"): a pg_dump of the oxygen schema every 15 minutes
+  # into ./backups next to this file, the newest 48 kept. Point
+  # BACKUP_DIR at a USB stick to keep a copy off the box's disk.
+  backup:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGUSER: oxygen
+      PGPASSWORD: oxygen
+      PGDATABASE: oxygen
+      BACKUP_INTERVAL_SECONDS: "${BACKUP_INTERVAL_SECONDS:-900}"
+      BACKUP_KEEP: "${BACKUP_KEEP:-48}"
+    volumes:
+      - ${BACKUP_DIR:-./backups}:/backups
+    # docker/pg-backup.sh, inline: this file runs without a checkout.
+    entrypoint:
+      - sh
+      - -c
+      - |
+        echo "pg-backup: every $${BACKUP_INTERVAL_SECONDS}s to /backups, keeping $${BACKUP_KEEP}"
+        while true; do
+          out="/backups/oxygen_$$(date -u +%Y%m%d_%H%M%S).dump"
+          if pg_dump --schema=oxygen --format=custom --file="$$out.partial"; then
+            mv "$$out.partial" "$$out" && echo "pg-backup: wrote $$out"
+            ls -1t /backups/oxygen_*.dump | tail -n +"$$(($${BACKUP_KEEP} + 1))" | while read -r old; do rm -f "$$old"; done
+          else
+            echo "pg-backup: pg_dump FAILED" >&2; rm -f "$$out.partial"
+          fi
+          sleep "$${BACKUP_INTERVAL_SECONDS}"
+        done
+
 volumes:
   postgres-release-data:

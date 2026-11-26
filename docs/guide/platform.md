@@ -70,7 +70,11 @@ Deleting an event from the start page is a soft delete: it disappears from the l
 
 ## Event backup
 
-The Event page exposes a one-click **Download backup** button that streams a per-event PostgreSQL dump (CSV `\copy` of every event-scoped table) to your browser. The scope is exactly one event: its courses, classes, runners, cards, punches, readouts, map, and tracks — not other events, and not the shared runner and club directories. The event map travels as the content-addressed source file and imported document it pins, by hash, and restores idempotently into a database that already holds them (`packages/api/scripts/restore-map-blobs.sql`). The dump is prefixed with a header that includes a ready-to-run (commented) `INSERT INTO oxygen.events` statement, so a restore can re-create the event row on a fresh database without manual SQL. See [ops/backup-restore.md](../ops/backup-restore.md) for the full restore workflow.
+The Event page has a one-click **Download backup** button that streams a dump of the selected event to your browser: its courses, classes, runners, cards, punches, readouts, the journal, the map with its patch and colour settings, print templates and course maps, logos, tracks and access grants. Not other events, and not the shared runner and club directories or the users. The map travels as the content-addressed source file and imported document it pins, by hash. The dump is one consistent snapshot even during readout, and it ends with `-- BACKUP COMPLETE`; a backup that fails shows an error on the page instead of saving a partial file.
+
+To restore it, run `pnpm db:migrate` and then `pnpm event:restore <file>` against the target database (`--replace` puts it in place of an existing copy of the event). The event comes back with every row, under a new internal id.
+
+Venue boxes and self-hosted installs also take a whole-database backup every 15 minutes into a `backups` folder beside the compose file; the cloud has Cloud SQL's daily backups with point-in-time recovery. See [ops/backup-restore.md](../ops/backup-restore.md) for both.
 
 ## Card readers
 

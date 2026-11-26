@@ -308,9 +308,33 @@ apply cleanly.
 
 - **Cloud SQL automated backups**: enabled by `provision.sh` (daily 03:00
 UTC, 7 retained). Restore via `gcloud sql backups list/restore`.
-- **Per-event backup download** (`GET /api/backup/event`, `pg_dump` inside
-the container) works as documented in `docs/ops/backup-restore.md` — the
-image ships `postgresql-client`.
+- **Point-in-time recovery** (DB-35): `provision.sh` creates the instance
+with `--enable-point-in-time-recovery --retained-transaction-log-days=7`,
+so the database can be restored to any moment of the last seven days, not
+only to the last 03:00 backup (a bad write at 14:00 on race day is undone
+to 13:59). The transaction logs add some storage cost (a few cents a day
+at this size). An instance created before this release does not have it:
+turn it on once, **between events, never on race day** (the patch
+restarts the instance, a minute or two of downtime):
+
+  ```bash
+  gcloud sql instances describe "$SQL_INSTANCE" --format='value(settings.backupConfiguration.pointInTimeRecoveryEnabled)'
+  gcloud sql instances patch "$SQL_INSTANCE" --enable-point-in-time-recovery --retained-transaction-log-days=7
+  ```
+
+  To recover, clone the instance to the moment before the damage and
+  point the service at the clone (or copy the event out of it with the
+  per-event backup and restore it into the live database):
+
+  ```bash
+  gcloud sql instances clone "$SQL_INSTANCE" "${SQL_INSTANCE}-recovered" --point-in-time='2026-05-01T12:59:00Z'
+  ```
+
+- **Per-event backup download** (`GET /api/backup/event`, psql inside the
+container through the Cloud SQL socket of the `?host=` parameter in
+`DATABASE_URL`) works as documented in `docs/ops/backup-restore.md`: the
+image ships `postgresql-client`. A dump that cannot reach the database
+answers an error instead of a file.
 
 ## Height data (Lantmäteriet)
 

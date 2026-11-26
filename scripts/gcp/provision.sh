@@ -25,7 +25,7 @@ gcloud artifacts repositories describe "$AR_REPO" --location="$REGION" >/dev/nul
     --location="$REGION" --repository-format=docker \
     --description="Oxygen images"
 
-echo "── Cloud SQL instance (db-f1-micro, 10 GB SSD, automated backups)…"
+echo "── Cloud SQL instance (db-f1-micro, 10 GB SSD, automated backups, point-in-time recovery)…"
 if ! gcloud sql instances describe "$SQL_INSTANCE" >/dev/null 2>&1; then
   gcloud sql instances create "$SQL_INSTANCE" \
     --database-version=POSTGRES_18 \
@@ -37,7 +37,9 @@ if ! gcloud sql instances describe "$SQL_INSTANCE" >/dev/null 2>&1; then
     --storage-auto-increase \
     --backup \
     --backup-start-time=03:00 \
-    --retained-backups-count=7
+    --retained-backups-count=7 \
+    --enable-point-in-time-recovery \
+    --retained-transaction-log-days=7
 fi
 
 echo "── Database + user…"

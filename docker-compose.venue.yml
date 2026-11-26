@@ -74,5 +74,27 @@ services:
     volumes:
       - ./docker/nginx.conf:/etc/nginx/conf.d/default.conf:ro
 
+  # Automatic whole-database backups (docs/ops/backup-restore.md
+  # "Automatic backups"): a pg_dump of the oxygen schema every 15 minutes
+  # into ./backups next to this file, the newest 48 kept. Point
+  # BACKUP_DIR at a USB stick to keep a copy off the box's disk.
+  backup:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGUSER: oxygen
+      PGPASSWORD: oxygen
+      PGDATABASE: oxygen
+      BACKUP_INTERVAL_SECONDS: "${BACKUP_INTERVAL_SECONDS:-900}"
+      BACKUP_KEEP: "${BACKUP_KEEP:-48}"
+    volumes:
+      - ${BACKUP_DIR:-./backups}:/backups
+      - ./docker/pg-backup.sh:/usr/local/bin/pg-backup.sh:ro
+    entrypoint: ["sh", "/usr/local/bin/pg-backup.sh"]
+
 volumes:
   venue-pg-data:
