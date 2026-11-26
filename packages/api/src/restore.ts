@@ -19,10 +19,11 @@
  * Each section loads through a temp table built from its CSV header (all
  * `text`), so columns match by name and a dump from an older schema loads
  * (its extra columns are left out with a warning, missing ones take their
- * defaults). `event_id` is rewritten to the new event; every other key is
- * kept, and serial sequences are moved past the restored ids. A reference
- * to a row the dump does not carry (a user, a user group, a club map) is
- * kept only when the target holds that row, else handled as the foreign
+ * defaults). `event_id` is rewritten to the new event; the global serial
+ * ids (graphics, with the layout JSON that draws them, tracks, routes, the
+ * journal's `ingest_seq`) come from the target's sequences, and the UUIDs
+ * are kept. A reference to a row the target does not hold (a user, a user
+ * group, a club map, a map source the dump did not carry) is handled as the foreign
  * key's ON DELETE action would: `SET NULL` clears it (a permission's
  * `granted_by`), `CASCADE` skips the row (the permission of a user this
  * database does not have), with a warning.
@@ -92,10 +93,10 @@ export type DumpCheck = { ok: true; dump: CheckedDump } | { ok: false; error: st
 
 /**
  * Split and vet a dump. A dump with a `-- BACKUP FAILED` trailer is
- * refused, and so is one without the completion marker that has a
- * `journal` section (written by a release that ends every dump with the
- * marker: it has `BACKUP_FORMAT_LINE` in its header), so it was cut short. A dump from before the marker loads with
- * a warning. Sections this release does not know (`event_log`,
+ * refused, and so is one without the completion marker that has
+ * `BACKUP_FORMAT_LINE` in its header (or a `journal` section): it was
+ * written by a release that ends every dump with the marker, so it was
+ * cut short. A dump from before the marker loads with a warning. Sections this release does not know (`event_log`,
  * `rendered_maps` of older dumps) are skipped with a warning.
  */
 export function checkDump(text: string): DumpCheck {
@@ -138,7 +139,7 @@ export function csvHeader(csv: string): string[] | null {
 // ─── Generated psql scripts ────────────────────────────────
 
 /**
- * `pg_temp.oxygen_restore_section(tbl, src, new_event, dumped, skip_conflicts, fresh, order_by)`:
+ * `pg_temp.oxygen_restore_section(tbl, src, new_event, skip_conflicts, fresh, order_by)`:
  * insert the rows of temp table `src` (all text) into `oxygen.<tbl>`,
  * matching columns by name and casting to each target type. `event_id`
  * becomes `new_event`; for `events` the id is left to the sequence and
@@ -150,7 +151,7 @@ export function csvHeader(csv: string): string[] | null {
  * skips the row.
  */
 const RESTORE_FUNCTION = String.raw`
-CREATE FUNCTION pg_temp.oxygen_restore_section(tbl text, src text, new_event bigint, dumped text[], skip_conflicts boolean,
+CREATE FUNCTION pg_temp.oxygen_restore_section(tbl text, src text, new_event bigint, skip_conflicts boolean,
                                                 fresh text[], order_by text)
 RETURNS bigint LANGUAGE plpgsql AS $fn$
 DECLARE
@@ -260,7 +261,8 @@ $fn$;
 
 /**
  * Fresh graphic ids: `restore_graphic_ids` maps each dumped id to a new
- * one from the target's sequence, and `pg_temp.oxygen_remap_graphics`
+ * one from the target's sequence, and `pg_temp.oxygen_remap_graphic` /
+ * `oxygen_remap_graphics_in`
  * rewrites a `graphicId` in layout JSON (template and sheet `objects`,
  * course object `props`) through it. An id the dump does not carry (a
  * club graphic) is kept as it is.
@@ -279,6 +281,33 @@ CREATE FUNCTION pg_temp.oxygen_remap_graphics_in(objects jsonb) RETURNS jsonb LA
                                FROM jsonb_array_elements(objects) WITH ORDINALITY AS e(o, n)), objects)
               ELSE objects END
 $fn$;
+`;
+
+/**
+ * A layout reference the remap left alone (a club graphic, not in the
+ * dump) that the target has no club graphic for: the print draws nothing
+ * there, or another event's graphic. Warned, not refused.
+ */
+const UNMAPPED_GRAPHICS_WARNING = String.raw`
+DO $$
+DECLARE missing text;
+BEGIN
+  SELECT string_agg(DISTINCT ref, ', ') INTO missing FROM (
+    SELECT o->>'graphicId' AS ref FROM oxygen.map_templates t, jsonb_array_elements(CASE WHEN jsonb_typeof(t.objects) = 'array' THEN t.objects ELSE '[]' END) o
+     WHERE t.event_id = current_setting('oxygen.restore_event')::bigint AND o ? 'graphicId'
+    UNION ALL
+    SELECT o->>'graphicId' FROM oxygen.course_maps t, jsonb_array_elements(CASE WHEN jsonb_typeof(t.objects) = 'array' THEN t.objects ELSE '[]' END) o
+     WHERE t.event_id = current_setting('oxygen.restore_event')::bigint AND o ? 'graphicId'
+    UNION ALL
+    SELECT props->>'graphicId' FROM oxygen.course_objects
+     WHERE event_id = current_setting('oxygen.restore_event')::bigint AND jsonb_typeof(props) = 'object' AND props ? 'graphicId'
+  ) r
+  WHERE NOT EXISTS (SELECT 1 FROM oxygen.graphics g
+                     WHERE g.id::text = r.ref AND (g.event_id IS NULL OR g.event_id = current_setting('oxygen.restore_event')::bigint));
+  IF missing IS NOT NULL THEN
+    RAISE WARNING 'the layout draws graphics this database does not have (club graphics are not in the backup): %', missing;
+  END IF;
+END $$;
 `;
 
 /** The layout columns that draw graphics by number, per section. */
@@ -313,17 +342,12 @@ function loadSection(t: BackupTable, csv: string): string {
   ].join("\n");
 }
 
-function insertSection(t: BackupTable, dumped: readonly string[]): string {
+function insertSection(t: BackupTable): string {
   const fresh = FRESH_COLUMNS[t];
   return (
-    `SELECT pg_temp.oxygen_restore_section('${t}', 'restore_${t}', :new_event_id, ${sqlArray(dumped)}, ` +
+    `SELECT pg_temp.oxygen_restore_section('${t}', 'restore_${t}', :new_event_id, ` +
     `${SHARED_SECTIONS.has(t)}, ${sqlArray(fresh?.cols ?? [])}, ${fresh?.orderBy ? `'${fresh.orderBy}'` : "NULL"}) AS restored_${t} \\gset`
   );
-}
-
-/** The tables whose rows are in the dump (references to them are restored, not looked up). */
-function dumpedTables(dump: CheckedDump): string[] {
-  return dump.tables.slice();
 }
 
 /** The marker phase 1 prints with the new event id. */
@@ -336,7 +360,6 @@ export const RESTORED_EVENT_ID_PREFIX = "restored-event-id ";
  * event (and, by cascade, all its rows) first. One transaction.
  */
 export function buildCoreRestoreScript(dump: CheckedDump, opts: { replace: boolean }): string {
-  const dumped = dumpedTables(dump);
   const parts: string[] = [`\\set ON_ERROR_STOP on`, `BEGIN;`, RESTORE_FUNCTION, GRAPHICS_FUNCTIONS, loadSection("events", dump.sections.get("events")!)];
   if (opts.replace) {
     parts.push(`DELETE FROM oxygen.events e USING restore_events s WHERE e.name_id = s.name_id;`);
@@ -350,7 +373,9 @@ export function buildCoreRestoreScript(dump: CheckedDump, opts: { replace: boole
 END $$;`,
     );
   }
-  parts.push(`SELECT pg_temp.oxygen_restore_section('events', 'restore_events', NULL, ${sqlArray(dumped)}, false, ${sqlArray([])}, NULL) AS new_event_id \\gset`);
+  parts.push(`SELECT pg_temp.oxygen_restore_section('events', 'restore_events', NULL, false, ${sqlArray([])}, NULL) AS new_event_id \\gset`,
+    `SELECT set_config('oxygen.restore_event', :'new_event_id', true) AS restore_event_set \\gset`,
+  );
   for (const t of dump.tables) {
     if (t === "events" || SCRIPT_SECTIONS.has(t) || MAP_EXTRA_SECTIONS.has(t)) continue;
     const csv = dump.sections.get(t)!;
@@ -363,9 +388,9 @@ END $$;`,
     }
     const remap = remapGraphics(t, csvHeader(csv)!);
     if (remap) parts.push(remap);
-    parts.push(insertSection(t, dumped));
+    parts.push(insertSection(t));
   }
-  parts.push(`COMMIT;`, `\\echo ${RESTORED_EVENT_ID_PREFIX}:new_event_id`, ``);
+  parts.push(UNMAPPED_GRAPHICS_WARNING, `COMMIT;`, `\\echo ${RESTORED_EVENT_ID_PREFIX}:new_event_id`, ``);
   return parts.join("\n");
 }
 
@@ -373,9 +398,8 @@ END $$;`,
 export function buildMapExtrasScript(dump: CheckedDump): string | null {
   const tables = dump.tables.filter((t) => MAP_EXTRA_SECTIONS.has(t));
   if (tables.length === 0) return null;
-  const dumped = dumpedTables(dump);
   const parts: string[] = [`\\set ON_ERROR_STOP on`, `BEGIN;`, RESTORE_FUNCTION];
-  for (const t of tables) parts.push(loadSection(t, dump.sections.get(t)!), insertSection(t, dumped));
+  for (const t of tables) parts.push(loadSection(t, dump.sections.get(t)!), insertSection(t));
   parts.push(`COMMIT;`, ``);
   return parts.join("\n");
 }

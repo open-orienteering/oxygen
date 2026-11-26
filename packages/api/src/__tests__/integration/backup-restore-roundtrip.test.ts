@@ -40,6 +40,7 @@ let before: Snapshot;
 let restoredId: bigint | null = null;
 let keptUserId: string;
 let groupId: string;
+let sourceIngestSeqs: string[];
 
 type Snapshot = Record<string, unknown[]>;
 
@@ -127,6 +128,7 @@ beforeAll(async () => {
   await one(`INSERT INTO oxygen.punches (event_id, card_no, control_code, time, unit_id, control_id) VALUES ($1, 500123, 31, 3600, $2::uuid, $3::uuid) RETURNING id`, e, unit.id, control.id);
   await one(`INSERT INTO oxygen.card_readout_backups (event_id, slot_address, card_no, punches, punches_hash, raw_bytes) VALUES ($1, 8, 500123, '[]'::jsonb, 'h1', '\\x0102ff'::bytea) RETURNING id`, e);
   await one(`INSERT INTO oxygen.journal (event_id, type, station_id, client_timestamp, payload, hlc, schema_version) VALUES ($1, 'runner.update', 'st-1', now(), '{"note":"a, \\"b\\""}'::jsonb, 1, 1) RETURNING id`, e);
+  await one(`INSERT INTO oxygen.journal (event_id, type, station_id, client_timestamp, payload, hlc, schema_version) VALUES ($1, 'runner.update', 'st-1', now(), '{"note":"second"}'::jsonb, 2, 1) RETURNING id`, e);
   await one(`INSERT INTO oxygen.tracks (event_id, device_id, start_time_ms, geometry) VALUES ($1, 'dev', 1, '{}'::jsonb) RETURNING id::text AS id`, e);
   await one(`INSERT INTO oxygen.routes (event_id, waypoints, runner_id, class_id) VALUES ($1, '[]'::jsonb, $2::uuid, $3::uuid) RETURNING id::text AS id`, e, runner.id, klass.id);
   await one(`INSERT INTO oxygen.event_permissions (event_id, user_id, group_id, granted_by) VALUES ($1, $2::uuid, $3::uuid, $4::uuid) RETURNING id`, e, keptUserId, groupId, goneUser.id);
@@ -149,6 +151,7 @@ beforeAll(async () => {
   expect(res.statusCode).toBe(200);
   dump = res.body;
   before = await snapshot(e);
+  sourceIngestSeqs = (await db.$queryRawUnsafe<{ s: string }[]>(`SELECT ingest_seq::text AS s FROM oxygen.journal WHERE event_id = $1`, e)).map((r) => r.s);
 
   // The database loses the event, and one of the users.
   await db.event.delete({ where: { id: e } });
@@ -202,7 +205,7 @@ describe("the dump against the schema", () => {
     const sections = splitBackupSections(dump);
     expect([...sections.keys()]).toEqual([...BACKUP_TABLES]);
     for (const [t, csv] of sections) expect(csv.split("\n")[0], t).not.toBe("");
-    expect(sections.get("journal")!.trim().split("\n")).toHaveLength(2);
+    expect(sections.get("journal")!.trim().split("\n")).toHaveLength(3);
   });
 });
 
@@ -224,6 +227,21 @@ describe("runRestore", () => {
     for (const t of ["runners", "cards", "card_readouts", "punches", "control_units", "map_templates", "classes", "course_maps", "course_objects", "journal", "graphics", "tracks", "routes", "card_readout_backups", "map_files", "map_patches", "map_gps_tracks", "map_colour_settings", "map_document_colour_settings", "event_seqs"]) {
       expect(after[t].length, t).toBeGreaterThan(0);
     }
+  });
+
+  it("takes tracks, routes and the journal's ingest_seq from this database's sequences, the journal in order", async () => {
+    const sections = splitBackupSections(dump);
+    const firstCol = (t: string) => sections.get(t)!.trim().split("\n").slice(1).map((l) => l.split(",")[0]);
+    const [tr] = await prisma().$queryRawUnsafe<{ id: string }[]>(`SELECT id::text AS id FROM oxygen.tracks WHERE event_id = $1`, restoredId);
+    const [ro] = await prisma().$queryRawUnsafe<{ id: string }[]>(`SELECT id::text AS id FROM oxygen.routes WHERE event_id = $1`, restoredId);
+    expect(firstCol("tracks")).not.toContain(tr.id);
+    expect(firstCol("routes")).not.toContain(ro.id);
+    const journal = await prisma().$queryRawUnsafe<{ seq: string; hlc: string }[]>(
+      `SELECT ingest_seq::text AS seq, hlc::text AS hlc FROM oxygen.journal WHERE event_id = $1 ORDER BY ingest_seq`, restoredId,
+    );
+    // In the order they were ingested, under numbers the originals did not have.
+    expect(journal.map((j) => j.hlc)).toEqual(["1", "2"]);
+    for (const j of journal) expect(sourceIngestSeqs).not.toContain(j.seq);
   });
 
   it("renumbers the graphics, and the layout JSON draws the new ids", async () => {

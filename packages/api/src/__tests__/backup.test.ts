@@ -7,6 +7,8 @@
 import { describe, it, expect, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import { PassThrough, Readable } from "node:stream";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   BACKUP_COMPLETE_MARKER,
   BACKUP_EXCLUDED,
@@ -307,5 +309,24 @@ describe("startBackupStream", () => {
     await new Promise((r) => setImmediate(r));
     expect(f.stdout.isPaused() || f.stdout.readableFlowing === false).toBe(true);
     res.stream.destroy();
+  });
+});
+
+describe("the automatic backup service (DB-36)", () => {
+  it("runs the same script inline in docker-compose.release.yml as docker/pg-backup.sh", () => {
+    const root = resolve(__dirname, "../../../..");
+    const script = readFileSync(resolve(root, "docker/pg-backup.sh"), "utf8");
+    const body = script.slice(script.indexOf('BACKUP_DIR="${BACKUP_DIR:-/backups}"')).trimEnd();
+    const compose = readFileSync(resolve(root, "docker-compose.release.yml"), "utf8");
+    const start = compose.indexOf('        BACKUP_DIR="$${BACKUP_DIR:-/backups}"');
+    expect(start).toBeGreaterThan(-1);
+    const inline = compose
+      .slice(start, compose.indexOf("\nvolumes:", start))
+      .split("\n")
+      .map((l) => l.replace(/^ {8}/, ""))
+      .join("\n")
+      .replaceAll("$$", "$")
+      .trimEnd();
+    expect(inline).toBe(body);
   });
 });

@@ -60,8 +60,8 @@ background: [`system/offline-architecture.md`](../system/offline-architecture.md
    file and keeps the newest 48. Set `BACKUP_DIR` in `.env.venue` to a USB
    stick's mount point to keep a copy off the box's disk (if the stick is
    not mounted, the dumps land on the box's disk: check with `df`). The
-   48 dumps take about 48 times one dump's size, and the service skips a
-   dump when the disk has less than twice that free. Before the race,
+   48 dumps take about 48 times one dump's size, and the service deletes
+   older dumps early, and skips a round, rather than fill the disk. Before the race,
    check that dumps are appearing: `ls -lt backups | head -3` (or
    `docker compose -f docker-compose.venue.yml logs backup`). See
    [backup-restore.md](backup-restore.md#automatic-backups) for restoring

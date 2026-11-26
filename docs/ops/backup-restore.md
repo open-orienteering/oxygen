@@ -119,7 +119,7 @@ Their `events` and `courses` sections carry columns v0.6.1 dropped (`map_pipelin
 | `BACKUP_INTERVAL_SECONDS` | `900` | Time between dumps. |
 | `BACKUP_KEEP` | `48` | Dumps kept; older ones are deleted. |
 
-`docker compose logs backup` shows each dump written, `pg_dump FAILED` when one was not, and `SKIPPED` when the backup directory had less free space than twice the last dump (the service never fills the disk the database lives on). Each dump is the whole database, map blobs included, so 48 of them take about 48 times one dump: check one dump's size before race day and lower `BACKUP_KEEP` if the disk is small. A `.partial` left by a stopped container is deleted on the next round. The script is `docker/pg-backup.sh` (inlined in the release compose file, which runs without a checkout).
+`docker compose logs backup` shows each dump written, `pg_dump FAILED` when one was not, and and what it does when space runs short: before each dump it wants twice the last dump's size free, deletes the oldest dumps (never the newest two) until there is, and skips the round (`SKIPPED`) only if that is not enough, so the service never fills the disk the database lives on. Each dump is the whole database, map blobs included, so 48 of them take about 48 times one dump: check one dump's size before race day and lower `BACKUP_KEEP` if the disk is small. A `.partial` left by a stopped container is deleted on the next round. The script is `docker/pg-backup.sh` (inlined in the release compose file, which runs without a checkout).
 
 When `BACKUP_DIR` points at a USB stick that is not mounted, the dumps go to the empty mount-point directory on the box's own disk: check with `df` that the directory is on the stick.
 
