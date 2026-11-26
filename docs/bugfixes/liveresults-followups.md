@@ -1,0 +1,21 @@
+# LiveResults: what package 16 left out
+
+Items from the package 16 plan and review that were not changed, with the reason. See [liveresults-single-owner-and-incremental-push.md](liveresults-single-owner-and-incremental-push.md) for what was fixed.
+
+- **Never checked against the live MySQL.** The remote schema, the `(dbid, control)` and `(classname, corder, code)` row-constructor deletes and the `changed` semantics are taken from the old pump and the review, not observed. Do one manual push against a test competition before the next release.
+- **A renamed class leaves its old rows.** The cleanup scope is Oxygen's class names. A runner row written under a class name the event no longer has (renamed class) is outside the scope and stays until removed by hand. Removed classes are covered.
+- **Remote cleanup on purge.** `purgeDeleted` drops the local settings rows but leaves the remote `login`, `runners` and `results` of the event's competition.
+- **Transactions on the remote.** "One transaction" holds only if the remote tables are InnoDB; on MyISAM `BEGIN` is a no-op. The diff design makes a half-applied cycle harmless (the next one completes it), but check the engine in the live test above.
+- **Classless runners.** A runner with no class is published with class `""`, which is not in the cleanup scope (another client's classless rows would be): if such a runner is removed in Oxygen, its remote row stays.
+- **`ensureCompetition` retry** on a duplicate `login` key has no test (it needs a fake pool). Two concurrent `enable` calls for one event can still leave an orphan `login` row, as before.
+- **Sheets for a standalone box that later ships.** A box with no `SYNC_PEER_URL` pushes readouts itself; if a peer is configured later in the day, the cloud pushes the shipped backlog again.
+- **ROC on both nodes.** The ROC puller still runs on the cloud and on a venue box, each into its own database, as before. The cloud's puller writes punches into an event leased to a box without a `mayWriteEventData` check. Whether the puller should be cloud-only or holder-only belongs to the ROC area; the spec line that called it cloud-only was corrected to describe what runs.
+- **Storage GC on a venue box** still runs; harmless, left as is.
+- **A manual push on a non-leader instance** is serialised only with cycles on its own instance. On a multi-instance cloud it can still run beside the leader's cycle; each is one transaction over the same rows, so the effect is two equal writes, not a flicker.
+- **Row locks after a black-holed link.** Destroying the socket frees it locally, but the server keeps the open transaction (and its row locks) until it notices the connection is gone; later cycles may hit the statement timeout on those rows until then. A `KILL <thread id>` from a fresh connection would end it at once.
+- **The 2-minute cycle deadline** in `syncAll` has no unit test (it needs Postgres and a fake pool together).
+- **Split control names that differ only in case.** Oxygen reads its split controls by exact name, but the delete and the primary key use the column's collation (case-insensitive by default), so another client's `h21` row with the same order and code as Oxygen's `H21` is deleted or overwritten. A `BINARY` comparison was left out: it would never match non-ASCII names if the remote column is not utf8mb4.
+- **Sheets backup now follows the ship stream.** A journal entry that fails to ship holds back the readouts behind it, sheet rows included, and a second read of one card inside the ingest dedupe window gets no row.
+- **Sheets URL change, edge cases.** The early settings push lives in memory (a restart, or the mutation landing on another instance, falls back to the 5-minute cadence), a readout already past the tick's check can ship ahead of it, and the cloud's 60 s webhook cache is per process (another replica may still hold an empty URL).
+- **`pushNow` on a non-leader instance** now records the push status too, so two instances can race on `pushCount` (a display counter).
+- **Sheets gate and a changed peer URL.** The box's gate keys on any lease row, shipping on the sync-state row of the current `SYNC_PEER_URL`; if the peer URL changes mid-checkout the event neither ships nor pushes to the sheet. The early settings retry counts ticks (about ten minutes at the default 5 s interval).

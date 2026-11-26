@@ -190,9 +190,11 @@ async function pollOnce(eventId: bigint): Promise<void> {
 
   const event = await prisma().event.findUnique({
     where: { id: eventId },
-    select: { date: true, zeroTime: true },
+    select: { date: true, zeroTime: true, removed: true },
   });
-  if (!event) return;
+  // A deleted event stops pulling (MC-28); its stored config is kept so a
+  // restore resumes where it left off.
+  if (!event || event.removed) return;
 
   const dateStr = event.date.toISOString().slice(0, 10);
   const req = proto.buildRequest(
@@ -494,6 +496,19 @@ export async function reconcileEnabledPullers(): Promise<void> {
         ? cfg.intervalSeconds
         : 10;
     desired.set(m[1], interval);
+  }
+
+  // A soft-deleted event keeps its config (a restore resumes it) but is
+  // not polled (MC-28).
+  if (desired.size > 0) {
+    const live = await prisma().event.findMany({
+      where: { id: { in: [...desired.keys()].map((k) => BigInt(k)) }, removed: false },
+      select: { id: true },
+    });
+    const liveIds = new Set(live.map((e) => String(e.id)));
+    for (const key of [...desired.keys()]) {
+      if (!liveIds.has(key)) desired.delete(key);
+    }
   }
 
   for (const [key, interval] of desired) {

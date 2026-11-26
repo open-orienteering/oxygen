@@ -104,6 +104,48 @@ changes, and two leaders under different `LEADER_LEASE_SCOPE`s on one
 database (dev and Docker) still run it once a day between them. Losing
 the lease asks a running GC to stop after its current row.
 
+## Which node runs what
+
+The lease picks one instance *within* a deployment. A venue box and the
+cloud are two deployments with two databases, so the lease cannot keep
+them apart; the node role does (`NODE_ROLE`, `sync/nodeIdentity.ts`):
+
+| Job | Cloud (`NODE_ROLE` unset or `cloud`) | Venue box (`NODE_ROLE=venue`, ships to `SYNC_PEER_URL`) |
+|-----|------|------|
+| LiveResults push | yes, the one owner | never: the reconcile skips it and drops any timer (`publishesLiveResults()` in `background/supervisor.ts`); a standalone box with no peer pushes itself |
+| ROC polling | yes | yes, into the box's own database (see [online-input-roc.md](online-input-roc.md)) |
+| Journal shipping | inert (no peer) | yes |
+| Map storage GC | yes | yes |
+
+A box with an uplink pushing LiveResults beside the cloud would write the
+same competition from two databases, and the lagging copy would undo the
+other's rows each cycle (SYNC-14). The box's results reach LiveResults
+through shipping: the cloud ingests them within a shipping interval and
+its next cycle publishes them. On such a box, `liveresults.getStatus` returns
+`pushedByCloud: true` and the event page says "Pushed by the cloud
+server"; the push status itself lives in the cloud's database.
+
+A soft-deleted event (`events.removed`) is neither pushed nor polled: both
+reconciles skip it and stop a running timer, and its stored config is kept
+so a restore resumes. `event.purgeDeleted` drops the event's
+`online_input_<id>_*` and `liveresults_<id>_status` settings rows with it
+(MC-28).
+
+## One LiveResults cycle at a time
+
+Each cycle reads the event, builds the rows the remote competition should
+hold (`buildLiveResultsRows`, pure), reads what the remote holds in
+Oxygen's scope, and writes only the difference in one MySQL transaction
+(`pushLiveResultsRows`). Per event, the manager runs one cycle at a time:
+a tick that finds the previous cycle still running is skipped, and a
+manual `pushNow` waits for it and then runs. A cycle has a 2-minute
+deadline and every statement a 15 s timeout; on a timeout or lost
+connection the socket is destroyed (the server rolls the transaction back
+once it notices) rather than rolled back behind the stalled statement, so the guard always
+clears and `lastError` is set. `lastPush` is the start time of the last
+successful cycle; a skipped tick changes no status. See
+[bugfixes/liveresults-single-owner-and-incremental-push.md](../bugfixes/liveresults-single-owner-and-incremental-push.md).
+
 ## Defence in depth on the ROC watermark
 
 The lease means one poller, but leadership does change hands, and

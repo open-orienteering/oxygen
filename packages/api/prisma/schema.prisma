@@ -114,7 +114,7 @@ model Event {
   /// Timestamp of the last successful Eventor sync. NULL = never synced.
   eventorLastSync DateTime? @map("eventor_last_sync") @db.Timestamptz(6)
 
-  liveresultsTavid  Int?  @map("liveresults_tavid")
+  liveresultsTavid  Int?  @unique @map("liveresults_tavid")
   liveresultsConfig Json? @map("liveresults_config")
 
   // Organizer

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { markVenueSettingsChanged } from "../sync/shipper.js";
 import { TRPCError } from "@trpc/server";
 import { router, publicProcedure, authedProcedure, adminProcedure, viewProcedure, manageProcedure, manageRaceProcedure, kioskOrViewProcedure } from "../trpc.js";
 import { prisma, sanitizeNameId, getZeroTime, isReservedEventSlug } from "../db.js";
@@ -492,8 +493,36 @@ export const eventRouter = router({
 
   /** Hard-delete every soft-deleted event (and its cascading children). */
   purgeDeleted: adminProcedure.mutation(async () => {
-    const result = await prisma().event.deleteMany({
-      where: { removed: true },
+    const result = await prisma().$transaction(async (tx) => {
+      const doomed = await tx.event.findMany({
+        where: { removed: true },
+        select: { id: true },
+      });
+      if (doomed.length === 0) return { count: 0 };
+      // Per-event settings rows have no foreign key: drop the ROC puller's
+      // config/watermark/status and the LiveResults push status with the
+      // event, so nothing keyed by a purged id is left behind (MC-28).
+      // Matched in JS: `startsWith` is a LIKE, where `_` is a wildcard.
+      const ids = new Set(doomed.map(({ id }) => String(id)));
+      const candidates = await tx.setting.findMany({
+        where: {
+          OR: [
+            { key: { startsWith: "online_input_" } },
+            { key: { startsWith: "liveresults_" } },
+          ],
+        },
+        select: { key: true },
+      });
+      const keys = candidates
+        .map(({ key }) => key)
+        .filter((key) => {
+          const m = /^online_input_(\d+)_/.exec(key) ?? /^liveresults_(\d+)_status$/.exec(key);
+          return m !== null && ids.has(m[1]);
+        });
+      if (keys.length > 0) await tx.setting.deleteMany({ where: { key: { in: keys } } });
+      return tx.event.deleteMany({
+        where: { id: { in: doomed.map((e) => e.id) } },
+      });
     });
     return { purged: result.count };
   }),
@@ -1104,6 +1133,9 @@ export const eventRouter = router({
         data: { googleSheetsWebhookUrl: input.webhookUrl },
       });
       clearSheetsCache();
+      // On a venue box the cloud pushes the readouts to the sheet: get the
+      // URL there before the next shipped readout (no-op without a shipper).
+      markVenueSettingsChanged();
       return { ok: true };
     }),
 

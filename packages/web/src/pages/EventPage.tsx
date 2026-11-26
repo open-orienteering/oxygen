@@ -878,6 +878,11 @@ function LiveResultsPanel() {
         <div className="mb-3 flex items-center gap-2 text-xs text-slate-500">
           <span className="inline-block w-2 h-2 rounded-full bg-green-400 animate-pulse" />
           <span>{t("live")}</span>
+          {status.data?.pushedByCloud && (
+            <span className="text-slate-400" data-testid="liveresults-pushed-by-cloud">
+              · {t("liveResultsPushedByCloud")}
+            </span>
+          )}
           {status.data?.lastPush && (
             <span className="text-slate-400">
               · {t("lastPush", { ago: timeAgo(status.data.lastPush) })} · {t("totalPushes", { count: status.data.pushCount })}

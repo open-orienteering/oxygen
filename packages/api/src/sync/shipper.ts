@@ -465,6 +465,48 @@ export async function refreshAllSettingsOnce(
 let timer: NodeJS.Timeout | null = null;
 let busy = false;
 let lastSettingsRefresh = 0;
+/** A venue-owned setting the cloud acts on changed: send it before shipping. */
+let venueSettingsDirty = false;
+/** Ticks left to retry a failed early settings push before leaving it to the cadence. */
+let venueSettingsRetries = 0;
+const VENUE_SETTINGS_RETRY_TICKS = 120;
+
+/**
+ * Ask the shipper to send this box's venue-owned settings ahead of the next
+ * journal batch. The cloud pushes the box's readouts to the Google Sheets
+ * backup, so a webhook URL set on the box must reach the cloud before the
+ * readouts that follow it, not on the 5-minute settings cadence (SYNC-14).
+ * Tried ahead of each tick's batch until it succeeds, for a bounded number
+ * of ticks (an outage of a few minutes: the first tick back online pushes
+ * the settings before the backlog). It never holds shipping back, so a
+ * permanent refusal (another holder, an older cloud) costs one request per
+ * tick until the retries run out, and then falls back to the cadence.
+ */
+export function markVenueSettingsChanged(): void {
+  venueSettingsDirty = true;
+  venueSettingsRetries = VENUE_SETTINGS_RETRY_TICKS;
+}
+
+/** Push the venue-owned settings of every event this box holds (a no-op for the rest); false when any push failed. */
+async function pushAllVenueSettingsOnce(db: PrismaClient, peer: LeasePeer): Promise<boolean> {
+  const events = await db.event.findMany({
+    where: { removed: false },
+    select: { id: true, nameId: true, zeroTime: true, timeZone: true },
+  });
+  let ok = true;
+  for (const ev of events) {
+    try {
+      await pushVenueOwnedSettings(db, ev, peer);
+    } catch (err) {
+      ok = false;
+      console.warn(
+        `[shipper] ${ev.nameId}: venue settings push failed:`,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+  return ok;
+}
 
 /**
  * Start the interval worker when a peer is configured. No-op otherwise —
@@ -489,6 +531,15 @@ export function startShipper(): void {
     busy = true;
     void (async () => {
       try {
+        // Best effort and never blocking: with the link up the settings land
+        // before this tick's journal batch.
+        if (venueSettingsDirty) {
+          // Cleared before the push, so a change saved while it runs is
+          // pushed again next tick.
+          venueSettingsDirty = false;
+          const ok = await pushAllVenueSettingsOnce(prisma(), leasePeer);
+          if (!ok && --venueSettingsRetries > 0) venueSettingsDirty = true;
+        }
         await shipAllOnce(prisma(), peerUrl, transport, leasePeer);
         if (Date.now() - lastSettingsRefresh >= syncSettingsRefreshMs()) {
           lastSettingsRefresh = Date.now();
