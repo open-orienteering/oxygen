@@ -115,13 +115,19 @@ function StartScreenPageBody() {
 
     // Select competition
     const queryClient = useQueryClient();
-    const selectMutation = trpc.competition.select.useMutation();
+    const selectMutation = trpc.competition.select.useMutation({ networkMode: "always" });
+    // The start list runs from the event's cache once it is claimed, server
+    // or not: a start screen reloaded during an outage keeps its list (WEB-03).
+    const [cacheClaimed, setCacheClaimed] = useState(false);
     useEffect(() => {
         if (!nameId) return;
         let cancelled = false;
+        setCacheClaimed(false);
         // The cache belongs to one event (MC-04).
         void ensureEventCache(queryClient, nameId).then(() => {
-            if (!cancelled) selectMutation.mutate({ nameId });
+            if (cancelled) return;
+            setCacheClaimed(true);
+            selectMutation.mutate({ nameId });
         });
         return () => { cancelled = true; };
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -129,7 +135,7 @@ function StartScreenPageBody() {
 
     // Fetch runner data (poll every 5s)
     const { data } = trpc.competition.startScreen.useQuery(undefined, {
-        enabled: selectMutation.isSuccess,
+        enabled: cacheClaimed,
         refetchInterval: 5000,
     });
 

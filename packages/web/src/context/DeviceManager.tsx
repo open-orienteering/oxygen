@@ -156,6 +156,8 @@ interface DeviceManagerState {
 const MAX_RECENT = 20;
 /** Longest the server store may take before the readout is queued instead (SI-29). */
 const STORE_TIMEOUT_MS = 8000;
+/** The readout lookup after a store (SYNC-16): past this the card resolves from the local cache. */
+const READOUT_FETCH_TIMEOUT_MS = 8000;
 
 // ─── Remembered Reader BTs ─────────────────────────────────
 // Chromium's getDevices() returns every device this origin was ever granted;
@@ -499,15 +501,21 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
       // Invalidate cache and resolve from server (only when online)
       const useServer = navigator.onLine && !storeFailed;
       if (useServer) {
-        await utils.cardReadout.readout.invalidate({ cardNo: readout.cardNumber });
+        // Not awaited: with a mounted observer of this card the invalidate
+        // waits for its refetch, which the timeout below must cover too.
+        // The query is marked stale at once, so the fetch below refetches.
+        void utils.cardReadout.readout.invalidate({ cardNo: readout.cardNumber });
       }
 
       // Resolve runner info and determine action (always — even for duplicates)
       try {
         // A failed store means the server is unreachable (or too slow): resolve
         // from the local cache instead of waiting out a second request (SI-15).
+        // No service-worker cache answers this any more (SYNC-16), so a slow
+        // link must not hang the station: past the timeout it resolves
+        // locally like an unreachable server.
         const result = useServer
-          ? await utils.cardReadout.readout.fetch({ cardNo: readout.cardNumber })
+          ? await withTimeout(utils.cardReadout.readout.fetch({ cardNo: readout.cardNumber }), READOUT_FETCH_TIMEOUT_MS)
           : null;
 
         // Offline — skip to catch block for local resolution

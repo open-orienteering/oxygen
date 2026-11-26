@@ -1471,9 +1471,12 @@ browser's HTTP cache. Checked by hand at G29; not part of the suite.
 
 The smoke does not cover:
 - offline navigation (the `navigateFallback` shell);
-- the `trpc-api` and `api-misc` routes;
 - the update prompt;
 - graphics (`print.png`), which the dev-server E2E stores.
+
+(The `trpc-api` and `api-misc` routes it did not cover either were removed
+in review package 9, SYNC-16; `e2e/outage.preview.spec.ts` checks that no
+tRPC answer is cached.)
 
 ### 8.7 On a venue box (G18)
 

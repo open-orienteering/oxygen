@@ -15,8 +15,11 @@ import { usePageVisible } from "../hooks/usePageVisible";
 import {
   attemptSessionReload,
   isNetworkClassError,
-  isNotFoundError,
 } from "../lib/session-recovery";
+import { probeSession } from "../lib/session-probe";
+import { getActiveBaseUrl } from "../lib/node-discovery";
+import { retryDelayMs } from "../lib/backoff";
+import { decideShellEntry, shellIsOpen, shellRetries, type SelectState } from "../lib/shell-entry";
 import { trpc } from "../lib/trpc";
 import { retiredPageHref } from "../lib/editor/layout-href";
 import { LanguageSelector } from "../components/LanguageSelector";
@@ -36,6 +39,7 @@ import { RegistrationDialog } from "../components/RegistrationDialog";
 import { DbLoadIndicator } from "../components/DbLoadIndicator";
 import { useExternalChanges } from "../hooks/useExternalChanges";
 import { SyncStatusIndicator } from "../components/SyncStatusIndicator";
+import { ErrorBoundary } from "../components/ErrorBoundary";
 import { LeaseBadge } from "../components/VenueLease";
 import { ClockSkewBanner } from "../components/ClockSkewBanner";
 import { useProjectionSync } from "../hooks/useProjectionSync";
@@ -127,7 +131,6 @@ function CompetitionShellInner() {
 
   // Auto-select the competition on mount / nameId change
   const [competitionName, setCompetitionName] = useState<string>("");
-  const [ready, setReady] = useState(false);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [showPrinterSettings, setShowPrinterSettings] = useState(false);
 
@@ -140,67 +143,87 @@ function CompetitionShellInner() {
   const { print: printerPrint } = usePrinter();
   // Keep the offline Dexie snapshot cache warm when the flag is on.
   useProjectionSync(nameId ?? "", useOfflineProjectionEnabled());
-  const selectMutation = trpc.competition.select.useMutation({
-    onSuccess: (data) => {
-      setCompetitionName(data.name);
-      setReady(true);
-    },
-    onError: () => {
-      // Offline fallback: use cached dashboard data to get competition name
-      if (!navigator.onLine) {
-        const cachedDashboard = utils.competition.dashboard.getData();
-        if (cachedDashboard?.competition?.name) {
-          setCompetitionName(cachedDashboard.competition.name);
-          setReady(true);
-        }
-      }
-    },
-  });
+  // Opening the event (WEB-03, lib/shell-entry.ts): from the cached
+  // dashboard at once when there is one, confirmed by `competition.select`
+  // in the background. `networkMode: "always"`: after an `offline` event a
+  // paused mutation never settles, and the shell must decide either way.
+  const selectMutation = trpc.competition.select.useMutation({ networkMode: "always" });
+  const [selectState, setSelectState] = useState<SelectState>({ status: "pending" });
+  const [cachedName, setCachedName] = useState<string | null>(null);
+  const [failures, setFailures] = useState(0);
+  /** Bumped per event and per attempt: a late answer for an earlier one is ignored. */
+  const selectGen = useRef(0);
+  const nameIdRef = useRef(nameId);
+  nameIdRef.current = nameId;
+  const sessionProbed = useRef(false);
+  const entry = decideShellEntry({ cachedName, select: selectState, failedBefore: failures > 0 });
+  const ready = shellIsOpen(entry);
+  /** The last failure of this event's select, kept while a retry is in flight. */
+  const [lastSelectError, setLastSelectError] = useState<unknown>(null);
+  const selectError = lastSelectError as { message?: string } | null;
 
+  const runSelect = useCallback(
+    (id: string) => {
+      const gen = ++selectGen.current;
+      const startedAt = Date.now();
+      setSelectState({ status: "pending" });
+      selectMutation.mutateAsync({ nameId: id }).then(
+        (data) => {
+          if (gen !== selectGen.current || nameIdRef.current !== id) return;
+          setCompetitionName(data.name);
+          setSelectState({ status: "success" });
+          setLastSelectError(null);
+          setFailures(0);
+          // Whatever the cache showed and nothing has fetched since this
+          // attempt started: fetch it fresh now (queries the open page
+          // already refetched are left alone).
+          void queryClient.invalidateQueries({
+            predicate: (q) => Array.isArray(q.queryKey[0]) && q.state.dataUpdatedAt < startedAt,
+          });
+        },
+        (error: unknown) => {
+          if (gen !== selectGen.current || nameIdRef.current !== id) return;
+          setSelectState({ status: "error", error });
+          setLastSelectError(error);
+          setFailures((n) => n + 1);
+          // An expired IAP session looks like no network. Ask once per
+          // event; only a page with nothing open reloads by itself.
+          if (isNetworkClassError(error) && !sessionProbed.current) {
+            sessionProbed.current = true;
+            void probeSession(fetch, getActiveBaseUrl()).then((result) => {
+              if (result !== "expired" || nameIdRef.current !== id) return;
+              if (!cachedNameRef.current) attemptSessionReload();
+            });
+          }
+        },
+      );
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [queryClient],
+  );
+  const cachedNameRef = useRef<string | null>(null);
+  cachedNameRef.current = cachedName;
+
+  // Retry while the server cannot be reached: backoff, and at once when the
+  // browser says it is online again or the page becomes visible.
   const pageVisible = usePageVisible();
-  const [reconnecting, setReconnecting] = useState(false);
-  const networkRetryDoneRef = useRef(false);
-  const selectError = selectMutation.error;
-  const selectFailedNetwork =
-    selectMutation.isError && !ready && isNetworkClassError(selectError);
-  const selectFailedNotFound =
-    selectMutation.isError && !ready && isNotFoundError(selectError);
-  const selectFailedOther =
-    selectMutation.isError && !ready && !selectFailedNetwork && !selectFailedNotFound;
-
-  // Reset recovery bookkeeping when navigating to another event.
+  const retrying = shellRetries(entry) && selectState.status === "error";
   useEffect(() => {
-    networkRetryDoneRef.current = false;
-    setReconnecting(false);
-  }, [nameId]);
-
-  // Network-class select failure (expired IAP / CORS): retry once, then reload.
-  // `selectError` is in the dep list so a second failure after the retry
-  // re-enters this effect (selectFailedNetwork alone stays true).
+    if (!retrying || !nameId) return;
+    const retry = () => runSelect(nameId);
+    const timer = window.setTimeout(retry, retryDelayMs(failures - 1));
+    window.addEventListener("online", retry);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("online", retry);
+    };
+  }, [retrying, failures, nameId, runSelect]);
+  const wasVisible = useRef(pageVisible);
   useEffect(() => {
-    if (!selectFailedNetwork || !nameId) return;
-    if (!navigator.onLine) return;
-    setReconnecting(true);
-    if (!networkRetryDoneRef.current) {
-      networkRetryDoneRef.current = true;
-      const timer = window.setTimeout(() => {
-        selectMutation.mutate({ nameId });
-      }, 600);
-      return () => window.clearTimeout(timer);
-    }
-    attemptSessionReload();
-  }, [selectFailedNetwork, selectError, nameId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // When a dormant PWA wakes up while still in a failed select state, try again.
-  useEffect(() => {
-    if (!pageVisible || ready || !nameId) return;
-    if (!selectMutation.isError) return;
-    if (!isNetworkClassError(selectMutation.error)) return;
-    networkRetryDoneRef.current = false;
-    setReconnecting(true);
-    selectMutation.mutate({ nameId });
+    const becameVisible = pageVisible && !wasVisible.current;
+    wasVisible.current = pageVisible;
+    if (becameVisible && retrying && nameId) runSelect(nameId);
   }, [pageVisible]); // eslint-disable-line react-hooks/exhaustive-deps
-
 
   // Fetch dashboard data for counts and organizer logo
   const dashboard = trpc.competition.dashboard.useQuery(undefined, {
@@ -232,7 +255,12 @@ function CompetitionShellInner() {
   useEffect(() => {
     let cancelled = false;
     if (nameId) {
-      setReady(false);
+      selectGen.current++;
+      sessionProbed.current = false;
+      setSelectState({ status: "pending" });
+      setCachedName(null);
+      setLastSelectError(null);
+      setFailures(0);
       setCompetitionNameId(nameId);
       void (async () => {
         // The persisted cache belongs to one event (MC-04): flush the old
@@ -241,8 +269,15 @@ function CompetitionShellInner() {
         // runs offline too: an event never opened on this device then starts
         // empty instead of showing the previous event's runners.
         await ensureEventCache(queryClient, nameId);
-        if (navigator.onLine) await utils.invalidate();
-        if (!cancelled) selectMutation.mutate({ nameId });
+        if (cancelled) return;
+        // After the swap the cache is this event's, so its dashboard name
+        // can open the shell before the server answers.
+        const name = utils.competition.dashboard.getData()?.competition?.name ?? null;
+        if (name) {
+          setCachedName(name);
+          setCompetitionName(name);
+        }
+        runSelect(nameId);
       })();
     }
     return () => {
@@ -342,17 +377,17 @@ function CompetitionShellInner() {
   );
   const wideContainer = isWide && !paneCollapsed;
 
-  if (selectFailedNotFound || selectFailedOther) {
+  if (entry === "not-found" || entry === "refused") {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
         <div className="text-center">
           <div className="text-red-500 text-lg font-medium mb-2">
-            {selectFailedNotFound ? t("competitionNotFound") : t("connectionError")}
+            {entry === "not-found" ? t("competitionNotFound") : t("connectionError")}
           </div>
           <p className="text-slate-500 text-sm mb-4">
             {t("couldNotConnect", { nameId })}
           </p>
-          {selectFailedOther && selectError?.message ? (
+          {entry === "refused" && selectError?.message ? (
             <p className="text-xs text-slate-400 mb-4 max-w-md mx-auto break-words">
               {selectError.message}
             </p>
@@ -368,26 +403,60 @@ function CompetitionShellInner() {
     );
   }
 
+  if (entry === "unreachable") {
+    // No cache for this event and no server: retry by itself, never a dead end.
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4" data-testid="shell-unreachable">
+        <div className="text-center max-w-md">
+          <div className="text-slate-700 text-lg font-medium mb-2">
+            {isNetworkClassError(selectError) ? t("serverUnreachable") : t("connectionError")}
+          </div>
+          <p className="text-slate-500 text-sm mb-2" data-testid="session-reconnecting">
+            {t("reconnectingSession")}
+          </p>
+          <p className="text-slate-400 text-xs mb-4">{t("serverUnreachableHint")}</p>
+          {selectError?.message ? (
+            <p className="text-xs text-slate-400 mb-4 break-words">{selectError.message}</p>
+          ) : null}
+          <div className="flex items-center justify-center gap-2">
+            <button
+              type="button"
+              data-testid="shell-retry"
+              onClick={() => nameId && runSelect(nameId)}
+              disabled={selectState.status === "pending"}
+              className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-60 transition-colors cursor-pointer"
+            >
+              {t("retry", { ns: "common" })}
+            </button>
+            <button
+              type="button"
+              data-testid="session-reload"
+              onClick={() => attemptSessionReload()}
+              className="px-4 py-2 text-sm bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 transition-colors cursor-pointer"
+            >
+              {t("reloadToSignIn")}
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate("/")}
+              className="px-4 py-2 text-sm text-slate-600 hover:text-slate-800 cursor-pointer"
+            >
+              {t("backToCompetitionList")}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (!ready) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
         <div className="text-center">
           <div className="inline-block w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
-          <p className="text-slate-500 mt-4" data-testid="session-reconnecting">
-            {reconnecting || selectFailedNetwork
-              ? t("reconnectingSession")
-              : t("loadingCompetition")}
+          <p className="text-slate-500 mt-4" data-testid="session-loading">
+            {t("loadingCompetition")}
           </p>
-          {(reconnecting || selectFailedNetwork) && (
-            <button
-              type="button"
-              data-testid="session-reload"
-              onClick={() => attemptSessionReload()}
-              className="mt-4 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors cursor-pointer"
-            >
-              {t("reloadToSignIn")}
-            </button>
-          )}
         </div>
       </div>
     );
@@ -402,8 +471,8 @@ function CompetitionShellInner() {
     : "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8";
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      <ExternalChangesProbe enabled={ready} />
+    <div className="min-h-screen bg-slate-50" data-connection={entry === "cached" ? "cached" : "live"}>
+      <ExternalChangesProbe enabled={entry !== "cached"} />
       <ClockSkewBanner />
       {/* Header. z-40 (not z-10) because the overflow menus inside it are
           z-30 within *this* stacking context — a sibling context at the
@@ -448,7 +517,16 @@ function CompetitionShellInner() {
               <PrinterStatusIndicator />
               <KioskLauncher nameId={nameId ?? ""} />
               <StartScreenLauncher nameId={nameId ?? ""} />
-              <DbLoadIndicator enabled={ready} />
+              <DbLoadIndicator enabled={entry !== "cached"} />
+              {entry === "cached" && (
+                <span
+                  data-testid="shell-cached-mode"
+                  title={t("serverUnreachableHint")}
+                  className="hidden sm:inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800 whitespace-nowrap"
+                >
+                  {t("cachedMode")}
+                </span>
+              )}
               <SyncStatusIndicator competitionId={nameId} />
             </div>
           </div>
@@ -609,6 +687,10 @@ function CompetitionShellInner() {
           onCollapse={() => setPaneCollapsed(true)}
           onWidthCommit={setPaneWidth}
         >
+          {/* WEB-15: a page that throws leaves the header, tabs, card
+              notifications and an open registration in place; another tab
+              renders again. */}
+          <ErrorBoundary resetKey={firstSegment} variant="page">
           <Suspense fallback={<div className="flex justify-center py-12"><div className="w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" /></div>}>
           <Routes>
             <Route index element={<Guarded cap="event.view"><CompetitionDashboard /></Guarded>} />
@@ -637,6 +719,7 @@ function CompetitionShellInner() {
             <Route path="*" element={<Navigate to="" replace />} />
           </Routes>
           </Suspense>
+          </ErrorBoundary>
         </PaneContainer>
 
         {/* Floating recent cards panel */}

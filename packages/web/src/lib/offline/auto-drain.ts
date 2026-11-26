@@ -1,3 +1,5 @@
+import { retryDelayMs } from "../backoff";
+
 /**
  * When the event queue drains by itself.
  *
@@ -11,6 +13,12 @@
  * another competition left blocked (auth, event, server) keep the total
  * above zero without growing it and raise no signal, so they do not
  * retrigger on every poll, and a new entry still does.
+ *
+ * Retry (SYNC-11): a run that ends with outcome "retry" (node unreachable,
+ * server error) schedules another run after `retryDelayMs` (2 s doubling to
+ * 30 s) while the device is online and work is pending; only an "ok" run
+ * resets the delay. "blocked" (auth, unknown event) waits for an operator.
+ * `kick()` runs at once (the tab became visible, the active node changed).
  */
 export interface AutoDrainState {
   online: boolean;
@@ -20,13 +28,48 @@ export interface AutoDrainState {
   scope: string | undefined;
 }
 
-export function createAutoDrain(run: () => Promise<void>) {
+export type AutoDrainOutcome = "ok" | "retry" | "blocked";
+
+export interface AutoDrainTimers {
+  setTimer: (fn: () => void, ms: number) => unknown;
+  clearTimer: (handle: unknown) => void;
+}
+
+const defaultTimers: AutoDrainTimers = {
+  setTimer: (fn, ms) => setTimeout(fn, ms),
+  clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
+
+export function createAutoDrain(
+  run: () => Promise<AutoDrainOutcome | void>,
+  timers: AutoDrainTimers = defaultTimers,
+) {
   let inFlight = false;
   let again = false;
   let stopped = false;
   let lastTotal = 0;
   let lastKey: string | null = null;
   let online = false;
+  let failures = 0;
+  let timer: unknown = null;
+  /** An entry was queued on this page and no drain has ended "ok" since. */
+  let localPending = false;
+
+  function clearRetry(): void {
+    if (timer !== null) timers.clearTimer(timer);
+    timer = null;
+  }
+
+  function scheduleRetry(): void {
+    clearRetry();
+    if (stopped || !online || lastTotal <= 0) return;
+    const delay = retryDelayMs(failures);
+    failures++;
+    timer = timers.setTimer(() => {
+      timer = null;
+      start();
+    }, delay);
+  }
 
   function start(): void {
     if (stopped) return;
@@ -34,25 +77,47 @@ export function createAutoDrain(run: () => Promise<void>) {
       again = true;
       return;
     }
+    clearRetry();
     inFlight = true;
+    let outcome: AutoDrainOutcome | void = undefined;
     void run()
-      .catch(() => {})
+      .then((o) => { outcome = o; }, () => { outcome = "retry"; })
       .finally(() => {
         inFlight = false;
+        if (outcome === "ok") {
+          failures = 0;
+          localPending = false;
+          if (!again) lastTotal = 0; // the next poll sets the real count
+        }
         if (again) {
           again = false;
           start();
+          return;
         }
+        if (outcome === "retry") scheduleRetry();
       });
   }
 
   return {
     /** An entry was queued on this page. */
     enqueued(): void {
+      // There is work now, even before the next poll raises the count: a
+      // drain that fails must still schedule its retry (the poll pauses
+      // while the tab is hidden).
+      localPending = true;
+      lastTotal = Math.max(lastTotal, 1);
       if (online) start();
     },
-    update({ online: isOnline, total, scope }: AutoDrainState): void {
+    /** Run now if there is work (tab visible again, active node changed). */
+    kick(): void {
+      if (online && lastTotal > 0) start();
+    },
+    update({ online: isOnline, total: polled, scope }: AutoDrainState): void {
       online = isOnline;
+      // The poll pauses in a hidden tab: an entry queued here since the last
+      // clean drain counts even when the polled count has not seen it.
+      const total = Math.max(polled, localPending ? 1 : 0);
+      if (!isOnline || total <= 0) clearRetry();
       const key = `${isOnline}|${scope ?? ""}`;
       const fire = total > lastTotal || key !== lastKey;
       lastTotal = total;
@@ -61,6 +126,7 @@ export function createAutoDrain(run: () => Promise<void>) {
     },
     stop(): void {
       stopped = true;
+      clearRetry();
     },
     /** Undo `stop` (React StrictMode runs an effect's cleanup and body again). */
     resume(): void {

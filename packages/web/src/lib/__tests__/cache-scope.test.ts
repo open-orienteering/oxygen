@@ -6,7 +6,7 @@
 import { describe, it, expect } from "vitest";
 import { QueryClient } from "@tanstack/react-query";
 import type { PersistedClient } from "@tanstack/react-query-persist-client";
-import { cacheOwner, switchCacheScope, CACHE_OWNER_KEY } from "../offline/cache-scope";
+import { cacheOwner, switchCacheScope, CACHE_OWNER_KEY, isPersistableQuery } from "../offline/cache-scope";
 import { createIdbPersister, blobKey, type KeyValueStore } from "../offline/persister";
 
 const RUNNERS = [["runner", "list"], { type: "query" }];
@@ -145,5 +145,19 @@ describe("per-event persister", () => {
       ] },
     });
     expect([...m.keys()].filter((k) => !k.endsWith("last-owner"))).toEqual([blobKey("a")]);
+  });
+});
+
+describe("isPersistableQuery (WEB-02)", () => {
+  const q = (path: string[], status = "success") => ({ queryKey: [path, { input: { cardNo: 8001234 }, type: "query" }], state: { status } });
+  it("keeps the per-card lookups out of the persisted blob", () => {
+    expect(isPersistableQuery(q(["runner", "findByCard"]))).toBe(false);
+    expect(isPersistableQuery(q(["cardReadout", "readout"]))).toBe(false);
+    expect(isPersistableQuery(q(["race", "finishReceipt"]))).toBe(false);
+  });
+  it("persists the station data and the owner marker, successful ones only", () => {
+    expect(isPersistableQuery(q(["runner", "list"]))).toBe(true);
+    expect(isPersistableQuery({ queryKey: [...CACHE_OWNER_KEY], state: { status: "success" } })).toBe(true);
+    expect(isPersistableQuery(q(["runner", "list"], "error"))).toBe(false);
   });
 });

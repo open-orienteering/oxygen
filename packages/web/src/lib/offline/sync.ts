@@ -150,7 +150,18 @@ export interface EventDrainerDeps {
   now?: () => number;
 }
 
+/**
+ * How the last `drain()` call ended, for the auto-drain's retry (SYNC-11):
+ * - "retry": the node was unreachable (a network-class failure) or answered
+ *   with a server error. Nothing is wrong with the entries; try again later.
+ * - "blocked": the server refused for a reason an operator must fix (auth,
+ *   unknown event). Retrying on a timer would only repeat the refusal.
+ * - "ok": the queue drained as far as it can.
+ */
+export type DrainOutcome = "ok" | "retry" | "blocked";
+
 export function createEventDrainer({ store, pushFor, now = Date.now }: EventDrainerDeps) {
+  let lastOutcome: DrainOutcome = "ok";
   /** Competitions with a drain running. A drain of B never waits for A (MC-01). */
   const draining = new Map<string, Promise<void>>();
   /** Competitions asked for another pass while draining. */
@@ -307,6 +318,7 @@ export function createEventDrainer({ store, pushFor, now = Date.now }: EventDrai
       ? [competitionId]
       : [...new Set((await store.pending()).map((e) => e.competitionId))];
     let syncedCount = 0;
+    let sawNetworkStop = false;
     const waiting: Array<Promise<unknown>> = [];
     for (const id of ids) {
       const running = draining.get(id);
@@ -321,7 +333,10 @@ export function createEventDrainer({ store, pushFor, now = Date.now }: EventDrai
       try {
         const step = await pass;
         syncedCount += step.synced;
-        if (step.stopAll) break;
+        if (step.stopAll) {
+          sawNetworkStop = true;
+          break;
+        }
       } finally {
         // runCompetition already removed it when it settled; only remove our
         // own marker, never a pass started since.
@@ -329,6 +344,10 @@ export function createEventDrainer({ store, pushFor, now = Date.now }: EventDrai
       }
     }
     await Promise.all(waiting);
+    const reasons = ids.map((id) => blockedReasons.get(id));
+    lastOutcome = sawNetworkStop || reasons.includes("server")
+      ? "retry"
+      : reasons.some((r) => r === "auth" || r === "event") ? "blocked" : "ok";
     return syncedCount;
   }
 
@@ -360,7 +379,7 @@ export function createEventDrainer({ store, pushFor, now = Date.now }: EventDrai
     return old.length;
   }
 
-  return { drain, cleanupSynced, countHeld };
+  return { drain, cleanupSynced, countHeld, lastOutcome: (): DrainOutcome => lastOutcome };
 }
 
 const dexieDrainer = createEventDrainer({
@@ -374,6 +393,9 @@ export const drainEventQueue = dexieDrainer.drain;
 
 /** Pending entries of one competition held behind a failed entry (for the sync panel). */
 export const countHeldEvents = dexieDrainer.countHeld;
+
+/** How the last `drainEventQueue` call ended (see `DrainOutcome`). */
+export const getLastDrainOutcome = dexieDrainer.lastOutcome;
 
 /** Clean up old synced events (older than 24 hours). */
 export const cleanupSyncedEvents = dexieDrainer.cleanupSynced;

@@ -451,3 +451,44 @@ describe("event drain", () => {
     expect(getDrainBlockedReason("b")).toBeNull();
   });
 });
+
+describe("drain outcome for the auto-drain retry (SYNC-11)", () => {
+  it("is 'retry' after a network failure, and the entries stay pending", async () => {
+    const store = memoryStore([entry("a")]);
+    const drainer = createEventDrainer({ store, pushFor: () => async () => { throw new TypeError("Failed to fetch"); } });
+    await drainer.drain();
+    expect(drainer.lastOutcome()).toBe("retry");
+    expect([...store.rows.values()][0].status).toBe("pending");
+  });
+
+  it("is 'retry' after a server error (502 / INTERNAL_SERVER_ERROR)", async () => {
+    const store = memoryStore([entry("a")]);
+    const drainer = createEventDrainer({ store, pushFor: () => async () => { throw trpcError("INTERNAL_SERVER_ERROR"); } });
+    await drainer.drain();
+    expect(drainer.lastOutcome()).toBe("retry");
+  });
+
+  it("is 'blocked' after an auth refusal: a timer would only repeat it", async () => {
+    const store = memoryStore([entry("a")]);
+    const drainer = createEventDrainer({ store, pushFor: () => async () => { throw trpcError("UNAUTHORIZED"); } });
+    await drainer.drain();
+    expect(drainer.lastOutcome()).toBe("blocked");
+  });
+
+  it("is 'ok' after a clean drain, also after an earlier retry", async () => {
+    const store = memoryStore([entry("a")]);
+    let fail = true;
+    const drainer = createEventDrainer({
+      store,
+      pushFor: () => async (input) => {
+        if (fail) throw new TypeError("Failed to fetch");
+        return acceptAll(input);
+      },
+    });
+    await drainer.drain();
+    expect(drainer.lastOutcome()).toBe("retry");
+    fail = false;
+    expect(await drainer.drain()).toBe(1);
+    expect(drainer.lastOutcome()).toBe("ok");
+  });
+});

@@ -242,7 +242,7 @@ The assigned (draw) start time takes priority over the card start punch — the 
 
 ### 2g. Kiosk Broadcast
 
-If a kiosk window is paired (same competition), DeviceManager sends the card data via BroadcastChannel and, after every online apply attempt (written, held or protected), a `readout-applied` message (not sent on the offline path). The kiosk then refetches `cardReadout.readout`, `runner.findByCard` and `race.finishReceipt`. The kiosk never writes a finish itself (WEB-72): it has no `race.recordFinish` call. See §7 for the kiosk protocol.
+If a kiosk window is paired (same competition), DeviceManager sends the card data via BroadcastChannel and, after every online apply attempt (written, held or protected), a `readout-applied` message (not sent on the offline path). The kiosk then refetches `cardReadout.readout`, `runner.findByCard` and `race.finishReceipt`. The kiosk never writes a finish itself (WEB-72): it has no `race.recordFinish` call. It sends `kiosk-print-receipt` only from a `runner.findByCard` and a `race.finishReceipt` answer fetched after its readout screen opened, once per read (WEB-02, `lib/kiosk-print.ts`): those per-card queries are keyed by card number and are not persisted, and a cached row of an earlier read may name another runner. With the server unreachable the kiosk therefore prints no receipt. The online readout lookup after a store gives up after 8 s and resolves the card locally (SYNC-16; the service worker no longer answers it from a cache). See §7 for the kiosk protocol.
 
 ---
 

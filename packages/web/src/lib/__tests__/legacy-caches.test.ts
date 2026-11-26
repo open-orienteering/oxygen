@@ -2,11 +2,13 @@ import { describe, it, expect, vi } from "vitest";
 import { dropLegacyCaches, LEGACY_CACHE_NAMES } from "../legacy-caches";
 
 describe("dropLegacyCaches", () => {
-  it("deletes the tile cache the service worker no longer routes (E4b)", async () => {
+  it("deletes the caches the service worker no longer routes (E4b tiles, package 9 tRPC and version)", async () => {
     const del = vi.fn(async () => true);
     await dropLegacyCaches({ delete: del });
-    expect(LEGACY_CACHE_NAMES).toEqual(["map-tiles"]);
+    expect(LEGACY_CACHE_NAMES).toEqual(["map-tiles", "trpc-api", "api-misc"]);
     expect(del).toHaveBeenCalledWith("map-tiles");
+    expect(del).toHaveBeenCalledWith("trpc-api");
+    expect(del).toHaveBeenCalledWith("api-misc");
   });
 
   it("does nothing without Cache Storage", async () => {
