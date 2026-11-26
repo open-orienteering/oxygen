@@ -19,7 +19,8 @@ were left out on purpose, or need a check that cannot be made in the cloud.
   N consecutive server failures (the `server` blocked reason already shows
   in the sync panel).
 - **A fetch timeout on the main React tRPC client.** Only the drain's push
-  (20 s) and the readout lookup after a store (8 s) have one. A global timeout
+  (60 s; a batch slower than that on a very poor link is resent, and
+  halving the batch after a timeout would help) and the readout lookup after a store (8 s) have one. A global timeout
   would cut large uploads and the runner database dump.
 - **`cardReadout.applyResult` after a readout has no timeout.** If the
   network dies between the lookup and the apply, the apply can hang until the
@@ -34,3 +35,14 @@ were left out on purpose, or need a check that cannot be made in the cloud.
 - **Two drainers in one browser profile** (a kiosk tab and an admin tab):
   each runs its own retry timer. The per-competition lock in `sync.ts` only
   covers one tab; the server's idempotent ingest keeps a double send safe.
+- **WEB-15 rest.** The reader and printer dialogs and the map panel have no
+  boundary of their own (a throw there is caught by the shell page's or the
+  outermost one). After two chunk reloads in five minutes the Reload button
+  does nothing more, with no message.
+- **The remembered identity on a shared laptop.** `oxygen.lastIdentity` is
+  used only while `users.me` gets no answer, but it is not cleared when
+  another person signs in on the device until their first answer arrives.
+- **Unit tests for the shell's select generation guard and the
+  `CurrentUserProvider` probe decision.** Both are inline in components (no
+  DOM test setup); the pure parts (`decideShellEntry`, `resolveCurrentUser`,
+  `classifyProbe`) are unit tested and the paths are covered by E2E.

@@ -70,7 +70,7 @@ export const eventScopedTrpcFetch = makeEventScopedFetch(activeEventNameId);
  * the drain cannot retry while it waits. A timeout counts as a network
  * failure (`isNetworkFailure`), so the auto-drain retries with backoff.
  */
-export const DRAIN_REQUEST_TIMEOUT_MS = 20_000;
+export const DRAIN_REQUEST_TIMEOUT_MS = 60_000;
 
 const eventClients = new Map<string, ReturnType<typeof createEventClient>>();
 

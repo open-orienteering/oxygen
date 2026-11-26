@@ -43,7 +43,7 @@ function PageSpinner() {
 function DarkBoundary({ children }: { children: ReactNode }) {
   const { pathname } = useLocation();
   return (
-    <ErrorBoundary resetKey={pathname.split("/")[1]} variant="screen">
+    <ErrorBoundary resetKey={pathname.split("/")[1]} variant="screen" autoResetMs={30_000}>
       {children}
     </ErrorBoundary>
   );
@@ -81,7 +81,7 @@ export default function App() {
           </button>
         </div>
       )}
-      {sessionState === "expired" && !gated && (
+      {sessionState === "expired" && !gated && !isPublicSurface && (
         // WEB-04: an expired sign-in never reloads a page in use by itself.
         <div
           data-testid="session-expired-banner"

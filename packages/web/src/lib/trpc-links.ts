@@ -78,7 +78,10 @@ export function withRequestTimeout(
 ) {
   return (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const timeout = AbortSignal.timeout(ms);
-    const signal = init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
+    // `AbortSignal.any` is missing before Safari 17.4: keep the caller's signal there.
+    const signal = init?.signal
+      ? typeof AbortSignal.any === "function" ? AbortSignal.any([init.signal, timeout]) : init.signal
+      : timeout;
     return fetchImpl(input, { ...init, signal });
   };
 }

@@ -1,8 +1,8 @@
 # Bugfix: a station went down for the whole outage although its data was cached
 
 Review package 9 of the November 2026 full code review
-(`docs/reviews/2026-11-full-review.md`): WEB-03, WEB-04, SYNC-11, SYNC-16,
-WEB-02, WEB-15. Technical description: `docs/system/offline-architecture.md`
+(findings WEB-03, WEB-04, SYNC-11, SYNC-16,
+WEB-02, WEB-15). Technical description: `docs/system/offline-architecture.md`
 "Station resilience".
 
 ## Symptoms
@@ -66,12 +66,13 @@ box reboots, the uplink drops): the browser still says it is online.
   `hooks/useEventQueue.ts`, `lib/trpc.ts`, `lib/trpc-links.ts`): the drain
   reports its outcome; "retry" (no answer, or a server error) schedules
   another run with backoff while online and pending. Visibility and an
-  active-node change retry at once. The push has a 20 s timeout, which
+  active-node change retry at once. The push has a 60 s timeout, which
   counts as a network failure. The 2 s pending-count `console.log` is gone.
 - **WEB-02** (`pages/KioskPage.tsx`, `lib/kiosk-print.ts`,
   `lib/offline/cache-scope.ts`, `main.tsx`): auto-print needs answers fetched
-  after the readout screen opened; each read is its own screen (keyed), so
-  the print guard is per read; the three per-card queries are no longer
+  successfully after the readout screen opened (a failed refetch over a
+  cached row does not count); one automatic print per read, also when the
+  read's screen remounts; the three per-card queries are no longer
   persisted.
 - **WEB-15** (`components/ErrorBoundary.tsx`, `lib/error-recovery.ts`): a
   boundary around the shell's routed pages (reset by the first route
@@ -86,7 +87,9 @@ box reboots, the uplink drops): the browser still says it is online.
   fetches the receipt from the server). Finish Station receipts are unchanged.
 - An installed PWA that wakes with an expired IAP cookie and a page open now
   shows a "Your sign-in has expired" banner with Reload instead of reloading
-  itself. It still reloads by itself when nothing is open. The probe's IAP
+  itself. It still reloads by itself (at most twice per five minutes) when
+  nothing can be shown: no identity was ever known on the device, or the
+  event has no cached data. The probe's IAP
   classification (an opaque redirect, or an HTML / 401 answer) has not been
   checked against a live IAP deployment yet: see the follow-ups.
 

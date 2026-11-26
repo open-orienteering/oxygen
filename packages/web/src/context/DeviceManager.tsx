@@ -501,7 +501,10 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
       // Invalidate cache and resolve from server (only when online)
       const useServer = navigator.onLine && !storeFailed;
       if (useServer) {
-        await utils.cardReadout.readout.invalidate({ cardNo: readout.cardNumber });
+        // Not awaited: with a mounted observer of this card the invalidate
+        // waits for its refetch, which the timeout below must cover too.
+        // The query is marked stale at once, so the fetch below refetches.
+        void utils.cardReadout.readout.invalidate({ cardNo: readout.cardNumber });
       }
 
       // Resolve runner info and determine action (always — even for duplicates)

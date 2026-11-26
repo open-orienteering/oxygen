@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { selectEvent } from "./helpers/print-pdf";
+import { blobHasQuery } from "./helpers/query-blob";
 
 /**
  * The service worker during an outage (review package 9: SYNC-16, WEB-03;
@@ -29,8 +30,9 @@ test.describe("service worker with the server unreachable (SYNC-16)", () => {
     await selectEvent(page);
     await page.getByRole("link", { name: "Runners", exact: true }).click();
     await expect(page.locator("table")).toBeVisible();
-    // Let the persister write the event's blob (throttled).
-    await page.waitForTimeout(2_000);
+    // Wait for the persister (throttled) to write the event's blob.
+    await expect.poll(() => blobHasQuery(page, "itest", "runner.list"), { timeout: 15_000 }).toBe(true);
+    await expect.poll(() => blobHasQuery(page, "itest", "competition.dashboard"), { timeout: 15_000 }).toBe(true);
 
     // The old runtime caches are gone and none is filled again.
     const names = await page.evaluate(() => caches.keys());

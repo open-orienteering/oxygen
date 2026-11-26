@@ -95,6 +95,10 @@ export function createAutoDrain(
   return {
     /** An entry was queued on this page. */
     enqueued(): void {
+      // There is work now, even before the next poll raises the count: a
+      // drain that fails must still schedule its retry (the poll pauses
+      // while the tab is hidden).
+      lastTotal = Math.max(lastTotal, 1);
       if (online) start();
     },
     /** Run now if there is work (tab visible again, active node changed). */

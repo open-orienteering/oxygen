@@ -25,13 +25,22 @@ type KV = Pick<Storage, "getItem" | "setItem">;
 
 /** At most two chunk reloads per five minutes per tab; counts the one it allows. */
 export function canReloadForChunk(storage: KV | null, now = Date.now()): boolean {
+  return canReloadBounded(CHUNK_RELOAD_KEY, storage, now);
+}
+
+/**
+ * At most two automatic reloads under `key` per five minutes per tab
+ * (chunk recovery here; the expired-session reload in CurrentUserProvider).
+ * Counts the one it allows.
+ */
+export function canReloadBounded(key: string, storage: KV | null, now = Date.now()): boolean {
   if (!storage) return true;
   try {
-    const raw = storage.getItem(CHUNK_RELOAD_KEY);
+    const raw = storage.getItem(key);
     const times = (raw ? (JSON.parse(raw) as unknown[]) : [])
       .filter((t): t is number => typeof t === "number" && now - t < CHUNK_RELOAD_WINDOW_MS);
     if (times.length >= CHUNK_RELOAD_MAX) return false;
-    storage.setItem(CHUNK_RELOAD_KEY, JSON.stringify([...times, now]));
+    storage.setItem(key, JSON.stringify([...times, now]));
     return true;
   } catch {
     return true;

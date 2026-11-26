@@ -166,7 +166,7 @@ Club-facing hosted deployment: the public GHCR `cloud` image on Cloud Run behind
 
 Oxygen is designed for field conditions where internet connectivity is unreliable. The database is always hosted remotely (cloud VM or dedicated server), keeping the competition data safe and accessible from anywhere. The planned approach makes each client station resilient to connectivity loss:
 
-- **Service Worker caching** — cache the full PWA shell and API responses so Oxygen loads and operates without internet
+- **Service Worker caching** — cache the full PWA shell so Oxygen loads without internet; API data for offline use comes from the persisted per-event query cache, not from the service worker (see [system/offline-architecture.md](system/offline-architecture.md) "Station resilience")
 - **Remote database, local resilience** — PostgreSQL runs on a remote server; each Oxygen PWA client caches all data it needs to continue operating independently during an outage
 - **Local network fallback** — during internet loss, Oxygen stations on the same local network (e.g., registration and start) can propagate new registrations and card readouts directly between each other
 - **Background sync** — when connectivity is restored, queued changes sync back to the remote database, Eventor, LiveResults, and online-input (ROC). UUIDv7 PKs let offline-minted rows merge without ID collisions when they reach the server.

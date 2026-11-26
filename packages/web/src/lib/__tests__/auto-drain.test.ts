@@ -233,4 +233,14 @@ describe("auto drain retry after a failed drain (SYNC-11)", () => {
     for (let i = 0; i < 5; i++) await Promise.resolve();
     expect(timers).toEqual([2000]);
   });
+
+  it("a failed drain started by the first enqueue schedules its retry before any poll", async () => {
+    const h = retryHarness();
+    h.outcomes.push("retry");
+    h.drain.update(st(0)); // the poll saw nothing yet
+    h.drain.enqueued();
+    await h.settle();
+    expect(h.runs()).toBe(1);
+    expect(h.live()).toHaveLength(1);
+  });
 });

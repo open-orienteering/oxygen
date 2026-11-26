@@ -10,6 +10,7 @@ import { test, expect, type Page, type Route } from "@playwright/test";
 import { API_BASE } from "./helpers/api-base";
 import { trpcProcedures, waitForTrpc } from "./helpers/trpc";
 import { reseed } from "./helpers/reseed";
+import { blobHasQuery } from "./helpers/query-blob";
 
 const COMPETITION_NAME = "My example tävling";
 const NAMEID = "itest";
@@ -25,33 +26,9 @@ async function warmCache(page: Page) {
   const listed = waitForTrpc(page, "runner.list", { timeout: 15_000 });
   await page.getByRole("link", { name: "Runners", exact: true }).click();
   await listed;
-  await expect
-    .poll(
-      () =>
-        page.evaluate(async (nameId) => {
-          // idb-keyval's default store: database "keyval-store", object store "keyval".
-          const db = await new Promise<IDBDatabase>((res, rej) => {
-            const r = indexedDB.open("keyval-store");
-            r.onsuccess = () => res(r.result);
-            r.onerror = () => rej(r.error);
-          });
-          try {
-            if (!db.objectStoreNames.contains("keyval")) return false;
-            const keys = await new Promise<IDBValidKey[]>((res) => {
-              const req = db.transaction("keyval").objectStore("keyval").getAllKeys();
-              req.onsuccess = () => res(req.result);
-              req.onerror = () => res([]);
-            });
-            return keys.some((k) => String(k).includes(nameId));
-          } finally {
-            db.close();
-          }
-        }, NAMEID),
-      { timeout: 10_000 },
-    )
-    .toBe(true);
-  // The blob is written on a throttle; give the last write (runner.list) time to land.
-  await page.waitForTimeout(1_500);
+  // Wait for the persister (throttled) to write the runner list into the event's blob.
+  await expect.poll(() => blobHasQuery(page, NAMEID, "runner.list"), { timeout: 15_000 }).toBe(true);
+  await expect.poll(() => blobHasQuery(page, NAMEID, "competition.dashboard"), { timeout: 15_000 }).toBe(true);
 }
 
 /** Abort every tRPC request (optionally only some procedures) as "no answer". */
@@ -139,7 +116,8 @@ test.describe("station with the server unreachable", () => {
     await go("/");
     await expect(page.getByRole("link", { name: "Dashboard" })).toHaveCount(0, { timeout: 10_000 });
     await go("/itest/runners");
-    await expect(page.locator("header").getByText(COMPETITION_NAME)).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator("[data-connection]")).toHaveAttribute("data-connection", "cached", { timeout: 15_000 });
+    await expect(page.locator("header").getByText(COMPETITION_NAME)).toBeVisible();
     await expect(page.locator("table")).toBeVisible({ timeout: 10_000 });
     await context.setOffline(false);
   });

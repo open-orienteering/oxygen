@@ -608,22 +608,29 @@ may wait for an `offline` event.
   failure runs a probe that does not follow redirects: `unreachable`
   never reloads; `expired` (an IAP redirect or login page) shows a
   "sign-in expired" banner with Reload over a page in use, and reloads by
-  itself (guarded, once per 15 s) only when nothing is open. With a venue
-  node active there is no probe: the box has no IAP.
+  itself only when nothing can be shown: no identity was ever known on
+  this device, or the shell has no cached data for the event. That reload
+  is bounded (at most two per five minutes per tab). The remembered
+  identity is used only while `users.me` gets no answer (also a 502/504
+  from the bundled nginx); any answer replaces it. With a venue node
+  active there is no probe: the box has no IAP.
 - **Per-card lookups are not persisted** (WEB-02). `runner.findByCard`,
   `cardReadout.readout` and `race.finishReceipt` are keyed by card number
   or runner id only; restored on another day they answer a re-read card
   with an earlier runner first. They stay in memory, and the kiosk prints
   a receipt by itself only from answers fetched after its readout screen
-  opened (`lib/kiosk-print.ts`), once per read. So the kiosk prints no
+  opened and answered successfully (`isFreshSince`, not
+  `isFetchedAfterMount`, which a failed refetch also sets;
+  `lib/kiosk-print.ts`), once per read. So the kiosk prints no
   receipt from cached rows: with the server unreachable it prints none
   (the Finish Station's local receipt is unaffected).
 - **A page that throws stays inside the page** (WEB-15). The shell's routed
   pages have their own error boundary, reset when the first route segment
   changes, so the header, tabs, card notifications and an open
   registration stay. The kiosk readout screen (keyed by the read), the
-  kiosk and start-screen routes, and the providers (outermost) have their
-  own. A failed lazy chunk offers Reload (at most two per five minutes per
+  kiosk and start-screen routes (which try again by themselves after 30 s,
+  as nobody may be at an unattended screen), and the providers (outermost)
+  have their own. A failed lazy chunk offers Reload (at most two per five minutes per
   tab), since React keeps a failed import and "Try again" would fail again.
 
 **The course editor's Field-mode outbox** (row D9c; `course-editor.md` §9
@@ -671,7 +678,7 @@ projection table, because the canvas reads the cache.
   starts a drain (another tab queued entries), and entries stuck behind an
   `auth` or `event` block raise no signal, so they never retrigger it.
 - **Retry after a failed drain** (SYNC-11). A drain that ended on no answer
-  (network-class, including the push's 20 s timeout) or a `server` block
+  (network-class, including the push's 60 s timeout) or a `server` block
   is retried by itself: 2 s doubling to 30 s while the device is online and
   entries are pending; only a clean drain resets the delay, and a new entry
   meanwhile drains at once without resetting it. The tab becoming visible

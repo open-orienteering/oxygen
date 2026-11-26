@@ -41,3 +41,14 @@ describe("shouldResetBoundary", () => {
     expect(shouldResetBoundary("results", "runners", false)).toBe(false);
   });
 });
+
+describe("canReloadBounded", () => {
+  it("counts each key on its own", async () => {
+    const { canReloadBounded } = await import("../error-recovery");
+    const s = memory();
+    expect(canReloadBounded("a", s, 0)).toBe(true);
+    expect(canReloadBounded("a", s, 1)).toBe(true);
+    expect(canReloadBounded("a", s, 2)).toBe(false);
+    expect(canReloadBounded("b", s, 2)).toBe(true);
+  });
+});

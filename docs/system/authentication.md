@@ -113,8 +113,9 @@ looks like no network. The web client tells the two apart with a probe of
 `/trpc/users.me` that does not follow redirects (`lib/session-probe.ts`): an
 opaque redirect, an HTML answer or a non-JSON 401/403 is "expired", no
 answer or a 502/503/504 is "unreachable". Expired over a page in use shows a
-"Your sign-in has expired" banner with Reload; a page with nothing open
-reloads by itself (at most once per 15 s). Unreachable never reloads. See
+"Your sign-in has expired" banner with Reload (not on the public kiosk and
+start screen); a device with nothing saved to show reloads by itself (at
+most twice per five minutes). Unreachable never reloads. See
 `docs/bugfixes/station-outage-resilience.md`.
 
 ## Provisioning

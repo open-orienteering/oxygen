@@ -158,24 +158,33 @@ function CompetitionShellInner() {
   const sessionProbed = useRef(false);
   const entry = decideShellEntry({ cachedName, select: selectState, failedBefore: failures > 0 });
   const ready = shellIsOpen(entry);
-  const selectError = selectState.status === "error" ? (selectState.error as { message?: string } | null) : null;
+  /** The last failure of this event's select, kept while a retry is in flight. */
+  const [lastSelectError, setLastSelectError] = useState<unknown>(null);
+  const selectError = lastSelectError as { message?: string } | null;
 
   const runSelect = useCallback(
     (id: string) => {
       const gen = ++selectGen.current;
+      const startedAt = Date.now();
       setSelectState({ status: "pending" });
       selectMutation.mutateAsync({ nameId: id }).then(
         (data) => {
           if (gen !== selectGen.current || nameIdRef.current !== id) return;
           setCompetitionName(data.name);
           setSelectState({ status: "success" });
+          setLastSelectError(null);
           setFailures(0);
-          // Whatever the cache showed meanwhile: fetch it fresh now.
-          void utils.invalidate();
+          // Whatever the cache showed and nothing has fetched since this
+          // attempt started: fetch it fresh now (queries the open page
+          // already refetched are left alone).
+          void queryClient.invalidateQueries({
+            predicate: (q) => Array.isArray(q.queryKey[0]) && q.state.dataUpdatedAt < startedAt,
+          });
         },
         (error: unknown) => {
           if (gen !== selectGen.current || nameIdRef.current !== id) return;
           setSelectState({ status: "error", error });
+          setLastSelectError(error);
           setFailures((n) => n + 1);
           // An expired IAP session looks like no network. Ask once per
           // event; only a page with nothing open reloads by itself.
@@ -190,7 +199,7 @@ function CompetitionShellInner() {
       );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [utils],
+    [queryClient],
   );
   const cachedNameRef = useRef<string | null>(null);
   cachedNameRef.current = cachedName;
@@ -250,6 +259,7 @@ function CompetitionShellInner() {
       sessionProbed.current = false;
       setSelectState({ status: "pending" });
       setCachedName(null);
+      setLastSelectError(null);
       setFailures(0);
       setCompetitionNameId(nameId);
       void (async () => {
@@ -398,7 +408,9 @@ function CompetitionShellInner() {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4" data-testid="shell-unreachable">
         <div className="text-center max-w-md">
-          <div className="text-slate-700 text-lg font-medium mb-2">{t("serverUnreachable")}</div>
+          <div className="text-slate-700 text-lg font-medium mb-2">
+            {isNetworkClassError(selectError) ? t("serverUnreachable") : t("connectionError")}
+          </div>
           <p className="text-slate-500 text-sm mb-2" data-testid="session-reconnecting">
             {t("reconnectingSession")}
           </p>

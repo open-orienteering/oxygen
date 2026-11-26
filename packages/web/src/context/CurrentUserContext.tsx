@@ -6,6 +6,7 @@ import {
 } from "../lib/session-recovery";
 import { probeSession, type ProbeResult } from "../lib/session-probe";
 import { getActiveBaseUrl } from "../lib/node-discovery";
+import { canReloadBounded } from "../lib/error-recovery";
 import {
   loadLastIdentity,
   resolveCurrentUser,
@@ -35,6 +36,21 @@ type CurrentUserValue = {
 
 const CurrentUserContext = createContext<CurrentUserValue | null>(null);
 
+function hasTrpcCode(err: unknown): boolean {
+  const code = (err as { data?: { code?: unknown } | null } | null)?.data?.code;
+  return typeof code === "string" && code.length > 0;
+}
+
+const AUTO_RELOAD_KEY = "oxygen.sessionRecovery.autoReloads";
+
+function sessionStore(): Pick<Storage, "getItem" | "setItem"> | null {
+  try {
+    return typeof sessionStorage === "undefined" ? null : sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
 /** While `users.me` is failing it is retried this often (on top of online / focus refetches). */
 const ERROR_REFETCH_MS = 15_000;
 
@@ -44,7 +60,9 @@ export function CurrentUserProvider({ children }: { children: ReactNode }) {
     retry: 1,
     refetchInterval: (q) => (q.state.status === "error" ? ERROR_REFETCH_MS : false),
   });
-  const networkClass = me.isError && isNetworkClassError(me.error);
+  // No answer from our API: a network-class failure, or an error without
+  // a tRPC code (the bundled nginx answers 502/504 with its own JSON).
+  const networkClass = me.isError && (isNetworkClassError(me.error) || !hasTrpcCode(me.error));
   const [lastKnown, setLastKnown] = useState<Identity | null>(() => loadLastIdentity());
   const [sessionState, setSessionState] = useState<SessionState>("ok");
   const refetchedAfterOkProbe = useRef(false);
@@ -96,7 +114,11 @@ export function CurrentUserProvider({ children }: { children: ReactNode }) {
         return;
       }
       setSessionState(result);
-      if (result === "expired" && nothingMountedRef.current) attemptSessionReload();
+      // Bounded (two per five minutes): a reload that does not fix the
+      // session must not turn into a reload every 15 s.
+      if (result === "expired" && nothingMountedRef.current && canReloadBounded(AUTO_RELOAD_KEY, sessionStore())) {
+        attemptSessionReload();
+      }
     });
     return () => {
       cancelled = true;

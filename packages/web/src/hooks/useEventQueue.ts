@@ -71,10 +71,12 @@ export function useEventQueue(competitionId?: string) {
         setPendingCount(remaining);
 
         // Invalidate relevant queries so UI refreshes with server data
-        await utils.runner.list.invalidate();
-        await utils.competition.dashboard.invalidate();
-        await utils.lists.resultList.invalidate();
-        await utils.race.recentActivity.invalidate();
+        // Not awaited: on a link that died after the push these refetches
+        // would hold the drain "in flight" and delay its retry.
+        void utils.runner.list.invalidate();
+        void utils.competition.dashboard.invalidate();
+        void utils.lists.resultList.invalidate();
+        void utils.race.recentActivity.invalidate();
       }
       return outcome;
     } finally {

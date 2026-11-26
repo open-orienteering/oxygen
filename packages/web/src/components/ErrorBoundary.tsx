@@ -15,6 +15,8 @@ interface Props {
    */
   resetKey?: unknown;
   variant?: Variant;
+  /** Try again by itself after this long (the unattended kiosk and start screen). */
+  autoResetMs?: number;
 }
 
 interface State {
@@ -29,8 +31,21 @@ export class ErrorBoundary extends Component<Props, State> {
     return { hasError: true, error };
   }
 
+  private autoReset: ReturnType<typeof setTimeout> | null = null;
+
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error("[ErrorBoundary]", error, info.componentStack);
+    if (this.props.autoResetMs && !isChunkLoadError(error)) {
+      if (this.autoReset) clearTimeout(this.autoReset);
+      this.autoReset = setTimeout(() => {
+        this.autoReset = null;
+        this.setState({ hasError: false, error: null });
+      }, this.props.autoResetMs);
+    }
+  }
+
+  componentWillUnmount() {
+    if (this.autoReset) clearTimeout(this.autoReset);
   }
 
   componentDidUpdate(prev: Props) {

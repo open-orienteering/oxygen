@@ -15,9 +15,9 @@ export function shouldAutoPrint({
   alreadyPrinted: boolean;
   runner: { id: number; finishTime: number } | null | undefined;
   receipt: { timing: { finishTime: number } } | null | undefined;
-  /** `isFetchedAfterMount` of `runner.findByCard`. */
+  /** `runner.findByCard` answered successfully since the screen opened (`isFreshSince`). */
   runnerFresh: boolean;
-  /** `isFetchedAfterMount` of `race.finishReceipt`. */
+  /** `race.finishReceipt` answered successfully since the screen opened. */
   receiptFresh: boolean;
 }): boolean {
   if (alreadyPrinted) return false;
@@ -27,4 +27,16 @@ export function shouldAutoPrint({
   // receipt's card-computed one (there as soon as storeReadout ran, before
   // applyResult wrote oRunner.FinishTime).
   return runner.finishTime > 0 || receipt.timing.finishTime > 0;
+}
+
+/**
+ * A query's data was fetched successfully at or after `since`. Not
+ * `isFetchedAfterMount`: that is also true after a refetch that failed,
+ * when the data is still the cached row.
+ */
+export function isFreshSince(
+  q: { isSuccess: boolean; isFetching: boolean; dataUpdatedAt: number },
+  since: number,
+): boolean {
+  return q.isSuccess && !q.isFetching && q.dataUpdatedAt >= since;
 }

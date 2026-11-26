@@ -28,7 +28,7 @@ test.describe("session recovery", () => {
     await expect(page.getByText("Event not found")).toHaveCount(0);
     await expect(page.getByText(/Reconnecting/)).toBeVisible();
 
-    // Let the shell's one-shot retry succeed.
+    // The retry page retries by itself (2 s, then backoff).
     failSelect = false;
 
     await expect(page.getByRole("link", { name: "Dashboard" })).toBeVisible({

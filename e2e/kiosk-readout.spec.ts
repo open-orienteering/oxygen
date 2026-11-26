@@ -222,7 +222,7 @@ test.describe("Kiosk Readout Station Flow", () => {
     await expect(kioskPage.getByRole("heading", { name: "E2E SecondHolder" })).toBeVisible({ timeout: 10_000 });
     await expect.poll(prints, { timeout: 10_000 }).toEqual([first.id, second.id]);
     // Never a second print for the first holder from the cached row.
-    await kioskPage.waitForTimeout(1_000);
+    await kioskPage.waitForTimeout(3_000);
     expect(await prints()).toEqual([first.id, second.id]);
   });
 

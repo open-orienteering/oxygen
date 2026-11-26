@@ -7,7 +7,7 @@
  * In standalone mode, uses its own DeviceManager + SI reader.
  */
 
-import { shouldAutoPrint } from "../lib/kiosk-print";
+import { isFreshSince, shouldAutoPrint } from "../lib/kiosk-print";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { useParams } from "react-router-dom";
@@ -436,6 +436,29 @@ function KioskPageBody() {
     [],
   );
 
+  // One automatic receipt per read, also when the read's screen remounts
+  // (its error boundary's "Try again").
+  const printedReadsRef = useRef(new Set<number>());
+  // A number per read on the readout screen: a new one when the screen
+  // enters readout or shows another recent card; updates of the same read
+  // keep it. Each read mounts its own readout screen.
+  const readSeq = useRef({ seq: 0, mode: "idle" as KioskScreen["mode"], cardId: "" });
+  if (screen.mode === "readout") {
+    const r = readSeq.current;
+    if (r.mode !== "readout" || r.cardId !== screen.card.id) r.seq++;
+    r.cardId = screen.card.id;
+  }
+  readSeq.current.mode = screen.mode;
+  const currentRead = readSeq.current.seq;
+  const printOnce = useCallback(
+    (read: number, runnerId: number) => {
+      if (printedReadsRef.current.has(read)) return;
+      printedReadsRef.current.add(read);
+      handlePrint(runnerId);
+    },
+    [handlePrint],
+  );
+
   // Toggle the admin's "print registration receipt" flag from the kiosk so
   // a runner can opt in (or back out) before submission.
   const handleRequestRegistrationReceipt = useCallback(
@@ -596,8 +619,8 @@ function KioskPageBody() {
             {screen.mode === "readout" && (
               // Keyed by the read: a new card is a new screen (its own print
               // guard), and a screen that throws does not take the kiosk down.
-              <ErrorBoundary key={screen.card.id} variant="dark">
-                <ReadoutScreen card={screen.card} onPrint={handlePrint} />
+              <ErrorBoundary key={currentRead} variant="dark">
+                <ReadoutScreen card={screen.card} onPrint={(runnerId) => printOnce(currentRead, runnerId)} />
               </ErrorBoundary>
             )}
             {screen.mode === "pre-start" && (
@@ -867,6 +890,8 @@ function ReadoutScreen({
 }) {
   const { t } = useTranslation("kiosk");
   const printedRef = useRef(false);
+  // Answers older than this are cached rows of an earlier read (WEB-02).
+  const [mountedAt] = useState(() => Date.now());
 
   // 1. Check DB state for this runner
   const dbRunner = trpc.runner.findByCard.useQuery(
@@ -911,12 +936,12 @@ function ReadoutScreen({
       alreadyPrinted: printedRef.current,
       runner: dbRunner.data,
       receipt: receipt.data,
-      runnerFresh: dbRunner.isFetchedAfterMount,
-      receiptFresh: receipt.isFetchedAfterMount,
+      runnerFresh: isFreshSince(dbRunner, mountedAt),
+      receiptFresh: isFreshSince(receipt, mountedAt),
     })) return;
     printedRef.current = true;
     onPrint(dbRunner.data!.id);
-  }, [receipt.data, dbRunner.data, dbRunner.isFetchedAfterMount, receipt.isFetchedAfterMount, onPrint]);
+  }, [receipt, dbRunner, mountedAt, onPrint]);
 
   // Derive rental card status: from readout data (authoritative) or card message (fast path)
   const isRentalCard = readout.data?.found ? readout.data.isRentalCard : card.isRentalCard;
