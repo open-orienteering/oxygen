@@ -323,3 +323,17 @@ describe("a finish before a daytime start (RES-16)", () => {
     expect(computePosition(runners, "Right", 24_000, 1)).toMatchObject({ rank: 1, total: 1 });
   });
 });
+
+describe("computeClassPlacements: a deduction that eats the whole time", () => {
+  it("does not rank an OK runner left with no time", () => {
+    const placed = computeClassPlacements(
+      [
+        { id: 1, status: RunnerStatus.OK, startTime: 360000, finishTime: 366000, runningTimeAdjustment: 6000 },
+        { id: 2, status: RunnerStatus.OK, startTime: 360000, finishTime: 372000 },
+      ],
+      false,
+    );
+    expect(placed.get(1)).toMatchObject({ place: 0, runningTime: 0 });
+    expect(placed.get(2)).toMatchObject({ place: 1, timeBehind: 0 });
+  });
+});

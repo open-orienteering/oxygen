@@ -115,6 +115,7 @@ export interface PerformReadoutResult {
      * leg into the finish.
      */
     legs: number[];
+    orderMode: "ordered" | "free_order";
   } | null;
   timing: {
     cardStartTime: number;
@@ -344,6 +345,7 @@ export async function performReadout(
           controlCount: expectedPositions.length,
           requiredControlCount: requiredCount,
           legs: parseLegsString(course.legs),
+          orderMode: course.orderMode,
         }
       : null,
     timing: {

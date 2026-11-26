@@ -329,6 +329,7 @@ function CompetitionShellInner() {
             punchTime: c.punchTime,
             legLength: c.legLength,
           })),
+          finish: result.finish,
           course: result.course ? { name: result.course.name, length: result.course.length } : null,
           position: result.position,
           siac: result.siac,

@@ -295,13 +295,18 @@ this PR:
   `missing-skipped`, and `ok-noTiming`. NoTiming legs render with
   strikethrough on the split time. The header shows
   `Time 32:14 · raw 35:42` whenever a deduction was applied.
-- **Runner list / leaderboards**: `runner.list` runs the matcher per
-  runner and feeds `runningTimeAdjustment` into `computeClassPlacements`
-  and the `runningTime` field on `RunnerInfo`. Placements rank on the
-  adjusted time; ties on adjusted time are broken the same way as
-  before.
-- **Results / start lists**: `lists.ts` (`resultList`) computes the
-  adjustment per runner and feeds `computeClassPlacements`.
+- **Runner list**: `runner.list` carries no places or adjusted times;
+  the Results page is where places are shown.
+- **Results and the finish receipt**: `lists.resultList` and
+  `race.finishReceipt` both rank through `loadClassStandings`
+  (`packages/api/src/classStandings.ts`). It picks each runner's card the
+  way the readout does (`pickRunnerCard`), merges free punches, runs the
+  matcher for `runningTimeAdjustment` and ranks every class with
+  `computeClassPlacements`: adjusted times, ties share a place (1, 1, 3),
+  no-timing classes and classless runners are unplaced, and an OK runner
+  whose deduction leaves no time is not ranked. The receipt substitutes the
+  runner's own row from the readout, so its rank and total are right before
+  the result is saved.
 - **Eventor publication**: `eventor.ts` mirrors MeOS
   `oImportExport.cpp:2325`, exporting the adjusted total
   (`getRunningTime(true)` in MeOS terms) and emitting NoTiming positions

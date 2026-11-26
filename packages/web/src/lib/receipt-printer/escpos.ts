@@ -392,13 +392,15 @@ export function buildFinishReceipt(data: FinishReceiptData): Uint8Array {
     }
 
     // Fin row — "Fin" (3) + 6 spaces aligns to split column at pos 9
-    const lastSplit = data.splits[data.splits.length - 1];
-    const finSplitDs = (lastSplit && lastSplit.status !== "missing") ? lastSplit.splitTime : 0;
+    // The finish leg comes from the server (CRS-013); never repeat the
+    // last control's split. No finish entry = blank split and pace.
+    const finSplitDs = data.finish?.splitTime ?? 0;
+    const finLegLength = data.finish?.legLength ?? 0;
     const finSplitFmt = finSplitDs > 0 ? formatRunningTime(finSplitDs).padStart(6) : "      ";
     const finClock = finishTime > 0 ? formatClock(finishTime) : "        ";
     const finCum = formatRunningTime(runningTime).padStart(6);
-    const finPace = (lastSplit && lastSplit.legLength && lastSplit.legLength > 0 && finSplitDs > 0)
-      ? formatPace(lastSplit.legLength, finSplitDs).padStart(5)
+    const finPace = (finLegLength > 0 && finSplitDs > 0)
+      ? formatPace(finLegLength, finSplitDs).padStart(5)
       : "    -";
     b.boldOn().line(`${L.fin.padEnd(3)}      ${finSplitFmt}  ${finClock} ${finCum} ${finPace}`).boldOff();
     b.separator();

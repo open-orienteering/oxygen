@@ -62,6 +62,8 @@ Notes whose code no longer exists (mostly the raster tile pipeline, deleted in s
 
 | Note | Added |
 | --- | --- |
+| [Ties got different places; the receipt, offline readout and Eventor upload disagreed with the result list](results-and-lists.md) | 2026-11-26 |
+| [Results and lists: what package 13 left out](results-and-lists-followups.md) | 2026-11-26 |
 | [ROC radio intake stalled after a reset, and the control mapping was never applied](roc-radio-intake.md) | 2026-11-26 |
 | [ROC radio intake: what package 12 left out](roc-radio-intake-followups.md) | 2026-11-26 |
 | [Registration desk stored wrong clubs, names and cards; offline registrations lost fields](registration-correctness.md) | 2026-11-26 |

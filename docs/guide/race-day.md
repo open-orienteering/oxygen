@@ -88,7 +88,7 @@ Oxygen supports direct USB receipt printing on Linux at the finish station and k
 
 ## Results
 
-Live results update as cards are processed — OK, mispunch, DNF, over max time, out of competition, no timing. Three-layer stale-punch detection ensures a card read today can't bring in phantom punches from a test run last week. See [system/registration-and-readout.md](../system/registration-and-readout.md) for the full readout pipeline.
+Live results update as cards are processed — OK, mispunch, DNF, over max time, out of competition, no timing. Runners with the same time share a place (1, 1, 3), the same place the finish receipt and the Eventor upload give them. A no-timing class is marked "Unofficial": its times are shown in grey and nobody is placed. Over max time and out of competition show the time without a place. Withdrawn (cancelled) entries are not on the result or start lists. Three-layer stale-punch detection ensures a card read today can't bring in phantom punches from a test run last week. See [system/registration-and-readout.md](../system/registration-and-readout.md) for the full readout pipeline.
 
 ![Live results](../screenshots/results.png)
 

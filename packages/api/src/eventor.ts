@@ -159,6 +159,8 @@ export interface ResultForUpload {
    */
   runningTimeAdjustment?: number;
   status: number; // MeOS status
+  /** Start time passed or punches read: an Unknown runner is "Active", not "Inactive". */
+  started?: boolean;
   place?: number; // 1-based, 0 or undefined = no placement
   noTiming?: boolean; // class has no timing/ranking
   // Fee data (integer currency units, e.g. 15000 = 150.00 SEK when factor=100)
@@ -352,8 +354,15 @@ function formatIofTime(date: string, deciseconds: number): string {
   return `${date}T${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
-// MeOS RunnerStatus → IOF 3.0 ResultStatus string (for upload)
-function meosStatusToIof(meosStatus: number, hasFinishTime: boolean): string {
+// MeOS RunnerStatus → IOF 3.0 ResultStatus string (for upload).
+// Unknown (0) is a runner without a result yet: IOF 3.0 has Inactive (not
+// started), Active (on the course) and Finished (finished, not checked) for
+// that, never OK or DidNotStart (RES-21).
+export function meosStatusToIof(
+  meosStatus: number,
+  hasFinishTime: boolean,
+  hasStarted = false,
+): string {
   switch (meosStatus) {
     case 1: return "OK";
     case 2: return hasFinishTime ? "OK" : "NotCompeting"; // NoTiming
@@ -361,11 +370,13 @@ function meosStatusToIof(meosStatus: number, hasFinishTime: boolean): string {
     case 4: return "DidNotFinish";
     case 5: return "Disqualified";
     case 6: return "OverTime"; // StatusMAX
-    case 15: return hasFinishTime ? "NotCompeting" : "NotCompeting"; // OutOfCompetition
+    case 15: return "NotCompeting"; // OutOfCompetition
     case 20: return "DidNotStart";
     case 21: return "Cancelled";
     case 99: return "DidNotEnter"; // StatusNotCompetiting
-    default: return hasFinishTime ? "OK" : "DidNotStart";
+    default:
+      if (hasFinishTime) return "Finished";
+      return hasStarted ? "Active" : "Inactive";
   }
 }
 
@@ -1424,7 +1435,7 @@ export async function uploadResults(
           }
 
           const hasTiming = !r.noTiming;
-          const statusStr = meosStatusToIof(r.status, (r.finishTime ?? 0) > 0);
+          const statusStr = meosStatusToIof(r.status, (r.finishTime ?? 0) > 0, r.started === true);
           // Adjusted running time — mirrors MeOS getRunningTime(true) which
           // returns tComputedTime including NoTiming/BadNoTiming deductions
           // (oImportExport.cpp:2325 calls the adjusted accessor).
