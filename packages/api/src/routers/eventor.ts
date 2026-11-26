@@ -80,7 +80,7 @@ import {
   type ParsedPunch,
   RunnerStatus,
 } from "@oxygen/shared";
-import { toAbsolute, toRelativeWrapped, zeroTimeForResults } from "../timeConvert.js";
+import { toAbsolute, toRelativeWrapped, zeroTimeForResults, hasStartedByClock, eventNowDs } from "../timeConvert.js";
 import { resolveCourseExpectedPositions } from "./course.js";
 import { reconcileVariants } from "../variants.js";
 import { pickRunnerCard } from "../cardLink.js";
@@ -1595,6 +1595,7 @@ export const eventorRouter = router({
           name: true,
           date: true,
           zeroTime: true,
+          timeZone: true,
           eventorEventId: true,
           eventorEnv: true,
           cardFeeCents: true,
@@ -1746,6 +1747,7 @@ export const eventorRouter = router({
       }
 
       // Build the ResultForUpload[] payload.
+      const nowDs = eventNowDs(event);
       const uploadData: ResultForUpload[] = runners.map((r) => {
         const cls = r.classId ? classById.get(r.classId) : null;
         const courseId = r.courseId ?? cls?.courseId ?? null;
@@ -1827,6 +1829,9 @@ export const eventorRouter = router({
           finishTime: toAbsolute(r.finishTime, event.zeroTime) || undefined,
           runningTimeAdjustment: adjustmentByRunner.get(r.id),
           status: oxygenStatus,
+          started:
+            hasStartedByClock(r.startTime, event.zeroTime, nowDs) ||
+            (matched?.matches.some((m) => m.status === "ok") ?? false),
           place: placement?.place ?? 0,
           noTiming: cls?.noTiming === true,
           fee: r.feeCents || undefined,

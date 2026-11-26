@@ -635,6 +635,8 @@ export const eventRouter = router({
         classType: c.classType || undefined,
         freeStart: c.freeStart,
         noTiming: c.noTiming,
+        // The offline readout applies the class's max time (RES-20).
+        maxTime: c.maxTime || undefined,
         coursePoolIds: poolIdsOf(c.id),
       }));
 

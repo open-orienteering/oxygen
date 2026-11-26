@@ -477,8 +477,8 @@ class.NoTiming OR runner.TransferFlags & 512  → NoTiming (2)
 
 Priority: MaxTime > OutOfCompetition > NoTiming. If MaxTime is exceeded, the runner gets OverMaxTime regardless of flags. OutOfCompetition takes priority over NoTiming.
 
-- **OverMaxTime**: Class-level setting (`oClass.MaxTime`, deciseconds). Runner's time is shown but they rank last.
-- **NoTiming**: For children's/open classes. Set at class level (`oClass.NoTiming`) or per-runner (`TransferFlags` bit 512). Time is not displayed in results, runner is not placed.
+- **OverMaxTime**: Class-level setting (`oClass.MaxTime`, deciseconds). Runner's time is shown but they are not placed.
+- **NoTiming**: For children's/open classes. Set at class level (`oClass.NoTiming`) or per-runner (`TransferFlags` bit 512). The runner is not placed and gets no position on the receipt. The result list still returns the time, and the Results page shows it in grey italics under an "Unofficial" badge; the Eventor upload sends no time.
 - **OutOfCompetition**: Per-runner flag (`TransferFlags` bit 256). For course setters, unofficial runs. Time IS shown but runner is not placed.
 
 ### 4e. Return Object

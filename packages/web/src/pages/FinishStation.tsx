@@ -83,6 +83,7 @@ export function FinishStation() {
           punchTime: c.punchTime,
           legLength: c.legLength,
         })),
+        finish: result.finish,
         course: result.course
           ? { name: result.course.name, length: result.course.length }
           : null,
@@ -230,8 +231,9 @@ export function FinishStation() {
         })),
         course: localResult.course,
         position: localResult.position,
-        classResults: localResult.classResults.map((r, i) => ({
-          rank: i + 1,
+        // Ties share a rank (RES-11): strictly faster runners + 1.
+        classResults: localResult.classResults.map((r) => ({
+          rank: localResult.classResults.filter((o) => o.runningTime < r.runningTime).length + 1,
           name: r.name,
           clubName: "",
           runningTime: r.runningTime,

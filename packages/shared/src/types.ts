@@ -382,6 +382,8 @@ export interface ClassInfo {
   freeStart?: boolean;
   /** Class runs without timing. */
   noTiming?: boolean;
+  /** Maximum running time in deciseconds; absent = no limit. */
+  maxTime?: number;
   /**
    * The class's stage-0 variant pool: its variant child courses' seqs in
    * key order, `[]` for a plain class (docs/course-controls-and-matching.md

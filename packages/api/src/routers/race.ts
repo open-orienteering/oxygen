@@ -2,13 +2,14 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, kioskOrRaceOperateProcedure, raceOperateRaceProcedure, raceOperateProcedure } from "../trpc.js";
 import { toAbsolute, toRelative, toRelativeChecked, hasTime, eventTimeZone } from "../timeConvert.js";
-import { timeOfDayDs, runningTimeDs } from "@oxygen/shared";
+import { timeOfDayDs, runningTimeDs, RunnerStatus } from "@oxygen/shared";
 import {
   runnerStatusToValue,
   valueToRunnerStatus,
 } from "../statusConvert.js";
 import { performReadout } from "./cardReadout.js";
 import { appendJournal } from "../journalEmit.js";
+import { loadClassStandings } from "../classStandings.js";
 import type { ControlMatch } from "@oxygen/shared";
 
 /**
@@ -159,10 +160,8 @@ export const raceRouter = router({
       if (!r) return null;
 
       // Build split times. The matcher's `controls` array is already
-      // ordered by course position. We compute split + cum from the
-      // punch times; first split is from start.
-      let lastTime = r.timing.startTime;
-      let cum = 0;
+      // ordered by course position; `legs[i]` is the leg leading INTO
+      // position `i`, so `legs[controls.length]` is the finish leg.
       const splits: Array<{
         controlIndex: number;
         controlCode: number;
@@ -173,76 +172,51 @@ export const raceRouter = router({
         legLength: number;
       }> = [];
       const legs = r.course?.legs ?? [];
+      // The latest OK punch, not the last array entry: free order appends
+      // missing entries after the punched ones (CRS-013).
+      let lastPunch = 0;
       r.controls.forEach((m: ControlMatch, idx) => {
         if (m.positionMode === "skipped") return;
-        const status: "ok" | "missing" | "extra" = m.status;
-        const punchTime = m.punchTime;
-        const split = m.splitTime;
-        cum = m.cumTime;
         splits.push({
           controlIndex: idx,
           controlCode: m.controlCode,
-          splitTime: split,
-          cumTime: cum,
-          status,
-          punchTime,
-          // `legs[i]` is the leg leading INTO position `i`, matching
-          // the matcher's `controls` index ordering (finish included
-          // as the last entry). Falls back to 0 for unknown lengths.
+          splitTime: m.splitTime,
+          cumTime: m.cumTime,
+          status: m.status,
+          punchTime: m.punchTime,
           legLength: legs[idx] ?? 0,
         });
-        if (status === "ok" && punchTime > 0) lastTime = punchTime;
+        if (m.status === "ok" && m.punchTime > 0) {
+          if (lastPunch === 0 || runningTimeDs(lastPunch, m.punchTime) > 0) lastPunch = m.punchTime;
+        }
       });
+      const legFrom = lastPunch || r.timing.startTime;
+      // The finish leg: from the last control (or the start) to the finish.
+      const finish = {
+        splitTime:
+          r.timing.finishTime > 0 && legFrom > 0 ? runningTimeDs(legFrom, r.timing.finishTime) : 0,
+        legLength: legs[r.controls.length] ?? 0,
+      };
 
-      // Position within class.
-      //
-      // The old implementation pulled every finished runner in the
-      // event into Node and sorted in JS — O(N) per receipt across
-      // the whole event, which is wasteful when the finish receipt
-      // only needs to know "how many same-class runners beat this
-      // running time?". Postgres can answer both halves of that
-      // question with a parameterised filtered count using the
-      // existing `(event_id, class_id, removed)` index path, so we
-      // push the computation down: one query counts the rank and the
-      // total. A filtered count on the class index beats a 5 000-row
-      // fetch + JS sort on every kiosk readout.
+      // Position within class, from the same standings step as the result
+      // list (adjusted times, shared places for ties, unplaced in no-timing
+      // classes). The runner's own row is taken from this readout, so rank
+      // and total agree before the result is saved (CRS-039).
       let position: { rank: number; total: number } | null = null;
-      if (
-        r.timing.status === 1 &&
-        r.timing.runningTime > 0 &&
-        runner.classId
-      ) {
-        // Absolute times; a run across midnight still counts (RES-16).
-        const myRunningTime = runningTimeDs(r.timing.startTime, r.timing.finishTime);
-
-        if (myRunningTime > 0) {
-          // OK-status peers in the same class with a running time. The CASE
-          // is runningTimeDs in SQL: a wrap past midnight counts up to 12 h,
-          // and a finish before a daytime start has no time (not ranked).
-          const counts = await ctx.db.$queryRaw<Array<{ faster: bigint; total: bigint }>>`
-            SELECT
-              COUNT(*) FILTER (WHERE rt BETWEEN 1 AND ${myRunningTime} - 1)::bigint AS faster,
-              COUNT(*) FILTER (WHERE rt >= 1)::bigint AS total
-            FROM (
-              SELECT CASE
-                       WHEN finish_time >= start_time THEN finish_time - start_time
-                       WHEN finish_time - start_time + 864000 <= 432000 THEN finish_time - start_time + 864000
-                       ELSE 0
-                     END AS rt
-              FROM oxygen.runners
-              WHERE event_id = ${ctx.event.id}
-                AND class_id = ${runner.classId}::uuid
-                AND removed = false
-                AND status = 'ok'::oxygen.runner_status
-                -- Relative times: negative before ZeroTime (RES-05).
-                AND finish_time <> 0
-                AND start_time <> 0
-            ) peers
-          `;
-          const total = Number(counts[0]?.total ?? 0n);
-          // Rank = strictly-faster peers + 1 (ties share a rank).
-          const rank = Number(counts[0]?.faster ?? 0n) + 1;
-          position = total > 0 ? { rank, total } : null;
+      if (r.timing.status === RunnerStatus.OK && r.timing.runningTime > 0 && runner.classId) {
+        const standings = await loadClassStandings(ctx.db, ctx.event, {
+          classId: runner.classId,
+          override: {
+            runnerId: runner.id,
+            status: r.timing.status,
+            startTime: r.timing.startTime,
+            finishTime: r.timing.finishTime,
+            runningTimeAdjustment: r.timing.runningTimeAdjustment,
+          },
+        });
+        const mine = standings.find((s) => s.runner.id === runner.id);
+        if (mine && mine.place > 0) {
+          position = { rank: mine.place, total: standings.filter((s) => s.place > 0).length };
         }
       }
 
@@ -279,6 +253,7 @@ export const raceRouter = router({
           status: r.timing.status,
         },
         controls: splits,
+        finish,
         course: r.course
           ? {
               id: r.course.id,

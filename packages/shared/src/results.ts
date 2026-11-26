@@ -128,6 +128,8 @@ export function computeClassPlacements(
         runningTimeDs(r.startTime, r.finishTime) > 0,
     )
     .map((r) => ({ ...r, runningTime: adjustedRunningTime(r) }))
+    // A NoTiming deduction that eats the whole time leaves nothing to rank.
+    .filter((r) => r.runningTime > 0)
     .sort((a, b) => a.runningTime - b.runningTime);
 
   const winnerTime = okRunners.length > 0 ? okRunners[0].runningTime : 0;
