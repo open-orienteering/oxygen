@@ -84,7 +84,7 @@ test("closing the row while a save is in flight keeps the later edit", async ({ 
   const name = page.getByTestId("runner-name");
   await expect(name).toBeVisible({ timeout: 10000 });
 
-  // Hold the first save so the next edit queues behind it.
+  // Hold the first save so the next edits queue behind it.
   const update = /\/trpc\/[^?]*runner\.update/;
   let release!: () => void;
   const gate = new Promise<void>((r) => (release = r));
@@ -98,20 +98,25 @@ test("closing the row while a save is in flight keeps the later edit", async ({ 
   });
 
   const first = page.waitForRequest(update);
-  await name.fill("In Flight Renamed");
+  await name.fill("In Flight First");
   await name.press("Enter");
   await first;
+  // Same field again plus another one, queued behind the held save; the
+  // close-time save must land after it, so the later name wins.
+  await name.fill("In Flight Last");
   await page.getByTestId("runner-bib").fill("B9");
-  await page.keyboard.press("Tab"); // queued: the name save is still held
-  await page.getByRole("cell", { name: /In Flight R/ }).first().click();
+  await page.keyboard.press("Tab");
+  await page.getByRole("cell", { name: /In Flight/ }).first().click();
   await expect(name).toBeHidden();
   release();
 
   await expect(async () => {
     const r = await stored(request, id);
-    expect(r.name).toBe("In Flight Renamed");
+    expect(r.name).toBe("In Flight Last");
     expect(r.bib).toBe("B9");
   }).toPass({ timeout: 10000 });
+  await page.waitForTimeout(1000);
+  expect((await stored(request, id)).name).toBe("In Flight Last");
 });
 
 test("a card held by another runner is refused with a message and the field reverts (WEB-08)", async ({

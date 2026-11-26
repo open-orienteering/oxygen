@@ -133,9 +133,12 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
           setLastSaved(0);
           // Back to the stored value, except where newer text is already
           // queued: that edit goes out next and must stay on screen.
+          // Read now: the updater runs at render, after `.finally` below
+          // may already have sent (and emptied) the queue.
+          const toReset = fields.filter((f) => !(f in pendingRef.current));
           setResetEpochs((prev) => {
             const next = { ...prev };
-            for (const f of fields) if (!(f in pendingRef.current)) next[f] = (next[f] ?? 0) + 1;
+            for (const f of toReset) next[f] = (next[f] ?? 0) + 1;
             return next;
           });
           utils.runner.getById.invalidate({ id: runnerId });
@@ -660,10 +663,14 @@ export function TimeField({
   useLayoutEffect(() => {
     shownRef.current = shown;
   });
+  const editingRef = useRef(editing);
+  useLayoutEffect(() => {
+    editingRef.current = editing;
+  });
   useEffect(() => {
-    if (resetEpoch === 0) return;
+    // Not while the field is being typed in again: that text is newer.
+    if (resetEpoch === 0 || editingRef.current) return;
     setText(shownRef.current);
-    setEditing(false);
     setInvalid(false);
   }, [resetEpoch]);
 
@@ -789,7 +796,9 @@ function SelectField({
       <SearchableSelect
         value={currentValue}
         onChange={(v) => {
-          if (Number(v) !== currentValue) onSave(field, Number(v));
+          // Re-picking "-" for a runner without a class changes nothing.
+          if (Number(v) === 0 && currentValue === 0) return;
+          onSave(field, Number(v));
         }}
         placeholder="-"
         searchPlaceholder={t("searchClasses")}

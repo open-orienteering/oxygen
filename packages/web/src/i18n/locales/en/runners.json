@@ -36,7 +36,7 @@
   "female": "Female",
   "nameRequired": "Name is required",
   "classRequired": "Class is required",
-  "invalidCardNo": "Enter a card number of 0 or more",
+  "invalidCardNo": "Enter a valid card number",
   "saving": "Saving...",
   "saved": "Saved",
   "loading": "Loading...",
