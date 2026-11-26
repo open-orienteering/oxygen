@@ -779,13 +779,17 @@ async function applyEvent(
 
     case "start.adjusted": {
       // Draw / manual start-time set — last-write-wins.
-      const { startTime } = event.payload as { startTime: number };
+      const { startTime, startNo } = event.payload as { startTime: number; startNo?: unknown };
       const runner = await resolveRunner(db, eventId, event.payload);
       if (runner) {
         await db.runner.update({
           where: { id: runner.id },
           data: {
             startTime: startTime > 0 ? toRelative(startTime, zeroTime) : 0,
+            // Draws carry the start number (RES-17); older entries don't.
+            ...(typeof startNo === "number" && Number.isInteger(startNo) && startNo >= 0
+              ? { startNo }
+              : {}),
           },
         });
       }

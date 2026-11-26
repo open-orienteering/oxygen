@@ -15,6 +15,8 @@ function previewClass(over: Partial<DrawPreviewClass> & { classId: number }): Dr
     corridor: 0,
     computedFirstStart: firstStart,
     interval,
+    skippedStarted: 0,
+    replaced: 0,
     entries: Array.from({ length: runnerCount }, (_, i) => ({
       runnerId: i + 1,
       name: `R${i}`,
@@ -27,7 +29,7 @@ function previewClass(over: Partial<DrawPreviewClass> & { classId: number }): Dr
 }
 
 function preview(classes: DrawPreviewClass[]): DrawPreviewResult {
-  return { classes, warnings: [] };
+  return { classes, warnings: [], seed: 1, previewToken: "t", skippedStarted: 0, replaced: 0 };
 }
 
 describe("buildTimelineBars", () => {

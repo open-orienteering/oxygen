@@ -17,6 +17,15 @@ import {
 } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
 
+/** Preview, then apply exactly what was previewed (draw.execute needs the seed and token). */
+async function applyDraw(
+  c: ReturnType<typeof makeCaller>,
+  input: Parameters<ReturnType<typeof makeCaller>["draw"]["preview"]>[0],
+) {
+  const preview = await c.draw.preview(input);
+  return c.draw.execute({ ...input, seed: preview.seed, previewToken: preview.previewToken });
+}
+
 const MIN = 600; // one minute in deciseconds
 const TEN_OCLOCK = 360_000;
 
@@ -137,7 +146,7 @@ describe("draw.preview", () => {
 
 describe("draw.execute", () => {
   it("writes startTime + startNo to each active runner", async () => {
-    const res = await caller.draw.execute({
+    const res = await applyDraw(caller, {
       classes: [{ classId: classSeq, method: "random", interval: 600 }],
       settings: {
         firstStart: 360_000,
@@ -385,7 +394,7 @@ describe("draw — start lanes, stagger and offsets", () => {
 
   it("persists offset start times on execute", async () => {
     const offset = 300;
-    await laneCaller.draw.execute({
+    await applyDraw(laneCaller, {
       classes: [laneConfig(laneClasses[2], { startOffset: offset })],
       settings: {
         firstStart: TEN_OCLOCK,

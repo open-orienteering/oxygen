@@ -63,7 +63,8 @@ The journaled set is small and closed: punches (`punch.recorded`), card
 reads (`card.read`), starts, finishes (`finish.recorded` / `finish.adjusted`),
 applied results (`result.applied`), runner create/update/delete
 (`runner.registered` / `runner.updated` / `runner.deleted`), draw start times
-(`start.adjusted`) — plus the class/course/control state that result
+(`start.adjusted`, which carries the start number as an optional `startNo`;
+replay applies it when present) — plus the class/course/control state that result
 computation depends on. This is the **dependency closure of live results**:
 state that must survive to the cloud and be visible there while the venue is
 the intermittently-connected writer.

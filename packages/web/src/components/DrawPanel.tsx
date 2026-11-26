@@ -28,6 +28,10 @@ interface ClassConfig {
   courseName: string;
   classType: string;
   runnerCount: number;
+  /** Runners who already have a start time. */
+  drawnCount: number;
+  /** Runners who have finished or have a status. */
+  startedCount: number;
   selected: boolean;
   method: DrawMethod;
   interval: string; // MM:SS format for editing
@@ -83,6 +87,12 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
   const [bulkMethod, setBulkMethod] = useState<DrawMethod>("clubSeparation");
   const [bulkInterval, setBulkInterval] = useState("2:00");
   const [drawComplete, setDrawComplete] = useState(false);
+  // RES-03: who the draw touches. Changing either clears the preview,
+  // because they change the runner set and so the preview token.
+  const [onlyMissing, setOnlyMissing] = useState(false);
+  const [force, setForce] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [staleMessage, setStaleMessage] = useState<string | null>(null);
 
   const [classConfigs, setClassConfigs] = useState<ClassConfig[] | null>(null);
   const [hints, setHints] = useState<HintMap>(new Map());
@@ -101,7 +111,10 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
           courseName: c.courseName,
           classType: c.classType ?? "",
           runnerCount: c.runnerCount,
-          selected: !c.freeStart,
+          drawnCount: c.drawnCount,
+          startedCount: c.startedCount,
+          // Preselect only classes nobody has drawn yet (RES-03).
+          selected: !c.freeStart && c.drawnCount === 0,
           method: "clubSeparation",
           interval: c.startInterval > 0 ? decisToInterval(c.startInterval) : "2:00",
           offset: "",
@@ -118,6 +131,11 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
   const totalRunners = configs
     .filter((c) => c.selected)
     .reduce((sum, c) => sum + c.runnerCount, 0);
+  const selectedStarted = configs
+    .filter((c) => c.selected)
+    .reduce((sum, c) => sum + c.startedCount, 0);
+  const startedOnPreview = preview?.skippedStarted ?? 0;
+  const showForce = force || selectedStarted > 0 || startedOnPreview > 0;
 
   const updateConfig = useCallback(
     (classId: number, update: Partial<ClassConfig>) => {
@@ -163,6 +181,7 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
     ): {
       classes: ClassDrawConfig[];
       settings: DrawSettings;
+      options: { mode: "all" | "onlyMissing"; force: boolean };
     } => {
       const activeHints = hintOverride ?? hints;
       const selected = configs.filter((c) => c.selected);
@@ -186,6 +205,7 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
           staggerOffset: parseMeosTime(stagger),
           minFirstControlGap: parseMeosTime(firstControlGap),
         },
+        options: { mode: onlyMissing ? "onlyMissing" : "all", force },
       };
     },
     [
@@ -197,19 +217,24 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
       stagger,
       firstControlGap,
       hints,
+      onlyMissing,
+      force,
     ],
   );
 
   const handlePreview = useCallback(() => {
     const input = buildInput();
     if (input.classes.length === 0) return;
+    setStaleMessage(null);
+    setConfirming(false);
+    executeMutation.reset();
     previewMutation.mutate(input, {
       onSuccess: (data) => {
         setPreview(data);
         setExpandedPreview(new Set(data.classes.map((c) => c.classId)));
       },
     });
-  }, [buildInput, previewMutation]);
+  }, [buildInput, previewMutation, executeMutation]);
 
   const handleTimelineReorder = useCallback(
     (event: TimelineReorderEvent) => {
@@ -247,7 +272,8 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
 
       setHints(newHints);
 
-      previewMutation.mutate(buildInput(newHints), {
+      // Keep the seed so moving a block does not reshuffle the runners.
+      previewMutation.mutate({ ...buildInput(newHints), seed: preview.seed }, {
         onSuccess: (data) => {
           setPreview(data);
           setExpandedPreview(new Set(data.classes.map((c) => c.classId)));
@@ -257,16 +283,36 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
     [preview, buildInput, previewMutation],
   );
 
-  const handleExecute = useCallback(() => {
+  const runExecute = useCallback(() => {
+    if (!preview) return;
     const input = buildInput();
     if (input.classes.length === 0) return;
-    executeMutation.mutate(input, {
-      onSuccess: () => {
-        setDrawComplete(true);
-        onDrawComplete();
+    setConfirming(false);
+    executeMutation.mutate(
+      { ...input, seed: preview.seed, previewToken: preview.previewToken },
+      {
+        onSuccess: () => {
+          setDrawComplete(true);
+          onDrawComplete();
+        },
+        onError: (err) => {
+          // RES-15: something changed since the preview; it no longer shows
+          // what Apply would write.
+          if (err.data?.code === "CONFLICT") {
+            setStaleMessage(err.message);
+            setPreview(null);
+          }
+        },
       },
-    });
-  }, [buildInput, executeMutation, onDrawComplete]);
+    );
+  }, [buildInput, executeMutation, onDrawComplete, preview]);
+
+  // Ask before replacing start times that are already set (RES-03).
+  const handleExecute = useCallback(() => {
+    if (!preview) return;
+    if (preview.replaced > 0 || force) setConfirming(true);
+    else runExecute();
+  }, [preview, force, runExecute]);
 
   const togglePreviewClass = (classId: number) => {
     setExpandedPreview((prev) => {
@@ -414,6 +460,36 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
               />
             </div>
           </div>
+          <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-2 text-xs text-slate-600">
+            <label className="flex items-center gap-1.5 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={onlyMissing}
+                onChange={(e) => {
+                  setOnlyMissing(e.target.checked);
+                  setPreview(null);
+                }}
+                className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                data-testid="draw-only-missing"
+              />
+              {t("onlyMissing")}
+            </label>
+            {showForce && (
+              <label className="flex items-center gap-1.5 cursor-pointer text-red-700">
+                <input
+                  type="checkbox"
+                  checked={force}
+                  onChange={(e) => {
+                    setForce(e.target.checked);
+                    setPreview(null);
+                  }}
+                  className="rounded border-slate-300 text-red-600 focus:ring-red-500 cursor-pointer"
+                  data-testid="draw-force"
+                />
+                {t("forceStarted", { count: Math.max(selectedStarted, startedOnPreview) })}
+              </label>
+            )}
+          </div>
         </div>
 
         {/* Class Configuration */}
@@ -505,6 +581,21 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
                     </td>
                     <td className="px-3 py-1.5 font-medium text-slate-700">
                       {c.className}
+                      {c.startedCount > 0 ? (
+                        <span
+                          className="ml-2 px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-50 text-red-700"
+                          data-testid={`draw-class-started-${c.classId}`}
+                        >
+                          {t("startedBadge", { count: c.startedCount })}
+                        </span>
+                      ) : c.drawnCount > 0 ? (
+                        <span
+                          className="ml-2 px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-600"
+                          data-testid={`draw-class-drawn-${c.classId}`}
+                        >
+                          {t("drawnBadge")}
+                        </span>
+                      ) : null}
                     </td>
                     <td className="px-3 py-1.5 text-slate-500 hidden sm:table-cell">
                       {c.courseName || "\u2014"}
@@ -577,6 +668,13 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
                 ))}
               </div>
             </div>
+          </div>
+        )}
+
+        {/* Who keeps their start */}
+        {preview && preview.skippedStarted > 0 && (
+          <div className="px-6 py-2 bg-slate-50 border-b border-slate-100 text-xs text-slate-600" data-testid="draw-preview-kept">
+            {t("keptStarted", { count: preview.skippedStarted })}
           </div>
         )}
 
@@ -676,14 +774,59 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
                 <p className="text-sm font-medium text-green-800">
                   {t("drawComplete")}
                 </p>
-                <p className="text-xs text-green-600 mt-0.5">
+                <p className="text-xs text-green-600 mt-0.5" data-testid="draw-complete-detail">
                   {t("drawCompleteDetail", { count: executeMutation.data?.totalDrawn ?? 0 })}
+                  {(executeMutation.data?.skippedStarted ?? 0) > 0 && (
+                    <> {t("keptStarted", { count: executeMutation.data?.skippedStarted ?? 0 })}</>
+                  )}
                 </p>
+                {(executeMutation.data?.warnings.length ?? 0) > 0 && (
+                  <div className="text-xs text-amber-800 mt-1 space-y-0.5">
+                    {executeMutation.data?.warnings.map((w, i) => (
+                      <p key={i}>{w}</p>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           </div>
         )}
       </div>
+
+      {/* Confirm replacing start times */}
+      {confirming && preview && (
+        <div
+          className={`px-6 py-3 border-t text-sm flex flex-wrap items-center justify-between gap-3 ${
+            force ? "bg-red-50 border-red-200 text-red-800" : "bg-amber-50 border-amber-200 text-amber-900"
+          }`}
+          data-testid="draw-confirm"
+        >
+          <p>
+            {force
+              ? t("confirmForce", { count: preview.replaced })
+              : t("confirmReplace", { count: preview.replaced })}
+            {preview.skippedStarted > 0 && <> {t("keptStarted", { count: preview.skippedStarted })}</>}
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setConfirming(false)}
+              className="px-3 py-1.5 text-sm text-slate-600 hover:bg-white/60 rounded-lg cursor-pointer"
+              data-testid="draw-confirm-cancel"
+            >
+              {t("cancelDraw")}
+            </button>
+            <button
+              onClick={runExecute}
+              className={`px-3 py-1.5 text-sm font-medium text-white rounded-lg cursor-pointer ${
+                force ? "bg-red-600 hover:bg-red-700" : "bg-amber-600 hover:bg-amber-700"
+              }`}
+              data-testid="draw-confirm-btn"
+            >
+              {t("confirmApply")}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Sticky footer */}
       <div className="px-6 py-4 border-t border-slate-200 bg-white flex items-center justify-between gap-3">
@@ -706,7 +849,7 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
               </button>
               <button
                 onClick={handleExecute}
-                disabled={!preview || executeMutation.isPending}
+                disabled={!preview || confirming || executeMutation.isPending}
                 className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 data-testid="draw-execute-btn"
               >
@@ -719,8 +862,8 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
 
       {/* Error display */}
       {(previewMutation.isError || executeMutation.isError) && (
-        <div className="px-6 py-3 bg-red-50 border-t border-red-200 text-sm text-red-700">
-          {previewMutation.error?.message || executeMutation.error?.message}
+        <div className="px-6 py-3 bg-red-50 border-t border-red-200 text-sm text-red-700" data-testid="draw-error-message">
+          {staleMessage ? t("stalePreview") : previewMutation.error?.message || executeMutation.error?.message}
         </div>
       )}
     </div>

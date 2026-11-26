@@ -1140,6 +1140,22 @@ export interface DrawPreviewEntry {
   startNo: number;
 }
 
+/**
+ * Which runners a draw touches (review RES-03).
+ * - `all`: every runner in the selected classes, except those who have
+ *   started (finish time, a status, a read card or a punch) unless `force`.
+ * - `onlyMissing`: only runners without a start time (late entries); they
+ *   are appended after the class's last kept start, and the class's first
+ *   start and interval are left as they are.
+ */
+export type DrawMode = "all" | "onlyMissing";
+
+export interface DrawOptions {
+  mode: DrawMode;
+  /** Also redraw runners who have started or finished. */
+  force: boolean;
+}
+
 export interface DrawPreviewClass {
   classId: number;
   className: string;
@@ -1149,11 +1165,28 @@ export interface DrawPreviewClass {
   /** Interval used for this class — the width of each runner's start slot. */
   interval: number;
   entries: DrawPreviewEntry[];
+  /** Runners who have started or finished and keep their start time. */
+  skippedStarted: number;
+  /** Drawn runners who already had a start time that the draw replaces. */
+  replaced: number;
 }
 
 export interface DrawPreviewResult {
   classes: DrawPreviewClass[];
   warnings: string[];
+  /**
+   * The seed the draw was made with. `execute` takes it back so the applied
+   * draw is exactly the previewed one (RES-15).
+   */
+  seed: number;
+  /**
+   * Fingerprint of the previewed result. `execute` recomputes the draw and
+   * refuses with "preview is stale" if anything changed in between.
+   */
+  previewToken: string;
+  /** Totals over all classes. */
+  skippedStarted: number;
+  replaced: number;
 }
 
 /**

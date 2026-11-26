@@ -116,6 +116,15 @@ export interface StartRecordedPayload {
   startTime: number;
 }
 
+/**
+ * A start time set by the draw or by hand. `startNo` is carried by draws
+ * (review RES-17) so a peer replays the start number too; older entries and
+ * manual start edits leave it out, and replay then leaves the number alone.
+ */
+export interface StartAdjustedPayload extends StartRecordedPayload {
+  startNo?: number;
+}
+
 export interface FinishRecordedPayload {
   cardNo: number | null;
   runnerId?: number;
@@ -251,7 +260,7 @@ export interface JournalPayloads {
   "punch.removed": PunchRemovedPayload;
   "punch.updated": PunchUpdatedPayload;
   "start.recorded": StartRecordedPayload;
-  "start.adjusted": StartRecordedPayload;
+  "start.adjusted": StartAdjustedPayload;
   "finish.recorded": FinishRecordedPayload;
   "finish.adjusted": FinishAdjustedPayload;
   "result.applied": ResultAppliedPayload;

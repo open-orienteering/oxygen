@@ -72,5 +72,18 @@
   "staggerTooltipExample": "8 korridorer med 2:00 intervall, förskjutna 1:00 → 4 startande varje minut i stället för 8 varannan minut.",
   "offsetHeader": "Förskjutning",
   "offsetPlaceholder": "—",
-  "offsetHint": "Manuell förskjutning för denna klass (MM:SS). Ersätter korridorförskjutningen."
+  "offsetHint": "Manuell förskjutning för denna klass (MM:SS). Ersätter korridorförskjutningen.",
+  "onlyMissing": "Bara löpare utan starttid",
+  "forceStarted_one": "Lotta även om {{count}} löpare som har startat eller gått i mål",
+  "forceStarted_other": "Lotta även om {{count}} löpare som har startat eller gått i mål",
+  "startedBadge": "{{count}} startade",
+  "drawnBadge": "lottad",
+  "keptStarted_one": "{{count}} löpare som har startat eller gått i mål behåller sin starttid.",
+  "keptStarted_other": "{{count}} löpare som har startat eller gått i mål behåller sina starttider.",
+  "confirmReplace_one": "Detta ersätter starttiden för {{count}} löpare som redan har en.",
+  "confirmReplace_other": "Detta ersätter starttiderna för {{count}} löpare som redan har en.",
+  "confirmForce_one": "Detta skriver även om löpare som har startat eller gått i mål: {{count}} starttid ersätts och deras löptider ändras.",
+  "confirmForce_other": "Detta skriver även om löpare som har startat eller gått i mål: {{count}} starttider ersätts och deras löptider ändras.",
+  "confirmApply": "Ersätt och verkställ",
+  "stalePreview": "Löpare eller klasser har ändrats sedan förhandsgranskningen, så den visar inte längre vad som skulle skrivas. Förhandsgranska igen."
 }
