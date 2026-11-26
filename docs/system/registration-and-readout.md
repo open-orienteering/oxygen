@@ -581,8 +581,11 @@ start number, birth year, sex, nationality, phone, the fee fields (`fee`,
 and the entry date and time stamped by the registering node. A station
 entry carries no entry date or time; the apply stamps it from the entry's
 client timestamp in the event's time zone. A follower
-stores the same row; an absent key keeps the column default, so older
-entries replay unchanged. The offline dialog sends the same form fields.
+stores the same row; an absent key keeps the column default (except the
+entry date and time, stamped as above), so older entries replay unchanged.
+The offline dialog sends the same form fields. An SI owner-data club is
+matched against the club list loaded when the card opens the dialog; a card
+opened before the list has loaded gets no club from its owner data.
 
 **A station registration that cannot be stored is refused.** Pushed from a
 station's outbox (no sync secret), a `runner.registered` whose class is not

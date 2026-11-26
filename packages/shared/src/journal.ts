@@ -201,7 +201,9 @@ export interface RunnerRegisteredPayload {
    * The rest of the entry form (SYNC-12), in the units of the `runner.create`
    * input: money in cents, `finishTime` absolute deciseconds, `status` the
    * numeric runner status. Every key is optional; an absent key keeps the
-   * column default, so entries written before these fields replay unchanged.
+   * column default, so entries written before these fields replay unchanged,
+   * except `entryDate`/`entryTime`, which the apply stamps from the entry's
+   * timestamp in the event's time zone.
    */
   startNo?: number;
   birthYear?: number;

@@ -100,7 +100,7 @@ export async function refreshAfterForward(nameId: string, peerUrl: string, waitM
   if (!secret) return;
   try {
     const db = prisma();
-    const event = await db.event.findFirst({ where: { nameId }, select: { id: true, nameId: true, zeroTime: true } });
+    const event = await db.event.findFirst({ where: { nameId }, select: { id: true, nameId: true, zeroTime: true, timeZone: true } });
     if (!event) return;
     const work = refreshCloudOwnedMaps(db, event, makeLeasePeer(peerUrl, secret)).then(
       () => {},

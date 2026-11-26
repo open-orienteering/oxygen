@@ -369,7 +369,12 @@ export function RegistrationDialog() {
 
   // ── Pending card from context ───────────────────────────
   useEffect(() => {
-    if (!isOpen || !pendingCard) return;
+    // Closed: forget the card, so a reopen with the same card starts fresh.
+    if (!isOpen) {
+      lastPendingCardRef.current = null;
+      return;
+    }
+    if (!pendingCard) return;
     if (lastPendingCardRef.current === pendingCard.cardNo) return;
     lastPendingCardRef.current = pendingCard.cardNo;
 
@@ -870,7 +875,6 @@ export function RegistrationDialog() {
   // Reset form when dialog opens
   useEffect(() => {
     if (isOpen) {
-      lastPendingCardRef.current = null;
       // Don't reset if pendingCard will populate
       if (!pendingCard) {
         clearForm();
@@ -1003,7 +1007,6 @@ export function RegistrationDialog() {
                 value={clubKey}
                 onChange={(v) => {
                   const key = String(v);
-                  // A directory pick stays an option after the search closes.
                   // The pick stays an option after the search closes, and
                   // after a roster refetch drops its club (its last runner
                   // moved): it is submitted with its own name and id.
