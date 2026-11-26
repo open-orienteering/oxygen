@@ -47,19 +47,33 @@ function fakeRemote(db: Db) {
       log.push("ROLLBACK");
       if (snapshot) Object.assign(db, JSON.parse(snapshot));
     },
+    destroy() {
+      log.push("DESTROY");
+      // MySQL rolls back an open transaction when the connection closes.
+      if (snapshot) Object.assign(db, JSON.parse(snapshot));
+    },
     async query(options, values = []) {
       const sql = options.sql.replace(/\s+/g, " ").trim();
       log.push(sql.split(" ").slice(0, 3).join(" "));
-      if (fail && sql.startsWith(fail)) throw Object.assign(new Error("boom"), { code: "PROTOCOL_CONNECTION_LOST" });
+      if (fail && sql.startsWith(fail.prefix)) throw Object.assign(new Error("boom"), { code: fail.code });
+      if (sql === "ROLLBACK") {
+        if (snapshot) Object.assign(db, JSON.parse(snapshot));
+        return [{}, []] as never;
+      }
       const v = values as Array<string | number>;
+      // MySQL's default collation compares case-insensitively.
+      const inCi = (list: unknown[], x: string) => list.some((y) => String(y).toLowerCase() === x.toLowerCase());
       const tavid = Number(v[0]);
       const rest = v.slice(1);
       const ret = (rows: unknown) => [rows, []] as never;
       if (sql.startsWith("SELECT dbid, name, club, class, bib FROM runners")) {
-        return ret(db.runners.filter((r) => r.tavid === tavid && rest.includes(r.class)));
+        if (sql.includes("AND dbid IN")) {
+          return ret(db.runners.filter((r) => r.tavid === tavid && rest.includes(r.dbid)));
+        }
+        return ret(db.runners.filter((r) => r.tavid === tavid && inCi(rest, r.class)));
       }
       if (sql.startsWith("SELECT classname, corder, code, name FROM splitcontrols")) {
-        return ret(db.splitcontrols.filter((r) => r.tavid === tavid && rest.includes(r.classname)));
+        return ret(db.splitcontrols.filter((r) => r.tavid === tavid && inCi(rest, r.classname)));
       }
       if (sql.startsWith("SELECT dbid, control, time, status FROM results")) {
         return ret(db.results.filter((r) => r.tavid === tavid && rest.includes(r.dbid)));
@@ -120,12 +134,12 @@ function fakeRemote(db: Db) {
       throw new Error(`fake remote: unexpected statement ${sql}`);
     },
   };
-  let fail: string | null = null;
+  let fail: { prefix: string; code: string } | null = null;
   return {
     conn,
     log,
-    failOn(prefix: string | null) {
-      fail = prefix;
+    failOn(prefix: string | null, code = "ER_PARSE_ERROR") {
+      fail = prefix ? { prefix, code } : null;
     },
   };
 }
@@ -164,7 +178,7 @@ function source(runners: LiveResultsSourceRunner[], over: Partial<LiveResultsSou
 }
 
 const TAVID = 4242;
-const OWNED = ["H21", ""];
+const OWNED = ["H21"];
 
 async function cycle(remote: ReturnType<typeof fakeRemote>, src: LiveResultsSource) {
   return pushLiveResultsRows(remote.conn, TAVID, buildLiveResultsRows(src), OWNED);
@@ -335,6 +349,35 @@ describe("pushLiveResultsRows across cycles (SYNC-15)", () => {
     await expect(cycle(remote, source([runner(1, { startTime: 6000 })]))).rejects.toThrow("boom");
     expect(remote.log.at(-1)).toBe("ROLLBACK");
     expect(db).toEqual(emptyDb());
+  });
+
+  it("a timed-out or lost connection is destroyed, not rolled back behind the stalled statement", async () => {
+    const db = emptyDb();
+    const remote = fakeRemote(db);
+    remote.failOn("INSERT INTO results", "PROTOCOL_SEQUENCE_TIMEOUT");
+    await expect(cycle(remote, source([runner(1, { startTime: 6000 })]))).rejects.toThrow("boom");
+    expect(remote.log.at(-1)).toBe("DESTROY");
+    expect(remote.log).not.toContain("ROLLBACK");
+    expect(db).toEqual(emptyDb());
+  });
+
+  it("a runner under another client's class name that differs only in case is not Oxygen's", async () => {
+    const db = emptyDb();
+    db.runners.push({ tavid: TAVID, dbid: 78, name: "MeOS lower", club: "", class: "h21", bib: "" });
+    db.splitcontrols.push({ tavid: TAVID, classname: "h21", corder: 1, code: 1050, name: "MeOS radio" });
+    const remote = fakeRemote(db);
+    await cycle(remote, source([runner(1, { startTime: 6000 })]));
+    expect(db.runners.map((r) => r.dbid).sort()).toEqual([1, 78]);
+    expect(db.splitcontrols.some((r) => r.classname === "h21")).toBe(true);
+  });
+
+  it("a wanted runner filed under a foreign class name is updated, not duplicated", async () => {
+    const db = emptyDb();
+    db.runners.push({ tavid: TAVID, dbid: 1, name: "Old", club: "", class: "Renamed", bib: "" });
+    const remote = fakeRemote(db);
+    await cycle(remote, source([runner(1, { startTime: 6000 })]));
+    expect(db.runners).toHaveLength(1);
+    expect(db.runners[0].class).toBe("H21");
   });
 });
 

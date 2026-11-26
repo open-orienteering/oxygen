@@ -138,8 +138,12 @@ hold (`buildLiveResultsRows`, pure), reads what the remote holds in
 Oxygen's scope, and writes only the difference in one MySQL transaction
 (`pushLiveResultsRows`). Per event, the manager runs one cycle at a time:
 a tick that finds the previous cycle still running is skipped, and a
-manual `pushNow` waits for it and then runs. `lastPush` is the start time
-of the last successful cycle; a skipped tick changes no status. See
+manual `pushNow` waits for it and then runs. A cycle has a 2-minute
+deadline and every statement a 15 s timeout; on a timeout or lost
+connection the connection is destroyed (MySQL rolls the transaction back)
+rather than rolled back behind the stalled statement, so the guard always
+clears and `lastError` is set. `lastPush` is the start time of the last
+successful cycle; a skipped tick changes no status. See
 [bugfixes/liveresults-single-owner-and-incremental-push.md](../bugfixes/liveresults-single-owner-and-incremental-push.md).
 
 ## Defence in depth on the ROC watermark

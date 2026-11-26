@@ -217,7 +217,7 @@ reached the cloud.
 | `cardFeeCents` | `event.setCardFee` | venue-owned |
 | `airPlus`, `awakeHours` | `control.setAirPlusConfig` | venue-owned |
 | `paymentMethods`, `swishNumber`, `swishPayeeName`, `printRegistrationReceipt`, `registrationReceiptMessage`, `finishReceiptMessage`, `receiptFriskvardNote`, `organizerEventorId`, `orgNumber`, `vatExempt` | `event.setRegistrationConfig` (`organizerEventorId` is also set when an Eventor import creates the event) | venue-owned |
-| `googleSheetsWebhookUrl` | `event.setGoogleSheetsConfig` (the node that stores readouts pushes to the sheet) | venue-owned |
+| `googleSheetsWebhookUrl` | `event.setGoogleSheetsConfig` (the cloud pushes readouts to the sheet, the box's shipped ones included; a box with a peer does not push) | venue-owned |
 | `kind`, `kindCustom` | `event.updateType` | cloud-owned, forwarded |
 | `autoOverprintCuts` | `course.setOverprintCuts` | cloud-owned, forwarded (a layout flag, row G18) |
 | everything else (name, organizer, fees, LiveResults, Eventor…) | forwarded writers | cloud-owned |
@@ -302,10 +302,9 @@ peer's shipper, the pull side of the shipper):
   idempotency check. The journal row going in first makes two concurrent
   ingests of one id serialize on the primary key: the loser sees the winner's
   row and reports `synced`. Post-commit effects (the Google Sheets push of a
-  `card.read`) run after the commit, on the singleton client, and only for
-  entries a station sent to this node: entries shipped from or pulled off
-  another node (sync secret, or the shipper's pull) skip them, because the
-  node that journaled them already ran them (SYNC-14).
+  `card.read`) run after the commit, on the singleton client. On a venue box
+  with a peer the Sheets push is a no-op; the cloud pushes the entry when
+  the box ships it (SYNC-14).
 - **Idempotency is per event.** An id already journaled under the same event
   is `synced`; under another event it is refused as `ENTRY_IN_OTHER_EVENT`.
   Row ids inside payloads follow the same rule: a `tempId` or punch `id` that
@@ -868,10 +867,11 @@ Deferred until after venue packaging lands; mechanically it is
   the latent bugs that motivated this redesign.)
 - **Single-owner background services.** The LiveResults pusher runs on
   the cloud only: the background reconcile skips it on `NODE_ROLE=venue`
-  (`publishesLiveResults()`), so a venue copy never double-pushes. A
-  readout's Google Sheets push runs on the node that stored it, never again
-  where it is ingested from another node (`fromNode` in
-  `ingestJournalEntries`).
+  (`publishesLiveResults()`), so a venue copy never double-pushes. The
+  Google Sheets readout backup has one owner too: the cloud, which pushes
+  every readout it stores or ingests, the box's shipped `card.read`
+  included. A box that ships to a peer pushes nothing to the sheet
+  (`pushesReadoutsToSheet()` in `sheetsBackup.ts`); a standalone box does.
 - **Large/streaming endpoints** (map tiles, 50 MB uploads) are cloud-owned
   non-critical endpoints; they are simply unavailable at an offline venue.
 - **Venue box sleep.** A laptop venue node must not sleep mid-race; the

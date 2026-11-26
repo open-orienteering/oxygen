@@ -1,4 +1,5 @@
 import type { PrismaClient } from "./generated/prisma/client.js";
+import { nodeRole, syncPeerUrl } from "./sync/nodeIdentity.js";
 
 export interface SheetRow {
   sheet?: string;
@@ -89,6 +90,18 @@ function fireAndForget(client: PrismaClient, eventId: bigint, payload: Record<st
 }
 
 /**
+ * Whether this node pushes readouts to the backup sheet. The cloud does, for
+ * every readout it stores or ingests (a shipped `card.read` included). A
+ * venue box that ships to a peer leaves it to the cloud: when both pushed,
+ * the sheet got every readout twice (SYNC-14), and the box's fire-and-forget
+ * push is lost when it has no uplink at readout, while the shipped entry
+ * reaches the cloud later. A standalone box (no peer) pushes itself.
+ */
+export function pushesReadoutsToSheet(): boolean {
+  return !(nodeRole() === "venue" && syncPeerUrl() !== null);
+}
+
+/**
  * Fire-and-forget push of a card readout row to the "Readouts" sheet.
  */
 export function pushToGoogleSheet(
@@ -96,6 +109,7 @@ export function pushToGoogleSheet(
   eventId: bigint,
   row: SheetRow,
 ): void {
+  if (!pushesReadoutsToSheet()) return;
   fireAndForget(client, eventId, { ...row, sheet: "Readouts" });
 }
 

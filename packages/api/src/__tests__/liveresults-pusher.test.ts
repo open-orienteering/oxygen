@@ -313,6 +313,21 @@ describe("getLiveResultsPool connection cache (EVT-16)", () => {
     expect(await getLiveResultsPool()).toBe(p1);
   });
 
+  it("an endpoint outage at the TTL keeps the working pool and retries a minute later", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    _resetLiveResultsPool();
+    const f = mockFetch({ body: "db.example;u;p;d" }, { status: 502, body: "down" }, { body: "db.example;u;p;d" });
+    const p1 = await getLiveResultsPool();
+    vi.setSystemTime(Date.now() + 11 * 60_000);
+    expect(await getLiveResultsPool()).toBe(p1);
+    expect(f).toHaveBeenCalledTimes(2);
+    expect(await getLiveResultsPool()).toBe(p1);
+    expect(f).toHaveBeenCalledTimes(2);
+    vi.setSystemTime(Date.now() + 61_000);
+    expect(await getLiveResultsPool()).toBe(p1);
+    expect(f).toHaveBeenCalledTimes(3);
+  });
+
   it("a changed connection string builds a new pool", async () => {
     _resetLiveResultsPool();
     mockFetch({ body: "db.example;u;p;d" }, { body: "db2.example;u;p2;d" });

@@ -501,14 +501,24 @@ export const eventRouter = router({
       // Per-event settings rows have no foreign key: drop the ROC puller's
       // config/watermark/status and the LiveResults push status with the
       // event, so nothing keyed by a purged id is left behind (MC-28).
-      await tx.setting.deleteMany({
+      // Matched in JS: `startsWith` is a LIKE, where `_` is a wildcard.
+      const ids = new Set(doomed.map(({ id }) => String(id)));
+      const candidates = await tx.setting.findMany({
         where: {
-          OR: doomed.flatMap(({ id }) => [
-            { key: { startsWith: `online_input_${id}_` } },
-            { key: `liveresults_${id}_status` },
-          ]),
+          OR: [
+            { key: { startsWith: "online_input_" } },
+            { key: { startsWith: "liveresults_" } },
+          ],
         },
+        select: { key: true },
       });
+      const keys = candidates
+        .map(({ key }) => key)
+        .filter((key) => {
+          const m = /^online_input_(\d+)_/.exec(key) ?? /^liveresults_(\d+)_status$/.exec(key);
+          return m !== null && ids.has(m[1]);
+        });
+      if (keys.length > 0) await tx.setting.deleteMany({ where: { key: { in: keys } } });
       return tx.event.deleteMany({
         where: { id: { in: doomed.map((e) => e.id) } },
       });

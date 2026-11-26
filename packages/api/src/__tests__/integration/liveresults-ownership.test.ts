@@ -3,8 +3,9 @@
  *  - MC-29: the tavid is never set by hand and is unique per event.
  *  - MC-28: a soft-deleted event stops publishing and polling; a purge
  *    drops its per-event settings rows.
- *  - SYNC-14 (Sheets half): a readout shipped from another node is not
- *    pushed to the backup sheet again; a station's own push still is.
+ *  - SYNC-14 (Sheets half): the cloud pushes a readout shipped from the
+ *    venue box to the backup sheet (the box with a peer leaves it to the
+ *    cloud, see sheets-owner.test.ts).
  */
 
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
@@ -143,7 +144,14 @@ describe("MC-28: a deleted event stops publishing", () => {
       `online_input_${ev.eventId}_poll_count`,
       `liveresults_${ev.eventId}_status`,
     ];
-    const keptKeys = [`online_input_${keep.eventId}_config`, `liveresults_${keep.eventId}_status`];
+    const keptKeys = [
+      `online_input_${keep.eventId}_config`,
+      `liveresults_${keep.eventId}_status`,
+      // `_` is a LIKE wildcard: an id that the doomed id prefixes must survive.
+      `online_input_${ev.eventId}0_config`,
+      `online_input_${ev.eventId}1_poll_count`,
+      `liveresults_${ev.eventId}0_status`,
+    ];
     try {
       for (const key of [...doomedKeys, ...keptKeys]) {
         await ev.db.setting.upsert({ where: { key }, create: { key, value: "{}" }, update: {} });
@@ -163,7 +171,7 @@ describe("MC-28: a deleted event stops publishing", () => {
   });
 });
 
-describe("SYNC-14: Sheets push only on the node that stored the readout", () => {
+describe("SYNC-14: the cloud pushes every stored readout to the sheet", () => {
   const SECRET = "liveresults-own-secret";
   let prevSecret: string | undefined;
   let card = 93000;
@@ -199,7 +207,7 @@ describe("SYNC-14: Sheets push only on the node that stored the readout", () => 
     expect(sheetPushes.count).toBe(1);
   });
 
-  it("a readout shipped by the venue node is stored but not pushed again", async () => {
+  it("a readout shipped by the venue node is stored and pushed (the box did not push it)", async () => {
     sheetPushes.count = 0;
     const e = readout();
     const res = await makeCaller(ctx.event, { syncSecret: SECRET, peerNodeId: "venue-1" } as never).events.push({
@@ -208,6 +216,6 @@ describe("SYNC-14: Sheets push only on the node that stored the readout", () => 
     expect(res.failed).toEqual([]);
     expect(res.synced).toContain(e.id);
     expect(await ctx.db.cardReadout.count({ where: { eventId: ctx.eventId, cardNo: e.payload.cardNo } })).toBe(1);
-    expect(sheetPushes.count).toBe(0);
+    expect(sheetPushes.count).toBe(1);
   });
 });

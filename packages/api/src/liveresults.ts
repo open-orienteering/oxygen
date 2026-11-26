@@ -200,6 +200,12 @@ const STATEMENT_TIMEOUT_MS = 15_000;
 let pool: mysql.Pool | null = null;
 let poolCredentials: string | null = null;
 let poolFetchedAt = 0;
+/** A connection error was seen: a failed refetch must not fall back to this pool. */
+let poolSuspect = false;
+/** After a failed refetch with a working pool, try again this much later. */
+const REFETCH_RETRY_MS = 60_000;
+/** How long an old pool's connections may finish their cycle after a swap. */
+const OLD_POOL_GRACE_MS = 120_000;
 
 export interface LiveResultsCredentials {
   host: string;
@@ -249,16 +255,25 @@ const CONNECTION_ERROR_CODES = new Set([
   "ENOTFOUND",
   "PROTOCOL_CONNECTION_LOST",
   "PROTOCOL_SEQUENCE_TIMEOUT",
+  "ECONNRESET",
+  "EPIPE",
+  "EHOSTUNREACH",
 ]);
+
+/** Whether the error leaves the connection unusable (or its state unknown). */
+export function isConnectionError(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  return typeof code === "string" && CONNECTION_ERROR_CODES.has(code);
+}
 
 /**
  * Forget the cached connection string after a connection or auth error,
  * so the next cycle fetches it again (the remote credentials rotate).
  */
 export function noteLiveResultsError(err: unknown): void {
-  const code = (err as { code?: unknown } | null)?.code;
-  if (typeof code === "string" && CONNECTION_ERROR_CODES.has(code)) {
+  if (isConnectionError(err)) {
     poolFetchedAt = 0;
+    poolSuspect = true;
   }
 }
 
@@ -270,8 +285,21 @@ export function noteLiveResultsError(err: unknown): void {
  */
 export async function getLiveResultsPool(): Promise<mysql.Pool> {
   if (pool && Date.now() - poolFetchedAt < CONNECTION_STRING_TTL_MS) return pool;
-  const connStr = await fetchConnectionString();
+  let connStr: string;
+  try {
+    connStr = await fetchConnectionString();
+  } catch (err) {
+    // The config endpoint is down but the pool has given no trouble: keep
+    // pushing with it and ask again in a minute.
+    if (pool && !poolSuspect) {
+      poolFetchedAt = Date.now() - CONNECTION_STRING_TTL_MS + REFETCH_RETRY_MS;
+      console.warn("[LiveResults] connection settings refetch failed, keeping the pool:", err);
+      return pool;
+    }
+    throw err;
+  }
   poolFetchedAt = Date.now();
+  poolSuspect = false;
   if (pool && poolCredentials === connStr) return pool;
   const { host, user, password, database } = parseConnectionString(connStr);
   const next = mysql.createPool({
@@ -290,7 +318,9 @@ export async function getLiveResultsPool(): Promise<mysql.Pool> {
   const old = pool;
   pool = next;
   poolCredentials = connStr;
-  if (old) void old.end().catch(() => {});
+  // `end()` closes connections in use too: give a running cycle time to
+  // finish on the old pool first.
+  if (old) setTimeout(() => void old.end().catch(() => {}), OLD_POOL_GRACE_MS).unref();
   return pool;
 }
 
@@ -300,6 +330,7 @@ export function _resetLiveResultsPool(): void {
   pool = null;
   poolCredentials = null;
   poolFetchedAt = 0;
+  poolSuspect = false;
   if (old) void old.end().catch(() => {});
 }
 
@@ -312,6 +343,8 @@ export interface LiveResultsConn {
   beginTransaction(): Promise<void>;
   commit(): Promise<void>;
   rollback(): Promise<void>;
+  /** Close the socket now; the pool replaces the connection. */
+  destroy(): void;
 }
 
 function exec<T extends mysql.RowDataPacket[] | mysql.ResultSetHeader>(
@@ -628,9 +661,9 @@ function chunks<T>(items: T[], size = CHUNK): T[][] {
 }
 
 /**
- * Read what the remote holds in Oxygen's scope: runner rows filed under a
- * class name Oxygen owns, result rows of those runners and of the wanted
- * dbids, and split controls of Oxygen class names.
+ * Read what the remote holds in Oxygen's scope: runner rows Oxygen wants or
+ * filed under exactly one of its class names, result rows of those runners
+ * and of the wanted dbids, and split controls of Oxygen class names.
  */
 async function readRemoteScope(
   conn: LiveResultsConn,
@@ -639,28 +672,41 @@ async function readRemoteScope(
   wantedDbids: number[],
 ): Promise<LiveResultsRows> {
   const remote: LiveResultsRows = { runners: [], results: [], splitcontrols: [] };
-  for (const names of chunks(ownedClassnames)) {
+  // MySQL compares case- and accent-insensitively; ownership is the exact
+  // name, so a MeOS class "h21" beside Oxygen's "H21" is not Oxygen's.
+  const owned = new Set(ownedClassnames.filter((n) => n.length > 0));
+  const wanted = new Set(wantedDbids);
+  const seen = new Set<number>();
+  const takeRunner = (r: mysql.RowDataPacket) => {
+    const row: LiveResultsRunnerRow = {
+      dbid: Number(r.dbid),
+      name: String(r.name ?? ""),
+      club: String(r.club ?? ""),
+      class: String(r.class ?? ""),
+      bib: String(r.bib ?? ""),
+    };
+    if (seen.has(row.dbid)) return;
+    // A runner row is in scope when Oxygen wants that dbid, or when it is
+    // filed under one of Oxygen's class names (then it is Oxygen's to clear).
+    if (!wanted.has(row.dbid) && !owned.has(row.class)) return;
+    seen.add(row.dbid);
+    remote.runners.push(row);
+  };
+  for (const names of chunks([...owned])) {
     const ph = names.map(() => "?").join(",");
     const [runners] = await exec<mysql.RowDataPacket[]>(
       conn,
       `SELECT dbid, name, club, class, bib FROM runners WHERE tavid = ? AND class IN (${ph})`,
       [tavid, ...names],
     );
-    for (const r of runners) {
-      remote.runners.push({
-        dbid: Number(r.dbid),
-        name: String(r.name ?? ""),
-        club: String(r.club ?? ""),
-        class: String(r.class ?? ""),
-        bib: String(r.bib ?? ""),
-      });
-    }
+    runners.forEach(takeRunner);
     const [splits] = await exec<mysql.RowDataPacket[]>(
       conn,
       `SELECT classname, corder, code, name FROM splitcontrols WHERE tavid = ? AND classname IN (${ph})`,
       [tavid, ...names],
     );
     for (const r of splits) {
+      if (!owned.has(String(r.classname))) continue;
       remote.splitcontrols.push({
         classname: String(r.classname),
         corder: Number(r.corder),
@@ -668,6 +714,15 @@ async function readRemoteScope(
         name: String(r.name ?? ""),
       });
     }
+  }
+  for (const ids of chunks(wantedDbids)) {
+    const ph = ids.map(() => "?").join(",");
+    const [runners] = await exec<mysql.RowDataPacket[]>(
+      conn,
+      `SELECT dbid, name, club, class, bib FROM runners WHERE tavid = ? AND dbid IN (${ph})`,
+      [tavid, ...ids],
+    );
+    runners.forEach(takeRunner);
   }
   const dbids = [...new Set([...remote.runners.map((r) => r.dbid), ...wantedDbids])];
   for (const ids of chunks(dbids)) {
@@ -787,7 +842,12 @@ export async function pushLiveResultsRows(
       deleted: diff.deleteRunnerDbids.length + diff.deleteResults.length + diff.deleteSplits.length,
     };
   } catch (err) {
-    await conn.rollback().catch(() => {});
+    // A timed-out statement is still at the head of the connection's queue
+    // (mysql2 only rejects the caller), so a ROLLBACK would wait behind it
+    // until TCP gives up. Destroy the connection instead: MySQL rolls back
+    // an open transaction when its connection closes.
+    if (isConnectionError(err)) conn.destroy();
+    else await exec(conn, "ROLLBACK", []).catch(() => conn.destroy());
     throw err;
   }
 }
@@ -869,7 +929,7 @@ async function loadLiveResultsSource(
     }
   }
 
-  const ownedClassnames = [...splitcontrolClassnamesToReplace(allClasses), ""];
+  const ownedClassnames = splitcontrolClassnamesToReplace(allClasses);
   return {
     source: {
       zeroTime: event.zeroTime,
@@ -882,17 +942,46 @@ async function loadLiveResultsSource(
   };
 }
 
+/** Longest a cycle may take before it is abandoned and its connection closed. */
+const CYCLE_DEADLINE_MS = 120_000;
+
 export async function syncAll(tavid: number, eventId: bigint): Promise<SyncStats> {
   const { source, ownedClassnames } = await loadLiveResultsSource(eventId);
   const desired = buildLiveResultsRows(source);
   const conn = await (await getLiveResultsPool()).getConnection();
+  let destroyed = false;
+  const tracked: LiveResultsConn = {
+    query: (options, values) => conn.query(options, values),
+    beginTransaction: () => conn.beginTransaction(),
+    commit: () => conn.commit(),
+    rollback: () => conn.rollback(),
+    destroy() {
+      destroyed = true;
+      conn.destroy();
+    },
+  };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(Object.assign(new Error(`LiveResults push took over ${CYCLE_DEADLINE_MS / 1000} s`), {
+        code: "PROTOCOL_SEQUENCE_TIMEOUT",
+      }));
+    }, CYCLE_DEADLINE_MS);
+  });
   try {
-    return await pushLiveResultsRows(conn, tavid, desired, ownedClassnames);
+    // The deadline makes sure the cycle settles (and the manager's per-event
+    // guard clears, with `lastError` set) even on a black-holed link.
+    return await Promise.race([pushLiveResultsRows(tracked, tavid, desired, ownedClassnames), deadline]);
   } catch (err) {
     noteLiveResultsError(err);
+    if (isConnectionError(err) && !destroyed) {
+      destroyed = true;
+      conn.destroy();
+    }
     throw err;
   } finally {
-    conn.release();
+    clearTimeout(timer);
+    if (!destroyed) conn.release();
   }
 }
 
@@ -1096,12 +1185,18 @@ export async function loadPushStatus(
  * Record the outcome of one push cycle. Only the lease holder pushes, so
  * the read-modify-write on `pushCount` has a single writer.
  */
-async function recordPush(eventId: bigint, error: string | null): Promise<void> {
+async function recordPush(
+  eventId: bigint,
+  error: string | null,
+  startedAt: string,
+): Promise<void> {
   const prev = await loadPushStatus(eventId);
   const next: PersistedPushStatus = error
     ? { ...prev, lastError: error }
     : {
-        lastPush: new Date().toISOString(),
+        // When the cycle read the event: what the public results show is
+        // as of then, not as of when the last statement returned.
+        lastPush: startedAt,
         pushCount: prev.pushCount + 1,
         lastError: null,
       };
@@ -1114,14 +1209,16 @@ async function recordPush(eventId: bigint, error: string | null): Promise<void> 
  * tests can drive it with plain stubs.
  */
 const persistingSync: SyncFn = async (tavid, eventId) => {
+  const startedAt = new Date().toISOString();
   try {
     const stats = await syncAll(tavid, eventId);
-    await recordPush(eventId, null).catch(() => {});
+    await recordPush(eventId, null, startedAt).catch(() => {});
     return stats;
   } catch (err) {
     await recordPush(
       eventId,
       err instanceof Error ? err.message : String(err),
+      startedAt,
     ).catch(() => {});
     throw err;
   }
