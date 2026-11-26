@@ -49,7 +49,7 @@ import { TRPCError } from "@trpc/server";
 import { runWithActor } from "../auth.js";
 import { capabilitiesForEntry } from "../journalCapabilities.js";
 import { REFERENCE_ENTITIES, type ReferenceEntity } from "../referenceJournal.js";
-import { toRelative } from "../timeConvert.js";
+import { toRelative, nowMeosDate, nowMeosTime, eventTimeZone } from "../timeConvert.js";
 import { liveCardId } from "../cardLink.js";
 import {
   encodeHlc,
@@ -269,6 +269,7 @@ export async function ingestJournalEntries(
         });
         const outcome = await applyEvent(tx, event.id, event.zeroTime, entry, {
           strict: opts.strict === true,
+          timeZone: eventTimeZone(event),
         });
         // A decision this node made while applying (a station registration's
         // variant, F6b) is journaled after the entry, so it sorts behind it,
@@ -721,7 +722,7 @@ async function applyEvent(
   eventId: bigint,
   zeroTime: number,
   event: OfflineEvent,
-  opts: { strict: boolean } = { strict: false },
+  opts: { strict: boolean; timeZone?: string } = { strict: false },
 ): Promise<ApplyOutcome> {
   switch (event.type) {
     case "finish.recorded": {
@@ -931,8 +932,11 @@ async function applyEvent(
           ...(int(p.paid) !== undefined ? { paidCents: int(p.paid) } : {}),
           ...(int(p.payMode) !== undefined ? { payMode: int(p.payMode) } : {}),
           ...(int(p.cardFee) !== undefined ? { cardFeeCents: int(p.cardFee) } : {}),
-          ...(int(p.entryDate) !== undefined ? { entryDate: int(p.entryDate) } : {}),
-          ...(int(p.entryTime) !== undefined ? { entryTime: int(p.entryTime) } : {}),
+          // Entry date/time: as stamped by the registering node; a station
+          // entry has none, so it is stamped from when it was registered
+          // (the entry's client timestamp), in the event's time zone.
+          entryDate: int(p.entryDate) ?? nowMeosDate(new Date(event.timestamp), opts.timeZone),
+          entryTime: int(p.entryTime) ?? nowMeosTime(new Date(event.timestamp), opts.timeZone),
           ...(status !== undefined ? { status: valueToRunnerStatus(status) } : {}),
           ...(finish !== undefined ? { finishTime: finish > 0 ? toRelative(finish, zeroTime) : finish } : {}),
         },

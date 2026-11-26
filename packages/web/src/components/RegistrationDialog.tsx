@@ -16,7 +16,6 @@ import {
   NO_CLUB,
   findClubOption,
   mergeClubOptions,
-  noRosterMatch,
   optionForClub,
   resolveClubKey,
   rosterClubOptions,
@@ -85,6 +84,7 @@ export function RegistrationDialog() {
   // the printing all run inside it (WEB-20).
   const [submitting, setSubmitting] = useState(false);
   const submittingRef = useRef(false);
+  const printChainRef = useRef<Promise<void>>(Promise.resolve());
 
   // Autocomplete state
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -133,7 +133,10 @@ export function RegistrationDialog() {
   }, [clubSearch]);
   // A club not yet in the event: searched in the club directory when the
   // roster has no match (online), or in the cached runner DB's clubs.
-  const wantDirectory = noRosterMatch(mergeClubOptions(rosterClubs, adHocClubs), debouncedClubSearch);
+  // Directory hits are listed under the roster for any search of two or
+  // more characters, so a club whose name is part of a roster club's is
+  // still reachable.
+  const wantDirectory = debouncedClubSearch.length >= 2;
   const directorySearch = trpc.club.searchDirectory.useQuery(
     { query: debouncedClubSearch },
     { enabled: wantDirectory && navigator.onLine, staleTime: 5 * 60_000, retry: false },
@@ -359,6 +362,11 @@ export function RegistrationDialog() {
     return () => clearInterval(interval);
   }, [isOpen, cardNo, duplicateCheck.data]);
 
+  const clearFormRef = useRef(clearForm);
+  clearFormRef.current = clearForm;
+  const matchOwnerClubRef = useRef(matchOwnerClub);
+  matchOwnerClubRef.current = matchOwnerClub;
+
   // ── Pending card from context ───────────────────────────
   useEffect(() => {
     if (!isOpen || !pendingCard) return;
@@ -367,7 +375,7 @@ export function RegistrationDialog() {
 
     // A fresh form for this card: the rental tick, receipt tick and payment
     // of the previous runner do not carry over (WEB-19).
-    clearForm();
+    clearFormRef.current();
 
     setCardNo(String(pendingCard.cardNo));
 
@@ -383,7 +391,7 @@ export function RegistrationDialog() {
       if (rawSex.startsWith("M")) setSex("M");
       else if (rawSex.startsWith("F")) setSex("F");
       if (od.phone) setPhone(od.phone);
-      if (od.club) matchOwnerClub(od.club);
+      if (od.club) matchOwnerClubRef.current(od.club);
     }
 
     // Notify kiosk about the card
@@ -400,7 +408,11 @@ export function RegistrationDialog() {
         },
       });
     }
-  }, [isOpen, pendingCard, clubs.data, clearForm, matchOwnerClub]);
+    // Only a new card (or a reopen) re-runs this: a refetch of the club
+    // list or the registration config must not wipe a half-filled form, so
+    // the helpers are read through refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, pendingCard]);
 
   // ── Auto-fill from card lookup ──────────────────────────
   useEffect(() => {
@@ -797,7 +809,9 @@ export function RegistrationDialog() {
         const paymentLabels: Record<string, string> = { billed: t("invoice"), "on-site": t("payOnSite"), card: t("card"), swish: t("swish"), cash: t("cash") };
         const cfg = regConfig.data;
         const organizerName = classes.data?.organizer?.name;
-        void (async () => {
+        // Prints go out one after another: a second registration does not
+        // start a USB transfer while the first is still in flight.
+        printChainRef.current = printChainRef.current.then(async () => {
           const logoRaster = eventorId
             ? await fetchLogoRaster(getClubLogoUrl(eventorId), 250).catch(() => null)
             : null;
@@ -815,7 +829,7 @@ export function RegistrationDialog() {
             vatInfo: { exempt: cfg?.vatExempt ?? true },
             friskvardNote: cfg?.receiptFriskvardNote ?? false,
           });
-        })().catch((err) => console.error("[registration] receipt print failed", err));
+        }).catch((err) => console.error("[registration] receipt print failed", err));
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : t("registrationFailed"));
@@ -990,8 +1004,11 @@ export function RegistrationDialog() {
                 onChange={(v) => {
                   const key = String(v);
                   // A directory pick stays an option after the search closes.
+                  // The pick stays an option after the search closes, and
+                  // after a roster refetch drops its club (its last runner
+                  // moved): it is submitted with its own name and id.
                   const o = findClubOption(clubOptions, key);
-                  if (o && o.source === "directory") setAdHocClubs((prev) => mergeClubOptions(prev, [{ ...o, source: "adhoc" }]));
+                  if (o) setAdHocClubs((prev) => mergeClubOptions(prev, [{ ...o, source: "adhoc" }]));
                   setClubKey(key);
                 }}
                 onSearchChange={setClubSearch}

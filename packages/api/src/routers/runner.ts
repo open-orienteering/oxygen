@@ -633,6 +633,15 @@ export const runnerRouter = router({
     .input(runnerCreateSchema)
     .mutation(async ({ ctx, input }) => {
       await assertCardNotTaken(ctx.db, ctx.event.id, input.cardNo);
+      // An Eventor club sent without its name takes the directory's (as
+      // bulkUpdate does), so the row never has an id and no name.
+      if (!input.clubName && input.eventorClubId && input.eventorClubId > 0) {
+        const dir = await ctx.db.clubDirectory.findUnique({
+          where: { eventorId: BigInt(input.eventorClubId) },
+          select: { name: true },
+        });
+        if (dir?.name) input.clubName = dir.name;
+      }
       const classUuid = await classSeqToId(ctx.db, ctx.event.id, input.classId);
       const cardNo = input.cardNo && input.cardNo > 0 ? input.cardNo : null;
       const now = new Date();

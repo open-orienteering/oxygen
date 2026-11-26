@@ -46,7 +46,7 @@ import { resolveCourseExpectedPositions } from "./course.js";
 import { pushToGoogleSheet, type SheetRow } from "../sheetsBackup.js";
 import { poolOf, assertInPool } from "../variants.js";
 import { pickRunnerCard } from "../cardLink.js";
-import { assertCardNotTaken } from "./runner.js";
+import { assertCardNotTaken, rethrowCardConflict } from "./runner.js";
 
 /** Works with both the singleton client and a `$transaction` client. */
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -185,10 +185,12 @@ export async function performReadout(
   const linked = runner.cardId
     ? await db.card.findUnique({ where: { id: runner.cardId } })
     : null;
+  const linkUsable =
+    !!linked && linked.eventId === eventId && !linked.removed && linked.cardNo === runner.cardNo;
   const card = pickRunnerCard(
     runner,
-    linked && linked.eventId === eventId ? linked : null,
-    linked && !linked.removed && linked.cardNo === runner.cardNo
+    linkUsable ? linked : null,
+    linkUsable
       ? []
       : runner.cardNo != null
         ? await db.card.findMany({
@@ -1427,7 +1429,7 @@ export const cardReadoutRouter = router({
       }
       // One card per event: linking a card another runner holds is refused,
       // as on create and update (API-11). Unlink it from that runner first.
-      if (runner.cardNo !== cardNo) await assertCardNotTaken(ctx.db, ctx.event.id, cardNo, runner.id);
+      await assertCardNotTaken(ctx.db, ctx.event.id, cardNo, runner.id);
       const card = await ctx.db.card.findFirst({
         where: { eventId: ctx.event.id, cardNo, removed: false },
         orderBy: { updatedAt: "desc" },
@@ -1447,7 +1449,7 @@ export const cardReadoutRouter = router({
             fields: { cardNo },
           },
         });
-      });
+      }).catch((err: unknown) => rethrowCardConflict(err, cardNo));
       return { ok: true as const };
     }),
 

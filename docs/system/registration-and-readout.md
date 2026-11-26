@@ -578,9 +578,11 @@ This ensures the FK is set at registration time, even if the card was scanned be
 holds name, class, club (`clubName` + `eventorClubId`), card, start time and
 start number, birth year, sex, nationality, phone, the fee fields (`fee`,
 `paid`, `payMode`, `cardFee`, in cents), status and finish time when given,
-and the entry date and time stamped by the registering node. A follower
+and the entry date and time stamped by the registering node. A station
+entry carries no entry date or time; the apply stamps it from the entry's
+client timestamp in the event's time zone. A follower
 stores the same row; an absent key keeps the column default, so older
-entries replay unchanged. The offline dialog sends the same fields.
+entries replay unchanged. The offline dialog sends the same form fields.
 
 **A station registration that cannot be stored is refused.** Pushed from a
 station's outbox (no sync secret), a `runner.registered` whose class is not
@@ -865,9 +867,11 @@ event yet is still reachable (WEB-11):
   club outside the roster adds it as an option and selects it; owner data
   is matched against the roster first, then against the cached runner
   database's clubs;
-- typing in the club search with no roster match searches the club
+- typing two or more characters in the club search also searches the club
   directory (`club.searchDirectory`) online, or the cached runner
-  database's clubs offline, and lists the hits under the roster.
+  database's clubs offline, and lists the hits under the roster matches;
+- a picked club stays an option for the rest of the form, so a roster
+  refetch that drops it (its last runner moved) does not lose its name.
 
 The dialog submits the chosen club's name and Eventor id together. The
 bulk "Set club" action on the Runners page uses the same keys and sends
@@ -909,8 +913,10 @@ After success:
    otherwise closes the dialog
 4. Prints the registration receipt (if enabled, ticked and a printer is
    connected) in the background: the runner is registered whatever the
-   printer does. The club logo load is bounded at 10 s (the receipt prints
-   without it) and each USB transfer at 30 s.
+   printer does. Receipts print one after another. The club logo load is
+   bounded at 10 s (the receipt prints without it) and each USB transfer at
+   30 s. A failed print shows on the printer button in the header (its last
+   error), not in the dialog.
 
 ---
 

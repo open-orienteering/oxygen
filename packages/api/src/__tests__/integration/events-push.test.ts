@@ -1045,6 +1045,16 @@ describe("events.push: station registrations (SYNC-12)", () => {
     expect(await reg.db.runner.count({ where: { eventId: reg.eventId, cardNo: 77004 } })).toBe(1);
   });
 
+  it("a station registration without an entry date is stamped from its own timestamp", async () => {
+    const e = { ...regEntry({ tempId: randomUUID(), name: "Stamped Stig", classId: regClass, cardNo: 77007 }), timestamp: Date.UTC(2026, 5, 13, 8, 30, 0) };
+    const res = await station().events.push({ events: [e] });
+    expect(res.failed).toEqual([]);
+    const r = await reg.db.runner.findFirstOrThrow({ where: { eventId: reg.eventId, cardNo: 77007 } });
+    // 10:30 in Europe/Stockholm (the default zone), MeOS date 2026-06-13.
+    expect(r.entryDate).toBe(20260613);
+    expect(r.entryTime).toBe(10 * 36000 + 30 * 600);
+  });
+
   it("a peer push keeps the skip: the originating node already decided", async () => {
     const e = regEntry({ tempId: randomUUID(), name: "Peer Petra", classId: 999_999, cardNo: 77005 });
     const res = await peer().events.push({ events: [e] });
@@ -1122,6 +1132,19 @@ describe("card link follows the card number (API-11)", () => {
     await expect(c.cardReadout.linkCardToRunner({ cardNo: 88400, runnerId: id })).rejects.toMatchObject({ code: "CONFLICT" });
     const o = await lk.db.runner.findFirstOrThrow({ where: { eventId: lk.eventId, seq: other.id } });
     expect(o.cardNo).toBe(88400);
+  });
+
+  it("a stale link (rows written before the fix) is ignored: the readout uses the runner's current card", async () => {
+    const oldCard = await lk.db.card.create({
+      data: { eventId: lk.eventId, cardNo: 88700, punchesRaw: "31-100.0;32-200.0" },
+      select: { id: true },
+    });
+    await lk.db.card.create({ data: { eventId: lk.eventId, cardNo: 88800, punchesRaw: "31-150.0" } });
+    const { id } = await makeCaller(lk.event).runner.create({ name: "Stale Stina", classId: lkClass, cardNo: 88800 });
+    // As an old writer left it: new number, link to the previous card.
+    await lk.db.runner.updateMany({ where: { eventId: lk.eventId, seq: id }, data: { cardId: oldCard.id } });
+    const r = await makeCaller(lk.event).cardReadout.readoutByRunner({ runnerId: id });
+    expect(r?.rawPunchCount).toBe(1);
   });
 
   it("a runner.updated replay of a new cardNo re-points cardId on the follower", async () => {

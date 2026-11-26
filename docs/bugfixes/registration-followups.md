@@ -24,6 +24,8 @@ and left for later, with the reason.
   Esc in the club or class dropdown also closes the dialog. Separate findings.
 - **Other receipts.** Only the shared USB transfer and the logo load got a
   timeout; `PrinterContext.print` for other receipt types has none of its own.
+  A failed registration receipt shows only as the printer button's last error,
+  not as a toast in the dialog (there is no toast component yet).
 - **Silent skips of `finish.recorded` / `result.applied` for no runner.** Not
   refused in general (SYNC-20): a deleted runner is a benign case and a refusal
   would block the outbox. The failed-registration case is covered by the hold.
