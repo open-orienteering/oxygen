@@ -640,7 +640,7 @@ export function RegistrationDialog() {
           const msg = err instanceof Error && err.message.startsWith("ZERO_TIME_COLLISION")
             ? err.message.replace(/^[A-Z_]+: /, "")
             : t("registrationFailed");
-          throw new Error(msg);
+          throw new Error(msg, { cause: err });
         }
       } else {
         // Offline — queue the registration event

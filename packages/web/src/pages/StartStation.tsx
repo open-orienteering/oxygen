@@ -1,6 +1,5 @@
 import { useRef, useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { trpc } from "../lib/trpc";
 import { formatMeosTime } from "@oxygen/shared";
 import { useSearchParam } from "../hooks/useSearchParam";
 import { useStationSync } from "../hooks/useStationSync";
