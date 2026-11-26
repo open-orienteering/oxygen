@@ -163,13 +163,14 @@ describe("lists.resultList standings (RES-11, CRS-042)", () => {
   });
 });
 
+// A punches 31 → 32 in 3:00, B in 0:30; the leg into 32 is not timed.
+const punchesA = [
+  { controlCode: 31, time: T10 + min(10) },
+  { controlCode: 32, time: T10 + min(13) },
+  { controlCode: 33, time: T10 + min(30) },
+];
+
 describe("race.finishReceipt position and finish leg (CRS-039, CRS-013)", () => {
-  // A punches 31 → 32 in 3:00, B in 0:30; the leg into 32 is not timed.
-  const punchesA = [
-    { controlCode: 31, time: T10 + min(10) },
-    { controlCode: 32, time: T10 + min(13) },
-    { controlCode: 33, time: T10 + min(30) },
-  ];
 
   it("ranks by the adjusted time, like the result list", async () => {
     const f = await setup("rs-adjust", { noTimingControl: true });
@@ -262,6 +263,47 @@ describe("race.finishReceipt position and finish leg (CRS-039, CRS-013)", () => 
       });
       const receipt = await f.caller.race.finishReceipt({ runnerId: a });
       expect(receipt!.finish).toEqual({ splitTime: min(0, 25), legLength: 240 });
+    } finally {
+      await f.ctx.cleanup();
+    }
+  });
+});
+
+describe("finish leg when the last control is missed (CRS-013)", () => {
+  it("prints no finish split rather than a multi-leg one", async () => {
+    const f = await setup("rs-finleg-mp");
+    try {
+      const a = await addRunner(f, "A", f.cls.seq, undefined, 555_041);
+      await f.caller.cardReadout.storeReadout({
+        cardNo: 555_041,
+        cardType: "SI11",
+        punches: punchesA.slice(0, 2),
+        startTime: T10,
+        finishTime: T10 + min(30, 25),
+      });
+      const receipt = await f.caller.race.finishReceipt({ runnerId: a });
+      expect(receipt!.status).toBe(3);
+      expect(receipt!.finish).toEqual({ splitTime: 0, legLength: 0 });
+      expect(receipt!.position).toBeNull();
+    } finally {
+      await f.ctx.cleanup();
+    }
+  });
+
+  it("a cancelled entry who runs anyway still gets a position", async () => {
+    const f = await setup("rs-cancel-runs");
+    try {
+      const a = await addRunner(f, "A", f.cls.seq, { status: "cancel", start: T10, finish: T10 + min(40) }, 555_051);
+      await f.caller.cardReadout.storeReadout({
+        cardNo: 555_051,
+        cardType: "SI11",
+        punches: punchesA,
+        startTime: T10,
+        finishTime: T10 + min(40),
+      });
+      const receipt = await f.caller.race.finishReceipt({ runnerId: a });
+      expect(receipt!.status).toBe(1);
+      expect(receipt!.position).toEqual({ rank: 1, total: 1 });
     } finally {
       await f.ctx.cleanup();
     }

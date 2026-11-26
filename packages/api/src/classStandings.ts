@@ -54,6 +54,7 @@ export interface StandingRow {
     eventorClubId: bigint | string | null;
     startNo: number;
     cardNo: number | null;
+    /** ZeroTime-relative, as stored (for `progressFlags`); see `startAbs`. */
     startTime: number;
     classId: string | null;
   };
@@ -83,7 +84,10 @@ export async function loadClassStandings(
     where: {
       eventId: event.id,
       removed: false,
-      status: { not: "cancel" as PgRunnerStatus },
+      // A cancelled entry who runs anyway still gets a receipt position.
+      ...(opts.override
+        ? { OR: [{ status: { not: "cancel" as PgRunnerStatus } }, { id: opts.override.runnerId }] }
+        : { status: { not: "cancel" as PgRunnerStatus } }),
       ...(opts.classId ? { classId: opts.classId } : {}),
     },
     include: {
@@ -144,9 +148,10 @@ export async function loadClassStandings(
       select: { id: true, orderMode: true },
     });
     for (const row of rows) orderModeByCourse.set(row.id, row.orderMode);
-    for (const cid of courseIds) {
-      expectedByCourse.set(cid, await resolveCourseExpectedPositions(db, cid));
-    }
+    const resolved = await Promise.all(
+      [...courseIds].map(async (cid) => [cid, await resolveCourseExpectedPositions(db, cid)] as const),
+    );
+    for (const [cid, expected] of resolved) expectedByCourse.set(cid, expected);
   }
 
   const override = opts.override;
@@ -163,9 +168,12 @@ export async function loadClassStandings(
     const startAbs = toAbsolute(r.startTime, zeroTime);
     const finishAbs = toAbsolute(r.finishTime, zeroTime);
     let adj = 0;
+    const status = runnerStatusToValue(r.status);
+    // The deduction only matters for a row that shows a time.
+    const timed = status === RunnerStatus.OK || TIMED_UNPLACED.has(status);
     const courseId = r.courseId ?? r.class?.courseId ?? null;
     const expected = courseId ? expectedByCourse.get(courseId) : undefined;
-    if (courseId && expected && expected.length > 0 && r.cardNo != null && r.cardNo > 0) {
+    if (timed && courseId && expected && expected.length > 0 && r.cardNo != null && r.cardNo > 0) {
       const card = pickRunnerCard(
         r,
         r.cardId ? cardById.get(r.cardId) : null,
@@ -186,7 +194,7 @@ export async function loadClassStandings(
         }).runningTimeAdjustment;
       }
     }
-    return { r, status: runnerStatusToValue(r.status), startAbs, finishAbs, adj };
+    return { r, status, startAbs, finishAbs, adj };
   });
 
   // Rank per class with the shared helper (keyed by array index).

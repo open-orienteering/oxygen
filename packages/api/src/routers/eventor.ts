@@ -1831,7 +1831,8 @@ export const eventorRouter = router({
           status: oxygenStatus,
           started:
             hasStartedByClock(r.startTime, event.zeroTime, nowDs) ||
-            (matched?.matches.some((m) => m.status === "ok") ?? false),
+            (matched?.matches.some((m) => m.status === "ok") ?? false) ||
+            (r.cardNo != null && (freePunchesByCardNo.get(r.cardNo)?.length ?? 0) > 0),
           place: placement?.place ?? 0,
           noTiming: cls?.noTiming === true,
           fee: r.feeCents || undefined,

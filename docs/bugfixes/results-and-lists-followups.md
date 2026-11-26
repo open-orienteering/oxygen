@@ -23,8 +23,16 @@ that were left for later.
 - **Timed OutOfCompetition / NoTiming runners on Eventor** go up as
   `NotCompeting` / `OK` as before; whether MeOS sends `OK` with a time for
   them was not checked.
-- **Unknown → Active uses the clock.** A runner whose drawn start has passed
-  but who never started goes up as `Active` until a DNS is set.
+- **Unknown → Active uses the time of day only.** A runner whose drawn start
+  has passed but who never started goes up as `Active` until a DNS is set,
+  and the event date is not compared: an upload the next morning before the
+  first start reports unread runners as `Inactive`. Whether Eventor's import
+  accepts `Active` / `Inactive` / `Finished` has not been tried against
+  Test-Eventor yet.
+- **The Star raster builder has no Fin-row test.** It uses the same
+  `finish` entry as the ESC/POS builder, which is tested.
+- **The offline receipt has no finish-leg length** (leg lengths are not in
+  the dashboard cache), so its Fin row prints the split without a pace.
 - **The finish split is the raw run-in.** No NoTiming deduction applies to
   the finish leg itself.
 - **Expected positions are resolved per request** (one query per course on

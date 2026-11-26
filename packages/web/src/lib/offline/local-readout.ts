@@ -25,6 +25,7 @@ import {
   PUNCH_FINISH,
   RunnerStatus,
   runningTimeDs,
+  finishLegOf,
 } from "@oxygen/shared";
 
 export interface LocalReadoutResult {
@@ -45,6 +46,8 @@ export interface LocalReadoutResult {
     status: number;
   };
   controls: ControlMatch[];
+  /** The receipt's finish leg (CRS-013); absent without card punches. */
+  finish?: { splitTime: number; legLength: number };
   course: { name: string; length: number } | null;
   position: PositionResult | null;
   classResults: Array<{ name: string; clubId: number | null; runningTime: number }>;
@@ -282,6 +285,8 @@ export function computeCardReadout(
       status,
     },
     controls: matches,
+    // No leg lengths in the offline cache: split only.
+    finish: finishLegOf(matches, startTime, finishTime, [], course?.orderMode ?? "ordered"),
     course: course ? { name: course.name, length: course.length } : null,
     position,
     classResults,

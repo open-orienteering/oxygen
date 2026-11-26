@@ -48,7 +48,9 @@ everyone in the forest as not started.
   standings step: stable order, the readout's card choice
   (`pickRunnerCard`) plus free punches, the matcher's deduction, and
   `computeClassPlacements` per class. Cancelled entries are left out (as
-  `cancellation-handling.md` already said; the filter had gone missing),
+  `cancellation-handling.md` already said; the filter had gone missing;
+  the Results page's "Cancelled" filter value is gone with them), except
+  the runner a receipt is printed for,
   and classless runners are unplaced. `resultList` and `finishReceipt` both
   use it; the receipt substitutes its own readout row so rank and total are
   right before the result is saved, and returns `null` for a no-timing
@@ -61,8 +63,11 @@ everyone in the forest as not started.
   index), placed runners by place, then timed unplaced runners, then the
   rest.
 - `runnerProgress.ts` computes `hasPunches` / `hasStarted` for both lists.
-- `finishReceipt` returns `finish: { splitTime, legLength }` (latest OK
-  punch, or the start, to the finish; `legs[controls.length]`), and both
+- `finishReceipt` and the offline card readout return
+  `finish: { splitTime, legLength }` from the shared `finishLegOf`: on an
+  ordered course the last timed control (or the start) to the finish, with
+  `legs[controls.length]`; nothing when that control was missed; on a
+  free-order course the split from the latest punch, with no length. Both
   builders print it; without it the Fin split and pace are blank.
 - The dashboard sends `ClassInfo.maxTime`; the offline readout tests
   `noTiming === true`, ranks only against OK peers, gives a position only

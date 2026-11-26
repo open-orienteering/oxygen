@@ -229,6 +229,7 @@ export function FinishStation() {
           status: c.status,
           punchTime: c.punchTime,
         })),
+        finish: localResult.finish,
         course: localResult.course,
         position: localResult.position,
         // Ties share a rank (RES-11): strictly faster runners + 1.

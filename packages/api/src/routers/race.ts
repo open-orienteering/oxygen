@@ -2,7 +2,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, kioskOrRaceOperateProcedure, raceOperateRaceProcedure, raceOperateProcedure } from "../trpc.js";
 import { toAbsolute, toRelative, toRelativeChecked, hasTime, eventTimeZone } from "../timeConvert.js";
-import { timeOfDayDs, runningTimeDs, RunnerStatus } from "@oxygen/shared";
+import { timeOfDayDs, runningTimeDs, RunnerStatus, finishLegOf } from "@oxygen/shared";
 import {
   runnerStatusToValue,
   valueToRunnerStatus,
@@ -172,9 +172,6 @@ export const raceRouter = router({
         legLength: number;
       }> = [];
       const legs = r.course?.legs ?? [];
-      // The latest OK punch, not the last array entry: free order appends
-      // missing entries after the punched ones (CRS-013).
-      let lastPunch = 0;
       r.controls.forEach((m: ControlMatch, idx) => {
         if (m.positionMode === "skipped") return;
         splits.push({
@@ -186,17 +183,15 @@ export const raceRouter = router({
           punchTime: m.punchTime,
           legLength: legs[idx] ?? 0,
         });
-        if (m.status === "ok" && m.punchTime > 0) {
-          if (lastPunch === 0 || runningTimeDs(lastPunch, m.punchTime) > 0) lastPunch = m.punchTime;
-        }
       });
-      const legFrom = lastPunch || r.timing.startTime;
-      // The finish leg: from the last control (or the start) to the finish.
-      const finish = {
-        splitTime:
-          r.timing.finishTime > 0 && legFrom > 0 ? runningTimeDs(legFrom, r.timing.finishTime) : 0,
-        legLength: legs[r.controls.length] ?? 0,
-      };
+      // The finish leg (CRS-013), the same rule as the offline readout.
+      const finish = finishLegOf(
+        r.controls,
+        r.timing.startTime,
+        r.timing.finishTime,
+        legs,
+        r.course?.orderMode ?? "ordered",
+      );
 
       // Position within class, from the same standings step as the result
       // list (adjusted times, shared places for ties, unplaced in no-timing
