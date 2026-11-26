@@ -487,7 +487,7 @@ export function markVenueSettingsChanged(): void {
   venueSettingsRetries = VENUE_SETTINGS_RETRY_TICKS;
 }
 
-/** Push every held event's venue-owned settings; false when any push failed. */
+/** Push the venue-owned settings of every event this box holds (a no-op for the rest); false when any push failed. */
 async function pushAllVenueSettingsOnce(db: PrismaClient, peer: LeasePeer): Promise<boolean> {
   const events = await db.event.findMany({
     where: { removed: false },
@@ -534,8 +534,11 @@ export function startShipper(): void {
         // Best effort and never blocking: with the link up the settings land
         // before this tick's journal batch.
         if (venueSettingsDirty) {
+          // Cleared before the push, so a change saved while it runs is
+          // pushed again next tick.
+          venueSettingsDirty = false;
           const ok = await pushAllVenueSettingsOnce(prisma(), leasePeer);
-          venueSettingsDirty = !ok && --venueSettingsRetries > 0;
+          if (!ok && --venueSettingsRetries > 0) venueSettingsDirty = true;
         }
         await shipAllOnce(prisma(), peerUrl, transport, leasePeer);
         if (Date.now() - lastSettingsRefresh >= syncSettingsRefreshMs()) {

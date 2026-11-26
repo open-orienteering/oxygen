@@ -217,7 +217,7 @@ reached the cloud.
 | `cardFeeCents` | `event.setCardFee` | venue-owned |
 | `airPlus`, `awakeHours` | `control.setAirPlusConfig` | venue-owned |
 | `paymentMethods`, `swishNumber`, `swishPayeeName`, `printRegistrationReceipt`, `registrationReceiptMessage`, `finishReceiptMessage`, `receiptFriskvardNote`, `organizerEventorId`, `orgNumber`, `vatExempt` | `event.setRegistrationConfig` (`organizerEventorId` is also set when an Eventor import creates the event) | venue-owned |
-| `googleSheetsWebhookUrl` | `event.setGoogleSheetsConfig` (the cloud pushes readouts to the sheet, the box's shipped ones included; a box with a peer does not push) | venue-owned |
+| `googleSheetsWebhookUrl` | `event.setGoogleSheetsConfig` (the cloud pushes readouts to the sheet, the box's shipped ones included; a box with a peer does not push for an event it checked out) | venue-owned |
 | `kind`, `kindCustom` | `event.updateType` | cloud-owned, forwarded |
 | `autoOverprintCuts` | `course.setOverprintCuts` | cloud-owned, forwarded (a layout flag, row G18) |
 | everything else (name, organizer, fees, LiveResults, Eventor…) | forwarded writers | cloud-owned |
