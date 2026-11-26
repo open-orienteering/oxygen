@@ -9,7 +9,7 @@ Oxygen has two kinds of backup:
 
 A single event: its rows in these tables of the `oxygen` schema, in this order, which is foreign-key order (every table after each dumped table it references, so the sections restore in file order):
 
-`events`, `controls`, `courses`, `course_controls`, `map_templates`, `classes`, `class_course_pools`, `course_objects`, `course_maps`, `card_readouts`, `cards`, `runners`, `teams`, `control_units`, `punches`, `card_readout_backups`, `journal`, `graphics`, `map_sources`, `map_documents`, `map_document_colour_settings`, `club_symbol_decisions`, `map_files`, `map_patches`, `map_gps_tracks`, `map_colour_settings`, `tracks`, `routes`, `event_permissions`, `event_seqs`.
+`events`, `graphics`, `controls`, `courses`, `course_controls`, `map_templates`, `classes`, `class_course_pools`, `course_objects`, `course_maps`, `card_readouts`, `cards`, `runners`, `teams`, `control_units`, `punches`, `card_readout_backups`, `journal`, `map_sources`, `map_documents`, `map_document_colour_settings`, `club_symbol_decisions`, `map_files`, `map_patches`, `map_gps_tracks`, `map_colour_settings`, `tracks`, `routes`, `event_permissions`, `event_seqs`.
 
 The list is `BACKUP_TABLES` in `packages/api/src/backup.ts`. An integration test checks it against the migrated schema: every table with an `event_id` column is dumped or listed in `BACKUP_EXCLUDED` with its reason, and the order agrees with the schema's foreign keys.
 
@@ -26,10 +26,11 @@ For a whole-database snapshot use the [automatic backups](#automatic-backups), o
 
 ## File format
 
-The downloaded file is UTF-8 text: a header comment, then one `--- <table> ---` section per table holding that table's rows as CSV with a header row, then the line `-- BACKUP COMPLETE`.
+The downloaded file is UTF-8 text: a header comment (its second line `-- Format:     2` says the file ends with the completion line below), then one `--- <table> ---` section per table holding that table's rows as CSV with a header row, then the line `-- BACKUP COMPLETE`.
 
 ```sql
 -- Oxygen backup
+-- Format:     2
 -- Created:    2026-04-25T20:14:55.123Z
 -- Event:      Vinterserien
 -- Name:       Vinterserien
@@ -59,9 +60,9 @@ The filename follows the pattern `<NameId>_backup_<YYYYMMDD_HHMMSS>.sql`.
 **A failed dump is never a quiet file.** psql runs with `ON_ERROR_STOP`, so the first failing section stops it, and its error output goes to the server log.
 
 - When psql fails before writing anything (the database is unreachable, the credentials are wrong), the server answers `502` with an error, and the Event page shows "The backup failed: …" instead of saving a file.
-- When it fails part way, the file gets a `-- BACKUP FAILED (exit N): <error>` line and the transfer is aborted, so the browser reports a failed download.
-- Only a file that ends with `-- BACKUP COMPLETE` is whole; the restore refuses any other written by this release.
-- When the browser goes away mid-download, the server stops psql.
+- When it fails part way, the transfer is aborted, so the browser reports a failed download. The server first writes a `-- BACKUP FAILED (exit N): <error>` line, which reaches a file saved by other means (curl) unless the client is reading too slowly to take it within 10 seconds.
+- Only a file that ends with `-- BACKUP COMPLETE` is whole; the restore refuses any file with the `-- Format:` line that lacks it, wherever it was cut.
+- When the browser goes away, before or during the dump, the server stops psql. psql gives up connecting after 10 seconds.
 
 On Cloud Run the dump reaches Cloud SQL through the unix socket named by the `?host=/cloudsql/…` parameter of `DATABASE_URL`, the same way the app does.
 
@@ -76,17 +77,17 @@ pnpm event:restore ~/Downloads/Vinterserien_backup_20260425_201455.sql
 
 # Inside the API image: the service is `api` in docker-compose.venue.yml,
 # `oxygen` in docker-compose.release.yml.
-docker compose -f docker-compose.venue.yml cp Vinterserien_backup_20260425_201455.sql api:/tmp/backup.sql
-docker compose -f docker-compose.venue.yml exec api node packages/api/dist/cli/restore-event.js /tmp/backup.sql
+docker compose -f docker-compose.venue.yml --env-file .env.venue cp Vinterserien_backup_20260425_201455.sql api:/tmp/backup.sql
+docker compose -f docker-compose.venue.yml --env-file .env.venue exec api node packages/api/dist/cli/restore-event.js /tmp/backup.sql
 ```
 
 The event comes back under a new `events.id` with every row of the dump. Refresh the Oxygen UI and it is in the event picker.
 
-**When the event already exists** in the target (same `name_id`), the restore refuses. `--replace` deletes the existing event, with everything that belongs to it, and restores the backup in its place: use it to roll an event back to a backup, or to rerun a restore that failed part way.
+**When the event already exists** in the target (same `name_id`), the restore refuses. `--replace` deletes the existing event, with everything that belongs to it, and restores the backup in its place: use it to roll an event back to a backup, or to rerun a restore that failed part way. Its lease and shipping state go with it, so on a venue box the event must be checked out again afterwards.
 
 **What the restore does** (`packages/api/src/restore.ts`), in five phases, each one transaction:
 
-1. The event row (a fresh id) and every race-data section, in dump order, which is foreign-key order. Each section loads through a temp table built from its CSV header, so columns match by name: a backup from an older release loads (its columns this schema no longer has are left out with a warning, columns it lacks take their defaults). `event_id` is rewritten to the new event. Every other id is kept, and serial sequences (`graphics`, `tracks`, `routes`, `journal.ingest_seq`) are moved past the restored ids. A reference to a row the backup does not carry (a user, a user group, a club map) is kept only when the target has that row. Otherwise it is handled as the foreign key's `ON DELETE` action would handle a deleted row: `SET NULL` clears the column (the user who granted a permission), `CASCADE` skips the row (the permission of a user the target does not have). Either way the restore prints a warning.
+1. The event row (a fresh id) and every race-data section, in dump order, which is foreign-key order. Each section loads through a temp table built from its CSV header, so columns match by name: a backup from an older release loads (its columns this schema no longer has are left out with a warning, columns it lacks take their defaults). `event_id` is rewritten to the new event. The global serial ids, which another database may already use, come from the target's sequences: `tracks.id`, `routes.id`, `journal.ingest_seq` (the journal keeps its order) and `graphics.id`, whose new numbers are also written into the layout JSON that draws them (`graphicId` in templates' and sheets' objects and in course objects). Every other id (the UUIDs) is kept. A reference to a row the target does not hold (a user, a user group, a club map, a map source the backup did not carry) is handled as the foreign key's `ON DELETE` action would handle a deleted row: `SET NULL` clears the column (the user who granted a permission), `CASCADE` skips the row (the permission of a user the target does not have). Either way the restore prints a warning.
 2. The map blobs, symbol decisions and the event's `map_files` row, through `packages/api/scripts/restore-map-blobs.sql` (below).
 3. The sections that need the blobs: the per-document colour settings (a row already present is kept), the map patch and the event's colour settings.
 4. The GPS tracks, through `restore-map-gps-tracks.sql`: `created_by` is kept only when that user exists.
@@ -94,9 +95,9 @@ The event comes back under a new `events.id` with every row of the dump. Refresh
 
 When phase 1 fails nothing is restored. When a later phase fails the event is partly restored; fix the cause and rerun with `--replace`.
 
-The restore refuses a file with a `-- BACKUP FAILED` line, and a file from this release without the `-- BACKUP COMPLETE` line (it was cut short). A file from an older release, which has no such line, loads with a warning to check that it is the whole file. Its `event_log` section (the journal before it was renamed, which always came out empty) and `rendered_maps` section are skipped.
+The restore refuses a file with a `-- BACKUP FAILED` line, and a file with the `-- Format:` header line but without the `-- BACKUP COMPLETE` line (it was cut short). A file from an older release, which has neither, loads with a warning to check that it is the whole file. Its `event_log` section (the journal before it was renamed, which always came out empty) and `rendered_maps` section are skipped.
 
-Restoring a copy of an event beside its original in the same database is not supported: the backup's row ids are kept, so they collide with the original's, and the restore stops with a duplicate-key error. Restore the copy into another database.
+Restoring a copy of an event beside its original in the same database is not supported: the backup's UUIDs are kept, so they collide with the original's, and the restore stops with a duplicate-key error. Restore the copy into another database (UUIDs do not collide across databases).
 
 **The map sections restore idempotently on hash.** `restore-map-blobs.sql` loads `map_sources`, `map_documents` and `club_symbol_decisions` through temporary tables and inserts them `ON CONFLICT DO NOTHING`: a blob the database already holds (another event or a club map pins the same file) keeps its row, nothing is ever overwritten, and running the script twice changes nothing. It refuses the whole load if any row's bytes do not hash to its `file_hash` / `hash`. `uploaded_by` and `club_map_version_id` are kept only when that user or club map version exists in the target database, else NULL. `created_at` / `last_referenced_at` restart at the restore, so the storage GC's 30-day grace ([map-storage.md](../map-storage.md) §8) counts from then. Decisions merge by key: the newer `decided_at` wins and nothing is deleted, so restoring an old dump never undoes a decision made since (but brings back one reset since). A promoted club map version's document carries the corrections it was built with (`map_documents.patch`, [map-patches.md](../map-patches.md) §5); the script restores the column, and loads a dump written before it existed with the column left empty.
 
@@ -118,15 +119,19 @@ Their `events` and `courses` sections carry columns v0.6.1 dropped (`map_pipelin
 | `BACKUP_INTERVAL_SECONDS` | `900` | Time between dumps. |
 | `BACKUP_KEEP` | `48` | Dumps kept; older ones are deleted. |
 
-`docker compose logs backup` shows each dump written, and `pg_dump FAILED` when one was not. The script is `docker/pg-backup.sh` (inlined in the release compose file, which runs without a checkout).
+`docker compose logs backup` shows each dump written, `pg_dump FAILED` when one was not, and `SKIPPED` when the backup directory had less free space than twice the last dump (the service never fills the disk the database lives on). Each dump is the whole database, map blobs included, so 48 of them take about 48 times one dump: check one dump's size before race day and lower `BACKUP_KEEP` if the disk is small. A `.partial` left by a stopped container is deleted on the next round. The script is `docker/pg-backup.sh` (inlined in the release compose file, which runs without a checkout).
 
-To restore the whole database from one of them, stop the app, then load it into the (empty or replaced) database:
+When `BACKUP_DIR` points at a USB stick that is not mounted, the dumps go to the empty mount-point directory on the box's own disk: check with `df` that the directory is on the stick.
+
+To restore the whole database from one of them, stop the app and load the dump into a freshly created database (a dump from before a migration does not `--clean` cleanly over a migrated schema), then run the migrations and start the app:
 
 ```bash
-docker compose -f docker-compose.venue.yml stop api
-docker compose -f docker-compose.venue.yml exec -T postgres \
-  pg_restore -U oxygen -d oxygen --clean --if-exists --no-owner < backups/oxygen_20260501_120000.dump
-docker compose -f docker-compose.venue.yml start api
+C="docker compose -f docker-compose.venue.yml --env-file .env.venue"
+$C stop api
+$C exec -T postgres sh -c 'dropdb -U oxygen --if-exists oxygen && createdb -U oxygen oxygen'
+$C exec -T postgres pg_restore -U oxygen -d oxygen --no-owner < backups/oxygen_20260501_120000.dump
+$C start api
+$C exec api pnpm --filter @oxygen/api exec prisma migrate deploy
 ```
 
 To get one event out of a whole-database dump, restore it into a scratch database, download the event's backup from an Oxygen pointed at it (or run the dump there), and `pnpm event:restore` that file into the live database.

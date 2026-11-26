@@ -176,6 +176,17 @@ describe("parseDatabaseUrl (BLD-01)", () => {
     expect(p.schema).toBe("oxygen");
   });
 
+  it("unbrackets an IPv6 host and tolerates a malformed escape", () => {
+    const p = parseDatabaseUrl("postgresql://u:50%zz@[::1]:5433/oxy");
+    expect(p.host).toBe("::1");
+    expect(p.password).toBe("50%zz");
+  });
+
+  it("bounds the connection wait", () => {
+    const { env } = psqlInvocation(parseDatabaseUrl("postgresql://u@h/d"), []);
+    expect(env.PGCONNECT_TIMEOUT).toBe("10");
+  });
+
   it("reads a plain TCP URL", () => {
     const p = parseDatabaseUrl("postgresql://u:pw@db.example:6543/oxy?schema=oxygen");
     expect(p).toMatchObject({ host: "db.example", port: 6543, user: "u", password: "pw", database: "oxy" });
@@ -260,6 +271,17 @@ describe("startBackupStream", () => {
     expect(text).toContain('-- BACKUP FAILED (exit 3): psql:<stdin>:9: ERROR:  relation "oxygen.event_log" does not exist');
     expect(error).not.toBeNull();
     expect(log.error).toHaveBeenCalledOnce();
+  });
+
+  it("kills psql when the client goes away before the first output", async () => {
+    const f = fakeDump();
+    const gone = new AbortController();
+    const started = startBackupStream(TARGET, undefined, new Date(), () => f.proc, gone.signal);
+    gone.abort();
+    expect(f.child.kill).toHaveBeenCalledWith("SIGTERM");
+    f.stdout.end();
+    f.exit({ code: null, stderr: "" });
+    expect((await started).ok).toBe(false);
   });
 
   it("kills psql when the client goes away (SYNC-36)", async () => {

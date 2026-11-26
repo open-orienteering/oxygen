@@ -38,7 +38,7 @@ import {
   BACKUP_TABLES,
   parseDatabaseUrl,
   psqlInvocation,
-  splitBackupSections,
+  scanBackup,
   type BackupTable,
 } from "./backup.js";
 
@@ -64,6 +64,19 @@ const MAP_EXTRA_SECTIONS: ReadonlySet<BackupTable> = new Set([
 /** Sections keyed by content, shared with other events: a row already present is kept. */
 const SHARED_SECTIONS: ReadonlySet<BackupTable> = new Set(["map_document_colour_settings"]);
 
+/**
+ * Serial columns the restore leaves to the target's sequence: they are
+ * global, so a kept value could be taken in another database. Nothing
+ * references them by key; `graphics.id` (drawn by number from layout
+ * JSON) is renumbered separately, references and all. The journal keeps
+ * its order: the rows insert by their old `ingest_seq`.
+ */
+const FRESH_COLUMNS: Readonly<Partial<Record<BackupTable, { cols: string[]; orderBy?: string }>>> = {
+  tracks: { cols: ["id"] },
+  routes: { cols: ["id"] },
+  journal: { cols: ["ingest_seq"], orderBy: "ingest_seq" },
+};
+
 const KNOWN: ReadonlySet<string> = new Set(BACKUP_TABLES);
 
 // ─── Checking the dump ─────────────────────────────────────
@@ -81,19 +94,21 @@ export type DumpCheck = { ok: true; dump: CheckedDump } | { ok: false; error: st
  * Split and vet a dump. A dump with a `-- BACKUP FAILED` trailer is
  * refused, and so is one without the completion marker that has a
  * `journal` section (written by a release that ends every dump with the
- * marker, so it was cut short). A dump from before the marker loads with
+ * marker: it has `BACKUP_FORMAT_LINE` in its header), so it was cut short. A dump from before the marker loads with
  * a warning. Sections this release does not know (`event_log`,
  * `rendered_maps` of older dumps) are skipped with a warning.
  */
 export function checkDump(text: string): DumpCheck {
-  if (/^-- BACKUP FAILED/m.test(text)) {
+  const { sections, complete, failed, marked } = scanBackup(text);
+  if (failed) {
     return { ok: false, error: "the backup is incomplete: it ends with a BACKUP FAILED line (the dump failed while it was written)" };
   }
-  const sections = splitBackupSections(text);
-  const complete = text.split("\n").some((l) => l === BACKUP_COMPLETE_MARKER);
   const warnings: string[] = [];
   if (!complete) {
-    if (sections.has("journal")) {
+    // The format line is in the header, so a cut anywhere after it is caught;
+    // `journal` marks a dump from before the format line but after the
+    // marker, of which none were released.
+    if (marked || sections.has("journal")) {
       return { ok: false, error: `the backup is incomplete: it does not end with "${BACKUP_COMPLETE_MARKER}" (the download was cut short)` };
     }
     warnings.push("this backup was written by an older release, which did not mark a complete dump: check that it is the whole file");
@@ -123,18 +138,20 @@ export function csvHeader(csv: string): string[] | null {
 // ─── Generated psql scripts ────────────────────────────────
 
 /**
- * `pg_temp.oxygen_restore_section(tbl, src, new_event, dumped, skip_conflicts)`:
+ * `pg_temp.oxygen_restore_section(tbl, src, new_event, dumped, skip_conflicts, fresh, order_by)`:
  * insert the rows of temp table `src` (all text) into `oxygen.<tbl>`,
  * matching columns by name and casting to each target type. `event_id`
  * becomes `new_event`; for `events` the id is left to the sequence and
- * the new id is returned (else the row count). A single-column foreign
- * key to a table not in `dumped` is kept only when the target has the
- * row; otherwise the row is treated as if the referenced row had been
+ * the new id is returned (else the row count); the `fresh` columns are
+ * left to their defaults, rows insert in `order_by` order. A single-column
+ * foreign key (but to the event or the table itself) is kept only when
+ * the target has the row; otherwise the row is treated as if the referenced row had been
  * deleted: `ON DELETE SET NULL` clears the column, any other action
  * skips the row.
  */
 const RESTORE_FUNCTION = String.raw`
-CREATE FUNCTION pg_temp.oxygen_restore_section(tbl text, src text, new_event bigint, dumped text[], skip_conflicts boolean)
+CREATE FUNCTION pg_temp.oxygen_restore_section(tbl text, src text, new_event bigint, dumped text[], skip_conflicts boolean,
+                                                fresh text[], order_by text)
 RETURNS bigint LANGUAGE plpgsql AS $fn$
 DECLARE
   target oid := to_regclass(format('oxygen.%I', tbl));
@@ -171,6 +188,7 @@ BEGIN
      ORDER BY a.attnum
   LOOP
     IF tbl = 'events' AND r.attname = 'id' THEN CONTINUE; END IF;
+    IF r.attname::text = ANY (fresh) THEN CONTINUE; END IF;
     IF tbl <> 'events' AND r.attname = 'event_id' THEN
       e := format('%s::bigint', new_event);
     ELSE
@@ -181,7 +199,10 @@ BEGIN
       JOIN pg_class fc ON fc.oid = c.confrelid
       JOIN pg_attribute fa ON fa.attrelid = c.confrelid AND fa.attnum = c.confkey[1]
      WHERE c.contype = 'f' AND c.conrelid = target AND cardinality(c.conkey) = 1 AND c.conkey[1] = r.attnum
-       AND NOT (fc.relname::text = ANY (dumped))
+       -- Every reference but to the event (rewritten) and to the table
+       -- itself (rows of this same statement, invisible to the check):
+       -- a dumped table's section can lack the row too (a filtered one).
+       AND c.confrelid <> target AND fc.relname <> 'events'
      LIMIT 1;
     IF FOUND THEN
       -- As if the missing row had been deleted: ON DELETE SET NULL clears
@@ -198,6 +219,9 @@ BEGIN
 
   EXECUTE format('SELECT count(*) FROM pg_temp.%I', src) INTO total;
   IF tbl = 'events' THEN
+    IF cardinality(conds) > 0 THEN
+      RAISE EXCEPTION 'events has a required reference the restore cannot check: update restore.ts';
+    END IF;
     IF total <> 1 THEN
       RAISE EXCEPTION 'the events section holds % rows, expected 1', total;
     END IF;
@@ -206,14 +230,15 @@ BEGIN
     RETURN new_id;
   END IF;
 
-  EXECUTE format('INSERT INTO oxygen.%I (%s) SELECT %s FROM pg_temp.%I s%s%s',
+  EXECUTE format('INSERT INTO oxygen.%I (%s) SELECT %s FROM pg_temp.%I s%s%s%s',
                  tbl, array_to_string(cols, ', '), array_to_string(exprs, ', '), src,
                  CASE WHEN cardinality(conds) > 0 THEN ' WHERE ' || array_to_string(conds, ' AND ') ELSE '' END,
+                 CASE WHEN order_by IS NOT NULL THEN format(' ORDER BY s.%I::bigint', order_by) ELSE '' END,
                  CASE WHEN skip_conflicts THEN ' ON CONFLICT DO NOTHING' ELSE '' END);
   GET DIAGNOSTICS n = ROW_COUNT;
   IF n < total THEN
     RAISE WARNING '%: % of % rows restored (% skipped: %)', tbl, n, total, total - n,
-      CASE WHEN skip_conflicts THEN 'already present' ELSE 'they reference users or groups this database does not have' END;
+      CASE WHEN skip_conflicts THEN 'already present' ELSE 'they reference rows this database does not have' END;
   END IF;
 
   -- Kept serial ids: move each sequence past them.
@@ -233,6 +258,44 @@ END
 $fn$;
 `;
 
+/**
+ * Fresh graphic ids: `restore_graphic_ids` maps each dumped id to a new
+ * one from the target's sequence, and `pg_temp.oxygen_remap_graphics`
+ * rewrites a `graphicId` in layout JSON (template and sheet `objects`,
+ * course object `props`) through it. An id the dump does not carry (a
+ * club graphic) is kept as it is.
+ */
+const GRAPHICS_FUNCTIONS = String.raw`
+CREATE TEMP TABLE restore_graphic_ids (old_id text PRIMARY KEY, new_id bigint NOT NULL) ON COMMIT DROP;
+CREATE FUNCTION pg_temp.oxygen_remap_graphic(o jsonb) RETURNS jsonb LANGUAGE sql STABLE AS $fn$
+  SELECT CASE WHEN jsonb_typeof(o) = 'object' AND o ? 'graphicId'
+              THEN COALESCE((SELECT jsonb_set(o, '{graphicId}', to_jsonb(m.new_id))
+                               FROM restore_graphic_ids m WHERE m.old_id = o->>'graphicId'), o)
+              ELSE o END
+$fn$;
+CREATE FUNCTION pg_temp.oxygen_remap_graphics_in(objects jsonb) RETURNS jsonb LANGUAGE sql STABLE AS $fn$
+  SELECT CASE WHEN jsonb_typeof(objects) = 'array'
+              THEN COALESCE((SELECT jsonb_agg(pg_temp.oxygen_remap_graphic(e.o) ORDER BY e.n)
+                               FROM jsonb_array_elements(objects) WITH ORDINALITY AS e(o, n)), objects)
+              ELSE objects END
+$fn$;
+`;
+
+/** The layout columns that draw graphics by number, per section. */
+const GRAPHIC_REFERENCES: Readonly<Partial<Record<BackupTable, { column: string; array: boolean }>>> = {
+  map_templates: { column: "objects", array: true },
+  course_maps: { column: "objects", array: true },
+  course_objects: { column: "props", array: false },
+};
+
+function remapGraphics(t: BackupTable, header: readonly string[]): string | null {
+  const ref = GRAPHIC_REFERENCES[t];
+  if (!ref || !header.includes(ref.column)) return null;
+  const c = quoteIdent(ref.column);
+  const fn = ref.array ? "pg_temp.oxygen_remap_graphics_in" : "pg_temp.oxygen_remap_graphic";
+  return `UPDATE restore_${t} SET ${c} = ${fn}(${c}::jsonb)::text WHERE ${c} IS NOT NULL;`;
+}
+
 function quoteIdent(name: string): string {
   return `"${name.replace(/"/g, '""')}"`;
 }
@@ -251,9 +314,10 @@ function loadSection(t: BackupTable, csv: string): string {
 }
 
 function insertSection(t: BackupTable, dumped: readonly string[]): string {
+  const fresh = FRESH_COLUMNS[t];
   return (
     `SELECT pg_temp.oxygen_restore_section('${t}', 'restore_${t}', :new_event_id, ${sqlArray(dumped)}, ` +
-    `${SHARED_SECTIONS.has(t)}) AS restored_${t} \\gset`
+    `${SHARED_SECTIONS.has(t)}, ${sqlArray(fresh?.cols ?? [])}, ${fresh?.orderBy ? `'${fresh.orderBy}'` : "NULL"}) AS restored_${t} \\gset`
   );
 }
 
@@ -273,7 +337,7 @@ export const RESTORED_EVENT_ID_PREFIX = "restored-event-id ";
  */
 export function buildCoreRestoreScript(dump: CheckedDump, opts: { replace: boolean }): string {
   const dumped = dumpedTables(dump);
-  const parts: string[] = [`\\set ON_ERROR_STOP on`, `BEGIN;`, RESTORE_FUNCTION, loadSection("events", dump.sections.get("events")!)];
+  const parts: string[] = [`\\set ON_ERROR_STOP on`, `BEGIN;`, RESTORE_FUNCTION, GRAPHICS_FUNCTIONS, loadSection("events", dump.sections.get("events")!)];
   if (opts.replace) {
     parts.push(`DELETE FROM oxygen.events e USING restore_events s WHERE e.name_id = s.name_id;`);
   } else {
@@ -286,10 +350,20 @@ export function buildCoreRestoreScript(dump: CheckedDump, opts: { replace: boole
 END $$;`,
     );
   }
-  parts.push(`SELECT pg_temp.oxygen_restore_section('events', 'restore_events', NULL, ${sqlArray(dumped)}, false) AS new_event_id \\gset`);
+  parts.push(`SELECT pg_temp.oxygen_restore_section('events', 'restore_events', NULL, ${sqlArray(dumped)}, false, ${sqlArray([])}, NULL) AS new_event_id \\gset`);
   for (const t of dump.tables) {
     if (t === "events" || SCRIPT_SECTIONS.has(t) || MAP_EXTRA_SECTIONS.has(t)) continue;
-    parts.push(loadSection(t, dump.sections.get(t)!), insertSection(t, dumped));
+    const csv = dump.sections.get(t)!;
+    parts.push(loadSection(t, csv));
+    if (t === "graphics") {
+      parts.push(
+        `INSERT INTO restore_graphic_ids (old_id, new_id) SELECT id, nextval(pg_get_serial_sequence('oxygen.graphics', 'id')) FROM restore_graphics ORDER BY id::bigint;`,
+        `UPDATE restore_graphics s SET id = m.new_id::text FROM restore_graphic_ids m WHERE m.old_id = s.id;`,
+      );
+    }
+    const remap = remapGraphics(t, csvHeader(csv)!);
+    if (remap) parts.push(remap);
+    parts.push(insertSection(t, dumped));
   }
   parts.push(`COMMIT;`, `\\echo ${RESTORED_EVENT_ID_PREFIX}:new_event_id`, ``);
   return parts.join("\n");

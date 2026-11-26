@@ -47,6 +47,13 @@ export async function getBackupTarget(
 
 // ─── Filename + header ─────────────────────────────────────
 
+/**
+ * The header line of a dump that ends with `BACKUP_COMPLETE_MARKER` when
+ * whole. The restore requires the marker in a dump with this line, and
+ * treats one without as written by an older release.
+ */
+export const BACKUP_FORMAT_LINE = "-- Format:     2";
+
 export function buildBackupFilename(nameId: string, when: Date = new Date()): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   const ts =
@@ -72,6 +79,7 @@ export function buildBackupHeader(row: BackupEvent, when: Date = new Date()): st
     `'${sqlEscape(row.annotation)}');`;
   return [
     `-- Oxygen backup`,
+    `${BACKUP_FORMAT_LINE}`,
     `-- Created:    ${when.toISOString()}`,
     `-- Event:      ${row.nameId}`,
     `-- Name:       ${row.name}`,
@@ -121,16 +129,24 @@ export interface PgConnectionParams {
  */
 export function parseDatabaseUrl(raw: string = process.env.DATABASE_URL ?? ""): PgConnectionParams {
   const u = new URL(raw);
+  const decode = (v: string) => {
+    try {
+      return decodeURIComponent(v);
+    } catch {
+      return v;
+    }
+  };
   const schema = u.searchParams.get("schema") ?? "oxygen";
   const socketHost = u.searchParams.get("host");
   const sslmode = u.searchParams.get("sslmode") ?? undefined;
   const portParam = u.searchParams.get("port");
   return {
-    host: socketHost || u.hostname || "localhost",
+    // An IPv6 literal comes bracketed from URL; psql wants it bare.
+    host: socketHost || u.hostname.replace(/^\[(.*)\]$/, "$1") || "localhost",
     port: u.port ? parseInt(u.port, 10) : portParam ? parseInt(portParam, 10) : 5432,
-    user: u.username ? decodeURIComponent(u.username) : undefined,
-    password: u.password ? decodeURIComponent(u.password) : undefined,
-    database: decodeURIComponent(u.pathname.replace(/^\//, "")),
+    user: u.username ? decode(u.username) : undefined,
+    password: u.password ? decode(u.password) : undefined,
+    database: decode(u.pathname.replace(/^\//, "")),
     schema,
     ...(sslmode ? { sslmode } : {}),
   };
@@ -148,6 +164,8 @@ export function psqlInvocation(
   const env: NodeJS.ProcessEnv = { ...process.env };
   if (params.password) env.PGPASSWORD = params.password;
   if (params.sslmode) env.PGSSLMODE = params.sslmode;
+  // A database that does not answer fails the dump instead of hanging it.
+  env.PGCONNECT_TIMEOUT ??= "10";
   return { args, env };
 }
 
@@ -168,6 +186,9 @@ export function psqlInvocation(
  */
 export const BACKUP_TABLES = [
   "events",
+  // Before the layout rows that draw it: the restore gives each graphic a
+  // fresh id and rewrites their `graphicId` references.
+  "graphics",
   "controls",
   "courses",
   "course_controls",
@@ -184,7 +205,6 @@ export const BACKUP_TABLES = [
   "punches",
   "card_readout_backups",
   "journal",
-  "graphics",
   "map_sources",
   "map_documents",
   "map_document_colour_settings",
@@ -282,31 +302,46 @@ export function buildBackupScript(eventId: bigint): string {
   ].join("\n");
 }
 
+export interface BackupScan {
+  /** Table → CSV text (header row first, trailing blank lines dropped). */
+  sections: Map<string, string>;
+  /** The dump ends with `BACKUP_COMPLETE_MARKER` (outside any value). */
+  complete: boolean;
+  /** The dump has a `-- BACKUP FAILED` trailer (outside any value). */
+  failed: boolean;
+  /** The header has `BACKUP_FORMAT_LINE`. */
+  marked: boolean;
+}
+
 /**
- * Split a dump back into its sections: table → CSV text (header row
- * first, trailing blank lines dropped). The header comment is skipped;
- * a `-- BACKUP FAILED` trailer or the completion marker ends the last
- * section.
+ * Read a dump: its sections, and whether it ends complete or failed. The
+ * header comment is skipped; a `-- BACKUP FAILED` trailer or the
+ * completion marker ends the last section. Inside a quoted CSV value that
+ * spans lines (a value with a newline), a line is data even when it looks
+ * like a separator or a marker: CSV doubles a quote inside a value, so an
+ * odd count of quotes on a line toggles.
  */
-export function splitBackupSections(dump: string): Map<string, string> {
-  const out = new Map<string, string>();
+export function scanBackup(dump: string): BackupScan {
+  const sections = new Map<string, string>();
   let table: string | null = null;
   let lines: string[] = [];
+  let complete = false;
+  let failed = false;
+  let marked = false;
   const flush = () => {
     if (table === null) return;
     while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
-    out.set(table, lines.map((l) => `${l}\n`).join(""));
+    sections.set(table, lines.map((l) => `${l}\n`).join(""));
   };
-  // Inside a quoted CSV field that spans lines (a value with a newline),
-  // a line is data even when it looks like a separator: CSV doubles a
-  // quote inside a field, so an odd count of quotes on a line toggles.
+  const oddQuotes = (line: string) => (line.split('"').length - 1) % 2 === 1;
   let inQuote = false;
   for (const line of dump.split("\n")) {
     if (inQuote) {
       lines.push(line);
-      if ((line.split('"').length - 1) % 2 === 1) inQuote = false;
+      if (oddQuotes(line)) inQuote = false;
       continue;
     }
+    if (table === null && line === BACKUP_FORMAT_LINE) marked = true;
     const sep = /^--- (\S+) ---$/.exec(line);
     if (sep) {
       flush();
@@ -314,14 +349,26 @@ export function splitBackupSections(dump: string): Map<string, string> {
       lines = [];
       continue;
     }
-    if (line.startsWith("-- BACKUP FAILED") || line === BACKUP_COMPLETE_MARKER) break;
+    if (line.startsWith("-- BACKUP FAILED")) {
+      failed = true;
+      break;
+    }
+    if (line === BACKUP_COMPLETE_MARKER) {
+      complete = true;
+      break;
+    }
     if (table !== null) {
       lines.push(line);
-      if ((line.split('"').length - 1) % 2 === 1) inQuote = true;
+      if (oddQuotes(line)) inQuote = true;
     }
   }
   flush();
-  return out;
+  return { sections, complete, failed, marked };
+}
+
+/** The sections of a dump (`scanBackup`). */
+export function splitBackupSections(dump: string): Map<string, string> {
+  return scanBackup(dump).sections;
 }
 
 export function spawnPgDump(eventId: bigint): PgDumpProcess {
@@ -383,9 +430,16 @@ export function startBackupStream(
   log?: BackupLogger,
   when: Date = new Date(),
   spawnDump: (eventId: bigint) => PgDumpProcess = spawnPgDump,
+  signal?: AbortSignal,
 ): Promise<BackupStart> {
   const dump = spawnDump(target.id);
   let running = true;
+  // The client went away before the stream was handed over.
+  const onAbort = () => {
+    if (running) dump.child.kill("SIGTERM");
+  };
+  if (signal?.aborted) onAbort();
+  else signal?.addEventListener("abort", onAbort, { once: true });
   void dump.exited.then(({ code, stderr }) => {
     running = false;
     if (stderr.trim() && log) {
@@ -397,7 +451,10 @@ export function startBackupStream(
     let started = false;
     const onFirst = (chunk: Buffer) => {
       started = true;
+      signal?.removeEventListener("abort", onAbort);
       const out = new PassThrough();
+      // The consumer (Fastify) reports the failure; never crash on it.
+      out.on("error", () => {});
       out.write(buildBackupHeader(target, when));
       out.write(chunk);
       dump.stdout.pipe(out, { end: false });
@@ -411,8 +468,18 @@ export function startBackupStream(
           return;
         }
         out.write(`\n-- BACKUP FAILED (exit ${code}): ${oneLine(stderr)}\n`);
-        // Let the trailer flush, then fail the transfer.
-        setImmediate(() => out.destroy(new Error(`event backup failed (psql exit ${code})`)));
+        // Let the buffered rest and the trailer reach the client (for up to
+        // 10 s of backpressure), then fail the transfer.
+        const deadline = Date.now() + 10_000;
+        const fail = () => {
+          if (out.destroyed) return;
+          if (out.readableLength > 0 && Date.now() < deadline) {
+            setTimeout(fail, 20);
+            return;
+          }
+          out.destroy(new Error(`event backup failed (psql exit ${code})`));
+        };
+        setImmediate(fail);
       });
       resolve({ ok: true, stream: out });
     };
@@ -475,7 +542,10 @@ export function registerBackupRoute(
     if (!target) {
       return reply.code(404).send({ error: `Event "${name}" not found` });
     }
-    const started = await startBackupStream(target, req.log, new Date(), opts.spawnDump);
+    // Stop psql when the client goes away before the dump starts.
+    const gone = new AbortController();
+    reply.raw.once("close", () => gone.abort());
+    const started = await startBackupStream(target, req.log, new Date(), opts.spawnDump, gone.signal);
     if (!started.ok) {
       return reply
         .code(502)

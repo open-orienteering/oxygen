@@ -98,12 +98,19 @@ services:
       - |
         echo "pg-backup: every $${BACKUP_INTERVAL_SECONDS}s to /backups, keeping $${BACKUP_KEEP}"
         while true; do
+          find /backups -maxdepth 1 -name 'oxygen_*.dump.partial' -type f -delete
+          last="$$(ls -1t /backups/oxygen_*.dump 2>/dev/null | head -n 1)"
+          need_kb=0
+          if [ -n "$$last" ]; then need_kb=$$(( $$(wc -c < "$$last") * 2 / 1024 )); fi
+          free_kb="$$(df -Pk /backups | awk 'NR == 2 { print $$4 }')"
           out="/backups/oxygen_$$(date -u +%Y%m%d_%H%M%S).dump"
-          if pg_dump --schema=oxygen --format=custom --file="$$out.partial"; then
+          if [ "$${free_kb:-0}" -lt "$$need_kb" ]; then
+            echo "pg-backup: SKIPPED: $$free_kb KiB free in /backups, need $$need_kb" >&2
+          elif pg_dump --schema=oxygen --format=custom --file="$$out.partial"; then
             mv "$$out.partial" "$$out" && echo "pg-backup: wrote $$out"
             ls -1t /backups/oxygen_*.dump | tail -n +"$$(($${BACKUP_KEEP} + 1))" | while read -r old; do rm -f "$$old"; done
           else
-            echo "pg-backup: pg_dump FAILED" >&2; rm -f "$$out.partial"
+            echo "pg-backup: pg_dump FAILED" >&2
           fi
           sleep "$${BACKUP_INTERVAL_SECONDS}"
         done

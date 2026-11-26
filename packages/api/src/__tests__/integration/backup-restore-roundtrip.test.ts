@@ -24,7 +24,9 @@ import { resolve } from "node:path";
 import { applyEventMap } from "../../event-map.js";
 import Fastify, { type FastifyInstance } from "fastify";
 import { createTestEvent, disconnect, type TestEventContext } from "../helpers/test-db.js";
-import { BACKUP_COMPLETE_MARKER, BACKUP_EXCLUDED, BACKUP_TABLES, registerBackupRoute, splitBackupSections } from "../../backup.js";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
+import { BACKUP_COMPLETE_MARKER, BACKUP_EXCLUDED, BACKUP_TABLES, registerBackupRoute, splitBackupSections, type PgDumpProcess } from "../../backup.js";
 import { RestoreError, runRestore } from "../../restore.js";
 import { prisma } from "../../db.js";
 
@@ -41,18 +43,41 @@ let groupId: string;
 
 type Snapshot = Record<string, unknown[]>;
 
+/** Columns the restore renumbers from the target's sequences (restore.ts FRESH_COLUMNS, graphics). */
+const RENUMBERED: Record<string, string[]> = { graphics: ["id"], tracks: ["id"], routes: ["id"], journal: ["ingest_seq"], map_files: ["id"] };
+
+/** `graphicId` in layout JSON, replaced by the graphic's name, so a renumbered graphic compares equal. */
+function byGraphicName(v: unknown, names: Map<string, string>): unknown {
+  if (Array.isArray(v)) return v.map((x) => byGraphicName(x, names));
+  if (v && typeof v === "object") {
+    const o = { ...(v as Record<string, unknown>) };
+    if ("graphicId" in o) o.graphicId = `graphic:${names.get(String(o.graphicId)) ?? `missing ${String(o.graphicId)}`}`;
+    return o;
+  }
+  return v;
+}
+
 /** The event's rows per table, as JSON without `event_id`, in a stable order. */
 async function snapshot(eventId: bigint): Promise<Snapshot> {
   const db = prisma();
   const out: Snapshot = {};
   const scoped = BACKUP_TABLES.filter((t) => !["events", "course_controls", "class_course_pools", "map_sources", "map_documents", "map_document_colour_settings", "club_symbol_decisions"].includes(t));
+  const graphicNames = new Map(
+    (await db.$queryRawUnsafe<{ id: string; name: string }[]>(`SELECT id::text AS id, name FROM oxygen.graphics WHERE event_id = $1`, eventId)).map((g) => [g.id, g.name]),
+  );
   for (const t of scoped) {
-    const rows = await db.$queryRawUnsafe<{ j: unknown }[]>(
-      `SELECT to_jsonb(t) - 'event_id' AS j FROM oxygen.${t} t WHERE event_id = $1 ORDER BY to_jsonb(t) - 'event_id' ->> ${t === "event_seqs" ? "'table_name'" : "'id'"}`,
+    const key = t === "event_seqs" ? "table_name" : t === "graphics" ? "name" : t === "tracks" ? "device_id" : "id";
+    const rows = await db.$queryRawUnsafe<{ j: Record<string, unknown> }[]>(
+      `SELECT to_jsonb(t) - 'event_id' AS j FROM oxygen.${t} t WHERE event_id = $1 ORDER BY to_jsonb(t) ->> '${key}'`,
       eventId,
     );
-    // map_files gets a fresh id from the restore (restore-map-blobs.sql).
-    out[t] = rows.map((r) => (t === "map_files" ? { ...(r.j as object), id: undefined } : r.j));
+    out[t] = rows.map(({ j }) => {
+      const row: Record<string, unknown> = { ...j };
+      for (const c of RENUMBERED[t] ?? []) delete row[c];
+      if (t === "map_templates" || t === "course_maps") row.objects = byGraphicName(row.objects, graphicNames);
+      if (t === "course_objects") row.props = byGraphicName(row.props, graphicNames);
+      return row;
+    });
   }
   out.map_document_colour_settings = (await db.$queryRawUnsafe<{ j: unknown }[]>(
     `SELECT to_jsonb(s) AS j FROM oxygen.map_document_colour_settings s WHERE s.document_hash IN (SELECT document_hash FROM oxygen.map_files WHERE event_id = $1) ORDER BY colour_key`, eventId,
@@ -87,10 +112,13 @@ beforeAll(async () => {
   const course = await one(`INSERT INTO oxygen.courses (event_id, name, finish_control_id) VALUES ($1, 'A', $2::uuid) RETURNING id`, e, finish.id);
   const variant = await one(`INSERT INTO oxygen.courses (event_id, name, parent_course_id, variant_key) VALUES ($1, 'A1', $2::uuid, 'AB') RETURNING id`, e, course.id);
   await one(`INSERT INTO oxygen.course_controls (course_id, position, control_id) VALUES ($1::uuid, 0, $2::uuid) RETURNING course_id AS id`, course.id, control.id);
-  const template = await one(`INSERT INTO oxygen.map_templates (event_id, name, print_scale) VALUES ($1, 'A4', 10000) RETURNING id`, e);
+  const logo = await one(`INSERT INTO oxygen.graphics (event_id, name, mime, data, size_bytes) VALUES ($1, 'logo', 'image/png', '\\x89504e47'::bytea, 4) RETURNING id::text AS id`, e);
+  const drawn = JSON.stringify([{ kind: "image", graphicId: Number(logo.id), x: 1 }, { kind: "text", text: "graphicId" }]);
+  const template = await one(`INSERT INTO oxygen.map_templates (event_id, name, print_scale, objects) VALUES ($1, 'A4', 10000, $2::jsonb) RETURNING id`, e, drawn);
+  await one(`INSERT INTO oxygen.course_objects (event_id, kind, geometry, scope, props) VALUES ($1, 'image', '[]'::jsonb, '{"all":true}'::jsonb, $2::jsonb) RETURNING id`, e, JSON.stringify({ graphicId: Number(logo.id) }));
   const klass = await one(`INSERT INTO oxygen.classes (event_id, name, course_id, sheet_template_id) VALUES ($1, 'H21', $2::uuid, $3::uuid) RETURNING id`, e, course.id, template.id);
   await one(`INSERT INTO oxygen.class_course_pools (class_id, course_id) VALUES ($1::uuid, $2::uuid) RETURNING class_id AS id`, klass.id, variant.id);
-  await one(`INSERT INTO oxygen.course_maps (event_id, name, course_id, template_id, class_id) VALUES ($1, 'A map', $2::uuid, $3::uuid, $4::uuid) RETURNING id`, e, course.id, template.id, klass.id);
+  await one(`INSERT INTO oxygen.course_maps (event_id, name, course_id, template_id, class_id, objects) VALUES ($1, 'A map', $2::uuid, $3::uuid, $4::uuid, $5::jsonb) RETURNING id`, e, course.id, template.id, klass.id, drawn);
   const readout = await one(`INSERT INTO oxygen.card_readouts (event_id, card_no, punches) VALUES ($1, 500123, '[{"code":31,"time":3600}]'::jsonb) RETURNING id`, e);
   const card = await one(`INSERT INTO oxygen.cards (event_id, card_no, readout_id) VALUES ($1, 500123, $2::uuid) RETURNING id`, e, readout.id);
   const runner = await one(`INSERT INTO oxygen.runners (event_id, name, club_name, card_id, class_id, course_id) VALUES ($1, 'Anna "A" Berg, jr', $5, $2::uuid, $3::uuid, $4::uuid) RETURNING id`, e, card.id, klass.id, course.id, "OK Linné\n--- runners ---");
@@ -99,7 +127,6 @@ beforeAll(async () => {
   await one(`INSERT INTO oxygen.punches (event_id, card_no, control_code, time, unit_id, control_id) VALUES ($1, 500123, 31, 3600, $2::uuid, $3::uuid) RETURNING id`, e, unit.id, control.id);
   await one(`INSERT INTO oxygen.card_readout_backups (event_id, slot_address, card_no, punches, punches_hash, raw_bytes) VALUES ($1, 8, 500123, '[]'::jsonb, 'h1', '\\x0102ff'::bytea) RETURNING id`, e);
   await one(`INSERT INTO oxygen.journal (event_id, type, station_id, client_timestamp, payload, hlc, schema_version) VALUES ($1, 'runner.update', 'st-1', now(), '{"note":"a, \\"b\\""}'::jsonb, 1, 1) RETURNING id`, e);
-  await one(`INSERT INTO oxygen.graphics (event_id, name, mime, data, size_bytes) VALUES ($1, 'logo', 'image/png', '\\x89504e47'::bytea, 4) RETURNING id::text AS id`, e);
   await one(`INSERT INTO oxygen.tracks (event_id, device_id, start_time_ms, geometry) VALUES ($1, 'dev', 1, '{}'::jsonb) RETURNING id::text AS id`, e);
   await one(`INSERT INTO oxygen.routes (event_id, waypoints, runner_id, class_id) VALUES ($1, '[]'::jsonb, $2::uuid, $3::uuid) RETURNING id::text AS id`, e, runner.id, klass.id);
   await one(`INSERT INTO oxygen.event_permissions (event_id, user_id, group_id, granted_by) VALUES ($1, $2::uuid, $3::uuid, $4::uuid) RETURNING id`, e, keptUserId, groupId, goneUser.id);
@@ -194,16 +221,20 @@ describe("runRestore", () => {
     const { event_permissions: _a, map_colour_settings: _c, ...restAfter } = after;
     const { event_permissions: _b, map_colour_settings: _d, ...restBefore } = before;
     expect(restAfter).toEqual(restBefore);
-    for (const t of ["runners", "cards", "card_readouts", "punches", "control_units", "map_templates", "classes", "course_maps", "journal", "graphics", "card_readout_backups", "map_files", "map_patches", "map_gps_tracks", "map_colour_settings", "map_document_colour_settings", "event_seqs"]) {
+    for (const t of ["runners", "cards", "card_readouts", "punches", "control_units", "map_templates", "classes", "course_maps", "course_objects", "journal", "graphics", "tracks", "routes", "card_readout_backups", "map_files", "map_patches", "map_gps_tracks", "map_colour_settings", "map_document_colour_settings", "event_seqs"]) {
       expect(after[t].length, t).toBeGreaterThan(0);
     }
   });
 
-  it("moves the serial sequences past the restored ids", async () => {
-    const g = await one<{ id: string }>(`INSERT INTO oxygen.graphics (event_id, name, mime, data, size_bytes) VALUES ($1, 'next', 'image/png', '\\x00'::bytea, 1) RETURNING id::text AS id`, restoredId);
-    const kept = (before.graphics as { id: number }[]).map((r) => BigInt(r.id));
-    expect(kept.every((k) => BigInt(g.id) > k)).toBe(true);
-    await prisma().$executeRawUnsafe(`DELETE FROM oxygen.graphics WHERE id = $1::bigint`, g.id);
+  it("renumbers the graphics, and the layout JSON draws the new ids", async () => {
+    const [g] = await prisma().$queryRawUnsafe<{ id: string }[]>(`SELECT id::text AS id FROM oxygen.graphics WHERE event_id = $1`, restoredId);
+    const [t] = await prisma().$queryRawUnsafe<{ objects: { graphicId?: number }[] }[]>(`SELECT objects FROM oxygen.map_templates WHERE event_id = $1`, restoredId);
+    const [o] = await prisma().$queryRawUnsafe<{ props: { graphicId?: number } }[]>(`SELECT props FROM oxygen.course_objects WHERE event_id = $1 AND kind = 'image'`, restoredId);
+    expect(t.objects[0].graphicId).toBe(Number(g.id));
+    expect(o.props.graphicId).toBe(Number(g.id));
+    // The dumped id is not reused: another database may hold it.
+    const dumped = splitBackupSections(dump).get("graphics")!.split("\n")[1].split(",")[0];
+    expect(g.id).not.toBe(dumped);
   });
 
   it("refuses to restore over the event a second time", () => {
@@ -223,7 +254,8 @@ describe("runRestore", () => {
   });
 
   it("refuses a cut-short dump and leaves nothing behind", async () => {
-    const cut = dump.slice(0, dump.indexOf("--- graphics ---"));
+    // Cut in the race data, before the journal section (M1).
+    const cut = dump.slice(0, dump.indexOf("--- punches ---"));
     expect(() => runRestore(cut, { replace: true })).toThrow(/cut short/);
     const [{ n }] = await prisma().$queryRawUnsafe<{ n: number }[]>(`SELECT count(*)::int AS n FROM oxygen.events WHERE name_id = $1`, src.nameId);
     expect(n).toBe(1);
@@ -231,6 +263,37 @@ describe("runRestore", () => {
 });
 
 describe("the backup route", () => {
+  it("aborts the HTTP transfer when psql fails mid-dump (DB-13)", async () => {
+    const live = await createTestEvent("restore_abort");
+    const http = Fastify({ logger: false });
+    registerBackupRoute(http, {
+      spawnDump: () => {
+        const stdout = new PassThrough();
+        const stderr = new PassThrough();
+        const child = Object.assign(new EventEmitter(), { kill: () => true });
+        const exited = new Promise<{ code: number | null; stderr: string }>((resolve) => {
+          setTimeout(() => {
+            stdout.write("--- events ---\nid\n1\n");
+            setTimeout(() => {
+              stdout.end();
+              resolve({ code: 3, stderr: "ERROR:  boom" });
+            }, 50);
+          }, 10);
+        });
+        return { child, stdout, stderr, exited } as unknown as PgDumpProcess;
+      },
+    });
+    try {
+      const address = await http.listen({ port: 0, host: "127.0.0.1" });
+      const res = await fetch(`${address}/api/backup/event?name=${live.nameId}`);
+      expect(res.status).toBe(200);
+      await expect(res.text()).rejects.toThrow();
+    } finally {
+      await http.close();
+      await live.cleanup();
+    }
+  });
+
   it("answers 502 and no attachment when psql cannot reach the database (BLD-01)", async () => {
     const saved = process.env.DATABASE_URL!;
     // The event must exist for the route to start a dump.

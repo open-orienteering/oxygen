@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { BACKUP_COMPLETE_MARKER } from "../backup.js";
+import { BACKUP_COMPLETE_MARKER, BACKUP_FORMAT_LINE } from "../backup.js";
 import { buildCoreRestoreScript, buildMapExtrasScript, checkDump, csvHeader, planRestore, type CheckedDump } from "../restore.js";
 
 const dumpOf = (sections: Record<string, string>, tail = BACKUP_COMPLETE_MARKER) =>
@@ -49,6 +49,20 @@ describe("checkDump", () => {
     if (!c.ok) expect(c.error).toContain("cut short");
   });
 
+  it("refuses a dump with the format line cut anywhere, even before the journal", () => {
+    const cut = ["-- Oxygen backup", BACKUP_FORMAT_LINE, "", "--- events ---", BASIC.events, "--- controls ---", BASIC.controls, ""].join("\n");
+    const c = checkDump(cut);
+    expect(c).toMatchObject({ ok: false });
+    if (!c.ok) expect(c.error).toContain("cut short");
+  });
+
+  it("does not take a marker inside a quoted value for the end of the dump", () => {
+    const sneaky = ["-- Oxygen backup", BACKUP_FORMAT_LINE, "--- events ---", 'id,name_id,name\n42,vinter,"x', BACKUP_COMPLETE_MARKER, '"', ""].join("\n");
+    expect(checkDump(sneaky)).toMatchObject({ ok: false });
+    const failedInside = dumpOf({ ...BASIC, controls: 'id,event_id,seq,notes\n1,42,1,"a\n-- BACKUP FAILED (exit 1): no\n"' });
+    expect(checkDump(failedInside).ok).toBe(true);
+  });
+
   it("loads an older dump (no marker, no journal) with warnings, skipping unknown sections", () => {
     const old = { events: BASIC.events, runners: BASIC.runners, event_log: "id,event_id\n", rendered_maps: "id\n" };
     const c = checkDump(dumpOf(old, ""));
@@ -84,6 +98,21 @@ describe("buildCoreRestoreScript", () => {
     const s = buildCoreRestoreScript(dump, { replace: false });
     expect(s.startsWith("\\set ON_ERROR_STOP on\nBEGIN;\n")).toBe(true);
     expect(s).toContain("COMMIT;\n\\echo restored-event-id :new_event_id");
+  });
+
+  it("renumbers the graphics and rewrites the layout JSON that draws them", () => {
+    const d = checked({ ...BASIC, graphics: "id,event_id,name\n7,42,logo", map_templates: "id,event_id,objects\n", course_objects: "id,event_id,props\n" });
+    const s = buildCoreRestoreScript(d, { replace: false });
+    expect(s).toContain("INSERT INTO restore_graphic_ids (old_id, new_id) SELECT id, nextval(pg_get_serial_sequence('oxygen.graphics', 'id'))");
+    expect(s).toContain('UPDATE restore_map_templates SET "objects" = pg_temp.oxygen_remap_graphics_in("objects"::jsonb)::text');
+    expect(s).toContain('UPDATE restore_course_objects SET "props" = pg_temp.oxygen_remap_graphic("props"::jsonb)::text');
+    expect(s.indexOf("oxygen_restore_section('graphics'")).toBeLessThan(s.indexOf("oxygen_restore_section('map_templates'"));
+  });
+
+  it("leaves global serial ids to the target's sequences, the journal in its old order", () => {
+    const s = buildCoreRestoreScript(dump, { replace: false });
+    expect(s).toContain("oxygen_restore_section('journal', 'restore_journal', :new_event_id, ");
+    expect(s).toMatch(/oxygen_restore_section\('journal'.*ARRAY\['ingest_seq'\]::text\[\], 'ingest_seq'\)/);
   });
 
   it("loads each section by its header into a text temp table", () => {
