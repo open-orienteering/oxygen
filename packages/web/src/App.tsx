@@ -63,7 +63,21 @@ export default function App() {
 
   let gated: ReactNode = null;
   if (authEnabled && !isPublicSurface) {
-    if (isLoading) gated = <PageSpinner />;
+    if (isLoading) {
+      gated = sessionState === "expired" ? (
+        // Expired and nothing known: the bounded auto reload may be spent.
+        <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center gap-4 p-4 text-center">
+          <p className="text-slate-600 text-sm max-w-md">{t("sessionExpired")}</p>
+          <button
+            data-testid="session-expired-reload"
+            onClick={() => window.location.reload()}
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors cursor-pointer"
+          >
+            {t("reload")}
+          </button>
+        </div>
+      ) : <PageSpinner />;
+    }
     else if (user === null) gated = <AccessDeniedPage />;
   }
 

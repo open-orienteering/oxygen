@@ -111,10 +111,12 @@ describe("withRequestTimeout", () => {
   });
   it("keeps the caller's own signal", async () => {
     const ctrl = new AbortController();
-    let seen: AbortSignal | undefined;
-    const spy = async (_i: RequestInfo | URL, init?: RequestInit) => { seen = init?.signal ?? undefined; return new Response("{}"); };
-    await withRequestTimeout(spy, 10_000)("/trpc/x", { signal: ctrl.signal });
-    ctrl.abort();
-    expect(seen?.aborted).toBe(true);
+    const hang = (_i: RequestInfo | URL, init?: RequestInit) =>
+      new Promise<Response>((_res, rej) => init?.signal?.addEventListener("abort", () => rej(init.signal!.reason)));
+    const pending = withRequestTimeout(hang, 10_000)("/trpc/x", { signal: ctrl.signal }).catch((e) => e);
+    ctrl.abort(new DOMException("cancelled", "AbortError"));
+    const err = await pending;
+    expect(err.name).toBe("AbortError");
+    expect(isNetworkFailure(err)).toBe(false);
   });
 });

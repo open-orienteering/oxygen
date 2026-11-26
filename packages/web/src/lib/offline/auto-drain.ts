@@ -52,6 +52,8 @@ export function createAutoDrain(
   let online = false;
   let failures = 0;
   let timer: unknown = null;
+  /** An entry was queued on this page and no drain has ended "ok" since. */
+  let localPending = false;
 
   function clearRetry(): void {
     if (timer !== null) timers.clearTimer(timer);
@@ -82,7 +84,11 @@ export function createAutoDrain(
       .then((o) => { outcome = o; }, () => { outcome = "retry"; })
       .finally(() => {
         inFlight = false;
-        if (outcome === "ok") failures = 0;
+        if (outcome === "ok") {
+          failures = 0;
+          localPending = false;
+          if (!again) lastTotal = 0; // the next poll sets the real count
+        }
         if (again) {
           again = false;
           start();
@@ -98,6 +104,7 @@ export function createAutoDrain(
       // There is work now, even before the next poll raises the count: a
       // drain that fails must still schedule its retry (the poll pauses
       // while the tab is hidden).
+      localPending = true;
       lastTotal = Math.max(lastTotal, 1);
       if (online) start();
     },
@@ -105,8 +112,11 @@ export function createAutoDrain(
     kick(): void {
       if (online && lastTotal > 0) start();
     },
-    update({ online: isOnline, total, scope }: AutoDrainState): void {
+    update({ online: isOnline, total: polled, scope }: AutoDrainState): void {
       online = isOnline;
+      // The poll pauses in a hidden tab: an entry queued here since the last
+      // clean drain counts even when the polled count has not seen it.
+      const total = Math.max(polled, localPending ? 1 : 0);
       if (!isOnline || total <= 0) clearRetry();
       const key = `${isOnline}|${scope ?? ""}`;
       const fire = total > lastTotal || key !== lastKey;

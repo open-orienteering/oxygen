@@ -71,17 +71,28 @@ export async function ensureSheetsBestEffort<T>(ensure: () => Promise<T>): Promi
   }
 }
 
-/** A fetch that aborts after `ms` (on top of any signal the caller passes). */
+/**
+ * A fetch that aborts after `ms`, on top of any signal the caller passes.
+ * Combined by hand, not with `AbortSignal.any` / `AbortSignal.timeout`
+ * (missing on older Safari), so the timeout applies everywhere. The abort
+ * reason is a `TimeoutError` DOMException, as `AbortSignal.timeout` gives.
+ */
 export function withRequestTimeout(
   fetchImpl: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
   ms: number,
 ) {
   return (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const timeout = AbortSignal.timeout(ms);
-    // `AbortSignal.any` is missing before Safari 17.4: keep the caller's signal there.
-    const signal = init?.signal
-      ? typeof AbortSignal.any === "function" ? AbortSignal.any([init.signal, timeout]) : init.signal
-      : timeout;
-    return fetchImpl(input, { ...init, signal });
+    const ctrl = new AbortController();
+    const outer = init?.signal;
+    const onOuterAbort = () => ctrl.abort(outer?.reason);
+    if (outer) {
+      if (outer.aborted) ctrl.abort(outer.reason);
+      else outer.addEventListener("abort", onOuterAbort, { once: true });
+    }
+    const timer = setTimeout(() => ctrl.abort(new DOMException("The request timed out.", "TimeoutError")), ms);
+    return fetchImpl(input, { ...init, signal: ctrl.signal }).finally(() => {
+      clearTimeout(timer);
+      outer?.removeEventListener("abort", onOuterAbort);
+    });
   };
 }

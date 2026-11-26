@@ -243,4 +243,26 @@ describe("auto drain retry after a failed drain (SYNC-11)", () => {
     expect(h.runs()).toBe(1);
     expect(h.live()).toHaveLength(1);
   });
+
+  it("an entry queued offline in a hidden tab drains when the device is back online, though the poll never saw it", async () => {
+    const h = retryHarness();
+    h.drain.update(st(0, { online: false }));
+    h.drain.enqueued(); // offline: nothing runs
+    expect(h.runs()).toBe(0);
+    h.drain.update(st(0)); // online again, the paused poll still says 0
+    await h.settle();
+    expect(h.runs()).toBe(1);
+  });
+
+  it("after a clean drain the count is forgotten, so growth seen by the poll drains again", async () => {
+    const h = retryHarness();
+    h.outcomes.push("ok", "ok");
+    h.drain.update(st(0));
+    h.drain.enqueued();
+    await h.settle();
+    expect(h.runs()).toBe(1);
+    h.drain.update(st(1)); // another tab queued one
+    await h.settle();
+    expect(h.runs()).toBe(2);
+  });
 });

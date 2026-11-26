@@ -116,7 +116,10 @@ export function CurrentUserProvider({ children }: { children: ReactNode }) {
       setSessionState(result);
       // Bounded (two per five minutes): a reload that does not fix the
       // session must not turn into a reload every 15 s.
-      if (result === "expired" && nothingMountedRef.current && canReloadBounded(AUTO_RELOAD_KEY, sessionStore())) {
+      // The public kiosk / start screen is in use even while nothing is
+      // known: it never reloads by itself.
+      const publicSurface = /^\/[^/]+\/(kiosk|start-screen)(\/|$)/.test(window.location.pathname);
+      if (result === "expired" && nothingMountedRef.current && !publicSurface && canReloadBounded(AUTO_RELOAD_KEY, sessionStore())) {
         attemptSessionReload();
       }
     });

@@ -46,3 +46,6 @@ were left out on purpose, or need a check that cannot be made in the cloud.
   `CurrentUserProvider` probe decision.** Both are inline in components (no
   DOM test setup); the pure parts (`decideShellEntry`, `resolveCurrentUser`,
   `classifyProbe`) are unit tested and the paths are covered by E2E.
+- **Very old browsers.** The drain's timeout is combined by hand (no
+  `AbortSignal.any` / `AbortSignal.timeout`), so it applies on older Safari
+  too; nothing else in package 9 was checked on Safari before 17.

@@ -438,7 +438,7 @@ function KioskPageBody() {
 
   // One automatic receipt per read, also when the read's screen remounts
   // (its error boundary's "Try again").
-  const printedReadsRef = useRef(new Set<number>());
+  const lastPrintedRead = useRef(0);
   // A number per read on the readout screen: a new one when the screen
   // enters readout or shows another recent card; updates of the same read
   // keep it. Each read mounts its own readout screen.
@@ -452,8 +452,8 @@ function KioskPageBody() {
   const currentRead = readSeq.current.seq;
   const printOnce = useCallback(
     (read: number, runnerId: number) => {
-      if (printedReadsRef.current.has(read)) return;
-      printedReadsRef.current.add(read);
+      if (lastPrintedRead.current >= read) return;
+      lastPrintedRead.current = read;
       handlePrint(runnerId);
     },
     [handlePrint],
@@ -894,9 +894,11 @@ function ReadoutScreen({
   const [mountedAt] = useState(() => Date.now());
 
   // 1. Check DB state for this runner
+  // `refetchOnMount: "always"`: the print guard needs an answer fetched for
+  // this screen, also when the cached one is younger than staleTime.
   const dbRunner = trpc.runner.findByCard.useQuery(
     { cardNo: card.cardNumber },
-    { enabled: card.cardNumber > 0 },
+    { enabled: card.cardNumber > 0, refetchOnMount: "always" },
   );
 
   // 3. Fetch full readout + receipt data
@@ -907,7 +909,7 @@ function ReadoutScreen({
 
   const receipt = trpc.race.finishReceipt.useQuery(
     { runnerId: dbRunner.data?.id ?? 0 },
-    { enabled: !!dbRunner.data?.id },
+    { enabled: !!dbRunner.data?.id, refetchOnMount: "always" },
   );
 
   // Derive status from readout (more accurate than card.status since it evaluates punches)

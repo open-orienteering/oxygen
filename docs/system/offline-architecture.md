@@ -682,7 +682,10 @@ projection table, because the canvas reads the cache.
   is retried by itself: 2 s doubling to 30 s while the device is online and
   entries are pending; only a clean drain resets the delay, and a new entry
   meanwhile drains at once without resetting it. The tab becoming visible
-  again or another node becoming active retries at once. `auth` and
+  again or another node becoming active retries at once. An entry queued
+  on this page counts as pending until a drain ends clean, also when the
+  pending-count poll is paused (a hidden tab): coming back online then
+  drains it. `auth` and
   `event` blocks wait for an operator (a timer would only repeat the
   refusal).
 - **Order and the hold rule.** Entries go out ordered by HLC (`compareHlc`;
