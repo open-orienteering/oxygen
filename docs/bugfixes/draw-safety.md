@@ -24,6 +24,10 @@ Tests: `packages/api/src/draw/__tests__/algorithms.test.ts`, `drawEngine.test.ts
 ## Left out
 
 - **Other classes on the first control.** A subset or only-missing draw does not book the starts of unselected classes or kept runners on the first control; it only warns when a drawn slot equals a kept start in the same class.
+- **Mass-start late entries need *Simultaneous* again.** The panel opens every class on *Club separation*; for a late-entry draw in a mass-start class the organiser must pick *Simultaneous* so the late entries join the field. Many imported classes store interval 0, so it cannot be used to guess a mass start.
+- **Class row with kept runners.** When a redraw keeps started runners in a class, the class's stored first start and interval are left as they were, even though the other runners move. Only the draw panel defaults and the class editor read them.
+- **Write-time guard.** The runner UPDATE re-checks finish time, result status and (only-missing) start time; a card read, punch, class move or cancel committed in the same instant is not re-checked.
+- **"Started" badge before the first preview** counts finish times and result statuses only; read cards and punches show up in the preview's kept count.
 - **Only-missing classes on the timeline.** Late entries are pinned after the class's last start, so those classes are not shown as timeline bars and are not spaced against each other on a shared first control (a clash is still warned about).
 - **Hand-set starts.** There is no `start_manual` column, so a start typed in by hand is not protected by the draw. The confirmation count and the only-missing mode cover it.
 - **Zero-time starts (RES-04).** "No start time" is still `start_time = 0`, so a runner starting exactly at ZeroTime counts as undrawn.

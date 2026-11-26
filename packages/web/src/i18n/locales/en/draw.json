@@ -86,5 +86,6 @@
   "confirmForce_other": "This also rewrites runners who have started or finished: {{count}} start times are replaced and their running times will change.",
   "confirmApply": "Replace and apply",
   "stalePreview": "Runners or classes changed since the preview, so it no longer shows what Apply would write. Preview again.",
-  "forceStartedNoCount": "Also redraw runners who have started or finished"
+  "forceStartedNoCount": "Also redraw runners who have started or finished",
+  "confirmForceNoCount": "This also rewrites runners who have started or finished; their running times will change."
 }

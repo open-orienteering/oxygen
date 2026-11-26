@@ -807,8 +807,10 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
           data-testid="draw-confirm"
         >
           <p>
-            {force
+            {force && preview.replaced > 0
               ? t("confirmForce", { count: preview.replaced })
+              : force
+              ? t("confirmForceNoCount")
               : t("confirmReplace", { count: preview.replaced })}
             {preview.skippedStarted > 0 && <> {t("keptStarted", { count: preview.skippedStarted })}</>}
           </p>

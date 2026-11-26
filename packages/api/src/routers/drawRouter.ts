@@ -41,8 +41,15 @@ const drawOptionsSchema = z
 
 const seedSchema = z.number().int().min(0).max(MAX_DRAW_SEED);
 
+const uniqueClasses = z
+  .array(classDrawConfigSchema)
+  .min(1)
+  .refine((cs) => new Set(cs.map((c) => c.classId)).size === cs.length, {
+    message: "Each class may appear only once in a draw",
+  });
+
 const drawPreviewInputSchema = z.object({
-  classes: z.array(classDrawConfigSchema).min(1),
+  classes: uniqueClasses,
   settings: drawSettingsSchema,
   options: drawOptionsSchema,
   /** Reuse a seed (e.g. re-preview after a drag) so the order stays. */
@@ -50,7 +57,7 @@ const drawPreviewInputSchema = z.object({
 });
 
 const drawExecuteInputSchema = z.object({
-  classes: z.array(classDrawConfigSchema).min(1),
+  classes: uniqueClasses,
   settings: drawSettingsSchema,
   options: drawOptionsSchema,
   /** The seed and token the preview returned (RES-15). */
@@ -253,7 +260,9 @@ export const drawRouter = router({
               where: { id: cls.classUuid },
               data: {
                 firstStart: toRelative(cls.computedFirstStart, zeroTime),
-                startInterval: config.interval,
+                // A mass start has no interval; storing 0 lets a later
+                // late-entry draw recognise it.
+                startInterval: config.method === "simultaneous" ? 0 : config.interval,
               },
             });
             await emitClassUpserted(tx, eventId, cls.classUuid);
