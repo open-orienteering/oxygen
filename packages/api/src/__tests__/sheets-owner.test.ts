@@ -1,7 +1,8 @@
 /**
  * SYNC-14 (Sheets half): one node pushes each readout to the backup sheet.
  * The cloud does; a venue box that ships to a peer leaves it to the cloud
- * (which pushes the shipped `card.read` on ingest); a standalone box pushes.
+ * for an event checked out from there (the cloud pushes the shipped
+ * `card.read` on ingest); a box-only event and a standalone box push.
  */
 
 import { describe, it, expect, afterEach, vi } from "vitest";
@@ -20,8 +21,10 @@ afterEach(() => {
   clearSheetsCache();
 });
 
+let leased = true;
 const client = {
   event: { findUnique: async () => ({ googleSheetsWebhookUrl: "https://sheets.example/hook" }) },
+  eventLease: { findFirst: async () => (leased ? { id: "l1" } : null) },
 } as unknown as PrismaClient;
 
 async function pushes(): Promise<number> {
@@ -35,21 +38,31 @@ async function pushes(): Promise<number> {
 describe("pushesReadoutsToSheet", () => {
   it("the cloud pushes", async () => {
     delete process.env.NODE_ROLE;
-    expect(pushesReadoutsToSheet()).toBe(true);
+    leased = true;
+    expect(await pushesReadoutsToSheet(client, 1n)).toBe(true);
     expect(await pushes()).toBe(1);
   });
 
-  it("a venue box with a peer leaves it to the cloud", async () => {
+  it("a venue box with a peer leaves a checked-out event to the cloud", async () => {
     process.env.NODE_ROLE = "venue";
     process.env.SYNC_PEER_URL = "https://cloud.example";
-    expect(pushesReadoutsToSheet()).toBe(false);
+    leased = true;
+    expect(await pushesReadoutsToSheet(client, 1n)).toBe(false);
     expect(await pushes()).toBe(0);
+  });
+
+  it("a venue box with a peer pushes an event that lives only on the box", async () => {
+    process.env.NODE_ROLE = "venue";
+    process.env.SYNC_PEER_URL = "https://cloud.example";
+    leased = false;
+    expect(await pushes()).toBe(1);
   });
 
   it("a standalone venue box pushes itself", async () => {
     process.env.NODE_ROLE = "venue";
     delete process.env.SYNC_PEER_URL;
-    expect(pushesReadoutsToSheet()).toBe(true);
+    leased = true;
+    expect(await pushesReadoutsToSheet(client, 1n)).toBe(true);
     expect(await pushes()).toBe(1);
   });
 });

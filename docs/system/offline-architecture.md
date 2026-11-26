@@ -36,8 +36,8 @@ Two kinds of long-lived nodes, both running the same server image
 
 - **Cloud node** — the permanent home of every event. Runs the background
   services that need internet (Eventor sync, LiveResults pusher). The
-  LiveResults pusher is single-owner: a node with `NODE_ROLE=venue` never
-  runs it ([background-jobs-lease.md](background-jobs-lease.md#which-node-runs-what)).
+  LiveResults pusher is single-owner: a venue box that ships to the cloud
+  (`NODE_ROLE=venue` with `SYNC_PEER_URL`) never runs it ([background-jobs-lease.md](background-jobs-lease.md#which-node-runs-what)).
   The ROC online-input puller runs on both, each into its own database.
 - **Venue node** — a laptop or Pi running the same Docker images against
   its own local Postgres. Present only on race day, and only when the
@@ -303,8 +303,8 @@ peer's shipper, the pull side of the shipper):
   ingests of one id serialize on the primary key: the loser sees the winner's
   row and reports `synced`. Post-commit effects (the Google Sheets push of a
   `card.read`) run after the commit, on the singleton client. On a venue box
-  with a peer the Sheets push is a no-op; the cloud pushes the entry when
-  the box ships it (SYNC-14).
+  with a peer the Sheets push of a checked-out event is a no-op; the cloud
+  pushes the entry when the box ships it (SYNC-14).
 - **Idempotency is per event.** An id already journaled under the same event
   is `synced`; under another event it is refused as `ENTRY_IN_OTHER_EVENT`.
   Row ids inside payloads follow the same rule: a `tempId` or punch `id` that
@@ -870,10 +870,12 @@ Deferred until after venue packaging lands; mechanically it is
   ships to a peer (`publishesLiveResults()`), so a venue copy never double-pushes. The
   Google Sheets readout backup has one owner too: the cloud, which pushes
   every readout it stores or ingests, the box's shipped `card.read`
-  included. A box that ships to a peer pushes nothing to the sheet
-  (`pushesReadoutsToSheet()` in `sheetsBackup.ts`); a standalone box does.
-  A webhook URL set on the box is sent ahead of the next journal batch, so
-  the readouts after it find it on the cloud.
+  included. A box that ships to a peer pushes nothing to the sheet for an
+  event it checked out (`pushesReadoutsToSheet()` in `sheetsBackup.ts`); an
+  event that lives only on the box, and a standalone box, push themselves.
+  A webhook URL set on the box is sent ahead of the next journal batches
+  (retried for about ten minutes, never holding shipping back), so the
+  readouts after it find it on the cloud.
 - **Large/streaming endpoints** (map tiles, 50 MB uploads) are cloud-owned
   non-critical endpoints; they are simply unavailable at an offline venue.
 - **Venue box sleep.** A laptop venue node must not sleep mid-race; the

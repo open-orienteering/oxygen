@@ -121,7 +121,7 @@ A box with an uplink pushing LiveResults beside the cloud would write the
 same competition from two databases, and the lagging copy would undo the
 other's rows each cycle (SYNC-14). The box's results reach LiveResults
 through shipping: the cloud ingests them within a shipping interval and
-its next cycle publishes them. On a box, `liveresults.getStatus` returns
+its next cycle publishes them. On such a box, `liveresults.getStatus` returns
 `pushedByCloud: true` and the event page says "Pushed by the cloud
 server"; the push status itself lives in the cloud's database.
 

@@ -806,7 +806,7 @@ async function applyLiveResultsDiff(
     const ph = rows.map(() => "(?, ?, ?)").join(",");
     await exec(
       conn,
-      `DELETE FROM splitcontrols WHERE tavid = ? AND (BINARY classname, corder, code) IN (${ph})`,
+      `DELETE FROM splitcontrols WHERE tavid = ? AND (classname, corder, code) IN (${ph})`,
       [tavid, ...rows.flatMap((r) => [r.classname, r.corder, r.code])],
     );
   }
