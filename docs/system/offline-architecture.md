@@ -215,7 +215,7 @@ reached the cloud.
 | `kioskKey` | `event.regenerateKioskKey` | venue-owned |
 | `cardFeeCents` | `event.setCardFee` | venue-owned |
 | `airPlus`, `awakeHours` | `control.setAirPlusConfig` | venue-owned |
-| `paymentMethods`, `swishNumber`, `swishPayeeName`, `printRegistrationReceipt`, `registrationReceiptMessage`, `finishReceiptMessage`, `receiptFriskvardNote`, `organizerEventorId`, `orgNumber`, `vatExempt` | `event.setRegistrationConfig` | venue-owned |
+| `paymentMethods`, `swishNumber`, `swishPayeeName`, `printRegistrationReceipt`, `registrationReceiptMessage`, `finishReceiptMessage`, `receiptFriskvardNote`, `organizerEventorId`, `orgNumber`, `vatExempt` | `event.setRegistrationConfig` (`organizerEventorId` is also set when an Eventor import creates the event) | venue-owned |
 | `googleSheetsWebhookUrl` | `event.setGoogleSheetsConfig` (the node that stores readouts pushes to the sheet) | venue-owned |
 | `kind`, `kindCustom` | `event.updateType` | cloud-owned, forwarded |
 | `autoOverprintCuts` | `course.setOverprintCuts` | cloud-owned, forwarded (a layout flag, row G18) |
@@ -228,19 +228,28 @@ reached the cloud.
   them alone, and the box pushes them to the cloud
   (`lease.importSettings`, accepted only from the active holder's node id,
   venue-owned keys only) on the settings cadence before each refresh, and
-  once more in the checkin barrier before the peer release. A failed push
-  fails the checkin, so the operator retries; a peer that predates the
-  endpoint (`NOT_FOUND`) or no longer lists the box as holder
-  (`PRECONDITION_FAILED`) does not block it.
+  once more in the checkin barrier before the peer release (the cadence
+  skips an event whose checkin runs). The cloud checks the holder and
+  writes under the lease lock, so a late push cannot land after the
+  release or a takeover. A failed push fails the checkin, so the operator
+  retries; a peer that predates the endpoint (`NOT_FOUND`) or no longer
+  lists the box as holder does not block it, and the checkin result says
+  `settingsNotTaken` (the lease panel shows it).
 - **Cloud-owned** columns are forwarded. After a forwarded `event.updateType`,
   `course.setOverprintCuts`, `liveresults.*` or `eventor.*` write the box
   refreshes the event row at once (bounded like the map refresh), not only
-  on the 5-minute cadence.
+  on the 5-minute cadence. Like every cloud-owned prefix, they are
+  forwarded on any venue node whatever the event's lease state, so offline
+  they answer the typed connectivity error, and an event that exists only
+  on the box cannot change them.
 - `packages/api/src/__tests__/event-settings-ownership.test.ts` scans the
-  routers: every procedure that writes the event row must be either
-  forwarded or a venue-owned race write, and a venue writer may set only
-  venue-owned columns. A new settings mutation fails it until its owner is
-  decided.
+  source for `.event.update(`, `.updateMany(` and `.upsert(`: every router
+  procedure that writes the event row must be either forwarded or a
+  venue-owned race write, a venue writer may set only venue-owned columns
+  (the arguments of its write calls), and a write outside the routers and
+  `sync/` must be on its allow-list. A new settings mutation written that
+  way fails it until its owner is decided; a write through a helper in
+  another module is caught only by the allow-list.
 
 These defaults were taken on Marcus's behalf under the review's fix-package
 authorization (2026-11-26): keep the arena working offline and lose no

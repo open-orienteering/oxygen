@@ -19,7 +19,8 @@ import {
   pickVenuePushedFields,
 } from "../sync/eventOwnership.js";
 
-const ROUTERS = join(__dirname, "..", "routers");
+const SRC = join(__dirname, "..");
+const ROUTERS = join(SRC, "routers");
 /** Router file → its key in `appRouter`. */
 const ROUTER_KEY: Record<string, string> = {
   "event.ts": "event",
@@ -28,6 +29,14 @@ const ROUTER_KEY: Record<string, string> = {
   "eventor.ts": "eventor",
   "liveresults.ts": "liveresults",
 };
+/**
+ * Event-row writes outside the routers (and outside `sync/`, which is the
+ * lease machinery itself), with why they are safe during a lease.
+ */
+const NON_ROUTER_WRITERS: Record<string, string> = {
+  "liveresults.ts": "liveresultsTavid, reached only from the forwarded liveresults.* router",
+};
+const WRITE = /\.event\.(?:update|updateMany|upsert)\(/;
 
 interface Writer {
   path: string;
@@ -35,34 +44,61 @@ interface Writer {
   body: string;
 }
 
-/** The procedures of the router files that write the event row. */
+/** Every .ts file under `dir`, relative to SRC. */
+function sources(dir: string): string[] {
+  const out: string[] = [];
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, e.name);
+    if (e.isDirectory()) {
+      if (["__tests__", "generated", "sync", "routers"].includes(e.name)) continue;
+      out.push(...sources(full));
+    } else if (e.name.endsWith(".ts") && !e.name.endsWith(".test.ts")) {
+      out.push(full.slice(SRC.length + 1));
+    }
+  }
+  return out;
+}
+
+/** The procedures of the router files that write the event row, each with its whole body. */
 function eventRowWriters(): Writer[] {
   const out: Writer[] = [];
   for (const file of readdirSync(ROUTERS).filter((f) => f.endsWith(".ts"))) {
     const src = readFileSync(join(ROUTERS, file), "utf8");
-    if (!/\b(?:db|tx|prisma\(\))\.event\.update\(/.test(src)) continue;
+    if (!WRITE.test(src)) continue;
     const key = ROUTER_KEY[file];
     expect(key, `${file} writes the event row: add it to ROUTER_KEY and EVENT_ROW_WRITERS`).toBeDefined();
     const lines = src.split("\n");
-    let current: { name: string; line: string; start: number } | null = null;
-    const seen = new Set<string>();
+    const headers: Array<{ name: string; line: string; start: number }> = [];
     lines.forEach((line, i) => {
       const m = /^ {2}(\w+): (\w+)/.exec(line);
-      if (m) current = { name: m[1], line, start: i };
-      if (/\b(?:db|tx|prisma\(\))\.event\.update\(/.test(line)) {
-        expect(current, `${file}:${i + 1} writes the event row outside a procedure`).not.toBeNull();
-        const c = current!;
-        if (seen.has(c.name)) return;
-        seen.add(c.name);
-        out.push({ path: `${key}.${c.name}`, procedureLine: c.line, body: lines.slice(c.start, i + 1).join("\n") });
-      }
+      if (m) headers.push({ name: m[1], line, start: i });
     });
+    const writing = new Set<number>();
+    lines.forEach((line, i) => {
+      if (!WRITE.test(line)) return;
+      const h = headers.findLastIndex((x) => x.start <= i);
+      expect(h, `routers/${file}:${i + 1} writes the event row outside a procedure`).toBeGreaterThanOrEqual(0);
+      writing.add(h);
+    });
+    for (const h of writing) {
+      const end = headers[h + 1]?.start ?? lines.length;
+      out.push({
+        path: `${key}.${headers[h].name}`,
+        procedureLine: headers[h].line,
+        body: lines.slice(headers[h].start, end).join("\n"),
+      });
+    }
   }
   return out;
 }
 
 describe("event row ownership during a lease (MC-08)", () => {
   const writers = eventRowWriters();
+
+  it("outside the routers, only the listed files write the event row", () => {
+    const hits = sources(SRC).filter((f) => WRITE.test(readFileSync(join(SRC, f), "utf8")));
+    expect(hits.sort()).toEqual(Object.keys(NON_ROUTER_WRITERS).sort());
+  });
 
   it("finds the known writers", () => {
     const paths = writers.map((w) => w.path);
@@ -101,9 +137,26 @@ describe("event row ownership during a lease (MC-08)", () => {
   it("the columns a venue writer sets are venue-owned", () => {
     const columns = Object.values(Prisma.EventScalarFieldEnum) as string[];
     for (const w of writers.filter((x) => EVENT_ROW_WRITERS[x.path] === "venue")) {
+      // What the procedure writes: each write call's argument, balanced to
+      // its closing paren, plus `data.<col> = …` assignments of a data
+      // object built up before the call.
+      const written: string[] = [];
+      const re = new RegExp(WRITE.source, "g");
+      for (let m = re.exec(w.body); m; m = re.exec(w.body)) {
+        let depth = 1;
+        let i = m.index + m[0].length;
+        for (; i < w.body.length && depth > 0; i++) {
+          if (w.body[i] === "(") depth++;
+          else if (w.body[i] === ")") depth--;
+        }
+        written.push(w.body.slice(m.index, i));
+      }
+      written.push(...(w.body.match(/\bdata\.\w+\s*=/g) ?? []));
+      const text = written.join("\n");
+      expect(text.length, w.path).toBeGreaterThan(0);
       for (const col of columns) {
-        const written = new RegExp(`\\b(?:data\\.${col}\\s*=|${col}:\\s)`).test(w.body);
-        if (written && !EVENT_IDENTITY_FIELDS.has(col)) {
+        if (EVENT_IDENTITY_FIELDS.has(col)) continue;
+        if (new RegExp(`\\b(?:data\\.${col}\\s*=|${col}\\s*[:,}])`).test(text)) {
           expect(VENUE_OWNED_EVENT_FIELDS.has(col), `${w.path} writes ${col}`).toBe(true);
         }
       }

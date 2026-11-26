@@ -14,6 +14,7 @@
   "leaseUpToDate": "Alla journalposter skickade till motparten.",
   "leaseCheckout": "Checka ut till den här noden",
   "leaseCheckin": "Checka in",
+  "leaseCheckinSettingsNotTaken": "Incheckad, men molnet tog inte emot den här boxens tävlingsinställningar (kioskyckel, hyrbrickeavgift, kvitton, AIR+, tidszon). Kontrollera dem i molnet.",
   "leaseForceTakeover": "Tvinga övertagande",
   "leaseForceConfirm": "Ta över låset från \"{{node}}\"? Gör bara detta om arenadatorn är död — dess oskickade resultat finns inte på den här noden ännu.",
   "leaseConfirmUnshipped": "Den här datorn har journalposter som molnet inte har fått. En ny utcheckning kastar bort dem. Fortsätta ändå?\n\n{{detail}}",

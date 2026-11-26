@@ -66,11 +66,10 @@ export const VENUE_OWNED_EVENT_FIELDS: ReadonlySet<string> = new Set([
  * Every mutation outside `sync/` that writes the event row, with how it
  * behaves during a lease. `venue`: a race procedure (or a lease check inside
  * the handler) that writes only venue-owned columns. `cloud`: listed in
- * `CLOUD_OWNED_MUTATIONS`. `lifecycle`: creates, deletes or restores the
- * row. The coverage test (`event-settings-ownership.test.ts`) fails when a
+ * `CLOUD_OWNED_MUTATIONS`. The coverage test (`event-settings-ownership.test.ts`) fails when a
  * new `event.update` writer is not listed here.
  */
-export const EVENT_ROW_WRITERS: Readonly<Record<string, "venue" | "cloud" | "lifecycle">> = {
+export const EVENT_ROW_WRITERS: Readonly<Record<string, "venue" | "cloud">> = {
   "event.setTimeSettings": "venue",
   "event.setRegistrationConfig": "venue",
   "event.setGoogleSheetsConfig": "venue",

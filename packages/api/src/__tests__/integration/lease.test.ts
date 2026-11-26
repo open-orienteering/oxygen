@@ -996,7 +996,8 @@ describe("checkout → write → checkin lifecycle", () => {
     expect((await dbB.event.findUniqueOrThrow({ where: { id: eventB.id } })).cardFeeCents).toBe(7700);
     await dbB.event.update({ where: { id: eventB.id }, data: { cardFeeCents: cardFeeOnB } });
     expect(res.ok).toBe(true);
-    expect(res.pushed).toBeGreaterThanOrEqual(1);
+    // The finish shipped already on the attempt whose settings push failed.
+    expect(res.pushed).toBe(0);
 
     // The finish arrived on B (366000+4000 abs − 324000 zero = 46000 rel).
     const runnerB = await dbB.runner.findFirstOrThrow({
@@ -1397,6 +1398,58 @@ describe("checkout guard and restart safety (API-07, SYNC-18)", () => {
       expect(await getActiveLease(ctx.db, local.id)).toBeNull();
       expect((await ctx.db.eventLease.findFirstOrThrow({ where: { eventId: local.id }, orderBy: { id: "desc" } })).forced).toBe(true);
     } finally {
+      _setLeasePeerFactory(() => leasePeerToB());
+      await undoCheckout();
+    }
+  });
+
+  it("checkin after a takeover: the peer refuses the settings, the checkin goes on and says so (MC-08)", async () => {
+    const { local, venue } = await checkedOutVenue();
+    _setLeasePeerFactory(() => ({
+      ...leasePeerToB(),
+      importSettings: async (_n, settings) => {
+        await importVenueOwnedSettings(dbB, eventB.id, "someone-else", settings);
+      },
+      release: async () => {
+        throw new TRPCError({ code: "CONFLICT", message: 'Lease is held by "someone-else", not "cloud".' });
+      },
+    }));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const res = await venue.lease.checkin();
+      expect(res).toMatchObject({ ok: true, peerAlreadyReleased: true, settingsNotTaken: "not-holder" });
+      expect(await getActiveLease(ctx.db, local.id)).toBeNull();
+    } finally {
+      warn.mockRestore();
+      _setLeasePeerFactory(() => leasePeerToB());
+      await undoCheckout();
+    }
+  });
+
+  it("checkin against a cloud without the settings import goes on and says so; any other refusal fails it (MC-08)", async () => {
+    const { local, venue } = await checkedOutVenue();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      _setLeasePeerFactory(() => ({
+        ...leasePeerToB(),
+        importSettings: async () => {
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Peering is not configured" });
+        },
+      }));
+      await expect(venue.lease.checkin()).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+      expect((await getActiveLease(ctx.db, local.id))?.holderNodeId).toBe(nodeId());
+
+      _setLeasePeerFactory(() => ({
+        ...leasePeerToB(),
+        importSettings: async () => {
+          throw new TRPCError({ code: "NOT_FOUND", message: 'No procedure found on path "lease.importSettings"' });
+        },
+      }));
+      const res = await venue.lease.checkin();
+      expect(res).toMatchObject({ ok: true, settingsNotTaken: "peer-too-old" });
+      expect(await getActiveLease(ctx.db, local.id)).toBeNull();
+    } finally {
+      warn.mockRestore();
       _setLeasePeerFactory(() => leasePeerToB());
       await undoCheckout();
     }

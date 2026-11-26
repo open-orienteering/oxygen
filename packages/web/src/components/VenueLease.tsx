@@ -183,6 +183,15 @@ export function VenueLeasePanel({ nameId }: { nameId: string }) {
           )}
         </div>
 
+        {checkin.data && "settingsNotTaken" in checkin.data && checkin.data.settingsNotTaken && (
+          <div
+            data-testid="lease-settings-not-taken"
+            className="text-sm text-amber-800 bg-amber-50 rounded-lg px-3 py-2"
+          >
+            {t("leaseCheckinSettingsNotTaken")}
+          </div>
+        )}
+
         {err && (
           <div
             data-testid="lease-error"

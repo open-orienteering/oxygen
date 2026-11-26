@@ -49,7 +49,7 @@ import {
   graphicClashError,
 } from "../sync/snapshotGraphics.js";
 import { exportMapRows } from "../sync/mapRefresh.js";
-import { importVenueOwnedSettings, pushVenueOwnedSettings } from "../sync/settingsRefresh.js";
+import { importVenueOwnedSettings, NOT_HOLDER_MARK, pushVenueOwnedSettings } from "../sync/settingsRefresh.js";
 import {
   nodeId,
   nodeRole,
@@ -455,17 +455,20 @@ export const leaseRouter = router({
       const peer = makeLeasePeer(peerUrl, secret);
       // The venue-owned settings (kiosk key, card fee, receipts, AIR+, time
       // zone…) go back with the event (review MC-08). Two refusals do not
-      // block the checkin: a peer that predates the endpoint (NOT_FOUND),
-      // and a peer that no longer lists this box as holder
-      // (PRECONDITION_FAILED: an earlier checkin already pushed them and
-      // released, or the event was taken over — the release below sorts
-      // those out). Anything else, such as an unreachable peer, fails the
-      // checkin so the operator retries.
+      // block the checkin, but the result says the settings were not taken:
+      // a peer that predates the endpoint (NOT_FOUND), and a peer that no
+      // longer lists this box as holder (an earlier checkin already pushed
+      // them and released, or the event was taken over — the release below
+      // sorts those out). Anything else, such as an unreachable peer, fails
+      // the checkin so the operator retries.
+      let settingsNotTaken: string | undefined;
       try {
-        await pushVenueOwnedSettings(ctx.db, ctx.event, peer);
+        await pushVenueOwnedSettings(ctx.db, ctx.event, peer, { checkin: true });
       } catch (err) {
         const code = errorCode(err);
-        if (code !== "NOT_FOUND" && code !== "PRECONDITION_FAILED") throw err;
+        const notHolder = code === "PRECONDITION_FAILED" && errMessage(err).includes(NOT_HOLDER_MARK);
+        if (code !== "NOT_FOUND" && !notHolder) throw err;
+        settingsNotTaken = notHolder ? "not-holder" : "peer-too-old";
         console.warn(`[lease] checkin of ${ctx.event.nameId}: the peer did not take the venue-owned settings (${errMessage(err)}); they stay on this box only.`);
       }
       let peerAlreadyReleased = false;
@@ -491,6 +494,7 @@ export const leaseRouter = router({
         ok: true as const,
         pushed: stats.pushed,
         ...(peerAlreadyReleased ? { peerAlreadyReleased: true as const } : {}),
+        ...(settingsNotTaken ? { settingsNotTaken } : {}),
       };
     } finally {
       endCheckin(ctx.event.id);
