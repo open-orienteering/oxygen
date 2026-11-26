@@ -119,6 +119,7 @@ Notes whose code no longer exists (mostly the raster tile pipeline, deleted in s
 
 | Note | Added |
 | --- | --- |
+| [The event backup was incomplete, failed silently and could not be restored](event-backup-restore.md) (follow-ups: [backup-restore-followups.md](backup-restore-followups.md)) | 2026-11-26 |
 | [Performance: polling endpoints and per-request auth round trips](perf-polling-and-auth-round-trips.md) | 2026-09-24 |
 | [GitHub Actions Node 20 runtime warnings](gha-node20-actions.md) | 2026-09-19 |
 | [Cloud Shell demo required pnpm and a source build](cloud-shell-demo-ghcr.md) | 2026-09-19 |

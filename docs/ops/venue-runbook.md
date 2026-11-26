@@ -55,6 +55,18 @@ background: [`system/offline-architecture.md`](../system/offline-architecture.md
    curl http://<box-ip>:3001/health   # → {"status":"ok",...}
    ```
 
+6. **Automatic backups.** The compose file's `backup` service dumps the
+   whole database every 15 minutes into `./backups` next to the compose
+   file and keeps the newest 48. Set `BACKUP_DIR` in `.env.venue` to a USB
+   stick's mount point to keep a copy off the box's disk (if the stick is
+   not mounted, the dumps land on the box's disk: check with `df`). The
+   48 dumps take about 48 times one dump's size, and the service deletes
+   older dumps early, and skips a round, rather than fill the disk. Before the race,
+   check that dumps are appearing: `ls -lt backups | head -3` (or
+   `docker compose -f docker-compose.venue.yml logs backup`). See
+   [backup-restore.md](backup-restore.md#automatic-backups) for restoring
+   from one.
+
 ## Race day
 
 ### Checkout
@@ -168,6 +180,12 @@ otherwise), and releases the lease on both nodes. The cloud is the writer
 again; the box can be shut down.
 
 ### If the box dies mid-race
+
+If the box's disk survives (or `BACKUP_DIR` was a USB stick), the newest
+dump in the backup directory holds everything up to 15 minutes before the
+failure, including entries the uplink had not shipped yet: see
+[backup-restore.md](backup-restore.md#automatic-backups) for getting one
+event out of it. Otherwise:
 
 1. On the **cloud**, open the event's Venue mode panel and press **Force
    takeover** (explicit confirmation required). The recovery point is
