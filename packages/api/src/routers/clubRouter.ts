@@ -15,8 +15,10 @@ const withdrawnEnums = WITHDRAWN_STATUSES.map(valueToRunnerStatus);
  */
 export const clubRouter = router({
   /** Aggregate clubs from the active event's runner roster.
-   *  `showAll` includes clubs without participating runners (currently
-   *  identical because clubs aren't first-class entities anymore). */
+   *  `showAll` is accepted but has no effect: clubs are not first-class
+   *  entities, so a club without runners in the event has no row to list.
+   *  Clubs outside the roster come from `searchDirectory` (WEB-11); the
+   *  Clubs page toggle is a follow-up (docs/bugfixes/registration-followups.md). */
   list: viewProcedure
     .input(z.object({ showAll: z.boolean().optional() }).optional())
     .query(async ({ ctx }): Promise<ClubSummary[]> => {

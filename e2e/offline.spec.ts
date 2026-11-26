@@ -257,6 +257,60 @@ test.describe("Offline Support", () => {
     await deleteRunnerByName(request, runnerName);
   });
 
+  test("an offline registration keeps club, birth year and phone after sync (SYNC-12)", async ({
+    page,
+    context,
+    request,
+  }) => {
+    const runnerName = "E2E Offline Full " + Date.now();
+    // A roster club to pick (any runner's Eventor club in the seed).
+    const listResp = await request.get(`${API_BASE}/trpc/runner.list`, { headers: { "x-competition-id": NAMEID } });
+    const roster = ((await listResp.json())?.result?.data ?? []) as Array<{ clubName: string; clubId: number }>;
+    const club = roster.find((r) => r.clubId > 0 && r.clubName)!;
+    expect(club).toBeTruthy();
+
+    await selectCompetition(page);
+    await warmStationCache(page);
+    // Open the dialog once online so the club list is cached.
+    await page.getByRole("button", { name: /Add runner|Lägg till/i }).click();
+    const dialog = page.getByTestId("registration-dialog");
+    await expect(dialog).toBeVisible({ timeout: 5000 });
+    await expect(dialog.getByTestId("reg-club").getByRole("button").first()).toBeVisible();
+    await page.waitForTimeout(500);
+    await page.getByRole("button", { name: "Close" }).click();
+
+    await context.setOffline(true);
+    await page.getByRole("button", { name: /Add runner|Lägg till/i }).click();
+    await expect(dialog).toBeVisible({ timeout: 5000 });
+    await dialog.locator("input[placeholder='First Last']").fill(runnerName);
+    await dialog.getByTestId("reg-club").getByRole("button").first().click();
+    await page.getByPlaceholder("Search clubs...").fill(club.clubName);
+    await page.getByRole("button", { name: club.clubName, exact: true }).first().click();
+    await dialog.locator("input[placeholder='e.g. 1990']").fill("1977");
+    await dialog.locator("input[placeholder='+46...']").fill("0701112233");
+    const classSelect = dialog.getByTestId("reg-class");
+    await classSelect.getByRole("button").click();
+    await classSelect.getByText("Öppen 3").click();
+    await dialog.getByTestId("reg-submit").click();
+    await expect(dialog).not.toBeVisible({ timeout: 10000 });
+
+    await context.setOffline(false);
+    await expect(async () => {
+      expect(await getPendingEventCount(page)).toBe(0);
+    }).toPass({ intervals: [1000, 1000, 2000, 2000, 3000], timeout: 15000 });
+
+    const after = await request.get(`${API_BASE}/trpc/runner.list`, { headers: { "x-competition-id": NAMEID } });
+    const created = ((await after.json())?.result?.data ?? []).find(
+      (r: { name: string }) => r.name === runnerName,
+    ) as { clubName: string; clubId: number; birthYear: number } | undefined;
+    expect(created).toBeTruthy();
+    expect(created!.clubName).toBe(club.clubName);
+    expect(created!.clubId).toBe(club.clubId);
+    expect(created!.birthYear).toBe(1977);
+
+    await deleteRunnerByName(request, runnerName);
+  });
+
   test("should show pending count in sync indicator while offline", async ({
     page,
     context,

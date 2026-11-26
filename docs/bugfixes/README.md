@@ -62,6 +62,8 @@ Notes whose code no longer exists (mostly the raster tile pipeline, deleted in s
 
 | Note | Added |
 | --- | --- |
+| [Registration desk stored wrong clubs, names and cards; offline registrations lost fields](registration-correctness.md) | 2026-11-26 |
+| [Registration: follow-ups left out of package 10](registration-followups.md) | 2026-11-26 |
 | [A station went down for the whole outage although its data was cached](station-outage-resilience.md) | 2026-11-26 |
 | [Station outage resilience: what package 9 left out](station-outage-followups.md) | 2026-11-26 |
 | [A start at ZeroTime read as "no start", early starters vanished, and station clocks ran in UTC](zerotime-and-time-zone.md) | 2026-11-26 |

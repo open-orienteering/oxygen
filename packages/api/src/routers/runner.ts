@@ -14,6 +14,7 @@ import {
   valueToRunnerStatus,
 } from "../statusConvert.js";
 import { appendJournal } from "../journalEmit.js";
+import { liveCardId } from "../cardLink.js";
 import {
   EVENTOR_DIFF_FIELDS,
   asRunnerSnapshot,
@@ -89,7 +90,13 @@ export async function buildRunnerUpdateData(
   const data: Record<string, unknown> = {};
   const cardNo = get<number | null>("cardNo");
   if (get<string>("name") !== undefined) data.name = get<string>("name");
-  if (cardNo !== undefined) data.cardNo = cardNo && cardNo > 0 ? cardNo : null;
+  if (cardNo !== undefined) {
+    data.cardNo = cardNo && cardNo > 0 ? cardNo : null;
+    // The card link follows the number (API-11): the newest card row read
+    // for the new number in this event, or none. A stale link would make the
+    // readout and the Eventor export use the previous card's punches.
+    data.cardId = data.cardNo != null ? await liveCardId(db, eventId, data.cardNo as number) : null;
+  }
   if (get<string>("clubName") !== undefined)
     data.clubName = get<string>("clubName");
   if (fields.eventorClubId !== undefined)
@@ -180,7 +187,7 @@ export function manualFlagsFor(
 }
 
 /** Throw CONFLICT if `cardNo` is already used by another runner in this event. */
-async function assertCardNotTaken(
+export async function assertCardNotTaken(
   db: import("../generated/prisma/client.js").PrismaClient,
   eventId: bigint,
   cardNo: number | null | undefined,
@@ -202,6 +209,23 @@ async function assertCardNotTaken(
       message: `Card ${cardNo} is already assigned to ${existing.name} (runner #${existing.seq})`,
     });
   }
+}
+
+/**
+ * A card write that lost the race against another desk (the check above
+ * passed, then the partial unique index `runners_event_id_card_no_key`
+ * refused the row) answers the same CONFLICT as the check, not a 500.
+ */
+export function rethrowCardConflict(err: unknown, cardNo: number | null | undefined): never {
+  const e = err as { code?: unknown; message?: unknown; meta?: unknown } | null;
+  const text = `${String(e?.message ?? "")} ${JSON.stringify(e?.meta ?? "")}`;
+  if (e?.code === "P2002" && (/card_no/.test(text) || /cardNo/.test(text))) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: `Card ${cardNo ?? ""} is already assigned to another runner`,
+    });
+  }
+  throw err;
 }
 
 // ─── Schemas ───────────────────────────────────────────────
@@ -401,7 +425,7 @@ export async function updateRunnerFields(
         fields: journalFields,
       },
     });
-  });
+  }).catch((err: unknown) => rethrowCardConflict(err, data.cardNo as number | null | undefined));
   return { ok: true };
 }
 
@@ -611,6 +635,9 @@ export const runnerRouter = router({
       await assertCardNotTaken(ctx.db, ctx.event.id, input.cardNo);
       const classUuid = await classSeqToId(ctx.db, ctx.event.id, input.classId);
       const cardNo = input.cardNo && input.cardNo > 0 ? input.cardNo : null;
+      const now = new Date();
+      const entryDate = nowMeosDate(now, eventTimeZone(ctx.event));
+      const entryTime = nowMeosTime(now, eventTimeZone(ctx.event));
 
       // Table write + journal entry commit or roll back together.
       const created = await ctx.db.$transaction(async (tx) => {
@@ -620,8 +647,12 @@ export const runnerRouter = router({
             name: input.name,
             // 0 (legacy sentinel) or absent → NULL (no card).
             cardNo,
+            // A card already read in the event is linked at registration
+            // (registration-and-readout.md §5a; API-11 keeps it current).
+            cardId: cardNo != null ? await liveCardId(tx, ctx.event.id, cardNo) : null,
             clubName: input.clubName,
-            eventorClubId: input.eventorClubId ?? null,
+            // 0 is the legacy "no Eventor id" sentinel (WEB-06).
+            eventorClubId: input.eventorClubId && input.eventorClubId > 0 ? input.eventorClubId : null,
             classId: classUuid,
             startNo: input.startNo,
             // Inputs are absolute deciseconds; storage is ZeroTime-relative.
@@ -648,8 +679,8 @@ export const runnerRouter = router({
             paidCents: input.paid,
             payMode: input.payMode,
             cardFeeCents: input.cardFee,
-            entryDate: nowMeosDate(new Date(), eventTimeZone(ctx.event)),
-            entryTime: nowMeosTime(new Date(), eventTimeZone(ctx.event)),
+            entryDate,
+            entryTime,
           },
           select: { id: true, seq: true },
         });
@@ -675,14 +706,29 @@ export const runnerRouter = router({
             name: input.name,
             classId: input.classId, // seq
             clubName: input.clubName,
-            eventorClubId: input.eventorClubId,
+            eventorClubId:
+              input.eventorClubId && input.eventorClubId > 0 ? input.eventorClubId : undefined,
             cardNo,
             startTime: input.startTime > 0 ? input.startTime : undefined,
             courseId: variantSeq,
+            // The rest of the form (SYNC-12), so a follower stores the same row.
+            startNo: input.startNo,
+            birthYear: input.birthYear,
+            sex: input.sex,
+            nationality: input.nationality,
+            phone: input.phone,
+            fee: input.fee,
+            paid: input.paid,
+            payMode: input.payMode,
+            cardFee: input.cardFee,
+            entryDate,
+            entryTime,
+            ...(input.status != null ? { status: input.status } : {}),
+            ...(input.finishTime != null ? { finishTime: input.finishTime } : {}),
           },
         });
         return c;
-      });
+      }).catch((err: unknown) => rethrowCardConflict(err, cardNo));
       return { id: created.seq };
     }),
 
@@ -875,13 +921,30 @@ export const runnerRouter = router({
         data.classId = await classSeqToId(ctx.db, ctx.event.id, input.classId);
         journalFields.classId = input.classId;
       }
-      if (input.clubName !== undefined) {
-        data.clubName = input.clubName;
-        journalFields.clubName = input.clubName;
+      // A club is a name plus an optional Eventor id (WEB-10). 0 is the
+      // legacy "no Eventor id" sentinel; an id sent without a name takes the
+      // directory's name, so the two never disagree on the row or the peer.
+      const clubId =
+        input.eventorClubId === undefined
+          ? undefined
+          : input.eventorClubId && input.eventorClubId > 0
+            ? input.eventorClubId
+            : null;
+      let clubName = input.clubName;
+      if (clubName === undefined && clubId) {
+        const dir = await ctx.db.clubDirectory.findUnique({
+          where: { eventorId: BigInt(clubId) },
+          select: { name: true },
+        });
+        if (dir?.name) clubName = dir.name;
       }
-      if (input.eventorClubId !== undefined) {
-        data.eventorClubId = input.eventorClubId;
-        journalFields.eventorClubId = input.eventorClubId;
+      if (clubName !== undefined) {
+        data.clubName = clubName;
+        journalFields.clubName = clubName;
+      }
+      if (clubId !== undefined) {
+        data.eventorClubId = clubId;
+        journalFields.eventorClubId = clubId;
       }
       if (input.status !== undefined) {
         data.status = valueToRunnerStatus(input.status);

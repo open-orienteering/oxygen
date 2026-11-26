@@ -90,7 +90,7 @@ describe("entryStamp", () => {
 
 describe("batch-stopping refusal codes", () => {
   it("are the apply-exception codes, a subset of the refusal codes", () => {
-    expect([...JOURNAL_BATCH_STOPPING_CODES].sort()).toEqual(["APPLY_FAILED", "INVALID_PAYLOAD", "ROW_IN_OTHER_EVENT"]);
+    expect([...JOURNAL_BATCH_STOPPING_CODES].sort()).toEqual(["APPLY_FAILED", "CARD_TAKEN", "CLASS_NOT_FOUND", "INVALID_PAYLOAD", "ROW_IN_OTHER_EVENT"]);
     for (const c of JOURNAL_BATCH_STOPPING_CODES) expect(JOURNAL_REFUSAL_CODES).toContain(c);
     expect(isBatchStoppingCode("ROW_IN_OTHER_EVENT")).toBe(true);
     for (const c of ["COMPETITION_MISMATCH", "FORBIDDEN", "ENTRY_IN_OTHER_EVENT", "free text", undefined]) {

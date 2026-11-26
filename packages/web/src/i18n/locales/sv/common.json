@@ -155,6 +155,8 @@
     "ENTRY_IN_OTHER_EVENT": "En post med samma id finns redan i en annan tävling.",
     "ROW_IN_OTHER_EVENT": "Posten pekar på data som hör till en annan tävling.",
     "INVALID_PAYLOAD": "Posten är felaktig och godtogs inte.",
-    "APPLY_FAILED": "Servern kunde inte tillämpa posten."
+    "APPLY_FAILED": "Servern kunde inte tillämpa posten.",
+    "CLASS_NOT_FOUND": "Anmälans klass finns inte längre i tävlingen. Anmäl löparen igen i en annan klass och kasta sedan posten.",
+    "CARD_TAKEN": "En annan löpare har redan den här brickan i tävlingen. Rätta bricknumret på någon av dem innan du kastar posten: annars hamnar posterna som köats efter den för brickan hos den andra löparen."
   }
 }

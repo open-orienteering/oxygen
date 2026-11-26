@@ -942,3 +942,203 @@ describe("events.push: result.applied keeps the full status", () => {
     expect(row.status).toBe(valueToRunnerStatus(decision.write.status));
   });
 });
+
+// SYNC-12: a station registration keeps the whole form, and one that cannot
+// be stored as entered is refused (holding the entries behind it) instead of
+// being acked while its finish lands on another runner.
+describe("events.push: station registrations (SYNC-12)", () => {
+  let reg: TestEventContext;
+  let regClass: number;
+  let prevSecret: string | undefined;
+  const station = () => makeCaller(reg.event);
+  const peer = () => makeCaller(reg.event, { syncSecret: SECRET });
+  const regEntry = (payload: Record<string, unknown>) => ({
+    id: randomUUID(),
+    type: "runner.registered" as never,
+    competitionId: reg.event.nameId,
+    stationId: "desk-1",
+    timestamp: 1_700_000_000_000,
+    payload,
+  });
+
+  beforeAll(async () => {
+    prevSecret = process.env.SYNC_SHARED_SECRET;
+    process.env.SYNC_SHARED_SECRET = SECRET;
+    reg = await createTestEvent("push-registration");
+    regClass = (await reg.db.class.create({ data: { eventId: reg.eventId, name: "D21" }, select: { seq: true } })).seq;
+  });
+
+  afterAll(async () => {
+    if (prevSecret === undefined) delete process.env.SYNC_SHARED_SECRET;
+    else process.env.SYNC_SHARED_SECRET = prevSecret;
+    await reg.cleanup();
+  });
+
+  it("stores club, person and payment fields of an offline registration", async () => {
+    const e = regEntry({
+      tempId: randomUUID(),
+      name: "Offline Olga",
+      classId: regClass,
+      clubName: "OK Linné",
+      eventorClubId: 1234,
+      cardNo: 77001,
+      birthYear: 1990,
+      sex: "F",
+      phone: "0701234567",
+      fee: 15000,
+      paid: 19000,
+      payMode: 4,
+      cardFee: 4000,
+    });
+    const res = await station().events.push({ events: [e] });
+    expect(res).toMatchObject({ synced: [e.id], failed: [] });
+    const r = await reg.db.runner.findFirstOrThrow({ where: { eventId: reg.eventId, cardNo: 77001 } });
+    expect(r).toMatchObject({
+      name: "Offline Olga",
+      clubName: "OK Linné",
+      eventorClubId: 1234n,
+      birthYear: 1990,
+      sex: "F",
+      phone: "0701234567",
+      feeCents: 15000,
+      paidCents: 19000,
+      payMode: 4,
+      cardFeeCents: 4000,
+    });
+  });
+
+  it("an unknown class is CLASS_NOT_FOUND and holds the entry behind it", async () => {
+    const e = regEntry({ tempId: randomUUID(), name: "Lost Lisa", classId: 999_999, cardNo: 77002 });
+    const finish = {
+      ...regEntry({ cardNo: 77002, finishTime: 123_000 }),
+      type: "finish.recorded" as never,
+    };
+    const res = await station().events.push({ events: [e, finish] });
+    expect(res.synced).toEqual([]);
+    expect(res.failed).toEqual([{ id: e.id, error: "CLASS_NOT_FOUND" }]);
+    expect(await reg.db.runner.count({ where: { eventId: reg.eventId, cardNo: 77002 } })).toBe(0);
+    expect(await reg.db.journalEntry.count({ where: { id: { in: [e.id, finish.id] } } })).toBe(0);
+  });
+
+  it("a card held by another runner is CARD_TAKEN; the queued finish does not reach that runner", async () => {
+    await reg.db.runner.create({
+      data: { eventId: reg.eventId, name: "Holder Hanna", cardNo: 77003, classId: (await reg.db.class.findFirstOrThrow({ where: { eventId: reg.eventId, seq: regClass } })).id },
+    });
+    const e = regEntry({ tempId: randomUUID(), name: "Second Sara", classId: regClass, cardNo: 77003 });
+    const finish = {
+      ...regEntry({ cardNo: 77003, finishTime: 123_000 }),
+      type: "finish.recorded" as never,
+    };
+    const res = await station().events.push({ events: [e, finish] });
+    expect(res.failed).toEqual([{ id: e.id, error: "CARD_TAKEN" }]);
+    expect(res.synced).toEqual([]);
+    const holder = await reg.db.runner.findFirstOrThrow({ where: { eventId: reg.eventId, cardNo: 77003 } });
+    expect(holder.name).toBe("Holder Hanna");
+    expect(holder.finishTime).toBe(0);
+  });
+
+  it("the same person registered again on the card is a duplicate, not a refusal", async () => {
+    const first = regEntry({ tempId: randomUUID(), name: "Dupe  Dora", classId: regClass, cardNo: 77004 });
+    const again = regEntry({ tempId: randomUUID(), name: "dupe dora", classId: regClass, cardNo: 77004 });
+    const res = await station().events.push({ events: [first, again] });
+    expect(res).toMatchObject({ synced: [first.id, again.id], failed: [] });
+    expect(await reg.db.runner.count({ where: { eventId: reg.eventId, cardNo: 77004 } })).toBe(1);
+  });
+
+  it("a peer push keeps the skip: the originating node already decided", async () => {
+    const e = regEntry({ tempId: randomUUID(), name: "Peer Petra", classId: 999_999, cardNo: 77005 });
+    const res = await peer().events.push({ events: [e] });
+    expect(res).toMatchObject({ synced: [e.id], failed: [] });
+  });
+
+  it("runner.create journals the whole form so a follower stores the same row", async () => {
+    const { id } = await station().runner.create({
+      name: "Online Ola",
+      classId: regClass,
+      clubName: "IFK Göteborg",
+      eventorClubId: 77,
+      cardNo: 77006,
+      birthYear: 1985,
+      sex: "M",
+      phone: "0709",
+      fee: 15000,
+      paid: 15000,
+      payMode: 3,
+      cardFee: 0,
+    });
+    const row = await reg.db.runner.findFirstOrThrow({ where: { eventId: reg.eventId, seq: id } });
+    const j = await reg.db.journalEntry.findFirstOrThrow({
+      where: { eventId: reg.eventId, type: "runner.registered", payload: { path: ["tempId"], equals: row.id } },
+    });
+    expect(j.payload).toMatchObject({
+      name: "Online Ola",
+      clubName: "IFK Göteborg",
+      eventorClubId: 77,
+      birthYear: 1985,
+      sex: "M",
+      phone: "0709",
+      fee: 15000,
+      paid: 15000,
+      payMode: 3,
+      entryDate: row.entryDate,
+      entryTime: row.entryTime,
+    });
+  });
+});
+
+// API-11: the card link follows the card number.
+describe("card link follows the card number (API-11)", () => {
+  let lk: TestEventContext;
+  let lkClass: number;
+  beforeAll(async () => {
+    lk = await createTestEvent("card-link");
+    lkClass = (await lk.db.class.create({ data: { eventId: lk.eventId, name: "H35" }, select: { seq: true } })).seq;
+  });
+  afterAll(async () => {
+    await lk.cleanup();
+  });
+
+  it("changing cardNo re-points cardId; unlink clears it; linking a taken card is CONFLICT", async () => {
+    const c = makeCaller(lk.event);
+    const card100 = await lk.db.card.create({ data: { eventId: lk.eventId, cardNo: 88100 }, select: { id: true } });
+    const card200 = await lk.db.card.create({ data: { eventId: lk.eventId, cardNo: 88200 }, select: { id: true } });
+    const { id } = await c.runner.create({ name: "Card Carl", classId: lkClass, cardNo: 88100 });
+    await lk.db.runner.updateMany({ where: { eventId: lk.eventId, seq: id }, data: { cardId: card100.id } });
+
+    await c.runner.update({ id, cardNo: 88200 });
+    let r = await lk.db.runner.findFirstOrThrow({ where: { eventId: lk.eventId, seq: id } });
+    expect(r).toMatchObject({ cardNo: 88200, cardId: card200.id });
+
+    await c.runner.update({ id, cardNo: 88300 });
+    r = await lk.db.runner.findFirstOrThrow({ where: { eventId: lk.eventId, seq: id } });
+    expect(r).toMatchObject({ cardNo: 88300, cardId: null });
+
+    await c.runner.update({ id, cardNo: 88200 });
+    await c.cardReadout.linkCardToRunner({ cardNo: 88200, runnerId: null });
+    r = await lk.db.runner.findFirstOrThrow({ where: { eventId: lk.eventId, seq: id } });
+    expect(r).toMatchObject({ cardNo: null, cardId: null });
+
+    const other = await c.runner.create({ name: "Other Otto", classId: lkClass, cardNo: 88400 });
+    await expect(c.cardReadout.linkCardToRunner({ cardNo: 88400, runnerId: id })).rejects.toMatchObject({ code: "CONFLICT" });
+    const o = await lk.db.runner.findFirstOrThrow({ where: { eventId: lk.eventId, seq: other.id } });
+    expect(o.cardNo).toBe(88400);
+  });
+
+  it("a runner.updated replay of a new cardNo re-points cardId on the follower", async () => {
+    const card = await lk.db.card.create({ data: { eventId: lk.eventId, cardNo: 88500 }, select: { id: true } });
+    const { id } = await makeCaller(lk.event).runner.create({ name: "Replay Rita", classId: lkClass, cardNo: 88600 });
+    const res = await makeCaller(lk.event).events.push({
+      events: [{
+        id: randomUUID(),
+        type: "runner.updated" as never,
+        competitionId: lk.event.nameId,
+        stationId: "peer",
+        timestamp: 1_700_000_000_000,
+        payload: { cardNo: 88600, runnerId: id, fields: { cardNo: 88500 } },
+      }],
+    });
+    expect(res.failed).toEqual([]);
+    const r = await lk.db.runner.findFirstOrThrow({ where: { eventId: lk.eventId, seq: id } });
+    expect(r).toMatchObject({ cardNo: 88500, cardId: card.id });
+  });
+});

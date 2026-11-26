@@ -220,3 +220,35 @@ describe("runner.bulkDns", () => {
     expect(det.status).toBe(20);
   });
 });
+
+// WEB-10: bulk "Set club" writes the name and the Eventor id together.
+describe("runner.bulkUpdate club", () => {
+  it("sets name and id from the directory, journals both; a free-text club clears the id", async () => {
+    await ctx.db.clubDirectory.upsert({
+      where: { eventorId: 424242n },
+      create: { eventorId: 424242n, name: "Bulk Club OK" },
+      update: { name: "Bulk Club OK" },
+    });
+    const a = await caller.runner.create({ name: "Bulk A", classId: classSeq, clubName: "Old", eventorClubId: 1 });
+    const b = await caller.runner.create({ name: "Bulk B", classId: classSeq });
+
+    await caller.runner.bulkUpdate({ ids: [a.id, b.id], eventorClubId: 424242 });
+    let rows = await ctx.db.runner.findMany({ where: { eventId: ctx.eventId, seq: { in: [a.id, b.id] } } });
+    for (const r of rows) expect(r).toMatchObject({ clubName: "Bulk Club OK", eventorClubId: 424242n });
+    const j = await ctx.db.journalEntry.findMany({
+      where: { eventId: ctx.eventId, type: "runner.updated" },
+      orderBy: { hlc: "desc" },
+      take: 2,
+    });
+    for (const e of j) expect((e.payload as { fields: unknown }).fields).toMatchObject({ clubName: "Bulk Club OK", eventorClubId: 424242 });
+
+    await caller.runner.bulkUpdate({ ids: [a.id], clubName: "Friskis", eventorClubId: null });
+    rows = await ctx.db.runner.findMany({ where: { eventId: ctx.eventId, seq: a.id } });
+    expect(rows[0]).toMatchObject({ clubName: "Friskis", eventorClubId: null });
+
+    // The legacy 0 sentinel is no Eventor id.
+    await caller.runner.bulkUpdate({ ids: [b.id], clubName: "Typed", eventorClubId: 0 });
+    rows = await ctx.db.runner.findMany({ where: { eventId: ctx.eventId, seq: b.id } });
+    expect(rows[0]).toMatchObject({ clubName: "Typed", eventorClubId: null });
+  });
+});

@@ -26,9 +26,23 @@ If the reader cannot read a card completely (the card was pulled out too early, 
 
 A standalone kiosk keeps working without the server. A card read is saved on the device, the result is shown from the data the kiosk already holds, and a small amber badge counts the reads waiting to be sent. They are sent by themselves when the connection is back. If a read could not be saved at all, a red notice asks you to insert the card again. A kiosk opened with a kiosk key only (no one signed in, login required) keeps the reads on the device until an operator signs in there; the badge says so.
 
+## Registration desk
+
+An unknown card opens the **Register runner** dialog (a card notification, the Recent Cards panel, or **Add Runner** on the Runners page). Each card read starts a fresh form: the rental-card and receipt ticks and the payment method of the previous runner are not carried over, and the name filled from a card's owner data is only ever that card's owner. The payment method starts on the first method in the Registration settings.
+
+- **Club.** The picker lists the clubs in the event and "No club". Type in its search to find a club with no runner in the event yet: online it searches the club directory, offline the downloaded runner database. A club that comes with a name suggestion or a card lookup is selected even when nobody from it is entered yet.
+- **A known card.** When the card already belongs to a runner, the dialog says so and **Register** stays disabled until the card is changed.
+- **Errors.** A failed registration says why: the card is taken, the account may not register, the class is gone, or the server could not be reached (nothing was saved). One click registers once, however often Register is pressed while it saves.
+- **Offline.** A registration made without network keeps every field (club, birth year, sex, phone, payment) and syncs when the network returns. If the server refuses it (the card belongs to someone else, or the class was removed), the Sync Status panel shows why, and the entries queued after it wait until it is retried or discarded.
+- **Receipts** print after the dialog has closed or cleared, so a slow or disconnected printer never holds the desk.
+
+**Set club** in the Runners page's bulk actions writes the club's name and its Eventor link together; picking a typed-in club clears the link.
+
+See [system/registration-and-readout.md](../system/registration-and-readout.md) §8.
+
 ## Start and finish stations
 
-Dedicated register-only stations for the arena — designed to run on cheap tablets and survive flaky Wi-Fi. Both stations work offline: mutations queue locally and drain when connectivity returns. Their clock (and the kiosk's and start screen's) is the event's time zone, synced with the server every 30 seconds and ticking on the device in between, so it keeps running without network and is right even on a tablet set to another zone. The Sync Status panel lists entries the server refused (for example a missing Race crew role) with the reason, and offers Retry, Retry all and Discard; a "Sync blocked" line says when the queue waits for a sign-in or for the server.
+Dedicated register-only stations for the arena — designed to run on cheap tablets and survive flaky Wi-Fi. Both stations work offline: mutations queue locally and drain when connectivity returns. Their clock (and the kiosk's and start screen's) is the event's time zone, synced with the server every 30 seconds and ticking on the device in between, so it keeps running without network and is right even on a tablet set to another zone. The Sync Status panel lists entries the server refused (for example a missing Race crew role, or a registration whose card another runner already has or whose class was removed) with the reason, and offers Retry, Retry all and Discard; a refused registration holds the entries queued after it, so the runner's finish never lands on someone else; a "Sync blocked" line says when the queue waits for a sign-in or for the server.
 
 ![Start station — pre-start timer and card scan](../screenshots/start-station.png)
 
