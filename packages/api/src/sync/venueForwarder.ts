@@ -32,6 +32,7 @@ import { authHeaderName } from "../auth.js";
 import { prisma } from "../db.js";
 import { makeLeasePeer } from "./lease.js";
 import { refreshCloudOwnedMaps } from "./mapRefresh.js";
+import { refreshCloudOwnedSettings } from "./settingsRefresh.js";
 
 /** Parse the procedure paths out of a tRPC request URL (batched or not). */
 export function trpcProcedurePaths(url: string): string[] {
@@ -80,6 +81,25 @@ export function refreshesMapRows(paths: readonly string[]): boolean {
   return paths.some((p) => MAP_REFRESH_PREFIXES.some((prefix) => p.startsWith(prefix)));
 }
 
+/**
+ * The forwarded writes after which the box refreshes the event row's
+ * cloud-owned columns (review MC-08): exact paths, or prefixes ending in ".".
+ */
+export const SETTINGS_REFRESH_PATHS: readonly string[] = [
+  "event.updateType",
+  "competition.updateType",
+  "course.setOverprintCuts",
+  "liveresults.",
+  "eventor.",
+];
+
+/** Whether a forwarded call wrote a cloud-owned column of the event row. */
+export function refreshesSettings(paths: readonly string[]): boolean {
+  return paths.some((p) =>
+    SETTINGS_REFRESH_PATHS.some((s) => (s.endsWith(".") ? p.startsWith(s) : p === s)),
+  );
+}
+
 /** The event a request names: `x-event-id`, or `x-competition-id`, which the web sends (`trpc.ts` reads both). */
 export function requestEventName(headers: Record<string, string | string[] | undefined>): string | null {
   const raw = headers["x-event-id"] ?? headers["x-competition-id"];
@@ -91,23 +111,35 @@ export function requestEventName(headers: Record<string, string | string[] | und
 export const FORWARD_REFRESH_WAIT_MS = 10_000;
 
 /**
- * Refresh the event's map rows after a forwarded write (row G19), waiting
- * at most `waitMs`. Never throws: a failed refresh leaves the box on its
- * copy until the cadence's next one.
+ * Refresh what a forwarded write changed on the cloud — the event's map rows
+ * (row G19) and/or the event row's cloud-owned columns (review MC-08) —
+ * waiting at most `waitMs`. Never throws: a failed refresh leaves the box on
+ * its copy until the cadence's next one.
  */
-export async function refreshAfterForward(nameId: string, peerUrl: string, waitMs = FORWARD_REFRESH_WAIT_MS): Promise<void> {
+export async function refreshAfterForward(
+  nameId: string,
+  peerUrl: string,
+  waitMs = FORWARD_REFRESH_WAIT_MS,
+  what: { maps?: boolean; settings?: boolean } = { maps: true },
+): Promise<void> {
   const secret = syncSharedSecret();
   if (!secret) return;
   try {
     const db = prisma();
     const event = await db.event.findFirst({ where: { nameId }, select: { id: true, nameId: true, zeroTime: true, timeZone: true } });
     if (!event) return;
-    const work = refreshCloudOwnedMaps(db, event, makeLeasePeer(peerUrl, secret)).then(
-      () => {},
-      (err: unknown) => {
-        console.warn(`[venue-forwarder] ${nameId}: map refresh after a forwarded write failed:`, err instanceof Error ? err.message : String(err));
-      },
-    );
+    const peer = makeLeasePeer(peerUrl, secret);
+    const step = (label: string, run: () => Promise<unknown>): Promise<void> =>
+      run().then(
+        () => {},
+        (err: unknown) => {
+          console.warn(`[venue-forwarder] ${nameId}: ${label} refresh after a forwarded write failed:`, err instanceof Error ? err.message : String(err));
+        },
+      );
+    const work = Promise.all([
+      what.settings ? step("settings", () => refreshCloudOwnedSettings(db, event, peer)) : Promise.resolve(),
+      what.maps ? step("map", () => refreshCloudOwnedMaps(db, event, peer)) : Promise.resolve(),
+    ]);
     let timer: NodeJS.Timeout | undefined;
     const bound = new Promise<void>((resolve) => {
       timer = setTimeout(resolve, waitMs);
@@ -116,7 +148,7 @@ export async function refreshAfterForward(nameId: string, peerUrl: string, waitM
     await Promise.race([work, bound]);
     clearTimeout(timer);
   } catch (err) {
-    console.warn(`[venue-forwarder] ${nameId}: map refresh after a forwarded write failed:`, err instanceof Error ? err.message : String(err));
+    console.warn(`[venue-forwarder] ${nameId}: refresh after a forwarded write failed:`, err instanceof Error ? err.message : String(err));
   }
 }
 
@@ -182,8 +214,10 @@ export function registerVenueForwarder(server: FastifyInstance): void {
       });
       const text = await upstream.text();
       const nameId = requestEventName(req.headers);
-      if (upstream.ok && nameId && refreshesMapRows(paths)) {
-        await refreshAfterForward(nameId, peerUrl);
+      if (upstream.ok && nameId) {
+        const maps = refreshesMapRows(paths);
+        const settings = refreshesSettings(paths);
+        if (maps || settings) await refreshAfterForward(nameId, peerUrl, FORWARD_REFRESH_WAIT_MS, { maps, settings });
       }
       void reply
         .code(upstream.status)

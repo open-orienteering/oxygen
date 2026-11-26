@@ -38,7 +38,7 @@ A venue box and the cloud keep their journals converged through a shipper, and t
 On purpose, to be decided or done elsewhere:
 
 1. **Conflict resolution for a stale holder's backlog** (SYNC-08 "apply only if newer, or quarantine"). It needs a per-row last-write HLC or a subject key per entry type, a design decision. This package makes the box stop writing, release itself and name every stale entry in the cloud log, but the overwrite of a correction made after the takeover remains (entries delivered after a takeover are applied last-write-wins, M5; a box older than the node-id header sends no id, so the cloud cannot even name it): SYNC-08 stays partly open.
-2. **The other request-path course emitters** (`control.upsertConfig` and the like; MC-36) are review package 15; only the derived-course refresh after a map change is guarded here.
+2. **The other request-path course emitters** (`control.upsertConfig` and the like; MC-36) are review package 15; only the derived-course refresh after a map change is guarded here. *Done 2026-11-26 in package 15: `control.upsertConfig` is a race procedure; every other emitter on main was already guarded ([settings-refresh-venue-edits.md](settings-refresh-venue-edits.md)).*
 3. **PR #254 (leg-route refresh)**: its job should call `mayWriteEventData` before each chunk and before the final climb refresh, and skip rather than throw; neither the job nor its columns are on `main`.
 4. **Checkout still wipes `tracks`, `routes` and `event_permissions`** of the box's copy (SYNC-07 side note); only readout backups are kept.
 5. **No "box older than cloud" banner** before a checkout: a warning in the log and the `peerSchema` / `localSchema` result fields only.

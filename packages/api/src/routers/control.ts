@@ -1416,7 +1416,7 @@ export const controlRouter = router({
     };
   }),
 
-  setAirPlusConfig: coursesEditProcedure
+  setAirPlusConfig: coursesEditRaceProcedure
     .input(
       z.object({
         enabled: z.boolean().optional(),
@@ -1446,7 +1446,7 @@ export const controlRouter = router({
    * AIR+ override across many rows in one round-trip. `stationSerial`
    * is single-control only — it doesn't make sense for bulk edits.
    */
-  upsertConfig: coursesEditProcedure
+  upsertConfig: coursesEditRaceProcedure
     .input(
       z.object({
         controlId: z.number().int().optional(),

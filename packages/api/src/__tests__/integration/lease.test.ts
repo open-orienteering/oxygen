@@ -63,7 +63,7 @@ import {
   type PeerTransport,
 } from "../../sync/shipper.js";
 import { canonicalJson, exportMapRows, refreshCloudOwnedMaps, refreshWrites } from "../../sync/mapRefresh.js";
-import { refreshCloudOwnedSettings } from "../../sync/settingsRefresh.js";
+import { importVenueOwnedSettings, pushVenueOwnedSettings, refreshCloudOwnedSettings } from "../../sync/settingsRefresh.js";
 import {
   ingestJournalEntries,
   listJournalEntriesSince,
@@ -149,6 +149,10 @@ function leasePeerToB(): LeasePeer {
       (await dbB.event.findUniqueOrThrow({
         where: { id: eventB.id },
       })) as unknown as Record<string, unknown>,
+    // As `lease.importSettings`: this process is the caller, so its node id is the peer's.
+    importSettings: async (_nameId, settings) => {
+      await importVenueOwnedSettings(dbB, eventB.id, nodeId(), JSON.parse(JSON.stringify(settings)));
+    },
     exportBlob: async (_nameId, input) => exportPeerBlobSlice(dbB, eventB.id, input),
     exportMapRows: async () => exportMapRows(dbB, eventB.id),
   };
@@ -376,6 +380,42 @@ describe("raceProcedure guard", () => {
     } finally {
       await releaseLease(ctx.db, ctx.eventId, { forced: true });
     }
+  });
+
+  it("the cloud refuses venue-owned settings and AIR+ unit config while another node holds the lease (MC-08, MC-36)", async () => {
+    await caller.control.create({ codes: "151" });
+    const journalBefore = await ctx.db.journalEntry.count({ where: { eventId: ctx.eventId } });
+    const ev = await ctx.db.event.findUniqueOrThrow({ where: { id: ctx.eventId } });
+    await acquireLease(ctx.db, ctx.eventId, "venue-99");
+    try {
+      const refused = [
+        () => caller.event.setCardFee({ cardFee: 100 }),
+        () => caller.event.regenerateKioskKey(),
+        () => caller.event.setRegistrationConfig({ finishReceiptMessage: "x" }),
+        () => caller.event.setGoogleSheetsConfig({ webhookUrl: "https://example.invalid/hook" }),
+        () => caller.control.setAirPlusConfig({ enabled: !ev.airPlus }),
+        () => caller.event.setTimeSettings({ zeroTime: ev.zeroTime, timeZone: "Europe/Oslo" }),
+        () => caller.control.upsertConfig({ controlId: 151, radioType: "public_radio", stationSerial: 424242 }),
+      ];
+      for (const call of refused) {
+        await expect(call()).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+      }
+      // An unchanged time zone stays allowed (the zero-time rules are separate).
+      await caller.event.setTimeSettings({ zeroTime: ev.zeroTime, timeZone: ev.timeZone });
+      expect(await ctx.db.journalEntry.count({ where: { eventId: ctx.eventId } })).toBe(journalBefore);
+      expect(await ctx.db.controlUnit.count({ where: { eventId: ctx.eventId, stationSerial: 424242 } })).toBe(0);
+      expect(await ctx.db.event.findUniqueOrThrow({ where: { id: ctx.eventId } })).toMatchObject({
+        cardFeeCents: ev.cardFeeCents,
+        kioskKey: ev.kioskKey,
+        airPlus: ev.airPlus,
+        timeZone: ev.timeZone,
+      });
+    } finally {
+      await releaseLease(ctx.db, ctx.eventId, { forced: true });
+    }
+    // Without a lease, the same node writes and journals the unit config.
+    await caller.control.upsertConfig({ controlId: 151, radioType: "public_radio" });
+    expect(await ctx.db.journalEntry.count({ where: { eventId: ctx.eventId } })).toBeGreaterThan(journalBefore);
   });
 
   it("writes resume after release; double-acquire conflicts", async () => {
@@ -755,11 +795,11 @@ describe("checkout → write → checkin lifecycle", () => {
       select: { id: true, nameId: true, zeroTime: true },
     });
 
-    // A cloud-side operator edits a receipt message (cloud-owned) AND the
+    // A cloud-side operator edits the organizer name (cloud-owned) AND the
     // zero time (closure — the venue owns it during the lease).
     await dbB.event.update({
       where: { id: eventB.id },
-      data: { finishReceiptMessage: "Grattis!", zeroTime: 999999 },
+      data: { organizerName: "Grattis!", zeroTime: 999999 },
     });
 
     const refreshed = await refreshCloudOwnedSettings(
@@ -771,9 +811,9 @@ describe("checkout → write → checkin lifecycle", () => {
 
     const after = await ctx.db.event.findUniqueOrThrow({
       where: { id: localEvent.id },
-      select: { finishReceiptMessage: true, zeroTime: true },
+      select: { organizerName: true, zeroTime: true },
     });
-    expect(after.finishReceiptMessage).toBe("Grattis!");
+    expect(after.organizerName).toBe("Grattis!");
     // The closure field did NOT follow.
     expect(after.zeroTime).toBe(localEvent.zeroTime);
 
@@ -782,6 +822,117 @@ describe("checkout → write → checkin lifecycle", () => {
       where: { id: eventB.id },
       data: { zeroTime: eventB.zeroTime },
     });
+  });
+
+  it("venue edits of the kiosk key, card fee, receipts, AIR+ and time zone survive the refresh and reach the cloud (MC-08)", async () => {
+    const localEvent = await ctx.db.event.findUniqueOrThrow({
+      where: { nameId: CHECKOUT_NAME },
+      select: { id: true, nameId: true, zeroTime: true, timeZone: true },
+    });
+    const boxCaller = makeCaller({ id: localEvent.id, nameId: localEvent.nameId, zeroTime: localEvent.zeroTime });
+    const before = await dbB.event.findUniqueOrThrow({ where: { id: eventB.id } });
+    try {
+      // The arena operator, on the box, during the lease.
+      await boxCaller.event.setCardFee({ cardFee: 4500 });
+      const { kioskKey } = await boxCaller.event.regenerateKioskKey();
+      await boxCaller.event.setRegistrationConfig({ finishReceiptMessage: "Bra sprunget!" });
+      await boxCaller.control.setAirPlusConfig({ enabled: true, awakeHours: 12 });
+      await boxCaller.event.setTimeSettings({ zeroTime: localEvent.zeroTime, timeZone: "Europe/Helsinki" });
+      // Meanwhile the cloud's copy of a cloud-owned column moves.
+      await dbB.event.update({ where: { id: eventB.id }, data: { organizerName: "OK Molnet" } });
+
+      expect(await refreshCloudOwnedSettings(ctx.db, localEvent, leasePeerToB())).toBe(true);
+      const box = await ctx.db.event.findUniqueOrThrow({ where: { id: localEvent.id } });
+      expect(box).toMatchObject({
+        cardFeeCents: 4500,
+        kioskKey,
+        finishReceiptMessage: "Bra sprunget!",
+        airPlus: true,
+        awakeHours: 12,
+        timeZone: "Europe/Helsinki",
+        organizerName: "OK Molnet",
+      });
+
+      // The push carries exactly the venue-owned columns to the cloud.
+      expect(await pushVenueOwnedSettings(ctx.db, localEvent, leasePeerToB())).toBe(true);
+      const cloud = await dbB.event.findUniqueOrThrow({ where: { id: eventB.id } });
+      expect(cloud).toMatchObject({
+        cardFeeCents: 4500,
+        kioskKey,
+        finishReceiptMessage: "Bra sprunget!",
+        airPlus: true,
+        awakeHours: 12,
+        timeZone: "Europe/Helsinki",
+        organizerName: "OK Molnet",
+        zeroTime: before.zeroTime,
+        name: before.name,
+      });
+    } finally {
+      const restore = {
+        cardFeeCents: before.cardFeeCents,
+        kioskKey: before.kioskKey,
+        finishReceiptMessage: before.finishReceiptMessage,
+        airPlus: before.airPlus,
+        awakeHours: before.awakeHours,
+        timeZone: before.timeZone,
+        organizerName: before.organizerName,
+      };
+      await dbB.event.update({ where: { id: eventB.id }, data: restore });
+      await ctx.db.event.update({ where: { id: localEvent.id }, data: restore });
+    }
+  });
+
+  it("lease.importSettings takes only venue-owned columns, only from the holder (MC-08)", async () => {
+    const before = await dbB.event.findUniqueOrThrow({ where: { id: eventB.id } });
+    try {
+      await expect(
+        importVenueOwnedSettings(dbB, eventB.id, "venue-impostor", { cardFeeCents: 1 }),
+      ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+      await expect(importVenueOwnedSettings(dbB, eventB.id, null, { cardFeeCents: 1 })).rejects.toMatchObject({
+        code: "PRECONDITION_FAILED",
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const n = await importVenueOwnedSettings(dbB, eventB.id, nodeId(), {
+          cardFeeCents: 2500,
+          name: "Hijacked",
+          zeroTime: 1,
+          removed: true,
+          settingFromTheFuture: 1,
+        });
+        expect(n).toBe(1);
+      } finally {
+        warn.mockRestore();
+      }
+      const after = await dbB.event.findUniqueOrThrow({ where: { id: eventB.id } });
+      expect(after).toMatchObject({ cardFeeCents: 2500, name: before.name, zeroTime: before.zeroTime, removed: false });
+    } finally {
+      await dbB.event.update({ where: { id: eventB.id }, data: { cardFeeCents: before.cardFeeCents } });
+    }
+  });
+
+  it("lease.importSettings answers behind the shared secret, for the holder's node id only", async () => {
+    // On this node the checked-out copy's lease is held by this node's id,
+    // so this node plays the cloud and the caller's node id the box.
+    const local = await ctx.db.event.findUniqueOrThrow({
+      where: { nameId: CHECKOUT_NAME },
+      select: { id: true, nameId: true, zeroTime: true, cardFeeCents: true },
+    });
+    const ref = { id: local.id, nameId: local.nameId, zeroTime: local.zeroTime };
+    try {
+      const res = await makeCaller(ref, { syncSecret: "test-sync-secret", peerNodeId: nodeId() }).lease.importSettings({
+        settings: { cardFeeCents: 3300, name: "Not taken" },
+      });
+      expect(res).toEqual({ ok: true, fields: 1 });
+      expect((await ctx.db.event.findUniqueOrThrow({ where: { id: local.id } })).cardFeeCents).toBe(3300);
+      await expect(
+        makeCaller(ref, { syncSecret: "test-sync-secret", peerNodeId: "venue-other" }).lease.importSettings({ settings: { cardFeeCents: 1 } }),
+      ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+      await expect(makeCaller(ref).lease.importSettings({ settings: { cardFeeCents: 1 } })).rejects.toBeInstanceOf(TRPCError);
+      expect((await ctx.db.event.findUniqueOrThrow({ where: { id: local.id } })).cardFeeCents).toBe(3300);
+    } finally {
+      await ctx.db.event.update({ where: { id: local.id }, data: { cardFeeCents: local.cardFeeCents } });
+    }
   });
 
   it("does not refresh on a node that is not the holder", async () => {
@@ -826,9 +977,24 @@ describe("checkout → write → checkin lifecycle", () => {
       code: "PRECONDITION_FAILED",
     });
 
-    // Healthy link: ships, then releases on both nodes.
+    // The journal ships but the settings push fails (link drops): the
+    // checkin refuses and the box keeps the lease (MC-08).
     _setPeerTransportFactory(() => transportToB());
+    const cardFeeOnB = (await dbB.event.findUniqueOrThrow({ where: { id: eventB.id } })).cardFeeCents;
+    await leaseCaller.event.setCardFee({ cardFee: 7700 });
+    _setLeasePeerFactory(() => ({ ...leasePeerToB(), importSettings: async () => Promise.reject(new Error("fetch failed")) }));
+    try {
+      await expect(leaseCaller.lease.checkin()).rejects.toThrow("fetch failed");
+    } finally {
+      _setLeasePeerFactory(() => leasePeerToB());
+    }
+    expect((await getActiveLease(ctx.db, localEvent.id))?.holderNodeId).toBe(nodeId());
+    expect((await getActiveLease(dbB, eventB.id))?.holderNodeId).toBe(nodeId());
+
+    // Healthy link: ships, pushes the venue-owned settings, then releases on both nodes.
     const res = await leaseCaller.lease.checkin();
+    expect((await dbB.event.findUniqueOrThrow({ where: { id: eventB.id } })).cardFeeCents).toBe(7700);
+    await dbB.event.update({ where: { id: eventB.id }, data: { cardFeeCents: cardFeeOnB } });
     expect(res.ok).toBe(true);
     expect(res.pushed).toBeGreaterThanOrEqual(1);
 
@@ -1682,21 +1848,21 @@ describe("a box follows the cloud's map rows during a lease (G19)", () => {
     _setLeasePeerFactory(() => jsonLeasePeerToB());
     try {
       await dbB.courseMap.update({ where: { id: sheetBId }, data: { name: "Cadence" } });
-      await dbB.event.update({ where: { id: eventB.id }, data: { finishReceiptMessage: "Cadence!" } });
+      await dbB.event.update({ where: { id: eventB.id }, data: { organizerName: "Cadence!" } });
       await refreshAllSettingsOnce(ctx.db, PEER_URL, "test-sync-secret");
       expect((await sheetOnBox()).name).toBe("Cadence");
-      expect((await ctx.db.event.findUniqueOrThrow({ where: { id: box.id } })).finishReceiptMessage).toBe("Cadence!");
+      expect((await ctx.db.event.findUniqueOrThrow({ where: { id: box.id } })).organizerName).toBe("Cadence!");
 
       // A cloud that predates exportMapRows: settings still follow, the map copy stays.
       _setLeasePeerFactory(() => ({ ...jsonLeasePeerToB(), exportMapRows: async () => Promise.reject(new Error("No procedure found")) }));
       await dbB.courseMap.update({ where: { id: sheetBId }, data: { name: "Not yet" } });
-      await dbB.event.update({ where: { id: eventB.id }, data: { finishReceiptMessage: "Still!" } });
+      await dbB.event.update({ where: { id: eventB.id }, data: { organizerName: "Still!" } });
       await refreshAllSettingsOnce(ctx.db, PEER_URL, "test-sync-secret");
       expect((await sheetOnBox()).name).toBe("Cadence");
-      expect((await ctx.db.event.findUniqueOrThrow({ where: { id: box.id } })).finishReceiptMessage).toBe("Still!");
+      expect((await ctx.db.event.findUniqueOrThrow({ where: { id: box.id } })).organizerName).toBe("Still!");
     } finally {
       _setLeasePeerFactory(() => leasePeerToB());
-      await dbB.event.update({ where: { id: eventB.id }, data: { finishReceiptMessage: "" } });
+      await dbB.event.update({ where: { id: eventB.id }, data: { organizerName: "" } });
     }
   });
 
@@ -1965,16 +2131,16 @@ describe("a peer of another version (SYNC-17)", () => {
         ...leasePeerToB(),
         exportSettings: async () => ({
           ...((await dbB.event.findUniqueOrThrow({ where: { id: eventB.id } })) as unknown as Record<string, unknown>),
-          finishReceiptMessage: "Skew ok",
+          organizerName: "Skew ok",
           settingFromTheFuture: true,
         }),
       });
       expect(refreshed).toBe(true);
-      expect((await ctx.db.event.findUniqueOrThrow({ where: { id: local.id }, select: { finishReceiptMessage: true } })).finishReceiptMessage).toBe("Skew ok");
+      expect((await ctx.db.event.findUniqueOrThrow({ where: { id: local.id }, select: { organizerName: true } })).organizerName).toBe("Skew ok");
     } finally {
       warn.mockRestore();
       await undoCheckout();
-      await dbB.event.update({ where: { id: eventB.id }, data: { finishReceiptMessage: "" } });
+      await dbB.event.update({ where: { id: eventB.id }, data: { organizerName: "" } });
     }
   });
 });

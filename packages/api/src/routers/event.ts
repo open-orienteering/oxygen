@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, publicProcedure, authedProcedure, adminProcedure, viewProcedure, manageProcedure, kioskOrViewProcedure } from "../trpc.js";
+import { router, publicProcedure, authedProcedure, adminProcedure, viewProcedure, manageProcedure, manageRaceProcedure, kioskOrViewProcedure } from "../trpc.js";
 import { prisma, sanitizeNameId, getZeroTime, isReservedEventSlug } from "../db.js";
 import { kioskKeyMatches } from "../trpc.js";
 import {
@@ -37,7 +37,7 @@ import { firstFreeEventSlug, yearOf } from "../event-slug.js";
 import { DAY_DS, isValidTimeZone } from "@oxygen/shared";
 import { zeroTimeForResults } from "../timeConvert.js";
 import { lockEventLeaseAndSync } from "../event-locks.js";
-import { getActiveLease } from "../sync/lease.js";
+import { getActiveLease, mayWriteEventData, writeRefusalError } from "../sync/lease.js";
 import type { Prisma } from "../generated/prisma/client.js";
 
 /** `events.zero_time` default (09:00). */
@@ -371,12 +371,18 @@ export const eventRouter = router({
         await lockEventLeaseAndSync(tx, eventId);
         const row = await tx.event.findUniqueOrThrow({
           where: { id: eventId },
-          select: { zeroTime: true },
+          select: { zeroTime: true, timeZone: true },
         });
         const oldZero = row.zeroTime;
         const newZero = input.zeroTime;
-        // The time zone alone shifts no data and may change at any time (a
-        // checked-out venue gets it with the next settings refresh).
+        // The time zone shifts no data, but during a lease it belongs to the
+        // venue box like the zero time (docs/system/offline-architecture.md
+        // "The event row during a lease"): the cloud refuses a change, the
+        // box keeps it out of its settings refresh and pushes it back.
+        if (input.timeZone !== row.timeZone) {
+          const verdict = await mayWriteEventData(tx, eventId);
+          if (!verdict.ok) throw writeRefusalError(verdict);
+        }
         if (newZero !== oldZero) {
           if (await getActiveLease(tx, eventId)) {
             throw new TRPCError({
@@ -1039,7 +1045,7 @@ export const eventRouter = router({
     };
   }),
 
-  setRegistrationConfig: manageProcedure
+  setRegistrationConfig: manageRaceProcedure
     .input(
       z.object({
         paymentMethods: z.array(z.string()).optional(),
@@ -1090,7 +1096,7 @@ export const eventRouter = router({
     return { webhookUrl: event?.googleSheetsWebhookUrl ?? "" };
   }),
 
-  setGoogleSheetsConfig: manageProcedure
+  setGoogleSheetsConfig: manageRaceProcedure
     .input(z.object({ webhookUrl: z.string() }))
     .mutation(async ({ ctx, input }) => {
       await ctx.db.event.update({
@@ -1117,7 +1123,7 @@ export const eventRouter = router({
     return { cardFee: event?.cardFeeCents ?? 0 };
   }),
 
-  setCardFee: manageProcedure
+  setCardFee: manageRaceProcedure
     .input(z.object({ cardFee: z.number().int().min(0) }))
     .mutation(async ({ ctx, input }) => {
       await ctx.db.event.update({
@@ -1135,7 +1141,7 @@ export const eventRouter = router({
     return { kioskKey: row?.kioskKey ?? null };
   }),
 
-  regenerateKioskKey: manageProcedure.mutation(async ({ ctx }) => {
+  regenerateKioskKey: manageRaceProcedure.mutation(async ({ ctx }) => {
     const kioskKey = randomBytes(24).toString("base64url");
     await ctx.db.event.update({
       where: { id: ctx.event.id },

@@ -14,7 +14,7 @@ The event page is mission control for external integrations. Everything the Swed
   the kiosk and the start screen) are under Event Info. Moving the zero time
   keeps every drawn start at its clock time; it locks once the race has
   finish times, punches or read cards, and while the event is checked out to
-  a venue. The time zone can always be changed. See [system/registration-and-readout.md](../system/registration-and-readout.md), "Time model".
+  a venue. The time zone can always be changed, on the venue box while the event is checked out there. See [system/registration-and-readout.md](../system/registration-and-readout.md), "Time model".
 - **Editable event type** — choose a competition, training, weekly course, or
   custom label during creation and change it later under Event Info. Eventor
   initializes the label on import but later syncs cannot overwrite it; raw

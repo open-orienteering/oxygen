@@ -113,6 +113,10 @@ tRPC, never journaled, and **cloud-owned even during a lease**:
 - The venue keeps a **checkout-time copy** of cloud-owned data for local
   reads, refreshed periodically while online. Staleness is acceptable
   because of the boundary rule below.
+- **The event row is split** (review MC-08, 2026-11-26), see
+  [The event row during a lease](#the-event-row-during-a-lease): most of
+  its columns are cloud-owned as above, but the settings the arena changes
+  on the day are venue-owned during a lease.
 - **The event's map patch** (`map_patches`, `docs/map-patches.md` §3.4)
   is cloud-owned the same way: it travels in the checkout snapshot's
   `maps` part for the venue's map, and `mapPatch.` writes are forwarded.
@@ -184,17 +188,71 @@ class→course, control codes/status) are inside the results closure and are
   crash in between loses only the ship, and re-running the operator-driven
   import re-emits.
 
+A control's radio and AIR+ settings (`control.upsertConfig`) journal as
+`control.upserted` and are a race procedure like the other control edits;
+the cloud refuses them during a lease (review MC-36, 2026-11-26).
+
 The remaining non-journaled reference writer is the Eventor entry sync,
 which is cloud-owned and forwarded from venues; running it against a
 leased-out event is refused (`EVENT_CHECKED_OUT`, any active lease: the
 cloud is then not the writer and the sync is not journaled). It is a
 pre-race operation in practice; see [eventor-sync.md](eventor-sync.md).
 
+### The event row during a lease
+
+The event row carries both kinds of data, so its columns are split
+(`packages/api/src/sync/eventOwnership.ts`; review MC-08, 2026-11-26).
+Before this, the box ran every settings mutation locally and the
+5-minute settings refresh copied the cloud's row back over it, so an
+arena edit of the card fee or kiosk key reverted within minutes and never
+reached the cloud.
+
+| Columns | Writer | During a lease |
+|---|---|---|
+| `id`, `nameId`, `removed`, `createdAt`, `updatedAt` | — | identity: never copied |
+| `zeroTime`, `date` | `event.setTimeSettings` (zero time) | results closure: venue-owned, kept out of the refresh; a zero-time move is refused on both nodes |
+| `timeZone` | `event.setTimeSettings` | venue-owned |
+| `kioskKey` | `event.regenerateKioskKey` | venue-owned |
+| `cardFeeCents` | `event.setCardFee` | venue-owned |
+| `airPlus`, `awakeHours` | `control.setAirPlusConfig` | venue-owned |
+| `paymentMethods`, `swishNumber`, `swishPayeeName`, `printRegistrationReceipt`, `registrationReceiptMessage`, `finishReceiptMessage`, `receiptFriskvardNote`, `organizerEventorId`, `orgNumber`, `vatExempt` | `event.setRegistrationConfig` | venue-owned |
+| `googleSheetsWebhookUrl` | `event.setGoogleSheetsConfig` (the node that stores readouts pushes to the sheet) | venue-owned |
+| `kind`, `kindCustom` | `event.updateType` | cloud-owned, forwarded |
+| `autoOverprintCuts` | `course.setOverprintCuts` | cloud-owned, forwarded (a layout flag, row G18) |
+| everything else (name, organizer, fees, LiveResults, Eventor…) | forwarded writers | cloud-owned |
+
+- **Venue-owned** columns are written on the box. Their mutations are race
+  procedures (`setTimeSettings` checks `mayWriteEventData` when the time
+  zone changes), so the cloud refuses them with the typed "checked out"
+  error while the box holds the lease. The box's settings refresh leaves
+  them alone, and the box pushes them to the cloud
+  (`lease.importSettings`, accepted only from the active holder's node id,
+  venue-owned keys only) on the settings cadence before each refresh, and
+  once more in the checkin barrier before the peer release. A failed push
+  fails the checkin, so the operator retries; a peer that predates the
+  endpoint (`NOT_FOUND`) or no longer lists the box as holder
+  (`PRECONDITION_FAILED`) does not block it.
+- **Cloud-owned** columns are forwarded. After a forwarded `event.updateType`,
+  `course.setOverprintCuts`, `liveresults.*` or `eventor.*` write the box
+  refreshes the event row at once (bounded like the map refresh), not only
+  on the 5-minute cadence.
+- `packages/api/src/__tests__/event-settings-ownership.test.ts` scans the
+  routers: every procedure that writes the event row must be either
+  forwarded or a venue-owned race write, and a venue writer may set only
+  venue-owned columns. A new settings mutation fails it until its owner is
+  decided.
+
+These defaults were taken on Marcus's behalf under the review's fix-package
+authorization (2026-11-26): keep the arena working offline and lose no
+edit. The cost is that a cloud admin cannot change the venue-owned
+settings while the event is checked out.
+
 ### Consequence: checkin is cheap
 
 Because non-journaled data is never written on the venue, **checkin is
 just a delivery barrier** (every venue journal entry shipped and acked
-before the cloud resumes writing). There is no snapshot-export step, no
+before the cloud resumes writing), plus one push of the venue-owned event
+settings (see above). There is no snapshot-export step, no
 reconciliation, no diffing. See [The lease](#the-lease).
 
 ## The journal
@@ -296,7 +354,9 @@ early keeps the ordering honest.
 > forwarder for cloud-owned mutations, and the shell badge + EventPage
 > panel. The venue additionally refreshes its copy of cloud-owned event
 > settings on a slow cadence while a lease is held
-> (`SYNC_SETTINGS_REFRESH_MS`, default 5 min; closure fields excluded),
+> (`SYNC_SETTINGS_REFRESH_MS`, default 5 min; closure and venue-owned
+> fields excluded, the venue-owned ones pushed back first, see
+> [The event row during a lease](#the-event-row-during-a-lease)),
 > and on the same cadence its copy of the event's cloud-owned map rows
 > (`lease.exportMapRows`, row G19, `docs/map-storage.md` §7.2).
 
