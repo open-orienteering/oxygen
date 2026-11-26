@@ -66,7 +66,7 @@ The registration trend page (overflow nav → **Trends**) plots when runners sig
 
 ## Runner list and bulk editing
 
-Every registered competitor is on one page, with class, club, SI card, and status visible at a glance. Click any row to expand an inline detail pane — name, class, club, times, punches, and status are all editable in place with auto-save. In a class on a forked course the pane also has a **Variant** select to change the runner's variant by hand; the start list shows the variant after the class (`H21 · AC`).
+Every registered competitor is on one page, with class, club, SI card, and status visible at a glance. Click any row to expand an inline detail pane — name, class, club, card, bib, times, punches, and status are all editable in place. A field saves when you pause typing, press Enter or leave it, and closing the row saves what is still pending. If the server refuses a change (a card another runner holds), the pane says why and the field shows the stored value again. An empty name or a negative card number is not sent; the field is marked red until you correct it. In a class on a forked course the pane also has a **Variant** select to change the runner's variant by hand; the start list shows the variant after the class (`H21 · AC`).
 
 ![Runner list with inline detail](../screenshots/runners.png)
 

@@ -36,6 +36,7 @@
   "female": "Kvinna",
   "nameRequired": "Namn krävs",
   "classRequired": "Klass krävs",
+  "invalidCardNo": "Ange ett giltigt bricknummer",
   "saving": "Sparar...",
   "saved": "Sparat",
   "loading": "Laddar...",
