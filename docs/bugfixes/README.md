@@ -88,6 +88,8 @@ Notes whose code no longer exists (mostly the raster tile pipeline, deleted in s
 
 | Note | Added |
 | --- | --- |
+| [Runner editor dropped edits behind "Saved" and refused saves silently](runner-inline-editor.md) | 2026-11-26 |
+| [Runner editor: follow-ups left out of package 11](runner-inline-editor-followups.md) | 2026-11-26 |
 | [Draw safety: a redraw rewrote started runners, the draw was not atomic, and Apply differed from the preview](draw-safety.md) | 2026-11-26 |
 | [Demo Competition courses read no controls](showcase-stale-course-structure.md) | 2026-11-07 |
 | [Runner search failed in given-name order](runner-name-search-order.md) | 2026-09-19 |

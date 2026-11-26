@@ -139,6 +139,32 @@ describe("runner.update", () => {
     const detail = await caller.runner.getById({ id: created.id });
     expect(detail.cardNo).toBe(77777);
   });
+
+  it("stores and journals a bib together with other fields of one save (package 11)", async () => {
+    const created = await caller.runner.create({
+      name: "Bib Runner",
+      classId: classSeq,
+      cardNo: 78787,
+    });
+    await caller.runner.update({
+      id: created.id,
+      data: { name: "Bib Runner Two", bib: "A12", cardNo: 78788 },
+    });
+    const detail = await caller.runner.getById({ id: created.id });
+    expect(detail.bib).toBe("A12");
+    expect(detail.name).toBe("Bib Runner Two");
+    expect(detail.cardNo).toBe(78788);
+    const entries = await ctx.db.journalEntry.findMany({
+      where: { eventId: ctx.eventId, type: "runner.updated" },
+      orderBy: { ingestSeq: "desc" },
+      take: 1,
+    });
+    expect((entries[0].payload as { fields: Record<string, unknown> }).fields).toMatchObject({
+      bib: "A12",
+      name: "Bib Runner Two",
+      cardNo: 78788,
+    });
+  });
 });
 
 describe("runner.delete (soft)", () => {

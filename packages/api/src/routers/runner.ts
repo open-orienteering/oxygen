@@ -145,6 +145,7 @@ export async function buildRunnerUpdateData(
   if (get<string>("nationality") !== undefined)
     data.nationality = get<string>("nationality");
   if (get<string>("phone") !== undefined) data.phone = get<string>("phone");
+  if (get<string>("bib") !== undefined) data.bib = get<string>("bib");
   if (get<number>("status") !== undefined)
     data.status = valueToRunnerStatus(get<number>("status")!);
   if (get<number>("finishTime") !== undefined) {
@@ -264,6 +265,8 @@ const runnerUpdateSchema = z.object({
   sex: z.string().optional(),
   nationality: z.string().optional(),
   phone: z.string().optional(),
+  /** Free-text bib; the inline editor's field was silently dropped before (package 11). */
+  bib: z.string().optional(),
   status: z.number().int().optional(),
   finishTime: z.number().int().optional(),
   fee: z.number().int().optional(),
