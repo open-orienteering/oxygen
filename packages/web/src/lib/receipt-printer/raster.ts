@@ -5,6 +5,7 @@
  * Returns null on any error (network failure, 404, CORS, no canvas support).
  */
 
+import { withTimeout, LOGO_LOAD_TIMEOUT_MS } from "./timeout.js";
 import type { LogoRaster } from "./types.js";
 
 /**
@@ -22,11 +23,15 @@ export async function fetchLogoRaster(
     const img = new Image();
     img.crossOrigin = "anonymous";
 
-    await new Promise<void>((resolve, reject) => {
-      img.onload = () => resolve();
-      img.onerror = () => reject(new Error("logo load failed"));
-      img.src = logoUrl;
-    });
+    await withTimeout(
+      new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error("logo load failed"));
+        img.src = logoUrl;
+      }),
+      LOGO_LOAD_TIMEOUT_MS,
+      "logo load",
+    );
 
     if (!img.naturalWidth || !img.naturalHeight) return null;
 

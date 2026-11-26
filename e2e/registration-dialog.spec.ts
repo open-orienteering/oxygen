@@ -22,7 +22,8 @@ import { connectMockSerialReader } from "./helpers/reader";
 import { waitForTrpc } from "./helpers/trpc";
 import { openKioskTab } from "./helpers/kiosk";
 import { API_BASE } from "./helpers/api-base";
-import { reseed } from "./helpers/reseed";
+import { reseed, E2E_DATABASE_URL } from "./helpers/reseed";
+import { Client } from "pg";
 
 test.beforeAll(reseed);
 
@@ -681,5 +682,161 @@ test.describe("Registration Dialog", () => {
       });
       if (runnerId) createdRunnerIds.push(runnerId);
     });
+  });
+});
+
+// ── Package 10: registration correctness ────────────────────
+test.describe("Registration correctness", () => {
+  const ids: number[] = [];
+  test.afterAll(async ({ request }) => {
+    for (const id of ids) await deleteRunner(request, id);
+  });
+
+  async function findByCard(request: import("@playwright/test").APIRequestContext, cardNo: number) {
+    const resp = await request.get(
+      `${API_BASE}/trpc/runner.findByCard?input=${encodeURIComponent(JSON.stringify({ cardNo }))}`,
+      { headers: COMP_HEADERS },
+    );
+    return (await resp.json())?.result?.data as
+      | { id: number; name: string; clubId: number; clubName: string }
+      | null;
+  }
+
+  async function pickClass(page: Page, className = "Öppen 2") {
+    const dialog = page.getByTestId("registration-dialog");
+    await dialog.getByTestId("reg-class").click();
+    await expect(page.getByRole("button", { name: className }).first()).toBeVisible({ timeout: 3000 });
+    await page.getByRole("button", { name: className }).first().click();
+  }
+
+  test("owner data of the previous card never names the next card (WEB-05)", async ({ page, request }) => {
+    await setupAdmin(page);
+    const resolution = waitForTrpc(page, "cardReadout.readout");
+    await page.evaluate(() =>
+      window.__siMock.insertCard(8900060, [], { ownerData: { firstName: "Owner", lastName: "Ahead" } }),
+    );
+    await resolution;
+    await page.getByTestId("card-notification-view").click();
+    const dialog = page.getByTestId("registration-dialog");
+    await expect(dialog).toBeVisible({ timeout: 5000 });
+    await page.getByTestId("reg-sticky-toggle").click();
+    const nameInput = dialog.locator("input[placeholder='First Last']");
+    await expect(nameInput).toHaveValue("Owner Ahead", { timeout: 5000 });
+    await pickClass(page);
+    await dialog.getByTestId("reg-submit").click();
+    await expect(nameInput).toHaveValue("", { timeout: 5000 });
+    const first = await findByCard(request, 8900060);
+    if (first) ids.push(first.id);
+
+    await page.evaluate(() => window.__siMock.removeCard());
+    await insertUnregisteredCard(page, 2900061);
+    await expect(dialog.locator("input[placeholder='e.g. 500123']")).toHaveValue("2900061", { timeout: 5000 });
+    // Give the deferred owner-data fill time to (wrongly) run.
+    await page.waitForTimeout(1500);
+    await expect(nameInput).toHaveValue("");
+    // Sticky mode stays on for later tests otherwise.
+    await page.getByTestId("reg-sticky-toggle").click();
+  });
+
+  test("No club stays no club when the event has a free-text club (WEB-06)", async ({ page, request }) => {
+    const classId = await getClassId(request, "Öppen 1");
+    const resp = await request.post(`${API_BASE}/trpc/runner.create`, {
+      headers: COMP_HEADERS,
+      data: { name: "E2E Freetext Club Holder", cardNo: 2900062, classId, clubName: "E2E Friskis" },
+    });
+    const holder = (await resp.json())?.result?.data?.id;
+    if (holder) ids.push(holder);
+
+    await setupAdmin(page);
+    await insertUnregisteredCard(page, 2900063);
+    await page.getByTestId("card-notification-view").click();
+    const dialog = page.getByTestId("registration-dialog");
+    await expect(dialog).toBeVisible({ timeout: 5000 });
+    await expect(dialog.getByTestId("reg-club")).toContainText("No club");
+    await dialog.locator("input[placeholder='First Last']").fill("E2E No Club Nora");
+    await pickClass(page);
+    await dialog.getByTestId("reg-submit").click();
+    await expect(dialog).not.toBeVisible({ timeout: 5000 });
+
+    const r = await findByCard(request, 2900063);
+    expect(r).toBeTruthy();
+    ids.push(r!.id);
+    expect(r!.clubName).toBe("");
+    expect(r!.clubId).toBe(0);
+  });
+
+  test("a club with no runner in the event can be picked from the directory (WEB-11)", async ({ page, request }) => {
+    const db = new Client({ connectionString: E2E_DATABASE_URL.replace(/\?schema=.*/, "") });
+    await db.connect();
+    await db.query(
+      `INSERT INTO oxygen.club_directory (eventor_id, name) VALUES (987654, 'E2E Långtbort OK')
+       ON CONFLICT (eventor_id) DO UPDATE SET name = EXCLUDED.name`,
+    );
+    await db.end();
+
+    await setupAdmin(page);
+    await insertUnregisteredCard(page, 2900064);
+    await page.getByTestId("card-notification-view").click();
+    const dialog = page.getByTestId("registration-dialog");
+    await expect(dialog).toBeVisible({ timeout: 5000 });
+    await dialog.getByTestId("reg-club").getByRole("button").first().click();
+    await page.getByPlaceholder("Search clubs...").fill("Långtbort");
+    await page.getByRole("button", { name: "E2E Långtbort OK" }).click();
+    await expect(dialog.getByTestId("reg-club")).toContainText("E2E Långtbort OK");
+    await dialog.locator("input[placeholder='First Last']").fill("E2E Directory Dan");
+    await pickClass(page);
+    await dialog.getByTestId("reg-submit").click();
+    await expect(dialog).not.toBeVisible({ timeout: 5000 });
+
+    const r = await findByCard(request, 2900064);
+    expect(r).toBeTruthy();
+    ids.push(r!.id);
+    expect(r!.clubName).toBe("E2E Långtbort OK");
+    expect(r!.clubId).toBe(987654);
+  });
+
+  test("Register is disabled for a card that is already registered (WEB-22)", async ({ page, request }) => {
+    const classId = await getClassId(request, "Öppen 1");
+    const { id } = await createRunner(request, "E2E Card Owner", 2900065, classId, 0);
+    ids.push(id);
+    await setupAdmin(page);
+    const nameId = getNameId(page);
+    await page.goto(`/${nameId}/runners`);
+    await page.getByRole("button", { name: "Add Runner" }).click();
+    const dialog = page.getByTestId("registration-dialog");
+    await expect(dialog).toBeVisible({ timeout: 5000 });
+    await dialog.locator("input[placeholder='First Last']").fill("E2E Second Holder");
+    const cardInput = dialog.locator("input[placeholder='e.g. 500123']");
+    await cardInput.fill("2900065");
+    await expect(dialog.getByText(/already assigned/)).toBeVisible({ timeout: 10000 });
+    await expect(dialog.getByTestId("reg-submit")).toBeDisabled();
+    await cardInput.fill("2900066");
+    await expect(dialog.getByTestId("reg-submit")).toBeEnabled({ timeout: 10000 });
+  });
+
+  test("two quick submits create one runner (WEB-20)", async ({ page, request }) => {
+    await setupAdmin(page);
+    await insertUnregisteredCard(page, 2900067);
+    await page.getByTestId("card-notification-view").click();
+    const dialog = page.getByTestId("registration-dialog");
+    await expect(dialog).toBeVisible({ timeout: 5000 });
+    await dialog.locator("input[placeholder='First Last']").fill("E2E Double Click");
+    await pickClass(page);
+    // Hold the create so the second submit lands while the first is in flight.
+    let creates = 0;
+    await page.route("**/trpc/runner.create*", async (route) => {
+      creates++;
+      await new Promise((r) => setTimeout(r, 800));
+      await route.continue();
+    });
+    await dialog.locator("form").evaluate((form: HTMLFormElement) => {
+      form.requestSubmit();
+      form.requestSubmit();
+    });
+    await expect(dialog).not.toBeVisible({ timeout: 10000 });
+    expect(creates).toBe(1);
+    const r = await findByCard(request, 2900067);
+    expect(r).toBeTruthy();
+    ids.push(r!.id);
   });
 });

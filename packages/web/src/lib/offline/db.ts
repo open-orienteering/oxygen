@@ -47,14 +47,13 @@ export interface StartRecordedPayload {
   startTime: number;
 }
 
-export interface RunnerRegisteredPayload {
-  tempId: string;
-  name: string;
-  classId: number;
-  clubId: number;
-  cardNo: number;
-  startTime?: number;
-}
+/**
+ * A station registration: the shared wire type (SYNC-12). The station sends
+ * the whole entry form, the club as `clubName` plus `eventorClubId`; the
+ * server never read the `clubId` this type used to carry.
+ */
+export type { RunnerRegisteredPayload } from "@oxygen/shared";
+import type { RunnerRegisteredPayload } from "@oxygen/shared";
 
 export interface RunnerUpdatedPayload {
   runnerId: number;

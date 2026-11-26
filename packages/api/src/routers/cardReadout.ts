@@ -45,6 +45,8 @@ import { appendJournal } from "../journalEmit.js";
 import { resolveCourseExpectedPositions } from "./course.js";
 import { pushToGoogleSheet, type SheetRow } from "../sheetsBackup.js";
 import { poolOf, assertInPool } from "../variants.js";
+import { pickRunnerCard } from "../cardLink.js";
+import { assertCardNotTaken, rethrowCardConflict } from "./runner.js";
 
 /** Works with both the singleton client and a `$transaction` client. */
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -178,15 +180,26 @@ export async function performReadout(
   });
   if (!runner || runner.eventId !== eventId || runner.removed) return null;
 
-  // Card: prefer linked (runner.cardId), fall back to cardNo lookup.
-  const card = runner.cardId
+  // Card: the linked row (runner.cardId) while it still has the runner's
+  // card number, else the newest row for that number (API-11).
+  const linked = runner.cardId
     ? await db.card.findUnique({ where: { id: runner.cardId } })
-    : runner.cardNo != null
-      ? await db.card.findFirst({
-          where: { eventId, cardNo: runner.cardNo, removed: false },
-          orderBy: { updatedAt: "desc" },
-        })
-      : null;
+    : null;
+  const linkUsable =
+    !!linked && linked.eventId === eventId && !linked.removed && linked.cardNo === runner.cardNo;
+  const card = pickRunnerCard(
+    runner,
+    linkUsable ? linked : null,
+    linkUsable
+      ? []
+      : runner.cardNo != null
+        ? await db.card.findMany({
+            where: { eventId, cardNo: runner.cardNo, removed: false },
+            orderBy: { updatedAt: "desc" },
+            take: 1,
+          })
+        : [],
+  );
 
   // Free punches (radio + manual + online-input + backup-memory).
   const freePunches =
@@ -1389,7 +1402,8 @@ export const cardReadoutRouter = router({
         await ctx.db.$transaction(async (tx) => {
           await tx.runner.updateMany({
             where: { id: { in: affected.map((r) => r.id) } },
-            data: { cardNo: null },
+            // The card link goes with the number (API-11).
+            data: { cardNo: null, cardId: null },
           });
           for (const r of affected) {
             await appendJournal(tx, {
@@ -1413,8 +1427,12 @@ export const cardReadoutRouter = router({
           message: "Runner not found",
         });
       }
+      // One card per event: linking a card another runner holds is refused,
+      // as on create and update (API-11). Unlink it from that runner first.
+      await assertCardNotTaken(ctx.db, ctx.event.id, cardNo, runner.id);
       const card = await ctx.db.card.findFirst({
         where: { eventId: ctx.event.id, cardNo, removed: false },
+        orderBy: { updatedAt: "desc" },
         select: { id: true },
       });
       await ctx.db.$transaction(async (tx) => {
@@ -1431,7 +1449,7 @@ export const cardReadoutRouter = router({
             fields: { cardNo },
           },
         });
-      });
+      }).catch((err: unknown) => rethrowCardConflict(err, cardNo));
       return { ok: true as const };
     }),
 

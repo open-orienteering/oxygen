@@ -390,7 +390,7 @@ export async function shipAllOnce(
   // sent to the cloud, and its slug is never asked of the cloud (review MC-23).
   const events = await db.event.findMany({
     where: { removed: false, journalSyncStates: { some: { peerId } } },
-    select: { id: true, nameId: true, zeroTime: true },
+    select: { id: true, nameId: true, zeroTime: true, timeZone: true },
   });
   for (const ev of events) {
     try {
@@ -428,7 +428,7 @@ export async function refreshAllSettingsOnce(
   const peer = makeLeasePeer(peerUrl, secret);
   const events = await db.event.findMany({
     where: { removed: false },
-    select: { id: true, nameId: true, zeroTime: true },
+    select: { id: true, nameId: true, zeroTime: true, timeZone: true },
   });
   for (const ev of events) {
     try {

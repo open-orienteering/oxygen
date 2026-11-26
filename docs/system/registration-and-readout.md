@@ -340,6 +340,20 @@ When updating an existing oCard, the server prefers the one linked to the runner
 
 This prevents the wrong oCard from being updated when multiple rows exist (e.g., one from Oxygen, one from MeOS).
 
+**The link follows the card number (API-11).** `runner.cardId` is trusted
+only while the linked card row has the runner's current `cardNo`. Every
+write that changes `cardNo` re-points it to the newest live card row for the
+new number, or clears it (`buildRunnerUpdateData`, shared by `runner.update`,
+`bulkUpdate` and the `runner.updated` replay; the unlink in
+`linkCardToRunner`). On the read side `pickRunnerCard`
+(`packages/api/src/cardLink.ts`) ignores a link whose card has another
+number and falls back to the newest row for the runner's number; the
+readout (`performReadout`) and the Eventor result upload use it, so a card
+changed at the desk never shows the previous card's punches. Linking a card
+that another runner holds (`linkCardToRunner`) is refused with CONFLICT,
+like `runner.create` and `runner.update`; a create or update that loses the
+race on the `(event_id, card_no)` unique index answers the same CONFLICT.
+
 ### 3f. ReadId Deduplication
 
 Before writing, a hash is computed from the punch data:
@@ -558,7 +572,32 @@ IF input.cardNo > 0:
   IF found → oRunner.Card = existing.Id
 ```
 
-This ensures the FK is set at registration time, even if the card was scanned before the runner was created.
+This ensures the FK is set at registration time, even if the card was scanned before the runner was created. A station registration replayed through `events.push` links the same way.
+
+**The journal entry carries the whole form (SYNC-12).** `runner.registered`
+holds name, class, club (`clubName` + `eventorClubId`), card, start time and
+start number, birth year, sex, nationality, phone, the fee fields (`fee`,
+`paid`, `payMode`, `cardFee`, in cents), status and finish time when given,
+and the entry date and time stamped by the registering node. A station
+entry carries no entry date or time; the apply stamps it from the entry's
+client timestamp in the event's time zone. A follower
+stores the same row; an absent key keeps the column default (except the
+entry date and time, stamped as above), so older entries replay unchanged.
+The offline dialog sends the same form fields. An SI owner-data club is
+matched against the club list loaded when the card opens the dialog; a card
+opened before the list has loaded gets no club from its owner data.
+
+**A station registration that cannot be stored is refused.** Pushed from a
+station's outbox (no sync secret), a `runner.registered` whose class is not
+in the event fails with `CLASS_NOT_FOUND`, and one whose card already
+belongs to a runner with another name fails with `CARD_TAKEN`. Both stop
+the batch (`JOURNAL_BATCH_STOPPING_CODES`): the entries queued behind it,
+such as the entrant's finish or readout, wait on the station instead of
+landing on the card's other holder. The Sync Status panel shows the reason
+with Retry and Discard. The same person registered twice (same card, same
+name after folding case and spaces) is a duplicate and syncs. A node-to-node
+push (with the secret) keeps skipping such an entry with a warning in the
+log: the originating node already decided.
 
 **Who may register.** `runner.create` needs `race.operate` (Race crew), the same
 capability a station's queued `runner.registered` needs through `events.push`;
@@ -806,6 +845,43 @@ This filters SPORTident factory defaults (card number as first name, "SPORTident
 
 Non-name fields (birth year, sex, phone, club) are filled from owner data immediately since they don't conflict with DB lookups.
 
+**Owner data belongs to one card (WEB-05).** The deferred name fill uses
+owner data only for the card number it was read from. A card read without
+owner data, a manual card entry and every form clear drop the previous
+card's owner data, so the next runner is never named after the last one.
+
+**Each card read starts a fresh form (WEB-19).** Opening the dialog for a
+card read clears every field, including the rental-card tick, the receipt
+tick and the payment method. A fresh form's payment method is the first
+method the event offers (Registration settings), on every reset path.
+
+### 8b-1. Clubs
+
+The club picker keys every choice by Eventor id (`e:<id>`) or, for a club
+typed without an Eventor id, by name (`n:<name>`); "No club" is the empty
+key (`packages/web/src/lib/club-options.ts`). Free-text clubs share id 0
+with "No club" in `club.list`, so keying by the numeric id saved "No club"
+as the first free-text club (WEB-06).
+
+The list is the event's roster (`club.list`). A club with no runner in the
+event yet is still reachable (WEB-11):
+
+- a name suggestion, a card lookup or an SI owner-data club that names a
+  club outside the roster adds it as an option and selects it; owner data
+  is matched against the roster first, then against the cached runner
+  database's clubs;
+- typing two or more characters in the club search also searches the club
+  directory (`club.searchDirectory`) online, or the cached runner
+  database's clubs offline, and lists the hits under the roster matches;
+- a picked club stays an option for the rest of the form, so a roster
+  refetch that drops it (its last runner moved) does not lose its name.
+
+The dialog submits the chosen club's name and Eventor id together. The
+bulk "Set club" action on the Runners page uses the same keys and sends
+both; the server fills a missing name from the club directory and treats an
+Eventor id of 0 as none (WEB-10). `club.list` accepts `showAll` but ignores
+it: a club without runners has no row to list.
+
 ### 8c. Name Autocomplete
 
 When typing ≥2 characters, the dialog searches two sources:
@@ -820,12 +896,30 @@ Results are deduplicated, limited to 12, and navigable with arrow keys.
 Creates the runner via `runner.create()` with all form fields. The dialog
 sends no `courseId`: in a class on a forked course the server deals the
 runner the least-populated variant (§5c), which the desk can change on
-the Runners page. After success:
+the Runners page. Offline it queues a `runner.registered` with the same
+fields (§5a).
+
+One registration runs at a time: a second Enter or click while the first
+is saving is ignored, online and offline (WEB-20). Register is disabled
+while the card shown belongs to a runner in the event. A failed online
+registration says what to do (WEB-22): a taken card, a missing permission,
+a class that no longer exists, an unreachable server (nothing saved) or a
+start on the zero time each have their own text, and the raw error goes to
+the console. A manual card entry whose server check fails, or that is made
+offline, opens the form anyway.
+
+After success:
 
 1. Sends `registration-complete` to kiosk
-2. Prints registration receipt (if printer connected)
-3. Invalidates caches (runner list, dashboard)
-4. In sticky mode: clears form, waits 3 seconds, sends `kiosk-reset`
+2. Invalidates caches (runner list, dashboard)
+3. Sticky mode: clears form, waits 3 seconds, sends `kiosk-reset`;
+   otherwise closes the dialog
+4. Prints the registration receipt (if enabled, ticked and a printer is
+   connected) in the background: the runner is registered whatever the
+   printer does. Receipts print one after another. The club logo load is
+   bounded at 10 s (the receipt prints without it) and each USB transfer at
+   30 s. A failed print shows on the printer button in the header (its last
+   error), not in the dialog.
 
 ---
 

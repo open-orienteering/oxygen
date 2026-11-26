@@ -83,6 +83,7 @@ import {
 import { toAbsolute, toRelativeWrapped, zeroTimeForResults } from "../timeConvert.js";
 import { resolveCourseExpectedPositions } from "./course.js";
 import { reconcileVariants } from "../variants.js";
+import { pickRunnerCard } from "../cardLink.js";
 import type {
   EventorEnvironment,
   RunnerStatusValue,
@@ -1635,6 +1636,12 @@ export const eventorRouter = router({
       const classById = new Map(classes.map((c) => [c.id, c]));
       const courseById = new Map(courses.map((c) => [c.id, c]));
       const cardById = new Map(cards.map((c) => [c.id, c]));
+      const cardsByNo = new Map<number, typeof cards>();
+      for (const c of cards) {
+        const list = cardsByNo.get(c.cardNo) ?? [];
+        list.push(c);
+        cardsByNo.set(c.cardNo, list);
+      }
 
       // Pre-compute ExpectedPositions per course so each runner mapping
       // is O(1) — one SQL query per course up front, not per runner.
@@ -1671,7 +1678,12 @@ export const eventorRouter = router({
         const positions = positionsByCourse.get(courseId) ?? [];
         if (positions.length === 0) continue;
 
-        const card = r.cardId ? cardById.get(r.cardId) : null;
+        // The linked card only while it has the runner's number (API-11).
+        const card = pickRunnerCard(
+          r,
+          r.cardId ? cardById.get(r.cardId) : null,
+          cardsByNo.get(r.cardNo ?? -1) ?? [],
+        );
         const cardPunches = parsePunches(card?.punchesRaw ?? "").map((p) => ({
           ...p,
           time: p.time !== 0 ? toAbsolute(p.time, event.zeroTime) : 0,

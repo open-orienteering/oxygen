@@ -49,7 +49,8 @@ import { TRPCError } from "@trpc/server";
 import { runWithActor } from "../auth.js";
 import { capabilitiesForEntry } from "../journalCapabilities.js";
 import { REFERENCE_ENTITIES, type ReferenceEntity } from "../referenceJournal.js";
-import { toRelative } from "../timeConvert.js";
+import { toRelative, nowMeosDate, nowMeosTime, eventTimeZone } from "../timeConvert.js";
+import { liveCardId } from "../cardLink.js";
 import {
   encodeHlc,
   decodeHlc,
@@ -63,6 +64,7 @@ import {
   type JournalBatchStoppingCode,
   type ReferenceUpsertPayload,
   type ReferenceImportedPayload,
+  type RunnerRegisteredPayload,
 } from "@oxygen/shared";
 import { storeReadoutImpl, applyResultGuarded } from "./cardReadout.js";
 import { buildRunnerUpdateData, manualFlagsFor } from "./runner.js";
@@ -85,7 +87,10 @@ type Db = PrismaClient | Prisma.TransactionClient;
  */
 export class JournalApplyError extends Error {
   constructor(
-    readonly code: Extract<JournalRefusalCode, "ROW_IN_OTHER_EVENT" | "INVALID_PAYLOAD">,
+    readonly code: Extract<
+      JournalRefusalCode,
+      "ROW_IN_OTHER_EVENT" | "INVALID_PAYLOAD" | "CLASS_NOT_FOUND" | "CARD_TAKEN"
+    >,
     message: string,
   ) {
     super(message);
@@ -162,6 +167,17 @@ export interface IngestOptions {
    * the same transaction is its own decision and stays unmarked.
    */
   fromPeer?: boolean;
+  /**
+   * The entries come straight from a station's outbox (a push without the
+   * sync secret), where the operator can still act on a refusal. A station
+   * registration that cannot be stored as entered (its class is gone, its
+   * card belongs to another runner) then fails with `CLASS_NOT_FOUND` /
+   * `CARD_TAKEN` and holds the entries behind it, instead of being acked
+   * as synced and letting the runner's finish land on the card's other
+   * holder (SYNC-12). Node-to-node ingest keeps the skip: the originating
+   * node already decided, and a refusal there would wedge the shipper.
+   */
+  strict?: boolean;
 }
 
 /** Interactive-transaction limits: `reference.imported` can be hundreds of upserts. */
@@ -251,7 +267,10 @@ export async function ingestJournalEntries(
             ...(opts.fromPeer ? { pushedAt: new Date() } : {}),
           },
         });
-        const outcome = await applyEvent(tx, event.id, event.zeroTime, entry);
+        const outcome = await applyEvent(tx, event.id, event.zeroTime, entry, {
+          strict: opts.strict === true,
+          timeZone: eventTimeZone(event),
+        });
         // A decision this node made while applying (a station registration's
         // variant, F6b) is journaled after the entry, so it sorts behind it,
         // in the same transaction: a lost follow-up is never skipped by the
@@ -534,6 +553,8 @@ export const eventsRouter = router({
           actorId,
           // A push by the holder (or with no holder): the entries are already at the peer.
           fromPeer: markDelivered ? true : undefined,
+          // A station's own outbox: refusals reach the operator.
+          strict: !ectx.syncSecret,
         }),
       );
       if (alreadyHeld) {
@@ -649,6 +670,11 @@ async function resolveRunner(
   return null;
 }
 
+/** Names compared for the registration duplicate rule: spacing and case folded, accents kept. */
+function normalizeRunnerName(name: string): string {
+  return name.normalize("NFC").trim().replace(/\s+/g, " ").toLocaleLowerCase("sv");
+}
+
 /** Work an apply leaves for after the ingested entry is journaled (same transaction). */
 type FollowUp = () => Promise<void>;
 
@@ -696,6 +722,7 @@ async function applyEvent(
   eventId: bigint,
   zeroTime: number,
   event: OfflineEvent,
+  opts: { strict: boolean; timeZone?: string } = { strict: false },
 ): Promise<ApplyOutcome> {
   switch (event.type) {
     case "finish.recorded": {
@@ -797,27 +824,8 @@ async function applyEvent(
     }
 
     case "runner.registered": {
-      const {
-        tempId,
-        seq,
-        name,
-        classId,
-        eventorClubId,
-        clubName,
-        cardNo,
-        startTime,
-        courseId,
-      } = event.payload as {
-        tempId?: string;
-        seq?: number;
-        name: string;
-        classId: number;
-        eventorClubId?: number;
-        clubName?: string;
-        cardNo?: number;
-        startTime?: number;
-        courseId?: number | null;
-      };
+      const p = event.payload as Partial<RunnerRegisteredPayload> & { cardNo?: number | null };
+      const { tempId, seq, name, classId, eventorClubId, clubName, cardNo, startTime, courseId } = p;
       // 0 (legacy sentinel) or absent → NULL (no card).
       const card = typeof cardNo === "number" && cardNo > 0 ? cardNo : null;
       // Dedupe: same row UUID (shipped twice / echoed), then by
@@ -839,48 +847,103 @@ async function applyEvent(
           `runner.registered: runner ${rowId} belongs to another event`,
         );
       }
+      if (byId) break;
       const byCard =
-        !byId && card != null
+        card != null
           ? await db.runner.findFirst({
               where: { eventId, cardNo: card, removed: false },
+              select: { id: true, name: true },
+            })
+          : null;
+      if (byCard) {
+        // The same person registered twice (two desks, or a retried
+        // registration under a new id) is a duplicate. Another runner on
+        // the card is a refusal on a station push: acking it would hand
+        // this entrant's finish and readout to the card's holder.
+        if (opts.strict && normalizeRunnerName(byCard.name) !== normalizeRunnerName(name ?? "")) {
+          throw new JournalApplyError(
+            "CARD_TAKEN",
+            `runner.registered: card ${card} already belongs to runner ${byCard.id}`,
+          );
+        }
+        if (normalizeRunnerName(byCard.name) !== normalizeRunnerName(name ?? "")) {
+          console.warn(
+            `[events.ingest] runner.registered ${event.id}: card ${card} already belongs to runner ${byCard.id}; registration skipped`,
+          );
+        }
+        break;
+      }
+      const cls =
+        typeof classId === "number"
+          ? await db.class.findFirst({
+              where: { eventId, seq: classId, removed: false },
               select: { id: true },
             })
           : null;
-      if (!byId && !byCard) {
-        const cls = await db.class.findFirst({
-          where: { eventId, seq: classId, removed: false },
-          select: { id: true },
-        });
-        if (cls) {
-          // Reuse the originating node's UUID and seq so the row is
-          // identical on every node. The allocate_event_seq() trigger
-          // honors an explicit seq and never re-allocates it; entries
-          // without one (legacy stations) let the trigger mint.
-          // The originating node's variant (F6b) as given; a station
-          // entry carries none and is dealt one here.
-          const course =
-            typeof courseId === "number"
-              ? await db.course.findFirst({ where: { eventId, seq: courseId }, select: { id: true } })
-              : null;
-          const created = await db.runner.create({
-            data: {
-              ...(rowId ? { id: rowId } : {}),
-              ...(typeof seq === "number" && seq > 0 ? { seq } : {}),
-              eventId,
-              name,
-              classId: cls.id,
-              clubName: clubName ?? "",
-              eventorClubId: eventorClubId ?? null,
-              cardNo: card,
-              startTime: startTime ? toRelative(startTime, zeroTime) : 0,
-              ...(course ? { courseId: course.id } : {}),
-            },
-            select: { id: true },
-          });
-          if (!("courseId" in event.payload)) {
-            return dealVariantFollowUp(db, eventId, created.id, cls.id);
-          }
+      if (!cls) {
+        if (opts.strict) {
+          throw new JournalApplyError(
+            "CLASS_NOT_FOUND",
+            `runner.registered: class ${String(classId)} is not in the event`,
+          );
         }
+        console.warn(
+          `[events.ingest] runner.registered ${event.id}: class ${String(classId)} is not in the event; registration skipped`,
+        );
+        break;
+      }
+      // Reuse the originating node's UUID and seq so the row is
+      // identical on every node. The allocate_event_seq() trigger
+      // honors an explicit seq and never re-allocates it; entries
+      // without one (legacy stations) let the trigger mint.
+      // The originating node's variant (F6b) as given; a station
+      // entry carries none and is dealt one here.
+      const course =
+        typeof courseId === "number"
+          ? await db.course.findFirst({ where: { eventId, seq: courseId }, select: { id: true } })
+          : null;
+      const int = (v: unknown): number | undefined =>
+        typeof v === "number" && Number.isInteger(v) ? v : undefined;
+      const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
+      const status = int(p.status);
+      const finish = int(p.finishTime);
+      const created = await db.runner.create({
+        data: {
+          ...(rowId ? { id: rowId } : {}),
+          ...(typeof seq === "number" && seq > 0 ? { seq } : {}),
+          eventId,
+          name: name ?? "",
+          classId: cls.id,
+          clubName: clubName ?? "",
+          eventorClubId: eventorClubId ?? null,
+          cardNo: card,
+          // The card row for this number, when one was already read in
+          // the event (API-11: cardId follows cardNo).
+          cardId: card != null ? await liveCardId(db, eventId, card) : null,
+          startTime: startTime ? toRelative(startTime, zeroTime) : 0,
+          ...(course ? { courseId: course.id } : {}),
+          // The rest of the entry form (SYNC-12); absent keys keep the defaults.
+          ...(int(p.startNo) !== undefined && int(p.startNo)! >= 0 ? { startNo: int(p.startNo) } : {}),
+          ...(int(p.birthYear) !== undefined ? { birthYear: int(p.birthYear) } : {}),
+          ...(str(p.sex) !== undefined ? { sex: str(p.sex) } : {}),
+          ...(str(p.nationality) !== undefined ? { nationality: str(p.nationality) } : {}),
+          ...(str(p.phone) !== undefined ? { phone: str(p.phone) } : {}),
+          ...(int(p.fee) !== undefined ? { feeCents: int(p.fee) } : {}),
+          ...(int(p.paid) !== undefined ? { paidCents: int(p.paid) } : {}),
+          ...(int(p.payMode) !== undefined ? { payMode: int(p.payMode) } : {}),
+          ...(int(p.cardFee) !== undefined ? { cardFeeCents: int(p.cardFee) } : {}),
+          // Entry date/time: as stamped by the registering node; a station
+          // entry has none, so it is stamped from when it was registered
+          // (the entry's client timestamp), in the event's time zone.
+          entryDate: int(p.entryDate) ?? nowMeosDate(new Date(event.timestamp), opts.timeZone),
+          entryTime: int(p.entryTime) ?? nowMeosTime(new Date(event.timestamp), opts.timeZone),
+          ...(status !== undefined ? { status: valueToRunnerStatus(status) } : {}),
+          ...(finish !== undefined ? { finishTime: finish > 0 ? toRelative(finish, zeroTime) : finish } : {}),
+        },
+        select: { id: true },
+      });
+      if (!("courseId" in event.payload)) {
+        return dealVariantFollowUp(db, eventId, created.id, cls.id);
       }
       break;
     }

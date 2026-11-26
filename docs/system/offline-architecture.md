@@ -248,7 +248,12 @@ peer's shipper, the pull side of the shipper):
   pending and sends them next round (the shipper marks delivery over a
   contiguous prefix). The batch-stopping codes are `JOURNAL_BATCH_STOPPING_CODES`
   in `@oxygen/shared` (`APPLY_FAILED`, `INVALID_PAYLOAD`,
-  `ROW_IN_OTHER_EVENT`), read by the server and the station drain alike.
+  `ROW_IN_OTHER_EVENT`, `CLASS_NOT_FOUND`, `CARD_TAKEN`), read by the server
+  and the station drain alike. The last two are station registrations that
+  cannot be stored as entered, refused only on a push from a station's own
+  outbox (no sync secret; `IngestOptions.strict`): a peer push keeps skipping
+  them, since the originating node already decided
+  ([registration-and-readout.md §5a](registration-and-readout.md#5a-runnercreate--ocard-linking)).
   Refusals decided before an entry is touched (`FORBIDDEN`,
   `COMPETITION_MISMATCH`, `ENTRY_IN_OTHER_EVENT`) never stop the batch. The
   station-side consequences are under "The station drain" below.

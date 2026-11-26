@@ -82,5 +82,9 @@
   "runnerDbSource": "Runner DB",
   "duplicateCardWarning": "Card {{cardNo}} is already assigned to {{name}} ({{className}})",
   "stickyMode": "Sticky mode",
-  "invalidClockTime": "Start time must be a clock time such as 10:30 or 10:30:15."
+  "invalidClockTime": "Start time must be a clock time such as 10:30 or 10:30:15.",
+  "errorCardTaken": "This card is already assigned to another runner in the event. Use another card, or change the card on the other runner first.",
+  "errorForbidden": "You are not allowed to register runners. Sign in with a race crew or event admin account.",
+  "errorNotFound": "The class or course no longer exists. Pick the class again.",
+  "errorUnreachable": "The server could not be reached. Nothing was saved; try again."
 }

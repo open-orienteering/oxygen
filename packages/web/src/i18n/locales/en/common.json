@@ -155,6 +155,8 @@
     "ENTRY_IN_OTHER_EVENT": "An entry with this id already exists in another event.",
     "ROW_IN_OTHER_EVENT": "The entry points at data that belongs to another event.",
     "INVALID_PAYLOAD": "The entry is malformed and was not accepted.",
-    "APPLY_FAILED": "The server could not apply the entry."
+    "APPLY_FAILED": "The server could not apply the entry.",
+    "CLASS_NOT_FOUND": "The registration's class no longer exists in the event. Register the runner again in another class, then discard this entry.",
+    "CARD_TAKEN": "Another runner already has this card in the event. Fix the card number on one of them before you discard this entry: the entries queued after it for this card would otherwise go to the other runner."
   }
 }

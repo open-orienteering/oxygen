@@ -197,6 +197,28 @@ export interface RunnerRegisteredPayload {
    * writing node, which journals its pick as a `runner.updated`.
    */
   courseId?: number | null;
+  /*
+   * The rest of the entry form (SYNC-12), in the units of the `runner.create`
+   * input: money in cents, `finishTime` absolute deciseconds, `status` the
+   * numeric runner status. Every key is optional; an absent key keeps the
+   * column default, so entries written before these fields replay unchanged,
+   * except `entryDate`/`entryTime`, which the apply stamps from the entry's
+   * timestamp in the event's time zone.
+   */
+  startNo?: number;
+  birthYear?: number;
+  sex?: string;
+  nationality?: string;
+  phone?: string;
+  fee?: number;
+  paid?: number;
+  payMode?: number;
+  cardFee?: number;
+  status?: number;
+  finishTime?: number;
+  /** MeOS entry date/time as stamped by the registering node (`nowMeosDate`/`nowMeosTime`). */
+  entryDate?: number;
+  entryTime?: number;
 }
 
 /**
@@ -296,6 +318,8 @@ export const JOURNAL_REFUSAL_CODES = [
   "ROW_IN_OTHER_EVENT",
   "INVALID_PAYLOAD",
   "APPLY_FAILED",
+  "CLASS_NOT_FOUND",
+  "CARD_TAKEN",
 ] as const;
 
 export type JournalRefusalCode = (typeof JOURNAL_REFUSAL_CODES)[number];
@@ -311,6 +335,11 @@ export const JOURNAL_BATCH_STOPPING_CODES = [
   "APPLY_FAILED",
   "INVALID_PAYLOAD",
   "ROW_IN_OTHER_EVENT",
+  // A station registration that cannot be stored as entered (SYNC-12): the
+  // entries behind it (the runner's finish, readout) wait instead of landing
+  // on another runner.
+  "CLASS_NOT_FOUND",
+  "CARD_TAKEN",
 ] as const satisfies readonly JournalRefusalCode[];
 
 export type JournalBatchStoppingCode = (typeof JOURNAL_BATCH_STOPPING_CODES)[number];
