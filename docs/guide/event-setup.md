@@ -24,7 +24,7 @@ The event page is mission control for external integrations. Everything the Swed
 - **Global Runner Database** — download the federation-wide runner directory for fast name/card lookup at registration.
 - **Club sync** — pull club metadata and logos.
 - **LiveResults** — push live splits to [liveresultat.se](https://liveresultat.se) on a configurable interval.
-- **Online Input (ROC)** — pull radio-control punches from [roc.olresultat.se](https://roc.olresultat.se) (or any ROC-protocol-compatible server) on a configurable interval. Punches land in the `punches` table tagged with their source so the result engine can deduplicate against later card readouts. See [docs/system/online-input-roc.md](../system/online-input-roc.md).
+- **Online Input (ROC)** — pull radio-control punches from [roc.olresultat.se](https://roc.olresultat.se) (or any ROC-protocol-compatible server) on a configurable interval. Punches land in the `punches` table tagged with their source so the result engine can deduplicate against later card readouts. Map a radio code to Start, Finish or Check in the panel's mapping table; it applies from the next poll. **Reset** next to the last id is safe mid-event: punches already imported are skipped. A response that is not ROC data (an error page, a wrong URL) shows as an error in the panel. See [docs/system/online-input-roc.md](../system/online-input-roc.md).
 
 ![Event page with sync integrations](../screenshots/event.png)
 

@@ -13,12 +13,14 @@
  *     that should be re-mapped to special punches; the legacy targets
  *     are 1=start, 2=finish, 3=check.
  *   - `lastId`: highest punch id we've already consumed (so the puller
- *     can ask Eventor / ROC for "everything after this").
+ *     can ask ROC for "everything after this"). The puller moves it with
+ *     a compare-and-set; every write here goes through `updateConfig`,
+ *     which locks the row, so a save can never roll it back.
  */
 
 import { z } from "zod";
 import { router, raceOperateProcedure } from "../trpc.js";
-import { getSetting, setSetting } from "../db.js";
+import { prisma, getSetting } from "../db.js";
 import { pollOnceForEvent } from "../online-input/puller.js";
 import { requestBackgroundReconcile } from "../background/supervisor.js";
 
@@ -49,7 +51,10 @@ function settingKey(eventId: bigint, name: string) {
 }
 
 async function loadConfig(eventId: bigint): Promise<OnlineInputConfig> {
-  const raw = await getSetting(settingKey(eventId, "config"));
+  return parseConfig(await getSetting(settingKey(eventId, "config")));
+}
+
+function parseConfig(raw: string | null): OnlineInputConfig {
   if (!raw) return { ...DEFAULT_CONFIG };
   try {
     const parsed = JSON.parse(raw) as Partial<OnlineInputConfig>;
@@ -65,8 +70,40 @@ async function loadConfig(eventId: bigint): Promise<OnlineInputConfig> {
   }
 }
 
-async function saveLoadedConfig(eventId: bigint, cfg: OnlineInputConfig) {
-  await setSetting(settingKey(eventId, "config"), JSON.stringify(cfg));
+/**
+ * Read-modify-write the config row under a row lock.
+ *
+ * The puller moves `lastId` inside the same row with a compare-and-set
+ * (`advanceWatermark` in `../online-input/puller.ts`). An unlocked
+ * load-then-save that straddled a poll commit would write the older
+ * `lastId` back, so the next poll would fetch and import that range a
+ * second time. Holding `FOR UPDATE` serialises the two: the poll's
+ * `UPDATE` waits for this transaction and then re-checks its condition
+ * against the row as this one left it.
+ */
+async function updateConfig(
+  eventId: bigint,
+  mutate: (cfg: OnlineInputConfig) => void,
+): Promise<OnlineInputConfig> {
+  const key = settingKey(eventId, "config");
+  return prisma().$transaction(async (tx) => {
+    // Make sure there is a row to lock; a first save creates it.
+    await tx.$executeRaw`
+      INSERT INTO oxygen.settings (key, value)
+      VALUES (${key}, ${JSON.stringify(DEFAULT_CONFIG)})
+      ON CONFLICT (key) DO NOTHING
+    `;
+    const rows = await tx.$queryRaw<{ value: string | null }[]>`
+      SELECT value FROM oxygen.settings WHERE key = ${key} FOR UPDATE
+    `;
+    const cfg = parseConfig(rows[0]?.value ?? null);
+    mutate(cfg);
+    await tx.setting.update({
+      where: { key },
+      data: { value: JSON.stringify(cfg) },
+    });
+    return cfg;
+  });
 }
 
 export const onlineInputRouter = router({
@@ -110,13 +147,13 @@ export const onlineInputRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const cfg = await loadConfig(ctx.event.id);
-      if (input.protocol !== undefined) cfg.protocol = input.protocol;
-      if (input.unitId !== undefined) cfg.unitId = input.unitId;
-      if (input.endpointUrl !== undefined) cfg.endpointUrl = input.endpointUrl;
-      if (input.intervalSeconds !== undefined)
-        cfg.intervalSeconds = input.intervalSeconds;
-      await saveLoadedConfig(ctx.event.id, cfg);
+      await updateConfig(ctx.event.id, (cfg) => {
+        if (input.protocol !== undefined) cfg.protocol = input.protocol;
+        if (input.unitId !== undefined) cfg.unitId = input.unitId;
+        if (input.endpointUrl !== undefined) cfg.endpointUrl = input.endpointUrl;
+        if (input.intervalSeconds !== undefined)
+          cfg.intervalSeconds = input.intervalSeconds;
+      });
       return { ok: true as const };
     }),
 
@@ -129,27 +166,27 @@ export const onlineInputRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const cfg = await loadConfig(ctx.event.id);
-      cfg.enabled = input.enabled;
-      cfg.protocol = input.protocol;
-      if (input.url) cfg.endpointUrl = input.url;
-      await saveLoadedConfig(ctx.event.id, cfg);
+      await updateConfig(ctx.event.id, (cfg) => {
+        cfg.enabled = input.enabled;
+        cfg.protocol = input.protocol;
+        if (input.url) cfg.endpointUrl = input.url;
+      });
       await requestBackgroundReconcile();
       return { ok: true as const };
     }),
 
   enable: raceOperateProcedure.mutation(async ({ ctx }) => {
-    const cfg = await loadConfig(ctx.event.id);
-    cfg.enabled = true;
-    await saveLoadedConfig(ctx.event.id, cfg);
+    await updateConfig(ctx.event.id, (cfg) => {
+      cfg.enabled = true;
+    });
     await requestBackgroundReconcile();
     return { ok: true as const };
   }),
 
   disable: raceOperateProcedure.mutation(async ({ ctx }) => {
-    const cfg = await loadConfig(ctx.event.id);
-    cfg.enabled = false;
-    await saveLoadedConfig(ctx.event.id, cfg);
+    await updateConfig(ctx.event.id, (cfg) => {
+      cfg.enabled = false;
+    });
     await requestBackgroundReconcile();
     return { ok: true as const };
   }),
@@ -171,26 +208,32 @@ export const onlineInputRouter = router({
     // before the operator has flipped the running toggle.
     const wasEnabled = cfg.enabled;
     if (!wasEnabled) {
-      cfg.enabled = true;
-      await saveLoadedConfig(ctx.event.id, cfg);
+      await updateConfig(ctx.event.id, (c) => {
+        c.enabled = true;
+      });
     }
     let stats = { fetched: 0, inserted: 0 };
     try {
       stats = await pollOnceForEvent(ctx.event.id);
     } finally {
       if (!wasEnabled) {
-        const c = await loadConfig(ctx.event.id);
-        c.enabled = false;
-        await saveLoadedConfig(ctx.event.id, c);
+        await updateConfig(ctx.event.id, (c) => {
+          c.enabled = false;
+        });
       }
     }
     return { ok: true as const, message: "Poll complete.", stats };
   }),
 
+  /**
+   * Reset the watermark so the next poll asks ROC for every punch again.
+   * Safe mid-event: punches already stored are skipped by the puller's
+   * conflict-skipping insert, so only the missing ones are added.
+   */
   clearLastId: raceOperateProcedure.mutation(async ({ ctx }) => {
-    const cfg = await loadConfig(ctx.event.id);
-    cfg.lastId = 0;
-    await saveLoadedConfig(ctx.event.id, cfg);
+    await updateConfig(ctx.event.id, (cfg) => {
+      cfg.lastId = 0;
+    });
     return { ok: true as const };
   }),
 
@@ -207,18 +250,18 @@ export const onlineInputRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const cfg = await loadConfig(ctx.event.id);
-      cfg.mapping[input.rawCode] = input.target;
-      await saveLoadedConfig(ctx.event.id, cfg);
+      await updateConfig(ctx.event.id, (cfg) => {
+        cfg.mapping[input.rawCode] = input.target;
+      });
       return { ok: true as const };
     }),
 
   removeMapping: raceOperateProcedure
     .input(z.object({ rawCode: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {
-      const cfg = await loadConfig(ctx.event.id);
-      delete cfg.mapping[input.rawCode];
-      await saveLoadedConfig(ctx.event.id, cfg);
+      await updateConfig(ctx.event.id, (cfg) => {
+        delete cfg.mapping[input.rawCode];
+      });
       return { ok: true as const };
     }),
 });

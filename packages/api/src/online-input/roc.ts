@@ -18,10 +18,30 @@ import {
   type ProtocolConfig,
   type PollEvent,
   type RemotePunch,
+  type ParseResult,
   type BuildRequestResult,
   formatHMS,
   parseHMS,
 } from "./protocol.js";
+
+/**
+ * Largest value the punch columns (and the `lastId` watermark) can hold:
+ * `punches.card_no` and `punches.control_code` are int4. A row above it
+ * would fail the insert and roll back the whole batch, so it is skipped
+ * at parse time instead.
+ */
+export const ROC_MAX_INT = 2_147_483_647;
+
+/**
+ * A strictly positive decimal integer that fits int4, or null. Stricter
+ * than `parseInt`, which reads `12abc` as 12.
+ */
+function parseIntField(field: string): number | null {
+  const t = field.trim();
+  if (!/^\d{1,10}$/.test(t)) return null;
+  const n = Number(t);
+  return n > 0 && n <= ROC_MAX_INT ? n : null;
+}
 
 export const ROC_DEFAULT_ENDPOINT = "http://roc.olresultat.se/getpunches.asp";
 
@@ -37,42 +57,46 @@ export const rocProtocol: Protocol = {
     return { url: url.toString() };
   },
 
-  parseResponse(body: string): RemotePunch[] {
-    if (!body) return [];
+  parseResponse(body: string): ParseResult {
+    if (!body) return { punches: [], skipped: 0 };
 
     // Strip BOM if present and split on any of CRLF / CR / LF.
     const cleaned = body.replace(/^\uFEFF/, "");
     const lines = cleaned.split(/\r\n|\r|\n/);
 
-    const out: RemotePunch[] = [];
+    const punches: RemotePunch[] = [];
+    let skipped = 0;
     for (const raw of lines) {
       const line = raw.trim();
       if (!line) continue;
 
       const parts = line.split(";");
-      if (parts.length < 4) continue;
-
-      const punchId = parseInt(parts[0], 10);
-      const rawCode = parseInt(parts[1], 10);
-      const cardNo = parseInt(parts[2], 10);
-      const ts = parts[3].trim();
-      // ROC timestamp is "YYYY-MM-DD HH:MM:SS"; we only need the time-of-day.
-      const absoluteTimeDs = parseHMS(ts);
-
-      if (
-        !Number.isFinite(punchId) || punchId <= 0 ||
-        !Number.isFinite(rawCode) || rawCode <= 0 ||
-        !Number.isFinite(cardNo) || cardNo <= 0 ||
-        !Number.isFinite(absoluteTimeDs)
-      ) {
-        // Malformed row — silently skip. ROC has been observed to emit
-        // trailing whitespace and occasional empty lines; throwing here
-        // would break perfectly fine punches that came on earlier rows.
+      if (parts.length < 4) {
+        skipped++;
         continue;
       }
 
-      out.push({ punchId, rawCode, cardNo, absoluteTimeDs });
+      const punchId = parseIntField(parts[0]);
+      const rawCode = parseIntField(parts[1]);
+      const cardNo = parseIntField(parts[2]);
+      // ROC timestamp is "YYYY-MM-DD HH:MM:SS"; we only need the time-of-day.
+      const absoluteTimeDs = parseHMS(parts[3].trim());
+
+      if (
+        punchId === null || rawCode === null || cardNo === null ||
+        !Number.isFinite(absoluteTimeDs)
+      ) {
+        // Malformed row: skip it and keep the rest. ROC has been observed
+        // to emit trailing whitespace and occasional empty lines, and one
+        // bad row must never block the punches around it. The puller
+        // counts skipped rows and treats a body with nothing but skipped
+        // rows (an HTML error page, say) as an error, not a healthy poll.
+        skipped++;
+        continue;
+      }
+
+      punches.push({ punchId, rawCode, cardNo, absoluteTimeDs });
     }
-    return out;
+    return { punches, skipped };
   },
 };

@@ -6,12 +6,14 @@
  *   2. Builds a protocol-specific GET request via `Protocol.buildRequest`.
  *   3. Fetches the response body with a hard timeout.
  *   4. Parses it through `Protocol.parseResponse` and de-dupes via `lastId`.
- *   5. Applies the per-event control mapping (`loadMapping`) to translate
+ *   5. Applies the event's control mapping (`mapping` in the config) to translate
  *      raw codes into the special-punch targets (1=start, 2=finish,
  *      3=check), leaving regular codes untouched.
  *   6. Inserts new rows into `punches` (`source = "online_input"`),
  *      resolving each control via `(event_id, control_code)` so the matcher
- *      can later attach the punch to a course.
+ *      can later attach the punch to a course. A row that is already
+ *      stored (same card, code and time, e.g. after "Reset last id") is
+ *      skipped through the `punches_oi_dedup_idx` unique index.
  *   7. Bumps the persisted `lastId` watermark and the status counters
  *      (`last_polled`, `poll_count`, `punches_imported`).
  *
@@ -30,7 +32,11 @@ import {
 } from "./protocol.js";
 import { uuidv7 } from "uuidv7";
 import { rocProtocol } from "./roc.js";
-import { loadMapping, applyMapping } from "./mapping.js";
+import {
+  applyMapping,
+  sanitizeMapping,
+  type ControlMapping,
+} from "./mapping.js";
 import { appendJournal } from "../journalEmit.js";
 
 const protocolById: Record<ProtocolId, Protocol> = {
@@ -45,7 +51,7 @@ type OnlineInputConfig = {
   unitId: string;
   endpointUrl: string;
   intervalSeconds: number;
-  mapping: Record<number, 1 | 2 | 3>;
+  mapping: ControlMapping;
   lastId: number;
 };
 
@@ -69,7 +75,7 @@ async function loadConfig(eventId: bigint): Promise<OnlineInputConfig | null> {
         typeof parsed.intervalSeconds === "number" && parsed.intervalSeconds > 0
           ? parsed.intervalSeconds
           : 10,
-      mapping: { ...(parsed.mapping ?? {}) } as Record<number, 1 | 2 | 3>,
+      mapping: sanitizeMapping(parsed.mapping),
       lastId:
         typeof parsed.lastId === "number" && parsed.lastId >= 0
           ? parsed.lastId
@@ -78,13 +84,6 @@ async function loadConfig(eventId: bigint): Promise<OnlineInputConfig | null> {
   } catch {
     return null;
   }
-}
-
-async function saveConfig(
-  eventId: bigint,
-  cfg: OnlineInputConfig,
-): Promise<void> {
-  await setSetting(settingKey(eventId, "config"), JSON.stringify(cfg));
 }
 
 /**
@@ -110,9 +109,9 @@ async function advanceWatermark(
   const key = settingKey(eventId, "config");
   const updated = await tx.$executeRaw`
     UPDATE oxygen.settings
-       SET value = jsonb_set(value::jsonb, '{lastId}', to_jsonb(${next}::int))::text
+       SET value = jsonb_set(value::jsonb, '{lastId}', to_jsonb(${next}::bigint))::text
      WHERE key = ${key}
-       AND COALESCE((value::jsonb->>'lastId')::int, 0) = ${expected}
+       AND COALESCE((value::jsonb->>'lastId')::bigint, 0) = ${expected}
   `;
   return updated === 1;
 }
@@ -134,6 +133,15 @@ async function recordError(eventId: bigint, msg: string): Promise<void> {
 
 async function clearError(eventId: bigint): Promise<void> {
   await setSetting(settingKey(eventId, "last_error"), null);
+}
+
+/** A short, printable excerpt of a response body for the status panel. */
+function describeBody(body: string): string {
+  const flat = body
+    .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return flat.length > 80 ? `${flat.slice(0, 80)}…` : flat;
 }
 
 async function fetchWithTimeout(url: string, timeoutMs: number): Promise<string> {
@@ -182,7 +190,7 @@ async function pollOnce(eventId: bigint): Promise<void> {
 
   const event = await prisma().event.findUnique({
     where: { id: eventId },
-    select: { date: true, zeroTime: true, nameId: true },
+    select: { date: true, zeroTime: true },
   });
   if (!event) return;
 
@@ -209,13 +217,22 @@ async function pollOnce(eventId: bigint): Promise<void> {
   }
 
   let parsed: RemotePunch[];
+  let skipped: number;
   try {
-    parsed = proto.parseResponse(body);
+    ({ punches: parsed, skipped } = proto.parseResponse(body));
   } catch (err) {
     await recordError(
       eventId,
       `Parse error: ${err instanceof Error ? err.message : String(err)}`,
     );
+    return;
+  }
+
+  // A body with lines but not one valid punch row is not ROC talking: an
+  // HTML error or login page from a proxy, a wrong endpoint URL. Report it
+  // like an HTTP error instead of as a healthy, empty poll.
+  if (parsed.length === 0 && skipped > 0) {
+    await recordError(eventId, `Unexpected response: ${describeBody(body)}`);
     return;
   }
 
@@ -232,7 +249,7 @@ async function pollOnce(eventId: bigint): Promise<void> {
     return;
   }
 
-  const mapping = await loadMapping(event.nameId);
+  const mapping = cfg.mapping;
   const controlIdByCode = await buildControlIndex(eventId);
 
   // Inserts run in a single transaction so a partial failure rolls
@@ -243,6 +260,7 @@ async function pollOnce(eventId: bigint): Promise<void> {
   const stationId = `roc-${cfg.unitId}`;
   const maxId = newPunches.reduce((m, p) => Math.max(m, p.punchId), cfg.lastId);
   let claimed = false;
+  let inserted = 0;
 
   await prisma().$transaction(async (tx) => {
     claimed = await advanceWatermark(tx, eventId, cfg.lastId, maxId);
@@ -255,18 +273,28 @@ async function pollOnce(eventId: bigint): Promise<void> {
       // Minted here and carried in the payload so every node stores the
       // punch under the same UUID (punch edits address rows by id).
       const punchId = uuidv7();
-      await tx.punch.create({
-        data: {
-          id: punchId,
-          eventId,
-          cardNo: p.cardNo,
-          controlCode: effectiveCode,
-          controlId,
-          time,
-          source: "online_input",
-          isOriginal: true,
-        },
+      // ON CONFLICT DO NOTHING against `punches_oi_dedup_idx`: a punch
+      // that is already stored (the operator reset the watermark, or ROC
+      // sent the same punch twice) is skipped instead of failing the
+      // whole batch, which would leave the watermark where it was and
+      // fail the same way on every following poll.
+      const { count } = await tx.punch.createMany({
+        data: [
+          {
+            id: punchId,
+            eventId,
+            cardNo: p.cardNo,
+            controlCode: effectiveCode,
+            controlId,
+            time,
+            source: "online_input",
+            isOriginal: true,
+          },
+        ],
+        skipDuplicates: true,
       });
+      if (count === 0) continue;
+      inserted++;
       await appendJournal(tx, {
         eventId,
         type: "punch.recorded",
@@ -294,7 +322,7 @@ async function pollOnce(eventId: bigint): Promise<void> {
   }
 
   await bumpCounter(eventId, "poll_count", 1);
-  await bumpCounter(eventId, "punches_imported", newPunches.length);
+  await bumpCounter(eventId, "punches_imported", inserted);
   await setSetting(
     settingKey(eventId, "last_polled"),
     new Date().toISOString(),

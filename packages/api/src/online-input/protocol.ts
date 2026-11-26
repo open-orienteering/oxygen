@@ -13,7 +13,7 @@
  */
 
 /**
- * Protocol identifiers stored in `online_input_config_<nameId>.protocol`.
+ * Protocol identifiers stored in `online_input_<eventId>_config.protocol`.
  * Adding a new id here requires updating the puller's `protocolById` map
  * and the `OnlineInputPanel` dropdown in the web package.
  */
@@ -66,7 +66,7 @@ export interface RemotePunch {
   punchId: number;
   /**
    * Raw control code as reported by the radio (e.g. 31, 100). The puller
-   * applies the user's control mapping to translate this into an `oPunch.Type`
+   * applies the event's control mapping (`mapping` in the event's config)
    * — special punches (start=1/finish=2/check=3) override the raw code.
    */
   rawCode: number;
@@ -74,6 +74,17 @@ export interface RemotePunch {
   cardNo: number;
   /** Absolute time of the punch in deciseconds since midnight. */
   absoluteTimeDs: number;
+}
+
+/** What `Protocol.parseResponse` found in one response body. */
+export interface ParseResult {
+  /** The well-formed rows, in body order. */
+  punches: RemotePunch[];
+  /**
+   * Non-blank lines that were not a valid punch row (malformed, or a value
+   * outside the stored range). They never move the watermark.
+   */
+  skipped: number;
 }
 
 export interface BuildRequestResult {
@@ -91,7 +102,7 @@ export interface Protocol {
   /** Build the GET URL (and any required headers) for the next poll. */
   buildRequest(cfg: ProtocolConfig, lastId: number, event: PollEvent): BuildRequestResult;
   /** Parse the raw response body into zero or more punches. */
-  parseResponse(body: string): RemotePunch[];
+  parseResponse(body: string): ParseResult;
 }
 
 /**

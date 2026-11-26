@@ -230,7 +230,7 @@
     "totalImported": "{{count}} stämplingar importerade",
     "lastId": "Senaste importerade ID",
     "resetLastId": "Återställ",
-    "resetLastIdHelp": "Tvingar en fullständig återimport vid nästa hämtning. Befintliga stämplingar i oPunch raderas inte, så dubbletter kan uppstå.",
+    "resetLastIdHelp": "Hämtar alla stämplingar från ROC igen vid nästa hämtning. Stämplingar som redan finns hoppas över, så bara de som saknas läggs till.",
     "pollNow": "Hämta nu",
     "pollStats": "Hämtade: {{fetched}}, infogade: {{inserted}}",
     "mappingTitle": "Kontrollmappning",
