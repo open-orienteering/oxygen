@@ -39,8 +39,10 @@ relative 0 doubles as "no time". Around that:
   and sets ZeroTime one hour before it. New `event.getTimeSettings` /
   `event.setTimeSettings` and an Event Info card edit ZeroTime and the time
   zone; moving ZeroTime shifts stored starts so clock times stay, and is
-  refused once timing data exists or while the event is checked out (the zone
-  alone can always change). New events take the default zone.
+  refused once timing data exists or while the event is checked out. The zone
+  alone can change at any time on the node that may write the event: during a
+  lease that is the venue box, and the cloud refuses it (review MC-08,
+  [settings-refresh-venue-edits.md](settings-refresh-venue-edits.md)). New events take the default zone.
 - `toRelativeChecked` refuses a human-entered time exactly at ZeroTime
   (`ZERO_TIME_COLLISION`); the draw proposes ZeroTime + 1 h and refuses a start
   on ZeroTime or past midnight (`blockers` in the preview, Apply disabled).

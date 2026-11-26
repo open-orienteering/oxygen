@@ -14,6 +14,7 @@
  */
 
 import { describe, it, expect, afterAll, afterEach } from "vitest";
+import { nodeId } from "../../sync/nodeIdentity.js";
 import { createTestEvent, disconnect, type TestEventContext } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
 import { prisma } from "../../db.js";
@@ -127,7 +128,12 @@ describe("ZeroTime at creation and in the settings (RES-04)", () => {
     await expect(caller.event.setTimeSettings({ zeroTime: 8 * H, timeZone: "Europe/Stockholm" })).rejects.toThrow(
       /checked out/,
     );
-    // The zone alone may change under a lease.
+    // During a lease the zone belongs to the holder (review MC-08): refused
+    // here, where another node holds it, and allowed on the holder.
+    await expect(caller.event.setTimeSettings({ zeroTime: 9 * H, timeZone: "Europe/Oslo" })).rejects.toThrow(
+      /checked out/,
+    );
+    await ctx.db.eventLease.updateMany({ where: { eventId: ctx.eventId }, data: { holderNodeId: nodeId() } });
     await caller.event.setTimeSettings({ zeroTime: 9 * H, timeZone: "Europe/Oslo" });
     expect((await caller.event.getTimeSettings()).timeZone).toBe("Europe/Oslo");
   });

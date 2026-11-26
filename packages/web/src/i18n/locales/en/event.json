@@ -14,6 +14,7 @@
   "leaseUpToDate": "All journal entries shipped to the peer.",
   "leaseCheckout": "Check out to this node",
   "leaseCheckin": "Check in",
+  "leaseCheckinSettingsNotTaken": "Checked in, but the cloud did not take this box's event settings (kiosk key, card fee, receipts, AIR+, time zone). Check them on the cloud.",
   "leaseForceTakeover": "Force takeover",
   "leaseForceConfirm": "Take over the lease from \"{{node}}\"? Only do this if the venue box is dead — its unshipped results are not on this node yet.",
   "leaseConfirmUnshipped": "This box holds journal entries the cloud has not received. Checking out again will discard them. Continue anyway?\n\n{{detail}}",

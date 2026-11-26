@@ -63,7 +63,7 @@ import {
 import { makeSyncHeaders } from "./googleIdToken.js";
 import { getActiveLease, makeLeasePeer, releaseLease, type LeasePeer } from "./lease.js";
 import { isCheckingIn } from "./leaseState.js";
-import { refreshCloudOwnedSettings } from "./settingsRefresh.js";
+import { pushVenueOwnedSettings, refreshCloudOwnedSettings } from "./settingsRefresh.js";
 import { refreshCloudOwnedMaps } from "./mapRefresh.js";
 
 const PUSH_BATCH = 200;
@@ -414,7 +414,8 @@ export async function shipAllOnce(
 }
 
 /**
- * Slow-cadence pass: refresh the local copy of cloud-owned event settings,
+ * Slow-cadence pass: push this box's venue-owned event settings to the
+ * cloud and refresh the local copy of its cloud-owned ones (review MC-08),
  * then of the event's cloud-owned map rows (row G19,
  * docs/map-storage.md §7.2), for events this node holds a lease on. The
  * two fail independently. Piggybacks on the shipper timer with its own
@@ -431,6 +432,14 @@ export async function refreshAllSettingsOnce(
     select: { id: true, nameId: true, zeroTime: true, timeZone: true },
   });
   for (const ev of events) {
+    try {
+      await pushVenueOwnedSettings(db, ev, peer);
+    } catch (err) {
+      console.warn(
+        `[shipper] ${ev.nameId}: venue settings push failed:`,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
     try {
       await refreshCloudOwnedSettings(db, ev, peer);
     } catch (err) {

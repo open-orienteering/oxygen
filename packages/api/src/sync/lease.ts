@@ -605,6 +605,11 @@ export interface LeasePeer {
   holder?(nameId: string): Promise<{ holderNodeId: string | null; schema?: string | null }>;
   /** The peer's full event row — the settings-refresh source. */
   exportSettings(nameId: string): Promise<Record<string, unknown>>;
+  /**
+   * Write the holder's venue-owned event columns on the peer (review MC-08).
+   * A peer that predates it answers NOT_FOUND.
+   */
+  importSettings(nameId: string, settings: Record<string, unknown>): Promise<void>;
   /** One slice of a map blob the event pins (docs/map-storage.md §7.2). */
   exportBlob(nameId: string, input: ExportBlobInput): Promise<ExportBlobResult>;
   /** The event's cloud-owned map rows without bytes — the map-refresh source (row G19). */
@@ -649,6 +654,9 @@ export function httpLeasePeer(baseUrl: string, secret: string): LeasePeer {
         string,
         unknown
       >;
+    },
+    async importSettings(nameId, settings) {
+      await clientFor(nameId).lease.importSettings.mutate({ settings });
     },
     async holder(nameId) {
       return clientFor(nameId).lease.holder.query();

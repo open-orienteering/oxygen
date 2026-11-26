@@ -3,7 +3,8 @@
  *
  * Two audiences:
  *   - **Node-to-node** (peerProcedure, shared-secret): `acquire`, `release`,
- *     `exportSnapshot`, `exportSettings`, `exportBlob`, `exportMapRows` —
+ *     `exportSnapshot`, `exportSettings`, `importSettings`, `exportBlob`,
+ *     `exportMapRows` —
  *     the cloud-side surface a venue's checkout/checkin and refreshes drive.
  *   - **Operator** (public/eventProcedure): `status` for the shell badge,
  *     `checkout`/`checkin` on the venue box, `forceTakeover` on the node
@@ -48,6 +49,7 @@ import {
   graphicClashError,
 } from "../sync/snapshotGraphics.js";
 import { exportMapRows } from "../sync/mapRefresh.js";
+import { importVenueOwnedSettings, NOT_HOLDER_MARK, pushVenueOwnedSettings } from "../sync/settingsRefresh.js";
 import {
   nodeId,
   nodeRole,
@@ -206,6 +208,20 @@ export const leaseRouter = router({
     });
     return row as unknown as Record<string, unknown>;
   }),
+
+  /**
+   * The holder's venue-owned event columns (review MC-08;
+   * docs/system/offline-architecture.md "The event row during a lease"):
+   * pushed by the box on the settings cadence and at checkin. Accepted only
+   * from the active holder (`x-oxygen-node-id`); keys that are not
+   * venue-owned, or that this schema lacks, are dropped.
+   */
+  importSettings: peerProcedure
+    .input(z.object({ settings: z.record(z.string(), z.unknown()) }))
+    .mutation(async ({ ctx, input }) => {
+      const fields = await importVenueOwnedSettings(ctx.db, ctx.event.id, ctx.peerNodeId, input.settings);
+      return { ok: true as const, fields };
+    }),
 
   /**
    * One slice (≤ 4 MiB, base64) of a map blob the event's `map_files` pin,
@@ -437,6 +453,24 @@ export const leaseRouter = router({
       }
 
       const peer = makeLeasePeer(peerUrl, secret);
+      // The venue-owned settings (kiosk key, card fee, receipts, AIR+, time
+      // zone…) go back with the event (review MC-08). Two refusals do not
+      // block the checkin, but the result says the settings were not taken:
+      // a peer that predates the endpoint (NOT_FOUND), and a peer that no
+      // longer lists this box as holder (an earlier checkin already pushed
+      // them and released, or the event was taken over — the release below
+      // sorts those out). Anything else, such as an unreachable peer, fails
+      // the checkin so the operator retries.
+      let settingsNotTaken: string | undefined;
+      try {
+        await pushVenueOwnedSettings(ctx.db, ctx.event, peer, { checkin: true });
+      } catch (err) {
+        const code = errorCode(err);
+        const notHolder = code === "PRECONDITION_FAILED" && errMessage(err).includes(NOT_HOLDER_MARK);
+        if (code !== "NOT_FOUND" && !notHolder) throw err;
+        settingsNotTaken = notHolder ? "not-holder" : "peer-too-old";
+        console.warn(`[lease] checkin of ${ctx.event.nameId}: the peer did not take the venue-owned settings (${errMessage(err)}); they stay on this box only.`);
+      }
       let peerAlreadyReleased = false;
       try {
         await peer.release(ctx.event.nameId, nodeId());
@@ -460,6 +494,7 @@ export const leaseRouter = router({
         ok: true as const,
         pushed: stats.pushed,
         ...(peerAlreadyReleased ? { peerAlreadyReleased: true as const } : {}),
+        ...(settingsNotTaken ? { settingsNotTaken } : {}),
       };
     } finally {
       endCheckin(ctx.event.id);
