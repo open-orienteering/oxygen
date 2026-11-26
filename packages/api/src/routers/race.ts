@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, kioskOrRaceOperateProcedure, raceOperateRaceProcedure, raceOperateProcedure } from "../trpc.js";
-import { toAbsolute, toRelative } from "../timeConvert.js";
+import { toAbsolute, toRelative, toRelativeChecked, hasTime, eventTimeZone } from "../timeConvert.js";
+import { timeOfDayDs, runningTimeDs } from "@oxygen/shared";
 import {
   runnerStatusToValue,
   valueToRunnerStatus,
@@ -81,15 +82,14 @@ export const raceRouter = router({
 
   /**
    * Server clock — returned both as ms-since-epoch (`now`) and as
-   * deciseconds-since-midnight (`deciseconds`, in the event's local
-   * timezone) for stations that want one or the other.
+   * deciseconds since midnight in the event's own time zone
+   * (`deciseconds`), with that zone (`timeZone`). Stations poll it now and
+   * then and tick locally from the offset (`useEventClock`).
    */
-  serverTime: kioskOrRaceOperateProcedure.query(() => {
-    const d = new Date();
-    const deciseconds =
-      (d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds()) * 10 +
-      Math.floor(d.getMilliseconds() / 100);
-    return { now: d.getTime(), deciseconds };
+  serverTime: kioskOrRaceOperateProcedure.query(({ ctx }) => {
+    const now = Date.now();
+    const timeZone = eventTimeZone(ctx.event);
+    return { now, deciseconds: timeOfDayDs(now, timeZone), timeZone };
   }),
 
   /** Most-recent finishers, for the activity feed. */
@@ -105,7 +105,7 @@ export const raceRouter = router({
         where: {
           eventId: ctx.event.id,
           removed: false,
-          finishTime: { gt: 0 },
+          finishTime: { not: 0 },
         },
         orderBy: { updatedAt: "desc" },
         take: limit,
@@ -115,10 +115,7 @@ export const raceRouter = router({
       return finishers.map((r) => {
         const startAbs = toAbsolute(r.startTime, zeroTime);
         const finishAbs = toAbsolute(r.finishTime, zeroTime);
-        const runningTime =
-          startAbs > 0 && finishAbs > 0
-            ? Math.max(0, finishAbs - startAbs)
-            : 0;
+        const runningTime = runningTimeDs(startAbs, finishAbs);
         return {
           id: r.seq,
           runnerId: r.seq,
@@ -215,9 +212,8 @@ export const raceRouter = router({
         r.timing.runningTime > 0 &&
         runner.classId
       ) {
-        const myRunningTime =
-          (r.timing.finishTime > 0 ? r.timing.finishTime : 0) -
-          (r.timing.startTime > 0 ? r.timing.startTime : 0);
+        // Absolute times; a run across midnight still counts (RES-16).
+        const myRunningTime = runningTimeDs(r.timing.startTime, r.timing.finishTime);
 
         if (myRunningTime > 0) {
           // OK-status, valid-time peers in the same class.
@@ -226,8 +222,9 @@ export const raceRouter = router({
             removed: false,
             classId: runner.classId,
             status: valueToRunnerStatus(1),
-            finishTime: { gt: 0 },
-            startTime: { gt: 0 },
+            // Relative times: negative before ZeroTime (RES-05).
+            finishTime: { not: 0 },
+            startTime: { not: 0 },
           } as const;
 
           const [strictlyFaster, total] = await Promise.all([
@@ -244,9 +241,9 @@ export const raceRouter = router({
                 AND class_id = ${runner.classId}::uuid
                 AND removed = false
                 AND status = 'ok'::oxygen.runner_status
-                AND finish_time > 0
-                AND start_time > 0
-                AND (finish_time - start_time) < ${myRunningTime}
+                AND finish_time <> 0
+                AND start_time <> 0
+                AND (((finish_time - start_time) % 864000) + 864000) % 864000 < ${myRunningTime}
             `,
             ctx.db.runner.count({ where: baseWhere }),
           ]);
@@ -349,7 +346,7 @@ export const raceRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "Runner not found" });
       }
       const zeroTime = ctx.event.zeroTime;
-      const finishRel = finishAbs > 0 ? toRelative(finishAbs, zeroTime) : 0;
+      const finishRel = finishAbs > 0 ? toRelativeChecked(finishAbs, zeroTime) : 0;
       if (r.finishTime !== 0 && finishRel !== r.finishTime && !input.allowOverwrite) {
         throw new TRPCError({
           code: "CONFLICT",

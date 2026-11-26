@@ -297,7 +297,7 @@ export async function distributeClassVariants(
     startTime: r.startTime,
     startNo: r.startNo,
     name: r.name,
-    locked: r.finishTime > 0 || RACED.has(r.status),
+    locked: r.finishTime !== 0 || RACED.has(r.status),
   }));
   const dealt = dealVariants(deal, pool, opts);
   const seqOf = new Map(pool.map((v) => [v.id, v.seq]));

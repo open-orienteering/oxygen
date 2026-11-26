@@ -30,7 +30,7 @@ Tests: `packages/api/src/draw/__tests__/algorithms.test.ts`, `drawEngine.test.ts
 - **"Started" badge before the first preview** counts finish times and result statuses only; read cards and punches show up in the preview's kept count.
 - **Only-missing classes on the timeline.** Late entries are pinned after the class's last start, so those classes are not shown as timeline bars and are not spaced against each other on a shared first control (a clash is still warned about).
 - **Hand-set starts.** There is no `start_manual` column, so a start typed in by hand is not protected by the draw. The confirmation count and the only-missing mode cover it.
-- **Zero-time starts (RES-04).** "No start time" is still `start_time = 0`, so a runner starting exactly at ZeroTime counts as undrawn.
+- **Zero-time starts (RES-04).** "No start time" is still `start_time = 0`. Since package 8 the draw refuses a start exactly at ZeroTime and proposes ZeroTime + 1 h ([zerotime-and-time-zone.md](zerotime-and-time-zone.md)).
 - **Unique start numbers.** There is no database constraint on start numbers; the draw no longer creates duplicates, but a hand edit can.
-- **RES-16** (midnight) and **RES-18/RES-19** (club separation in small classes, seeded ranks) are not part of this package.
+- **RES-16** (midnight; since package 8 the draw refuses starts past 24:00) and **RES-18/RES-19** (club separation in small classes, seeded ranks) are not part of this package.
 - **Timing.** A 2,000-runner draw against a remote database was not measured; the single statement and the batched journal insert should keep it well inside the timeout.

@@ -28,7 +28,7 @@ A standalone kiosk keeps working without the server. A card read is saved on the
 
 ## Start and finish stations
 
-Dedicated register-only stations for the arena — designed to run on cheap tablets and survive flaky Wi-Fi. Both stations work offline: mutations queue locally and drain when connectivity returns. The Sync Status panel lists entries the server refused (for example a missing Race crew role) with the reason, and offers Retry, Retry all and Discard; a "Sync blocked" line says when the queue waits for a sign-in or for the server.
+Dedicated register-only stations for the arena — designed to run on cheap tablets and survive flaky Wi-Fi. Both stations work offline: mutations queue locally and drain when connectivity returns. Their clock (and the kiosk's and start screen's) is the event's time zone, synced with the server every 30 seconds and ticking on the device in between, so it keeps running without network and is right even on a tablet set to another zone. The Sync Status panel lists entries the server refused (for example a missing Race crew role) with the reason, and offers Retry, Retry all and Discard; a "Sync blocked" line says when the queue waits for a sign-in or for the server.
 
 ![Start station — pre-start timer and card scan](../screenshots/start-station.png)
 
@@ -48,7 +48,7 @@ Punches are matched in the order the card lists them, so a control punched by a 
 
 ## Backup punches
 
-SI backup-memory punches (the unit's local fallback when the chip read failed) land in a dedicated reconciliation view. Each backup punch is matched to a registered card/runner; unmatched rows are highlighted, and a one-click action pushes the reconciled punch into the `punches` table for the result engine to pick up.
+SI backup-memory punches (the unit's local fallback when the chip read failed) land in a dedicated reconciliation view. Each backup punch is matched to a registered card/runner; unmatched rows are highlighted, and a one-click action pushes the reconciled punch into the `punches` table for the result engine to pick up. An imported backup punch counts for nothing until it is pushed: the readout, the Eventor upload and LiveResults only see pushed punches.
 
 ![Backup-punch reconciliation](../screenshots/backup-punches.png)
 

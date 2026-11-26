@@ -21,6 +21,8 @@ export interface BackupEvent {
   name: string;
   date: Date;
   zeroTime: number;
+  /** IANA zone; absent on rows from before package 8 (then the default). */
+  timeZone?: string;
   annotation: string;
 }
 
@@ -38,6 +40,7 @@ export async function getBackupTarget(
     name: row.name,
     date: row.date,
     zeroTime: row.zeroTime,
+    timeZone: row.timeZone,
     annotation: row.annotation,
   };
 }
@@ -60,11 +63,12 @@ function sqlEscape(s: string): string {
 export function buildBackupHeader(row: BackupEvent, when: Date = new Date()): string {
   const dateStr = row.date.toISOString().slice(0, 10);
   const reInsert =
-    `INSERT INTO oxygen.events (name_id, name, date, zero_time, annotation) VALUES (` +
+    `INSERT INTO oxygen.events (name_id, name, date, zero_time, time_zone, annotation) VALUES (` +
     `'${sqlEscape(row.nameId)}', ` +
     `'${sqlEscape(row.name)}', ` +
     `'${dateStr}', ` +
     `${row.zeroTime}, ` +
+    `'${sqlEscape(row.timeZone ?? "Europe/Stockholm")}', ` +
     `'${sqlEscape(row.annotation)}');`;
   return [
     `-- Oxygen backup`,
@@ -73,6 +77,7 @@ export function buildBackupHeader(row: BackupEvent, when: Date = new Date()): st
     `-- Name:       ${row.name}`,
     `-- Date:       ${dateStr}`,
     `-- ZeroTime:   ${row.zeroTime}`,
+    `-- TimeZone:   ${row.timeZone ?? "Europe/Stockholm"}`,
     `-- Annotation: ${row.annotation}`,
     `--`,
     `-- This is a per-event dump filtered to event_id = ${row.id}.`,

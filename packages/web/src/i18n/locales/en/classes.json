@@ -77,5 +77,6 @@
   "distributeRandom": "Random",
   "distributeOnlyUnassigned": "Only runners without a variant",
   "distributeConfirm": "Re-deal the variants of every runner in this class? Runners who have already raced keep theirs.",
-  "variantsDistributed": "{{changed}} runners changed, {{skipped}} who have raced kept theirs"
+  "variantsDistributed": "{{changed}} runners changed, {{skipped}} who have raced kept theirs",
+  "invalidMaxTime": "Max time must be hours:minutes (2:30) or minutes (150)."
 }

@@ -931,12 +931,19 @@ async function applyEvent(
     }
 
     case "punch.recorded": {
-      const { id, cardNo, controlCode, time } = event.payload as {
+      const { id, cardNo, controlCode, time, origin, pushedFrom } = event.payload as {
         id?: string;
         cardNo: number;
         controlCode: number;
         time: number;
+        origin?: string;
+        pushedFrom?: string;
       };
+      // An imported backup-memory row stays evidence on every node; its
+      // pushed mirror is a `manual` punch and flips the backup row (RES-08).
+      const pushedFromId =
+        typeof pushedFrom === "string" && UUID_RE.test(pushedFrom) ? pushedFrom : null;
+      const isBackupRow = origin === "backup_memory" && !pushedFromId;
       // Journal entries cross node boundaries — validate before the dedupe
       // lookup, where an undefined field would silently drop the filter.
       if (
@@ -965,6 +972,9 @@ async function applyEvent(
           `punch.recorded: punch ${rowId} belongs to another event`,
         );
       }
+      // The key dedupe compares like with like: a backup row against backup
+      // rows, a live punch against live punches (a mirror shares its key
+      // with the backup row it mirrors).
       const dup =
         byId ??
         (await db.punch.findFirst({
@@ -974,9 +984,16 @@ async function applyEvent(
             controlCode,
             time: relTime,
             removed: false,
+            source: isBackupRow ? "backup_memory" : { not: "backup_memory" },
           },
           select: { id: true },
         }));
+      if (pushedFromId) {
+        await db.punch.updateMany({
+          where: { id: pushedFromId, eventId, source: "backup_memory" },
+          data: { isOriginal: false },
+        });
+      }
       if (!dup) {
         // The origin row UUID is inserted verbatim so later punch edits
         // (`punch.removed` / `punch.updated`) address the same row on
@@ -988,7 +1005,7 @@ async function applyEvent(
             cardNo,
             controlCode,
             time: relTime,
-            source: "card",
+            source: isBackupRow ? "backup_memory" : pushedFromId ? "manual" : "card",
           },
         });
       }

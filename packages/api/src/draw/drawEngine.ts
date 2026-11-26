@@ -23,7 +23,7 @@ import type {
   DrawPreviewClass,
   DrawPreviewEntry,
 } from "@oxygen/shared";
-import { WITHDRAWN_STATUSES } from "@oxygen/shared";
+import { WITHDRAWN_STATUSES, DAY_DS } from "@oxygen/shared";
 import {
   randomDraw,
   clubSeparationDraw,
@@ -74,6 +74,12 @@ export interface DrawInputs {
   warnings: string[];
   /** Highest start number among runners the draw does not renumber. */
   maxKeptStartNo: number;
+  /**
+   * The event's ZeroTime (absolute deciseconds). A start exactly on it would
+   * store as relative 0, the "no start time" sentinel, so the draw refuses it
+   * (RES-04). Absent in pure tests that do not care.
+   */
+  zeroTime?: number;
 }
 
 const withdrawnEnums = WITHDRAWN_STATUSES.map(valueToRunnerStatus);
@@ -281,7 +287,7 @@ export async function loadDrawInputs(
     });
   }
 
-  return { classes, warnings, maxKeptStartNo };
+  return { classes, warnings, maxKeptStartNo, zeroTime };
 }
 
 /** Deciseconds as `M:SS` for warning text. */
@@ -452,14 +458,53 @@ export function computeDraw(
     globalStartNo += ordered.length;
   }
 
+  const blockers = drawBlockers(resultClasses, inputs.zeroTime);
   const result = {
     classes: resultClasses,
     warnings,
+    blockers,
     seed,
     skippedStarted: resultClasses.reduce((n, c) => n + c.skippedStarted, 0),
     replaced: resultClasses.reduce((n, c) => n + c.replaced, 0),
   };
   return { ...result, previewToken: drawToken(result, options) };
+}
+
+/**
+ * Problems that make the draw impossible to apply (preview shows them, Apply
+ * is refused):
+ *
+ * - a start exactly at ZeroTime, which is stored as relative 0 and reads back
+ *   as "no start time" (RES-04, DB-05);
+ * - a start at or past 24:00, which wraps to the next morning and breaks
+ *   running times and ordering (RES-16).
+ */
+export function drawBlockers(
+  classes: Pick<DrawPreviewClassInternal, "className" | "computedFirstStart" | "entries" | "writesClass">[],
+  zeroTime: number | undefined,
+): string[] {
+  const out: string[] = [];
+  for (const c of classes) {
+    const starts = c.entries.map((e) => e.startTime);
+    if (c.writesClass) starts.push(c.computedFirstStart);
+    if (zeroTime !== undefined && zeroTime > 0 && starts.includes(zeroTime)) {
+      out.push(
+        `ZERO_TIME_COLLISION: "${c.className}" has a start at ${formatClock(zeroTime)}, the event's zero time, which would be stored as "no start time". Move the first start, or move the zero time in the event settings.`,
+      );
+    }
+    if (starts.some((t) => t >= DAY_DS)) {
+      out.push(
+        `PAST_MIDNIGHT: "${c.className}" has starts at or after 24:00. Start earlier, shorten the interval, or split the start.`,
+      );
+    }
+  }
+  return out;
+}
+
+function formatClock(ds: number): string {
+  const sec = Math.floor(ds / 10);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${p(Math.floor(sec / 3600))}:${p(Math.floor((sec % 3600) / 60))}:${p(sec % 60)}`;
 }
 
 /**

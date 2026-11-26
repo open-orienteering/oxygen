@@ -3,25 +3,32 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { Prisma } from "../generated/prisma/client.js";
 import { router, viewProcedure, manageRaceProcedure } from "../trpc.js";
-import { toRelative, toAbsolute } from "../timeConvert.js";
+import { toRelativeChecked, toAbsolute } from "../timeConvert.js";
 import { generateDrawPreview, MAX_DRAW_SEED, RESULT_STATUSES } from "../draw/index.js";
 import type { DrawPreviewResult } from "@oxygen/shared";
-import { WITHDRAWN_STATUSES } from "@oxygen/shared";
+import { WITHDRAWN_STATUSES, DEFAULT_EVENT_TIME_ZONE } from "@oxygen/shared";
 import { valueToRunnerStatus } from "../statusConvert.js";
 import { appendJournalMany } from "../journalEmit.js";
 import { emitClassUpserted } from "../referenceJournal.js";
 import { lockEventLeaseAndSync } from "../event-locks.js";
 import { mayWriteEventData, writeRefusalError } from "../sync/lease.js";
 
-const classDrawConfigSchema = z.object({
-  classId: z.number().int(),
-  method: z.enum(["random", "clubSeparation", "seeded", "simultaneous"]),
-  interval: z.number().int().min(0),
-  firstStart: z.number().int().optional(),
-  corridorHint: z.number().int().optional(),
-  orderHint: z.number().int().optional(),
-  startOffset: z.number().int().optional(),
-});
+const classDrawConfigSchema = z
+  .object({
+    classId: z.number().int(),
+    method: z.enum(["random", "clubSeparation", "seeded", "simultaneous"]),
+    interval: z.number().int().min(0),
+    firstStart: z.number().int().optional(),
+    corridorHint: z.number().int().optional(),
+    orderHint: z.number().int().optional(),
+    startOffset: z.number().int().optional(),
+  })
+  // An interval of 0 would give the whole class one start time; only a mass
+  // start may do that (RES-13).
+  .refine((c) => c.method === "simultaneous" || c.interval >= 1, {
+    message: "The start interval must be at least one second unless the class has a mass start",
+    path: ["interval"],
+  });
 
 const drawSettingsSchema = z.object({
   firstStart: z.number().int(),
@@ -114,6 +121,9 @@ export const drawRouter = router({
 
     return {
       zeroTime,
+      // One hour after ZeroTime, so the default draw never lands on it (RES-04).
+      suggestedFirstStart: zeroTime + 36000,
+      timeZone: ctx.event.timeZone ?? DEFAULT_EVENT_TIME_ZONE,
       classes: classes.map((c) => ({
         id: c.seq,
         name: c.name,
@@ -146,6 +156,7 @@ export const drawRouter = router({
       );
       return {
         warnings: result.warnings,
+        blockers: result.blockers,
         seed: result.seed,
         previewToken: result.previewToken,
         skippedStarted: result.skippedStarted,
@@ -215,13 +226,16 @@ export const drawRouter = router({
           if (result.previewToken !== input.previewToken) {
             throw new TRPCError({ code: "CONFLICT", message: STALE_PREVIEW_MESSAGE });
           }
+          if (result.blockers.length > 0) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: result.blockers.join(" ") });
+          }
 
           const entries = result.classes.flatMap((c) => c.entries);
           if (entries.length > 0) {
             // One statement for every runner. Arrays keep the bind-parameter
             // count constant whatever the size of the draw.
             const ids = entries.map((e) => e.runnerId);
-            const starts = entries.map((e) => toRelative(e.startTime, zeroTime));
+            const starts = entries.map((e) => toRelativeChecked(e.startTime, zeroTime));
             const nos = entries.map((e) => e.startNo);
             // The guards repeat the engine's rules at write time, so a runner
             // who finished (or got a start) after the load is not rewritten:
@@ -259,7 +273,7 @@ export const drawRouter = router({
             await tx.class.update({
               where: { id: cls.classUuid },
               data: {
-                firstStart: toRelative(cls.computedFirstStart, zeroTime),
+                firstStart: toRelativeChecked(cls.computedFirstStart, zeroTime),
                 // A mass start has no interval; storing 0 lets a later
                 // late-entry draw recognise it.
                 startInterval: config.method === "simultaneous" ? 0 : config.interval,

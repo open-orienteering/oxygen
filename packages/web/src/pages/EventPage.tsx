@@ -1,7 +1,8 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import type { EventInfo, EventKind } from "@oxygen/shared";
+import { formatMeosTime, parseClockTime, isValidTimeZone } from "@oxygen/shared";
 import { trpc } from "../lib/trpc";
 import {
   EVENT_KIND_OPTIONS,
@@ -75,6 +76,7 @@ export function EventPage() {
                 event={d.event}
                 canManage={canManage}
               />
+              <EventTimeSettings key={`time-${d.event.nameId}`} canManage={canManage} />
               <div className="mt-3">
                 <RegistrationTrendsLink />
               </div>
@@ -239,6 +241,120 @@ function EventTypeEditor({
       {updateType.isError && (
         <p className="mt-1 text-xs text-red-600">
           {t("eventTypeSaveFailed", { message: updateType.error.message })}
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ─── Zero time and time zone (RES-04, RES-06) ───────────────
+
+function timeZoneOptions(): string[] {
+  try {
+    return (Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf?.("timeZone") ?? [];
+  } catch {
+    return [];
+  }
+}
+
+function EventTimeSettings({ canManage }: { canManage: boolean }) {
+  const { t } = useTranslation("event");
+  const utils = trpc.useUtils();
+  const settings = trpc.event.getTimeSettings.useQuery();
+  const [zeroText, setZeroText] = useState<string | null>(null);
+  const [zone, setZone] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const save = trpc.event.setTimeSettings.useMutation({
+    onSuccess: async () => {
+      setSaved(true);
+      setZeroText(null);
+      setZone(null);
+      await Promise.all([
+        utils.event.getTimeSettings.invalidate(),
+        utils.event.dashboard.invalidate(),
+        utils.draw.defaults.invalidate(),
+        utils.runner.list.invalidate(),
+      ]);
+    },
+  });
+  const zones = useMemo(timeZoneOptions, []);
+
+  if (!settings.data) return null;
+  const s = settings.data;
+  const zeroShown = zeroText ?? formatMeosTime(s.zeroTime);
+  const zoneShown = zone ?? s.timeZone;
+  const zeroDs = parseClockTime(zeroShown);
+  const zoneValid = isValidTimeZone(zoneShown.trim());
+  const dirty = (zeroDs !== null && zeroDs !== s.zeroTime) || zoneShown.trim() !== s.timeZone;
+
+  if (!canManage) {
+    return (
+      <div className="mt-3 text-sm text-slate-600" data-testid="event-time-settings">
+        <span className="font-medium">{t("zeroTime")}:</span> {formatMeosTime(s.zeroTime)} ·{" "}
+        <span className="font-medium">{t("timeZone")}:</span> {s.timeZone}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-3 max-w-md" data-testid="event-time-settings">
+      <div className="flex flex-col sm:flex-row gap-2 items-end">
+        <div className="flex-1">
+          <label className="block text-xs font-medium text-slate-500 mb-1">{t("zeroTime")}</label>
+          <input
+            type="text"
+            data-testid="event-zero-time"
+            value={zeroShown}
+            disabled={s.zeroTimeLocked}
+            onChange={(e) => {
+              setZeroText(e.target.value);
+              setSaved(false);
+            }}
+            aria-invalid={zeroDs === null || undefined}
+            className={`w-full px-3 py-2 border rounded-lg text-sm tabular-nums focus:outline-none focus:ring-2 disabled:bg-slate-50 disabled:text-slate-500 ${
+              zeroDs === null ? "border-red-400 focus:ring-red-400" : "border-slate-200 focus:ring-blue-500"
+            }`}
+          />
+        </div>
+        <div className="flex-1">
+          <label className="block text-xs font-medium text-slate-500 mb-1">{t("timeZone")}</label>
+          <input
+            type="text"
+            list="event-time-zones"
+            data-testid="event-time-zone"
+            value={zoneShown}
+            onChange={(e) => {
+              setZone(e.target.value);
+              setSaved(false);
+            }}
+            aria-invalid={!zoneValid || undefined}
+            className={`w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 ${
+              zoneValid ? "border-slate-200 focus:ring-blue-500" : "border-red-400 focus:ring-red-400"
+            }`}
+          />
+          <datalist id="event-time-zones">
+            {zones.map((z) => (
+              <option key={z} value={z} />
+            ))}
+          </datalist>
+        </div>
+        <button
+          type="button"
+          data-testid="event-time-save"
+          disabled={save.isPending || !dirty || zeroDs === null || !zoneValid}
+          onClick={() => zeroDs !== null && save.mutate({ zeroTime: zeroDs, timeZone: zoneShown.trim() })}
+          className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 cursor-pointer"
+        >
+          {save.isPending ? t("saving") : t("save")}
+        </button>
+      </div>
+      <p className="mt-1 text-xs text-slate-400">
+        {s.zeroTimeLocked ? t("zeroTimeLockedHelp") : t("zeroTimeHelp")}
+      </p>
+      {saved && <p className="mt-1 text-xs text-green-600">{t("timeSettingsSaved")}</p>}
+      {save.isError && (
+        <p className="mt-1 text-xs text-red-600" role="alert">
+          {save.error.message.replace(/^[A-Z_]+: /, "")}
         </p>
       )}
     </div>

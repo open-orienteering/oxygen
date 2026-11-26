@@ -100,6 +100,9 @@ COPY --from=build /app/packages/shared/ ./packages/shared/
 COPY --from=build /app/packages/api/ ./packages/api/
 
 ENV NODE_ENV=production
+# Backup file names and log lines only. Race clocks never use the process
+# zone: they use each event's own time zone (events.time_zone, RES-06).
+ENV TZ=Europe/Stockholm
 ENV PORT=3001
 ENV HOST=0.0.0.0
 EXPOSE 3001

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { router, viewProcedure, resultsViewProcedure } from "../trpc.js";
-import { toAbsolute } from "../timeConvert.js";
+import { toAbsolute, hasTime, hasStartedByClock, eventNowDs } from "../timeConvert.js";
 import { runnerStatusToValue } from "../statusConvert.js";
 import {
   parsePunches,
@@ -47,9 +47,7 @@ export const listsRouter = router({
       });
       const punchSet = new Set(punchCards.map((p) => p.cardNo));
 
-      const now = new Date();
-      const meosNow =
-        (now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()) * 10;
+      const meosNow = eventNowDs(ctx.event);
 
       return runners.map(
         (r): StartListEntry => ({
@@ -66,10 +64,7 @@ export const listsRouter = router({
           // The runner's variant (F6b): `H21 · AC` on the start list.
           ...(r.course?.variantKey ? { variantKey: r.course.variantKey } : {}),
           hasPunches: (r.cardNo != null && punchSet.has(r.cardNo)) || undefined,
-          hasStarted:
-            (r.startTime > 0 &&
-              (r.startTime <= 1 ||
-                meosNow >= toAbsolute(r.startTime, zeroTime))) || undefined,
+          hasStarted: hasStartedByClock(r.startTime, zeroTime, meosNow) || undefined,
         }),
       );
     }),

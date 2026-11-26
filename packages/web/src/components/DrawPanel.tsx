@@ -3,7 +3,8 @@ import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import {
   formatMeosTime,
-  parseMeosTime,
+  parseClockTime,
+  parseDuration,
   type DrawMethod,
   type DrawPreviewResult,
   type ClassDrawConfig,
@@ -50,15 +51,16 @@ function useDrawMethods(): { value: DrawMethod; label: string }[] {
   ];
 }
 
+/** M:SS (or bare minutes) → deciseconds; 0 for unparseable (blocked in the UI). */
 function intervalToDeciseconds(mmss: string): number {
-  return parseMeosTime(mmss);
+  return parseDuration(mmss, "ms") ?? 0;
 }
 
 /** Blank / zero offsets are sent as `undefined` so the optimizer keeps its own phase. */
 function offsetToDeciseconds(mmss: string): number | undefined {
   const trimmed = mmss.trim();
   if (trimmed === "") return undefined;
-  const ds = parseMeosTime(trimmed);
+  const ds = parseDuration(trimmed, "ms") ?? 0;
   return ds > 0 ? ds : undefined;
 }
 
@@ -122,10 +124,32 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
       );
   }, [classConfigs, defaults.data]);
 
+  // One hour after ZeroTime: a start exactly on ZeroTime would be stored as
+  // "no start time" (RES-04).
   const defaultFirstStart = useMemo(() => {
-    if (!defaults.data) return "09:00:00";
-    return formatMeosTime(defaults.data.zeroTime);
+    if (!defaults.data) return "10:00:00";
+    return formatMeosTime(defaults.data.suggestedFirstStart);
   }, [defaults.data]);
+
+  // Strict parsing (RES-13): a half-typed or out-of-range value blocks the
+  // preview instead of silently becoming 00:00 or 0 s.
+  const inputErrors = useMemo(() => {
+    const errs: string[] = [];
+    if (parseClockTime(firstStart ?? defaultFirstStart) === null) errs.push(t("invalidFirstStart"));
+    if (parseDuration(stagger, "ms") === null || parseDuration(firstControlGap, "ms") === null)
+      errs.push(t("invalidDuration"));
+    for (const c of configs) {
+      if (!c.selected) continue;
+      const iv = parseDuration(c.interval, "ms");
+      if (c.method !== "simultaneous" && (iv === null || iv < 10)) {
+        errs.push(t("invalidInterval", { className: c.className }));
+      }
+      if (c.offset.trim() !== "" && parseDuration(c.offset, "ms") === null) {
+        errs.push(t("invalidDuration"));
+      }
+    }
+    return [...new Set(errs)];
+  }, [firstStart, defaultFirstStart, stagger, firstControlGap, configs, t]);
 
   const selectedCount = configs.filter((c) => c.selected).length;
   const totalRunners = configs
@@ -198,12 +222,12 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
           };
         }),
         settings: {
-          firstStart: parseMeosTime(firstStart ?? defaultFirstStart),
+          firstStart: parseClockTime(firstStart ?? defaultFirstStart) ?? 0,
           baseInterval: 600,
           maxParallelStarts: maxParallel,
           detectCourseOverlap: detectOverlap,
-          staggerOffset: parseMeosTime(stagger),
-          minFirstControlGap: parseMeosTime(firstControlGap),
+          staggerOffset: parseDuration(stagger, "ms") ?? 0,
+          minFirstControlGap: parseDuration(firstControlGap, "ms") ?? 0,
         },
         options: { mode: onlyMissing ? "onlyMissing" : "all", force },
       };
@@ -224,7 +248,7 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
 
   const handlePreview = useCallback(() => {
     const input = buildInput();
-    if (input.classes.length === 0) return;
+    if (input.classes.length === 0 || inputErrors.length > 0) return;
     setStaleMessage(null);
     setConfirming(false);
     executeMutation.reset();
@@ -234,7 +258,7 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
         setExpandedPreview(new Set(data.classes.map((c) => c.classId)));
       },
     });
-  }, [buildInput, previewMutation, executeMutation]);
+  }, [buildInput, previewMutation, executeMutation, inputErrors]);
 
   const handleTimelineReorder = useCallback(
     (event: TimelineReorderEvent) => {
@@ -391,7 +415,7 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
                 placeholder="09:00:00"
                 value={firstStart ?? defaultFirstStart}
                 onChange={(e) => {
-                  const v = e.target.value.replace(/[^\d:]/g, "");
+                  const v = e.target.value.replace(/[^\d:.]/g, "");
                   setFirstStart(v);
                   setPreview(null);
                 }}
@@ -660,6 +684,28 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
           </div>
         </div>
 
+        {/* Input errors (RES-13) */}
+        {inputErrors.length > 0 && (
+          <div className="px-6 py-3 bg-red-50 border-b border-red-100" data-testid="draw-input-errors">
+            <div className="text-xs text-red-800 space-y-0.5">
+              {inputErrors.map((w, i) => (
+                <p key={i}>{w}</p>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Blockers: Apply is refused (start at ZeroTime, past midnight) */}
+        {preview && (preview.blockers?.length ?? 0) > 0 && (
+          <div className="px-6 py-3 bg-red-50 border-b border-red-100" data-testid="draw-blockers">
+            <div className="text-xs text-red-800 space-y-0.5">
+              {preview.blockers.map((w, i) => (
+                <p key={i}>{w.replace(/^[A-Z_]+: /, "")}</p>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Warnings */}
         {preview && preview.warnings.length > 0 && (
           <div className="px-6 py-3 bg-amber-50 border-b border-amber-100">
@@ -849,7 +895,7 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
             <>
               <button
                 onClick={handlePreview}
-                disabled={selectedCount === 0 || previewMutation.isPending}
+                disabled={selectedCount === 0 || inputErrors.length > 0 || previewMutation.isPending}
                 className="px-4 py-2 text-sm font-medium text-blue-600 border border-blue-200 rounded-lg hover:bg-blue-50 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 data-testid="draw-preview-btn"
               >
@@ -857,7 +903,13 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
               </button>
               <button
                 onClick={handleExecute}
-                disabled={!preview || confirming || previewMutation.isPending || executeMutation.isPending}
+                disabled={
+                  !preview ||
+                  (preview.blockers?.length ?? 0) > 0 ||
+                  confirming ||
+                  previewMutation.isPending ||
+                  executeMutation.isPending
+                }
                 className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 data-testid="draw-execute-btn"
               >

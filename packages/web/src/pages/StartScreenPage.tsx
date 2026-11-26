@@ -19,6 +19,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
+import { useEventClock } from "../hooks/useEventClock";
 import { trpc } from "../lib/trpc";
 import { ensureEventCache } from "../lib/offline/persister";
 import { ClubLogo } from "../components/ClubLogo";
@@ -46,10 +47,6 @@ interface MinuteGroup {
 }
 
 // ─── Helpers ────────────────────────────────────────────────
-
-function wallClockToMeos(date: Date): number {
-    return (date.getHours() * 3600 + date.getMinutes() * 60 + date.getSeconds()) * 10;
-}
 
 function formatMinute(ds: number): string {
     const totalSec = Math.floor(ds / 10);
@@ -102,7 +99,9 @@ function StartScreenPageBody() {
     const { nameId } = useParams<{ nameId: string }>();
     const [offsetMinutes, setOffsetMinutes] = useState(3);
     const [showSettings, setShowSettings] = useState(false);
-    const [now, setNow] = useState(() => new Date());
+    // The event's clock (event time zone, synced with the server, ticks
+    // locally), the same one the start station shows (RES-06).
+    const clock = useEventClock({ tickMs: 1000 });
     const [transitioning, setTransitioning] = useState(false);
     const [windowSize, setWindowSize] = useState({ width: window.innerWidth, height: window.innerHeight });
     const prevMinuteRef = useRef<number>(-1);
@@ -134,14 +133,8 @@ function StartScreenPageBody() {
         refetchInterval: 5000,
     });
 
-    // Tick clock every second
-    useEffect(() => {
-        const id = setInterval(() => setNow(new Date()), 1000);
-        return () => clearInterval(id);
-    }, []);
-
     // ── Timing ─────────────────────────────────────────────────
-    const meosNow = wallClockToMeos(now);
+    const meosNow = clock.currentDs;
     // The advance clock = wall clock + offset
     const advanceClock = meosNow + offsetMinutes * 600;
     const advanceFloorMinute = floorToMinute(advanceClock);

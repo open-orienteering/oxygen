@@ -123,7 +123,10 @@ All times live in **ZeroTime-relative deciseconds** (the column type is
 `INT`, default `0`). The default `ZeroTime` is `324000` (09:00:00 in
 deciseconds since midnight). Every API surface accepts **absolute
 deciseconds** and converts at the boundary (`toAbsolute` / `toRelative` in
-`packages/api/src/timeConvert.ts`).
+`packages/api/src/timeConvert.ts`). Relative 0 is "no time", so a start exactly at
+ZeroTime is refused and starts before ZeroTime are negative; "now" is in the
+event's own time zone (`events.time_zone`). See
+[system/registration-and-readout.md](system/registration-and-readout.md), "Time model".
 
 ## Deployment Options
 

@@ -216,6 +216,11 @@ scripts/gcp/event-mode.sh   # the day before: always-on, timers running
 scripts/gcp/idle-mode.sh    # after prize-giving: back to scale-to-zero
 ```
 
+Before the race, check the event's **zero time** (before the first start)
+and **time zone** under Event Info. Cloud Run runs the image with
+`TZ=Europe/Stockholm`, but no race time depends on it: "now", has-started and
+the station clocks use each event's own time zone.
+
 In event mode the LiveResults pusher and ROC online-punch puller run
 continuously, exactly as in the docker-compose deployment. Forgetting
 idle-mode costs ~$110/month, so put it in the tear-down checklist.

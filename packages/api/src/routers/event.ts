@@ -17,7 +17,7 @@ import {
   isEventKind,
 } from "@oxygen/shared";
 import { randomBytes } from "node:crypto";
-import { toAbsolute } from "../timeConvert.js";
+import { toAbsolute, hasTime, hasStartedByClock, eventNowDs } from "../timeConvert.js";
 import { resolveCourseExpectedPositions } from "./course.js";
 import { isWithdrawn, isFinished, WITHDRAWN_STATUSES } from "@oxygen/shared";
 import type {
@@ -34,6 +34,30 @@ import { clearSheetsCache, testGoogleSheetPush } from "../sheetsBackup.js";
 import { runnerStatusToValue, valueToRunnerStatus } from "../statusConvert.js";
 import { ttlMemo } from "../ttl-memo.js";
 import { firstFreeEventSlug, yearOf } from "../event-slug.js";
+import { DAY_DS, isValidTimeZone } from "@oxygen/shared";
+import { zeroTimeForResults } from "../timeConvert.js";
+import { lockEventLeaseAndSync } from "../event-locks.js";
+import { getActiveLease } from "../sync/lease.js";
+import type { Prisma } from "../generated/prisma/client.js";
+
+/** `events.zero_time` default (09:00). */
+const DEFAULT_ZERO_TIME = 324000;
+
+const timeZoneSchema = z.string().min(1).refine(isValidTimeZone, { message: "Unknown time zone" });
+
+/** True once the race has timing data: a finish, a punch, a read card. */
+async function timingDataPresent(
+  db: Prisma.TransactionClient,
+  eventId: bigint,
+): Promise<boolean> {
+  const [finished, punches, cards, readouts] = await Promise.all([
+    db.runner.count({ where: { eventId, removed: false, finishTime: { not: 0 } } }),
+    db.punch.count({ where: { eventId, removed: false } }),
+    db.card.count({ where: { eventId } }),
+    db.cardReadout.count({ where: { eventId } }),
+  ]);
+  return finished + punches + cards + readouts > 0;
+}
 
 /**
  * `pg_database_size()` stats every file under the database directory,
@@ -242,6 +266,12 @@ export const eventRouter = router({
         name: z.string().min(1),
         date: z.string().min(1),
         nameId: z.string().optional(),
+        /**
+         * Planned first start (absolute deciseconds). ZeroTime is set one
+         * hour before it, rounded down to the hour (RES-04). Absent: 09:00.
+         */
+        firstStart: z.number().int().min(0).max(DAY_DS - 1).optional(),
+        timeZone: timeZoneSchema.optional(),
         ...eventKindFields,
       }).superRefine(validateEventKind),
     )
@@ -284,6 +314,10 @@ export const eventRouter = router({
           date: new Date(input.date),
           kind: input.kind,
           kindCustom: input.kindCustom,
+          ...(input.firstStart
+            ? { zeroTime: zeroTimeForResults([input.firstStart], DEFAULT_ZERO_TIME) }
+            : {}),
+          ...(input.timeZone ? { timeZone: input.timeZone } : {}),
         },
       });
       if (ctx.user) {
@@ -295,6 +329,102 @@ export const eventRouter = router({
         });
       }
       return { nameId: created.nameId, eventId: Number(created.id) };
+    }),
+
+  /** ZeroTime and time zone, for the event settings card. */
+  getTimeSettings: viewProcedure.query(async ({ ctx }) => {
+    const row = await ctx.db.event.findUniqueOrThrow({
+      where: { id: ctx.event.id },
+      select: { zeroTime: true, timeZone: true },
+    });
+    const timing = await timingDataPresent(ctx.db, ctx.event.id);
+    const lease = await getActiveLease(ctx.db, ctx.event.id);
+    return {
+      zeroTime: row.zeroTime,
+      timeZone: row.timeZone,
+      /** ZeroTime can be moved only before any finish, punch or card exists, and not under a lease. */
+      zeroTimeLocked: timing || lease !== null,
+    };
+  }),
+
+  /**
+   * Set the event's ZeroTime and time zone (RES-04, RES-06).
+   *
+   * Moving ZeroTime keeps every drawn start at its clock time: stored
+   * (relative) start times and class first starts shift by old − new. It is
+   * refused once timing data exists (a finish, a punch, a read card) or while
+   * a lease is held (the venue owns ZeroTime then), and when a drawn start
+   * would land exactly on the new ZeroTime.
+   */
+  setTimeSettings: manageProcedure
+    .input(
+      z.object({
+        zeroTime: z.number().int().min(0).max(DAY_DS - 1),
+        timeZone: timeZoneSchema,
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const eventId = ctx.event.id;
+      return ctx.db.$transaction(async (tx) => {
+        await lockEventLeaseAndSync(tx, eventId);
+        if (await getActiveLease(tx, eventId)) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "The event is checked out to a venue; change its time settings there or after check-in.",
+          });
+        }
+        const row = await tx.event.findUniqueOrThrow({
+          where: { id: eventId },
+          select: { zeroTime: true },
+        });
+        const oldZero = row.zeroTime;
+        const newZero = input.zeroTime;
+        if (newZero !== oldZero) {
+          if (await timingDataPresent(tx, eventId)) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message:
+                "The zero time cannot be moved after the race has started (finish times, punches or read cards exist).",
+            });
+          }
+          const delta = oldZero - newZero;
+          // Relative 0 is "no time" and 1 is "drawn, no time": neither moves,
+          // and no real time may land on either.
+          const collide = await tx.runner.count({
+            where: { eventId, removed: false, startTime: { in: [-delta, 1 - delta], notIn: [0, 1] } },
+          });
+          const collideClass = await tx.class.count({
+            where: { eventId, removed: false, firstStart: { in: [-delta, 1 - delta], not: 0 } },
+          });
+          const collideTeam = await tx.team.count({
+            where: { eventId, startTime: { in: [-delta, 1 - delta], notIn: [0, 1] } },
+          });
+          if (collide + collideClass + collideTeam > 0) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message:
+                "ZERO_TIME_COLLISION: a drawn start is exactly at the new zero time. Pick another zero time, or redraw first.",
+            });
+          }
+          await tx.runner.updateMany({
+            where: { eventId, startTime: { notIn: [0, 1] } },
+            data: { startTime: { increment: delta } },
+          });
+          await tx.team.updateMany({
+            where: { eventId, startTime: { notIn: [0, 1] } },
+            data: { startTime: { increment: delta } },
+          });
+          await tx.class.updateMany({
+            where: { eventId, firstStart: { not: 0 } },
+            data: { firstStart: { increment: delta } },
+          });
+        }
+        await tx.event.update({
+          where: { id: eventId },
+          data: { zeroTime: newZero, timeZone: input.timeZone },
+        });
+        return { zeroTime: newZero, timeZone: input.timeZone };
+      });
     }),
 
   updateType: manageProcedure
@@ -412,9 +542,7 @@ export const eventRouter = router({
 
       const runnerCountByClass = new Map<string, number>();
 
-      const now = new Date();
-      const meosNow =
-        (now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()) * 10;
+      const meosNow = eventNowDs(ctx.event);
       const zeroTime = event.zeroTime;
 
       const punchGroups = await ctx.db.punch.groupBy({
@@ -450,9 +578,7 @@ export const eventRouter = router({
         }
 
         const hasPunches = (punchMap.get(r.cardNo ?? -1) ?? 0) > 0;
-        const hasStartedByTime =
-          r.startTime > 0 &&
-          (r.startTime <= 1 || meosNow >= toAbsolute(r.startTime, zeroTime));
+        const hasStartedByTime = hasStartedByClock(r.startTime, zeroTime, meosNow);
         const finished = isFinished(status, r.finishTime);
 
         if (finished) {
@@ -737,7 +863,8 @@ export const eventRouter = router({
       const where: Record<string, unknown> = {
         eventId: ctx.event.id,
         removed: false,
-        startTime: { gt: 0 },
+        // Relative: a start before ZeroTime is negative (RES-05).
+        startTime: { not: 0 },
       };
       if (input?.classId) {
         const cls = await ctx.db.class.findFirst({

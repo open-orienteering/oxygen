@@ -29,7 +29,7 @@ function previewClass(over: Partial<DrawPreviewClass> & { classId: number }): Dr
 }
 
 function preview(classes: DrawPreviewClass[]): DrawPreviewResult {
-  return { classes, warnings: [], seed: 1, previewToken: "t", skippedStarted: 0, replaced: 0 };
+  return { classes, warnings: [], blockers: [], seed: 1, previewToken: "t", skippedStarted: 0, replaced: 0 };
 }
 
 describe("buildTimelineBars", () => {

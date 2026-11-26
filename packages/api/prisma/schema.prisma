@@ -104,6 +104,8 @@ model Event {
   date            DateTime  @db.Date
   /// Deciseconds since midnight. Default 324000 = 09:00:00.
   zeroTime        Int       @default(324000) @map("zero_time")
+  /// IANA time zone of the venue; "now" and time of day are computed in it.
+  timeZone        String    @default("Europe/Stockholm") @map("time_zone")
   kind            String    @default("competition")
   /// User-defined display label when kind is "other".
   kindCustom      String    @default("") @map("kind_custom")

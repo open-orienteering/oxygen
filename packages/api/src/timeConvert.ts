@@ -1,12 +1,39 @@
 /**
- * Time conversion utilities for MeOS compatibility.
+ * Time conversion at the DB boundary.
  *
- * MeOS stores all times (oRunner.StartTime/FinishTime, oCard.Punches, oPunch.Time)
- * as ZeroTime-relative deciseconds. Oxygen's API speaks absolute deciseconds
- * (since midnight). These helpers convert at the DB boundary.
+ * Runner, class and punch times are stored as ZeroTime-relative deciseconds
+ * (a layout inherited from MeOS). Oxygen's API speaks absolute deciseconds
+ * since the event's local midnight. Relative 0 doubles as "no time", so a
+ * real time exactly at ZeroTime cannot be stored: `toRelativeChecked` refuses
+ * it on human input. See docs/system/registration-and-readout.md, "Time model".
  */
 
-const DAY_DS = 864000; // 24 hours in deciseconds
+import { TRPCError } from "@trpc/server";
+import { DAY_DS, dateInZone, timeOfDayDs, DEFAULT_EVENT_TIME_ZONE } from "@oxygen/shared";
+
+/**
+ * True if a stored ZeroTime-relative value carries a time. Relative times
+ * are negative for anything before ZeroTime, so never test them with `> 0`.
+ */
+export function hasTime(rel: number | null | undefined): boolean {
+  return rel != null && rel !== 0;
+}
+
+/**
+ * `toRelative` for times typed by a person (or chosen in the draw): refuses a
+ * time exactly at ZeroTime, which would read back as "no time".
+ */
+export function toRelativeChecked(absoluteDs: number, zeroTime: number): number {
+  if (absoluteDs > 0 && absoluteDs === zeroTime) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "ZERO_TIME_COLLISION: a time exactly at the event's zero time cannot be stored. " +
+        "Use a time one second later, or move the zero time in the event settings.",
+    });
+  }
+  return toRelative(absoluteDs, zeroTime);
+}
 
 /**
  * Convert an absolute time (deciseconds since midnight) to ZeroTime-relative
@@ -52,22 +79,19 @@ export function toAbsolute(relativeDs: number, zeroTime: number): number {
 }
 
 /**
- * Today's local date as a YYYYMMDD integer — the format MeOS uses for
- * `oRunner.EntryDate`. Optional `now` for deterministic testing.
+ * Today's date in the event's time zone as a YYYYMMDD integer (the
+ * `runners.entry_date` format). Optional `now` for deterministic testing.
  */
-export function nowMeosDate(now: Date = new Date()): number {
-  const y = now.getFullYear();
-  const m = now.getMonth() + 1;
-  const d = now.getDate();
-  return y * 10000 + m * 100 + d;
+export function nowMeosDate(now: Date = new Date(), timeZone: string = DEFAULT_EVENT_TIME_ZONE): number {
+  return dateInZone(now.getTime(), timeZone);
 }
 
 /**
- * Current local time-of-day as deciseconds since midnight — the format MeOS
- * uses for `oRunner.EntryTime`. Optional `now` for deterministic testing.
+ * Current time of day in the event's time zone as whole-second deciseconds
+ * since midnight (the `runners.entry_time` format).
  */
-export function nowMeosTime(now: Date = new Date()): number {
-  return (now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()) * 10;
+export function nowMeosTime(now: Date = new Date(), timeZone: string = DEFAULT_EVENT_TIME_ZONE): number {
+  return Math.floor(timeOfDayDs(now.getTime(), timeZone) / 10) * 10;
 }
 
 /**
@@ -91,4 +115,28 @@ export function meosEntryToDate(
   const min = Math.floor((totalSeconds % 3600) / 60);
   const s = totalSeconds % 60;
   return new Date(y, m - 1, d, h, min, s);
+}
+
+/** The event's IANA zone, falling back to the default for partial refs. */
+export function eventTimeZone(event: { timeZone?: string | null }): string {
+  return event.timeZone || DEFAULT_EVENT_TIME_ZONE;
+}
+
+/**
+ * The current time of day at the event (deciseconds since the event's local
+ * midnight). Use this, never `Date#getHours`, which reads the process zone.
+ */
+export function eventNowDs(event: { timeZone?: string | null }, nowMs: number = Date.now()): number {
+  return timeOfDayDs(nowMs, eventTimeZone(event));
+}
+
+/**
+ * "Has started" by the clock: the runner has a start time (relative, may be
+ * before ZeroTime) and it has passed. Relative 1 is the "drawn, start time
+ * not set" marker and counts as started.
+ */
+export function hasStartedByClock(relStart: number, zeroTime: number, nowDs: number): boolean {
+  if (!hasTime(relStart)) return false;
+  if (relStart === 1) return true;
+  return nowDs >= toAbsolute(relStart, zeroTime);
 }

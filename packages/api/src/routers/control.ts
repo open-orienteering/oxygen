@@ -19,7 +19,7 @@ import type {
 } from "@oxygen/shared";
 import { lastWriter } from "../course-presence.js";
 import { uuidv7 } from "uuidv7";
-import { toAbsolute } from "../timeConvert.js";
+import { toAbsolute, toRelative, hasTime } from "../timeConvert.js";
 import { appendJournal } from "../journalEmit.js";
 import { emitControlUpserted, emitCourseUpserted } from "../referenceJournal.js";
 import { Prisma as PrismaNs } from "../generated/prisma/client.js";
@@ -1717,14 +1717,18 @@ export const controlRouter = router({
       const isFinish = ctrl?.status === "finish";
       const isStart = ctrl?.status === "start";
       const r = runnerByCard.get(p.cardNo);
-      const registeredTime = isFinish
+      // Both stored ZeroTime-relative; compared in that base, returned
+      // absolute like every other API time (RES-08).
+      const registeredRel = isFinish
         ? r?.finishTime ?? null
         : isStart
           ? r?.startTime ?? null
           : null;
+      const registeredTime =
+        registeredRel != null ? toAbsolute(registeredRel, ctx.event.zeroTime) : null;
       const timeMatch =
-        registeredTime != null && registeredTime > 0
-          ? Math.abs(registeredTime - p.time) <= 10
+        registeredRel != null && hasTime(registeredRel)
+          ? Math.abs(registeredRel - p.time) <= 10
           : false;
 
       let matchStatus: "matched" | "no_runner" | "no_result" | "time_mismatch" | "unknown";
@@ -1740,7 +1744,7 @@ export const controlRouter = router({
         controlCodes: ctrl?.codes ?? "",
         controlName: ctrl?.name ?? "",
         cardNo: p.cardNo,
-        punchTime: p.time,
+        punchTime: toAbsolute(p.time, ctx.event.zeroTime),
         punchDatetime: p.punchedAt ? p.punchedAt.toISOString() : null,
         subSecond: p.subSecond,
         stationSerial: p.unit?.stationSerial ?? null,
@@ -1804,6 +1808,9 @@ export const controlRouter = router({
             controlCode: bp.controlCode,
             time: bp.time !== 0 ? toAbsolute(bp.time, ctx.event.zeroTime) : 0,
             origin: "backup_memory",
+            // The backup row this mirrors: a peer flips that row and stores
+            // the mirror as `manual`, as here (RES-08).
+            pushedFrom: bp.id,
           },
         });
       });
@@ -1819,7 +1826,13 @@ export const controlRouter = router({
    * `time`; we derive both from the station's mapped control (when
    * `controlId` is set) and rewrite `punchTime` (seconds × 10) into
    * `time`. New callers can send `{ controlCode, time, punchedAt }`
-   * directly — both shapes are accepted.
+   * directly — both shapes are accepted. Either time is the station's
+   * clock time (absolute deciseconds since midnight) and is stored
+   * ZeroTime-relative like every other punch (RES-08).
+   *
+   * Imported rows are evidence only: readout, the Eventor upload and
+   * LiveResults ignore `source = 'backup_memory'` rows and see a punch only
+   * once it is pushed (`pushBackupPunch` adds the `manual` mirror).
    */
   importBackupPunches: raceOperateRaceProcedure
     .input(
@@ -1867,7 +1880,7 @@ export const controlRouter = router({
         controlCode: p.controlCode ?? fallbackControlCode,
         controlId: controlUuid,
         unitId: unitRow?.id ?? null,
-        time: p.time ?? p.punchTime ?? 0,
+        time: toRelative(p.time ?? p.punchTime ?? 0, ctx.event.zeroTime),
         punchedAt: p.punchedAt
           ? new Date(p.punchedAt)
           : p.punchDatetime

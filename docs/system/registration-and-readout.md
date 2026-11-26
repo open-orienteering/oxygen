@@ -938,9 +938,11 @@ The `oCard` table is shared between Oxygen and MeOS. Both systems can read and w
 - **ReadId**: Both compute the same hash for deduplication. Oxygen's `computeReadId()` matches MeOS's `SICard::calculateHash`.
 - **Multiple oCard rows**: When both systems create oCards for the same CardNo, Oxygen prefers the runner-linked one. The runner FK (`oRunner.Card`) is the authoritative link.
 
-### Time Format: ZeroTime-Relative Storage
+### Time model: ZeroTime-relative storage, event time zone
 
-All times in the database are stored as **ZeroTime-relative deciseconds**. ZeroTime is the competition's reference point (default: 324000 = 09:00:00), stored in `oEvent.ZeroTime`. This matches MeOS behavior exactly.
+Runner, team, class and punch times are stored as **ZeroTime-relative
+deciseconds** (a layout inherited from MeOS). ZeroTime is the event's reference
+point, `events.zero_time` (default 324000 = 09:00:00).
 
 ```
 Absolute time → Stored (relative to ZeroTime 09:00:00)
@@ -949,18 +951,60 @@ Absolute time → Stored (relative to ZeroTime 09:00:00)
 08:50:00       → -6000 ds   (318000 - 324000)
 ```
 
-**Conversion at the API boundary:**
+**Conversion at the API boundary** (`packages/api/src/timeConvert.ts`):
 
-- **DB writes**: `toRelative(absoluteDs, zeroTime) = absoluteDs - zeroTime`
-- **DB reads**: `toAbsolute(relativeDs, zeroTime) = (relativeDs + zeroTime) % 864000`
-- **API always speaks absolute times** — the web UI never sees relative values
-- **Running time = finishTime - startTime** is the same in both frames (no conversion needed)
+- **DB writes**: `toRelative(absoluteDs, zeroTime) = absoluteDs - zeroTime`;
+  `toRelativeChecked` for times a person typed or the draw chose (see below).
+- **DB reads**: `toAbsolute(relativeDs, zeroTime) = (relativeDs + zeroTime) % 864000`.
+- **The API always speaks absolute times**; the web UI never sees relative values.
+- **Running time** is `runningTimeDs(startAbs, finishAbs)` from
+  `@oxygen/shared`: a finish earlier than the start is a run across midnight
+  (23:30 → 00:20 is 50 minutes), and 0 means a time is missing.
+  `computeClassPlacements` and `computePosition` take absolute times only.
 
-Sentinel value: `StartTime = 1` means "drawn with no specific time" (MeOS convention for interval=0 draws). It is preserved through the conversion layer and treated as "started" in dashboard/status logic.
+**Sentinels.** Relative `0` means "no time". A start before ZeroTime is
+negative when stored, so never test a stored time with `> 0`: use
+`hasTime(rel)` (`rel !== 0`) or `{ not: 0 }` in a query. Relative `1` means
+"drawn, no specific time" and counts as started.
+
+**A time exactly at ZeroTime** would be stored as 0 and read back as "no time"
+(RES-04). It is refused where a person or the draw sets it: `runner.create`,
+`runner.update`, bulk edits, the finish stamp, manual punches, the draw
+(`ZERO_TIME_COLLISION`). Machine paths (card readout, journal replay, ROC)
+convert unchecked: a punch at exactly ZeroTime.0 is a known limit. To keep
+starts away from it:
+
+- `event.create` takes the planned first start and sets ZeroTime one hour
+  before it, rounded down to the hour (the dialog defaults to 10:00, which
+  gives the old 09:00). An Eventor import with results does the same from the
+  earliest start.
+- The draw panel proposes ZeroTime + 1 h as the first start, and the draw
+  refuses a start on ZeroTime or at/after 24:00 (`blockers` in the preview).
+- `event.setTimeSettings` moves ZeroTime before the race: stored start times
+  and class first starts shift by old − new so every drawn start keeps its
+  clock time. It is refused once a finish, punch or read card exists, and while
+  a lease is held (the venue owns ZeroTime then).
+
+**Event time zone.** `events.time_zone` (IANA, default `Europe/Stockholm`) is
+the zone of every "now" and every date: `race.serverTime`, has-started, the
+in-forest counts, entry stamps (`nowMeosDate` / `nowMeosTime`). Never use
+`Date#getHours` on the server: the Docker and Cloud Run images run in UTC (the
+images set `TZ=Europe/Stockholm` only for backup file names and logs). The
+stations (start, finish, kiosk, start screen) use `useEventClock`: it asks
+`race.serverTime` every 30 s, keeps the offset from the device clock and the
+zone, and ticks locally, so the clock keeps running offline and the finish
+stamp is the event's time of day even on a laptop set to another zone.
+
+**Backup-memory punches** (`source = 'backup_memory'`) are stored relative like
+every other punch and are evidence only: readout, the Eventor upload and
+LiveResults ignore them until they are pushed, which adds a `manual` mirror.
+The migration `20261126150100_fix_backup_punch_time_base` repaired rows stored
+as clock time before.
 
 **Files:**
-- `packages/api/src/timeConvert.ts` — `toRelative()` and `toAbsolute()` helpers
-- `packages/api/src/db.ts` — `getZeroTime(client)` — cached ZeroTime lookup (defaults to 324000)
+- `packages/api/src/timeConvert.ts` — `toRelative`, `toRelativeChecked`, `toAbsolute`, `hasTime`, `hasStartedByClock`, `eventNowDs`
+- `packages/shared/src/time.ts` — `timeOfDayDs`, `dateInZone`, `runningTimeDs`, `parseClockTime`, `parseDuration`
+- `packages/web/src/lib/event-clock.ts`, `packages/web/src/hooks/useEventClock.ts` — the station clock
 
 ### Counter Increments
 

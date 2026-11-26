@@ -190,7 +190,7 @@ export const classRouter = router({
         allowQuickEntry: z.boolean().optional().default(false),
         firstStart: z.number().int().optional().default(0),
         startInterval: z.number().int().optional().default(0),
-        maxTime: z.number().int().optional().default(0),
+        maxTime: z.number().int().min(0).optional().default(0),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -302,7 +302,7 @@ export const classRouter = router({
         allowQuickEntry: z.boolean().optional(),
         firstStart: z.number().int().optional(),
         startInterval: z.number().int().optional(),
-        maxTime: z.number().int().optional(),
+        maxTime: z.number().int().min(0).optional(),
         noTiming: z.boolean().optional(),
         freeStart: z.boolean().optional(),
         classType: z.string().optional(),
@@ -353,7 +353,7 @@ export const classRouter = router({
         classFee: z.number().int().optional(),
         firstStart: z.number().int().optional(),
         startInterval: z.number().int().optional(),
-        maxTime: z.number().int().optional(),
+        maxTime: z.number().int().min(0).optional(),
         freeStart: z.boolean().optional(),
         noTiming: z.boolean().optional(),
         allowQuickEntry: z.boolean().optional(),

@@ -34,8 +34,9 @@ import {
   type ParsedPunch,
   type ControlMatch,
   type CardReadPayload,
+  runningTimeDs,
 } from "@oxygen/shared";
-import { toAbsolute, toRelative } from "../timeConvert.js";
+import { toAbsolute, toRelative, toRelativeChecked, hasTime } from "../timeConvert.js";
 import {
   runnerStatusToValue,
   valueToRunnerStatus,
@@ -191,7 +192,9 @@ export async function performReadout(
   const freePunches =
     runner.cardNo != null
       ? await db.punch.findMany({
-          where: { eventId, cardNo: runner.cardNo, removed: false },
+          // Backup-memory rows count only once pushed, through their
+          // `manual` mirror (RES-08).
+          where: { eventId, cardNo: runner.cardNo, removed: false, source: { not: "backup_memory" } },
           orderBy: { time: "asc" },
         })
       : [];
@@ -260,8 +263,9 @@ export async function performReadout(
       ? toAbsolute(runner.finishTime, zeroTime)
       : punchFinishTime;
 
-  const rawRunningTime =
-    finishTime !== 0 && startTime !== 0 ? finishTime - startTime : 0;
+  // Absolute clock times: a finish after midnight still gives the real
+  // running time, not 0 (RES-16).
+  const rawRunningTime = runningTimeDs(startTime, finishTime);
   const runningTime = Math.max(0, rawRunningTime - runningTimeAdjustment);
 
   const dbStatusNumeric = runnerStatusToValue(runner.status);
@@ -1462,7 +1466,7 @@ export const cardReadoutRouter = router({
             cardNo: input.cardNo,
             controlCode: input.controlCode,
             controlId: control?.id ?? null,
-            time: input.time > 0 ? toRelative(input.time, zeroTime) : 0,
+            time: input.time > 0 ? toRelativeChecked(input.time, zeroTime) : 0,
             source: "manual",
             isOriginal: false,
           },
@@ -1528,7 +1532,7 @@ export const cardReadoutRouter = router({
         await tx.punch.update({
           where: { id: p.id },
           data: {
-            time: input.time > 0 ? toRelative(input.time, zeroTime) : 0,
+            time: input.time > 0 ? toRelativeChecked(input.time, zeroTime) : 0,
             isOriginal: false,
           },
         });

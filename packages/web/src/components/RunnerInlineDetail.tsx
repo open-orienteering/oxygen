@@ -4,7 +4,7 @@ import { trpc } from "../lib/trpc";
 import {
   formatMeosTime,
   formatRunningTime,
-  parseMeosTime,
+  parseClockTime,
   RunnerStatus,
   TransferFlags,
   hasTransferFlag,
@@ -162,6 +162,11 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
             </div>
           )}
 
+          {updateMutation.error && (
+            <p className="mb-2 text-xs text-red-600" role="alert" data-testid="runner-save-error">
+              {updateMutation.error.message.replace(/^[A-Z_]+: /, "")}
+            </p>
+          )}
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-x-6 gap-y-3">
             {/* Editable fields */}
             <div>
@@ -209,17 +214,19 @@ export function RunnerInlineDetail({ runnerId, colSpan }: Props) {
               />
               {marker("cardNo")}
             </div>
-            <EditField
+            <TimeField
               label={t("startTime")}
-              value={r.startTime > 0 ? formatMeosTime(r.startTime) : ""}
-              placeholder="HH:MM:SS"
-              onChange={(v) => debouncedSave("startTime", parseMeosTime(v))}
+              testId="runner-start-time"
+              value={r.startTime}
+              invalidText={t("invalidClockTime")}
+              onCommit={(ds) => updateMutation.mutate({ id: runnerId, data: { startTime: ds } })}
             />
-            <EditField
+            <TimeField
               label={t("finishTime")}
-              value={r.finishTime > 0 ? formatMeosTime(r.finishTime) : ""}
-              placeholder="HH:MM:SS"
-              onChange={(v) => debouncedSave("finishTime", parseMeosTime(v))}
+              testId="runner-finish-time"
+              value={r.finishTime}
+              invalidText={t("invalidClockTime")}
+              onCommit={(ds) => updateMutation.mutate({ id: runnerId, data: { finishTime: ds } })}
             />
             <ReadonlyField
               label={t("runningTime")}
@@ -440,6 +447,84 @@ function EditField({
         placeholder={placeholder}
         className="w-full px-2 py-1.5 text-sm border border-slate-200 rounded-md bg-white focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
       />
+    </div>
+  );
+}
+
+/**
+ * A clock-time field (RES-13): saved on blur or Enter, never per keystroke,
+ * and only when it parses (`H:MM`, `H:MM:SS`, `HH.MM.SS`, `HHMMSS`). An
+ * empty field clears the time; anything else is shown in red and not saved,
+ * so a half-typed "10:4" can no longer be stored as 00:10:04.
+ */
+export function TimeField({
+  label,
+  value,
+  onCommit,
+  invalidText,
+  testId,
+}: {
+  label: string;
+  /** Absolute deciseconds; 0 = no time. */
+  value: number;
+  onCommit: (ds: number) => void;
+  invalidText: string;
+  testId?: string;
+}) {
+  const shown = value > 0 ? formatMeosTime(value) : "";
+  const [text, setText] = useState(shown);
+  const [editing, setEditing] = useState(false);
+  const [invalid, setInvalid] = useState(false);
+
+  // Follow the stored value, but never rewrite the field while it is edited.
+  useEffect(() => {
+    if (!editing) {
+      setText(shown);
+      setInvalid(false);
+    }
+  }, [shown, editing]);
+
+  const commit = () => {
+    const trimmed = text.trim();
+    const ds = trimmed === "" ? 0 : parseClockTime(trimmed);
+    if (ds === null) {
+      setInvalid(true);
+      return;
+    }
+    setInvalid(false);
+    setEditing(false);
+    if (ds !== value) onCommit(ds);
+    else setText(shown);
+  };
+
+  return (
+    <div>
+      <label className="block text-xs text-slate-500 mb-1">{label}</label>
+      <input
+        type="text"
+        value={text}
+        data-testid={testId}
+        aria-invalid={invalid || undefined}
+        placeholder="HH:MM:SS"
+        onFocus={() => setEditing(true)}
+        onChange={(e) => {
+          setText(e.target.value);
+          setInvalid(false);
+        }}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") commit();
+          if (e.key === "Escape") {
+            setEditing(false);
+            setText(shown);
+            setInvalid(false);
+          }
+        }}
+        className={`w-full px-2 py-1.5 text-sm border rounded-md bg-white focus:outline-none focus:ring-2 focus:border-transparent tabular-nums ${
+          invalid ? "border-red-400 focus:ring-red-400" : "border-slate-200 focus:ring-blue-400"
+        }`}
+      />
+      {invalid && <p className="text-xs text-red-600 mt-0.5">{invalidText}</p>}
     </div>
   );
 }

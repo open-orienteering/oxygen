@@ -329,7 +329,7 @@ export const testLabRouter = router({
         where: {
           eventId: ctx.event.id,
           removed: false,
-          startTime: { gt: 0 },
+          startTime: { not: 0 },
           cardNo: { gt: 0 },
         },
         select: {
@@ -690,7 +690,7 @@ export const testLabRouter = router({
         Math.max(0.5, 1 + gaussianRandom() * pace.spread);
 
       const startAbsolute =
-        runner.startTime > 0 ? runner.startTime + zeroTime : 36000 + zeroTime; // fallback 10:00
+        runner.startTime !== 0 ? runner.startTime + zeroTime : 36000 + zeroTime; // fallback 10:00
       let cumulative = startAbsolute;
       const punches: { code: number; timeDs: number }[] = [];
       const numLegs = codes.length + 1;

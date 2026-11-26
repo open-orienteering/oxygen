@@ -62,6 +62,8 @@ Notes whose code no longer exists (mostly the raster tile pipeline, deleted in s
 
 | Note | Added |
 | --- | --- |
+| [A start at ZeroTime read as "no start", early starters vanished, and station clocks ran in UTC](zerotime-and-time-zone.md) | 2026-11-26 |
+| [ZeroTime and time zone follow-ups: review items left as they are](zerotime-followups.md) | 2026-11-26 |
 | [SI card protocol: SI8 punches read from the owner area, half-read cards filed, clock-skewed punches lost](si-card-protocol.md) | 2026-11-25 |
 | [SI card protocol: what package 6 left out](si-card-protocol-followups.md) | 2026-11-25 |
 | [Venue shipping, checkout and the lease lost or duplicated data](venue-shipping-and-lease.md) | 2026-11-25 |

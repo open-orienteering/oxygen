@@ -29,6 +29,7 @@ import { recentCardToKioskMessage } from "../lib/kiosk-channel";
 import { shouldProcessStandaloneCard } from "../lib/kiosk-standalone-routing";
 import { getClubLogoUrl } from "../lib/club-logo";
 import { SiCardAnimation } from "../components/SiCardAnimation";
+import { useEventClock } from "../hooks/useEventClock";
 import { useStationSync } from "../hooks/useStationSync";
 import { useEventQueue } from "../hooks/useEventQueue";
 import { KioskAccessGate } from "../components/KioskAccessGate";
@@ -1247,14 +1248,12 @@ function PreStartScreen({
     { enabled: card.cardNumber > 0 },
   );
 
-  // Server time for countdown
-  const serverTime = trpc.race.serverTime.useQuery(undefined, {
-    refetchInterval: 1000,
-  });
+  // Event clock for the countdown (ticks locally, event time zone).
+  const clock = useEventClock();
 
   const runner = lookup.data?.found ? lookup.data.runner : null;
   const course = lookup.data?.found ? lookup.data.course : null;
-  const currentTimeDeci = serverTime.data?.deciseconds ?? 0;
+  const currentTimeDeci = clock.currentDs;
 
   // Clear/check verification
   const hasCheck = card.checkTime != null && card.checkTime > 0;

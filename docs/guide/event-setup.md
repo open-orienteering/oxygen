@@ -6,6 +6,15 @@ Creating an event, Eventor import, classes, controls, clubs, runners and the sta
 
 The event page is mission control for external integrations. Everything the Swedish orienteering stack relies on is wired into one screen:
 
+- **Zero time and time zone** — every race time is counted from the event's
+  zero time. The new-event dialog asks for the planned first start (default
+  10:00) and sets the zero time one hour earlier; a start exactly on the zero
+  time cannot be stored, so keep it before the first start. Both the zero time
+  and the time zone (which sets the clock of the start and finish stations,
+  the kiosk and the start screen) are under Event Info. Moving the zero time
+  keeps every drawn start at its clock time; it locks once the race has
+  finish times, punches or read cards, and while the event is checked out to
+  a venue. See [system/registration-and-readout.md](../system/registration-and-readout.md), "Time model".
 - **Editable event type** — choose a competition, training, weekly course, or
   custom label during creation and change it later under Event Info. Eventor
   initializes the label on import but later syncs cannot overwrite it; raw
@@ -73,6 +82,13 @@ The draw engine allocates start times with configurable methods:
 - **Random** — simple random allocation within each class.
 - **Seeded** — preserves a specific order (e.g. ranking-based).
 - **Simultaneous** — mass start for all runners in a class.
+
+The first start defaults to one hour after the zero time. Times are typed as
+clock times (`10:00`, `10:00:00`) and intervals as minutes:seconds (`1:30`) or
+whole minutes (`2`); a value that does not parse is shown in red and blocks the
+preview, and every class except a mass start needs an interval of at least one
+second. The preview refuses to apply a draw with a start exactly on the zero
+time or one that runs past midnight, and says why.
 
 The graphical timeline shows how classes are distributed across corridors (parallel start lanes) and time. Each bar covers the class's whole start window, up to and including the last runner's slot, so consecutive classes in a corridor meet edge to edge. Classes on the same course share a corridor and run one after another. Drag class bars to rearrange the schedule and re-run the draw without losing context.
 

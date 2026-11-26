@@ -100,7 +100,9 @@ export function isFinished(
   finishTime: number,
 ): boolean {
   if (RACE_RESULT_STATUSES.includes(status)) return true;
-  return status === RunnerStatus.Unknown && finishTime > 0;
+  // `!== 0`, not `> 0`: callers pass stored relative times too, which are
+  // negative for a finish before ZeroTime (RES-05).
+  return status === RunnerStatus.Unknown && finishTime !== 0;
 }
 
 /** i18n translation keys produced by {@link runnerStatusKey} */
@@ -1174,6 +1176,11 @@ export interface DrawPreviewClass {
 export interface DrawPreviewResult {
   classes: DrawPreviewClass[];
   warnings: string[];
+  /**
+   * Problems that make Apply impossible (a start exactly at ZeroTime, starts
+   * past 24:00). `execute` refuses while any is present.
+   */
+  blockers: string[];
   /**
    * The seed the draw was made with. `execute` takes it back so the applied
    * draw is exactly the previewed one (RES-15).

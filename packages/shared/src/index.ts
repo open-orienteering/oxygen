@@ -1,4 +1,5 @@
 export * from "./types.js";
+export * from "./time.js";
 export * from "./constants.js";
 export * from "./control-display.js";
 export * from "./readout.js";
