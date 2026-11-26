@@ -344,5 +344,12 @@
   "syncSkippedNoId_other": "{{count}} anmälningar hoppades över eftersom Eventor saknade person- och anmälnings-id",
   "syncSkippedResultsOnly_one": "{{count}} person som bara finns i Eventors resultat lades inte till (resultat hämtas bara vid första importen)",
   "syncSkippedResultsOnly_other": "{{count}} personer som bara finns i Eventors resultat lades inte till (resultat hämtas bara vid första importen)",
-  "syncPreviewRequired": "Synkningen måste förhandsgranskas innan den tillämpas. Ladda om sidan och förhandsgranska igen."
+  "syncPreviewRequired": "Synkningen måste förhandsgranskas innan den tillämpas. Ladda om sidan och förhandsgranska igen.",
+  "zeroTime": "Nolltid",
+  "timeZone": "Tidszon",
+  "zeroTimeHelp": "Alla tävlingstider räknas från nolltiden. Lägg den före första start: en start exakt på nolltiden kan inte sparas. Lottade starttider behålls när nolltiden flyttas.",
+  "zeroTimeLockedHelp": "Nolltiden är låst när tävlingen har tidsdata (eller tävlingen är utcheckad till en arena). Tidszonen kan fortfarande ändras; den styr stationernas klocka.",
+  "timeSettingsSaved": "Tidsinställningar sparade",
+  "plannedFirstStart": "Planerad första start",
+  "plannedFirstStartHelp": "Nolltiden sätts en timme tidigare. Båda kan ändras i tävlingsinställningarna före tävlingen."
 }

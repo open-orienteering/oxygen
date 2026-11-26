@@ -51,13 +51,14 @@ export async function createTestEvent(
       date: new Date("2026-01-01T00:00:00Z"),
       kind: "competition",
     },
-    select: { id: true, nameId: true, zeroTime: true, date: true, kioskKey: true },
+    select: { id: true, nameId: true, zeroTime: true, timeZone: true, date: true, kioskKey: true },
   });
 
   const event: EventRef = {
     id: row.id,
     nameId: row.nameId,
     zeroTime: row.zeroTime,
+    timeZone: row.timeZone,
     date: row.date,
     kioskKey: row.kioskKey,
   };

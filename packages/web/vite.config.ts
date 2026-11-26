@@ -21,6 +21,9 @@ const APP_VERSION = process.env.OXYGEN_VERSION || `${PACKAGE_VERSION}-dev`;
 // https://vite.dev/config/
 export default defineConfig({
   test: {
+    // Browsers at a Swedish event run in Europe/Stockholm, CI in UTC: pin it
+    // so a local-time versus UTC mix-up fails everywhere (BLD-14).
+    env: { TZ: "Europe/Stockholm" },
     coverage: {
       provider: "v8",
       reporter: ["text", "html", "lcov"],

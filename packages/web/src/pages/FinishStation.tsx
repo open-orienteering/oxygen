@@ -12,6 +12,7 @@ import type { FinishReceiptData } from "../lib/receipt-printer/index.js";
 import { useLookupByCard, useRecentActivity } from "../lib/offline/projection-reads";
 import { fetchLogoRaster } from "../lib/receipt-printer/index.js";
 import { getClubLogoUrl } from "../lib/club-logo";
+import { useEventClock } from "../hooks/useEventClock";
 import { useStationSync } from "../hooks/useStationSync";
 import { useOnlineStatus } from "../hooks/useOnlineStatus";
 import { useQueryClient } from "@tanstack/react-query";
@@ -33,9 +34,8 @@ export function FinishStation() {
   const utils = trpc.useUtils();
   const printer = usePrinter();
 
-  const serverTime = trpc.race.serverTime.useQuery(undefined, {
-    refetchInterval: 10000,
-  });
+  // The event's clock (event time zone, ticks locally, works offline).
+  const clock = useEventClock();
 
   // Competition nameId — used for projection reads + event emission.
   const nameId = window.location.pathname.match(/^\/([^/]+)/)?.[1] ?? "";
@@ -252,10 +252,9 @@ export function FinishStation() {
     const hasFinish = runner.finishTime > 0 || confirmReplace;
     if (hasFinish && !fromButton) return;
 
-    // One reading of the clock, taken at the key press, for every path below.
-    const now = new Date();
-    const deciseconds =
-      (now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()) * 10;
+    // One reading of the event clock, taken at the key press, for every
+    // path below (whole seconds, like a manual stamp always was).
+    const deciseconds = Math.floor(clock.nowDs() / 10) * 10;
     busyRef.current = true;
     pendingRunnerRef.current = { id: runner.id, name: runner.name, cardNo: runner.cardNo };
 
@@ -288,7 +287,7 @@ export function FinishStation() {
     [printer, buildReceiptData],
   );
 
-  const currentTimeDeci = serverTime.data?.deciseconds ?? 0;
+  const currentTimeDeci = clock.currentDs;
 
   return (
     <div className="max-w-2xl mx-auto">

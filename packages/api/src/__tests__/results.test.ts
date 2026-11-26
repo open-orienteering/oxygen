@@ -305,3 +305,21 @@ describe("computePosition", () => {
     expect(result!.rank).toBe(2);
   });
 });
+
+describe("a finish before a daytime start (RES-16)", () => {
+  const H = 36_000;
+  it("is not ranked in the result list", () => {
+    const wrong = makeRunner(1, RunnerStatus.OK, 11 * H, 10 * H + 9_000);
+    const right = makeRunner(2, RunnerStatus.OK, 10 * H, 10 * H + 24_000);
+    const map = computeClassPlacements([wrong, right], false);
+    expect(map.get(2)).toMatchObject({ place: 1, runningTime: 24_000, timeBehind: 0 });
+    expect(map.get(1)?.place).toBe(0);
+  });
+  it("does not count as faster on the receipt", () => {
+    const runners: ClassRunnerForPosition[] = [
+      { name: "Wrong", clubId: 1, startTime: 11 * H, finishTime: 10 * H + 9_000 },
+      { name: "Right", clubId: 1, startTime: 10 * H, finishTime: 10 * H + 24_000 },
+    ];
+    expect(computePosition(runners, "Right", 24_000, 1)).toMatchObject({ rank: 1, total: 1 });
+  });
+});

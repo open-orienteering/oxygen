@@ -344,5 +344,12 @@
   "syncSkippedNoId_other": "{{count}} entries skipped because Eventor gave no person or entry id",
   "syncSkippedResultsOnly_one": "{{count}} person who is only in Eventor's results was not added (results are taken at the first import only)",
   "syncSkippedResultsOnly_other": "{{count}} people who are only in Eventor's results were not added (results are taken at the first import only)",
-  "syncPreviewRequired": "The sync must be previewed before it is applied. Reload the page and preview again."
+  "syncPreviewRequired": "The sync must be previewed before it is applied. Reload the page and preview again.",
+  "zeroTime": "Zero time",
+  "timeZone": "Time zone",
+  "zeroTimeHelp": "All race times are counted from the zero time. Keep it before the first start: a start exactly at the zero time cannot be stored. Moving it keeps drawn start times.",
+  "zeroTimeLockedHelp": "The zero time is fixed now that the race has timing data (or the event is checked out to a venue). The time zone can still change; it sets the clock of the stations.",
+  "timeSettingsSaved": "Time settings saved",
+  "plannedFirstStart": "Planned first start",
+  "plannedFirstStartHelp": "Sets the zero time one hour earlier. Both can be changed in the event settings before the race."
 }

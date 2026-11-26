@@ -2,7 +2,7 @@ import { useState, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { trpc } from "../lib/trpc";
-import { formatMeosTime, parseMeosTime, type ClassSummary } from "@oxygen/shared";
+import { formatMeosTime, parseDuration, type ClassSummary } from "@oxygen/shared";
 import { useNumericSearchParam } from "../hooks/useSearchParam";
 import { SortHeader } from "../components/SortHeader";
 import { useSort } from "../hooks/useSort";
@@ -99,13 +99,20 @@ export function ClassesPage() {
 
   const handleApplyBulk = () => {
     if (bulkValue === "") return;
+    // Max time is a duration (WEB-40): "2:30" is 2 h 30 min, "150" is
+    // 150 min. An unparseable value is refused, never stored as 0.
+    const maxTimeDs = bulkField === "maxTime" ? parseDuration(bulkValue, "hm") : null;
+    if (bulkField === "maxTime" && maxTimeDs === null) {
+      window.alert(t("invalidMaxTime"));
+      return;
+    }
     const fieldLabel = bulkField === "fee" ? t("fee").toLowerCase() : bulkField === "maxTime" ? t("maxTime").toLowerCase() : bulkField === "freeStart" ? t("freeStart").toLowerCase() : bulkField === "noTiming" ? t("noTiming").toLowerCase() : t("allowQuickEntry").toLowerCase();
-    const valueLabel = bulkField === "fee" ? `${bulkValue} kr` : bulkField === "maxTime" ? bulkValue : bulkValue === "1" ? t("yes") : t("no");
+    const valueLabel = bulkField === "fee" ? `${bulkValue} kr` : bulkField === "maxTime" ? formatMeosTime(maxTimeDs ?? 0) : bulkValue === "1" ? t("yes") : t("no");
     if (!window.confirm(t("bulkConfirm", { field: fieldLabel, value: valueLabel, count: selection.count }))) return;
 
     const data: { classFee?: number; freeStart?: boolean; noTiming?: boolean; allowQuickEntry?: boolean; maxTime?: number } = {};
     if (bulkField === "fee") data.classFee = parseInt(bulkValue, 10) || 0;
-    else if (bulkField === "maxTime") data.maxTime = bulkValue.trim() ? parseMeosTime(bulkValue) : 0;
+    else if (bulkField === "maxTime") data.maxTime = maxTimeDs ?? 0;
     else if (bulkField === "freeStart") data.freeStart = bulkValue === "1";
     else if (bulkField === "noTiming") data.noTiming = bulkValue === "1";
     else if (bulkField === "allowQuickEntry") data.allowQuickEntry = bulkValue === "1";
@@ -454,7 +461,8 @@ export function ClassesPage() {
             type="text"
             value={bulkValue}
             onChange={(e) => setBulkValue(e.target.value)}
-            placeholder="H:MM:SS"
+            placeholder="H:MM"
+            data-testid="classes-bulk-max-time"
             className="w-28 px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 tabular-nums"
           />
         ) : (
@@ -679,6 +687,7 @@ function ClassInlineDetail({ classId }: { classId: number }) {
   const [editHighAge, setEditHighAge] = useState<string | null>(null);
   const [editFee, setEditFee] = useState<string | null>(null);
   const [editMaxTime, setEditMaxTime] = useState<string | null>(null);
+  const maxTimeInvalid = editMaxTime !== null && editMaxTime.trim() !== "" && parseDuration(editMaxTime, "hm") === null;
   const [editCourseIds, setEditCourseIds] = useState<number[] | null>(null);
 
   if (detail.isLoading) {
@@ -880,16 +889,28 @@ function ClassInlineDetail({ classId }: { classId: number }) {
               onChange={(e) => setEditMaxTime(e.target.value)}
               onBlur={() => {
                 if (editMaxTime !== null) {
-                  const ds = editMaxTime.trim() ? parseMeosTime(editMaxTime) : 0;
+                  // A duration (WEB-40): empty clears the limit; an
+                  // unparseable value stays in the field, unsaved.
+                  const ds = editMaxTime.trim() ? parseDuration(editMaxTime, "hm") : 0;
+                  if (ds === null) return;
                   if (ds !== d.maxTime) {
                     handleSave("maxTime", ds);
                   }
                 }
                 setEditMaxTime(null);
               }}
-              className="w-36 px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 tabular-nums"
-              placeholder="H:MM:SS"
+              data-testid="class-max-time"
+              aria-invalid={maxTimeInvalid || undefined}
+              className={`w-36 px-3 py-1.5 border rounded-lg text-sm bg-white focus:outline-none focus:ring-2 tabular-nums ${
+                maxTimeInvalid ? "border-red-400 focus:ring-red-400" : "border-slate-200 focus:ring-blue-500"
+              }`}
+              placeholder="H:MM"
             />
+            {editMaxTime !== null && editMaxTime.trim() !== "" && (
+              <p className={`text-xs mt-0.5 ${maxTimeInvalid ? "text-red-600" : "text-slate-500"}`} data-testid="class-max-time-echo">
+                {maxTimeInvalid ? t("invalidMaxTime") : formatMeosTime(parseDuration(editMaxTime, "hm") ?? 0)}
+              </p>
+            )}
           </div>
 
           {/* Class type (read-only, shown only if set) */}

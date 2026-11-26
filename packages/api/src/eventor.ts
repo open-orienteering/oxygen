@@ -1,6 +1,6 @@
 import { XMLParser, XMLBuilder } from "fast-xml-parser";
 import AdmZip from "adm-zip";
-import { type EventorEnvironment } from "@oxygen/shared";
+import { type EventorEnvironment, runningTimeDs } from "@oxygen/shared";
 
 const EVENTOR_URLS: Record<EventorEnvironment, string> = {
   prod: "https://eventor.orientering.se/api/",
@@ -1429,8 +1429,8 @@ export async function uploadResults(
           // returns tComputedTime including NoTiming/BadNoTiming deductions
           // (oImportExport.cpp:2325 calls the adjusted accessor).
           const adjustedRaw =
-            hasTiming && r.status === 1 && r.finishTime && r.startTime && r.finishTime > r.startTime
-              ? Math.max(0, r.finishTime - r.startTime - (r.runningTimeAdjustment ?? 0))
+            hasTiming && r.status === 1 && r.finishTime && r.startTime
+              ? Math.max(0, runningTimeDs(r.startTime, r.finishTime) - (r.runningTimeAdjustment ?? 0))
               : 0;
           const runningTime = adjustedRaw > 0 ? Math.round(adjustedRaw / 10) : undefined;
 

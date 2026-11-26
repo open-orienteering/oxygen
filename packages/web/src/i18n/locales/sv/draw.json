@@ -87,5 +87,8 @@
   "confirmApply": "Ersätt och verkställ",
   "stalePreview": "Löpare eller klasser har ändrats sedan förhandsgranskningen, så den visar inte längre vad som skulle skrivas. Förhandsgranska igen.",
   "forceStartedNoCount": "Lotta även om löpare som har startat eller gått i mål",
-  "confirmForceNoCount": "Detta skriver även om löpare som har startat eller gått i mål; deras löptider ändras."
+  "confirmForceNoCount": "Detta skriver även om löpare som har startat eller gått i mål; deras löptider ändras.",
+  "invalidFirstStart": "Första start måste vara en klocktid, till exempel 10:00 eller 10:00:00.",
+  "invalidDuration": "Tider anges i minuter (2) eller minuter:sekunder (1:30).",
+  "invalidInterval": "\"{{className}}\" behöver ett startintervall på minst en sekund (eller masstart)."
 }

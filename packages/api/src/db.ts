@@ -49,6 +49,8 @@ export interface EventRef {
   nameId: string;
   /** Deciseconds since midnight, the reference point for all race times. */
   zeroTime: number;
+  /** IANA time zone of the venue — present when resolved via `resolveEvent`. */
+  timeZone?: string;
   /** Calendar date — present when resolved via `resolveEvent`. */
   date?: Date;
   /** Kiosk/start-screen token; null until generated. */
@@ -62,13 +64,14 @@ export interface EventRef {
 export async function resolveEvent(nameId: string): Promise<EventRef | null> {
   const row = await prisma().event.findUnique({
     where: { nameId },
-    select: { id: true, nameId: true, zeroTime: true, removed: true, date: true, kioskKey: true },
+    select: { id: true, nameId: true, zeroTime: true, timeZone: true, removed: true, date: true, kioskKey: true },
   });
   if (!row || row.removed) return null;
   return {
     id: row.id,
     nameId: row.nameId,
     zeroTime: row.zeroTime,
+    timeZone: row.timeZone,
     date: row.date,
     kioskKey: row.kioskKey,
   };

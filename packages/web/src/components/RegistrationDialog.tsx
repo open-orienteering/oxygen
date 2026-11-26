@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
-import { parseMeosTime } from "@oxygen/shared";
+import { parseClockTime } from "@oxygen/shared";
 import { SearchableSelect } from "./SearchableSelect";
 import { ClubLogo } from "./ClubLogo";
 import { useDeviceManager } from "../context/DeviceManager";
@@ -587,6 +587,9 @@ export function RegistrationDialog() {
 
     if (!name.trim()) { setError(t("nameRequired")); return; }
     if (!effectiveClassId) { setError(t("classRequired")); return; }
+    // Strict clock time (RES-13): "10:30" is 10:30:00, a half-typed value is refused.
+    const startDs = startTime.trim() ? parseClockTime(startTime) : 0;
+    if (startDs === null) { setError(t("invalidClockTime")); return; }
 
     const classFee = classes.data?.classes.find((c) => c.id === effectiveClassId)?.classFee ?? 0;
     const rentalFee = isRentalCard ? (cardFeeQuery.data?.cardFee ?? 0) : 0;
@@ -621,7 +624,7 @@ export function RegistrationDialog() {
             clubName: selectedClubName,
             eventorClubId: selectedClub?.extId ?? undefined,
             cardNo: cn,
-            startTime: st ? parseMeosTime(st) : 0,
+            startTime: startDs,
             birthYear: birthYear ? parseInt(birthYear, 10) : 0,
             sex,
             phone,
@@ -631,9 +634,13 @@ export function RegistrationDialog() {
             cardFee: rentalFee > 0 ? rentalFee : 0,
           });
           registeredOnline = true;
-        } catch {
+        } catch (err) {
           // Server error while online — don't silently queue, show the error
-          throw new Error(t("registrationFailed"));
+          // (a start on the zero time is refused with its own message).
+          const msg = err instanceof Error && err.message.startsWith("ZERO_TIME_COLLISION")
+            ? err.message.replace(/^[A-Z_]+: /, "")
+            : t("registrationFailed");
+          throw new Error(msg, { cause: err });
         }
       } else {
         // Offline — queue the registration event
@@ -644,7 +651,7 @@ export function RegistrationDialog() {
           classId: effectiveClassId,
           clubId: clubId || 0,
           cardNo: cn,
-          startTime: st ? parseMeosTime(st) : 0,
+          startTime: startDs,
         });
       }
 

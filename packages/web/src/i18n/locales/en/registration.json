@@ -50,7 +50,6 @@
   "registrationConfig": "Registration Settings",
   "allowOnSiteRegistration": "Allow on-site registration",
   "defaultPaymentMode": "Default payment method",
-
   "waitingForCard": "Waiting for SI card...",
   "insertCardOrEnterManually": "Insert a card into the reader, or enter a card number manually",
   "cardNumber": "Card number",
@@ -82,5 +81,6 @@
   "clubSource": "Club",
   "runnerDbSource": "Runner DB",
   "duplicateCardWarning": "Card {{cardNo}} is already assigned to {{name}} ({{className}})",
-  "stickyMode": "Sticky mode"
+  "stickyMode": "Sticky mode",
+  "invalidClockTime": "Start time must be a clock time such as 10:30 or 10:30:15."
 }

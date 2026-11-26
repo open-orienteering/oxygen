@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, kioskOrRaceOperateProcedure, raceOperateRaceProcedure, raceOperateProcedure } from "../trpc.js";
-import { toAbsolute, toRelative } from "../timeConvert.js";
+import { toAbsolute, toRelative, toRelativeChecked, hasTime, eventTimeZone } from "../timeConvert.js";
+import { timeOfDayDs, runningTimeDs } from "@oxygen/shared";
 import {
   runnerStatusToValue,
   valueToRunnerStatus,
@@ -81,15 +82,14 @@ export const raceRouter = router({
 
   /**
    * Server clock — returned both as ms-since-epoch (`now`) and as
-   * deciseconds-since-midnight (`deciseconds`, in the event's local
-   * timezone) for stations that want one or the other.
+   * deciseconds since midnight in the event's own time zone
+   * (`deciseconds`), with that zone (`timeZone`). Stations poll it now and
+   * then and tick locally from the offset (`useEventClock`).
    */
-  serverTime: kioskOrRaceOperateProcedure.query(() => {
-    const d = new Date();
-    const deciseconds =
-      (d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds()) * 10 +
-      Math.floor(d.getMilliseconds() / 100);
-    return { now: d.getTime(), deciseconds };
+  serverTime: kioskOrRaceOperateProcedure.query(({ ctx }) => {
+    const now = Date.now();
+    const timeZone = eventTimeZone(ctx.event);
+    return { now, deciseconds: timeOfDayDs(now, timeZone), timeZone };
   }),
 
   /** Most-recent finishers, for the activity feed. */
@@ -105,7 +105,7 @@ export const raceRouter = router({
         where: {
           eventId: ctx.event.id,
           removed: false,
-          finishTime: { gt: 0 },
+          finishTime: { not: 0 },
         },
         orderBy: { updatedAt: "desc" },
         take: limit,
@@ -115,10 +115,7 @@ export const raceRouter = router({
       return finishers.map((r) => {
         const startAbs = toAbsolute(r.startTime, zeroTime);
         const finishAbs = toAbsolute(r.finishTime, zeroTime);
-        const runningTime =
-          startAbs > 0 && finishAbs > 0
-            ? Math.max(0, finishAbs - startAbs)
-            : 0;
+        const runningTime = runningTimeDs(startAbs, finishAbs);
         return {
           id: r.seq,
           runnerId: r.seq,
@@ -206,8 +203,8 @@ export const raceRouter = router({
       // running time?". Postgres can answer both halves of that
       // question with a parameterised filtered count using the
       // existing `(event_id, class_id, removed)` index path, so we
-      // push the computation down: one count for the rank, one for
-      // the total. Two trivial index-only counts beat a 5 000-row
+      // push the computation down: one query counts the rank and the
+      // total. A filtered count on the class index beats a 5 000-row
       // fetch + JS sort on every kiosk readout.
       let position: { rank: number; total: number } | null = null;
       if (
@@ -215,43 +212,36 @@ export const raceRouter = router({
         r.timing.runningTime > 0 &&
         runner.classId
       ) {
-        const myRunningTime =
-          (r.timing.finishTime > 0 ? r.timing.finishTime : 0) -
-          (r.timing.startTime > 0 ? r.timing.startTime : 0);
+        // Absolute times; a run across midnight still counts (RES-16).
+        const myRunningTime = runningTimeDs(r.timing.startTime, r.timing.finishTime);
 
         if (myRunningTime > 0) {
-          // OK-status, valid-time peers in the same class.
-          const baseWhere = {
-            eventId: ctx.event.id,
-            removed: false,
-            classId: runner.classId,
-            status: valueToRunnerStatus(1),
-            finishTime: { gt: 0 },
-            startTime: { gt: 0 },
-          } as const;
-
-          const [strictlyFaster, total] = await Promise.all([
-            // Rank = strictly-faster peers + 1 (ties share a rank).
-            // `finishTime - startTime` isn't directly indexed; in the
-            // common case where `startTime` is the same across the
-            // class (mass start or per-class draw) the planner can
-            // still use the (event_id, class_id, removed) index and
-            // filter on the projection cheaply.
-            ctx.db.$queryRaw<Array<{ count: bigint }>>`
-              SELECT COUNT(*)::bigint AS count
+          // OK-status peers in the same class with a running time. The CASE
+          // is runningTimeDs in SQL: a wrap past midnight counts up to 12 h,
+          // and a finish before a daytime start has no time (not ranked).
+          const counts = await ctx.db.$queryRaw<Array<{ faster: bigint; total: bigint }>>`
+            SELECT
+              COUNT(*) FILTER (WHERE rt BETWEEN 1 AND ${myRunningTime} - 1)::bigint AS faster,
+              COUNT(*) FILTER (WHERE rt >= 1)::bigint AS total
+            FROM (
+              SELECT CASE
+                       WHEN finish_time >= start_time THEN finish_time - start_time
+                       WHEN finish_time - start_time + 864000 <= 432000 THEN finish_time - start_time + 864000
+                       ELSE 0
+                     END AS rt
               FROM oxygen.runners
               WHERE event_id = ${ctx.event.id}
                 AND class_id = ${runner.classId}::uuid
                 AND removed = false
                 AND status = 'ok'::oxygen.runner_status
-                AND finish_time > 0
-                AND start_time > 0
-                AND (finish_time - start_time) < ${myRunningTime}
-            `,
-            ctx.db.runner.count({ where: baseWhere }),
-          ]);
-
-          const rank = Number(strictlyFaster[0]?.count ?? 0n) + 1;
+                -- Relative times: negative before ZeroTime (RES-05).
+                AND finish_time <> 0
+                AND start_time <> 0
+            ) peers
+          `;
+          const total = Number(counts[0]?.total ?? 0n);
+          // Rank = strictly-faster peers + 1 (ties share a rank).
+          const rank = Number(counts[0]?.faster ?? 0n) + 1;
           position = total > 0 ? { rank, total } : null;
         }
       }
@@ -349,7 +339,7 @@ export const raceRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "Runner not found" });
       }
       const zeroTime = ctx.event.zeroTime;
-      const finishRel = finishAbs > 0 ? toRelative(finishAbs, zeroTime) : 0;
+      const finishRel = finishAbs > 0 ? toRelativeChecked(finishAbs, zeroTime) : 0;
       if (r.finishTime !== 0 && finishRel !== r.finishTime && !input.allowOverwrite) {
         throw new TRPCError({
           code: "CONFLICT",

@@ -4,6 +4,12 @@
  */
 
 import { RunnerStatus } from "./types.js";
+import { runningTimeDs } from "./time.js";
+
+// All start and finish times here are ABSOLUTE deciseconds since midnight
+// (0 = no time). Never pass stored ZeroTime-relative values: a start before
+// ZeroTime is negative there and would count as "no time" (RES-05). A finish
+// earlier than the start is a run across midnight (RES-16).
 
 // ─── Position calculation for receipts ──────────────────────
 
@@ -40,14 +46,15 @@ export function computePosition(
 ): PositionResult | null {
   if (selfRunningTime <= 0) return null;
 
+  // A finish before a daytime start has no running time (0): not ranked.
   const withTimes = runners
-    .filter((r) => r.finishTime > 0 && r.startTime > 0)
+    .filter((r) => r.finishTime > 0 && r.startTime > 0 && runningTimeDs(r.startTime, r.finishTime) > 0)
     .map((r) => ({
       name: r.name,
       clubId: r.clubId,
       runningTime: Math.max(
         0,
-        r.finishTime - r.startTime - (r.runningTimeAdjustment ?? 0),
+        runningTimeDs(r.startTime, r.finishTime) - (r.runningTimeAdjustment ?? 0),
       ),
     }))
     .sort((a, b) => a.runningTime - b.runningTime);
@@ -107,7 +114,7 @@ export function computeClassPlacements(
     if (r.finishTime <= 0 || r.startTime <= 0) return 0;
     return Math.max(
       0,
-      r.finishTime - r.startTime - (r.runningTimeAdjustment ?? 0),
+      runningTimeDs(r.startTime, r.finishTime) - (r.runningTimeAdjustment ?? 0),
     );
   };
 
@@ -116,7 +123,9 @@ export function computeClassPlacements(
       (r) =>
         r.status === RunnerStatus.OK &&
         r.finishTime > 0 &&
-        r.startTime > 0,
+        r.startTime > 0 &&
+        // A finish before a daytime start has no running time: not ranked.
+        runningTimeDs(r.startTime, r.finishTime) > 0,
     )
     .map((r) => ({ ...r, runningTime: adjustedRunningTime(r) }))
     .sort((a, b) => a.runningTime - b.runningTime);

@@ -74,7 +74,16 @@ export interface PunchRecordedPayload {
   cardNo: number;
   controlCode: number;
   time: number;
+  /**
+   * Where the punch came from (`manual`, `online_input`, `backup_memory`…).
+   * `backup_memory` with `backupRow` is an imported backup row (stored as
+   * evidence, not matched); with `pushedFrom` it is the pushed mirror.
+   */
   origin?: string;
+  /** For a pushed backup punch: the id of the backup row it mirrors (RES-08). */
+  pushedFrom?: string;
+  /** An imported backup-memory row: evidence only until pushed (RES-08). */
+  backupRow?: boolean;
   /**
    * The origin node's punch row UUID. The applying node inserts it verbatim
    * so later `punch.removed` / `punch.updated` entries can address the row

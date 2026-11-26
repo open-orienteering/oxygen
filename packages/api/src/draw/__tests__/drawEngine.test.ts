@@ -152,3 +152,42 @@ describe("computeDraw", () => {
     );
   });
 });
+
+describe("draw blockers (package 8: RES-04, RES-16)", () => {
+  const NINE = 324_000;
+  it("refuses a start exactly at ZeroTime", () => {
+    const res = computeDraw(
+      { ...inputs([klass(1, 3)]), zeroTime: NINE },
+      [{ classId: 1, method: "simultaneous", interval: 0 }],
+      { ...settings, firstStart: NINE },
+      1,
+    );
+    expect(res.blockers).toHaveLength(1);
+    expect(res.blockers[0]).toMatch(/ZERO_TIME_COLLISION.*09:00:00/);
+  });
+
+  it("refuses the leading runner of a stagger landing on ZeroTime", () => {
+    const res = computeDraw(
+      { ...inputs([klass(1, 3)]), zeroTime: TEN },
+      configs([1]),
+      settings,
+      1,
+    );
+    expect(res.blockers.join(" ")).toMatch(/ZERO_TIME_COLLISION/);
+  });
+
+  it("refuses starts at or past 24:00", () => {
+    const res = computeDraw(
+      inputs([klass(1, 4)]),
+      [{ classId: 1, method: "random", interval: 30 * MIN }],
+      { ...settings, firstStart: 23 * 36_000 },
+      1,
+    );
+    expect(res.blockers.join(" ")).toMatch(/PAST_MIDNIGHT/);
+  });
+
+  it("has no blockers for an ordinary draw", () => {
+    const res = computeDraw({ ...inputs([klass(1, 5)]), zeroTime: NINE }, configs([1]), settings, 1);
+    expect(res.blockers).toEqual([]);
+  });
+});

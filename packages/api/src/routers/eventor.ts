@@ -1624,8 +1624,9 @@ export const eventorRouter = router({
           ctx.db.card.findMany({
             where: { eventId: ctx.event.id, removed: false },
           }),
+          // Backup-memory rows count only through their pushed mirror (RES-08).
           ctx.db.punch.findMany({
-            where: { eventId: ctx.event.id, removed: false },
+            where: { eventId: ctx.event.id, removed: false, source: { not: "backup_memory" } },
             orderBy: { time: "asc" },
           }),
         ],
@@ -1717,8 +1718,10 @@ export const eventorRouter = router({
             return {
               id: idx,
               status: runnerStatusToValue(r.status),
-              startTime: r.startTime,
-              finishTime: r.finishTime,
+              // Absolute: stored relative times are negative before
+              // ZeroTime and would get no place (RES-05).
+              startTime: toAbsolute(r.startTime, event.zeroTime),
+              finishTime: toAbsolute(r.finishTime, event.zeroTime),
               runningTimeAdjustment: adjustmentByRunner.get(r.id) ?? 0,
             };
           }),

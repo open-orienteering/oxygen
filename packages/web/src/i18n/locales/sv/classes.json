@@ -77,5 +77,6 @@
   "distributeRandom": "Slumpvis",
   "distributeOnlyUnassigned": "Bara löpare utan variant",
   "distributeConfirm": "Fördela om varianterna för alla löpare i klassen? Löpare som redan har sprungit behåller sina.",
-  "variantsDistributed": "{{changed}} löpare ändrade, {{skipped}} som redan har sprungit behöll sina"
+  "variantsDistributed": "{{changed}} löpare ändrade, {{skipped}} som redan har sprungit behöll sina",
+  "invalidMaxTime": "Maxtid anges som timmar:minuter (2:30) eller minuter (150)."
 }

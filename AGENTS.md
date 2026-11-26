@@ -163,6 +163,13 @@ shaped the original layout was retired in May 2026
   happens at the boundary via `toAbsolute` / `toRelative` in
   `packages/api/src/timeConvert.ts`. Internal calculations stay in
   deciseconds.
+- Relative `0` is "no time" and a start before ZeroTime is negative: test a
+  stored time with `hasTime()` / `{ not: 0 }`, never `> 0`. Human-entered
+  times go through `toRelativeChecked` (a time exactly at ZeroTime is
+  refused). Running times use `runningTimeDs` (midnight-safe).
+- "Now" and dates are in the event's zone (`events.time_zone`): use
+  `eventNowDs` / `timeOfDayDs`, never `Date#getHours` (the images run in UTC).
+  See `docs/system/registration-and-readout.md`, "Time model".
 - `cards.punches_raw` stores the legacy MeOS punch-list format
   `code-seconds.tenths;...` so the `parsePunches` round-trip is stable
   with the kiosk / matcher code that has not been ported yet.

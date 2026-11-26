@@ -114,7 +114,8 @@ export function hasLocalActivity(r: {
 }): boolean {
   return (
     r.cardId != null ||
-    r.finishTime > 0 ||
+    // Stored relative: a finish before ZeroTime is negative (RES-05).
+    r.finishTime !== 0 ||
     !["unknown", "no_timing", "cancel"].includes(r.status)
   );
 }
@@ -758,7 +759,7 @@ export function planRunnerSync(input: {
         // Moved at the desk into a class Eventor does not know: not undone.
         kept = true;
       } else if (m.write && next !== undefined) {
-        if (hasLocalActivity(found) || found.startTime > 0) {
+        if (hasLocalActivity(found) || found.startTime !== 0) {
           c.classChangeBlocked++;
           kept = true;
         } else {

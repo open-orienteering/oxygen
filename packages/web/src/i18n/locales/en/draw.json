@@ -87,5 +87,8 @@
   "confirmApply": "Replace and apply",
   "stalePreview": "Runners or classes changed since the preview, so it no longer shows what Apply would write. Preview again.",
   "forceStartedNoCount": "Also redraw runners who have started or finished",
-  "confirmForceNoCount": "This also rewrites runners who have started or finished; their running times will change."
+  "confirmForceNoCount": "This also rewrites runners who have started or finished; their running times will change.",
+  "invalidFirstStart": "First start must be a clock time such as 10:00 or 10:00:00.",
+  "invalidDuration": "Durations must be minutes (2) or minutes:seconds (1:30).",
+  "invalidInterval": "\"{{className}}\" needs a start interval of at least one second (or a mass start)."
 }

@@ -30,9 +30,9 @@
 import { createHash } from "node:crypto";
 import mysql from "mysql2/promise";
 import { prisma, getSetting, setSetting } from "./db.js";
-import { toAbsolute } from "./timeConvert.js";
+import { toAbsolute, hasTime } from "./timeConvert.js";
 import { runnerStatusToValue } from "./statusConvert.js";
-import { RunnerStatus } from "@oxygen/shared";
+import { RunnerStatus, runningTimeDs } from "@oxygen/shared";
 
 const CONFIG_ENDPOINT =
   "https://liveresultat.orientering.se/configs/getConnectionSettings.php";
@@ -64,8 +64,28 @@ export function mapStatus(oxygenStatus: number, finishTime: number): number {
   if (oxygenStatus === RunnerStatus.DNS) return 1;
   if (oxygenStatus === RunnerStatus.Cancel) return 1;
   if (oxygenStatus === RunnerStatus.NotCompeting) return 9;
-  if (finishTime > 0) return 0;
+  if (hasTime(finishTime)) return 0;
   return 9;
+}
+
+/**
+ * The start row (absolute, centiseconds) and the finish row's elapsed time
+ * (centiseconds) LiveResults gets for a runner, from the stored
+ * ZeroTime-relative start and finish. A start before ZeroTime is negative
+ * when stored and still a start (RES-05); a finish after midnight still
+ * gives the real running time (RES-16).
+ */
+export function liveResultsTimes(
+  startRel: number,
+  finishRel: number,
+  zeroTime: number,
+): { startCenti: number | null; elapsedCenti: number } {
+  const startAbs = toAbsolute(startRel, zeroTime);
+  const finishAbs = toAbsolute(finishRel, zeroTime);
+  return {
+    startCenti: hasTime(startRel) ? startAbs * 10 : null,
+    elapsedCenti: runningTimeDs(startAbs, finishAbs) * 10,
+  };
 }
 
 /**
@@ -418,7 +438,7 @@ export async function syncAll(
       const oxygenStatus = runnerStatusToValue(r.status);
       // Only push runners that have a status or a start row. Unknown +
       // no start time = entry without a draw → skip.
-      if (oxygenStatus === RunnerStatus.Unknown && r.startTime <= 0) continue;
+      if (oxygenStatus === RunnerStatus.Unknown && !hasTime(r.startTime)) continue;
 
       const cls = r.classId ? classById.get(r.classId) : null;
       const className = cls?.name ?? "";
@@ -441,9 +461,10 @@ export async function syncAll(
       stats.runners++;
 
       const lrStatus = mapStatus(oxygenStatus, r.finishTime);
+      const { startCenti, elapsedCenti } = liveResultsTimes(r.startTime, r.finishTime, zeroTime);
 
-      if (r.startTime > 0) {
-        const startAbsoluteCenti = toAbsolute(r.startTime, zeroTime) * 10;
+      if (startCenti !== null) {
+        const startAbsoluteCenti = startCenti;
         await conn.execute(
           `INSERT INTO results (tavid, dbid, control, time, status, changed)
            VALUES (?, ?, 100, ?, 0, Now())
@@ -453,11 +474,8 @@ export async function syncAll(
         stats.results++;
       }
 
-      if (r.finishTime > 0 || oxygenStatus !== RunnerStatus.Unknown) {
-        const elapsed =
-          r.finishTime > 0 && r.startTime > 0
-            ? (r.finishTime - r.startTime) * 10
-            : 0;
+      if (hasTime(r.finishTime) || oxygenStatus !== RunnerStatus.Unknown) {
+        const elapsed = elapsedCenti;
         await conn.execute(
           `INSERT INTO results (tavid, dbid, control, time, status, changed)
            VALUES (?, ?, ?, ?, ?, Now())
@@ -468,7 +486,7 @@ export async function syncAll(
       }
 
       // ── 3. radio splits per runner ──────────────────────────
-      if (r.startTime > 0 && cls?.courseId) {
+      if (hasTime(r.startTime) && cls?.courseId) {
         const radios = radioByCourse.get(cls.courseId) ?? [];
         if (radios.length > 0) {
           const punchCodes = [...new Set(radios.map((rad) => rad.punchCode))];
@@ -477,6 +495,8 @@ export async function syncAll(
               eventId,
               cardNo: r.cardNo ?? -1,
               removed: false,
+              // Backup-memory rows count only through their pushed mirror (RES-08).
+              source: { not: "backup_memory" },
               controlCode: { in: punchCodes },
             },
             select: { controlCode: true, time: true },

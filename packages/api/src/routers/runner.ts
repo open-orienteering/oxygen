@@ -7,7 +7,7 @@ import {
   raceOperateRaceProcedure,
   kioskOrRaceOperateProcedure,
 } from "../trpc.js";
-import { toAbsolute, toRelative, nowMeosDate, nowMeosTime } from "../timeConvert.js";
+import { toAbsolute, toRelative, toRelativeChecked, hasTime, hasStartedByClock, eventNowDs, eventTimeZone, nowMeosDate, nowMeosTime } from "../timeConvert.js";
 import { RunnerStatus, type RunnerDetail, type RunnerInfo, type RunnerEventorDiff } from "@oxygen/shared";
 import {
   runnerStatusToValue,
@@ -346,6 +346,11 @@ export async function updateRunnerFields(
     await assertCardNotTaken(ctx.db, ctx.event.id, cardNo, r.id);
   }
 
+  // A time typed by a person may not land on ZeroTime (RES-04). The journal
+  // replay path (`events.push`) does not check: the origin already did.
+  for (const k of ["startTime", "finishTime"] as const) {
+    if (typeof fields[k] === "number") toRelativeChecked(fields[k] as number, ctx.event.zeroTime);
+  }
   const data = await buildRunnerUpdateData(
     ctx.db,
     ctx.event.id,
@@ -537,9 +542,7 @@ export const runnerRouter = router({
         orderBy: [{ class: { sortIndex: "asc" } }, { startNo: "asc" }],
       });
 
-      const now = new Date();
-      const meosNow =
-        (now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()) * 10;
+      const meosNow = eventNowDs(ctx.event);
 
       const punchCards = await ctx.db.punch.groupBy({
         by: ["cardNo"],
@@ -552,17 +555,14 @@ export const runnerRouter = router({
         ? runners.filter((r) => {
             const status = runnerStatusToValue(r.status);
             const hasPunches = r.cardNo != null && punchCardNos.has(r.cardNo);
-            const hasStartedByTime =
-              r.startTime > 0 &&
-              (r.startTime <= 1 ||
-                meosNow >= toAbsolute(r.startTime, zeroTime));
+            const hasStartedByTime = hasStartedByClock(r.startTime, zeroTime, meosNow);
             const finished =
               status === 1 ||
               status === 3 ||
               status === 4 ||
               status === 5 ||
               status === 6 ||
-              (status === 0 && r.finishTime > 0);
+              (status === 0 && hasTime(r.finishTime));
             if (sf === "not-started")
               return !finished && !hasPunches && !hasStartedByTime;
             if (sf === "in-forest")
@@ -627,7 +627,7 @@ export const runnerRouter = router({
             // Inputs are absolute deciseconds; storage is ZeroTime-relative.
             startTime:
               input.startTime > 0
-                ? toRelative(input.startTime, ctx.event.zeroTime)
+                ? toRelativeChecked(input.startTime, ctx.event.zeroTime)
                 : input.startTime,
             birthYear: input.birthYear,
             sex: input.sex,
@@ -640,7 +640,7 @@ export const runnerRouter = router({
               ? {
                   finishTime:
                     input.finishTime > 0
-                      ? toRelative(input.finishTime, ctx.event.zeroTime)
+                      ? toRelativeChecked(input.finishTime, ctx.event.zeroTime)
                       : input.finishTime,
                 }
               : {}),
@@ -648,8 +648,8 @@ export const runnerRouter = router({
             paidCents: input.paid,
             payMode: input.payMode,
             cardFeeCents: input.cardFee,
-            entryDate: nowMeosDate(),
-            entryTime: nowMeosTime(),
+            entryDate: nowMeosDate(new Date(), eventTimeZone(ctx.event)),
+            entryTime: nowMeosTime(new Date(), eventTimeZone(ctx.event)),
           },
           select: { id: true, seq: true },
         });
@@ -891,7 +891,7 @@ export const runnerRouter = router({
       if (input.startTime !== undefined) {
         data.startTime =
           input.startTime > 0
-            ? toRelative(input.startTime, ctx.event.zeroTime)
+            ? toRelativeChecked(input.startTime, ctx.event.zeroTime)
             : input.startTime;
         journalFields.startTime = input.startTime;
       }

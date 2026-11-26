@@ -73,6 +73,10 @@ export default defineConfig({
     baseURL: `http://127.0.0.1:${WEB_PORT}`,
     trace: "on-first-retry",
     screenshot: "only-on-failure",
+    // The browser at the venue is in Sweden, the API (as in the Docker and
+    // Cloud Run images) in UTC: a time-zone mix-up between them fails the
+    // suite instead of passing only because both sides are UTC (BLD-14).
+    timezoneId: "Europe/Stockholm",
     extraHTTPHeaders: {
       "x-forwarded-email": "e2e-admin@oxygen.test",
     },
@@ -116,6 +120,7 @@ export default defineConfig({
         // clobber each other.
         DATABASE_URL,
         PORT: String(API_PORT),
+        TZ: "UTC",
         // Lets lease.spec.ts drive the node-to-node lease surface
         // (lease.acquire) the way a peer node would.
         SYNC_SHARED_SECRET: "e2e-sync-secret",
