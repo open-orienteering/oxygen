@@ -21,7 +21,10 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
+  _resetLiveResultsPool,
+  getLiveResultsPool,
   liveResultsPusherManager,
+  noteLiveResultsError,
   type SyncFn,
   type SyncStats,
 } from "../liveresults.js";
@@ -148,5 +151,174 @@ describe("liveResultsPusherManager (multi-tenant)", () => {
     expect(liveResultsPusherManager.activeEventIds()).toHaveLength(0);
     expect(liveResultsPusherManager.getStatus(A).running).toBe(false);
     expect(liveResultsPusherManager.getStatus(B).running).toBe(false);
+  });
+});
+
+// ─── SYNC-15: one cycle at a time per event ─────────────────
+
+describe("liveResultsPusherManager overlap guard (SYNC-15)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    liveResultsPusherManager.stopAll();
+  });
+  afterEach(() => {
+    liveResultsPusherManager.stopAll();
+    vi.useRealTimers();
+  });
+
+  function slowSync(ms: number) {
+    let active = 0;
+    let maxActive = 0;
+    const fn = vi.fn<SyncFn>(async () => {
+      active++;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((r) => setTimeout(r, ms));
+      active--;
+      return NO_OP_STATS;
+    });
+    return { fn, maxActive: () => maxActive };
+  }
+
+  it("a tick that finds the previous cycle still running is skipped", async () => {
+    const A = 3001n;
+    const slow = slowSync(75_000); // 2.5 intervals
+    liveResultsPusherManager.start(A, 100, 30, slow.fn);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(60_000); // ticks at 30 s and 60 s: busy
+    expect(slow.fn).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(30_000); // 75 s done, tick at 90 s runs
+    expect(slow.fn).toHaveBeenCalledTimes(2);
+    expect(slow.maxActive()).toBe(1);
+  });
+
+  it("pushNow waits for the running cycle, then runs once", async () => {
+    const A = 3002n;
+    const slow = slowSync(10_000);
+    liveResultsPusherManager.start(A, 100, 30, slow.fn);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(liveResultsPusherManager.isBusy(A)).toBe(true);
+    const manual = liveResultsPusherManager.pushNow(100, A, slow.fn);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(slow.fn).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(15_000);
+    await expect(manual).resolves.toEqual(NO_OP_STATS);
+    expect(slow.fn).toHaveBeenCalledTimes(2);
+    expect(slow.maxActive()).toBe(1);
+  });
+
+  it("a tick during a manual push is skipped", async () => {
+    const A = 3003n;
+    const quick = vi.fn<SyncFn>().mockResolvedValue(NO_OP_STATS);
+    const slow = slowSync(40_000);
+    liveResultsPusherManager.start(A, 100, 30, quick);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(quick).toHaveBeenCalledTimes(1);
+    const manual = liveResultsPusherManager.pushNow(100, A, slow.fn);
+    await vi.advanceTimersByTimeAsync(30_000); // tick while manual runs
+    expect(quick).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await manual;
+    await vi.advanceTimersByTimeAsync(20_000); // tick at 60 s runs
+    expect(quick).toHaveBeenCalledTimes(2);
+  });
+
+  it("a skipped tick leaves lastError as the failed cycle set it", async () => {
+    const A = 3004n;
+    let calls = 0;
+    const fn: SyncFn = async () => {
+      calls++;
+      if (calls === 1) throw new Error("remote down");
+      await new Promise((r) => setTimeout(r, 45_000));
+      return NO_OP_STATS;
+    };
+    liveResultsPusherManager.start(A, 100, 30, fn);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(liveResultsPusherManager.getStatus(A).lastError).toBe("remote down");
+    await vi.advanceTimersByTimeAsync(60_000); // 30 s runs (slow), 60 s skipped
+    expect(calls).toBe(2);
+    expect(liveResultsPusherManager.getStatus(A).lastError).toBe("remote down");
+    await vi.advanceTimersByTimeAsync(15_000); // slow one finishes
+    expect(liveResultsPusherManager.getStatus(A).lastError).toBeNull();
+  });
+
+  it("lastPush is when the successful cycle started", async () => {
+    const A = 3005n;
+    vi.setSystemTime(new Date("2026-11-27T10:00:00Z"));
+    const slow = slowSync(20_000);
+    liveResultsPusherManager.start(A, 100, 60, slow.fn);
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(liveResultsPusherManager.getStatus(A).lastPush).toBe("2026-11-27T10:00:00.000Z");
+  });
+});
+
+// ─── EVT-16: connection settings cache ──────────────────────
+
+describe("getLiveResultsPool connection cache (EVT-16)", () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    _resetLiveResultsPool();
+    vi.useRealTimers();
+  });
+
+  function mockFetch(...answers: Array<{ status?: number; body: string }>) {
+    const fn = vi.fn(async () => {
+      const a = answers.length > 1 ? answers.shift()! : answers[0];
+      return new Response(a.body, { status: a.status ?? 200 });
+    });
+    globalThis.fetch = fn as unknown as typeof fetch;
+    return fn;
+  }
+
+  it("fetches the connection string once for many cycles", async () => {
+    _resetLiveResultsPool();
+    const f = mockFetch({ body: "db.example;u;p;d" });
+    const p1 = await getLiveResultsPool();
+    const p2 = await getLiveResultsPool();
+    const p3 = await getLiveResultsPool();
+    expect(f).toHaveBeenCalledTimes(1);
+    expect(p2).toBe(p1);
+    expect(p3).toBe(p1);
+  });
+
+  it("fetches again after the TTL and after a connection error, keeping the pool when unchanged", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    _resetLiveResultsPool();
+    const f = mockFetch({ body: "db.example;u;p;d" });
+    const p1 = await getLiveResultsPool();
+    vi.setSystemTime(Date.now() + 11 * 60_000);
+    expect(await getLiveResultsPool()).toBe(p1);
+    expect(f).toHaveBeenCalledTimes(2);
+    noteLiveResultsError(Object.assign(new Error("denied"), { code: "ER_ACCESS_DENIED_ERROR" }));
+    expect(await getLiveResultsPool()).toBe(p1);
+    expect(f).toHaveBeenCalledTimes(3);
+    // A query error that is not about the connection keeps the cache.
+    noteLiveResultsError(Object.assign(new Error("syntax"), { code: "ER_PARSE_ERROR" }));
+    await getLiveResultsPool();
+    expect(f).toHaveBeenCalledTimes(3);
+  });
+
+  it("a 502 or a garbage body is refused and does not replace the working pool", async () => {
+    _resetLiveResultsPool();
+    mockFetch(
+      { body: "db.example;u;p;d" },
+      { status: 502, body: "<html>Bad gateway</html>" },
+      { body: "<html>maintenance</html>" },
+      { body: "db.example;u;p;d" },
+    );
+    const p1 = await getLiveResultsPool();
+    noteLiveResultsError({ code: "ECONNREFUSED" });
+    await expect(getLiveResultsPool()).rejects.toThrow(/HTTP 502/);
+    await expect(getLiveResultsPool()).rejects.toThrow(/Unexpected/);
+    expect(await getLiveResultsPool()).toBe(p1);
+  });
+
+  it("a changed connection string builds a new pool", async () => {
+    _resetLiveResultsPool();
+    mockFetch({ body: "db.example;u;p;d" }, { body: "db2.example;u;p2;d" });
+    const p1 = await getLiveResultsPool();
+    noteLiveResultsError({ code: "ER_ACCESS_DENIED_ERROR" });
+    const p2 = await getLiveResultsPool();
+    expect(p2).not.toBe(p1);
   });
 });

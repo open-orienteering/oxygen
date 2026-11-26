@@ -15,11 +15,12 @@ import { z } from "zod";
 import { router, viewProcedure, manageProcedure } from "../trpc.js";
 import {
   ensureCompetition,
+  liveResultsPusherManager,
   loadPushStatus,
-  syncAll,
   updateCompetitionMeta,
 } from "../liveresults.js";
 import { requestBackgroundReconcile } from "../background/supervisor.js";
+import { nodeRole } from "../sync/nodeIdentity.js";
 
 export interface LRConfig {
   enabled: boolean;
@@ -94,6 +95,9 @@ export const liveresultsRouter = router({
       lastPush: status.lastPush,
       pushCount: status.pushCount,
       lastError: status.lastError,
+      // A venue box never pushes (SYNC-14): the cloud does, and its push
+      // status lives in the cloud's database, not in this one.
+      pushedByCloud: nodeRole() === "venue",
     };
   }),
 
@@ -110,7 +114,6 @@ export const liveresultsRouter = router({
         intervalSeconds: z.number().int().min(5).max(3600).optional(),
         country: z.string().max(8).optional(),
         isPublic: z.boolean().optional(),
-        tavid: z.number().int().nullable().optional(),
         publicUrl: z.string().optional(),
       }),
     )
@@ -128,9 +131,13 @@ export const liveresultsRouter = router({
       if (input.country !== undefined) cfg.country = input.country;
       if (input.isPublic !== undefined) cfg.isPublic = input.isPublic;
       if (input.publicUrl !== undefined) cfg.publicUrl = input.publicUrl;
-      const data: Record<string, unknown> = { liveresultsConfig: cfg as never };
-      if (input.tavid !== undefined) data.liveresultsTavid = input.tavid;
-      await ctx.db.event.update({ where: { id: ctx.event.id }, data });
+      // The tavid is allocated by `enable` and never set by hand (MC-29):
+      // two events on one competition would push into and delete from each
+      // other's rows. The column is unique.
+      await ctx.db.event.update({
+        where: { id: ctx.event.id },
+        data: { liveresultsConfig: cfg as never },
+      });
       return { ok: true as const };
     }),
 
@@ -210,33 +217,13 @@ export const liveresultsRouter = router({
     if (!tavid) {
       tavid = await ensureCompetition(ctx.event.id);
     }
-    const stats = await syncAll(tavid, ctx.event.id);
+    // Through the manager, so a manual push never runs alongside the
+    // timer's cycle for the same event (SYNC-15).
+    const stats = await liveResultsPusherManager.pushNow(tavid, ctx.event.id);
     return {
       ok: true as const,
       message: "LiveResults push complete.",
       stats,
     };
   }),
-
-  /**
-   * Legacy alias kept for internal tooling that wants to write the raw
-   * JSON blob (e.g. tests that bypass `saveConfig`). EventPage doesn't
-   * call it; flag it as a thin pass-through.
-   */
-  setConfig: manageProcedure
-    .input(
-      z.object({
-        tavid: z.number().int().nullable().optional(),
-        config: z.record(z.string(), z.unknown()).nullable().optional(),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const data: Record<string, unknown> = {};
-      if (input.tavid !== undefined) data.liveresultsTavid = input.tavid;
-      if (input.config !== undefined) data.liveresultsConfig = input.config;
-      if (Object.keys(data).length > 0) {
-        await ctx.db.event.update({ where: { id: ctx.event.id }, data });
-      }
-      return { ok: true as const };
-    }),
 });

@@ -35,9 +35,10 @@ Two kinds of long-lived nodes, both running the same server image
 ```
 
 - **Cloud node** — the permanent home of every event. Runs the background
-  services that need internet (Eventor sync, LiveResults pusher, ROC
-  online-input puller — single-owner services, config-flagged so a venue
-  copy never double-runs them).
+  services that need internet (Eventor sync, LiveResults pusher). The
+  LiveResults pusher is single-owner: a node with `NODE_ROLE=venue` never
+  runs it ([background-jobs-lease.md](background-jobs-lease.md#which-node-runs-what)).
+  The ROC online-input puller runs on both, each into its own database.
 - **Venue node** — a laptop or Pi running the same Docker images against
   its own local Postgres. Present only on race day, and only when the
   organizer wants LAN-local operation. Zero bespoke binaries: the venue
@@ -301,7 +302,10 @@ peer's shipper, the pull side of the shipper):
   idempotency check. The journal row going in first makes two concurrent
   ingests of one id serialize on the primary key: the loser sees the winner's
   row and reports `synced`. Post-commit effects (the Google Sheets push of a
-  `card.read`) run after the commit, on the singleton client.
+  `card.read`) run after the commit, on the singleton client, and only for
+  entries a station sent to this node: entries shipped from or pulled off
+  another node (sync secret, or the shipper's pull) skip them, because the
+  node that journaled them already ran them (SYNC-14).
 - **Idempotency is per event.** An id already journaled under the same event
   is `synced`; under another event it is refused as `ENTRY_IN_OTHER_EVENT`.
   Row ids inside payloads follow the same rule: a `tempId` or punch `id` that
@@ -862,9 +866,12 @@ Deferred until after venue packaging lands; mechanically it is
   Every emit path — online mutation *and* offline outbox payload — must
   convert. (A missed conversion in the offline `card.read` path was one of
   the latent bugs that motivated this redesign.)
-- **Single-owner background services.** `liveResultsPusher`,
-  `onlineInputPuller`, Eventor sync run on the cloud only (config flag).
-  A venue copy must never double-push.
+- **Single-owner background services.** The LiveResults pusher runs on
+  the cloud only: the background reconcile skips it on `NODE_ROLE=venue`
+  (`publishesLiveResults()`), so a venue copy never double-pushes. A
+  readout's Google Sheets push runs on the node that stored it, never again
+  where it is ingested from another node (`fromNode` in
+  `ingestJournalEntries`).
 - **Large/streaming endpoints** (map tiles, 50 MB uploads) are cloud-owned
   non-critical endpoints; they are simply unavailable at an offline venue.
 - **Venue box sleep.** A laptop venue node must not sleep mid-race; the

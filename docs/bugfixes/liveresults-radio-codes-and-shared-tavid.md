@@ -58,3 +58,7 @@ this `login` row. Do not run Oxygen's pusher and MeOS against the same
 
 `packages/api/src/__tests__/liveresults.test.ts` — encoding, course
 walk, punch visit matching, md5 shape, scoped class-name list.
+
+## Later
+
+Package 16 replaced the per-cycle wipe of runners and results with a diff in one transaction, scoped the same way as `splitcontrols` (Oxygen class names): [liveresults-single-owner-and-incremental-push.md](liveresults-single-owner-and-incremental-push.md).

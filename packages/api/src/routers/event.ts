@@ -492,8 +492,26 @@ export const eventRouter = router({
 
   /** Hard-delete every soft-deleted event (and its cascading children). */
   purgeDeleted: adminProcedure.mutation(async () => {
-    const result = await prisma().event.deleteMany({
-      where: { removed: true },
+    const result = await prisma().$transaction(async (tx) => {
+      const doomed = await tx.event.findMany({
+        where: { removed: true },
+        select: { id: true },
+      });
+      if (doomed.length === 0) return { count: 0 };
+      // Per-event settings rows have no foreign key: drop the ROC puller's
+      // config/watermark/status and the LiveResults push status with the
+      // event, so nothing keyed by a purged id is left behind (MC-28).
+      await tx.setting.deleteMany({
+        where: {
+          OR: doomed.flatMap(({ id }) => [
+            { key: { startsWith: `online_input_${id}_` } },
+            { key: `liveresults_${id}_status` },
+          ]),
+        },
+      });
+      return tx.event.deleteMany({
+        where: { id: { in: doomed.map((e) => e.id) } },
+      });
     });
     return { purged: result.count };
   }),

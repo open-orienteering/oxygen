@@ -178,6 +178,14 @@ export interface IngestOptions {
    * node already decided, and a refusal there would wedge the shipper.
    */
   strict?: boolean;
+  /**
+   * The entries were journaled on another node (a node-to-node push or this
+   * node's own pull), so that node already ran their post-commit effects: a
+   * venue box pushes its readouts to Google Sheets when it stores them. They
+   * are skipped here, or the sheet gets every shipped readout twice
+   * (SYNC-14). Unlike `fromPeer`, this holds for a stale holder's late push.
+   */
+  fromNode?: boolean;
 }
 
 /** Interactive-transaction limits: `reference.imported` can be hundreds of upserts. */
@@ -278,7 +286,7 @@ export async function ingestJournalEntries(
         if (outcome.followUp) await outcome.followUp();
         afterCommit = outcome.afterCommit;
       }, INGEST_TX_OPTIONS);
-      afterCommit?.(db);
+      if (!opts.fromNode) afterCommit?.(db);
 
       synced.push(entry.id);
     } catch (err) {
@@ -555,6 +563,8 @@ export const eventsRouter = router({
           fromPeer: markDelivered ? true : undefined,
           // A station's own outbox: refusals reach the operator.
           strict: !ectx.syncSecret,
+          // Another node's journal: its side effects already ran there.
+          fromNode: !!ectx.syncSecret,
         }),
       );
       if (alreadyHeld) {

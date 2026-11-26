@@ -216,6 +216,7 @@
   "save": "Save",
   "saving": "Saving...",
   "pushNow": "Push now",
+  "liveResultsPushedByCloud": "Pushed by the cloud server",
   "pushedStats": "Pushed: {{runners}} runners, {{results}} results, {{splitcontrols}} split controls",
   "liveresultsHelp": "Toggle on to automatically create an event on liveresultat.orientering.se and start pushing results. Controls with \"radio\" in their name will appear as split times.",
   "onlineInput": {

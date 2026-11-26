@@ -286,7 +286,7 @@ export async function shipEventOnce(
     }
     if (page.entries.length === 0) break;
 
-    const res = await ingestJournalEntries(db, event, page.entries, { fromPeer: true });
+    const res = await ingestJournalEntries(db, event, page.entries, { fromPeer: true, fromNode: true });
     const ids = ackedPrefix(page.entries, new Set(res.synced));
     if (ids.length > 0) {
       stats.pulled += ids.length;
@@ -322,7 +322,7 @@ async function legacyPull(
     );
     if (page.entries.length === 0) break;
 
-    const res = await ingestJournalEntries(db, event, page.entries, { fromPeer: true });
+    const res = await ingestJournalEntries(db, event, page.entries, { fromPeer: true, fromNode: true });
     const syncedIds = new Set(res.synced);
 
     let lastApplied: (typeof page.entries)[number] | undefined;

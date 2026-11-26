@@ -67,6 +67,7 @@ Notes whose code no longer exists (mostly the raster tile pipeline, deleted in s
 | [ROC radio intake stalled after a reset, and the control mapping was never applied](roc-radio-intake.md) | 2026-11-26 |
 | [ROC radio intake: what package 12 left out](roc-radio-intake-followups.md) | 2026-11-26 |
 | [Registration desk stored wrong clubs, names and cards; offline registrations lost fields](registration-correctness.md) | 2026-11-26 |
+| [LiveResults: two nodes pushed one event, and each cycle deleted the runners in the forest](liveresults-single-owner-and-incremental-push.md) (follow-ups: [liveresults-followups.md](liveresults-followups.md)) | 2026-11-26 |
 | [Registration: follow-ups left out of package 10](registration-followups.md) | 2026-11-26 |
 | [A station went down for the whole outage although its data was cached](station-outage-resilience.md) | 2026-11-26 |
 | [Station outage resilience: what package 9 left out](station-outage-followups.md) | 2026-11-26 |

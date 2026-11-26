@@ -159,7 +159,11 @@ packages/api/src/
 
 Boot reconciliation (`reconcileEnabledPullers` in
 [`puller.ts`](../../packages/api/src/online-input/puller.ts)) re-arms every
-enabled puller on API restart. Older builds documented an
+enabled puller on API restart. A soft-deleted event is skipped (its
+config is kept, so a restore resumes polling) and a poll for it does
+nothing; `event.purgeDeleted` deletes its `online_input_<id>_*` rows
+(MC-28). The puller runs on the cloud and on a venue box alike, each into
+its own database. Older builds documented an
 `online_input_mapping_<nameId>` key; nothing in the app ever wrote it and
 it is no longer read.
 
