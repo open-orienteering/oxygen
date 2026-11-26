@@ -35,9 +35,11 @@ poll, clearing the error.
 
 ## The fix
 
-- `puller.ts` inserts each punch with `createMany({ skipDuplicates: true })`
-  (`ON CONFLICT DO NOTHING`); a stored punch is skipped, only stored punches
-  are journaled and counted in `punches_imported`.
+- `puller.ts` inserts a poll's punches in one `createManyAndReturn({
+  skipDuplicates: true })` (`ON CONFLICT DO NOTHING`) inside a transaction
+  allowed 60 s, so a reset that replays a whole event does not hit the 5 s
+  default and jam again. A stored punch is skipped; only stored punches are
+  journaled and counted in `punches_imported`.
 - `routers/onlineInput.ts` routes every config write through
   `updateConfig`, a transaction that locks the row with `SELECT … FOR
   UPDATE`. The poll's compare-and-set waits for it and re-checks the row,
@@ -45,9 +47,12 @@ poll, clearing the error.
 - The puller applies `cfg.mapping` (validated by `sanitizeMapping`);
   `loadMapping` / `saveMapping` and the `nameId` key are gone.
 - `roc.ts` accepts only plain positive integers up to 2,147,483,647 for id,
-  code and card and returns `{ punches, skipped }`. Skipped rows never move
-  the watermark. The watermark SQL casts to `bigint`.
-- A body with lines but no valid row is recorded as `Unexpected response:
+  code and card and returns `{ punches, skipped, maxSkippedId }`. A skipped
+  row with a sound id is moved past (so a bad row at the tail is not
+  refetched every poll); an out-of-range id never becomes the watermark.
+  Skipped rows are counted in `rows_skipped` (`getStatus().rowsSkipped`).
+  The watermark SQL casts to `bigint`.
+- A body with lines but no row starting with a valid id is recorded as `Unexpected response:
   <excerpt>` and leaves `last_polled` alone, like an HTTP error.
 - Tooltip (en, sv) now says Reset re-asks ROC and skips what is stored.
 
@@ -61,7 +66,8 @@ No migration.
   (old punches skipped, new one stored, no error, one journal entry per
   stored punch); mapping set and removed through the router; an
   out-of-range row between good ones; an HTML 200 then a good poll; a
-  config save racing a locked watermark advance; router writes on an event
-  with no config row. The five new failure cases fail on the old code.
+  config save racing a locked watermark advance, and a poll waiting on a
+  locked router write; a bad row at the tail moved past; two identical
+  punches in one response; router writes on an event with no config row. The five new failure cases fail on the old code.
 
 Left out: [roc-radio-intake-followups.md](roc-radio-intake-followups.md).

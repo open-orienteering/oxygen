@@ -94,22 +94,28 @@ highest valid id it imported, in the same transaction as the inserts
 
 - **Duplicates are skipped.** The unique index `punches_oi_dedup_idx`
   (`event_id, card_no, control_code, time` where `source = 'online_input'`)
-  makes a punch that is already stored a no-op (`INSERT … ON CONFLICT DO
-  NOTHING`). Only punches actually stored are counted and journaled.
+  makes a punch that is already stored a no-op (one `INSERT … ON CONFLICT
+  DO NOTHING` per poll, in a transaction allowed 60 s so a reset that
+  replays a whole event fits). Only punches actually stored are counted
+  and journaled.
 - **Reset is safe.** The **Reset** button next to the last id sets
   `lastId` to 0, so the next poll asks ROC for everything again. Punches
   already imported are skipped and only missing ones are added; polling
-  carries on as before.
+  carries on as before. One exception: the dedupe key holds the *mapped*
+  code, so after a mapping change a reset stores the old punches again
+  under the new code (the old rows stay).
 - **Config edits never rewind the watermark.** Every router write to the
   config row (save, enable, disable, mapping, reset) locks the row
   (`SELECT … FOR UPDATE`) for its read-modify-write, so it cannot write an
   older `lastId` back over a poll that committed meanwhile.
 - **Bad rows are skipped, not fatal.** A row whose id, code or card is not
   a positive whole number that fits the int4 columns (at most
-  2,147,483,647), or whose time is not a valid `HH:MM:SS`, is skipped. It
-  never becomes the watermark, so it cannot block the rows after it.
+  2,147,483,647), or whose time is not a valid `HH:MM:SS`, is skipped and
+  counted in `rows_skipped` (`getStatus().rowsSkipped`). If its id is
+  sound the watermark moves past it, so it is not fetched again; an id
+  outside the range never becomes the watermark.
 - **A body that is not ROC is an error.** A 200 response with lines but not
-  one valid punch row (an HTML error or sign-in page, a wrong endpoint) is
+  one row that even starts with a valid punch id (an HTML error or sign-in page, a wrong endpoint) is
   reported in the panel as `Unexpected response: <first 80 characters>`,
   like an HTTP error; `last_polled` is not touched and the next good poll
   clears the error. An empty body is a normal "nothing new" poll.
@@ -149,6 +155,7 @@ packages/api/src/
 | `online_input_<eventId>_poll_count`       | Polls run                                              |
 | `online_input_<eventId>_punches_imported` | Punches actually stored                                |
 | `online_input_<eventId>_last_error`       | Last error shown in the panel, cleared by a good poll  |
+| `online_input_<eventId>_rows_skipped`     | ROC rows skipped as malformed or out of range          |
 
 Boot reconciliation (`reconcileEnabledPullers` in
 [`puller.ts`](../../packages/api/src/online-input/puller.ts)) re-arms every

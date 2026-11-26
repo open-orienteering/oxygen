@@ -22,6 +22,7 @@ import { z } from "zod";
 import { router, raceOperateProcedure } from "../trpc.js";
 import { prisma, getSetting } from "../db.js";
 import { pollOnceForEvent } from "../online-input/puller.js";
+import { sanitizeMapping } from "../online-input/mapping.js";
 import { requestBackgroundReconcile } from "../background/supervisor.js";
 
 type SpecialTarget = 1 | 2 | 3;
@@ -63,7 +64,7 @@ function parseConfig(raw: string | null): OnlineInputConfig {
       ...parsed,
       // mapping needs an explicit clone so the in-memory edits don't
       // leak across requests via the JSON parser's default behaviour.
-      mapping: { ...(parsed.mapping ?? {}) } as Record<number, SpecialTarget>,
+      mapping: sanitizeMapping(parsed.mapping) as Record<number, SpecialTarget>,
     };
   } catch {
     return { ...DEFAULT_CONFIG };
@@ -123,12 +124,17 @@ export const onlineInputRouter = router({
     const lastError = await getSetting(
       settingKey(ctx.event.id, "last_error"),
     );
+    const skippedRaw = await getSetting(
+      settingKey(ctx.event.id, "rows_skipped"),
+    );
     return {
       running: cfg.enabled,
       lastPoll: lastPolledRaw,
       pollCount: pollCountRaw ? parseInt(pollCountRaw, 10) : 0,
       punchesImported: importedRaw ? parseInt(importedRaw, 10) : 0,
       lastError: lastError && lastError.length > 0 ? lastError : null,
+      // ROC rows that were not a valid punch (malformed, out of range).
+      rowsSkipped: skippedRaw ? parseInt(skippedRaw, 10) || 0 : 0,
     };
   }),
 

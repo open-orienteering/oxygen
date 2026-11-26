@@ -82,9 +82,16 @@ export interface ParseResult {
   punches: RemotePunch[];
   /**
    * Non-blank lines that were not a valid punch row (malformed, or a value
-   * outside the stored range). They never move the watermark.
+   * outside the stored range). They are never stored.
    */
   skipped: number;
+  /**
+   * Highest valid punch id among the skipped rows (0 if none had one). A
+   * bad row that still carries a sound id is moved past, so it is not
+   * fetched again on every poll; a row without one never moves the
+   * watermark.
+   */
+  maxSkippedId: number;
 }
 
 export interface BuildRequestResult {

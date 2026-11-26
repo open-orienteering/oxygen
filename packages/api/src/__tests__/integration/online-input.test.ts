@@ -90,6 +90,7 @@ async function teardown({ ctx, fetchSpy }: FixtureCtx) {
       "poll_count",
       "punches_imported",
       "last_error",
+      "rows_skipped",
     ].map((k) =>
       setSetting(`online_input_${String(ctx.eventId)}_${k}`, null),
     ),
@@ -436,12 +437,57 @@ describe("online-input ROC puller", () => {
         select: { cardNo: true },
       });
       expect(punches.map((p) => p.cardNo).sort()).toEqual([6001, 6003]);
-      // The watermark stops at the last valid id; the corrupt id never
-      // becomes the watermark.
-      expect((await readConfig(f.ctx.eventId)).lastId).toBe(3);
+      // The corrupt id never becomes the watermark; row 4 (bad card,
+      // sound id) is moved past so it is not fetched again.
+      expect((await readConfig(f.ctx.eventId)).lastId).toBe(4);
       expect(
         await getSetting(`online_input_${String(f.ctx.eventId)}_last_error`),
       ).toBeNull();
+    } finally {
+      await teardown(f);
+    }
+  });
+
+  it("moves past a bad row that carries a sound id, so it is not refetched", async () => {
+    const f = await setupPuller("oi-tail");
+    try {
+      // Row 4 has a valid id but an out-of-range card: skipped, but the
+      // watermark moves past it, and the panel keeps showing a healthy poll.
+      f.fetchSpy.mockResolvedValueOnce(
+        rocBody([
+          "1;31;6201;2026-01-01 10:00:00",
+          "4;31;99999999999;2026-01-01 10:03:00",
+        ]),
+      );
+      await pollOnceForEvent(f.ctx.eventId);
+      expect((await readConfig(f.ctx.eventId)).lastId).toBe(4);
+
+      // A response made only of such a row is not "unexpected" either.
+      f.fetchSpy.mockResolvedValueOnce(rocBody(["5;31;1;2026-01-01 25:00:00"]));
+      expect(await pollOnceForEvent(f.ctx.eventId)).toEqual({ fetched: 1, inserted: 0 });
+      expect((await readConfig(f.ctx.eventId)).lastId).toBe(5);
+      expect(
+        await getSetting(`online_input_${String(f.ctx.eventId)}_last_error`),
+      ).toBeNull();
+
+      const caller = makeCaller(f.ctx.event);
+      expect((await caller.onlineInput.getStatus()).rowsSkipped).toBe(2);
+    } finally {
+      await teardown(f);
+    }
+  });
+
+  it("stores two identical punches in one response once", async () => {
+    const f = await setupPuller("oi-twice");
+    try {
+      f.fetchSpy.mockResolvedValueOnce(
+        rocBody([
+          "1;31;6301;2026-01-01 10:00:00",
+          "2;31;6301;2026-01-01 10:00:00",
+        ]),
+      );
+      expect(await pollOnceForEvent(f.ctx.eventId)).toEqual({ fetched: 2, inserted: 1 });
+      expect((await readConfig(f.ctx.eventId)).lastId).toBe(2);
     } finally {
       await teardown(f);
     }
@@ -527,6 +573,48 @@ describe("online-input ROC puller", () => {
       const cfg = await readConfig(f.ctx.eventId);
       expect(cfg.unitId).toBe("54321");
       expect(cfg.lastId).toBe(5);
+    } finally {
+      await teardown(f);
+    }
+  });
+
+  it("a poll waiting on a locked config row keeps the edit made under the lock", async () => {
+    const f = await setupPuller("oi-poll-wait");
+    try {
+      const key = cfgKey(f.ctx.eventId);
+      f.fetchSpy.mockResolvedValue(
+        rocBody(["1;31;6401;2026-01-01 10:00:00", "2;32;6402;2026-01-01 10:01:00"]),
+      );
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      let locked!: () => void;
+      const isLocked = new Promise<void>((r) => (locked = r));
+
+      // Stand-in for a router write: lock, wait while the poll reaches its
+      // compare-and-set, then write the whole blob back with one change.
+      const edit = f.ctx.db.$transaction(
+        async (tx) => {
+          const rows = await tx.$queryRaw<{ value: string }[]>`
+            SELECT value FROM oxygen.settings WHERE key = ${key} FOR UPDATE`;
+          locked();
+          await gate;
+          const cfg = JSON.parse(rows[0].value);
+          cfg.unitId = "99999";
+          await tx.setting.update({ where: { key }, data: { value: JSON.stringify(cfg) } });
+        },
+        { timeout: 10_000 },
+      );
+      await isLocked;
+      const poll = pollOnceForEvent(f.ctx.eventId);
+      await new Promise((r) => setTimeout(r, 300));
+      release();
+      await edit;
+      const stats = await poll;
+
+      expect(stats.inserted).toBe(2);
+      const cfg = await readConfig(f.ctx.eventId);
+      expect(cfg.unitId).toBe("99999");
+      expect(cfg.lastId).toBe(2);
     } finally {
       await teardown(f);
     }

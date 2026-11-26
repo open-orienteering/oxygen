@@ -190,8 +190,30 @@ describe("rocProtocol.parseResponse: range checks and skipped rows", () => {
   });
 
   it("reports an empty or whitespace-only body as nothing skipped", () => {
-    expect(rocProtocol.parseResponse("")).toEqual({ punches: [], skipped: 0 });
-    expect(rocProtocol.parseResponse(" \r\n\n ")).toEqual({ punches: [], skipped: 0 });
+    expect(rocProtocol.parseResponse("")).toEqual({ punches: [], skipped: 0, maxSkippedId: 0 });
+    expect(rocProtocol.parseResponse(" \r\n\n ")).toEqual({
+      punches: [],
+      skipped: 0,
+      maxSkippedId: 0,
+    });
+  });
+
+  it("reports the highest sound id among skipped rows", () => {
+    const body =
+      "1;31;1001;2026-05-05 09:42:13\n" +
+      "7;31;99999999999;2026-05-05 09:42:14\n" + // bad card, sound id
+      "9;31;1003;not-a-time\n" + // bad time, sound id
+      "99999999999;31;1004;2026-05-05 09:42:16\n" + // id itself out of range
+      "garbage\n";
+    const result = rocProtocol.parseResponse(body);
+    expect(result.punches.map((p) => p.punchId)).toEqual([1]);
+    expect(result.skipped).toBe(4);
+    expect(result.maxSkippedId).toBe(9);
+  });
+
+  it("gives an HTML page no skipped id", () => {
+    const result = rocProtocol.parseResponse("<html>\n<body>502</body>\n</html>\n");
+    expect(result.maxSkippedId).toBe(0);
   });
 });
 

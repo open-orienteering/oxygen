@@ -58,7 +58,7 @@ export const rocProtocol: Protocol = {
   },
 
   parseResponse(body: string): ParseResult {
-    if (!body) return { punches: [], skipped: 0 };
+    if (!body) return { punches: [], skipped: 0, maxSkippedId: 0 };
 
     // Strip BOM if present and split on any of CRLF / CR / LF.
     const cleaned = body.replace(/^\uFEFF/, "");
@@ -66,6 +66,7 @@ export const rocProtocol: Protocol = {
 
     const punches: RemotePunch[] = [];
     let skipped = 0;
+    let maxSkippedId = 0;
     for (const raw of lines) {
       const line = raw.trim();
       if (!line) continue;
@@ -92,11 +93,12 @@ export const rocProtocol: Protocol = {
         // counts skipped rows and treats a body with nothing but skipped
         // rows (an HTML error page, say) as an error, not a healthy poll.
         skipped++;
+        if (punchId !== null) maxSkippedId = Math.max(maxSkippedId, punchId);
         continue;
       }
 
       punches.push({ punchId, rawCode, cardNo, absoluteTimeDs });
     }
-    return { punches, skipped };
+    return { punches, skipped, maxSkippedId };
   },
 };
