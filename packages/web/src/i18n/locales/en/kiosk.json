@@ -77,5 +77,8 @@
   "syncNeedsSignIn": "{{count}} saved on this device. An operator must sign in to send them.",
   "syncFailed": "{{count}} rejected by the server",
   "notSaved": "Card was not saved. Insert it again.",
-  "noCompetition": "No event selected, so the card could not be saved."
+  "noCompetition": "No event selected, so the card could not be saved.",
+  "cardNotRead": "Card not read",
+  "cardNotReadHint": "Insert your card again and wait for the beep.",
+  "readerDisconnected": "Reader disconnected"
 }

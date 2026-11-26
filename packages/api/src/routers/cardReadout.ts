@@ -19,6 +19,7 @@ import { router, raceOperateProcedure, raceOperateRaceProcedure, kioskOrRaceOper
 import type { Prisma, PrismaClient } from "../generated/prisma/client.js";
 import {
   parsePunches,
+  mergePunchesInCardOrder,
   matchPunchesToCourse,
   computeStatus,
   computeMatchScore,
@@ -226,10 +227,10 @@ export async function performReadout(
     freePunchId: p.id, // UUID string in the new schema
   }));
 
-  // Merge + sort chronologically so sequential matching works.
-  const allPunches = [...cardPunches, ...freeParsed].sort(
-    (a, b) => a.time - b.time,
-  );
+  // Card punches keep the card's order (its clock may be wrong); free punches
+  // are slotted in by time. Sorting everything by time would let one punch
+  // with a mis-set clock jump the queue and read as a missing control.
+  const allPunches = mergePunchesInCardOrder(cardPunches, freeParsed);
 
   // Expected positions: full status-aware descriptors so MeOS evaluation
   // rules (Multiple, Bad/Optional/BadNoTiming skipping, NoTiming leg

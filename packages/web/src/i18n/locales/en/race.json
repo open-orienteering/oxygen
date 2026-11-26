@@ -104,5 +104,7 @@
   "applyHoldReason_no-finish": "no finish on the card",
   "applyHoldReason_stale-punches": "the punches look like an old card's",
   "replaceFinish": "Replace finish {{time}} with now",
-  "applyHoldReason": "see the runner"
+  "applyHoldReason": "see the runner",
+  "notifReadFailed": "Card {{number}} was not read: insert it again",
+  "notifDismiss": "Dismiss"
 }

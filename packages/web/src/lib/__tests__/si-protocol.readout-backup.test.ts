@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { parseReadoutBackupBuffer, type ReadoutBackupRecord } from "../si-protocol";
+import {
+  parseReadoutBackupBuffer,
+  parseReadoutBackupBufferDetailed,
+  type ReadoutBackupRecord,
+} from "../si-protocol";
 import {
   READOUT_BACKUP_FIXTURE,
   READOUT_BACKUP_FIXTURE_BASE_ADDR,
@@ -135,13 +139,71 @@ describe("parseReadoutBackupBuffer (M_READOUT slot layout)", () => {
     expect(rec.rawBytes.length).toBe(0x80);
   });
 
-  it("parses card 7 (SIID 2220164, SI8) — last slot in flash, 10 punches", () => {
-    const rec = findBySIID(records, 2220164);
-    expect(rec).toBeDefined();
-    if (!rec) return;
-    const c = rec.card;
+  const t = (h: number, m: number, sec: number) => h * 3600 + m * 60 + sec;
+
+  it("parses card 7 (SIID 2220164, SI8): owner text is not read as punches", () => {
+    // The capture holds "2220164;SPORTident Swede;" at image byte 32, where the
+    // old parser started reading punch records. The first real punch is at 136.
+    const c = findBySIID(records, 2220164)!.card;
     expect(c.cardType).toBe("SI8");
     expect(c.punchCount).toBe(10);
+    expect(c.punches).toEqual([
+      { controlCode: 48, time: t(10, 27, 46) },
+      { controlCode: 56, time: t(10, 32, 35) },
+      { controlCode: 53, time: t(10, 41, 21) },
+      { controlCode: 41, time: t(10, 43, 56) },
+      { controlCode: 57, time: t(10, 50, 50) },
+      { controlCode: 44, time: t(10, 54, 48) },
+      { controlCode: 45, time: t(10, 57, 26) },
+      { controlCode: 31, time: t(10, 59, 33) },
+      { controlCode: 32, time: t(11, 2, 50) },
+      { controlCode: 100, time: t(11, 4, 42) },
+    ]);
+    expect(c.finishTime).toBe(t(11, 5, 20));
+  });
+
+  it("parses card 1 (SIID 2164102, SI8): counter 27 with 5 blank records -> 22 punches", () => {
+    const c = findBySIID(records, 2164102)!.card;
+    expect(c.punchCount).toBe(27);
+    expect(c.finishTime).toBe(t(11, 37, 35));
+    const expected = [
+      [72, t(11, 27, 37)], [62, t(11, 27, 6)], [81, t(11, 29, 39)],
+      [83, t(11, 29, 7)], [88, t(11, 29, 20)], [71, t(11, 32, 47)],
+      [70, t(11, 33, 3)], [90, t(11, 33, 56)], [91, t(11, 34, 25)],
+      [80, t(11, 34, 46)], [64, t(11, 34, 54)], [63, t(11, 37, 7)],
+      [85, t(11, 37, 29)], [84, t(11, 37, 39)],
+      // Fr 05:43..08:27, written by an older event; the times are still raw
+      // seconds-of-day, no day-of-week handling here.
+      [42, t(5, 43, 11)], [42, t(5, 45, 22)], [42, t(5, 57, 47)],
+      [42, t(6, 49, 3)], [42, t(7, 3, 15)], [42, t(8, 9, 4)],
+      [42, t(8, 18, 52)], [42, t(8, 27, 15)],
+    ].map(([controlCode, time]) => ({ controlCode, time }));
+    expect(c.punches).toEqual(expected);
+    expect(c.punches).toHaveLength(22);
+  });
+
+  it("parses SIAC 8506707: exactly 12 punches, the stale record 13 is not read", () => {
+    const c = findBySIID(records, 8506707)!.card;
+    expect(c.punchCount).toBe(12);
+    expect(c.punches).toEqual([
+      [45, t(18, 35, 59)], [72, t(18, 37, 39)], [73, t(18, 39, 10)],
+      [50, t(18, 40, 9)], [37, t(18, 40, 47)], [41, t(18, 42, 2)],
+      [33, t(18, 42, 50)], [42, t(18, 44, 14)], [60, t(18, 45, 39)],
+      [78, t(18, 46, 43)], [62, t(18, 47, 22)], [100, t(18, 47, 31)],
+    ].map(([controlCode, time]) => ({ controlCode, time })));
+  });
+
+  it("parses SIAC 8408405 and 8060780: 8 punches each", () => {
+    expect(findBySIID(records, 8408405)!.card.punches).toEqual([
+      [33, t(18, 4, 53)], [34, t(18, 6, 11)], [35, t(18, 7, 51)],
+      [40, t(18, 12, 46)], [44, t(18, 15, 54)], [48, t(18, 22, 31)],
+      [53, t(18, 25, 9)], [100, t(18, 26, 20)],
+    ].map(([controlCode, time]) => ({ controlCode, time })));
+    expect(findBySIID(records, 8060780)!.card.punches).toEqual([
+      [34, t(18, 22, 36)], [44, t(18, 29, 43)], [40, t(18, 31, 30)],
+      [56, t(18, 34, 52)], [62, t(18, 36, 55)], [48, t(18, 40, 12)],
+      [50, t(18, 42, 53)], [100, t(18, 44, 22)],
+    ].map(([controlCode, time]) => ({ controlCode, time })));
   });
 
   it("skips empty-flash regions without throwing", () => {
@@ -159,8 +221,77 @@ describe("parseReadoutBackupBuffer (M_READOUT slot layout)", () => {
     expect(() => parseReadoutBackupBuffer(garbage)).not.toThrow();
   });
 
+  it("owner text in an unclaimed chunk is not emitted as an SI5 card", () => {
+    // 0x80 bytes of personal data, no SI8+ marker: the SI5 branch must reject it.
+    const text = "Marcus;Kempe;male;19790314;Skogsluffarnas OK;marcus@example.org;0046708956221;Lagmansplan 3;12838;Skarpnack;SWE;";
+    const chunk = new Uint8Array(0x80).fill(0xee);
+    for (let i = 0; i < text.length && i < 0x80; i++) chunk[i] = text.charCodeAt(i);
+    expect(parseReadoutBackupBuffer(chunk, 0x100)).toEqual([]);
+  });
+
+  it("an SI5 chunk with an implausible punch pointer is skipped", () => {
+    const sl = READOUT_BACKUP_FIXTURE.slice(0xd00, 0xd80); // card 452242
+    expect(parseReadoutBackupBuffer(sl, 0xe00)).toHaveLength(1);
+    const damaged = Uint8Array.from(sl);
+    damaged[23] = 0x80;
+    expect(parseReadoutBackupBuffer(damaged, 0xe00)).toEqual([]);
+  });
+
   it("returns empty array on all-EE buffer", () => {
     const empty = new Uint8Array(512).fill(0xee);
     expect(parseReadoutBackupBuffer(empty)).toEqual([]);
+  });
+
+  describe("slots that cannot be decoded are reported, not dropped", () => {
+    // Slot at 0x1280 (SI8 2220164) from the capture, still carrying the marker.
+    const si8 = READOUT_BACKUP_FIXTURE.slice(0x1180, 0x1280);
+
+    it("a tCard slot before a real SI8 slot is skipped with its address and raw bytes", () => {
+      const tcard = Uint8Array.from(si8);
+      tcard[24] = 0x06; // series 6: no decoder, fails safe
+      tcard[25] = 0x5d; tcard[26] = 0xc3; tcard[27] = 0x40; // 6144832: tCard range
+      const buf = new Uint8Array(0x200);
+      buf.set(tcard, 0);
+      buf.set(si8, 0x100);
+      const { records, skipped } = parseReadoutBackupBufferDetailed(buf, 0x100);
+      expect(records.map((r) => r.card.cardNumber)).toEqual([2220164]);
+      expect(records[0].slotAddress).toBe(0x200);
+      expect(skipped).toHaveLength(1);
+      expect(skipped[0].slotAddress).toBe(0x100);
+      expect(skipped[0].reason).toBe("parse-failed");
+      expect(skipped[0].rawBytesHex).toBe(
+        Array.from(tcard).map((b) => b.toString(16).padStart(2, "0")).join(""),
+      );
+    });
+
+    it("an SI5-range chunk with an implausible punch pointer is reported as skipped", () => {
+      const sl = Uint8Array.from(READOUT_BACKUP_FIXTURE.slice(0xd00, 0xd80));
+      sl[23] = 0x80;
+      const { records, skipped } = parseReadoutBackupBufferDetailed(sl, 0xe00);
+      expect(records).toEqual([]);
+      expect(skipped.map((x) => [x.slotAddress, x.reason])).toEqual([[0xe00, "not-si5"]]);
+    });
+
+    it("a non-empty partial tail (0xC0-byte buffer) is reported as overrun", () => {
+      const buf = new Uint8Array(0xc0).fill(0xee);
+      buf.set([1, 2, 3, 4], 0x80 + 0x10);
+      const { records, skipped } = parseReadoutBackupBufferDetailed(buf, 0x100);
+      expect(records).toEqual([]);
+      expect(skipped).toHaveLength(1);
+      expect(skipped[0].slotAddress).toBe(0x180);
+      expect(skipped[0].reason).toBe("overrun");
+      expect(skipped[0].rawBytesHex.length).toBe(0x40 * 2);
+    });
+
+    it("an erased partial tail is not reported", () => {
+      const buf = new Uint8Array(0xc0).fill(0xee);
+      expect(parseReadoutBackupBufferDetailed(buf, 0x100).skipped).toEqual([]);
+    });
+
+    it("the unmodified capture has nothing skipped", () => {
+      expect(
+        parseReadoutBackupBufferDetailed(READOUT_BACKUP_FIXTURE, READOUT_BACKUP_FIXTURE_BASE_ADDR).skipped,
+      ).toEqual([]);
+    });
   });
 });

@@ -18,6 +18,10 @@ Mispunch — the runner sees exactly what went wrong:
 
 ![Kiosk readout — mispunch](../screenshots/kiosk-mispunch.png)
 
+### When a card is not read
+
+If the reader cannot read a card completely (the card was pulled out too early, or the transfer was damaged), the reader does not beep and nothing is saved. The kiosk says **Card not read. Insert your card again and wait for the beep.** and returns to the idle screen after a few seconds; the operator window shows a red banner "Card … was not read: insert it again". The card never shows up as a result with missing punches. If the USB reader itself is unplugged, a standalone kiosk shows a red **Reader disconnected** bar and picks the reader up again when it is plugged back in.
+
 ### When the network drops at the kiosk
 
 A standalone kiosk keeps working without the server. A card read is saved on the device, the result is shown from the data the kiosk already holds, and a small amber badge counts the reads waiting to be sent. They are sent by themselves when the connection is back. If a read could not be saved at all, a red notice asks you to insert the card again. A kiosk opened with a kiosk key only (no one signed in, login required) keeps the reads on the device until an operator signs in there; the badge says so.
@@ -38,6 +42,8 @@ A dedicated readout workflow for organizers — type a card number (or scan one 
 
 ![Card readout with splits](../screenshots/card-readout.png)
 
+Punches are matched in the order the card lists them, so a control punched by a unit with a wrong clock still counts; radio punches are slotted in by time.
+
 **Re-reading a card never silently changes a result.** A disqualified runner or a status you set by hand stays as it is (a banner says so). A read that would replace a result with a worse one, such as a cleared hire card with no finish or punches that look like an old card's, asks first: **Replace result** or **Keep result**. Pushing a readout-station backup now writes the result too, under the same rules.
 
 ## Backup punches
@@ -48,7 +54,7 @@ SI backup-memory punches (the unit's local fallback when the chip read failed) l
 
 ## Readout-station backup recovery
 
-The same Backup Punches page also recovers full card readouts from a SI **readout station's** internal flash. This is the last-line-of-defence when Oxygen itself is broken and runners have read out on a standalone readout station — Oxygen wasn't there to hear the readout, but the station's own beep confirmed it landed in flash. Later, the operator dumps the flash through the Read Controls panel, reviews the recovered card readouts on the Backup Punches page's "Card readouts" tab, and pushes selected rows through the normal `storeReadout` pipeline — each one gets results, splits, and (optionally) a retroactive receipt as if it had happened live. Full details in [`docs/system/registration-and-readout.md`](../system/registration-and-readout.md#11-readout-station-backup-memory-recovery) and [`docs/si-protocol/readout-backup-format.md`](../si-protocol/readout-backup-format.md).
+The same Backup Punches page also recovers full card readouts from a SI **readout station's** internal flash. This is the last-line-of-defence when Oxygen itself is broken and runners have read out on a standalone readout station — Oxygen wasn't there to hear the readout, but the station's own beep confirmed it landed in flash. Later, the operator dumps the flash through the Read Controls panel, reviews the recovered card readouts on the Backup Punches page's "Card readouts" tab, and pushes selected rows through the normal `storeReadout` pipeline — each one gets results, splits, and (optionally) a retroactive receipt as if it had happened live. If a page of the station's memory cannot be read, the read stops with "Backup read incomplete … nothing was cleared": nothing is imported and the station is not cleared, so read it again. "Clear after read" only runs after a complete read and a successful import. If some slots on the station could not be decoded, the row turns amber, the reader beeps three times, nothing is cleared, and "Clear memory" asks before erasing ("Clear anyway"). Full details in [`docs/system/registration-and-readout.md`](../system/registration-and-readout.md#11-readout-station-backup-memory-recovery) and [`docs/si-protocol/readout-backup-format.md`](../si-protocol/readout-backup-format.md).
 
 ## Start screen
 

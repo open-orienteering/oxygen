@@ -21,6 +21,7 @@ declare global {
         punches?: Array<{ controlCode: number; time: number }>,
         options?: {
           hasFinish?: boolean;
+          silentBlocks?: number[];
           ownerData?: {
             firstName?: string;
             lastName?: string;
@@ -102,6 +103,32 @@ test.describe("WebSerial SI Reader", () => {
     await page.getByTestId("reader-dialog-close").click();
     await expect(page.getByTestId("reader-menu")).toBeVisible();
     expect(await page.evaluate(() => window.__siMock.isConnected())).toBe(false);
+  });
+
+  test("a card that cannot be read completely shows a banner and no readout", async ({ page }) => {
+    await selectCompetition(page);
+    await connectMockSerialReader(page, 5000);
+
+    // Block 1 never arrives: the reader asks again once, then gives up (~4 s).
+    await page.evaluate(() =>
+      window.__siMock.insertCard(2401438, [{ controlCode: 31, time: 36360 }], { silentBlocks: [1] }),
+    );
+
+    const banner = page.getByTestId("card-read-failed-banner");
+    await expect(banner).toBeVisible({ timeout: 10000 });
+    await expect(banner).toContainText("2401438");
+    await expect(banner).toContainText("was not read");
+    // No result row and no readout notification for a card that was not read.
+    await expect(page.getByTestId("card-notification")).toHaveCount(0);
+
+    // The same card inserted again, this time answered in full, is read.
+    await page.evaluate(() => window.__siMock.removeCard());
+    const readout = waitForTrpc(page, "cardReadout.readout");
+    await page.evaluate(() =>
+      window.__siMock.insertCard(2401438, [{ controlCode: 31, time: 36360 }]),
+    );
+    await readout;
+    await expect(page.getByTestId("card-notification")).toBeVisible({ timeout: 5000 });
   });
 
   test("readout notification navigates to card readout", async ({ page }) => {

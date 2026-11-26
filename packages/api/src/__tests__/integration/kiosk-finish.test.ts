@@ -188,6 +188,60 @@ describe("kiosk finish flow", () => {
     }
   });
 
+  it("a control punched with a clock an hour behind is still OK (card order, not time order)", async () => {
+    const f = await buildFixture("kf-clock");
+    try {
+      // 32 was punched by a unit whose clock ran an hour behind: its time sorts
+      // before the start. The card lists 31, 32, 33 in that order, and the
+      // readout must keep it, not re-sort by time (SI-09).
+      await f.caller.cardReadout.storeReadout({
+        cardNo: f.cardNo,
+        cardType: "SI11",
+        punches: [
+          { controlCode: 31, time: 366_000 },
+          { controlCode: 32, time: 372_000 - 36_000 },
+          { controlCode: 33, time: 378_000 },
+        ],
+        startTime: 360_000,
+        finishTime: 384_000,
+      });
+      const receipt = await f.caller.race.finishReceipt({ runnerId: f.runnerSeq });
+      expect(receipt).not.toBeNull();
+      expect(receipt!.status).toBe(1);
+      expect(receipt!.controls.find((s) => s.controlCode === 32)?.status).not.toBe("missing");
+    } finally {
+      await f.ctx.cleanup();
+    }
+  });
+
+  it("a radio punch for the same card still fills a control the card missed", async () => {
+    const f = await buildFixture("kf-radio");
+    try {
+      await f.caller.cardReadout.storeReadout({
+        cardNo: f.cardNo,
+        cardType: "SI11",
+        punches: [
+          { controlCode: 31, time: 366_000 },
+          { controlCode: 33, time: 378_000 },
+        ],
+        startTime: 360_000,
+        finishTime: 384_000,
+      });
+      // The radio control 32 recorded the pass between 31 and 33.
+      await f.caller.cardReadout.addPunch({
+        cardNo: f.cardNo,
+        controlCode: 32,
+        time: 372_000,
+      });
+      const receipt = await f.caller.race.finishReceipt({ runnerId: f.runnerSeq });
+      expect(receipt).not.toBeNull();
+      expect(receipt!.status).toBe(1);
+      expect(receipt!.splits.map((s) => s.code)).toEqual([31, 32, 33]);
+    } finally {
+      await f.ctx.cleanup();
+    }
+  });
+
   it("free-order course: scrambled punch order → OK; same card on ordered → MP", async () => {
     const f = await buildFixture("kf-free");
     try {

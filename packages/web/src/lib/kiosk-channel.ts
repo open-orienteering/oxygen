@@ -83,6 +83,15 @@ export interface KioskCardReadingMessage {
 }
 
 /**
+ * The reader could not read the card completely (SI-05): no readout will
+ * follow. The kiosk tells the runner to insert the card again.
+ */
+export interface KioskCardReadFailedMessage {
+  type: "card-read-failed";
+  cardNumber: number;
+}
+
+/**
  * Sent by the admin tab once a readout's result has been written (or the
  * offline event queued). The kiosk tab refetches the readout, the runner and
  * the receipt then: it never writes a finish itself (WEB-72).
@@ -124,6 +133,7 @@ export interface KioskRequestRegistrationReceiptMessage {
 export type KioskMessage =
   | KioskCardReadoutMessage
   | KioskCardReadingMessage
+  | KioskCardReadFailedMessage
   | KioskRegistrationStateMessage
   | KioskRegistrationCompleteMessage
   | KioskResetMessage

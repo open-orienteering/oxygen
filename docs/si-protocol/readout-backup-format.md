@@ -15,6 +15,9 @@ trusting them — see [Capturing a fresh trace](#capturing-a-fresh-trace).
 - `readout-capture.pcapng` — Config+ ↔ station USB-serial traffic, 7 cards
 - `readouts.txt` — Config+'s rendering of the same backup, used as ground
   truth for the parser tests
+- `packages/web/src/lib/__tests__/fixtures/station-frames-pcap.ts` — four
+  station reply frames from the same capture (odd data lengths), for the
+  CRC tests
 
 ## Protocol layer
 
@@ -31,8 +34,15 @@ control-mode stations:
 
 Config+ does a simple sequential walk from `0x100` to the end pointer;
 no per-slot skipping. The 5-byte response header `[00, station_code,
-adr2, adr1, adr0]` is the same as the control-mode response. Pages are
-concatenated (header bytes stripped) to form a contiguous flash buffer.
+adr2, adr1, adr0]` is the same as the control-mode response (the address
+bytes echo the request). Oxygen accepts a page only when `data.length ==
+5 + count` and `data[2..4]` equals the requested address; a late answer to
+an earlier page is discarded, a page that fails four attempts aborts the
+whole read with `BackupReadIncompleteError(address)`. The pages are placed
+at `address - 0x100` in a buffer pre-filled with `0xEE`, so an offset in
+the buffer is always a flash address. The caller never clears the station
+after a read that threw (see
+[registration-and-readout.md §11](../system/registration-and-readout.md)).
 
 Empty flash reads as `ee ee ee ...`.
 
@@ -79,7 +89,9 @@ offset 0x08..        card image  Identical layout to a live card readout from of
 
 The card image preserves block-by-block what a live readout would return.
 That means `parseSI8CardData` and `parseSI10CardData` work unchanged
-against backup-slot bytes (after the bytes 4-7 patch).
+against backup-slot bytes (after the bytes 4-7 patch). The per-series
+punch offsets (SI8 first punch at image byte 136, owner area in between)
+are in [card-layouts.md](card-layouts.md).
 
 ### SI5 slot
 
@@ -122,11 +134,11 @@ The walker steps `0x80` bytes at a time. At each candidate offset:
   data didn't exercise this case. If it shows up, our parser will
   truncate to the first 0x400 bytes — we'd see the punch list cut off in
   the parsed result. Defensive size check would be a nice-to-have.
-- **Card 1 (SI8 family) punch list.** In the captured slot the
-  punch records didn't appear at the expected `parseSI8CardData` offset
-  (block 0 byte 32) — they showed up at block 1 byte 22. The current
-  parser may under-report card 1's punches. The other cards in the
-  capture are SIAC and round-trip correctly.
+- **Card 1 (SI8 family) punch list.** Resolved: the records are at image
+  byte 136 (block 1 byte 8), not at block 0 byte 32, which holds the owner
+  text. Records 1-5 of that card are blank (`ee ee ee ee`) and the counter
+  (27) includes them, so the card has 22 punches. See
+  [card-layouts.md](card-layouts.md).
 
 ## 12-hour AM/PM disambiguation (SI5 only)
 
@@ -164,8 +176,12 @@ future enhancement would resolve SI5 times against the event's
 | Review UI | `packages/web/src/pages/BackupPunchesPage.tsx` → "Card readouts" tab |
 
 Parser tests at `packages/web/src/lib/__tests__/si-protocol.readout-backup.test.ts`
-drive the parser against the captured fixture and assert SIID + punch
-list + owner data for the 7 captured cards.
+drive the parser against the captured fixture and assert SIID + the full
+punch list (and owner data for the SIAC) of the captured cards, including
+the SI8 owner-text, blank-record and stale-record cases. The reader-level
+tests in `packages/web/src/lib/__tests__/webserial.test.ts` serve the same
+fixture through a fake serial port: live readouts of the SI8, SIAC and SI5
+cards, and the whole backup walk with page placement.
 
 Integration tests at
 `packages/api/src/__tests__/integration/readout-backup.test.ts` cover
