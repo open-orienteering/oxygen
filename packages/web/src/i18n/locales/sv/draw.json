@@ -85,5 +85,6 @@
   "confirmForce_one": "Detta skriver även om löpare som har startat eller gått i mål: {{count}} starttid ersätts och deras löptider ändras.",
   "confirmForce_other": "Detta skriver även om löpare som har startat eller gått i mål: {{count}} starttider ersätts och deras löptider ändras.",
   "confirmApply": "Ersätt och verkställ",
-  "stalePreview": "Löpare eller klasser har ändrats sedan förhandsgranskningen, så den visar inte längre vad som skulle skrivas. Förhandsgranska igen."
+  "stalePreview": "Löpare eller klasser har ändrats sedan förhandsgranskningen, så den visar inte längre vad som skulle skrivas. Förhandsgranska igen.",
+  "forceStartedNoCount": "Lotta även om löpare som har startat eller gått i mål"
 }

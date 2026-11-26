@@ -3,6 +3,7 @@ export {
   loadDrawInputs,
   computeDraw,
   DEFAULT_DRAW_OPTIONS,
+  RESULT_STATUSES,
 } from "./drawEngine.js";
 export type {
   DrawInputs,

@@ -4,7 +4,7 @@ import { TRPCError } from "@trpc/server";
 import { Prisma } from "../generated/prisma/client.js";
 import { router, viewProcedure, manageRaceProcedure } from "../trpc.js";
 import { toRelative, toAbsolute } from "../timeConvert.js";
-import { generateDrawPreview, MAX_DRAW_SEED } from "../draw/index.js";
+import { generateDrawPreview, MAX_DRAW_SEED, RESULT_STATUSES } from "../draw/index.js";
 import type { DrawPreviewResult } from "@oxygen/shared";
 import { WITHDRAWN_STATUSES } from "@oxygen/shared";
 import { valueToRunnerStatus } from "../statusConvert.js";
@@ -58,8 +58,13 @@ const drawExecuteInputSchema = z.object({
   previewToken: z.string().min(1),
 });
 
-/** A big draw is many rows; one transaction, so give it room (nginx allows 120 s). */
-const DRAW_TX_OPTIONS = { timeout: 110_000, maxWait: 10_000 } as const;
+/**
+ * A big draw is many rows in one transaction, so give it room, but stay well
+ * inside nginx's 120 s `proxy_read_timeout` (lock wait and middleware count too).
+ */
+const DRAW_TX_OPTIONS = { timeout: 90_000, maxWait: 10_000 } as const;
+
+const resultStatusSet = new Set<string>(RESULT_STATUSES);
 
 export const STALE_PREVIEW_MESSAGE =
   "The draw preview is stale: runners or classes changed since it was made. Preview again before applying.";
@@ -97,7 +102,7 @@ export const drawRouter = router({
       if (!r.classId) continue;
       bump(countByClassId, r.classId);
       if (r.startTime !== 0) bump(drawnByClassId, r.classId);
-      if (r.finishTime !== 0 || r.status !== "unknown") bump(startedByClassId, r.classId);
+      if (r.finishTime !== 0 || resultStatusSet.has(r.status)) bump(startedByClassId, r.classId);
     }
 
     return {
@@ -211,11 +216,19 @@ export const drawRouter = router({
             const ids = entries.map((e) => e.runnerId);
             const starts = entries.map((e) => toRelative(e.startTime, zeroTime));
             const nos = entries.map((e) => e.startNo);
+            // The guards repeat the engine's rules at write time, so a runner
+            // who finished (or got a start) after the load is not rewritten:
+            // the count then falls short and the draw is refused as stale.
+            const force = input.options.force;
+            const onlyMissing = input.options.mode === "onlyMissing";
+            const results = [...RESULT_STATUSES];
             const updated = await tx.$executeRaw(Prisma.sql`
               UPDATE oxygen.runners AS r
                  SET start_time = v.st, start_no = v.no
                 FROM unnest(${ids}::uuid[], ${starts}::int[], ${nos}::int[]) AS v(id, st, no)
-               WHERE r.id = v.id AND r.event_id = ${eventId}`);
+               WHERE r.id = v.id AND r.event_id = ${eventId} AND r.removed = false
+                 AND (${force}::boolean OR (r.finish_time = 0 AND r.status::text <> ALL(${results}::text[])))
+                 AND (NOT ${onlyMissing}::boolean OR r.start_time = 0)`);
             if (updated !== entries.length) {
               throw new TRPCError({ code: "CONFLICT", message: STALE_PREVIEW_MESSAGE });
             }

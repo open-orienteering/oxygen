@@ -271,6 +271,9 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
       }
 
       setHints(newHints);
+      setStaleMessage(null);
+      setConfirming(false);
+      executeMutation.reset();
 
       // Keep the seed so moving a block does not reshuffle the runners.
       previewMutation.mutate({ ...buildInput(newHints), seed: preview.seed }, {
@@ -280,7 +283,7 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
         },
       });
     },
-    [preview, buildInput, previewMutation],
+    [preview, buildInput, previewMutation, executeMutation],
   );
 
   const runExecute = useCallback(() => {
@@ -486,7 +489,9 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
                   className="rounded border-slate-300 text-red-600 focus:ring-red-500 cursor-pointer"
                   data-testid="draw-force"
                 />
-                {t("forceStarted", { count: Math.max(selectedStarted, startedOnPreview) })}
+                {Math.max(selectedStarted, startedOnPreview) > 0
+                  ? t("forceStarted", { count: Math.max(selectedStarted, startedOnPreview) })
+                  : t("forceStartedNoCount")}
               </label>
             )}
           </div>
@@ -817,6 +822,7 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
             </button>
             <button
               onClick={runExecute}
+              disabled={previewMutation.isPending || executeMutation.isPending}
               className={`px-3 py-1.5 text-sm font-medium text-white rounded-lg cursor-pointer ${
                 force ? "bg-red-600 hover:bg-red-700" : "bg-amber-600 hover:bg-amber-700"
               }`}
@@ -849,7 +855,7 @@ export function DrawPanel({ onClose, onDrawComplete }: Props) {
               </button>
               <button
                 onClick={handleExecute}
-                disabled={!preview || confirming || executeMutation.isPending}
+                disabled={!preview || confirming || previewMutation.isPending || executeMutation.isPending}
                 className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 data-testid="draw-execute-btn"
               >

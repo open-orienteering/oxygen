@@ -79,9 +79,18 @@ export interface DrawInputs {
 const withdrawnEnums = WITHDRAWN_STATUSES.map(valueToRunnerStatus);
 
 /**
+ * Statuses that mean the runner has run (a result). The other non-Unknown
+ * statuses (DNS, No timing, Not competing, Out of competition) are often set
+ * before the start, so on their own they do not keep a runner out of the
+ * draw; a finish time, read card or punch still does.
+ */
+export const RESULT_STATUSES = ["ok", "missing_punch", "dnf", "dq", "over_max_time"] as const;
+const resultStatuses = new Set<string>(RESULT_STATUSES);
+
+/**
  * Whether a runner has started or finished, so a redraw must keep their start
- * (RES-03): a finish time, a status other than Unknown, a read card, or any
- * punch stored for their card.
+ * (RES-03): a finish time, a result status (`RESULT_STATUSES`), a read card,
+ * or any stored punch for their card.
  */
 function hasStarted(
   r: {
@@ -94,7 +103,7 @@ function hasStarted(
   punchedCards: Set<number>,
 ): boolean {
   if (r.finishTime !== 0) return true;
-  if (r.status !== "unknown") return true;
+  if (resultStatuses.has(r.status)) return true;
   if (r.card && (r.card.readoutId !== null || r.card.readCount > 0)) return true;
   if (r.cardNo !== null && (readCards.has(r.cardNo) || punchedCards.has(r.cardNo))) return true;
   return false;
@@ -165,7 +174,7 @@ export async function loadDrawInputs(
           distinct: ["cardNo"],
         }),
         db.punch.findMany({
-          where: { eventId, cardNo: { in: cardNos } },
+          where: { eventId, cardNo: { in: cardNos }, removed: false },
           select: { cardNo: true },
           distinct: ["cardNo"],
         }),
@@ -315,7 +324,8 @@ export function computeDraw(
   const appendAfterKept = (cls: ClassData, config: ClassDrawConfig): number | undefined => {
     if (config.firstStart !== undefined) return config.firstStart;
     if (options.mode !== "onlyMissing" || cls.keptStarts.length === 0) return undefined;
-    return cls.keptStarts[cls.keptStarts.length - 1] + Math.max(intervalOf(config), 1);
+    // A mass start's late entries join the field at the same instant.
+    return cls.keptStarts[cls.keptStarts.length - 1] + intervalOf(config);
   };
 
   const courseInfos: ClassCourseInfo[] = classes.map((cls) => {
@@ -430,9 +440,14 @@ export function computeDraw(
       entries,
       skippedStarted: cls.skippedStarted,
       replaced,
-      // A late-entry draw appended to kept starts leaves the class's own
-      // first start and interval alone.
-      writesClass: !(options.mode === "onlyMissing" && cls.keptStarts.length > 0),
+      // The class's own first start and interval change only when the draw
+      // lays out the whole class: not when it places nobody, not when it
+      // appends late entries to kept starts, and not when started runners
+      // stay on the old grid.
+      writesClass:
+        entries.length > 0 &&
+        !(options.mode === "onlyMissing" && cls.keptStarts.length > 0) &&
+        cls.skippedStarted === 0,
     });
     globalStartNo += ordered.length;
   }

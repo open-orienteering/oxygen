@@ -102,6 +102,27 @@ describe("computeDraw", () => {
     expect(res.classes[0].writesClass).toBe(false);
   });
 
+  it("puts late entries of a mass start at the field's start", () => {
+    const cls = klass(1, 2, { keptStarts: [TEN, TEN] });
+    const res = computeDraw(
+      inputs([cls]),
+      [{ classId: 1, method: "simultaneous", interval: 0 }],
+      settings,
+      5,
+      { mode: "onlyMissing", force: false },
+    );
+    expect(res.classes[0].entries.map((e) => e.startTime)).toEqual([TEN, TEN]);
+  });
+
+  it("does not rewrite the class row when it places nobody or keeps started runners", () => {
+    const empty = computeDraw(inputs([klass(1, 0, { skippedStarted: 3 })]), configs([1]), settings, 5);
+    expect(empty.classes[0].writesClass).toBe(false);
+    const partly = computeDraw(inputs([klass(1, 2, { skippedStarted: 1 })]), configs([1]), settings, 5);
+    expect(partly.classes[0].writesClass).toBe(false);
+    const fresh = computeDraw(inputs([klass(1, 2)]), configs([1]), settings, 5);
+    expect(fresh.classes[0].writesClass).toBe(true);
+  });
+
   it("counts drawn runners whose start time is replaced", () => {
     const cls = klass(1, 3);
     cls.runners[0].startTime = TEN;

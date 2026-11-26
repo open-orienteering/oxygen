@@ -113,7 +113,7 @@ describe("a redraw keeps runners who have started (RES-03)", () => {
     await drawAndApply([cfg(classA)]);
     const [finished, withStatus, readOut, punched, fresh] = await runnersOf(classA);
     await ctx.db.runner.update({ where: { id: finished.id }, data: { finishTime: 30_000 } });
-    await ctx.db.runner.update({ where: { id: withStatus.id }, data: { status: "dns" } });
+    await ctx.db.runner.update({ where: { id: withStatus.id }, data: { status: "missing_punch" } });
     await ctx.db.cardReadout.create({
       data: { eventId: ctx.eventId, cardNo: readOut.cardNo!, punches: [] },
     });
@@ -133,6 +133,35 @@ describe("a redraw keeps runners who have started (RES-03)", () => {
       expect(r.startTime).toBe(before.get(r.id)!.startTime);
       expect(r.startNo).toBe(before.get(r.id)!.startNo);
     }
+  });
+
+  it("still draws a runner marked DNS or not competing before the start", async () => {
+    const [dns, notCompeting] = await runnersOf(classB);
+    await ctx.db.runner.update({ where: { id: dns.id }, data: { status: "dns" } });
+    await ctx.db.runner.update({ where: { id: notCompeting.id }, data: { status: "not_competing" } });
+    const { preview, res } = await drawAndApply([cfg(classB)]);
+    expect(preview.skippedStarted).toBe(0);
+    expect(res.totalDrawn).toBe(3);
+    expect((await runnersOf(classB)).every((r) => r.startTime !== 0)).toBe(true);
+  });
+
+  it("leaves the class's first start alone when started runners keep theirs", async () => {
+    await drawAndApply([cfg(classA)]);
+    const cls = await ctx.db.class.findFirstOrThrow({ where: { eventId: ctx.eventId, seq: classA } });
+    const [finished] = await runnersOf(classA);
+    await ctx.db.runner.update({ where: { id: finished.id }, data: { finishTime: 30_000 } });
+    const before = await ctx.db.journalEntry.count({ where: { eventId: ctx.eventId, type: "class.upserted" } });
+    await caller.draw.preview({ classes: [cfg(classA)], settings: { ...settings, firstStart: TEN + 60 * MIN } }).then((p) =>
+      caller.draw.execute({
+        classes: [cfg(classA)],
+        settings: { ...settings, firstStart: TEN + 60 * MIN },
+        seed: p.seed,
+        previewToken: p.previewToken,
+      }),
+    );
+    const after = await ctx.db.class.findFirstOrThrow({ where: { id: cls.id } });
+    expect(after.firstStart).toBe(cls.firstStart);
+    expect(await ctx.db.journalEntry.count({ where: { eventId: ctx.eventId, type: "class.upserted" } })).toBe(before);
   });
 
   it("rewrites them when forced", async () => {
@@ -319,8 +348,11 @@ describe("start numbers (RES-17)", () => {
       expect(p.startNo).toBe(rows.get(p.cardNo)!.startNo);
       expect(p.startTime).toBe(rows.get(p.cardNo)!.startTime + ctx.event.zeroTime);
     }
-    // Every entry carries its own HLC.
-    expect(new Set(entries.map((e) => e.hlc)).size).toBe(5);
+    // Every entry carries its own HLC, increasing in insert order.
+    const inOrder = [...entries].sort((a, b) => Number(a.ingestSeq - b.ingestSeq));
+    for (let i = 1; i < inOrder.length; i++) {
+      expect(inOrder[i].hlc > inOrder[i - 1].hlc).toBe(true);
+    }
   });
 
   it("replays startNo from start.adjusted, and leaves it alone when absent", async () => {

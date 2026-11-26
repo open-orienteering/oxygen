@@ -87,9 +87,9 @@ The draw also warns when two classes sharing a first control still send runners 
 
 ### Redrawing during an event
 
-A draw never moves a runner who has started: anyone with a finish time, a status, a read card or a stored punch keeps their start time and start number, and the preview says how many were kept. Only classes nobody has drawn yet are preselected when the panel opens; classes that already have start times show a *drawn* badge, and classes with finished runners a *started* badge.
+A draw never moves a runner who has started: anyone with a finish time, a result (OK, MP, DNF, DQ), a read card or a stored punch keeps their start time and start number, and the preview says how many were kept. Only classes nobody has drawn yet are preselected when the panel opens; classes that already have start times show a *drawn* badge, and classes with finished runners a *started* badge.
 
-- **Only runners without a start time** draws just the late entries. They are placed after the class's last start, and the class's own first start and interval stay as they are.
+- **Only runners without a start time** draws just the late entries. They are placed after the class's last start (in a mass start, at the same time as the field), and the class's own first start and interval stay as they are. These classes are not shown in the timeline.
 - **Also redraw runners who have started or finished** appears when the selection has such runners. It puts them back in the draw; their running times will change.
 
 When Apply would replace start times that are already set, the panel asks first and says how many. Apply writes exactly the order shown in the preview. If runners or classes change in between (a late entry, a class change), Apply refuses and asks for a new preview. Moving a class in the timeline keeps the runner order.
