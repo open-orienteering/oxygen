@@ -6,9 +6,12 @@
  * feature via "Kontrollmappning" in the Online Input settings dialog
  * (see `code/onlineinput.cpp:274` / `controlMappingView`).
  *
- * Storage: a single JSON row per competition in `oxygen_settings`,
+ * Storage: the `mapping` field of the event's online-input config,
  *
- *   online_input_mapping_<nameId> = {"100": 1, "200": 2}
+ *   online_input_<eventId>_config = {..., "mapping": {"100": 2}, ...}
+ *
+ * written by `onlineInput.addMapping` / `removeMapping` and read by the
+ * puller on every poll.
  *
  * Values are the MeOS `oPunch::SpecialPunch` enum from `oPunch.h:118`:
  *
@@ -18,8 +21,6 @@
  *   PunchCheck  = 3
  */
 
-import { getSetting, setSetting } from "../db.js";
-
 export const PUNCH_START = 1;
 export const PUNCH_FINISH = 2;
 export const PUNCH_CHECK = 3;
@@ -28,57 +29,23 @@ export type SpecialPunch = typeof PUNCH_START | typeof PUNCH_FINISH | typeof PUN
 
 export type ControlMapping = Record<string, SpecialPunch>;
 
-const MAPPING_PREFIX = "online_input_mapping_";
-
-export function mappingKey(nameId: string): string {
-  return `${MAPPING_PREFIX}${nameId}`;
-}
-
-/** Load the persisted mapping. Empty object if none stored or stored value is invalid. */
-export async function loadMapping(nameId: string): Promise<ControlMapping> {
-  const raw = await getSetting(mappingKey(nameId));
-  if (!raw) return {};
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    const out: ControlMapping = {};
-    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
-      const code = parseInt(k, 10);
-      if (!Number.isFinite(code) || code <= 0) continue;
-      if (v === PUNCH_START || v === PUNCH_FINISH || v === PUNCH_CHECK) {
-        out[String(code)] = v;
-      }
+/**
+ * Keep only valid entries of a stored mapping: positive integer codes that
+ * map to start, finish or check. Anything else (a hand-edited settings row,
+ * an older shape) is dropped rather than applied.
+ */
+export function sanitizeMapping(raw: unknown): ControlMapping {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out: ControlMapping = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (!/^\d+$/.test(k)) continue;
+    const code = Number(k);
+    if (code <= 0) continue;
+    if (v === PUNCH_START || v === PUNCH_FINISH || v === PUNCH_CHECK) {
+      out[String(code)] = v;
     }
-    return out;
-  } catch {
-    return {};
   }
-}
-
-/** Persist the mapping (overwrites any existing value). */
-export async function saveMapping(nameId: string, mapping: ControlMapping): Promise<void> {
-  await setSetting(mappingKey(nameId), JSON.stringify(mapping));
-}
-
-export async function addMapping(
-  nameId: string,
-  rawCode: number,
-  target: SpecialPunch,
-): Promise<ControlMapping> {
-  if (!Number.isFinite(rawCode) || rawCode <= 0 || rawCode >= 1024) {
-    throw new Error(`Invalid control code: ${rawCode}`);
-  }
-  const current = await loadMapping(nameId);
-  current[String(rawCode)] = target;
-  await saveMapping(nameId, current);
-  return current;
-}
-
-export async function removeMapping(nameId: string, rawCode: number): Promise<ControlMapping> {
-  const current = await loadMapping(nameId);
-  delete current[String(rawCode)];
-  await saveMapping(nameId, current);
-  return current;
+  return out;
 }
 
 /**

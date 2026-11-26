@@ -62,12 +62,16 @@ Some installations want a particular raw control code (e.g. 100) to land
 in `punches.type` as a special punch — this matches the same feature in
 MeOS's "Kontrollmappning" dialog.
 
-The mapping is per-event, stored as a single JSON row in
-`oxygen.oxygen_settings`:
+The mapping is per-event and lives in the `mapping` field of the event's
+config row in `oxygen.settings` (set from the mapping table on the Event
+page through `onlineInput.addMapping` / `removeMapping`):
 
 ```
-online_input_mapping_<nameId> = {"100": 1, "200": 2}
+online_input_<eventId>_config = {..., "mapping": {"100": 2, "200": 1}, ...}
 ```
+
+The puller reads it on every poll, so a change applies from the next poll
+on. Punches already stored keep the code they were stored with.
 
 Values mirror the MeOS `oPunch::SpecialPunch` enum:
 
@@ -80,6 +84,41 @@ Values mirror the MeOS `oPunch::SpecialPunch` enum:
 Codes that aren't in the mapping land in `punches.type` with their raw
 value, which is what you want for spectator radios that just shadow a
 regular control.
+
+## Watermark, duplicates and bad rows
+
+The puller asks ROC for rows after `lastId` and moves `lastId` to the
+highest valid id it imported, in the same transaction as the inserts
+(a compare-and-set, see
+[background-jobs-lease.md](background-jobs-lease.md#defence-in-depth-on-the-roc-watermark)).
+
+- **Duplicates are skipped.** The unique index `punches_oi_dedup_idx`
+  (`event_id, card_no, control_code, time` where `source = 'online_input'`)
+  makes a punch that is already stored a no-op (one `INSERT … ON CONFLICT
+  DO NOTHING` per poll, in a transaction allowed 60 s so a reset that
+  replays a whole event fits). Only punches actually stored are counted
+  and journaled.
+- **Reset is safe.** The **Reset** button next to the last id sets
+  `lastId` to 0, so the next poll asks ROC for everything again. Punches
+  already imported are skipped and only missing ones are added; polling
+  carries on as before. One exception: the dedupe key holds the *mapped*
+  code, so after a mapping change a reset stores the old punches again
+  under the new code (the old rows stay).
+- **Config edits never rewind the watermark.** Every router write to the
+  config row (save, enable, disable, mapping, reset) locks the row
+  (`SELECT … FOR UPDATE`) for its read-modify-write, so it cannot write an
+  older `lastId` back over a poll that committed meanwhile.
+- **Bad rows are skipped, not fatal.** A row whose id, code or card is not
+  a positive whole number that fits the int4 columns (at most
+  2,147,483,647), or whose time is not a valid `HH:MM:SS`, is skipped and
+  counted in `rows_skipped` (`getStatus().rowsSkipped`). If its id is
+  sound the watermark moves past it, so it is not fetched again; an id
+  outside the range never becomes the watermark.
+- **A body that is not ROC is an error.** A 200 response with lines but not
+  one row that even starts with a valid punch id (an HTML error or sign-in page, a wrong endpoint) is
+  reported in the panel as `Unexpected response: <first 80 characters>`,
+  like an HTTP error; `last_polled` is not touched and the next good poll
+  clears the error. An empty body is a normal "nothing new" poll.
 
 ## Origin attribution
 
@@ -102,7 +141,7 @@ packages/api/src/
 ├── online-input/
 │   ├── protocol.ts                     # Protocol seam (extend → SICenter)
 │   ├── roc.ts                          # ROC implementation
-│   ├── mapping.ts                      # Control-mapping helpers
+│   ├── mapping.ts                      # Control-mapping validation + apply
 │   └── puller.ts                       # PullerManager + reconcile
 └── routers/onlineInput.ts              # tRPC router
 ```
@@ -111,14 +150,18 @@ packages/api/src/
 
 | Key                                    | Value                                                  |
 |----------------------------------------|--------------------------------------------------------|
-| `online_input_config_<nameId>`         | JSON `{enabled, protocol, endpointUrl, unitId, intervalSeconds}` |
-| `online_input_last_id_<nameId>`        | Highest `punchId` already imported                     |
-| `online_input_mapping_<nameId>`        | JSON `{"<rawCode>": 1|2|3, ...}`                       |
+| `online_input_<eventId>_config`           | JSON `{enabled, protocol, endpointUrl, unitId, intervalSeconds, mapping, lastId}`; `mapping` is `{"<rawCode>": 1\|2\|3}`, `lastId` the highest ROC id already imported |
+| `online_input_<eventId>_last_polled`      | ISO time of the last successful poll                   |
+| `online_input_<eventId>_poll_count`       | Polls run                                              |
+| `online_input_<eventId>_punches_imported` | Punches actually stored                                |
+| `online_input_<eventId>_last_error`       | Last error shown in the panel, cleared by a good poll  |
+| `online_input_<eventId>_rows_skipped`     | ROC rows skipped as malformed or out of range          |
 
 Boot reconciliation (`reconcileEnabledPullers` in
 [`puller.ts`](../../packages/api/src/online-input/puller.ts)) re-arms every
-enabled puller on API restart and skips orphaned settings whose `nameId`
-is no longer present in `oxygen.events`.
+enabled puller on API restart. Older builds documented an
+`online_input_mapping_<nameId>` key; nothing in the app ever wrote it and
+it is no longer read.
 
 ## Forward-compat: SICenter
 
@@ -139,10 +182,8 @@ inside the protocol implementation:
 | Auth                | None                                                  | `Authorization: Bearer <apiKey>`                                            |
 | Multi-device        | Single `unitId` (account scopes the poll)             | Multiple modems comma-separated in one call                                 |
 
-When SICenter lands, the `online_input_config_<nameId>` JSON gains a
+When SICenter lands, the `online_input_<eventId>_config` JSON gains a
 `protocol: "sicenter"` field plus an encrypted `apiKey` (mirroring the
 existing pattern in
 [`packages/api/src/eventorKeyStore.ts`](../../packages/api/src/eventorKeyStore.ts)),
-and the `Protocol` registry adds a `sicenter.ts` entry. The
-`online_input_last_id_<nameId>` and `online_input_mapping_<nameId>` rows
-carry over as-is.
+and the `Protocol` registry adds a `sicenter.ts` entry. Its `lastId` and `mapping` fields carry over as-is.

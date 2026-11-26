@@ -230,7 +230,7 @@
     "totalImported": "{{count}} punches imported",
     "lastId": "Last imported ID",
     "resetLastId": "Reset",
-    "resetLastIdHelp": "Forces a full re-import on the next poll. Existing punches in oPunch are not deleted, so duplicates may appear.",
+    "resetLastIdHelp": "Asks ROC for all punches again on the next poll. Punches already imported are skipped, so only missing ones are added.",
     "pollNow": "Poll now",
     "pollStats": "Poll: {{fetched}} fetched, {{inserted}} inserted",
     "mappingTitle": "Control mapping",

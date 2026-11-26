@@ -113,15 +113,21 @@ transaction as the punch inserts:
 
 ```sql
 UPDATE oxygen.settings
-   SET value = jsonb_set(value::jsonb, '{lastId}', to_jsonb($1::int))::text
+   SET value = jsonb_set(value::jsonb, '{lastId}', to_jsonb($1::bigint))::text
  WHERE key = $2
-   AND COALESCE((value::jsonb->>'lastId')::int, 0) = $3
+   AND COALESCE((value::jsonb->>'lastId')::bigint, 0) = $3
 ```
 
 A second poller that fetched the same range finds the watermark moved,
 fails the compare, and rolls its inserts back. Updating only this key
 also stops a poll from clobbering configuration an operator edited while
-the fetch was in flight.
+the fetch was in flight. The other direction is covered too: every
+router write to the config row (`routers/onlineInput.ts`, `updateConfig`)
+holds `SELECT … FOR UPDATE` for its read-modify-write, so the poll's
+`UPDATE` waits for it and re-checks against the row it left, and a save
+can never write an older `lastId` back. Punches already stored are
+skipped by `punches_oi_dedup_idx` (`ON CONFLICT DO NOTHING`), so a reset
+watermark re-reads the range without failing the batch.
 
 ## Lease scope in development
 

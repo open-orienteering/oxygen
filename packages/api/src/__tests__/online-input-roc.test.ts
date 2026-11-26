@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { rocProtocol, ROC_DEFAULT_ENDPOINT } from "../online-input/roc.js";
+import { rocProtocol, ROC_DEFAULT_ENDPOINT, ROC_MAX_INT } from "../online-input/roc.js";
+import { sanitizeMapping, applyMapping } from "../online-input/mapping.js";
 import { formatHMS, parseHMS } from "../online-input/protocol.js";
 
 describe("rocProtocol.buildRequest", () => {
@@ -45,12 +46,15 @@ describe("rocProtocol.buildRequest", () => {
   });
 });
 
+/** The well-formed rows only; `skipped` has its own tests below. */
+const parse = (body: string) => rocProtocol.parseResponse(body).punches;
+
 describe("rocProtocol.parseResponse", () => {
   it("parses a typical ROC response", () => {
     const body =
       "1;31;1234567;2026-05-05 09:42:13\n" +
       "2;100;7654321;2026-05-05 09:43:00\n";
-    const punches = rocProtocol.parseResponse(body);
+    const punches = parse(body);
     expect(punches).toEqual([
       {
         punchId: 1,
@@ -68,28 +72,28 @@ describe("rocProtocol.parseResponse", () => {
   });
 
   it("returns [] on an empty body", () => {
-    expect(rocProtocol.parseResponse("")).toEqual([]);
+    expect(parse("")).toEqual([]);
   });
 
   it("ignores blank lines, trailing newlines and trailing whitespace", () => {
     const body =
       "\n\n1;31;1234567;2026-05-05 09:42:13   \n" +
       "  \n\n";
-    const punches = rocProtocol.parseResponse(body);
+    const punches = parse(body);
     expect(punches).toHaveLength(1);
     expect(punches[0].punchId).toBe(1);
   });
 
   it("strips a BOM at the start of the body", () => {
     const body = "\uFEFF1;31;1234567;2026-05-05 09:42:13\n";
-    const punches = rocProtocol.parseResponse(body);
+    const punches = parse(body);
     expect(punches).toHaveLength(1);
     expect(punches[0].rawCode).toBe(31);
   });
 
   it("handles CRLF line endings", () => {
     const body = "1;31;1234567;2026-05-05 09:42:13\r\n2;32;7654321;2026-05-05 09:43:00\r\n";
-    const punches = rocProtocol.parseResponse(body);
+    const punches = parse(body);
     expect(punches).toHaveLength(2);
   });
 
@@ -101,7 +105,7 @@ describe("rocProtocol.parseResponse", () => {
       ";;;;\n" +
       "3;55;2222222;not-a-timestamp\n" +
       "4;55;3333333;2026-05-05 09:44:00\n";
-    const punches = rocProtocol.parseResponse(body);
+    const punches = parse(body);
     expect(punches.map((p) => p.punchId)).toEqual([1, 2, 4]);
   });
 
@@ -110,7 +114,7 @@ describe("rocProtocol.parseResponse", () => {
       "0;31;1234567;2026-05-05 09:42:13\n" +
       "1;0;1234567;2026-05-05 09:42:13\n" +
       "2;31;0;2026-05-05 09:42:13\n";
-    expect(rocProtocol.parseResponse(body)).toEqual([]);
+    expect(parse(body)).toEqual([]);
   });
 
   it("rejects rows where the time-of-day is invalid", () => {
@@ -118,14 +122,127 @@ describe("rocProtocol.parseResponse", () => {
       "1;31;1234567;2026-05-05 25:00:00\n" + // hour > 23
       "2;31;1234567;2026-05-05 09:60:00\n" + // minute > 59
       "3;31;1234567;2026-05-05 09:00:60\n";  // second > 59
-    expect(rocProtocol.parseResponse(body)).toEqual([]);
+    expect(parse(body)).toEqual([]);
   });
 
   it("tolerates extra trailing fields by ignoring them", () => {
     const body = "1;31;1234567;2026-05-05 09:42:13;extra;trailing\n";
-    const punches = rocProtocol.parseResponse(body);
+    const punches = parse(body);
     expect(punches).toHaveLength(1);
     expect(punches[0].punchId).toBe(1);
+  });
+});
+
+describe("rocProtocol.parseResponse: range checks and skipped rows", () => {
+  it("skips a row whose id, code or card does not fit int4 and keeps its neighbours", () => {
+    const body =
+      "1;31;1001;2026-05-05 09:42:13\n" +
+      "99999999999;31;1002;2026-05-05 09:42:14\n" + // id above int4
+      "2147483648;31;1003;2026-05-05 09:42:15\n" + // id = int4 max + 1
+      "4;2147483648;1004;2026-05-05 09:42:16\n" + // code above int4
+      "5;31;99999999999;2026-05-05 09:42:17\n" + // card above int4
+      "6;32;1006;2026-05-05 09:42:18\n";
+    const result = rocProtocol.parseResponse(body);
+    expect(result.punches.map((p) => p.punchId)).toEqual([1, 6]);
+    expect(result.skipped).toBe(4);
+  });
+
+  it("accepts the int4 maximum itself", () => {
+    const result = rocProtocol.parseResponse(
+      `${ROC_MAX_INT};31;${ROC_MAX_INT};2026-05-05 09:42:13\n`,
+    );
+    expect(result.punches).toHaveLength(1);
+    expect(result.punches[0].punchId).toBe(ROC_MAX_INT);
+  });
+
+  it("rejects numeric fields with trailing junk that parseInt would accept", () => {
+    const body =
+      "12abc;31;1001;2026-05-05 09:42:13\n" +
+      "13;31x;1001;2026-05-05 09:42:13\n" +
+      "14;31;1001.5;2026-05-05 09:42:13\n" +
+      "15;-31;1001;2026-05-05 09:42:13\n" +
+      "16;31;1001;2026-05-05 09:42:13\n";
+    const result = rocProtocol.parseResponse(body);
+    expect(result.punches.map((p) => p.punchId)).toEqual([16]);
+    expect(result.skipped).toBe(4);
+  });
+
+  it("tolerates whitespace around numeric fields", () => {
+    const result = rocProtocol.parseResponse(" 7 ; 31 ; 1001 ;2026-05-05 09:42:13\n");
+    expect(result.punches).toHaveLength(1);
+    expect(result.punches[0]).toMatchObject({ punchId: 7, rawCode: 31, cardNo: 1001 });
+  });
+
+  it("counts malformed lines as skipped but not blank lines", () => {
+    const body = "\n  \ngarbage\n1;31;1001;2026-05-05 09:42:13\n\n;;;;\n";
+    const result = rocProtocol.parseResponse(body);
+    expect(result.punches).toHaveLength(1);
+    expect(result.skipped).toBe(2);
+  });
+
+  it("reports an HTML page as zero punches and some skipped lines", () => {
+    const body =
+      "<!DOCTYPE html>\n<html><head><title>502 Bad Gateway</title></head>\n" +
+      "<body>Bad gateway</body></html>\n";
+    const result = rocProtocol.parseResponse(body);
+    expect(result.punches).toEqual([]);
+    expect(result.skipped).toBeGreaterThan(0);
+  });
+
+  it("reports an empty or whitespace-only body as nothing skipped", () => {
+    expect(rocProtocol.parseResponse("")).toEqual({ punches: [], skipped: 0, maxSkippedId: 0 });
+    expect(rocProtocol.parseResponse(" \r\n\n ")).toEqual({
+      punches: [],
+      skipped: 0,
+      maxSkippedId: 0,
+    });
+  });
+
+  it("reports the highest sound id among skipped rows", () => {
+    const body =
+      "1;31;1001;2026-05-05 09:42:13\n" +
+      "7;31;99999999999;2026-05-05 09:42:14\n" + // bad card, sound id
+      "9;31;1003;not-a-time\n" + // bad time, sound id
+      "99999999999;31;1004;2026-05-05 09:42:16\n" + // id itself out of range
+      "garbage\n";
+    const result = rocProtocol.parseResponse(body);
+    expect(result.punches.map((p) => p.punchId)).toEqual([1]);
+    expect(result.skipped).toBe(4);
+    expect(result.maxSkippedId).toBe(9);
+  });
+
+  it("gives an HTML page no skipped id", () => {
+    const result = rocProtocol.parseResponse("<html>\n<body>502</body>\n</html>\n");
+    expect(result.maxSkippedId).toBe(0);
+  });
+});
+
+describe("sanitizeMapping / applyMapping", () => {
+  it("keeps positive integer codes mapped to start, finish or check", () => {
+    expect(sanitizeMapping({ "100": 2, "101": 1, "102": 3 })).toEqual({
+      "100": 2,
+      "101": 1,
+      "102": 3,
+    });
+  });
+
+  it("drops bad codes and bad targets", () => {
+    expect(
+      sanitizeMapping({ "0": 2, "-5": 1, "abc": 1, "12x": 2, "100": 4, "101": "2", "102": null }),
+    ).toEqual({});
+  });
+
+  it("returns {} for non-objects", () => {
+    expect(sanitizeMapping(null)).toEqual({});
+    expect(sanitizeMapping(undefined)).toEqual({});
+    expect(sanitizeMapping([2])).toEqual({});
+    expect(sanitizeMapping("x")).toEqual({});
+  });
+
+  it("applyMapping rewrites a mapped code and passes others through", () => {
+    const m = sanitizeMapping({ "100": 2 });
+    expect(applyMapping(m, 100)).toBe(2);
+    expect(applyMapping(m, 31)).toBe(31);
   });
 });
 
