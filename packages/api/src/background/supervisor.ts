@@ -34,7 +34,7 @@ import {
 } from "../online-input/puller.js";
 import { startShipper, stopShipper } from "../sync/shipper.js";
 import { maybeStartStorageGc, stopStorageGc } from "../map-store/gc.js";
-import { nodeRole } from "../sync/nodeIdentity.js";
+import { nodeRole, syncPeerUrl } from "../sync/nodeIdentity.js";
 
 /**
  * Whether this node publishes to LiveResults. The cloud is the one owner
@@ -42,9 +42,11 @@ import { nodeRole } from "../sync/nodeIdentity.js";
  * with an uplink would otherwise push the same competition as the cloud from
  * a second database, and the lagging copy would undo the other's rows each
  * cycle (SYNC-14). The box's results reach LiveResults through shipping.
+ * A standalone box (no `SYNC_PEER_URL`) has no cloud behind it and pushes
+ * itself.
  */
 export function publishesLiveResults(): boolean {
-  return nodeRole() !== "venue";
+  return !(nodeRole() === "venue" && syncPeerUrl() !== null);
 }
 
 /** How often the leader re-reads the configuration, in ms. */

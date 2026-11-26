@@ -866,12 +866,14 @@ Deferred until after venue packaging lands; mechanically it is
   convert. (A missed conversion in the offline `card.read` path was one of
   the latent bugs that motivated this redesign.)
 - **Single-owner background services.** The LiveResults pusher runs on
-  the cloud only: the background reconcile skips it on `NODE_ROLE=venue`
-  (`publishesLiveResults()`), so a venue copy never double-pushes. The
+  the cloud only: the background reconcile skips it on a venue box that
+  ships to a peer (`publishesLiveResults()`), so a venue copy never double-pushes. The
   Google Sheets readout backup has one owner too: the cloud, which pushes
   every readout it stores or ingests, the box's shipped `card.read`
   included. A box that ships to a peer pushes nothing to the sheet
   (`pushesReadoutsToSheet()` in `sheetsBackup.ts`); a standalone box does.
+  A webhook URL set on the box is sent ahead of the next journal batch, so
+  the readouts after it find it on the cloud.
 - **Large/streaming endpoints** (map tiles, 50 MB uploads) are cloud-owned
   non-critical endpoints; they are simply unavailable at an offline venue.
 - **Venue box sleep.** A laptop venue node must not sleep mid-race; the

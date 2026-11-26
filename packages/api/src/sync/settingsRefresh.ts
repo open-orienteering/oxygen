@@ -20,6 +20,7 @@
  * venue can run its own Eventor sync while online.
  */
 
+import { clearSheetsCache } from "../sheetsBackup.js";
 import { TRPCError } from "@trpc/server";
 import { knownFields } from "./knownFields.js";
 import type { EventRef, PrismaClient } from "../db.js";
@@ -105,5 +106,7 @@ export async function importVenueOwnedSettings(
       await tx.event.update({ where: { id: eventId }, data: data as never });
     }
   });
+  // The cloud pushes the box's readouts to the sheet: use a new URL at once.
+  if ("googleSheetsWebhookUrl" in data) clearSheetsCache();
   return Object.keys(data).length;
 }

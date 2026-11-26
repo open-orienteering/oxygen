@@ -110,9 +110,9 @@ The lease picks one instance *within* a deployment. A venue box and the
 cloud are two deployments with two databases, so the lease cannot keep
 them apart; the node role does (`NODE_ROLE`, `sync/nodeIdentity.ts`):
 
-| Job | Cloud (`NODE_ROLE` unset or `cloud`) | Venue box (`NODE_ROLE=venue`) |
+| Job | Cloud (`NODE_ROLE` unset or `cloud`) | Venue box (`NODE_ROLE=venue`, ships to `SYNC_PEER_URL`) |
 |-----|------|------|
-| LiveResults push | yes, the one owner | never: the reconcile skips it and drops any timer (`publishesLiveResults()` in `background/supervisor.ts`) |
+| LiveResults push | yes, the one owner | never: the reconcile skips it and drops any timer (`publishesLiveResults()` in `background/supervisor.ts`); a standalone box with no peer pushes itself |
 | ROC polling | yes | yes, into the box's own database (see [online-input-roc.md](online-input-roc.md)) |
 | Journal shipping | inert (no peer) | yes |
 | Map storage GC | yes | yes |
@@ -140,8 +140,8 @@ Oxygen's scope, and writes only the difference in one MySQL transaction
 a tick that finds the previous cycle still running is skipped, and a
 manual `pushNow` waits for it and then runs. A cycle has a 2-minute
 deadline and every statement a 15 s timeout; on a timeout or lost
-connection the connection is destroyed (MySQL rolls the transaction back)
-rather than rolled back behind the stalled statement, so the guard always
+connection the socket is destroyed (the server rolls the transaction back
+once it notices) rather than rolled back behind the stalled statement, so the guard always
 clears and `lastError` is set. `lastPush` is the start time of the last
 successful cycle; a skipped tick changes no status. See
 [bugfixes/liveresults-single-owner-and-incremental-push.md](../bugfixes/liveresults-single-owner-and-incremental-push.md).

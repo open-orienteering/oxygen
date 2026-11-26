@@ -205,7 +205,7 @@ let poolSuspect = false;
 /** After a failed refetch with a working pool, try again this much later. */
 const REFETCH_RETRY_MS = 60_000;
 /** How long an old pool's connections may finish their cycle after a swap. */
-const OLD_POOL_GRACE_MS = 120_000;
+const OLD_POOL_GRACE_MS = 300_000;
 
 export interface LiveResultsCredentials {
   host: string;
@@ -355,6 +355,57 @@ function exec<T extends mysql.RowDataPacket[] | mysql.ResultSetHeader>(
   return conn.query<T>({ sql, timeout: STATEMENT_TIMEOUT_MS }, values);
 }
 
+/**
+ * Close a connection's socket at once. mysql2's `destroy()` ends the stream
+ * politely (a FIN), which a black-holed link never delivers; destroying the
+ * socket as well frees it locally. The server rolls back the open
+ * transaction once it notices (its keepalive or `wait_timeout`).
+ */
+function hardDestroy(conn: mysql.PoolConnection): void {
+  conn.destroy();
+  const stream = (conn as unknown as { connection?: { stream?: { destroy?: () => void } } })
+    .connection?.stream;
+  stream?.destroy?.();
+}
+
+/**
+ * Run `fn` on a pooled connection. A connection or auth error, at connect
+ * time too, invalidates the cached connection string; a connection that hit
+ * one is destroyed rather than handed back to the pool with a stalled
+ * statement at the head of its queue.
+ */
+async function withConnection<T>(fn: (conn: LiveResultsConn) => Promise<T>): Promise<T> {
+  let conn: mysql.PoolConnection;
+  try {
+    conn = await (await getLiveResultsPool()).getConnection();
+  } catch (err) {
+    noteLiveResultsError(err);
+    throw err;
+  }
+  let destroyed = false;
+  const destroy = () => {
+    if (destroyed) return;
+    destroyed = true;
+    hardDestroy(conn);
+  };
+  const wrapped: LiveResultsConn = {
+    query: (options, values) => conn.query(options, values),
+    beginTransaction: () => conn.beginTransaction(),
+    commit: () => conn.commit(),
+    rollback: () => conn.rollback(),
+    destroy,
+  };
+  try {
+    return await fn(wrapped);
+  } catch (err) {
+    noteLiveResultsError(err);
+    if (isConnectionError(err)) destroy();
+    throw err;
+  } finally {
+    if (!destroyed) conn.release();
+  }
+}
+
 // ─── Competition row management ────────────────────────────
 
 function isDuplicateKey(err: unknown): boolean {
@@ -384,8 +435,7 @@ export async function ensureCompetition(eventId: bigint): Promise<number> {
     return event.liveresultsTavid;
   }
 
-  const conn = await (await getLiveResultsPool()).getConnection();
-  try {
+  return withConnection(async (conn) => {
     let tavid = 0;
     for (let attempt = 0; ; attempt++) {
       const [rows] = await exec<mysql.RowDataPacket[]>(
@@ -419,12 +469,7 @@ export async function ensureCompetition(eventId: bigint): Promise<number> {
       data: { liveresultsTavid: tavid },
     });
     return tavid;
-  } catch (err) {
-    noteLiveResultsError(err);
-    throw err;
-  } finally {
-    conn.release();
-  }
+  });
 }
 
 export async function updateCompetitionMeta(
@@ -436,8 +481,7 @@ export async function updateCompetitionMeta(
     country?: string;
   },
 ): Promise<void> {
-  const conn = await (await getLiveResultsPool()).getConnection();
-  try {
+  await withConnection(async (conn) => {
     const parts: string[] = [];
     const vals: (string | number)[] = [];
     if (opts.compName !== undefined) {
@@ -459,12 +503,7 @@ export async function updateCompetitionMeta(
     if (parts.length === 0) return;
     vals.push(tavid);
     await exec(conn, `UPDATE login SET ${parts.join(", ")} WHERE tavid = ?`, vals);
-  } catch (err) {
-    noteLiveResultsError(err);
-    throw err;
-  } finally {
-    conn.release();
-  }
+  });
 }
 
 // ─── Main sync: plan, then apply ───────────────────────────
@@ -767,7 +806,7 @@ async function applyLiveResultsDiff(
     const ph = rows.map(() => "(?, ?, ?)").join(",");
     await exec(
       conn,
-      `DELETE FROM splitcontrols WHERE tavid = ? AND (classname, corder, code) IN (${ph})`,
+      `DELETE FROM splitcontrols WHERE tavid = ? AND (BINARY classname, corder, code) IN (${ph})`,
       [tavid, ...rows.flatMap((r) => [r.classname, r.corder, r.code])],
     );
   }
@@ -948,41 +987,26 @@ const CYCLE_DEADLINE_MS = 120_000;
 export async function syncAll(tavid: number, eventId: bigint): Promise<SyncStats> {
   const { source, ownedClassnames } = await loadLiveResultsSource(eventId);
   const desired = buildLiveResultsRows(source);
-  const conn = await (await getLiveResultsPool()).getConnection();
-  let destroyed = false;
-  const tracked: LiveResultsConn = {
-    query: (options, values) => conn.query(options, values),
-    beginTransaction: () => conn.beginTransaction(),
-    commit: () => conn.commit(),
-    rollback: () => conn.rollback(),
-    destroy() {
-      destroyed = true;
-      conn.destroy();
-    },
-  };
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      reject(Object.assign(new Error(`LiveResults push took over ${CYCLE_DEADLINE_MS / 1000} s`), {
-        code: "PROTOCOL_SEQUENCE_TIMEOUT",
-      }));
-    }, CYCLE_DEADLINE_MS);
-  });
-  try {
-    // The deadline makes sure the cycle settles (and the manager's per-event
-    // guard clears, with `lastError` set) even on a black-holed link.
-    return await Promise.race([pushLiveResultsRows(tracked, tavid, desired, ownedClassnames), deadline]);
-  } catch (err) {
-    noteLiveResultsError(err);
-    if (isConnectionError(err) && !destroyed) {
-      destroyed = true;
-      conn.destroy();
+  return withConnection(async (conn) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        reject(
+          Object.assign(new Error(`LiveResults push took over ${CYCLE_DEADLINE_MS / 1000} s`), {
+            code: "PROTOCOL_SEQUENCE_TIMEOUT",
+          }),
+        );
+      }, CYCLE_DEADLINE_MS);
+    });
+    try {
+      // The deadline makes sure the cycle settles (and the manager's
+      // per-event guard clears, with `lastError` set) even on a black-holed
+      // link; its connection-class code gets the connection destroyed.
+      return await Promise.race([pushLiveResultsRows(conn, tavid, desired, ownedClassnames), deadline]);
+    } finally {
+      clearTimeout(timer);
     }
-    throw err;
-  } finally {
-    clearTimeout(timer);
-    if (!destroyed) conn.release();
-  }
+  });
 }
 
 // ─── Pusher manager (multi-tenant) ─────────────────────────
@@ -1114,7 +1138,12 @@ class LiveResultsPusherManager {
    * One push on demand. Waits for a cycle already running for the event,
    * then runs its own, so the two never interleave.
    */
-  async pushNow(tavid: number, eventId: bigint, syncFn: SyncFn = syncAll): Promise<SyncStats> {
+  async pushNow(
+    tavid: number,
+    eventId: bigint,
+    // Recorded like a timer cycle, so a manual success shows in the status.
+    syncFn: SyncFn = (t, e) => persistingSync(t, e),
+  ): Promise<SyncStats> {
     for (;;) {
       const running = this.inFlight.get(String(eventId));
       if (!running) break;

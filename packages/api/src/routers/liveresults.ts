@@ -19,8 +19,10 @@ import {
   loadPushStatus,
   updateCompetitionMeta,
 } from "../liveresults.js";
-import { requestBackgroundReconcile } from "../background/supervisor.js";
-import { nodeRole } from "../sync/nodeIdentity.js";
+import {
+  publishesLiveResults,
+  requestBackgroundReconcile,
+} from "../background/supervisor.js";
 
 export interface LRConfig {
   enabled: boolean;
@@ -97,7 +99,7 @@ export const liveresultsRouter = router({
       lastError: status.lastError,
       // A venue box never pushes (SYNC-14): the cloud does, and its push
       // status lives in the cloud's database, not in this one.
-      pushedByCloud: nodeRole() === "venue",
+      pushedByCloud: !publishesLiveResults(),
     };
   }),
 

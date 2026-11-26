@@ -39,6 +39,8 @@ vi.mock("../map-store/gc.js", () => ({
 
 const { defaultJobs, publishesLiveResults } = await import("../background/supervisor.js");
 
+const savedPeer = process.env.SYNC_PEER_URL;
+
 describe("defaultJobs.reconcile by node role (SYNC-14)", () => {
   const saved = process.env.NODE_ROLE;
   beforeEach(() => {
@@ -47,10 +49,13 @@ describe("defaultJobs.reconcile by node role (SYNC-14)", () => {
   afterEach(() => {
     if (saved === undefined) delete process.env.NODE_ROLE;
     else process.env.NODE_ROLE = saved;
+    if (savedPeer === undefined) delete process.env.SYNC_PEER_URL;
+    else process.env.SYNC_PEER_URL = savedPeer;
   });
 
   it("a venue node never reconciles the LiveResults pusher, and drops any timer", async () => {
     process.env.NODE_ROLE = "venue";
+    process.env.SYNC_PEER_URL = "https://cloud.example";
     expect(publishesLiveResults()).toBe(false);
     await defaultJobs.reconcile();
     expect(calls.pushers).toBe(0);
@@ -68,6 +73,14 @@ describe("defaultJobs.reconcile by node role (SYNC-14)", () => {
     expect(calls.pushers).toBe(1);
     expect(calls.pullers).toBe(1);
     expect(calls.pusherStops).toBe(0);
+  });
+
+  it("a standalone venue box (no peer) has no cloud behind it and pushes itself", async () => {
+    process.env.NODE_ROLE = "venue";
+    delete process.env.SYNC_PEER_URL;
+    expect(publishesLiveResults()).toBe(true);
+    await defaultJobs.reconcile();
+    expect(calls.pushers).toBe(1);
   });
 
   it("the default role (unset) is the cloud", async () => {

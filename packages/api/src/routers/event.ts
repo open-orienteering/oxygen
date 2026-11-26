@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { markVenueSettingsChanged } from "../sync/shipper.js";
 import { TRPCError } from "@trpc/server";
 import { router, publicProcedure, authedProcedure, adminProcedure, viewProcedure, manageProcedure, manageRaceProcedure, kioskOrViewProcedure } from "../trpc.js";
 import { prisma, sanitizeNameId, getZeroTime, isReservedEventSlug } from "../db.js";
@@ -1132,6 +1133,9 @@ export const eventRouter = router({
         data: { googleSheetsWebhookUrl: input.webhookUrl },
       });
       clearSheetsCache();
+      // On a venue box the cloud pushes the readouts to the sheet: get the
+      // URL there before the next shipped readout (no-op without a shipper).
+      markVenueSettingsChanged();
       return { ok: true };
     }),
 

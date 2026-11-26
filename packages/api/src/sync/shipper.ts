@@ -465,6 +465,40 @@ export async function refreshAllSettingsOnce(
 let timer: NodeJS.Timeout | null = null;
 let busy = false;
 let lastSettingsRefresh = 0;
+/** A venue-owned setting the cloud acts on changed: send it before shipping. */
+let venueSettingsDirty = false;
+
+/**
+ * Ask the shipper to send this box's venue-owned settings ahead of the next
+ * journal batch. The cloud pushes the box's readouts to the Google Sheets
+ * backup, so a webhook URL set on the box must reach the cloud before the
+ * readouts that follow it, not on the 5-minute settings cadence (SYNC-14).
+ * Kept until a push succeeds, so after an outage it still goes first.
+ */
+export function markVenueSettingsChanged(): void {
+  venueSettingsDirty = true;
+}
+
+/** Push every held event's venue-owned settings; false when any push failed. */
+async function pushAllVenueSettingsOnce(db: PrismaClient, peer: LeasePeer): Promise<boolean> {
+  const events = await db.event.findMany({
+    where: { removed: false },
+    select: { id: true, nameId: true, zeroTime: true, timeZone: true },
+  });
+  let ok = true;
+  for (const ev of events) {
+    try {
+      await pushVenueOwnedSettings(db, ev, peer);
+    } catch (err) {
+      ok = false;
+      console.warn(
+        `[shipper] ${ev.nameId}: venue settings push failed:`,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+  return ok;
+}
 
 /**
  * Start the interval worker when a peer is configured. No-op otherwise —
@@ -489,6 +523,13 @@ export function startShipper(): void {
     busy = true;
     void (async () => {
       try {
+        if (venueSettingsDirty) {
+          venueSettingsDirty = false;
+          if (!(await pushAllVenueSettingsOnce(prisma(), leasePeer))) {
+            venueSettingsDirty = true;
+            return; // Ship nothing ahead of the settings; retry next tick.
+          }
+        }
         await shipAllOnce(prisma(), peerUrl, transport, leasePeer);
         if (Date.now() - lastSettingsRefresh >= syncSettingsRefreshMs()) {
           lastSettingsRefresh = Date.now();
