@@ -3,7 +3,7 @@ import { createTRPCClient, httpBatchLink, httpLink } from "@trpc/client";
 import type { AppRouter } from "@oxygen/api";
 import { rejectHtmlApiResponse } from "./html-api-response";
 import { venueAwareFetch } from "./node-discovery";
-import { cloudOwnedApart } from "./trpc-links";
+import { cloudOwnedApart, withRequestTimeout } from "./trpc-links";
 
 export const trpc = createTRPCReact<AppRouter>();
 
@@ -30,7 +30,7 @@ function getCompetitionHeader(): Record<string, string> {
   return nameId ? { "x-competition-id": nameId } : {};
 }
 
-/** Add event identity to the URL so the service-worker cache is event-scoped. */
+/** Add event identity to the URL (the service worker no longer caches /trpc; the query keeps the event visible in logs and in the network panel). */
 export function scopeTrpcUrl(url: string, nameId: string | null): string {
   if (!nameId) return url;
   const separator = url.includes("?") ? "&" : "?";
@@ -64,6 +64,14 @@ export function makeEventScopedFetch(getNameId: () => string | null) {
 
 export const eventScopedTrpcFetch = makeEventScopedFetch(activeEventNameId);
 
+/**
+ * The outbox drain's push gives up after this long (SYNC-11): with no
+ * timeout a request to a node that went away can hang for minutes, and
+ * the drain cannot retry while it waits. A timeout counts as a network
+ * failure (`isNetworkFailure`), so the auto-drain retries with backoff.
+ */
+export const DRAIN_REQUEST_TIMEOUT_MS = 20_000;
+
 const eventClients = new Map<string, ReturnType<typeof createEventClient>>();
 
 function createEventClient(nameId: string) {
@@ -71,7 +79,7 @@ function createEventClient(nameId: string) {
     links: [
       httpLink({
         url: getApiUrl(),
-        fetch: makeEventScopedFetch(() => nameId),
+        fetch: withRequestTimeout(makeEventScopedFetch(() => nameId), DRAIN_REQUEST_TIMEOUT_MS),
         headers: () => ({ "x-competition-id": nameId }),
       }),
     ],

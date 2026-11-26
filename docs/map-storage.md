@@ -2014,8 +2014,10 @@ preview-build smoke (G29, `e2e/offline-print.preview.spec.ts`, §10):
 an offline export after a reload, the document and faces answered from
 the service worker's caches. The rest of the suite runs the Vite dev server,
 which registers no service worker, so there G17's app-code copy (§7.1)
-is what is exercised. Not exercised end to end: the `trpc-api` and
-`api-misc` routes, offline navigation (`navigateFallback`), and a viewer
+is what is exercised. (The `trpc-api` and `api-misc` routes were removed
+in review package 9, SYNC-16; `e2e/outage.preview.spec.ts` checks that no
+tRPC answer is cached.) Not exercised end to end: offline navigation
+(`navigateFallback`), and a viewer
 opened offline from `map-documents` (the smoke prints, it does not draw
 the map); `course.importCourses` run on a box still writes its
 `course_objects` locally, and a map uploaded on a box still pins it

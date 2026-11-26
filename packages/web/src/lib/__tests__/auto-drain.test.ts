@@ -107,3 +107,130 @@ describe("auto drain", () => {
     expect(h.runs()).toBe(0);
   });
 });
+
+describe("auto drain retry after a failed drain (SYNC-11)", () => {
+  function retryHarness() {
+    const outcomes: Array<"ok" | "retry" | "blocked"> = [];
+    let runs = 0;
+    const timers: Array<{ fn: () => void; ms: number; live: boolean }> = [];
+    const drain = createAutoDrain(
+      async () => {
+        runs++;
+        return outcomes.shift() ?? "ok";
+      },
+      {
+        setTimer: (fn, ms) => {
+          const t = { fn, ms, live: true };
+          timers.push(t);
+          return t;
+        },
+        clearTimer: (t) => {
+          (t as { live: boolean }).live = false;
+        },
+      },
+    );
+    const settle = async () => {
+      for (let i = 0; i < 5; i++) await Promise.resolve();
+    };
+    const live = () => timers.filter((t) => t.live);
+    const fire = async () => {
+      const t = live()[0];
+      t.live = false;
+      t.fn();
+      await settle();
+    };
+    return { drain, outcomes, runs: () => runs, live, fire, settle };
+  }
+
+  it("retries on its own with 2 s doubling to 30 s while the node stays unreachable", async () => {
+    const h = retryHarness();
+    h.outcomes.push(...Array(8).fill("retry"));
+    h.drain.update(st(6));
+    await h.settle();
+    const delays: number[] = [];
+    for (let i = 0; i < 6; i++) {
+      expect(h.live()).toHaveLength(1);
+      delays.push(h.live()[0].ms);
+      await h.fire();
+    }
+    expect(delays).toEqual([2000, 4000, 8000, 16000, 30000, 30000]);
+    expect(h.runs()).toBe(7);
+  });
+
+  it("a successful run resets the delay; an ok run schedules nothing", async () => {
+    const h = retryHarness();
+    h.outcomes.push("retry", "retry", "ok", "retry");
+    h.drain.update(st(1));
+    await h.settle();
+    await h.fire(); // 2 s
+    await h.fire(); // 4 s -> ok
+    expect(h.live()).toHaveLength(0);
+    h.drain.enqueued(); // -> retry
+    await h.settle();
+    expect(h.live()[0].ms).toBe(2000);
+  });
+
+  it("a queued entry mid-backoff drains at once but does not reset the delay", async () => {
+    const h = retryHarness();
+    h.outcomes.push("retry", "retry", "retry");
+    h.drain.update(st(1));
+    await h.settle();
+    expect(h.live()[0].ms).toBe(2000);
+    h.drain.enqueued();
+    await h.settle();
+    expect(h.runs()).toBe(2);
+    expect(h.live()).toHaveLength(1);
+    expect(h.live()[0].ms).toBe(4000);
+  });
+
+  it("'blocked' (auth, unknown event) schedules nothing", async () => {
+    const h = retryHarness();
+    h.outcomes.push("blocked");
+    h.drain.update(st(1));
+    await h.settle();
+    expect(h.live()).toHaveLength(0);
+  });
+
+  it("going offline, an empty queue, or stop() cancel the retry", async () => {
+    const h = retryHarness();
+    h.outcomes.push("retry", "retry", "retry");
+    h.drain.update(st(1));
+    await h.settle();
+    h.drain.update(st(1, { online: false }));
+    expect(h.live()).toHaveLength(0);
+    h.drain.update(st(1));
+    await h.settle();
+    expect(h.live()).toHaveLength(1);
+    h.drain.update(st(0));
+    expect(h.live()).toHaveLength(0);
+    h.drain.update(st(1));
+    await h.settle();
+    h.drain.stop();
+    expect(h.live()).toHaveLength(0);
+  });
+
+  it("kick() runs at once when there is work, and not when there is none", async () => {
+    const h = retryHarness();
+    h.drain.kick();
+    expect(h.runs()).toBe(0);
+    h.outcomes.push("retry", "ok");
+    h.drain.update(st(1));
+    await h.settle();
+    expect(h.runs()).toBe(1);
+    h.drain.kick();
+    await h.settle();
+    expect(h.runs()).toBe(2);
+    expect(h.live()).toHaveLength(0);
+  });
+
+  it("a run that throws counts as retry", async () => {
+    const timers: number[] = [];
+    const drain = createAutoDrain(async () => { throw new Error("x"); }, {
+      setTimer: (_fn, ms) => { timers.push(ms); return ms; },
+      clearTimer: () => {},
+    });
+    drain.update(st(1));
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(timers).toEqual([2000]);
+  });
+});

@@ -39,6 +39,16 @@ function PageSpinner() {
   );
 }
 
+/** Kiosk and start screen are dark full-screen surfaces: their own boundary, reset per event (WEB-15). */
+function DarkBoundary({ children }: { children: ReactNode }) {
+  const { pathname } = useLocation();
+  return (
+    <ErrorBoundary resetKey={pathname.split("/")[1]} variant="screen">
+      {children}
+    </ErrorBoundary>
+  );
+}
+
 export default function App() {
   const { updateAvailable: apiRestarted, reload } = useVersionCheck();
   const { bundleWaiting, activate } = useServiceWorkerUpdate();
@@ -48,7 +58,7 @@ export default function App() {
   });
   const { t } = useTranslation();
   const location = useLocation();
-  const { user, authEnabled, isLoading } = useCurrentUser();
+  const { user, authEnabled, isLoading, sessionState } = useCurrentUser();
   const isPublicSurface = PUBLIC_SURFACE.test(location.pathname);
 
   let gated: ReactNode = null;
@@ -66,6 +76,22 @@ export default function App() {
           <button
             onClick={action === "activate-service-worker" ? activate : reload}
             className="bg-white text-blue-600 px-3 py-0.5 rounded font-medium hover:bg-blue-50 transition-colors cursor-pointer"
+          >
+            {t("reload")}
+          </button>
+        </div>
+      )}
+      {sessionState === "expired" && !gated && (
+        // WEB-04: an expired sign-in never reloads a page in use by itself.
+        <div
+          data-testid="session-expired-banner"
+          className="fixed bottom-0 left-0 right-0 z-[9999] bg-amber-500 text-white text-center py-1.5 px-4 text-sm shadow-lg flex items-center justify-center gap-3"
+        >
+          <span>{t("sessionExpired")}</span>
+          <button
+            data-testid="session-expired-reload"
+            onClick={() => window.location.reload()}
+            className="bg-white text-amber-700 px-3 py-0.5 rounded font-medium hover:bg-amber-50 transition-colors cursor-pointer"
           >
             {t("reload")}
           </button>
@@ -92,8 +118,8 @@ export default function App() {
             {MapGlDocPage && <Route path="/dev/map-gl-doc" element={<MapGlDocPage />} />}
             {MapTerrainPage && <Route path="/dev/map-terrain" element={<MapTerrainPage />} />}
             {/* Kiosk route — outside CompetitionShell (fullscreen, no admin UI) */}
-            <Route path="/:nameId/kiosk" element={<KioskPage />} />
-            <Route path="/:nameId/start-screen" element={<StartScreenPage />} />
+            <Route path="/:nameId/kiosk" element={<DarkBoundary><KioskPage /></DarkBoundary>} />
+            <Route path="/:nameId/start-screen" element={<DarkBoundary><StartScreenPage /></DarkBoundary>} />
             <Route path="/:nameId/*" element={<CompetitionShell />} />
             {/* Catch-all redirect to home */}
             <Route path="*" element={<Navigate to="/" replace />} />

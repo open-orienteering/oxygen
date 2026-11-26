@@ -37,6 +37,22 @@ function isUserKey(key: readonly unknown[]): boolean {
   const path = Array.isArray(key[0]) ? (key[0] as string[]).join(".") : "";
   return path.startsWith("users.");
 }
+/**
+ * Per-card lookups keyed by card number only (WEB-02): kept in memory for
+ * the open screen, never persisted. Restored on another day they answer a
+ * re-read card with an earlier runner id first.
+ */
+const PER_CARD_PATHS = new Set(["runner.findByCard", "cardReadout.readout", "race.finishReceipt"]);
+
+function queryPath(key: readonly unknown[]): string {
+  return Array.isArray(key[0]) ? (key[0] as string[]).join(".") : "";
+}
+
+/** A query that goes into the persisted per-event blob. */
+export function isPersistableQuery(q: { queryKey: readonly unknown[]; state: { status: string } }): boolean {
+  return q.state.status === "success" && !PER_CARD_PATHS.has(queryPath(q.queryKey));
+}
+
 const isMarker = (key: readonly unknown[]) => JSON.stringify(key) === JSON.stringify(CACHE_OWNER_KEY);
 const isGlobalKey = (key: readonly unknown[]) => isUserKey(key) || isMarker(key);
 
@@ -70,7 +86,7 @@ export async function switchCacheScope(
       buster: "",
       clientState: dehydrate(queryClient, {
         shouldDehydrateMutation: () => true,
-        shouldDehydrateQuery: (q) => !isUserKey(q.queryKey) && q.state.status === "success",
+        shouldDehydrateQuery: (q) => !isUserKey(q.queryKey) && isPersistableQuery(q),
       }),
     });
   }

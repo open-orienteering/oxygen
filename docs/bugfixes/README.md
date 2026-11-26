@@ -62,6 +62,8 @@ Notes whose code no longer exists (mostly the raster tile pipeline, deleted in s
 
 | Note | Added |
 | --- | --- |
+| [A station went down for the whole outage although its data was cached](station-outage-resilience.md) | 2026-11-26 |
+| [Station outage resilience: what package 9 left out](station-outage-followups.md) | 2026-11-26 |
 | [A start at ZeroTime read as "no start", early starters vanished, and station clocks ran in UTC](zerotime-and-time-zone.md) | 2026-11-26 |
 | [ZeroTime and time zone follow-ups: review items left as they are](zerotime-followups.md) | 2026-11-26 |
 | [SI card protocol: SI8 punches read from the owner area, half-read cards filed, clock-skewed punches lost](si-card-protocol.md) | 2026-11-25 |
@@ -113,7 +115,7 @@ Notes whose code no longer exists (mostly the raster tile pipeline, deleted in s
 | [GitHub Actions Node 20 runtime warnings](gha-node20-actions.md) | 2026-09-19 |
 | [Cloud Shell demo required pnpm and a source build](cloud-shell-demo-ghcr.md) | 2026-09-19 |
 | [Cloud SQL "handshake failed … EOF" after raising max instances](cloud-sql-handshake-eof.md) | 2026-09-07 |
-| [PWA "Event not found" after dormancy (expired IAP)](pwa-iap-session-recovery.md) | 2026-09-05 |
+| [PWA "Event not found" after dormancy (expired IAP)](pwa-iap-session-recovery.md) (superseded in part by [station-outage-resilience.md](station-outage-resilience.md)) | 2026-09-05 |
 | [A tab could keep running an old web bundle after a deploy](stale-web-bundle-after-deploy.md) | 2026-08-25 |
 
 ## E2E and test infrastructure

@@ -573,6 +573,59 @@ Stations are clients, not replicas. When a station loses its node
 - `computeLocalReadout` (the client-side readout fallback) remains for
   blip-mode card reads, with parity to the server path asserted by tests.
 
+**With the node unreachable for the whole outage** (review package 9;
+`docs/bugfixes/station-outage-resilience.md`). The usual arena failure is
+"Wi-Fi up, node unreachable": `navigator.onLine` stays true, so nothing
+may wait for an `offline` event.
+
+- **The service worker does not cache tRPC** (SYNC-16). It used to answer
+  `/trpc/*` GETs NetworkFirst with a 3 s timeout from a 24 h cache, as an
+  ordinary 200: a readout after the race could get the pre-start answer.
+  The `trpc-api` and `api-misc` runtime routes are gone and their caches
+  are deleted at start (`lib/legacy-caches.ts`). Offline reads come only
+  from the persisted per-event query cache, and a request with no answer
+  fails as a network error. The readout lookup after a store has its own
+  8 s timeout (`DeviceManager`), after which the card resolves locally.
+- **The shell opens from cache** (WEB-03, `lib/shell-entry.ts`). When the
+  event's cached dashboard exists, the shell opens from it at once and
+  `competition.select` runs in the background (`networkMode: "always"`, so
+  it settles after an `offline` event too). Only `NOT_FOUND` or a refusal
+  (`UNAUTHORIZED` / `FORBIDDEN`) closes it. Any other failure keeps it
+  open in cached mode (`data-connection="cached"` on the shell, an amber
+  "Offline: showing saved data" pill in the header) and retries: 2 s
+  doubling to 30 s, at once on `online` and when the page becomes
+  visible. On success it turns live and refetches everything. With no
+  cache it shows "Cannot reach the server" with Retry, the same backoff,
+  and Reload; never a dead end. The kiosk and start screen run from the
+  event's cache as soon as it is claimed, whether or not `select` answered.
+  Cached capabilities keep deciding after a failed refetch (they no longer
+  fail open).
+- **A failing `users.me` keeps the app mounted** (WEB-04,
+  `lib/current-user-state.ts`, `lib/session-probe.ts`). The last known
+  identity (from the query, or from `localStorage` after a reload) is
+  used while it fails; the access gate spins only when nothing is known.
+  `users.me` is retried every 15 s while failing. Each network-class
+  failure runs a probe that does not follow redirects: `unreachable`
+  never reloads; `expired` (an IAP redirect or login page) shows a
+  "sign-in expired" banner with Reload over a page in use, and reloads by
+  itself (guarded, once per 15 s) only when nothing is open. With a venue
+  node active there is no probe: the box has no IAP.
+- **Per-card lookups are not persisted** (WEB-02). `runner.findByCard`,
+  `cardReadout.readout` and `race.finishReceipt` are keyed by card number
+  or runner id only; restored on another day they answer a re-read card
+  with an earlier runner first. They stay in memory, and the kiosk prints
+  a receipt by itself only from answers fetched after its readout screen
+  opened (`lib/kiosk-print.ts`), once per read. So the kiosk prints no
+  receipt from cached rows: with the server unreachable it prints none
+  (the Finish Station's local receipt is unaffected).
+- **A page that throws stays inside the page** (WEB-15). The shell's routed
+  pages have their own error boundary, reset when the first route segment
+  changes, so the header, tabs, card notifications and an open
+  registration stay. The kiosk readout screen (keyed by the read), the
+  kiosk and start-screen routes, and the providers (outermost) have their
+  own. A failed lazy chunk offers Reload (at most two per five minutes per
+  tab), since React keeps a failed import and "Try again" would fail again.
+
 **The course editor's Field-mode outbox** (row D9c; `course-editor.md` §9
 "Offline") is a second Dexie table beside `events`, `controlWrites` in the
 same `oxygen-offline` database (version 4, additive). It holds the
@@ -615,8 +668,16 @@ projection table, because the canvas reads the cache.
   competition changes; never while a drain runs (work arriving meanwhile gets
   one more pass). The polled pending count is not the trigger, since an entry
   queued while the previous one drains leaves it unchanged; growth of it still
-  starts a drain (another tab queued entries), and entries stuck behind a
-  blocked reason raise no signal, so they never retrigger it.
+  starts a drain (another tab queued entries), and entries stuck behind an
+  `auth` or `event` block raise no signal, so they never retrigger it.
+- **Retry after a failed drain** (SYNC-11). A drain that ended on no answer
+  (network-class, including the push's 20 s timeout) or a `server` block
+  is retried by itself: 2 s doubling to 30 s while the device is online and
+  entries are pending; only a clean drain resets the delay, and a new entry
+  meanwhile drains at once without resetting it. The tab becoming visible
+  again or another node becoming active retries at once. `auth` and
+  `event` blocks wait for an operator (a timer would only repeat the
+  refusal).
 - **Order and the hold rule.** Entries go out ordered by HLC (`compareHlc`;
   the wall-clock `timestamp` only for an entry without an `hlc`), so a clock
   stepped back does not reorder them. A failed entry whose code is batch-
@@ -653,7 +714,8 @@ projection table, because the canvas reads the cache.
 > fallback, climb-back, `venueAwareFetch` with the LNA annotation),
 > `docker-compose.venue.yml`, `CORS_ORIGINS` on the API, the sync-panel
 > venue-URL input + connection-mode line, and the same-origin restriction
-> on the service worker's tRPC cache. Ops guide:
+> on the service worker's tRPC cache (the cache itself was removed in
+> review package 9, SYNC-16; see "Station resilience"). Ops guide:
 > [`ops/venue-runbook.md`](../ops/venue-runbook.md).
 
 An HTTPS-served PWA calling `http://` on the LAN is normally blocked as
@@ -693,8 +755,8 @@ Base-URL selection, run at boot and on every health-check failure:
 A background re-probe runs while connected cloud-direct so stations
 *climb back* to the venue node when it recovers. The connection mode
 (`venue` / `cloud` / `offline`) is surfaced as a badge. The service worker
-excludes venue base URLs from caching so stale responses never shadow the
-LAN node.
+caches no tRPC answers at all (SYNC-16), so no stale response can shadow
+the LAN node or the cloud.
 
 ## Retention and compaction
 

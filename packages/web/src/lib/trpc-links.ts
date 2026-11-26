@@ -39,8 +39,19 @@ export function isCloudUnreachable(err: unknown): boolean {
 export function isNetworkFailure(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
   if ((err as { data?: unknown }).data) return false;
-  if (err instanceof TypeError || (err as { cause?: unknown }).cause instanceof TypeError) return true;
+  const cause = (err as { cause?: unknown }).cause;
+  if (err instanceof TypeError || cause instanceof TypeError) return true;
+  // A fetch given up on by its timeout signal (the drain's, the readout's):
+  // the node did not answer in time, which is the same as unreachable.
+  if (isTimeoutAbort(err) || isTimeoutAbort(cause)) return true;
   return typeof navigator !== "undefined" && navigator.onLine === false;
+}
+
+function isTimeoutAbort(err: unknown): boolean {
+  const name = (err as { name?: unknown } | null)?.name;
+  // Only the timeout: a deliberate abort (unmount, cancelled query) is not
+  // a statement about the network.
+  return name === "TimeoutError";
 }
 
 /**
@@ -58,4 +69,16 @@ export async function ensureSheetsBestEffort<T>(ensure: () => Promise<T>): Promi
     if (isCloudUnreachable(err) || isNetworkFailure(err)) return null;
     throw err;
   }
+}
+
+/** A fetch that aborts after `ms` (on top of any signal the caller passes). */
+export function withRequestTimeout(
+  fetchImpl: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
+  ms: number,
+) {
+  return (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const timeout = AbortSignal.timeout(ms);
+    const signal = init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
+    return fetchImpl(input, { ...init, signal });
+  };
 }

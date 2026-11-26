@@ -183,6 +183,49 @@ test.describe("Kiosk Readout Station Flow", () => {
     expect(afterStatus).toBe(1); // RunnerStatus.OK = 1
   });
 
+  test("a card read again prints the receipt of its current runner, not the cached one (WEB-02)", async ({ context, request }) => {
+    test.setTimeout(60_000);
+    const { adminPage, kioskPage, nameId } = await setupAdminAndKiosk(context);
+    // Every print request the kiosk sends to the admin tab.
+    await adminPage.evaluate((id) => {
+      const w = window as unknown as { __prints: number[] };
+      w.__prints = [];
+      new BroadcastChannel(`oxygen-kiosk-${id}`).onmessage = (e) => {
+        if (e.data?.type === "kiosk-print-receipt") w.__prints.push(e.data.runnerId);
+      };
+    }, nameId);
+    const prints = () => adminPage.evaluate(() => (window as unknown as { __prints: number[] }).__prints);
+
+    const classId = await getClassId(request, "Öppen 2");
+    const cardNo = 2800031;
+    const first = await createRunner(request, "E2E FirstHolder", cardNo, classId, 363000);
+    createdRunnerIds.push(first.id);
+    const punches = COURSE_2_CONTROLS.map((code, i) => ({ controlCode: code, time: 36600 + i * 120 }));
+    const read = async () => {
+      const done = waitForTrpc(adminPage, "cardReadout.readout");
+      await adminPage.evaluate(({ cardNo, punches }) => { window.__siMock.insertCard(cardNo, punches); }, { cardNo, punches });
+      await done;
+    };
+
+    await read();
+    await expect(kioskPage.getByRole("heading", { name: "E2E FirstHolder" })).toBeVisible({ timeout: 10_000 });
+    await expect.poll(prints, { timeout: 10_000 }).toEqual([first.id]);
+    await adminPage.evaluate(() => { window.__siMock.removeCard(); });
+
+    // The card changes hands (another day, a rental card): the kiosk's cache
+    // still says it belongs to the first runner.
+    await request.post(`${API_BASE}/trpc/runner.update`, { headers: COMP_HEADERS, data: { id: first.id, cardNo: 0 } });
+    const second = await createRunner(request, "E2E SecondHolder", cardNo, classId, 363000);
+    createdRunnerIds.push(second.id);
+
+    await read();
+    await expect(kioskPage.getByRole("heading", { name: "E2E SecondHolder" })).toBeVisible({ timeout: 10_000 });
+    await expect.poll(prints, { timeout: 10_000 }).toEqual([first.id, second.id]);
+    // Never a second print for the first holder from the cached row.
+    await kioskPage.waitForTimeout(1_000);
+    expect(await prints()).toEqual([first.id, second.id]);
+  });
+
   test("MP readout shows missing punch on kiosk", async ({ context, request }) => {
     const { adminPage, kioskPage } = await setupAdminAndKiosk(context);
 

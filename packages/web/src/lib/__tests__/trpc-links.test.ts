@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import { createTRPCUntypedClient, type TRPCLink } from "@trpc/client";
 import type { AnyTRPCRouter } from "@trpc/server";
 import { observable } from "@trpc/server/observable";
-import { cloudOwnedApart, ensureSheetsBestEffort, isCloudOwnedOp, isCloudUnreachable, isNetworkFailure } from "../trpc-links";
+import { cloudOwnedApart, ensureSheetsBestEffort, isCloudOwnedOp, isCloudUnreachable, isNetworkFailure, withRequestTimeout } from "../trpc-links";
 
 describe("isCloudOwnedOp", () => {
   it("is a mutation on a cloud-owned path", () => {
@@ -87,5 +87,34 @@ describe("ensureSheetsBestEffort", () => {
         }),
       ).rejects.toBe(err);
     }
+  });
+});
+
+describe("isNetworkFailure: a request timeout (SYNC-11)", () => {
+  it("counts a TimeoutError, bare or as the cause of a client error, as no answer", () => {
+    const timeout = new DOMException("signal timed out", "TimeoutError");
+    expect(isNetworkFailure(timeout)).toBe(true);
+    expect(isNetworkFailure(Object.assign(new Error("signal timed out"), { cause: timeout }))).toBe(true);
+  });
+  it("does not count a deliberate abort", () => {
+    expect(isNetworkFailure(new DOMException("aborted", "AbortError"))).toBe(false);
+  });
+});
+
+describe("withRequestTimeout", () => {
+  it("aborts a request that does not answer in time, as a TimeoutError", async () => {
+    const hang = (_i: RequestInfo | URL, init?: RequestInit) =>
+      new Promise<Response>((_res, rej) => init?.signal?.addEventListener("abort", () => rej(init.signal!.reason)));
+    const err = await withRequestTimeout(hang, 10)("/trpc/x").catch((e) => e);
+    expect(err.name).toBe("TimeoutError");
+    expect(isNetworkFailure(err)).toBe(true);
+  });
+  it("keeps the caller's own signal", async () => {
+    const ctrl = new AbortController();
+    let seen: AbortSignal | undefined;
+    const spy = async (_i: RequestInfo | URL, init?: RequestInit) => { seen = init?.signal ?? undefined; return new Response("{}"); };
+    await withRequestTimeout(spy, 10_000)("/trpc/x", { signal: ctrl.signal });
+    ctrl.abort();
+    expect(seen?.aborted).toBe(true);
   });
 });

@@ -82,6 +82,7 @@ export const WEIGHTS = {
   "registration-trends.spec.ts": 3,
   "runners-bulk.spec.ts": 3,
   "session-recovery.spec.ts": 3,
+  "station-outage.spec.ts": 12,
   "trpc-batch-matching.spec.ts": 3,
 };
 

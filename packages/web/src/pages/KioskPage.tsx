@@ -7,6 +7,8 @@
  * In standalone mode, uses its own DeviceManager + SI reader.
  */
 
+import { shouldAutoPrint } from "../lib/kiosk-print";
+import { ErrorBoundary } from "../components/ErrorBoundary";
 import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
@@ -111,18 +113,26 @@ function KioskPageBody() {
   useEffect(() => { screenRef.current = screen; }, [screen]);
 
   // Select the competition (same as CompetitionShell)
+  // `networkMode: "always"`: after an `offline` event a paused select would
+  // never settle (WEB-03).
   const selectMutation = trpc.competition.select.useMutation({
+    networkMode: "always",
     onSuccess: (data) => setCompetitionName(data.name),
   });
+  // The cache is this event's (ensureEventCache resolved). The station runs
+  // from it whether or not the server confirmed the event: a kiosk reloaded
+  // during an outage keeps its runner list, name and logo (WEB-03).
+  const [cacheClaimed, setCacheClaimed] = useState(false);
 
   // Pre-fetch and persist all competition data for offline use
-  useStationSync(selectMutation.isSuccess);
+  useStationSync(cacheClaimed);
 
   // Fetch dashboard data for organizer logo
   const dashboard = trpc.competition.dashboard.useQuery(undefined, {
-    enabled: selectMutation.isSuccess,
+    enabled: cacheClaimed,
     staleTime: 5 * 60_000,
   });
+  const shownName = competitionName || dashboard.data?.competition?.name || "";
   const organizerEventorId =
     dashboard.data?.organizer?.eventorId && dashboard.data.organizer.eventorId > 0
       ? dashboard.data.organizer.eventorId
@@ -133,8 +143,11 @@ function KioskPageBody() {
     let cancelled = false;
     // The cache belongs to one event (MC-04); claim it before selecting so the
     // standalone readout path never computes from another event's runners.
+    setCacheClaimed(false);
     void ensureEventCache(queryClient, nameId).then(() => {
-      if (!cancelled) selectMutation.mutate({ nameId });
+      if (cancelled) return;
+      setCacheClaimed(true);
+      selectMutation.mutate({ nameId });
     });
     return () => {
       cancelled = true;
@@ -452,7 +465,7 @@ function KioskPageBody() {
       {/* Minimal top bar — settings + fullscreen */}
       <div className="flex items-center justify-between px-4 py-2 bg-slate-800/50">
         <div className="text-sm text-slate-400 truncate max-w-[60%]">
-          {competitionName || nameId}
+          {shownName || nameId}
         </div>
         <div className="flex items-center gap-2">
           {(pendingCount > 0 || failedCount > 0) && (
@@ -551,9 +564,9 @@ function KioskPageBody() {
                   onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
                 />
               )}
-              {competitionName && (
+              {shownName && (
                 <h2 className="text-4xl font-bold text-slate-200 tracking-tight">
-                  {competitionName}
+                  {shownName}
                 </h2>
               )}
             </div>
@@ -580,7 +593,13 @@ function KioskPageBody() {
           </div>
         ) : (
           <>
-            {screen.mode === "readout" && <ReadoutScreen card={screen.card} onPrint={handlePrint} />}
+            {screen.mode === "readout" && (
+              // Keyed by the read: a new card is a new screen (its own print
+              // guard), and a screen that throws does not take the kiosk down.
+              <ErrorBoundary key={screen.card.id} variant="dark">
+                <ReadoutScreen card={screen.card} onPrint={handlePrint} />
+              </ErrorBoundary>
+            )}
             {screen.mode === "pre-start" && (
               <PreStartScreen card={screen.card} requireClearCheck={settings.requireClearCheck} />
             )}
@@ -885,22 +904,19 @@ function ReadoutScreen({
   const isMP = displayStatus === RunnerStatus.MissingPunch;
   const isDNF = displayStatus === RunnerStatus.DNF;
 
-  // 4. Auto-print receipt
+  // 4. Auto-print receipt, from answers fetched for this screen only
+  // (WEB-02): a cached row of an earlier read may name another runner.
   useEffect(() => {
-    if (printedRef.current) return;
-    if (!receipt.data || !dbRunner.data) return;
-    // Only auto-print for runners with a finish time.
-    // Check both the DB-stored finish time AND the receipt's card-computed finish
-    // time — the latter is derived from oCard and is available as soon as
-    // storeReadout runs, before applyResult has written to oRunner.FinishTime.
-    const hasFinish =
-      (dbRunner.data.finishTime > 0) ||
-      (receipt.data.timing.finishTime > 0);
-    if (!hasFinish) return;
-
+    if (!shouldAutoPrint({
+      alreadyPrinted: printedRef.current,
+      runner: dbRunner.data,
+      receipt: receipt.data,
+      runnerFresh: dbRunner.isFetchedAfterMount,
+      receiptFresh: receipt.isFetchedAfterMount,
+    })) return;
     printedRef.current = true;
-    onPrint(dbRunner.data.id);
-  }, [receipt.data, dbRunner.data, onPrint]);
+    onPrint(dbRunner.data!.id);
+  }, [receipt.data, dbRunner.data, dbRunner.isFetchedAfterMount, receipt.isFetchedAfterMount, onPrint]);
 
   // Derive rental card status: from readout data (authoritative) or card message (fast path)
   const isRentalCard = readout.data?.found ? readout.data.isRentalCard : card.isRentalCard;

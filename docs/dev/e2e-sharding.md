@@ -159,9 +159,11 @@ and runs project `preview`.
   is the one rule the config shares with the runner (`isPreviewSpec` in
   `scripts/e2e-weights.mjs`). Preview specs are in no shard and carry
   no weight.
-- **Specs.** One today, `e2e/offline-print.preview.spec.ts`: offline
+- **Specs.** Two today: `e2e/offline-print.preview.spec.ts`, offline
   print from the production bundle (`course-print.md` §8.6 "Offline",
-  "The preview-build smoke"). A spec here waits for
+  "The preview-build smoke"), and `e2e/outage.preview.spec.ts`, the
+  service worker with the server unreachable (no tRPC cache, a reload
+  opening the event from the persisted cache; review package 9). A spec here waits for
   `navigator.serviceWorker.ready` and reloads before it relies on a
   route. With `registerType: "prompt"` the service worker claims no
   client, so the first page is not controlled.

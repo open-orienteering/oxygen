@@ -2,15 +2,18 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { useOnlineStatus } from "./useOnlineStatus";
 import { usePageVisible } from "./usePageVisible";
 import { getPendingCount, getFailedCount, retryAllFailedEvents, subscribeEnqueue } from "../lib/offline/events";
-import { drainEventQueue, cleanupSyncedEvents, getDrainBlockedReason, countHeldEvents, type DrainBlockedReason } from "../lib/offline/sync";
-import { createAutoDrain } from "../lib/offline/auto-drain";
+import { drainEventQueue, cleanupSyncedEvents, getDrainBlockedReason, countHeldEvents, getLastDrainOutcome, type DrainBlockedReason } from "../lib/offline/sync";
+import { createAutoDrain, type AutoDrainOutcome } from "../lib/offline/auto-drain";
 import { trpc } from "../lib/trpc";
 import { usePerformanceSensitive } from "../lib/performance-mode";
+import { useActiveNode } from "../lib/node-discovery";
 
 /**
  * Hook that manages the offline event queue:
  * - Tracks pending event count
- * - Auto-drains when connectivity is restored
+ * - Auto-drains when an entry is queued, when connectivity is restored,
+ *   and again with backoff after a drain that failed on the network or a
+ *   server error (SYNC-11; see auto-drain.ts)
  * - Invalidates React Query cache after successful drain
  *
  * @param competitionId - Optional filter for competition-specific events
@@ -41,9 +44,6 @@ export function useEventQueue(competitionId?: string) {
     const refresh = async () => {
       const filtered = await getPendingCount(competitionId);
       const total = await getPendingCount();
-      if (total > 0) {
-        console.log(`[event-queue] pending: ${filtered} (filtered by "${competitionId}"), ${total} (total)`);
-      }
       setPendingCount(filtered);
       setTotalPending(total);
       setFailedCount(await getFailedCount(competitionId));
@@ -56,11 +56,12 @@ export function useEventQueue(competitionId?: string) {
   }, [competitionId, pollingActive]);
 
   // Auto-drain when work arrives or connectivity returns (see auto-drain.ts).
-  const drainRun = useRef<() => Promise<void>>(async () => {});
+  const drainRun = useRef<() => Promise<AutoDrainOutcome>>(async () => "ok");
   drainRun.current = async () => {
     setSyncing(true);
     try {
       const count = await drainEventQueue();
+      const outcome = getLastDrainOutcome();
       const reason = getDrainBlockedReason(competitionId);
       setNeedsSignIn(reason === "auth");
       setBlockedReason(reason);
@@ -75,6 +76,7 @@ export function useEventQueue(competitionId?: string) {
         await utils.lists.resultList.invalidate();
         await utils.race.recentActivity.invalidate();
       }
+      return outcome;
     } finally {
       setSyncing(false);
     }
@@ -91,6 +93,17 @@ export function useEventQueue(competitionId?: string) {
   useEffect(() => {
     autoDrain.current?.update({ online: isOnline, total: totalPending, scope: competitionId });
   }, [isOnline, totalPending, competitionId]);
+  // Back in view, or another node became active: try the queue at once
+  // instead of waiting out the retry delay.
+  const activeNode = useActiveNode();
+  const firstKick = useRef(true);
+  useEffect(() => {
+    if (firstKick.current) {
+      firstKick.current = false;
+      return;
+    }
+    if (visible) autoDrain.current?.kick();
+  }, [visible, activeNode]);
 
   // Periodic cleanup of old synced events
   useEffect(() => {

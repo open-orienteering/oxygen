@@ -7,10 +7,12 @@ import { httpBatchLink } from "@trpc/client";
 import { eventScopedTrpcFetch, trpc } from "./lib/trpc";
 import { cloudOwnedApart } from "./lib/trpc-links";
 import { queryCachePersister } from "./lib/offline/persister";
+import { isPersistableQuery } from "./lib/offline/cache-scope";
 import { startNodeDiscovery } from "./lib/node-discovery";
 import { dropLegacyCaches } from "./lib/legacy-caches";
 import { CurrentUserProvider } from "./context/CurrentUserContext";
 import App from "./App";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import "./index.css";
 
 // 24 hours — how long unused query data is kept in the persisted cache
@@ -83,14 +85,20 @@ createRoot(document.getElementById("root")!).render(
           // Dehydrate mutations too so pending offline mutations survive reload
           dehydrateOptions: {
             shouldDehydrateMutation: () => true,
+            // Per-card lookups stay in memory (WEB-02, cache-scope.ts).
+            shouldDehydrateQuery: isPersistableQuery,
           },
         }}
       >
-        <BrowserRouter>
-          <CurrentUserProvider>
-            <App />
-          </CurrentUserProvider>
-        </BrowserRouter>
+        {/* Outermost boundary (WEB-15): a throw in a provider (user, devices,
+            printer) shows a fallback with Try again / Reload, not a blank page. */}
+        <ErrorBoundary>
+          <BrowserRouter>
+            <CurrentUserProvider>
+              <App />
+            </CurrentUserProvider>
+          </BrowserRouter>
+        </ErrorBoundary>
       </PersistQueryClientProvider>
     </trpc.Provider>
   </StrictMode>,

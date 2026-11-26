@@ -107,6 +107,16 @@ IAP sends `X-Goog-Authenticated-User-Email` as
 Set `AUTH_HEADER=x-goog-authenticated-user-email`. IAP must be the only
 path to the load balancer.
 
+**An expired IAP cookie in an open tab.** Same-origin `/trpc` calls are then
+redirected to the Google sign-in and fail as CORS "Failed to fetch", which
+looks like no network. The web client tells the two apart with a probe of
+`/trpc/users.me` that does not follow redirects (`lib/session-probe.ts`): an
+opaque redirect, an HTML answer or a non-JSON 401/403 is "expired", no
+answer or a 502/503/504 is "unreachable". Expired over a page in use shows a
+"Your sign-in has expired" banner with Reload; a page with nothing open
+reloads by itself (at most once per 15 s). Unreachable never reloads. See
+`docs/bugfixes/station-outage-resilience.md`.
+
 ## Provisioning
 
 1. Set `OXYGEN_ADMIN_EMAILS` to at least one real mailbox.
