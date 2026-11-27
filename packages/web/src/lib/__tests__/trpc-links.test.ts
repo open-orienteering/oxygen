@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import { createTRPCUntypedClient, type TRPCLink } from "@trpc/client";
 import type { AnyTRPCRouter } from "@trpc/server";
 import { observable } from "@trpc/server/observable";
-import { cloudOwnedApart, ensureSheetsBestEffort, isCloudOwnedOp, isCloudUnreachable, isNetworkFailure, withRequestTimeout } from "../trpc-links";
+import { cloudOwnedApart, ensureSheetsBestEffort, isCloudAuthRefused, isCloudOwnedOp, isCloudUnreachable, isNetworkFailure, withRequestTimeout } from "../trpc-links";
 
 describe("isCloudOwnedOp", () => {
   it("is a mutation on a cloud-owned path", () => {
@@ -87,6 +87,24 @@ describe("ensureSheetsBestEffort", () => {
         }),
       ).rejects.toBe(err);
     }
+  });
+});
+
+describe("isCloudAuthRefused", () => {
+  const refused = Object.assign(new Error("The cloud refused this box's credentials"), {
+    data: { code: "PRECONDITION_FAILED", reason: "CLOUD_AUTH" },
+  });
+
+  it("recognises the forwarder's CLOUD_AUTH refusal and nothing else; it is not a case to skip", async () => {
+    expect(isCloudAuthRefused(refused)).toBe(true);
+    expect(isCloudUnreachable(refused)).toBe(false);
+    expect(isCloudAuthRefused(Object.assign(new Error("x"), { data: { code: "PRECONDITION_FAILED", reason: "CLOUD_UNREACHABLE" } }))).toBe(false);
+    expect(isCloudAuthRefused(new Error("plain"))).toBe(false);
+    await expect(
+      ensureSheetsBestEffort(async () => {
+        throw refused;
+      }),
+    ).rejects.toBe(refused);
   });
 });
 

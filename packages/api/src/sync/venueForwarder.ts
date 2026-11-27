@@ -27,8 +27,16 @@
 
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { isCloudOwnedMutation } from "./ownership.js";
-import { nodeRole, syncPeerUrl, syncSharedSecret } from "./nodeIdentity.js";
-import { authHeaderName } from "../auth.js";
+import {
+  SYNC_FORWARDED_HEADER,
+  SYNC_NODE_ID_HEADER,
+  SYNC_SECRET_HEADER,
+  nodeId,
+  nodeRole,
+  syncPeerUrl,
+  syncSharedSecret,
+} from "./nodeIdentity.js";
+import { makeSyncHeaders } from "./googleIdToken.js";
 import { prisma } from "../db.js";
 import { makeLeasePeer } from "./lease.js";
 import { refreshCloudOwnedMaps } from "./mapRefresh.js";
@@ -155,14 +163,31 @@ export async function refreshAfterForward(
 }
 
 /** Why a cloud-owned call failed on a venue: the cloud is unreachable, or the batch mixed it with local calls. */
-export type VenueRefusalReason = "CLOUD_UNREACHABLE" | "MIXED_BATCH";
+export type VenueRefusalReason = "CLOUD_UNREACHABLE" | "MIXED_BATCH" | "CLOUD_AUTH";
 
 const REFUSAL_MESSAGES: Record<VenueRefusalReason, string> = {
   CLOUD_UNREACHABLE:
     "This action requires connectivity to the cloud (cloud-owned data is not editable at an offline venue).",
   MIXED_BATCH:
     "A cloud-owned change was batched with local calls; nothing was run. Retry the action.",
+  CLOUD_AUTH:
+    "The cloud refused this box's credentials (check SYNC_SHARED_SECRET and the IAP settings).",
 };
+
+/** A forwarded call that gets no answer within this long is treated as an unreachable cloud. */
+export const FORWARD_TIMEOUT_MS = 30_000;
+
+/**
+ * Whether a cloud reply is a tRPC answer (JSON) the box relays as it is. A
+ * redirect (IAP sending the box to a sign-in page) or an HTML page is the
+ * front door refusing the box, not the API answering: `CLOUD_AUTH`. An HTML
+ * 5xx is an outage in front of the API: `CLOUD_UNREACHABLE`.
+ */
+export function classifyForwardReply(status: number, contentType: string | null): "relay" | "CLOUD_AUTH" | "CLOUD_UNREACHABLE" {
+  if (status >= 300 && status < 400) return "CLOUD_AUTH";
+  if (contentType && /\bjson\b/i.test(contentType)) return "relay";
+  return status >= 500 ? "CLOUD_UNREACHABLE" : "CLOUD_AUTH";
+}
 
 /** tRPC-shaped error body so the web client surfaces a typed failure (`data.reason` tells the two cases apart). */
 export function connectivityErrorBody(
@@ -180,7 +205,8 @@ export function connectivityErrorBody(
   return batched ? paths.map(one) : one(paths[0] ?? "");
 }
 
-export function registerVenueForwarder(server: FastifyInstance): void {
+export function registerVenueForwarder(server: FastifyInstance, opts: { timeoutMs?: number } = {}): void {
+  const timeoutMs = opts.timeoutMs ?? FORWARD_TIMEOUT_MS;
   const peerUrl = syncPeerUrl();
   if (nodeRole() !== "venue" || !peerUrl) return;
 
@@ -195,25 +221,35 @@ export function registerVenueForwarder(server: FastifyInstance): void {
     const paths = trpcProcedurePaths(req.url);
     const batched = req.url.includes("batch=1");
     try {
+      // The box's own credentials, never the caller's: the node secret, its
+      // id and the forwarded marker (the cloud then runs the call as this
+      // node, under the lease rule), plus an IAP token when configured. The
+      // caller's identity header is not relayed (it would be a header the
+      // cloud's proxy never set).
+      const secret = syncSharedSecret();
+      const base: Record<string, string> = {
+        "content-type": req.headers["content-type"] ?? "application/json",
+        ...(req.headers["x-event-id"] ? { "x-event-id": String(req.headers["x-event-id"]) } : {}),
+        ...(req.headers["x-competition-id"] ? { "x-competition-id": String(req.headers["x-competition-id"]) } : {}),
+        ...(secret ? { [SYNC_SECRET_HEADER]: secret } : {}),
+        [SYNC_NODE_ID_HEADER]: nodeId(),
+        [SYNC_FORWARDED_HEADER]: "1",
+      };
+      const made = makeSyncHeaders(base);
+      const headers = typeof made === "function" ? await made() : made;
       const upstream = await fetch(`${peerUrl}${req.url}`, {
         method: "POST",
-        headers: {
-          "content-type": req.headers["content-type"] ?? "application/json",
-          ...(req.headers["x-event-id"]
-            ? { "x-event-id": String(req.headers["x-event-id"]) }
-            : {}),
-          ...(req.headers["x-competition-id"]
-            ? { "x-competition-id": String(req.headers["x-competition-id"]) }
-            : {}),
-          ...(() => {
-            const name = authHeaderName();
-            const raw = req.headers[name];
-            if (raw == null) return {};
-            return { [name]: Array.isArray(raw) ? raw[0] : raw };
-          })(),
-        },
+        headers,
         body: JSON.stringify(req.body),
+        redirect: "manual",
+        signal: AbortSignal.timeout(timeoutMs),
       });
+      const verdict = classifyForwardReply(upstream.status, upstream.headers.get("content-type"));
+      if (verdict !== "relay") {
+        await upstream.body?.cancel().catch(() => {});
+        void reply.code(412).send(connectivityErrorBody(paths, batched, verdict));
+        return reply;
+      }
       const text = await upstream.text();
       const nameId = requestEventName(req.headers);
       if (upstream.ok && nameId) {

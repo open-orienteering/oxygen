@@ -71,3 +71,11 @@ export const SYNC_SECRET_HEADER = "x-oxygen-sync-secret";
  * (review SYNC-08). Informational: it grants nothing.
  */
 export const SYNC_NODE_ID_HEADER = "x-oxygen-node-id";
+
+/**
+ * Marks a venue's forwarded cloud-owned mutation (`venueForwarder.ts`).
+ * With a valid node secret the cloud runs the call as that node, not as a
+ * signed-in user (`Context.nodeForward`, docs/system/authentication.md
+ * "Venue nodes"). Without the secret the marker grants nothing.
+ */
+export const SYNC_FORWARDED_HEADER = "x-oxygen-forwarded";

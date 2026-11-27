@@ -3,7 +3,7 @@ import { markVenueSettingsChanged } from "../sync/shipper.js";
 import { TRPCError } from "@trpc/server";
 import { router, publicProcedure, authedProcedure, adminProcedure, viewProcedure, manageProcedure, manageRaceProcedure, kioskOrViewProcedure } from "../trpc.js";
 import { prisma, sanitizeNameId, getZeroTime, isReservedEventSlug } from "../db.js";
-import { kioskKeyMatches } from "../trpc.js";
+import { kioskKeyMatches, capabilitiesForEventRow } from "../trpc.js";
 import {
   grantSystemGroup,
   resolveEventCapabilities,
@@ -522,16 +522,10 @@ export const eventRouter = router({
         });
       }
       if (ctx.authEnabled) {
-        if (!ctx.user) {
+        if (!ctx.user && !ctx.nodeForward) {
           throw new TRPCError({ code: "UNAUTHORIZED", message: "Not authenticated" });
         }
-        const caps = await resolveEventCapabilities({
-          db: prisma(),
-          eventId: event.id,
-          eventDate: event.date,
-          user: ctx.user,
-          authEnabled: true,
-        });
+        const caps = await capabilitiesForEventRow(ctx, event);
         if (!caps.has("event.manage")) {
           throw new TRPCError({
             code: "FORBIDDEN",

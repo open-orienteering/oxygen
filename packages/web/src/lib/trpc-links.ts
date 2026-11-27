@@ -32,6 +32,17 @@ export function isCloudUnreachable(err: unknown): boolean {
 }
 
 /**
+ * The venue forwarder's typed refusal when the cloud turned the box's
+ * credentials away (wrong `SYNC_SHARED_SECRET`, IAP settings). Its message
+ * names what to check, so it is shown as it is; unlike an unreachable
+ * cloud, it is not a case to carry on from the box's own copy.
+ */
+export function isCloudAuthRefused(err: unknown): boolean {
+  const data = (err as { data?: { code?: unknown; reason?: unknown } | null } | null)?.data;
+  return data?.code === "PRECONDITION_FAILED" && data.reason === "CLOUD_AUTH";
+}
+
+/**
  * A request that got no response (no network, the box gone): no tRPC
  * `data`, and a `TypeError` from `fetch` itself or as the client error's
  * cause, or the browser knows it is offline.

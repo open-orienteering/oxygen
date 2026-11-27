@@ -5,9 +5,10 @@ import { prisma, resolveEvent, type EventRef } from "./db.js";
 import {
   SYNC_SECRET_HEADER,
   SYNC_NODE_ID_HEADER,
+  SYNC_FORWARDED_HEADER,
   syncSharedSecret,
 } from "./sync/nodeIdentity.js";
-import { assertRaceWritable } from "./sync/lease.js";
+import { assertRaceWritable, getActiveLease } from "./sync/lease.js";
 import { VersionConflictError } from "./version-conflict.js";
 import {
   authDevEmail,
@@ -43,6 +44,14 @@ export interface Context {
   authMode: AuthMode;
   /** Device token from `x-kiosk-key` / `?k=`. */
   kioskKey: string | null;
+  /**
+   * Set when a venue forwarded this call (`x-oxygen-forwarded`) with this
+   * node's secret: the call runs as that node, not as a user. It passes
+   * `authedProcedure`, never `adminProcedure`, and holds capabilities only
+   * on an event whose active lease the node holds (`capabilitiesForEventRow`).
+   * Null for every other request, including a marked one with a wrong secret.
+   */
+  nodeForward?: { nodeId: string | null } | null;
 }
 
 /**
@@ -69,10 +78,18 @@ export async function createContext(
   const enabled = mode !== "off";
   let identityEmail: string | null = null;
   let user: AuthUser | null = null;
+  // A venue's forwarded call is the node, never a user: whatever identity
+  // header rides along is ignored, and a marker without the node secret
+  // leaves the caller anonymous (UNAUTHORIZED), not a user by their header.
+  const forwarded = opts.req.headers[SYNC_FORWARDED_HEADER] !== undefined;
+  const nodeForward =
+    forwarded && syncSecretMatches(syncSecret) ? { nodeId: peerNodeId } : null;
 
   if (mode === "proxy") {
-    identityEmail = parseIdentityEmail(opts.req.headers[authHeaderName()]);
-    if (identityEmail) user = await resolveUser(identityEmail);
+    if (!forwarded) {
+      identityEmail = parseIdentityEmail(opts.req.headers[authHeaderName()]);
+      if (identityEmail) user = await resolveUser(identityEmail);
+    }
   } else if (mode === "dev") {
     identityEmail = parseIdentityEmail(authDevEmail()) ?? "dev@localhost";
     user = await resolveUser(identityEmail, { implicitAdmin: true });
@@ -87,6 +104,7 @@ export async function createContext(
     authEnabled: enabled,
     authMode: mode,
     kioskKey,
+    nodeForward,
   };
 }
 
@@ -120,7 +138,7 @@ export const publicProcedure = t.procedure.use(async ({ path, next }) => {
 
 /** Require an invited user when AUTH_MODE is on; pass through when off. */
 export const authedProcedure = publicProcedure.use(async ({ ctx, next }) => {
-  if (ctx.authEnabled && !ctx.user) {
+  if (ctx.authEnabled && !ctx.user && !ctx.nodeForward) {
     throw new TRPCError({
       code: "UNAUTHORIZED",
       message: "Not authenticated",
@@ -129,7 +147,10 @@ export const authedProcedure = publicProcedure.use(async ({ ctx, next }) => {
   return runWithActor(ctx.user?.id ?? null, () => next());
 });
 
-/** Authed, and an instance admin when AUTH_MODE is on. */
+/**
+ * Authed, and an instance admin when AUTH_MODE is on. A forwarded node call
+ * has no user, so it is never admin.
+ */
 export const adminProcedure = authedProcedure.use(async ({ ctx, next }) => {
   if (ctx.authEnabled && !ctx.user?.isAdmin) {
     throw new TRPCError({
@@ -270,17 +291,40 @@ async function eventDateFor(
   return row?.date ?? new Date(0);
 }
 
+/**
+ * The capabilities a request holds on one event row. A signed-in user: their
+ * grants. A forwarded node call (no user): everything on an event whose
+ * active lease this node holds (the event is checked out to it, so it is the
+ * node's to administer), nothing otherwise. Handlers that check an event
+ * other than `ctx.event` (`event.delete`) call this instead of
+ * `resolveEventCapabilities`, so the node rule cannot be forgotten there.
+ */
+export async function capabilitiesForEventRow(
+  ctx: Pick<Context, "user" | "authEnabled" | "nodeForward">,
+  event: { id: bigint; date: Date },
+  db: PrismaClient = prisma(),
+): Promise<Set<Capability>> {
+  if (!ctx.authEnabled) return new Set(ALL_CAPABILITIES);
+  if (!ctx.user && ctx.nodeForward) {
+    const holder = ctx.nodeForward.nodeId;
+    if (!holder) return new Set();
+    const lease = await getActiveLease(db, event.id);
+    return lease?.holderNodeId === holder ? new Set(ALL_CAPABILITIES) : new Set();
+  }
+  return resolveEventCapabilities({
+    db,
+    eventId: event.id,
+    eventDate: event.date,
+    user: ctx.user,
+    authEnabled: ctx.authEnabled,
+  });
+}
+
 export async function capabilitiesForContext(
   ctx: EventContext,
 ): Promise<Set<Capability>> {
   const date = await eventDateFor(ctx);
-  return resolveEventCapabilities({
-    db: ctx.db,
-    eventId: ctx.event.id,
-    eventDate: date,
-    user: ctx.user,
-    authEnabled: ctx.authEnabled,
-  });
+  return capabilitiesForEventRow(ctx, { id: ctx.event.id, date }, ctx.db);
 }
 
 function requireCapability(cap: Capability) {
