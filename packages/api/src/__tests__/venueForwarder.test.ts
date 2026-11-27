@@ -228,6 +228,24 @@ describe("registerVenueForwarder on the wire", () => {
     expect(seen[0].body).toBe(JSON.stringify({ name: "x" }));
   });
 
+  it.each([undefined, "", "cloud"])("a box whose NODE_ID is %j answers CLOUD_AUTH telling the operator to set it, without calling the cloud", async (id) => {
+    if (id === undefined) delete process.env.NODE_ID;
+    else process.env.NODE_ID = id;
+    await startVenue();
+    const res = await post();
+    expect(res.statusCode).toBe(412);
+    const body = res.json() as { error: { message: string; data: { reason: string; code: string } } };
+    expect(body.error.data).toMatchObject({ code: "PRECONDITION_FAILED", reason: "CLOUD_AUTH" });
+    expect(body.error.message).toMatch(/NODE_ID/);
+    expect(seen).toHaveLength(0);
+  });
+
+  it("sends no caps header from a box with login off", async () => {
+    await startVenue();
+    await post();
+    expect(seen[0].headers["x-oxygen-forwarded-caps"]).toBeUndefined();
+  });
+
   it("sends no secret header when none is configured", async () => {
     delete process.env.SYNC_SHARED_SECRET;
     await startVenue();

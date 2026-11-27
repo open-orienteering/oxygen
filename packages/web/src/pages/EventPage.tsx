@@ -118,7 +118,7 @@ export function EventPage() {
           )}
 
           {/* Global Runner Database */}
-          {syncStatus.data?.apiKeyConfigured && (
+          {canManage && syncStatus.data?.apiKeyConfigured && (
             <RunnerDbPanel env={syncStatus.data.env} />
           )}
 
@@ -729,11 +729,14 @@ function EventorSyncPanel({
 
 // ─── Runner Database Panel ──────────────────────────────────
 
-function RunnerDbPanel({ env }: { env?: string }) {
+export function RunnerDbPanel({ env }: { env?: string }) {
   const { t } = useTranslation("event");
   const timeAgo = useTimeAgo();
+  // `runnerDbStatus` needs event.manage: other users do not run it (and see no error).
+  const { has, loaded } = useCapabilities();
   const dbStatus = trpc.eventor.runnerDbStatus.useQuery(undefined, {
     staleTime: 60_000,
+    enabled: loaded && has("event.manage"),
   });
   const utils = trpc.useUtils();
   const syncMutation = trpc.eventor.syncRunnerDb.useMutation({

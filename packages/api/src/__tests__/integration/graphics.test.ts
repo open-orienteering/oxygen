@@ -209,9 +209,9 @@ describe("served graphics cannot run script (CRS-003 / API-31)", () => {
     expect((await get(`/api/maps/${ctx.nameId}/graphics/${raster.id}`)).headers["content-disposition"]).toBeUndefined();
   });
 
-  it("refuses an SVG whose script hides in a comment or a character reference at upload", async () => {
+  it("refuses an SVG whose script hides in metadata or behind a prefix at upload", async () => {
     const wrap = (inner: string) => Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 4">${inner}</svg>`);
-    for (const inner of ["<metadata><script>alert(1)</script></metadata>", "&#60;script>alert(1)&#60;/script>", '<image href="//evil.example/x.png"/>']) {
+    for (const inner of ["<metadata><script>alert(1)</script></metadata>", "<s:script xmlns:s=\"http://www.w3.org/2000/svg\">alert(1)</s:script>", '<image href="//evil.example/x.png"/>']) {
       await expect(upload("bad", wrap(inner)), inner).rejects.toThrow(/The SVG must not contain/);
     }
   });

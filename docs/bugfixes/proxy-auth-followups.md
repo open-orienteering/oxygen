@@ -44,5 +44,11 @@ What [proxy-auth-and-svg-xss.md](proxy-auth-and-svg-xss.md) did not do, and why.
   cluster-wide.
 - **Local gate on an auth-off box.** A venue box with login off trusts every
   LAN device to forward cloud-owned edits as the box, like every other local
-  write; only a box with login on checks its caller (admin or `event.manage`
-  on the local copy).
+  write; only a box with login on checks its caller (signed in, and a non-empty
+  capability set on the local copy, which it also sends upstream).
+- **A node with the secret but no lease passes authed-level procedures.** A
+  forward with the right secret and a node id is admitted by `authedProcedure`
+  whether or not the node holds a lease, so `classPreset`, `controlSeries`, the
+  club map rename and Eventor browsing accept it. It holds no event
+  capability without the lease. Narrowing this needs a per-procedure review
+  (or the per-event checkout token above).

@@ -135,33 +135,82 @@ describe("the context wiring over real HTTP (marker + secret into a procedure)",
   });
 });
 
+describe("the capabilities the box vouches for limit the forwarded call (x-oxygen-forwarded-caps)", () => {
+  it("intersects the lease-holder rule with the forwarded set; absent header is as before; unknown names are ignored", async () => {
+    const saved = { mode: process.env.AUTH_MODE, secret: process.env.SYNC_SHARED_SECRET };
+    process.env.AUTH_MODE = "proxy";
+    process.env.SYNC_SHARED_SECRET = "http-secret";
+    const app = Fastify({ logger: false });
+    await app.register(fastifyTRPCPlugin, { prefix: "/trpc", trpcOptions: { router: appRouter, createContext } });
+    await app.ready();
+    try {
+      // courseObject.reorder needs courses.edit; an id that does not exist answers NOT_FOUND once past the gate.
+      const call = (event: string, caps: string | null) =>
+        app.inject({
+          method: "POST",
+          url: "/trpc/courseObject.reorder",
+          headers: {
+            "content-type": "application/json",
+            "x-event-id": event,
+            "x-oxygen-forwarded": "1",
+            "x-oxygen-node-id": "venue-fwd",
+            "x-oxygen-sync-secret": "http-secret",
+            ...(caps !== null ? { "x-oxygen-forwarded-caps": caps } : {}),
+          },
+          payload: JSON.stringify({ ids: [999999] }),
+        });
+      expect((await call(held.nameId, null)).statusCode).toBe(404);
+      expect((await call(held.nameId, "courses.edit")).statusCode).toBe(404);
+      expect((await call(held.nameId, "event.view,courses.view,courses.edit,courses.review")).statusCode).toBe(404);
+      expect((await call(held.nameId, "bogus.cap, courses.edit")).statusCode).toBe(404);
+      // A viewer's set, a manager-only set and an empty set do not include courses.edit.
+      expect((await call(held.nameId, "event.view,results.view")).statusCode).toBe(403);
+      expect((await call(held.nameId, "event.manage")).statusCode).toBe(403);
+      expect((await call(held.nameId, "")).statusCode).toBe(403);
+      expect((await call(held.nameId, "nonsense")).statusCode).toBe(403);
+      // The lease rule still applies on top of a full set.
+      expect((await call(other.nameId, "courses.edit")).statusCode).toBe(403);
+    } finally {
+      await app.close();
+      if (saved.mode === undefined) delete process.env.AUTH_MODE;
+      else process.env.AUTH_MODE = saved.mode;
+      if (saved.secret === undefined) delete process.env.SYNC_SHARED_SECRET;
+      else process.env.SYNC_SHARED_SECRET = saved.secret;
+    }
+  });
+});
+
 describe("the box checks its own caller before lending its authority upstream", () => {
-  it("refuses anonymous and unauthorised local callers, forwards managers and admins", async () => {
+  it("refuses anonymous callers and callers without access; forwards a course setter and a viewer with their own capabilities", async () => {
     const stamp = Math.random().toString(16).slice(2, 8);
     const mk = (label: string, isAdmin = false) =>
       free.db.user.create({ data: { email: `${label}-${stamp}@fwd-gate.example`, displayName: label, isAdmin, active: true } });
-    const [member, manager, admin] = [await mk("m"), await mk("g"), await mk("a", true)];
+    const [member, setter, admin, nobody] = [await mk("m"), await mk("s"), await mk("a", true), await mk("n")];
     await grantSystemGroup(free.db, { eventId: free.eventId, userId: member.id, groupId: SYSTEM_GROUP_IDS.member, grantedBy: admin.id });
-    await grantSystemGroup(free.db, { eventId: free.eventId, userId: manager.id, groupId: SYSTEM_GROUP_IDS.eventAdmin, grantedBy: admin.id });
+    await grantSystemGroup(free.db, { eventId: free.eventId, userId: setter.id, groupId: SYSTEM_GROUP_IDS.courseSetter, grantedBy: admin.id });
 
-    const upstreamSeen: string[] = [];
+    // A finished event gives every signed-in user a view; the "no access" case needs one still to come.
+    const originalDate = (await free.db.event.findUniqueOrThrow({ where: { id: free.eventId }, select: { date: true } })).date;
+    await free.db.event.update({ where: { id: free.eventId }, data: { date: new Date(Date.now() + 30 * 86_400_000) } });
+    const upstreamSeen: Array<{ url: string; caps: string | undefined }> = [];
     const upstream = http.createServer((req, res) => {
-      upstreamSeen.push(req.url ?? "");
+      upstreamSeen.push({ url: req.url ?? "", caps: req.headers["x-oxygen-forwarded-caps"] as string | undefined });
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ result: { data: { ok: true } } }));
     });
     await new Promise<void>((r) => upstream.listen(0, "127.0.0.1", r));
-    const saved = { role: process.env.NODE_ROLE, peer: process.env.SYNC_PEER_URL, mode: process.env.AUTH_MODE, secret: process.env.SYNC_SHARED_SECRET };
+    const saved = { role: process.env.NODE_ROLE, peer: process.env.SYNC_PEER_URL, mode: process.env.AUTH_MODE, secret: process.env.SYNC_SHARED_SECRET, node: process.env.NODE_ID };
     process.env.NODE_ROLE = "venue";
     process.env.SYNC_PEER_URL = `http://127.0.0.1:${(upstream.address() as { port: number }).port}`;
     process.env.AUTH_MODE = "proxy";
     process.env.SYNC_SHARED_SECRET = "box-secret";
+    process.env.NODE_ID = "venue-fwd";
     const box = Fastify({ logger: false });
     registerVenueForwarder(box);
     box.post("/trpc/*", async () => ({ local: true }));
     await box.ready();
     try {
-      const post = (email: string | null, event: string | null, url = "/trpc/club.update") =>
+      const post = (email: string | null, event: string | null, url = "/trpc/courseObject.reorder") =>
         box.inject({
           method: "POST",
           url,
@@ -171,24 +220,33 @@ describe("the box checks its own caller before lending its authority upstream", 
       expect((await post(null, free.nameId)).statusCode).toBe(401);
       const anon = (await post(null, free.nameId)).json() as { error: { data: { code: string } } };
       expect(anon.error.data.code).toBe("UNAUTHORIZED");
-      expect((await post(member.email, free.nameId)).statusCode).toBe(403);
-      expect((await post(manager.email, null)).statusCode).toBe(403); // no event: admin only
-      expect((await post(manager.email, "no_such_event_here")).statusCode).toBe(403);
+      // Signed in but no access to the event at all: an empty set.
+      expect((await post(nobody.email, free.nameId)).statusCode).toBe(403);
       expect(upstreamSeen).toEqual([]);
-      expect((await post(manager.email, free.nameId)).statusCode).toBe(200);
+      // A course setter (courses.edit, no event.manage) is forwarded, carrying exactly their capabilities.
+      expect((await post(setter.email, free.nameId)).statusCode).toBe(200);
+      expect(upstreamSeen.at(-1)?.caps?.split(",").sort()).toEqual(["courses.edit", "courses.review", "courses.view", "event.view"]);
+      // A viewer is forwarded too, but without courses.edit: the cloud refuses the edit (see the caps test above).
+      expect((await post(member.email, free.nameId)).statusCode).toBe(200);
+      expect(upstreamSeen.at(-1)?.caps?.split(",").sort()).toEqual(["event.view", "results.view"]);
+      // No event named: a signed-in user is enough; an admin carries every capability, others none.
       expect((await post(admin.email, null)).statusCode).toBe(200);
+      expect(upstreamSeen.at(-1)?.caps?.split(",").length).toBeGreaterThan(5);
+      expect((await post(setter.email, null)).statusCode).toBe(200);
+      expect(upstreamSeen.at(-1)?.caps).toBe("");
       // A batch gets one refusal per call.
-      const batch = await post(member.email, free.nameId, "/trpc/club.update,club.create?batch=1");
+      const batch = await post(nobody.email, free.nameId, "/trpc/club.update,club.create?batch=1");
       expect(batch.statusCode).toBe(403);
       expect((batch.json() as unknown[]).length).toBe(2);
-      expect(upstreamSeen).toEqual(["/trpc/club.update", "/trpc/club.update"]);
+      expect(upstreamSeen).toHaveLength(4);
     } finally {
       await box.close();
       await new Promise<void>((r) => upstream.close(() => r()));
-      for (const [k, v] of [["NODE_ROLE", saved.role], ["SYNC_PEER_URL", saved.peer], ["AUTH_MODE", saved.mode], ["SYNC_SHARED_SECRET", saved.secret]] as const) {
+      for (const [k, v] of [["NODE_ROLE", saved.role], ["SYNC_PEER_URL", saved.peer], ["AUTH_MODE", saved.mode], ["SYNC_SHARED_SECRET", saved.secret], ["NODE_ID", saved.node]] as const) {
         if (v === undefined) delete process.env[k];
         else process.env[k] = v;
       }
+      await free.db.event.update({ where: { id: free.eventId }, data: { date: originalDate } });
       await free.db.user.deleteMany({ where: { email: { endsWith: "@fwd-gate.example" } } });
     }
   });

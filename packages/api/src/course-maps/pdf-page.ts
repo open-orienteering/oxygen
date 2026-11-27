@@ -23,6 +23,7 @@ import { getBlob } from "../map-store/blob-store.js";
 import { eventPrintPatch } from "../map-store/patches.js";
 import { bundledPrintFonts } from "../render/fonts.js";
 import { type BaseMapInfo, getBaseMapInfo } from "./map-source.js";
+import { renderableSvg } from "./svg-sanitize.js";
 import { svgFontOptions, windowedSvg } from "./svg-window.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -41,7 +42,9 @@ export async function rasteriseSvgGraphic(svg: Uint8Array, widthPx: number, heig
   const { Resvg } = await import("@resvg/resvg-js");
   const sharp = (await import("sharp")).default;
   const font = svgFontOptions();
-  const source = Buffer.from(svg);
+  // The re-serialised, validated tree, never the stored bytes; a graphic that no longer validates renders as nothing.
+  const source = renderableSvg(svg);
+  if (!source) return blankPng(sharp, widthPx, heightPx);
   if (window && !isWholeWindow(window)) {
     const canvas = new Resvg(source, { font });
     let png: Buffer;
@@ -55,6 +58,10 @@ export async function rasteriseSvgGraphic(svg: Uint8Array, widthPx: number, heig
     return exactBox(sharp, png, widthPx, heightPx);
   }
   return exactBox(sharp, new Resvg(source, { fitTo: { mode: "width", value: widthPx }, font }).render().asPng(), widthPx, heightPx);
+}
+
+async function blankPng(sharp: Sharp, w: number, h: number): Promise<Uint8Array> {
+  return new Uint8Array(await sharp({ create: { width: w, height: h, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } }).png().toBuffer());
 }
 
 type ResvgCtor = typeof import("@resvg/resvg-js").Resvg;

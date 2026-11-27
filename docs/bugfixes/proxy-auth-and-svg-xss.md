@@ -105,7 +105,8 @@ Left out on purpose: [proxy-auth-followups.md](proxy-auth-followups.md).
 Two reviews of the first fix found the following, now fixed:
 
 - The forwarder lent the box's authority to any local caller; a box with
-  login on now checks its caller (admin or `event.manage` on the local copy).
+  login on now checks its caller (round 2 replaced the `event.manage`
+  requirement with the caller's capability set, see below).
 - A node could create, import and delete events and list every event; it now
   cannot create, import or delete, sees only events it holds, and a node id
   that is empty or the cloud's own is anonymous.
@@ -115,3 +116,32 @@ Two reviews of the first fix found the following, now fixed:
   refused `href= "#a"`, `url(&quot;#c&quot;)` and embedded fonts. See
   [course-maps.md](../course-maps.md).
 - A JSON 401 from the cloud on a forward is `CLOUD_AUTH`.
+
+## Review round 2 (same day)
+
+A re-review showed the regex SVG validator was still bypassable (a comment or
+CDATA quote that desynchronised the attribute scan hid `<image href="/abs/path.png">`
+from the checks, so resvg read a local file; duplicate entity declarations;
+non-ASCII entity names; `</style >`; a prefixed `<s:style>`; CSS escapes in
+presentation attributes; `<set attributeName="href">` and `<animate
+attributeName="xlink:href">`; non-UTF-8 encodings). The approach was replaced,
+not patched:
+
+- **Parser-based validation and a sanitised render input.** Pre-checks (UTF-8,
+  no control characters, no processing instructions, a DOCTYPE of plain
+  entities only, custom entity references only inside `xmlns` values), then
+  `fast-xml-parser` validate + parse, a walk of the tree (elements, attributes,
+  animations, CSS decoded in one pass), and a re-serialisation that is the only
+  thing resvg, the window wrapper and the trim step read. A stored graphic that
+  no longer validates renders as nothing, with a warning. Details in
+  [course-maps.md](../course-maps.md) "SVG validation".
+- **The forwarder's local gate no longer needs `event.manage`** (it blocked
+  course setters with only `courses.edit`). The box sends the caller's
+  capabilities in `x-oxygen-forwarded-caps`; the cloud intersects them with the
+  lease rule. Anonymous is 401, an empty set on an event-scoped forward is 403.
+- **A box whose `NODE_ID` is unset or `cloud`** answers 412 `CLOUD_AUTH` with
+  the instruction to set it, without calling the cloud.
+- **`RunnerDbPanel`** runs `runnerDbStatus` (now `event.manage`) only for a user
+  who has it.
+- A node with the secret but no lease passes authed-level procedures; noted in
+  [authentication.md](../system/authentication.md) and the follow-ups.

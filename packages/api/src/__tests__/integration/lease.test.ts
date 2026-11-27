@@ -26,7 +26,7 @@
  * nothing race-critical is touched.
  */
 
-import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
 import { TRPCError } from "@trpc/server";
 import { execSync } from "child_process";
 import { Client } from "pg";
@@ -1989,7 +1989,8 @@ describe("a box follows the cloud's map rows during a lease (G19)", () => {
     const venue = Fastify({ logger: false });
     _setLeasePeerFactory(() => jsonLeasePeerToB());
     try {
-      registerVenueForwarder(venue);
+      // This test's "box" leases under the default id (it shares a process with the stub cloud).
+      registerVenueForwarder(venue, { allowDefaultNodeId: true });
       venue.post("/trpc/*", async () => ({ result: { data: "local" } }));
       await venue.ready();
       // The header the web's tRPC clients send (\`x-event-id\` is the peers').
@@ -2275,6 +2276,16 @@ describe("forceTakeover", () => {
 });
 
 describe("layout writes on a venue box are forwarded to the cloud (G18)", () => {
+  // A box needs a node id of its own to forward (the default "cloud" is refused before the cloud is called).
+  let savedNodeId: string | undefined;
+  beforeEach(() => {
+    savedNodeId = process.env.NODE_ID;
+    process.env.NODE_ID = "venue-under-test";
+  });
+  afterEach(() => {
+    if (savedNodeId === undefined) delete process.env.NODE_ID;
+    else process.env.NODE_ID = savedNodeId;
+  });
   /** A box: the forwarder in front of a stub tRPC route that records what ran locally. */
   async function venueBox(peerUrl: string) {
     const previous = { role: process.env.NODE_ROLE, peer: process.env.SYNC_PEER_URL };

@@ -284,39 +284,58 @@ GET /api/maps/:nameId/graphics/:id/print.png[?w=&h=[&crop=]]   (the PNG a print 
 GET /api/maps/:nameId/graphics/:id/thumb.png[?v=]       (≤ 256 px on the longer side, never enlarged; immutable cache; J2)
 ```
 
-**SVG validation (CRS-003).** `parseSvgGraphic` checks the text *as
-uploaded*, with the document's declared entities expanded, and again with
-character references (`&#60;`, `&#x3c;`) and the five predefined entities
-decoded and tabs / line breaks removed; nothing is stripped first, so a
-comment, `<metadata>` or an entity cannot hide markup. Every `<!ENTITY`
-anywhere in the text is read (a `]>` inside a value or comment hides nothing):
-parameter, `SYSTEM` and `PUBLIC` entities are refused, and a value that still
-contains `<` or `&` after decoding to a fixpoint (five rounds) is refused;
-plain-text values (the namespace URL Illustrator declares) are expanded into
-the text the checks read, so `ur&a;(…)` and `java&a;cript:` are caught.
-Refused (`The SVG must not contain …`): a `script`, `foreignObject`,
-`iframe`, `object`, `embed`, `audio`, `video`, `link`, `meta` or `base`
-element, with or without a namespace prefix; `javascript:`; an `on…=`
-attribute; `@import`; `<?xml-stylesheet`, an `xsl:` element or the XSLT
-namespace; `<!ATTLIST`, `<!ELEMENT` and `<!NOTATION` declarations; a backslash
-in a `<style>` element or a `style` attribute (CSS escapes can spell
-`url(`); `image-set(`; an `href`, `xlink:href` or `src` attribute (in a start
-tag; whitespace around `=` is fine, an unquoted value is refused) whose value
-is neither `#fragment` nor `data:image/(png|jpeg|gif|webp);base64,…` (no
-`data:image/svg+xml`); and a `url(…)` (read on the decoded text, so
-`url(&quot;#c&quot;)` passes) that is not `url(#…)`, an embedded raster or an
-embedded font (`data:font/*`, `data:application/font-*`,
-`data:application/x-font-*;base64,…`, as Illustrator and Affinity write
-`@font-face`). Accepted false positive: a comment or `<metadata>` that
-merely contains forbidden text is refused (the element, `javascript:`,
-`@import` and entity checks run on the whole text); `src=x` in plain text
-content is not an attribute and passes. The stripped copy is used only to find
-the root element. The stored bytes stay as uploaded. Serving: the three
-graphic routes below send `Content-Security-Policy: default-src 'none';
-style-src 'unsafe-inline'; sandbox` and `X-Content-Type-Options: nosniff`, and
-the raw route sends an SVG with `Content-Disposition: attachment;
-filename="graphic-<id>.svg"`; the web client never renders a graphic as SVG
-(it shows `thumb.png` and `print.png`). Tests: `course-map-graphics.test.ts`,
+**SVG validation (CRS-003).** An SVG is validated by **parsing**, not by
+pattern matching (`course-maps/svg-sanitize.ts`, `analyseSvg`), and what the
+rasteriser reads is a re-serialisation of the validated tree, never the
+uploaded bytes.
+
+1. *Refused before parsing* (`The SVG must not contain …`): a `encoding=` in
+   the XML declaration that is not UTF-8; C0 control characters other than tab,
+   CR and LF; any processing instruction other than the XML declaration
+   (`<?xml-stylesheet`, anything in the body); more than one DOCTYPE; and a
+   DOCTYPE internal subset that holds anything but `<!ENTITY name "value">`
+   general entities (no `%`, `SYSTEM`, `PUBLIC`, `ATTLIST`, `ELEMENT`,
+   `NOTATION`, comments). The subset is read sequentially, so a `]>` inside a
+   value hides nothing. A reference to a custom entity is refused everywhere
+   except inside an `xmlns` / `xmlns:*` attribute value (Illustrator's `ns_*`
+   entities); entity values never reach content, so duplicate declarations and
+   non-ASCII names do not matter.
+2. *Parsed*: `fast-xml-parser`'s `XMLValidator` first (ill-formed is refused),
+   then `XMLParser` with `preserveOrder`, comments dropped, CDATA as text and
+   entities not expanded. A bare `&` is refused; character references are
+   range-checked.
+3. *Walked*: an element whose local name (any prefix) is `script`,
+   `foreignObject`, `iframe`, `object`, `embed`, `audio`, `video`, `link`,
+   `meta`, `base`, `handler` or `listener`, or that is `xsl:` prefixed or in the
+   XSLT namespace; any attribute named `on…` (any case, any prefix); an `href` /
+   `src` attribute (any prefix) whose trimmed value is neither `#fragment` nor
+   `data:image/(png|jpeg|jpg|gif|webp)[;params];base64,…`; a `set`, `animate`,
+   `animateTransform` or `animateMotion` whose `attributeName` (local part) is
+   `href`, `src` or starts with `on`, or whose `to` / `from` / `values` / `by`
+   holds a scheme or a path. CSS (every `style` element, any prefix, and every
+   attribute value) is read after one pass that drops comments and decodes CSS
+   escapes (`\75rl(` is `url(`; an escape cannot open or close a comment):
+   `@import`, `image-set(`, `expression(`, `javascript:` and any `url(…)` that
+   is not `#…`, a raster data image or an embedded font (`data:font/*`,
+   `data:application/(x-)font-*`, `data:application/octet-stream`, any
+   parameters, `;base64,`) are refused, as is an unterminated `url(`. Plain
+   backslashes (`font-family:"Foo\ Bar"`) pass, and text content outside `style`
+   is not checked (`<text>url(…)</text>` passes). Nesting over 256 deep is
+   refused.
+4. *Rendered*: the tree is serialised again (the declaration, DOCTYPE and comments
+   are gone; xmlns entity values substituted; CDATA re-emitted as escaped text). `rasteriseSvgGraphic` (print, `print.png`,
+   `thumb.png`, the outline trace), the window wrapper and `trimSvgUpload`
+   take only that serialisation. A stored graphic that no longer validates
+   (for example after the rules tightened) renders as a transparent box of the
+   requested size and logs a warning.
+
+The stored bytes stay as uploaded. Serving: the three graphic routes below
+send `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline';
+sandbox` and `X-Content-Type-Options: nosniff`, and the raw route sends an SVG
+with `Content-Disposition: attachment; filename="graphic-<id>.svg"`; the web
+client never renders a graphic as SVG (it shows `thumb.png` and `print.png`).
+Tests: `course-map-graphics.test.ts` (every bypass payload, the exporters'
+documents, a local-path image that must not render), `svg-window.test.ts`,
 `integration/graphics.test.ts`.
 
 The three graphic routes answer `courses.view`, and the event's kiosk key

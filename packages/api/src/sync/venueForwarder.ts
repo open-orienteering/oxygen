@@ -28,16 +28,19 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { isCloudOwnedMutation } from "./ownership.js";
 import {
+  SYNC_FORWARDED_CAPS_HEADER,
   SYNC_FORWARDED_HEADER,
   SYNC_NODE_ID_HEADER,
   SYNC_SECRET_HEADER,
   nodeId,
+  nodeIdIsDefault,
   nodeRole,
   syncPeerUrl,
   syncSharedSecret,
 } from "./nodeIdentity.js";
 import { makeSyncHeaders } from "./googleIdToken.js";
 import { createContext, capabilitiesForEventRow } from "../trpc.js";
+import { ALL_CAPABILITIES, type Capability } from "@oxygen/shared";
 import { authMode } from "../auth.js";
 import { prisma } from "../db.js";
 import { makeLeasePeer } from "./lease.js";
@@ -176,6 +179,10 @@ const REFUSAL_MESSAGES: Record<VenueRefusalReason, string> = {
     "The cloud refused this box's credentials (check SYNC_SHARED_SECRET and the IAP settings).",
 };
 
+/** Shown when the box has no NODE_ID of its own (the cloud's default id cannot lease or forward). */
+export const NODE_ID_UNSET_MESSAGE =
+  "This box has no node id of its own: set NODE_ID to a unique name for it (not \"cloud\") and restart.";
+
 /** A forwarded call that gets no answer within this long is treated as an unreachable cloud. */
 export const FORWARD_TIMEOUT_MS = 30_000;
 
@@ -198,10 +205,11 @@ export function connectivityErrorBody(
   paths: string[],
   batched: boolean,
   reason: VenueRefusalReason = "CLOUD_UNREACHABLE",
+  message: string = REFUSAL_MESSAGES[reason],
 ): unknown {
   const one = (path: string) => ({
     error: {
-      message: REFUSAL_MESSAGES[reason],
+      message,
       code: -32603,
       data: { code: "PRECONDITION_FAILED", httpStatus: 412, path, reason },
     },
@@ -222,28 +230,34 @@ export function localRefusalBody(paths: string[], batched: boolean, code: "UNAUT
 }
 
 /**
- * Who may lend the box's authority upstream. The forward is made as the box,
- * with every capability on events checked out to it, so with login on at the
- * box the local caller is checked first: signed in, and an instance admin or
- * holding `event.manage` on the box's copy of the event the request names (no
- * event: admin only). `null` = allowed. With login off at the box (a LAN
- * venue box) every device on the LAN is trusted, as for all local writes.
+ * Who may lend the box's authority upstream, and what the forward may do.
+ * The forward is made as the box, so with login on at the box the local
+ * caller is checked first: it must be signed in (401), and on an event-scoped
+ * forward must hold at least one capability on the box's copy of that event
+ * (403). The capabilities it holds (an admin: all) travel in
+ * `x-oxygen-forwarded-caps`, and the cloud lets the forward do no more than
+ * those. A forward that names no event needs a signed-in user only; it carries
+ * the capabilities of an admin or none (cloud-owned, event-less procedures
+ * check the node, not capabilities). With login off at the box (a LAN venue
+ * box) every device on the LAN is trusted, as for all local writes: no header.
  */
-export async function localForwardRefusal(req: FastifyRequest): Promise<{ code: "UNAUTHORIZED" | "FORBIDDEN"; message: string } | null> {
-  if (authMode() === "off") return null;
+export async function localForwardGate(
+  req: FastifyRequest,
+): Promise<{ refusal: { code: "UNAUTHORIZED" | "FORBIDDEN"; message: string } } | { caps: Capability[] | null }> {
+  if (authMode() === "off") return { caps: null };
   const ctx = await createContext({ req } as unknown as Parameters<typeof createContext>[0]);
-  if (!ctx.user) return { code: "UNAUTHORIZED", message: "Not authenticated" };
-  if (ctx.user.isAdmin) return null;
+  if (!ctx.user) return { refusal: { code: "UNAUTHORIZED", message: "Not authenticated" } };
   if (ctx.event) {
     const date = ctx.event.date ?? new Date(0);
-    const caps = await capabilitiesForEventRow(ctx, { id: ctx.event.id, date });
-    if (caps.has("event.manage")) return null;
-    return { code: "FORBIDDEN", message: "Missing capability event.manage" };
+    const caps = ctx.user.isAdmin ? new Set<Capability>(ALL_CAPABILITIES) : await capabilitiesForEventRow(ctx, { id: ctx.event.id, date });
+    if (caps.size === 0) return { refusal: { code: "FORBIDDEN", message: "You have no access to this event" } };
+    return { caps: [...caps] };
   }
-  return { code: "FORBIDDEN", message: "Admin access required" };
+  return { caps: ctx.user.isAdmin ? [...ALL_CAPABILITIES] : [] };
 }
 
-export function registerVenueForwarder(server: FastifyInstance, opts: { timeoutMs?: number } = {}): void {
+/** `allowDefaultNodeId` is a test seam only: a process that plays both the box and its stub cloud shares one NODE_ID. */
+export function registerVenueForwarder(server: FastifyInstance, opts: { timeoutMs?: number; allowDefaultNodeId?: boolean } = {}): void {
   const timeoutMs = opts.timeoutMs ?? FORWARD_TIMEOUT_MS;
   const peerUrl = syncPeerUrl();
   if (nodeRole() !== "venue" || !peerUrl) return;
@@ -258,11 +272,17 @@ export function registerVenueForwarder(server: FastifyInstance, opts: { timeoutM
 
     const paths = trpcProcedurePaths(req.url);
     const batched = req.url.includes("batch=1");
-    const refusal = await localForwardRefusal(req);
-    if (refusal) {
+    const gate = await localForwardGate(req);
+    if ("refusal" in gate) {
+      const { refusal } = gate;
       void reply
         .code(refusal.code === "UNAUTHORIZED" ? 401 : 403)
         .send(localRefusalBody(paths, batched, refusal.code, refusal.message));
+      return reply;
+    }
+    // A box still named "cloud" would be refused by the cloud as an impostor of itself: say what to fix, do not call.
+    if (nodeIdIsDefault() && !opts.allowDefaultNodeId) {
+      void reply.code(412).send(connectivityErrorBody(paths, batched, "CLOUD_AUTH", NODE_ID_UNSET_MESSAGE));
       return reply;
     }
     try {
@@ -279,6 +299,7 @@ export function registerVenueForwarder(server: FastifyInstance, opts: { timeoutM
         ...(secret ? { [SYNC_SECRET_HEADER]: secret } : {}),
         [SYNC_NODE_ID_HEADER]: nodeId(),
         [SYNC_FORWARDED_HEADER]: "1",
+        ...(gate.caps ? { [SYNC_FORWARDED_CAPS_HEADER]: gate.caps.join(",") } : {}),
       };
       const made = makeSyncHeaders(base);
       const headers = typeof made === "function" ? await made() : made;

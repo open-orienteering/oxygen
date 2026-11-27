@@ -15,6 +15,7 @@
 
 import type { ImageWindow } from "@oxygen/shared/print";
 import { BUNDLED_FONT_FILES } from "../render/fonts.js";
+import { renderableSvg } from "./svg-sanitize.js";
 
 /** Text in a logo uses the bundled faces only: the same output on every host. */
 export function svgFontOptions() {
@@ -88,8 +89,11 @@ export function alphaBounds(rgba: Uint8Array, width: number, height: number): [x
  * is stored as it is. Runs resvg synchronously: the API calls it in a print
  * worker (`trimSvgInWorker`), never on the event loop.
  */
-export async function trimSvgUpload(svg: Buffer): Promise<Buffer | null> {
+export async function trimSvgUpload(upload: Buffer): Promise<Buffer | null> {
   const { Resvg } = await import("@resvg/resvg-js");
+  // Measured and re-framed from the validated tree's serialisation, not the uploaded bytes.
+  const svg = renderableSvg(upload);
+  if (!svg) return null;
   const text = svg.toString("utf8");
   const font = svgFontOptions();
   const probe = new Resvg(svg, { font });

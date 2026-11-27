@@ -179,15 +179,24 @@ the call is the **box's**, not the caller's:
   settings)") and does not refresh. A silent or unreachable cloud stays
   `CLOUD_UNREACHABLE`.
 
-**The box checks its own caller first.** With login on at the box
-(`AUTH_MODE` `proxy` or `dev`), `venueForwarder` resolves the local caller
-before lending the box's authority: anonymous is `UNAUTHORIZED`, and the
-caller must be an instance admin or hold `event.manage` on the box's copy of
-the event the request names (`x-event-id` / `x-competition-id`); a forward
-naming no event needs an admin. Anything else is `FORBIDDEN` and is not
-forwarded (tRPC-shaped, per call in a batch). With login off at the box (the
-usual LAN venue box) every device on the LAN is trusted, as for all local
-writes.
+**The box checks its own caller first, and vouches for what they may do.**
+With login on at the box (`AUTH_MODE` `proxy` or `dev`), `venueForwarder`
+resolves the local caller before lending the box's authority: anonymous is
+`UNAUTHORIZED` (401); on a forward that names an event (`x-event-id` /
+`x-competition-id`) the caller's capabilities on the box's copy of it are
+computed (an instance admin: all) and an empty set is `FORBIDDEN` (403); a
+forward naming no event needs a signed-in user only. Refusals are tRPC-shaped,
+per call in a batch, and nothing is forwarded. The set travels in
+`x-oxygen-forwarded-caps` (comma list; an event-less forward carries all of them
+for an admin and none for anyone else), and on the cloud a `nodeForward` call
+holds the lease-holder rule **intersected with** that set (unknown names are
+ignored). So a course setter with only `courses.edit` can forward a course
+object edit, a viewer cannot, and nobody can do through the box what they could
+not do at it. With login off at the box (the usual LAN venue box) no header is
+sent, every device on the LAN is trusted, as for all local writes, and the
+cloud applies the lease rule alone. A box whose `NODE_ID` is unset or still the
+default `cloud` answers a forward with `412` `CLOUD_AUTH` ("set NODE_ID …")
+without calling the cloud: the cloud would treat it as itself.
 
 **What a node may and may not do on the cloud.** A forwarded call never
 creates, imports or deletes events (`event.create`, `eventor.importEvent`,
@@ -201,6 +210,15 @@ per-event checkout token would close it,
 [proxy-auth-followups](../bugfixes/proxy-auth-followups.md)). A 401 from the
 cloud on a forward (wrong or missing secret on a cloud not behind IAP) comes
 back as `CLOUD_AUTH`.
+
+**A node with the secret but no lease still passes authed-level procedures.** A
+forward with the right secret and a node id is `ctx.nodeForward`, which
+`authedProcedure` admits whether or not that node holds any lease, so it can call
+what only needs a signed-in user: `classPreset`, `controlSeries`, the club map
+rename and Eventor browsing. Event capabilities are never granted without the
+lease. This is by design for the node-owned cloud data; narrowing it needs
+per-procedure review
+([proxy-auth-followups](../bugfixes/proxy-auth-followups.md)).
 
 Who may check an event out on a box is in
 [offline-architecture.md](offline-architecture.md) ("The lease").

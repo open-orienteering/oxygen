@@ -5,6 +5,7 @@ import { prisma, resolveEvent, type EventRef } from "./db.js";
 import {
   SYNC_SECRET_HEADER,
   SYNC_NODE_ID_HEADER,
+  SYNC_FORWARDED_CAPS_HEADER,
   SYNC_FORWARDED_HEADER,
   nodeId,
   syncSharedSecret,
@@ -22,7 +23,7 @@ import {
   type AuthUser,
 } from "./auth.js";
 import type { Capability } from "@oxygen/shared";
-import { ALL_CAPABILITIES } from "@oxygen/shared";
+import { ALL_CAPABILITIES, isCapability } from "@oxygen/shared";
 import { resolveEventCapabilities } from "./permissions.js";
 import { timingSafeEqual } from "node:crypto";
 
@@ -53,6 +54,12 @@ export interface Context {
    * Null for every other request, including a marked one with a wrong secret.
    */
   nodeForward?: { nodeId: string | null } | null;
+  /**
+   * The capabilities the forwarding box vouched for (`x-oxygen-forwarded-caps`),
+   * only on a `nodeForward` call; null when the header is absent (a box with
+   * login off).
+   */
+  forwardedCaps?: Set<Capability> | null;
 }
 
 /**
@@ -90,6 +97,13 @@ export async function createContext(
       ? { nodeId: peerNodeId }
       : null;
 
+  const capsRaw = opts.req.headers[SYNC_FORWARDED_CAPS_HEADER];
+  const capsHeader = Array.isArray(capsRaw) ? capsRaw[0] : capsRaw;
+  const forwardedCaps =
+    nodeForward && capsHeader !== undefined
+      ? new Set(capsHeader.split(",").map((c) => c.trim()).filter(isCapability))
+      : null;
+
   if (mode === "proxy") {
     if (!forwarded) {
       identityEmail = parseIdentityEmail(opts.req.headers[authHeaderName()]);
@@ -110,6 +124,7 @@ export async function createContext(
     authMode: mode,
     kioskKey,
     nodeForward,
+    forwardedCaps,
   };
 }
 
@@ -319,7 +334,7 @@ export function assertNotNodeForward(ctx: Pick<Context, "user" | "nodeForward">)
  * `resolveEventCapabilities`, so the node rule cannot be forgotten there.
  */
 export async function capabilitiesForEventRow(
-  ctx: Pick<Context, "user" | "authEnabled" | "nodeForward">,
+  ctx: Pick<Context, "user" | "authEnabled" | "nodeForward"> & { forwardedCaps?: Set<Capability> | null },
   event: { id: bigint; date: Date },
   db: PrismaClient = prisma(),
 ): Promise<Set<Capability>> {
@@ -328,7 +343,9 @@ export async function capabilitiesForEventRow(
     const holder = ctx.nodeForward.nodeId;
     if (!holder) return new Set();
     const lease = await getActiveLease(db, event.id);
-    return lease?.holderNodeId === holder ? new Set(ALL_CAPABILITIES) : new Set();
+    if (lease?.holderNodeId !== holder) return new Set();
+    // The box vouches for what its signed-in caller may do; the node never does more than that.
+    return ctx.forwardedCaps ? new Set(ALL_CAPABILITIES.filter((c) => ctx.forwardedCaps!.has(c))) : new Set(ALL_CAPABILITIES);
   }
   return resolveEventCapabilities({
     db,
