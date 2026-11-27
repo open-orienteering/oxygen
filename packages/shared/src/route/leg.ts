@@ -147,11 +147,17 @@ export function shortestLegRoute(features: readonly BoxedRouteFeature[], req: Om
   const grid = legGrid(features, null, req);
   const stops = [req.from, ...(req.via ?? []), req.to];
   if (req.corridor && req.corridor.line.length >= 2 && Number.isFinite(polylineCost(grid, SHORTEST_COST_MODEL, req.corridor.line))) return [];
+  // No vertices reads as the drawn leg (§7.3): a bent corridor leg whose centre is not legal needs its route's own.
+  const bent = !!req.corridor && req.corridor.line.length > 2;
   // The line itself, where it is legal: no search. Through a crossing point the obstacle is opened by the search.
-  if (stops.length === 2 && Number.isFinite(segmentCost(grid, SHORTEST_COST_MODEL, req.from, req.to))) return [];
+  if (!bent && stops.length === 2 && Number.isFinite(segmentCost(grid, SHORTEST_COST_MODEL, req.from, req.to))) return [];
   const routes = findRoutes(grid, req.from, req.to, { model: SHORTEST_COST_MODEL, alternatives: 0, via: req.via });
   const route = routes.find((r) => r.shortest) ?? routes[0];
-  return route ? route.points.slice(1, -1) : null;
+  if (!route) return null;
+  const interior = route.points.slice(1, -1);
+  // The straight way inside the corridor: its middle as the one vertex, so it is not read as the bent centre line.
+  if (bent && interior.length === 0) return [{ x: (req.from.x + req.to.x) / 2, y: (req.from.y + req.to.y) / 2 }];
+  return interior;
 }
 
 /**

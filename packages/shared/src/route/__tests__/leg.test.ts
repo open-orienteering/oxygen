@@ -128,6 +128,24 @@ describe("a corridor leg (docs/course-elevation.md §7.6, §0.46)", () => {
     expect(shortestLegRoute([wall], { from, to, groundMPerMm: 10 })).not.toBeNull();
   });
 
+  it("a bent corridor whose centre crosses a lake: the route has its own vertices, inside, never read as the bent line", () => {
+    const line = [from, { x: 25, y: 23 }, to];
+    const lake = boxedFeature(BLOCKED_SOFT, "area", [rect(23, 21.5, 27, 26)]);
+    const route = shortestLegRoute([lake], { from, to, groundMPerMm: 10, corridor: { line, halfMm: 4 } })!;
+    expect(route.length).toBeGreaterThan(0);
+    expect(inside(line, [from, ...route, to], 4 + 0.3)).toBe(true);
+    expect(legPolylineCost([lake], null, { points: [from, ...route, to], groundMPerMm: 10 }, DEFAULT_COST_MODEL)).toBeLessThan(Infinity);
+  });
+
+  it("a crossing point beside the corridor's edge opens nothing outside it", () => {
+    const line = [from, to];
+    const wall = boxedFeature(BLOCKED, "line", [[25, 15, 25, 25]]);
+    const via = [{ x: 25, y: 20.4 }];
+    const found = findLegRoutes([wall], null, { from, to, via, groundMPerMm: 10, corridor: { line, halfMm: 0.5 } }, DEFAULT_COST_MODEL);
+    expect(found.routes.length).toBeGreaterThan(0);
+    for (const r of found.routes) expect(inside(line, r.points, 0.5 + 0.3)).toBe(true);
+  });
+
   it("every computed route stays inside, though a faster way runs outside", () => {
     const line = [from, to];
     const road = boxedFeature(CLASS_INDEX.road, "line", [[0, 23, 50, 23]]);

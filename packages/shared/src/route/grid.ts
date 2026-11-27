@@ -26,6 +26,8 @@ export interface RouteGrid {
   cls: Uint8Array;
   /** Height in metres at each cell's centre, NaN where unknown; null without a field. */
   heights: Float32Array | null;
+  /** Cells outside a corridor (`confineToCorridor`): nothing opens them, a crossing point's disc neither. */
+  outside?: Uint8Array;
 }
 
 export interface RouteGridInput {
@@ -229,7 +231,9 @@ export function confineToCorridor(g: RouteGrid, line: readonly RoutePoint[], hal
   const flat: number[] = [];
   for (const p of line) flat.push(p.x, p.y);
   if (flat.length >= 4) walkLine(g, flat, (i) => { inside[i] = 1; });
-  for (let i = 0; i < inside.length; i++) if (!inside[i]) g.cls[i] = BLOCKED;
+  const outside = g.outside ?? new Uint8Array(inside.length);
+  for (let i = 0; i < inside.length; i++) if (!inside[i]) { g.cls[i] = BLOCKED; outside[i] = 1; }
+  g.outside = outside;
 }
 
 /** Opens the cells within `radiusMm` of a point: a crossing point is where a leg passes an obstacle (course-layer.md §9.3). */
@@ -239,7 +243,8 @@ export function openDisc(g: RouteGrid, at: RoutePoint, radiusMm: number, cls: nu
   for (let r = Math.max(0, r0 - reach); r <= Math.min(g.rows - 1, r0 + reach); r++) {
     for (let c = Math.max(0, c0 - reach); c <= Math.min(g.cols - 1, c0 + reach); c++) {
       const p = centreOf(g, r * g.cols + c);
-      if (Math.hypot(p.x - at.x, p.y - at.y) <= radiusMm + g.cellMm * 0.5 && isBlockedClass(g.cls[r * g.cols + c])) g.cls[r * g.cols + c] = cls;
+      const i = r * g.cols + c;
+      if (Math.hypot(p.x - at.x, p.y - at.y) <= radiusMm + g.cellMm * 0.5 && isBlockedClass(g.cls[i]) && !g.outside?.[i]) g.cls[i] = cls;
     }
   }
 }

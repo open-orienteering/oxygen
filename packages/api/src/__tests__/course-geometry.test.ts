@@ -176,3 +176,20 @@ describe("courseLengthM", () => {
     expect(courseLengthM([], 10000)).toBe(0);
   });
 });
+
+describe("a leg's corridor at the map's scale (docs/course-elevation.md §7.3, §0.46)", () => {
+  it("half the stored width in paper mm at the map's own scale; none without a corridor or a scale", async () => {
+    const { editorCourseLayer, legCorridorHalfMm } = await import("../course-geometry.js");
+    const corridor = { widthM: 50, edge: true, whiteMm: 5, whiteOpacity: 1 };
+    const seq = [
+      { id: "a", code: "31", type: "Control" as const, xMm: 10, yMm: 10 },
+      { id: "b", code: "32", type: "Control" as const, xMm: 40, yMm: 10, leg: { corridor } },
+    ];
+    const [leg] = editorCourseLayer("c", seq, "ordered", { legCorridor: true }).derivation.courses[0].legs;
+    expect(legCorridorHalfMm(leg, 10000)).toBeCloseTo(2.5, 9);
+    expect(legCorridorHalfMm(leg, 4000)).toBeCloseTo(6.25, 9);
+    expect(legCorridorHalfMm(leg, null)).toBeNull();
+    const [plain] = editorCourseLayer("c", seq, "ordered").derivation.courses[0].legs;
+    expect(legCorridorHalfMm(plain, 10000)).toBeNull();
+  });
+});

@@ -311,16 +311,19 @@ test.describe("computed route alternatives (docs/course-elevation.md §7.8)", ()
     const alts = page.getByTestId("editor-leg-alternative");
     const count = await alts.count();
     expect(count).toBeGreaterThanOrEqual(1);
-    // Every route follows the bend inside the 50 m corridor, none takes the straight way.
+    // Every route follows the bend inside the 50 m corridor, none takes the straight way: at the least it passes
+    // within 25 m of the bend (and the search's cells, 0.5 mm of paper), cutting the corner as far as the corridor lets it.
+    const insideM = 2 * Math.hypot((len / 2) * gm, len * 0.3 * gm - 25 - 0.5 * gm) - 3;
+    expect(insideM).toBeGreaterThan(len * gm + 5);
     for (let i = 0; i < count; i++) {
       const m = Number(await alts.nth(i).getAttribute("data-m"));
-      expect(m, `alternative ${i}`).toBeGreaterThan(bentM * 0.95);
+      expect(m, `alternative ${i}`).toBeGreaterThan(insideM);
       expect(m, `alternative ${i}`).toBeLessThan(bentM * 1.15);
     }
     // The pair's automatic route (§7.5) is the centre line, or a way inside the corridor: never the straight line.
     await expect.poll(async () => {
       const auto = page.locator('[data-testid="editor-leg-route"][data-source="auto"]');
-      return (await auto.count()) === 0 || Number(await auto.getAttribute("data-m")) > bentM * 0.95;
+      return (await auto.count()) === 0 || Number(await auto.getAttribute("data-m")) > insideM;
     }, { timeout: 45000 }).toBe(true);
   });
 });

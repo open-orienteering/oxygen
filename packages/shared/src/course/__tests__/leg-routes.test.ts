@@ -64,6 +64,10 @@ describe("a corridor leg reads only a route inside its corridor (docs/course-ele
     expect(routeInsideCorridor(line, [A, { x: 5, y: 1 }, B], 1)).toBe(true);
     expect(routeInsideCorridor(line, [A, { x: 5, y: 1.25 }, B], 1)).toBe(true);
     expect(routeInsideCorridor(line, [A, { x: 5, y: 2 }, B], 1)).toBe(false);
+    // Along a bend: the corner's inside is inside, the chord across it is not.
+    const bent = [A, { x: 5, y: 5 }, B];
+    expect(routeInsideCorridor(bent, [A, { x: 5, y: 4.2 }, B], 1)).toBe(true);
+    expect(routeInsideCorridor(bent, [A, B], 1)).toBe(false);
   });
 
   it("a route that leaves the corridor gives the leg its line; one inside is read; a leg without a corridor is unchanged", () => {

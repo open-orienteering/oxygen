@@ -207,6 +207,12 @@ describe("automatic leg routes (docs/course-elevation.md §7.5)", () => {
     const also = (await caller.course.create({ name: "Also across, no corridor", controlIds: [west, east] })).id;
     [now] = await pair(west, east);
     expect(now.points).toEqual(before.points);
+    // Both with a corridor, of two widths: still each course on its own.
+    const alsoDetail = await caller.course.detail({ id: also });
+    const alsoItems = (alsoDetail.structure as typeof structure).items.map((i) => (i.siteId === east ? { ...i, leg: { ...(i.leg ?? {}), bends: [{ x: 30, y: 42 }], corridor: { widthM: 90, edge: true, whiteMm: 5, whiteOpacity: 1 } } } : i));
+    await caller.course.setStructure({ courseId: also, structure: { ...(alsoDetail.structure as typeof structure), items: alsoItems } as never });
+    [now] = await pair(west, east);
+    expect(now.points).toEqual(before.points);
     // The corridor course's climb is read along its own line, not along the route outside its corridor.
     const legs = await import("../../leg-routes.js");
     const { loadCourseSequences } = await import("../../course-geometry.js");

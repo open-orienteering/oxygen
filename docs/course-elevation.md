@@ -875,8 +875,11 @@ paper to spare for the search's cells (`routeInsideCorridor`,
 `CORRIDOR_EDGE_TOLERANCE_MM`) — and its drawn line otherwise (§0.46):
 a route searched for another course of the pair, drawn by hand, or kept
 from before the corridor was added. `climbLegsOf` and the editor give
-each leg its own half width (`legCorridorHalfMm` on the server, at the
-map's scale). The style is the leg's own: where
+each leg its own half width: the server at the pinned map's scale
+(`legCorridorHalfMm`), the editor at the document header's, which
+the editor's search reads too. The tolerance covers the search's cells
+up to 0.42 mm (a cell's half diagonal), so a corridor window up to
+about 400 mm square. The style is the leg's own: where
 a control is run to twice, one leg to it can be marked and the other
 read along its pair's route. A leg through a crossing point is
 read along the chosen route as any other; the setter draws the route
@@ -992,7 +995,10 @@ without any way the row has none either.
 the same width along the same line, the pair is searched inside it: its
 route is the centre line where that is legal (a row without points,
 as for a legal straight line), else the shortest way inside, and no
-route when the corridor holds no way (the leg reads its line). Where
+route when the corridor holds no way (the leg reads its line). A bent
+corridor whose centre is not legal never gets a row without points,
+which would read as the bent line: where the way inside is the
+straight one, its middle is the row's one vertex. Where
 the legs differ the pair is searched as without a corridor, and each
 corridor leg keeps its line where the route leaves its corridor (§7.3).
 A corridor added, removed, widened or bent changes the basis, so the
@@ -1072,8 +1078,8 @@ nothing slips through a barrier or past its corner.
    the corridor's box and 1 mm beyond its edge
    (`ROUTE_CORRIDOR_PAD_MM`), with the cell size the same rule gives.
    The control symbols at its mouths are not part of it (the controls
-   are on its line). A crossing point's opening (§7.7) is applied after
-   and may open blocked cells within 1 mm of the point.
+   are on its line). A crossing point's opening (§7.7) opens nothing
+   outside the corridor (`RouteGrid.outside`).
 
 Line objects of other classes mean nothing. Objects a map patch hides
 and hidden symbols are skipped.
@@ -1604,7 +1610,9 @@ only when a person presses the button.
 - §7.6 (§0.46): a corridor's mouths (the control symbols) are not part
   of it for the search; a pair whose courses have different corridors is
   searched without one, so the corridor legs read their lines; the editor
-  does not say that a route was confined. Against a corridor only a few
+  does not say that a route was confined, nor that a corridor leg of a
+mixed pair reads its line while the list shows the automatic route as
+chosen. Against a corridor only a few
   cells wide a route steps along the cells (a corridor at least 1 mm of
   paper wide is several cells at the finest size).
 - §7.6: bridges, underpasses, stairs and multi-level sprint areas are

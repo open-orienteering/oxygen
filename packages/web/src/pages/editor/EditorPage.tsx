@@ -96,7 +96,7 @@ import { legElevation, lineClimbStatus, sequenceLegClimbs } from "../../lib/edit
 import { chosenRouteMap, pairRoutes, routeItems, routeNumbers, routeShapes, type RouteDraft, lineIsShortest } from "../../lib/editor/leg-routes";
 import { DEFAULT_PACE_S_PER_KM, alternativeColor, alternativeItems, alternativeLabelAnchors, alternativeLabelText, alternativeShapes, courseRouteTotals, flatPaceSPerKm, formatClock, oobFeatures, parsePace } from "../../lib/editor/leg-alternatives";
 import { createRouteFinder } from "../../lib/route/finder";
-import { DEFAULT_COST_MODEL, SHORTEST_COST_MODEL, corridorHalfMm, type CostModelNote, type LegCorridor, type RouteAlternative } from "@oxygen/shared/src/route/index.js";
+import { DEFAULT_COST_MODEL, SHORTEST_COST_MODEL, type CostModelNote, type LegCorridor, type RouteAlternative } from "@oxygen/shared/src/route/index.js";
 import { legAt, legBounds, readProfileOpen, writeProfileOpen } from "../../lib/editor/profile-graph";
 import { pointAtDistance } from "@oxygen/shared/src/terrain/profile/index.js";
 import { ProfileMini, ProfilePanel } from "./ProfilePanel";
@@ -2002,9 +2002,11 @@ export function EditorPage() {
   const oobKey = useMemo(() => oobExtra.map((f) => `${f.kind}:${f.parts.map((part) => Array.from(part).join(",")).join(";")}`).join("/"), [oobExtra]);
   /** The selected leg's corridor (§7.6): the routes stay inside it. Its line is the drawn leg, bends included. */
   const selectedLegCorridor = useMemo((): LegCorridor | null => {
-    const halfMm = selectedLeg?.props.corridor && mapScale ? corridorHalfMm(selectedLeg.props.corridor.widthM, mapScale / 1000) : null;
-    return halfMm !== null && selectedLegLine && selectedLegLine.length >= 2 ? { line: selectedLegLine.map((p) => ({ x: p.x, y: p.y })), halfMm } : null;
-  }, [selectedLeg, mapScale, selectedLegLine]);
+    // The drawn leg's own width, as the climb reads it (`elevationLegs`): one scale for both.
+    const drawn = selectedLegIndex !== null ? drawnLegs?.[selectedLegIndex] : undefined;
+    const halfMm = selectedLeg?.props.corridor && drawn?.corridor ? drawn.corridor.widthMm / 2 : null;
+    return halfMm && drawn && drawn.points.length >= 2 ? { line: drawn.points.map((p) => ({ x: p.x, y: p.y })), halfMm } : null;
+  }, [selectedLeg, selectedLegIndex, drawnLegs]);
   const corridorKey = selectedLegCorridor ? `${selectedLegCorridor.halfMm}:${selectedLegCorridor.line.map((p) => `${p.x},${p.y}`).join(" ")}` : "";
   /** What a search of the selected leg rests on: a result is this key's alone. */
   const alternativesKey = selectedLeg && mapDoc && mapScale ? [
