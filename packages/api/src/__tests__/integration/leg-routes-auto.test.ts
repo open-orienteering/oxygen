@@ -182,6 +182,46 @@ describe("automatic leg routes (docs/course-elevation.md §7.5)", () => {
     expect(await pair(b, a)).toEqual([]);
   });
 
+  it("a corridor leg follows its centre line; a change of width re-searches; a pair run without the corridor too is searched as before (§0.46)", async () => {
+    const [before] = await pair(west, east);
+    expect(before.points.length).toBeGreaterThan(0);
+    const detail = await caller.course.detail({ id: cross });
+    const structure = detail.structure as { items: { siteId: number; leg?: Record<string, unknown> }[] };
+    const withCorridor = (widthM: number) => ({
+      ...structure,
+      // Bent north of the lake (y 22–38): the centre line is legal, 60 m wide is 4 mm at 1:15 000.
+      items: structure.items.map((i) => (i.siteId === east ? { ...i, leg: { ...(i.leg ?? {}), bends: [{ x: 30, y: 42 }], corridor: { widthM, edge: true, whiteMm: 5, whiteOpacity: 1 } } } : i)),
+    });
+    await caller.course.setStructure({ courseId: cross, structure: withCorridor(60) as never });
+    let [now] = await pair(west, east);
+    expect(now.id).toBe(before.id);
+    expect(now.points).toEqual([]);
+    const basis = async () => { await drainAutoRoutes(); return (await ctx.db.legRoute.findUniqueOrThrow({ where: { id: now.id } })).autoBasis; };
+    const narrow = await basis();
+    await caller.course.setStructure({ courseId: cross, structure: withCorridor(90) as never });
+    [now] = await pair(west, east);
+    expect(await basis()).not.toBe(narrow);
+    await caller.course.setStructure({ courseId: cross, structure: withCorridor(60) as never });
+    expect(await basis()).toBe(narrow);
+    // Another course runs the pair without the corridor: the pair is searched round the lake again.
+    const also = (await caller.course.create({ name: "Also across, no corridor", controlIds: [west, east] })).id;
+    [now] = await pair(west, east);
+    expect(now.points).toEqual(before.points);
+    // The corridor course's climb is read along its own line, not along the route outside its corridor.
+    const legs = await import("../../leg-routes.js");
+    const { loadCourseSequences } = await import("../../course-geometry.js");
+    const seqs = await loadCourseSequences(ctx.db, ctx.eventId, [(await ctx.db.course.findFirstOrThrow({ where: { eventId: ctx.eventId, seq: cross } })).id]);
+    const [{ seq }] = [...seqs.values()];
+    const chosen = await legs.chosenLegRoutes(ctx.db, ctx.eventId);
+    expect(legs.climbLegsOf("c", seq, chosen, 15000).every((l) => !l.routed)).toBe(true);
+    await caller.course.delete({ id: also });
+    await caller.course.setStructure({ courseId: cross, structure: structure as never });
+    // Without the corridor the same course reads the route round the lake.
+    const plain = (await loadCourseSequences(ctx.db, ctx.eventId, [...seqs.keys()])).get([...seqs.keys()][0])!.seq;
+    expect(legs.climbLegsOf("c", plain, chosen, 15000).some((l) => l.routed)).toBe(true);
+    expect((await pair(west, east))[0].points).toEqual(before.points);
+  });
+
   it("an object drawn with named courses closes the way only while every course running the pair is named (§0.25)", async () => {
     const [before] = await pair(west, east);
     const south = Math.min(...before.points.map((p) => p.y)) < 22;

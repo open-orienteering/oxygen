@@ -1139,7 +1139,8 @@ closed disclosure at its end, *About this panel***
   neither shows nor edits it, it is never stored, and it follows the
   corridor when the corridor changes or goes. A corridor at least as wide
   as the circle encloses it whole. Start and finish are never opened, and
-  without the edge nothing opens.
+  without the edge nothing opens. The leg's routes stay inside its corridor
+  (`course-elevation.md` §0.46, §7.6).
 
 **Map.** In `V`, the selected leg draws its outline (`editor-leg-outline`,
 solid over a white casing: the leg as the layer draws it, `legPolyline(from, bends, to)` —

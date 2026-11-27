@@ -8,9 +8,9 @@ import { OBJECT_TYPE } from "../map-document/index.js";
 import type { EffectiveDocument } from "../map-document/patch.js";
 import { isAppliedMatch } from "../map-document/render-bridge.js";
 import { flattenObject } from "../terrain/graph/flatten.js";
-import { findRoutes, routeCost, segmentCost, type RouteAlternative } from "./alternatives.js";
+import { findRoutes, polylineCost, routeCost, segmentCost, type RouteAlternative } from "./alternatives.js";
 import { SHORTEST_COST_MODEL, costClassOfCode, costModelNote, type CostModel, type CostModelNote } from "./cost-model.js";
-import { buildRouteGrid, type RouteFeature, type RoutePoint } from "./grid.js";
+import { buildRouteGrid, confineToCorridor, type RouteFeature, type RoutePoint } from "./grid.js";
 
 /** A feature with its bounds, paper mm. */
 export interface BoxedRouteFeature extends RouteFeature {
@@ -63,8 +63,20 @@ export interface LegRouteRequest {
   groundMPerMm: number;
   /** Features beside the document's: the course's out-of-bounds objects. */
   extra?: readonly BoxedRouteFeature[];
+  /** The leg's corridor (§7.6): its centre line (the drawn leg, bends flattened) and half its width, paper mm. Routes stay inside. */
+  corridor?: LegCorridor;
   alternatives?: number;
 }
+
+/** A corridor as the search reads it: the inside is every point within `halfMm` of `line`. */
+export interface LegCorridor {
+  line: readonly RoutePoint[];
+  halfMm: number;
+}
+
+/** A corridor's half width in paper mm from its width in metres on the ground; null for a width that is not positive. */
+export const corridorHalfMm = (widthM: number, groundMPerMm: number): number | null =>
+  Number.isFinite(widthM) && widthM > 0 && groundMPerMm > 0 ? widthM / groundMPerMm / 2 : null;
 
 export interface LegRouteResult {
   routes: RouteAlternative[];
@@ -82,10 +94,15 @@ export const ROUTE_MAX_CELLS = 1_200_000;
 export const ROUTE_PAD_SHARE = 0.5;
 export const ROUTE_MIN_PAD_MM = 10;
 
-/** The window a leg is searched in and its cell size. */
-export function legWindow(req: Pick<LegRouteRequest, "from" | "to" | "via">): { bounds: { minX: number; minY: number; maxX: number; maxY: number }; cellMm: number } {
-  const pts = [req.from, ...(req.via ?? []), req.to];
-  const pad = Math.max(ROUTE_MIN_PAD_MM, Math.hypot(req.to.x - req.from.x, req.to.y - req.from.y) * ROUTE_PAD_SHARE);
+/** Beyond a corridor's edge the window reaches this far, paper mm: nothing outside is searched. */
+export const ROUTE_CORRIDOR_PAD_MM = 1;
+
+/** The window a leg is searched in and its cell size; a corridor leg's is the corridor's, so its cells are finer. */
+export function legWindow(req: Pick<LegRouteRequest, "from" | "to" | "via" | "corridor">): { bounds: { minX: number; minY: number; maxX: number; maxY: number }; cellMm: number } {
+  const pts = [req.from, ...(req.via ?? []), req.to, ...(req.corridor?.line ?? [])];
+  const pad = req.corridor
+    ? req.corridor.halfMm + ROUTE_CORRIDOR_PAD_MM
+    : Math.max(ROUTE_MIN_PAD_MM, Math.hypot(req.to.x - req.from.x, req.to.y - req.from.y) * ROUTE_PAD_SHARE);
   const bounds = {
     minX: Math.min(...pts.map((p) => p.x)) - pad, minY: Math.min(...pts.map((p) => p.y)) - pad,
     maxX: Math.max(...pts.map((p) => p.x)) + pad, maxY: Math.max(...pts.map((p) => p.y)) + pad,
@@ -102,7 +119,7 @@ export function legWindow(req: Pick<LegRouteRequest, "from" | "to" | "via">): { 
 export function legGridCovering(
   features: readonly BoxedRouteFeature[],
   heightAt: ((p: RoutePoint) => number | null) | null,
-  req: Pick<LegRouteRequest, "from" | "to" | "via" | "groundMPerMm" | "extra">,
+  req: Pick<LegRouteRequest, "from" | "to" | "via" | "groundMPerMm" | "extra" | "corridor">,
   cover?: { minX: number; minY: number; maxX: number; maxY: number },
 ) {
   const { bounds: window, cellMm } = legWindow(req);
@@ -110,7 +127,9 @@ export function legGridCovering(
     ? { minX: Math.min(window.minX, cover.minX - 2), minY: Math.min(window.minY, cover.minY - 2), maxX: Math.max(window.maxX, cover.maxX + 2), maxY: Math.max(window.maxY, cover.maxY + 2) }
     : window;
   const inWindow = (f: BoxedRouteFeature) => f.box[2] >= bounds.minX && f.box[0] <= bounds.maxX && f.box[3] >= bounds.minY && f.box[1] <= bounds.maxY;
-  return buildRouteGrid({ bounds, cellMm, groundMPerMm: req.groundMPerMm, features: [...features, ...(req.extra ?? [])].filter(inWindow), heightAt });
+  const grid = buildRouteGrid({ bounds, cellMm, groundMPerMm: req.groundMPerMm, features: [...features, ...(req.extra ?? [])].filter(inWindow), heightAt });
+  if (req.corridor && req.corridor.line.length > 0) confineToCorridor(grid, req.corridor.line, req.corridor.halfMm);
+  return grid;
 }
 
 const legGrid = (features: readonly BoxedRouteFeature[], heightAt: ((p: RoutePoint) => number | null) | null, req: LegRouteRequest) => legGridCovering(features, heightAt, req);
@@ -120,10 +139,14 @@ const legGrid = (features: readonly BoxedRouteFeature[], heightAt: ((p: RoutePoi
  * interior vertices — none when the straight line crosses nothing
  * uncrossable, the line being that route — or null when there is no way.
  * Heights are not read: the shortest route is the same on any slope.
+ * A corridor leg (§7.6) follows its centre: where the centre line crosses
+ * nothing uncrossable it is the route (no vertices); else the shortest way
+ * inside the corridor; null when the corridor holds no way.
  */
 export function shortestLegRoute(features: readonly BoxedRouteFeature[], req: Omit<LegRouteRequest, "alternatives">): RoutePoint[] | null {
   const grid = legGrid(features, null, req);
   const stops = [req.from, ...(req.via ?? []), req.to];
+  if (req.corridor && req.corridor.line.length >= 2 && Number.isFinite(polylineCost(grid, SHORTEST_COST_MODEL, req.corridor.line))) return [];
   // The line itself, where it is legal: no search. Through a crossing point the obstacle is opened by the search.
   if (stops.length === 2 && Number.isFinite(segmentCost(grid, SHORTEST_COST_MODEL, req.from, req.to))) return [];
   const routes = findRoutes(grid, req.from, req.to, { model: SHORTEST_COST_MODEL, alternatives: 0, via: req.via });

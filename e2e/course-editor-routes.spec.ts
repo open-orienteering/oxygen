@@ -287,4 +287,40 @@ test.describe("computed route alternatives (docs/course-elevation.md §7.8)", ()
       await cleanup("courseObject.delete", { id: objectId });
     }
   });
+
+  test("a corridor leg: the routes stay inside the corridor, along its bend (§7.6, §0.46)", async ({ page }) => {
+    await servePlane(page, "contours");
+    const { name, a, b } = await twoControlCourse(page, "CE corridor", { minChordPx: 120 });
+    const gm = (await mapScale(page)) / 1000;
+    const len = Math.hypot(b.mm.x - a.mm.x, b.mm.y - a.mm.y);
+    const u = { x: (b.mm.x - a.mm.x) / len, y: (b.mm.y - a.mm.y) / len };
+    // A bend a third of the leg off its middle: the bent line is about 1.2 × the straight one.
+    const r2 = (v: number) => Math.round(v * 100) / 100;
+    const apex = { x: r2((a.mm.x + b.mm.x) / 2 - u.y * len * 0.3), y: r2((a.mm.y + b.mm.y) / 2 + u.x * len * 0.3) };
+    const bentM = (Math.hypot(apex.x - a.mm.x, apex.y - a.mm.y) + Math.hypot(b.mm.x - apex.x, b.mm.y - apex.y)) * gm;
+    const id = (await trpcCall<{ id: number; name: string }[]>("course.list", undefined, false)).find((c) => c.name === name)!.id;
+    const detail = await trpcCall<{ structure: { items: { siteId: number; leg?: Record<string, unknown> }[] } }>("course.detail", { id }, false);
+    const items = detail.structure.items.map((i) => (String(i.siteId) === b.id
+      ? { ...i, leg: { ...(i.leg ?? {}), bends: [apex], corridor: { widthM: 50, edge: true, whiteMm: 5, whiteOpacity: 1 } } } : i));
+    await trpcCall("course.setStructure", { courseId: id, structure: { ...detail.structure, items } });
+    await page.reload();
+    await editorReady(page);
+    await selectLeg(page, name, a, b);
+    const box = page.getByTestId("editor-leg-alternatives");
+    await expect(box).toHaveAttribute("data-status", "done", { timeout: 60000 });
+    const alts = page.getByTestId("editor-leg-alternative");
+    const count = await alts.count();
+    expect(count).toBeGreaterThanOrEqual(1);
+    // Every route follows the bend inside the 50 m corridor, none takes the straight way.
+    for (let i = 0; i < count; i++) {
+      const m = Number(await alts.nth(i).getAttribute("data-m"));
+      expect(m, `alternative ${i}`).toBeGreaterThan(bentM * 0.95);
+      expect(m, `alternative ${i}`).toBeLessThan(bentM * 1.15);
+    }
+    // The pair's automatic route (§7.5) is the centre line, or a way inside the corridor: never the straight line.
+    await expect.poll(async () => {
+      const auto = page.locator('[data-testid="editor-leg-route"][data-source="auto"]');
+      return (await auto.count()) === 0 || Number(await auto.getAttribute("data-m")) > bentM * 0.95;
+    }, { timeout: 45000 }).toBe(true);
+  });
 });

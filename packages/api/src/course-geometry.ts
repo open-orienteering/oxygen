@@ -66,8 +66,11 @@ export function editorCourseLayer(
   courseId: string,
   seq: GeometrySeqControl[],
   orderMode: "ordered" | "free_order" = "ordered",
-  /** `legStyle`: each leg carries its stored style too (the climb reads it, docs/course-elevation.md §7.3). */
-  options: { legStyle?: boolean } = {},
+  /**
+   * `legStyle`: each leg carries its stored style too (the climb reads it, docs/course-elevation.md §7.3).
+   * `legCorridor`: and its corridor (the routes stay inside it, §7.6); read its width with `legCorridorHalfMm`.
+   */
+  options: { legStyle?: boolean; legCorridor?: boolean } = {},
 ): course.CourseLayer {
   const sites = new Map<string, course.CourseSite>();
   for (const c of seq) sites.set(c.id, { id: c.id, code: c.code, kind: KIND[c.type], x: c.xMm, y: c.yMm });
@@ -77,6 +80,7 @@ export function editorCourseLayer(
     if (c.leg?.bends?.length) leg.bends = c.leg.bends;
     if (c.via) leg.crossing = { controlId: c.via.id };
     if (options.legStyle && c.leg?.style) leg.style = c.leg.style;
+    if (options.legCorridor && c.leg?.corridor) leg.corridor = c.leg.corridor;
     return Object.keys(leg).length ? leg : undefined;
   };
   return course.courseLayer({
@@ -87,6 +91,18 @@ export function editorCourseLayer(
     viewOptions: {},
     document: legacySizeContext(),
   });
+}
+
+/**
+ * Half a derived leg's corridor width in paper mm at the map's real scale
+ * (docs/course-elevation.md §7.6), or null without a corridor. The layer
+ * resolves the width at `legacySizeContext`'s scale; the width on the
+ * ground is what was stored.
+ */
+export function legCorridorHalfMm(leg: Pick<course.DerivedLeg, "corridor">, mapScale: number | null | undefined): number | null {
+  if (!leg.corridor || !mapScale || mapScale <= 0) return null;
+  const widthM = (leg.corridor.widthMm * legacySizeContext().mapScale) / 1000;
+  return widthM > 0 ? (widthM * 1000) / mapScale / 2 : null;
 }
 
 /** Whether the layer's first course draws anything: at least one positioned item. */

@@ -200,6 +200,38 @@ export function buildRouteGrid(input: RouteGridInput): RouteGrid {
   return g;
 }
 
+/**
+ * Keeps a leg inside its corridor (docs/course-elevation.md §7.6): every
+ * cell whose centre lies farther than `halfMm` from the corridor's centre
+ * line, and that the line itself does not pass through, becomes
+ * uncrossable. Obstacles inside the corridor stay as they are; the cells
+ * the line passes through keep a band narrower than a cell connected.
+ */
+export function confineToCorridor(g: RouteGrid, line: readonly RoutePoint[], halfMm: number): void {
+  const inside = new Uint8Array(g.cols * g.rows);
+  const reach = halfMm + 1e-9;
+  for (let i = 0; i < Math.max(1, line.length - 1); i++) {
+    const a = line[i], b = line[Math.min(i + 1, line.length - 1)];
+    const c0 = Math.max(0, Math.floor((Math.min(a.x, b.x) - halfMm - g.x0) / g.cellMm));
+    const c1 = Math.min(g.cols - 1, Math.floor((Math.max(a.x, b.x) + halfMm - g.x0) / g.cellMm));
+    const r0 = Math.max(0, Math.floor((Math.min(a.y, b.y) - halfMm - g.y0) / g.cellMm));
+    const r1 = Math.min(g.rows - 1, Math.floor((Math.max(a.y, b.y) + halfMm - g.y0) / g.cellMm));
+    const dx = b.x - a.x, dy = b.y - a.y, len2 = dx * dx + dy * dy;
+    for (let r = r0; r <= r1; r++) {
+      const y = g.y0 + (r + 0.5) * g.cellMm;
+      for (let c = c0; c <= c1; c++) {
+        const x = g.x0 + (c + 0.5) * g.cellMm;
+        const t = len2 > 0 ? Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / len2)) : 0;
+        if (Math.hypot(x - (a.x + t * dx), y - (a.y + t * dy)) <= reach) inside[r * g.cols + c] = 1;
+      }
+    }
+  }
+  const flat: number[] = [];
+  for (const p of line) flat.push(p.x, p.y);
+  if (flat.length >= 4) walkLine(g, flat, (i) => { inside[i] = 1; });
+  for (let i = 0; i < inside.length; i++) if (!inside[i]) g.cls[i] = BLOCKED;
+}
+
 /** Opens the cells within `radiusMm` of a point: a crossing point is where a leg passes an obstacle (course-layer.md §9.3). */
 export function openDisc(g: RouteGrid, at: RoutePoint, radiusMm: number, cls: number): void {
   const reach = Math.ceil(radiusMm / g.cellMm) + 1;
