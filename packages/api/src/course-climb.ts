@@ -17,8 +17,9 @@ import { TERRAIN_VERSION } from "@oxygen/shared/src/terrain/field/index.js";
 import { courseProfile, fieldSampler, pickClimbField, type ClimbFieldPick, type PaperPoint, type TerrainSampler } from "@oxygen/shared/src/terrain/profile/index.js";
 import type { ClimbMarks } from "./course-climb-pending.js";
 import { loadCourseSequences } from "./course-geometry.js";
-import { chosenLegRoutes, climbLegsOf } from "./leg-routes.js";
+import { chosenLegRoutes, chosenRoutesStamp, climbLegsOf } from "./leg-routes.js";
 import { emitCourseUpserted } from "./referenceJournal.js";
+import { mayRunBackgroundJob } from "./background-lease.js";
 import { eventPin } from "./map-store/event-document.js";
 import { HEIGHTFIELD_SOURCE, readHeightfield, terrainDescriptor } from "./map-store/heightfield.js";
 
@@ -96,6 +97,8 @@ const OPEN_CLIMB = { climbM: 0, OR: [{ climbSource: null }, { climbSource: { not
  */
 export async function computeMissingClimbs(db: PrismaClient, eventId: bigint, courseUuids?: readonly string[]): Promise<number> {
   if (courseUuids && courseUuids.length === 0) return 0;
+  // Not the lease holder: the holder computes (§6 "During a lease").
+  if (!(await mayRunBackgroundJob(db, eventId, "course-climb"))) return 0;
   const open = await db.course.findMany({
     where: { eventId, removed: false, orderMode: "ordered", ...OPEN_CLIMB, ...(courseUuids ? { id: { in: [...courseUuids] } } : {}) },
     select: { id: true },
@@ -105,8 +108,14 @@ export async function computeMissingClimbs(db: PrismaClient, eventId: bigint, co
   const sampler = await climbSamplerFor(db, eventId);
   if (!sampler) return 0;
   let written = 0;
+  // The event's chosen routes are read once; each course's transaction re-reads only their stamp and
+  // reloads them when a route was chosen meanwhile (a read hoisted without that would race a choice).
+  let stamp = await chosenRoutesStamp(db, eventId);
+  let chosen = await chosenLegRoutes(db, eventId);
   for (const { id } of open) {
     written += await db.$transaction(async (tx) => {
+      // A checkout can start between two courses.
+      if (!(await mayRunBackgroundJob(tx, eventId, "course-climb"))) return 0;
       // Locked: an edit of this course waits, then clears what is written here and computes again.
       const locked = await tx.$queryRaw<{ id: string }[]>`
         SELECT "id" FROM "oxygen"."courses"
@@ -117,7 +126,12 @@ export async function computeMissingClimbs(db: PrismaClient, eventId: bigint, co
       const found = (await loadCourseSequences(tx, eventId, [id])).get(id);
       if (!found || found.orderMode !== "ordered") return 0;
       // Along the pair's chosen route where a leg has one (§7.3), else the drawn line.
-      const legs = climbLegsOf(id, found.seq, await chosenLegRoutes(tx, eventId));
+      const now = await chosenRoutesStamp(tx, eventId);
+      if (now !== stamp) {
+        chosen = await chosenLegRoutes(tx, eventId);
+        stamp = now;
+      }
+      const legs = climbLegsOf(id, found.seq, chosen);
       const climbM = computedClimbM(legs, sampler);
       if (climbM === null) return 0;
       await tx.course.update({ where: { id }, data: { climbM, climbSource: "computed" } });

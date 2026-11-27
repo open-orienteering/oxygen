@@ -11,16 +11,37 @@
  * its `contours` field derived and stored.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { createHash, randomBytes, randomUUID } from "crypto";
 import { mapDocument } from "@oxygen/shared";
 import { createTestEvent, disconnect, type TestEventContext } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
 import { FLAT, HILL, encodeTerrainDoc } from "../helpers/terrain-doc.js";
 import { deriveDocumentHeightfield, readHeightfield } from "../../map-store/heightfield.js";
-import { refreshMarkedClimbs, resetClimbFields } from "../../course-climb.js";
+import { computeMissingClimbs, refreshComputedClimbs, refreshMarkedClimbs, resetClimbFields } from "../../course-climb.js";
+import { acquireLease, releaseLease } from "../../sync/lease.js";
 import { withClimbMarks } from "../../course-climb-pending.js";
 import { rebuildCourseLengths } from "../../course-geometry.js";
+
+// The reads of the event's chosen routes, and a hook that runs after a course's climb has been journaled.
+const spy = vi.hoisted(() => ({ routeReads: 0, afterEmit: null as null | (() => Promise<void>) }));
+vi.mock("../../leg-routes.js", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../../leg-routes.js")>();
+  return { ...real, chosenLegRoutes: (...args: Parameters<typeof real.chosenLegRoutes>) => { spy.routeReads++; return real.chosenLegRoutes(...args); } };
+});
+vi.mock("../../referenceJournal.js", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../../referenceJournal.js")>();
+  return {
+    ...real,
+    emitCourseUpserted: async (...args: Parameters<typeof real.emitCourseUpserted>) => {
+      const out = await real.emitCourseUpserted(...args);
+      const hook = spy.afterEmit;
+      spy.afterEmit = null;
+      await hook?.();
+      return out;
+    },
+  };
+});
 
 const suffix = randomBytes(4).toString("hex");
 const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
@@ -289,5 +310,63 @@ describe("the course's stored climb (docs/course-elevation.md §6)", () => {
     for (const s of ["manual", "file", "computed"]) {
       await ctx.db.$executeRaw`UPDATE "oxygen"."courses" SET "climb_source" = ${s} WHERE "id" = ${row.id}::uuid`;
     }
+  });
+});
+
+describe("the compute under a lease and over many courses (docs/course-elevation.md §6)", () => {
+  const journal = () => ctx.db.journalEntry.count({ where: { eventId: ctx.eventId, type: "course.upserted" } });
+  const uuidOf = async (code: string) => (await ctx.db.control.findFirstOrThrow({ where: { eventId: ctx.eventId, codes: code } })).id;
+
+  it("a node that does not hold the event's lease computes nothing and journals nothing; a courseObject write there succeeds and touches no course", async () => {
+    await ctx.db.course.updateMany({ where: { eventId: ctx.eventId, removed: false }, data: { climbM: 0, climbSource: null } });
+    const before = JSON.stringify((await ctx.db.course.findMany({ where: { eventId: ctx.eventId }, orderBy: { id: "asc" } })).map((c) => [c.id, c.climbM, c.climbSource]));
+    const entries = await journal();
+    await acquireLease(ctx.db, ctx.eventId, "venue-d8");
+    try {
+      expect(await computeMissingClimbs(ctx.db, ctx.eventId)).toBe(0);
+      expect(await refreshComputedClimbs(ctx.db, ctx.eventId)).toBe(0);
+      const { marks } = await withClimbMarks(async () => { await rebuildCourseLengths(ctx.db, ctx.eventId, [], {}); });
+      expect(await refreshMarkedClimbs(ctx.db, marks)).toBe(0);
+      // The cloud-owned write goes ahead and enqueues a route refresh that does nothing.
+      await caller.courseObject.create({ kind: "oob_area", geometry: [{ x: 1, y: 1 }, { x: 3, y: 1 }, { x: 3, y: 3 }], props: {}, scope: { all: true } });
+      expect(JSON.stringify((await ctx.db.course.findMany({ where: { eventId: ctx.eventId }, orderBy: { id: "asc" } })).map((c) => [c.id, c.climbM, c.climbSource]))).toBe(before);
+      expect(await journal()).toBe(entries);
+    } finally {
+      await releaseLease(ctx.db, ctx.eventId);
+    }
+    expect(await refreshComputedClimbs(ctx.db, ctx.eventId)).toBeGreaterThan(0);
+  });
+
+  it("the event's chosen routes are read once for an all-courses compute, and again only when a route was chosen in between", async () => {
+    const p = (await caller.control.create({ codes: "61", xpos: 10, ypos: 30 })).id;
+    const q = (await caller.control.create({ codes: "62", xpos: 50, ypos: 30 })).id;
+    const first = (await caller.course.create({ name: "Over the line 1", controlIds: [p, q] })).id;
+    const second = (await caller.course.create({ name: "Over the line 2", controlIds: [p, q] })).id;
+    const clear = () => ctx.db.course.updateMany({ where: { eventId: ctx.eventId, removed: false }, data: { climbM: 0, climbSource: null } });
+    const courses = await ctx.db.course.count({ where: { eventId: ctx.eventId, removed: false, orderMode: "ordered" } });
+    expect(courses).toBeGreaterThanOrEqual(3);
+
+    await clear();
+    spy.routeReads = 0;
+    expect(await computeMissingClimbs(ctx.db, ctx.eventId)).toBeGreaterThanOrEqual(3);
+    expect(spy.routeReads).toBe(1);
+    const along = (await climbOf(first)).m;
+    expect(along).toBeGreaterThan(0);
+    expect((await climbOf(second)).m).toBe(along);
+
+    // A route chosen after the first course was written, before the second: the second reads along it.
+    await clear();
+    const route = { eventId: ctx.eventId, fromControlId: await uuidOf("61"), toControlId: await uuidOf("62"), points: [{ x: 30, y: 58 }], source: "drawn", chosen: true };
+    spy.afterEmit = async () => { await ctx.db.legRoute.create({ data: route }); };
+    spy.routeReads = 0;
+    const ids = (await ctx.db.course.findMany({ where: { eventId: ctx.eventId, seq: { in: [first, second] } }, orderBy: { id: "asc" } })).map((c) => c.id);
+    await computeMissingClimbs(ctx.db, ctx.eventId, ids);
+    expect(spy.routeReads).toBe(2);
+    const [a, b] = (await ctx.db.course.findMany({ where: { eventId: ctx.eventId, seq: { in: [first, second] } }, orderBy: { id: "asc" } })).map((c) => c.climbM);
+    expect(a).toBe(along);
+    expect(b).toBeLessThan(along);
+    await ctx.db.legRoute.deleteMany({ where: { eventId: ctx.eventId, fromControlId: route.fromControlId } });
+    await caller.course.delete({ id: first });
+    await caller.course.delete({ id: second });
   });
 });

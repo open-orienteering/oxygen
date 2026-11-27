@@ -19,9 +19,11 @@ import { course, mapDocument } from "@oxygen/shared";
 import { Prisma, type PrismaClient } from "./generated/prisma/client.js";
 import { clearComputedClimbs, editorCourseLayer, loadCourseSequences } from "./course-geometry.js";
 import { refreshComputedClimbs } from "./course-climb.js";
+import { coursesByPair } from "./leg-routes.js";
 import { storedObjectOf } from "./course-objects.js";
 import { eventPin } from "./map-store/event-document.js";
 import { eventPatchOnPin } from "./map-store/patches.js";
+import { mayRunBackgroundJob } from "./background-lease.js";
 import { workerBootstrap } from "./worker-bootstrap.js";
 
 /** Bumped when the search changes what it finds: every automatic route is searched again. */
@@ -29,8 +31,8 @@ export const AUTO_ROUTE_VERSION = 1;
 export const AUTO_ROUTE_MODEL = "shortest";
 /** The pairs searched by one worker; its routes are written before the next is started. */
 export const AUTO_ROUTE_CHUNK = 20;
-/** One worker's searches may take this long before they are given up (a long leg is a few seconds). */
-export const AUTO_ROUTE_TIMEOUT_MS = 5 * 60_000;
+/** One job may take this long before it is given up (a long leg is a few seconds). */
+export const AUTO_ROUTE_JOB_TIMEOUT_MS = 60_000;
 
 type Pt = course.RoutePoint;
 
@@ -44,16 +46,29 @@ export interface AutoRouteJob {
   obstacles: AutoRouteObstacle[];
 }
 
-export interface AutoRouteWorkerData {
-  /** The encoded map document and the event's patch on it. */
+/** What a worker prepares once: the encoded map document and the event's patch on it. */
+export interface AutoRouteInit {
   bytes: Uint8Array;
   patch: mapDocument.MapPatch | null;
   groundMPerMm: number;
+}
+
+/** A chunk of jobs on one document (the seam of `RefreshAutoRoutesOptions.search`). */
+export interface AutoRouteWorkerData extends AutoRouteInit {
   jobs: AutoRouteJob[];
 }
 
-/** One per job, in order: the route's interior vertices (none: the line is the route), or null without a way. */
-export type AutoRouteWorkerMessage = { type: "done"; routes: (Pt[] | null)[] } | { type: "error"; message: string };
+/** One job's outcome: the route's interior vertices (none: the line is the route; null: no way at all), or its failure. */
+export type AutoRouteResult = { ok: true; points: Pt[] | null } | { ok: false; error: string };
+
+/** Host → worker. */
+export type AutoRouteWorkerRequest = { type: "search"; id: number; job: AutoRouteJob };
+/** Worker → host. */
+export type AutoRouteWorkerMessage =
+  | { type: "ready" }
+  | { type: "error"; message: string }
+  | { type: "route"; id: number; points: Pt[] | null }
+  | { type: "failed"; id: number; message: string };
 
 interface Pair extends AutoRouteJob {
   fromId: string;
@@ -127,73 +142,185 @@ async function pairsOf(db: PrismaClient, eventId: bigint): Promise<{ pairs: Pair
   return { pairs, documentHash: pin.documentHash, patch, scale: pin.scale };
 }
 
-/** The searches in a worker thread of their own, terminated as soon as it settles. */
-export function searchAutoRoutesInWorker(data: AutoRouteWorkerData, opts: { timeoutMs?: number } = {}): Promise<(Pt[] | null)[]> {
-  const timeoutMs = opts.timeoutMs ?? AUTO_ROUTE_TIMEOUT_MS;
-  return new Promise((resolve, reject) => {
-    const worker = new Worker(workerBootstrap(new URL("./leg-routes-auto-worker", import.meta.url), import.meta.url), { eval: true, workerData: data });
-    let settled = false;
-    const finish = (fn: () => void) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      fn();
-      void worker.terminate();
-    };
-    const timer = setTimeout(() => finish(() => reject(new Error(`route search exceeded ${timeoutMs} ms`))), timeoutMs);
-    worker.on("message", (m: AutoRouteWorkerMessage) => {
-      if (m.type === "done") finish(() => resolve(m.routes));
-      else finish(() => reject(new Error(m.message)));
+let workerStarts = 0;
+/** For tests: how many worker threads the searchers have started. */
+export const _autoRouteWorkerStarts = (): number => workerStarts;
+
+export interface AutoRouteSearcher {
+  /** One job's route; a job that fails or runs out of time is `ok: false`. Rejects when the worker cannot be prepared (the document does not decode). */
+  searchOne(job: AutoRouteJob): Promise<AutoRouteResult>;
+  /** Ends the worker; every exit path of a refresh calls it. */
+  close(): Promise<void>;
+}
+
+/**
+ * One worker thread for a refresh's searches (`print-worker-host.ts`'s
+ * way): started on the first job, holding the decoded, patched and
+ * classified document, a job at a time, each with its own time limit. A
+ * job that times out or kills the worker ends it; the next job starts a
+ * new one.
+ */
+export function openAutoRouteSearcher(init: AutoRouteInit, opts: { jobTimeoutMs?: number } = {}): AutoRouteSearcher {
+  const timeoutMs = opts.jobTimeoutMs ?? AUTO_ROUTE_JOB_TIMEOUT_MS;
+  interface Live { worker: Worker; ready: Promise<void>; fail: (err: Error) => void; job: { id: number; settle: (r: AutoRouteResult) => void } | null }
+  let live: Live | null = null;
+  let closed = false;
+  let nextId = 1;
+
+  const start = (): Live => {
+    workerStarts++;
+    // A private copy on the transfer list: the document is not cloned per structured-clone rules, and a restart copies again.
+    const copy = new Uint8Array(init.bytes);
+    const worker = new Worker(workerBootstrap(new URL("./leg-routes-auto-worker", import.meta.url), import.meta.url), {
+      eval: true, workerData: { bytes: copy, patch: init.patch, groundMPerMm: init.groundMPerMm } satisfies AutoRouteInit, transferList: [copy.buffer],
     });
-    worker.on("error", (err) => finish(() => reject(err)));
-    worker.on("exit", (code) => finish(() => reject(new Error(`route worker exited with code ${code}`))));
-  });
+    worker.unref();
+    let readyOk!: () => void;
+    let readyFail!: (err: Error) => void;
+    const ready = new Promise<void>((resolve, reject) => { readyOk = resolve; readyFail = reject; });
+    ready.catch(() => undefined);
+    const me: Live = {
+      worker, ready,
+      job: null,
+      fail: (err) => {
+        if (live === me) live = null;
+        readyFail(err);
+        const job = me.job;
+        me.job = null;
+        job?.settle({ ok: false, error: err.message });
+        void worker.terminate();
+      },
+    };
+    worker.on("message", (m: AutoRouteWorkerMessage) => {
+      if (m.type === "ready") readyOk();
+      else if (m.type === "error") me.fail(new Error(m.message));
+      else if (me.job && me.job.id === m.id) {
+        const job = me.job;
+        me.job = null;
+        job.settle(m.type === "route" ? { ok: true, points: m.points } : { ok: false, error: m.message });
+      }
+    });
+    worker.on("error", (err) => me.fail(err instanceof Error ? err : new Error(String(err))));
+    worker.on("exit", (code) => me.fail(new Error(`route worker exited with code ${code}`)));
+    return me;
+  };
+
+  return {
+    async searchOne(job) {
+      if (closed) return { ok: false, error: "the route search was closed" };
+      const mine = live ?? (live = start());
+      // The document is prepared within one job's time; a worker that cannot prepare it is no way to search.
+      let timer: NodeJS.Timeout | undefined;
+      const prepared = await Promise.race([
+        mine.ready.then(() => true),
+        new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs); }),
+      ]).finally(() => clearTimeout(timer));
+      if (!prepared) {
+        mine.fail(new Error(`route worker not ready within ${timeoutMs} ms`));
+        throw new Error(`route worker not ready within ${timeoutMs} ms`);
+      }
+      return new Promise<AutoRouteResult>((resolve) => {
+        const id = nextId++;
+        const timeout = setTimeout(() => mine.fail(new Error(`route search exceeded ${timeoutMs} ms`)), timeoutMs);
+        mine.job = { id, settle: (r) => { clearTimeout(timeout); resolve(r); } };
+        mine.worker.postMessage({ type: "search", id, job } satisfies AutoRouteWorkerRequest);
+      });
+    },
+    async close() {
+      closed = true;
+      const mine = live;
+      live = null;
+      if (mine) {
+        mine.job?.settle({ ok: false, error: "the route search was closed" });
+        mine.job = null;
+        await mine.worker.terminate();
+      }
+    },
+  };
 }
 
 export interface RefreshAutoRoutesOptions {
-  /** The searches of one chunk (tests); the worker thread by default. */
-  search?: (data: AutoRouteWorkerData) => Promise<(Pt[] | null)[]>;
+  /** The searches of one chunk (tests), one result per job in order; one worker thread for the whole refresh by default. A rejection fails the chunk. */
+  search?: (data: AutoRouteWorkerData) => Promise<AutoRouteResult[]>;
   chunk?: number;
 }
 
 const samePoints = (a: unknown, b: readonly Pt[]) => JSON.stringify(a) === JSON.stringify(b);
 
 /**
+ * Pairs whose search failed, by event: `pairKey|basis`. A failure rests on
+ * the pair's inputs, so it is not searched again until its basis changes
+ * (or the process restarts: in memory, no migration).
+ */
+const failedPairs = new Map<bigint, Set<string>>();
+
+/**
  * Brings the event's automatic routes up to date: searches every pair
  * whose basis changed, a chunk at a time, writes each chunk's rows and
- * computes the climbs they cleared. A chunk that fails leaves its pairs
- * for the next refresh; the others are still written, and the error is
- * thrown at the end. Returns the number of pairs written.
+ * computes the climbs they cleared. A pair whose search fails is logged
+ * and left; the others of its chunk are written, and the first failure
+ * is thrown at the end. A chunk whose search cannot run at all leaves
+ * its pairs for the next refresh. A node that does not hold the event's
+ * lease does nothing. Returns the number of pairs written.
  */
 export async function refreshAutoRoutes(db: PrismaClient, eventId: bigint, opts: RefreshAutoRoutesOptions = {}): Promise<number> {
+  // Not the lease holder: no search, no write; the holder refreshes (§7.5 "When").
+  if (!(await mayRunBackgroundJob(db, eventId, "leg-routes"))) return 0;
   const found = await pairsOf(db, eventId);
   if (!found) return 0;
   const rows = await db.legRoute.findMany({ where: { eventId, autoBasis: { not: null } }, select: { fromControlId: true, toControlId: true, autoBasis: true } });
   const current = new Map(rows.map((r) => [course.legPairKey(r.fromControlId, r.toControlId), r.autoBasis]));
-  const stale = found.pairs.filter((p) => current.get(course.legPairKey(p.fromId, p.toId)) !== p.basis);
+  const memo = (p: Pair) => `${course.legPairKey(p.fromId, p.toId)}|${p.basis}`;
+  // What failed under an older basis is forgotten.
+  const failed = failedPairs.get(eventId);
+  if (failed) {
+    const live = new Set(found.pairs.map(memo));
+    for (const key of failed) if (!live.has(key)) failed.delete(key);
+    if (failed.size === 0) failedPairs.delete(eventId);
+  }
+  const stale = found.pairs.filter((p) => current.get(course.legPairKey(p.fromId, p.toId)) !== p.basis && !failedPairs.get(eventId)?.has(memo(p)));
   if (stale.length === 0) return 0;
   const doc = await db.mapDocument.findUnique({ where: { hash: found.documentHash }, select: { bytes: true } });
   if (!doc?.bytes) return 0;
-  const search = opts.search ?? searchAutoRoutesInWorker;
+  const init: AutoRouteInit = { bytes: doc.bytes, patch: found.patch, groundMPerMm: found.scale / 1000 };
+  const searcher = openAutoRouteSearcher(init);
+  const search = opts.search ?? (async (data: AutoRouteWorkerData) => {
+    const out: AutoRouteResult[] = [];
+    for (const job of data.jobs) out.push(await searcher.searchOne(job));
+    return out;
+  });
   const size = Math.max(1, opts.chunk ?? AUTO_ROUTE_CHUNK);
-  let written = 0, cleared = false;
+  let written = 0;
   let failure: unknown;
+  // The courses whose computed climb this refresh cleared and that are not computed again yet.
+  const pending = new Set<string>();
   try {
     for (let at = 0; at < stale.length; at += size) {
       const chunk = stale.slice(at, at + size);
-      let routes: (Pt[] | null)[];
+      let results: AutoRouteResult[];
       try {
-        routes = await search({
-          bytes: doc.bytes, patch: found.patch, groundMPerMm: found.scale / 1000,
-          jobs: chunk.map(({ from, to, via, obstacles }) => ({ from, to, ...(via ? { via } : {}), obstacles })),
-        });
+        results = await search({ ...init, jobs: chunk.map(({ from, to, via, obstacles }) => ({ from, to, ...(via ? { via } : {}), obstacles })) });
       } catch (err) {
         failure ??= err;
         continue;
       }
+      // A checkout can start while a chunk is searched: its rows are not written.
+      if (!(await mayRunBackgroundJob(db, eventId, "leg-routes"))) break;
+      // Courses that gained a pair while the chunk was searched are read along its route too (CRS-048).
+      const fresh = await coursesByPair(db, eventId);
       for (const [i, p] of chunk.entries()) {
+        const result = results[i];
+        if (!result?.ok) {
+          const error = result ? result.error : "no result";
+          console.warn(`[leg-routes] event ${eventId} pair ${p.fromId} → ${p.toId}: ${error}`);
+          let set = failedPairs.get(eventId);
+          if (!set) failedPairs.set(eventId, (set = new Set()));
+          set.add(memo(p));
+          failure ??= new Error(`route search of pair ${p.fromId} → ${p.toId} failed: ${error}`);
+          continue;
+        }
         // No way at all: the line, as a pair without a route.
-        const points = (routes[i] ?? []).slice(0, course.LEG_ROUTE_MAX_POINTS).map((v) => ({ x: round(v.x), y: round(v.y) }));
+        const points = (result.points ?? []).slice(0, course.LEG_ROUTE_MAX_POINTS).map((v) => ({ x: round(v.x), y: round(v.y) }));
         try {
           const done = await db.$transaction(async (tx) => {
             const pair = { eventId, fromControlId: p.fromId, toControlId: p.toId };
@@ -211,20 +338,31 @@ export async function refreshAutoRoutes(db: PrismaClient, eventId: bigint, opts:
             // The climb is read along another polyline only when the chosen route's vertices changed: a new row
             // without points is the line the climb was read along already.
             const changed = chosen && !samePoints(existing?.points ?? [], points);
-            if (changed) await clearComputedClimbs(tx, eventId, p.courses);
-            return { changed };
+            const cleared = changed
+              ? await clearComputedClimbs(tx, eventId, [...new Set([...p.courses, ...(fresh.get(course.legPairKey(p.fromId, p.toId)) ?? [])])], { emit: true })
+              : [];
+            return { cleared };
           });
-          if (done) written++;
-          if (done?.changed) cleared = true;
+          if (done) {
+            written++;
+            for (const id of done.cleared) pending.add(id);
+          }
         } catch (err) {
           // Two refreshes of one pair, a person choosing at the same moment, a control deleted meanwhile: the next refresh settles it.
           if (!(err instanceof Prisma.PrismaClientKnownRequestError && ["P2002", "P2003", "P2025"].includes(err.code))) failure ??= err;
         }
       }
+      // The climbs this chunk cleared are computed now, not when the whole refresh ends (CRS-070).
+      if (pending.size > 0) {
+        const ids = [...pending];
+        pending.clear();
+        await refreshComputedClimbs(db, eventId, ids);
+      }
     }
   } finally {
+    await searcher.close();
     // Whatever stopped the loop, the climbs it cleared are computed again.
-    if (cleared) await refreshComputedClimbs(db, eventId);
+    if (pending.size > 0) await refreshComputedClimbs(db, eventId, [...pending]);
   }
   if (failure) throw failure;
   return written;

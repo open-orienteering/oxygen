@@ -18,7 +18,8 @@ import { makeCaller } from "../helpers/caller.js";
 import { HILL, encodeTerrainDoc } from "../helpers/terrain-doc.js";
 import { deriveDocumentHeightfield } from "../../map-store/heightfield.js";
 import { resetClimbFields } from "../../course-climb.js";
-import { autoRouteBasis, drainAutoRoutes, refreshAutoRoutes } from "../../leg-routes-auto.js";
+import { _autoRouteWorkerStarts, autoRouteBasis, drainAutoRoutes, refreshAutoRoutes, type AutoRouteWorkerData } from "../../leg-routes-auto.js";
+import { acquireLease, releaseLease } from "../../sync/lease.js";
 import { searchAutoRoutes } from "../../leg-routes-auto-worker.js";
 
 const suffix = randomBytes(4).toString("hex");
@@ -81,8 +82,8 @@ describe("automatic leg routes (docs/course-elevation.md §7.5)", () => {
       bytes, patch: null, groundMPerMm: 15,
       jobs: [{ from: { x: 14, y: 44 }, to: { x: 46, y: 44 }, obstacles: [] }, { from: { x: 14, y: 30 }, to: { x: 46, y: 30 }, obstacles: [] }],
     });
-    expect(line).toEqual([]);
-    expect(round!.length).toBeGreaterThan(0);
+    expect(line).toEqual({ ok: true, points: [] });
+    expect(round.ok && round.points!.length).toBeGreaterThan(0);
   });
 
   it("a course's pairs get their automatic route once the edit has committed: chosen, the shortest way round", async () => {
@@ -217,31 +218,125 @@ describe("automatic leg routes (docs/course-elevation.md §7.5)", () => {
     expect(await refreshAutoRoutes(ctx.db, ctx.eventId)).toBe(0);
   });
 
-  it("a search that fails leaves its pairs for the next refresh; the others are written and the climbs computed", async () => {
-    await drainAutoRoutes();
-    const [before] = await pair(west, east);
+  /** The pairs of a course made stale and its stored route made wrong, as a changed map would leave them. */
+  const stale = async (from: number, to: number) => {
+    const fromUuid = (await ctx.db.control.findFirstOrThrow({ where: { eventId: ctx.eventId, codes: String(from) } })).id;
+    const toUuid = (await ctx.db.control.findFirstOrThrow({ where: { eventId: ctx.eventId, codes: String(to) } })).id;
+    await ctx.db.legRoute.updateMany({ where: { eventId: ctx.eventId, fromControlId: fromUuid, toControlId: toUuid, autoBasis: { not: null } }, data: { autoBasis: "stale", points: [{ x: 1, y: 1 }] } });
+    return { fromUuid, toUuid };
+  };
+  const basisOf = async (fromUuid: string, toUuid: string) => (await ctx.db.legRoute.findFirstOrThrow({ where: { eventId: ctx.eventId, fromControlId: fromUuid, toControlId: toUuid, autoBasis: { not: null } } })).autoBasis;
+  const withEnqueueOff = async (run: () => Promise<void>) => {
     process.env.AUTO_LEG_ROUTES = "off";
-    try {
+    try { await run(); } finally { process.env.AUTO_LEG_ROUTES = "on"; }
+  };
+
+  it("one pair that fails does not block its chunk: the others are written and their climbs computed; the failed pair is not searched again until its basis changes", async () => {
+    await drainAutoRoutes();
+    await withEnqueueOff(async () => {
       // Start → 51 and 51 → 52 are stale; the edit itself computed the climb along the old vertices.
       await caller.control.update({ id: west, xpos: 14, ypos: 27 });
+      const [before] = await pair(west, east);
+      const fromStart = (d: AutoRouteWorkerData, i: number) => d.jobs[i].from.x === 12 && d.jobs[i].from.y === 12;
+      const seen: number[] = [];
+      const search = async (data: AutoRouteWorkerData) => {
+        seen.push(data.jobs.length);
+        return searchAutoRoutes(data).map((r, i) => (fromStart(data, i) ? { ok: false as const, error: "no luck" } : r));
+      };
+      const startBasis = async () => (await ctx.db.legRoute.findMany({ where: { eventId: ctx.eventId, autoBasis: { not: null } } })).map((r) => r.autoBasis).sort().join();
+      const rowsBefore = await startBasis();
+      await expect(refreshAutoRoutes(ctx.db, ctx.eventId, { chunk: 3, search })).rejects.toThrow(/no luck/);
+      expect(seen).toEqual([2]);
+      const [after] = await pair(west, east);
+      expect(after.points).not.toEqual(before.points);
+      expect((await ctx.db.course.findFirstOrThrow({ where: { eventId: ctx.eventId, seq: cross } })).climbSource).toBe("computed");
+      // The failed pair keeps its old row; its basis is remembered, so it is not handed to the search again.
+      expect(await startBasis()).not.toBe(rowsBefore);
+      const calls: number[] = [];
+      expect(await refreshAutoRoutes(ctx.db, ctx.eventId, { search: async (d) => { calls.push(d.jobs.length); return searchAutoRoutes(d); } })).toBe(0);
+      expect(calls).toEqual([]);
+      // A control of it moves: the basis changes and the pair is searched again.
+      await caller.control.update({ id: west, xpos: 14, ypos: 26 });
+      expect(await refreshAutoRoutes(ctx.db, ctx.eventId, { search: async (d) => { calls.push(d.jobs.length); return searchAutoRoutes(d); } })).toBe(2);
+      expect(calls).toEqual([2]);
+      await caller.control.update({ id: west, xpos: 14, ypos: 30 });
+      expect(await refreshAutoRoutes(ctx.db, ctx.eventId)).toBe(2);
+    });
+  });
+
+  it("a search that cannot run fails its chunk only: the other chunks are written, and the pair is tried again", async () => {
+    await drainAutoRoutes();
+    await withEnqueueOff(async () => {
+      await caller.control.update({ id: west, xpos: 14, ypos: 27 });
       let calls = 0;
-      const search = async (data: Parameters<typeof searchAutoRoutes>[0]) => {
+      const search = async (data: AutoRouteWorkerData) => {
         if (++calls === 1) throw new Error("search gave up");
         return searchAutoRoutes(data);
       };
       await expect(refreshAutoRoutes(ctx.db, ctx.eventId, { chunk: 1, search })).rejects.toThrow(/gave up/);
       expect(calls).toBe(2);
-      const [after] = await caller.legRoute.list().then((all) => all.filter((r) => r.fromControlId === west && r.toControlId === east));
-      expect(after.points).not.toEqual(before.points);
-      expect((await ctx.db.course.findFirstOrThrow({ where: { eventId: ctx.eventId, seq: cross } })).climbSource).toBe("computed");
-      // The pair whose search failed is the one left.
+      // The pair whose chunk was lost is the one left: nothing was remembered of it.
       expect(await refreshAutoRoutes(ctx.db, ctx.eventId)).toBe(1);
       expect(await refreshAutoRoutes(ctx.db, ctx.eventId)).toBe(0);
       await caller.control.update({ id: west, xpos: 14, ypos: 30 });
       expect(await refreshAutoRoutes(ctx.db, ctx.eventId)).toBe(2);
-    } finally {
-      process.env.AUTO_LEG_ROUTES = "on";
-    }
+    });
+  });
+
+  it("one worker serves a whole refresh: two chunks, one start, the right routes", async () => {
+    await drainAutoRoutes();
+    await withEnqueueOff(async () => {
+      await caller.control.update({ id: west, xpos: 14, ypos: 28 });
+      const starts = _autoRouteWorkerStarts();
+      expect(await refreshAutoRoutes(ctx.db, ctx.eventId, { chunk: 1 })).toBe(2);
+      expect(_autoRouteWorkerStarts() - starts).toBe(1);
+      const [r] = await pair(west, east);
+      expect(lengthOf(r.points, { x: 14, y: 28 }, { x: 46, y: 30 })).toBeGreaterThan(32);
+      await caller.control.update({ id: west, xpos: 14, ypos: 30 });
+      expect(await refreshAutoRoutes(ctx.db, ctx.eventId)).toBe(2);
+    });
+  });
+
+  it("a course that gains the pair while it is searched has its climb read along the new route too", async () => {
+    await drainAutoRoutes();
+    await withEnqueueOff(async () => {
+      await stale(51, 52);
+      let late = 0;
+      const search = async (data: AutoRouteWorkerData) => {
+        // Created after the pairs were read: no snapshot of them names it.
+        late = (await caller.course.create({ name: "Late", controlIds: [west, east] })).id;
+        await ctx.db.course.updateMany({ where: { eventId: ctx.eventId, seq: late }, data: { climbM: 777, climbSource: "computed" } });
+        return searchAutoRoutes(data);
+      };
+      expect(await refreshAutoRoutes(ctx.db, ctx.eventId, { search })).toBe(1);
+      const row = await ctx.db.course.findFirstOrThrow({ where: { eventId: ctx.eventId, seq: late } });
+      expect(row.climbM).not.toBe(777);
+      expect(row.climbSource).toBe("computed");
+      await caller.course.delete({ id: late });
+    });
+  });
+
+  it("the climbs a chunk cleared are computed before the next chunk is searched", async () => {
+    await drainAutoRoutes();
+    await withEnqueueOff(async () => {
+      // 51 → 52 of the first course and 53 → 54 of the second: their routes are wrong, their climbs a stale 777.
+      await stale(51, 52);
+      await stale(53, 54);
+      await ctx.db.course.updateMany({ where: { eventId: ctx.eventId, name: { in: ["Across", "Marked"] } }, data: { climbM: 777, climbSource: "computed" } });
+      const seenAtSecond: { m: number; source: string | null }[] = [];
+      let calls = 0;
+      const search = async (data: AutoRouteWorkerData) => {
+        if (++calls === 2) {
+          const c = await ctx.db.course.findFirstOrThrow({ where: { eventId: ctx.eventId, name: "Across" } });
+          seenAtSecond.push({ m: c.climbM, source: c.climbSource });
+        }
+        return searchAutoRoutes(data);
+      };
+      expect(await refreshAutoRoutes(ctx.db, ctx.eventId, { chunk: 1, search })).toBe(2);
+      expect(calls).toBe(2);
+      expect(seenAtSecond[0].source).toBe("computed");
+      expect(seenAtSecond[0].m).not.toBe(777);
+    });
   });
 
   it("a route a person saves while the search runs stays the chosen one", async () => {
@@ -259,6 +354,64 @@ describe("automatic leg routes (docs/course-elevation.md §7.5)", () => {
       const both = (await caller.legRoute.list()).filter((r) => r.fromControlId === e && r.toControlId === f);
       expect(both.find((r) => r.id === drawn)).toMatchObject({ chosen: true, auto: false });
       expect(both.find((r) => r.auto)).toMatchObject({ chosen: false });
+    } finally {
+      process.env.AUTO_LEG_ROUTES = "on";
+    }
+  });
+});
+
+describe("during a lease (docs/course-elevation.md §7.5, D8)", () => {
+  const moveWest = (ypos: number) => ctx.db.control.updateMany({ where: { eventId: ctx.eventId, codes: "51" }, data: { ypos } });
+  const journal = () => ctx.db.journalEntry.count({ where: { eventId: ctx.eventId, type: "course.upserted" } });
+  const snapshot = async () => JSON.stringify((await ctx.db.legRoute.findMany({ where: { eventId: ctx.eventId }, orderBy: { id: "asc" } })).map((r) => [r.id, r.autoBasis, r.points, r.chosen]));
+  const neverSearch = async (): Promise<never> => { throw new Error("a node that does not hold the lease must not search"); };
+
+  it("a node that does not hold the event's lease searches nothing and writes nothing; the holder does after it ends", async () => {
+    await drainAutoRoutes();
+    process.env.AUTO_LEG_ROUTES = "off";
+    try {
+      await moveWest(27);
+      const rows = await snapshot();
+      const entries = await journal();
+      await acquireLease(ctx.db, ctx.eventId, "venue-d8");
+      try {
+        expect(await refreshAutoRoutes(ctx.db, ctx.eventId, { search: neverSearch })).toBe(0);
+        expect(await snapshot()).toBe(rows);
+        expect(await journal()).toBe(entries);
+      } finally {
+        await releaseLease(ctx.db, ctx.eventId);
+      }
+      expect(await refreshAutoRoutes(ctx.db, ctx.eventId)).toBeGreaterThan(0);
+      await moveWest(30);
+      expect(await refreshAutoRoutes(ctx.db, ctx.eventId)).toBeGreaterThan(0);
+    } finally {
+      process.env.AUTO_LEG_ROUTES = "on";
+    }
+  });
+
+  it("a lease taken while a chunk is searched: its rows are not written and nothing is cleared", async () => {
+    await drainAutoRoutes();
+    process.env.AUTO_LEG_ROUTES = "off";
+    try {
+      await moveWest(27);
+      const rows = await snapshot();
+      const climb = (await ctx.db.course.findFirstOrThrow({ where: { eventId: ctx.eventId, seq: cross } })).climbM;
+      let calls = 0;
+      try {
+        const search = async (data: AutoRouteWorkerData) => {
+          if (++calls === 1) await acquireLease(ctx.db, ctx.eventId, "venue-d8");
+          return searchAutoRoutes(data);
+        };
+        expect(await refreshAutoRoutes(ctx.db, ctx.eventId, { chunk: 1, search })).toBe(0);
+        expect(calls).toBe(1);
+        expect(await snapshot()).toBe(rows);
+        expect((await ctx.db.course.findFirstOrThrow({ where: { eventId: ctx.eventId, seq: cross } })).climbM).toBe(climb);
+      } finally {
+        await releaseLease(ctx.db, ctx.eventId);
+      }
+      expect(await refreshAutoRoutes(ctx.db, ctx.eventId)).toBeGreaterThan(0);
+      await moveWest(30);
+      expect(await refreshAutoRoutes(ctx.db, ctx.eventId)).toBeGreaterThan(0);
     } finally {
       process.env.AUTO_LEG_ROUTES = "on";
     }
