@@ -538,14 +538,14 @@ test.describe("Field mode on a phone (docs/course-editor.md §9, §10)", () => {
     await openEditor(page);
     const c = await visibleControl(page);
     const restore = await storedControl(Number(c.id));
-    // The server's refusal, as tRPC answers a batch (a leased event's "checked out to venue").
-    const refuse = (route: Route) => (route.request().method() === "POST" && procedures(route.request().url()).includes("control.update")
-      ? route.fulfill({
-        status: 403,
-        contentType: "application/json",
-        body: JSON.stringify([{ error: { message: "Event is checked out to venue", code: -32003, data: { code: "FORBIDDEN", httpStatus: 403, path: "control.update" } } }]),
-      })
-      : route.continue());
+    // The server's refusal (a leased event's "checked out to venue"), as tRPC answers the request: a batch an
+    // array, a single call (the editor's client pinned to its event, docs/course-editor.md §9) one object.
+    const refuse = (route: Route) => {
+      if (route.request().method() !== "POST" || !procedures(route.request().url()).includes("control.update")) return route.continue();
+      const error = { error: { message: "Event is checked out to venue", code: -32003, data: { code: "FORBIDDEN", httpStatus: 403, path: "control.update" } } };
+      const batch = new URL(route.request().url()).searchParams.has("batch");
+      return route.fulfill({ status: 403, contentType: "application/json", body: JSON.stringify(batch ? [error] : error) });
+    };
     try {
       await context.setOffline(true);
       await touchTap(page, c.at);

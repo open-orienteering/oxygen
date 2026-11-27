@@ -61,7 +61,8 @@ export interface LayoutModeArgs {
   /** The editor's writes (one per row in flight, D6 undo guard) and its client pinned to the editor's event (MC-17). */
   writes: EditorWrites;
   client: EventClient;
-  record: (undo: () => Promise<unknown>, redo: () => Promise<unknown>) => unknown;
+  /** `ranAs`: the op `run` ran for the entry, when not `redo` itself (its rows are the entry's D6 guard). */
+  record: (undo: () => Promise<unknown>, redo: () => Promise<unknown>, ranAs?: () => Promise<unknown>) => unknown;
   /** Why a paste was refused (J12), shown on the page's error line; a course object's entry is `clipboardWrongTypePage`. */
   notify?: (why: Refusal | "clipboardWrongTypePage" | "clipboardGraphicsUnknown") => void;
   /** The viewer's centre in paper mm, where a paste lands with the pointer off the map (J12). */
@@ -159,7 +160,9 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
   const data: EditorSheet | null = input && query.data ? query.data : null;
 
   // ─── The snapshot: stored, the last write until the refetch has it, a drag's preview ──
-  const [local, setLocal] = useState<{ key: string; snap: LayoutSnapshot; at: number } | null>(null);
+  // `seq`: the gesture (or undo step) the snapshot is from; a write's reply never replaces a newer gesture's (CRS-053).
+  const [local, setLocal] = useState<{ key: string; snap: LayoutSnapshot; at: number; seq: number } | null>(null);
+  const localSeq = useRef(0);
   const [draft, setDraft] = useState<LayoutSnapshot | null>(null);
   const base = useMemo(() => (data ? snapshotOf(data) : null), [data]);
   const stored = local && local.key === key && query.dataUpdatedAt <= local.at ? local.snap : base;
@@ -211,7 +214,8 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
   const writeTarget: WriteTarget | null = data
     ? { key, scope: data.scope, sheetSeq: data.sheet?.seq ?? null, templateSeq: data.template.seq }
     : null;
-  const save = useCallback(async (w: WriteTarget, s: LayoutSnapshot) => {
+  const save = useCallback(async (w: WriteTarget, s: LayoutSnapshot, gesture?: number) => {
+    const seq = gesture ?? ++localSeq.current;
     const kind = w.scope === "sheet" && w.sheetSeq !== null ? "sheet" : "template";
     const id = kind === "sheet" ? w.sheetSeq! : w.templateSeq;
     try {
@@ -229,7 +233,8 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
       if (e instanceof EditorConflict || e instanceof UndoSkipped) void utils.courseMap.resolveSheet.invalidate();
       throw e;
     }
-    setLocal({ key: w.key, snap: s, at: Date.now() });
+    // Writes of one sheet go one at a time: a later gesture's optimistic snapshot stays until its own reply.
+    setLocal((l) => (l && l.seq > seq ? l : { key: w.key, snap: s, at: Date.now(), seq }));
     void utils.courseMap.resolveSheet.invalidate();
     void utils.courseMap.list.invalidate();
     void utils.mapTemplate.list.invalidate();
@@ -241,10 +246,12 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
   const commit = useCallback(async (next: LayoutSnapshot) => {
     if (!writeTarget || !stored) return;
     const prev = stored, w = writeTarget;
-    setLocal({ key: w.key, snap: next, at: Number.POSITIVE_INFINITY });
+    const seq = ++localSeq.current;
+    setLocal({ key: w.key, snap: next, at: Number.POSITIVE_INFINITY, seq });
+    const first = () => save(w, next, seq);
+    if ((await run(first)) === undefined) { setLocal((l) => (l?.seq === seq ? null : l)); return; }
     const redo = () => save(w, next);
-    if ((await run(redo)) === undefined) { setLocal(null); return; }
-    record(() => save(w, prev), redo);
+    record(() => save(w, prev), redo, first);
   }, [writeTarget, stored, save, run, record]);
 
   const apply = useCallback((s: LayoutSnapshot, c: LayoutChange): LayoutSnapshot => {
@@ -525,14 +532,14 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
       ) : null}
     />
     {data && (
-      <TemplateKeySection template={data.template} sheets={sheets.data ?? []} canEdit={canEdit} run={run} record={record} onOpen={open}
+      <TemplateKeySection template={data.template} sheets={sheets.data ?? []} canEdit={canEdit} writes={writes} run={run} record={record} onOpen={open}
         sheetCourse={data.sheet?.kind === "course" && data.sheet.classSeq === null ? data.sheet.courseSeq : null} />
     )}
     {data?.sheet?.kind === "course" && data.sheet.courseSeq !== null && (
       <ClassOverridesSection courseSeq={data.sheet.courseSeq} canEdit={canEdit} run={run} record={record} onOpen={open} />
     )}
     <SetterSection view={a.view} course={a.course} rows={sheets.data ?? []} openSheet={data?.sheet?.seq ?? null}
-      canEdit={canEdit} versions={versions} run={run} record={record} onOpen={open} />
+      canEdit={canEdit} versions={versions} writes={writes} run={run} record={record} onOpen={open} />
     {data && <ClubTemplatesSection template={data.template} canEdit={canEdit} run={run} onOpen={open} />}
     </div>
   );

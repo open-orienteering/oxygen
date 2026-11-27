@@ -29,7 +29,7 @@ export interface UndoEntry {
 }
 
 /** Runs one step of an entry; may return the entry's new `rows`. */
-export type UndoStepRunner = (entry: UndoEntry, step: () => Promise<unknown> | unknown) => Promise<UndoEntry["rows"] | void>;
+export type UndoStepRunner = (entry: UndoEntry, step: () => Promise<unknown> | unknown, which: "undo" | "redo") => Promise<UndoEntry["rows"] | void>;
 
 export class UndoStack {
   private past: UndoEntry[] = [];
@@ -98,7 +98,7 @@ export class UndoStack {
       const entry = this.past[this.past.length - 1];
       if (!entry || (allow && !allow(entry))) return false;
       this.past.pop();
-      const rows = await this.runStep(entry, () => entry.undo()); // a throw drops the entry — see module docs
+      const rows = await this.runStep(entry, () => entry.undo(), "undo"); // a throw drops the entry — see module docs
       if (rows) entry.rows = rows;
       this.future.push(entry);
       return true;
@@ -111,7 +111,7 @@ export class UndoStack {
       const entry = this.future[this.future.length - 1];
       if (!entry || (allow && !allow(entry))) return false;
       this.future.pop();
-      const rows = await this.runStep(entry, () => entry.redo());
+      const rows = await this.runStep(entry, () => entry.redo(), "redo");
       if (rows) entry.rows = rows;
       this.past.push(entry);
       return true;

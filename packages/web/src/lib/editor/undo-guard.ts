@@ -23,7 +23,7 @@ export type EditorNotice =
     queueSeq?: number;
   }
   /** An undo or redo refused under D6: the row was changed elsewhere since. `name`: the course's name or control's code. */
-  | { kind: "undoSkipped"; row: NoticeRow; name: string | null; by?: { name: string; at: string } | null };
+  | { kind: "undoSkipped"; row: NoticeRow; name: string | null; by?: { name: string; at: string } | null; step?: "undo" | "redo" };
 
 const sameRow = (a: NoticeRow, b: NoticeRow) => a.kind === b.kind && a.id === b.id;
 

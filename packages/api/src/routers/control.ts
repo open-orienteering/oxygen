@@ -1006,6 +1006,8 @@ export const controlRouter = router({
         }
       }
 
+      /** The courses a kind change re-mirrored and their new tokens (the editor's own chain, docs/course-editor.md §3). */
+      const advanced: { id: number; version: string }[] = [];
       const version = await ctx.db.$transaction(async (tx) => {
         if (baseVersion !== undefined) {
           const now = await lockControlVersion(tx, c.id);
@@ -1071,12 +1073,16 @@ export const controlRouter = router({
           const rebuild = positionChanged ? dependent : [...remirrored];
           await rebuildCourseLengths(tx, ctx.event.id, rebuild);
           for (const courseId of rebuild) {
-            await emitCourseUpserted(tx, ctx.event.id, courseId, { advanceVersion: remirrored.has(courseId) });
+            const cv = await emitCourseUpserted(tx, ctx.event.id, courseId, { advanceVersion: remirrored.has(courseId) });
+            if (remirrored.has(courseId)) {
+              const row = await tx.course.findUniqueOrThrow({ where: { id: courseId }, select: { seq: true } });
+              advanced.push({ id: row.seq, version: cv.toString() });
+            }
           }
         }
         return v;
       });
-      return { ok: true, version: version.toString() };
+      return { ok: true, version: version.toString(), courses: advanced };
     }),
 
   /**

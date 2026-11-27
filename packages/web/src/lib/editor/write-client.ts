@@ -132,6 +132,8 @@ export interface WrittenRow {
 export class UndoSkipped extends Error {
   readonly kind: VersionedKind;
   readonly id: number;
+  /** Which step was refused (the page sets it; the notice says "undo" or "redo"). */
+  step: "undo" | "redo" = "undo";
 
   constructor(kind: VersionedKind, id: number) {
     super("undo skipped: changed elsewhere");
@@ -206,6 +208,19 @@ export class EditorWrites {
     if (base !== undefined && base !== result) this.ownNext.set(`${rowKey(kind, id)}:${base}`, result);
     this.versions.seed(kind, id, result);
     for (const c of this.collectors) c.push({ kind, id, version: result });
+  }
+
+  /**
+   * Rows another procedure of this client wrote and answered the tokens of (Layout's template and setter writes, a
+   * kind change's re-mirrored courses): their chains link from the book's token as the reply arrives.
+   */
+  adoptOwn(kind: VersionedKind, rows: readonly { id?: number; seq?: number; version: string }[]): void {
+    for (const r of rows) {
+      const id = r.id ?? r.seq;
+      if (id === undefined) continue;
+      if (kind === "course") this.noteOwnCourse(id, this.versions.get(kind, id), r.version);
+      else this.noteOwn(kind, id, this.versions.get(kind, id), r.version);
+    }
   }
 
   /** The end of this client's own chain from `since`: the newest token its own writes reached from it. */
@@ -362,22 +377,28 @@ export class EditorWrites {
     const fields = Object.keys(input).filter((k) => k !== "id" && k !== "autoDescribe");
     const isMove = from !== undefined && MOVE_FIELDS.every((f) => fields.includes(f));
     const write = isMove ? { fields: MOVE_FIELDS, base: from } : { fields };
-    // D6's control rule (docs/course-editor.md §3): an undo of a move whose control was changed elsewhere in
-    // anything but its position still goes through, on the server's token, leaving out the fields the other side
-    // changed (their description stays). A position changed elsewhere, or an unknown change, skips it.
-    const positionOnly = (conflict: { version: string; differing: string[] | null }) => {
-      if (!("xpos" in input) || !("ypos" in input) || !conflict.differing) return null;
-      if (conflict.differing.some((f) => (MOVE_FIELDS as readonly string[]).includes(f))) return null;
-      const kept = Object.fromEntries(Object.entries(input).filter(([k]) => !conflict.differing!.includes(k)));
+    // D6's control rule (docs/course-editor.md §3): a control's undo is decided field by field. It is skipped when
+    // the other side changed a field the undo is about — a move undo's position, any other undo's fields — or the
+    // change is unknown; otherwise it goes through on the server's token, leaving out the fields the other side
+    // changed (a move undo keeps their description). A change of a field the undo does not write (radio, a restore,
+    // a check-off, this client's own included) never blocks it.
+    const about: readonly string[] = isMove || ("xpos" in input && "ypos" in input) ? MOVE_FIELDS : fields;
+    const fieldRule = (conflict: { version: string; differing: string[] | null }) => {
+      const differing = conflict.differing;
+      if (!differing || differing.some((f) => about.includes(f))) return null;
+      const kept = Object.fromEntries(Object.entries(input).filter(([k]) => !differing.includes(k)));
       return () => this.client.control.update.mutate({ ...kept, id: input.id, baseVersion: conflict.version }) as Promise<{ version: string }>;
     };
     return this.serialRow("control", input.id, async () => {
       const { value: res, base } = await this.withToken("control", input.id, write, (baseVersion) =>
         this.client.control.update.mutate({ ...input, baseVersion }),
-      opts?.baseVersion, positionOnly);
+      opts?.baseVersion, fieldRule);
       // A code change re-keys the row: its chain starts again under the new public id.
       const publicId = publicIdAfterCodes(input.id, input.codes);
       this.noteOwn("control", publicId, publicId === input.id ? base : undefined, res.version);
+      // A kind change re-mirrors the courses that visit it and answers their tokens: own writes (D6).
+      const courses = (res as { courses?: { id: number; version: string }[] }).courses;
+      if (courses?.length) this.adoptOwn("course", courses);
       return res;
     });
   }
@@ -430,11 +451,14 @@ export class EditorWrites {
   }
 
   /** `control.check` (Field mode, §9; `courses.review`): no token in — a check-off never conflicts — the control's out. */
-  async checkControl(id: number, checked: boolean): Promise<{ version: string }> {
-    const base = this.versions.get("control", id);
-    const res = await this.client.control.check.mutate({ controlId: id, checked });
-    this.noteOwn("control", id, base, res.version);
-    return res;
+  checkControl(id: number, checked: boolean): Promise<{ version: string }> {
+    // Queued with the control's other writes, so its chain link starts from its predecessor's result.
+    return this.serialRow("control", id, async () => {
+      const base = this.versions.get("control", id);
+      const res = await this.client.control.check.mutate({ controlId: id, checked });
+      this.noteOwn("control", id, base, res.version);
+      return res;
+    });
   }
 
   /** `control.delete`: the cascade advances the tokens of the courses that lost it. */

@@ -22,6 +22,7 @@ import { useTranslation } from "react-i18next";
 import { displayCode } from "@oxygen/shared";
 import { trpc } from "../../../lib/trpc";
 import type { VersionBook } from "../../../lib/version-book";
+import type { EditorWrites } from "../../../lib/editor/write-client";
 import type { EditorView } from "../../../lib/editor/state";
 import { nextSetterSheet, setterScopeOf, setterSheetsOf, type SetterSheetRow } from "../../../lib/editor/setter-maps";
 import { InspectorSection } from "../Inspector";
@@ -39,6 +40,8 @@ export function SetterSection(p: {
   openSheet: number | null;
   canEdit: boolean;
   versions: VersionBook;
+  /** The editor's writes: the sheets these procedures answer are this client's own (D6, docs/course-editor.md §3). */
+  writes: EditorWrites;
   run: Run;
   record: Record_;
   onOpen: (t: LayoutTarget | null) => void;
@@ -74,18 +77,19 @@ export function SetterSection(p: {
     if (!next) return;
     const to = (sheet: number) => async () => {
       const r = await client.layout.moveToSetter.mutate({ controlId, sheet });
-      for (const s of r.sheets) p.versions.seed("sheet", s.seq, s.version);
+      p.writes.adoptOwn("sheet", r.sheets);
       await refresh();
       return true;
     };
-    if ((await p.run(to(next.seq))) !== undefined) p.record(to(open.seq), to(next.seq));
+    const redo = to(next.seq);
+    if ((await p.run(redo)) !== undefined) p.record(to(open.seq), redo);
   };
 
   const unassigned = sheets[0]?.setter?.unassigned ?? [];
   const adopt = async () => {
     await p.run(async () => {
       const r = await client.layout.adoptToSetters.mutate(scope !== null ? { courseId: scope } : {});
-      for (const s of r.sheets) p.versions.seed("sheet", s.seq, s.version);
+      p.writes.adoptOwn("sheet", r.sheets);
       await refresh(true);
       return r;
     });

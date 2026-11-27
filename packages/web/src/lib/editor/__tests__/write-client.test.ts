@@ -462,6 +462,42 @@ describe("EditorWrites: own chain and the D6 undo guard (docs/course-editor.md Â
     await expect(w.guarded([{ kind: "control", id: 31, version: "20" }], () => w.updateControl({ id: 31, xpos: 1, ypos: 2 }))).rejects.toBeInstanceOf(UndoSkipped);
   });
 
+  it("guarded: an own radio toggle (or any field the undo does not write) between an edit and its undo does not block it", async () => {
+    const f = fakeClient();
+    const w = new EditorWrites(f.client);
+    w.versions.seed("control", 31, "20");
+    f.fail(conflictError({ kind: "control", id: 31, version: "21", differing: ["radioType"] }));
+    f.ok({ version: "22" });
+    await w.guarded([{ kind: "control", id: 31, version: "20" }], () => w.updateControl({ id: 31, description: null }));
+    expect(f.calls[1].input).toEqual({ id: 31, description: null, baseVersion: "21" });
+  });
+
+  it("guarded: a description undo is skipped when the other side changed the description", async () => {
+    const f = fakeClient();
+    const w = new EditorWrites(f.client);
+    w.versions.seed("control", 31, "20");
+    f.fail(conflictError({ kind: "control", id: 31, version: "21", differing: ["description"] }));
+    await expect(w.guarded([{ kind: "control", id: 31, version: "20" }], () => w.updateControl({ id: 31, description: null }))).rejects.toBeInstanceOf(UndoSkipped);
+  });
+
+  it("a kind change's re-mirrored courses are own tokens: a structure undo after it still goes through", async () => {
+    const f = fakeClient();
+    const w = new EditorWrites(f.client);
+    w.versions.seed("course", 1, "5");
+    f.ok({ version: "6" });
+    const edit = await w.collect(() => w.setStructure(1, S));
+    f.ok({ version: "40", courses: [{ id: 1, version: "7" }] });
+    await w.updateControl({ id: 31, kind: "start" } as never);
+    expect(w.stillMine("course", 1, edit.rows[0]!.version)).toBe(true);
+  });
+
+  it("adoptOwn links answered sheet tokens from the book's", () => {
+    const w = new EditorWrites(fakeClient().client);
+    w.versions.seed("sheet", 3, "10");
+    w.adoptOwn("sheet", [{ seq: 3, version: "11" }]);
+    expect(w.stillMine("sheet", 3, "10")).toBe(true);
+  });
+
   it("guarded: a course object's undo is never rebased (D6 per object)", async () => {
     const f = fakeClient();
     const w = new EditorWrites(f.client);

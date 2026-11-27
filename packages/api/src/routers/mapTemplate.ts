@@ -245,6 +245,8 @@ export const mapTemplateRouter = router({
         },
         select: { id: true, name: true },
       });
+      /** The course sheets this wrote and their new tokens (the editor's own chain, docs/course-editor.md §3). */
+      const sheets: { seq: number; version: string }[] = [];
       if (courses.length !== new Set(input.courseIds).size) {
         throw new TRPCError({
           code: "NOT_FOUND",
@@ -258,7 +260,7 @@ export const mapTemplateRouter = router({
           // The course's own sheets; class sheets keep their class's template (docs/course-layout.md §6).
           const existing = await tx.courseMap.findMany({
             where: { eventId: ctx.event.id, courseId: course.id, classId: null },
-            select: { id: true },
+            select: { id: true, seq: true },
           });
           if (existing.length === 0) {
             await tx.courseMap.create({
@@ -273,14 +275,16 @@ export const mapTemplateRouter = router({
             });
             created += 1;
           } else {
+            const version = nextObjectVersion();
             await tx.courseMap.updateMany({
               where: { id: { in: existing.map((map) => map.id) } },
-              data: { templateId: template.id, version: nextObjectVersion() },
+              data: { templateId: template.id, version },
             });
+            for (const map of existing) sheets.push({ seq: map.seq, version: version.toString() });
             updated += existing.length;
           }
         }
-        return { created, updated };
+        return { created, updated, sheets };
       });
     }),
 
