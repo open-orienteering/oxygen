@@ -7,7 +7,7 @@ import {
   raceOperateRaceProcedure,
   kioskOrRaceOperateProcedure,
 } from "../trpc.js";
-import { toAbsolute, toRelative, toRelativeChecked, hasTime, hasStartedByClock, eventNowDs, eventTimeZone, nowMeosDate, nowMeosTime } from "../timeConvert.js";
+import { absoluteTimeSchema, toAbsolute, toRelative, toRelativeChecked, hasTime, hasStartedByClock, eventNowDs, eventTimeZone, nowMeosDate, nowMeosTime } from "../timeConvert.js";
 import { RunnerStatus, type RunnerDetail, type RunnerInfo, type RunnerEventorDiff } from "@oxygen/shared";
 import {
   runnerStatusToValue,
@@ -239,13 +239,13 @@ const runnerCreateSchema = z.object({
   eventorClubId: z.number().int().optional(),
   classId: z.number().int(), // seq
   startNo: z.number().int().optional().default(0),
-  startTime: z.number().int().optional().default(0),
+  startTime: absoluteTimeSchema.optional().default(0),
   birthYear: z.number().int().optional().default(0),
   sex: z.string().optional().default(""),
   nationality: z.string().optional().default(""),
   phone: z.string().optional().default(""),
   status: runnerStatusValueSchema.optional(),
-  finishTime: z.number().int().optional(),
+  finishTime: absoluteTimeSchema.optional(),
   fee: z.number().int().optional().default(0),
   paid: z.number().int().optional().default(0),
   payMode: z.number().int().optional().default(0),
@@ -261,7 +261,7 @@ const runnerUpdateSchema = z.object({
   eventorClubId: z.number().int().nullable().optional(),
   classId: z.number().int().optional(),
   startNo: z.number().int().optional(),
-  startTime: z.number().int().optional(),
+  startTime: absoluteTimeSchema.optional(),
   birthYear: z.number().int().optional(),
   sex: z.string().optional(),
   nationality: z.string().optional(),
@@ -269,7 +269,7 @@ const runnerUpdateSchema = z.object({
   /** Free-text bib; the inline editor's field was silently dropped before (package 11). */
   bib: z.string().optional(),
   status: runnerStatusValueSchema.optional(),
-  finishTime: z.number().int().optional(),
+  finishTime: absoluteTimeSchema.optional(),
   fee: z.number().int().optional(),
   paid: z.number().int().optional(),
   payMode: z.number().int().optional(),
@@ -914,7 +914,7 @@ export const runnerRouter = router({
         clubName: z.string().optional(),
         eventorClubId: z.number().int().nullable().optional(),
         status: runnerStatusValueSchema.optional(),
-        startTime: z.number().int().optional(),
+        startTime: absoluteTimeSchema.optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {

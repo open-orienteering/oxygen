@@ -1,6 +1,6 @@
 # Test Lab could wipe a live event; unchecked statuses and times; dead endpoints (package 19)
 
-Review items API-06, API-34, API-13 (rest) and RES-24 (rest).
+Review items API-06, API-34, API-13 (rest), RES-24 (rest), MC-15 and DB-10 (the lease and journal half of the Test Lab: its writes ran outside the lease and the journal).
 
 ## What happened
 
@@ -35,8 +35,8 @@ Review items API-06, API-34, API-13 (rest) and RES-24 (rest).
   `20261127120000_event_is_test_event`, additive, default false). Set with
   `event.setTestEvent({ enabled })` (`event.manage`) or the optional
   `isTestEvent` of `event.create`. Turning it on is refused
-  (`PRECONDITION_FAILED`) with an Eventor link, any card readout, or an active
-  lease; turning it off is always allowed and stops a running simulation. It
+  (`PRECONDITION_FAILED`) unless the event is empty: an Eventor link, an active
+  lease, or any runner, card, punch or card readout refuses it; turning it off is always allowed and stops a running simulation. It
   is a cloud-owned column (forwarded during a lease; `EVENT_ROW_WRITERS`,
   `CLOUD_OWNED_MUTATIONS`, `SETTINGS_REFRESH_PATHS`) and part of `EventInfo`.
 - **Guard.** `testEventProcedure` (`manageProcedure` plus a fresh read of the
@@ -48,6 +48,15 @@ Review items API-06, API-34, API-13 (rest) and RES-24 (rest).
   overlaps its own ticks and re-checks the flag on each tick, so clearing it
   halts the timer. `stopSimulationFor(eventId)` is exported for
   `event.setTestEvent`.
+- **Lease half (MC-15, DB-10).** The Test Lab stays lease-exempt and
+  unjournaled, and that is made safe by keeping the two apart in both
+  directions: `acquireLease` refuses a test event (so a venue cannot check it
+  out), `setTestEvent` refuses an event with a lease, and `testEventProcedure`
+  refuses an event that has an active lease or an Eventor link whatever its
+  mark says. There is no path that links an existing event to Eventor (an
+  import always creates a new event), so nothing else needed a guard. A
+  failing simulation tick is caught, logged and stops that simulation, and
+  the instant loop re-checks the flag every 25 readouts.
 - **Web.** The Test Lab tab exists only when `isTestEvent` is true
   (`computeTabLayout`); the page on a real event (direct URL) shows a notice
   with a link to Event settings; Start simulation asks for confirmation; a
@@ -63,7 +72,10 @@ Review items API-06, API-34, API-13 (rest) and RES-24 (rest).
   since midnight, so the bound is a day, not ZeroTime-relative. In
   `events.push`, a `finish.adjusted` / `result.applied` entry with an unknown
   status or an out-of-range time is refused as `INVALID_PAYLOAD` and writes
-  nothing.
+  nothing; so are `runner.updated` / `runner.registered` with an unknown
+  status or time and `start.recorded` / `start.adjusted` with an out-of-range
+  time. `runner.create` / `update` / `bulkUpdate` bound their times with
+  `absoluteTimeSchema` too (0 still clears).
 - **API-13.** `kioskOrRaceOperateRaceProcedure` deleted.
 
 ## Tests

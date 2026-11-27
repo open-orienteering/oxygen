@@ -459,9 +459,10 @@ export const eventRouter = router({
 
   /**
    * Mark the event as a test event (API-06) or take the mark off. The Test
-   * Lab refuses every other event. Turning it on is refused once the event
-   * holds real data: an Eventor link, a card readout, or a lease. Turning it
-   * off is always allowed and halts a running simulation.
+   * Lab refuses every other event. Turning it on is refused
+   * (`PRECONDITION_FAILED`) unless the event is still empty: an Eventor link,
+   * a lease, a card readout, a runner, a card or a punch each refuse it.
+   * Turning it off is always allowed and halts a running simulation.
    */
   setTestEvent: manageProcedure
     .input(z.object({ enabled: z.boolean() }))
@@ -484,11 +485,20 @@ export const eventRouter = router({
         if (row.eventorEventId !== null) {
           refuse("An event linked to Eventor cannot be a test event.");
         }
-        if ((await tx.cardReadout.count({ where: { eventId } })) > 0) {
-          refuse("An event with card readouts cannot become a test event.");
-        }
         if (await getActiveLease(tx, eventId)) {
           refuse("An event checked out to a venue cannot become a test event.");
+        }
+        const where = { eventId };
+        const [readouts, runners, cards, punches] = await Promise.all([
+          tx.cardReadout.count({ where }),
+          tx.runner.count({ where }),
+          tx.card.count({ where }),
+          tx.punch.count({ where }),
+        ]);
+        if (readouts + runners + cards + punches > 0) {
+          refuse(
+            "Only an empty event can become a test event: this one already has runners, cards, punches or card readouts.",
+          );
         }
         await tx.event.update({ where: { id: eventId }, data: { isTestEvent: true } });
       });

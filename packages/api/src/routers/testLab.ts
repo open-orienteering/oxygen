@@ -19,6 +19,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, manageProcedure } from "../trpc.js";
 import { prisma } from "../db.js";
+import { getActiveLease } from "../sync/lease.js";
 import {
   MALE_FIRST_NAMES,
   FEMALE_FIRST_NAMES,
@@ -199,12 +200,20 @@ export function stopSimulationFor(eventId: bigint): void {
 const testEventProcedure = manageProcedure.use(async ({ ctx, next }) => {
   const row = await ctx.db.event.findUnique({
     where: { id: ctx.event.id },
-    select: { isTestEvent: true },
+    select: { isTestEvent: true, eventorEventId: true },
   });
   if (!row?.isTestEvent) {
     throw new TRPCError({
       code: "PRECONDITION_FAILED",
       message: "NOT_A_TEST_EVENT: the Test Lab works only on an event marked as a test event.",
+    });
+  }
+  // The guard is two-way: an event that has since been linked to Eventor or
+  // checked out is real, whatever its mark says.
+  if (row.eventorEventId !== null || (await getActiveLease(ctx.db, ctx.event.id))) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "NOT_A_TEST_EVENT: an event linked to Eventor or checked out to a venue is not a test event.",
     });
   }
   return next();
@@ -444,7 +453,17 @@ export const testLabRouter = router({
 
       // Instant mode — process everything inline and return.
       if (cfg.speedFactor === 0) {
+        let done = 0;
         for (const r of schedule) {
+          // Every 25 readouts: stop when the flag was cleared meanwhile.
+          if (done > 0 && done % 25 === 0) {
+            const flag = await ctx.db.event.findUnique({
+              where: { id: ctx.event.id },
+              select: { isTestEvent: true },
+            });
+            if (!flag?.isTestEvent) break;
+          }
+          done++;
           try {
             await processSimulatedReadout(ctx.event.id, zeroTime, r);
           } catch (err) {
@@ -453,7 +472,7 @@ export const testLabRouter = router({
         }
         return {
           mode: "instant" as const,
-          processed: schedule.length,
+          processed: done,
           total: schedule.length,
         };
       }
@@ -484,6 +503,11 @@ export const testLabRouter = router({
         ticking = true;
         try {
           await runTick();
+        } catch (err) {
+          // A failing tick (a database error) must not become an unhandled
+          // rejection that takes the API down: log it and stop this simulation.
+          console.error("[testLab] tick failed, stopping the simulation:", err);
+          stopSimulationFor(state.eventId);
         } finally {
           ticking = false;
         }

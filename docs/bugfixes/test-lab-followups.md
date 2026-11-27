@@ -19,3 +19,13 @@ the Test Lab test-event only. These were deliberately left out.
    the Test Lab on it. That is the existing meaning of auth off (a venue box
    or a development machine). The refusal on readouts is the protection that
    remains: an event that has been raced cannot be marked.
+4. **A refused queued entry holds the station queue.** `INVALID_PAYLOAD` is a
+   batch-stopping code (`JOURNAL_BATCH_STOPPING_CODES`), so a queued
+   `finish.adjusted`, `result.applied`, `runner.updated` or start entry refused
+   for an unknown status or an out-of-range time stops its batch and holds the
+   entries behind it until the operator discards it. A non-stopping refusal
+   code would let the rest through; left for a later package.
+5. **Only an empty event can be marked.** An event that already has runners
+   cannot be turned into a test event, by design; the way round it is to create
+   the event with the test mark. Clearing the mark does not delete the
+   synthetic data.

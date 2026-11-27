@@ -436,6 +436,40 @@ describe("event.setTestEvent (API-06)", () => {
     }
   });
 
+  it("refuses to turn on once the event has runners, cards or punches", async () => {
+    const withRunner = await createTestEvent("flag-runner");
+    const withCard = await createTestEvent("flag-card");
+    const withPunch = await createTestEvent("flag-punch");
+    try {
+      await withRunner.db.runner.create({ data: { eventId: withRunner.eventId, name: "R" } });
+      await withCard.db.card.create({ data: { eventId: withCard.eventId, cardNo: 500010 } });
+      await withPunch.db.punch.create({
+        data: { eventId: withPunch.eventId, cardNo: 500011, controlCode: 31, time: 1, source: "backup_memory" },
+      });
+      for (const f of [withRunner, withCard, withPunch]) {
+        await expect(makeCaller(f.event).event.setTestEvent({ enabled: true })).rejects.toMatchObject({
+          code: "PRECONDITION_FAILED",
+        });
+        expect((await f.db.event.findUniqueOrThrow({ where: { id: f.eventId } })).isTestEvent).toBe(false);
+      }
+    } finally {
+      await withRunner.cleanup();
+      await withCard.cleanup();
+      await withPunch.cleanup();
+    }
+  });
+
+  it("a test event cannot be checked out (lease acquisition is refused)", async () => {
+    const f = await createTestEvent("flag-checkout");
+    try {
+      await f.db.event.update({ where: { id: f.eventId }, data: { isTestEvent: true } });
+      await expect(acquireLease(f.db, f.eventId, "venue-x")).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+      expect(await f.db.eventLease.count({ where: { eventId: f.eventId } })).toBe(0);
+    } finally {
+      await f.cleanup();
+    }
+  });
+
   it("turning off is allowed even with readouts present", async () => {
     const f = await createTestEvent("flag-off");
     try {

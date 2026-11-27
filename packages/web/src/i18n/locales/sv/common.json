@@ -162,5 +162,6 @@
   "testLabNotTestEvent": "Den här tävlingen är ingen testtävling, så Testlabbet är avstängt. Det skapar och raderar löpare och resultat, vilket en riktig tävling aldrig ska få.",
   "testLabOpenEventSettings": "Öppna tävlingsinställningarna för att markera den som testtävling",
   "testLabStartConfirm": "Starta simuleringen? Den skriver syntetiska resultat för varje löpare med starttid och bricka.",
-  "testEventBadge": "Testtävling"
+  "testEventBadge": "Testtävling",
+  "testLabLoadFailed": "Kunde inte läsa tävlingen, så Testlabbet kan inte avgöra om den är en testtävling."
 }

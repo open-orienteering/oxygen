@@ -13,6 +13,21 @@ export function TestLabPage() {
   const { nameId } = useParams();
   const dashboard = trpc.competition.dashboard.useQuery(undefined, { staleTime: 30_000 });
   if (dashboard.isLoading) return null;
+  if (dashboard.isError) {
+    return (
+      <div className="p-6 space-y-3" data-testid="test-lab-load-failed">
+        <h1 className="text-2xl font-semibold">{t("testLab")}</h1>
+        <p className="text-sm text-red-600">{t("testLabLoadFailed")}</p>
+        <button
+          type="button"
+          onClick={() => dashboard.refetch()}
+          className="text-sm font-medium text-blue-600 hover:underline"
+        >
+          {t("retry")}
+        </button>
+      </div>
+    );
+  }
   // The Test Lab writes synthetic data, so the API refuses every event that
   // is not marked as a test event (API-06). Reached by a direct URL, the page
   // says so instead of offering buttons that would fail.

@@ -211,7 +211,10 @@ it a correctness problem:
   (`events.is_test_event`; every writing procedure answers
   `PRECONDITION_FAILED` / `NOT_A_TEST_EVENT` otherwise). It is not
   lease-managed and its writes are not journaled: a test event cannot be
-  checked out to a venue, and `event.setTestEvent` refuses an event with an
-  active lease, card readouts or an Eventor link. A timed simulation checks
+  checked out to a venue (lease acquisition, which a venue checkout goes
+  through on the cloud, refuses a test event), `event.setTestEvent` refuses an
+  event that has an active lease, an Eventor link, or any runner, card, punch
+  or card readout, and the Test Lab itself refuses an event that has since
+  gained a lease or an Eventor link. A timed simulation checks
   the flag on every tick and halts when it is cleared (`event.setTestEvent`
   with `enabled: false` also stops it at once); ticks never overlap.

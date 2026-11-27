@@ -227,7 +227,7 @@ applyResult.mutateAsync({
 })
 ```
 
-Input is validated at the wire (RES-24): `status` must be one of the `RunnerStatus` constants (`runnerStatusValueSchema` in `statusConvert.ts`; 7 or 999 is a `BAD_REQUEST`, no longer stored as "unknown") and `finishTime` / `startTime` are absolute times of day, 0..863999 (`absoluteTimeSchema`, the same bound as `event.create`'s `firstStart`). `race.recordFinish` (`finishTime`, `finishTimeAbsolute`, `status`) and the runner `status` inputs of `runner.create` / `update` / `bulkUpdate` follow the same rules. A queued `finish.adjusted` or `result.applied` journal entry with an unknown status or an out-of-range time is refused as `INVALID_PAYLOAD` by `events.push` and writes nothing.
+Input is validated at the wire (RES-24): `status` must be one of the `RunnerStatus` constants (`runnerStatusValueSchema` in `statusConvert.ts`; 7 or 999 is a `BAD_REQUEST`, no longer stored as "unknown") and `finishTime` / `startTime` are absolute times of day, 0..863999 (`absoluteTimeSchema`, the same bound as `event.create`'s `firstStart`). `race.recordFinish` (`finishTime`, `finishTimeAbsolute`, `status`) and the runner `status` inputs of `runner.create` / `update` / `bulkUpdate` follow the same rules, and so do the `startTime` / `finishTime` inputs of `runner.create` / `update` / `bulkUpdate` (0 still clears). `runner.updated`, `runner.registered`, `start.recorded` and `start.adjusted` journal entries are checked the same way. A queued `finish.adjusted` or `result.applied` journal entry with an unknown status or an out-of-range time is refused as `INVALID_PAYLOAD` by `events.push` and writes nothing.
 
 The server runs one guard, `decideReadoutApply` (§3a), and answers with `{ ok, outcome, reason }`:
 

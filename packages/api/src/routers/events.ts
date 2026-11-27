@@ -92,6 +92,14 @@ function assertAbsoluteTime(type: string, field: string, value: unknown): void {
   }
 }
 
+/** Validate the status / time keys a runner patch or registration may carry; an absent or null key passes. */
+function assertRunnerPatch(type: string, fields: Record<string, unknown>): void {
+  if (fields.status !== undefined && fields.status !== null) assertRunnerStatus(type, fields.status);
+  for (const k of ["startTime", "finishTime"]) {
+    if (fields[k] !== undefined && fields[k] !== null) assertAbsoluteTime(type, k, fields[k]);
+  }
+}
+
 /** The singleton client or a `$transaction` client — appliers run on either. */
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -816,6 +824,7 @@ async function applyEvent(
 
     case "start.recorded": {
       const { startTime } = event.payload as { startTime: number };
+      assertAbsoluteTime("start.recorded", "startTime", startTime);
       const runner = await resolveRunner(db, eventId, event.payload);
       if (runner) {
         await db.runner.update({
@@ -829,6 +838,7 @@ async function applyEvent(
     case "start.adjusted": {
       // Draw / manual start-time set — last-write-wins.
       const { startTime, startNo } = event.payload as { startTime: number; startNo?: unknown };
+      assertAbsoluteTime("start.adjusted", "startTime", startTime);
       const runner = await resolveRunner(db, eventId, event.payload);
       if (runner) {
         await db.runner.update({
@@ -927,6 +937,7 @@ async function applyEvent(
       const int = (v: unknown): number | undefined =>
         typeof v === "number" && Number.isInteger(v) ? v : undefined;
       const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
+      assertRunnerPatch("runner.registered", p as Record<string, unknown>);
       const status = int(p.status);
       const finish = int(p.finishTime);
       const created = await db.runner.create({
@@ -979,6 +990,7 @@ async function applyEvent(
       const { fields } = event.payload as {
         fields?: Record<string, unknown>;
       };
+      if (fields) assertRunnerPatch("runner.updated", fields);
       const runner = await resolveRunner(db, eventId, event.payload);
       if (runner && fields && Object.keys(fields).length > 0) {
         const data = await buildRunnerUpdateData(

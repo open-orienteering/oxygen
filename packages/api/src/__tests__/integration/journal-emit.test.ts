@@ -86,6 +86,22 @@ describe("recordFinish and applyResult input validation (RES-24)", () => {
     ).rejects.toMatchObject(bad("BAD_REQUEST"));
   });
 
+  it("runner.update, create and bulkUpdate refuse out-of-day times; 0 still clears", async () => {
+    await expect(
+      caller.runner.update({ id: runnerSeq, finishTime: 999_999_999 } as never),
+    ).rejects.toMatchObject(bad("BAD_REQUEST"));
+    await expect(
+      caller.runner.update({ id: runnerSeq, startTime: 864_000 } as never),
+    ).rejects.toMatchObject(bad("BAD_REQUEST"));
+    await expect(
+      caller.runner.bulkUpdate({ ids: [runnerSeq], startTime: 999_999_999 }),
+    ).rejects.toMatchObject(bad("BAD_REQUEST"));
+    await expect(
+      caller.runner.create({ name: "Late", classId: 1, startTime: 999_999_999 } as never),
+    ).rejects.toMatchObject(bad("BAD_REQUEST"));
+    await expect(caller.runner.update({ id: runnerSeq, finishTime: 0 } as never)).resolves.toBeDefined();
+  });
+
   it("runner.update refuses an unknown status", async () => {
     await expect(
       caller.runner.update({ id: runnerSeq, status: 999 } as never),

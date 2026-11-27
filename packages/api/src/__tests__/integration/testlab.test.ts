@@ -15,6 +15,8 @@ import { afterAll, beforeEach, describe, it, expect, vi } from "vitest";
 import { createTestEvent, disconnect } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
 import { appRouter } from "../../routers/index.js";
+import { prisma } from "../../db.js";
+import { acquireLease } from "../../sync/lease.js";
 import { RunnerStatus } from "@oxygen/shared";
 
 afterAll(async () => {
@@ -284,6 +286,9 @@ describe("test event guard (API-06)", () => {
       courses: await f.ctx.db.course.count({ where }),
       cards: await f.ctx.db.card.count({ where }),
       punches: await f.ctx.db.punch.count({ where }),
+      // What a readout or simulation would have written onto the rows.
+      finishTimes: (await f.ctx.db.runner.findMany({ where, select: { finishTime: true, status: true }, orderBy: { id: "asc" } })),
+      cardPunches: (await f.ctx.db.card.findMany({ where, select: { punchesRaw: true }, orderBy: { id: "asc" } })),
     };
   }
 
@@ -372,6 +377,45 @@ describe("test event guard (API-06)", () => {
     } finally {
       vi.useRealTimers();
       await f.caller.testLab.stopSimulation();
+      await f.ctx.cleanup();
+    }
+  });
+
+  it("refuses the Test Lab on a flagged event that has since been checked out or linked to Eventor", async () => {
+    const f = await buildSimEvent("guard-two-way");
+    try {
+      await f.ctx.db.event.update({ where: { id: f.ctx.eventId }, data: { eventorEventId: 4242n } });
+      await expect(f.caller.testLab.generateClasses({ count: 1 })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+      await f.ctx.db.event.update({ where: { id: f.ctx.eventId }, data: { eventorEventId: null } });
+      await acquireLease(f.ctx.db, f.ctx.eventId, "venue-zz").catch(() => {});
+      // acquire refuses a test event, so force the state a legacy row could be in.
+      await f.ctx.db.eventLease.create({ data: { eventId: f.ctx.eventId, holderNodeId: "venue-zz" } });
+      await expect(f.caller.testLab.clearRunners()).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+      expect(await f.ctx.db.runner.count({ where: { eventId: f.ctx.eventId } })).toBe(1);
+      await expect(f.caller.testLab.stopSimulation()).resolves.toEqual({ ok: true });
+    } finally {
+      await f.ctx.cleanup();
+    }
+  });
+
+  it("a tick whose database read fails stops the simulation instead of crashing", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const f = await buildSimEvent("guard-tick-error");
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      await f.caller.testLab.startSimulation({ speedFactor: 1, dnsRate: 0, dnfRate: 0, mpRate: 0 });
+      const spy = vi.spyOn(prisma().event, "findUnique").mockRejectedValue(new Error("db down"));
+      const log = vi.spyOn(console, "error").mockImplementation(() => {});
+      await vi.advanceTimersByTimeAsync(600);
+      await vi.waitFor(() => expect(log).toHaveBeenCalled());
+      spy.mockRestore();
+      log.mockRestore();
+      expect((await f.caller.testLab.simulationStatus()).active).toBe(false);
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandled);
+      vi.useRealTimers();
       await f.ctx.cleanup();
     }
   });

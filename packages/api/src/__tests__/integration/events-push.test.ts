@@ -1193,6 +1193,10 @@ describe("events.push: status and time validation (RES-24)", () => {
     ["result.applied", { status: 7, finishTime: 384_000, startTime: 360_000 }],
     ["result.applied", { status: 1, finishTime: 999_999_999, startTime: 360_000 }],
     ["result.applied", { status: 1, finishTime: 384_000, startTime: 864_000 }],
+    ["runner.updated", { fields: { status: 999 } }],
+    ["runner.updated", { fields: { startTime: 999_999_999 } }],
+    ["start.recorded", { startTime: 999_999_999 }],
+    ["start.adjusted", { startTime: -5 }],
   ])("%s %j is refused and writes nothing", async (type, extra) => {
     const cardNo = 95000 + Math.floor(Math.random() * 4000);
     await register(cardNo);
