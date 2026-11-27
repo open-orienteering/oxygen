@@ -456,4 +456,15 @@ describe("a corridor confines the grid (docs/course-elevation.md §7.6)", () => 
     const [r] = findRoutes(wide, centre[0], centre[1], { model: DEFAULT_COST_MODEL, alternatives: 0 });
     expect(r.lengthM).toBeCloseTo(Math.hypot(29.6, 26.6) * 10, 0);
   });
+
+  it("a crossing point's opening opens the obstacle inside the corridor and nothing outside it", () => {
+    const g = grid([line(BLOCKED, [20, 5, 20, 35])]);
+    confineToCorridor(g, [{ x: 5, y: 20 }, { x: 35, y: 20 }], 0.5);
+    openDisc(g, { x: 20, y: 20 }, 1, C.path);
+    // The fence on the line is opened; the corridor's outside within the disc's reach stays closed.
+    expect(at(g, 20.25, 20.25)).toBe(C.path);
+    expect(at(g, 20.25, 21.25)).toBe(BLOCKED);
+    expect(at(g, 19.25, 19.25 - 0.5)).toBe(BLOCKED);
+    for (let i = 0; i < g.cls.length; i++) if (g.outside![i]) expect(g.cls[i]).toBe(BLOCKED);
+  });
 });

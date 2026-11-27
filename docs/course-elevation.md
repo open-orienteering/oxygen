@@ -878,8 +878,8 @@ from before the corridor was added. `climbLegsOf` and the editor give
 each leg its own half width: the server at the pinned map's scale
 (`legCorridorHalfMm`), the editor at the document header's, which
 the editor's search reads too. The tolerance covers the search's cells
-up to 0.42 mm (a cell's half diagonal), so a corridor window up to
-about 400 mm square. The style is the leg's own: where
+up to 0.42 mm (whose half diagonal is 0.3 mm), so a corridor window up
+to about 400 mm square. The style is the leg's own: where
 a control is run to twice, one leg to it can be marked and the other
 read along its pair's route. A leg through a crossing point is
 read along the chosen route as any other; the setter draws the route
@@ -1611,8 +1611,8 @@ only when a person presses the button.
   of it for the search; a pair whose courses have different corridors is
   searched without one, so the corridor legs read their lines; the editor
   does not say that a route was confined, nor that a corridor leg of a
-mixed pair reads its line while the list shows the automatic route as
-chosen. Against a corridor only a few
+  mixed pair reads its line while the list shows the automatic route as
+  chosen. Against a corridor only a few
   cells wide a route steps along the cells (a corridor at least 1 mm of
   paper wide is several cells at the finest size).
 - §7.6: bridges, underpasses, stairs and multi-level sprint areas are
