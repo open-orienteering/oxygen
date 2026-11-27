@@ -299,7 +299,9 @@ uploaded bytes.
    value hides nothing. A reference to a custom entity is refused everywhere
    except inside an `xmlns` / `xmlns:*` attribute value (Illustrator's `ns_*`
    entities); entity values never reach content, so duplicate declarations and
-   non-ASCII names do not matter.
+   non-ASCII names do not matter. An entity value may hold no `&`, `<` or `%`
+   and at most 512 characters, and a namespace declaration at most 2,048
+   characters before and after expansion, so expansion cannot exhaust memory.
 2. *Parsed*: `fast-xml-parser`'s `XMLValidator` first (ill-formed is refused),
    then `XMLParser` with `preserveOrder`, comments dropped, CDATA as text and
    entities not expanded. A bare `&` is refused; character references are

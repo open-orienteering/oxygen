@@ -61,3 +61,7 @@ What [proxy-auth-and-svg-xss.md](proxy-auth-and-svg-xss.md) did not do, and why.
 - **`reframeSvg` does not handle a prefixed root** (`<s:svg>`): the window
   wrapper and the trim step give up on such a document (a window falls back to
   cutting a whole raster; trim leaves it as uploaded).
+- **A box with login off forwards the event header as sent**: it does not
+  resolve the event locally or answer 400 for an unknown one (that check runs
+  only with login on). The cloud's lease-holder rule still limits what the
+  forward can touch.

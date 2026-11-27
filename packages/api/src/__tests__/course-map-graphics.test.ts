@@ -90,7 +90,7 @@ describe("SVG graphic safety (parser-based validation, docs/course-maps.md \"SVG
       ["a non-ASCII entity name", svg(`<image href="&é;"/>`, ent(`<!ENTITY é "http://host/x.png">`)), "custom entities"],
       ["an entity in text", svg(`<text>&x;</text>`, ent(`<!ENTITY x "a">`)), "custom entities"],
       ["an undeclared entity", svg(`<text>&nope;</text>`), "custom entities"],
-      ["an entity expanding to markup", svg(`&x;`, ent(`<!ENTITY x "&#60;script>alert(1)&#60;/script>">`)), /custom entities|malformed/],
+      ["an entity expanding to markup", svg(`&x;`, ent(`<!ENTITY x "&#60;script>alert(1)&#60;/script>">`)), /custom entities|malformed|DOCTYPE/],
       ["an entity in xmlns that is undeclared", Buffer.from(`<svg xmlns="&nope;" viewBox="0 0 1 1"/>`), "custom entities"],
       // DOCTYPE shapes.
       ["a parameter entity", svg(``, ent(`<!ENTITY % p "x">`)), "DOCTYPE"],
@@ -173,6 +173,13 @@ describe("SVG graphic safety (parser-based validation, docs/course-maps.md \"SVG
       ["expression()", svg(`<rect style="width:expression(alert(1))"/>`), "expression"],
       ["javascript: in CSS", svg(`<style>.a{background:url(javascript:alert(1))}</style>`), "javascript"],
       ["a url() whose entity-free value is an svg data URL", svg(`<rect style="fill:url(data:image/svg+xml;base64,AAAA)"/>`), "external references"],
+      // Final-review round: offsets shifted by a character whose lower case is longer (U+0130).
+      ["a url() after characters whose lower case is longer", svg(`<rect style="font-family:'${"\u0130".repeat(17)}';fill:url(http://evil.com/a#b)"/>`), "external references"],
+      ["the same in a style element", svg(`<style>.a{font-family:'${"\u0130".repeat(17)}';fill:url(http://evil.com/a#b)}</style>`), "external references"],
+      // An entity value is a namespace URI only: no references, no markup, bounded.
+      ["an entity value holding a character reference", Buffer.from(`<!DOCTYPE svg [<!ENTITY ns "http://www.w3.org/1999/xht&#109;l">]><svg xmlns="http://www.w3.org/2000/svg" xmlns:h="&ns;"><h:p/></svg>`), "DOCTYPE"],
+      ["an overlong entity value", svg(``, ent(`<!ENTITY a "${"x".repeat(600)}">`)), "DOCTYPE"],
+      ["many references expanding a namespace declaration", Buffer.from(`<!DOCTYPE svg [<!ENTITY a "${"x".repeat(500)}">]><svg xmlns="http://www.w3.org/2000/svg" xmlns:q="${"&a;".repeat(50)}"/>`), "overlong namespace"],
     ];
     for (const [name, data, reason] of cases) {
       expect(() => validateGraphicUpload(data), name).toThrow(reason);
@@ -190,6 +197,10 @@ describe("SVG graphic safety (parser-based validation, docs/course-maps.md \"SVG
     expect(validateGraphicUpload(svg(`<style><![CDATA[@font-face{font-family:I;src:url(data:font/otf;base64,T1RUTw==)}]]></style>`))).toBe("image/svg+xml");
     expect(validateGraphicUpload(svg(`<text>the src=x note, url(http://host/x) and javascript: are text</text>`))).toBe("image/svg+xml");
     expect(validateGraphicUpload(svg(`<text style="font-family:'Foo\\ Bar'">x</text><text style='font-family:"Foo\\ Bar"'>y</text>`))).toBe("image/svg+xml");
+    // Labels that merely mention "data: text" are not URLs.
+    expect(validateGraphicUpload(svg(`<g data-name="Metadata: Text layer" inkscape:label="Data: text" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape">${rect}</g>`))).toBe("image/svg+xml");
+    // Line-wrapped base64 in an embedded raster.
+    expect(validateGraphicUpload(svg(`<image href="data:image/png;base64,iVBO\n  Rw0KGgo=" width="1" height="1"/>`))).toBe("image/svg+xml");
     expect(validateGraphicUpload(svg(`<style>.a{fill:#c00}</style><rect style="fill:#c00" width="1" height="1"/>`))).toBe("image/svg+xml");
     expect(validateGraphicUpload(svg(`<rect><animate attributeName="fill" values="red;#00f" dur="1s"/></rect>`))).toBe("image/svg+xml");
     // A comment, even one holding markup, is dropped, not read.

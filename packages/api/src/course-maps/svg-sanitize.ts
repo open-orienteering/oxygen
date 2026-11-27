@@ -29,6 +29,11 @@ const DATA_IMAGE = /^data:image\/(?:png|jpe?g|gif|webp)(?:;[^,;]*)*;base64,/i;
 /** An embedded font (`@font-face` from Illustrator or Affinity): allowed in CSS `url()` only. */
 const DATA_FONT = /^data:(?:font\/[\w.+-]+|application\/(?:x-)?font-[\w.+-]+|application\/vnd\.ms-fontobject|application\/octet-stream)(?:;[^,;]*)*;base64,/i;
 
+/** Longest DOCTYPE entity value accepted (Illustrator's `ns_*` entities are namespace URIs). */
+const MAX_ENTITY_VALUE = 512;
+/** Longest namespace declaration after entity expansion. */
+const MAX_NAMESPACE_VALUE = 2048;
+
 function refuse(what: string): never {
   throw new Error(`The SVG must not contain ${what}`);
 }
@@ -129,7 +134,8 @@ function scanDoctype(raw: string, start: number, entities: Map<string, string>):
       ws();
       if (raw[i] !== ">") bad();
       i++;
-      if (/%/.test(value)) bad();
+      // A namespace URI is all an entity may hold: no markup, no nested references, bounded length.
+      if (/[%&<]/.test(value) || value.length > MAX_ENTITY_VALUE) bad();
       if (!entities.has(m![1])) entities.set(m![1], value);
     }
     ws();
@@ -215,11 +221,12 @@ const isSpace = (c: string | undefined) => c === " " || c === "\t" || c === "\n"
 
 /** The target of every `url(…)` in already-normalised CSS, by a linear scan; an unterminated or malformed one is refused. */
 function urlTargets(text: string): string[] {
-  const lower = text.toLowerCase();
   const out: string[] = [];
-  let at = lower.indexOf("url(");
-  while (at >= 0) {
-    let i = at + 4;
+  // Matched on `text` itself: lower-casing can change string length (U+0130) and shift offsets.
+  const opener = /url\(/gi;
+  let match: RegExpExecArray | null;
+  while ((match = opener.exec(text))) {
+    let i = match.index + 4;
     while (isSpace(text[i])) i++;
     let target: string;
     const q = text[i];
@@ -236,7 +243,7 @@ function urlTargets(text: string): string[] {
     while (isSpace(text[i])) i++;
     if (text[i] !== ")") refuse("external references");
     out.push(target.trim());
-    at = lower.indexOf("url(", i + 1);
+    opener.lastIndex = i + 1;
   }
   return out;
 }
@@ -261,11 +268,13 @@ function checkAttribute(element: string, name: string, value: string): void {
   if (!NAME.test(name)) refuse("unusual attribute names");
   const local = localName(name).toLowerCase();
   if (/^on/i.test(local)) refuse("event handler attributes");
-  // A browser ignores tabs, line breaks and other control characters inside a scheme.
-  const bare = value.replace(/[\x00-\x20\x7f-\x9f]/g, "");
-  if (/^(?:javascript|vbscript):|(?:javascript|vbscript):|data:text/i.test(bare)) refuse("javascript: URLs");
+  // A browser ignores tabs, line breaks and other control characters inside a scheme (not spaces).
+  const bare = value.replace(/[\x00-\x1f\x7f-\x9f]/g, "").trim();
+  if (/(?:javascript|vbscript):|^data:text/i.test(bare)) refuse("javascript: URLs");
   if (URL_ATTRIBUTES.has(local)) {
-    const ok = bare.startsWith("#") || (DATA_IMAGE.test(bare) && /^[^,]*,[A-Za-z0-9+/=]*$/.test(bare));
+    // A URL ignores ASCII whitespace too (line-wrapped base64).
+    const url = bare.replace(/\s/g, "");
+    const ok = url.startsWith("#") || (DATA_IMAGE.test(url) && /^[^,]*,[A-Za-z0-9+/=]*$/.test(url));
     if (!ok) refuse("external references");
   }
   assertSafeCss(value);
@@ -304,7 +313,9 @@ function walk(nodes: unknown, state: Walk, depth: number): void {
     const attrs: Array<[string, string]> = [];
     for (const [name, rawValue] of attributesOf(node)) {
       const isNs = name === "xmlns" || name.startsWith("xmlns:");
+      if (isNs && rawValue.length > MAX_NAMESPACE_VALUE) refuse("overlong namespace declarations");
       const value = decodeStrict(rawValue, isNs ? state.entities : undefined);
+      if (isNs && value.length > MAX_NAMESPACE_VALUE) refuse("overlong namespace declarations");
       if (isNs && /XSL\/Transform/i.test(value)) refuse("stylesheet processing instructions or XSLT");
       if (isNs && /\/1999\/xhtml/i.test(value)) refuse("XHTML elements");
       checkAttribute(local, name, value);
