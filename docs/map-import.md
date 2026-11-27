@@ -12,6 +12,8 @@ implemented and marks what is still pending.
  1 receive      binary upload → Buffer; sha256 → fileHash                 api        done: base64 ≤ 8 MiB, chunked route above (docs/map-storage.md §5)
  2 detect       0x0CAD → OCAD; "<?xml" + Mapper namespace → OMAP          api        done on the chunked route (first chunk sniff, 415 otherwise); base64 path assumes OCAD
  3 parse        reader → source model                                     api/shared done (OCAD via the ocad2geojson fork; OMAP via the shared XML reader, §4)
+                (OCAD: a file whose index cannot be followed to its end, or that
+                 takes over 120 s, fails `DAMAGED_FILE`, §3.6)
  4 normalise    source model → objects, symbols, colours, georef, warnings shared     done (OCAD §3; OMAP §4; symbol IR §3.3 / §4.3)
  5 analyse      bounds, north, fonts, feature usage                       shared     bounds, georeference, north (§3.8); fonts and feature usage pending
  6 match        03 §6.5 staged matcher → SymbolMatch[]                    shared     done (docs/map-symbols.md §8); club decisions as stage 1 (§8.5); ISSkiOM overlay candidates on every document (§8.2, §12)
@@ -583,6 +585,28 @@ alone does not bump the importer version. Reports from before `ocad-10` /
 `omap-4` have none. Everything else in the file (view, zoom, bookmarks,
 symbol icons, course-setting data) is dropped silently per 02 §1.
 
+**`DAMAGED_FILE` (MAP-3).** The OCAD file is a set of linked index blocks
+(symbols, objects, strings). The reader (`ocad2geojson`, patched in
+`patches/ocad2geojson@2.2.2-oxygen.1.patch` until the fork's next tag
+carries the same change) follows each chain once per offset: a pointer `0` ends
+the chain silently (the normal end), a repeated offset or a pointer outside the
+file ends it with the warning `Index block chain loops or points outside the
+file at <offset>`, and an object index block that cannot be read ends the object
+chain with `Object index block at <offset> could not be read: <message>` (or the
+reader's own `Invalid object index block pointer …`). Before it, a damaged
+file made the reader loop for ever. `readAndNormalise` (`api/src/import/ocad.ts`)
+refuses a file whose reader warnings match `isDamagedFileWarning`
+(`shared/src/import/ocad-source.ts`) with `DAMAGED_FILE: the map file is cut
+short or damaged (its object index cannot be read to the end). Export or copy
+the file again and upload it.`, so a cut-short file is never imported with
+objects missing. The job's worker also runs a **parse timer**
+(`IMPORT_PARSE_TIMEOUT_MS`, 120 s, cleared when stage 4 starts): on expiry it
+fails `DAMAGED_FILE: the map file could not be read within 120 s; it is
+probably damaged.` (docs/map-storage.md §6.1). A file cut so short that the
+reader throws keeps the reader's own error. The two main-thread reads
+(`course.importCourses`, the event-document read) use the same patched reader
+but have no timer.
+
 ### 3.7 Stage 6–7 warnings
 
 Added by `matchDocument` to `header.warnings` and the import report, one
@@ -954,6 +978,7 @@ document hash is identical on two machines.
 | Level | File | Covers |
 |---|---|---|
 | Unit / integration (api) | `packages/api/src/__tests__/map-import-jobs.test.ts` (I6 part), `integration/map-colour-settings.test.ts`, `integration/map-review.test.ts` (I6 part: `review.colour` on `test.ocd` for the event's map) | §10 (I6) |
+| Unit (api) | `packages/api/src/__tests__/import-ocad-damaged.test.ts` | cut and looped OCAD files end with an error (`DAMAGED_FILE`) instead of hanging, intact fixtures unchanged, the parse timer (§3.6; `map-storage.md` §10) |
 | Unit (shared) | `packages/shared/src/map-document/__tests__/patch-bake.test.ts` | stage 8's bake (G12a, `docs/map-patches.md` §5.2): what the event drew, determinism, no layers = today's bytes, layers, issues, units — the full list in `map-patches.md` "Tests"; `report.test.ts` scans `patch-warnings.ts` for `PATCH_ISSUE` |
 | Integration (api) | `packages/api/src/__tests__/integration/map-promote.test.ts` | a worker import that bakes a version patch: another document hash, `map_documents.patch` and `report.corrections` recorded, the job `done` |
 | Unit (shared) | `packages/shared/src/import/__tests__/report.test.ts` | §7 |

@@ -209,7 +209,7 @@ export class EventorAuthError extends Error {
   }
 }
 
-async function eventorFetch(
+export async function eventorFetch(
   endpoint: string,
   apiKey: string,
   env: EventorEnvironment = "prod",
@@ -222,18 +222,83 @@ async function eventorFetch(
     }
   }
 
-  const resp = await fetch(url.toString(), {
-    headers: { ApiKey: apiKey },
+  return withEventorTimeout(EVENTOR_REQUEST_TIMEOUT_MS, "request", async (signal) => {
+    const resp = await fetch(url.toString(), {
+      headers: { ApiKey: apiKey },
+      signal,
+    });
+
+    if (resp.status === 403) {
+      throw new EventorAuthError();
+    }
+    if (!resp.ok) {
+      throw new Error(`Eventor API error: ${resp.status} ${resp.statusText}`);
+    }
+
+    return resp.text();
   });
+}
 
-  if (resp.status === 403) {
-    throw new EventorAuthError();
-  }
-  if (!resp.ok) {
-    throw new Error(`Eventor API error: ${resp.status} ${resp.statusText}`);
-  }
+// ─── Timeouts (EVT-13) ──────────────────────────────────────
 
-  return resp.text();
+export const EVENTOR_REQUEST_TIMEOUT_MS = 30_000;
+export const EVENTOR_DOWNLOAD_TIMEOUT_MS = 120_000;
+/**
+ * The upload deadline. `EVENTOR_UPLOAD_TIMEOUT_MS` in the environment
+ * overrides it (read once at load), for the E2E stack that stalls the stub.
+ */
+export const EVENTOR_UPLOAD_TIMEOUT_MS = (() => {
+  const n = Number(process.env.EVENTOR_UPLOAD_TIMEOUT_MS);
+  return Number.isFinite(n) && n > 0 ? n : 60_000;
+})();
+
+/**
+ * Eventor did not answer in time. `phase "request"`: a read, nothing was
+ * changed. `phase "upload"`: a POST whose outcome is unknown, the
+ * XML may have been received.
+ */
+export class EventorTimeoutError extends Error {
+  constructor(
+    readonly phase: "request" | "upload",
+    ms: number,
+  ) {
+    const secs = Math.round(ms / 1000);
+    super(
+      phase === "upload"
+        ? `EVENTOR_OUTCOME_UNKNOWN: Eventor did not confirm the upload within ${secs} s. It may or may not have been received; check the event in Eventor before pushing again.`
+        : `EVENTOR_TIMEOUT: Eventor did not answer within ${secs} s. Nothing was changed; try again.`,
+    );
+    this.name = "EventorTimeoutError";
+  }
+}
+
+/**
+ * Run `fn` with an abort signal that fires after `ms`. `fn` must read the
+ * response body itself so the deadline covers it. A timer (not
+ * `AbortSignal.timeout`) so fake timers can drive it in tests.
+ */
+export async function withEventorTimeout<T>(
+  ms: number,
+  phase: "request" | "upload",
+  fn: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const ctrl = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    ctrl.abort();
+  }, ms);
+  try {
+    return await fn(ctrl.signal);
+  } catch (err) {
+    const name = (err as { name?: string } | null)?.name;
+    if (timedOut || name === "TimeoutError" || name === "AbortError") {
+      throw new EventorTimeoutError(phase, ms);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function safeInt(val: unknown): number {
@@ -1116,18 +1181,23 @@ export async function fetchCachedCompetitors(
   url.searchParams.set("zip", "true");
   url.searchParams.set("version", "3.0");
 
-  const res = await fetch(url.toString(), {
-    headers: { ApiKey: apiKey },
-  });
-
-  if (!res.ok) {
-    throw new Error(
-      `Eventor cachedcompetitors failed: ${res.status} ${res.statusText}`,
-    );
-  }
-
-  // Response is a ZIP file
-  const zipBuffer = Buffer.from(await res.arrayBuffer());
+  const zipBuffer = await withEventorTimeout(
+    EVENTOR_DOWNLOAD_TIMEOUT_MS,
+    "request",
+    async (signal) => {
+      const res = await fetch(url.toString(), {
+        headers: { ApiKey: apiKey },
+        signal,
+      });
+      if (!res.ok) {
+        throw new Error(
+          `Eventor cachedcompetitors failed: ${res.status} ${res.statusText}`,
+        );
+      }
+      // Response is a ZIP file
+      return Buffer.from(await res.arrayBuffer());
+    },
+  );
   const zip = new AdmZip(zipBuffer);
   const entries = zip.getEntries();
   if (entries.length === 0) {
@@ -1348,18 +1418,21 @@ async function postZip(
   env: EventorEnvironment,
 ): Promise<void> {
   const url = new URL(endpoint, eventorBaseUrl(env));
-  const resp = await fetch(url.toString(), {
-    method: "POST",
-    headers: { ApiKey: apiKey },
-    body: new Uint8Array(zip.toBuffer()),
-  });
+  await withEventorTimeout(EVENTOR_UPLOAD_TIMEOUT_MS, "upload", async (signal) => {
+    const resp = await fetch(url.toString(), {
+      method: "POST",
+      headers: { ApiKey: apiKey },
+      body: new Uint8Array(zip.toBuffer()),
+      signal,
+    });
 
-  if (!resp.ok) {
-    const text = await resp.text();
-    throw new Error(
-      `Eventor upload to ${endpoint} failed: ${resp.status} ${text}`,
-    );
-  }
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(
+        `Eventor upload to ${endpoint} failed: ${resp.status} ${text}`,
+      );
+    }
+  });
 }
 
 /**

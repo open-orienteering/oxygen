@@ -590,6 +590,12 @@ next step up.
 
 ## Troubleshooting
 
+- **Log line `[process] unhandled rejection:`.** A promise failed with nobody
+listening. The API logs it and keeps serving, so it does not restart the
+revision; read the stack in the line and report it. On SIGTERM (Cloud Run
+instance swap) the API shuts down in order and is forced out after 8 s
+(`[process] shutdown exceeded 8000 ms, forcing exit`), inside Cloud Run's
+10 s grace period.
 - **"Update available" prompts on every visit.** The web client compares
 the version identity from `/api/version`. Cloud Run restarts the process
 constantly (scale-to-zero, instance swaps), so process start time alone

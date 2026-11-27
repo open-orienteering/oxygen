@@ -77,6 +77,13 @@ ${events
 const SYNC_EVENT_ID = "90001";
 let scenario = 1;
 
+/**
+ * Upload behaviour, switched with `POST /__upload/<ok|stall>`. "stall"
+ * accepts a POST to /import/* and never answers it, so the API's upload
+ * deadline (EVENTOR_UPLOAD_TIMEOUT_MS, 2 s on the E2E stack) is what ends it.
+ */
+let uploadMode = "ok";
+
 function syncEntries() {
   const entry = (id, personId, given, family, cardNo, classId) => `  <Entry>
     <EntryId>${id}</EntryId>
@@ -140,6 +147,13 @@ const server = createServer((req, res) => {
     return;
   }
 
+  const uploadControl = /^\/__upload\/(ok|stall)$/.exec(pathname);
+  if (req.method === "POST" && uploadControl) {
+    uploadMode = uploadControl[1];
+    send(res, 200, JSON.stringify({ uploadMode }), "application/json");
+    return;
+  }
+
   // Every Eventor endpoint is key-authenticated, and the client maps 403
   // onto EventorAuthError. Keep that contract so the "bad key" UI path
   // stays reachable from tests.
@@ -155,6 +169,16 @@ const server = createServer((req, res) => {
 
   if (req.method === "GET" && pathname === "/events") {
     send(res, 200, eventListXml());
+    return;
+  }
+
+  if (req.method === "POST" && pathname.startsWith("/import/")) {
+    // Drain the body; in stall mode then say nothing at all.
+    req.on("data", () => {});
+    req.on("end", () => {
+      if (uploadMode === "stall") return;
+      send(res, 200, "<ImportResult />");
+    });
     return;
   }
 

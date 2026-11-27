@@ -13,6 +13,7 @@
  * See docs/system/offline-architecture.md § "The lease".
  */
 
+import { isPeerTimeout } from "../sync/peerTimeouts.js";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import {
@@ -390,6 +391,14 @@ export const leaseRouter = router({
             console.error(
               `[lease] checkout of ${input.nameId} failed and the lease on the peer could not be released (${errMessage(relErr)}): retry the checkout (taking the lease again is a no-op for this node), or force a takeover on the cloud.`,
             );
+          });
+        }
+        if (isPeerTimeout(err)) {
+          throw new TRPCError({
+            code: "TIMEOUT",
+            message:
+              "The cloud did not answer in time, so the checkout was stopped. Check the connection and try again.",
+            cause: err,
           });
         }
         throw err;

@@ -547,6 +547,18 @@ box dies. Mitigations, in order of importance:
 
 ## Journal shipping
 
+> **Peer deadlines (SYNC-21).** Every node-to-node tRPC call carries an abort
+> signal (`sync/peerTimeouts.ts`): 30 s (`PEER_CALL_TIMEOUT_MS`) for `push`,
+> `unshipped`, `ackShipped`, `since`, lease `acquire` / `release` / `holder` and
+> the settings calls; 120 s (`PEER_TRANSFER_TIMEOUT_MS`) for the bulk reads
+> `exportSnapshot`, `exportBlob` and `exportMapRows`. The deadline is on the
+> whole call including the body, not idle time. A silent peer therefore ends a
+> shipper cycle (retried next interval) instead of blocking it, and a checkout
+> that times out rolls the lease back like any unknown outcome and answers
+> `TIMEOUT` ("The cloud did not answer in time"). A write that timed out may
+> still have landed on the peer; pushes are idempotent by entry id.
+> Test: `src/__tests__/peer-timeouts.test.ts`.
+
 > **Implementation status (pivot Step 3, 2026-07-14).** Landed:
 > `sync/nodeIdentity.ts`, `journal_sync_state`, secret-guarded
 > `events.since`, and `sync/shipper.ts`. The venue dials the cloud; the

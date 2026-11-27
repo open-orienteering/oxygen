@@ -102,6 +102,10 @@ async function readAndNormalise(
   let t = performance.now();
   const ocad = await readOcad(file, { quietWarnings: true });
   const read = performance.now() - t;
+  // A file whose object, symbol or string index cannot be followed to the end is refused, not imported with holes (MAP-3).
+  if (Array.from(ocad.warnings ?? []).some(mapImport.isDamagedFileWarning)) {
+    throw new Error("DAMAGED_FILE: the map file is cut short or damaged (its object index cannot be read to the end). Export or copy the file again and upload it.");
+  }
   opts.onStage?.("normalise");
   t = performance.now();
   const source = mapImport.ocadToDocumentInput(ocad, { ...base, renderFor: opts.renderFor });

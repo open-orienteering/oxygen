@@ -34,6 +34,7 @@
  * / `events.ackShipped` for the venue that holds the event's lease. Transport is injectable for the two-node integration harness.
  */
 
+import { PEER_CALL_TIMEOUT_MS, peerSignal, type PeerTimeoutOptions } from "./peerTimeouts.js";
 import {
   createTRPCClient,
   httpLink,
@@ -106,7 +107,9 @@ export function isProcedureMissing(err: unknown): boolean {
 export function httpPeerTransport(
   baseUrl: string,
   secret: string,
+  timeouts: PeerTimeoutOptions = {},
 ): PeerTransport {
+  const callMs = timeouts.callTimeoutMs ?? PEER_CALL_TIMEOUT_MS;
   const clients = new Map<string, TRPCClient<AppRouter>>();
   const clientFor = (nameId: string): TRPCClient<AppRouter> => {
     let c = clients.get(nameId);
@@ -132,23 +135,23 @@ export function httpPeerTransport(
 
   return {
     async push(nameId, entries) {
-      const res = await clientFor(nameId).events.push.mutate({
-        events: entries,
-      });
+      const res = await clientFor(nameId).events.push.mutate(
+        { events: entries },
+        peerSignal(callMs),
+      );
       return { synced: res.synced, failed: res.failed };
     },
     async unshipped(nameId, limit) {
-      return clientFor(nameId).events.unshipped.query({ limit });
+      return clientFor(nameId).events.unshipped.query({ limit }, peerSignal(callMs));
     },
     async ack(nameId, ids) {
-      await clientFor(nameId).events.ackShipped.mutate({ ids });
+      await clientFor(nameId).events.ackShipped.mutate({ ids }, peerSignal(callMs));
     },
     async since(nameId, cursor, limit) {
-      return clientFor(nameId).events.since.query({
-        afterHlc: cursor.hlc,
-        afterId: cursor.id,
-        limit,
-      });
+      return clientFor(nameId).events.since.query(
+        { afterHlc: cursor.hlc, afterId: cursor.id, limit },
+        peerSignal(callMs),
+      );
     },
   };
 }

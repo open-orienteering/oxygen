@@ -1,15 +1,16 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { importOcadToDocument, importOmapToDocument } from "../import/ocad.js";
-import { isClaimable, isTerminal, runImportInWorker, stageProgress, STALE_MS } from "../map-store/jobs.js";
+import { IMPORT_MAX_ATTEMPTS, isClaimable, isTerminal, needsKick, reportStage, runImportInWorker, stageProgress, STALE_MS } from "../map-store/jobs.js";
 import {
   assembleChunks,
   chunkCount,
   expectedChunkSize,
   MAX_CHUNK_BYTES,
   MAX_UPLOAD_BYTES,
+  MAX_UPLOAD_CHUNKS,
   missingChunks,
   sniffMapKind,
   validateUploadInit,
@@ -28,6 +29,26 @@ describe("import job state rules", () => {
     expect(isClaimable({ state: "running", heartbeatAt: ago(STALE_MS - 1000) }, now)).toBe(false);
     expect(isClaimable({ state: "done", heartbeatAt: ago(STALE_MS * 10) }, now)).toBe(false);
     expect(isClaimable({ state: "failed", heartbeatAt: null }, now)).toBe(false);
+  });
+
+  it("does not claim a stale running job that used its attempts, but a poll still kicks so the engine fails it (MAP-5)", () => {
+    const stale = ago(STALE_MS + 1);
+    expect(isClaimable({ state: "running", heartbeatAt: stale, attempts: IMPORT_MAX_ATTEMPTS - 1 }, now)).toBe(true);
+    expect(isClaimable({ state: "running", heartbeatAt: stale, attempts: IMPORT_MAX_ATTEMPTS }, now)).toBe(false);
+    expect(isClaimable({ state: "running", heartbeatAt: null, attempts: IMPORT_MAX_ATTEMPTS + 1 }, now)).toBe(false);
+    expect(isClaimable({ state: "queued", heartbeatAt: null, attempts: IMPORT_MAX_ATTEMPTS }, now)).toBe(true);
+    expect(needsKick({ state: "running", heartbeatAt: stale }, now)).toBe(true);
+    expect(needsKick({ state: "running", heartbeatAt: ago(1000) }, now)).toBe(false);
+    expect(needsKick({ state: "queued", heartbeatAt: null }, now)).toBe(true);
+    expect(needsKick({ state: "failed", heartbeatAt: stale }, now)).toBe(false);
+  });
+
+  it("a failed progress write is logged, never rejected (MAP-6)", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const db = { mapImportJob: { updateMany: () => Promise.reject(new Error("connection lost")) } };
+    await expect(reportStage(db as never, "job-1", "normalise")).resolves.toBeUndefined();
+    expect(error).toHaveBeenCalledWith(expect.stringContaining("stage normalise of job-1"), expect.any(Error));
+    error.mockRestore();
   });
 
   it("orders stage progress monotonically and ends at 1", () => {
@@ -105,6 +126,11 @@ describe("chunked upload rules", () => {
     expect(validateUploadInit({ fileName: "a", bytes: 10, chunkBytes: MAX_CHUNK_BYTES + 1 })).toMatchObject({ ok: false, status: 400 });
     expect(validateUploadInit({ fileName: "a", bytes: 10, chunkBytes: 0 })).toMatchObject({ ok: false, status: 400 });
     expect(validateUploadInit({ fileName: "a", bytes: MAX_UPLOAD_BYTES, chunkBytes: MAX_CHUNK_BYTES })).toEqual({ ok: true, chunkCount: 16 });
+    // API-23: at most 4096 chunks per upload; the 413 check still comes first.
+    expect(validateUploadInit({ fileName: "a", bytes: MAX_UPLOAD_BYTES, chunkBytes: 1 })).toMatchObject({ ok: false, status: 400 });
+    expect(validateUploadInit({ fileName: "a", bytes: MAX_UPLOAD_BYTES + 1, chunkBytes: 1 })).toMatchObject({ ok: false, status: 413 });
+    expect(validateUploadInit({ fileName: "a", bytes: MAX_UPLOAD_CHUNKS, chunkBytes: 1 })).toEqual({ ok: true, chunkCount: MAX_UPLOAD_CHUNKS });
+    expect(validateUploadInit({ fileName: "a", bytes: MAX_UPLOAD_CHUNKS + 1, chunkBytes: 1 })).toMatchObject({ ok: false, status: 400, error: expect.stringContaining("at most 4096 chunks") });
   });
 
   it("sizes every chunk as chunkBytes except the last, and rejects out-of-range indices", () => {
@@ -131,6 +157,8 @@ describe("chunked upload rules", () => {
 
   it("lists missing chunk indices and assembles the rest in order with the file hash", () => {
     expect(missingChunks(4, [0, 2])).toEqual([1, 3]);
+    expect(missingChunks(1_000_000, [], 100)).toHaveLength(100);
+    expect(missingChunks(1_000_000, [])).toHaveLength(100);
     expect(missingChunks(2, [1, 0])).toEqual([]);
     const parts = [fixture.subarray(0, 10_000), fixture.subarray(10_000, 20_000), fixture.subarray(20_000)];
     const { bytes, fileHash } = assembleChunks(parts);

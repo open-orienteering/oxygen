@@ -27,6 +27,12 @@ import { nodeId, nodeRole, SYNC_NODE_ID_HEADER, SYNC_SECRET_HEADER } from "./nod
 import { isCheckingIn } from "./leaseState.js";
 import { makeSyncHeaders } from "./googleIdToken.js";
 import {
+  PEER_CALL_TIMEOUT_MS,
+  PEER_TRANSFER_TIMEOUT_MS,
+  peerSignal,
+  type PeerTimeoutOptions,
+} from "./peerTimeouts.js";
+import {
   applyTokens,
   exportSnapshotMaps,
   importSnapshotMaps,
@@ -624,7 +630,13 @@ export interface LeasePeer {
   exportMapRows(nameId: string): Promise<MapRows>;
 }
 
-export function httpLeasePeer(baseUrl: string, secret: string): LeasePeer {
+export function httpLeasePeer(
+  baseUrl: string,
+  secret: string,
+  timeouts: PeerTimeoutOptions = {},
+): LeasePeer {
+  const callMs = timeouts.callTimeoutMs ?? PEER_CALL_TIMEOUT_MS;
+  const transferMs = timeouts.transferTimeoutMs ?? PEER_TRANSFER_TIMEOUT_MS;
   const clients = new Map<string, TRPCClient<AppRouter>>();
   const clientFor = (nameId: string): TRPCClient<AppRouter> => {
     let c = clients.get(nameId);
@@ -649,31 +661,31 @@ export function httpLeasePeer(baseUrl: string, secret: string): LeasePeer {
   };
   return {
     async acquire(nameId, holderNodeId) {
-      await clientFor(nameId).lease.acquire.mutate({ holderNodeId });
+      await clientFor(nameId).lease.acquire.mutate({ holderNodeId }, peerSignal(callMs));
     },
     async release(nameId, holderNodeId) {
-      await clientFor(nameId).lease.release.mutate({ holderNodeId });
+      await clientFor(nameId).lease.release.mutate({ holderNodeId }, peerSignal(callMs));
     },
     async exportSnapshot(nameId) {
-      return (await clientFor(nameId).lease.exportSnapshot.query()) as EventSnapshot;
+      return (await clientFor(nameId).lease.exportSnapshot.query(undefined, peerSignal(transferMs))) as EventSnapshot;
     },
     async exportSettings(nameId) {
-      return (await clientFor(nameId).lease.exportSettings.query()) as Record<
+      return (await clientFor(nameId).lease.exportSettings.query(undefined, peerSignal(callMs))) as Record<
         string,
         unknown
       >;
     },
     async importSettings(nameId, settings) {
-      await clientFor(nameId).lease.importSettings.mutate({ settings });
+      await clientFor(nameId).lease.importSettings.mutate({ settings }, peerSignal(callMs));
     },
     async holder(nameId) {
-      return clientFor(nameId).lease.holder.query();
+      return clientFor(nameId).lease.holder.query(undefined, peerSignal(callMs));
     },
     async exportBlob(nameId, input) {
-      return clientFor(nameId).lease.exportBlob.query(input);
+      return clientFor(nameId).lease.exportBlob.query(input, peerSignal(transferMs));
     },
     async exportMapRows(nameId) {
-      return (await clientFor(nameId).lease.exportMapRows.query()) as MapRows;
+      return (await clientFor(nameId).lease.exportMapRows.query(undefined, peerSignal(transferMs))) as MapRows;
     },
   };
 }

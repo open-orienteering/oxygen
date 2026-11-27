@@ -19,6 +19,7 @@ RUN npm install -g pnpm@10.34.9
 
 WORKDIR /app
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY patches/ patches/
 COPY packages/shared/package.json packages/shared/
 COPY packages/api/package.json packages/api/
 COPY packages/web/package.json packages/web/

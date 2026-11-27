@@ -1,6 +1,7 @@
 // Mount the BigInt JSON polyfill before anything else loads — Prisma
 // models surface BigInt PKs throughout the response pipeline.
 import "./bigint-json.js";
+import { createShutdown, installUnhandledRejectionLogger } from "./process-guards.js";
 
 import { accessSync, constants } from "node:fs";
 import Fastify from "fastify";
@@ -41,6 +42,7 @@ const PORT = parseInt(process.env.PORT ?? "3002", 10);
 const HOST = process.env.HOST ?? "0.0.0.0";
 
 async function main() {
+  installUnhandledRejectionLogger();
   const server = Fastify({
     logger: {
       level: "info",
@@ -194,20 +196,21 @@ async function main() {
     server.log[auth.level](auth.message);
   }
 
-  const shutdown = async () => {
-    server.log.info("Shutting down");
-    // Hands the lease back so the replacement instance picks the
-    // background jobs up immediately instead of waiting out the TTL.
-    await backgroundSupervisor()
-      .stop()
-      .catch((err) => console.error("[background] shutdown failed:", err));
-    try {
-      await server.close();
-    } finally {
-      await disconnectAll();
-      process.exit(0);
-    }
-  };
+  const shutdown = createShutdown({
+    steps: [
+      {
+        // Hands the lease back so the replacement instance picks the
+        // background jobs up immediately instead of waiting out the TTL.
+        name: "background",
+        run: () => {
+          server.log.info("Shutting down");
+          return backgroundSupervisor().stop();
+        },
+      },
+      { name: "server", run: () => server.close() },
+      { name: "database", run: () => disconnectAll() },
+    ],
+  });
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
 }

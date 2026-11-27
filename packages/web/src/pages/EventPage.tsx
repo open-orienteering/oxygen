@@ -542,6 +542,19 @@ function EventorSyncPanel({
         : message;
   const pushResultsMutation = trpc.eventor.pushResults.useMutation();
   const pushStartListMutation = trpc.eventor.pushStartList.useMutation();
+  // A push that timed out may still have landed: say so in amber, not red.
+  const pushNotice = (message: string, failedKey: "pushStartListFailed" | "pushResultsFailed") => {
+    if (message.startsWith("EVENTOR_OUTCOME_UNKNOWN")) return { tone: "unknown" as const, text: t("pushOutcomeUnknown") };
+    if (message.startsWith("EVENTOR_PUSH_IN_PROGRESS")) return { tone: "info" as const, text: t("pushInProgress") };
+    if (message.startsWith("EVENTOR_TIMEOUT")) return { tone: "error" as const, text: t("eventorTimeout") };
+    return { tone: "error" as const, text: t(failedKey, { message }) };
+  };
+  const noticeClass = (tone: "unknown" | "info" | "error") =>
+    tone === "error"
+      ? "bg-red-50 border-red-100 text-red-600"
+      : tone === "unknown"
+        ? "bg-amber-50 border-amber-200 text-amber-800"
+        : "bg-slate-50 border-slate-200 text-slate-700";
 
   const [, setTick] = useState(0);
   useEffect(() => {
@@ -608,6 +621,7 @@ function EventorSyncPanel({
           </button>
 
           <button
+            data-testid="eventor-push-startlist"
             onClick={() => pushStartListMutation.mutate()}
             disabled={pushStartListMutation.isPending || !apiKeyConfigured}
             className="px-4 py-2 bg-slate-600 text-white text-sm font-medium rounded-lg hover:bg-slate-700 disabled:opacity-50 transition-colors cursor-pointer flex items-center gap-2 whitespace-nowrap"
@@ -628,6 +642,7 @@ function EventorSyncPanel({
           </button>
 
           <button
+            data-testid="eventor-push-results"
             onClick={() => pushResultsMutation.mutate()}
             disabled={pushResultsMutation.isPending || !apiKeyConfigured}
             className="px-4 py-2 bg-amber-600 text-white text-sm font-medium rounded-lg hover:bg-amber-700 disabled:opacity-50 transition-colors cursor-pointer flex items-center gap-2 whitespace-nowrap"
@@ -700,11 +715,19 @@ function EventorSyncPanel({
         </div>
       )}
 
-      {pushStartListMutation.isError && (
-        <div className="mt-3 p-3 bg-red-50 rounded-lg border border-red-100 text-xs text-red-600">
-          {t("pushStartListFailed", { message: pushStartListMutation.error.message })}
-        </div>
-      )}
+      {pushStartListMutation.isError && (() => {
+        const n = pushNotice(pushStartListMutation.error.message, "pushStartListFailed");
+        return (
+          <div
+            role="alert"
+            data-testid="eventor-push-notice"
+            data-tone={n.tone}
+            className={`mt-3 p-3 rounded-lg border text-xs ${noticeClass(n.tone)}`}
+          >
+            {n.text}
+          </div>
+        );
+      })()}
 
       {pushResultsMutation.isSuccess && pushResultsMutation.data && (
         <div className="mt-3 p-3 bg-amber-50 rounded-lg border border-amber-200 text-xs text-amber-800">
@@ -712,11 +735,19 @@ function EventorSyncPanel({
         </div>
       )}
 
-      {pushResultsMutation.isError && (
-        <div className="mt-3 p-3 bg-red-50 rounded-lg border border-red-100 text-xs text-red-600">
-          {t("pushResultsFailed", { message: pushResultsMutation.error.message })}
-        </div>
-      )}
+      {pushResultsMutation.isError && (() => {
+        const n = pushNotice(pushResultsMutation.error.message, "pushResultsFailed");
+        return (
+          <div
+            role="alert"
+            data-testid="eventor-push-notice"
+            data-tone={n.tone}
+            className={`mt-3 p-3 rounded-lg border text-xs ${noticeClass(n.tone)}`}
+          >
+            {n.text}
+          </div>
+        );
+      })()}
 
       {!apiKeyConfigured && (
         <div className="mt-3 text-xs text-amber-700 bg-amber-50 p-2 rounded-lg">

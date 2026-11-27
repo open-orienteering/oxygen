@@ -267,6 +267,7 @@ event out of it. Otherwise:
 | Symptom | Check |
 |---|---|
 | Badge stuck amber with growing count | Box's internet uplink; `docker compose logs api \| grep shipper` |
+| Checkout answers "The cloud did not answer in time", or the log shows `cycle failed` with a timeout | The cloud accepted the connection but did not reply within 30 s (120 s for the snapshot and map reads). The box gave up instead of hanging and the lease was rolled back; check the uplink and retry. Shipping retries by itself every cycle |
 | "checked out to venue-…" on a station | That device is talking to the cloud — set the venue URL or use the LAN UI |
 | Permission prompt never appears (Chrome) | `chrome://flags` LNA not disabled; URL really is private-range or `.local` |
 | Stations can't reach the box at all | Firewall on the box (allow 3001/8080), station on the same LAN/VLAN |
