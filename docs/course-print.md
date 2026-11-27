@@ -1261,9 +1261,11 @@ box, an SVG once per box the composer asks (§8.5) — and the faces through
 viewer's own (already runtime-cached as `map-fonts`). A graphic that
 cannot be fetched is answered with `error`: the writer's `IMAGE_MISSING`
 / `SVG_RASTER`, as on the server; a hiding graphic that is missing is
-`PrintGraphicMissingError`'s message as `error` (the client falls back to
+`PrintGraphicMissingError`'s message and name as `error` (the client falls back to
 the server, whose 400 is the export's error line; a stored offline job is
-`OfflinePrintError("failed", message)`). The worker keeps `prepareDocument`'s
+`OfflinePrintError("failed", message)`; the offline store step skips that
+job, lists it in `skipped` and goes on, partial, while any other compose
+failure still ends it as an `OfflinePrepareError`). The worker keeps `prepareDocument`'s
 cache (the last two hash + patch-version keys, §8.2; G14), so a second
 export of the same event asks the document no more until the event's
 patch changes; it is terminated after 60 s idle
