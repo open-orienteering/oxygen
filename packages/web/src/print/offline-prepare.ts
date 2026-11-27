@@ -316,7 +316,16 @@ async function run(nameId: string, opts: PrepareOptions, deps: PrepareDeps): Pro
         }),
     };
     for (const job of learn) {
-      await deps.compose(nameId, job, printDeps);
+      try {
+        await deps.compose(nameId, job, printDeps);
+      } catch (err) {
+        // A job that cannot be composed (a hiding graphic that is missing, CRS-010) is skipped; a network loss aborts.
+        if (net.gone || err instanceof NetworkGone) throw net.gone ?? err;
+        skipped.push({ query: job.sheets[0]?.label ?? job.filename, status: 0, message: err instanceof Error ? err.message : String(err) });
+        complete = false;
+        tick();
+        continue;
+      }
       if (net.gone) throw net.gone;
       tick();
     }

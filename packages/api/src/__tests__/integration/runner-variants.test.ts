@@ -21,6 +21,7 @@ import { RunnerStatus } from "@oxygen/shared";
 import { createTestEvent, disconnect, type TestEventContext } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
 import { acquireLease } from "../../sync/lease.js";
+import { reconcileClassVariants } from "../../variants.js";
 
 let ctx: TestEventContext;
 let caller: ReturnType<typeof makeCaller>;
@@ -204,9 +205,11 @@ describe("the invariant at the pool seams", () => {
       const racedKey = await courseSeqOfRunner(raced);
       expect(racedKey).not.toBeNull();
       await ctx.db.runner.updateMany({ where: { eventId: ctx.eventId, seq: raced }, data: { status: "ok", finishTime: 50000 } });
-      // Unchanged: no journal entry for any runner.
+      // Unchanged: no journal entry for any runner, and a runner with no variant is not dealt one.
+      await ctx.db.runner.updateMany({ where: { eventId: ctx.eventId, seq: waiting }, data: { courseId: null } });
       const same = await entriesDuring(() => change(classId, root.id));
       expect(same.filter((e) => e.type === "runner.updated")).toEqual([]);
+      expect(await courseSeqOfRunner(waiting)).toBeNull();
       // To a plain course: the raced runner keeps her variant, the other is cleared.
       await change(classId, plain);
       expect(await courseSeqOfRunner(raced)).toBe(racedKey);
@@ -218,6 +221,21 @@ describe("the invariant at the pool seams", () => {
     };
     await through((classId, courseId) => caller.class.update({ id: classId, courseId }));
     await through((classId, courseId) => caller.class.bulkUpdate({ ids: [classId], courseId }));
+  });
+
+  it("reconcileClassVariants with no pool clears an unraced runner's variant and keeps a raced runner's (WEB-09)", async () => {
+    const root = await forkedCourse("Raced reconcile");
+    const { id: classId } = await caller.class.create({ name: `Q${randomUUID().slice(0, 4)}`, courseId: root.id });
+    const raced = (await caller.runner.create({ name: "Raced", classId, startTime: 360000 })).id;
+    const waiting = (await caller.runner.create({ name: "Waiting", classId, startTime: 361200 })).id;
+    await ctx.db.runner.updateMany({ where: { eventId: ctx.eventId, seq: raced }, data: { status: "ok", finishTime: 50000 } });
+    const cls = await ctx.db.class.findFirstOrThrow({ where: { eventId: ctx.eventId, seq: classId } });
+    await ctx.db.classCoursePool.deleteMany({ where: { classId: cls.id } });
+    await ctx.db.class.update({ where: { id: cls.id }, data: { courseId: null } });
+    const changes = await reconcileClassVariants(ctx.db, cls.id);
+    expect(changes.map((c) => c.seq)).toEqual([waiting]);
+    expect(await courseSeqOfRunner(raced)).not.toBeNull();
+    expect(await courseSeqOfRunner(waiting)).toBeNull();
   });
 
   it("a vanished variant's runners are dealt one of the remaining pool, the journal carrying the seq", async () => {

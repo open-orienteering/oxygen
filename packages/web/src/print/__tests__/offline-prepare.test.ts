@@ -181,6 +181,17 @@ describe("prepareOfflinePrint (§8.6 \"Offline\")", () => {
     warn.mockRestore();
   });
 
+  it("a job the device cannot compose (a hiding graphic missing) is skipped with its message; the run goes on, partial (CRS-010)", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const s = setup();
+    s.compose.mockRejectedValueOnce(new Error("A: graphic 8 could not be loaded and it replaces the circle or number of control 31"));
+    const out = await prepareOfflinePrint("ev", {}, s.deps);
+    expect(out.status).toBe("partial");
+    expect(out.manifest!.complete).toBe(false);
+    expect(out.manifest!.skipped.some((k) => k.status === 0 && /could not be loaded/.test(k.message))).toBe(true);
+    warn.mockRestore();
+  });
+
   it("the document going with the network ends the run partial, under a manifest", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const s = setup();

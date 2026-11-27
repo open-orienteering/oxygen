@@ -272,9 +272,9 @@ async function findMapRows(
   if (setter && rows.length === 0) throw new Error("No setter maps found: generate them in Layout mode (Setter maps)");
   if (setter) {
     // A control added after the groups were made is in none of them and would print on no setter map (CRS-002).
-    const missing = (await setterUnassigned(db, eventId)).flatMap((u) => u.sites.map((s) => publicControlId(s)));
+    const missing = (await setterUnassigned(db, eventId)).flatMap((u) => u.sites.map((s) => publicControlId(s))).filter((id, i, all) => all.indexOf(id) === i);
     if (missing.length > 0) {
-      throw new Error(`${missing.length} control${missing.length === 1 ? " is" : "s are"} in no setter map: ${[...new Set(missing)].join(", ")}. Add them in Layout mode (Setter maps).`);
+      throw new Error(`${missing.length} control${missing.length === 1 ? " is" : "s are"} in no setter map: ${missing.join(", ")}. Add them in Layout mode (Setter maps).`);
     }
   }
   return rows;

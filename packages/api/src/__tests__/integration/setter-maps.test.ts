@@ -282,6 +282,18 @@ describe("setter maps (course-layout.md §8, F10)", () => {
     await t.db.courseMap.deleteMany({ where: { eventId: t.eventId, kind: "setter", courseId: course.id } });
   }, 90_000);
 
+  it("a removed course's setter maps report nothing; the list and ?setter=1 still work (CRS-002)", async () => {
+    const doomed = await t.db.course.create({ data: { eventId: t.eventId, name: "Doomed", lengthM: 1000, climbM: 0, courseControls: { create: [{ position: 1, controlId: c.c31.id }] } } });
+    await caller.layout.setterMaps({ courseId: doomed.seq, groups: 1 });
+    await caller.course.delete({ id: doomed.seq });
+    expect((await t.db.course.findUniqueOrThrow({ where: { id: doomed.id } })).removed).toBe(true);
+    const rows = await caller.courseMap.list();
+    expect(rows.some((m) => m.kind === "setter")).toBe(true);
+    const res = await server.inject({ method: "GET", url: pdfUrl("?setter=1") });
+    expect(res.statusCode).toBe(200);
+    await t.db.courseMap.deleteMany({ where: { eventId: t.eventId, kind: "setter", courseId: doomed.id } });
+  }, 90_000);
+
   it("a scope without setter maps reports nothing, whatever it holds", async () => {
     await t.db.courseMap.deleteMany({ where: { eventId: t.eventId, kind: "setter", courseId: course.id } });
     const rows = (await caller.courseMap.list()).filter((m) => m.kind === "setter");

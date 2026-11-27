@@ -218,7 +218,10 @@ export async function renderCoursePages(opts: CoursePagesOptions): Promise<Cours
       const graphicId = o.props.graphicId;
       if (!onMap.has(graphicId) || images.has(graphicId)) continue;
       const controlId = String(o.attach.controlId);
-      const code = sheet.course.sites.find((s) => s.id === controlId)?.code ?? controlId;
+      // Only a hide that is drawn with its control on this page counts (an undrawn control hides nothing).
+      const site = sheet.course.sites.find((s) => s.id === controlId);
+      if (!site || (site.x === 0 && site.y === 0)) continue;
+      const code = site.code ?? controlId;
       const why = rasterFailures.get(graphicId);
       throw new PrintGraphicMissingError(
         `${sheet.label}: graphic ${graphicId} could not be loaded and it replaces the circle or number of control ${code}; restore the graphic or untick the hide options${why ? ` (${why})` : ""}`,

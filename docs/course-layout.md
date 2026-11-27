@@ -838,7 +838,7 @@ scope's setter maps `BAD_REQUEST`, a sheet that is not a setter's
 last one's next the first. One undo entry (undo moves it back to its
 sheet); the versions it answers are seeded for both rows.
 
-**Controls added after generation** (CRS-002, review D5: no silent
+**Controls added after generation** (a removed course's setter maps report nothing; CRS-002, review D5: no silent
 auto-assign). `layout.setterMaps` writes the groups once; a control
 created or added to a course afterwards is in none of them and would print
 on no setter map. A scope with setter maps whose sites
@@ -947,6 +947,9 @@ of the event, course seq (the event's last), sort order, seq.
 | E2E | `e2e/course-editor-status.spec.ts` "F5: map exchange" | §6, §7: map exchange parts as own sheets, `EXCHANGE_WITHOUT_SHEET` |
 
 ## Pending in this chapter
+
+- **`maps=` seqs of setter sheets are not blocked** when controls are in no setter map (§8 "Controls added after generation"); only `?setter=1` is.
+- **Stale members of a setter group**: a control removed from a course stays in the group's `controlIds`; only missing controls are reported.
 
 - **A per-runner named map** (the runner's name on her map): F8 prints
   the per-variant stack sized by the assigned runners

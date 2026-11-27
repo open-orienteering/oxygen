@@ -218,7 +218,7 @@ export async function selectDescriptionBlocks(db: Db, event: { id: bigint; name:
     const parentIds = [...new Set(found.filter((c) => c.parentCourseId).map((c) => c.parentCourseId!))];
     const parents = new Map((await db.course.findMany({ where: { id: { in: parentIds }, removed: false }, include: courseInclude })).map((c) => [c.id, c]));
     const askedRoots = new Set(found.filter((c) => !c.parentCourseId).map((c) => c.id));
-    const kidsOf = await variantsOf([...askedRoots]);
+    const kidsOf = await variantsOf([...new Set([...askedRoots, ...parentIds])]);
     const out: DescriptionSheetBlock[] = [];
     const done = new Set<string>();
     for (const seq of req.courseSeqs) {
@@ -231,7 +231,7 @@ export async function selectDescriptionBlocks(db: Db, event: { id: bigint; name:
       const own = classes.filter((c) => c.courseId === root.id);
       const names = own.map((c) => c.name);
       if (course.parentCourseId) {
-        const siblings = (await variantsOf([root.id])).get(root.id) ?? [course];
+        const siblings = kidsOf.get(root.id) ?? [course];
         out.push(block(course, course.name, names, own.reduce((n, c) => n + (variantCounts(c, siblings).get(course.id) ?? 0), 0)));
         continue;
       }

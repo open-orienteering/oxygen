@@ -711,8 +711,8 @@ UI), no base map and no template.
   course a variant's `count` = the class's runners whose `course_id` is
   that variant; the rest (vacancies, runners without a variant, runners on
   another course) are allotted one at a time to the variant with the
-  fewest copies so far, ties in key order — what `assignVariant` would
-  deal. The floor of 1 copy per block stays.
+  fewest copies so far, ties in key order (`pickLeastPopulated`, which
+  `assignVariant` uses too, except that it counts withdrawn runners). The floor of 1 copy per block stays.
 - **Tiling** (`tileDescriptionSheets`, `print/description-sheet.ts`; pure):
   A4 portrait, a 10 mm margin; the block `8 × cell` wide and
   `cell × (rows + 3)` high (`descriptionBlockSize`); columns =

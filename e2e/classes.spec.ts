@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { waitForTrpc } from "./helpers/trpc";
 
 async function selectCompetition(page: import("@playwright/test").Page) {
   await page.goto("/");
@@ -171,7 +172,7 @@ test.describe("Classes Page", () => {
     await expect(picker).toContainText("Bana 3");
 
     const pick = async (course: string) => {
-      const saved = page.waitForResponse((r) => r.url().includes("class.update") && r.ok());
+      const saved = waitForTrpc(page, "class.update");
       await picker.getByRole("button").first().click();
       await picker.getByRole("button", { name: new RegExp(`^${course}`) }).click();
       await saved;
@@ -188,7 +189,8 @@ test.describe("Classes Page", () => {
       expect((await detail()).courseNames).toEqual(["Bana 1"]);
     } finally {
       // Restore the seeded course.
-      await page.request.post("/trpc/class.update", { headers: { "x-competition-id": "itest" }, data: { id: 3, courseId: 3 } });
+      const restored = await page.request.post("/trpc/class.update", { headers: { "x-competition-id": "itest" }, data: { id: 3, courseId: 3 } });
+      expect(restored.ok(), await restored.text()).toBe(true);
     }
   });
 

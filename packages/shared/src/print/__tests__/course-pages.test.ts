@@ -165,6 +165,11 @@ describe("a graphic that stands in for a control (CRS-010)", () => {
     expect(out.warnings.some((w) => w.includes("IMAGE_MISSING"))).toBe(true);
   });
 
+  it("a hiding image whose control is not drawn on the page does not fail the print", async () => {
+    const out = await run([withObjects([hatch({ hideControlCircle: true }, { controlId: "nobody", at: { x: 0, y: 0 } }), { ...hatch({}), id: "plain" }])]);
+    expect(out.pageCount).toBe(1);
+  });
+
   it("prints when the hiding image's bytes are there", async () => {
     const out = await run([withObjects([hatch({ hideControlCircle: true })])], new Map([[9, { mime: "image/png", data: PNG }]]));
     expect(out.pageCount).toBe(1);

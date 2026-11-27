@@ -13,3 +13,5 @@ Left open by [course-print-correctness.md](course-print-correctness.md) (fix pac
 - **The rest of WEB-70** (payment, trends) in the web client review.
 - **Open one `.ppen` export in real Purple Pen** (EVT-07): the XML is now well-formed and validated in tests; a manual check against the application is still to do.
 - **The remaining D5 items not in this package:** CRS-035, CRS-068, CRS-083, CRS-067, CRS-061.
+- **Forked roots are under-covered by the course-scope setter check**: `setterScopeSites` reads the root's first alternatives only, so a control only on another variant is neither grouped nor reported.
+- **The structured-search "forked" anchor is dead**: `class-anchors.ts` (`courseForked`) matches classes with several courses, which cannot exist since WEB-09 (a class has one course). Remove it with its tests.

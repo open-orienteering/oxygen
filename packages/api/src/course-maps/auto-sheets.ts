@@ -660,7 +660,15 @@ export interface SetterUnassigned {
  * setter maps, are absent. `opts.courseUuid` (null = the event scope) limits the check to one scope.
  */
 export async function setterUnassigned(db: Db, eventId: bigint, opts: { courseUuid?: string | null } = {}): Promise<SetterUnassigned[]> {
-  const rows = await db.courseMap.findMany({ where: { eventId, kind: "setter", ...(opts.courseUuid !== undefined ? { courseId: opts.courseUuid } : {}) }, select: { courseId: true, props: true } });
+  const rows = await db.courseMap.findMany({ where: {
+      eventId,
+      kind: "setter",
+      ...(opts.courseUuid !== undefined ? { courseId: opts.courseUuid } : {}),
+      // A removed course's setter maps report nothing (course.delete only soft-deletes; `setterScopeSites` would throw).
+      OR: [{ courseId: null }, { course: { removed: false } }],
+    },
+    select: { courseId: true, props: true },
+  });
   const grouped = new Map<string | null, Set<string>>();
   for (const r of rows) {
     const set = grouped.get(r.courseId) ?? new Set<string>();
@@ -689,7 +697,11 @@ export async function adoptToSetters(db: Db, eventId: bigint, opts: { courseUuid
   const [missing] = await setterUnassigned(db, eventId, { courseUuid: opts.courseUuid });
   if (!missing) return { sheets: [] };
   const scope = (await db.courseMap.findMany({ where: { eventId, kind: "setter", courseId: opts.courseUuid } }))
-    .map((r) => ({ row: r, props: setterSheetPropsSchema.safeParse(r.props).data ?? { setter: 1, controlIds: [] as string[] } }))
+    .flatMap((r) => {
+      // A row whose props do not parse is left alone, not rewritten.
+      const props = setterSheetPropsSchema.safeParse(r.props).data;
+      return props ? [{ row: r, props }] : [];
+    })
     .sort((a, b) => a.props.setter - b.props.setter || a.row.seq - b.row.seq);
   const controls = new Map((await db.control.findMany({ where: { eventId, removed: false } })).map((c) => [c.id, c]));
   const groups = scope.map((g) => g.props.controlIds.flatMap((id) => (controls.has(id) && placed(controls.get(id)!) ? [{ x: controls.get(id)!.xpos, y: controls.get(id)!.ypos }] : [])));

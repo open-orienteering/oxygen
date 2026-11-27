@@ -389,7 +389,7 @@ user review). The flag reaches every consumer of the layer:
 
 - **Text**: `sequence` (1, 2, … over the first course's control items,
   placed or not: an unplaced control takes its number and draws nothing,
-  as the description sheet counts it — CRS-024, review D5; a
+  as the description sheet counts it — CRS-024, review D5 (exception: the all-variations numbers and the editor's predicate, §12.7 and Pending); a
   site visited twice gets `3/7`) by default for one ordered course
   outside the all-controls view; `code` otherwise, or by `labelMode`.
   `viewOptions.labels` (F15) wins over both for the control-role sites it
@@ -2599,6 +2599,8 @@ label.
 | `packages/api/src/course-checks.ts`, `event-map-objects.ts` (`loadEventCheckDocument`), `description-autodetect.ts` (`describeAt`, `descriptionsEqual`) | §9.4: the server's list, `DESCRIPTION_STALE`; `routers/course.ts` `checks`, `setStructure` |
 
 ## Pending in this chapter
+
+- **All-variations numbers and the editor's predicate count placed controls only** (`allVariationNumbers` in `resolve-sheet.ts`, `variation-view.ts`), so they differ from §3.5's numbers (which count an unplaced control) for a course that has one (CRS-024 follow-up).
 
 - **Course import, beyond package 17** (§6.4 "Import semantics"): a
   "which race?" picker for a multi-race IOF file (refused today); rename
