@@ -55,6 +55,7 @@ import {
   encodeHlc,
   decodeHlc,
   resolveHlc,
+  DAY_DS,
   cardReadIsDuplicate,
   CARD_READ_DEDUPE_WINDOW_MS,
   meosFromVolts,
@@ -71,11 +72,25 @@ import { buildRunnerUpdateData, manualFlagsFor } from "./runner.js";
 import { appendJournal } from "../journalEmit.js";
 import { getActiveLease, isRaceWritable, isStaleHolder, mayWriteEventData, writeRefusalError } from "../sync/lease.js";
 import { assignVariant } from "../variants.js";
-import { valueToRunnerStatus } from "../statusConvert.js";
+import { valueToRunnerStatus, isRunnerStatusValue } from "../statusConvert.js";
 import { foldServerHlc } from "../serverClock.js";
 import { pushToGoogleSheet } from "../sheetsBackup.js";
 import type { EventRef } from "../db.js";
 import { Prisma, type PrismaClient } from "../generated/prisma/client.js";
+
+/** Refuse an entry whose runner status is not a `RunnerStatus` constant. */
+function assertRunnerStatus(type: string, status: unknown): void {
+  if (!isRunnerStatusValue(status)) {
+    throw new JournalApplyError("INVALID_PAYLOAD", `${type}: unknown runner status`);
+  }
+}
+
+/** Refuse an entry whose absolute time of day is not 0..DAY_DS-1 (RES-24). */
+function assertAbsoluteTime(type: string, field: string, value: unknown): void {
+  if (!Number.isInteger(value) || (value as number) < 0 || (value as number) >= DAY_DS) {
+    throw new JournalApplyError("INVALID_PAYLOAD", `${type}: ${field} out of range`);
+  }
+}
 
 /** The singleton client or a `$transaction` client — appliers run on either. */
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -751,6 +766,10 @@ async function applyEvent(
         finishTime: number;
         status?: number;
       };
+      // A queued entry is refused like a live call would be (RES-24): an
+      // unknown status or an out-of-day time is never written.
+      assertAbsoluteTime("finish.adjusted", "finishTime", finishTime);
+      if (status !== undefined) assertRunnerStatus("finish.adjusted", status);
       const runner = await resolveRunner(db, eventId, event.payload);
       if (runner) {
         await db.runner.update({
@@ -774,6 +793,9 @@ async function applyEvent(
         startTime: number;
         confirmed?: boolean;
       };
+      assertRunnerStatus("result.applied", status);
+      assertAbsoluteTime("result.applied", "finishTime", finishTime);
+      assertAbsoluteTime("result.applied", "startTime", startTime);
       const runner = await resolveRunner(db, eventId, event.payload);
       if (runner) {
         // Same guard as a live apply (RES-01): a queued result never

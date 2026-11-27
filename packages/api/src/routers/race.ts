@@ -6,7 +6,9 @@ import { timeOfDayDs, runningTimeDs, RunnerStatus, finishLegOf } from "@oxygen/s
 import {
   runnerStatusToValue,
   valueToRunnerStatus,
+  runnerStatusValueSchema,
 } from "../statusConvert.js";
+import { absoluteTimeSchema } from "../timeConvert.js";
 import { performReadout } from "./cardReadout.js";
 import { appendJournal } from "../journalEmit.js";
 import { loadClassStandings } from "../classStandings.js";
@@ -283,9 +285,10 @@ export const raceRouter = router({
         .object({
           id: z.number().int().optional(),
           runnerId: z.number().int().optional(),
-          finishTimeAbsolute: z.number().int().optional(),
-          finishTime: z.number().int().optional(),
-          status: z.number().int().optional(),
+          // Absolute deciseconds since midnight (0 = clear the finish).
+          finishTimeAbsolute: absoluteTimeSchema.optional(),
+          finishTime: absoluteTimeSchema.optional(),
+          status: runnerStatusValueSchema.optional(),
           /**
            * Replace a finish the runner already has with a different time
            * (WEB-53). Without it the call is refused with `FINISH_EXISTS`,

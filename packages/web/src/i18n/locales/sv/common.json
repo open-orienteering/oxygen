@@ -158,5 +158,9 @@
     "APPLY_FAILED": "Servern kunde inte tillämpa posten.",
     "CLASS_NOT_FOUND": "Anmälans klass finns inte längre i tävlingen. Anmäl löparen igen i en annan klass och kasta sedan posten.",
     "CARD_TAKEN": "En annan löpare har redan den här brickan i tävlingen. Rätta bricknumret på någon av dem innan du kastar posten: annars hamnar posterna som köats efter den för brickan hos den andra löparen."
-  }
+  },
+  "testLabNotTestEvent": "Den här tävlingen är ingen testtävling, så Testlabbet är avstängt. Det skapar och raderar löpare och resultat, vilket en riktig tävling aldrig ska få.",
+  "testLabOpenEventSettings": "Öppna tävlingsinställningarna för att markera den som testtävling",
+  "testLabStartConfirm": "Starta simuleringen? Den skriver syntetiska resultat för varje löpare med starttid och bricka.",
+  "testEventBadge": "Testtävling"
 }

@@ -105,6 +105,17 @@ describe("event type permissions", () => {
   });
 });
 
+describe("test event permissions (API-06)", () => {
+  it("setTestEvent and every guarded Test Lab call need event.manage", async () => {
+    await expect(callerFor(setter).event.setTestEvent({ enabled: true })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(callerFor(member).event.setTestEvent({ enabled: true })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(callerFor(crew).testLab.clearRunners()).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(callerFor(crew).testLab.defaults()).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect((await callerFor(admin).event.setTestEvent({ enabled: true })).isTestEvent).toBe(true);
+    await callerFor(admin).event.setTestEvent({ enabled: false });
+  });
+});
+
 describe("permission grant/revoke", () => {
   it("grant → list → revoke", async () => {
     const email = `extra-${suffix}@perms-test.example`;

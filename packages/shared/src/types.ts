@@ -335,6 +335,8 @@ export interface EventInfo {
   kind: EventKind;
   /** User-defined label when `kind === "other"`. */
   kindCustom: string;
+  /** A throwaway event the Test Lab may fill with synthetic data. */
+  isTestEvent: boolean;
   /** The Eventor environment this event is linked to, if any */
   eventorEnv?: EventorEnvironment;
   /** Eventor event ID. Used to build QR links on receipts. */

@@ -81,12 +81,15 @@ function isPrimary(tab: TabDef, signals: ContentSignals): boolean {
 export function computeTabLayout(
   signals: ContentSignals | null,
   capabilities?: ReadonlySet<Capability> | null,
+  /** The Test Lab tab exists only on an event marked as a test event (API-06). */
+  isTestEvent = false,
 ): {
   primary: TabDef[];
   overflow: TabDef[];
 } {
   const allowed = (tab: TabDef) =>
-    !capabilities || capabilities.has(tab.requiredCapability);
+    (isTestEvent || tab.id !== "test-lab") &&
+    (!capabilities || capabilities.has(tab.requiredCapability));
 
   if (signals === null) {
     const primary: TabDef[] = [];

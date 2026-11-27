@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Link, useParams } from "react-router-dom";
 import { trpc } from "../lib/trpc";
 
 /**
@@ -9,7 +10,31 @@ import { trpc } from "../lib/trpc";
  */
 export function TestLabPage() {
   const { t } = useTranslation("common");
-  void t;
+  const { nameId } = useParams();
+  const dashboard = trpc.competition.dashboard.useQuery(undefined, { staleTime: 30_000 });
+  if (dashboard.isLoading) return null;
+  // The Test Lab writes synthetic data, so the API refuses every event that
+  // is not marked as a test event (API-06). Reached by a direct URL, the page
+  // says so instead of offering buttons that would fail.
+  if (!dashboard.data?.event.isTestEvent) {
+    return (
+      <div className="p-6 space-y-3" data-testid="test-lab-not-test-event">
+        <h1 className="text-2xl font-semibold">{t("testLab")}</h1>
+        <p className="text-sm text-slate-600">{t("testLabNotTestEvent")}</p>
+        <Link
+          to={`/${nameId}/event`}
+          className="text-sm font-medium text-blue-600 hover:underline"
+        >
+          {t("testLabOpenEventSettings")}
+        </Link>
+      </div>
+    );
+  }
+  return <TestLabTools />;
+}
+
+function TestLabTools() {
+  const { t } = useTranslation("common");
   const utils = trpc.useUtils();
   const status = trpc.testLab.status.useQuery();
   const simStatus = trpc.testLab.simulationStatus.useQuery(undefined, {
@@ -226,14 +251,15 @@ export function TestLabPage() {
           {!isActive ? (
             <button
               type="button"
-              onClick={() =>
+              onClick={() => {
+                if (!window.confirm(t("testLabStartConfirm"))) return;
                 startSimulation.mutate({
                   speedFactor,
                   dnsRate,
                   dnfRate,
                   mpRate,
-                })
-              }
+                });
+              }}
               disabled={startSimulation.isPending}
               className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
             >

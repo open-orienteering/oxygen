@@ -12,6 +12,7 @@ import { RunnerStatus, type RunnerDetail, type RunnerInfo, type RunnerEventorDif
 import {
   runnerStatusToValue,
   valueToRunnerStatus,
+  runnerStatusValueSchema,
 } from "../statusConvert.js";
 import { appendJournal } from "../journalEmit.js";
 import { liveCardId } from "../cardLink.js";
@@ -243,7 +244,7 @@ const runnerCreateSchema = z.object({
   sex: z.string().optional().default(""),
   nationality: z.string().optional().default(""),
   phone: z.string().optional().default(""),
-  status: z.number().int().optional(),
+  status: runnerStatusValueSchema.optional(),
   finishTime: z.number().int().optional(),
   fee: z.number().int().optional().default(0),
   paid: z.number().int().optional().default(0),
@@ -267,7 +268,7 @@ const runnerUpdateSchema = z.object({
   phone: z.string().optional(),
   /** Free-text bib; the inline editor's field was silently dropped before (package 11). */
   bib: z.string().optional(),
-  status: z.number().int().optional(),
+  status: runnerStatusValueSchema.optional(),
   finishTime: z.number().int().optional(),
   fee: z.number().int().optional(),
   paid: z.number().int().optional(),
@@ -912,7 +913,7 @@ export const runnerRouter = router({
         classId: z.number().int().optional(),
         clubName: z.string().optional(),
         eventorClubId: z.number().int().nullable().optional(),
-        status: z.number().int().optional(),
+        status: runnerStatusValueSchema.optional(),
         startTime: z.number().int().optional(),
       }),
     )

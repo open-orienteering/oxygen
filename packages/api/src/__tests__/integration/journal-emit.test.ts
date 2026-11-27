@@ -58,6 +58,41 @@ afterAll(async () => {
   await disconnect();
 });
 
+describe("recordFinish and applyResult input validation (RES-24)", () => {
+  const bad = (code: string) => ({ code });
+  it("recordFinish refuses an unknown status and an out-of-day time, writing nothing", async () => {
+    const before = await ctx.db.journalEntry.count({ where: { eventId: ctx.eventId } });
+    await expect(
+      caller.race.recordFinish({ id: runnerSeq, finishTimeAbsolute: 366000, status: 999 }),
+    ).rejects.toMatchObject(bad("BAD_REQUEST"));
+    await expect(
+      caller.race.recordFinish({ id: runnerSeq, finishTimeAbsolute: 999_999_999 }),
+    ).rejects.toMatchObject(bad("BAD_REQUEST"));
+    await expect(
+      caller.race.recordFinish({ id: runnerSeq, finishTime: 864_000 }),
+    ).rejects.toMatchObject(bad("BAD_REQUEST"));
+    expect(await ctx.db.journalEntry.count({ where: { eventId: ctx.eventId } })).toBe(before);
+  });
+
+  it("applyResult refuses status 999 and finish/start 999999999 with BAD_REQUEST", async () => {
+    await expect(
+      caller.cardReadout.applyResult({ runnerId: runnerSeq, status: 999, finishTime: 366000, startTime: 360000 }),
+    ).rejects.toMatchObject(bad("BAD_REQUEST"));
+    await expect(
+      caller.cardReadout.applyResult({ runnerId: runnerSeq, status: 1, finishTime: 999_999_999, startTime: 360000 }),
+    ).rejects.toMatchObject(bad("BAD_REQUEST"));
+    await expect(
+      caller.cardReadout.applyResult({ runnerId: runnerSeq, status: 1, finishTime: 366000, startTime: 999_999_999 }),
+    ).rejects.toMatchObject(bad("BAD_REQUEST"));
+  });
+
+  it("runner.update refuses an unknown status", async () => {
+    await expect(
+      caller.runner.update({ id: runnerSeq, status: 999 } as never),
+    ).rejects.toMatchObject(bad("BAD_REQUEST"));
+  });
+});
+
 describe("recordFinish journaling (Step 2a)", () => {
   it("emits a finish.adjusted entry in the same call as the runner update", async () => {
     const finishAbs = 366000; // absolute deciseconds

@@ -207,6 +207,7 @@ beforeAll(async () => {
       name: "Checkout Source",
       date: new Date("2026-01-01T00:00:00Z"),
       kind: "competition",
+      isTestEvent: true,
     },
     select: { id: true, nameId: true, zeroTime: true },
   });
@@ -638,6 +639,10 @@ describe("checkout → write → checkin lifecycle", () => {
       select: { id: true },
     });
     expect(localEvent).not.toBeNull();
+    // The test-event mark is an ordinary column of the event row: it travels.
+    expect(
+      (await ctx.db.event.findUniqueOrThrow({ where: { id: localEvent!.id }, select: { isTestEvent: true } })).isTestEvent,
+    ).toBe(true);
     const runnerA = await ctx.db.runner.findFirst({
       where: { eventId: localEvent!.id, cardNo: 800200 },
     });

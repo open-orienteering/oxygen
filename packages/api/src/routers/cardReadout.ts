@@ -40,7 +40,9 @@ import { toAbsolute, toRelative, toRelativeChecked, hasTime } from "../timeConve
 import {
   runnerStatusToValue,
   valueToRunnerStatus,
+  runnerStatusValueSchema,
 } from "../statusConvert.js";
+import { absoluteTimeSchema } from "../timeConvert.js";
 import { appendJournal } from "../journalEmit.js";
 import { resolveCourseExpectedPositions } from "./course.js";
 import { pushToGoogleSheet, type SheetRow } from "../sheetsBackup.js";
@@ -969,9 +971,9 @@ export const cardReadoutRouter = router({
     .input(
       z.object({
         runnerId: z.number().int(),
-        status: z.number().int(),
-        finishTime: z.number().int(), // absolute deciseconds
-        startTime: z.number().int(), // absolute deciseconds
+        status: runnerStatusValueSchema,
+        finishTime: absoluteTimeSchema, // absolute deciseconds
+        startTime: absoluteTimeSchema, // absolute deciseconds
         /** The reader's "punches are fresh" verdict (RES-01). */
         punchesFresh: z.boolean().optional(),
         /** The operator accepted replacing the stored result (never a DQ). */

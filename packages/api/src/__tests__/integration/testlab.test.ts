@@ -14,6 +14,7 @@
 import { afterAll, beforeEach, describe, it, expect, vi } from "vitest";
 import { createTestEvent, disconnect } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
+import { appRouter } from "../../routers/index.js";
 import { RunnerStatus } from "@oxygen/shared";
 
 afterAll(async () => {
@@ -31,6 +32,8 @@ interface SimCtx {
  */
 async function buildSimEvent(label: string): Promise<SimCtx> {
   const ctx = await createTestEvent(label);
+  // The Test Lab works only on a test event (API-06).
+  await ctx.db.event.update({ where: { id: ctx.eventId }, data: { isTestEvent: true } });
   const caller = makeCaller(ctx.event);
 
   const controls = await Promise.all([
@@ -123,6 +126,7 @@ describe("testLab simulator", () => {
 
   it("rejects starting a sim with no eligible runners", async () => {
     const ctx = await createTestEvent("sim-empty");
+    await ctx.db.event.update({ where: { id: ctx.eventId }, data: { isTestEvent: true } });
     const caller = makeCaller(ctx.event);
     try {
       await expect(
@@ -257,6 +261,125 @@ describe("testLab simulator", () => {
     } finally {
       await f.ctx.cleanup();
     }
+  });
+});
+
+describe("test event guard (API-06)", () => {
+  beforeEach(() => {
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+  });
+
+  /** A fixture event with the flag taken off again. */
+  async function buildLiveEvent(label: string): Promise<SimCtx> {
+    const f = await buildSimEvent(label);
+    await f.ctx.db.event.update({ where: { id: f.ctx.eventId }, data: { isTestEvent: false } });
+    return f;
+  }
+
+  async function counts(f: SimCtx) {
+    const where = { eventId: f.ctx.eventId };
+    return {
+      runners: await f.ctx.db.runner.count({ where }),
+      classes: await f.ctx.db.class.count({ where }),
+      courses: await f.ctx.db.course.count({ where }),
+      cards: await f.ctx.db.card.count({ where }),
+      punches: await f.ctx.db.punch.count({ where }),
+    };
+  }
+
+  it("refuses every writing procedure on a non-test event and changes nothing", async () => {
+    const f = await buildLiveEvent("guard-live");
+    try {
+      const before = await counts(f);
+      const classSeq = (await f.ctx.db.class.findFirstOrThrow({ where: { eventId: f.ctx.eventId } })).seq;
+      const calls: Array<[string, () => Promise<unknown>]> = [
+        ["clearRunners", () => f.caller.testLab.clearRunners()],
+        ["startSimulation", () => f.caller.testLab.startSimulation({ speedFactor: 0, dnsRate: 0, dnfRate: 0, mpRate: 0 })],
+        ["updateSpeed", () => f.caller.testLab.updateSpeed({ speedFactor: 5 })],
+        ["generateReadout", () => f.caller.testLab.generateReadout({ cardNo: 999_001 })],
+        ["generateClasses", () => f.caller.testLab.generateClasses({ count: 3 })],
+        ["generateCourses", () => f.caller.testLab.generateCourses({ count: 3 })],
+        ["registerFictionalRunners", () => f.caller.testLab.registerFictionalRunners({ count: 5 })],
+        ["registerRunners", () => f.caller.testLab.registerRunners({ classId: classSeq, count: 5 })],
+        ["pushBackupPunch", () => f.caller.testLab.pushBackupPunch({ cardNo: 1, controlCode: 31, time: 1 })],
+      ];
+      for (const [name, call] of calls) {
+        await expect(call(), name).rejects.toMatchObject({
+          code: "PRECONDITION_FAILED",
+          message: expect.stringContaining("NOT_A_TEST_EVENT"),
+        });
+      }
+      expect(await counts(f)).toEqual(before);
+      const runner = await f.ctx.db.runner.findFirstOrThrow({ where: { eventId: f.ctx.eventId } });
+      expect(runner.status).toBe("unknown");
+    } finally {
+      await f.ctx.cleanup();
+    }
+  });
+
+  it("leaves stopSimulation and the read-only procedures open on a non-test event", async () => {
+    const f = await buildLiveEvent("guard-open");
+    try {
+      await expect(f.caller.testLab.stopSimulation()).resolves.toEqual({ ok: true });
+      await expect(f.caller.testLab.status()).resolves.toMatchObject({ runnerCount: 1 });
+      await expect(f.caller.testLab.simulationStatus()).resolves.toMatchObject({ active: false });
+      await expect(f.caller.testLab.cardList()).resolves.toHaveLength(1);
+      await expect(f.caller.testLab.listAllBackupPunches()).resolves.toEqual([]);
+      await expect(f.caller.testLab.defaults()).resolves.toMatchObject({ runnerCount: 50 });
+    } finally {
+      await f.ctx.cleanup();
+    }
+  });
+
+  it("reads the flag fresh: turning it off refuses the next call", async () => {
+    const f = await buildSimEvent("guard-fresh");
+    try {
+      await expect(f.caller.testLab.generateClasses({ count: 1 })).resolves.toMatchObject({ created: 1 });
+      await f.caller.event.setTestEvent({ enabled: false });
+      await expect(f.caller.testLab.generateClasses({ count: 1 })).rejects.toMatchObject({
+        code: "PRECONDITION_FAILED",
+      });
+    } finally {
+      await f.ctx.cleanup();
+    }
+  });
+
+  it("clearing the flag stops a timed simulation", async () => {
+    const f = await buildSimEvent("guard-timer");
+    try {
+      const started = await f.caller.testLab.startSimulation({ speedFactor: 1, dnsRate: 0, dnfRate: 0, mpRate: 0 });
+      expect(started.mode).toBe("timed");
+      expect((await f.caller.testLab.simulationStatus()).active).toBe(true);
+      await f.caller.event.setTestEvent({ enabled: false });
+      expect((await f.caller.testLab.simulationStatus()).active).toBe(false);
+    } finally {
+      await f.caller.testLab.stopSimulation();
+      await f.ctx.cleanup();
+    }
+  });
+
+  it("a tick that finds the flag cleared in the database halts the timer", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const f = await buildSimEvent("guard-tick");
+    try {
+      await f.caller.testLab.startSimulation({ speedFactor: 1, dnsRate: 0, dnfRate: 0, mpRate: 0 });
+      // Raw update: no stopSimulationFor, the tick has to notice by itself.
+      await f.ctx.db.event.update({ where: { id: f.ctx.eventId }, data: { isTestEvent: false } });
+      await vi.advanceTimersByTimeAsync(1_200);
+      await vi.waitFor(async () => {
+        expect((await f.caller.testLab.simulationStatus()).active).toBe(false);
+      });
+    } finally {
+      vi.useRealTimers();
+      await f.caller.testLab.stopSimulation();
+      await f.ctx.cleanup();
+    }
+  });
+
+  it("generateEvent is gone (API-34)", () => {
+    const procedures = appRouter._def.procedures as Record<string, unknown>;
+    expect(procedures["testLab.generateEvent"]).toBeUndefined();
+    expect(procedures["testLab.clearRunners"]).toBeDefined();
   });
 });
 

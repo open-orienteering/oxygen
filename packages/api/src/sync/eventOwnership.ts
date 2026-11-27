@@ -77,6 +77,7 @@ export const EVENT_ROW_WRITERS: Readonly<Record<string, "venue" | "cloud">> = {
   "event.regenerateKioskKey": "venue",
   "control.setAirPlusConfig": "venue",
   "event.updateType": "cloud",
+  "event.setTestEvent": "cloud",
   "course.setOverprintCuts": "cloud",
 };
 

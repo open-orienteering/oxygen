@@ -1165,3 +1165,53 @@ describe("card link follows the card number (API-11)", () => {
     expect(r).toMatchObject({ cardNo: 88500, cardId: card.id });
   });
 });
+
+// RES-24: an entry with a status or time no live call would accept is refused
+// like a malformed payload, not stored as "unknown" or as a nonsense time.
+describe("events.push: status and time validation (RES-24)", () => {
+  let ctx: TestEventContext;
+  let classSeq: number;
+
+  beforeAll(async () => {
+    ctx = await createTestEvent("push-validate");
+    classSeq = (await ctx.db.class.create({ data: { eventId: ctx.eventId, name: "H21" }, select: { seq: true } })).seq;
+  });
+  afterAll(async () => {
+    await ctx.cleanup();
+  });
+
+  async function register(cardNo: number) {
+    await makeCaller(ctx.event).events.push({
+      events: [wire(ctx.event, "runner.registered", { name: `V${cardNo}`, classId: classSeq, cardNo })],
+    });
+  }
+
+  it.each([
+    ["finish.adjusted", { finishTime: 361_000, status: 999 }],
+    ["finish.adjusted", { finishTime: 999_999_999 }],
+    ["finish.adjusted", { finishTime: -5 }],
+    ["result.applied", { status: 7, finishTime: 384_000, startTime: 360_000 }],
+    ["result.applied", { status: 1, finishTime: 999_999_999, startTime: 360_000 }],
+    ["result.applied", { status: 1, finishTime: 384_000, startTime: 864_000 }],
+  ])("%s %j is refused and writes nothing", async (type, extra) => {
+    const cardNo = 95000 + Math.floor(Math.random() * 4000);
+    await register(cardNo);
+    const e = wire(ctx.event, type, { cardNo, ...extra });
+    const res = await makeCaller(ctx.event).events.push({ events: [e] });
+    expect(res.synced).toEqual([]);
+    expect(res.failed).toEqual([{ id: e.id, error: "INVALID_PAYLOAD" }]);
+    expect(await ctx.db.journalEntry.count({ where: { id: e.id } })).toBe(0);
+    const row = await ctx.db.runner.findFirstOrThrow({ where: { eventId: ctx.eventId, cardNo } });
+    expect(row.status).toBe("unknown");
+    expect(row.finishTime).toBe(0);
+  });
+
+  it("accepts the boundary values", async () => {
+    const cardNo = 99100;
+    await register(cardNo);
+    const e = wire(ctx.event, "finish.adjusted", { cardNo, finishTime: 863_999, status: RunnerStatus.OK });
+    const res = await makeCaller(ctx.event).events.push({ events: [e] });
+    expect(res.failed).toEqual([]);
+    expect(res.synced).toEqual([e.id]);
+  });
+});

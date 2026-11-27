@@ -10,6 +10,8 @@ import { describe, it, expect, afterAll } from "vitest";
 import { disconnect } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
 import { resolveEvent, prisma } from "../../db.js";
+import { createTestEvent } from "../helpers/test-db.js";
+import { acquireLease, releaseLease } from "../../sync/lease.js";
 import { RunnerStatus } from "@oxygen/shared";
 
 afterAll(async () => {
@@ -368,6 +370,80 @@ describe("event.counterState (legacy alias)", () => {
     } finally {
       await publicCaller.event.delete({ nameId: slug });
       await publicCaller.event.purgeDeleted();
+    }
+  });
+});
+
+describe("event.setTestEvent (API-06)", () => {
+  it("create takes an optional isTestEvent flag, default false; the event info carries it", async () => {
+    const caller = makeCaller(null);
+    const a = `oxygen_test_flag_a_${Math.random().toString(36).slice(2, 8)}`;
+    const b = `oxygen_test_flag_b_${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      await caller.event.create({ name: "Plain", nameId: a, date: "2026-04-15" });
+      await caller.event.create({ name: "Test", nameId: b, date: "2026-04-15", isTestEvent: true });
+      expect((await prisma().event.findUniqueOrThrow({ where: { nameId: a } })).isTestEvent).toBe(false);
+      expect((await prisma().event.findUniqueOrThrow({ where: { nameId: b } })).isTestEvent).toBe(true);
+      const ref = (await resolveEvent(b))!;
+      const dash = await makeCaller(ref).event.dashboard();
+      expect(dash.event.isTestEvent).toBe(true);
+    } finally {
+      await prisma().event.deleteMany({ where: { nameId: { in: [a, b] } } });
+    }
+  });
+
+  it("turns on for a plain event and off again", async () => {
+    const f = await createTestEvent("flag-toggle");
+    try {
+      const caller = makeCaller(f.event);
+      expect(await caller.event.setTestEvent({ enabled: true })).toEqual({ isTestEvent: true });
+      expect((await f.db.event.findUniqueOrThrow({ where: { id: f.eventId } })).isTestEvent).toBe(true);
+      expect(await caller.event.setTestEvent({ enabled: false })).toEqual({ isTestEvent: false });
+      expect((await f.db.event.findUniqueOrThrow({ where: { id: f.eventId } })).isTestEvent).toBe(false);
+    } finally {
+      await f.cleanup();
+    }
+  });
+
+  it("refuses to turn on with a card readout, an Eventor link or an active lease", async () => {
+    const readout = await createTestEvent("flag-readout");
+    const linked = await createTestEvent("flag-eventor");
+    const leased = await createTestEvent("flag-lease");
+    try {
+      await readout.db.cardReadout.create({
+        data: { eventId: readout.eventId, cardNo: 500001, punches: [] },
+      });
+      await linked.db.event.update({ where: { id: linked.eventId }, data: { eventorEventId: 12345n } });
+      for (const f of [readout, linked]) {
+        await expect(makeCaller(f.event).event.setTestEvent({ enabled: true })).rejects.toMatchObject({
+          code: "PRECONDITION_FAILED",
+        });
+        expect((await f.db.event.findUniqueOrThrow({ where: { id: f.eventId } })).isTestEvent).toBe(false);
+      }
+      await acquireLease(leased.db, leased.eventId, "venue-flag");
+      try {
+        await expect(makeCaller(leased.event).event.setTestEvent({ enabled: true })).rejects.toMatchObject({
+          code: "PRECONDITION_FAILED",
+        });
+      } finally {
+        await releaseLease(leased.db, leased.eventId, { forced: true });
+      }
+      expect((await leased.db.event.findUniqueOrThrow({ where: { id: leased.eventId } })).isTestEvent).toBe(false);
+    } finally {
+      await readout.cleanup();
+      await linked.cleanup();
+      await leased.cleanup();
+    }
+  });
+
+  it("turning off is allowed even with readouts present", async () => {
+    const f = await createTestEvent("flag-off");
+    try {
+      await f.db.event.update({ where: { id: f.eventId }, data: { isTestEvent: true } });
+      await f.db.cardReadout.create({ data: { eventId: f.eventId, cardNo: 500002, punches: [] } });
+      expect(await makeCaller(f.event).event.setTestEvent({ enabled: false })).toEqual({ isTestEvent: false });
+    } finally {
+      await f.cleanup();
     }
   });
 });
