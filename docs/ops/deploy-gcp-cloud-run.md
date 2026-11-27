@@ -267,6 +267,14 @@ A missing or wrong secret now fails the push loudly (`UNAUTHORIZED`, or
 shipper logs it every cycle; before, a secret-only push was rejected for lack
 of a user while the pull looked healthy. IAP still needs the ID token above.
 
+The same secret authenticates the box's **forwarded cloud-owned edits**
+(Eventor admin, club directory, layout writes, `event.delete`, ...): the box
+sends it with its node id and `x-oxygen-forwarded: 1` (and the ID token),
+and the cloud runs the call as that node, with rights only on events whose
+lease the node holds. The user's own identity header is not forwarded. If
+IAP answers such a call with a redirect or a page instead of the API, the
+box reports `CLOUD_AUTH` ([venue-runbook.md](venue-runbook.md#troubleshooting)).
+
 The secret lives in Secret Manager as `oxygen-sync-secret` (`SYNC_SECRET` in
 `env.sh` names another). `./provision.sh` creates it with a random value if
 it is missing and lets the runtime account read it; `./deploy.sh` then binds

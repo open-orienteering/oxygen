@@ -120,8 +120,8 @@ its maps; deleting a template leaves maps in place with `template_id = NULL`
 so the UI can report and repair the invalid assignment.
 
 `graphics` stores uploaded SVG or PNG images (BIGSERIAL id, mime-checked
-at upload; SVG content is parsed and rejected if it contains scripts,
-event handlers or external references). An upload may be up to 16 MiB
+at upload; an SVG is rejected unless it is self-contained and inert, see
+"SVG validation" below). An upload may be up to 16 MiB
 and a stored row at most 8 MiB (J2): a PNG whose longer side is over
 4096 px is resampled to 4096 by `sharp` (aspect and alpha kept, metadata
 dropped); a PNG still over 8 MiB is resampled to 3072, then 2048 px, and
@@ -283,6 +283,28 @@ GET /api/maps/:nameId/graphics/:id
 GET /api/maps/:nameId/graphics/:id/print.png[?w=&h=[&crop=]]   (the PNG a print embeds; SVG needs w, h, crop = its window; G15)
 GET /api/maps/:nameId/graphics/:id/thumb.png[?v=]       (≤ 256 px on the longer side, never enlarged; immutable cache; J2)
 ```
+
+**SVG validation (CRS-003).** `parseSvgGraphic` checks the text *as
+uploaded* and again with character references (`&#60;`, `&#x3c;`) and the
+five predefined entities expanded and tabs / line breaks removed; nothing is
+stripped first, so a comment, `<metadata>` or an entity cannot hide markup.
+Refused (`The SVG must not contain …`): a `script`, `foreignObject`,
+`iframe`, `object`, `embed`, `audio`, `video`, `link`, `meta` or `base`
+element, with or without a namespace prefix; `javascript:`; an `on…=`
+attribute; `@import`; an `href`, `xlink:href` or `src` whose value (decoded,
+trimmed) is neither `#fragment` nor `data:image/(png|jpeg|gif|webp);base64,…`
+(no `data:image/svg+xml`); a `url(…)` that is not `url(#…)`; and, in the
+DOCTYPE's internal subset, a parameter entity, a `SYSTEM` / `PUBLIC` entity or
+an entity whose value contains `<` or `&` (a plain-text value such as the
+namespace URL Illustrator declares is fine). Accepted false positive: a
+comment or `<metadata>` that merely contains such text is refused. The
+stripped copy is used only to find the root element. The stored bytes stay as
+uploaded. Serving: the three graphic routes below send `Content-Security-Policy:
+default-src 'none'; style-src 'unsafe-inline'; sandbox` and
+`X-Content-Type-Options: nosniff`, and the raw route sends an SVG with
+`Content-Disposition: attachment; filename="graphic-<id>.svg"`; the web client
+never renders a graphic as SVG (it shows `thumb.png` and `print.png`). Tests:
+`course-map-graphics.test.ts`, `integration/graphics.test.ts`.
 
 The three graphic routes answer `courses.view`, and the event's kiosk key
 (header `x-kiosk-key` or `?k=`; J2, user 2026-11-18 Q2: the kiosk and

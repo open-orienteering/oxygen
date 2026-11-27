@@ -111,6 +111,18 @@ tRPC, never journaled, and **cloud-owned even during a lease**:
   the venue has no internet, the venue returns a typed error: *"requires
   connectivity."* (Venue-side users offline mid-race have no business
   editing report templates; this is the cheap path by design.)
+  The forward is made with **the box's own credentials**, not the user's:
+  the node secret, node id, the `x-oxygen-forwarded` marker and, behind
+  IAP, the ID token; the user's identity header is not relayed, no redirect
+  is followed and the call times out after 30 s. On a cloud running
+  `AUTH_MODE=proxy` the call then runs as the node, with every capability
+  on the events whose lease the node holds and none elsewhere, and is never
+  an admin ([authentication.md](authentication.md#venue-nodes)). A redirect
+  or an HTML answer from the cloud (IAP refusing the box) comes back as the
+  typed error `CLOUD_AUTH` ("The cloud refused this box's credentials"),
+  distinct from `CLOUD_UNREACHABLE`; fix `SYNC_SHARED_SECRET` / the IAP
+  settings ([venue-runbook.md](../ops/venue-runbook.md)). A forwarded write
+  that times out may still have landed on the cloud.
 - The venue keeps a **checkout-time copy** of cloud-owned data for local
   reads, refreshed periodically while online. Staleness is acceptable
   because of the boundary rule below.
@@ -403,7 +415,13 @@ Checkout replaces the box's copy of the event, so it refuses before it
 touches anything (message prefix = code, the way `PATCH_STALE` is):
 
 - **Who:** with login on, `event.manage` on the box's existing copy of the
-  event, or an instance admin when the box does not hold the event yet.
+  event, or an instance admin when the box does not hold the event yet. An
+  anonymous caller is `UNAUTHORIZED` (`lease.checkout` is an `authedProcedure`),
+  a member with no `event.manage` on the copy, or any non-admin when there is
+  no copy, is `FORBIDDEN`. Pinned in `lease.test.ts`. With `AUTH_MODE=off` on
+  the box, anyone on the LAN may check out (the cloud-side lease has no
+  per-event secret yet, see the follow-ups in
+  [proxy-auth-followups](../bugfixes/proxy-auth-followups.md)).
 - `CHECKOUT_LEASE_HELD` — this box still holds the lease: check in first.
 - `CHECKOUT_LOCAL_EVENT` — the event was created on this box and never
   checked out from the cloud (no `journal_sync_state` row for the peer).

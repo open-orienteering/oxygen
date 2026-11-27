@@ -95,6 +95,7 @@ Notes whose code no longer exists (mostly the raster tile pipeline, deleted in s
 
 | Note | Added |
 | --- | --- |
+| [Proxy-mode authorisation gaps (runner directory, map sources, venue forwarding) and stored XSS through SVG graphics](proxy-auth-and-svg-xss.md) (follow-ups: [proxy-auth-followups.md](proxy-auth-followups.md)) | 2026-11-27 |
 | [Test Lab could wipe a live event; unchecked statuses and times; dead endpoints](test-lab-live-event-guard.md) | 2026-11-27 |
 | [Test Lab guard: follow-ups left out of package 19](test-lab-followups.md) | 2026-11-27 |
 | [Runner editor dropped edits behind "Saved" and refused saves silently](runner-inline-editor.md) | 2026-11-26 |

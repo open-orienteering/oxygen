@@ -916,6 +916,20 @@ upload — the source row keeps whatever the first uploader called it, so
 the event's `map_files.file_name` and the version label come from the
 request, not the shared row.
 
+**Possession (API-17 / MAP-4).** A source is content-addressed and global, so
+quoting a hash must not be enough to turn someone else's file into a library
+map or an event map (that would sidestep the download rule of §4.4). With
+login on, both calls first run `assertMayConsumeSource`
+(`map-store/source-possession.ts`): the caller is an instance admin, or has a
+`map_uploads` row with `finalised_hash = fileHash` and `uploaded_by` = the
+caller (any event scope). Finalise records the hash even when the bytes
+deduplicated onto an existing source, so uploading the same file again is
+always the way in; upload rows live 24 h (§6.6), so the proof is "uploaded it
+within the last day". Otherwise `FORBIDDEN` "Upload the file again". The
+uploader of the library version a job creates is the job's `started_by` (the
+caller), not the source row's first uploader, and `createClubMap` no longer
+rewrites it afterwards. `AUTH_MODE=off` skips the check.
+
 ### 5.2 Client
 
 `packages/web/src/lib/map-upload.ts`. Every map upload — `MapPanel` and
@@ -1206,7 +1220,8 @@ and with `club_map_files` its write-through to every mutation above.
   calls no `deleteBlob`. Event copies keep their own `source_hash` /
   `document_hash` (copy-on-use); a document nothing references any more
   is collected by the GC after the grace (§8).
-- **Authorisation.** `remove` is allowed for `club_maps.created_by` or an
+- **Authorisation.** `addFromSource` needs the caller's own upload of the
+  bytes (§5.1 "Possession"). `remove` is allowed for `club_maps.created_by` or an
   instance admin; `download` for the version's `uploaded_by` or an admin
   — the club clause of the source route (§4.4); `AUTH_MODE=off` skips
   both. Upload and rename carry no owner check, as before

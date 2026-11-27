@@ -207,7 +207,8 @@ instead.
 - ROC punches keep arriving at the **cloud** and flow to the box through
   the shipper's pull direction — no ROC reconfiguration needed.
 - Cloud-owned admin (Eventor sync, club directory, report templates) is
-  forwarded upstream when the box has internet, and fails with a clear
+  forwarded upstream when the box has internet (as the box, with its sync
+  secret, not as the person using it), and fails with a clear
   "requires connectivity" error when it doesn't. Don't fight it — nothing
   in that set affects results. Course-map layout is in that set too:
   edit sheets, templates, course objects and logos **on the cloud**
@@ -270,6 +271,7 @@ event out of it. Otherwise:
 | Permission prompt never appears (Chrome) | `chrome://flags` LNA not disabled; URL really is private-range or `.local` |
 | Stations can't reach the box at all | Firewall on the box (allow 3001/8080), station on the same LAN/VLAN |
 | `checkin` refuses | It's the barrier working: fix connectivity, watch the pending count drain, retry. While it runs the box refuses race writes for the event, so do not retry in a loop during a race |
+| A cloud-owned edit answers "The cloud refused this box's credentials" (`CLOUD_AUTH`) | The cloud is reachable but turned the forward away: the box's `SYNC_SHARED_SECRET` differs from the cloud's, or IAP is sending it to a sign-in page (`SYNC_GOOGLE_AUDIENCE`, `GOOGLE_APPLICATION_CREDENTIALS`, the service account's *IAP-secured Web App User* role). The startup line `[sync] IAP auth …` says what the box thinks. A forwarded edit is made as the box and only works on events checked out to it |
 | Race writes on the box answer "checked in or taken over" | The box no longer holds the lease (checked in, or the cloud took over). Check the event on the cloud; check out again if the box should be the writer |
 | Checkout says "journal entries not yet on the cloud" | Fix the uplink and retry; continue only if those entries do not matter |
 | Box log: `ignoring column(s) this schema does not have` / checkout result `peerSchema` ≠ `localSchema` | The box and cloud run different versions. It still works; update the older one before the event |
