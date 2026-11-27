@@ -35,7 +35,7 @@ const row = (extra: Partial<StateControl>): StateControl => ({
 const course = (extra: Partial<StateCourse>): StateCourse => ({
   id: `k${++n}`, name: "", removed: false, lengthM: 0, forked: false, variantIds: [], ...extra,
 });
-const state = (s: Partial<ImportState>): ImportState => ({ controls: [], courses: [], classes: [], runnersByCourse: new Map(), ...s });
+const state = (s: Partial<ImportState>): ImportState => ({ controls: [], courses: [], classes: [], variantRootByName: new Map(), runnersByCourse: new Map(), ...s });
 
 describe("fileBlockers", () => {
   it("refuses a file with no courses and no controls in both modes", () => {
@@ -158,6 +158,13 @@ describe("planCourseImport: modes", () => {
     const p = { ...parsed, courses: [crs("F AB", ["31"], { family: "F" })] };
     expect([...planCourseImport(p, s, { replaceAll: false, comparePositions: false }).skippedCourseNames]).toEqual(["F AB"]);
     expect(planCourseImport(p, s, { replaceAll: true, comparePositions: false }).consequences.coursesAdded).toEqual(["F AB"]);
+  });
+
+  it("Merge skips a file course named like a live variant (a round trip without a family)", () => {
+    const s2 = { ...s, variantRootByName: new Map([["f ab", forked.id]]) };
+    const plan = planCourseImport({ ...parsed, courses: [crs("F AB", ["31"])] }, s2, { replaceAll: false, comparePositions: false });
+    expect([...plan.skippedCourseNames]).toEqual(["F AB"]);
+    expect(plan.skippedLinkTo.get("F AB")).toBe(forked.id);
   });
 
   it("reports the length rule: kept when the file states none, derived for a new course, changed when it differs", () => {

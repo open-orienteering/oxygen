@@ -212,3 +212,33 @@ describe("preview and import agree", () => {
     expect([match.dbClassName, match.matchType, match.preselect]).toEqual(["D10", "substring", false]);
   });
 });
+
+describe("review follow-ups (package 17)", () => {
+  it("is refused while the event is checked out to another node, and writes nothing", async () => {
+    await ctx.db.eventLease.create({ data: { eventId: ctx.eventId, holderNodeId: "box-elsewhere" } });
+    await expect(caller.course.importCourses({ xmlContent: BASE })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    expect(await live("course")).toEqual([]);
+  });
+
+  it("restores a removed two-code site once when the file carries both codes", async () => {
+    const site = await ctx.db.control.create({ data: { eventId: ctx.eventId, seq: 901, codes: "31;131", removed: true } });
+    await caller.course.importCourses({ xmlContent: file(["31", "131"], [courseXml("A", ["31", "131"])]) });
+    const after = await ctx.db.control.findUniqueOrThrow({ where: { id: site.id } });
+    expect([after.removed, after.codes]).toEqual([false, "31;131"]);
+  });
+
+  it("under Replace all a start the file does not carry frees its code", async () => {
+    await ctx.db.control.create({ data: { eventId: ctx.eventId, seq: 902, name: "Start 3", kind: "start", status: "start", codes: "5" } });
+    const xml = file(["5"], [courseXml("A", ["5"])]);
+    await expect(caller.course.importCourses({ xmlContent: xml })).rejects.toMatchObject({ message: "Control code 5 is held by Start 3" });
+    await caller.course.importCourses({ xmlContent: xml, replaceAll: true });
+    expect((await live("control")).some((c) => c.codes === "5")).toBe(true);
+  });
+
+  it("counts a class the mapping puts back as not unassigned", async () => {
+    await caller.course.importCourses({ xmlContent: BASE });
+    const onB = await caller.class.create({ name: "D21", courseId: (await caller.course.list()).find((c) => c.name === "B")!.id });
+    const result = await caller.course.importCourses({ xmlContent: file(["31", "32"], [courseXml("A", ["31", "32"])]), replaceAll: true, classMapping: { A: [onB.id] } });
+    expect(result.classesUnassigned).toBe(0);
+  });
+});

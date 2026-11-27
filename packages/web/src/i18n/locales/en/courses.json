@@ -74,6 +74,7 @@
   "mergeLabel": "Merge",
   "mergeHint": "Adds and updates the file's courses and controls; everything else stays. A control keeps its status, extra codes and name; a forked course is left as it is.",
   "consequencesTitle": "What this import does",
+  "noCoursesMergeHint": "The file has no courses: only the positions of the controls in it are updated, and new controls are added.",
   "replaceAllImportCount_one": "Replace all and import {{count}} course",
   "replaceAllImportCount_other": "Replace all and import {{count}} courses",
   "blocker": {
@@ -82,7 +83,8 @@
     "duplicate_start_finish": "The file's {{ids}} would become the same start or finish.",
     "duplicate_crossing": "The file lists crossing point {{ids}} more than once.",
     "duplicate_course": "The file lists course {{ids}} more than once.",
-    "held_code": "Control code {{ids}} is held by {{holder}}."
+    "held_code": "Control code {{ids}} is held by {{holder}}.",
+    "class_mapped_twice": "Class {{className}} is selected for several courses ({{courses}}). Pick one."
   },
   "classWarning": {
     "class_on_fork_variants": "Class {{className}} is on a forked course in the file ({{courses}}). Forks are not imported, so the class is left unassigned.",

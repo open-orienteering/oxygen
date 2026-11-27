@@ -70,3 +70,20 @@ export function consequenceLines(
   ];
   return lines.filter((l) => l.count > 0);
 }
+
+/**
+ * Event classes the operator's mapping puts under more than one course: the
+ * server refuses the import (course-layer.md §6.4), so the dialog shows it first.
+ */
+export function classMappedTwice(classMapping: Record<string, number[]>): Array<{ seq: number; courseNames: string[] }> {
+  const coursesOf = new Map<number, Set<string>>();
+  for (const [courseName, seqs] of Object.entries(classMapping)) {
+    for (const seq of seqs) {
+      if (seq <= 0) continue;
+      const set = coursesOf.get(seq) ?? new Set<string>();
+      set.add(courseName);
+      coursesOf.set(seq, set);
+    }
+  }
+  return [...coursesOf].filter(([, names]) => names.size > 1).map(([seq, names]) => ({ seq, courseNames: [...names] }));
+}

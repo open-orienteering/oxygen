@@ -1066,7 +1066,8 @@ what it says.
   and clears the course of the classes on a removed course only: a class on
   a course the file updates keeps it unless the operator remaps it. Matched
   rows are never flipped to removed and back, so the counts are right
-  (an update is an update) and the tokens stamp only what changed.
+  (an update is an update), and the tokens stamp every row the file
+  carries plus the rows Replace all removes, not the rest of the event.
 - **Controls** are matched by code among ordinary controls, a start /
   finish by its synthesised name among starts and finishes (F32, below), a
   crossing point by name among crossing points; a **live row before a
@@ -1180,12 +1181,22 @@ applying the entry holds the same tokens. Course objects take their own
 token. Rows the import soft-deleted under `replaceAll` are stamped too. The
 import is **one transaction** (`inImportTransaction`, `course-import-tx.ts`:
 `COURSE_IMPORT_TX`, 60 s timeout, 10 s `maxWait`, as the journal ingest's),
-behind an event-scoped advisory lock (`course-import:<event>`) so two
-imports into one event run one after the other: a failure anywhere (the
+ordered against taking a lease as the draw is (`lockEventLeaseAndSync`, then
+`mayWriteEventData` inside the transaction: a checkout cannot snapshot the
+event halfway through an import, and an import refused by a lease taken
+meanwhile writes nothing), and behind an event-scoped advisory lock
+(`course-import:<event>`) so two imports into one event run one after the
+other. Parsing, alignment, the OCAD CRS and the file's own refusals run
+before the transaction opens; a run past the timeout is undone and answers
+`TIMEOUT`. A failure anywhere inside the transaction (the
 wipe, a row, the objects, the journal append) leaves the event untouched and
 journals nothing. A start / finish code allocation (F32) inside it holds its
 `control-codes` lock until the import commits, so other control creates on
-the event wait for the import. (Until review package 17 this paragraph said
+the event wait for the import. Its row locks are held to the commit too, so
+an editor save racing it can deadlock; Postgres then aborts one side and an
+aborted import is undone whole (`bugfixes/course-import-followups.md`). A peer's
+mirror soft-deletes the rows Replace all removes without the entry's token
+(same follow-ups). (Until review package 17 this paragraph said
 the import was not atomic; there was no technical reason, and a crash after
 the Replace-all wipe left the event with no courses: decision D3,
 `decisions/general.md` 2026-11-26.) Import-time `differing` is `null`: `basePayload` reads

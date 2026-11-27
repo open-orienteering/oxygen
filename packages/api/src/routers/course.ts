@@ -484,6 +484,83 @@ async function loadCourseDetail(
   };
 }
 
+/** What `importCourses` parses and checks before its transaction opens (course-layer.md §6.4). */
+interface PreparedCourseImport {
+  alignment: Awaited<ReturnType<typeof resolveImportAlignment>>;
+  ocdCrs: mapGeo.PaperFrame | null;
+}
+
+/**
+ * The import's work outside the transaction: parsing, alignment, the OCAD
+ * CRS and the refusals the file earns on its own, so a refused or slow file
+ * never holds a connection or the event's import lock.
+ */
+async function prepareCourseImport<I extends { xmlContent?: string; ocdBase64?: string; replaceAll: boolean; classMapping?: Record<string, number[]> }>(
+  ctx: { db: PrismaClient; event: { id: bigint } },
+  input: I,
+): Promise<PreparedCourseImport> {
+  const eventId = ctx.event.id;
+  const alignment = await resolveImportAlignment(ctx.db, eventId, parseCourseFile(input));
+  const parsed = alignment.parsed;
+  const blockers = fileBlockers(parsed, { replaceAll: input.replaceAll });
+  if (blockers.length > 0) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: blockerMessage(blockers[0]) });
+  }
+  const mappingConflict = classMappingConflict(input.classMapping);
+  if (mappingConflict) {
+    const cls = await ctx.db.class.findFirst({ where: { eventId, seq: mappingConflict.classSeq }, select: { name: true } });
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Class ${cls?.name ?? mappingConflict.classSeq} is mapped to several courses: ${mappingConflict.courseNames.join(", ")}`,
+    });
+  }
+      // ── 0a. Resolve WGS84 lat/lng for OCD imports ───────────
+  //
+  // The OCD parser only knows map-mm coordinates and emits
+  // `lat: 0, lng: 0` for every control. If we write those zeros
+  // through, two things break:
+  //   1. Subsequent reads see (0, 0) and plot controls at the
+  //      equator, so they disappear off the map.
+  //   2. Re-importing an OCD bundle silently clobbers any
+  //      previously-resolved lat/lng (e.g. imported earlier via
+  //      IOF XML or computed on the fly by `controlCoordinates`).
+  //
+  // Fix: after import alignment, use the event map's corrected CRS
+  // to convert each control's (mapX, mapY) → WGS84 up-front.
+  // Controls whose CRS we don't
+  // support fall back to lat/lng = null below, and
+  // `controlCoordinates` keeps its on-the-fly conversion as a
+  // belt-and-braces fallback. IOF XML imports already carry good
+  // lat/lng from the parser and are not affected.
+  let ocdCrs: mapGeo.PaperFrame | null = null;
+  if (input.ocdBase64) {
+    // Alignment has already put parsed map-mm coordinates into the
+    // event map's paper space, so convert them with that map's
+    // corrected CRS rather than the raw CRS embedded in the import.
+    ocdCrs = await loadEventCrs(ctx.db, eventId);
+    // A standalone OCD course bundle can be imported before the event
+    // has a base map. In that case its own CRS remains the only valid
+    // conversion source.
+    if (!ocdCrs) {
+      try {
+        const ocadMod = await import("ocad2geojson");
+        const readOcad = (ocadMod as Record<string, unknown>).readOcad as (
+          buf: Buffer,
+          opts?: Record<string, unknown>,
+        ) => Promise<{ getCrs(): OcadCrs }>;
+        const imported = await readOcad(
+          Buffer.from(input.ocdBase64, "base64"),
+          { quietWarnings: true },
+        );
+        ocdCrs = frameFromOcadCrs(imported.getCrs());
+      } catch (error) {
+        console.warn("[importCourses] OCAD CRS load failed:", error);
+      }
+    }
+  }
+  return { alignment, ocdCrs };
+}
+
 export const courseRouter = router({
   list: kioskOrCoursesViewProcedure.query(async ({ ctx }): Promise<CourseSummary[]> => {
     const eventId = ctx.event.id;
@@ -1723,10 +1800,9 @@ export const courseRouter = router({
       const comparePositions = alignment.status !== "mismatch";
       const merge = planCourseImport(parsed, state, { replaceAll: false, comparePositions });
       const replace = planCourseImport(parsed, state, { replaceAll: true, comparePositions });
-      const held = heldCodeBlockers(parsed, state);
       const blockers = {
-        merge: [...fileBlockers(parsed, { replaceAll: false }), ...held],
-        replaceAll: [...fileBlockers(parsed, { replaceAll: true }), ...held],
+        merge: [...fileBlockers(parsed, { replaceAll: false }), ...heldCodeBlockers(parsed, state)],
+        replaceAll: [...fileBlockers(parsed, { replaceAll: true }), ...heldCodeBlockers(parsed, state, new Set(replace.removeControlIds))],
       };
 
       const { assignments: classAssignments, fromCourseNames } =
@@ -1835,62 +1911,14 @@ export const courseRouter = router({
         skipPositions: z.boolean().optional().default(false),
       }),
     )
-    .mutation(inImportTransaction(async ({ ctx, input }) => {
-      // `ctx.db` is the import's transaction (course-import-tx.ts).
+    .mutation(inImportTransaction(prepareCourseImport, async ({ ctx, input, prepared }) => {
+      // `ctx.db` is the import's transaction (course-import-tx.ts); the file
+      // was parsed and checked before it opened (`prepareCourseImport`).
       const eventId = ctx.event.id;
-      const alignment = await resolveImportAlignment(
-        ctx.db,
-        eventId,
-        parseCourseFile(input),
-      );
+      const { alignment, ocdCrs } = prepared;
       const parsed = alignment.parsed;
       const skipPositions = input.skipPositions;
       const { courseGeometry, geometrySource } = parsed;
-
-      // ── 0a. Resolve WGS84 lat/lng for OCD imports ───────────
-      //
-      // The OCD parser only knows map-mm coordinates and emits
-      // `lat: 0, lng: 0` for every control. If we write those zeros
-      // through, two things break:
-      //   1. Subsequent reads see (0, 0) and plot controls at the
-      //      equator, so they disappear off the map.
-      //   2. Re-importing an OCD bundle silently clobbers any
-      //      previously-resolved lat/lng (e.g. imported earlier via
-      //      IOF XML or computed on the fly by `controlCoordinates`).
-      //
-      // Fix: after import alignment, use the event map's corrected CRS
-      // to convert each control's (mapX, mapY) → WGS84 up-front.
-      // Controls whose CRS we don't
-      // support fall back to lat/lng = null below, and
-      // `controlCoordinates` keeps its on-the-fly conversion as a
-      // belt-and-braces fallback. IOF XML imports already carry good
-      // lat/lng from the parser and are not affected.
-      let ocdCrs: mapGeo.PaperFrame | null = null;
-      if (input.ocdBase64) {
-        // Alignment has already put parsed map-mm coordinates into the
-        // event map's paper space, so convert them with that map's
-        // corrected CRS rather than the raw CRS embedded in the import.
-        ocdCrs = await loadEventCrs(ctx.db, eventId);
-        // A standalone OCD course bundle can be imported before the event
-        // has a base map. In that case its own CRS remains the only valid
-        // conversion source.
-        if (!ocdCrs) {
-          try {
-            const ocadMod = await import("ocad2geojson");
-            const readOcad = (ocadMod as Record<string, unknown>).readOcad as (
-              buf: Buffer,
-              opts?: Record<string, unknown>,
-            ) => Promise<{ getCrs(): OcadCrs }>;
-            const imported = await readOcad(
-              Buffer.from(input.ocdBase64, "base64"),
-              { quietWarnings: true },
-            );
-            ocdCrs = frameFromOcadCrs(imported.getCrs());
-          } catch (error) {
-            console.warn("[importCourses] OCAD CRS load failed:", error);
-          }
-        }
-      }
 
       let controlsCreated = 0;
       let controlsUpdated = 0;
@@ -1901,23 +1929,17 @@ export const courseRouter = router({
       // Refusals before anything is written (course-layer.md §6.4): an empty
       // or wrong file, duplicate ids, a class mapped to two courses, and a
       // file control whose code a live start / finish holds (F32).
+      // The file's own refusals ran in `prepareCourseImport`; the plan and
+      // the F32 guard read the event inside the transaction.
       const state = await loadImportState(ctx.db, eventId);
-      const blockers = [...fileBlockers(parsed, { replaceAll: input.replaceAll }), ...heldCodeBlockers(parsed, state)];
-      if (blockers.length > 0) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: blockerMessage(blockers[0]) });
-      }
-      const mappingConflict = classMappingConflict(input.classMapping);
-      if (mappingConflict) {
-        const cls = state.classes.find((c) => c.seq === mappingConflict.classSeq);
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: `Class ${cls?.name ?? mappingConflict.classSeq} is mapped to several courses: ${mappingConflict.courseNames.join(", ")}`,
-        });
-      }
       const plan = planCourseImport(parsed, state, {
         replaceAll: input.replaceAll,
         comparePositions: !skipPositions && alignment.status !== "mismatch",
       });
+      const held = heldCodeBlockers(parsed, state, input.replaceAll ? new Set(plan.removeControlIds) : undefined);
+      if (held.length > 0) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: blockerMessage(held[0]) });
+      }
 
       // ── 0. Replace all: what the file does not carry goes ────
       // Matched rows are never flipped, so they keep what is theirs and are
@@ -1945,8 +1967,10 @@ export const courseRouter = router({
       const writtenSites = new Set<string>();
       /** Codes live rows hold: a restored row drops the extra ones another took. */
       const liveCodes = new Map<string, string>();
+      const removing = new Set(input.replaceAll ? plan.removeControlIds : []);
       for (const c of state.controls) {
-        if (c.removed || isStartOrFinish(c)) continue;
+        // A row Replace all removes frees its codes.
+        if (c.removed || isStartOrFinish(c) || removing.has(c.id)) continue;
         for (const code of c.codes.split(";").map((x) => x.trim()).filter(Boolean)) liveCodes.set(code.toLowerCase(), c.id);
       }
 
@@ -2079,11 +2103,16 @@ export const courseRouter = router({
             delete data.status;
             delete data.name;
             delete data.codes;
-            if (matched.removed) {
+            // Once per site: a second file id on the same restored site ("131"
+            // after "31") must not see the codes the first pass restored.
+            if (matched.removed && !writtenSites.has(matched.id)) {
               const kept = matched.codes
                 .split(";")
                 .map((x) => x.trim())
-                .filter((code) => code && (code.toLowerCase() === pc.id.trim().toLowerCase() || !liveCodes.has(code.toLowerCase())));
+                .filter((code) => {
+                  const holder = liveCodes.get(code.toLowerCase());
+                  return code && (code.toLowerCase() === pc.id.trim().toLowerCase() || holder === undefined || holder === matched.id);
+                });
               data.codes = kept.join(";") || codes;
             }
           }
@@ -2159,10 +2188,8 @@ export const courseRouter = router({
         // carry Oxygen's forks. Its controls were updated above (shared
         // sites); a class mapped to it follows the existing root (D3).
         if (plan.skippedCourseNames.has(pc.name)) {
-          const root =
-            plan.courseMatch.get(pc.name) ??
-            state.courses.find((r) => r.forked && r.name.toLowerCase() === (pc.family ?? "").toLowerCase());
-          if (root) linkCourseIdMap.set(pc.name, root.id);
+          const rootId = plan.skippedLinkTo.get(pc.name);
+          if (rootId) linkCourseIdMap.set(pc.name, rootId);
           continue;
         }
         const lengthStated = statedLength(pc);
@@ -2314,6 +2341,7 @@ export const courseRouter = router({
       if (skipPositions) {
         await rebuildCourseLengths(ctx.db, eventId, [...courseIdMap.values()], {
           updateLength: false,
+          keepSource: true,
         });
       } else if (deriveLegsIds.length > 0) {
         await rebuildCourseLengths(ctx.db, eventId, deriveLegsIds, { updateLength: false, keepSource: true });
@@ -2423,7 +2451,10 @@ export const courseRouter = router({
         coursesSkippedForked: plan.consequences.coursesSkippedForked,
         coursesRemoved: plan.consequences.coursesRemoved,
         controlsRemoved: plan.consequences.controlsRemoved.length,
-        classesUnassigned: plan.unassignClassIds.length,
+        // The classes Replace all took a course from and the mapping did not give one back.
+        classesUnassigned: plan.unassignClassIds.length
+          ? await ctx.db.class.count({ where: { id: { in: plan.unassignClassIds }, courseId: null } })
+          : 0,
         runnersLosingVariant: plan.consequences.runnersLosingVariant,
         coordinateAlignment: skipPositions
           ? ("skipped" as const)

@@ -184,10 +184,11 @@ class→course, control codes/status) are inside the results closure and are
   the applying node. Course `geometry` blobs stay out of the journal — they
   are derived artifacts that travel with the checkout snapshot.
 - Emission re-reads the post-write row inside the mutating transaction, so
-  the entry is exactly what landed. One documented exception:
-  `importCourses` emits after its (non-transactional) import completes — a
-  crash in between loses only the ship, and re-running the operator-driven
-  import re-emits.
+  the entry is exactly what landed. `importCourses` too, since review
+  package 17: the whole import and its entry are one transaction, ordered
+  against taking a lease (`course-layer.md` §6.4). Under `replaceAll` the
+  entry lists every class still on a course, because the applying node's
+  mirror clears the course of every class it does not list.
 
 A control's radio and AIR+ settings (`control.upsertConfig`) journal as
 `control.upserted` and are a race procedure like the other control edits;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { consequenceLines, type ModeConsequences } from "../course-import-consequences";
+import { classMappedTwice, consequenceLines, type ModeConsequences } from "../course-import-consequences";
 
 const empty: ModeConsequences = {
   coursesAdded: [], coursesUpdated: [], coursesRestored: [], coursesRemoved: [], coursesSkippedForked: [],
@@ -28,5 +28,12 @@ describe("consequenceLines", () => {
   it("counts restored rows as updated", () => {
     const lines = consequenceLines({ ...empty, coursesUpdated: ["A"], coursesRestored: ["R"], controlsUpdated: 1, controlsRestored: 2 }, {});
     expect(lines.map((l) => [l.key, l.count])).toEqual([["coursesUpdated", 2], ["controlsUpdated", 3]]);
+  });
+});
+
+describe("classMappedTwice", () => {
+  it("finds a class under two course names, ignoring skips and repeats on one course", () => {
+    expect(classMappedTwice({ A: [1, 1, 0], B: [2, 0] })).toEqual([]);
+    expect(classMappedTwice({ A: [1], B: [1, 2], C: [0] })).toEqual([{ seq: 1, courseNames: ["A", "B"] }]);
   });
 });

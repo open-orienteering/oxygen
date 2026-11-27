@@ -51,6 +51,8 @@ export interface ImportState {
   /** Root courses: live first, then removed newest first. */
   courses: StateCourse[];
   classes: StateClass[];
+  /** Live materialised variants by lower-cased name → their root's id. */
+  variantRootByName: Map<string, string>;
   /** Live runners per `course_id`. */
   runnersByCourse: Map<string, number>;
 }
@@ -69,7 +71,7 @@ export async function loadImportState(db: Db, eventId: bigint): Promise<ImportSt
     }),
     db.course.findMany({
       where: { eventId, removed: false, parentCourseId: { not: null } },
-      select: { id: true, parentCourseId: true },
+      select: { id: true, name: true, parentCourseId: true },
     }),
     db.class.findMany({
       where: { eventId, removed: false },
@@ -97,6 +99,7 @@ export async function loadImportState(db: Db, eventId: bigint): Promise<ImportSt
       return { id: c.id, name: c.name, removed: c.removed, lengthM: c.lengthM, forked, variantIds };
     }),
     classes,
+    variantRootByName: new Map(variants.map((v) => [v.name.toLowerCase(), v.parentCourseId!])),
     runnersByCourse: new Map(runners.map((r) => [r.courseId!, r._count._all])),
   };
 }
@@ -165,10 +168,15 @@ export function fileBlockers(parsed: Pick<ParsedCourseData, "controls" | "course
 }
 
 /** A file control whose code a live start / finish holds (F32): refused. */
-export function heldCodeBlockers(parsed: Pick<ParsedCourseData, "controls">, state: ImportState): ImportBlocker[] {
+export function heldCodeBlockers(
+  parsed: Pick<ParsedCourseData, "controls">,
+  state: ImportState,
+  /** Rows Replace all removes: their codes are free. */
+  removing?: Set<string>,
+): ImportBlocker[] {
   const held = new Map<number, string>();
   for (const c of state.controls) {
-    if (c.removed || !isStartOrFinish(c)) continue;
+    if (c.removed || !isStartOrFinish(c) || removing?.has(c.id)) continue;
     for (const part of c.codes.split(";")) {
       const n = parseInt(part.trim(), 10);
       if (Number.isFinite(n) && n > 0) held.set(n, c.name);
@@ -246,6 +254,8 @@ export interface ImportPlan {
   courseMatch: Map<string, StateCourse | undefined>;
   /** Parsed course names whose row and structure are left alone (Merge, forked). */
   skippedCourseNames: Set<string>;
+  /** A skipped course name → the forked root its mapped classes follow. */
+  skippedLinkTo: Map<string, string>;
   removeCourseIds: string[];
   removeControlIds: string[];
   unassignClassIds: string[];
@@ -330,20 +340,28 @@ export function planCourseImport(
     const key = row.name.toLowerCase();
     if (!byName.has(key)) byName.set(key, row);
   }
-  const forkedRootNames = new Set(state.courses.filter((r) => r.forked).map((r) => r.name.toLowerCase()));
+  const forkedRootByName = new Map(state.courses.filter((r) => r.forked).map((r) => [r.name.toLowerCase(), r.id]));
   const runnersOn = (ids: string[]) => ids.reduce((n, id) => n + (state.runnersByCourse.get(id) ?? 0), 0);
 
   const courseMatch = new Map<string, StateCourse | undefined>();
   const skippedCourseNames = new Set<string>();
+  const skippedLinkTo = new Map<string, string>();
   const matchedCourseIds = new Set<string>();
   for (const pc of parsed.courses) {
     const row = byName.get(pc.name.toLowerCase());
     courseMatch.set(pc.name, row);
     if (row) matchedCourseIds.add(row.id);
     // Merge leaves a local fork alone, and a file variant of it (an Oxygen
-    // export lists "A AB" with family "A") is not a new top-level course.
-    if (!replaceAll && (row?.forked || (!row && pc.family && forkedRootNames.has(pc.family.toLowerCase())))) {
+    // export lists "A AB" with family "A"; a PPen / OCD round trip names
+    // it "A AB" without a family) is not a new top-level course.
+    const forkRoot = row?.forked
+      ? row.id
+      : !row
+        ? (pc.family ? forkedRootByName.get(pc.family.toLowerCase()) : undefined) ?? state.variantRootByName.get(pc.name.toLowerCase())
+        : undefined;
+    if (!replaceAll && forkRoot) {
       skippedCourseNames.add(pc.name);
+      skippedLinkTo.set(pc.name, forkRoot);
       c.coursesSkippedForked.push(pc.name);
       continue;
     }
@@ -391,7 +409,7 @@ export function planCourseImport(
     }
   }
 
-  return { controlMatch, courseMatch, skippedCourseNames, removeCourseIds, removeControlIds, unassignClassIds, consequences: c };
+  return { controlMatch, courseMatch, skippedCourseNames, skippedLinkTo, removeCourseIds, removeControlIds, unassignClassIds, consequences: c };
 }
 
 // ─── Class pre-selection ────────────────────────────────────

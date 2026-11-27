@@ -2,7 +2,7 @@ import { useState, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
 import { SearchableSelect } from "./SearchableSelect";
-import { consequenceLines, type ConsequenceTone } from "../lib/course-import-consequences";
+import { classMappedTwice, consequenceLines, type ConsequenceTone } from "../lib/course-import-consequences";
 
 interface Props {
   onClose: () => void;
@@ -153,6 +153,9 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
     : 0;
 
   const modeBlockers = preview ? (replaceAll ? preview.blockers.replaceAll : preview.blockers.merge) : [];
+  // A class picked on two course rows: the server would refuse it.
+  const mappedTwice = preview ? classMappedTwice(classMapping) : [];
+  const classNameOf = (seq: number) => preview?.dbClasses.find((c) => c.id === seq)?.name ?? String(seq);
   const lines = preview
     ? consequenceLines(replaceAll ? preview.consequences.replaceAll : preview.consequences.merge, classMapping)
     : [];
@@ -334,7 +337,7 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
               </fieldset>
 
               {/* Refusals: nothing is imported while any applies */}
-              {modeBlockers.length > 0 && (
+              {(modeBlockers.length > 0 || mappedTwice.length > 0) && (
                 <div
                   data-testid="course-import-blockers"
                   className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-800 space-y-1"
@@ -342,6 +345,19 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
                   {modeBlockers.map((b, i) => (
                     <p key={i}>{t(`blocker.${b.code}`, { ids: b.ids.join(", "), holder: b.holders?.[0] ?? "" })}</p>
                   ))}
+                  {mappedTwice.map((m) => (
+                    <p key={`twice-${m.seq}`}>{t("blocker.class_mapped_twice", { className: classNameOf(m.seq), courses: m.courseNames.join(", ") })}</p>
+                  ))}
+                </div>
+              )}
+
+              {/* A file of controls only (Merge): positions are updated, no course is touched */}
+              {preview.courses.length === 0 && modeBlockers.length === 0 && (
+                <div
+                  data-testid="course-import-no-courses-hint"
+                  className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800"
+                >
+                  {t("noCoursesMergeHint")}
                 </div>
               )}
 
@@ -521,7 +537,7 @@ export function CourseImportDialog({ onClose, onSuccess }: Props) {
                 <button
                   onClick={handleImport}
                   data-testid="course-import-submit"
-                  disabled={importMutation.isPending || modeBlockers.length > 0}
+                  disabled={importMutation.isPending || modeBlockers.length > 0 || mappedTwice.length > 0}
                   className={`flex-1 px-4 py-2.5 ${replaceAll ? "bg-red-600 hover:bg-red-700" : "bg-blue-600 hover:bg-blue-700"} text-white text-sm font-medium rounded-lg transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2`}
                 >
                   {importMutation.isPending ? (

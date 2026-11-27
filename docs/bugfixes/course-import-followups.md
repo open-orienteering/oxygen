@@ -19,10 +19,10 @@ Left out of fix package 17 ([course-import-safety.md](course-import-safety.md)),
    close the window.
 5. **No derived length** for a new course when the event has no map scale or
    the course is free order: it stays 0.
-6. **`skipPositions` flips `length_source`.** The position-less path calls
-   `rebuildCourseLengths(updateLength: false)` without `keepSource`, so an
-   existing course's `length_source` becomes `derived` / `null` although its
-   length is kept.
+6. **Peer tokens for removed rows.** The origin stamps the rows Replace all
+   removes with the entry's token; a peer's mirror (`events.ts`) soft-deletes
+   them without it, so their `version` differs between nodes (predates the
+   package; harmless until a removed row is edited on the peer).
 7. **Several races.** Refused today; a "which race?" picker in the dialog.
    A suggestion chip for substring class matches would also help.
 8. **Import-time `differing` is `null`** (existing Pending item in §6.4).
@@ -35,3 +35,11 @@ Left out of fix package 17 ([course-import-safety.md](course-import-safety.md)),
 12. **Two file ids on one site** (`31` and `131` both in the file, one
     `31;131` site): both map to the site and the course sequences use it;
     the preview counts it once. Not refused.
+13. **Deadlocks.** The import holds its row locks (controls, then courses)
+    and, after a start / finish allocation, the `control-codes` lock until it
+    commits. An editor save that locks a course first, or a `control.create`
+    waiting on a row the import holds, can deadlock with it; Postgres aborts
+    one side (`40P01`) and the import is undone as a whole. No retry yet.
+14. **Restored-row counts.** The result's `controlsCreated` / `coursesCreated`
+    include rows the import restored; the preview lists restored ones under
+    "Updates".
