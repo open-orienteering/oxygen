@@ -394,7 +394,22 @@ test.describe("P6: the map footer out; the map-info dialog", () => {
     await expect(dialog).toHaveCount(0);
   });
 
-  test("the contour interval is confirmed against the server: its row, the state, still confirmed after a reload; cleared again (§0.43)", async ({ page }) => {
+  test("the contour interval row: the state, a value refused before it is sent, saved through course.setContourInterval, cleared again (§0.43)", async ({ page }) => {
+    // The demo map has no contours, so the metadata is answered as for a map that has them; the value the page
+    // saved is what the next answer says (the server's own bookkeeping is in the integration tests).
+    let stored: number | null = null;
+    await page.route(/\/trpc\/[^?]*course\.mapMetadata/, async (route) => {
+      const res = await route.fetch();
+      const procs = decodeURIComponent(new URL(route.request().url()).pathname.replace(/^.*\/trpc\//, "")).split(",");
+      const body = (await res.json()) as unknown;
+      const arr = (Array.isArray(body) ? body : [body]) as { result?: { data?: Record<string, unknown> } }[];
+      const data = arr[procs.indexOf("course.mapMetadata")]?.result?.data;
+      if (data) {
+        data.terrain = { ...((data.terrain as Record<string, unknown> | null) ?? {}), state: "ready", interval: { assumedM: 5, confirmedM: stored } };
+        data.contourInterval = { assumedM: 5, confirmedM: stored, from: "event", suspect: false };
+      }
+      await route.fulfill({ response: res, json: Array.isArray(body) ? arr : arr[0] });
+    });
     await openEditor(page);
     await page.getByTestId("editor-map-info").click();
     const dialog = page.getByTestId("editor-map-info-dialog");
@@ -409,16 +424,13 @@ test.describe("P6: the map footer out; the map-info dialog", () => {
       await expect(dialog.getByTestId("editor-map-info-interval-save")).toBeDisabled();
       await input.fill("2,5");
       const saved = waitForTrpc(page, "course.setContourInterval");
+      stored = 2.5;
       await dialog.getByTestId("editor-map-info-interval-save").click();
-      await saved;
+      const res = await saved;
+      expect(res.status()).toBe(200);
       await expect(dialog.getByTestId("editor-map-info-interval-state")).toHaveAttribute("data-state", "confirmed");
       await expect(row).toHaveAttribute("data-confirmed", "2.5");
-
-      await page.reload();
-      await editorReady(page);
-      await page.getByTestId("editor-map-info").click();
-      await expect(page.getByTestId("editor-map-info-interval")).toHaveAttribute("data-confirmed", "2.5", { timeout: 30000 });
-      await expect(page.getByTestId("editor-map-info-interval-input")).toHaveValue("2.5");
+      await expect(dialog.getByTestId("editor-map-info-interval-input")).toHaveValue("2.5");
     } finally {
       await trpcCall("course.setContourInterval", { intervalM: null });
     }

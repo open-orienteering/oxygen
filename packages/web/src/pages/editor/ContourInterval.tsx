@@ -15,7 +15,7 @@
 
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { INTERVAL_SUGGESTIONS, parseInterval, useContourInterval } from "./contourIntervalState";
+import { INTERVAL_SUGGESTIONS, openMapInfoAtInterval, parseInterval, useContourInterval } from "./contourIntervalState";
 
 /** The dialog's row: *Contour interval*. */
 export function ContourIntervalRow({ labelClass }: { labelClass: string }) {
@@ -74,7 +74,7 @@ export function IntervalBanner({ nameId }: { nameId: string | null }) {
   if (!iv.canEdit || !iv.hasContours || !iv.data || iv.data.confirmedM !== null || dismissed) return null;
   return (
     <div data-testid="editor-interval-banner" role="status"
-      className="absolute left-1/2 top-1 z-20 flex max-w-[calc(100%-1rem)] -translate-x-1/2 items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs text-amber-900 shadow-sm">
+      className="absolute left-1/2 top-14 z-20 flex max-w-[calc(100%-1rem)] -translate-x-1/2 items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs text-amber-900 shadow-sm">
       <span className="truncate">{t("intervalBanner")}</span>
       <button type="button" data-testid="editor-interval-banner-open" onClick={openMapInfoAtInterval}
         className="shrink-0 rounded border border-amber-300 bg-white px-1.5 py-0.5 text-[11px] hover:bg-amber-100 cursor-pointer">{t("intervalConfirm")}</button>
