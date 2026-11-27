@@ -52,6 +52,12 @@ async function main() {
     maxParamLength: 500,
   });
 
+  // No response is ever to be sniffed into another type (an uploaded file
+  // served as text/html, CRS-003). Routes that set it themselves keep theirs.
+  server.addHook("onSend", async (_req, reply) => {
+    if (!reply.hasHeader("x-content-type-options")) reply.header("X-Content-Type-Options", "nosniff");
+  });
+
   // CORS_ORIGINS (comma-separated) extends the dev defaults — a venue box
   // must allow the cloud-served PWA's HTTPS origin so stations on the LAN
   // can call it cross-origin (Chrome LNA lifts the mixed-content block).

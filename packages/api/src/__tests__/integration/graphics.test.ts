@@ -186,3 +186,33 @@ describe("the event's kiosk key reads graphics (Q2)", () => {
     }
   });
 });
+
+describe("served graphics cannot run script (CRS-003 / API-31)", () => {
+  const CSP = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
+
+  it("sends a sandboxing CSP and nosniff on the raw bytes, print.png and thumb.png; an SVG downloads", async () => {
+    const svg = await upload("hostile-safe", SVG);
+    const raster = await upload("raster", await png(8, 4));
+    for (const row of [svg, raster]) {
+      for (const path of ["", "/print.png?w=40&h=20", "/thumb.png"]) {
+        // print.png of a PNG ignores w/h; of an SVG it needs them.
+        const res = await get(`/api/maps/${ctx.nameId}/graphics/${row.id}${path}`);
+        expect(res.statusCode, `${row.id}${path}`).toBe(200);
+        expect(res.headers["content-security-policy"], `${row.id}${path}`).toBe(CSP);
+        expect(res.headers["x-content-type-options"], `${row.id}${path}`).toBe("nosniff");
+      }
+    }
+    const rawSvg = await get(`/api/maps/${ctx.nameId}/graphics/${svg.id}`);
+    expect(rawSvg.headers["content-type"]).toContain("image/svg+xml");
+    expect(rawSvg.headers["content-disposition"]).toBe(`attachment; filename="graphic-${svg.id}.svg"`);
+    // A PNG is not a document: no download prompt.
+    expect((await get(`/api/maps/${ctx.nameId}/graphics/${raster.id}`)).headers["content-disposition"]).toBeUndefined();
+  });
+
+  it("refuses an SVG whose script hides in a comment or a character reference at upload", async () => {
+    const wrap = (inner: string) => Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 4">${inner}</svg>`);
+    for (const inner of ["<metadata><script>alert(1)</script></metadata>", "&#60;script>alert(1)&#60;/script>", '<image href="//evil.example/x.png"/>']) {
+      await expect(upload("bad", wrap(inner)), inner).rejects.toThrow(/The SVG must not contain/);
+    }
+  });
+});

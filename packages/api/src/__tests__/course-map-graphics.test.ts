@@ -67,6 +67,47 @@ describe("graphic upload validation", () => {
   });
 });
 
+describe("SVG graphic safety (CRS-003: nothing is stripped, the raw and the decoded text are both checked)", () => {
+  const svg = (inner: string, head = "") =>
+    Buffer.from(`${head}<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 10 10">${inner}</svg>`);
+
+  it("refuses markup that only works once comments, metadata or entities are read", () => {
+    const cases: Array<[string, Buffer, string]> = [
+      ["script inside <metadata>", svg(`<metadata><script>alert(1)</script></metadata>`), "script"],
+      ["script in a comment", svg(`<!-- <script>alert(1)</script> -->`), "script"],
+      ["a character reference for <", svg(`&#60;script>alert(1)&#60;/script>`), "script"],
+      ["an entity that expands to markup", svg(`&x;`, `<!DOCTYPE svg [<!ENTITY x "&#60;script>alert(1)&#60;/script>">]>`), "entity"],
+      ["an entity that references another", svg(`&x;`, `<!DOCTYPE svg [<!ENTITY x "&y;">]>`), "entity"],
+      ["a parameter entity", svg(``, `<!DOCTYPE svg [<!ENTITY % p "x">]>`), "entity"],
+      ["an external entity", svg(`&x;`, `<!DOCTYPE svg [<!ENTITY x SYSTEM "file:///etc/passwd">]>`), "entity"],
+      ["a namespaced script", svg(`<s:script xmlns:s="http://www.w3.org/2000/svg">alert(1)</s:script>`), "script"],
+      ["iframe", svg(`<iframe src="#a"/>`), "iframe"],
+      ["foreignObject", svg(`<foreignObject><p/></foreignObject>`), "foreignObject"],
+      ["a split javascript: scheme", svg(`<a xlink:href="java&#115;cript:alert(1)"><rect width="1" height="1"/></a>`), "javascript"],
+      ["a tab inside javascript:", svg(`<a href="java&#9;script:alert(1)"/>`), "javascript"],
+      ["a protocol-relative href", svg(`<image href="//host/x.png"/>`), "external references"],
+      ["a path href", svg(`<image href="/etc/x.png"/>`), "external references"],
+      ["an https xlink:href", svg(`<image xlink:href="https://host/x.png"/>`), "external references"],
+      ["an svg data href", svg(`<image href="data:image/svg+xml;base64,PHN2Zz48L3N2Zz4="/>`), "external references"],
+      ["a url() to a host", svg(`<rect fill="url(http://host/x)" width="1" height="1"/>`), "external references"],
+      ["a url() to a path", svg(`<rect style="fill:url('/x')" width="1" height="1"/>`), "external references"],
+      ["@import", svg(`<style>@import "x.css";</style>`), "@import"],
+      ["an event handler", svg(`<rect onload="x()" width="1" height="1"/>`), "event handler"],
+    ];
+    for (const [name, data, reason] of cases) {
+      expect(() => validateGraphicUpload(data), name).toThrow(reason);
+    }
+  });
+
+  it("accepts local references, embedded rasters and a plain-URL entity (Illustrator)", () => {
+    const png = "data:image/png;base64,iVBORw0KGgo=";
+    expect(validateGraphicUpload(svg(`<defs><linearGradient id="a"/></defs><use xlink:href="#a"/><rect fill="url(#a)" width="1" height="1"/>`))).toBe("image/svg+xml");
+    expect(validateGraphicUpload(svg(`<image href="${png}" width="1" height="1"/>`))).toBe("image/svg+xml");
+    expect(validateGraphicUpload(svg(`<image xlink:href='data:image/jpeg;base64,/9j/4AAQ' width="1" height="1"/>`))).toBe("image/svg+xml");
+    expect(validateGraphicUpload(svg(``, `<?xml version="1.0"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd" [<!ENTITY ns_svg "http://www.w3.org/2000/svg">]>`))).toBe("image/svg+xml");
+  });
+});
+
 describe("print.png's box (docs/course-print.md §8.5)", () => {
   it("takes integers 1–4096 for both sides, else the 400 message", () => {
     expect(parseRasterBox("473", "236")).toEqual([473, 236]);

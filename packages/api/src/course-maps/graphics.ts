@@ -28,17 +28,85 @@ export type GraphicMime = "image/svg+xml" | "image/png";
 
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
 
+/**
+ * What an uploaded SVG may not contain. Nothing is stripped before the
+ * check: a script in a comment, in `<metadata>` or behind a character
+ * reference is refused too (docs/course-maps.md "Graphics", CRS-003), so
+ * the validator and a browser or rasteriser cannot read different documents.
+ * Every pattern runs on the raw text and on the text with character
+ * references and the five predefined entities expanded.
+ */
+const SVG_FORBIDDEN_ELEMENT =
+  /<\s*(?:[\w.-]+:)?(script|foreignObject|iframe|object|embed|audio|video|link|meta|base)\b/i;
 const SVG_FORBIDDEN: Array<{ pattern: RegExp; reason: string }> = [
-  { pattern: /<script/i, reason: "script elements" },
-  { pattern: /<foreignObject/i, reason: "foreignObject elements" },
   { pattern: /javascript:/i, reason: "javascript: URLs" },
   { pattern: /\son\w+\s*=/i, reason: "event handler attributes" },
-  {
-    pattern: /(?:href|src)\s*=\s*(["'])\s*https?:/i,
-    reason: "external references",
-  },
-  { pattern: /url\(\s*(["']?)\s*https?:/i, reason: "external references" },
+  { pattern: /@import/i, reason: "@import rules" },
 ];
+/** An embedded raster; the only non-local href an SVG graphic may carry. */
+const SVG_DATA_IMAGE = /^data:image\/(?:png|jpe?g|gif|webp);base64,/i;
+
+/** Character references and the five predefined entities expanded, tabs and line breaks removed. */
+function decodeSvgText(text: string): string {
+  return text
+    .replace(/&#x([0-9a-f]+);?/gi, (_m, h: string) => codePoint(Number.parseInt(h, 16)))
+    .replace(/&#(\d+);?/g, (_m, d: string) => codePoint(Number.parseInt(d, 10)))
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&apos;/gi, "'")
+    .replace(/&amp;/gi, "&")
+    .replace(/[\t\r\n]/g, "");
+}
+
+function codePoint(n: number): string {
+  return Number.isInteger(n) && n >= 0 && n <= 0x10ffff ? String.fromCodePoint(n) : "";
+}
+
+/** The DOCTYPE's internal subset may declare plain-text entities only. */
+function assertSafeDoctype(raw: string): void {
+  const subset = /<!DOCTYPE[^[>]*\[([\s\S]*?)\]\s*>/i.exec(raw)?.[1];
+  if (subset === undefined) return;
+  const refuse = () => {
+    throw new Error("The SVG must not contain entity declarations that expand to markup or load files");
+  };
+  if (/<!ENTITY\s+%/i.test(subset)) refuse();
+  if (/<!ENTITY\s+\S+\s+(?:SYSTEM|PUBLIC)\b/i.test(subset)) refuse();
+  for (const m of subset.matchAll(/<!ENTITY\s+\S+\s+(?:"([^"]*)"|'([^']*)')/gi)) {
+    const value = decodeSvgText(m[1] ?? m[2] ?? "");
+    if (value.includes("<") || value.includes("&")) refuse();
+  }
+}
+
+/** Throws unless every reference in the document stays inside it (`#id`) or is an embedded raster. */
+function assertLocalReferences(raw: string, decoded: string): void {
+  const external = () => {
+    throw new Error("The SVG must not contain external references");
+  };
+  if (/(?:^|[\s"'/])(?:[\w.-]+:)?(?:href|src)\s*=\s*(?!["'])/i.test(raw)) external();
+  for (const m of raw.matchAll(/(?:^|[\s"'/])(?:[\w.-]+:)?(?:href|src)\s*=\s*(?:"([^"]*)"|'([^']*)')/gi)) {
+    const value = decodeSvgText(m[1] ?? m[2] ?? "").trim();
+    if (!value.startsWith("#") && !SVG_DATA_IMAGE.test(value)) external();
+  }
+  for (const text of [raw, decoded]) {
+    for (const m of text.matchAll(/url\(\s*(["']?)\s*([^)]*?)\1\s*\)/gi)) {
+      if (!decodeSvgText(m[2] ?? "").trim().startsWith("#")) external();
+    }
+  }
+}
+
+function assertSafeSvg(raw: string): void {
+  assertSafeDoctype(raw);
+  const decoded = decodeSvgText(raw);
+  for (const text of [raw, decoded]) {
+    const element = SVG_FORBIDDEN_ELEMENT.exec(text);
+    if (element) throw new Error(`The SVG must not contain ${element[1]} elements`);
+    for (const { pattern, reason } of SVG_FORBIDDEN) {
+      if (pattern.test(text)) throw new Error(`The SVG must not contain ${reason}`);
+    }
+  }
+  assertLocalReferences(raw, decoded);
+}
 
 interface ParsedSvgGraphic {
   mime: "image/svg+xml";
@@ -59,7 +127,10 @@ function sanitizeSvgMarkup(text: string): string {
 }
 
 function parseSvgGraphic(data: Buffer): ParsedSvgGraphic {
-  const text = sanitizeSvgMarkup(data.toString("utf8"));
+  const raw = data.toString("utf8");
+  // The checks read the document as uploaded; the stripped copy only locates
+  // the root and its inner markup.
+  const text = sanitizeSvgMarkup(raw);
   const rootStart = text.search(/<svg[\s>]/i);
   if (rootStart < 0) throw new Error("The SVG file has no <svg> root element");
   // The start tag's end, past `>` inside quoted attribute values.
@@ -70,11 +141,7 @@ function parseSvgGraphic(data: Buffer): ParsedSvgGraphic {
   if (rootEnd < 0 || closing <= rootEnd) {
     throw new Error("The SVG file is malformed");
   }
-  for (const { pattern, reason } of SVG_FORBIDDEN) {
-    if (pattern.test(text)) {
-      throw new Error(`The SVG must not contain ${reason}`);
-    }
-  }
+  assertSafeSvg(raw);
   const root = text.slice(rootStart, rootEnd + 1);
   const rootAttrs = [...root.matchAll(/\s(xmlns(?::[\w-]+)?)\s*=\s*(["'])([^"']*)\2/gi)]
     .map((match) => `${match[1]}="${match[3]}"`)
@@ -102,6 +169,16 @@ function parseSvgGraphic(data: Buffer): ParsedSvgGraphic {
     viewBox: parts.join(" "),
     rootAttrs,
   };
+}
+
+/**
+ * Headers for bytes an upload decided (a graphic's raw SVG, the PNGs
+ * rendered from it): even if a script slipped past the validator, a browser
+ * that opens the URL runs none of it and does not sniff another type.
+ */
+export function untrustedImageHeaders(reply: { header(name: string, value: string): unknown }): void {
+  reply.header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+  reply.header("X-Content-Type-Options", "nosniff");
 }
 
 /** Validate an uploaded graphic and return its detected mime type. */
