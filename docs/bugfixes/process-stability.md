@@ -1,6 +1,6 @@
 # Process stability: a stray rejection, a bad map file or a hung peer could stop the API
 
-Fix package 21 of the November 2026 full code review (`docs/reviews/2026-11-full-review.md`, IDs SYNC-39 / API-37i,
+Fix package 21 of the November 2026 full code review (report on branch `claude/project-thread-qb2vbb`, IDs SYNC-39 / API-37i,
 MAP-6, MAP-5 / DB-28, MAP-3, MAP-2, API-23, SYNC-21 / API-37a, EVT-13 / MC-45). Left-out edge cases are in
 [process-stability-followups.md](process-stability-followups.md).
 
