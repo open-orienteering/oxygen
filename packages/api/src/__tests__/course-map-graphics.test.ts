@@ -179,6 +179,7 @@ describe("SVG graphic safety (parser-based validation, docs/course-maps.md \"SVG
       // An entity value is a namespace URI only: no references, no markup, bounded.
       ["an entity value holding a character reference", Buffer.from(`<!DOCTYPE svg [<!ENTITY ns "http://www.w3.org/1999/xht&#109;l">]><svg xmlns="http://www.w3.org/2000/svg" xmlns:h="&ns;"><h:p/></svg>`), "DOCTYPE"],
       ["an overlong entity value", svg(``, ent(`<!ENTITY a "${"x".repeat(600)}">`)), "DOCTYPE"],
+      ["an element nested inside a style element", svg(`<style><style>.a{fill:red}</style></style>`), "elements inside a style element"],
       ["many small namespace declarations expanding past the document budget", Buffer.from(`<!DOCTYPE svg [<!ENTITY e "${"x".repeat(500)}">]><svg xmlns="http://www.w3.org/2000/svg">${`<g xmlns:q="&e;&e;&e;&e;"/>`.repeat(40)}</svg>`), "overlong namespace"],
       // Only ASCII whitespace is ignored in a URL: a browser reads these as relative URLs.
       ["an href after a no-break space", svg(`<use href="\u00a0#a"/>`), "external references"],

@@ -126,7 +126,7 @@ and a stored row at most 8 MiB (J2): a PNG whose longer side is over
 4096 px is resampled to 4096 by `sharp` (aspect and alpha kept, metadata
 dropped); a PNG still over 8 MiB is resampled to 3072, then 2048 px, and
 refused only beyond that (user 2026-11-18, question 12); a PNG that fits
-is stored byte for byte; an SVG over 8 MiB is refused. An SVG whose
+is stored byte for byte; an SVG over 8 MiB is refused before it is parsed, and an SVG whose `<style>` holds an element is refused. An SVG whose
 canvas is much larger than what it draws is stored **trimmed** to the
 drawing (user 2026-11-19, "Trim new uploads"; `trimSvgUpload` in
 `course-maps/svg-window.ts`, run in a print worker, `trimSvgInWorker`, so

@@ -363,7 +363,9 @@ function flatText(children: unknown[]): string {
     const node = raw as XmlNode;
     if ("#text" in node) text += decodeStrict(String(node["#text"]));
     else if ("__cdata" in node) text += (node.__cdata as XmlNode[]).map((n) => String(n["#text"] ?? "")).join("");
-    else text += flatText((node[Object.keys(node).find((k) => k !== ":@") ?? ""] as unknown[]) ?? []);
+    // CSS is character data only; an element inside <style> is refused (re-reading nested
+    // descendants at every level made validation O(depth × size)).
+    else refuse("elements inside a style element");
   }
   return text;
 }

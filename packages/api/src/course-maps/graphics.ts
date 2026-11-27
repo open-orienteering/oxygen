@@ -46,6 +46,8 @@ export function validateGraphicUpload(data: Buffer): GraphicMime {
     throw new Error(`Graphics are limited to ${MAX_GRAPHIC_UPLOAD_BYTES / MIB} MB`);
   }
   if (data.subarray(0, 4).equals(PNG_MAGIC)) return "image/png";
+  // The SVG limit is checked before parsing, so validation never reads more than that.
+  if (data.byteLength > MAX_GRAPHIC_STORED_BYTES) throw new Error(`An SVG graphic is limited to ${MAX_GRAPHIC_STORED_BYTES / MIB} MB`);
   analyseSvg(data);
   return "image/svg+xml";
 }

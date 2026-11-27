@@ -69,3 +69,8 @@ What [proxy-auth-and-svg-xss.md](proxy-auth-and-svg-xss.md) did not do, and why.
   `url(` scan, so `url(/*)*/#x)` reads as `#x` while a browser reads a
   same-origin relative target. No route to another host was found; the raw
   route is sandboxed and resvg does not fetch. Scan `url(` before stripping.
+- **Canonical SVG can be a few times larger than the upload**: escaping in the
+  re-serialisation (`"` to `&quot;`, newlines in attributes) gives up to about
+  6x on adversarial input, bounded by the 8 MiB SVG limit. Validation is
+  linear but runs on the main thread; moving `analyseSvg` into the worker
+  (above) also covers this.
