@@ -145,7 +145,8 @@ interface Found { cells: number[]; fastest: boolean; shortest: boolean }
 
 /** One stretch a → b: the fastest path, the alternatives, the shortest. Empty when b cannot be reached. */
 function searchStretch(g: RouteGrid, a: number, b: number, o: Required<Pick<RouteSearchOptions, "model" | "alternatives" | "maxCostRatio" | "maxShared">>): Found[] {
-  const fwd = costField(g, o.model, a);
+  // Without alternatives the field is only traced to b, so the search stops there (§7.7).
+  const fwd = costField(g, o.model, a, false, o.alternatives === 0 ? b : undefined);
   if (!Number.isFinite(fwd.cost[b])) return [];
   const best = tracePath(fwd, b).reverse();
   const found: Found[] = [{ cells: best, fastest: true, shortest: false }];
@@ -176,7 +177,8 @@ function searchStretch(g: RouteGrid, a: number, b: number, o: Required<Pick<Rout
     }
   }
   // The shortest legal route: distance only.
-  const shortField = costField(g, SHORTEST_COST_MODEL, a);
+  // The distance-only model's own field is the one already searched; else it too stops at b.
+  const shortField = o.model.id === SHORTEST_COST_MODEL.id ? fwd : costField(g, SHORTEST_COST_MODEL, a, false, b);
   const shortest = tracePath(shortField, b).reverse();
   const same = found.find((f) => {
     const own = new Uint8Array(g.cols * g.rows);
