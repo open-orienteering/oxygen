@@ -154,10 +154,12 @@ export const createCallerFactory = t.createCallerFactory;
 export const publicProcedure = t.procedure.use(async ({ path, next }) => {
   const result = await next();
   if (!result.ok) {
-    // Every Eventor read that runs out of time (sync, preview, import, club
-    // and runner sync, key check, competitor download) surfaces as TIMEOUT.
+    // Every Eventor call that runs out of time (a read: sync, preview, import,
+    // club and runner sync, key check, competitor download; or an upload)
+    // surfaces as TIMEOUT.
     const cause = result.error.cause;
     if (cause instanceof EventorTimeoutError) {
+      console.warn(`[tRPC TIMEOUT] ${path}: ${cause.message}`);
       throw new TRPCError({ code: "TIMEOUT", message: cause.message, cause });
     }
     console.error(`[tRPC ERROR] ${path}:`, result.error);

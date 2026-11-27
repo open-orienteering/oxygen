@@ -1083,7 +1083,10 @@ such a row, but the status poll and `awaitImportJob` kick on `needsKick` (queued
 or `running` with a stale heartbeat), so the poll settles it. The abandon also sets `claimedBy = null`, so a
 stalled-but-alive owner that wakes later no longer matches its guarded writes
 (`{ id, claimedBy: INSTANCE_ID }`: stage, heartbeat, the terminal `done` or
-`failed`): its late result changes nothing and the row stays `IMPORT_ABANDONED`. A job that merely
+`failed`). `execute` checks this once more through the guarded `store` stage write
+(`claimedBy` and `state = running`) before any side effect (the stored document, the
+colour, the pin, the derived artifacts) and returns when it matches nothing: its late
+result changes nothing and the row stays `IMPORT_ABANDONED`. A job that merely
 has a slow worker keeps its heartbeat and is never counted again; a redeploy
 that interrupts a job costs it one attempt.
 

@@ -100,14 +100,14 @@ async function readAndNormalise(
   const readOcad = await loadReader();
   opts.onStage?.("parse");
   let t = performance.now();
-  const damaged = () => new Error("DAMAGED_FILE: the map file is cut short or damaged (its object index cannot be read to the end). Export or copy the file again and upload it.");
+  const damaged = (cause?: unknown) => new Error("DAMAGED_FILE: the map file is cut short or damaged (its object index cannot be read to the end). Export or copy the file again and upload it.", cause === undefined ? undefined : { cause });
   let ocad: Awaited<ReturnType<ReadOcad>>;
   try {
     ocad = await readOcad(file, { quietWarnings: true });
   } catch (err: unknown) {
-    // A cut file makes the reader read past the end of the buffer: an out-of-range offset is damage, not a bug.
-    const e = err as { name?: string; code?: string; message?: string } | null;
-    if (err instanceof RangeError || e?.name === "RangeError" || e?.code === "ERR_OUT_OF_RANGE" || /out of range/i.test(e?.message ?? "")) throw damaged();
+    // A cut file makes the reader read past the end of the buffer: Node's buffer bounds errors are damage, not a bug.
+    const code = (err as { code?: unknown } | null)?.code;
+    if (code === "ERR_OUT_OF_RANGE" || code === "ERR_BUFFER_OUT_OF_BOUNDS") throw damaged(err);
     throw err;
   }
   const read = performance.now() - t;

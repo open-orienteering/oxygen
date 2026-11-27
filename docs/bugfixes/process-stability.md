@@ -44,6 +44,6 @@ MAP-6, MAP-5 / DB-28, MAP-3, MAP-2, API-23, SYNC-21 / API-37a, EVT-13 / MC-45). 
   chunks plus `missingCount`.
 - Node-to-node calls carry a per-call abort signal: 30 s for ordinary calls, 120 s for snapshot, blob and map-row
   transfers (`sync/peerTimeouts.ts`).
-- Eventor requests time out at 30 s, the competitor download at 120 s and uploads at 60 s. An upload timeout is
+- Eventor requests time out at 60 s (30 s when this was written), the competitor download at 120 s and uploads at 60 s. An upload timeout is
   reported as `EVENTOR_OUTCOME_UNKNOWN` (check Eventor before pushing again), and a second push for the same
   event while one runs is refused with `EVENTOR_PUSH_IN_PROGRESS`.

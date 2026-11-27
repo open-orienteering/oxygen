@@ -23,6 +23,7 @@ import { documentFrameSchema, mapFileMetadataFor } from "../../map-store/map-fil
 import { Prisma } from "../../generated/prisma/client.js";
 import {
   applyJobResult,
+  execute,
   getImportJob,
   INSTANCE_ID,
   kickImportJobs,
@@ -325,6 +326,24 @@ describe("import jobs from applyEventMap", () => {
     expect(after).toMatchObject({ state: "failed", claimedBy: null });
     expect(after?.error).toMatch(/^IMPORT_ABANDONED/);
   }, 30_000);
+
+  it("a late owner whose job was abandoned runs execute and pins nothing", async () => {
+    const club = await ctx.db.clubMap.create({ data: { name: `late-owner-${suffix}` } });
+    const job = await ctx.db.mapImportJob.create({
+      data: { eventId: null, clubMapId: club.id, sourceHash: fixtureHash, state: "running", stage: "parse", claimedBy: INSTANCE_ID, attempts: IMPORT_MAX_ATTEMPTS, heartbeatAt: new Date(Date.now() - 120_000) },
+    });
+    await kickImportJobs(ctx.db);
+    const abandoned = await getImportJob(ctx.db, job.id);
+    expect(abandoned).toMatchObject({ state: "failed", claimedBy: null });
+    // The stalled owner still holds its in-memory row and runs to the end.
+    await execute(ctx.db, { ...abandoned!, state: "running", claimedBy: INSTANCE_ID });
+    expect(await ctx.db.clubMapVersion.count({ where: { clubMapId: club.id } })).toBe(0);
+    const after = await getImportJob(ctx.db, job.id);
+    expect(after).toMatchObject({ state: "failed", claimedBy: null });
+    expect(after?.error).toMatch(/^IMPORT_ABANDONED/);
+    await ctx.db.mapImportJob.delete({ where: { id: job.id } });
+    await ctx.db.clubMap.delete({ where: { id: club.id } });
+  }, 60_000);
 
   it("an exhausted promote job removes its pending version", async () => {
     const club = await ctx.db.clubMap.create({ data: { name: `abandon-${suffix}` } });

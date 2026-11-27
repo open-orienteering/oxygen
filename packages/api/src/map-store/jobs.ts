@@ -286,8 +286,9 @@ async function claim(db: Db, id: string): Promise<ImportJobRow | null> {
 }
 
 /** Writes guarded by `claimedBy` so a job re-claimed elsewhere ignores our late updates. */
-async function progress(db: Db, id: string, stage: JobStage): Promise<void> {
-  await db.mapImportJob.updateMany({ where: { id, claimedBy: INSTANCE_ID }, data: { stage, progress: stageProgress(stage), heartbeatAt: new Date() } });
+async function progress(db: Db, id: string, stage: JobStage): Promise<boolean> {
+  const { count } = await db.mapImportJob.updateMany({ where: { id, claimedBy: INSTANCE_ID, state: "running" }, data: { stage, progress: stageProgress(stage), heartbeatAt: new Date() } });
+  return count === 1;
 }
 
 /**
@@ -295,10 +296,11 @@ async function progress(db: Db, id: string, stage: JobStage): Promise<void> {
  * (a dropped connection) is logged, never an unhandled rejection (MAP-6).
  */
 export function reportStage(db: Db, id: string, stage: JobStage): Promise<void> {
-  return progress(db, id, stage).catch((err: unknown) => console.error(`[map-import] stage ${stage} of ${id}:`, err));
+  return progress(db, id, stage).then(() => undefined, (err: unknown) => console.error(`[map-import] stage ${stage} of ${id}:`, err));
 }
 
-async function execute(db: Db, job: ImportJobRow): Promise<void> {
+/** Runs one claimed job to its terminal row. Exported for the late-owner test; callers go through `kickImportJobs`. */
+export async function execute(db: Db, job: ImportJobRow): Promise<void> {
   const heartbeat = setInterval(() => {
     db.mapImportJob.updateMany({ where: { id: job.id, claimedBy: INSTANCE_ID }, data: { heartbeatAt: new Date() } })
       .catch((err: unknown) => console.error(`[map-import] heartbeat ${job.id}:`, err));
@@ -309,7 +311,11 @@ async function execute(db: Db, job: ImportJobRow): Promise<void> {
     if (source.kind !== "ocad" && source.kind !== "omap") throw new Error(`UNSUPPORTED_FORMAT: ${source.kind} import is not available`);
 
     const result = await runImportInWorker(source.bytes, source.fileName, { kind: source.kind, decisions: job.decisions, patch: job.patch, colour: job.colour, onStage: (stage) => void reportStage(db, job.id, stage) });
-    await progress(db, job.id, "store");
+    // The guarded write doubles as the ownership check: an abandoned or re-claimed job pins nothing (docs/map-storage.md §6).
+    if (!(await progress(db, job.id, "store"))) {
+      console.warn(`[map-import] job ${job.id} is no longer ours: result discarded`);
+      return;
+    }
     const stored = await storeImportedDocument(db, {
       source: { bytes: source.bytes, fileHash: job.sourceHash, kind: source.kind, fileName: source.fileName, uploadedBy: source.uploadedBy },
       document: { bytes: result.bytes, hash: result.documentHash, libraryVersion: result.libraryVersion, patch: job.patch },

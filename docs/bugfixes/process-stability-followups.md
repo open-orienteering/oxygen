@@ -17,7 +17,7 @@ Left open by [process-stability.md](process-stability.md) (fix package 21).
   damaged file, but a large file still parses on the event loop; move it to a worker.
 - **The Eventor push guard is per process.** Two Cloud Run instances can still upload at once; it needs an
   advisory lock or a row.
-- **Eventor `sync` / `importEvent`** make several sequential calls, each bounded at 30 s, with no overall deadline
+- **Eventor `sync` / `importEvent`** make several sequential calls, each bounded at 60 s, with no overall deadline
   and no in-flight guard.
 - **Other outbound fetches without a timeout:** `liveresults.ts`, `sheetsBackup.ts`, and the google-auth-library
   token fetch in `sync/googleIdToken.ts`.

@@ -122,4 +122,17 @@ describe("read-phase timeout through the router", () => {
     );
     spy.mockRestore();
   });
+
+  it("a TRPCError-wrapped EventorTimeoutError cause (an upload) surfaces as TIMEOUT and is logged", async () => {
+    const r = router({
+      wrapped: publicProcedure.mutation(async () => {
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "wrapped", cause: new EventorTimeoutError("upload", EVENTOR_UPLOAD_TIMEOUT_MS) });
+      }),
+    });
+    const caller = createCallerFactory(r)({} as never);
+    const spy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await expect(caller.wrapped()).rejects.toSatisfy((e) => e instanceof TRPCError && e.code === "TIMEOUT" && /OUTCOME_UNKNOWN/.test(e.message));
+    expect(spy).toHaveBeenCalledWith(expect.stringMatching(/^\[tRPC TIMEOUT\] wrapped: EVENTOR_OUTCOME_UNKNOWN/));
+    spy.mockRestore();
+  });
 });
