@@ -65,3 +65,7 @@ What [proxy-auth-and-svg-xss.md](proxy-auth-and-svg-xss.md) did not do, and why.
   resolve the event locally or answer 400 for an unknown one (that check runs
   only with login on). The cloud's lease-holder rule still limits what the
   forward can touch.
+- **CSS comments inside an unquoted `url()`**: comments are stripped before the
+  `url(` scan, so `url(/*)*/#x)` reads as `#x` while a browser reads a
+  same-origin relative target. No route to another host was found; the raw
+  route is sandboxed and resvg does not fetch. Scan `url(` before stripping.

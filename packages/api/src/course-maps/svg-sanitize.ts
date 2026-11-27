@@ -33,6 +33,8 @@ const DATA_FONT = /^data:(?:font\/[\w.+-]+|application\/(?:x-)?font-[\w.+-]+|app
 const MAX_ENTITY_VALUE = 512;
 /** Longest namespace declaration after entity expansion. */
 const MAX_NAMESPACE_VALUE = 2048;
+/** Most characters entity expansion may add across a whole document. */
+const MAX_TOTAL_EXPANSION = 64 * 1024;
 
 function refuse(what: string): never {
   throw new Error(`The SVG must not contain ${what}`);
@@ -252,6 +254,8 @@ function urlTargets(text: string): string[] {
 
 interface Walk {
   entities: Map<string, string>;
+  /** Characters namespace-entity expansion has added so far, across the whole document. */
+  expanded: number;
   out: string[];
   root?: Record<string, string>;
 }
@@ -264,16 +268,26 @@ function attributesOf(node: XmlNode): Array<[string, string]> {
 /** Attributes a browser may fetch or navigate from: only `#…` or an embedded raster. */
 const URL_ATTRIBUTES = new Set(["href", "src", "srcset", "action", "formaction", "ping", "poster", "background"]);
 
+/** Leading and trailing U+0020 removed by index (a ` +$` regex is quadratic on long inner runs). */
+function trimSpaces(s: string): string {
+  let start = 0;
+  let end = s.length;
+  while (start < end && s[start] === " ") start++;
+  while (end > start && s[end - 1] === " ") end--;
+  return s.slice(start, end);
+}
+
 function checkAttribute(element: string, name: string, value: string): void {
   if (!NAME.test(name)) refuse("unusual attribute names");
   const local = localName(name).toLowerCase();
   if (/^on/i.test(local)) refuse("event handler attributes");
   // A browser ignores tabs, line breaks and other control characters inside a scheme (not spaces).
-  const bare = value.replace(/[\x00-\x1f\x7f-\x9f]/g, "").trim();
+  const bare = trimSpaces(value.replace(/[\x00-\x1f\x7f-\x9f]/g, ""));
   if (/(?:javascript|vbscript):|^data:text/i.test(bare)) refuse("javascript: URLs");
   if (URL_ATTRIBUTES.has(local)) {
-    // A URL ignores ASCII whitespace too (line-wrapped base64).
-    const url = bare.replace(/\s/g, "");
+    // A URL ignores ASCII whitespace too (line-wrapped base64); Unicode spaces are not stripped.
+    const url = value.replace(/[\t\n\f\r ]/g, "");
+    if (/[\x00-\x1f\x7f-\x9f]/.test(url)) refuse("external references");
     const ok = url.startsWith("#") || (DATA_IMAGE.test(url) && /^[^,]*,[A-Za-z0-9+/=]*$/.test(url));
     if (!ok) refuse("external references");
   }
@@ -316,6 +330,10 @@ function walk(nodes: unknown, state: Walk, depth: number): void {
       if (isNs && rawValue.length > MAX_NAMESPACE_VALUE) refuse("overlong namespace declarations");
       const value = decodeStrict(rawValue, isNs ? state.entities : undefined);
       if (isNs && value.length > MAX_NAMESPACE_VALUE) refuse("overlong namespace declarations");
+      if (isNs) {
+        state.expanded += Math.max(0, value.length - rawValue.length);
+        if (state.expanded > MAX_TOTAL_EXPANSION) refuse("overlong namespace declarations");
+      }
       if (isNs && /XSL\/Transform/i.test(value)) refuse("stylesheet processing instructions or XSLT");
       if (isNs && /\/1999\/xhtml/i.test(value)) refuse("XHTML elements");
       checkAttribute(local, name, value);
@@ -373,7 +391,7 @@ export function analyseSvg(data: Uint8Array | string): SvgAnalysis {
   const top = (tree as XmlNode[]).filter((n) => !("#text" in n) || String(n["#text"]).trim() !== "");
   if (top.length === 0) throw new Error("The SVG file has no <svg> root element");
   if (top.length !== 1 || "#text" in top[0] || "__cdata" in top[0]) throw new Error("The SVG file is malformed");
-  const state: Walk = { entities, out: [] };
+  const state: Walk = { entities, expanded: 0, out: [] };
   walk(top, state, 0);
   const root = state.root ?? {};
   let viewBox = root.viewBox?.trim();
