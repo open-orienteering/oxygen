@@ -193,7 +193,8 @@ automatic cuts; an empty list means automatic (decision log 2026-11-01,
 
 Free order is the structure's `orderMode` (a property of the course, not
 of the view). A site at the origin (0, 0) is unpositioned and skipped,
-legs connecting the remaining items (the editor's rule, `editorCourseLayer`).
+legs connecting the remaining items (the editor's rule, `editorCourseLayer`);
+a control-role item's number is kept (§3.5).
 Gaps follow the rule above. Crossing points, map-issue points and map
 exchanges are drawn since F4 (§10.3; an exchange as a control, the
 course split into parts at it since F5, §11); variations reach the layer
@@ -386,7 +387,9 @@ user review). The flag reaches every consumer of the layer:
 
 ### 3.5 Numbers
 
-- **Text**: `sequence` (1, 2, … over the first course's control items; a
+- **Text**: `sequence` (1, 2, … over the first course's control items,
+  placed or not: an unplaced control takes its number and draws nothing,
+  as the description sheet counts it — CRS-024, review D5 (exception: the all-variations numbers and the editor's predicate, §12.7 and Pending); a
   site visited twice gets `3/7`) by default for one ordered course
   outside the all-controls view; `code` otherwise, or by `labelMode`.
   `viewOptions.labels` (F15) wins over both for the control-role sites it
@@ -1460,6 +1463,16 @@ hid it already; the flag is for a hatch whose opening shows the map. The
 hiding goes wherever the image is drawn with its control: an `all`-scoped
 hatch hides them on all-controls and setter sheets too.
 
+**In print the hiding graphic must load** (CRS-010, review D5). The
+hide flags act whether or not the graphic's bytes are there, so a hatch
+that fails to load would print the control bare. An attached image with
+`hideControlCircle` or `hideControlNumber` that the page draws and whose
+graphic is missing (another event's or a deleted graphic, a PNG that
+cannot be fetched, an SVG that cannot be rasterised) therefore fails the
+print: `renderCoursePages` throws `PrintGraphicMissingError` (a 400 on
+`maps.pdf`; `course-print.md` §8.2 item 5). Any other missing graphic
+stays an `IMAGE_MISSING` / `SVG_RASTER` warning.
+
 **Graphic outline (J19).** A knockout image object read by the API
 (`loadCourseObjects`, so the list, the print job and the checks alike)
 carries its graphic's traced outline as `outline` — never written, never
@@ -2434,6 +2447,8 @@ label.
 | unit | `cuts.test.ts` | §3.4: clearances at arc and gap ends, the cut rules |
 | unit | `cuts.test.ts` "polylineLegGaps" | §3.4 "Bent leg" (F1): a straight leg equals `legGaps`, fractions along the bends, one gap across a bend, end keep at the ends only, the 70 % cap |
 | unit | `course/__tests__/cuts-reference.test.ts` (fixture `__fixtures__/cuts-reference.json`) | §3.4 (F20b) |
+| unit | `derive.test.ts` "an unplaced control takes its number" | §3.5 (CRS-024) |
+| unit | `print/__tests__/course-pages.test.ts` "a graphic that stands in for a control" | §8.1 (CRS-010) |
 | unit | `derive.test.ts` "bends and styles" | §10.1 |
 | unit | `layer.test.ts` "leg styles" | §10.1: a `marked_route` leg draws 707 through its bend, upper purple, more than three dash slices, after black; a `none` leg draws nothing, numbers unchanged |
 | unit | `checks.test.ts` "test the bent polyline" | §9.2: a bend round the building clears it, the first hit along the bends |
@@ -2584,6 +2599,8 @@ label.
 | `packages/api/src/course-checks.ts`, `event-map-objects.ts` (`loadEventCheckDocument`), `description-autodetect.ts` (`describeAt`, `descriptionsEqual`) | §9.4: the server's list, `DESCRIPTION_STALE`; `routers/course.ts` `checks`, `setStructure` |
 
 ## Pending in this chapter
+
+- **All-variations numbers and the editor's predicate count placed controls only** (`allVariationNumbers` in `resolve-sheet.ts`, `variation-view.ts`), so they differ from §3.5's numbers (which count an unplaced control) for a course that has one (CRS-024 follow-up).
 
 - **Course import, beyond package 17** (§6.4 "Import semantics"): a
   "which race?" picker for a multi-race IOF file (refused today); rename

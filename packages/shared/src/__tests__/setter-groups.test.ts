@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { groupSites, type GroupSite } from "../course-maps/setter-groups.js";
+import { groupSites, nearestGroupIndex, type GroupSite } from "../course-maps/setter-groups.js";
 
 const site = (seq: number, x: number, y: number): GroupSite => ({ id: `c${seq}`, seq, x, y });
 const seqs = (groups: GroupSite[][]) => groups.map((g) => g.map((s) => s.seq));
@@ -44,5 +44,23 @@ describe("groupSites — setter maps (course-layout.md §8; 08 §4.6 k-means)", 
     expect(groupSites(twoClusters, 0)).toHaveLength(1);
     expect(groupSites(twoClusters, 10)).toHaveLength(6);
     expect(groupSites([], 3)).toEqual([]);
+  });
+});
+
+describe("nearestGroupIndex — a control added after generation (CRS-002)", () => {
+  const west = [{ x: -100, y: 0 }, { x: -90, y: 10 }];
+  const east = [{ x: 100, y: 0 }, { x: 110, y: 10 }];
+  it("picks the group with the nearest centroid", () => {
+    expect(nearestGroupIndex({ x: -60, y: 0 }, [west, east])).toBe(0);
+    expect(nearestGroupIndex({ x: 60, y: 0 }, [west, east])).toBe(1);
+  });
+  it("a tie goes to the lower index", () => {
+    expect(nearestGroupIndex({ x: 5, y: 5 }, [[{ x: -10, y: 5 }], [{ x: 20, y: 5 }]])).toBe(0);
+    expect(nearestGroupIndex({ x: 5, y: 5 }, [[{ x: 0, y: 5 }], [{ x: 10, y: 5 }]])).toBe(0);
+  });
+  it("skips an empty group unless all are empty", () => {
+    expect(nearestGroupIndex({ x: -100, y: 0 }, [[], east])).toBe(1);
+    expect(nearestGroupIndex({ x: 0, y: 0 }, [[], []])).toBe(0);
+    expect(nearestGroupIndex({ x: 0, y: 0 }, [])).toBe(-1);
   });
 });

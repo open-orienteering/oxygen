@@ -92,10 +92,18 @@ export function FieldSection({ rows, selectedControlId, onSelectRow, onCheck, ca
       )}
     </div>
   );
-  if (!setterRows && !hasCourse) return <>{picker}<p className="px-2.5 py-2 text-slate-400" data-testid="editor-field-no-course">{t("fieldNoCourse")}</p></>;
+  const codeOf = useMemo(() => new Map((controls.data ?? []).map((c) => [c.id, displayCode({ codes: c.codes, name: c.name, seq: c.id, kind: c.kind })])), [controls.data]);
+  const missing = picked?.setter?.unassigned ?? [];
+  const warning = missing.length > 0 && (
+    <p className="px-2.5 py-1 text-amber-700" data-testid="editor-field-setter-unassigned" data-count={missing.length}>
+      {t("layoutSetterUnassigned", { count: missing.length, codes: missing.map((id) => codeOf.get(id) ?? String(id)).join(", ") })}
+    </p>
+  );
+  if (!setterRows && !hasCourse) return <>{picker}{warning}<p className="px-2.5 py-2 text-slate-400" data-testid="editor-field-no-course">{t("fieldNoCourse")}</p></>;
   return (
     <>
     {picker}
+    {warning}
     <FieldList rows={setterRows ?? rows} selectedControlId={selectedControlId} onSelectRow={onSelectRow} onCheck={onCheck} canCheck={canCheck} setter={picked?.seq ?? null} />
     </>
   );

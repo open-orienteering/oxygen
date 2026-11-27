@@ -228,6 +228,10 @@ export function buildPpenXml(input: PpenExportInput): string {
 
   const builder = new XMLBuilder({
     ignoreAttributes: false,
+    // Valued boolean attributes (`restrict-to-page-size="true"`), not bare
+    // ones: bare attributes are not well-formed XML. Same as
+    // `iof-course-export.ts`.
+    suppressBooleanAttributes: false,
     format: true,
     suppressEmptyNode: true,
   });

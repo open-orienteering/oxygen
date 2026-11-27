@@ -89,3 +89,22 @@ export function groupSites<T extends GroupSite>(input: readonly T[], n: number):
   groups.sort((a, b) => a.centre.x - b.centre.x || b.centre.y - a.centre.y || a.sites[0].seq - b.sites[0].seq);
   return groups.map((g) => g.sites);
 }
+
+/**
+ * The group a site added after generation joins (CRS-002, docs/course-layout.md §8): the index of the group whose
+ * centroid (mean position of its members) is nearest; a tie goes to the lower index (the lower setter number when
+ * the groups are in setter order). An empty group has no centroid and is skipped; when every group is empty the
+ * first is taken. No groups: -1.
+ */
+export function nearestGroupIndex(site: { x: number; y: number }, groups: ReadonlyArray<ReadonlyArray<{ x: number; y: number }>>): number {
+  if (groups.length === 0) return -1;
+  let best = -1, bestD = Infinity;
+  for (const [i, members] of groups.entries()) {
+    if (members.length === 0) continue;
+    const cx = members.reduce((n, m) => n + m.x, 0) / members.length;
+    const cy = members.reduce((n, m) => n + m.y, 0) / members.length;
+    const d = (site.x - cx) ** 2 + (site.y - cy) ** 2;
+    if (d < bestD) { best = i; bestD = d; }
+  }
+  return best < 0 ? 0 : best;
+}

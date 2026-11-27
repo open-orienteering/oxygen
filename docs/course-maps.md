@@ -167,7 +167,7 @@ runs on the API thread (tens of milliseconds at 512 px, once per
 graphic). Storing it stamps `updated_at`
 once (the trigger), so a thumbnail is refetched once. Deleting a graphic that sheets still place leaves
 those image objects pointing at a missing graphic: the editor and print
-report it as before J2 (`IMAGE_MISSING`); the picker does not check use.
+report it as before J2 (`IMAGE_MISSING`; for an attached image that hides its control's circle or number the print fails instead, `course-print.md` §8.2 item 5, CRS-010); the picker does not check use (checking across events is a follow-up).
 
 Tests (J2): `packages/api/src/__tests__/course-map-graphics-upload.test.ts`
 (pixel size, the 4096 resample with alpha, the 3072/2048 fallbacks, the

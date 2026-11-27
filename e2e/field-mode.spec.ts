@@ -652,6 +652,19 @@ test.describe("Field mode on a desktop (docs/course-editor.md §9)", () => {
       await expect(rows).toHaveCount(setters[0].setter!.controls.length, { timeout: 15000 });
       expect((await rows.evaluateAll((els) => els.map((e) => Number(e.getAttribute("data-control-id")))))).toEqual(setters[0].setter!.controls);
       await expect(page.getByTestId("editor-field-setter-kpi")).toContainText("Setter 1");
+      // A control created after generation is in no setter map: the picked setter's line names it (CRS-002).
+      const added = await trpcCall<{ id: number }>("control.create", { codes: "978", xpos: 41, ypos: 31 });
+      try {
+        await page.reload();
+        await page.getByTestId("editor-mode-field").click();
+        await page.getByTestId("editor-field-setter-picker").selectOption(String(setters[0].seq));
+        await expect(page.getByTestId("editor-field-setter-unassigned")).toContainText("978", { timeout: 15000 });
+      } finally {
+        await trpcCall("control.delete", { id: added.id });
+      }
+      await page.reload();
+      await page.getByTestId("editor-mode-field").click();
+      await page.getByTestId("editor-field-setter-picker").selectOption(String(setters[0].seq));
       // None: the course's list again (or the "pick a course" line without one).
       await picker.selectOption("");
       await expect(page.locator('[data-testid="editor-field-list"]:not([data-setter=""])')).toHaveCount(0);

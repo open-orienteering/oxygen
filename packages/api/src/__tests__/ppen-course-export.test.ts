@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { buildPpenXml, type PpenExportInput } from "../ppen-course-export.js";
 import { parsePpenCourseData } from "../ppen-course-parser.js";
 import { course } from "@oxygen/shared";
+import { XMLValidator } from "fast-xml-parser";
 
 /** A two-course event: shared start/finish, one control only on course B. */
 function sample(): PpenExportInput {
@@ -58,6 +59,19 @@ describe("buildPpenXml", () => {
     expect(xml).toContain('kind="finish"');
     expect(xml).toContain("<code>31</code>");
     expect(xml).not.toContain("<code>99</code>");
+  });
+
+  it("is well-formed XML with valued boolean attributes (EVT-07)", () => {
+    for (const input of [sample(), { ...sample(), courses: [], classAssignments: [] }]) {
+      const xml = buildPpenXml(input);
+      expect(XMLValidator.validate(xml)).toBe(true);
+      // No bare attribute inside any tag: every name is followed by "=".
+      for (const tag of xml.match(/<[A-Za-z][^>]*>/g) ?? []) {
+        const attrs = tag.replace(/^<[\w-]+/, "").replace(/"[^"]*"/g, '""');
+        expect(attrs).not.toMatch(/\s[\w-]+(?=[\s/>])(?!=)/);
+      }
+    }
+    expect(buildPpenXml(sample())).toContain('restrict-to-page-size="true"');
   });
 
   it("survives a round-trip through the ppen importer", () => {

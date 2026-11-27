@@ -29,7 +29,8 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { MapSlot } from "../components/MapSlot";
-import { CourseMultiSelectDropdown } from "../components/CourseMultiSelectDropdown";
+import { ClassCourseSelect } from "../components/ClassCourseSelect";
+import { courseChange } from "../lib/class-course";
 import { useCapabilities } from "../context/CapabilitiesContext";
 
 export function ClassesPage() {
@@ -585,16 +586,7 @@ function SortableClassRow({
           {cls.name}
         </td>
         <td className="px-4 py-2.5 text-slate-600">
-          {cls.courseIds.length > 1 ? (
-            <span className="flex items-center gap-1.5">
-              <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-700">
-                {t("courseForked")}
-              </span>
-              <span className="text-xs text-slate-400">
-                {cls.courseNames.join(", ")}
-              </span>
-            </span>
-          ) : cls.courseNames.length > 0 ? (
+          {cls.courseNames.length > 0 ? (
             cls.courseNames[0]
           ) : (
             <span className="text-slate-300">—</span>
@@ -688,7 +680,6 @@ function ClassInlineDetail({ classId }: { classId: number }) {
   const [editFee, setEditFee] = useState<string | null>(null);
   const [editMaxTime, setEditMaxTime] = useState<string | null>(null);
   const maxTimeInvalid = editMaxTime !== null && editMaxTime.trim() !== "" && parseDuration(editMaxTime, "hm") === null;
-  const [editCourseIds, setEditCourseIds] = useState<number[] | null>(null);
 
   if (detail.isLoading) {
     return (
@@ -712,9 +703,11 @@ function ClassInlineDetail({ classId }: { classId: number }) {
     updateMutation.mutate({ id: classId, [field]: value });
   };
 
-  const handleCourseChange = (ids: number[]) => {
-    setEditCourseIds(ids);
-    updateMutation.mutate({ id: classId, courseId: ids[0] ?? null });
+  const handleCourseChange = (courseId: number | null) => {
+    const change = courseChange(d.courseIds[0] ?? null, courseId, d.runnerCount);
+    if (!change.changed) return;
+    if (change.confirm && !window.confirm(t("courseChangeConfirm", { count: d.runnerCount }))) return;
+    updateMutation.mutate({ id: classId, courseId });
   };
 
   return (
@@ -924,12 +917,9 @@ function ClassInlineDetail({ classId }: { classId: number }) {
           {/* Course assignment */}
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-2">
-              {(editCourseIds ?? d.courseIds).length > 1 ? t("coursesForked") : t("course")}
+              {t("course")}
             </label>
-            <CourseMultiSelectDropdown
-              selectedIds={editCourseIds ?? d.courseIds}
-              onChange={handleCourseChange}
-            />
+            <ClassCourseSelect value={d.courseIds[0] ?? null} onChange={handleCourseChange} testId="class-course-select" />
           </div>
 
           {/* Quick info */}
@@ -1096,7 +1086,7 @@ function CreateClassForm({
 }) {
   const { t } = useTranslation("classes");
   const [name, setName] = useState("");
-  const [courseIds, setCourseIds] = useState<number[]>([]);
+  const [courseId, setCourseId] = useState<number | null>(null);
   const [sex, setSex] = useState("");
   const [sortIndex, setSortIndex] = useState("");
 
@@ -1109,7 +1099,7 @@ function CreateClassForm({
     if (!name.trim()) return;
     createMutation.mutate({
       name: name.trim(),
-      courseId: courseIds[0] ?? undefined,
+      courseId: courseId ?? undefined,
       sex,
       sortIndex: parseInt(sortIndex, 10) || 0,
     });
@@ -1167,9 +1157,9 @@ function CreateClassForm({
         </div>
         <div>
           <label className="block text-xs font-medium text-slate-500 mb-2">
-            {courseIds.length > 1 ? t("coursesForked") : t("course")}
+            {t("course")}
           </label>
-          <CourseMultiSelectDropdown selectedIds={courseIds} onChange={setCourseIds} />
+          <ClassCourseSelect value={courseId} onChange={setCourseId} testId="class-create-course-select" />
         </div>
         <div className="flex items-center gap-2 pt-1">
           <button

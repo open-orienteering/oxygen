@@ -365,7 +365,18 @@ pooled class asks for a new deal (the Variant select offers no "none").
 `runner.updated.fields` carries the resulting `courseId` (seq or null),
 so a peer replays the pick and never re-picks.
 
-**The invariant: every runner in a pooled class has a variant.** The
+**One class, one course** (WEB-09, review D5). The Classes page picks a
+class's course with a single select; picking the course it has changes
+nothing, and changing it asks first when the class has runners (their
+variants are cleared or dealt anew). A runner who has raced (a finish time
+or a result status, as `distributeVariants` skips her) keeps her variant
+through a course change, **even when it is outside the new pool** (or the
+class has none): the result stands on the course she ran.
+`runner.update`'s `VARIANT_NOT_IN_POOL` applies only when a `courseId` is
+passed. Runners with no course are dealt as before.
+
+**The invariant: every runner in a pooled class has a variant** (a raced
+runner left outside the pool by a course change is the one exception). The
 pick is `assignVariant` — the least-populated variant of the pool among
 the class's non-removed runners (withdrawn ones count), ties the first
 key. Where it runs:
@@ -374,7 +385,7 @@ key. Where it runs:
 |------|------|
 | `runner.create` without `courseId` (the Registration dialog sends none) | `assignVariant`, journaled in `runner.registered.courseId` |
 | `runner.update` / `bulkUpdate { classId }` (a class change) | clear + `assignVariant` |
-| `class.create` / `update` / `bulkUpdate { courseId }`, `course.importCourses`' class mapping | `syncClassPool` → `reconcileClassVariants` (deals a fresh pool in start order, balanced; clears a runner left on a variant when the class has no pool) |
+| `class.create` / `update` / `bulkUpdate { courseId }`, `course.importCourses`' class mapping | `syncClassPool` → `reconcileClassVariants` (deals a fresh pool in start order, balanced; clears a runner left on a variant when the class has no pool; **a runner who has raced keeps her variant**, in or out of the new pool — WEB-09). `class.update` / `bulkUpdate` call it only when the course actually changes |
 | A variant vanishing under re-materialisation (`syncVariants`, `clearRemovedVariants`) | its runners are nulled, then reconciled: dealt one of the remaining pool, null only when the class has none |
 | `events.push` of a station `runner.registered` without `courseId`, or a station `runner.updated { classId }` without `courseId` | the writing node (no lease, or the leaseholder) deals one and journals `runner.updated { courseId }` **after** the ingested entry; a follower deals nothing and waits for the leaseholder's entry (single-allocator rule, `system/offline-architecture.md`) |
 | Eventor `sync` (re-entry: new entries, class moves) | `reconcileVariants` over the event's classes, once at the end (not journaled, as the sync's runner writes are not) |

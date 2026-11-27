@@ -308,7 +308,7 @@ corners in the order bottom-left, bottom-right, top-right, top-left).
 - **Backends.** The reference raster (§5.1) draws an SVG `<image>`
   through the quad, the PDF (§5.3) an image XObject under `cm`, each from
   the bytes its caller gives by graphic id; without bytes the pass is
-  left out (the PDF warns `IMAGE_MISSING`, course-print.md §4.4). WebGL2
+  left out (the PDF warns `IMAGE_MISSING`, course-print.md §4.4; a graphic that hides an attached control's circle or number fails the print instead, CRS-010). WebGL2
   (§5.2) does not draw image passes until J6.
 
 ## 4. Symbolisation rules

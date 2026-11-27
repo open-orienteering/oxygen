@@ -106,6 +106,10 @@ describe("dealVariants", () => {
     expect(after(rs, dealVariants(rs, pool.slice(0, 2), { mode: "startOrder", onlyUnassigned: true }))).toEqual([
       "b", "a", "a",
     ]);
+    // A locked runner on a variant outside the pool keeps it (WEB-09), in both modes.
+    const outside = [runner("r1", 100, { courseId: "gone", locked: true }), runner("r2", 200, { courseId: "gone" })];
+    expect(dealVariants(outside, pool.slice(0, 2), { mode: "startOrder", onlyUnassigned: true }).map((c) => c.runnerId)).toEqual(["r2"]);
+    expect(dealVariants(outside, pool.slice(0, 2), { mode: "startOrder", onlyUnassigned: false }).map((c) => c.runnerId)).toEqual(["r2"]);
     const unlockedNone = [runner("r1", 100, { locked: true })];
     expect(dealVariants(unlockedNone, pool, { mode: "startOrder", onlyUnassigned: true })).toEqual([]);
   });

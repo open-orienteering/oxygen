@@ -19,7 +19,7 @@ export interface SetterSheetRow {
   /** The sheet's course (seq); null for the event's setter maps. */
   courseId: number | null;
   sortOrder: number;
-  setter: { index: number; controls: number[] } | null;
+  setter: { index: number; controls: number[]; /** Controls of the scope in no setter map (CRS-002). */ unassigned: number[] } | null;
 }
 
 /** The scope *Setter maps* generates for: the event in view All or without a course, else the top bar's course (its seq). */
