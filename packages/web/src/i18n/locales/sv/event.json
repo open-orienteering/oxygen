@@ -156,6 +156,7 @@
   "syncing": "Synkar...",
   "syncFromEventor": "Synka från Eventor",
   "pushing": "Skickar...",
+  "pushIncludeCourse": "Skicka banlängd och stigning",
   "pushStartList": "Skicka startlista",
   "syncComplete": "Synk klar:",
   "runnersAdded_one": "{{count}} löpare tillagd",

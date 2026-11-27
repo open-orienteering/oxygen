@@ -156,6 +156,7 @@
   "syncing": "Syncing...",
   "syncFromEventor": "Sync from Eventor",
   "pushing": "Pushing...",
+  "pushIncludeCourse": "Send course length and climb",
   "pushStartList": "Push Start List",
   "syncComplete": "Sync complete:",
   "runnersAdded_one": "{{count}} runner added",

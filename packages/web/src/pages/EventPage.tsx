@@ -106,6 +106,7 @@ export function EventPage() {
           {/* Eventor Sync */}
           {syncStatus.data?.linked && (
             <EventorSyncPanel
+              nameId={d.competition.nameId}
               eventorEventId={syncStatus.data.eventorEventId}
               lastSync={syncStatus.data.lastSync}
               apiKeyConfigured={syncStatus.data.apiKeyConfigured}
@@ -506,13 +507,40 @@ function SyncRow({ icon, label, detail }: { icon: string; label: string; detail:
 
 // ─── Eventor Sync Panel ─────────────────────────────────────
 
+/** The push's "send course length and climb" choice, kept per browser and event (docs/course-elevation.md §8). */
+function useIncludeCourse(nameId: string): [boolean, (v: boolean) => void] {
+  const key = `oxygen:eventor-include-course:${nameId}`;
+  const read = () => {
+    try {
+      return window.localStorage.getItem(key) !== "0";
+    } catch {
+      return true;
+    }
+  };
+  const [value, setValue] = useState(read);
+  useEffect(() => setValue(read()), [key]); // eslint-disable-line react-hooks/exhaustive-deps
+  return [
+    value,
+    (v) => {
+      setValue(v);
+      try {
+        window.localStorage.setItem(key, v ? "1" : "0");
+      } catch {
+        // Not remembered; the choice still holds for this page.
+      }
+    },
+  ];
+}
+
 function EventorSyncPanel({
+  nameId,
   eventorEventId,
   lastSync,
   apiKeyConfigured,
   env,
   onSynced,
 }: {
+  nameId: string;
   eventorEventId: number;
   lastSync: string | null;
   apiKeyConfigured: boolean;
@@ -543,6 +571,7 @@ function EventorSyncPanel({
         : message.startsWith("EVENTOR_TIMEOUT")
         ? t("eventorTimeout")
         : message;
+  const [includeCourse, setIncludeCourse] = useIncludeCourse(nameId);
   const pushResultsMutation = trpc.eventor.pushResults.useMutation();
   const pushStartListMutation = trpc.eventor.pushStartList.useMutation();
   // A push that timed out may still have landed: say so in amber, not red.
@@ -625,7 +654,7 @@ function EventorSyncPanel({
 
           <button
             data-testid="eventor-push-startlist"
-            onClick={() => pushStartListMutation.mutate()}
+            onClick={() => pushStartListMutation.mutate({ includeCourse })}
             disabled={pushStartListMutation.isPending || !apiKeyConfigured}
             className="px-4 py-2 bg-slate-600 text-white text-sm font-medium rounded-lg hover:bg-slate-700 disabled:opacity-50 transition-colors cursor-pointer flex items-center gap-2 whitespace-nowrap"
           >
@@ -646,7 +675,7 @@ function EventorSyncPanel({
 
           <button
             data-testid="eventor-push-results"
-            onClick={() => pushResultsMutation.mutate()}
+            onClick={() => pushResultsMutation.mutate({ includeCourse })}
             disabled={pushResultsMutation.isPending || !apiKeyConfigured}
             className="px-4 py-2 bg-amber-600 text-white text-sm font-medium rounded-lg hover:bg-amber-700 disabled:opacity-50 transition-colors cursor-pointer flex items-center gap-2 whitespace-nowrap"
           >
@@ -666,6 +695,16 @@ function EventorSyncPanel({
           </button>
         </div>
       </div>
+
+      <label className="mt-2 flex items-center justify-end gap-2 text-xs text-slate-600 cursor-pointer">
+        <input
+          type="checkbox"
+          data-testid="eventor-push-include-course"
+          checked={includeCourse}
+          onChange={(e) => setIncludeCourse(e.target.checked)}
+        />
+        {t("pushIncludeCourse")}
+      </label>
 
       {previewMutation.data && !syncMutation.isSuccess && (
         <SyncCounts

@@ -129,6 +129,22 @@ describe("the class's course in the lists pushed to Eventor", () => {
     }
   });
 
+  it("includeCourse: false leaves the course out of both lists; the default sends it (docs/course-elevation.md §8)", async () => {
+    const ctx = await seed("evp-no-course");
+    try {
+      await makeCaller(ctx.event).eventor.pushStartList({ includeCourse: false });
+      await makeCaller(ctx.event).eventor.pushResults({ includeCourse: false });
+      for (const rows of [vi.mocked(uploadStartList).mock.calls.at(-1)![4], vi.mocked(uploadResults).mock.calls.at(-1)![4]]) {
+        expect(rows.length).toBeGreaterThan(0);
+        expect(rows.every((r) => r.course === undefined)).toBe(true);
+      }
+      await makeCaller(ctx.event).eventor.pushStartList({ includeCourse: true });
+      expect(coursesByClass(vi.mocked(uploadStartList).mock.calls.at(-1)![4])).toEqual(EXPECTED);
+    } finally {
+      await ctx.cleanup();
+    }
+  });
+
   it("a dry run uploads nothing", async () => {
     const ctx = await seed("evp-dry-run");
     try {

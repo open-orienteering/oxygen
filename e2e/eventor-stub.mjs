@@ -22,6 +22,7 @@
  * Usage: EVENTOR_STUB_PORT=4300 node e2e/eventor-stub.mjs
  */
 import { createServer } from "node:http";
+import { inflateRawSync } from "node:zlib";
 
 const PORT = Number(process.env.EVENTOR_STUB_PORT ?? 4300);
 
@@ -83,6 +84,21 @@ let scenario = 1;
  * deadline (EVENTOR_UPLOAD_TIMEOUT_MS, 2 s on the E2E stack) is what ends it.
  */
 let uploadMode = "ok";
+/** The text of the last POST /import/*, for tests that check what was sent (`GET /__lastUpload`, no ApiKey). */
+let lastUpload = "";
+
+/** The uploads are one-entry zips: the entry's text, or the body as is when it is no zip. */
+function uploadText(body) {
+  if (body.length > 30 && body.readUInt32LE(0) === 0x04034b50) {
+    const start = 30 + body.readUInt16LE(26) + body.readUInt16LE(28);
+    try {
+      return body.readUInt16LE(8) === 0 ? body.subarray(start).toString("utf8") : inflateRawSync(body.subarray(start)).toString("utf8");
+    } catch {
+      // Fall through to the raw text.
+    }
+  }
+  return body.toString("utf8");
+}
 
 function syncEntries() {
   const entry = (id, personId, given, family, cardNo, classId) => `  <Entry>
@@ -147,6 +163,11 @@ const server = createServer((req, res) => {
     return;
   }
 
+  if (req.method === "GET" && pathname === "/__lastUpload") {
+    send(res, 200, lastUpload, "text/plain");
+    return;
+  }
+
   const uploadControl = /^\/__upload\/(ok|stall)$/.exec(pathname);
   if (req.method === "POST" && uploadControl) {
     uploadMode = uploadControl[1];
@@ -174,8 +195,10 @@ const server = createServer((req, res) => {
 
   if (req.method === "POST" && pathname.startsWith("/import/")) {
     // Drain the body; in stall mode then say nothing at all.
-    req.on("data", () => {});
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
     req.on("end", () => {
+      lastUpload = uploadText(Buffer.concat(chunks));
       if (uploadMode === "stall") return;
       send(res, 200, "<ImportResult />");
     });
