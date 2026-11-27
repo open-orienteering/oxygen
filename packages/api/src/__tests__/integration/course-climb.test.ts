@@ -52,7 +52,8 @@ let caller: ReturnType<typeof makeCaller>;
 let flatCaller: ReturnType<typeof makeCaller>;
 let top: number;
 
-async function pinDocument(t: TestEventContext, objects: typeof HILL, salt: string): Promise<string> {
+/** The hill's document pinned to the event; `intervalM` is the interval a person confirmed (null: not confirmed). */
+async function pinDocument(t: TestEventContext, objects: typeof HILL, salt: string, intervalM: number | null = 5): Promise<string> {
   const sourceBytes = Buffer.from(`course-climb-source-${salt}`);
   const sourceHash = sha(sourceBytes);
   await t.db.mapSource.create({ data: { fileHash: sourceHash, kind: "ocad", bytes: sourceBytes, sizeBytes: sourceBytes.byteLength, fileName: "synthetic.ocd" } });
@@ -65,7 +66,7 @@ async function pinDocument(t: TestEventContext, objects: typeof HILL, salt: stri
       header: JSON.parse(JSON.stringify({ ...header, symbols: undefined, strings: undefined })), report: {},
     },
   });
-  await t.db.mapFile.create({ data: { eventId: t.eventId, fileName: "synthetic.ocd", sourceHash, documentHash: hash, scale: 15000 } });
+  await t.db.mapFile.create({ data: { eventId: t.eventId, fileName: "synthetic.ocd", sourceHash, documentHash: hash, scale: 15000, contourIntervalM: intervalM } });
   return hash;
 }
 
@@ -368,5 +369,127 @@ describe("the compute under a lease and over many courses (docs/course-elevation
     await ctx.db.legRoute.deleteMany({ where: { eventId: ctx.eventId, fromControlId: route.fromControlId } });
     await caller.course.delete({ id: first });
     await caller.course.delete({ id: second });
+  });
+});
+
+describe("the contour interval gates the stored climb (docs/course-elevation.md §0.43)", () => {
+  let t: TestEventContext;
+  let c: ReturnType<typeof makeCaller>;
+  let doc: { sourceHash: string; hash: string };
+  let course1: number;
+  const climb = async (seq: number) => { const r = await rowOf(t, seq); return { m: r.climbM, source: r.climbSource }; };
+  const journalFor = (id: string) => t.db.journalEntry.count({ where: { eventId: t.eventId, type: "course.upserted", payload: { path: ["id"], equals: id } } });
+
+  beforeAll(async () => {
+    t = await createTestEvent("course_climb_interval");
+    c = makeCaller(t.event);
+    const hash = await pinDocument(t, HILL, `interval-${suffix}`, null);
+    await deriveDocumentHeightfield(t.db, hash);
+    const file = await t.db.mapFile.findFirstOrThrow({ where: { eventId: t.eventId } });
+    doc = { sourceHash: file.sourceHash!, hash };
+    await c.control.create({ status: 4, xpos: 12, ypos: 30 });
+    await c.control.create({ status: 5, xpos: 48, ypos: 30 });
+    const top1 = (await c.control.create({ codes: "31", xpos: 30, ypos: 30 })).id;
+    course1 = (await c.course.create({ name: "Interval", controlIds: [top1] })).id;
+  });
+  afterAll(async () => { await t.cleanup(); });
+
+  it("an unconfirmed interval stores no climb, after an edit or after refreshClimbs; the estimate is the editor's", async () => {
+    expect(await climb(course1)).toEqual({ m: 0, source: null });
+    await c.course.refreshClimbs();
+    expect(await climb(course1)).toEqual({ m: 0, source: null });
+    const meta = await c.course.mapMetadata();
+    expect(meta!.contourInterval).toEqual({ assumedM: 5, confirmedM: null, from: "event", suspect: false });
+    expect(meta!.terrain!.interval).toEqual({ assumedM: 5, confirmedM: null });
+  });
+
+  it("confirming the interval stores the climb and journals it; another interval scales it; clearing removes it again", async () => {
+    const row = await rowOf(t, course1);
+    const before = await journalFor(row.id);
+    await c.course.setContourInterval({ intervalM: 5 });
+    const at5 = await climb(course1);
+    expect(at5.source).toBe("computed");
+    expect(at5.m).toBeGreaterThanOrEqual(12);
+    expect(await journalFor(row.id)).toBeGreaterThan(before);
+    expect((await c.course.mapMetadata())!.contourInterval).toMatchObject({ confirmedM: 5, from: "event" });
+
+    await c.course.setContourInterval({ intervalM: 2.5 });
+    const at25 = await climb(course1);
+    expect(at25.source).toBe("computed");
+    expect(Math.abs(at25.m - at5.m / 2)).toBeLessThanOrEqual(1.5);
+
+    await c.course.setContourInterval({ intervalM: null });
+    expect(await climb(course1)).toEqual({ m: 0, source: null });
+    // A typed climb is untouched by any change of the interval.
+    await c.course.update({ id: course1, climb: 77 });
+    await c.course.setContourInterval({ intervalM: 5 });
+    expect(await climb(course1)).toEqual({ m: 77, source: "manual" });
+    await c.course.update({ id: course1, climb: null });
+    expect((await climb(course1)).source).toBe("computed");
+  });
+
+  it("refuses a value outside what a map's interval can be", async () => {
+    for (const intervalM of [0, -5, 101, 2.555, Number.NaN]) await expect(c.course.setContourInterval({ intervalM })).rejects.toThrow();
+    await c.course.setContourInterval({ intervalM: 2.5 });
+    await c.course.setContourInterval({ intervalM: 5 });
+  });
+
+  it("a club map's interval follows every event using it; the club map takes the setting made from an event", async () => {
+    const other = await createTestEvent("course_climb_interval_club");
+    try {
+      await c.course.setContourInterval({ intervalM: null });
+      const series = await t.db.clubMap.create({ data: { name: `Interval club ${suffix}` } });
+      const version = await t.db.clubMapVersion.create({ data: { clubMapId: series.id, seq: 1, sourceHash: doc.sourceHash, documentHash: doc.hash } });
+      await t.db.mapFile.updateMany({ where: { eventId: t.eventId }, data: { clubMapVersionId: version.id, contourIntervalM: null } });
+      await other.db.mapFile.create({ data: { eventId: other.eventId, fileName: "synthetic.ocd", sourceHash: doc.sourceHash, documentHash: doc.hash, scale: 15000, clubMapVersionId: version.id } });
+      const oc = makeCaller(other.event);
+      await oc.control.create({ status: 4, xpos: 12, ypos: 30 });
+      await oc.control.create({ status: 5, xpos: 48, ypos: 30 });
+      const topO = (await oc.control.create({ codes: "31", xpos: 30, ypos: 30 })).id;
+      const courseO = (await oc.course.create({ name: "Other", controlIds: [topO] })).id;
+      // The club map has no interval: neither event stores a climb, whatever its own column says.
+      expect((await climb(course1)).m).toBe(0);
+      expect((await rowOf(other, courseO)).climbM).toBe(0);
+
+      await makeCaller(t.event, {}).clubMap.setContourInterval({ id: series.id, intervalM: 5 });
+      expect((await climb(course1)).source).toBe("computed");
+      expect((await rowOf(other, courseO)).climbSource).toBe("computed");
+      expect((await oc.course.mapMetadata())!.contourInterval).toMatchObject({ confirmedM: 5, from: "club" });
+      const listed = (await makeCaller(t.event).clubMap.list()).find((s) => s.id === series.id)!;
+      expect(listed.contourIntervalM).toBe(5);
+      expect(listed.assumedContourIntervalM).toBe(5);
+
+      // Set from an event of the series: the club map is written, both follow.
+      await oc.course.setContourInterval({ intervalM: null });
+      expect((await t.db.clubMap.findUniqueOrThrow({ where: { id: series.id } })).contourIntervalM).toBeNull();
+      expect((await climb(course1)).m).toBe(0);
+      expect((await rowOf(other, courseO)).climbM).toBe(0);
+
+      // The exporter writes the resolved value into the file row a box will read.
+      await t.db.clubMap.update({ where: { id: series.id }, data: { contourIntervalM: 2.5 } });
+      const { exportSnapshotMaps } = await import("../../sync/snapshotMaps.js");
+      const exported = await exportSnapshotMaps(t.db, t.eventId);
+      expect(exported.files.map((f) => f.contourIntervalM)).toEqual([2.5]);
+      await t.db.mapFile.updateMany({ where: { eventId: t.eventId }, data: { clubMapVersionId: null, contourIntervalM: 5 } });
+      await t.db.clubMap.delete({ where: { id: series.id } });
+    } finally {
+      await other.cleanup();
+    }
+  });
+
+  it("under a foreign lease the value is written and no course row is touched; the holder's map refresh does the rest", async () => {
+    await c.course.setContourInterval({ intervalM: 5 });
+    const row = await rowOf(t, course1);
+    expect(row.climbSource).toBe("computed");
+    const before = await journalFor(row.id);
+    await acquireLease(t.db, t.eventId, "venue-d8");
+    try {
+      await c.course.setContourInterval({ intervalM: 2.5 });
+      expect((await t.db.mapFile.findFirstOrThrow({ where: { eventId: t.eventId } })).contourIntervalM).toBe(2.5);
+      expect(await rowOf(t, course1)).toMatchObject({ climbM: row.climbM, climbSource: "computed" });
+      expect(await journalFor(row.id)).toBe(before);
+    } finally {
+      await releaseLease(t.db, t.eventId);
+    }
   });
 });

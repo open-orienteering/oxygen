@@ -95,9 +95,12 @@ export function forwardsObjectWrite(paths: readonly string[]): boolean {
   return paths.some((p) => p.startsWith("courseObject."));
 }
 
+/** Exact forwarded paths that write a map row the box mirrors (the contour interval is on the map file's row). */
+export const MAP_REFRESH_PATHS: readonly string[] = ["course.setContourInterval"];
+
 /** Whether a forwarded call wrote a map row the box mirrors. */
 export function refreshesMapRows(paths: readonly string[]): boolean {
-  return paths.some((p) => MAP_REFRESH_PREFIXES.some((prefix) => p.startsWith(prefix)));
+  return paths.some((p) => MAP_REFRESH_PATHS.includes(p) || MAP_REFRESH_PREFIXES.some((prefix) => p.startsWith(prefix)));
 }
 
 /**

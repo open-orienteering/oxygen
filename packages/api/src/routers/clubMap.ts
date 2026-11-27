@@ -14,6 +14,8 @@ import {
 import { assertMayConsumeSource } from "../map-store/source-possession.js";
 import { startImportJob, type ImportJobRow } from "../map-store/jobs.js";
 import { documentNorth } from "../map-store/event-document.js";
+import { validContourInterval } from "../map-store/contour-interval.js";
+import { applyContourInterval, eventsOnClubMap } from "../map-store/contour-interval-apply.js";
 import { meridianStalenessFromDetection } from "../map-north.js";
 
 const clubMapId = z.string().uuid();
@@ -172,6 +174,23 @@ export const clubMapRouter = router({
       await requireSeries(input.id);
       await prisma().clubMap.update({ where: { id: input.id }, data: { name: input.name.trim() } });
       return { success: true as const };
+    }),
+
+  /**
+   * Confirm (or clear, with null) the map's contour interval (docs/course-elevation.md §0.43). It follows every event that
+   * uses the map: their computed climbs are cleared and computed again. Any signed-in user may, as for `rename`.
+   */
+  setContourInterval: authedProcedure
+    .input(z.object({ id: clubMapId, intervalM: z.number().nullable() }))
+    .mutation(async ({ input }) => {
+      if (input.intervalM !== null && !validContourInterval(input.intervalM)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "The contour interval is above 0 and at most 100 m, with at most two decimals" });
+      }
+      await requireSeries(input.id);
+      await prisma().clubMap.update({ where: { id: input.id }, data: { contourIntervalM: input.intervalM } });
+      const events = await eventsOnClubMap(prisma(), input.id);
+      await applyContourInterval(prisma(), events);
+      return { success: true as const, contourIntervalM: input.intervalM, events: events.length };
     }),
 
   /**

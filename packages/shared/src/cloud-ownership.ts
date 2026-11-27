@@ -47,6 +47,8 @@ export const CLOUD_OWNED_MUTATIONS: ReadonlySet<string> = new Set([
   "competition.updateType",
   "competition.setTestEvent",
   "course.setOverprintCuts",
+  // The map's contour interval lives on the map rows the cloud owns (docs/course-elevation.md §0.43).
+  "course.setContourInterval",
 ]);
 
 /** True when a tRPC procedure path is a cloud-owned mutation. */

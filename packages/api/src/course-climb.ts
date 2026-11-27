@@ -21,6 +21,7 @@ import { chosenLegRoutes, chosenRoutesStamp, climbLegsOf } from "./leg-routes.js
 import { emitCourseUpserted } from "./referenceJournal.js";
 import { mayRunBackgroundJob } from "./background-lease.js";
 import { eventPin } from "./map-store/event-document.js";
+import { eventContourInterval } from "./map-store/contour-interval.js";
 import { HEIGHTFIELD_SOURCE, readHeightfield, terrainDescriptor } from "./map-store/heightfield.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -67,9 +68,12 @@ export function resetClimbFields(): void {
 export async function climbSamplerFor(db: Db, eventId: bigint): Promise<TerrainSampler | null> {
   const pin = await eventPin(db, eventId);
   if (!pin?.documentHash) return null;
-  const terrain = await terrainDescriptor(db, pin.documentHash, undefined, { rotationCorrection: pin.rotationCorrection });
+  const interval = await eventContourInterval(db, pin);
+  const terrain = await terrainDescriptor(db, pin.documentHash, undefined, { rotationCorrection: pin.rotationCorrection, confirmedIntervalM: interval.confirmedM });
   const pick = pickClimbField(terrain);
   if (!pick) return null;
+  // A climb on the contours rests on the map's interval: unconfirmed, it is an estimate and nothing is stored (§3, §0.43).
+  if (pick.basis === "contours" && !pick.interval?.confirmed) return null;
   const source = climbFieldSource(pick);
   const key = `${pin.documentHash}/${source}/${TERRAIN_VERSION}`;
   let field = fields.get(key);
@@ -83,7 +87,7 @@ export async function climbSamplerFor(db: Db, eventId: bigint): Promise<TerrainS
     fields.set(key, field);
     while (fields.size > FIELD_CACHE_ENTRIES) fields.delete(fields.keys().next().value as string);
   }
-  return fieldSampler(field);
+  return fieldSampler(field, pick.interval ? { intervalM: pick.interval.m } : {});
 }
 
 /** A course with no climb to state: empty and not a computed one (a typed source over an empty value is no climb, §6 "Read rule"). */

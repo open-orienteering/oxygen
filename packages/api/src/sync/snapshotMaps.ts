@@ -255,10 +255,18 @@ export function applyTokens(rows: ReadonlyArray<Record<string, unknown>>, tokens
  * (the refresh during a lease carries none, docs/map-storage.md §7.2).
  */
 export async function exportSnapshotMaps(db: Db, eventId: bigint, opts: { decisions?: boolean } = {}): Promise<SnapshotMaps> {
-  const rows = await db.mapFile.findMany({
+  const own = await db.mapFile.findMany({
     where: { eventId },
     orderBy: { uploadedAt: "asc" },
   });
+  // The contour interval travels resolved (docs/course-elevation.md §0.43): a box has no club map row (its link is
+  // nulled below), so each file row carries the club map's value when the map follows one.
+  const versionIds = [...new Set(own.flatMap((r) => (r.clubMapVersionId ? [r.clubMapVersionId] : [])))];
+  const clubValues = new Map(
+    (await db.clubMapVersion.findMany({ where: { id: { in: versionIds } }, select: { id: true, clubMap: { select: { contourIntervalM: true } } } }))
+      .map((v) => [v.id, v.clubMap.contourIntervalM] as const),
+  );
+  const rows = own.map((r) => (r.clubMapVersionId && clubValues.has(r.clubMapVersionId) ? { ...r, contourIntervalM: clubValues.get(r.clubMapVersionId)! } : r));
   const { files, skipped } = partitionMapFiles(rows as unknown as Array<Record<string, unknown>>);
   const pinned = rows.filter((r) => r.sourceHash !== null);
   const documentHashes = [...new Set(pinned.flatMap((r) => (r.documentHash ? [r.documentHash] : [])))];

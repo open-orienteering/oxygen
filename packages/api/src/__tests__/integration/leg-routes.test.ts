@@ -56,7 +56,7 @@ beforeAll(async () => {
       header: JSON.parse(JSON.stringify({ ...header, symbols: undefined, strings: undefined })), report: {},
     },
   });
-  await ctx.db.mapFile.create({ data: { eventId: ctx.eventId, fileName: "synthetic.ocd", sourceHash, documentHash: hash, scale: 15000 } });
+  await ctx.db.mapFile.create({ data: { eventId: ctx.eventId, fileName: "synthetic.ocd", sourceHash, documentHash: hash, scale: 15000, contourIntervalM: 5 } });
   await deriveDocumentHeightfield(ctx.db, hash);
   await caller.control.create({ status: 4, xpos: 12, ypos: 12 });
   await caller.control.create({ status: 5, xpos: 48, ypos: 48 });

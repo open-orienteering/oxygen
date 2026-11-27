@@ -62,6 +62,8 @@ import { cutRotationDeg, meridianStalenessFromDetection } from "../map-north.js"
 import { documentNorth, eventPin } from "../map-store/event-document.js";
 import { eventPatchVersion } from "../map-store/patches.js";
 import { terrainDescriptor } from "../map-store/heightfield.js";
+import { eventContourInterval, validContourInterval } from "../map-store/contour-interval.js";
+import { applyContourInterval, eventsOnClubMap } from "../map-store/contour-interval-apply.js";
 import { canDownloadEventMap } from "../ocad-export.js";
 import { loadEventCrs } from "../event-crs.js";
 import { clearComputedClimbs, rebuildCourseLengths } from "../course-geometry.js";
@@ -1387,6 +1389,8 @@ export const courseRouter = router({
     const north = row.documentHash
       ? await documentNorth(ctx.db, row.documentHash)
       : null;
+    const interval = await eventContourInterval(ctx.db, row);
+    const terrain = row.documentHash ? await terrainDescriptor(ctx.db, row.documentHash, undefined, { rotationCorrection, confirmedIntervalM: interval.confirmedM }) : null;
 
     return {
       scale,
@@ -1403,13 +1407,40 @@ export const courseRouter = router({
       /** The delivered patch's token (docs/map-patches.md §3.3); `"0"` when nothing is delivered. Refetch `/api/maps/:nameId/patch` when it changes. */
       patchVersion: await eventPatchVersion(ctx.db, ctx.event.id, row.documentHash),
       /** The pinned document's height field (docs/map-storage.md §4.7): state, `url` to fetch (fetching a `pending` one derives it), `decided` for the 3D gate, and `dem` (the DEM's fields, none for a rotation-corrected pin); null until the pin. */
-      terrain: row.documentHash ? await terrainDescriptor(ctx.db, row.documentHash, undefined, { rotationCorrection }) : null,
+      terrain,
+      /** The map's contour interval (docs/course-elevation.md §0.43): the assumed one, the confirmed one, whose it is, and whether the DEM anchor suspects the contours are drawn at half. */
+      contourInterval: terrain ? { assumedM: terrain.interval.assumedM, confirmedM: interval.confirmedM, from: interval.from, suspect: terrain.dem.anchored?.intervalSuspect === true } : null,
       cutRotationDeg: cutRotationDeg(
         northOffset,
         north?.meridian?.medianTiltDeg ?? null,
       ),
     };
   }),
+
+  /**
+   * Confirm (or clear, with null) the contour interval of the event's map (docs/course-elevation.md §0.43). A map
+   * from the club library keeps it on the club map, so it follows every event using it; any other map keeps it on
+   * its own row. The computed climbs of every event on the map are cleared and computed again.
+   */
+  setContourInterval: coursesEditProcedure
+    .input(z.object({ intervalM: z.number().nullable() }))
+    .mutation(async ({ ctx, input }) => {
+      if (input.intervalM !== null && !validContourInterval(input.intervalM)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "The contour interval is above 0 and at most 100 m, with at most two decimals" });
+      }
+      const pin = await eventPin(ctx.db, ctx.event.id);
+      if (!pin) throw new TRPCError({ code: "NOT_FOUND", message: "No map file uploaded" });
+      const current = await eventContourInterval(ctx.db, pin);
+      let events: bigint[] = [ctx.event.id];
+      if (current.clubMapId) {
+        await ctx.db.clubMap.update({ where: { id: current.clubMapId }, data: { contourIntervalM: input.intervalM } });
+        events = [...new Set([ctx.event.id, ...(await eventsOnClubMap(ctx.db, current.clubMapId))])];
+      } else {
+        await ctx.db.mapFile.update({ where: { id: pin.id }, data: { contourIntervalM: input.intervalM } });
+      }
+      await applyContourInterval(ctx.db, events);
+      return { success: true as const, contourIntervalM: input.intervalM, from: current.from };
+    }),
 
   /** Info about the uploaded map file (if any). */
   mapFileInfo: kioskOrCoursesViewProcedure.query(async ({ ctx }) => {

@@ -42,6 +42,26 @@ describe("fieldSampler (course-elevation.md §1)", () => {
   });
 });
 
+describe("fieldSampler at a confirmed interval (course-elevation.md §3, §0.43)", () => {
+  const A = { x: 0.1, y: 5 }, B = { x: 30, y: 5 };
+  it("a relative field read at 2.5 m instead of 5 m gives half the heights and, on a ramp, half the climb", () => {
+    const f = slope();
+    const at5 = courseProfile([{ points: [A, B] }], fieldSampler(f));
+    const at25 = courseProfile([{ points: [A, B] }], fieldSampler(f, { intervalM: 2.5 }));
+    expect(fieldSampler(f, { intervalM: 2.5 }).heightAt(c(10, 5))!).toBeCloseTo(fieldSampler(f).heightAt(c(10, 5))! / 2, 6);
+    expect(at5.climbM).toBeGreaterThan(10);
+    expect(at25.climbM).toBeCloseTo(at5.climbM / 2, 1);
+    // The interval it was derived at, or none: untouched.
+    expect(fieldSampler(f, { intervalM: 5 }).heightAt(c(10, 5))).toBe(fieldSampler(f).heightAt(c(10, 5)));
+  });
+
+  it("an absolute field ignores the option", () => {
+    const f = slope();
+    const abs = { ...f, header: { ...f.header, datum: "absolute" as const } };
+    expect(fieldSampler(abs, { intervalM: 2.5 }).heightAt(c(10, 5))).toBe(fieldSampler(abs).heightAt(c(10, 5)));
+  });
+});
+
 describe("profileAlong (course-elevation.md §1)", () => {
   it("the default step is half a cell, at least 1 m", () => {
     expect(profileStepM({ cellM: 6 })).toBe(3);

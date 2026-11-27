@@ -1306,6 +1306,9 @@ model MapFile {
   /// OCAD file's own angle. Used when the drawing is magnetic-north-up
   /// but ScalePar declares a=0 — common for Swedish club exports.
   rotationCorrection Float    @default(0) @map("rotation_correction")
+  /// The contour interval (m) a person confirmed for this event's map; NULL = not confirmed. A map from the club library
+  /// takes the club map's value (`ClubMap.contourIntervalM`); the venue box, which has no club map row, reads this one.
+  contourIntervalM   Float?   @map("contour_interval_m")
   /// The upload-time OCAD north diagnostic. Unwritten since E5 (no OCAD
   /// parse at upload; `course.mapMetadata` reads the document report's
   /// `north`); kept for rows written before (docs/map-storage.md §4.6).
@@ -1536,6 +1539,8 @@ model ClubMap {
   colourOverrides    Json     @default("{}") @map("colour_overrides")
   northLinesBelow    Boolean  @default(true) @map("north_lines_below")
   rotationCorrection Float    @default(0) @map("rotation_correction")
+  /// The contour interval (m) a person confirmed; NULL = not confirmed (docs/course-elevation.md §0.43). Follows every event using the map.
+  contourIntervalM   Float?   @map("contour_interval_m")
   createdBy          String?  @map("created_by") @db.Uuid
   createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt          DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)

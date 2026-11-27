@@ -406,7 +406,7 @@ export async function completePromote(
 
   const move = async (tx: Prisma.TransactionClient): Promise<PromoteCompletion> => {
     await tx.$queryRaw`SELECT 1 FROM "oxygen"."map_patches" WHERE "event_id" = ${job.eventId} FOR UPDATE`;
-    const files = await tx.mapFile.findMany({ where: { eventId: job.eventId, sourceHash: job.sourceHash }, select: { clubMapVersionId: true } });
+    const files = await tx.mapFile.findMany({ where: { eventId: job.eventId, sourceHash: job.sourceHash }, select: { clubMapVersionId: true, contourIntervalM: true } });
     if (!from || files.length === 0 || files.some((f) => f.clubMapVersionId !== from.id)) {
       return { outcome: "skipped", reason: "the event's map moved while the promote ran", versionId: target.id };
     }
@@ -417,6 +417,9 @@ export async function completePromote(
       if (!samePatchContent(patch, next)) await tx.mapPatch.update({ where: { eventId: job.eventId }, data: rowData(next, nextPatchVersion()) });
     }
     await tx.mapFile.updateMany({ where: { eventId: job.eventId, sourceHash: job.sourceHash }, data: { documentHash: job.documentHash, clubMapVersionId: target.id } });
+    // The club map takes the interval an event confirmed on its own row, when it has none (docs/course-elevation.md §0.43).
+    const own = files.find((f) => f.contourIntervalM !== null)?.contourIntervalM ?? null;
+    if (own !== null) await tx.clubMap.updateMany({ where: { versions: { some: { id: target.id } }, contourIntervalM: null }, data: { contourIntervalM: own } });
     return { outcome: "pinned", versionId: target.id };
   };
   const r = isClient(db) ? await db.$transaction(move, REKEY_TX) : await move(db);
