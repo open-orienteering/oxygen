@@ -6,16 +6,16 @@ the Test Lab test-event only. These were deliberately left out.
 1. **Test events are not barred from Eventor upload or LiveResults.** The flag
    stops the Test Lab touching a real event. It does not stop a test event
    from pushing its synthetic results to Eventor or to a LiveResults feed if
-   the organiser configures one. Setting the mark is refused once an event is
-   linked to Eventor, but an event marked first and linked later is not
-   refused.
+   the organiser configures one. No path links an existing event to Eventor (an
+   import always creates a new event), and the Test Lab refuses an event that
+   has an Eventor link anyway.
 2. **Eventor test-environment events are refused as test events.** An event
    linked to Eventor's test environment (`eventorEnv = "test"`) has an Eventor
    id, so `event.setTestEvent` refuses it like a production link, although a
    test-environment event would be a fair test event.
 3. **`AUTH_MODE=off` lets anyone flip the flag.** With auth off every caller
    has `event.manage`, so anyone who can reach the API can mark an event (that
-   passes the refusal checks: no Eventor link, readouts or lease) and then use
+   passes the refusal checks: no Eventor link, lease, runners, cards, punches or readouts) and then use
    the Test Lab on it. That is the existing meaning of auth off (a venue box
    or a development machine). The refusal on readouts is the protection that
    remains: an event that has been raced cannot be marked.
@@ -29,3 +29,11 @@ the Test Lab test-event only. These were deliberately left out.
    cannot be turned into a test event, by design; the way round it is to create
    the event with the test mark. Clearing the mark does not delete the
    synthetic data.
+6. **Peer-shipped entries are not validated.** The status and time checks run
+   on a station's own pushes only, so an out-of-range value from a peer (an
+   older release, or an entry journaled before the checks) still lands. The
+   cost of validating there is a blocked shipping stream; the value can be
+   corrected on the runner afterwards.
+7. **`clearRunners` is a single delete** and is not re-checked mid-way; the
+   long loops (`registerFictionalRunners`, `registerRunners`, the instant
+   simulation) re-check the flag, lease and Eventor link every 25 rows.

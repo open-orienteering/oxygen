@@ -32,6 +32,7 @@ import {
 } from "../lib/reader-bt";
 import { ReaderConnectionDialog } from "../components/ReaderConnectionDialog";
 import type { SICardReadout, SICardOwnerData } from "../lib/si-protocol";
+import { cardSecondsToDs } from "../lib/si-protocol";
 import { trpc, activeEventNameId } from "../lib/trpc";
 import { useCurrentUser } from "./CurrentUserContext";
 import { canApplyResults, findDuplicate, isLatestCard, nextCurrentCard, readoutsMatch as sameReadout, withTimeout, type ApplyHold, type SaveState } from "../lib/offline/readout-policy";
@@ -431,20 +432,20 @@ export function DeviceManagerProvider({ children }: { children: ReactNode }) {
                 cardNo: readout.cardNumber,
                 punches: readout.punches.map((p) => ({
                   controlCode: p.controlCode,
-                  time: p.time * 10,
+                  time: cardSecondsToDs(p.time),
                   ...(p.subSecond != null ? { subSecond: p.subSecond } : {}),
                 })),
                 checkTime:
                   readout.checkTime !== null && readout.checkTime !== undefined
-                    ? readout.checkTime * 10
+                    ? cardSecondsToDs(readout.checkTime)
                     : undefined,
                 startTime:
                   readout.startTime !== null && readout.startTime !== undefined
-                    ? readout.startTime * 10
+                    ? cardSecondsToDs(readout.startTime)
                     : undefined,
                 finishTime:
                   readout.finishTime !== null && readout.finishTime !== undefined
-                    ? readout.finishTime * 10
+                    ? cardSecondsToDs(readout.finishTime)
                     : undefined,
                 cardType: readout.cardType,
                 punchesFresh: raceData,

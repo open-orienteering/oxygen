@@ -8,6 +8,7 @@
  */
 
 import type { QueryClient } from "@tanstack/react-query";
+import { cardSecondsToDs } from "../si-protocol";
 import { cacheOwner } from "./cache-scope";
 import {
   matchPunchesToCourse,
@@ -193,13 +194,13 @@ export function computeCardReadout(
   const allPunches: ParsedPunch[] = [];
 
   if (input.startTime && input.startTime > 0) {
-    allPunches.push({ type: PUNCH_START, time: input.startTime * 10, source: "card" });
+    allPunches.push({ type: PUNCH_START, time: cardSecondsToDs(input.startTime), source: "card" });
   }
   for (const p of input.punches) {
-    allPunches.push({ type: p.controlCode, time: p.time * 10, source: "card" });
+    allPunches.push({ type: p.controlCode, time: cardSecondsToDs(p.time), source: "card" });
   }
   if (input.finishTime && input.finishTime > 0) {
-    allPunches.push({ type: PUNCH_FINISH, time: input.finishTime * 10, source: "card" });
+    allPunches.push({ type: PUNCH_FINISH, time: cardSecondsToDs(input.finishTime), source: "card" });
   }
 
   // Use runner's assigned start time as fallback (already in deciseconds from server cache)

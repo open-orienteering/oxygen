@@ -475,6 +475,9 @@ export const eventRouter = router({
       }
       await ctx.db.$transaction(async (tx) => {
         await lockEventLeaseAndSync(tx, eventId);
+        // Lock the event row: a concurrent child insert (a runner, a readout)
+        // takes a key-share lock on it and so waits for this transaction.
+        await tx.$queryRaw`SELECT id FROM oxygen.events WHERE id = ${eventId} FOR UPDATE`;
         const row = await tx.event.findUniqueOrThrow({
           where: { id: eventId },
           select: { eventorEventId: true },

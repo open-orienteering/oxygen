@@ -1,3 +1,4 @@
+import { DAY_DS } from "@oxygen/shared";
 /**
  * SportIdent Protocol Library
  *
@@ -429,6 +430,16 @@ export function parseDayOfWeek(ptdByte: number): number | null {
  *
  * This applies to both special times (check/start/finish/clear) and punch records.
  */
+/**
+ * Card seconds since midnight to absolute deciseconds, wrapped into one day.
+ * A corrupt or 12/24-hour-confused card time (the 16-bit field plus the PM
+ * flag reaches 108735 s) would otherwise become a time past midnight that the
+ * server refuses, holding the station queue (RES-24).
+ */
+export function cardSecondsToDs(seconds: number): number {
+  return (((Math.round(seconds * 10)) % DAY_DS) + DAY_DS) % DAY_DS;
+}
+
 export function parsePunchTime(
   data: Uint8Array,
   offset: number,

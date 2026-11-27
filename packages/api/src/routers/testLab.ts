@@ -19,6 +19,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, manageProcedure } from "../trpc.js";
 import { prisma } from "../db.js";
+import type { PrismaClient } from "../generated/prisma/client.js";
 import { getActiveLease } from "../sync/lease.js";
 import {
   MALE_FIRST_NAMES,
@@ -197,9 +198,9 @@ export function stopSimulationFor(eventId: bigint): void {
  * event (API-06). The flag is read fresh on every call, never from the
  * cached event context.
  */
-const testEventProcedure = manageProcedure.use(async ({ ctx, next }) => {
-  const row = await ctx.db.event.findUnique({
-    where: { id: ctx.event.id },
+async function assertTestEvent(db: PrismaClient, eventId: bigint): Promise<void> {
+  const row = await db.event.findUnique({
+    where: { id: eventId },
     select: { isTestEvent: true, eventorEventId: true },
   });
   if (!row?.isTestEvent) {
@@ -210,12 +211,16 @@ const testEventProcedure = manageProcedure.use(async ({ ctx, next }) => {
   }
   // The guard is two-way: an event that has since been linked to Eventor or
   // checked out is real, whatever its mark says.
-  if (row.eventorEventId !== null || (await getActiveLease(ctx.db, ctx.event.id))) {
+  if (row.eventorEventId !== null || (await getActiveLease(db, eventId))) {
     throw new TRPCError({
       code: "PRECONDITION_FAILED",
       message: "NOT_A_TEST_EVENT: an event linked to Eventor or checked out to a venue is not a test event.",
     });
   }
+}
+
+const testEventProcedure = manageProcedure.use(async ({ ctx, next }) => {
+  await assertTestEvent(ctx.db, ctx.event.id);
   return next();
 });
 
@@ -497,6 +502,12 @@ export const testLabRouter = router({
 
       // 500ms tick — sized to balance wall-clock granularity against
       // DB write pressure when speedFactor is high.
+      // Only this run: a newer simulation for the event is left alone.
+      const stopThis = () => {
+        state.running = false;
+        if (state.timer) clearInterval(state.timer);
+        if (simulations.get(key) === state) simulations.delete(key);
+      };
       let ticking = false;
       const tick = async () => {
         if (ticking) return; // a slow tick must not overlap the next one
@@ -507,7 +518,7 @@ export const testLabRouter = router({
           // A failing tick (a database error) must not become an unhandled
           // rejection that takes the API down: log it and stop this simulation.
           console.error("[testLab] tick failed, stopping the simulation:", err);
-          stopSimulationFor(state.eventId);
+          stopThis();
         } finally {
           ticking = false;
         }
@@ -524,7 +535,7 @@ export const testLabRouter = router({
           select: { isTestEvent: true },
         });
         if (!flag?.isTestEvent) {
-          stopSimulationFor(state.eventId);
+          stopThis();
           return;
         }
         const elapsedRealMs = Date.now() - state.realTimeAtLastSpeedChange;
@@ -801,6 +812,8 @@ export const testLabRouter = router({
       }
       let created = 0;
       for (let i = 0; i < input.count; i++) {
+        // Re-check the guard now and then: the flag may be cleared or a lease taken meanwhile.
+        if (i > 0 && i % 25 === 0) await assertTestEvent(ctx.db, ctx.event.id);
         const male = Math.random() < 0.5;
         const first = pick(male ? MALE_FIRST_NAMES : FEMALE_FIRST_NAMES);
         const last = pick(LAST_NAMES);
@@ -843,6 +856,7 @@ export const testLabRouter = router({
       if (!cls) return { created: 0 };
       let created = 0;
       for (let i = 0; i < input.count; i++) {
+        if (i > 0 && i % 25 === 0) await assertTestEvent(ctx.db, ctx.event.id);
         const male = Math.random() < 0.5;
         const first = pick(male ? MALE_FIRST_NAMES : FEMALE_FIRST_NAMES);
         const last = pick(LAST_NAMES);

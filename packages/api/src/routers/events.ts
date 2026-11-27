@@ -747,9 +747,18 @@ async function applyEvent(
   event: OfflineEvent,
   opts: { strict: boolean; timeZone?: string } = { strict: false },
 ): Promise<ApplyOutcome> {
+  // The status / time checks (RES-24) are for a station's own outbox only. An
+  // entry a peer ships was accepted by its origin, possibly an older release
+  // without them: refusing it here would block that event's whole shipping
+  // stream (sync/shipper.ts), so the peer path applies it as before.
+  const check = opts.strict
+    ? { status: assertRunnerStatus, time: assertAbsoluteTime, patch: assertRunnerPatch }
+    : { status: () => {}, time: () => {}, patch: () => {} };
   switch (event.type) {
     case "finish.recorded": {
-      const { finishTime } = event.payload as { finishTime: number };
+      const { finishTime, status } = event.payload as { finishTime: number; status?: number | null };
+      check.time("finish.recorded", "finishTime", finishTime);
+      if (status != null) check.status("finish.recorded", status);
       const runner = await resolveRunner(db, eventId, event.payload);
       // First non-zero finish wins (a runner crosses the line once).
       if (runner && runner.finishTime === 0) {
@@ -772,12 +781,12 @@ async function applyEvent(
       // "apply unconditionally" is the LWW rule at this arrival point.
       const { finishTime, status } = event.payload as {
         finishTime: number;
-        status?: number;
+        status?: number | null;
       };
       // A queued entry is refused like a live call would be (RES-24): an
       // unknown status or an out-of-day time is never written.
-      assertAbsoluteTime("finish.adjusted", "finishTime", finishTime);
-      if (status !== undefined) assertRunnerStatus("finish.adjusted", status);
+      check.time("finish.adjusted", "finishTime", finishTime);
+      if (status != null) check.status("finish.adjusted", status);
       const runner = await resolveRunner(db, eventId, event.payload);
       if (runner) {
         await db.runner.update({
@@ -801,9 +810,9 @@ async function applyEvent(
         startTime: number;
         confirmed?: boolean;
       };
-      assertRunnerStatus("result.applied", status);
-      assertAbsoluteTime("result.applied", "finishTime", finishTime);
-      assertAbsoluteTime("result.applied", "startTime", startTime);
+      check.status("result.applied", status);
+      check.time("result.applied", "finishTime", finishTime);
+      check.time("result.applied", "startTime", startTime);
       const runner = await resolveRunner(db, eventId, event.payload);
       if (runner) {
         // Same guard as a live apply (RES-01): a queued result never
@@ -824,7 +833,7 @@ async function applyEvent(
 
     case "start.recorded": {
       const { startTime } = event.payload as { startTime: number };
-      assertAbsoluteTime("start.recorded", "startTime", startTime);
+      check.time("start.recorded", "startTime", startTime);
       const runner = await resolveRunner(db, eventId, event.payload);
       if (runner) {
         await db.runner.update({
@@ -838,7 +847,7 @@ async function applyEvent(
     case "start.adjusted": {
       // Draw / manual start-time set — last-write-wins.
       const { startTime, startNo } = event.payload as { startTime: number; startNo?: unknown };
-      assertAbsoluteTime("start.adjusted", "startTime", startTime);
+      check.time("start.adjusted", "startTime", startTime);
       const runner = await resolveRunner(db, eventId, event.payload);
       if (runner) {
         await db.runner.update({
@@ -937,7 +946,7 @@ async function applyEvent(
       const int = (v: unknown): number | undefined =>
         typeof v === "number" && Number.isInteger(v) ? v : undefined;
       const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
-      assertRunnerPatch("runner.registered", p as Record<string, unknown>);
+      check.patch("runner.registered", p as Record<string, unknown>);
       const status = int(p.status);
       const finish = int(p.finishTime);
       const created = await db.runner.create({
@@ -990,7 +999,7 @@ async function applyEvent(
       const { fields } = event.payload as {
         fields?: Record<string, unknown>;
       };
-      if (fields) assertRunnerPatch("runner.updated", fields);
+      if (fields) check.patch("runner.updated", fields);
       const runner = await resolveRunner(db, eventId, event.payload);
       if (runner && fields && Object.keys(fields).length > 0) {
         const data = await buildRunnerUpdateData(

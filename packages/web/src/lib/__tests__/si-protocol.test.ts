@@ -1857,3 +1857,22 @@ describe("parsePunchSlot", () => {
     expect(parsePunchSlot(Uint8Array.of(0x1c, 0x48, 0xa1, 0x29), 0)).toEqual({ controlCode: 72, time: 41257 });
   });
 });
+
+describe("cardSecondsToDs (RES-24)", () => {
+  it("converts seconds to deciseconds and keeps in-day values", async () => {
+    const { cardSecondsToDs } = await import("../si-protocol");
+    expect(cardSecondsToDs(0)).toBe(0);
+    expect(cardSecondsToDs(36000)).toBe(360000);
+  });
+  it("wraps a corrupt card time into one day", async () => {
+    const { cardSecondsToDs } = await import("../si-protocol");
+    // 16-bit field + PM flag reaches 108735 s, past midnight.
+    expect(cardSecondsToDs(108735)).toBe(1_087_350 % 864_000);
+    expect(cardSecondsToDs(86400)).toBe(0);
+    for (const t of [0, 1, 43199, 86399, 86400, 108735]) {
+      const ds = cardSecondsToDs(t);
+      expect(ds).toBeGreaterThanOrEqual(0);
+      expect(ds).toBeLessThan(864_000);
+    }
+  });
+});
