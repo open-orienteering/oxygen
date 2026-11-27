@@ -248,7 +248,7 @@ too (J2): the event's own graphics and any club graphic by id
 | `/api/export/course-data` | `courses.view` |
 | `/api/map-sources/:hash` | `event.manage` on an event whose map is that source (`?event=` / `x-event-id`), **instance admin** if it was copied from the club library; or the uploader of a club map version with that source, or an instance admin. Never the kiosk key. See [map-storage.md](../map-storage.md) §4.4 |
 | `/api/maps/:nameId/graphics/:id[/print.png\|/thumb.png]` | `courses.view`, or the event's kiosk key (J2) |
-| `/health`, `/api/version`, `/api/club-logo/*` | open |
+| `/health`, `/ready`, `/api/version`, `/api/club-logo/*` | open |
 
 `course.downloadMap` requires `event.manage`, and instance admin when
 `map_files.from_club_library` is set. `clubMap.download` matches delete:

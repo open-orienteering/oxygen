@@ -14,8 +14,8 @@ dependency install:
 bash scripts/demo.sh
 ```
 
-The demo defaults to `ghcr.io/open-orienteering/oxygen:edge`, the latest
-verified `main` build. To test a release or immutable build:
+The demo defaults to `ghcr.io/open-orienteering/oxygen:edge`, the newest
+`main` build that passed the image smoke. To test a release or immutable build:
 
 ```bash
 OXYGEN_IMAGE=ghcr.io/open-orienteering/oxygen:v1.2.3 bash scripts/demo.sh

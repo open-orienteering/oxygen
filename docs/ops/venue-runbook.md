@@ -15,6 +15,11 @@ background: [`system/offline-architecture.md`](../system/offline-architecture.md
   environment. The same value authorises the box's push to the cloud as well
   as its pull; if it is missing or different the shipper logs
   `UNAUTHORIZED` / `PRECONDITION_FAILED` every cycle and nothing ships.
+  `scripts/gcp/provision.sh` creates it as the secret `oxygen-sync-secret`
+  and `deploy.sh` binds it on every deploy (read it with
+  `gcloud secrets versions access latest --secret=oxygen-sync-secret`). A
+  cloud deployed with `deploy.sh` is behind IAP: the box needs the two IAP
+  lines below as well.
 - Chrome 142+ on station devices that will use the cloud-served PWA against
   the box (see [Transport](#transport-how-stations-reach-the-box)).
 
@@ -27,15 +32,30 @@ background: [`system/offline-architecture.md`](../system/offline-architecture.md
    SYNC_PEER_URL=https://oxygen.example.com
    SYNC_SHARED_SECRET=<same value as on the cloud: it authorises push and pull>
    CLOUD_WEB_ORIGIN=https://oxygen.example.com
+   # Cloud behind IAP (a deploy made with scripts/gcp/deploy.sh always is):
+   SYNC_GOOGLE_AUDIENCE=<the IAP OAuth client ID>
+   VENUE_SA_KEY=/home/me/oxygen-keys/venue-sa.json   # absolute or ./ path
    ```
 
-2. Build and start the stack, then apply migrations:
+   Create the service account and its key as described in
+   [deploy-gcp-cloud-run.md](deploy-gcp-cloud-run.md#venue-box-sync-through-iap),
+   keep the key file outside the checkout, and make it readable by the
+   container's user (uid 1000): `chown 1000 venue-sa.json && chmod 400
+   venue-sa.json`. A bare file name would be taken as a Docker volume, so
+   use a full path or one starting with `./`. At start the api logs
+   `[sync] IAP auth on` or a warning that names what is missing
+   (`docker compose -f docker-compose.venue.yml logs api | grep '\[sync\]'`).
+
+2. Build and start the stack:
 
    ```bash
    docker compose -f docker-compose.venue.yml --env-file .env.venue up --build -d
-   docker compose -f docker-compose.venue.yml exec api \
-     pnpm --filter @oxygen/api exec prisma migrate deploy
    ```
+
+   The compose file's `migrate` service applies the Prisma migrations before
+   the api starts (and again on every `up`); no separate command is needed.
+   If it fails, `docker compose -f docker-compose.venue.yml logs migrate`
+   says why and the api stays down.
 
 3. **Disable sleep.** A suspended box ships nothing and serves nobody:
 
@@ -49,10 +69,13 @@ background: [`system/offline-architecture.md`](../system/offline-architecture.md
 4. Give the box a static IP on the venue LAN (router DHCP reservation), or
    rely on mDNS (`hostname.local`) if every station OS resolves it.
 
-5. Verify from another device on the LAN:
+5. Verify from another device on the LAN. `/ready` answers 200 only when
+   the database is reachable and every migration is applied; otherwise 503
+   with a `reason` (`database` or `migrations`) and the pending migrations.
+   `/health` only says the process is up.
 
    ```bash
-   curl http://<box-ip>:3001/health   # → {"status":"ok",...}
+   curl http://<box-ip>:3001/ready   # → {"status":"ok"}
    ```
 
 6. **Automatic backups.** The compose file's `backup` service dumps the
@@ -66,6 +89,35 @@ background: [`system/offline-architecture.md`](../system/offline-architecture.md
    `docker compose -f docker-compose.venue.yml logs backup`). See
    [backup-restore.md](backup-restore.md#automatic-backups) for restoring
    from one.
+
+## Upgrading the box
+
+Do this days before the event, not at the arena, and never while the box
+holds a lease.
+
+1. Check the box in (or confirm no event is checked out to it).
+2. Take a dump that the 15-minute rotation will not delete:
+
+   ```bash
+   docker compose -f docker-compose.venue.yml --env-file .env.venue \
+     run --rm --entrypoint pg_dump backup --schema=oxygen --format=custom \
+     --file=/backups/pre-upgrade_$(date -u +%Y%m%d_%H%M%S).dump
+   ```
+
+   (`pre-upgrade_*` does not match the rotation's `oxygen_*.dump`.)
+3. `git pull` (or check out the release tag), then rebuild and start:
+
+   ```bash
+   docker compose -f docker-compose.venue.yml --env-file .env.venue up --build -d
+   ```
+
+   `migrate` runs first; the api and web wait for it and for `/ready`.
+4. Check `curl http://<box-ip>:3001/ready` answers `{"status":"ok"}`, then
+   reload the station and admin tabs that use the box. Upgrade the cloud
+   first when both change (the box refuses nothing it does not understand,
+   but warns about a schema mismatch in its log).
+
+Restoring the pre-upgrade dump: [backup-restore.md](backup-restore.md#before-an-upgrade).
 
 ## Race day
 
@@ -132,8 +184,9 @@ Two options, both fine:
 - **Cloud-served PWA + LNA (recommended for Chrome devices).** Stations
   load the app from the cloud over HTTPS as usual, then set the box's URL
   under **Sync status → Venue node URL** (e.g. `http://192.168.1.10:3001`).
-  The discovery loop probes `/health` every 15 s; when the box is healthy,
-  all API calls go to it over the LAN. Chrome asks once for the "local
+  The discovery loop probes `/ready` every 15 s (`/health` on a box running
+  an older image that has no `/ready`); when the box is ready (database up,
+  migrations applied), all API calls go to it over the LAN. Chrome asks once for the "local
   network" permission — accept it. If the box goes down, calls fall back
   to the cloud automatically, and climb back when it returns.
 - **LAN-served web UI (any browser, zero internet).** Browse

@@ -837,7 +837,9 @@ Base-URL selection, run at boot and on every health-check failure:
 
 1. Pinned URL in `localStorage` (admin override) — used directly if set.
 2. Static IP/hostname list from the event's config, probed in parallel;
-   first `/health` 200 wins.
+   first `/ready` 200 wins (`/ready` = database reachable and migrations
+   applied; a box whose image has no `/ready` is probed on `/health`; a 503 or
+   a network error is unhealthy).
 3. Cloud fallback (`VITE_API_BASE_URL`).
 
 A background re-probe runs while connected cloud-direct so stations

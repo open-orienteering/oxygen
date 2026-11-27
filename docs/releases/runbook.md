@@ -37,7 +37,9 @@ then took `main` back once; that branch is retired.)
 
 ## 2. Cut the release
 
-Tag the `main` merge commit once its publish job is green:
+Tag the `main` merge commit once its publish job is green (the run has
+written `verified-sha-<commit>`: `release.yml` promotes only that tag, and
+fails with "the image smoke has not passed for commit …" otherwise):
 
 ```bash
 git checkout main && git pull
@@ -48,6 +50,14 @@ git push origin v<x.y.z>         # release.yml retags sha-… as v<x.y.z>, stabl
 Cloud sessions cannot push tags (the proxy refuses `refs/tags`); the tag is
 pushed from the maintainer's own machine.
 
+**No `verified-sha-…` image.** Either the commit's publish run failed or was
+cancelled, or the commit is older than the `verified-` tags (earlier publishes
+wrote only `sha-…` and `edge`). Re-run the commit's publish run when it only
+failed to start; otherwise tag a later `main` commit that still carries the
+bumped `package.json` versions. `edge` is not proof: it moves only to a
+verified commit that is still the code tip of `main`, so after a burst of
+merges it can sit on a newer commit than the one you want.
+
 ## 3. Backup, deploy
 
 ```bash
@@ -57,6 +67,15 @@ gcloud sql backups create --instance="$SQL_INSTANCE" --project="$PROJECT_ID" \
 gcloud sql backups list --instance="$SQL_INSTANCE" --project="$PROJECT_ID" --limit=1
 cd scripts/gcp && ./deploy.sh v<x.y.z>   # migrate job, then the service
 ```
+
+`deploy.sh` stops before migrating when the live service has an environment
+variable it would remove (list it in `EXTRA_ENV` in `env.sh`, or pass
+`--drop-unlisted` on purpose), and prints the mode (idle or event) it kept.
+
+Upgrade order when a venue box is in play: the cloud first (`./deploy.sh`),
+then the box (`docs/ops/venue-runbook.md` "Upgrading the box": pre-upgrade
+dump, `up --build -d`), days before the event. Venue and self-host boxes
+should run a pinned `vX.Y.Z`, not `edge`.
 
 Note the backup id and the new revision in the release note's record.
 

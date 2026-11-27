@@ -13,10 +13,28 @@
 #   SYNC_SHARED_SECRET  the same secret configured on the cloud node
 #   CLOUD_WEB_ORIGIN    the cloud PWA origin for CORS, usually = SYNC_PEER_URL
 #
+# Optional, when the cloud is behind IAP (it is, for a deploy made with
+# scripts/gcp/deploy.sh; docs/ops/deploy-gcp-cloud-run.md "Venue-box sync
+# through IAP"):
+#   SYNC_GOOGLE_AUDIENCE  the IAP OAuth client ID
+#   VENUE_SA_KEY          path to the service-account key file on this host,
+#                         absolute or starting with ./ (a bare name would be
+#                         taken as a Docker volume). Mounted read-only into
+#                         the api container, which runs as uid 1000 (user
+#                         `node`): `chown 1000 <file> && chmod 400 <file>`.
+# The api logs at start whether IAP auth is on and warns if only one of the
+# two is set or the key cannot be read.
+#
 # Usage:
 #   docker compose -f docker-compose.venue.yml --env-file .env.venue up --build -d
-#   docker compose -f docker-compose.venue.yml exec api \
-#     pnpm --filter @oxygen/api exec prisma migrate deploy
+# The `migrate` service applies Prisma migrations before the api starts (and on
+# every `up`); there is no separate migrate command. Upgrading the box:
+# docs/ops/venue-runbook.md "Upgrading the box".
+
+# Both api and migrate build the same image (layers are shared).
+x-api-build: &api-build
+  context: .
+  target: api
 
 services:
   postgres:
@@ -34,14 +52,27 @@ services:
       timeout: 3s
       retries: 10
 
+  migrate:
+    build: *api-build
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: "postgresql://oxygen:oxygen@postgres:5432/oxygen?schema=oxygen"
+    command:
+      - sh
+      - -c
+      - cd packages/api && node_modules/.bin/prisma migrate deploy
+
   api:
-    build:
-      context: .
-      target: api
+    build: *api-build
     restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     ports:
       - "3001:3001"
     environment:
@@ -58,6 +89,23 @@ services:
       # The cloud PWA's origin — stations load the app over HTTPS from the
       # cloud and call this box cross-origin on the LAN.
       CORS_ORIGINS: "${CLOUD_WEB_ORIGIN:-}"
+      # IAP in front of the cloud (see the header): audience + key file.
+      SYNC_GOOGLE_AUDIENCE: "${SYNC_GOOGLE_AUDIENCE:-}"
+      GOOGLE_APPLICATION_CREDENTIALS: "${VENUE_SA_KEY:+/run/secrets/venue-sa.json}"
+    volumes:
+      - "${VENUE_SA_KEY:-/dev/null}:/run/secrets/venue-sa.json:ro"
+    # Ready = database reachable and every migration applied (/ready), not just
+    # "process is up": the web container and node discovery wait for it.
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"fetch('http://127.0.0.1:3001/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
 
   # LAN-served web UI: lets stations work even with zero internet (they
   # browse http://<box-ip>:8080 directly — same origin as nothing, plain
@@ -68,7 +116,8 @@ services:
       target: web
     restart: unless-stopped
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     ports:
       - "8080:80"
     volumes:
