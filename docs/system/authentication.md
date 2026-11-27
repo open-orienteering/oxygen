@@ -36,9 +36,19 @@ wired, and typically on LAN venue boxes that do not terminate SSO.
 
 ### `AUTH_MODE=proxy`
 
-Every request except `users.me`, health/version, and kiosk/start-screen
-pages (which still render without an invite) is gated at the tRPC layer once
-`eventProcedure` / `authedProcedure` run. Unknown emails get `UNAUTHORIZED`
+Every request except health/version and kiosk/start-screen pages (which
+still render without an invite) is gated at the tRPC layer once
+`eventProcedure` / `authedProcedure` run. The procedures an anonymous caller
+may reach are a short, written-down list: `users.me`, `event.select` /
+`competition.select` and `mapImport.review` / `mapImport.exportCrt` (each
+decides inside its handler), and `events.push` (node secret or signed-in
+user, then a per-entry capability check). `router-auth-sweep.test.ts` calls
+every procedure anonymously and fails when anything outside that list answers
+something other than `UNAUTHORIZED` / `FORBIDDEN`; its integration twin does
+the same as a member with no grant on a real event, against the club-wide
+list (`permission.groups`, `clubMap.*`, `classPreset.*`, `controlSeries.*`,
+the Eventor browse calls, `lease.checkout`, …). A new `publicProcedure`
+therefore has to be written into one of those lists, with its reason. Unknown emails get `UNAUTHORIZED`
 from event-scoped procedures unless `AUTH_AUTO_PROVISION` is on, in which
 case they are created as members on first sight. The UI shows **Access denied**
 for every route except `/:nameId/kiosk` and `/:nameId/start-screen` when there
@@ -141,8 +151,81 @@ entry's own `actorId`, the origin node's attribution.
 ## Venue nodes
 
 LAN venue boxes usually keep `AUTH_MODE=off` or `dev`. When a venue forwards
-cloud-owned mutations, `venueForwarder` copies the configured identity header
-so the cloud can attribute the call if the cloud runs `proxy` mode.
+cloud-owned mutations (`venueForwarder`, [offline-architecture.md](offline-architecture.md)),
+the call is the **box's**, not the caller's:
+
+- It carries the node secret (`x-oxygen-sync-secret`, when `SYNC_SHARED_SECRET`
+  is set), the node id (`x-oxygen-node-id`), the marker
+  `x-oxygen-forwarded: 1` and, behind IAP, the `Authorization: Bearer` ID
+  token. The caller's identity header is **not** relayed (a header the cloud's
+  proxy never set would otherwise pass for a user), and the forwarder follows
+  no redirects and gives up after 30 s.
+- The cloud's `createContext` turns a marked call with a matching secret into
+  `ctx.nodeForward = { nodeId }` and does not read the identity header. A
+  marker with a wrong or missing secret is an anonymous request
+  (`UNAUTHORIZED`).
+- With auth on, `authedProcedure` admits `ctx.nodeForward`; `adminProcedure`
+  does not (a forwarded call is never an instance admin), and `kioskOrCapProcedure`
+  and the REST guards ignore it. Its capabilities on an event are **all of
+  them when the event's active lease is held by that node id, none otherwise**
+  (`capabilitiesForEventRow`; the in-handler check of `mapPatch.promote` uses
+  the same rule). Calls with no event pass at the authed level, except the
+  event create / import / delete refusals below. The journal's `actor_id` of a forwarded write is
+  null for now.
+- A cloud that answers the forward with a redirect (IAP sending the box to a
+  sign-in page) or a non-JSON page is the cloud's front door refusing the
+  box: the venue answers `412` with `data.reason: "CLOUD_AUTH"` ("The cloud
+  refused this box's credentials (check `SYNC_SHARED_SECRET` and the IAP
+  settings)") and does not refresh. A silent or unreachable cloud stays
+  `CLOUD_UNREACHABLE`.
+
+**The box checks its own caller first, and vouches for what they may do.**
+With login on at the box (`AUTH_MODE` `proxy` or `dev`), `venueForwarder`
+resolves the local caller before lending the box's authority: anonymous is
+`UNAUTHORIZED` (401); on a forward that names an event (`x-event-id` /
+`x-competition-id`) the caller's capabilities on the box's copy of it are
+computed (an instance admin: all) and an empty set is `FORBIDDEN` (403); a
+forward naming no event needs a signed-in user only. Refusals are tRPC-shaped,
+per call in a batch, and nothing is forwarded. The set travels in
+`x-oxygen-forwarded-caps` (comma list; an event-less forward carries all of them
+for an admin and `none` for anyone else; an empty value is never sent), and on
+the cloud a `nodeForward` call holds the lease-holder rule **intersected with**
+that set (unknown names are ignored). The cloud fails closed: an absent header
+is no capability at all. The box sends exactly one event header, `x-event-id`,
+with the event as it resolved it, and answers 400 when the caller named an event
+that does not resolve on the box; an empty `x-event-id` never shadows
+`x-competition-id` (on either side). So a course setter with only `courses.edit` can forward a course
+object edit, a viewer cannot, and nobody can do through the box what they could
+not do at it. With login off at the box (the usual LAN venue box) the header is `*`,
+every device on the LAN is trusted, as for all local writes, and the cloud
+applies the lease rule alone. A box whose `NODE_ID` is unset or still the
+default `cloud` answers a forward with `412` `CLOUD_AUTH` ("set NODE_ID …")
+without calling the cloud: the cloud would treat it as itself.
+
+**What a node may and may not do on the cloud.** A forwarded call never
+creates, imports or deletes events (`event.create`, `eventor.importEvent`,
+`event.delete` answer `FORBIDDEN` "Do this on the cloud": no ownerless events,
+and the checked-out event cannot be removed from under its own lease),
+`event.list` shows it only the events whose lease it holds, and a forward that
+names no node, or names the cloud's own `NODE_ID`, is anonymous. The node id is
+not proof of identity: with one instance-wide `SYNC_SHARED_SECRET`, a box that
+knows the secret can claim another box's id and so act on that box's events (a
+per-event checkout token would close it,
+[proxy-auth-followups](../bugfixes/proxy-auth-followups.md)). A 401 from the
+cloud on a forward (wrong or missing secret on a cloud not behind IAP) comes
+back as `CLOUD_AUTH`.
+
+**A node with the secret but no lease still passes authed-level procedures.** A
+forward with the right secret and a node id is `ctx.nodeForward`, which
+`authedProcedure` admits whether or not that node holds any lease, so it can call
+what only needs a signed-in user: `classPreset`, `controlSeries`, the club map
+rename and Eventor browsing. Event capabilities are never granted without the
+lease. This is by design for the node-owned cloud data; narrowing it needs
+per-procedure review
+([proxy-auth-followups](../bugfixes/proxy-auth-followups.md)).
+
+Who may check an event out on a box is in
+[offline-architecture.md](offline-architecture.md) ("The lease").
 
 ## Transition
 
@@ -220,7 +303,9 @@ URLs. The web client sends `x-kiosk-key`. Middleware accepts a matching key
 **or** a logged-in user with the relevant capability (`kioskOrCapProcedure`).
 Identity-less devices without a key see an error pane (`kiosk-key-required`).
 
-A key-only device is **display-only** apart from its own outbox: it cannot call
+A key-only device is **display-only** apart from its own outbox, and it
+cannot read the runner directory (`eventor.runnerDbDump` and the lookups need
+`race.operate`): it cannot call
 `cardReadout.storeReadout`, `cardReadout.applyResult`, `race.recordFinish` or
 `events.push` (all need a signed-in user, or the node secret for a peer;
 `recordFinish` was kiosk-key callable
@@ -240,6 +325,21 @@ itself (`lib/map-document-cache.ts`). The graphic routes
 too (J2): the event's own graphics and any club graphic by id
 ([course-maps.md](../course-maps.md) API). Mutations never accept the key.
 
+### Runner directory and Eventor browse
+
+With `AUTH_AUTO_PROVISION=member` (the documented deploy) "signed in" means
+"anyone the proxy admits", so personal-data lookups need a capability, not just
+a user:
+
+| Procedures | Gate |
+|------------|------|
+| `eventor.runnerDbDump`, `searchRunnerDb`, `lookupByCardNo`, `clubMembers` (names, birth years, card numbers) | `race.operate`, event header required; **no kiosk key** (the kiosk looks cards up through `race.lookupByCard` and does not prefetch the dump) |
+| `eventor.syncRunnerDb`, `runnerDbStatus` | `event.manage`; one sync at a time **per API process** (a second call on that process is `CONFLICT`; a cluster-wide lock is a follow-up) |
+| `club.searchDirectory` (club names only), `eventor.events` / `searchEvents` / `eventDetail` / `fetchEntryHistory`, `registrationTrends.*`, `event.dbStatus` | any signed-in user |
+
+Race crew registers runners, so the registration dialog's lookups work for
+them; for anyone else a refused lookup leaves manual entry.
+
 ### REST protection
 
 | Route | Required |
@@ -247,8 +347,11 @@ too (J2): the event's own graphics and any club graphic by id
 | `/api/backup/*` | `event.manage`; **instance admin** if the event's current map was copied from the club library (the dump contains the OCAD blob) |
 | `/api/export/course-data` | `courses.view` |
 | `/api/map-sources/:hash` | `event.manage` on an event whose map is that source (`?event=` / `x-event-id`), **instance admin** if it was copied from the club library; or the uploader of a club map version with that source, or an instance admin. Never the kiosk key. See [map-storage.md](../map-storage.md) §4.4 |
-| `/api/maps/:nameId/graphics/:id[/print.png\|/thumb.png]` | `courses.view`, or the event's kiosk key (J2) |
+| `/api/maps/:nameId/graphics/:id[/print.png\|/thumb.png]` | `courses.view`, or the event's kiosk key (J2). All three answer `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; sandbox` and `X-Content-Type-Options: nosniff`; the raw route also `Content-Disposition: attachment` for an SVG (CRS-003) |
 | `/health`, `/ready`, `/api/version`, `/api/club-logo/*` | open |
+
+Every API response carries `X-Content-Type-Options: nosniff` (a global
+`onSend` hook). There is no application-wide CSP yet.
 
 `course.downloadMap` requires `event.manage`, and instance admin when
 `map_files.from_club_library` is set. `clubMap.download` matches delete:

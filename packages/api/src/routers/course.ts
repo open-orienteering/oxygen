@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
+import { assertMayConsumeSource } from "../map-store/source-possession.js";
 import { router, coursesViewProcedure, kioskOrCoursesViewProcedure, coursesEditProcedure, coursesEditRaceProcedure, manageProcedure } from "../trpc.js";
 import type { PrismaClient } from "../generated/prisma/client.js";
 import { Prisma as PrismaNs } from "../generated/prisma/client.js";
@@ -1652,6 +1653,7 @@ export const courseRouter = router({
       if (!source) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Uploaded file not found; upload it again" });
       }
+      await assertMayConsumeSource(ctx, input.fileHash, ctx.db);
       const result = await applyEventMap(
         ctx.db,
         ctx.event.id,

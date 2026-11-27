@@ -178,7 +178,9 @@ describe("print worker", () => {
     expect(Buffer.from(remote).readUInt32BE(20)).toBe(236);
     // The caller's bytes are not transferred away.
     expect(svg.byteLength).toBeGreaterThan(0);
-    await expect(rasteriseSvgInWorker(new TextEncoder().encode("not svg"), 10, 10)).rejects.toThrow();
+    // A graphic that does not validate renders as nothing (a transparent box), not as an error.
+    const blank = await rasteriseSvgInWorker(new TextEncoder().encode("not svg"), 10, 10);
+    expect([Buffer.from(blank).readUInt32BE(16), Buffer.from(blank).readUInt32BE(20)]).toEqual([10, 10]);
   });
 
   it("sizes the pool from PRINT_WORKERS", () => {

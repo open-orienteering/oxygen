@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, viewProcedure, manageProcedure, publicProcedure } from "../trpc.js";
+import { router, viewProcedure, manageProcedure, authedProcedure } from "../trpc.js";
 import { prisma } from "../db.js";
 import { WITHDRAWN_STATUSES, type ClubSummary, type ClubDetail } from "@oxygen/shared";
 import { valueToRunnerStatus } from "../statusConvert.js";
@@ -221,7 +221,7 @@ export const clubRouter = router({
    * Search the global club directory by name.
    * Returns matching clubs with their Eventor ids.
    */
-  searchDirectory: publicProcedure
+  searchDirectory: authedProcedure
     .input(z.object({ query: z.string().min(1) }))
     .query(async ({ input }) => {
       const rows = await prisma().clubDirectory.findMany({

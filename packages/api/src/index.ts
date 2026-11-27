@@ -34,6 +34,7 @@ import { registerStaticServe } from "./staticServe.js";
 import { registerReadyRoute } from "./ready.js";
 import { describeSyncAuth } from "./sync/googleIdToken.js";
 import { nodeRole } from "./sync/nodeIdentity.js";
+import { registerSecurityHeaders } from "./securityHeaders.js";
 import "dotenv/config";
 
 const PORT = parseInt(process.env.PORT ?? "3002", 10);
@@ -51,6 +52,8 @@ async function main() {
     bodyLimit: 50 * 1024 * 1024,
     maxParamLength: 500,
   });
+
+  registerSecurityHeaders(server);
 
   // CORS_ORIGINS (comma-separated) extends the dev defaults — a venue box
   // must allow the cloud-served PWA's HTTPS origin so stations on the LAN

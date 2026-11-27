@@ -125,7 +125,8 @@ function KioskPageBody() {
   const [cacheClaimed, setCacheClaimed] = useState(false);
 
   // Pre-fetch and persist all competition data for offline use
-  useStationSync(cacheClaimed);
+  // No runner directory dump: it needs `race.operate`, which a kiosk key lacks.
+  useStationSync(cacheClaimed, { runnerDb: false });
 
   // Fetch dashboard data for organizer logo
   const dashboard = trpc.competition.dashboard.useQuery(undefined, {

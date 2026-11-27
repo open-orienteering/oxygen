@@ -26,7 +26,7 @@
  * nothing race-critical is touched.
  */
 
-import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
 import { TRPCError } from "@trpc/server";
 import { execSync } from "child_process";
 import { Client } from "pg";
@@ -72,6 +72,8 @@ import {
   _resetDeliveryRefusalWarnings,
 } from "../../routers/events.js";
 import { nodeId } from "../../sync/nodeIdentity.js";
+import { grantSystemGroup } from "../../permissions.js";
+import { SYSTEM_GROUP_IDS } from "@oxygen/shared";
 import type { EventRef } from "../../db.js";
 import { importAndStoreOcad } from "../../map-store/documents.js";
 import { exportBlobSlice } from "../../sync/snapshotMaps.js";
@@ -1256,6 +1258,42 @@ describe("checkout guard and restart safety (API-07, SYNC-18)", () => {
     }
   });
 
+  it("in proxy mode who may check out: nobody anonymous, no grant-less member, event managers and admins (API-25)", async () => {
+    const mk = async (label: string, isAdmin = false) => {
+      const row = await ctx.db.user.create({
+        data: { email: `${label}-${mapSuffix}@lease.example`, displayName: label, isAdmin, active: true },
+      });
+      return { id: row.id, email: row.email, displayName: label, isAdmin, active: true };
+    };
+    const asProxy = (user: Awaited<ReturnType<typeof mk>> | null) =>
+      makeCaller(null, { authEnabled: true, authMode: "proxy", user, identityEmail: user?.email ?? null });
+    const member = await mk("lease-member");
+    const manager = await mk("lease-manager");
+    const admin = await mk("lease-admin", true);
+    try {
+      // A box with no copy yet: only an instance admin may bring one in.
+      await expect(asProxy(null).lease.checkout({ nameId: CHECKOUT_NAME })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+      await expect(asProxy(member).lease.checkout({ nameId: CHECKOUT_NAME })).rejects.toMatchObject({ code: "FORBIDDEN" });
+      await expect(asProxy(manager).lease.checkout({ nameId: CHECKOUT_NAME })).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+      expect((await asProxy(admin).lease.checkout({ nameId: CHECKOUT_NAME })).ok).toBe(true);
+      const local = await ctx.db.event.findUniqueOrThrow({ where: { nameId: CHECKOUT_NAME }, select: { id: true } });
+      await dropLeasesWithoutShipping(local.id);
+      await grantSystemGroup(ctx.db, { eventId: local.id, userId: member.id, groupId: SYSTEM_GROUP_IDS.member, grantedBy: admin.id });
+      await grantSystemGroup(ctx.db, { eventId: local.id, userId: manager.id, groupId: SYSTEM_GROUP_IDS.eventAdmin, grantedBy: admin.id });
+
+      // With a local copy: event.manage on it decides.
+      await expect(asProxy(null).lease.checkout({ nameId: CHECKOUT_NAME })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+      await expect(asProxy(member).lease.checkout({ nameId: CHECKOUT_NAME })).rejects.toMatchObject({ code: "FORBIDDEN", message: "Missing capability event.manage" });
+      expect((await asProxy(manager).lease.checkout({ nameId: CHECKOUT_NAME })).ok).toBe(true);
+      await dropLeasesWithoutShipping((await ctx.db.event.findUniqueOrThrow({ where: { nameId: CHECKOUT_NAME }, select: { id: true } })).id);
+      expect((await asProxy(admin).lease.checkout({ nameId: CHECKOUT_NAME })).ok).toBe(true);
+    } finally {
+      await undoCheckout();
+      await ctx.db.user.deleteMany({ where: { id: { in: [member.id, manager.id, admin.id] } } });
+    }
+  });
+
   it("readout backups survive a re-checkout", async () => {
     const { local } = await checkedOutVenue();
     await ctx.db.cardReadoutBackup.create({
@@ -1951,7 +1989,8 @@ describe("a box follows the cloud's map rows during a lease (G19)", () => {
     const venue = Fastify({ logger: false });
     _setLeasePeerFactory(() => jsonLeasePeerToB());
     try {
-      registerVenueForwarder(venue);
+      // This test's "box" leases under the default id (it shares a process with the stub cloud).
+      registerVenueForwarder(venue, { allowDefaultNodeId: true });
       venue.post("/trpc/*", async () => ({ result: { data: "local" } }));
       await venue.ready();
       // The header the web's tRPC clients send (\`x-event-id\` is the peers').
@@ -2237,6 +2276,16 @@ describe("forceTakeover", () => {
 });
 
 describe("layout writes on a venue box are forwarded to the cloud (G18)", () => {
+  // A box needs a node id of its own to forward (the default "cloud" is refused before the cloud is called).
+  let savedNodeId: string | undefined;
+  beforeEach(() => {
+    savedNodeId = process.env.NODE_ID;
+    process.env.NODE_ID = "venue-under-test";
+  });
+  afterEach(() => {
+    if (savedNodeId === undefined) delete process.env.NODE_ID;
+    else process.env.NODE_ID = savedNodeId;
+  });
   /** A box: the forwarder in front of a stub tRPC route that records what ran locally. */
   async function venueBox(peerUrl: string) {
     const previous = { role: process.env.NODE_ROLE, peer: process.env.SYNC_PEER_URL };
@@ -2259,7 +2308,7 @@ describe("layout writes on a venue box are forwarded to the cloud (G18)", () => 
     return { box, local };
   }
 
-  it("forwards sheet, layout and course-object writes with body, event and user; runs local writes locally", async () => {
+  it("forwards sheet, layout and course-object writes with body and event, never the caller's identity; runs local writes locally", async () => {
     const seen: Array<{ url: string; body: unknown; event: unknown; user: unknown }> = [];
     const cloud = Fastify({ logger: false });
     cloud.post("/trpc/*", async (req) => {
@@ -2281,8 +2330,8 @@ describe("layout writes on a venue box are forwarded to the cloud (G18)", () => 
       });
       expect(batch.statusCode).toBe(200);
       expect(seen).toEqual([
-        { url: "/trpc/courseMap.saveLayout", body: { seq: 1, objects: [] }, event: CHECKOUT_NAME, user: "setter@example.test" },
-        { url: "/trpc/layout.autoSheets,courseObject.update?batch=1", body: { 0: { courseId: 1 }, 1: { id: 2, baseVersion: (2n ** 60n).toString() } }, event: CHECKOUT_NAME, user: "setter@example.test" },
+        { url: "/trpc/courseMap.saveLayout", body: { seq: 1, objects: [] }, event: CHECKOUT_NAME, user: undefined },
+        { url: "/trpc/layout.autoSheets,courseObject.update?batch=1", body: { 0: { courseId: 1 }, 1: { id: 2, baseVersion: (2n ** 60n).toString() } }, event: CHECKOUT_NAME, user: undefined },
       ]);
       // Reads stay on the box; race-critical writes run there.
       const runner = await box.inject({ method: "POST", url: "/trpc/runner.update", headers, payload: {} });

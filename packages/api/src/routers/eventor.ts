@@ -18,10 +18,11 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import {
   router,
-  publicProcedure,
   authedProcedure,
   adminProcedure,
   manageProcedure,
+  raceOperateProcedure,
+  assertNotNodeForward,
 } from "../trpc.js";
 import { getSetting, setSetting, prisma, sanitizeNameId, isReservedEventSlug } from "../db.js";
 import type { Prisma, PrismaClient } from "../generated/prisma/client.js";
@@ -764,6 +765,131 @@ async function syncClubsFromEntries(
 
 // ── Router ─────────────────────────────────────────────────────────────────
 
+/**
+ * The runner-directory sync is a ~9 MB Eventor download plus a bulk upsert;
+ * one run at a time per process (a second caller gets CONFLICT).
+ */
+let runnerDbSyncRunning = false;
+
+async function syncRunnerDbOnce(input: { env: "prod" | "test" }) {
+  const { apiKey } = await requireApiKey(input.env);
+  const db = prisma();
+
+  // 1. Competitors
+  const competitors = await fetchCachedCompetitors(apiKey, input.env);
+
+  // 2. Aggregate the clubs referenced by competitors.
+  const clubMap = new Map<number, string>();
+  for (const c of competitors) {
+    if (c.clubEventorId > 0 && c.clubName) {
+      clubMap.set(c.clubEventorId, c.clubName);
+    }
+  }
+
+  // 3. Upsert competitor-referenced clubs first (name only).
+  const partialClubs: EventorClub[] = [...clubMap.entries()].map(
+    ([id, name]) => ({
+      id,
+      name,
+      shortName: "",
+      countryCode: "",
+      careOf: "",
+      street: "",
+      city: "",
+      zip: "",
+      email: "",
+      phone: "",
+      webUrl: "",
+    }),
+  );
+  await syncClubDirectoryEntries(partialClubs);
+
+  // 4. Try to enrich with full club details (name + short + country).
+  try {
+    const allClubs = await fetchClubs(apiKey, input.env);
+    await syncClubDirectoryEntries(allClubs);
+  } catch (err) {
+    console.warn("[syncRunnerDb] full club fetch failed:", err);
+  }
+
+  // 5. Upsert runner directory with one SQL statement per 1,000 rows.
+  //    Keep the global table in place so readers never see it empty.
+  const valid = [
+    ...new Map(
+      competitors
+        .filter((c) => c.extId > 0)
+        .map((c) => [c.extId, c] as const),
+    ).values(),
+  ];
+  await upsertRunnerDirectoryEntries(
+    db,
+    valid.map((c) => ({
+      eventorPersonId: BigInt(c.extId),
+      name: c.name,
+      cardNo: clampInt32(c.cardNo),
+      eventorClubId: clampInt32(c.clubEventorId),
+      birthYear: c.birthYear,
+      sex: c.sex,
+      nationality: c.nationality,
+    })),
+  );
+
+  // 6. Background logo fetch for clubs that still lack a small logo.
+  void (async () => {
+    try {
+      const needsLogo = await db.clubDirectory.findMany({
+        where: {
+          eventorId: { in: [...clubMap.keys()].map((id) => BigInt(id)) },
+          smallLogoPng: null,
+        },
+        select: { eventorId: true },
+        take: 200,
+      });
+      for (const c of needsLogo) {
+        try {
+          const small = await fetchClubLogo(
+            Number(c.eventorId),
+            apiKey,
+            "SmallIcon",
+          );
+          const large = await fetchClubLogo(
+            Number(c.eventorId),
+            apiKey,
+            "LargeIcon",
+          );
+          if (small) {
+            await db.clubDirectory.update({
+              where: { eventorId: c.eventorId },
+              data: {
+                smallLogoPng: Buffer.from(small),
+                ...(large ? { largeLogoPng: Buffer.from(large) } : {}),
+                updatedAt: new Date(),
+              },
+            });
+          }
+        } catch {
+          // skip individual failures
+        }
+      }
+    } catch {
+      // non-critical
+    }
+  })();
+
+  // 7. Record sync state in settings.
+  await Promise.all([
+    setSetting("runnerdb_last_sync", new Date().toISOString()),
+    setSetting("runnerdb_runner_count", String(valid.length)),
+    setSetting("runnerdb_club_count", String(clubMap.size)),
+  ]);
+
+  return {
+    runners: valid.length,
+    clubs: clubMap.size,
+    logosAdded: 0, // background — count not available synchronously
+  };
+}
+
 export const eventorRouter = router({
   // ───────────── Key management ─────────────
   //
@@ -852,7 +978,7 @@ export const eventorRouter = router({
 
   // ───────────── Browse events ─────────────
 
-  events: publicProcedure
+  events: authedProcedure
     .input(
       z
         .object({
@@ -874,7 +1000,7 @@ export const eventorRouter = router({
       return fetchEvents(apiKey, org.id, fromDate, toDate, input?.env);
     }),
 
-  searchEvents: publicProcedure
+  searchEvents: authedProcedure
     .input(
       z.object({
         query: z.string(),
@@ -900,7 +1026,7 @@ export const eventorRouter = router({
       return events.filter((e) => e.name.toLowerCase().includes(q));
     }),
 
-  eventDetail: publicProcedure
+  eventDetail: authedProcedure
     .input(
       z.object({
         eventId: z.number().int().positive(),
@@ -950,6 +1076,7 @@ export const eventorRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      assertNotNodeForward(ctx);
       const { apiKey } = await requireApiKey(input.env);
       const db = prisma();
 
@@ -1279,125 +1406,21 @@ export const eventorRouter = router({
    * global runner_directory / club_directory tables. Fire-and-forget
    * logo fetch for clubs that lack one.
    */
-  syncRunnerDb: publicProcedure
+  syncRunnerDb: manageProcedure
     .input(z.object({ env: z.enum(["prod", "test"]).default("prod") }))
     .mutation(async ({ input }) => {
-      const { apiKey } = await requireApiKey(input.env);
-      const db = prisma();
-
-      // 1. Competitors
-      const competitors = await fetchCachedCompetitors(apiKey, input.env);
-
-      // 2. Aggregate the clubs referenced by competitors.
-      const clubMap = new Map<number, string>();
-      for (const c of competitors) {
-        if (c.clubEventorId > 0 && c.clubName) {
-          clubMap.set(c.clubEventorId, c.clubName);
-        }
+      if (runnerDbSyncRunning) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "Runner database sync already running",
+        });
       }
-
-      // 3. Upsert competitor-referenced clubs first (name only).
-      const partialClubs: EventorClub[] = [...clubMap.entries()].map(
-        ([id, name]) => ({
-          id,
-          name,
-          shortName: "",
-          countryCode: "",
-          careOf: "",
-          street: "",
-          city: "",
-          zip: "",
-          email: "",
-          phone: "",
-          webUrl: "",
-        }),
-      );
-      await syncClubDirectoryEntries(partialClubs);
-
-      // 4. Try to enrich with full club details (name + short + country).
+      runnerDbSyncRunning = true;
       try {
-        const allClubs = await fetchClubs(apiKey, input.env);
-        await syncClubDirectoryEntries(allClubs);
-      } catch (err) {
-        console.warn("[syncRunnerDb] full club fetch failed:", err);
+        return await syncRunnerDbOnce(input);
+      } finally {
+        runnerDbSyncRunning = false;
       }
-
-      // 5. Upsert runner directory with one SQL statement per 1,000 rows.
-      //    Keep the global table in place so readers never see it empty.
-      const valid = [
-        ...new Map(
-          competitors
-            .filter((c) => c.extId > 0)
-            .map((c) => [c.extId, c] as const),
-        ).values(),
-      ];
-      await upsertRunnerDirectoryEntries(
-        db,
-        valid.map((c) => ({
-          eventorPersonId: BigInt(c.extId),
-          name: c.name,
-          cardNo: clampInt32(c.cardNo),
-          eventorClubId: clampInt32(c.clubEventorId),
-          birthYear: c.birthYear,
-          sex: c.sex,
-          nationality: c.nationality,
-        })),
-      );
-
-      // 6. Background logo fetch for clubs that still lack a small logo.
-      void (async () => {
-        try {
-          const needsLogo = await db.clubDirectory.findMany({
-            where: {
-              eventorId: { in: [...clubMap.keys()].map((id) => BigInt(id)) },
-              smallLogoPng: null,
-            },
-            select: { eventorId: true },
-            take: 200,
-          });
-          for (const c of needsLogo) {
-            try {
-              const small = await fetchClubLogo(
-                Number(c.eventorId),
-                apiKey,
-                "SmallIcon",
-              );
-              const large = await fetchClubLogo(
-                Number(c.eventorId),
-                apiKey,
-                "LargeIcon",
-              );
-              if (small) {
-                await db.clubDirectory.update({
-                  where: { eventorId: c.eventorId },
-                  data: {
-                    smallLogoPng: Buffer.from(small),
-                    ...(large ? { largeLogoPng: Buffer.from(large) } : {}),
-                    updatedAt: new Date(),
-                  },
-                });
-              }
-            } catch {
-              // skip individual failures
-            }
-          }
-        } catch {
-          // non-critical
-        }
-      })();
-
-      // 7. Record sync state in settings.
-      await Promise.all([
-        setSetting("runnerdb_last_sync", new Date().toISOString()),
-        setSetting("runnerdb_runner_count", String(valid.length)),
-        setSetting("runnerdb_club_count", String(clubMap.size)),
-      ]);
-
-      return {
-        runners: valid.length,
-        clubs: clubMap.size,
-        logosAdded: 0, // background — count not available synchronously
-      };
     }),
 
   /**
@@ -1422,7 +1445,7 @@ export const eventorRouter = router({
 
   // ───────────── Lookups ─────────────
 
-  runnerDbStatus: publicProcedure.query(async () => {
+  runnerDbStatus: manageProcedure.query(async () => {
     const [last, runners, clubs] = await Promise.all([
       getSetting("runnerdb_last_sync"),
       getSetting("runnerdb_runner_count"),
@@ -1435,7 +1458,7 @@ export const eventorRouter = router({
     };
   }),
 
-  searchRunnerDb: publicProcedure
+  searchRunnerDb: raceOperateProcedure
     .input(z.object({ query: z.string().min(2) }))
     .query(async ({ input }) => {
       const db = prisma();
@@ -1480,7 +1503,7 @@ export const eventorRouter = router({
       }));
     }),
 
-  lookupByCardNo: publicProcedure
+  lookupByCardNo: raceOperateProcedure
     .input(z.object({ cardNo: z.number().int().positive() }))
     .query(async ({ input }) => {
       const db = prisma();
@@ -1506,7 +1529,7 @@ export const eventorRouter = router({
       };
     }),
 
-  clubMembers: publicProcedure
+  clubMembers: raceOperateProcedure
     .input(
       z.object({
         organisationId: z.number().int().positive(),
@@ -1533,7 +1556,7 @@ export const eventorRouter = router({
    * Compact dump of the full runner directory + club name lookup.
    * Used by RegistrationDialog for offline client-side search.
    */
-  runnerDbDump: publicProcedure.query(async () => {
+  runnerDbDump: raceOperateProcedure.query(async () => {
     const db = prisma();
     const [runners, clubs] = await Promise.all([
       db.runnerDirectory.findMany({
@@ -1975,7 +1998,7 @@ export const eventorRouter = router({
    * one bad id doesn't block the rest. Returns a per-event status the
    * UI can show inline.
    */
-  fetchEntryHistory: publicProcedure
+  fetchEntryHistory: authedProcedure
     .input(
       z.object({
         eventIds: z.array(z.number().int().positive()).min(1).max(20),

@@ -31,6 +31,12 @@ export function nodeId(): string {
   return process.env.NODE_ID ?? "cloud";
 }
 
+/** Whether this node still has the default identity "cloud" (NODE_ID unset or empty): a venue box must have its own. */
+export function nodeIdIsDefault(): boolean {
+  const id = nodeId().trim();
+  return id === "" || id === "cloud";
+}
+
 export function nodeRole(): NodeRole {
   return process.env.NODE_ROLE === "venue" ? "venue" : "cloud";
 }
@@ -68,6 +74,26 @@ export const SYNC_SECRET_HEADER = "x-oxygen-sync-secret";
 /**
  * Request header carrying the calling node's `NODE_ID` on node-to-node calls,
  * so the receiving node can tell a stale holder's delivery from a current one
- * (review SYNC-08). Informational: it grants nothing.
+ * (review SYNC-08). It is also what a forwarded call's authority is keyed on
+ * (`ctx.nodeForward`, all capabilities on events whose lease that id holds).
+ * It is NOT proof of identity: with one instance-wide `SYNC_SHARED_SECRET`, a
+ * box that knows the secret can claim another box's node id (follow-up: a
+ * per-event checkout token, docs/bugfixes/proxy-auth-followups.md).
  */
 export const SYNC_NODE_ID_HEADER = "x-oxygen-node-id";
+
+/**
+ * Marks a venue's forwarded cloud-owned mutation (`venueForwarder.ts`).
+ * With a valid node secret the cloud runs the call as that node, not as a
+ * signed-in user (`Context.nodeForward`, docs/system/authentication.md
+ * "Venue nodes"). Without the secret the marker grants nothing.
+ */
+export const SYNC_FORWARDED_HEADER = "x-oxygen-forwarded";
+/**
+ * The capabilities the forwarding box found its signed-in caller to hold on
+ * the event (comma list; an admin sends them all, `event.manage` is not
+ * assumed). The cloud intersects it with the lease-holder rule, so a forward
+ * never does more than the person at the box could do. Absent from a box with
+ * login off.
+ */
+export const SYNC_FORWARDED_CAPS_HEADER = "x-oxygen-forwarded-caps";
