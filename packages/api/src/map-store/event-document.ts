@@ -32,6 +32,8 @@ export interface EventPin {
   sourceHash: string | null;
   clubMapVersionId: string | null;
   rotationCorrection: number;
+  /** The interval a person confirmed for this row's map; the effective value is `eventContourInterval`'s. */
+  contourIntervalM: number | null;
   scale: number | null;
   bounds: Prisma.JsonValue;
   northOffset: number | null;
@@ -46,6 +48,7 @@ const PIN_SELECT = {
   sourceHash: true,
   clubMapVersionId: true,
   rotationCorrection: true,
+  contourIntervalM: true,
   scale: true,
   bounds: true,
   northOffset: true,

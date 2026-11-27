@@ -14,6 +14,8 @@ import {
 import { assertMayConsumeSource } from "../map-store/source-possession.js";
 import { startImportJob, type ImportJobRow } from "../map-store/jobs.js";
 import { documentNorth } from "../map-store/event-document.js";
+import { validContourInterval } from "../map-store/contour-interval.js";
+import { enqueueContourInterval, eventsOnClubMap, requireMayChangeClubMapInterval } from "../map-store/contour-interval-apply.js";
 import { meridianStalenessFromDetection } from "../map-north.js";
 
 const clubMapId = z.string().uuid();
@@ -104,20 +106,22 @@ export const clubMapRouter = router({
    * The library: one row per `club_maps` series (§6.5). Nothing here
    * starts an import.
    */
-  list: authedProcedure.query(async () => {
+  list: authedProcedure.query(async ({ ctx }) => {
     const series = await prisma().clubMap.findMany({
       orderBy: { createdAt: "desc" },
       include: SERIES_INCLUDE,
     });
 
-    return series.map((s) =>
-      projectClubMapRow({
+    return Promise.all(series.map(async (s) => ({
+      ...(await projectClubMapRow({
         series: s,
         version: s.versions[0] ?? null,
         versionCount: s._count.versions,
         job: s.importJobs[0] ?? null,
-      }),
-    );
+      })),
+      /** Whether the caller may change the series' contour interval (its uploader or an admin; §0.43). */
+      mayChange: canRemoveClubMap({ authEnabled: ctx.authEnabled, user: ctx.user, createdBy: s.createdBy }),
+    })));
   }),
 
   /**
@@ -175,6 +179,25 @@ export const clubMapRouter = router({
     }),
 
   /**
+   * Confirm (or clear, with null) the map's contour interval (docs/course-elevation.md §0.43). It follows every event that
+   * uses the map: their computed climbs are cleared and computed again. Only who may delete the map (its uploader or an admin: it changes every event's climbs); the climbs are computed in the background.
+   */
+  setContourInterval: authedProcedure
+    .input(z.object({ id: clubMapId, intervalM: z.number().nullable() }))
+    .mutation(async ({ ctx, input }) => {
+      if (input.intervalM !== null && !validContourInterval(input.intervalM)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "The contour interval is above 0 and at most 100 m, with at most two decimals" });
+      }
+      const series = await prisma().clubMap.findUnique({ where: { id: input.id }, select: { createdBy: true } });
+      if (!series) throw notFound(input.id);
+      requireMayChangeClubMapInterval(ctx, series.createdBy);
+      await prisma().clubMap.update({ where: { id: input.id }, data: { contourIntervalM: input.intervalM } });
+      const events = await eventsOnClubMap(prisma(), input.id);
+      enqueueContourInterval(prisma(), events);
+      return { success: true as const, contourIntervalM: input.intervalM, events: events.length };
+    }),
+
+  /**
    * Delete a series: its versions cascade and events that pinned one keep
    * their copy with `club_map_version_id` nulled. Blobs are left to the
    * GC (§8).
@@ -193,7 +216,14 @@ export const clubMapRouter = router({
           message: "Only the uploader or an admin can delete this map",
         });
       }
-      await prisma().clubMap.delete({ where: { id: input.id } });
+      // The events keep their copy but lose the series: a value a person confirmed on it stays theirs (§0.43).
+      await prisma().$transaction(async (tx) => {
+        const club = await tx.clubMap.findUnique({ where: { id: input.id }, select: { contourIntervalM: true } });
+        if (club?.contourIntervalM != null) {
+          await tx.mapFile.updateMany({ where: { clubMapVersion: { clubMapId: input.id }, contourIntervalM: null }, data: { contourIntervalM: club.contourIntervalM } });
+        }
+        await tx.clubMap.delete({ where: { id: input.id } });
+      });
       return { success: true as const };
     }),
 
@@ -230,6 +260,11 @@ export const clubMapRouter = router({
         });
         if (jobs.some((j) => mapDocument.sameVersionPatch(j.patch, layers))) {
           throw new TRPCError({ code: "PRECONDITION_FAILED", message: "PATCH_PROMOTING: the version is still being saved" });
+        }
+        // The events on it keep their document but lose the series: the club's confirmed interval stays theirs (§0.43).
+        const club = await db.clubMap.findUnique({ where: { id: input.id }, select: { contourIntervalM: true } });
+        if (club?.contourIntervalM != null) {
+          await db.mapFile.updateMany({ where: { clubMapVersionId: version.id, contourIntervalM: null }, data: { contourIntervalM: club.contourIntervalM } });
         }
         await db.clubMapVersion.delete({ where: { id: version.id } });
         return { success: true as const };

@@ -27,10 +27,10 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "r
 import { useParams, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { course as courseShared, type ControlDescription, type ControlKind, type course } from "@oxygen/shared";
-import { trpc } from "../../lib/trpc";
+import { trpc, trpcClientForEvent } from "../../lib/trpc";
 import { MapPanel } from "../../components/MapPanel";
 import { ControlDescriptionEditor } from "../../components/ControlDescriptionEditor";
-import type { EditorDescriptionSuggestion, EditorToolBinding, MapViewerEditorProps, ToolPointer } from "../../components/MapViewer";
+import type { EditorDescriptionSuggestion, EditorToolBinding, MapLabel, MapViewerEditorProps, ToolPointer } from "../../components/MapViewer";
 import { useCoursePresence } from "../../hooks/useCoursePresence";
 import { clockTime, courseChangedElsewhere } from "../../lib/editor/presence";
 import { PresenceChips } from "./PresenceChips";
@@ -60,8 +60,10 @@ import { snapIndexForDocument } from "../../lib/editor/snap";
 import { pickIndexForDocument } from "../../lib/editor/symbol-pick";
 import { groupOfSymbol, swatchUrl, symbolGroups, type SymbolGroup } from "../../lib/editor/symbol-groups";
 import { deleteVertex, vertexRule, type Vertex } from "../../lib/editor/geometry-edit";
-import { legLengthLabel } from "../../lib/editor/leg-length";
-import { EditorConflict, EditorWrites, type EditorClient } from "../../lib/editor/write-client";
+import { legLengthLabel, type LegClimbOf } from "../../lib/editor/leg-length";
+import { EditorConflict, EditorWrites, UndoSkipped, type EditorClient, type WrittenRow } from "../../lib/editor/write-client";
+import { clearsNotice, createdControlElsewhere, writesRow, type EditorNotice } from "../../lib/editor/undo-guard";
+import { WriteGate, queuedEditAction, serialQueue } from "../../lib/editor/write-gate";
 import { instructionsOnCourse, type Instructions } from "../../lib/editor/instructions";
 import { areaTool, editorReducer, escapeHasWork, initialEditorState, type EditorTool } from "../../lib/editor/state";
 import {
@@ -69,7 +71,7 @@ import {
   renameAlternative, setLegGaps, setLegProps, setLoop, setNumberHidden, setRole, DEFAULT_CORRIDOR, type GroupOrders, type KindOf, type LegPatch,
 } from "../../lib/editor/structure-edit";
 import { allVariationDraws, courseDrawOf, shownLegDraftOf, type HeldLegDraft } from "../../lib/editor/variation-view";
-import { alternativeEndAt, courseViewOrders, displaySequence, effectiveEnds, explicitStructure, insertIndexForLeg, kindOfSites, legForInsert, legMeterInputs, variationBlocks, type SiteRow } from "../../lib/editor/sequence";
+import { alternativeEndAt, courseViewOrders, displaySequence, effectiveEnds, explicitStructure, insertIndexForLeg, kindOfSites, legForInsert, legIndexForInsert, legMeterInputs, routeMarks, variationBlocks, type SiteRow } from "../../lib/editor/sequence";
 import { insertBendAt, legPolyline, projectOnPolyline, setBendKind, type Bend } from "../../lib/editor/bends";
 import { courseActions } from "./ActionBar";
 import { TopBar } from "./TopBar";
@@ -88,6 +90,17 @@ import { StatusBar } from "./StatusBar";
 import type { SaveState, StatusInput } from "../../lib/editor/status";
 import type { MapInfoInput } from "../../lib/editor/map-info";
 import { useCourseChecks } from "./useCourseChecks";
+import { useCourseElevation } from "./useCourseElevation";
+import { IntervalBanner } from "./ContourInterval";
+import { legElevation, lineClimbStatus, sequenceLegClimbs } from "../../lib/editor/elevation";
+import { chosenRouteMap, pairRoutes, routeItems, routeNumbers, routeShapes, type RouteDraft, lineIsShortest } from "../../lib/editor/leg-routes";
+import { DEFAULT_PACE_S_PER_KM, alternativeColor, alternativeItems, alternativeLabelAnchors, alternativeLabelText, alternativeShapes, courseRouteTotals, flatPaceSPerKm, formatClock, oobFeatures, parsePace } from "../../lib/editor/leg-alternatives";
+import { createRouteFinder } from "../../lib/route/finder";
+import { DEFAULT_COST_MODEL, SHORTEST_COST_MODEL, type CostModelNote, type RouteAlternative } from "@oxygen/shared/src/route/index.js";
+import { legAt, legBounds, readProfileOpen, writeProfileOpen } from "../../lib/editor/profile-graph";
+import { pointAtDistance } from "@oxygen/shared/src/terrain/profile/index.js";
+import { ProfileMini, ProfilePanel } from "./ProfilePanel";
+import { createHoverDotStore } from "../../lib/editor/hover-dot";
 import type { EditorCheck } from "../../lib/editor/checks";
 import { CourseSection, MultiSection, SelectionSection } from "./modes/CourseMode";
 import { AddMenu, FieldQueueNotice, FieldSection, FieldSelection, FieldTopBar, FixStatus, OverflowMenu, type AddChoice } from "./modes/FieldMode";
@@ -98,6 +111,9 @@ import { useLayoutMode } from "./modes/LayoutMode";
 import { useMapMode } from "./modes/MapMode";
 import { checkInbound, editorSearchFor, fetchIfIdle, parseEditorUrl, type EditorUrlState } from "../../lib/editor/url";
 import { useClassView } from "./modes/ClassView";
+
+/** How often the leg routes are asked again while a course is open: the server writes the automatic ones after an edit. */
+const AUTO_ROUTE_POLL_MS = 8000;
 
 type Pt = { x: number; y: number };
 type Structure = course.WireCourseStructure;
@@ -123,13 +139,7 @@ function defaultProps(kind: AreaKind): CourseObject["props"] {
 }
 
 /** A conflict the user sees (docs/course-editor.md §3). */
-type Notice =
-  | { kind: "refresh"; items: string[] | null }
-  | {
-    kind: "moved"; controlId: number; mine: Pt; theirs: Pt | null; by?: { name: string; at: string } | null;
-    /** A queued Field-mode write that met a move elsewhere on replay (D9c): its outbox entry, which the buttons settle. */
-    queueSeq?: number;
-  };
+type Notice = EditorNotice;
 
 export function EditorPage() {
   const { t } = useTranslation("editor");
@@ -149,12 +159,29 @@ export function EditorPage() {
   const canEdit = caps.has("courses.edit");
   const geo = useFieldFix(fieldMode);
 
-  const [undoStack] = useState(() => new UndoStack(50));
+  // Every write goes to the event the editor was opened on (MC-17, CRS-015): a client pinned to it, never the page
+  // URL's event at send time. The route keys the page on the event, so a new event is a new page (`CourseEditorRoute`).
+  const [client] = useState(() => trpcClientForEvent(nameId ?? ""));
+  const [writes] = useState(() => new EditorWrites(client as unknown as EditorClient));
+  // Ordinary writes side by side, an undo / redo step alone (D6: its guard sees only its own writes).
+  const [gate] = useState(() => new WriteGate());
+  // Field mode's entries go through the outbox under its own rules (§9 "Offline"); set before any entry is recorded.
+  const fieldEntries = useRef(new WeakSet<object>());
+  // Every other entry undoes and redoes under D6 (docs/course-editor.md §3): only while its rows are still as this
+  // client left them, its rows renewed by each step.
+  // The step runs holding the gate alone (`lock`): the entry is picked only once the writes asked for before have settled.
+  const [undoStack] = useState(() => new UndoStack(50, async (entry, step, which) => {
+    if (fieldEntries.current.has(entry)) { await step(); return undefined; }
+    try {
+      return await writes.guarded((entry.rows ?? []) as WrittenRow[], async () => step());
+    } catch (e) {
+      if (e instanceof UndoSkipped) e.step = which;
+      throw e;
+    }
+  }, (op) => gate.runStep(op)));
   const [, setHistVersion] = useState(0);
   const bumpHistory = useCallback(() => setHistVersion((v) => v + 1), []);
   const [moveEpoch, setMoveEpoch] = useState(0);
-  const [writes] = useState(() => new EditorWrites(utils.client as unknown as EditorClient));
-  const client = utils.client;
 
   const [pendingOps, setPendingOps] = useState(0);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -217,6 +244,23 @@ export function EditorPage() {
     () => (state.selectedCourseId !== null ? courses.data?.find((c) => c.id === state.selectedCourseId) ?? null : null),
     [state.selectedCourseId, courses.data],
   );
+
+  /** Names for the D6 "undo skipped" notice, read when an undo is refused. */
+  const latestNames = useRef({ courses: [] as readonly { id: number; name: string }[], coords: new Map<number, { code: string | null }>() });
+  useEffect(() => { latestNames.current = { courses: courses.data ?? [], coords: coordsById }; }, [courses.data, coordsById]);
+  /** The courses as last polled, for the D6 check of an undo whose `control.delete` cascades (below). */
+  const latestCourses = useRef<readonly { id: number; version: string; controls: string; startControlId?: number | null; finishControlId?: number | null; parentCourseId?: number | null }[]>([]);
+  useEffect(() => { latestCourses.current = courses.data ?? []; }, [courses.data]);
+  /**
+   * D6 for an undo that deletes a control this client created (§3): the delete cascades out of every course that
+   * visits it, so the undo is skipped when a course other than `courseId` (the entry's own, if any) visits it now.
+   */
+  const onlyIn = useCallback((id: number, courseId: number | null) => {
+    // The rule (the list's row stale behind this client's newer token, variants judged by their root): `undo-guard.ts`.
+    const other = createdControlElsewhere(latestCourses.current, id, courseId, (c) => writes.versions.get("course", c));
+    // Skipped as the control's undo: the other course's own entries stay.
+    if (other) throw new UndoSkipped("control", id);
+  }, [writes]);
 
   // Presence (D11): who else has a course open. Heartbeat on the poll's cadence while a course is open.
   const presence = useCoursePresence(state.selectedCourseId, state.mode);
@@ -319,16 +363,38 @@ export function EditorPage() {
     void utils.course.variantList.invalidate();
   }, [utils]);
 
-  /** One write (or an undo / redo): pending count, the conflict notice or the error, then a reload. */
-  const run = useCallback(async <T,>(op: () => Promise<T>, move?: { controlId: number; mine: Pt }): Promise<T | undefined> => {
+  /** The rows each gesture's write produced tokens for, by the op `run` ran (`record` reads them for the entry). */
+  const ranRows = useRef(new WeakMap<() => Promise<unknown>, WrittenRow[]>());
+  /** An undo / redo refused under D6: its row's entries go, and the notice says who changed it and when. */
+  const undoSkipped = useCallback((e: UndoSkipped) => {
+    const row = { kind: e.kind, id: e.id };
+    undoStack.remove((entry) => writesRow(entry, row));
+    bumpHistory();
+    const { courses: list, coords } = latestNames.current;
+    const name = e.kind === "course" ? list.find((c) => c.id === e.id)?.name ?? null : e.kind === "control" ? coords.get(e.id)?.code ?? String(e.id) : null;
+    setNotice({ kind: "undoSkipped", row, name, step: e.step });
+    const same = (n: Notice | null) => n?.kind === "undoSkipped" && n.row.kind === row.kind && n.row.id === row.id;
+    const by = e.kind === "course" ? client.course.lastChange.query({ courseId: e.id })
+      : e.kind === "control" ? client.control.lastChange.query({ id: e.id }) : null;
+    void by?.then((who) => setNotice((n) => (same(n) ? { ...(n as Extract<Notice, { kind: "undoSkipped" }>), by: who } : n)), () => undefined);
+  }, [undoStack, bumpHistory, client]);
+
+  /**
+   * One write (or an undo / redo): pending count, the conflict notice or the error, then a reload. A success clears
+   * a notice only when it wrote the notice's row (CRS-065, `clearsNotice`).
+   */
+  const run = useCallback(async <T,>(op: () => Promise<T>, move?: { controlId: number; mine: Pt }, opts?: { gated?: false }): Promise<T | undefined> => {
     setPendingOps((n) => n + 1);
     setErrorMsg(null);
     try {
-      const out = await op();
-      setNotice(null);
+      // `gated: false`: an undo / redo (its step takes the gate itself), or a write inside a held one (`queueStructure`).
+      const { value: out, rows } = await (opts?.gated === false ? writes.collect(op) : gate.runShared(() => writes.collect(op)));
+      ranRows.current.set(op, rows);
+      setNotice((n) => (clearsNotice(n, rows, move) ? null : n));
       return out;
     } catch (e) {
-      if (e instanceof EditorConflict) {
+      if (e instanceof UndoSkipped) undoSkipped(e);
+      else if (e instanceof EditorConflict) {
         if (e.decision.kind === "moved" && move) {
           const { controlId, mine } = move;
           setNotice({ kind: "moved", controlId, mine, theirs: e.decision.theirs });
@@ -338,7 +404,7 @@ export function EditorPage() {
             () => undefined,
           );
         }
-        else setNotice({ kind: "refresh", items: e.decision.kind === "refresh" ? e.decision.differing : null });
+        else setNotice({ kind: "refresh", items: e.decision.kind === "refresh" ? e.decision.differing : null, row: { kind: e.kind, id: e.id } });
       } else {
         setErrorMsg(e instanceof Error ? e.message : String(e));
       }
@@ -347,11 +413,15 @@ export function EditorPage() {
       setPendingOps((n) => n - 1);
       invalidate();
     }
-  }, [invalidate, client]);
+  }, [invalidate, client, writes, undoSkipped, gate]);
 
-  /** Push an undo entry for a write that succeeded. */
-  const record = useCallback((undo: () => Promise<unknown>, redo: () => Promise<unknown>) => {
-    const entry = { undo, redo };
+  /**
+   * Push an undo entry for a write that succeeded. `ranAs`: the op `run` ran for it, when not `redo` itself; the
+   * rows it wrote become the entry's D6 guard (none known: its first step collects them, guarded from then on).
+   */
+  const record = useCallback((undo: () => Promise<unknown>, redo: () => Promise<unknown>, ranAs: () => Promise<unknown> = redo) => {
+    // No rows known (the gesture wrote no token it was told of): guarded from its first step on, which collects them.
+    const entry = { undo, redo, rows: ranRows.current.get(ranAs) ?? [] };
     undoStack.push(entry);
     bumpHistory();
     return entry;
@@ -360,10 +430,13 @@ export function EditorPage() {
   // Field mode's writes through the device's outbox (§9 "Offline", D9c): moves and check-offs queue while
   // offline and replay on reconnect. Their undo entries go through it too, so they alone undo while offline.
   const outbox = useFieldOutbox({ competitionId: nameId ?? "", writes, online, onSettled: invalidate });
-  const fieldEntries = useRef(new WeakSet<object>());
+  // No D6 rows: a queued entry's replay keeps the outbox's own conflict rules (§9 "Offline", docs/course-editor.md §3 Pending).
   const recordField = useCallback((undo: () => Promise<unknown>, redo: () => Promise<unknown>) => {
-    fieldEntries.current.add(record(undo, redo));
-  }, [record]);
+    const entry = { undo, redo };
+    undoStack.push(entry);
+    bumpHistory();
+    fieldEntries.current.add(entry);
+  }, [undoStack, bumpHistory]);
   // A queued move that met a move elsewhere on replay becomes the moved notice (§3), one at a time; settled
   // (Keep mine / Keep theirs, or moved again), it goes and the next follows.
   useEffect(() => {
@@ -392,6 +465,8 @@ export function EditorPage() {
     variantKey: sheetVariant,
     run,
     record,
+    writes,
+    client,
     notify: layoutNotify,
     viewCentre: viewCentreMm,
   });
@@ -430,12 +505,13 @@ export function EditorPage() {
    * The structure as of now, read from refs: the one this client wrote last unless the course's detail
    * already holds a newer one. A queued placement can run before React re-renders after its predecessor.
    */
-  const currentStructure = useCallback((): Structure | null => {
+  const currentVersioned = useCallback((): { structure: Structure; version: string } | null => {
     const { detailStructure: d, detailVersion, selectedCourse: course } = latest.current;
     const mine = localStructure.current;
-    if (mine && course && mine.courseId === course.id && d && detailVersion !== null && BigInt(detailVersion) < BigInt(mine.version)) return mine.structure;
-    return d;
+    if (mine && course && mine.courseId === course.id && d && detailVersion !== null && BigInt(detailVersion) < BigInt(mine.version)) return { structure: mine.structure, version: mine.version };
+    return d && detailVersion !== null ? { structure: d, version: detailVersion } : null;
   }, []);
+  const currentStructure = useCallback((): Structure | null => currentVersioned()?.structure ?? null, [currentVersioned]);
 
   /** The structure edits start from: the current one with its start and finish explicit. */
   const baseStructure = useCallback((): Structure | null => {
@@ -443,26 +519,50 @@ export function EditorPage() {
     return s ? explicitStructure(s, latest.current.sites) : null;
   }, [currentStructure]);
 
-  /** `setStructure`, remembering the result as the local structure (every structure write and its undo / redo). */
-  const writeStructure = useCallback(async (courseId: number, next: Structure) => {
-    const res = await writes.setStructure(courseId, next);
+  /**
+   * `setStructure`, remembering the result as the local structure (every structure write and its undo / redo).
+   * `since`: the course token the structure was built from (CRS-049), so a newer one from elsewhere is refused.
+   */
+  const writeStructure = useCallback(async (courseId: number, next: Structure, since?: string) => {
+    const res = await writes.setStructure(courseId, next, since !== undefined ? { since } : undefined);
     localStructure.current = { courseId, structure: next, version: res.version };
     setLocalEpoch((v) => v + 1);
     return res;
   }, [writes]);
 
-  /** One sequence edit: `setStructure(next)`, undo writes back the structure it replaced. */
-  const applyStructure = useCallback(async (edit: (s: Structure) => Structure): Promise<boolean> => {
-    const course = latest.current.selectedCourse;
-    const prev = currentStructure();
-    const base = baseStructure();
-    if (!course || !prev || !base) return false;
-    const next = edit(base);
-    const redo = () => writeStructure(course.id, next);
-    if ((await run(redo)) === undefined) return false;
-    record(() => writeStructure(course.id, prev), redo);
-    return true;
-  }, [currentStructure, baseStructure, writeStructure, run, record]);
+  /**
+   * Structure edits run one at a time (CRS-018): each is built only once its predecessor's write has settled and
+   * the local structure holds its result, so a second edit made while the first is in flight builds on it.
+   */
+  const [structureQueue] = useState(() => serialQueue());
+  // Inside the gate (an undo / redo step never runs while an edit is built and sent, nor an edit while a step runs).
+  const queueStructure = useCallback(<T,>(op: () => Promise<T>): Promise<T> => structureQueue(() => gate.runShared(op)), [structureQueue, gate]);
+
+  /**
+   * One sequence edit: `setStructure(next)`, undo writes back the structure it replaced. Queued (CRS-018), it is
+   * built on the structure as the previous edit left it — on the course selected when it was asked for (another
+   * course selected since drops it). `positional`: the edit names rows or legs by their place (a row's index, a
+   * leg's path), which only mean the same on the structure it was clicked on: when an edit of this client changed
+   * it meanwhile, the edit is dropped with "Do it again" (`structureMovedRetry`) rather than applied to another row.
+   */
+  const applyStructure = useCallback((edit: (s: Structure) => Structure, opts?: { positional?: boolean }): Promise<boolean> => {
+    const courseId = latest.current.selectedCourse?.id ?? null;
+    const clickedOn = currentVersioned()?.version ?? null;
+    return queueStructure(async () => {
+      const course = latest.current.selectedCourse;
+      const cur = currentVersioned();
+      const base = baseStructure();
+      const action = queuedEditAction({ courseId, version: clickedOn }, { courseId: course?.id ?? null, version: cur?.version ?? null }, !!opts?.positional);
+      if (action === "again") setErrorMsg(t("structureMovedRetry"));
+      if (action !== "apply" || !course || !cur || !base) return false;
+      const prev = cur.structure;
+      const next = edit(base);
+      const first = () => writeStructure(course.id, next, cur.version);
+      if ((await run(first, undefined, { gated: false })) === undefined) return false;
+      record(() => writeStructure(course.id, prev), () => writeStructure(course.id, next), first);
+      return true;
+    });
+  }, [queueStructure, currentVersioned, baseStructure, writeStructure, run, record, t]);
 
   // ─── The selected leg (§6.7): the leg-click phantom on the selected course ──
   const selectedLeg = useMemo(() => {
@@ -476,11 +576,83 @@ export function EditorPage() {
   }, [state.phantom, state.mode, state.view, structure, rows, explicit]);
   /** Leg editing is desktop and tablet; the phone shows the section read-only (08 §5.5). */
   const legEditable = !!selectedLeg && !isMobile;
+  /** Desktop and tablet: a selected leg draws no click ring and opens no action bar (§6.7). */
+  const legQuiet = legEditable;
+
+  // ─── Leg routes (docs/course-elevation.md §7.4): a route per directed control pair, one of them chosen ───
+  // The automatic routes (§7.5) land a moment after an edit, written by the server: the list is asked again while a course is open.
+  const legRoutes = trpc.legRoute.list.useQuery(undefined, { enabled: !!nameId && state.mode === "course", refetchInterval: selectedCourse ? AUTO_ROUTE_POLL_MS : false });
+  // A route that landed changed the stored climb of the courses running its pair.
+  const autoRoutesKey = useMemo(() => (legRoutes.data ?? []).filter((r) => r.auto).map((r) => `${r.id}:${r.chosen ? 1 : 0}:${r.points.map((p) => `${p.x},${p.y}`).join(" ")}`).join("|"), [legRoutes.data]);
+  const seenAutoRoutes = useRef<string | null>(null);
+  useEffect(() => {
+    if (!legRoutes.data) return;
+    if (seenAutoRoutes.current !== null && seenAutoRoutes.current !== autoRoutesKey) void utils.course.list.invalidate();
+    seenAutoRoutes.current = autoRoutesKey;
+  }, [autoRoutesKey, legRoutes.data, utils]);
+  const chosenRoutes = useMemo(() => chosenRouteMap(legRoutes.data), [legRoutes.data]);
+  const selectedLegFrom = selectedLeg?.from.id ?? null;
+  const selectedLegTo = selectedLeg?.to.id ?? null;
+  const selectedPairRoutes = useMemo(
+    () => (selectedLegFrom !== null && selectedLegTo !== null ? pairRoutes(legRoutes.data, selectedLegFrom, selectedLegTo) : []),
+    [legRoutes.data, selectedLegFrom, selectedLegTo],
+  );
+  /** The route being drawn for the selected leg; it ends with the selection. */
+  const [routeDraft, setRouteDraft] = useState<RouteDraft | null>(null);
+  useEffect(() => {
+    if (routeDraft && (selectedLegFrom !== routeDraft.from || selectedLegTo !== routeDraft.to)) setRouteDraft(null);
+  }, [routeDraft, selectedLegFrom, selectedLegTo]);
+  // A route write changes the stored climb of every course running the pair (§7.2).
+  const afterRouteWrite = useCallback(() => { void utils.legRoute.list.invalidate(); void utils.course.list.invalidate(); }, [utils]);
+  const saveRoute = trpc.legRoute.save.useMutation({ onSuccess: () => { setRouteDraft(null); afterRouteWrite(); } });
+  const chooseRoute = trpc.legRoute.choose.useMutation({ onSuccess: afterRouteWrite });
+  const deleteRoute = trpc.legRoute.delete.useMutation({ onSuccess: afterRouteWrite });
+  const routeBusy = saveRoute.isPending || chooseRoute.isPending || deleteRoute.isPending;
+  const startRoute = useCallback(() => {
+    if (selectedLeg) setRouteDraft({ from: selectedLeg.from.id, to: selectedLeg.to.id, fromPt: selectedLeg.fromPt, toPt: selectedLeg.toPt, points: [] });
+  }, [selectedLeg]);
+  const saveRouteNow = saveRoute.mutate;
+  const finishRoute = useCallback(() => {
+    if (routeDraft && routeDraft.points.length > 0 && !routeBusy) saveRouteNow({ fromControlId: routeDraft.from, toControlId: routeDraft.to, points: routeDraft.points });
+  }, [routeDraft, routeBusy, saveRouteNow]);
+  const addRoutePoint = useCallback((pt: Pt) => setRouteDraft((d) => {
+    const last = d?.points[d.points.length - 1];
+    // A double click's second click lands on the first.
+    if (!d || d.points.length >= courseShared.LEG_ROUTE_MAX_POINTS || (last && Math.hypot(last.x - pt.x, last.y - pt.y) < 1e-6)) return d;
+    return { ...d, points: [...d.points, { x: pt.x, y: pt.y }] };
+  }), []);
+  const chooseRouteNow = chooseRoute.mutate;
+  const chooseLegRoute = useCallback((id: string | null) => {
+    if (id !== null) chooseRouteNow({ id, chosen: true });
+    else { const chosen = selectedPairRoutes.find((r) => r.chosen); if (chosen) chooseRouteNow({ id: chosen.id, chosen: false }); }
+  }, [chooseRouteNow, selectedPairRoutes]);
+  const deleteRouteNow = deleteRoute.mutate;
+  const deleteLegRoute = useCallback((id: string) => deleteRouteNow({ id }), [deleteRouteNow]);
+  const drawingRoute = routeDraft !== null;
+  // While a route is drawn its keys come first: Enter saves, Esc cancels, Backspace takes the last point back.
+  useEffect(() => {
+    if (!drawingRoute) return;
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable) && e.key !== "Escape") return;
+      // A focused button or link keeps its Enter: it presses what it is on.
+      if (e.key === "Enter" && el && (el.tagName === "BUTTON" || el.tagName === "A")) return;
+      if (e.key === "Enter") finishRoute();
+      else if (e.key === "Escape") setRouteDraft(null);
+      else if (e.key === "Backspace" || e.key === "Delete") setRouteDraft((d) => (d ? { ...d, points: d.points.slice(0, -1) } : d));
+      else return;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [drawingRoute, finishRoute]);
   /** One leg edit: a patch of the item's `LegProps`, one `setStructure`, one undo entry. False when nothing was written. */
   const writeLeg = useCallback((patch: LegPatch): Promise<boolean> => {
     if (!selectedLeg) return Promise.resolve(false);
     const path = selectedLeg.path;
-    return applyStructure((s) => setLegProps(s, path, patch));
+    return applyStructure((s) => setLegProps(s, path, patch), { positional: true });
   }, [selectedLeg, applyStructure]);
   /** The selected leg's identity: its course, item and sites (F21: a live draft belongs to one). */
   const legIdentity = selectedLeg && selectedCourse ? `${selectedCourse.id}/${selectedLeg.itemIndex}/${selectedLeg.from.id}>${selectedLeg.to.id}` : null;
@@ -514,14 +686,19 @@ export function EditorPage() {
   const focusBend = useCallback((index: number | null) => {
     setBendFocus(index === null || !selectedLeg ? null : { itemIndex: selectedLeg.itemIndex, index });
   }, [selectedLeg]);
-  /** *Add bend here* (§6.7, F16): a smooth bend on the leg at the phantom; Alt held on the click, a corner. Focused. */
-  const addBend = useCallback((e?: { altKey?: boolean }) => {
-    const p = state.phantom;
-    if (!selectedLeg || !p) return;
-    const { bends, index } = insertBendAt(selectedLeg.fromPt, selectedLeg.props.bends, selectedLeg.toPt, { x: p.x, y: p.y }, !!e?.altKey);
+  /** **Add bend** in the Leg section and `B` (§6.7): a focused bend half way along the leg's longest straight part. */
+  const addBendMid = useCallback((corner = false) => {
+    if (!selectedLeg || !legEditable) return;
+    const pts = courseShared.legPolylineOf(selectedLeg.fromPt, selectedLeg.props.bends ?? [], selectedLeg.toPt);
+    let at = pts[0], longest = -1;
+    for (let i = 1; i < pts.length; i++) {
+      const d = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+      if (d > longest) { longest = d; at = { x: (pts[i].x + pts[i - 1].x) / 2, y: (pts[i].y + pts[i - 1].y) / 2 }; }
+    }
+    const { bends, index } = insertBendAt(selectedLeg.fromPt, selectedLeg.props.bends, selectedLeg.toPt, at, corner);
     writeLeg({ bends });
     setBendFocus({ itemIndex: selectedLeg.itemIndex, index });
-  }, [state.phantom, selectedLeg, writeLeg]);
+  }, [selectedLeg, legEditable, writeLeg]);
   /** The bend row's **Smooth** / **Corner** (§6.7, tablets): one write. */
   const setBendCurve = useCallback((index: number, kind: "smooth" | "corner") => {
     if (!selectedLeg) return;
@@ -541,7 +718,7 @@ export function EditorPage() {
       const out = createGroup(s, at, latest.current.kindOf, latest.current.orders);
       made = out?.groupId ?? null;
       return out?.structure ?? s;
-    }).then((ok) => {
+    }, { positional: true }).then((ok) => {
       // The new group's A is displayed and active: `K` places into it (§12).
       if (ok && made) dispatch({ type: "alternative", groupId: made, label: "A" });
     });
@@ -567,7 +744,7 @@ export function EditorPage() {
     },
     onLoop: (groupId: string, loop: boolean) => editGroup((s) => setLoop(s, groupId, loop)),
     onMoveTo: (seqIndex: number, groupId: string, label: string) =>
-      editGroup((s) => moveToAlternative(s, seqIndex, groupId, label, latest.current.kindOf, latest.current.orders)),
+      void applyStructure((s) => moveToAlternative(s, seqIndex, groupId, label, latest.current.kindOf, latest.current.orders), { positional: true }),
   }), [isMobile, applyStructure, editGroup]);
   /** The group the selection is in (a row, a leg into a group row, or the last activated): `1–9` picks its alternative. */
   const selectionGroup = useMemo(() => {
@@ -641,7 +818,10 @@ export function EditorPage() {
    * Create a site at `pt` — a control (code from the club allocation; SRR codes get radio) or a code-less
    * start / finish — and, with a course, write `edit(base, id)` into its structure: one undo entry (§4, §6.1).
    */
-  const createSite = useCallback(async (pt: Pt, kind: "control" | "start" | "finish" | "crossing_point" | "map_issue" | "map_exchange", edit: ((s: Structure, id: number) => Structure) | null): Promise<number | null> => {
+  const createSite = useCallback(async (pt: Pt, kind: "control" | "start" | "finish" | "crossing_point" | "map_issue" | "map_exchange", edit: ((s: Structure, id: number) => Structure) | null, positional = true): Promise<number | null> => {
+    // The course and structure version the click was made on (positional insert, §3 "Structure edits").
+    const courseId = latest.current.selectedCourse?.id ?? null;
+    const clickedOn = currentVersioned()?.version ?? null;
     let code: number | null = null;
     let srr = false;
     // A map exchange takes a code like a control (§6.9).
@@ -667,22 +847,40 @@ export function EditorPage() {
     const id = made.id;
     created.current.set(id, { kind: kind === "start" || kind === "finish" ? kind : "control", pt, code, ...(kind === "crossing_point" || kind === "map_issue" ? { mark: true } : {}) });
     if (srr) await run(() => client.control.upsertConfig.mutate({ controlIds: [id], radioType: "internal_radio" }));
-    const course = latest.current.selectedCourse;
-    const prev = currentStructure();
-    const base = baseStructure();
-    if (edit && course && base && prev) {
+    // The structure part queues with the other structure edits (CRS-018), built on the structure as it is then.
+    // An insert names its place in the structure as it was clicked on (positional, §3 "Structure edits").
+    let again = false as boolean;
+    const placed = edit && courseId !== null ? await queueStructure(async () => {
+      const course = latest.current.selectedCourse;
+      const cur = currentVersioned();
+      const base = baseStructure();
+      const action = queuedEditAction({ courseId, version: clickedOn }, { courseId: course?.id ?? null, version: cur?.version ?? null }, positional);
+      if (action === "again") again = true;
+      if (action !== "apply" || !course || !cur || !base) return false;
+      const prev = cur.structure;
       const next = edit(base, id);
-      if ((await run(() => writeStructure(course.id, next))) !== undefined) {
-        record(
-          async () => { await writeStructure(course.id, prev); await writes.deleteControl(id); },
-          async () => { await client.control.restore.mutate({ id }); await writeStructure(course.id, next); },
-        );
-        return id;
+      const first = () => writeStructure(course.id, next, cur.version);
+      if ((await run(first, undefined, { gated: false })) === undefined) return false;
+      record(
+        async () => { onlyIn(id, course.id); await writeStructure(course.id, prev); await writes.deleteControl(id); },
+        async () => { await client.control.restore.mutate({ id }); await writeStructure(course.id, next); },
+        first,
+      );
+      return true;
+    }) : false;
+    if (placed) return id;
+    if (again) {
+      // "Do it again": the control made for this placement goes too, so doing it again leaves one control, not two.
+      if ((await run(() => writes.deleteControl(id))) !== undefined) {
+        created.current.delete(id);
+        setErrorMsg(t("structureMovedRetry"));
+        return null;
       }
+      // The delete failed (its error stays on the line): the control is kept with its delete as the undo.
     }
-    record(() => writes.deleteControl(id), () => client.control.restore.mutate({ id }));
+    record(async () => { onlyIn(id, null); await writes.deleteControl(id); }, () => client.control.restore.mutate({ id }));
     return id;
-  }, [controlList.data, seriesAllocation.data, activeSeriesId, run, client, currentStructure, baseStructure, writeStructure, writes, record]);
+  }, [controlList.data, seriesAllocation.data, activeSeriesId, run, client, queueStructure, currentVersioned, baseStructure, writeStructure, writes, record, onlyIn, t]);
 
   /** Create a control at `pt`; with `insertAt` also into the selected course at that position (one undo entry). */
   const createControl = useCallback(async (pt: Pt, insertAt: number | null) => {
@@ -698,13 +896,15 @@ export function EditorPage() {
 
   // ─── Gestures (stable: they flow through MapPanel's memo) ─
   /** The objects drawn in the view and whether `V` is the tool, for the map click (J7: a click inside an image selects it). */
-  const clickContext = useRef<{ objects: readonly CourseObject[]; select: boolean }>({ objects: [], select: false });
+  const clickContext = useRef<{ objects: readonly CourseObject[]; select: boolean; legQuiet: boolean }>({ objects: [], select: false, legQuiet: false });
   const handleMapClick = useCallback((pt: Pt) => {
     setRadioSwapOffer(null);
     const c = clickContext.current;
     // An image takes no press (a drag inside it pans); a click inside it, off every other target, selects it (§5, §7).
     const image = c.select ? imageAt(c.objects, pt) : null;
     if (image) return dispatch({ type: "select-object", id: image.id });
+    // Off a selected leg the click only deselects (§6.7): no ring, no bar to dismiss.
+    if (c.legQuiet) return dispatch({ type: "escape" });
     dispatch({ type: "map-click", x: pt.x, y: pt.y });
   }, []);
 
@@ -964,7 +1164,7 @@ export function EditorPage() {
     const raw = objects.find((x) => x.id === id);
     return raw ? shownObject(raw, sitePos) ?? raw : undefined;
   };
-  clickContext.current = { objects: objectsInView, select: state.mode === "course" && state.tool.kind === "select" };
+  clickContext.current = { objects: objectsInView, select: state.mode === "course" && state.tool.kind === "select", legQuiet };
   const rawSelectedObject = state.selectedObjectId !== null ? objects.find((o) => o.id === state.selectedObjectId) ?? null : null;
   // J10: an attached object whose control is not drawn in the view is not selectable: it is dropped from the selection.
   const selectedObject = useMemo(() => (rawSelectedObject ? shownObject(rawSelectedObject, sitePos) : null), [rawSelectedObject, sitePos]);
@@ -1041,12 +1241,14 @@ export function EditorPage() {
 
   /** Create an object: one undo entry (undo deletes it; redo creates it again, under a new id). */
   const createObject = useCallback(async (body: Pick<CourseObject, "kind" | "geometry" | "props" | "scope"> & { attach?: CourseObject["attach"] }): Promise<number | null> => {
-    const made = await run(() => writes.createObject(body));
+    const first = () => writes.createObject(body);
+    const made = await run(first);
     if (!made) return null;
     const box = { id: made.id };
     record(
       () => writes.deleteObject(box.id),
       async () => { box.id = (await writes.createObject(body)).id; },
+      first,
     );
     return made.id;
   }, [run, writes, record]);
@@ -1128,12 +1330,14 @@ export function EditorPage() {
       if (targets.length === 0) return setErrorMsg(t("clipboardNoDrawnControl"));
       // One copy per control, attached; one undo entry for the batch (a failure rolls the made ones back).
       const bodies = targets.map((site) => ({ ...pasteOnSite(entry.object, site), scope }));
-      const made = await run(() => writes.createObjects(bodies));
+      const first = () => writes.createObjects(bodies);
+      const made = await run(first);
       if (!made) return;
       const box = { ids: made.map((o) => o.id) };
       record(
         async () => { for (const id of box.ids) await writes.deleteObject(id); },
         async () => { box.ids = (await writes.createObjects(bodies)).map((o) => o.id); },
+        first,
       );
       return;
     }
@@ -1191,12 +1395,14 @@ export function EditorPage() {
   const duplicateObjectsMany = useCallback(async (list: readonly CourseObject[]) => {
     if (list.length === 0) return;
     const bodies = list.map((o) => ({ ...duplicateBody(o), scope: o.scope }));
-    const made = await run(() => writes.createObjects(bodies));
+    const first = () => writes.createObjects(bodies);
+    const made = await run(first);
     if (!made) return;
     const box = { ids: made.map((o) => o.id) };
     record(
       async () => { for (const id of box.ids) await writes.deleteObject(id); },
       async () => { box.ids = (await writes.createObjects(bodies)).map((o) => o.id); },
+      first,
     );
     // The copies are selected before the list has them: they wait for it rather than leave the selection.
     for (const id of box.ids) pendingCopies.current.add(id);
@@ -1321,7 +1527,7 @@ export function EditorPage() {
         if (targetId !== null) {
           if (latest.current.siteKindOf(targetId) !== "crossing_point") return;
           if (!route) { dispatch({ type: "select", id: targetId }); return; }
-          if (!(await applyStructure((s) => route(s, targetId)))) return;
+          if (!(await applyStructure((s) => route(s, targetId), { positional: true }))) return;
           id = targetId;
         } else {
           id = await createSite(pt, "crossing_point", route);
@@ -1335,7 +1541,7 @@ export function EditorPage() {
           // Reuse the site: into the course at the insertion point, no new site.
           if (chain.insertAt === null) { dispatch({ type: "select", id: targetId }); return; }
           const at = chain.insertAt;
-          if (!(await applyStructure((s) => insertSite(s, at, targetId, kindOfL, latest.current.orders)))) return;
+          if (!(await applyStructure((s) => insertSite(s, at, targetId, kindOfL, latest.current.orders), { positional: true }))) return;
           id = targetId;
         } else {
           const at = chain.insertAt;
@@ -1349,7 +1555,8 @@ export function EditorPage() {
           if (edit && !(await applyStructure((s) => edit(s, targetId)))) return;
           id = targetId;
         } else {
-          id = await createSite(pt, role, edit);
+          // A role names its site, not a place: built on the structure as it is then.
+          id = await createSite(pt, role, edit, false);
         }
       }
       if (id === null || chainRef.current !== chain) return;
@@ -1444,7 +1651,7 @@ export function EditorPage() {
     } else {
       // The target's row (its index) names the leg's item by its path (§12).
       const path = latest.current.rows[target.itemIndex]?.path;
-      if (path) void applyStructure((s) => setLegGaps(s, path, gaps as FractionGap[]));
+      if (path) void applyStructure((s) => setLegGaps(s, path, gaps as FractionGap[]), { positional: true });
     }
   }, [controlRowsById, writes, run, record, applyStructure]);
 
@@ -1483,6 +1690,8 @@ export function EditorPage() {
     return created.current.get(id)?.pt ?? null;
   }, [coordsById]);
 
+  /** The climb along a leg's line while it is placed or dragged (docs/course-elevation.md §4.5): set once heights are read, below. */
+  const legClimbRef = useRef<LegClimbOf | null>(null);
   const ghost = useMemo(() => {
     if (!placing || !hover) return null;
     const reuseId = hover.target?.kind === "site" ? Number(hover.target.id) : null;
@@ -1500,9 +1709,9 @@ export function EditorPage() {
     const label = reuse !== null
       ? t("ghostReuse", { code })
       : isVisitTool(placing.tool)
-        ? [info.number !== null ? String(info.number) : null, nextCode !== null ? String(nextCode) : null].filter(Boolean).join(" · ")
+        ? [info.number !== null ? String(info.number) : null, nextCode !== null ? String(nextCode) : null].filter(Boolean).join("-")
         : t(placing.tool === "start" ? "kindStart" : placing.tool === "crossing" ? "kind_crossing_point" : "kindFinish");
-    const legLabel = info.legs[0] ? legLengthLabel(info.legs[0][0], info.legs[0][1], mapScale) : null;
+    const legLabel = info.legs[0] ? legLengthLabel(info.legs[0][0], info.legs[0][1], mapScale, [], legClimbRef.current) : null;
     // §6.8: the ghost 710 turns along the selected leg's segment nearest the cursor; north without a leg.
     let angleDeg: number | undefined;
     if (crossing && placing.insertAt !== null) {
@@ -1518,20 +1727,22 @@ export function EditorPage() {
       }
     }
     const role = crossing ? "crossing_point" as const : isVisitTool(placing.tool) ? "control" as const : placing.tool as "start" | "finish";
-    return { at, radiusMm, role, angleDeg, label, description: reuse === null && !crossing ? ghostDescription : null, legs: info.legs, legMm: info.legMm, legLabel, reuse };
+    return { at, radiusMm, role, angleDeg, label, labelOnLayer: reuse === null && isVisitTool(placing.tool), description: reuse === null && !crossing ? ghostDescription : null, legs: info.legs, legMm: info.legMm, legLabel, reuse };
   }, [placing, hover, kindOfLatest, siteKindOf, isMark, ptOf, rows, explicit, courseInfo, coordsById, t, nextCode, ghostDescription, mapScale]);
 
   // The visit the click would write, drawn by the layer (§6.1): one course request per hover. Keyed by
   // primitives: the ghost itself changes with every course reply (its radius), which must not re-request.
   const ghostX = ghost?.at.x, ghostY = ghost?.at.y, ghostReuse = ghost?.reuse ?? null;
+  const ghostLayerLabel = ghost?.labelOnLayer ? ghost.label : "";
   const provisional = useMemo((): ProvisionalVisit | null => {
     // A crossing point is no visit (§6.8): the layer draws nothing provisional for it.
     if (!placing || placing.tool === "crossing" || placing.insertAt === null || ghostX === undefined || ghostY === undefined) return null;
     return {
       role: placing.tool === "exchange" ? "map_exchange" : placing.tool, insertAt: placing.insertAt, pt: { x: ghostX, y: ghostY },
       ...(ghostReuse !== null ? { reuseId: String(ghostReuse) } : { code: nextCode !== null ? String(nextCode) : "" }),
+      ...(ghostLayerLabel ? { label: ghostLayerLabel } : {}),
     };
-  }, [placing, ghostX, ghostY, ghostReuse, nextCode]);
+  }, [placing, ghostX, ghostY, ghostReuse, nextCode, ghostLayerLabel]);
 
   const sitesForTools = useMemo(() => sites.filter((x) => x.mapX !== 0 || x.mapY !== 0)
     .map((x) => ({ id: x.id, x: x.mapX, y: x.mapY, kind: kindOf(x.id) })), [sites, kindOf]);
@@ -1670,6 +1881,7 @@ export function EditorPage() {
           leg: legEditable && selectedLeg ? {
             from: selectedLeg.fromPt, to: selectedLeg.toPt, bends: selectedLeg.props.bends ?? [], focused: focusedBend,
             onBendsChange: writeLegBends, onBendsDraft: draftLegBends, onBendFocus: focusBend, snap,
+            onPress: (pt) => { const at = state.phantom?.insertAt; setBendFocus(null); if (at != null) dispatch({ type: "leg-click", x: pt.x, y: pt.y, insertAt: at }); },
           } : null,
         });
     }
@@ -1688,7 +1900,17 @@ export function EditorPage() {
   }, [state.mode, state.view, selectedCourse, courseView, courseInfo, rows, outlinedLegAt]);
   // J12: the pointer's last paper point over the map (null off it), where a paste lands; kept in a ref, no re-render.
   const corridorBinding = withCorridorGuides(toolBinding, corridorGuides);
-  const shownBinding = corridorBinding ? {
+  // Drawing a route takes the map (§7.4): every click is a vertex, nothing else is hit.
+  const routeBinding: EditorToolBinding | null = routeDraft ? {
+    exclusive: true,
+    cursor: "crosshair",
+    onHover,
+    onClick: (p) => addRoutePoint(p.pt),
+    onDoubleClick: () => finishRoute(),
+    onContextMenu: () => setRouteDraft(null),
+    shapes: routeShapes({ from: routeDraft.fromPt, to: routeDraft.toPt, routes: [], draft: routeDraft, hover: hover?.pt ?? null }),
+  } : null;
+  const shownBinding = routeBinding ? routeBinding : corridorBinding ? {
     ...corridorBinding,
     onHover: (p: ToolPointer | null) => { hoverPt.current = p?.pt ?? null; corridorBinding.onHover?.(p); },
   } : null;
@@ -1734,6 +1956,230 @@ export function EditorPage() {
     structure, sites, controls: controlList.data, document: mapDoc, mapScale, objects: objectsInView,
     derivation: courseInfo?.derivation, ringMm: courseInfo?.metrics?.circleRadiusMm ?? 2.5, orders,
   });
+  // Heights along the course (docs/course-elevation.md §4.1): an ordered course in Course mode's Course view, where
+  // the rows and the drawn legs are one path.
+  const elevationActive = state.mode === "course" && state.view === "course" && !!selectedCourse && structure?.orderMode === "ordered";
+  const drawnLegs = elevationActive ? courseChecks.legs : null;
+  // Each leg along its pair's chosen route when it has one (§7.3), else as drawn.
+  const elevationLegs = useMemo(() => (drawnLegs ? courseShared.routedLegs(drawnLegs, chosenRoutes) : null), [drawnLegs, chosenRoutes]);
+  const { elevation, sampler: elevationSampler, field: elevationField, retry: retryElevation } = useCourseElevation({ terrain: mapMetadata.data?.terrain, active: elevationActive, legs: elevationLegs, nameId: nameId ?? null });
+  /** The climb along a polyline for the placing and dragging labels (docs/course-elevation.md §4.5). */
+  const legClimb = useMemo((): LegClimbOf | null => (elevation.state === "ready" && elevationSampler && mapScale ? (pts) => {
+    const n = routeNumbers(pts, mapScale, elevationSampler);
+    return n.climbM === null ? null : { m: n.climbM, approx: n.approx };
+  } : null), [elevation.state, elevationSampler, mapScale]);
+  legClimbRef.current = legClimb;
+  const selectedLegIndex = useMemo(() => {
+    const insertAt = state.phantom?.insertAt;
+    return selectedLeg && insertAt != null && elevationLegs ? legIndexForInsert(rows, insertAt) : null;
+  }, [selectedLeg, state.phantom, elevationLegs, rows]);
+  const selectedLegRouted = selectedLegIndex !== null && !!elevationLegs?.[selectedLegIndex]?.routed;
+  const selectedLegElevation = useMemo(() => legElevation(elevation, selectedLegIndex, selectedLegRouted), [elevation, selectedLegIndex, selectedLegRouted]);
+  const selectedLegLine = selectedLegIndex !== null ? drawnLegs?.[selectedLegIndex]?.points ?? null : null;
+  /** The selected leg's Routes list: the drawn line and the pair's routes with their own numbers. */
+  const legRouteItems = useMemo(
+    () => (selectedLegLine && mapScale ? routeItems({ line: selectedLegLine, routes: selectedPairRoutes, mapScale, sampler: elevationSampler }) : null),
+    [selectedLegLine, selectedPairRoutes, mapScale, elevationSampler],
+  );
+  /** The selected leg's stored routes on the map, screen only. */
+  const routeMarkers = useMemo(
+    () => (selectedLegLine && !routeDraft && selectedPairRoutes.length > 0
+      ? routeShapes({ from: selectedLegLine[0], to: selectedLegLine[selectedLegLine.length - 1], routes: selectedPairRoutes, draft: null, hover: null }) : []),
+    [selectedLegLine, routeDraft, selectedPairRoutes],
+  );
+
+  // ─── Computed alternatives for the selected leg (docs/course-elevation.md §7.8) ───
+  const routeFinder = useMemo(() => createRouteFinder(), []);
+  useEffect(() => () => routeFinder.dispose(), [routeFinder]);
+  const selectedLegVia = useMemo(() => (selectedLeg ? crossingPt(selectedLeg.props) ?? null : null), [selectedLeg, crossingPt]);
+  const patchForDoc = mapDoc && mapPatch?.patch && mapPatch.patch.documentHash === mapDoc.hash ? mapPatch : null;
+  /** The course's out-of-bounds objects the search may not cross, and what tells one set from another. */
+  const oobExtra = useMemo(() => oobFeatures(objectsInView), [objectsInView]);
+  const oobKey = useMemo(() => oobExtra.map((f) => `${f.kind}:${f.parts.map((part) => Array.from(part).join(",")).join(";")}`).join("/"), [oobExtra]);
+  /** What a search of the selected leg rests on: a result is this key's alone. */
+  const alternativesKey = selectedLeg && mapDoc && mapScale ? [
+    mapDoc.hash, patchForDoc?.version ?? "0", elevationField?.key ?? "", selectedLeg.from.id, selectedLeg.to.id,
+    selectedLeg.fromPt.x, selectedLeg.fromPt.y, selectedLeg.toPt.x, selectedLeg.toPt.y, selectedLegVia?.x ?? "", selectedLegVia?.y ?? "",
+    oobKey,
+  ].join("|") : null;
+  const [alternatives, setAlternatives] = useState<{ key: string; status: "running" | "done" | "error"; routes: RouteAlternative[]; model?: CostModelNote } | null>(null);
+  const alternativesNow = alternatives && alternatives.key === alternativesKey ? alternatives : null;
+  const [pointedAlternative, setPointedAlternative] = useState<number | null>(null);
+  /** The alternative a press on its label or its row picked: it stays lit, with **Use** on its label. */
+  const [pickedAlternative, setPickedAlternative] = useState<number | null>(null);
+  useEffect(() => { setPointedAlternative(null); setPickedAlternative(null); }, [alternativesKey]);
+  const activeAlternative = pointedAlternative ?? pickedAlternative;
+  // One search runs at a time and the latest asked waits behind it (the worker has no cancel); a leg searched before
+  // shows its result at once.
+  const altCache = useRef(new Map<string, { routes: RouteAlternative[]; model?: CostModelNote }>());
+  const altBusy = useRef(false);
+  const altQueued = useRef<(() => void) | null>(null);
+  const findAlternatives = useCallback((again = false) => {
+    if (!alternativesKey || !selectedLeg || !mapDoc || !mapScale) return;
+    const key = alternativesKey;
+    const cached = again ? undefined : altCache.current.get(key);
+    if (cached) { setAlternatives({ key, status: "done", ...cached }); return; }
+    setAlternatives({ key, status: "running", routes: [] });
+    const ask = {
+      doc: { key: `${mapDoc.hash}:${patchForDoc?.version ?? "0"}`, bytes: mapDoc.bytes, patch: patchForDoc?.patch ?? null },
+      field: elevationField,
+      req: { from: selectedLeg.fromPt, to: selectedLeg.toPt, ...(selectedLegVia ? { via: [selectedLegVia] } : {}), groundMPerMm: mapScale / 1000, extra: oobExtra },
+    };
+    const job = () => {
+      altBusy.current = true;
+      const next = () => { altBusy.current = false; const queued = altQueued.current; altQueued.current = null; queued?.(); };
+      routeFinder.find(ask).then(
+        (result) => {
+          altCache.current.set(key, { routes: result.routes, model: result.model });
+          if (altCache.current.size > 20) altCache.current.delete(altCache.current.keys().next().value!);
+          setAlternatives((now) => (now?.key === key ? { key, status: "done", routes: result.routes, model: result.model } : now));
+          next();
+        },
+        () => { setAlternatives((now) => (now?.key === key ? { key, status: "error", routes: [] } : now)); next(); },
+      );
+    };
+    if (altBusy.current) altQueued.current = job; else job();
+  }, [alternativesKey, selectedLeg, mapDoc, mapScale, routeFinder, patchForDoc, elevationField, selectedLegVia, oobExtra]);
+  // docs/course-elevation.md §7.8: the search starts by itself a moment after a leg is selected (or its ends settle).
+  const findAlternativesRef = useRef(findAlternatives);
+  findAlternativesRef.current = findAlternatives;
+  const autoSearch = !!alternativesKey && !isMobile && (selectedLeg?.props.style ?? "line") !== "marked_route";
+  useEffect(() => {
+    if (!autoSearch) return;
+    const timer = setTimeout(() => findAlternativesRef.current(), 300);
+    return () => clearTimeout(timer);
+  }, [alternativesKey, autoSearch]);
+  // The course's expected winner pace (§7.8), stored with the course; the typed one shows at once.
+  const [typedPace, setTypedPace] = useState<{ courseId: number; s: number } | null>(null);
+  const winnerPace = (typedPace && typedPace.courseId === selectedCourse?.id ? typedPace.s : selectedCourse?.winnerPaceSPerKm) ?? DEFAULT_PACE_S_PER_KM;
+  const winnerPaceIsDefault = !(typedPace && typedPace.courseId === selectedCourse?.id) && selectedCourse?.winnerPaceSPerKm == null;
+  const setPaceText = useCallback((text: string): boolean => {
+    const s = parsePace(text);
+    const course = selectedCourse;
+    if (s === null || !course) return false;
+    setTypedPace({ courseId: course.id, s });
+    void run(() => writes.setWinnerPace(course.id, s)).then((res) => {
+      if (res === undefined) setTypedPace((p) => (p && p.courseId === course.id && p.s === s ? null : p));
+      else void utils.course.list.invalidate();
+    });
+    return true;
+  }, [selectedCourse, run, writes, utils]);
+  // What each leg costs along the polyline it is read along: the winner's time is shared over the legs by these.
+  const costsKey = elevationLegs && mapDoc && mapScale && selectedCourse ? [
+    selectedCourse.id, mapDoc.hash, patchForDoc?.version ?? "0", mapScale, elevationField?.key ?? "", oobKey,
+    elevationLegs.map((l) => l.points.map((p) => `${p.x},${p.y}`).join(" ")).join("/"),
+  ].join("|") : null;
+  const [legCosts, setLegCosts] = useState<{ key: string; costs: number[] } | null>(null);
+  useEffect(() => {
+    if (!costsKey || !elevationLegs || !mapDoc || !mapScale) return;
+    let live = true;
+    const key = costsKey;
+    // A moment after the last change: a drag of a control asks once.
+    const timer = setTimeout(() => {
+      routeFinder.costs({
+        doc: { key: `${mapDoc.hash}:${patchForDoc?.version ?? "0"}`, bytes: mapDoc.bytes, patch: patchForDoc?.patch ?? null },
+        field: elevationField,
+        req: { legs: elevationLegs.map((l) => ({ points: l.points.map((p) => ({ x: p.x, y: p.y })) })), groundMPerMm: mapScale / 1000, extra: oobExtra },
+      }).then((costs) => { if (live) setLegCosts({ key, costs }); }, () => undefined);
+    }, 400);
+    return () => { live = false; clearTimeout(timer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `costsKey` names everything the costs rest on
+  }, [costsKey, routeFinder]);
+  const flatPace = useMemo(
+    () => flatPaceSPerKm(winnerPace, selectedCourse?.length ?? 0, legCosts && legCosts.key === costsKey ? legCosts.costs : null),
+    [winnerPace, selectedCourse, legCosts, costsKey],
+  );
+  const routeTotals = useMemo(() => courseRouteTotals(elevationLegs, mapScale ?? null, selectedCourse?.length ?? null, winnerPace), [elevationLegs, mapScale, selectedCourse, winnerPace]);
+  const alternativeList = useMemo(
+    () => (alternativesNow?.status === "done" && mapScale ? alternativeItems(alternativesNow.routes, mapScale, elevationSampler, flatPace) : []),
+    [alternativesNow, mapScale, elevationSampler, flatPace],
+  );
+  const applyAlternative = useCallback((index: number) => {
+    const a = alternativeList[index];
+    if (a && selectedLeg && a.interior.length > 0) saveRouteNow({ fromControlId: selectedLeg.from.id, toControlId: selectedLeg.to.id, points: a.interior, source: "computed", model: a.kind === "shortest" ? SHORTEST_COST_MODEL.id : alternativesNow?.model?.id ?? DEFAULT_COST_MODEL.id });
+  }, [alternativeList, selectedLeg, saveRouteNow, alternativesNow]);
+  const alternativeMarkers = useMemo(() => (routeDraft ? [] : alternativeShapes(alternativeList, activeAlternative)), [alternativeList, activeAlternative, routeDraft]);
+  const applyAlternativeRef = useRef<(index: number) => void>(() => undefined);
+  applyAlternativeRef.current = applyAlternative;
+  const useLabel = t("legAlternativeUse"), isLineTitle = t("legAlternativeIsLine");
+  const alternativeLabels = useMemo((): MapLabel[] => {
+    if (routeDraft || alternativeList.length === 0) return [];
+    const anchors = alternativeLabelAnchors(alternativeList);
+    return alternativeList.map((a, i): MapLabel => ({
+      x: anchors[i].x, y: anchors[i].y, text: alternativeLabelText(a), color: alternativeColor(a.index), active: a.index === activeAlternative,
+      testId: "editor-route-alternative-label", data: { index: String(a.index), kind: a.kind, m: String(a.lengthM), climb: a.climbM === null ? "" : String(a.climbM), time: a.timeS === null ? "" : String(a.timeS) },
+      onPress: () => setPickedAlternative((now) => (now === a.index ? null : a.index)),
+      onPoint: (over) => setPointedAlternative((now) => (over ? a.index : now === a.index ? null : now)),
+      action: legEditable ? { label: useLabel, testId: "editor-route-alternative-label-use", disabled: routeBusy || a.interior.length === 0, title: a.interior.length === 0 ? isLineTitle : undefined, onPress: () => applyAlternativeRef.current(a.index) } : null,
+    }));
+  }, [alternativeList, activeAlternative, routeDraft, legEditable, routeBusy, useLabel, isLineTitle]);
+  const shownMarkers = useMemo(
+    () => (routeMarkers.length + alternativeMarkers.length > 0 ? [...courseChecks.markers, ...alternativeMarkers, ...routeMarkers] : courseChecks.markers),
+    [courseChecks.markers, routeMarkers, alternativeMarkers],
+  );
+
+  // ─── The elevation profile under the map (docs/course-elevation.md §5): desktop and tablet ───
+  const [profileOpen, setProfileOpen] = useState(() => readProfileOpen(typeof localStorage === "undefined" ? null : localStorage));
+  const toggleProfile = useCallback(() => setProfileOpen((open) => {
+    writeProfileOpen(typeof localStorage === "undefined" ? null : localStorage, !open);
+    return !open;
+  }), []);
+  const profileShown = profileOpen && !isMobile && elevation.state === "ready";
+  /** The paper point of a distance along the course's legs. */
+  const profilePlace = useCallback((d: number): { leg: number; pt: Pt } | null => {
+    if (elevation.state !== "ready" || !elevationLegs) return null;
+    const leg = legAt(legBounds(elevation.profile), d);
+    const points = elevationLegs[leg]?.points;
+    const pt = points ? pointAtDistance(points, elevation.groundMPerMm, d - elevation.profile.legs[leg].offsetM) : null;
+    return pt ? { leg, pt } : null;
+  }, [elevation, elevationLegs]);
+  /** The place the graph's pointer reads, for the map's dot: a store, so a moving pointer does not render the page. */
+  const profileDot = useMemo(() => createHoverDotStore(), []);
+  const hoverProfile = useCallback((d: number | null) => {
+    const at = d === null ? null : profilePlace(d);
+    profileDot.set(at ? { x: at.pt.x, y: at.pt.y, leg: at.leg } : null);
+  }, [profilePlace, profileDot]);
+  useEffect(() => { if (!profileShown) profileDot.set(null); }, [profileShown, profileDot]);
+  const selectProfileLeg = useCallback((leg: number, d: number) => {
+    const at = profilePlace(d);
+    if (!at) return;
+    setRadioSwapOffer(null);
+    setBendFocus(null);
+    dispatch({ type: "leg-click", x: at.pt.x, y: at.pt.y, insertAt: insertIndexForLeg(rows, leg) });
+    // §5: the map follows only when the leg is not in sight.
+    const reveal = elevationLegs?.[leg]?.points.map((q) => ({ x: q.x, y: q.y }));
+    if (reveal?.length) setViewRequest((v) => ({ key: (v?.key ?? 0) + 1, reveal }));
+  }, [profilePlace, rows, elevationLegs]);
+  const profileLabels = useMemo(() => {
+    const marks = routeMarks(rows);
+    return { legs: marks.legs, bounds: marks.bounds.map((b) => (b.kind === "control" ? b.label : t(b.kind === "start" ? "profileStart" : "profileFinish"))) };
+  }, [rows, t]);
+  // docs/course-elevation.md §6 "When": heights that arrived after the course's last edit — the stored climb is
+  // empty though the editor computes one — are caught up once per course opened.
+  const refreshClimbs = trpc.course.refreshClimbs.useMutation({ onSuccess: (r) => { if (r.written > 0) void utils.course.list.invalidate(); } });
+  const climbCaughtUp = useRef(new Set<number>());
+  const computedShownM = elevation.state === "ready" && !elevation.profile.partial ? Math.round(elevation.profile.climbM) : 0;
+  const refreshClimbsNow = refreshClimbs.mutate;
+  useEffect(() => {
+    if (!canEdit || !selectedCourse || selectedCourse.climb !== 0 || computedShownM <= 0 || pendingOps > 0) return;
+    if (climbCaughtUp.current.has(selectedCourse.id)) return;
+    const id = selectedCourse.id;
+    climbCaughtUp.current.add(id);
+    // A failed catch-up is tried again the next time this course's numbers change.
+    refreshClimbsNow(undefined, { onError: () => { climbCaughtUp.current.delete(id); } });
+  }, [canEdit, selectedCourse, computedShownM, pendingOps, refreshClimbsNow]);
+  // docs/course-elevation.md §7.5: a map or a map correction that changed since the last course edit — the
+  // automatic routes are brought up to date once per opening of the course mode.
+  const autoRoutesAsked = useRef(false);
+  useEffect(() => {
+    if (!canEdit || state.mode !== "course" || !selectedCourse || pendingOps > 0 || autoRoutesAsked.current) return;
+    autoRoutesAsked.current = true;
+    refreshClimbsNow();
+  }, [canEdit, state.mode, selectedCourse, pendingOps, refreshClimbsNow]);
+  const profilePanel = useMemo(() => (profileShown && elevation.state === "ready" ? (
+    <ProfilePanel profile={elevation.profile} datum={elevation.datum} basis={elevation.basis} legLabels={profileLabels.legs} boundLabels={profileLabels.bounds}
+      selectedLeg={selectedLegIndex} onHover={hoverProfile} onSelectLeg={selectProfileLeg} onClose={toggleProfile} />
+  ) : null), [profileShown, elevation, profileLabels, selectedLegIndex, hoverProfile, selectProfileLeg, toggleProfile]);
   const locateSite = courseChecks.locate;
   const locateCheck = useCallback((c: EditorCheck) => {
     const { selectId, centre } = locateSite(c);
@@ -1752,7 +2198,8 @@ export function EditorPage() {
     const mark = coord ? isMark(coord.id) : false;
     return courseActions(
       {
-        phantom: state.phantom ? { insertAt: state.phantom.insertAt } : null,
+        // A selected leg opens no bar on desktop and tablet (§6.7): its actions are the Leg section's.
+        phantom: state.phantom && !legQuiet ? { insertAt: state.phantom.insertAt } : null,
         selected: coord ? {
           id: coord.id,
           role,
@@ -1766,12 +2213,8 @@ export function EditorPage() {
         course: selectedCourse && structure ? selectedCourse.name : null,
         codesReady: !!controlList.data,
         busy: pendingOps > 0,
-        legEdit: legEditable,
-        variationHere,
       },
       {
-        addBend,
-        createVariation,
         insert: () => { const p = state.phantom; if (p) void createControl({ x: p.x, y: p.y }, p.insertAt); },
         addToCourse: () => { const p = state.phantom; if (p) void createControl({ x: p.x, y: p.y }, sequenceIds.length); },
         add: () => { const p = state.phantom; if (p) void createControl({ x: p.x, y: p.y }, null); },
@@ -1792,7 +2235,7 @@ export function EditorPage() {
     );
   }, [state.tool.kind, state.selectedControlId, state.phantom, coordsById, kindOf, sequenceIds, ends, selectedCourse, structure, controlRowsById,
     radioSwapOffer, controlList.data, pendingOps, createControl, createRoleControl, applyStructure, resetLabel, handleRadio,
-    confirmSwap, declineSwap, handleDelete, tc, legEditable, addBend, isMark, variationHere, createVariation, memberIds]);
+    confirmSwap, declineSwap, handleDelete, tc, isMark, memberIds]);
 
   const contextInfo = useMemo(() => {
     const sel = state.selectedControlId;
@@ -1857,6 +2300,7 @@ export function EditorPage() {
     const leg = itemOfRow(i)?.leg;
     return { bends: leg?.bends, via: crossingPt(leg) };
   }, meterDraft), mapScale), [rows, itemOfRow, mapScale, crossingPt, meterDraft]);
+  const sequenceClimbs = useMemo(() => sequenceLegClimbs(rows, elevation), [rows, elevation]);
   const totalMeters = useMemo(() => legMeters.reduce<number>((sum, m) => sum + (m ?? 0), 0), [legMeters]);
 
   // Offline, Field mode queues its moves and check-offs (§9 "Offline", D9c); `+` (a create) still needs a connection.
@@ -1873,7 +2317,8 @@ export function EditorPage() {
   const toolActive = state.tool.kind !== "select";
   const editor: MapViewerEditorProps = useMemo(() => ({
     selectedControlId: state.selectedControlId !== null ? String(state.selectedControlId) : null,
-    phantom: state.phantom ? { x: state.phantom.x, y: state.phantom.y } : null,
+    // A selected leg is lit as a leg (§6.7): no ring at the click.
+    phantom: state.phantom && !legQuiet ? { x: state.phantom.x, y: state.phantom.y } : null,
     contextActions,
     // An active tool opens no action bar (§6): nothing in it, not even the info line and badges.
     contextInfo: toolActive ? null : contextInfo,
@@ -1906,11 +2351,14 @@ export function EditorPage() {
     viewRequest,
     provisional,
     onCourseInfo: setCourseInfo,
-    markers: courseChecks.markers,
+    markers: shownMarkers,
+    hoverDot: profileDot,
+    mapLabels: alternativeLabels,
+    legClimb,
     layout: classLayout,
     courseOverride,
     legDraft: shownLegDraft,
-  }), [shownLegDraft, classLayout, courseChecks.markers, isMobile, fix, sheetPx, fieldMoveEnd, state.selectedControlId, state.phantom, contextActions, contextInfo, srrBadge, radioOn, suggestions, tc, courseControlIds, toolActive,
+  }), [alternativeLabels, legClimb, profileDot, shownLegDraft, classLayout, shownMarkers, isMobile, fix, sheetPx, fieldMoveEnd, state.selectedControlId, state.phantom, contextActions, contextInfo, srrBadge, radioOn, suggestions, tc, courseControlIds, toolActive,
     courseView, selectedCourse, moveWarnings, moveEpoch, handleMapClick, handleLabelMoveEnd, handleSelect,
     handleDismiss, handleLegClick, shownBinding, placementLoupe, snapIndex, snap, draftObjects, draftFast, viewRequest, provisional, courseOverride, state.view]);
 
@@ -1924,20 +2372,25 @@ export function EditorPage() {
   // Offline, only Field mode's queued writes undo / redo (D9c): any other entry's write would fail and be dropped.
   const undoable = online || (!!undoStack.top && fieldEntries.current.has(undoStack.top));
   const redoable = online || (!!undoStack.nextRedo && fieldEntries.current.has(undoStack.nextRedo));
+  // Read when the queued undo / redo picks its entry (CRS-050), not when the key was pressed.
+  const onlineRef = useRef(online);
+  useEffect(() => { onlineRef.current = online; }, [online]);
+  const mayStep = useCallback((entry: object) => onlineRef.current || fieldEntries.current.has(entry), []);
   const runUndo = useCallback(() => {
     if (!undoable) return;
     setMoveEpoch((v) => v + 1);
     setFocus(null); // its index may name another vertex now
     setBendFocus(null);
-    void run(async () => { await undoStack.undo(); bumpHistory(); });
-  }, [run, undoStack, bumpHistory, undoable]);
+    // Queued in the stack behind an undo / redo in flight (CRS-050): a held Ctrl+Z steps back one entry at a time.
+    void run(async () => { try { await undoStack.undo(mayStep); } finally { bumpHistory(); } }, undefined, { gated: false });
+  }, [run, undoStack, bumpHistory, undoable, mayStep]);
   const runRedo = useCallback(() => {
     if (!redoable) return;
     setMoveEpoch((v) => v + 1);
     setFocus(null);
     setBendFocus(null);
-    void run(async () => { await undoStack.redo(); bumpHistory(); });
-  }, [run, undoStack, bumpHistory, redoable]);
+    void run(async () => { try { await undoStack.redo(mayStep); } finally { bumpHistory(); } }, undefined, { gated: false });
+  }, [run, undoStack, bumpHistory, redoable, mayStep]);
 
   /** Tab / Shift+Tab: the next / previous control of the course, centred (§6.5). */
   const stepSelection = useCallback((dir: 1 | -1) => {
@@ -2064,6 +2517,10 @@ export function EditorPage() {
       } else if (plain && key === "L") {
         // F27: the placement loupe toggle (§6 key table, §10 "Loupe").
         togglePlacementLoupe();
+      } else if (plain && key === "B" && legEditable && state.tool.kind === "select") {
+        // §6.7: a bend on the selected leg.
+        e.preventDefault();
+        addBendMid(false);
       } else if (plain && key === "V") {
         exitTool();
       } else if (plain && (key === "S" || key === "K" || key === "M")) {
@@ -2110,7 +2567,7 @@ export function EditorPage() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [descControlId, runUndo, runRedo, undoStack, state, handleDelete, deleteControls, deleteObject, duplicateObject, pasteObject, deleteObjectsMany, duplicateObjectsMany, multiObjects, canEdit, nameId, propDrafts, selectedObject, focusedVertex, drafts, setDraft, cropMode, updateObject, setChain, exitTool, finishArea,
-    stepSelection, armPlace, setTool, canGap, fitView, areaOpen, canTonerSaver, startArea, layoutKey, mapKey, selectedLeg, focusedBend, legEditable, writeLeg, addCorridor, selectionGroup, redraw, togglePlacementLoupe]);
+    stepSelection, armPlace, setTool, canGap, fitView, areaOpen, canTonerSaver, startArea, layoutKey, mapKey, selectedLeg, focusedBend, legEditable, addBendMid, writeLeg, addCorridor, selectionGroup, redraw, togglePlacementLoupe]);
 
   // ─── The URL (docs/course-editor.md §1 "URL"; F31) ─────────
   // Read once, then taken step by step as the data that checks each param loads: Layout's sheet or template
@@ -2208,9 +2665,10 @@ export function EditorPage() {
     const publicNew = Number.isFinite(first) && first > 0 ? first : id;
     const currentCodes = controlRowsById.get(id)?.codes ?? current;
     void (async () => {
-      if ((await run(() => writes.updateControl({ id, codes: next }))) === undefined) return;
+      const redo = () => writes.updateControl({ id, codes: next });
+      if ((await run(redo)) === undefined) return;
       // After the edit the control's public id is the new first code; after an undo the old one again.
-      record(() => writes.updateControl({ id: publicNew, codes: currentCodes }), () => writes.updateControl({ id, codes: next }));
+      record(() => writes.updateControl({ id: publicNew, codes: currentCodes }), redo);
       dispatch({ type: "select", id: publicNew });
     })();
   }, [controlRowsById, writes, run, record]);
@@ -2247,6 +2705,9 @@ export function EditorPage() {
     controls: selectedCourse ? sequenceIds.length : null,
     lengthM: selectedCourse ? courseChecks.lengthM ?? totalMeters : null,
     climbM: selectedCourse?.climb ?? null,
+    // A typed or imported climb is the course's (docs/course-elevation.md §6); a stored computed one is the live value's copy.
+    climbManual: !!selectedCourse?.climb && selectedCourse.climbSource !== "computed",
+    line: selectedCourse ? lineClimbStatus(elevation) : null,
     scale: mapScale,
     sheetKey: state.mode === "layout" ? layoutMode.sheetKey : state.mode === "course" && state.view === "class" ? classView.sheetKey : null,
     snapping: state.snapping,
@@ -2313,6 +2774,11 @@ export function EditorPage() {
       presence={<PresenceChips others={presence} selectedCourseId={state.selectedCourseId} />}
       save={save}
       status={status}
+      onRetryElevation={retryElevation}
+      profile={elevation.state === "ready" ? { open: profileOpen, onToggle: toggleProfile } : null}
+      pace={elevationActive && selectedCourse ? {
+        text: formatClock(winnerPace), isDefault: winnerPaceIsDefault, readOnly: !canEdit, onPace: setPaceText, totals: routeTotals,
+      } : null}
       map={mapInfoInput}
     />
   );
@@ -2402,13 +2868,15 @@ export function EditorPage() {
       course={selectedCourse && structure ? { id: selectedCourse.id, name: selectedCourse.name, orderMode: structure.orderMode } : null}
       rows={rows}
       legMeters={legMeters}
+      legClimbs={sequenceClimbs}
+      profileMini={!isMobile && elevation.state === "ready" ? <ProfileMini profile={elevation.profile} selectedLeg={selectedLegIndex} open={profileOpen} onToggle={toggleProfile} /> : null}
       totalMeters={totalMeters}
       suggestions={suggestionsForNew}
       onCreate={handleCreateCourse}
       onClone={handleClone}
       onOrderMode={(mode) => void applyStructure((s) => ({ ...s, orderMode: mode }))}
-      onMove={(from, to) => void applyStructure((s) => moveVisit(s, from, to, kindOf, latest.current.orders))}
-      onRemove={(seqIndex) => void applyStructure((s) => removeVisit(s, seqIndex, kindOf, latest.current.orders))}
+      onMove={(from, to) => void applyStructure((s) => moveVisit(s, from, to, kindOf, latest.current.orders), { positional: true })}
+      onRemove={(seqIndex) => void applyStructure((s) => removeVisit(s, seqIndex, kindOf, latest.current.orders), { positional: true })}
       onEditCode={handleEditCode}
       onSelectRow={(id) => dispatch({ type: "select", id })}
       selectedControlId={state.selectedControlId}
@@ -2508,7 +2976,20 @@ export function EditorPage() {
       title={`${selectedLeg.from.code} → ${selectedLeg.to.code}`}
       leg={selectedLeg.props}
       crossingCode={selectedLeg.props.crossing ? coordsById.get(selectedLeg.props.crossing.controlId)?.code ?? String(selectedLeg.props.crossing.controlId) : null}
+      elevation={selectedLegElevation}
+      routes={legRouteItems && legRoutes.data ? {
+        items: legRouteItems, drawing: routeDraft ? { points: routeDraft.points.length } : null, busy: routeBusy,
+        lineIsShortest: selectedLegFrom !== null && selectedLegTo !== null && lineIsShortest(legRoutes.data, selectedLegFrom, selectedLegTo),
+        onDraw: startRoute, onDone: finishRoute, onCancel: () => setRouteDraft(null), onChoose: chooseLegRoute, onDelete: deleteLegRoute,
+        alternatives: alternativesKey ? {
+          status: alternativesNow?.status ?? "idle", items: alternativeList,
+          onFind: () => findAlternatives(true), onUse: applyAlternative, onPoint: setPointedAlternative,
+          active: activeAlternative, onPick: (index) => setPickedAlternative((now) => (now === index ? null : index)),
+          measured: alternativesNow?.model ? { state: alternativesNow.model.state, classes: alternativesNow.model.classes } : { state: "none", classes: [] },
+        } : null,
+      } : null}
       focusedBend={focusedBend}
+      actions={legEditable ? { onAddBend: addBendMid, onInsert: () => armPlace("control"), onVariation: variationHere ? createVariation : null } : null}
       readOnly={!legEditable}
       onPatch={writeLeg}
       onFocusBend={focusBend}
@@ -2546,6 +3027,10 @@ export function EditorPage() {
     <div data-testid="editor-conflict" data-kind={notice.kind} className="pointer-events-auto w-64 rounded-lg border border-amber-300 bg-amber-50 text-amber-900 text-xs p-2 shadow-sm">
       {notice.kind === "refresh" ? (
         <p>{notice.items?.length ? t("conflictRefreshItems", { items: notice.items.join(", ") }) : t("conflictRefresh")}</p>
+      ) : notice.kind === "undoSkipped" ? (
+        <p data-testid="editor-undo-skipped">{notice.by
+          ? t(notice.step === "redo" ? "redoSkipped" : "undoSkipped", { name: notice.name ?? t("undoSkippedThis"), who: notice.by.name || t("presenceAnonymous"), time: clockTime(notice.by.at, i18n.language) })
+          : t(notice.step === "redo" ? "redoSkippedUnknown" : "undoSkippedUnknown", { name: notice.name ?? t("undoSkippedThis") })}</p>
       ) : (
         <p>{notice.theirs
           ? notice.by
@@ -2560,7 +3045,7 @@ export function EditorPage() {
               const n = notice;
               // A queued write's conflict (D9c): its entry goes out again from their position on the server's token.
               if (n.queueSeq !== undefined) void outbox.resolve(n.queueSeq, "mine");
-              else void run(() => writes.updateControl({ id: n.controlId, xpos: n.mine.x, ypos: n.mine.y }));
+              else void run(() => writes.updateControl({ id: n.controlId, xpos: n.mine.x, ypos: n.mine.y }), { controlId: n.controlId, mine: n.mine });
             }}>
             {t("keepMine")}
           </button>
@@ -2720,7 +3205,9 @@ export function EditorPage() {
     // the 42 px tabs row, the header's 1 px border) and the container's `py-3` (1.5rem).
     <div data-testid="editor-page" data-mode={state.mode} data-layout={isMobile ? "phone" : "desktop"}
       className={isMobile ? "fixed inset-0 z-[60] bg-white" : "h-[calc(100dvh-99px-1.5rem)] min-h-[420px]"}>
-      <div className={isMobile ? "h-full overflow-hidden" : "h-full bg-white rounded-xl border border-slate-200 overflow-hidden"}>
+      <div className={isMobile ? "h-full overflow-hidden" : "relative h-full bg-white rounded-xl border border-slate-200 overflow-hidden"}>
+        {/* §0.43: asked once while the map has contours and no confirmed interval. */}
+        {!isMobile && state.mode === "course" && <IntervalBanner nameId={nameId ?? null} />}
         <MapPanel
           fillContainer
           fitToControls
@@ -2729,6 +3216,7 @@ export function EditorPage() {
           descriptionsAllControls
           toolbar={toolbar}
           mapOverlay={overlay}
+          bottomPanel={profilePanel}
           mapOverlayLayout={isMobile ? "fill" : "corner"}
           fullscreenOverlay={descControl ? (
             <ControlDescriptionEditor controlCode={descControl.code} initial={descControl.description} onSave={saveDescription} onCancel={closeDescription} />

@@ -1436,10 +1436,13 @@ async function applyReferenceUpsert(
   }
 
   if (entity === "course") {
+    // An entry from a sender that does not know the source (before review package 23) carries the climb without
+    // it: it is held as a typed one, whatever this node's row said before (docs/course-elevation.md §6 "Readers").
+    const climbSource = "climbM" in fields && !("climbSource" in fields) ? { climbSource: null } : {};
     await db.course.upsert({
       where: { id: payload.id },
       create: create as Prisma.CourseUncheckedCreateInput,
-      update: fields as Prisma.CourseUncheckedUpdateInput,
+      update: { ...fields, ...climbSource } as Prisma.CourseUncheckedUpdateInput,
     });
     if (payload.courseControls) {
       await db.courseControl.deleteMany({ where: { courseId: payload.id } });

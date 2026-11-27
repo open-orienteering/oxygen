@@ -33,6 +33,8 @@ export interface CourseChecksResult {
   markers: ToolShape[];
   /** From the layer's legs; null until the viewer has derived the course. */
   lengthM: number | null;
+  /** The course's legs as drawn, when the viewer draws it alone and whole (docs/course-elevation.md §4.1); else null. */
+  legs: readonly course.DerivedLeg[] | null;
   locate: (c: EditorCheck) => { selectId: number | null; centre: { x: number; y: number } | null };
 }
 
@@ -69,6 +71,7 @@ export function useCourseChecks(input: CourseChecksInput): CourseChecksResult {
   const markers = useMemo(() => checkMarkers(checks, siteById, ringMm), [checks, siteById, ringMm]);
   // A part drawn alone (Layout mode, §11) is not the course's length: the stored one stands in.
   const lengthM = useMemo(() => (ownDerivation?.courses[0]?.section ? null : legsLengthM(ownDerivation, mapScale)), [ownDerivation, mapScale]);
+  const legs = useMemo(() => (ownDerivation && !ownDerivation.courses[0]?.section ? ownDerivation.courses[0].legs : null), [ownDerivation]);
   const locate = useCallback((c: EditorCheck) => locateTarget(c, siteById), [siteById]);
-  return { checks, markers, lengthM, locate };
+  return { checks, markers, lengthM, legs, locate };
 }

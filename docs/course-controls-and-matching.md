@@ -463,6 +463,10 @@ per-leg lengths (`"1200;900;"`). Who wrote them is
 | `derived` | every re-derivation of an edited course with at least one positioned control (`rebuildCourseLengths`: create, update, sequence edits, control moves, copy, map upload, rotation, a position-less import) | recomputed from the controls' current positions and the map scale by the stored rule below (along the bends, through the crossing point, rounded once), the stored length when that is 0 | never overwritten |
 | NULL | a course without positioned controls; rows written before E6 without geometry | as `file` | as `file` |
 
+The start list Eventor returns can be one Oxygen pushed, with the
+length stored here at that time (`course-elevation.md` §8 "The way
+back").
+
 It replaced what `courses.geometry_source = 'editor'` meant to these two
 readers: the E6 migration backfilled it 1:1 (`editor` → `derived`,
 `ocd` / `xml` → `file`, `''` → NULL) and the writers set it beside
@@ -503,6 +507,17 @@ bends since F3 and crossing points since F4.
 | `packages/api/src/__tests__/integration/control-editor.test.ts` "course geometry regeneration", "course.clone" | `derived` on create, sequence edits, control moves and copy (the E6 migration's backfill test went with `geometry_source` in E5) |
 | `packages/api/src/__tests__/course-geometry.test.ts` "legDistancesMm (from the course layer, E6)" | layer-derived leg lengths = the pre-E6 formula bit for bit |
 | `packages/api/src/__tests__/course-geometry.test.ts` "legs along their bends", `integration/control-editor.test.ts` "course.setStructure with bends" | lengths along the bends; style and corridor change nothing (F1) |
+
+## Course climb
+
+`courses.climb_m` is the course's climb in metres and
+`courses.climb_source` who stated it (`manual`, `file`, `computed`,
+NULL): `docs/course-elevation.md` §6 is the specification. In short: a
+typed or imported climb is the course's; without one, Oxygen computes
+the climb from the map's height field along the course's drawn legs
+after every edit of its geometry and stores it. The description sheet
+and the exports read the stored value. Unlike the length's `derived`,
+nothing is recomputed at export, and the source's rule is typed-wins.
 
 ## Description autodetect: map source
 

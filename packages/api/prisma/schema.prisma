@@ -213,6 +213,7 @@ model Event {
   mapTemplates       MapTemplate[]
   courseMaps         CourseMap[]
   courseObjects      CourseObject[]
+  legRoutes          LegRoute[]
   mapPatch           MapPatch?
   mapColourSettings  MapColourSetting[]
   mapGpsTracks       MapGpsTrack[]
@@ -480,6 +481,8 @@ model Control {
   courseControls  CourseControl[]
   punches         Punch[]
   controlUnits    ControlUnit[]
+  legRoutesFrom   LegRoute[]      @relation("LegRouteFrom")
+  legRoutesTo     LegRoute[]      @relation("LegRouteTo")
 
   @@unique([eventId, seq])
   @@index([eventId, removed])
@@ -503,6 +506,10 @@ model Course {
   shorten         Int      @default(0)
   /// Where `lengthM` comes from: 'file' (an imported file's published length; Eventor may overwrite it), 'derived' (edited in Oxygen: derived from the controls, recomputed at export, never overwritten by Eventor), NULL (neither) (E6; course-controls-and-matching.md "Course length").
   lengthSource    String?  @map("length_source")
+  /// Where `climbM` comes from: 'manual' (typed), 'file' (an imported file), 'computed' (from the map's height field along the course; reset by every geometry rebuild), NULL (no climb; with a climb: typed, written before the column) (docs/course-elevation.md §6).
+  climbSource     String?  @map("climb_source")
+  /// The expected winner pace, seconds per km (docs/course-elevation.md §7.8); NULL: none typed.
+  winnerPaceSPerKm Int?    @map("winner_pace_s_per_km")
   /// Course-level description-sheet instructions (special rows + finish variant).
   /// Shape: { specials?: [{afterControlId, kind, lengthM?}], finish?: {kind, lengthM?} }.
   descriptionInstructions Json? @map("description_instructions")
@@ -656,6 +663,35 @@ model CourseObject {
   @@unique([eventId, seq])
   @@index([eventId, z, seq])
   @@map("course_objects")
+  @@schema("oxygen")
+}
+
+/// A route between two controls in the direction it is run (docs/course-elevation.md §7): shared by every course
+/// that runs the pair. `points` are the interior vertices in paper mm ([{ x, y }]); the ends are the controls.
+/// At most one row of a pair is `chosen` (a partial unique index): the one the pair's climb is read along.
+/// Not journaled; travels with the backup and the checkout snapshot.
+model LegRoute {
+  id            String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  eventId       BigInt   @map("event_id")
+  fromControlId String   @map("from_control_id") @db.Uuid
+  toControlId   String   @map("to_control_id") @db.Uuid
+  points        Json
+  /// 'drawn' (by hand) | 'computed' (an alternative the search found and someone kept).
+  source        String   @default("drawn")
+  /// The cost model a computed route was found with; NULL for a drawn one.
+  model         String?
+  chosen        Boolean  @default(false)
+  /// Non-NULL: the pair's automatic route (the shortest legal one, docs/course-elevation.md §7.5) and what it was searched on.
+  autoBasis     String?  @map("auto_basis")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  event Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  from  Control @relation("LegRouteFrom", fields: [fromControlId], references: [id], onDelete: Cascade)
+  to    Control @relation("LegRouteTo", fields: [toControlId], references: [id], onDelete: Cascade)
+
+  @@index([eventId, fromControlId, toControlId])
+  @@map("leg_routes")
   @@schema("oxygen")
 }
 
@@ -1270,6 +1306,9 @@ model MapFile {
   /// OCAD file's own angle. Used when the drawing is magnetic-north-up
   /// but ScalePar declares a=0 — common for Swedish club exports.
   rotationCorrection Float    @default(0) @map("rotation_correction")
+  /// The contour interval (m) a person confirmed for this event's map; NULL = not confirmed. A map from the club library
+  /// takes the club map's value (`ClubMap.contourIntervalM`); the venue box, which has no club map row, reads this one.
+  contourIntervalM   Float?   @map("contour_interval_m")
   /// The upload-time OCAD north diagnostic. Unwritten since E5 (no OCAD
   /// parse at upload; `course.mapMetadata` reads the document report's
   /// `north`); kept for rows written before (docs/map-storage.md §4.6).
@@ -1500,6 +1539,8 @@ model ClubMap {
   colourOverrides    Json     @default("{}") @map("colour_overrides")
   northLinesBelow    Boolean  @default(true) @map("north_lines_below")
   rotationCorrection Float    @default(0) @map("rotation_correction")
+  /// The contour interval (m) a person confirmed; NULL = not confirmed (docs/course-elevation.md §0.43). Follows every event using the map.
+  contourIntervalM   Float?   @map("contour_interval_m")
   createdBy          String?  @map("created_by") @db.Uuid
   createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt          DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)

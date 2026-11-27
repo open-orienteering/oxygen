@@ -34,7 +34,11 @@ type Db = PrismaClient | Prisma.TransactionClient;
 
 const STRIP = new Set(["id", "eventId", "seq", "createdAt", "updatedAt"]);
 const CLASS_LAYOUT_FIELDS = ["printScale", "sheetTemplateId"] as const;
-/** Derived (E6): travels with the checkout snapshot, not the journal. */
+/**
+ * Derived (E6): travels with the checkout snapshot, not the journal. `climbSource` and `winnerPaceSPerKm` do
+ * travel in the journal since review package 23 (docs/course-elevation.md §6 "Readers"): a climb computed on
+ * the lease holder stays a computed one on the peer, and a winner pace typed on a box reaches the cloud.
+ */
 const COURSE_DERIVED_FIELDS = ["lengthSource"] as const;
 
 export type ReferenceEntity = "control" | "course" | "class";
@@ -131,7 +135,8 @@ export async function courseUpsertPayload(
   return {
     id: row.id,
     seq: row.seq,
-    // lengthSource is derived (E6): it travels with the snapshot, not the journal.
+    // Derived: `lengthSource` (E6) travels with the snapshot, not the journal. `climbSource` and `winnerPaceSPerKm`
+    // do travel here (docs/course-elevation.md §6 "Readers", §7.8).
     fields: portableFields(row as unknown as Record<string, unknown>, COURSE_DERIVED_FIELDS),
     courseControls: ccs,
   };

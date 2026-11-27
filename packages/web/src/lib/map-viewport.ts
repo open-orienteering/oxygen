@@ -135,6 +135,33 @@ export function fitMm(
   };
 }
 
+/**
+ * The view that brings `points` (paper mm) into sight, or null when every one of them already is at least `marginPx`
+ * inside the `w` × `h` screen (`toScreen`: the current view's projection): then nothing moves. Otherwise the view is
+ * centred on their bounds, and zoomed out only when the bounds do not fit at the current zoom.
+ */
+export function revealView(
+  vp: MapViewport,
+  points: readonly Pt[],
+  toScreen: (mmX: number, mmY: number) => Pt | null,
+  w: number, h: number, marginPx: number,
+): MapViewport | null {
+  if (points.length === 0 || w <= 0 || h <= 0) return null;
+  const m = Math.min(marginPx, w / 4, h / 4);
+  const inside = points.every((q) => {
+    const s = toScreen(q.x, q.y);
+    return !!s && s.x >= m && s.x <= w - m && s.y >= m && s.y <= h - m;
+  });
+  if (inside) return null;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const q of points) { minX = Math.min(minX, q.x); minY = Math.min(minY, q.y); maxX = Math.max(maxX, q.x); maxY = Math.max(maxY, q.y); }
+  const centred = { ...vp, centreX: ((minX + maxX) / 2) * 1000, centreY: ((minY + maxY) / 2) * 1000 };
+  // The diagonal fits whatever the bearing.
+  const diagPx = Math.hypot(maxX - minX, maxY - minY) * 1000 * vp.pxPerUm;
+  const room = Math.min(w, h) - 2 * m;
+  return diagPx <= room ? centred : { ...centred, pxPerUm: clamp((vp.pxPerUm * room) / diagPx, PAPER_MIN_PX_PER_MM / 1000, PAPER_MAX_PX_PER_MM / 1000) };
+}
+
 // ─── Scale ───────────────────────────────────────────────────
 
 /** CSS px per map mm (the overlay's symbol scale). */

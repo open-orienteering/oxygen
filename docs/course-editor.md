@@ -141,7 +141,8 @@ exit bubble on every pointer move
 | Action bar (`ActionBar.tsx`) | `editor-action-bar` | the selection's or phantom's entries, horizontal, centred under the selection, hidden during a drag; ids `editor-action-<id>` as the legacy popover's. Always inside the viewer, 8 px from its edges (`lib/editor/action-bar-place.ts`): near a side it is shifted sideways, and when it does not fit below the selection it goes above it (`data-placement="below" \| "above"`). It is never wider than the viewer less 16 px. The *Also in* line is one line cut with an ellipsis, with the whole list in its `title` (the inspector lists the courses too) (`docs/bugfixes/action-bar-off-viewer.md`). The viewer positions it (`actionLayout: "bar"`); on a phone the same list is the bottom sheet's peek row (`actionLayout: "host"`, §10) |
 | Inspector (`Inspector.tsx`, `modes/CourseMode.tsx`, `modes/ObjectSection.tsx`) | `editor-inspector` | collapsible sections: course (create, sequence — a variation group as a nested block `editor-variation`, §12 —, visit order, description sheet — `editor-description-instructions`, §4 —, clone), selection (a site: code, kind, position, description summary, "also in", hidden number, notes — §6.6; several controls: `editor-multi` with the bulk actions — §6.5; a course object: `editor-object` — §7; a leg: `editor-leg` — §6.7, `modes/LegSection.tsx`), inventory (`editor-inventory-panel`, collapsed), checks (`editor-checks`, §8) |
 | Map info (`MapInfoDialog.tsx`, model `lib/editor/map-info.ts`; P6) | `editor-map-info` → `editor-map-info-dialog` | a map icon button (`IconMap`, `components/map-icons.tsx`) in the top bar right after Export ▾ (`aria-haspopup="dialog"`, `aria-expanded`); a click opens a modal (`role="dialog"`, `aria-modal="true"`, centred over a dimmed backdrop; the close button `editor-map-info-close`, a backdrop click or Escape closes it). Its header shows the map's file name (`editor-map-info-name`, `data-name`) or, without a map, `editor-map-info-none`. Its rows, each only when it has a value: the scale `editor-map-info-scale` (`data-scale`, `1:10 000`), the north lines `editor-map-info-north` (the `NorthLinesBadge` sentence, `north-lines-badge` with `data-north-lines`; *No magnetic north lines found* when the file has none), the file `editor-map-info-file` (size and upload time, `data-bytes`, `data-uploaded`); then the document section `editor-map-info-document` (`data-source`, `data-objects`, `data-symbols`, `data-colours`; read from the loaded document's header, absent while it loads or the import runs) with `editor-map-info-source` (OCAD and its version, or OpenOrienteering Mapper), `-content` (objects · symbols · colours), `-symbol-library` (the matched symbol library and version; not `-library`, which is the action below), `-crs` (EPSG code and name) and `-importer`. Its actions: *Review symbols* (`editor-map-info-review`, a link to `/<event>/map-review/<documentHash>`, only once the document exists — `map-symbols.md` §8.7), *Replace map* (`editor-map-info-replace`; *Upload map* without a map; the hidden `accept=".ocd"` input), *From club library* (`editor-map-info-library`, only when the club library lists a map; opens `club-map-picker`, `system/club-library.md`). An upload's progress, error and the stale-north-lines notice (`map-upload-notice`) show in the dialog's footer |
-| Course info (`EditorStatus.tsx` `StatsButton`, model `lib/editor/status.ts`) | `editor-stats` → `editor-stats-popover` | an icon button in the top bar (`aria-haspopup="dialog"`, `aria-expanded`) with the check count as its amber badge (`editor-stats-badge`, `data-count`, absent at zero, §8); a click opens the popover (`role="dialog"`; a second click, an outside click or Escape closes it — Escape closes only the popover, the editor's Escape cascade of §3 is not stepped, so an armed tool stays armed). Its rows, each only when it has a value, in this order: `editor-stats-controls` (`data-count`), `editor-stats-length` (`data-m`), `editor-stats-climb` (`data-m`), the shown sheet's key in Layout mode and Class view (`editor-stats-sheet`, `data-key`, `course-layout.md` §6), `editor-stats-snapping` when on, `editor-stats-checks` (`data-count`, amber). No map scale since P6: it is the map-info dialog's (`courseInfoRows`). With no course and no sheet the popover says *No course* |
+| Elevation profile (`ProfilePanel.tsx`; `MapPanel`'s `bottomPanel`) | `editor-profile` | desktop and tablet: a 144 px panel under the map, opened from the course-info popover (`editor-stats-profile-toggle`); the map gives it its height and the tool rail scrolls when the window is too short for both — `course-elevation.md` §5 |
+| Course info (`EditorStatus.tsx` `StatsButton`, model `lib/editor/status.ts`) | `editor-stats` → `editor-stats-popover` | an icon button in the top bar (`aria-haspopup="dialog"`, `aria-expanded`) with the check count as its amber badge (`editor-stats-badge`, `data-count`, absent at zero, §8); a click opens the popover (`role="dialog"`; a second click, an outside click or Escape closes it — Escape closes only the popover, the editor's Escape cascade of §3 is not stepped, so an armed tool stays armed). Its rows, each only when it has a value, in this order: `editor-stats-controls` (`data-count`), `editor-stats-length` (`data-m`), `editor-stats-climb` (`data-m`, `data-source`; typed or computed, with the computed climb's notes `editor-stats-elevation-*` under the rows — `course-elevation.md` §4.4), the shown sheet's key in Layout mode and Class view (`editor-stats-sheet`, `data-key`, `course-layout.md` §6), `editor-stats-snapping` when on, `editor-stats-checks` (`data-count`, amber). No map scale since P6: it is the map-info dialog's (`courseInfoRows`). With no course and no sheet the popover says *No course* |
 | Save indicator (`EditorStatus.tsx` `SaveIndicator`) | `editor-save-state` | in the top bar after the course-info button: a dot and the save state's words (`data-state` = `saved` / `saving` / `error` / `conflict` / `queued` — Field mode's writes waiting in the outbox, §9 "Offline", D9c —, `role="status"`, `aria-live="polite"`, the words also its `title`). `saved` / `saving` are the dot alone (green / grey pulsing; the words `sr-only`), so P2 adds a dot (≤ 16 px) and an icon button (≤ 32 px) to the top bar's row (how the row makes room on a laptop screen: "Top bar" below, F29); `error` / `conflict` show their words (`editor-save-state-text`, red) at every width — a failed or conflicting save never hides behind a popover or a tooltip; `queued` shows its words too, amber |
 | Conflict notice | `editor-conflict` | §3 |
 | Map mode (§13) | `editor-mode-map`, `editor-hide-overprint`, `editor-inspector-map-object`, `editor-map-object` (`-none`, `-symbol`, `-swatch`, `-hide`, `-restore`), `editor-corrections` (`-count`, `-none`, `-apply`), `editor-correction-row` (`-locate`, `-revert`), `editor-map-none`, `editor-map-disabled`, `editor-map-readonly`, `editor-tool-N`, `editor-map-node`, `editor-map-node-grip`, `editor-map-nodes-hint`, `editor-map-nodes-none` (`data-reason`), `editor-snapping` (Map mode's own, "Nodes") | the inspector's *Map object* and *Corrections* sections in place of the course's; the rail's `V`, `N` and snapping toggle |
@@ -268,6 +269,11 @@ change switches it off with the course.
 
 **One gesture, one write, one undo entry.** `UndoStack(50)` of inverse
 pairs; an entry whose undo / redo fails is dropped and the error shown.
+Undo and redo run one at a time in the order they were pressed (CRS-050):
+a held or double Ctrl+Z queues the second step behind the first, which
+picks its entry only once the first has settled, so the redo branch keeps
+the order of the undos. Whether an entry may run offline (§9) is asked
+when it is picked, not when the key was pressed.
 There is no save button: every write goes out as the gesture ends and the
 top bar's save indicator (§2; on a phone the sheet's peek line, §10)
 says *Saved* / *Saving…* / *Not saved* / *Changed elsewhere*.
@@ -289,10 +295,107 @@ different rows do not wait for each other.
 `course.setControlLabelOffset`, `course.create` / `clone` and
 `control.delete` take no token and seed the ones they return
 (`setControlLabelOffset` advances the course's token, so it queues as a
-course write). Map mode's
-`mapPatch.applyChange` / `setEnabled` (§13, `applyPatchChange`,
-`setPatchEnabled`) take none either: the patch merges per op id,
-last-writer-wins (`map-patches.md` §3.2).
+course write). Layout mode's sheet and template writes (`course-layout.md`
+§2) go through the same book and queue (`EditorWrites.writeRow`), one per
+row in flight (CRS-053). Map mode's
+`mapPatch.applyChange` / `setEnabled` / `attachUnresolved` (§13,
+`applyPatchChange`, `setPatchEnabled`, `attachUnresolvedPatch`) take none
+either: the patch merges per op id, last-writer-wins (`map-patches.md`
+§3.2). They still go one at a time (MAP-8), so their replies come in
+order, and the session's copy of the patch never takes an older version
+of the same document over a newer one (`setMapPatch`, §13).
+
+**Structure edits** run one at a time too (CRS-018): each is built
+only once the previous structure write has settled and the local
+structure holds its result, so a second edit made while the first is in
+flight builds on it instead of reverting it (`serialQueue`,
+`queuedEditAction` in `lib/editor/write-gate.ts`). An edit asked for on
+one course is dropped when another course is selected by its turn. An
+edit that names rows or legs by their place — a row's ✕ or ↑ / ↓, a
+leg's style or gaps, an insert at a place (a placement into a leg, a
+new control inserted there, a crossing point routed by its leg), *Create
+variation here* and a move into an alternative (a row index or a leg
+path) — is not applied when the structure changed between the click and
+its turn: the error line says "The course changed while your last edit
+was saving. Do it again." A control created for such a placement is
+deleted again, so doing it again leaves one control. An edit that names
+sites (append, remove a control, set a role) builds on the new structure
+as asked. A structure write is sent
+on the token of the structure it was built from (CRS-049) — the course
+detail's, or the local structure's — followed along this client's own
+writes, never on a newer token `course.list` seeded from someone else's
+write: that one is refused and becomes the structure conflict below.
+
+**Own chain** (`EditorWrites.noteOwn`, `chainEnd`, `stillMine`): each
+write this client makes links the token it was sent on to the token it
+produced. A token reached from an earlier one through these links only
+was written by nobody else since. A write that sends no token
+(`setControlLabelOffset`, `control.delete`'s cascade, `control.check`)
+links from the book's token as it is sent. Procedures that write other
+rows and answer their tokens are linked the same way (`adoptOwn`): a
+`control.update` kind change answers the courses it re-mirrored
+(`courses`), `mapTemplate.applyToCourses` the course sheets it moved
+(`sheets`), `layout.moveToSetter` / `adoptToSetters` their sheets.
+
+**Write gate** (`WriteGate`, `lib/editor/write-gate.ts`): ordinary writes
+(every `run`) go side by side; an undo or redo step runs alone, once
+every write asked for before it has settled, and holds back those asked
+for after it. The step picks its entry inside the gate, one macrotask
+after the gate is its own (`WriteGate.runStep`), so Ctrl+Z pressed while
+a gesture of one write is in flight undoes that gesture once it has
+settled and recorded its entry, not the one before it (a gesture of
+several holds, such as a create-and-place, see Pending). A structure edit is built and sent
+inside the gate, so an undo never replaces a structure while an edit is
+built on it, and the D6 guard of a step sees only the step's own writes.
+A write made inside a gated one (a structure edit's write, Map mode's
+follow-up after a patch write, an undo step's own writes) does not ask
+the gate again: it already holds it.
+
+**Undo after another editor's change** (D6, user 2026-11-24, review
+CRS-016). The undo list is this tab's own actions; an entry stores the
+rows its write produced tokens for and those tokens (`collect`). An undo
+or redo goes through only while each row is still at that token, or at
+one this client's own writes reached from it (`EditorWrites.guarded`):
+
+- **Courses, course objects, sheets and templates**: checked before
+  anything is written, so an entry of several rows (a bulk delete
+  restoring several courses, a create-and-insert) is all or nothing. The
+  write is then sent on the row's own-chain token, never the book's newer
+  one; a refusal (a change the poll had not seen) is never rebased. "The
+  same thing" is the whole course, the whole object, the whole sheet or
+  template: a bend at leg 2 blocks the undo of a placement at leg 9.
+- **Controls**: the server decides, field by field. The undo is skipped
+  when the other side changed a field the undo is about — a move undo's
+  position; any other undo's fields (a description undo's description) —
+  or the change is unknown (`differing: null`). Otherwise it goes through
+  on the server's token, leaving out the fields the other side changed:
+  a move undo restores the position and keeps a description changed
+  elsewhere; a change of a field the undo does not write (radio, a
+  check-off, a restore, this client's own included) never blocks it.
+  Such a pass links the control's own chain across the other write and
+  names the fields it changed there, so an older undo of the same
+  control follows it: one about those fields is skipped, any other goes
+  through and leaves them out too (two move undos across a description
+  change both restore their position). The fields left out stay left out
+  for the entry's later steps: undo, redo, undo of a move never writes
+  the description back over theirs.
+- **A control this client created**: its undo deletes it, and the delete
+  cascades out of every course that visits it. The undo is skipped when a
+  course other than the entry's own (or one of its variants, F7) visits
+  it now (from the last `course.list`; a row stale behind this client's
+  newer token is not read, nor a variant while its root's row is stale;
+  a variant of the entry's own course is not another course,
+  `createdControlElsewhere`).
+- **Skipped**: nothing of the entry is written; the entry and every
+  other entry, undo or redo, that wrote the same row are dropped; the
+  notice says "Lång was changed by Anna at 14:02; undo skipped" — "redo
+  skipped" for a redo — (who and when from `course.lastChange` /
+  `control.lastChange`; "This was changed elsewhere" for a course object,
+  sheet or template, which have none). It stays until dismissed.
+- **After a step** the entry's tokens are the ones the step produced:
+  redo is guarded on the undo's result, the next undo on the redo's.
+- Field mode's entries (§9 "Offline") are not guarded: they replay
+  through the outbox under its own rules.
 
 **Conflicts** (`lib/editor/conflict.ts`; `course-layer.md` §7 "Client
 rules"):
@@ -308,12 +411,33 @@ rules"):
 The reload is the usual cache invalidation after every write. The moved
 notice names who and when when the journal has it (§11).
 
+**A notice stays until it is answered** (CRS-065, `lib/editor/undo-guard.ts`
+`clearsNotice`): a successful write clears only a notice about its own
+row. A refresh notice goes with the next write of its course or control;
+a moved notice with **Keep mine**, **Keep theirs** or a new move of that
+control; a queued one with its outbox entry; an "undo skipped" notice
+when dismissed. An edit of another row leaves the notice and its buttons
+in place.
+
 **Queued writes** (D9c, §9 "Offline"): Field mode's moves and check-offs
 that could not go out wait in the device's outbox and replay in order
 under the same rules, each move on the token it was queued with; a
 `moved` on replay is the same notice, its buttons settling the entry.
 One gesture is still one undo entry; offline, undo / redo run only those
 entries, and an undo back to where a waiting move started drops it.
+
+**One event per editor** (MC-17, CRS-015): the editor's writes through
+`EditorWrites` (Course, Field and Map mode, Layout's sheet and template
+saves, renames and recalculations), its direct mutations in the page
+and the outbox drain go through a client pinned to the event the editor
+was opened on (`trpcClientForEvent`: unbatched, 60 s per request, a
+timeout a network failure), never the page URL's event at send time,
+and the route keys the editor on the event, so another event is a new
+editor with its own undo list and queues. The outbox drain asks
+before each entry whether the editor is still open on the entries' event;
+once it is not, the drain stops and the rest stay pending for that
+event's next drain. Reads stay on the page's event (the query cache is
+not keyed per event yet, MC-04).
 
 ## 4. Course mode
 
@@ -349,9 +473,9 @@ exchange lists its parts (§6.9).
 | `X`, click (§6.9) | `control.create { codes, kind: "map_exchange", … }` + `setStructure(insertSite)` at the insertion point; over an existing exchange only the `setStructure` | as Add to ‹course› |
 | `C` on a selected leg, click (§6.8) | `control.create { kind: "crossing_point" }` + `setStructure(setLegProps { crossing })`; over an existing crossing point only the `setStructure` | as Add to ‹course› |
 | Leg section: crossing ✕, *section* (§6.8) | `setStructure(setLegProps { crossing })` | `setStructure(prev)` |
-| click a leg (selected course) | phantom with the insert position (`insertIndexForLeg`: before the row the leg ends at, last when it ends at the finish) + **Insert into course**; the phantom is the **selected leg** — the inspector's *Leg* section (§6.7) and, on desktop and tablet, **Add bend here** | — |
+| click a leg (selected course) | phantom with the insert position (`insertIndexForLeg`: before the row the leg ends at, last when it ends at the finish); the phantom is the **selected leg** — the inspector's *Leg* section (§6.7). Desktop and tablet: the leg is lit, with no ring and no action bar. Phone: the ring and **Insert into course** | — |
 | Leg section: style, bends ✕, corridor *Add* / fields / *Remove* (§6.7) | `setStructure(setLegProps)`: the item's `leg` patched, its other props kept | `setStructure(prev)` |
-| **Add bend here** (leg phantom) | `setStructure(setLegProps { bends })`: a **smooth** bend at the nearest point of the nearest segment (`insertBendAt`; F16) — `Alt` held on the click: a corner | `setStructure(prev)` |
+| drag the selected leg's line; **Add bend** / `B` (§6.7) | `setStructure(setLegProps { bends })`: a **smooth** bend at the press (`insertBendAt`; F16), moved by the drag — `Alt` held at the press: a corner; the button and `B`: half way along the leg's longest straight part | `setStructure(prev)` |
 | **Create variation here** (a top-level leg phantom, desktop and tablet; §12) | `setStructure(createGroup)`: a group with empty alternatives A and B between the leg's ends; A is shown and active | `setStructure(prev)` — the group and its variants go |
 | variation block: a tab (`editor-variation-tab-<label>`), `1–9` on the selection's group (§12) | — the alternative shown in Course view and where `K` goes | — |
 | variation block: ＋ (`editor-variation-add`), ✎ / double-click a tab (`editor-variation-rename`, `-label`), ✕ (`editor-variation-remove`), *Loop* (`editor-variation-loop`), a row dropped on a tab | `setStructure(addAlternative / renameAlternative / removeAlternative / setLoop / moveToAlternative)` | `setStructure(prev)` |
@@ -568,6 +692,7 @@ screen-size Bézier handle on a thin line from its vertex — and text). The too
 | `T` | map text | one click places it (§7) |
 | `I` | image (J7) | the graphics picker opens beside the rail's button (`editor-image-picker`: the event's graphics, then the club's; upload, save and delete with `courses.edit`); a tile's Place arms that graphic, then one click places it (§7); nothing is placed before a graphic is picked (`editor-image-hint`). Course mode only; the phone's `+` menu has no entry (Pending) |
 | `G` | gaps | on the selected circle or leg (§6.3) |
+| `B` | — | with a leg selected under `V`: adds a bend to it (§6.7) |
 | `L` | placement loupe | toggles the loupe over a placing tool's hover (§10 "Loupe", F27); not in Layout mode |
 | — | snapping | the rail's toggle (§6.2) |
 
@@ -586,10 +711,10 @@ returns to select from any tool; right-click exits an exclusive tool.
   (its insert position, §4), otherwise the item before the finish; `S`
   anchors at position 0. Without a course the tools only create sites.
 - **Ghost** (`editor-ghost`, `editor-ghost-label`,
-  `editor-ghost-description`): *number · code* — the sequence number at
-  the insertion point and the next code from the club allocation
-  (`nextSeriesControlCode`, the inventory's series) — and the top
-  autodetect description under the cursor (`control.suggestDescription`,
+  `editor-ghost-description`): *number-code* (*13-96*) — the sequence
+  number at the insertion point and the next code from the club
+  allocation (`nextSeriesControlCode`, the inventory's series) — and the
+  top autodetect description under the cursor (`control.suggestDescription`,
   asked 150 ms after the pointer rests, rounded to 0.1 mm). Over an
   existing control of the tool's kind the ghost sits on it and reads
   **Add ‹code›**. The circle at true paper size (the layer's `metrics`,
@@ -598,7 +723,16 @@ returns to select from any tool; right-click exits an exclusive tool.
   when the layer draws no provisional visit — no course selected, the
   All-controls view, or a reuse (`provisionalDrawn` in
   `lib/course-layer-request.ts` is false). With a course the layer's
-  provisional circle is the one circle at the cursor; a second, thinner
+  provisional circle is the one circle at the cursor, and **the layer
+  writes the new control's *13-96* itself**, where its number goes
+  (`ProvisionalVisit.label` → `viewOptions.labels`, purple, outside the
+  circle): the UI layer then draws no `editor-ghost-label` (user review
+  2026-11-23: the number stood twice, once inside the circle). Where
+  the UI layer still draws the label (no course, a reuse, `S`, `M`, a
+  crossing point) it stands outside the ring at any zoom: anchored
+  0.75 radius up and right of the centre on paper, plus 6 px. The
+  pending leg's length label carries its climb when heights are read
+  (`course-elevation.md` §5). A second, thinner
   UI-layer circle on top of it was the "blue thin circle" of feedback
   2026-11-07 item 1 (P4, [bugfix](bugfixes/ghost-circle-doubles-the-layer.md)).
 - **Pending legs, drawn by the layer.** While the tool is armed with a
@@ -875,8 +1009,8 @@ than three hull points).
 - **`Tab` / `Shift+Tab`** select the next / previous control of the
   course and centre the view on it (`viewRequest.centre`); **`F`** fits
   the course, or every positioned control without one (`viewRequest.fit`).
-- **Double-click a leg** inserts a new control there (§4's insert, without
-  the action bar; not in All variations, §12).
+- **Double-click a leg** inserts a new control there (§4's insert; not in
+  All variations, §12).
 - **`1`–`9`** show and activate the n-th alternative of the selection's
   variation group (§12; with `V`).
 - `Delete` / `Backspace` deletes the multi-selection of controls, else
@@ -923,15 +1057,48 @@ inspector has no row for it) there is no selected leg and no `G`
 target on a leg, and the leg metres take no bends, rather than reading
 or writing another item's leg.
 
+**The selection on the map** (user review 2026-11-23, decision
+`course-elevation.md` §0.42). On desktop and tablet a selected leg is
+**the leg lit**: its outline (`editor-leg-outline`) solid blue, 3 px
+over a white casing. The page hands the viewer no phantom for it and
+`courseActions` gets none, so there is no dashed ring at the click
+(`editor-phantom`) and no action bar over the map: nothing covers the
+leg or its routes, and nothing has to be dismissed. Escape or a click
+on empty map deselects: off a selected leg the click sets no phantom
+(`handleMapClick`), so the ring and **Add control** bar of §4's "click
+empty map" need a second click. A press on the leg's own line drops
+the bend focus and keeps the leg. The exception is a leg without leg
+props — a loop's anchor visit (§12) — which has no Leg section: it
+keeps the ring and **Insert into course**, as on a phone. What the bar offered is in the Leg
+section and on the keys:
+
+| | Gesture | Key | Leg section (`editor-leg-actions`) |
+|---|---|---|---|
+| A bend | drag the selected leg's line (below) | `B` | **Add bend** (`editor-leg-add-bend`) |
+| A control on the leg | double-click the leg (§6.5) | `K` | **Insert control** (`editor-leg-insert`: arms `K` at the leg) |
+| A variation | | | **Create variation here** (`editor-leg-variation`, where §12 allows one) |
+
+The phone keeps the ring and **Insert into course** in its peek row
+(§10): its Leg section is read-only.
+
 **Inspector.** The selection slot shows the *Leg* section (`editor-leg`,
-`modes/LegSection.tsx`, title "Leg ‹from› → ‹to›" by code):
+`modes/LegSection.tsx`, title "Leg ‹from› → ‹to›" by code). It is
+numbers and controls; **everything that only explains is under one
+closed disclosure at its end, *About this panel***
+(`editor-leg-info`, a `<details>`): the contour disclaimer
+(`editor-leg-elevation-note`), what a route is
+(`editor-leg-routes-hint`), what the times rest on
+(`editor-leg-alternatives-note`), the bends' gestures
+(`editor-leg-bends-hint`), and the corridor's two notes
+(`editor-leg-style-corridor-note`,
+`editor-leg-corridor-opacity-hint`). The section's parts:
 
 - **Style** (`editor-leg-style`): *Line* (705, the default, stored as no
   `style`), *Marked route* (707 along the leg), *None* (no line; numbers,
   cuts and the leg's hit unchanged, §5). With a corridor and *Line* a
-  note under it (`editor-leg-style-corridor-note`) says the line is
-  hidden inside the corridor and its edge marks the leg (F14,
-  `course-layer.md` §10.2 "No centre line").
+  note (`editor-leg-style-corridor-note`, under *About this panel*)
+  says the line is hidden inside the corridor and its edge marks the
+  leg (F14, `course-layer.md` §10.2 "No centre line").
 - **Bends** (`editor-leg-bend`, `data-index` / `data-x` / `data-y` paper
   mm, `data-curve` `smooth` (a handle stored) / `corner`, `data-focused`):
   one row per bend in order, its kind named after its point, a click
@@ -941,11 +1108,10 @@ or writing another item's leg.
   (`editor-leg-bend-corner`), the bend's current kind disabled: each is
   the Alt-click below, one write — the tablet's way to switch a bend
   (F16; no Alt on touch). No numeric edit: the handle, its grips and
-  *Add bend here* place them. A hint line (`editor-leg-bends-hint`)
-  says how to add one while the leg has none (`legBendsHint`) and names
-  the gestures once it has bends (`legBendsEditHint`), so a leg without
-  bends keeps the section's height of before (the inspector's Checks
-  header sits over a scrolled section's lower rows).
+  the drag on the leg's line place them. The hint
+  (`editor-leg-bends-hint`, under *About this panel*) says how to add
+  one while the leg has none (`legBendsHint`) and names the gestures
+  once it has bends (`legBendsEditHint`).
 - **Corridor** (`editor-leg-corridor`): **Add corridor**
   (`editor-leg-corridor-add`) writes the default corridor — 50 m wide,
   edge on, a 5 mm white band, opacity 1 (decision log, F3: a band visible
@@ -955,8 +1121,8 @@ or writing another item's leg.
   5, stored 0–1; J13, F26 folded in — it was hidden since F25 while the
   band drew opaque). Below 100 the band is translucent: the map shows
   through it, veiled (`course-layer.md` §10.2). One opacity draws every
-  band — the most transparent one in view — which a hint under the fields
-  says (`editor-leg-corridor-opacity-hint`). Every corridor write spreads
+  band — the most transparent one in view — which a hint says
+  (`editor-leg-corridor-opacity-hint`, under *About this panel*). Every corridor write spreads
   the stored corridor, and the API
   still validates it (0–1). A number is written on blur or
   Enter; a value outside its range is not written and the field shows the
@@ -976,7 +1142,7 @@ or writing another item's leg.
   without the edge nothing opens.
 
 **Map.** In `V`, the selected leg draws its outline (`editor-leg-outline`,
-dashed: the leg as the layer draws it, `legPolyline(from, bends, to)` —
+solid over a white casing: the leg as the layer draws it, `legPolyline(from, bends, to)` —
 the curve flattened at 5 µm, exactly from → bends → to without handles),
 a handle per bend (`editor-bend-handle`, `data-index`, `data-focused`;
 the focused one active) and a grip per stored Bézier handle
@@ -993,10 +1159,21 @@ two ends — are written back), and handles exist on bends only (user
 answer Q1).
 
 - **Pressing order**: a bend handle, then a grip, within the handle
-  reach (7 CSS px; a finger 14 px, `2 × HANDLE_PX`, F23), before anything
-  else under it (the leg would be a leg click); then the selected
-  object's and the usual §6.5 ones. A finger's press takes only a bend
-  or a grip: anything else is the viewer's (§10).
+  reach (7 CSS px; a finger 14 px, `2 × HANDLE_PX`, F23), then the
+  selected leg's own line (5 px; a finger 14 px), before anything
+  else under it; then the selected object's and the usual §6.5 ones. A
+  finger's press takes only a bend, a grip or the selected leg's line:
+  anything else is the viewer's (§10).
+- **Drag the leg's line** (`bend-new`): a press on the selected leg's
+  line, not on a control and outside the circles of its two ends,
+  dragged past 3 px, makes a bend at the press (`insertBendAt`:
+  smooth, a corner with `Alt` held at the press) and moves it as a
+  bend drag does — snapped, the layer following live, one write and one
+  undo entry on release, the new bend focused. Released within 3 px it
+  is a click on the leg (`LegBends.onPress`: the leg stays selected);
+  cancelled, nothing is written. On a tablet this means a finger drag
+  that starts on the selected leg bends it instead of panning the map
+  (accepted with the decision).
 - **Drag a bend** (past 3 px; with `Alt` too, F18): the bend moves,
   snapped (§6.2), its handles with it (`moveBend`); the outline follows on
   the UI layer and the **course layer follows live** (F21, below); the
@@ -1046,10 +1223,12 @@ answer Q1).
   rules are `shownLegDraftOf` (`lib/editor/variation-view.ts`). The
   inspector's metres read the same shown draft (F25, "Readouts follow the
   bends" below).
-- **Add bend here** (`editor-action-add-bend`, the leg's action bar):
-  a bend on the segment whose (flattened) path is nearest the phantom's
-  point, at that segment's nearest point (`insertBendAt`, `nearestEdge`
-  on the path), so the leg keeps its order of vertices and its shape:
+- **Add bend** (`editor-leg-add-bend` in the Leg section, and `B`): a
+  bend half way along the leg's longest straight part (`addBendMid`).
+  It and the drag above place the bend with `insertBendAt`: on the
+  segment whose (flattened) path is nearest the point, at that
+  segment's nearest point (`nearestEdge` on the path), so the leg keeps
+  its order of vertices and its shape:
   **smooth** — on a straight segment with handles from its neighbours
   (collinear with the segment, so the leg is unchanged until a grip or
   the bend moves), on a curved one by `insertVertex`'s de Casteljau
@@ -1097,14 +1276,14 @@ inspector's leg metres (`sequenceLegMeters` with each row's stored
 bends, and the crossing point joined by `routedBends`, §6.8), a dragged
 control's leg labels (`dragLegShapes` with `bendsInto`) and the `G`
 tool's target (§6.3, through the crossing point too) all run along the
-polyline. The bend handles and the dashed leg outline are the stored
+polyline. The bend handles and the leg outline are the stored
 bends only (the crossing point is a site, moved as one). A
 `course-leg` mirror item carries its leg's resolved `data-style`.
 A stored bend may carry Bézier handles (F13, `course-layer.md` §10.1):
-the layer draws the curve, and every readout above and the dashed
+the layer draws the curve, and every readout above and the
 outline read the shared flattened polyline (`legPolyline` =
 `course.legPolylineOf`), so every editor composition of
-`[from, …bends, to]` is the drawn curve (F16); *Add bend here* finds its
+`[from, …bends, to]` is the drawn curve (F16); a new bend finds its
 segment on the path itself (`nearestEdge`, the exact cubics).
 
 **During a bend or grip drag** (F25, user feedback 2026-11-10 item 3)
@@ -1128,7 +1307,7 @@ F21), falling back to the total.
 **Phone** (08 §5.5 "desktop-only by design", §10): a tapped leg shows the
 section in the sheet with every control disabled and the line *Leg
 editing is for desktop and tablet* (`editor-leg-readonly`); no handles,
-no *Add bend here*, no corridor entry (user answer 1, 2026-11-10: the
+no bend buttons, no corridor entry (user answer 1, 2026-11-10: the
 phone stays read-only).
 
 **Tablet** (F23; a coarse pointer with the desktop layout, §10): one
@@ -1214,7 +1393,7 @@ Row F5 (08 §5.2 rail `X`, §5.3 "Map exchange"; the layer's rules
   (`PlacementTool` `"exchange"`, rail button `X` lit). It is a **control
   in the chain** (`isVisitTool`): the same insertion point (after the
   selected control, at a selected leg, else before the finish), the same
-  ghost (`number · code`, the pending legs, the autodetected
+  ghost (`number-code`, the pending legs, the autodetected
   description) and provisional visit (a `map_exchange` site the layer
   draws as a control), and **the chain continues** after the click — the
   next click with `X` or, after `K`, a control goes after the exchange;
@@ -1656,9 +1835,19 @@ undo or a mode switch.
   Length is the sum of the layer's leg polylines (`DerivedLeg.points`)
   × the map scale, the course's stored length until the viewer has
   derived it — and while it draws one part of the course (Layout mode on
-  a part sheet, §6.9), whose legs are not the course's. Climb is the course's stored climb (`courses.climb`,
-  entered on the Courses page; "manual" — there is no terrain model
-  yet), shown when set.
+  a part sheet, §6.9), whose legs are not the course's. Climb is one row (`docs/course-elevation.md` §4.4): a typed climb
+  (`courses.climb`, entered on the Courses page), else the climb computed
+  from the map's height field along the course, with its share of the
+  length. A selected leg shows its own length, climb, descent and net
+  height in the Leg section (`course-elevation.md` §4.5). The popover's
+  *Show elevation profile* opens the profile graph under the map
+  (`editor-profile`, `course-elevation.md` §5). The Leg section's
+  **Routes** block draws, chooses and removes routes for the leg's
+  control pair; the climb is read along the chosen one
+  (`editor-leg-routes`, `course-elevation.md` §7.4). Computed alternatives
+  are searched for when a leg is selected and listed with metres, climb
+  and an estimated time (`editor-leg-alternatives`,
+  `course-elevation.md` §7.8).
 
 ## 9. Field mode
 
@@ -2040,8 +2229,8 @@ other structure edit — one write and one undo entry per gesture.
 
 **Create a group.** A selected **top-level** leg (§6.7: the leg phantom;
 both ends top-level items, no group between them — `canCreateGroup`)
-offers **Create variation here** in its action bar
-(`editor-action-create-variation`, after *Add bend here*; desktop and
+offers **Create variation here** in the Leg section
+(`editor-leg-variation`, §6.7 "The selection on the map"; desktop and
 tablet). It writes `createGroup`: a group `{ kind: "variation", id:
 "v<n>", alternatives: [A: [], B: []] }` before the leg's end item — the
 leg's start is the group's **anchor**. Both alternatives start empty and
@@ -3188,7 +3377,10 @@ shard (`docs/dev/e2e-sharding.md` "CI"); the helpers they share are
 | `e2e/course-editor-layout.spec.ts` | Layout mode (`course-layout.md`), auto templates, setter maps (F10), description sheets (F11), the white-outs (P7, F12) |
 | `e2e/course-editor-placing.spec.ts` | the circles while placing (P1, P4), the pending leg (P5), crossing and map-issue points (F4), the placement loupe (F27) |
 | `e2e/course-editor-status.spec.ts` | conflicts between two contexts (§3), the save state in the top bar (P2), the map-info dialog (P6), map exchange (F5) |
-| `e2e/course-editor-phone.spec.ts` | the phone: the touch subset, the read-only Leg section (F3), the variation block (F7) |
+| `e2e/course-editor-phone.spec.ts` | the phone: the touch subset, the read-only Leg section (F3), the variation block (F7), the computed climb on the peek line (`course-elevation.md` §4.4) |
+| `e2e/course-editor-elevation.spec.ts` | the computed climb and a leg's heights (`course-elevation.md` §4) |
+| `e2e/course-editor-profile.spec.ts` | the elevation profile under the map (`course-elevation.md` §5) |
+| `e2e/course-editor-routes.spec.ts` | leg routes: draw, choose, remove (`course-elevation.md` §7.4) |
 
 Project `chromium` (desktop Chrome) runs the first six, project `mobile`
 (Pixel 7; `MOBILE_SPECS`) only the phone file. The desktop describes still
@@ -3242,6 +3434,9 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | unit (web) | `packages/web/src/lib/editor/__tests__/hit.test.ts` | §5 (D12) |
 | unit (web) | `lib/editor/__tests__/url.test.ts` | §1 "URL" (F31): every writable state round-trips through `editorSearchFor` → `parseEditorUrl`; defaults omitted (no course, Course mode, Course view; Class view's and Layout's first variant); the fixed order; a phone writes `mode=course`, `mode=field` is always written; `control` read and never written; foreign params kept; every invalid case dropped and named (non-integer, zero, negative, leading-zero and over-long ids, an unknown mode or view, `class` without Class view and the reverse, Variant view without its key, a key where nothing draws one, `sheet` / `template` outside Layout, both at once); the cleaned URL after a bad inbound; `checkInbound` takes a cached hit, waits on a miss while a fetch is in flight, rejects one only after a fetch since mount or an error, and `fetchIfIdle` fetches once. `field.test.ts` "initial mode": the URL's mode wins on both devices, `layout` on a phone is Field |
 | unit (web) | `lib/editor/__tests__/conflict.test.ts`, `write-client.test.ts` | §3: rebase vs moved vs refresh, unknown base, structure never merged; tokens sent and advanced, one re-send, `EditorConflict`, code re-keying, delete seeding |
+| unit (web) | `lib/editor/__tests__/write-client.test.ts` (own chain, `since`, `guarded`, field rule and bridges, `writeRow`, patch order), `write-gate.test.ts`, `undo-guard.test.ts`, `lib/__tests__/undo-stack.test.ts` (serialised steps, the gate as lock), `lib/__tests__/map-document-cache.test.ts` (older patch delivery), `lib/__tests__/control-outbox.test.ts` (`active`) | §3 "Undo after another editor's change" (D6), "Write gate", "A notice stays until it is answered", "One event per editor" (package 24) |
+| integration | `packages/api/src/__tests__/integration/course-structure.test.ts` (`control.update` answers re-mirrored courses), `integration/course-maps.test.ts` (`applyToCourses` answers sheets) | §3 own tokens of other procedures |
+| E2E | `e2e/course-presence.spec.ts` "an undo after another context changed the course is skipped" (D6, CRS-065), "two structure edits inside one round trip both land" (CRS-018) | §3 |
 | unit (web) | `lib/editor/__tests__/structure-edit.test.ts`, `sequence.test.ts`, `state.test.ts` | §4: sequence positions, insert / append / remove / move / role, legs dropped on a new predecessor; display sequence, explicit structure, leg → insert position; §3 Escape cascade, hide-others, modes |
 | unit (web) | `pages/editor/__tests__/action-bar.test.ts` | §4, §6.7, §6.8 (F16, F14) |
 | unit (web) | `pages/editor/__tests__/placement.test.ts` "C: the crossing tool", `bindings.test.ts` "the crossing ghost", `lib/editor/__tests__/checks.test.ts` "legs keep their bends and crossing point" | §6.8 |
@@ -3360,6 +3555,61 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | E2E | `e2e/course-editor.spec.ts` "F7: variations and loops" (`chromium`), "F7 on a phone" (`mobile`) | §12 (F8, F15) |
 
 ## Pending in this chapter
+
+- **D6 edges** (§3 "Undo after another editor's change", package 24):
+  a write that sends no token (`setControlLabelOffset`, `control.delete`,
+  `control.check`) links from the book's token, so a change elsewhere the
+  client's poll has not seen yet is bridged as its own, and a course row
+  of such a write is guarded by the pre-check only; tokens on those
+  procedures are the follow-up. Two ordinary gestures running at once
+  collect each other's rows (only ever rows this client wrote too). An
+  entry of several rows is checked all at once, but a refusal by the
+  server after the first row was written leaves the rows before it
+  written. The created-control check reads the last polled course list.
+  Map mode's patch ops have no D6 rule (per-op last-writer-wins, §13), nor
+  do Field mode's queued entries (a move elsewhere on replay is still
+  Keep mine / Keep theirs). Layout's class overrides (`setClassOverride`)
+  answer no sheet tokens: a class sheet's undo after one is skipped.
+  The redo of a bulk delete deletes again and cascades out of courses
+  another editor added the control to since (the created-control check
+  covers only the undo of a creation). The Field-mode outbox drain does
+  not ask the write gate: a queued move without a token that goes out
+  while an undo step of the same control runs is sent on the step's
+  own-chain token and collected into its entry. Field mode runs a
+  gesture's first write before its outbox entry is stored, and a write
+  outside `trpcClientForEvent` (no timeout) holds the gate as long as it
+  hangs. A placement chain's step (`Shift+K` chain) reads the top entry
+  when the key is pressed, not when its queued undo picks it.
+  `deleteControl` and `adoptOwn` link a course's chain from the book's
+  token as the reply arrives, so a poll that seeded another editor's
+  token inside that round trip is bridged. `deleteControl` is not queued
+  with the writes of the courses it cascades to: with a structure write
+  of one of them in flight and the replies in reverse order, the course's
+  chain breaks and its later undo is skipped as changed elsewhere. A
+  gesture that records its entry only after a further round trip (a
+  create-and-place, whose create and structure write are separate
+  holds of the gate, or a new control's radio config before its entry)
+  can still be overtaken by a Ctrl+Z pressed while it runs: the entry
+  before it is undone. E2E covers D6 on a course, the notice
+  staying (CRS-065) and two structure edits in one round trip (CRS-018);
+  Layout's chain, the control field rule, "redo skipped" and an event
+  switch mid-drain are covered by unit tests only.
+- **Tokens of instructions and winner pace** (§3 "Tokens"): they are sent
+  on the book's token, not the token of the value they were built from,
+  as structures are (CRS-049's shape; their own queue orders this
+  client's writes).
+- **Still on the page's event** (§3 "One event per editor"): reads (the
+  query cache is not keyed per event, MC-04), and the Layout key,
+  setter, class-override, club-template and sheet-creation sections, the
+  export menu, leg routes, climb refresh, overprint cuts and the contour
+  interval, which write through the URL-bound client: one sent as the
+  page changes event can reach the new event (the page key makes it
+  rare). `mapPatch.promote` (Map mode's *Promote*) also writes through
+  the URL-bound client.
+- **An older "no patch" read** (§13): `setMapPatch` compares versions only
+  between two deliveries of one document's patch, so a read without a
+  patch answering after a write's reply still replaces it until the next
+  read.
 
 - **`T` on a selection without split nodes** (§13 "Split tool", G32): a
   multi-part line, one over `MAP_NODES_MAX`, a hidden one or *Apply

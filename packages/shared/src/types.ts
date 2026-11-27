@@ -981,6 +981,10 @@ export interface CourseSummary {
   controlCount: number;
   length: number; // in meters
   climb: number;
+  /** Who stated the climb (docs/course-elevation.md §6): typed, from an imported file, computed from the map's heights; null without a climb. */
+  climbSource?: "manual" | "file" | "computed" | null;
+  /** The expected winner pace, seconds per km (docs/course-elevation.md §7.8); null: none typed. */
+  winnerPaceSPerKm?: number | null;
   numberOfMaps: number;
   /** Visit-order mode: sequential vs any-order (no legs / sequence numbers). */
   orderMode: CourseOrderMode;

@@ -418,8 +418,10 @@ describe("the mirror stays a function of the structure (course-layer.md §6.2)",
     const v0 = (await courseRow(id)).version;
     expect((await ccOf(id)).map((cc) => cc.control.codes)).toEqual(["81", "31", "32"]);
 
-    await caller.control.update({ id: site.id, kind: "start" });
+    const changed = await caller.control.update({ id: site.id, kind: "start" });
     const row = await courseRow(id);
+    // The re-mirrored course's new token is answered (the editor's own chain, docs/course-editor.md §3).
+    expect(changed.courses).toEqual([{ id, version: row.version.toString() }]);
     // The site now leads the course as its explicit start: out of course_controls, into start_name.
     expect(row.startName).toBe("Start K");
     expect((await ccOf(id)).map((cc) => cc.control.codes)).toEqual(["31", "32"]);

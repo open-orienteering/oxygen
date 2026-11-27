@@ -13,6 +13,7 @@ import { cleanup, controlRows, editorReady, ensureFixtureFromDesktop, legPieces,
 import { touchDrag, touchTap } from "./helpers/touch";
 import { waitForTrpc } from "./helpers/trpc";
 import { type Pt } from "./helpers/course-editor-spec";
+import { servePlane } from "./helpers/terrain";
 
 test.beforeAll(async () => {
   await reseed();
@@ -199,4 +200,25 @@ test.describe("F7 on a phone: the variation block switches alternatives only (do
     const list = await trpcCall<{ id: number; kind: string }[]>("control.list", undefined, false);
     return list.filter((c) => c.kind === "control").slice(0, n).map((c) => c.id);
   }
+});
+
+test.describe("the computed climb on a phone (docs/course-elevation.md §4.4, docs/course-editor.md §10)", () => {
+  test.skip(({ isMobile }) => !isMobile, "the phone's subset");
+
+  test("the peek line states the course's computed climb", async ({ page, browser }, info) => {
+    const nameId = await ensureFixtureFromDesktop(browser, info);
+    await servePlane(page, "contours");
+    const name = `CE phone ${Date.now() % 100000}`;
+    const { id } = await trpcCall<{ id: number }>("course.create", { name });
+    await page.goto(`/${nameId}/course-editor`);
+    await editorReady(page);
+    await page.getByTestId("editor-mode-course").click();
+    await page.getByTestId("editor-course-picker").selectOption(String(id));
+    await expect.poll(async () => (await legPieces(page, name)).length, { timeout: 15000 }).toBeGreaterThan(0);
+    const status = page.getByTestId("editor-status");
+    await expect(status).toHaveAttribute("data-climb", /^\d+$/, { timeout: 20000 });
+    await expect(page.getByTestId("editor-status-kpis")).toContainText(/\d+ m climb/);
+    // The share of the length is the popover's: the line stays short.
+    await expect(page.getByTestId("editor-status-kpis")).not.toContainText("%");
+  });
 });

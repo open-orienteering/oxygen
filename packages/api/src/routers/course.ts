@@ -38,6 +38,7 @@ import {
 import { parseOCDCourseData } from "../ocd-course-parser.js";
 import { isPpenContent, parsePpenCourseData } from "../ppen-course-parser.js";
 import { resolveImportAlignment } from "../course-import-align.js";
+import { enqueueAutoRoutes } from "../leg-routes-auto.js";
 import { MARK_SEQ_BASE, allocateStartFinishCode, codeHolder, publicControlId } from "./control.js";
 import { displayCode, isStartOrFinish } from "../control-id.js";
 import { courseChecksFor } from "../course-checks.js";
@@ -56,14 +57,18 @@ import {
   type MapCalibrationPoint,
 } from "../event-map.js";
 import { copyClubColourSettings } from "../map-store/colour-settings.js";
-import { latestVersionOrRefuse } from "../club-map-library.js";
+import { canRemoveClubMap, latestVersionOrRefuse } from "../club-map-library.js";
 import { cutRotationDeg, meridianStalenessFromDetection } from "../map-north.js";
 import { documentNorth, eventPin } from "../map-store/event-document.js";
 import { eventPatchVersion } from "../map-store/patches.js";
 import { terrainDescriptor } from "../map-store/heightfield.js";
+import { eventContourInterval, validContourInterval } from "../map-store/contour-interval.js";
+import { enqueueContourInterval, eventsOnClubMap, requireMayChangeClubMapInterval } from "../map-store/contour-interval-apply.js";
 import { canDownloadEventMap } from "../ocad-export.js";
 import { loadEventCrs } from "../event-crs.js";
-import { rebuildCourseLengths } from "../course-geometry.js";
+import { clearComputedClimbs, rebuildCourseLengths } from "../course-geometry.js";
+import { isTypedClimb, refreshComputedClimbs, statedClimb } from "../course-climb.js";
+import { markClimbPending } from "../course-climb-pending.js";
 import { appendJournal } from "../journalEmit.js";
 import {
   emitClassUpserted,
@@ -454,6 +459,8 @@ async function loadCourseDetail(
     controlCount: ccs.length,
     length: c.lengthM,
     climb: c.climbM,
+    climbSource: climbSourceOf(c),
+    winnerPaceSPerKm: c.winnerPaceSPerKm,
     numberOfMaps: c.numberOfMaps,
     orderMode: c.orderMode as CourseOrderMode,
     firstAsStart: c.firstAsStart,
@@ -484,6 +491,10 @@ async function loadCourseDetail(
     }))),
   };
 }
+
+/** A stored climb's source as the clients read it (docs/course-elevation.md §6 "Read rule"): a climb without a source is a typed one. */
+const climbSourceOf = (c: { climbM: number; climbSource: string | null }): "manual" | "file" | "computed" | null =>
+  c.climbM === 0 ? null : c.climbSource === "computed" ? "computed" : c.climbSource === "file" ? "file" : "manual";
 
 /** What `importCourses` parses and checks before its transaction opens (course-layer.md §6.4). */
 interface PreparedCourseImport {
@@ -630,6 +641,8 @@ export const courseRouter = router({
           controlCount: tokens.length,
           length: c.lengthM,
           climb: c.climbM,
+          climbSource: climbSourceOf(c),
+          winnerPaceSPerKm: c.winnerPaceSPerKm,
           numberOfMaps: c.numberOfMaps,
           orderMode: c.orderMode as CourseOrderMode,
           firstAsStart: c.firstAsStart,
@@ -698,7 +711,7 @@ export const courseRouter = router({
       z.object({
         name: z.string().min(1),
         length: z.number().int().optional().default(0),
-        climb: z.number().int().optional().default(0),
+        climb: z.number().int().nullable().optional().default(0),
         numberOfMaps: z.number().int().optional().default(0),
         orderMode: orderModeSchema.optional().default("ordered"),
         firstAsStart: z.boolean().optional().default(false),
@@ -723,7 +736,7 @@ export const courseRouter = router({
             eventId: ctx.event.id,
             name: input.name,
             lengthM: input.length,
-            climbM: input.climb,
+            ...statedClimb(input.climb, "manual"),
             numberOfMaps: input.numberOfMaps,
             orderMode: input.orderMode,
             firstAsStart: input.firstAsStart,
@@ -799,7 +812,8 @@ export const courseRouter = router({
           data: {
             eventId: ctx.event.id,
             name: input.name,
-            climbM: source.climbM,
+            // A typed climb is copied; a computed one is the copy's own to compute.
+            ...(isTypedClimb(source) ? { climbM: source.climbM, climbSource: source.climbSource ?? "manual" } : {}),
             numberOfMaps: source.numberOfMaps,
             orderMode: source.orderMode,
             startName: source.startName,
@@ -859,7 +873,9 @@ export const courseRouter = router({
         id: z.number().int(),
         name: z.string().min(1).optional(),
         length: z.number().int().optional(),
-        climb: z.number().int().optional(),
+        climb: z.number().int().nullable().optional(),
+        /** The expected winner pace, seconds per km (docs/course-elevation.md §7.8); null clears it. */
+        winnerPaceSPerKm: z.number().int().min(courseShared.WINNER_PACE_MIN_S).max(courseShared.WINNER_PACE_MAX_S).nullable().optional(),
         numberOfMaps: z.number().int().optional(),
         orderMode: orderModeSchema.optional(),
         firstAsStart: z.boolean().optional(),
@@ -902,7 +918,12 @@ export const courseRouter = router({
       const data: Record<string, unknown> = {};
       if (input.name !== undefined) data.name = input.name;
       if (input.length !== undefined) data.lengthM = input.length;
-      if (input.climb !== undefined) data.climbM = input.climb;
+      // A typed climb is the course's; none (0 or null) hands it back to the computed one (course-elevation.md §6).
+      if (input.climb !== undefined) {
+        Object.assign(data, statedClimb(input.climb, "manual"));
+        markClimbPending(ctx.event.id, [c.id]);
+      }
+      if (input.winnerPaceSPerKm !== undefined) data.winnerPaceSPerKm = input.winnerPaceSPerKm;
       if (input.numberOfMaps !== undefined)
         data.numberOfMaps = input.numberOfMaps;
       if (input.orderMode !== undefined) data.orderMode = input.orderMode;
@@ -1039,6 +1060,9 @@ export const courseRouter = router({
           await rebuildCourseLengths(tx, ctx.event.id, [c.id], {
             updateLength: input.length === undefined,
           });
+        } else if (input.firstAsStart !== undefined || input.lastAsFinish !== undefined) {
+          // The ends move the legs the computed climb rests on (§6 "When"), as in `bulkUpdate`.
+          await clearComputedClimbs(tx, ctx.event.id, [c.id]);
         }
         // A root's name, climb, maps and instructions reach its variants.
         const mirrored =
@@ -1241,7 +1265,7 @@ export const courseRouter = router({
       z.object({
         ids: z.array(z.number().int()),
         numberOfMaps: z.number().int().optional(),
-        climb: z.number().int().optional(),
+        climb: z.number().int().nullable().optional(),
         orderMode: orderModeSchema.optional(),
         firstAsStart: z.boolean().optional(),
         lastAsFinish: z.boolean().optional(),
@@ -1268,7 +1292,10 @@ export const courseRouter = router({
       const data: Record<string, unknown> = {};
       if (input.numberOfMaps !== undefined)
         data.numberOfMaps = input.numberOfMaps;
-      if (input.climb !== undefined) data.climbM = input.climb;
+      if (input.climb !== undefined) {
+        Object.assign(data, statedClimb(input.climb, "manual"));
+        markClimbPending(ctx.event.id, rows.map((r) => r.id));
+      }
       if (input.orderMode !== undefined) data.orderMode = input.orderMode;
       if (input.firstAsStart !== undefined)
         data.firstAsStart = input.firstAsStart;
@@ -1289,6 +1316,10 @@ export const courseRouter = router({
             await rewriteStructureFromColumns(tx, ctx.event.id, r.id);
           }
         }
+        if (input.firstAsStart !== undefined || input.lastAsFinish !== undefined) {
+          // The course's ends moved: a computed climb no longer holds.
+          await clearComputedClimbs(tx, ctx.event.id, rows.map((r) => r.id));
+        }
         if (input.orderMode !== undefined) {
           await rebuildCourseLengths(
             tx,
@@ -1306,6 +1337,17 @@ export const courseRouter = router({
       });
       return { ok: true as const, count: rows.length };
     }),
+
+  /**
+   * Computes and stores the climb of the event's ordered courses that have none (docs/course-elevation.md §6):
+   * the catch-up for heights that arrived after a course's last edit. Returns how many were written.
+   */
+  refreshClimbs: coursesEditRaceProcedure.mutation(async ({ ctx }) => {
+    const written = await refreshComputedClimbs(ctx.db, ctx.event.id);
+    // The catch-up of §7.5 too: routes searched on a map or a patch that has changed since.
+    enqueueAutoRoutes(ctx.db, ctx.event.id);
+    return { written };
+  }),
 
   delete: coursesEditRaceProcedure
     .input(z.object({ id: z.number().int() }))
@@ -1347,6 +1389,11 @@ export const courseRouter = router({
     const north = row.documentHash
       ? await documentNorth(ctx.db, row.documentHash)
       : null;
+    const interval = await eventContourInterval(ctx.db, row);
+    // A club map's value is its uploader's or an admin's to change; an event's own is any course editor's (§0.43).
+    const clubSeries = interval.clubMapId ? await ctx.db.clubMap.findUnique({ where: { id: interval.clubMapId }, select: { createdBy: true } }) : null;
+    const mayChangeInterval = interval.from === "event" || canRemoveClubMap({ authEnabled: ctx.authEnabled, user: ctx.user, createdBy: clubSeries?.createdBy ?? null });
+    const terrain = row.documentHash ? await terrainDescriptor(ctx.db, row.documentHash, undefined, { rotationCorrection, confirmedIntervalM: interval.confirmedM }) : null;
 
     return {
       scale,
@@ -1363,13 +1410,43 @@ export const courseRouter = router({
       /** The delivered patch's token (docs/map-patches.md §3.3); `"0"` when nothing is delivered. Refetch `/api/maps/:nameId/patch` when it changes. */
       patchVersion: await eventPatchVersion(ctx.db, ctx.event.id, row.documentHash),
       /** The pinned document's height field (docs/map-storage.md §4.7): state, `url` to fetch (fetching a `pending` one derives it), `decided` for the 3D gate, and `dem` (the DEM's fields, none for a rotation-corrected pin); null until the pin. */
-      terrain: row.documentHash ? await terrainDescriptor(ctx.db, row.documentHash, undefined, { rotationCorrection }) : null,
+      terrain,
+      /** The map's contour interval (docs/course-elevation.md §0.43): the assumed one, the confirmed one, whose it is, and whether the DEM anchor suspects the contours are drawn at half. */
+      contourInterval: terrain ? { assumedM: terrain.interval.assumedM, confirmedM: interval.confirmedM, from: interval.from, mayChange: mayChangeInterval, suspect: terrain.dem.anchored?.intervalSuspect === true } : null,
       cutRotationDeg: cutRotationDeg(
         northOffset,
         north?.meridian?.medianTiltDeg ?? null,
       ),
     };
   }),
+
+  /**
+   * Confirm (or clear, with null) the contour interval of the event's map (docs/course-elevation.md §0.43). A map
+   * from the club library keeps it on the club map, so it follows every event using it; any other map keeps it on
+   * its own row. The computed climbs of every event on the map are cleared and computed again.
+   */
+  setContourInterval: coursesEditProcedure
+    .input(z.object({ intervalM: z.number().nullable() }))
+    .mutation(async ({ ctx, input }) => {
+      if (input.intervalM !== null && !validContourInterval(input.intervalM)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "The contour interval is above 0 and at most 100 m, with at most two decimals" });
+      }
+      const pin = await eventPin(ctx.db, ctx.event.id);
+      if (!pin) throw new TRPCError({ code: "NOT_FOUND", message: "No map file uploaded" });
+      const current = await eventContourInterval(ctx.db, pin);
+      let events: bigint[] = [ctx.event.id];
+      if (current.clubMapId) {
+        // The club map's value follows every event using it: as for deleting the map, its uploader or an admin.
+        const series = await ctx.db.clubMap.findUnique({ where: { id: current.clubMapId }, select: { createdBy: true } });
+        requireMayChangeClubMapInterval(ctx, series?.createdBy ?? null);
+        await ctx.db.clubMap.update({ where: { id: current.clubMapId }, data: { contourIntervalM: input.intervalM } });
+        events = [...new Set([ctx.event.id, ...(await eventsOnClubMap(ctx.db, current.clubMapId))])];
+      } else {
+        await ctx.db.mapFile.update({ where: { id: pin.id }, data: { contourIntervalM: input.intervalM } });
+      }
+      enqueueContourInterval(ctx.db, events);
+      return { success: true as const, contourIntervalM: input.intervalM, from: current.from };
+    }),
 
   /** Info about the uploaded map file (if any). */
   mapFileInfo: kioskOrCoursesViewProcedure.query(async ({ ctx }) => {
@@ -2257,7 +2334,8 @@ export const courseRouter = router({
             data: {
               name: pc.name,
               ...(lengthStated ? { lengthM: Math.round(pc.length) } : {}),
-              climbM: Math.round(pc.climb),
+              // The file's climb when it states one; a file without one leaves a typed climb alone (course-elevation.md §6).
+              ...(Math.round(pc.climb) > 0 ? statedClimb(pc.climb, "file") : {}),
               orderMode: pc.orderMode ?? "ordered",
               ...(hasLegLengths ? { legs: legsStr } : {}),
               startName,
@@ -2279,7 +2357,7 @@ export const courseRouter = router({
               eventId,
               name: pc.name,
               lengthM: Math.round(pc.length),
-              climbM: Math.round(pc.climb),
+              ...statedClimb(pc.climb, "file"),
               orderMode: pc.orderMode ?? "ordered",
               legs: legsStr,
               startName,
@@ -2361,6 +2439,9 @@ export const courseRouter = router({
       if (deriveLengthIds.length > 0) {
         await rebuildCourseLengths(ctx.db, eventId, deriveLengthIds, { updateLength: true });
       }
+      // The import moved controls and rewrote courses: every computed climb of the event is computed again,
+      // and the imported courses whose file states none get theirs (course-elevation.md §6 "When").
+      await clearComputedClimbs(ctx.db, eventId, "all");
 
       // ── 3. Class → Course assignments ───────────────────────
       if (input.classMapping) {

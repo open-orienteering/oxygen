@@ -18,6 +18,7 @@ The vector map pipeline's normative spec. Code cites these by path and section n
 | [map-terrain.md](map-terrain.md) | Contour graph, height field, DEM, 3D |
 | [course-layer.md](course-layer.md) | The derived course layer |
 | [course-editor.md](course-editor.md) | The course editor |
+| [course-elevation.md](course-elevation.md) | Heights along a course: profile, climb, which field |
 | [course-layout.md](course-layout.md) | Layout mode, templates and sheets |
 | [course-print.md](course-print.md) | Course print and PDF |
 
@@ -31,7 +32,7 @@ Older course notes that share the prefix: [course-maps.md](course-maps.md), [cou
 | [system/](system/) | Feature and subsystem design: authentication, offline and lease, readout, club library, imports and exports, mobile layout |
 | [ops/](ops/) | Operator guides: Cloud Run deploy, venue box, demo, printers, backup and restore |
 | [releases/](releases/) | Release policy, image tags, and one runbook per release |
-| [dev/](dev/) | Test infrastructure and tooling: E2E sharding, Eventor stub, fixtures, lint policy |
+| [dev/](dev/) | Test infrastructure and tooling: E2E sharding, Eventor stub, fixtures, lint policy, [route cost model calibration](dev/route-calibration.md) |
 | [bugfixes/](bugfixes/) | One note per fixed bug, indexed by area in [bugfixes/README.md](bugfixes/README.md) |
 | [migrations/](migrations/) | Data and dependency migrations (MeOS drop, vector pipeline, dependency sweeps) |
 | [history/](history/) | Superseded notes and finished plans, kept for the record |

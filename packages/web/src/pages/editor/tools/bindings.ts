@@ -15,7 +15,7 @@ import {
 } from "../../../lib/editor/transform-gestures";
 import type { Crop } from "../../../lib/editor/style-fields";
 import { circleGapAt, circleGapFromDrag, compassDeg, legFraction, legGapAt, legGapFromDrag, type AngularGap, type FractionGap } from "./gaps";
-import { dragBendGrip, legPolyline, moveBend, polylineDistance, polylineSlice, toggleBendSmooth, type Bend } from "../../../lib/editor/bends";
+import { dragBendGrip, insertBendAt, legPolyline, moveBend, polylineDistance, polylineSlice, toggleBendSmooth, type Bend } from "../../../lib/editor/bends";
 import { legLengthShape } from "../../../lib/editor/leg-length";
 import { isClosedKind, pointInPolygon, smoothed, step, type PolygonState } from "./polygon";
 import { nearestEdge, outlinePoints, vertexRule, type Vertex } from "../../../lib/editor/geometry-edit";
@@ -56,6 +56,8 @@ export type Gesture =
   | { kind: "gap"; from: Pt; to: Pt }
   /** Bend `index` of the selected leg dragged from `press` (§6.7); `bends` is the live list; `alt` is the press's (a click with it toggles corner / smooth). */
   | { kind: "bend"; index: number; press: Pt; mmPerPx: number; bends: Bend[]; moved: boolean; alt: boolean }
+  /** A press on the selected leg's line (§6.7): past 3 px it becomes a new bend at the press, dragged (`bend`); released before, a click on the leg. */
+  | { kind: "bend-new"; press: Pt; mmPerPx: number; alt: boolean }
   /** A grip (handle `which`) of bend `index` dragged from `press` by the pointer's offset (§6.7, F16); `base` at the press, `bends` live; `alt` live breaks the pair. */
   | { kind: "bend-grip"; index: number; which: "in" | "out"; press: Pt; mmPerPx: number; base: readonly Bend[]; bends: Bend[]; moved: boolean }
   | null;
@@ -238,7 +240,20 @@ export interface LegBends {
    */
   onBendsDraft?: (bends: Bend[] | null) => void;
   onBendFocus: (index: number | null) => void;
+  /** A click on the selected leg's own line (the press that did not become a bend). */
+  onPress?: (pt: Pt) => void;
   snap: (pt: Pt) => Pt;
+}
+
+/** Whether `pt` is within `reach` of the polyline `pts`. */
+function onPolyline(pts: readonly Pt[], pt: Pt, reach: number): boolean {
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1], b = pts[i];
+    const dx = b.x - a.x, dy = b.y - a.y, len = dx * dx + dy * dy;
+    const f = len > 0 ? Math.max(0, Math.min(1, ((pt.x - a.x) * dx + (pt.y - a.y) * dy) / len)) : 0;
+    if (Math.hypot(pt.x - (a.x + dx * f), pt.y - (a.y + dy * f)) <= reach) return true;
+  }
+  return false;
 }
 
 /** The grip of a bend's handle within reach of `pt` (the first in order); null when none. */
@@ -286,7 +301,8 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
   if (leg) {
     // The live list during a bend or grip drag; the outline is the flattened curve the layer draws (F16).
     const bends = gs?.kind === "bend" || gs?.kind === "bend-grip" ? gs.bends : leg.bends;
-    shapes.push({ kind: "line", points: legPolyline(leg.from, bends, leg.to), dashed: true, color: BLUE, testId: "editor-leg-outline" });
+    // The selection is the leg itself, lit (§6.7): no ring, nothing floating over it.
+    shapes.push({ kind: "line", points: legPolyline(leg.from, bends, leg.to), color: BLUE, widthPx: 3, casingPx: 3, opacity: 0.85, testId: "editor-leg-outline" });
     bends.forEach((b, i) => {
       const focused = gs?.kind === "bend" || gs?.kind === "bend-grip" ? gs.index === i : leg.focused === i;
       shapes.push({ kind: "handle", x: b.x, y: b.y, active: focused, testId: "editor-bend-handle", data: { index: String(i), focused: String(focused) } });
@@ -312,6 +328,12 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
       const grip = leg ? bendGripAt(leg, p.pt, reach) : null;
       if (leg && grip) {
         g.current = { kind: "bend-grip", ...grip, press: p.pt, mmPerPx: p.mmPerPx, base: leg.bends, bends: [...leg.bends], moved: false };
+        return true;
+      }
+      // The selected leg's own line, away from its ends' controls: a drag from here makes a bend (§6.7).
+      if (leg && !p.shift && !p.ctrl && p.target?.kind !== "site" && p.target?.kind !== "object" && p.target?.kind !== "number" && !near(leg.from, p.pt, o.ringMm) && !near(leg.to, p.pt, o.ringMm)
+        && onPolyline(legPolyline(leg.from, leg.bends, leg.to), p.pt, (p.touch ? 14 : 5) * p.mmPerPx)) {
+        g.current = { kind: "bend-new", press: p.pt, mmPerPx: p.mmPerPx, alt: !!p.alt };
         return true;
       }
       // A finger elsewhere is the viewer's: its targets, a pan, the tap that selects an object (§10).
@@ -395,7 +417,12 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
       return false;
     },
     onPointerDrag(pt, mods) {
-      const cur = g.current;
+      let cur = g.current;
+      if (cur?.kind === "bend-new" && leg) {
+        if (near(cur.press, pt, 3 * cur.mmPerPx)) return;
+        const made = insertBendAt(leg.from, leg.bends, leg.to, cur.press, cur.alt);
+        cur = g.current = { kind: "bend", index: made.index, press: cur.press, mmPerPx: cur.mmPerPx, bends: made.bends, moved: true, alt: false };
+      }
       if (cur?.kind === "lasso") {
         cur.points.push(pt);
         o.redraw();
@@ -445,6 +472,11 @@ export function selectBinding(o: SelectOptions): EditorToolBinding {
       const cur = g.current;
       g.current = null;
       if (!cur) return;
+      if (cur.kind === "bend-new") {
+        // No drag: a click on the leg.
+        if (pt) leg?.onPress?.(cur.press);
+        return;
+      }
       if (cur.kind === "bend") {
         o.redraw();
         if (!leg) return;
@@ -586,8 +618,10 @@ export interface PlaceOptions {
     role: "start" | "control" | "finish" | "crossing_point";
     /** A crossing point's direction of passage, degrees counter-clockwise from +x (§6.8); default north. */
     angleDeg?: number;
-    /** "3 · 47" (number · code), "Add 47" over an existing control, or the code. */
+    /** "3-47" (number and code), "Add 47" over an existing control, or the code. */
     label: string;
+    /** The label is a new control's number and code, which the layer writes itself where it draws the visit. */
+    labelOnLayer?: boolean;
     description: string | null;
     /** The pending legs (the layer draws them from the provisional visit); the first one is labelled. */
     legs: [Pt, Pt][];
@@ -638,8 +672,11 @@ export function placeBinding(o: PlaceOptions): EditorToolBinding {
       shapes.push({ kind: "circle", x: gh.at.x, y: gh.at.y, rMm: gh.radiusMm, color: PURPLE, testId: "editor-ghost", data: { role: gh.role } });
       if (gh.role === "finish") shapes.push({ kind: "circle", x: gh.at.x, y: gh.at.y, rMm: gh.radiusMm * 0.7, color: PURPLE });
     }
-    shapes.push({ kind: "text", x: gh.at.x, y: gh.at.y, text: gh.label, dxPx: 14, dyPx: -10, color: PURPLE, testId: "editor-ghost-label" });
-    if (gh.description) shapes.push({ kind: "text", x: gh.at.x, y: gh.at.y, text: gh.description, dxPx: 14, dyPx: 6, color: "#475569", testId: "editor-ghost-description" });
+    // Outside the ring, up and to the right of it (the ring is paper-sized: a fixed pixel offset lands inside it when
+    // zoomed in). Where the layer writes the new control's "13-96" itself, no second label is drawn.
+    const out = gh.role === "crossing_point" ? 0 : gh.radiusMm * 0.75;
+    if (!(o.provisionalDrawn && gh.labelOnLayer)) shapes.push({ kind: "text", x: gh.at.x + out, y: gh.at.y + out, text: gh.label, dxPx: 6, dyPx: -6, color: PURPLE, testId: "editor-ghost-label" });
+    if (gh.description) shapes.push({ kind: "text", x: gh.at.x + out, y: gh.at.y - out, text: gh.description, dxPx: 6, dyPx: 12, color: "#475569", testId: "editor-ghost-description" });
   }
   return {
     exclusive: true,

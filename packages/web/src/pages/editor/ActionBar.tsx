@@ -32,18 +32,10 @@ export interface ActionContext {
   codesReady: boolean;
   /** A write is in flight (delete waits for it). */
   busy: boolean;
-  /** The leg phantom's leg can be edited here (it resolves to an item; not on a phone, §6.7). */
-  legEdit?: boolean;
-  /** The leg phantom's leg can become a variation group (§12: a top-level leg, desktop and tablet). */
-  variationHere?: boolean;
 }
 
 export interface ActionHandlers {
   insert(): void;
-  /** *Add bend here* on a leg (§6.7): a smooth bend; with Alt held on the click, a corner (F16). */
-  addBend(e?: { altKey?: boolean }): void;
-  /** *Create variation here* on a leg (§12). */
-  createVariation?(): void;
   addToCourse(): void;
   add(): void;
   addStart(): void;
@@ -68,8 +60,7 @@ export function courseActions(ctx: ActionContext, on: ActionHandlers, label: Act
   if (ctx.phantom) {
     if (ctx.phantom.insertAt !== null && ctx.course) {
       out.push({ id: "insert", label: label("editor.actionInsert"), onClick: on.insert, disabled: !ctx.codesReady });
-      if (ctx.legEdit) out.push({ id: "add-bend", label: label("editor:actionAddBend"), onClick: (e) => on.addBend({ altKey: !!e?.altKey }) });
-      if (ctx.variationHere && on.createVariation) out.push({ id: "create-variation", label: label("editor:actionCreateVariation"), onClick: on.createVariation });
+      // The leg's own actions (bend, variation) are the Leg section's (§6.7): this bar is the phone's and a loop anchor's.
       return out;
     }
     if (ctx.course) out.push({ id: "add-to-course", label: label("editor.actionAddToCourse", { name: ctx.course }), onClick: on.addToCourse, disabled: !ctx.codesReady });

@@ -27,6 +27,13 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
+
+// The holder's route refresh after a forwarded `courseObject.*` write (D8): counted, not run.
+const routeRefreshes = vi.hoisted(() => ({ eventIds: [] as bigint[] }));
+vi.mock("../../leg-routes-auto.js", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../../leg-routes-auto.js")>();
+  return { ...real, enqueueAutoRoutes: (_db: unknown, eventId: bigint) => { routeRefreshes.eventIds.push(eventId); } };
+});
 import { TRPCError } from "@trpc/server";
 import { execSync } from "child_process";
 import { Client } from "pg";
@@ -2047,6 +2054,61 @@ describe("a box follows the cloud's map rows during a lease (G19)", () => {
       release();
       _setLeasePeerFactory(() => leasePeerToB());
       // Refreshes of one event queue: this one returns after the held one finished.
+      await refresh();
+    }
+  });
+
+  it("after a forwarded out-of-bounds write has landed the holder searches its routes again; after a patch write it does not (D8)", async () => {
+    routeRefreshes.eventIds.length = 0;
+    await refreshAfterForward(CHECKOUT_NAME, PEER_URL, 5_000, { maps: true });
+    expect(routeRefreshes.eventIds).toEqual([]);
+    await refreshAfterForward(CHECKOUT_NAME, PEER_URL, 5_000, { maps: true, routes: true });
+    expect(routeRefreshes.eventIds).toEqual([box.id]);
+  });
+
+  it("a refresh that replaces the map's rows clears the box's computed climbs and journals the cleared row (D8)", async () => {
+    const course = await ctx.db.course.create({ data: { eventId: box.id, name: "Climbs", lengthM: 900, legs: "900;", lengthSource: "file", climbM: 37, climbSource: "computed" } });
+    cleanup.push(() => ctx.db.course.delete({ where: { id: course.id } }).then(() => undefined));
+    const latest = async () => {
+      const e = await ctx.db.journalEntry.findFirst({ where: { eventId: box.id, type: "course.upserted", payload: { path: ["id"], equals: course.id } }, orderBy: { hlc: "desc" } });
+      return e ? (e.payload as { fields: { climbM: number } }).fields.climbM : null;
+    };
+    // A refresh that changes nothing leaves it.
+    await refresh();
+    expect((await ctx.db.course.findUniqueOrThrow({ where: { id: course.id } })).climbM).toBe(37);
+    expect(await latest()).toBeNull();
+    // The cloud's map moves to another document: the box's rows are replaced.
+    await dbB.mapFile.updateMany({ where: { eventId: eventB.id, sourceHash }, data: { sourceHash: reimport.sourceHash, documentHash: reimport.documentHash } });
+    try {
+      expect(await refresh()).toMatchObject({ mapFiles: 2 });
+    } finally {
+      await dbB.mapFile.updateMany({ where: { eventId: eventB.id, sourceHash: reimport.sourceHash }, data: { sourceHash, documentHash } });
+      await refresh();
+    }
+    expect(await ctx.db.course.findUniqueOrThrow({ where: { id: course.id } })).toMatchObject({ climbM: 0, climbSource: null });
+    expect(await latest()).toBe(0);
+  });
+
+  it("a takeover that lands between the map rows and the clear leaves the climbs alone: clear and compute are refused together", async () => {
+    const course = await ctx.db.course.create({ data: { eventId: box.id, name: "Climbs taken", lengthM: 900, legs: "900;", lengthSource: "file", climbM: 41, climbSource: "computed" } });
+    cleanup.push(() => ctx.db.course.delete({ where: { id: course.id } }).then(() => undefined));
+    await dbB.mapFile.updateMany({ where: { eventId: eventB.id, sourceHash }, data: { sourceHash: reimport.sourceHash, documentHash: reimport.documentHash } });
+    const peer = jsonLeasePeerToB();
+    const slow: LeasePeer = {
+      ...peer,
+      exportMapRows: async (...args: Parameters<LeasePeer["exportMapRows"]>) => {
+        const out = await peer.exportMapRows(...args);
+        // The lease changes hands after the refresh began and before its rows are written.
+        await ctx.db.eventLease.updateMany({ where: { eventId: box.id, releasedAt: null }, data: { holderNodeId: "someone-else" } });
+        return out;
+      },
+    };
+    try {
+      await refresh(slow).catch(() => null);
+      expect(await ctx.db.course.findUniqueOrThrow({ where: { id: course.id } })).toMatchObject({ climbM: 41, climbSource: "computed" });
+    } finally {
+      await ctx.db.eventLease.updateMany({ where: { eventId: box.id, releasedAt: null }, data: { holderNodeId: nodeId() } });
+      await dbB.mapFile.updateMany({ where: { eventId: eventB.id, sourceHash: reimport.sourceHash }, data: { sourceHash, documentHash } });
       await refresh();
     }
   });

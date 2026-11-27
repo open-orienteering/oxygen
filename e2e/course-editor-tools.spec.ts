@@ -33,8 +33,9 @@ test.describe("tools", () => {
     // length at the pointer.
     const first = await emptyPoint(page, 40);
     await page.mouse.move(first.x, first.y);
-    await expect(page.getByTestId("editor-ghost-label")).toBeAttached({ timeout: 10000 });
-    await expect(page.getByTestId("editor-ghost-label")).toHaveText(/^1 · \d+$/);
+    // The layer writes the new control's number and code beside its circle (§6.1): no second label on the UI layer.
+    await expect(page.locator('[data-testid="course-label"][data-site-id="provisional"]')).toHaveAttribute("data-text", /^1-\d+$/, { timeout: 10000 });
+    await expect(page.getByTestId("editor-ghost-label")).toHaveCount(0);
     // The layer draws the pending leg (§6.1); the UI layer only labels it at the leg's midpoint — the one readout (P2).
     await expect(page.getByTestId("editor-pending-leg")).toHaveCount(0);
     await expect(page.getByTestId("editor-leg-length")).toHaveText(/^\d+ m$/);
@@ -58,7 +59,7 @@ test.describe("tools", () => {
     // The ghost reads the next number (on empty map; over a control it reads "Add ‹code›").
     const next = await emptyPoint(page, 40, spots);
     await page.mouse.move(next.x, next.y);
-    await expect(page.getByTestId("editor-ghost-label")).toHaveText(/^11 · /, { timeout: 10000 });
+    await expect(page.locator('[data-testid="course-label"][data-site-id="provisional"]')).toHaveAttribute("data-text", /^11-/, { timeout: 10000 });
 
     // Ctrl+Z while armed: the last placement goes, the tool stays armed.
     await page.keyboard.press("Control+z");
@@ -84,7 +85,7 @@ test.describe("tools", () => {
       const p = await emptyPoint(page, 60, spots);
       spots.push(p);
       await page.mouse.move(p.x, p.y);
-      await expect(page.getByTestId("editor-ghost-label")).toHaveText(new RegExp(`^${i + 1} · `), { timeout: 10000 });
+      await expect(page.locator('[data-testid="course-label"][data-site-id="provisional"]')).toHaveAttribute("data-text", new RegExp(`^${i + 1}-`), { timeout: 10000 });
       last = await place(page, p);
       await expect(controlRows(page)).toHaveCount(i + 1, { timeout: 15000 });
     }
@@ -104,7 +105,8 @@ test.describe("tools", () => {
       spots.push(p);
       expect(await legEndsNear(p)).toBe(false);
       await page.mouse.move(p.x, p.y);
-      await expect(page.getByTestId("editor-ghost-label")).toBeAttached({ timeout: 10000 });
+      // The next number and code: on the layer's provisional circle with a course, beside the ghost without.
+      await expect(page.getByTestId("editor-ghost-label").or(page.locator('[data-testid="course-label"][data-site-id="provisional"]')).first()).toBeAttached({ timeout: 10000 });
       // The leg into the cursor is a `course-leg` piece of the course: the layer's, with its slits (one round trip per hover).
       await expect.poll(() => legEndsNear(p), { timeout: 15000, message: `pass ${pass}` }).toBe(true);
       await expect(page.getByTestId("editor-pending-leg")).toHaveCount(0);
@@ -237,7 +239,7 @@ test.describe("tools", () => {
     await expect(async () => {
       await dropSelection(page);
       await clickMap(page, await toPage(page, mid));
-      await expect(page.getByTestId("editor-action-bar").getByTestId("editor-action-insert")).toBeVisible({ timeout: 3000 });
+      await expect(page.getByTestId("editor-leg")).toBeVisible({ timeout: 3000 });
     }).toPass({ timeout: 30000 });
     await page.keyboard.press("g");
     await expect(page.getByTestId("editor-tool-layer").getByTestId("editor-gap-target")).toHaveAttribute("data-kind", "leg");

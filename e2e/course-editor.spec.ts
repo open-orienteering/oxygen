@@ -129,10 +129,15 @@ test.describe("Course editor (new, GL canvas)", () => {
     await expect(async () => {
       await dropSelection(page);
       await clickMap(page, await toPage(page, mid));
-      await expect(page.getByTestId("editor-action-bar").getByTestId("editor-action-insert")).toBeVisible({ timeout: 3000 });
+      await expect(page.getByTestId("editor-leg")).toBeVisible({ timeout: 3000 });
     }).toPass({ timeout: 30000 });
+    // A selected leg is lit, with no ring and no bar over the map (§6.7); a double-click on it inserts a control.
+    await expect(page.getByTestId("editor-phantom")).toHaveCount(0);
+    await expect(page.getByTestId("editor-action-bar")).toHaveCount(0);
+    await expect(page.getByTestId("editor-leg-actions")).toBeVisible();
     const inserted = waitForTrpc(page, "course.setStructure");
-    await page.getByTestId("editor-action-bar").getByTestId("editor-action-insert").click();
+    const at = await toPage(page, mid);
+    await page.mouse.dblclick(at.x, at.y);
     await inserted;
     await expect(controlRows(page)).toHaveCount(4, { timeout: 15000 });
     await expect(controlRows(page).nth(0)).toHaveAttribute("data-control-id", a);
@@ -790,9 +795,9 @@ test.describe("F7: variations and loops (docs/course-editor.md §12)", () => {
 
     // The leg a → b, then Create variation here: one write, A and B empty (answer 5), the leg still drawn straight.
     await selectLeg(page, name, a, b);
-    await expect(page.getByTestId("editor-action-create-variation")).toBeVisible();
+    await expect(page.getByTestId("editor-leg-variation")).toBeVisible();
     const created = waitForTrpc(page, "course.setStructure");
-    await page.getByTestId("editor-action-bar").getByTestId("editor-action-create-variation").click();
+    await page.getByTestId("editor-leg-variation").click();
     await created;
     const block = page.getByTestId("editor-variation");
     await expect(block).toHaveCount(1, { timeout: 15000 });
@@ -903,9 +908,9 @@ test.describe("F7: variations and loops (docs/course-editor.md §12)", () => {
     // leg drawn on top — Create variation here then groups after b (load run: x numbered 3 in Variant B, not 2).
     const { name, a, b } = await twoControlCourse(page, "F15 numbers");
     await selectLeg(page, name, a, b);
-    await expect(page.getByTestId("editor-action-create-variation")).toBeVisible();
+    await expect(page.getByTestId("editor-leg-variation")).toBeVisible();
     const created = waitForTrpc(page, "course.setStructure");
-    await page.getByTestId("editor-action-bar").getByTestId("editor-action-create-variation").click();
+    await page.getByTestId("editor-leg-variation").click();
     await created;
     const block = page.getByTestId("editor-variation");
     await expect(block).toHaveCount(1, { timeout: 15000 });

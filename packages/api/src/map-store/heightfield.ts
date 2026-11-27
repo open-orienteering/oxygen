@@ -14,6 +14,8 @@
 
 import { Worker } from "node:worker_threads";
 // Leaf modules only: this file is in the router's type graph, which the web compiles too.
+import { contourIntervalM } from "@oxygen/shared/src/terrain/index.js";
+import type { MapDocumentHeader } from "@oxygen/shared/src/map-document/index.js";
 import { RASTER_RULES } from "@oxygen/shared/src/terrain/graph/raster.js";
 import { DEM_FIELD_SOURCE_RE, heightFieldProviderSchema, TERRAIN_VERSION, type HeightFieldHeader, type HeightFieldProvider } from "@oxygen/shared/src/terrain/field/types.js";
 import type { TerrainReport } from "@oxygen/shared/src/terrain/solve/types.js";
@@ -312,12 +314,14 @@ export interface DemDescriptor {
   reason: string | null;
   provider: HeightFieldProvider | null;
   ground: { url: string } | null;
-  anchored: { url: string; decided: number | null } | null;
+  anchored: { url: string; decided: number | null; intervalSuspect: boolean | null } | null;
 }
 
 export interface TerrainOptions {
   /** The pin's `rotation_correction`: a corrected pin gets no DEM (docs/map-terrain.md §7.0 answer 2). */
   rotationCorrection?: number | null;
+  /** The contour interval a person confirmed for the event's map (`eventContourInterval`); null or absent: not confirmed (docs/course-elevation.md §0.43). */
+  confirmedIntervalM?: number | null;
 }
 
 /** How stale the descriptor's view of Settings → Height data may be (map-terrain §7.8). */
@@ -335,15 +339,17 @@ export async function demDescriptor(db: Db, hash: string, opts: TerrainOptions =
   for (const p of list) {
     const id = p.info.id, job = jobs.find((j) => j.provider === id);
     const urls = { ground: { url: heightfieldUrl(hash, TERRAIN_VERSION, `ground.${id}`) }, anchoredUrl: heightfieldUrl(hash, TERRAIN_VERSION, `contours.${id}`) };
-    if (!job || job.state === "queued" || job.state === "running") return { state: "pending", reason: null, provider: p.info, ground: urls.ground, anchored: { url: urls.anchoredUrl, decided: null } };
+    if (!job || job.state === "queued" || job.state === "running") return { state: "pending", reason: null, provider: p.info, ground: urls.ground, anchored: { url: urls.anchoredUrl, decided: null, intervalSuspect: null } };
     if (job.state === "unavailable" && job.reason === "no-coverage") continue;
     if (job.state === "done") {
       const row = await db.mapHeightfield.findUnique({ where: { documentHash_source_version: { documentHash: hash, source: `contours.${id}`, version: TERRAIN_VERSION } }, select: { report: true, header: true } });
-      const decided = (row?.report as { share?: { decided?: unknown } } | null)?.share?.decided;
+      const report = row?.report as { share?: { decided?: unknown }; anchor?: { intervalSuspect?: unknown } } | null;
+      const decided = report?.share?.decided;
+      const suspect = report?.anchor?.intervalSuspect;
       // the row's provider block: its `resolutionM` is the level read, a coarser overview's over the window cap (map-terrain §7.0c answer 12)
       const stored = heightFieldProviderSchema.safeParse((row?.header as { provider?: unknown } | null)?.provider);
       const provider = stored.success && stored.data.id === id ? stored.data : p.info;
-      return { state: "ready", reason: null, provider, ground: urls.ground, anchored: { url: urls.anchoredUrl, decided: typeof decided === "number" ? decided : null } };
+      return { state: "ready", reason: null, provider, ground: urls.ground, anchored: { url: urls.anchoredUrl, decided: typeof decided === "number" ? decided : null, intervalSuspect: typeof suspect === "boolean" ? suspect : null } };
     }
     return none(job.state === "failed" ? "failed" : "unavailable", job.reason, p.info);
   }
@@ -360,6 +366,8 @@ export interface TerrainDescriptor {
   decided: number | null;
   /** The DEM's fields (docs/map-terrain.md §7). */
   dem: DemDescriptor;
+  /** The interval the contour field was derived at (the scale guess) and the one a person confirmed (docs/course-elevation.md §3). */
+  interval: { assumedM: number; confirmedM: number | null };
 }
 
 export interface TerrainReview {
@@ -394,5 +402,10 @@ export async function terrainReview(db: Db, hash: string, documentSummary?: unkn
 export async function terrainDescriptor(db: Db, hash: string, documentSummary?: unknown, opts: TerrainOptions = {}): Promise<TerrainDescriptor> {
   const r = await terrainReview(db, hash, documentSummary, opts);
   const decided = r.report?.share?.decided;
-  return { state: r.state, source: r.source, version: r.version, url: r.url, decided: typeof decided === "number" ? decided : null, dem: r.dem };
+  const header = documentSummary !== undefined ? documentSummary : (await db.mapDocument.findUnique({ where: { hash }, select: { header: true } }))?.header;
+  const assumedM = contourIntervalM({ library: (header as Pick<MapDocumentHeader, "library"> | null)?.library ?? null });
+  return {
+    state: r.state, source: r.source, version: r.version, url: r.url, decided: typeof decided === "number" ? decided : null, dem: r.dem,
+    interval: { assumedM, confirmedM: opts.confirmedIntervalM ?? null },
+  };
 }

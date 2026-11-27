@@ -9,7 +9,7 @@ Oxygen has two kinds of backup:
 
 A single event: its rows in these tables of the `oxygen` schema, in this order, which is foreign-key order (every table after each dumped table it references, so the sections restore in file order):
 
-`events`, `graphics`, `controls`, `courses`, `course_controls`, `map_templates`, `classes`, `class_course_pools`, `course_objects`, `course_maps`, `card_readouts`, `cards`, `runners`, `teams`, `control_units`, `punches`, `card_readout_backups`, `journal`, `map_sources`, `map_documents`, `map_document_colour_settings`, `club_symbol_decisions`, `map_files`, `map_patches`, `map_gps_tracks`, `map_colour_settings`, `tracks`, `routes`, `event_permissions`, `event_seqs`.
+`events`, `graphics`, `controls`, `courses`, `course_controls`, `map_templates`, `classes`, `class_course_pools`, `course_objects`, `leg_routes`, `course_maps`, `card_readouts`, `cards`, `runners`, `teams`, `control_units`, `punches`, `card_readout_backups`, `journal`, `map_sources`, `map_documents`, `map_document_colour_settings`, `club_symbol_decisions`, `map_files`, `map_patches`, `map_gps_tracks`, `map_colour_settings`, `tracks`, `routes`, `event_permissions`, `event_seqs`.
 
 The list is `BACKUP_TABLES` in `packages/api/src/backup.ts`. An integration test checks it against the migrated schema: every table with an `event_id` column is dumped or listed in `BACKUP_EXCLUDED` with its reason, and the order agrees with the schema's foreign keys.
 

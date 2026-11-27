@@ -5,6 +5,7 @@ import {
   meosStatusToIof,
   uploadResults,
   uploadStartList,
+  parseEventorStartListCourseLengths,
   type ResultForUpload,
 } from "../eventor.js";
 
@@ -113,6 +114,53 @@ describe("Eventor uploads", () => {
     expect(xml).toContain("<StartList");
     expect(xml).toContain(`<StartTime>${EVENT_DATE}T09:01:00</StartTime>`);
     expect(xml).toContain("<ControlCard>8123456</ControlCard>");
+  });
+
+  it("states each class's course with its length and climb", async () => {
+    const calls = captureUploads();
+    const rows = [
+      runner({ course: { name: "Long", lengthM: 8420, climbM: 265 } }),
+      // Only the class's first runner is read.
+      runner({ name: "Roe, Jo", course: { name: "Other", lengthM: 1, climbM: 1 } }),
+      runner({ className: "D21", classExtId: "102", course: { name: "Flat", lengthM: 4100, climbM: 0 } }),
+      runner({ className: "H10", classExtId: "103", course: { name: "Hill", lengthM: 0, climbM: 40.4 } }),
+      runner({ className: "Open", classExtId: "104", course: { name: "Empty", lengthM: 0, climbM: 0 } }),
+      runner({ className: "None", classExtId: "105" }),
+    ];
+
+    await uploadStartList("secret", "12345", "Test Event", EVENT_DATE, rows);
+    await uploadResults("secret", "12345", "Test Event", EVENT_DATE, rows);
+
+    for (const [call, file, block] of [
+      [calls[0], "startlist.xml", "ClassStart"],
+      [calls[1], "resultlist.xml", "ClassResult"],
+    ] as const) {
+      const xml = unzip(call.body, file).replace(/\s+/g, "");
+      const blocks = xml.split(`<${block}>`).slice(1);
+      expect(blocks).toHaveLength(5);
+      // Between the class and its first person, in the schema's order.
+      expect(blocks[0]).toContain(
+        "</Class><Course><Name>Long</Name><Length>8420</Length><Climb>265</Climb></Course><Person",
+      );
+      expect(blocks[0]).not.toContain("Other");
+      expect(blocks[1]).toContain("<Course><Name>Flat</Name><Length>4100</Length></Course>");
+      expect(blocks[2]).toContain("<Course><Name>Hill</Name><Climb>40</Climb></Course>");
+      expect(blocks[3]).not.toContain("<Course>");
+      expect(blocks[4]).not.toContain("<Course>");
+    }
+  });
+
+  it("a pushed start list reads back as the class's published length", async () => {
+    const calls = captureUploads();
+    await uploadStartList("secret", "12345", "Test Event", EVENT_DATE, [
+      runner({ course: { name: "Long", lengthM: 8420, climbM: 265 } }),
+      runner({ className: "H10", classExtId: "103", course: { name: "Hill", lengthM: 0, climbM: 40 } }),
+      runner({ className: "None", classExtId: "105" }),
+    ]);
+
+    expect(
+      parseEventorStartListCourseLengths(unzip(calls[0].body, "startlist.xml")),
+    ).toEqual([{ classId: 101, className: "H21", courseLengthM: 8420 }]);
   });
 
   it("targets the test host when the event is linked to Test-Eventor", async () => {

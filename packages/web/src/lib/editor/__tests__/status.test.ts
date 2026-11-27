@@ -40,6 +40,46 @@ describe("the course-info rows (docs/course-editor.md §2, §10: the phone's pee
   });
 });
 
+describe("the climb row is one number (docs/course-elevation.md §4.4)", () => {
+  const line = { state: "ready" as const, climbM: 135, descentM: 120, sharePct: 3.1, basis: "contours" as const, partial: false, approx: false, attribution: null, intervalConfirmed: true, assumedIntervalM: null };
+  const ids = ["controls", "length", "climb", "scale", "checks"];
+
+  it("a typed climb is the course's: the computed one is not shown", () => {
+    const rows = statusRows({ ...course, climbManual: true, line }, t);
+    expect(rows.map((r) => r.id)).toEqual(ids);
+    expect(rows[2]).toEqual({ id: "climb", text: `statusClimb:{"m":85}`, data: { m: "85", source: "manual" } });
+  });
+
+  it("else the computed climb with its share of the length; the phone's line has the metres alone", () => {
+    const rows = statusRows({ ...course, line }, t);
+    expect(rows.map((r) => r.id)).toEqual(ids);
+    expect(rows[2]).toEqual({ id: "climb", text: `statusClimbShare:{"m":"135","share":"3.1"}`, short: `statusClimb:{"m":"135"}`, data: { m: "135", source: "computed", state: "ready", share: "3.1", basis: "contours", partial: "false", approx: "false", "interval-confirmed": "true" } });
+    expect(statusRows({ ...course, climbM: null, line }, t)[2]).toMatchObject({ data: { m: "135", source: "computed" } });
+  });
+
+  it("approximate values carry ≈ in the words, not in the data", () => {
+    const rows = statusRows({ ...course, climbM: null, line: { ...line, approx: true, partial: true } }, t);
+    expect(rows[2]).toMatchObject({ text: `statusClimbShare:{"m":"≈ 135","share":"3.1"}`, data: { m: "135", approx: "true", partial: "true" } });
+  });
+
+  it("an unconfirmed contour interval is an estimate: ≈ in the words, the attribute says why", () => {
+    const rows = statusRows({ ...course, climbM: null, line: { ...line, approx: true, intervalConfirmed: false, assumedIntervalM: 5 } }, t);
+    expect(rows[2]).toMatchObject({ text: `statusClimbShare:{"m":"≈ 135","share":"3.1"}`, data: { m: "135", source: "computed", "interval-confirmed": "false" } });
+  });
+
+  it("while the field loads or cannot be read: the stored climb, else one row of words left off the phone's line", () => {
+    expect(statusRows({ ...course, line: { state: "loading" } }, t)[2]).toEqual({ id: "climb", text: `statusClimb:{"m":85}`, data: { m: "85", source: "stored", state: "loading" } });
+    expect(statusRows({ ...course, climbM: null, line: { state: "loading" } }, t)[2]).toEqual({ id: "climb", text: "statusClimbLoading", short: "", data: { state: "loading" } });
+    expect(statusRows({ ...course, climbM: 0, line: { state: "unavailable", kind: "offline" } }, t)[2]).toEqual({ id: "climb", text: "statusClimbUnavailable", short: "", data: { state: "unavailable", kind: "offline" } });
+  });
+
+  it("without a field: the stored climb, or no row", () => {
+    expect(statusRows({ ...course, line: null }, t)[2]).toMatchObject({ id: "climb", data: { m: "85", source: "stored" } });
+    expect(statusRows({ ...course, climbM: null, line: null }, t).map((r) => r.id)).toEqual(["controls", "length", "scale", "checks"]);
+  });
+});
+
+
 describe("the desktop popover leaves the map scale to the map-info dialog (P6, docs/course-editor.md §2)", () => {
   it("a course: no scale row, the rest as the peek line's", () => {
     expect(courseInfoRows(course, t).map((r) => r.id)).toEqual(["controls", "length", "climb", "checks"]);

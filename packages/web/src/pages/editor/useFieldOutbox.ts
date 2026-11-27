@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { trpc } from "../../lib/trpc";
+import { activeEventNameId, trpc } from "../../lib/trpc";
 import { offlineDb } from "../../lib/offline/db";
 import {
   dexieControlWriteStore,
@@ -90,6 +90,13 @@ export function useFieldOutbox({ competitionId, writes, online, onSettled }: {
   const coordsOverlay = useRef<Overlaid<NonNullable<typeof coords.data>>>({ base: undefined, baseAt: 0 });
   const listOverlay = useRef<Overlaid<NonNullable<typeof list.data>>>({ base: undefined, baseAt: 0 });
 
+  // Set when the editor closes: a drain in flight stops before its next entry (MC-17).
+  const gone = useRef(false);
+  useEffect(() => {
+    gone.current = false;
+    return () => { gone.current = true; };
+  }, []);
+
   const drainNow = useCallback(async () => {
     if (typeof navigator !== "undefined" && !navigator.onLine) return;
     // A sent write is the server's now: into the base, so the shown value holds until the refetch answers.
@@ -98,7 +105,10 @@ export function useFieldOutbox({ competitionId, writes, online, onSettled }: {
       if (c.base) c.base = overlayCoordinates(c.base, [e]);
       if (l.base) l.base = overlayChecks(l.base, [e]);
     };
-    const r = await drain(store, writes, competitionId, { onSent });
+    // Only while this editor is open on the entries' event (MC-17): `writes` is pinned to it, and a drain stops
+    // once the page has moved to another event or closed, leaving the rest for that event's next drain.
+    const active = () => !gone.current && activeEventNameId() === competitionId;
+    const r = await drain(store, writes, competitionId, { onSent, active });
     if (r && (r.sent || r.conflicts || r.failed)) settledRef.current();
   }, [writes, competitionId]);
 

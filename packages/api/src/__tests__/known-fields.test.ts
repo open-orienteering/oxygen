@@ -25,6 +25,12 @@ describe("knownFields", () => {
     expect(knownFields("course", { name: "A", geometry: {}, geometrySource: "editor" })).toEqual({ name: "A" });
   });
 
+  it("keeps the course climb's source and the winner pace and drops a column this schema does not have (docs/course-elevation.md §6 \"Readers\")", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const row = { id: "c1", name: "A", climbM: 120, climbSource: "computed", winnerPaceSPerKm: 330, someFutureColumn: 1 };
+    expect(knownFields("course", row)).toEqual({ id: "c1", name: "A", climbM: 120, climbSource: "computed", winnerPaceSPerKm: 330 });
+  });
+
   it("warns once per model and name", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     knownFields("runner", { name: "a", brandNew: 1 });

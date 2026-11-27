@@ -138,6 +138,22 @@ describe("course.setMapRotation", () => {
     expect(await journaled()).toBeGreaterThan(before);
   });
 
+  it("a computed climb cleared by a map change is journaled even on a course whose length is not derived (§6)", async () => {
+    const file = await ctx.db.course.create({ data: { eventId: ctx.eventId, name: "File with climb", lengthM: 900, legs: "900;", lengthSource: "file", climbM: 41, climbSource: "computed" } });
+    const latest = async () => {
+      const e = await ctx.db.journalEntry.findFirst({ where: { eventId: ctx.eventId, type: "course.upserted", payload: { path: ["id"], equals: file.id } }, orderBy: { hlc: "desc" } });
+      return e ? (e.payload as { fields: { climbM: number } }).fields.climbM : null;
+    };
+    expect(await latest()).toBeNull();
+    await caller.course.setMapRotation({ degrees: 6 });
+    try {
+      expect(await latest()).toBe(0);
+      expect((await ctx.db.course.findUniqueOrThrow({ where: { id: file.id } })).climbSource).toBeNull();
+    } finally {
+      await caller.course.setMapRotation({ degrees: 0 });
+    }
+  });
+
   it("rejects when no map is uploaded", async () => {
     const other = await createTestEvent("map_rotation_empty");
     const emptyCaller = makeCaller(other.event);

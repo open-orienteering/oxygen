@@ -35,7 +35,7 @@ test.describe("P1: no blue circle on placing; the toner saver covers everything 
       await arm(page, "K");
       const a = await emptyPoint(page, 60);
       await page.mouse.move(a.x, a.y);
-      await expect(page.getByTestId("editor-ghost-label")).toBeAttached({ timeout: 10000 });
+      await expect(page.getByTestId("editor-ghost-label").or(page.locator('[data-testid="course-label"][data-site-id="provisional"]')).first()).toBeAttached({ timeout: 10000 });
       await blue();
       made.push((await place(page, a)).id);
       await blue();
@@ -210,7 +210,8 @@ test.describe("P4: the dashed ring back after placing; the ghost circle only wit
       await arm(page, "K");
       const a = await emptyPoint(page, 60);
       await page.mouse.move(a.x, a.y);
-      await expect(label).toHaveText(/^1 · \d+$/, { timeout: 10000 });
+      await expect(page.locator('[data-testid="course-label"][data-site-id="provisional"]')).toHaveAttribute("data-text", /^1-\d+$/, { timeout: 10000 });
+      await expect(label).toHaveCount(0);
       await expect(ghost).toHaveCount(0);
       await expect(ring).toHaveCount(0);
       await expect(page.getByTestId("editor-action-bar")).toHaveCount(0);
@@ -219,7 +220,7 @@ test.describe("P4: the dashed ring back after placing; the ghost circle only wit
       await expect(controlRows(page)).toHaveCount(1, { timeout: 15000 });
       const b = await emptyPoint(page, 60, [a]);
       await page.mouse.move(b.x, b.y);
-      await expect(label).toHaveText(/^2 · \d+$/, { timeout: 10000 });
+      await expect(page.locator('[data-testid="course-label"][data-site-id="provisional"]')).toHaveAttribute("data-text", /^2-\d+$/, { timeout: 10000 });
       await expect(ghost).toHaveCount(0);
       await expect(ring).toHaveCount(0);
 
@@ -400,7 +401,7 @@ test.describe("F27: the placement loupe toggle (docs/course-editor.md §6, §10 
     await arm(page, "K");
     const p = await emptyPoint(page);
     await page.mouse.move(p.x, p.y, { steps: 2 });
-    await expect(page.getByTestId("editor-ghost-label")).toBeAttached({ timeout: 10000 });
+    await expect(page.getByTestId("editor-ghost-label").or(page.locator('[data-testid="course-label"][data-site-id="provisional"]')).first()).toBeAttached({ timeout: 10000 });
     await expect(loupe).toHaveCount(0);
 
     // The magnifier turns it on (stored per browser); back over the map the loupe hangs above the cursor.
@@ -490,7 +491,7 @@ test.describe("F27: the placement loupe toggle (docs/course-editor.md §6, §10 
     await toggle.click();
     await expect(toggle).toHaveAttribute("aria-pressed", "false");
     await page.mouse.move(r.x + 4, r.y + 4, { steps: 2 });
-    await expect(page.getByTestId("editor-ghost-label")).toBeAttached({ timeout: 10000 });
+    await expect(page.getByTestId("editor-ghost-label").or(page.locator('[data-testid="course-label"][data-site-id="provisional"]')).first()).toBeAttached({ timeout: 10000 });
     await expect(loupe).toHaveCount(0);
   });
 

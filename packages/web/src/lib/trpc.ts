@@ -86,12 +86,15 @@ function createEventClient(nameId: string) {
   });
 }
 
+/** A vanilla tRPC client pinned to one event (`trpcClientForEvent`). */
+export type EventClient = ReturnType<typeof createEventClient>;
+
 /**
  * A vanilla client pinned to one event: header and `?event=` come from
  * `nameId`, never from the page URL. The outbox drain uses it so an entry
  * always reaches the competition it was made in (MC-01, BLD-04).
  */
-export function trpcClientForEvent(nameId: string) {
+export function trpcClientForEvent(nameId: string): EventClient {
   let client = eventClients.get(nameId);
   if (!client) {
     client = createEventClient(nameId);

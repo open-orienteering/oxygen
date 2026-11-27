@@ -1,4 +1,6 @@
-import { useState, useRef, useEffect, useCallback, useMemo, type ReactNode } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo, type ReactNode, useSyncExternalStore } from "react";
+import { placeMapLabels } from "../lib/map-labels";
+import type { HoverDotStore } from "../lib/editor/hover-dot";
 import { useTranslation } from "react-i18next";
 import { useParams } from "react-router-dom";
 import {
@@ -32,6 +34,7 @@ import {
   mmToInner,
   panBy,
   pxPerMapMm,
+  revealView,
   viewportRotationDeg,
   zoomAt,
 } from "../lib/map-viewport";
@@ -95,7 +98,7 @@ import {
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { courseLayerRequest, PROVISIONAL_SITE_ID, sheetCrossings, sheetExchanges, type LayoutRequest, type ProvisionalVisit } from "../lib/course-layer-request";
 import { course } from "@oxygen/shared";
-import { dragLegShapes } from "../lib/editor/leg-length";
+import { dragLegShapes, type LegClimbOf } from "../lib/editor/leg-length";
 import { outlinePoints, vertexRule } from "../lib/editor/geometry-edit";
 import type { CourseInfo } from "../map-gl/engine";
 import type { TerrainLine } from "../map-gl/terrain/lines";
@@ -342,6 +345,8 @@ export interface MapViewerEditorProps {
     centre?: { x: number; y: number };
     offsetPx?: { x: number; y: number };
     bounds?: { minX: number; minY: number; maxX: number; maxY: number };
+    /** Bring these paper points into sight: nothing moves when all of them already are (docs/course-elevation.md §5). */
+    reveal?: readonly { x: number; y: number }[];
   } | null;
   /** Layout mode's sheet (docs/course-layout.md §1): the course layer draws as the sheet prints, the page part over it. */
   layout?: LayoutRequest | null;
@@ -356,6 +361,15 @@ export interface MapViewerEditorProps {
   fullBleed?: boolean;
   /** Check markers (docs/course-editor.md §8): UI-layer shapes, never hit targets. */
   markers?: readonly ToolShape[];
+  /**
+   * Labels on the map that can be pressed (a computed route's "412 m · ↑ 18 m · ~3:05", docs/course-elevation.md
+   * §7.8): upright HTML at a paper point, over the map and under the dialogs.
+   */
+  mapLabels?: readonly MapLabel[];
+  /** A place another panel points at (the profile graph's pointer, docs/course-elevation.md §5): a dot, never a hit target. */
+  hoverDot?: HoverDotStore;
+  /** The climb along a leg's line, for the labels of a dragged control's legs (docs/course-elevation.md §4.5). */
+  legClimb?: LegClimbOf | null;
   /**
    * A course with variation groups as the editor shows it (docs/course-editor.md §12): the first
    * entry replaces the overlay of the same name (controls, legs, hidden numbers — the displayed
@@ -398,10 +412,27 @@ export interface ToolPointer {
   touch?: boolean;
 }
 
+/** A pressable label at a paper point (`MapViewerEditorProps.mapLabels`). */
+export interface MapLabel {
+  x: number;
+  y: number;
+  text: string;
+  color: string;
+  active?: boolean;
+  testId?: string;
+  data?: Record<string, string>;
+  onPress?: () => void;
+  onPoint?: (over: boolean) => void;
+  /** A second button shown on the active label ("Use"). */
+  action?: { label: string; disabled?: boolean; title?: string; testId?: string; onPress: () => void } | null;
+}
+
 /** A UI-layer shape a tool draws, paper mm (the viewer projects it). */
 export type ToolShape =
   | { kind: "circle"; x: number; y: number; rMm: number; dashed?: boolean; color?: string; fill?: string; testId?: string; data?: Record<string, string> }
-  | { kind: "line"; points: readonly { x: number; y: number }[]; closed?: boolean; dashed?: boolean; color?: string; fill?: string; widthPx?: number; testId?: string; data?: Record<string, string> }
+  | { kind: "line"; points: readonly { x: number; y: number }[]; closed?: boolean; dashed?: boolean; color?: string; fill?: string; widthPx?: number;
+      /** A white line this much wider under the line, so it reads on any map colour. */
+      casingPx?: number; opacity?: number; testId?: string; data?: Record<string, string> }
   /** A screen-size square handle. */
   | { kind: "handle"; x: number; y: number; active?: boolean; testId?: string; data?: Record<string, string> }
   /**
@@ -1175,8 +1206,8 @@ export function MapViewer({
     const structures: readonly Structure[] = !st ? [] : Array.isArray(st) ? st : [st as Structure];
     if (!editorOn || !editorDragPos || !courseRequest || structures.length !== 1) return [];
     const pos = new Map(courseRequest.sites.map((x) => [x.id, { x: x.x, y: x.y }] as const));
-    return dragLegShapes(structures[0].items.map((i) => i.siteId), pos, editorDragPos.id, mapScale, structures[0].items.map((i) => i.leg?.bends));
-  }, [editorOn, editorDragPos, courseRequest, mapScale]);
+    return dragLegShapes(structures[0].items.map((i) => i.siteId), pos, editorDragPos.id, mapScale, structures[0].items.map((i) => i.leg?.bends), editor?.legClimb);
+  }, [editorOn, editorDragPos, courseRequest, mapScale, editor?.legClimb]);
 
   // ─── Editor hit-test on the shared stage (docs/course-editor.md §5) ──
   const sharedHit = !!editor && glCourse;
@@ -1368,11 +1399,19 @@ export function MapViewer({
 
   // ─── Editor view requests (docs/course-editor.md §6.5: F, Tab) ──
   const viewRequestKeyRef = useRef<number | null>(null);
+  const mapMmToScreenRef = useRef<(x: number, y: number) => Pt | null>(() => null);
+  const innerToContainerRef = useRef<(x: number, y: number) => Pt>((x, y) => ({ x, y }));
   useEffect(() => {
     const req = editor?.viewRequest;
     if (!req || !viewport || req.key === viewRequestKeyRef.current) return;
     viewRequestKeyRef.current = req.key;
-    if (req.bounds) {
+    if (req.reveal) {
+      const next = revealView(viewport, req.reveal, (x, y) => {
+        const p = mapMmToScreenRef.current(x, y);
+        return p ? innerToContainerRef.current(p.x, p.y) : null;
+      }, containerSize.w, containerSize.h, 32);
+      if (next) setViewport(next);
+    } else if (req.bounds) {
       setUserBearing(0);
       setViewport(fitMm(req.bounds, containerSize.w, containerSize.h, 0.04));
     } else if (req.fit && req.fit.length > 0) {
@@ -1482,6 +1521,8 @@ export function MapViewer({
     [viewport, vctx, containerSize, proj3d],
   );
 
+  mapMmToScreenRef.current = mapMmToScreen;
+
   /** Inverse of screenToInner: rotated inner coords → container coords.
    *  Used to anchor unrotated HTML (the editor context menu) at a point
    *  that lives in the rotated overlay space. */
@@ -1499,6 +1540,7 @@ export function MapViewer({
     },
     [rotRad, containerSize, renderW, renderH],
   );
+  innerToContainerRef.current = innerToContainer;
 
   // Symbol size: CSS px per paper mm at the current zoom.
   const symbolScale = useMemo(() => (viewport ? pxPerMapMm(viewport) : 1), [viewport]);
@@ -1906,6 +1948,8 @@ export function MapViewer({
         return;
       }
       if (e.touches.length !== 1) return;
+      // A label over the map is a button of its own (docs/course-elevation.md §7.8): not a press on what lies under it.
+      if (e.target instanceof Element && e.target.closest("[data-map-label]")) return;
       const t = e.touches[0];
       lastTouchRef.current = { x: t.clientX, y: t.clientY };
       touchStartPosRef.current = { x: t.clientX, y: t.clientY };
@@ -3226,6 +3270,7 @@ export function MapViewer({
                 {editor.markers.map((sh, i) => toolShapeNode(sh, i, mapMmToScreen, symbolScale))}
               </g>
             )}
+            {editor?.hoverDot && viewport && <HoverDotMark store={editor.hoverDot} project={mapMmToScreen} />}
             {editor?.tool?.shapes && viewport && (
               <g data-testid="editor-tool-layer" className="pointer-events-none">
                 {editor.tool.shapes.map((sh, i) => toolShapeNode(sh, i, mapMmToScreen, symbolScale))}
@@ -3297,6 +3342,30 @@ export function MapViewer({
       )}
       {/* Editor contextual actions — unrotated HTML, anchored at the
           selection/phantom */}
+      {editor?.mapLabels && viewport && !editorDragPos && placeMapLabels(editor.mapLabels.map((l) => {
+        const inner = mapMmToScreen(l.x, l.y);
+        return inner ? { label: l, at: innerToContainer(inner.x, inner.y) } : null;
+      }).filter((l): l is { label: MapLabel; at: Pt } => l !== null), containerSize,
+        // Never over a handle or a grip of the tool: the label would take its press.
+        (editor.tool?.shapes ?? []).flatMap((sh) => {
+          if (sh.kind !== "handle" && sh.kind !== "grip") return [];
+          const inner = mapMmToScreen(sh.x, sh.y);
+          return inner ? [innerToContainer(inner.x, inner.y)] : [];
+        })).map(({ label: l, at }, i) => (
+        <div key={i} data-map-label data-testid={l.testId} data-active={l.active ? "true" : "false"} {...Object.fromEntries(Object.entries(l.data ?? {}).map(([k, v]) => [`data-${k}`, v]))}
+          className={`absolute flex items-center gap-1 rounded-full border bg-white/95 shadow-sm text-[11px] tabular-nums whitespace-nowrap ${l.active ? "z-[8] px-1.5 py-0.5 font-semibold shadow-md" : "z-[7] px-1.5 py-px"}`}
+          style={{ left: at.x, top: at.y, transform: "translate(-50%, -50%)", borderColor: l.color, borderWidth: l.active ? 2 : 1.5 }}
+          onMouseDown={(e) => e.stopPropagation()} onPointerEnter={() => l.onPoint?.(true)} onPointerLeave={() => l.onPoint?.(false)}>
+          <button type="button" onClick={l.onPress} className="flex items-center gap-1 cursor-pointer text-slate-800">
+            <span aria-hidden className="inline-block h-2 w-2 rounded-full" style={{ background: l.color }} />
+            {l.text}
+          </button>
+          {l.active && l.action && (
+            <button type="button" data-testid={l.action.testId} disabled={l.action.disabled} title={l.action.title} onClick={l.action.onPress}
+              className="rounded-full px-1.5 text-white cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed" style={{ background: l.color }}>{l.action.label}</button>
+          )}
+        </div>
+      ))}
       {editorMenu}
       {dragWarning}
       {touchHandle}
@@ -3947,6 +4016,15 @@ function renderDescriptionRows(
 }
 
 /** One tool shape (docs/course-editor.md §6) in the rotated overlay's inner px; `pxPerMm` sizes true-size circles. */
+/** The hover dot (docs/course-elevation.md §5): subscribed here, so a new place redraws this node alone. */
+function HoverDotMark({ store, project }: { store: HoverDotStore; project: (x: number, y: number) => { x: number; y: number } | null }) {
+  const dot = useSyncExternalStore(store.subscribe, store.get, store.get);
+  const p = dot ? project(dot.x, dot.y) : null;
+  if (!dot || !p) return null;
+  return <circle data-testid="editor-profile-map-dot" data-x={dot.x.toFixed(2)} data-y={dot.y.toFixed(2)} data-leg={dot.leg}
+    cx={p.x} cy={p.y} r={7} fill="#a21caf" stroke="#ffffff" strokeWidth={3} className="pointer-events-none" style={{ filter: "drop-shadow(0 0 3px rgba(0,0,0,0.55))" }} />;
+}
+
 function toolShapeNode(
   sh: ToolShape,
   key: number,
@@ -3966,9 +4044,16 @@ function toolShapeNode(
       const pts = sh.points.map((q) => project(q.x, q.y)).filter((q): q is { x: number; y: number } => q !== null);
       if (pts.length < 2) return null;
       const d = pts.map((q, i) => `${i ? "L" : "M"}${q.x.toFixed(1)},${q.y.toFixed(1)}`).join("") + (sh.closed ? "Z" : "");
-      return <path key={key} d={d} fill={sh.fill ?? "none"} stroke={color} strokeWidth={sh.widthPx ?? 1.5}
-        strokeDasharray={sh.dashed ? "5 4" : undefined} strokeLinejoin="round" data-testid={sh.testId}
+      const line = <path key={key} d={d} fill={sh.fill ?? "none"} stroke={color} strokeWidth={sh.widthPx ?? 1.5} opacity={sh.casingPx ? undefined : sh.opacity}
+        strokeDasharray={sh.dashed ? "5 4" : undefined} strokeLinejoin="round" strokeLinecap={sh.casingPx ? "round" : undefined} data-testid={sh.testId}
         data-points={sh.points.map((q) => `${q.x},${q.y}`).join(" ")} {...data} />;
+      if (!sh.casingPx) return line;
+      return (
+        <g key={key} opacity={sh.opacity}>
+          <path d={d} fill="none" stroke="#ffffff" strokeWidth={(sh.widthPx ?? 1.5) + sh.casingPx} strokeLinejoin="round" strokeLinecap="round" />
+          {line}
+        </g>
+      );
     }
     case "handle": {
       const p = project(sh.x, sh.y);

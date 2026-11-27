@@ -14,10 +14,12 @@
  */
 
 import { displayCode } from "./control-id.js";
+import { markClimbPending } from "./course-climb-pending.js";
 import { course, symbolLibrary } from "@oxygen/shared";
 import type { PrismaClient, Prisma } from "./generated/prisma/client.js";
 import { loadEventCrs } from "./event-crs.js";
 import { courseSequenceOf } from "./course-structure.js";
+import { emitCourseUpserted } from "./referenceJournal.js";
 
 /** One entry of a course's rendered sequence (start + controls + finish). */
 export interface GeometrySeqControl {
@@ -64,6 +66,8 @@ export function editorCourseLayer(
   courseId: string,
   seq: GeometrySeqControl[],
   orderMode: "ordered" | "free_order" = "ordered",
+  /** `legStyle`: each leg carries its stored style too (the climb reads it, docs/course-elevation.md §7.3). */
+  options: { legStyle?: boolean } = {},
 ): course.CourseLayer {
   const sites = new Map<string, course.CourseSite>();
   for (const c of seq) sites.set(c.id, { id: c.id, code: c.code, kind: KIND[c.type], x: c.xMm, y: c.yMm });
@@ -72,6 +76,7 @@ export function editorCourseLayer(
     const leg: course.CourseLegProps = {};
     if (c.leg?.bends?.length) leg.bends = c.leg.bends;
     if (c.via) leg.crossing = { controlId: c.via.id };
+    if (options.legStyle && c.leg?.style) leg.style = c.leg.style;
     return Object.keys(leg).length ? leg : undefined;
   };
   return course.courseLayer({
@@ -305,4 +310,31 @@ export async function rebuildCourseLengths(
 
     await db.course.update({ where: { id: courseUuid }, data });
   }
+  // A computed climb rests on the geometry just rebuilt (docs/course-elevation.md §6 "When"): cleared here, in the
+  // edit's transaction, and computed again once it has committed.
+  await clearComputedClimbs(db, eventId, courseUuids);
+}
+
+/**
+ * Clears the computed climb of the given courses (or of every course of
+ * the event) and marks them for the compute that follows the commit.
+ * For every change of what a climb rests on: a course's legs, a
+ * control's position, the event's map (docs/course-elevation.md §6 "When").
+ * Returns the ids it cleared. `emit`: each cleared course is journaled
+ * (the token not advanced), for a clear outside an edit that journals the
+ * course itself afterwards; without it a peer keeps the old climb until
+ * the compute that follows writes the new one (§6).
+ */
+export async function clearComputedClimbs(
+  db: Db,
+  eventId: bigint,
+  courseUuids: readonly string[] | "all",
+  opts: { emit?: boolean } = {},
+): Promise<string[]> {
+  const where = { eventId, climbSource: "computed", ...(courseUuids === "all" ? {} : { id: { in: [...courseUuids] } }) };
+  const ids = (await db.course.findMany({ where, select: { id: true }, orderBy: { id: "asc" } })).map((c) => c.id);
+  if (ids.length > 0) await db.course.updateMany({ where: { ...where, id: { in: ids } }, data: { climbM: 0, climbSource: null } });
+  markClimbPending(eventId, courseUuids);
+  if (opts.emit) for (const id of ids) await emitCourseUpserted(db, eventId, id, { advanceVersion: false });
+  return ids;
 }

@@ -170,15 +170,16 @@ describe("map templates and course maps", () => {
         templateId: template.seq,
         courseIds: [courseId],
       }),
-    ).resolves.toEqual({ created: 1, updated: 0 });
-    await expect(
-      caller.mapTemplate.applyToCourses({
-        templateId: duplicate.seq,
-        courseIds: [courseId],
-      }),
-    ).resolves.toEqual({ created: 0, updated: 1 });
+    ).resolves.toEqual({ created: 1, updated: 0, sheets: [] });
+    const moved = await caller.mapTemplate.applyToCourses({
+      templateId: duplicate.seq,
+      courseIds: [courseId],
+    });
+    expect(moved).toMatchObject({ created: 0, updated: 1 });
 
     const maps = await caller.courseMap.list();
+    // The moved sheet's new token is answered (the editor's own chain, docs/course-editor.md §3).
+    expect(moved.sheets).toEqual([{ seq: maps[0].seq, version: maps[0].version }]);
     expect(maps).toHaveLength(1);
     expect(maps[0]).toMatchObject({
       name: "Blue",

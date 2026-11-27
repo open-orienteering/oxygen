@@ -23,8 +23,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { validateCourseMap, type CourseMapDocument, type CourseMapObject } from "@oxygen/shared";
 import { trpc } from "../../../lib/trpc";
-import { VersionBook, versionConflictOfError } from "../../../lib/version-book";
-import { EditorConflict } from "../../../lib/editor/write-client";
+import { EditorConflict, UndoSkipped, type EditorWrites } from "../../../lib/editor/write-client";
+import type { EventClient } from "../../../lib/trpc";
 import type { MapViewerEditorProps, ToolPointer } from "../../../components/MapViewer";
 import { descriptionRect, gridSnap, pageBounds, pathFromView, pathRule, toPage, type SheetGeometry } from "../../../lib/editor/layout";
 import { readClipboard, refusal, writeClipboard, type Refusal } from "../../../lib/editor/clipboard";
@@ -58,7 +58,11 @@ export interface LayoutModeArgs {
   variantKey?: string | null;
   /** One write, through the page's pending count and error line; `undefined` when it failed. */
   run: <T>(op: () => Promise<T>) => Promise<T | undefined>;
-  record: (undo: () => Promise<unknown>, redo: () => Promise<unknown>) => unknown;
+  /** The editor's writes (one per row in flight, D6 undo guard) and its client pinned to the editor's event (MC-17). */
+  writes: EditorWrites;
+  client: EventClient;
+  /** `ranAs`: the op `run` ran for the entry, when not `redo` itself (its rows are the entry's D6 guard). */
+  record: (undo: () => Promise<unknown>, redo: () => Promise<unknown>, ranAs?: () => Promise<unknown>) => unknown;
   /** Why a paste was refused (J12), shown on the page's error line; a course object's entry is `clipboardWrongTypePage`. */
   notify?: (why: Refusal | "clipboardWrongTypePage" | "clipboardGraphicsUnknown") => void;
   /** The viewer's centre in paper mm, where a paste lands with the pointer off the map (J12). */
@@ -95,7 +99,7 @@ interface WriteTarget { key: string; scope: "sheet" | "template"; sheetSeq: numb
 
 export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
   const utils = trpc.useUtils();
-  const client = utils.client;
+  const { client } = a;
   const coarse = useMediaQuery("(pointer: coarse)");
   const canEdit = useCapabilities().has("courses.edit");
   const [target, setTarget] = useState<LayoutTarget | null>(null);
@@ -156,10 +160,16 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
   const data: EditorSheet | null = input && query.data ? query.data : null;
 
   // ─── The snapshot: stored, the last write until the refetch has it, a drag's preview ──
-  const [local, setLocal] = useState<{ key: string; snap: LayoutSnapshot; at: number } | null>(null);
+  // `seq`: the gesture (or undo step) the snapshot is from; a write's reply never replaces a newer gesture's (CRS-053).
+  // `since`: the stored token the local chain of snapshots was built on (a gesture writes on this client's own chain from it).
+  const [local, setLocal] = useState<{ key: string; snap: LayoutSnapshot; at: number; seq: number; since?: string } | null>(null);
+  const localSeq = useRef(0);
   const [draft, setDraft] = useState<LayoutSnapshot | null>(null);
   const base = useMemo(() => (data ? snapshotOf(data) : null), [data]);
-  const stored = local && local.key === key && query.dataUpdatedAt <= local.at ? local.snap : base;
+  const fromLocal = !!local && local.key === key && query.dataUpdatedAt <= local.at;
+  const stored = fromLocal ? local!.snap : base;
+  /** The token `stored` was built on (the write's `since`). */
+  const storedSince = fromLocal ? local!.since : data ? (data.scope === "sheet" && data.sheet ? data.sheet.version : data.template.version) : undefined;
   const snap = draft ?? stored;
   const geometry: SheetGeometry | null = useMemo(() => (data && snap ? geometryOf(data, snap) : null), [data, snap]);
   const scoped = useMemo(() => (data && snap ? scopeObjects(data, snap) : { editable: [], locked: [] }), [data, snap]);
@@ -197,7 +207,9 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
 
   // ─── Writes ──────────────────────────────────────────────
   // The newest token seen per sheet / template (docs/course-layout.md §2): reads and write results raise it.
-  const [versions] = useState(() => new VersionBook());
+  // The editor's own writes and token book (CRS-053, D6): one sheet / template write in flight per row.
+  const { writes } = a;
+  const versions = writes.versions;
   useEffect(() => {
     if (!data) return;
     if (data.sheet) versions.seed("sheet", data.sheet.seq, data.sheet.version);
@@ -206,46 +218,46 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
   const writeTarget: WriteTarget | null = data
     ? { key, scope: data.scope, sheetSeq: data.sheet?.seq ?? null, templateSeq: data.template.seq }
     : null;
-  const save = useCallback(async (w: WriteTarget, s: LayoutSnapshot) => {
+  const save = useCallback(async (w: WriteTarget, s: LayoutSnapshot, gesture?: number, since?: string) => {
+    const seq = gesture ?? ++localSeq.current;
     const kind = w.scope === "sheet" && w.sheetSeq !== null ? "sheet" : "template";
     const id = kind === "sheet" ? w.sheetSeq! : w.templateSeq;
+    let wrote: { version: string };
     try {
       if (kind === "sheet") {
-        const r = await client.courseMap.saveLayout.mutate({
+        wrote = await writes.writeRow("sheet", id, (baseVersion) => client.courseMap.saveLayout.mutate({
           // The template's objects are locked here and not written: a sheet gesture never touches the template.
           id, windowCenter: s.centre, printScale: s.printScale, description: s.description, objects: s.sheetObjects,
-          baseVersion: versions.get("sheet", id),
-        });
-        versions.seed("sheet", id, r.version);
+          baseVersion,
+        }), since);
       } else {
-        const r = await client.mapTemplate.update.mutate({ id, ...templateWriteOf(s), baseVersion: versions.get("template", id) });
-        versions.seed("template", id, r.version);
+        wrote = await writes.writeRow("template", id, (baseVersion) => client.mapTemplate.update.mutate({ id, ...templateWriteOf(s), baseVersion }), since);
       }
     } catch (e) {
-      // Another setter wrote the sheet or template: refresh and redo (no merge of whole snapshots).
-      const conflict = versionConflictOfError(e);
-      if (!conflict) throw e;
-      versions.seed(kind, id, conflict.version);
-      void utils.courseMap.resolveSheet.invalidate();
-      throw new EditorConflict({ kind: "refresh", differing: null }, kind, id);
+      // Another setter wrote the sheet or template: refresh and redo (no merge of whole snapshots), or the undo is skipped (D6).
+      if (e instanceof EditorConflict || e instanceof UndoSkipped) void utils.courseMap.resolveSheet.invalidate();
+      throw e;
     }
-    setLocal({ key: w.key, snap: s, at: Date.now() });
+    // Writes of one sheet go one at a time: a later gesture's optimistic snapshot stays until its own reply.
+    setLocal((l) => (l && l.seq > seq ? l : { key: w.key, snap: s, at: Date.now(), seq, since: (l?.key === w.key ? l.since : undefined) ?? since ?? wrote.version }));
     void utils.courseMap.resolveSheet.invalidate();
     void utils.courseMap.list.invalidate();
     void utils.mapTemplate.list.invalidate();
     return true;
-  }, [client, utils, versions]);
+  }, [client, utils, writes]);
 
   const { run, record } = a;
   /** One gesture: the whole snapshot written, one undo entry writing back the one it replaced. */
   const commit = useCallback(async (next: LayoutSnapshot) => {
     if (!writeTarget || !stored) return;
-    const prev = stored, w = writeTarget;
-    setLocal({ key: w.key, snap: next, at: Number.POSITIVE_INFINITY });
+    const prev = stored, w = writeTarget, since = storedSince;
+    const seq = ++localSeq.current;
+    setLocal({ key: w.key, snap: next, at: Number.POSITIVE_INFINITY, seq, since });
+    const first = () => save(w, next, seq, since);
+    if ((await run(first)) === undefined) { setLocal((l) => (l?.seq === seq ? null : l)); return; }
     const redo = () => save(w, next);
-    if ((await run(redo)) === undefined) { setLocal(null); return; }
-    record(() => save(w, prev), redo);
-  }, [writeTarget, stored, save, run, record]);
+    record(() => save(w, prev), redo, first);
+  }, [writeTarget, stored, storedSince, save, run, record]);
 
   const apply = useCallback((s: LayoutSnapshot, c: LayoutChange): LayoutSnapshot => {
     let next = s;
@@ -521,18 +533,18 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
       noSheet={<NoSheetActions view={a.view} course={a.course} canEdit={canEdit} run={run} onOpen={open} />}
       sheetActions={data?.sheet ? (
         <SheetActions sheet={data.sheet} templateSeq={data.template.seq} siblings={siblings} courseName={a.course?.name ?? null}
-          canEdit={canEdit} versions={versions} run={run} record={record} onOpen={open} />
+          canEdit={canEdit} versions={versions} writes={writes} client={client} run={run} record={record} onOpen={open} />
       ) : null}
     />
     {data && (
-      <TemplateKeySection template={data.template} sheets={sheets.data ?? []} canEdit={canEdit} run={run} record={record} onOpen={open}
+      <TemplateKeySection template={data.template} sheets={sheets.data ?? []} canEdit={canEdit} writes={writes} run={run} record={record} onOpen={open}
         sheetCourse={data.sheet?.kind === "course" && data.sheet.classSeq === null ? data.sheet.courseSeq : null} />
     )}
     {data?.sheet?.kind === "course" && data.sheet.courseSeq !== null && (
       <ClassOverridesSection courseSeq={data.sheet.courseSeq} canEdit={canEdit} run={run} record={record} onOpen={open} />
     )}
     <SetterSection view={a.view} course={a.course} rows={sheets.data ?? []} openSheet={data?.sheet?.seq ?? null}
-      canEdit={canEdit} versions={versions} run={run} record={record} onOpen={open} />
+      canEdit={canEdit} versions={versions} writes={writes} run={run} record={record} onOpen={open} />
     {data && <ClubTemplatesSection template={data.template} canEdit={canEdit} run={run} onOpen={open} />}
     </div>
   );

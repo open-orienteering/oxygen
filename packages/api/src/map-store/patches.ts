@@ -20,6 +20,9 @@ import type { Prisma, PrismaClient } from "../generated/prisma/client.js";
 import { nextServerHlc } from "../serverClock.js";
 import { decodedDocument, eventDocumentHash, writePinnedMapFileColumns } from "./event-document.js";
 import { synchronizePositionedControlCoordinates } from "../event-crs.js";
+import { mayRunBackgroundJob } from "../background-lease.js";
+import { clearComputedClimbs } from "../course-geometry.js";
+import { refreshComputedClimbs } from "../course-climb.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -368,6 +371,8 @@ export interface PromoteCompletion {
   outcome: "pinned" | "skipped";
   reason?: string;
   versionId?: string;
+  /** `pinned` only: the event's document hash changed (the bake), so its computed climbs rested on the old one. */
+  documentChanged?: boolean;
 }
 
 /**
@@ -406,7 +411,7 @@ export async function completePromote(
 
   const move = async (tx: Prisma.TransactionClient): Promise<PromoteCompletion> => {
     await tx.$queryRaw`SELECT 1 FROM "oxygen"."map_patches" WHERE "event_id" = ${job.eventId} FOR UPDATE`;
-    const files = await tx.mapFile.findMany({ where: { eventId: job.eventId, sourceHash: job.sourceHash }, select: { clubMapVersionId: true } });
+    const files = await tx.mapFile.findMany({ where: { eventId: job.eventId, sourceHash: job.sourceHash }, select: { clubMapVersionId: true, documentHash: true } });
     if (!from || files.length === 0 || files.some((f) => f.clubMapVersionId !== from.id)) {
       return { outcome: "skipped", reason: "the event's map moved while the promote ran", versionId: target.id };
     }
@@ -417,7 +422,7 @@ export async function completePromote(
       if (!samePatchContent(patch, next)) await tx.mapPatch.update({ where: { eventId: job.eventId }, data: rowData(next, nextPatchVersion()) });
     }
     await tx.mapFile.updateMany({ where: { eventId: job.eventId, sourceHash: job.sourceHash }, data: { documentHash: job.documentHash, clubMapVersionId: target.id } });
-    return { outcome: "pinned", versionId: target.id };
+    return { outcome: "pinned", versionId: target.id, documentChanged: files.some((f) => f.documentHash !== job.documentHash) };
   };
   const r = isClient(db) ? await db.$transaction(move, REKEY_TX) : await move(db);
   if (r.outcome !== "pinned") {
@@ -434,6 +439,19 @@ export async function completePromote(
   }
   // What stays in the patch (ops that did not apply, unresolved entries) follows the pin (§4.4).
   await reresolveAfterPin(db, job.eventId);
+  // The event's document changed (the bake): its computed climbs rested on the old one. Cleared (journaled) and computed
+  // again where this node may (docs/course-elevation.md §6 "When"). The event's own confirmed interval is not copied to
+  // the club map: the club map's value, if any, is the event's from now on.
+  if (r.documentChanged && isClient(db)) {
+    try {
+      if (await mayRunBackgroundJob(db, job.eventId, "map-promote")) {
+        await clearComputedClimbs(db, job.eventId, "all", { emit: true });
+        await refreshComputedClimbs(db, job.eventId);
+      }
+    } catch (err) {
+      console.warn(`[map-patches] event ${job.eventId}: the climbs after the promote:`, err);
+    }
+  }
   return r;
 }
 

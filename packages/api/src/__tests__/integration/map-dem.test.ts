@@ -163,6 +163,20 @@ describe("the DEM job at import stage 10 (map-storage.md §4.7)", () => {
       anchored: { url: url(hill, `contours.${LM}`), decided: expect.any(Number) },
     });
     expect((await terrainReview(ctx.db, hill)).dem.state).toBe("ready");
+    // The interval: assumed from the document, confirmed from the event; the anchor's suspicion is read from the stored report.
+    expect(d.interval).toEqual({ assumedM: 5, confirmedM: null });
+    expect((await terrainDescriptor(ctx.db, hill, undefined, { confirmedIntervalM: 2.5 })).interval).toEqual({ assumedM: 5, confirmedM: 2.5 });
+    expect(d.dem.anchored!.intervalSuspect).toBe(false);
+    const anchoredRow = await ctx.db.mapHeightfield.findUniqueOrThrow({ where: { documentHash_source_version: { documentHash: hill, source: `contours.${LM}`, version: TERRAIN_VERSION } }, select: { report: true } });
+    await ctx.db.mapHeightfield.update({
+      where: { documentHash_source_version: { documentHash: hill, source: `contours.${LM}`, version: TERRAIN_VERSION } },
+      data: { report: { ...(anchoredRow.report as object), anchor: { ...(anchoredRow.report as { anchor: object }).anchor, intervalSuspect: true } } },
+    });
+    try {
+      expect((await terrainDescriptor(ctx.db, hill)).dem.anchored!.intervalSuspect).toBe(true);
+    } finally {
+      await ctx.db.mapHeightfield.update({ where: { documentHash_source_version: { documentHash: hill, source: `contours.${LM}`, version: TERRAIN_VERSION } }, data: { report: anchoredRow.report as object } });
+    }
     expect((await terrainDescriptor(ctx.db, hill, undefined, { rotationCorrection: 1.5 })).dem).toEqual({ state: "unavailable", reason: "rotation-corrected", provider: null, ground: null, anchored: null });
     setDemProviders([]);
     expect((await terrainDescriptor(ctx.db, hill)).dem.state).toBe("disabled");

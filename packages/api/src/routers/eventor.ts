@@ -63,6 +63,7 @@ import {
   uploadResults,
   EventorTimeoutError,
   uploadStartList,
+  classCourseForUpload,
   type EventorEntry,
   type EventorResult,
   type EventorClub,
@@ -1641,7 +1642,7 @@ export const eventorRouter = router({
    * Returns `{ runnerCount }` for the UI status line.
    */
   pushResults: manageProcedure
-    .input(z.object({ dryRun: z.boolean().optional() }).optional())
+    .input(z.object({ dryRun: z.boolean().optional(), includeCourse: z.boolean().default(true) }).optional())
     .mutation(async ({ ctx, input }): Promise<{ runnerCount: number }> => {
       const event = await ctx.db.event.findUnique({
         where: { id: ctx.event.id },
@@ -1890,6 +1891,11 @@ export const eventorRouter = router({
             (r.cardNo != null && (freePunchesByCardNo.get(r.cardNo)?.length ?? 0) > 0),
           place: placement?.place ?? 0,
           noTiming: cls?.noTiming === true,
+          // The organiser may leave the element out (docs/course-elevation.md §8).
+          course:
+            input?.includeCourse === false
+              ? undefined
+              : classCourseForUpload(cls?.courseId ? courseById.get(cls.courseId) : null),
           fee: r.feeCents || undefined,
           cardFee:
             r.cardFeeCents !== 0
@@ -1934,7 +1940,7 @@ export const eventorRouter = router({
    * pass.
    */
   pushStartList: manageProcedure
-    .input(z.object({ dryRun: z.boolean().optional() }).optional())
+    .input(z.object({ dryRun: z.boolean().optional(), includeCourse: z.boolean().default(true) }).optional())
     .mutation(async ({ ctx, input }): Promise<{ runnerCount: number }> => {
       const event = await ctx.db.event.findUnique({
         where: { id: ctx.event.id },
@@ -1956,14 +1962,19 @@ export const eventorRouter = router({
       const env = (event.eventorEnv as EventorEnvironment) || "prod";
       const { apiKey } = await requireApiKey(env);
 
-      const [classes, runners] = await Promise.all([
+      const [classes, courses, runners] = await Promise.all([
         ctx.db.class.findMany({
           where: { eventId: ctx.event.id, removed: false },
+        }),
+        ctx.db.course.findMany({
+          where: { eventId: ctx.event.id, removed: false },
+          select: { id: true, name: true, lengthM: true, climbM: true },
         }),
         ctx.db.runner.findMany({
           where: { eventId: ctx.event.id, removed: false },
         }),
       ]);
+      const courseById = new Map(courses.map((c) => [c.id, c]));
       const classById = new Map(classes.map((c) => [c.id, c]));
 
       const uploadData: ResultForUpload[] = runners.map((r) => {
@@ -1980,6 +1991,11 @@ export const eventorRouter = router({
           cardNo: r.cardNo || undefined,
           startTime: toAbsolute(r.startTime, event.zeroTime) || undefined,
           status: runnerStatusToValue(r.status),
+          // The organiser may leave the element out (docs/course-elevation.md §8).
+          course:
+            input?.includeCourse === false
+              ? undefined
+              : classCourseForUpload(cls?.courseId ? courseById.get(cls.courseId) : null),
         };
       });
 

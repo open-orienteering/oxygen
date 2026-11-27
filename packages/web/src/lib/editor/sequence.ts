@@ -211,6 +211,30 @@ export function legForInsert(rows: readonly DisplayRow[], insertAt: number): { i
 }
 
 /**
+ * The drawn leg a leg-click phantom's insert position names: its index among the route's legs (leg i joins positioned
+ * rows i and i + 1, as `insertIndexForLeg` reads them); null when the position names no drawn leg. The heights of the
+ * selected leg are read by it (docs/course-elevation.md §4.5).
+ */
+export function legIndexForInsert(rows: readonly DisplayRow[], insertAt: number): number | null {
+  const leg = legForInsert(rows, insertAt);
+  if (!leg) return null;
+  const index = rows.slice(0, leg.itemIndex + 1).filter((r) => r.pt !== null).length - 2;
+  return index >= 0 ? index : null;
+}
+
+/**
+ * The marks of the profile graph along the drawn route (docs/course-elevation.md §5): one per positioned row — a
+ * start `start`, a finish `finish`, a control its number on the course — and each leg by its ends' codes.
+ */
+export function routeMarks(rows: readonly DisplayRow[]): { bounds: ({ kind: "start" | "finish" } | { kind: "control"; label: string })[]; legs: string[] } {
+  const placed = rows.filter((r) => r.pt !== null);
+  return {
+    bounds: placed.map((r) => (r.kind === "start" || r.kind === "finish" ? { kind: r.kind } : { kind: "control" as const, label: r.seqIndex >= 0 ? String(r.seqIndex + 1) : r.code })),
+    legs: placed.slice(1).map((r, i) => `${placed[i].code} → ${r.code}`),
+  };
+}
+
+/**
  * The points `sequenceLegMeters` measures (§6.7 "Readouts follow the bends", course-layer.md §10.1): each row's point
  * with the bends of the leg into it, routed through its crossing point (§10.3) when it has one. `legOf(i)` is row i's
  * leg: its stored bends and its crossing point, resolved. A leg draft (F21's, live or held; F25) replaces the stored

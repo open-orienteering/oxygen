@@ -394,6 +394,55 @@ test.describe("P6: the map footer out; the map-info dialog", () => {
     await expect(dialog).toHaveCount(0);
   });
 
+  test("the contour interval row: the state, a value refused before it is sent, saved through course.setContourInterval, cleared again (§0.43)", async ({ page }) => {
+    // The demo map has no contours, so the metadata is answered as for a map that has them; the value the page
+    // saved is what the next answer says (the server's own bookkeeping is in the integration tests).
+    let stored: number | null = null;
+    await page.route(/\/trpc\/[^?]*course\.mapMetadata/, async (route) => {
+      const res = await route.fetch();
+      const procs = decodeURIComponent(new URL(route.request().url()).pathname.replace(/^.*\/trpc\//, "")).split(",");
+      const body = (await res.json()) as unknown;
+      const arr = (Array.isArray(body) ? body : [body]) as { result?: { data?: Record<string, unknown> } }[];
+      const data = arr[procs.indexOf("course.mapMetadata")]?.result?.data;
+      if (data) {
+        data.terrain = { ...((data.terrain as Record<string, unknown> | null) ?? {}), state: "ready", interval: { assumedM: 5, confirmedM: stored } };
+        data.contourInterval = { assumedM: 5, confirmedM: stored, from: "event", suspect: false };
+      }
+      await route.fulfill({ response: res, json: Array.isArray(body) ? arr : arr[0] });
+    });
+    await openEditor(page);
+    await page.getByTestId("editor-map-info").click();
+    const dialog = page.getByTestId("editor-map-info-dialog");
+    const row = dialog.getByTestId("editor-map-info-interval");
+    await expect(row).toBeVisible({ timeout: 30000 });
+    try {
+      await expect(dialog.getByTestId("editor-map-info-interval-state")).toHaveAttribute("data-state", "unconfirmed");
+      const input = dialog.getByTestId("editor-map-info-interval-input");
+      // A value that cannot be an interval is refused before it is sent.
+      await input.fill("0");
+      await expect(dialog.getByTestId("editor-map-info-interval-invalid")).toBeVisible();
+      await expect(dialog.getByTestId("editor-map-info-interval-save")).toBeDisabled();
+      await input.fill("2,5");
+      const saved = waitForTrpc(page, "course.setContourInterval");
+      stored = 2.5;
+      await dialog.getByTestId("editor-map-info-interval-save").click();
+      const res = await saved;
+      expect(res.status()).toBe(200);
+      await expect(dialog.getByTestId("editor-map-info-interval-state")).toHaveAttribute("data-state", "confirmed");
+      await expect(row).toHaveAttribute("data-confirmed", "2.5");
+      await expect(dialog.getByTestId("editor-map-info-interval-input")).toHaveValue("2.5");
+      // And back to not confirmed.
+      const cleared = waitForTrpc(page, "course.setContourInterval");
+      stored = null;
+      await dialog.getByTestId("editor-map-info-interval-clear").click();
+      await cleared;
+      await expect(dialog.getByTestId("editor-map-info-interval-state")).toHaveAttribute("data-state", "unconfirmed");
+      await expect(dialog.getByTestId("editor-map-info-interval-clear")).toHaveCount(0);
+    } finally {
+      await trpcCall("course.setContourInterval", { intervalM: null });
+    }
+  });
+
   test("Escape closes only the dialog: the armed tool and the selection stay; the tools' letters are inert while it is open", async ({ page }) => {
     await openEditor(page);
     await newCourse(page, "P6 escape");
@@ -461,7 +510,7 @@ test.describe("F5: map exchange (docs/course-editor.md §6.9)", () => {
     await arm(page, "X");
     const spot = await emptyPoint(page, 40);
     await page.mouse.move(spot.x, spot.y);
-    await expect(page.getByTestId("editor-ghost-label")).toHaveText(/^2 · \d+$/, { timeout: 10000 });
+    await expect(page.locator('[data-testid="course-label"][data-site-id="provisional"]')).toHaveAttribute("data-text", /^2-\d+$/, { timeout: 10000 });
     const saved = waitForTrpc(page, "course.setStructure");
     const x = await place(page, spot);
     await saved;

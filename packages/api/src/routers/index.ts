@@ -28,6 +28,7 @@ import { classPresetRouter } from "./classPreset.js";
 import { mapTemplateRouter } from "./mapTemplate.js";
 import { courseMapRouter } from "./courseMap.js";
 import { courseObjectRouter } from "./courseObject.js";
+import { legRouteRouter } from "./legRoute.js";
 import { mapPatchRouter } from "./mapPatch.js";
 import { mapTrackRouter } from "./mapTrack.js";
 import { layoutRouter } from "./layout.js";
@@ -70,6 +71,7 @@ export const appRouter = router({
   mapTemplate: mapTemplateRouter,
   courseMap: courseMapRouter,
   courseObject: courseObjectRouter,
+  legRoute: legRouteRouter,
   mapPatch: mapPatchRouter,
   mapTrack: mapTrackRouter,
   layout: layoutRouter,
