@@ -47,6 +47,7 @@ import {
 } from "@oxygen/shared/print";
 import type { Prisma, PrismaClient } from "../generated/prisma/client.js";
 import { prisma } from "../db.js";
+import { pickLeastPopulated } from "../variants.js";
 import { renderGate } from "../map-render-limits.js";
 import { assertRestAccess } from "../restGuard.js";
 import { bundledPdfFaces, loadBundledFonts } from "../render/fonts.js";
@@ -135,18 +136,43 @@ type CourseRow = Prisma.CourseGetPayload<{ include: typeof courseInclude }>;
  * order) or per course; a class without a course is skipped. `count` =
  * the class's runners (not removed, not withdrawn — `class.list`'s
  * count) + its vacancies; a course's = the sum over its classes.
+ *
+ * A course with live variants prints one block per variant, in key order
+ * (CRS-009, course-print.md §6.4): a class block is `<class> <key>` with
+ * the runners whose course is that variant, the rest (vacancies, runners
+ * without a variant) dealt one at a time to the variant with the fewest
+ * copies so far, as `assignVariant` would. `courses=<child>` is one
+ * variant's block, on its root's classes.
  */
 export async function selectDescriptionBlocks(db: Db, event: { id: bigint; name: string; date: Date }, req: DescriptionsRequest): Promise<DescriptionSheetBlock[]> {
   const eventId = event.id;
   const [classes, runners, mapInfo, allControls] = await Promise.all([
     db.class.findMany({ where: { eventId, removed: false }, orderBy: [{ sortIndex: "asc" }, { seq: "asc" }] }),
-    db.runner.findMany({ where: { eventId, removed: false, status: { notIn: WITHDRAWN_STATUSES.map(valueToRunnerStatus) } }, select: { classId: true } }),
+    db.runner.findMany({ where: { eventId, removed: false, status: { notIn: WITHDRAWN_STATUSES.map(valueToRunnerStatus) } }, select: { classId: true, courseId: true } }),
     getBaseMapInfoOrNull(db, eventId),
     db.control.findMany({ where: { eventId, removed: false } }),
   ]);
-  const runnersIn = new Map<string, number>();
-  for (const r of runners) if (r.classId) runnersIn.set(r.classId, (runnersIn.get(r.classId) ?? 0) + 1);
-  const countOf = (c: (typeof classes)[number]) => (runnersIn.get(c.id) ?? 0) + c.vacantCount;
+  const runnersOf = new Map<string, { courseId: string | null }[]>();
+  for (const r of runners) if (r.classId) runnersOf.set(r.classId, [...(runnersOf.get(r.classId) ?? []), r]);
+  const runnersIn = (c: (typeof classes)[number]) => runnersOf.get(c.id)?.length ?? 0;
+  const countOf = (c: (typeof classes)[number]) => runnersIn(c) + c.vacantCount;
+
+  /** Per variant (`kids` in key order): the class's copies, the runners' own plus the rest dealt to the fewest. */
+  const variantCounts = (c: (typeof classes)[number], kids: readonly { id: string }[]): Map<string, number> => {
+    const counts = new Map<string, number>(kids.map((k) => [k.id, 0]));
+    let assigned = 0;
+    for (const r of runnersOf.get(c.id) ?? []) {
+      if (r.courseId && counts.has(r.courseId)) {
+        counts.set(r.courseId, counts.get(r.courseId)! + 1);
+        assigned++;
+      }
+    }
+    for (let rest = countOf(c) - assigned; rest > 0; rest--) {
+      const v = pickLeastPopulated(kids, counts)!;
+      counts.set(v.id, counts.get(v.id)! + 1);
+    }
+    return counts;
+  };
 
   const block = (course: CourseRow, label: string, classNames: string[], count: number): DescriptionSheetBlock => {
     const ends = layoutCourseEnds(
@@ -175,15 +201,48 @@ export async function selectDescriptionBlocks(db: Db, event: { id: bigint; name:
     return { label, rows: layout.descriptionRows, header: layout.descriptionHeader, title: course.name, count };
   };
 
+  /** Each root's live variants, in key order. */
+  const variantsOf = async (rootIds: string[]): Promise<Map<string, CourseRow[]>> => {
+    const out = new Map<string, CourseRow[]>();
+    if (rootIds.length === 0) return out;
+    const kids = await db.course.findMany({ where: { parentCourseId: { in: rootIds }, removed: false }, include: courseInclude, orderBy: { variantKey: "asc" } });
+    for (const k of kids) out.set(k.parentCourseId!, [...(out.get(k.parentCourseId!) ?? []), k]);
+    return out;
+  };
+
   if (req.courseSeqs) {
-    const courses = await db.course.findMany({ where: { eventId, removed: false, seq: { in: req.courseSeqs } }, include: courseInclude });
-    if (courses.length !== req.courseSeqs.length) throw new DescriptionsRequestError("One or more requested courses were not found");
-    const bySeq = new Map(courses.map((c) => [c.seq, c]));
-    return req.courseSeqs.map((seq) => {
+    const found = await db.course.findMany({ where: { eventId, removed: false, seq: { in: req.courseSeqs } }, include: courseInclude });
+    if (found.length !== req.courseSeqs.length) throw new DescriptionsRequestError("One or more requested courses were not found");
+    const bySeq = new Map(found.map((c) => [c.seq, c]));
+    // A variant asked for by its seq prints on its root's classes; asked with its root it is absorbed.
+    const parentIds = [...new Set(found.filter((c) => c.parentCourseId).map((c) => c.parentCourseId!))];
+    const parents = new Map((await db.course.findMany({ where: { id: { in: parentIds }, removed: false }, include: courseInclude })).map((c) => [c.id, c]));
+    const askedRoots = new Set(found.filter((c) => !c.parentCourseId).map((c) => c.id));
+    const kidsOf = await variantsOf([...askedRoots]);
+    const out: DescriptionSheetBlock[] = [];
+    const done = new Set<string>();
+    for (const seq of req.courseSeqs) {
       const course = bySeq.get(seq)!;
-      const own = classes.filter((c) => c.courseId === course.id);
-      return block(course, course.name, own.map((c) => c.name), own.reduce((n, c) => n + countOf(c), 0));
-    });
+      if (done.has(course.id)) continue;
+      done.add(course.id);
+      const root = course.parentCourseId ? parents.get(course.parentCourseId) : course;
+      if (!root) throw new DescriptionsRequestError("One or more requested courses were not found");
+      if (course.parentCourseId && askedRoots.has(root.id)) continue;
+      const own = classes.filter((c) => c.courseId === root.id);
+      const names = own.map((c) => c.name);
+      if (course.parentCourseId) {
+        const siblings = (await variantsOf([root.id])).get(root.id) ?? [course];
+        out.push(block(course, course.name, names, own.reduce((n, c) => n + (variantCounts(c, siblings).get(course.id) ?? 0), 0)));
+        continue;
+      }
+      const kids = kidsOf.get(course.id) ?? [];
+      if (kids.length === 0) {
+        out.push(block(course, course.name, names, own.reduce((n, c) => n + countOf(c), 0)));
+        continue;
+      }
+      for (const kid of kids) out.push(block(kid, kid.name, names, own.reduce((n, c) => n + (variantCounts(c, kids).get(kid.id) ?? 0), 0)));
+    }
+    return out;
   }
 
   let selected = classes;
@@ -198,7 +257,16 @@ export async function selectDescriptionBlocks(db: Db, event: { id: bigint; name:
   const courses = new Map(
     (await db.course.findMany({ where: { id: { in: courseIds }, removed: false }, include: courseInclude })).map((c) => [c.id, c]),
   );
-  return selected.filter((c) => courses.has(c.courseId!)).map((c) => block(courses.get(c.courseId!)!, c.name, [c.name], countOf(c)));
+  const kidsOf = await variantsOf([...courses.keys()]);
+  return selected
+    .filter((c) => courses.has(c.courseId!))
+    .flatMap((c) => {
+      const root = courses.get(c.courseId!)!;
+      const kids = kidsOf.get(root.id) ?? [];
+      if (kids.length === 0) return [block(root, c.name, [c.name], countOf(c))];
+      const counts = variantCounts(c, kids);
+      return kids.map((kid) => block(kid, `${c.name} ${kid.variantKey ?? ""}`.trimEnd(), [c.name], counts.get(kid.id) ?? 0));
+    });
 }
 
 export interface DescriptionsPdfOptions {
