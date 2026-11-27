@@ -43,7 +43,8 @@ export function inImportTransaction<C extends { db: PrismaClient; event: { id: b
       if (error instanceof PrismaNs.PrismaClientKnownRequestError && error.code === "P2028") {
         throw new TRPCError({
           code: "TIMEOUT",
-          message: "The course import took too long and was undone; nothing was changed. Try again, or import a smaller file.",
+          // Waiting for the event (an Eventor sync, another import, a busy pool) counts too.
+          message: "The course import timed out and was undone; nothing was changed. The event may be busy (an Eventor sync or another import): try again in a minute.",
           cause: error,
         });
       }

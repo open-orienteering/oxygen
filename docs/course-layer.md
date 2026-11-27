@@ -1063,8 +1063,9 @@ what it says.
 - **Two modes.** **Merge** (pre-selected) adds and updates what the file
   carries and leaves everything else. **Replace all** also soft-deletes the
   live courses (and their variants) and controls the file does not carry,
-  and clears the course of the classes on a removed course only: a class on
-  a course the file updates keeps it unless the operator remaps it. Matched
+  and clears the course of the classes on a removed course only (and of a
+  class still pointing at a course removed earlier): a class on a course
+  the file updates keeps it unless the operator remaps it. Matched
   rows are never flipped to removed and back, so the counts are right
   (an update is an update), and the tokens stamp every row the file
   carries plus the rows Replace all removes, not the rest of the event.
@@ -1076,7 +1077,8 @@ what it says.
   one). **Local wins** on status (Bad, Optional, …), extra codes
   (`31;131`), name, kind and notes, in both modes. A removed control the
   import restores keeps its codes minus any extra code a live row has since
-  taken. A control the file moves more than 50 m (`MOVED_FAR_METRES`, map
+  taken: by a live control or a live start / finish's unit code, or claimed
+  as its own code by another removed row the same file restores. A control the file moves more than 50 m (`MOVED_FAR_METRES`, map
   mm × the file's scale) under the same code is a preview warning, not a
   refusal; it is skipped when positions are skipped or the file's map
   mismatches.

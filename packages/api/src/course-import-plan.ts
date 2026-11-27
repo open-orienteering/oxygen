@@ -99,7 +99,7 @@ export async function loadImportState(db: Db, eventId: bigint): Promise<ImportSt
       return { id: c.id, name: c.name, removed: c.removed, lengthM: c.lengthM, forked, variantIds };
     }),
     classes,
-    variantRootByName: new Map(variants.map((v) => [v.name.toLowerCase(), v.parentCourseId!])),
+    variantRootByName: new Map(variants.map((v) => [importKey(v.name), v.parentCourseId!])),
     runnersByCourse: new Map(runners.map((r) => [r.courseId!, r._count._all])),
   };
 }
@@ -120,6 +120,9 @@ export interface ImportBlocker {
   /** held_code: the start / finish holding each code, by index. */
   holders?: string[];
 }
+
+/** One key for blockers and matching: trimmed, case-insensitive. */
+export const importKey = (s: string) => s.trim().toLowerCase();
 
 /** The name Oxygen gives an imported start / finish ("Start 2", "Mål 1"). */
 export function startFinishName(pc: Pick<ParsedControl, "id" | "type">): string {
@@ -149,7 +152,7 @@ export function fileBlockers(parsed: Pick<ParsedCourseData, "controls" | "course
   if (parsed.courses.length === 0 && (opts.replaceAll || parsed.controls.length === 0)) {
     out.push({ code: "no_courses", ids: [] });
   }
-  const norm = (s: string) => s.trim().toLowerCase();
+  const norm = importKey;
   for (const g of duplicates(parsed.controls.filter((c) => c.type === "Control").map((c) => [norm(c.id), c.id]))) {
     out.push({ code: "duplicate_control", ids: g });
   }
@@ -289,14 +292,14 @@ export function planCourseImport(
   const crossings = new Map<string, StateControl>();
   for (const row of state.controls) {
     if (row.kind === "crossing_point") {
-      const key = row.name.toLowerCase();
+      const key = importKey(row.name);
       if (key && !crossings.has(key)) crossings.set(key, row);
     } else if (isStartOrFinish(row)) {
       // A start / finish is keyed by its name only: its unit code (F32) is never a file id.
-      const key = row.name.toLowerCase();
+      const key = importKey(row.name);
       if (key && !ends.has(key)) ends.set(key, row);
     } else {
-      for (const code of row.codes.split(";").map((s) => s.trim().toLowerCase()).filter(Boolean)) {
+      for (const code of row.codes.split(";").map(importKey).filter(Boolean)) {
         if (!ordinary.has(code)) ordinary.set(code, row);
       }
     }
@@ -306,10 +309,10 @@ export function planCourseImport(
   for (const pc of parsed.controls) {
     const row =
       pc.type === "CrossingPoint"
-        ? crossings.get(pc.id.toLowerCase())
+        ? crossings.get(importKey(pc.id))
         : pc.type === "Control"
-          ? ordinary.get(pc.id.trim().toLowerCase())
-          : ends.get(startFinishName(pc).toLowerCase());
+          ? ordinary.get(importKey(pc.id))
+          : ends.get(importKey(startFinishName(pc)));
     controlMatch.set(pc.id, row);
     if (!row) {
       c.controlsAdded++;
@@ -337,10 +340,10 @@ export function planCourseImport(
   // ── Courses ──
   const byName = new Map<string, StateCourse>();
   for (const row of state.courses) {
-    const key = row.name.toLowerCase();
+    const key = importKey(row.name);
     if (!byName.has(key)) byName.set(key, row);
   }
-  const forkedRootByName = new Map(state.courses.filter((r) => r.forked).map((r) => [r.name.toLowerCase(), r.id]));
+  const forkedRootByName = new Map(state.courses.filter((r) => r.forked).map((r) => [importKey(r.name), r.id]));
   const runnersOn = (ids: string[]) => ids.reduce((n, id) => n + (state.runnersByCourse.get(id) ?? 0), 0);
 
   const courseMatch = new Map<string, StateCourse | undefined>();
@@ -348,16 +351,18 @@ export function planCourseImport(
   const skippedLinkTo = new Map<string, string>();
   const matchedCourseIds = new Set<string>();
   for (const pc of parsed.courses) {
-    const row = byName.get(pc.name.toLowerCase());
+    const row = byName.get(importKey(pc.name));
     courseMatch.set(pc.name, row);
     if (row) matchedCourseIds.add(row.id);
     // Merge leaves a local fork alone, and a file variant of it (an Oxygen
     // export lists "A AB" with family "A"; a PPen / OCD round trip names
     // it "A AB" without a family) is not a new top-level course.
+    // A removed root of the same name (an earlier import of the export,
+    // since deleted) does not make the variant a course of its own.
     const forkRoot = row?.forked
       ? row.id
-      : !row
-        ? (pc.family ? forkedRootByName.get(pc.family.toLowerCase()) : undefined) ?? state.variantRootByName.get(pc.name.toLowerCase())
+      : !row || row.removed
+        ? (pc.family ? forkedRootByName.get(importKey(pc.family)) : undefined) ?? state.variantRootByName.get(importKey(pc.name))
         : undefined;
     if (!replaceAll && forkRoot) {
       skippedCourseNames.add(pc.name);
@@ -401,8 +406,12 @@ export function planCourseImport(
       removeControlIds.push(row.id);
       c.controlsRemoved.push(label(row));
     }
+    // Live courses: a class pointing anywhere else (a course removed
+    // earlier) is cleared too, as the old full wipe did.
+    const liveCourseIds = new Set(state.courses.filter((r) => !r.removed).flatMap((r) => [r.id, ...r.variantIds]));
     for (const cl of state.classes) {
-      const courseName = cl.courseId ? removedById.get(cl.courseId) : undefined;
+      if (!cl.courseId) continue;
+      const courseName = removedById.get(cl.courseId) ?? (liveCourseIds.has(cl.courseId) ? undefined : "—");
       if (courseName === undefined) continue;
       unassignClassIds.push(cl.id);
       c.classesUnassigned.push({ seq: cl.seq, name: cl.name, courseName });

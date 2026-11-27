@@ -241,4 +241,13 @@ describe("review follow-ups (package 17)", () => {
     const result = await caller.course.importCourses({ xmlContent: file(["31", "32"], [courseXml("A", ["31", "32"])]), replaceAll: true, classMapping: { A: [onB.id] } });
     expect(result.classesUnassigned).toBe(0);
   });
+
+  it("a restored site drops an extra code another restored row claims, or a live start holds", async () => {
+    const older = await ctx.db.control.create({ data: { eventId: ctx.eventId, seq: 903, codes: "31;45;5", removed: true, updatedAt: new Date("2026-01-01") } });
+    const newer = await ctx.db.control.create({ data: { eventId: ctx.eventId, seq: 904, codes: "45", removed: true, updatedAt: new Date("2026-06-01") } });
+    await ctx.db.control.create({ data: { eventId: ctx.eventId, seq: 905, name: "Start 4", kind: "start", status: "start", codes: "5" } });
+    await caller.course.importCourses({ xmlContent: file(["31", "45"], [courseXml("A", ["31", "45"])]) });
+    expect((await ctx.db.control.findUniqueOrThrow({ where: { id: older.id } })).codes).toBe("31");
+    expect((await ctx.db.control.findUniqueOrThrow({ where: { id: newer.id } })).codes).toBe("45");
+  });
 });

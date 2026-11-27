@@ -1969,9 +1969,17 @@ export const courseRouter = router({
       const liveCodes = new Map<string, string>();
       const removing = new Set(input.replaceAll ? plan.removeControlIds : []);
       for (const c of state.controls) {
-        // A row Replace all removes frees its codes.
-        if (c.removed || isStartOrFinish(c) || removing.has(c.id)) continue;
+        // A row Replace all removes frees its codes; a live start / finish's
+        // unit code (F32) is held like a control's.
+        if (c.removed || removing.has(c.id)) continue;
         for (const code of c.codes.split(";").map((x) => x.trim()).filter(Boolean)) liveCodes.set(code.toLowerCase(), c.id);
+      }
+      // A removed row the file restores by its code claims that code, so an
+      // older removed row restored for another code drops it as an extra.
+      for (const pc of parsed.controls) {
+        const row = pc.type === "Control" ? plan.controlMatch.get(pc.id) : undefined;
+        const key = pc.id.trim().toLowerCase();
+        if (row?.removed && !liveCodes.has(key)) liveCodes.set(key, row.id);
       }
 
       /** Map: parsed control id (e.g. "31", "STA1") → PG control UUID. */

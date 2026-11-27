@@ -167,6 +167,24 @@ describe("planCourseImport: modes", () => {
     expect(plan.skippedLinkTo.get("F AB")).toBe(forked.id);
   });
 
+  it("Merge skips a family variant even when a removed root of its name exists", () => {
+    const old = course({ name: "F AB", removed: true });
+    const s2 = { ...s, courses: [...s.courses, old] };
+    const plan = planCourseImport({ ...parsed, courses: [crs("F AB", ["31"], { family: "F" })] }, s2, { replaceAll: false, comparePositions: false });
+    expect([...plan.skippedCourseNames]).toEqual(["F AB"]);
+  });
+
+  it("Replace all also clears a class still pointing at a course removed earlier", () => {
+    const s2 = { ...s, classes: [...s.classes, { id: "cl3", seq: 3, name: "H10", courseId: "gone" }] };
+    const plan = planCourseImport(parsed, s2, { replaceAll: true, comparePositions: false });
+    expect(plan.unassignClassIds).toEqual(["cl2", "cl3"]);
+  });
+
+  it("matches a course and a crossing point by a trimmed name", () => {
+    const p = { ...parsed, courses: [crs(" A ", ["31"])] };
+    expect(planCourseImport(p, s, { replaceAll: false, comparePositions: false }).courseMatch.get(" A ")).toBe(a);
+  });
+
   it("reports the length rule: kept when the file states none, derived for a new course, changed when it differs", () => {
     const keep = planCourseImport(parsed, s, { replaceAll: false, comparePositions: false }).consequences;
     expect(keep.coursesKeepingLength).toEqual(["A"]);

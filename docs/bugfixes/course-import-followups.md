@@ -43,3 +43,10 @@ Left out of fix package 17 ([course-import-safety.md](course-import-safety.md)),
 14. **Restored-row counts.** The result's `controlsCreated` / `coursesCreated`
     include rows the import restored; the preview lists restored ones under
     "Updates".
+15. **A course named like a live variant.** Under Merge a file course without
+    a family whose name equals a live variant's ("H21 A" against fork "H21",
+    key "A") is skipped as forked, not created; the preview lists it under
+    "forked courses left as they are".
+16. **Older than the package:** a new start's allocated code (3–30) is not
+    checked against a later file control with the same code; `carryLegs` can
+    carry a `crossing` whose site Replace all removed.
