@@ -699,6 +699,8 @@ a derive:
 | `over-cap` | no row, the estimate is over the cap | null | null |
 | `pending` | no row otherwise: not derived yet, deriving, or a failed derive | the route (fetching it derives) | null |
 
+The descriptor also carries **`interval: { assumedM, confirmedM }`** (`terrainDescriptor`; docs/course-elevation.md §3, §0.43): the interval the contour field was derived at (`contourIntervalM(header)`, 5 m or 2.5 m for ISSprOM) and the one a person confirmed for the event's map (`club_maps.contour_interval_m` when the pin follows a club map, else `map_files.contour_interval_m`; null: not confirmed). `dem.anchored` gains **`intervalSuspect`** (`report.anchor.intervalSuspect` of the stored `contours.<provider>` row; null while the job is pending). `course.mapMetadata` states the same as `contourInterval: { assumedM, confirmedM, from: "club" | "event", suspect }`. `course.setContourInterval` and `clubMap.setContourInterval` write the value and clear and compute again the computed climbs of every event on the map.
+
 `mapMetadata.terrain` is `{ state, source: "contours", version, url,
 decided }`; it is null when the event has no pin. The review's carries
 the whole report and the field's `width`, `height` and `cellMm`
@@ -1605,7 +1607,7 @@ by id (below).
 
 | Part | Rows | Columns carried |
 |---|---|---|
-| `files` | every `map_files` row of the event with `source_hash IS NOT NULL` | all but `id`, `event_id` |
+| `files` | every `map_files` row of the event with `source_hash IS NOT NULL` | all but `id`, `event_id`; `contour_interval_m` is the **resolved** value (the club map's when the row follows one, else its own), since the box has no club map row |
 | `sources` | the distinct `map_sources` rows those rows pin, plus the `source_hash` of every pinned document | `file_hash`, `kind`, `size_bytes`, `file_name` |
 | `documents` | the distinct `map_documents` rows pinned by `document_hash` | `hash`, `size_bytes`, `format_version`, `importer_version`, `library_version`, `source_hash`, `header`, `report`, and `patch` only for a document baked with a version patch (`docs/map-patches.md` §5; an older peer's rows have none and store NULL) |
 | `decisions` | the whole `club_symbol_decisions` table (`docs/map-symbols.md` §8.5) | `fingerprint`, `library_version`, `canonical_id`, `decided_at` |

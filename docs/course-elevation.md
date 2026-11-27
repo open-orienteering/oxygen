@@ -1449,15 +1449,21 @@ only when a person presses the button.
 
 | Test | Covers |
 |---|---|
-| `packages/shared/src/terrain/profile/__tests__/profile.test.ts` | §1: the sampler, sampling step, vertices once, lengths, no-data and confidence shares, net, degenerate polylines, `pointAtDistance` / `distanceAtPoint`; §2 "A course": offsets, a rise across a control, shares summing to the total, a leg without data, `partial` |
+| `packages/shared/src/terrain/profile/__tests__/profile.test.ts` | §3: a relative field read at a confirmed interval (half the heights and the climb at 2.5 m instead of 5 m; an absolute field ignores it). §1: the sampler, sampling step, vertices once, lengths, no-data and confidence shares, net, degenerate polylines, `pointAtDistance` / `distanceAtPoint`; §2 "A course": offsets, a rise across a control, shares summing to the total, a leg without data, `partial` |
 | `packages/shared/src/terrain/profile/__tests__/climb.test.ts` | §2: the hysteresis rule on hand-made heights, descent, step independence, a noise bound against a plain sum, `climbRises`, `climbShares` |
-| `packages/shared/src/terrain/profile/__tests__/pick.test.ts` | §3: the order over every descriptor state |
-| `packages/web/src/lib/editor/__tests__/elevation.test.ts` | §4.3–4.5: what a state shows, rounding, the share, approximate, a leg's numbers and a leg without data |
+| `packages/shared/src/terrain/profile/__tests__/pick.test.ts` | §3: the order over every descriptor state; the interval on each contour row (confirmed, unconfirmed, absent), the anchored row skipped at another confirmed interval, a ground model unaffected |
+| `packages/web/src/lib/editor/__tests__/elevation.test.ts` | §4.3–4.5: what a state shows, rounding, the share, approximate, a leg's numbers and a leg without data; the estimate on an unconfirmed contour interval |
 | `packages/web/src/lib/editor/__tests__/status.test.ts` "the climb row is one number" | §4.4: the order typed · computed · stored · words, the phone's short text |
-| `e2e/course-editor-elevation.spec.ts` | §4 in the browser on a synthetic plane field: the computed climb and its notes, a leg's numbers, a moved control, a ground model's attribution, the sequence row's climb (§5), the climb on the placing label (§4.5), the notes under the info disclosure, a failed read and **Try again**, a typed climb, free order and the all-controls view, a map without a field |
+| `e2e/eventor-push.spec.ts` | §8: the switch leaves the `Course` element out of the start list, remembered per event; on, it is sent |
+| `e2e/course-editor-status.spec.ts`, `e2e/club-map-library.spec.ts` | §0.43: confirming the contour interval against the server (the map info row, the club card), still confirmed after a reload |
+| `e2e/course-editor-elevation.spec.ts` | §0.43, §4.4: an unconfirmed interval (≈, the note with Confirm, the banner), 2.5 m halving the climb. §4 in the browser on a synthetic plane field: the computed climb and its notes, a leg's numbers, a moved control, a ground model's attribution, the sequence row's climb (§5), the climb on the placing label (§4.5), the notes under the info disclosure, a failed read and **Try again**, a typed climb, free order and the all-controls view, a map without a field |
 | `e2e/course-editor-phone.spec.ts` "the computed climb on a phone" | §4.4 "Phone" |
 | `packages/api/src/__tests__/course-climb.test.ts` | §6: a stated climb's source, the read rule, the field's row source, the climb to store (partial, flat, no legs) |
-| `packages/api/src/__tests__/integration/course-climb.test.ts` | §6: computed after a create commits, cleared and recomputed by a move, the journal payload and token, both journal entries of an edit, typed wins and clears back, a climb without a source, a typed source over an empty climb, clone, free order, bulk end moves and bulk climb, `refreshClimbs`, marks not taken by another request while the edit is open, a climb applied from the journal, a field not stored, the column's constraint |
+| `packages/api/src/__tests__/integration/course-climb.test.ts` | §6: `course.update` moving the ends, a clear that journals the cleared row itself, the compute under a foreign lease (nothing computed, journaled or cleared; a `courseObject` write goes ahead), the chosen routes read once for an all-courses compute and again when one was chosen between two courses. §0.43: an unconfirmed interval stores nothing, confirming stores and journals, 2.5 m halves it, null clears, a typed climb untouched, refused values, a club map's interval reaching two events and the exporter's resolved value, a foreign lease. Computed after a create commits, cleared and recomputed by a move, the journal payload and token, both journal entries of an edit, typed wins and clears back, a climb without a source, a typed source over an empty climb, clone, free order, bulk end moves and bulk climb, `refreshClimbs`, marks not taken by another request while the edit is open, a climb applied from the journal, a field not stored, the column's constraint |
+| `packages/api/src/__tests__/leg-routes-auto-worker.test.ts` | §7.5: the search's results per job, a job that throws failing alone |
+| `packages/api/src/__tests__/known-fields.test.ts` | §6 "Readers": a course row keeps `climbSource` and `winnerPaceSPerKm` and drops a column this schema lacks |
+| `packages/api/src/__tests__/map-refresh.test.ts` | §7.5: a forwarded `courseObject.*` write makes the holder refresh its routes, a patch write does not |
+| `packages/api/src/__tests__/integration/lease.test.ts` (map refresh) | §6 "During a lease": a map refresh that replaces the rows clears and journals the box's computed climbs; the holder's route refresh after a forwarded object write |
 | `packages/api/src/__tests__/course-climb-pending.test.ts` | §6: marks are per request scope, concurrent scopes apart, `all`, a mark outside a scope dropped |
 | `e2e/courses.spec.ts` "climb" | §6 "The Courses page": typing and clearing a climb, a computed climb as the placeholder with its hint |
 | `packages/web/src/lib/editor/__tests__/sequence.test.ts` "an insert position names its drawn leg's index" | §4.5, §5: the selected leg's index, the route's marks, a repeated control |
@@ -1466,16 +1472,16 @@ only when a person presses the button.
 | `packages/api/src/__tests__/integration/leg-routes.test.ts` | §7.2, §7.3: a saved route chosen and every course of the pair read along it, the length unchanged, direction, choose and unchoose, one chosen route per pair (and the index), new points, a typed climb and a marked route untouched, a control run to twice with one marked leg, a moved control, refusals, another event, a removed control, delete, the backup, the checkout snapshot |
 | `packages/web/src/lib/editor/__tests__/leg-routes.test.ts` | §7.4: the chosen routes by leg key, a pair's routes, a route's metres and climb, the list with the drawn line, the automatic route and the line as that route, the map's shapes, a draft's shapes |
 | `e2e/course-editor-routes.spec.ts` | §7.4 in the browser: a route drawn and saved, its numbers, the leg and the course read along it, the drawn line chosen back, removal; a draft's keys (Backspace, Enter, Escape). §7.5: the automatic route round an out-of-bounds area, chosen and not removable, unchosen once a person uses another. §7.8: alternatives found on selecting the leg, their lines and labels on the map (a press picks one), their times, the winner pace typed in the course popover and saved with the course, the course along its routes, **Use** on the picked route's label (the list row's **Use** is the same handler, not pressed here) |
-| `packages/shared/src/route/__tests__/route.test.ts` | §7.6: codes to classes, the default model, slope; the grid's fill, holes, ranks, bridge, barrier, heights, `openDisc`, `nearestPassable`. §7.7: the cost field (distance, a gap, enclosed, slope and the reversed field); alternatives (straight, straightened, round a lake on both sides, a path against thick forest, a hill, the bounds, no way, a crossing point, a control on an obstacle, determinism); at the search's cell size: one route in open terrain, a control on a building or a cliff with a wall between, an uncrossable area thinner than a cell, a passage between two buildings, the marks after straightening, a control beside a fence, the cost of a run downhill, a bridge over drawn banks |
+| `packages/shared/src/route/__tests__/route.test.ts` | §7.7: the early stop at the target (same cost and path, farther cells unreached, the same routes from `findRoutes`). §7.6: codes to classes, the default model, slope; the grid's fill, holes, ranks, bridge, barrier, heights, `openDisc`, `nearestPassable`. §7.7: the cost field (distance, a gap, enclosed, slope and the reversed field); alternatives (straight, straightened, round a lake on both sides, a path against thick forest, a hill, the bounds, no way, a crossing point, a control on an obstacle, determinism); at the search's cell size: one route in open terrain, a control on a building or a cliff with a wall between, an uncrossable area thinner than a cell, a passage between two buildings, the marks after straightening, a control beside a fence, the cost of a run downhill, a bridge over drawn banks |
 | `packages/shared/src/route/__tests__/leg.test.ts` | §7.6: a document's features by match or source code, a patch-hidden object, the course's out-of-bounds area, a leg's window and cell size. §7.5: the shortest legal route (the line, round a lake, no way). §7.8: a leg's cost along a polyline |
-| `packages/api/src/__tests__/integration/leg-routes-auto.test.ts` | §7.5: the worker's search, a course's pairs after its edit (chosen, shortest, the line as a row without points, the climb), nothing searched while the basis holds, the basis, a moved control, not edited or deleted by hand, a person's choice over a refresh, an out-of-bounds area, a marked-route leg, a free-order course. §7.8: the winner pace stored, listed, cleared, its bounds; an object drawn with named courses (§0.25), a leg through its crossing point, two edits in a row, a search that fails (the other pairs written, the climbs computed, the pair left for the next refresh), a route saved by hand while the search runs |
+| `packages/api/src/__tests__/integration/leg-routes-auto.test.ts` | §7.5: the worker's search, a course's pairs after its edit (chosen, shortest, the line as a row without points, the climb), nothing searched while the basis holds, the basis, a moved control, not edited or deleted by hand, a person's choice over a refresh, an out-of-bounds area, a marked-route leg, a free-order course. §7.8: the winner pace stored, listed, cleared, its bounds; an object drawn with named courses (§0.25), a leg through its crossing point, two edits in a row, one pair that fails (the others of its chunk written, their climbs computed, the pair not searched again until its basis changes), a search that cannot run (its chunk lost, the pair tried again), one worker for two chunks, a course that gains the pair during the search, climbs computed after each chunk, a node that does not hold the lease (nothing searched or written; a lease taken mid-chunk), a route saved by hand while the search runs |
 | `packages/shared/src/route/calibration/__tests__/calibration.test.ts` | §7.9 on made-up terrain and runners (`world.ts`): the record (shape, `kept`, paper positions, warnings, no CRS); legs (2, 5 and 10 s fixes, a clock offset, no punch times, a control passed twice, each reason a leg is left out, a stop taken out, one and two wild fixes, a slow leg kept, a track from before the start to after the finish, a near miss); attribution (equal to the route's cost, the covering grid, a track beside a path, across one and leaving one, uncrossable metres); the fit (the linear solve, factors recovered across paces and under ±20 % leg noise, a class three times slower, blown legs, a class that is most of every leg (settling, its interval, a fit cut short), control pairs that disagree, a class on one control pair, a wandered track, records sharing pairs, too little track, an anchor without forest, the slope, determinism); held-out legs, the finder check, a model of measured numbers only, the model as data, the report's strictness and that no input number is in it |
 | `packages/api/src/__tests__/calibrate-cost-model.test.ts` | §7.9: the command's arguments; a run on `e2e/test.ocd` with made-up runners from a directory of records, its report and its lines as they come; a file that is no map, a record that does not parse, a missing map or record and a record that is not JSON named by position only; under five runs on a map no report |
 | `packages/web/src/lib/route/__tests__/finder.test.ts` | §7.8: the worker's state (a search needs its document), the document sent once and again when it changes, a message the worker cannot take, the legs' costs, dispose; §7.9: the model a search ran under |
 | `packages/web/src/lib/editor/__tests__/leg-alternatives.test.ts` | §7.8: the pace as typed, the clock, the pace on flat forest, the course along its routes, the list's kinds and times, the map's shapes (colours, the picked one on top), the labels' text and anchors, out-of-bounds objects as obstacles |
 | `packages/web/src/lib/editor/__tests__/profile-graph.test.ts` | §5: points and bounds, the leg at a distance, ticks, an axis that ends on ticks, the scale and its minimum span, the paths and their breaks, decimation, the height at a distance, label thinning, the kept preference |
 | `packages/api/src/__tests__/eventor-upload.test.ts` "states each class's course with its length and climb" | §8: the element in both lists, its place and order, the class's first runner, a missing length, a missing climb, a rounded climb, no element; the pushed start list read back by the sync's parser |
-| `packages/api/src/__tests__/integration/eventor-push-courses.test.ts` | §8: the class's course from the database in both pushes, a computed and a typed climb, no climb, an empty course, a removed course, a class without a course, a forked class stating its root whatever its runner's variant, a dry run of each |
+| `packages/api/src/__tests__/integration/eventor-push-courses.test.ts` | §8: `includeCourse: false` in both pushes, the class's course from the database in both pushes, a computed and a typed climb, no climb, an empty course, a removed course, a class without a course, a forked class stating its root whatever its runner's variant, a dry run of each |
 | `packages/web/src/lib/editor/__tests__/elevation.test.ts` "the climb of the leg into each row of the sequence" | §4.5, §5: a climb per sequence row, a row without a leg, a leg without data |
 | `packages/web/src/lib/editor/__tests__/leg-length.test.ts` | §4.5: the placing and dragging label with the climb ("123 m · ↑ 8 m"), approximate, the leg out read in its own direction |
 | `packages/web/src/lib/__tests__/map-labels.test.ts` | §7.8: the labels on the map kept apart, the first in its place, moved off a handle or grip, one off screen left out |
@@ -1489,11 +1495,19 @@ only when a person presses the button.
   shows the pushed length before its own start list is published, is
   not known (§0.38). A forked class states its root course's numbers,
   not each variant's.
-- §7.5: a map correction alone does not refresh the automatic routes
-  until the next course edit or opening of the course mode (§0.26); the
-  refreshes of several events are not capped together, and a refresh
-  cut off by a restart between its clear and its compute leaves those
-  climbs empty until the next edit or opening; an out-of-bounds object scoped by class is not an obstacle
+- §7.5: the lease holder refreshes the routes after a forwarded
+  `courseObject.*` or `course.setContourInterval` write, but not after a
+  cadence map refresh (an out-of-bounds edit made in the cloud UI during a
+  lease): that reaches its routes at its next course edit or opening of
+  the course mode (§0.26, §0.44). Any map correction still makes every pair stale (the
+  basis digests the event-wide patch version; follow-ups F2). The
+  refreshes of several events are not capped together. A refresh cut off
+  by a restart between a clear and its compute leaves those climbs empty
+  until the next edit or opening. An edit that commits between a chunk's
+  read of the courses per pair and the pair's own transaction can keep an
+  old climb on a course that gained the pair in that instant (the
+  residual window of CRS-048). A failed pair's memo is per process: a
+  restart tries it once more. An out-of-bounds object scoped by class is not an obstacle
   for them (§0.25); the refresh queue does not survive a restart; the
   editor learns of a landed route by asking again, not by a push. A
   pair no course runs any more keeps its automatic row until a
@@ -1551,8 +1565,23 @@ only when a person presses the button.
   that it rests on contours.
 - §6: the climb's source does not travel in the journal, so a node that
   received a computed climb from a peer treats it as typed and does not
-  recompute it on its own edits. Sending the source needs every peer to
-  know the column first (AGENTS §7).
+  recompute it on its own edits; likewise a winner pace typed on a box
+  does not reach the cloud (both are stripped as derived). Receivers drop
+  unknown keys since review package 3 (2026-11-25), so letting
+  `climbSource` and `winnerPaceSPerKm` travel is now small: it waits for
+  the answer whether any box older than that is in use (follow-ups, Q2).
+- §0.43: the contour interval is confirmed, but the fields are still
+  derived at the assumed one: the 3D view's vertical scale, the height
+  under the pick, the DEM anchor's level vote and its misalignment gate use
+  the guess. A map whose true interval differs may be refused a ground
+  model as `misaligned`, and a coarse-DEM anchored field is not read for
+  climb while the confirmed interval differs from the assumed one
+  (follow-ups F3). The Courses page says nothing when a course has no
+  computed climb because the interval is unconfirmed; the printed and
+  exported climb does not say it rests on contours. `clubMap.setContourInterval` is not
+  forwarded from the cloud to a box: the box learns the value with its map
+  refresh. A restored event backup, or an event whose club map version was
+  deleted, uses its own file row's value (NULL asks again).
 - §7: routes are not journaled, so a route drawn on a node that holds
   the event's lease does not come back with the journal; route writes
   have no concurrency token (the last write wins) and no undo; the

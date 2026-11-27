@@ -883,7 +883,7 @@ interface HeightFieldHeader {
   source: "contours" | string; // or a DEM source matching DEM_FIELD_SOURCE_RE (§7.0 answer 3)
   cellMm: number; x0: number; y0: number; width: number; height: number;  // §2's Grid, y up
   groundMPerMm: number;
-  intervalM: number;        // 5, or 2.5 for ISSprOM (answer 8)
+  intervalM: number;        // the assumed interval: 5, or 2.5 for ISSprOM (answer 8); a confirmed one scales readers' heights (course-elevation.md §3)
   zScaleM: number;          // metres per unit: intervalM / 64
   zOffsetM: number;         // metres = z · zScaleM + zOffsetM
   datum: "relative" | "absolute";
@@ -1062,8 +1062,13 @@ pure; the provider, the fetch and the paper → projected transform are
    (answer 8's assumed 5 m / 2.5 m); the report carries R at I and I/2,
    globally and within each ladder, and `intervalSuspect` (§6.5). This
    narrows answer 8's "H9 measures it": a scan would pick 2.5 m on both
-   full club maps, whose two ladders sit half an interval apart. The
-   per-map override stays later.
+   full club maps, whose two ladders sit half an interval apart. (Review
+   package 23, D7, `course-elevation.md` §0.43: the interval is still
+   never changed *in the field* — it is derived at the assumed interval
+   and `TERRAIN_VERSION` is unchanged — but a person confirms it per
+   map, and readers of climb scale the relative field's heights by
+   confirmed / assumed; the 3D view, the DEM anchor's level vote and the
+   pick's `heightM` keep the assumed one, `bugfixes/course-elevation-followups.md` F3.)
 3. **A ladder area is spatial**, and the corpus target is read per area:
    on club-2026, ≥ 94 % of snapped index-contour length lies on its
    area's modal residue (mod 5), **and** snapped index length is ≥ 80 % of
@@ -1156,7 +1161,8 @@ R(I), R(I/2), the global phase at I, the number of contributors, and per
 ladder (§6.6) R(I) over its members. **Promotion**: a coarse DEM is
 promoted when R(I) ≥ 0.6. **`intervalSuspect`** is set when R(I/2) ≥ 0.6
 and less than half of the contributors' length is labelled by §6.6's
-vote — two phases half an interval apart mixed everywhere, which is what
+vote (shown as an amber warning in the editor's map info dialog; it is
+never a source of the interval, `course-elevation.md` §0.43) — two phases half an interval apart mixed everywhere, which is what
 a true interval of I/2 looks like (two ladders in separate places are
 labelled, so a two-ladder map is not suspect).
 

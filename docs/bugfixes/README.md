@@ -46,6 +46,7 @@ Notes whose code no longer exists (mostly the raster tile pipeline, deleted in s
 | Note | Added |
 | --- | --- |
 | [Course and print correctness: description sheets per variant, setter maps missing new controls, hiding graphics, unplaced control numbers, class course change, `.ppen` XML](course-print-correctness.md) (follow-ups: [course-print-followups.md](course-print-followups.md)) | 2026-11-27 |
+| [Course elevation before PR #254 merges: lease guard for background jobs, one route worker per refresh, clears that journal, contour interval confirmed per map, Eventor course switch](course-elevation-review.md) (follow-ups: [course-elevation-followups.md](course-elevation-followups.md)) | 2026-11-27 |
 | [An empty or wrong course file wiped the event's courses; re-import reset control settings](course-import-safety.md) (follow-ups: [course-import-followups.md](course-import-followups.md)) | 2026-11-26 |
 | [Two prints a second apart hashed differently with the same drawing](printed-drawing-hash.md) | 2026-11-17 |
 | [An image course object printed without its graphic](course-object-image-print.md) | 2026-11-13 |
