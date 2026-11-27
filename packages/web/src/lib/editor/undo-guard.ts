@@ -49,3 +49,43 @@ export function clearsNotice(notice: EditorNotice | null, wrote: readonly Writte
 export function writesRow(entry: { rows?: readonly NoticeRow[] }, row: NoticeRow): boolean {
   return !!entry.rows?.some((r) => sameRow(r, row));
 }
+
+/** A course row of `course.list` as the created-control check reads it (ids are public seqs). */
+export interface ListedCourse {
+  id: number;
+  version: string;
+  controls: string;
+  startControlId?: number | null;
+  finishControlId?: number | null;
+  parentCourseId?: number | null;
+}
+
+/**
+ * D6's created-control rule (docs/course-editor.md §3): the undo of a control this client created deletes it, and the
+ * delete cascades out of every course visiting it, so the undo is skipped when a course other than the entry's own
+ * visits it now. A row of the last polled list counts unless it is stale behind this client's newer token (`book`
+ * holds another token: this client wrote the course since, an undo a moment ago included). A variant (F7) is judged
+ * by its root, which the server writes it with: never counted under the entry's own course, nor while the root's
+ * row is stale or its token this client's own (`own`). @returns the course that blocks the undo, if any.
+ */
+export function createdControlElsewhere(
+  courses: readonly ListedCourse[],
+  controlId: number,
+  courseId: number | null,
+  book: (courseId: number) => string | undefined,
+  own: ReadonlySet<string>,
+): ListedCourse | undefined {
+  const byId = new Map(courses.map((c) => [c.id, c]));
+  const stale = (c: ListedCourse) => { const v = book(c.id); return v !== undefined && v !== c.version; };
+  return courses.find((c) => {
+    if (c.id === courseId) return false;
+    const visits = c.controls.split(";").filter(Boolean).map(Number).includes(controlId) || c.startControlId === controlId || c.finishControlId === controlId;
+    if (!visits || stale(c)) return false;
+    if (c.parentCourseId != null) {
+      if (c.parentCourseId === courseId) return false;
+      const root = byId.get(c.parentCourseId);
+      if (root && (stale(root) || own.has(root.version))) return false;
+    }
+    return true;
+  });
+}

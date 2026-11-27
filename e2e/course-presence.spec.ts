@@ -170,7 +170,7 @@ test("an undo after another context changed the course is skipped and keeps thei
     // A appends a control: one undo entry on the course.
     await viewSettled(a.page);
     const codes = await clearCodes(a.page);
-    expect(codes.length, "two controls clear of the chrome and the legs").toBeGreaterThanOrEqual(2);
+    expect(codes.length, "three controls clear of the chrome and the legs").toBeGreaterThanOrEqual(3);
     await select(a.page, codes[0]!);
     let saved = waitForTrpc(a.page, "course.setStructure");
     await a.page.getByTestId("editor-action-bar").getByTestId("editor-action-append").click();
@@ -192,14 +192,12 @@ test("an undo after another context changed the course is skipped and keeps thei
     // The course's entries are gone: nothing left to undo.
     await expect(a.page.getByTestId("editor-undo")).toBeDisabled();
     // CRS-065: the notice stays until dismissed; another edit does not clear it.
-    if (codes[2]) {
-      await select(a.page, codes[2]);
-      saved = waitForTrpc(a.page, "course.setStructure");
-      await a.page.getByTestId("editor-action-bar").getByTestId("editor-action-append").click();
-      await saved;
-      await expect(rows(a.page)).toHaveCount(count + 3, { timeout: 20_000 });
-      await expect(a.page.getByTestId("editor-undo-skipped")).toBeVisible();
-    }
+    await select(a.page, codes[2]!);
+    saved = waitForTrpc(a.page, "course.setStructure");
+    await a.page.getByTestId("editor-action-bar").getByTestId("editor-action-append").click();
+    await saved;
+    await expect(rows(a.page)).toHaveCount(count + 3, { timeout: 20_000 });
+    await expect(a.page.getByTestId("editor-undo-skipped")).toBeVisible();
   } finally {
     await a.ctx.close();
     await b.ctx.close();

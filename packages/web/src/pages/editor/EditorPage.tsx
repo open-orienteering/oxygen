@@ -62,7 +62,7 @@ import { groupOfSymbol, swatchUrl, symbolGroups, type SymbolGroup } from "../../
 import { deleteVertex, vertexRule, type Vertex } from "../../lib/editor/geometry-edit";
 import { legLengthLabel, type LegClimbOf } from "../../lib/editor/leg-length";
 import { EditorConflict, EditorWrites, UndoSkipped, type EditorClient, type WrittenRow } from "../../lib/editor/write-client";
-import { clearsNotice, writesRow, type EditorNotice } from "../../lib/editor/undo-guard";
+import { clearsNotice, createdControlElsewhere, writesRow, type EditorNotice } from "../../lib/editor/undo-guard";
 import { WriteGate, queuedEditAction, serialQueue } from "../../lib/editor/write-gate";
 import { instructionsOnCourse, type Instructions } from "../../lib/editor/instructions";
 import { areaTool, editorReducer, escapeHasWork, initialEditorState, type EditorTool } from "../../lib/editor/state";
@@ -256,12 +256,8 @@ export function EditorPage() {
    * visits it, so the undo is skipped when a course other than `courseId` (the entry's own, if any) visits it now.
    */
   const onlyIn = useCallback((id: number, courseId: number | null) => {
-    // A course whose newest token is this client's own write, or newer than the list's row, is not read from the list:
-    // this client changed it last (an undo a moment ago included), so it is not someone else's change.
-    // A variant of the entry's own course (F7, written by the server with it) is not another course.
-    const other = latestCourses.current.find((c) => c.id !== courseId && (courseId === null || c.parentCourseId !== courseId)
-      && (c.controls.split(";").filter(Boolean).map(Number).includes(id) || c.startControlId === id || c.finishControlId === id)
-      && writes.versions.get("course", c.id) === c.version && !writes.ownCourseVersions.has(c.version));
+    // The rule (the list's row stale behind this client's newer token, variants judged by their root): `undo-guard.ts`.
+    const other = createdControlElsewhere(latestCourses.current, id, courseId, (c) => writes.versions.get("course", c), writes.ownCourseVersions);
     // Skipped as the control's undo: the other course's own entries stay.
     if (other) throw new UndoSkipped("control", id);
   }, [writes]);
@@ -875,10 +871,12 @@ export function EditorPage() {
     if (placed) return id;
     if (again) {
       // "Do it again": the control made for this placement goes too, so doing it again leaves one control, not two.
-      created.current.delete(id);
-      await run(() => writes.deleteControl(id));
-      setErrorMsg(t("structureMovedRetry"));
-      return null;
+      if ((await run(() => writes.deleteControl(id))) !== undefined) {
+        created.current.delete(id);
+        setErrorMsg(t("structureMovedRetry"));
+        return null;
+      }
+      // The delete failed (its error stays on the line): the control is kept with its delete as the undo.
     }
     record(async () => { onlyIn(id, null); await writes.deleteControl(id); }, () => client.control.restore.mutate({ id }));
     return id;

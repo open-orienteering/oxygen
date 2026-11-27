@@ -342,8 +342,9 @@ rows and answer their tokens are linked the same way (`adoptOwn`): a
 every write asked for before it has settled, and holds back those asked
 for after it. The step picks its entry inside the gate, one macrotask
 after the gate is its own (`WriteGate.runStep`), so Ctrl+Z pressed while
-a gesture is in flight undoes that gesture once it has settled and
-recorded its entry, not the one before it. A structure edit is built and sent
+a gesture of one write is in flight undoes that gesture once it has
+settled and recorded its entry, not the one before it (a gesture of
+several holds, such as a create-and-place, see Pending). A structure edit is built and sent
 inside the gate, so an undo never replaces a structure while an edit is
 built on it, and the D6 guard of a step sees only the step's own writes.
 A write made inside a gated one (a structure edit's write, Map mode's
@@ -381,7 +382,9 @@ one this client's own writes reached from it (`EditorWrites.guarded`):
 - **A control this client created**: its undo deletes it, and the delete
   cascades out of every course that visits it. The undo is skipped when a
   course other than the entry's own (or one of its variants, F7) visits
-  it now (from the last `course.list`).
+  it now (from the last `course.list`; a row stale behind this client's
+  newer token is not read, and a variant is judged by its root,
+  `createdControlElsewhere`).
 - **Skipped**: nothing of the entry is written; the entry and every
   other entry, undo or redo, that wrote the same row are dropped; the
   notice says "Lång was changed by Anna at 14:02; undo skipped" — "redo
@@ -3582,9 +3585,11 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
   with the writes of the courses it cascades to: with a structure write
   of one of them in flight and the replies in reverse order, the course's
   chain breaks and its later undo is skipped as changed elsewhere. A
-  gesture that records its entry only after a further round trip (a new
-  control's radio config before its entry) can still be overtaken by a
-  Ctrl+Z pressed while it runs. E2E covers D6 on a course, the notice
+  gesture that records its entry only after a further round trip (a
+  create-and-place, whose create and structure write are separate
+  holds of the gate, or a new control's radio config before its entry)
+  can still be overtaken by a Ctrl+Z pressed while it runs: the entry
+  before it is undone. E2E covers D6 on a course, the notice
   staying (CRS-065) and two structure edits in one round trip (CRS-018);
   Layout's chain, the control field rule, "redo skipped" and an event
   switch mid-drain are covered by unit tests only.

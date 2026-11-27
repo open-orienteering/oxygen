@@ -418,14 +418,16 @@ export class EditorWrites {
       // is skipped; otherwise it leaves those fields out, as the pass did.
       const crossed = guardSince !== undefined ? this.bridgedOn("control", input.id, guardSince) : new Set<string>();
       if ([...crossed].some((f) => about.includes(f))) throw new UndoSkipped("control", input.id);
-      const sendInput = crossed.size ? Object.fromEntries(Object.entries(input).filter(([k]) => !crossed.has(k))) as typeof input : input;
+      // Leaving the description out leaves its auto-description out too (it would fill one the other side cleared).
+      const leaveOut = (out: ReadonlySet<string>) => (k: string) => !out.has(k) && !(k === "autoDescribe" && out.has("description"));
+      const sendInput = crossed.size ? Object.fromEntries(Object.entries(input).filter(([k]) => leaveOut(crossed)(k))) as typeof input : input;
       const sentOn = this.baseFor("control", input.id, opts?.baseVersion);
       let bridged = null as string[] | null;
       const fieldRule = (conflict: { version: string; differing: string[] | null }) => {
         const differing = conflict.differing;
         if (!differing || differing.some((f) => about.includes(f))) return null;
         bridged = [...differing, ...crossed];
-        const kept = Object.fromEntries(Object.entries(sendInput).filter(([k]) => !differing.includes(k)));
+        const kept = Object.fromEntries(Object.entries(sendInput).filter(([k]) => leaveOut(new Set(differing))(k)));
         return () => this.client.control.update.mutate({ ...kept, id: input.id, baseVersion: conflict.version }) as Promise<{ version: string }>;
       };
       const { value: res, base } = await this.withToken("control", input.id, write, (baseVersion) =>

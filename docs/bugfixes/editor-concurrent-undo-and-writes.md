@@ -22,13 +22,13 @@ Two setters, one course, the course editor polling every 5 s:
 - `UndoStack` runs undo / redo on one queue; the entry is picked when its turn comes.
 - A write gate (`WriteGate`): ordinary writes side by side, an undo / redo step alone, so the guard sees only the step's writes and a structure edit is never built on a structure an undo is replacing.
 - Own writes through other procedures are linked too (`adoptOwn`): a kind change's re-mirrored courses, `applyToCourses`'s and the setter procedures' sheets. Control undos are decided field by field, so an own radio toggle or restore never blocks them; such a pass links the control's chain across the other write and remembers its fields, so the next older undo of that control follows it (skipped only when it is about those fields).
-- A positional structure edit (a row's index, a leg's path) queued behind another is refused with "do it again" when the structure changed; an edit of a course no longer selected is dropped.
 - Layout keeps the newest gesture's optimistic snapshot until its own reply.
 - Structure edits run on one queue in the page (`queueStructure`) and are sent on the token of the structure they were built from (`setStructure(…, { since })`).
 - Layout mode's book is the editor's; sheet and template writes go through `EditorWrites.writeRow` (one per row in flight), each on the end of the own chain from the token its snapshot was built on, so a gesture behind a refused one is refused too.
 - Ctrl+Z picks its entry inside the write gate, after the gestures before it have settled; writes made inside a gated write (Map mode's follow-ups, a structure edit's write) do not ask the gate again, so an undo of a track conversion cannot wait on itself.
 - Undo / redo steps take the gate with `runStep`, one macrotask late, so a gesture that just settled has recorded its entry before the step picks one. A "Do it again" placement deletes the control it created.
-- Positional structure edits (row ✕, ↑ / ↓, leg style and gaps, insert at a place, create variation, move to an alternative, a crossing point routed by leg) queued behind a write of the same course are dropped with "Do it again" when the structure changed meanwhile.
+- Positional structure edits (row ✕, ↑ / ↓, leg style and gaps, insert at a place, create variation, move to an alternative, a crossing point routed by leg) queued behind a write of the same course are dropped with "Do it again" when the structure changed meanwhile; an edit of a course no longer selected is dropped.
+- The undo of a created control is skipped when another course visits it in the last list, even one this client edited since (only a row stale behind this client's newer token is not read); a variant is judged by its root (`createdControlElsewhere`). Leaving a description out of a control undo leaves its `autoDescribe` out too.
 - `run` clears a notice only when the write was about the notice's row (`clearsNotice`).
 - Patch writes go through `serialRow("patch", 0, …)`; `setMapPatch` drops a lower version of the same document's patch.
 - The editor's writes use `trpcClientForEvent(nameId)`; `CourseEditorRoute` keys the page on the event; the outbox drain takes `active` and stops before the next entry once the editor left the event or closed (the rest stay pending).
@@ -39,13 +39,12 @@ Two setters, one course, the course editor polling every 5 s:
 - `packages/web/src/lib/__tests__/undo-stack.test.ts`: overlapping undos in press order, a refused entry not blocking, `allow`, rows renewed by the step runner.
 - `packages/web/src/lib/__tests__/map-document-cache.test.ts`: an older delivery dropped, a new document / no patch accepted, a late read keeping the newer copy.
 - `packages/web/src/lib/__tests__/control-outbox.test.ts`: a drain stops when `active` turns false; the rest stay pending.
-- `packages/web/src/lib/editor/__tests__/undo-guard.test.ts`: which notice a write clears; which entries a skipped undo drops.
+- `packages/web/src/lib/editor/__tests__/undo-guard.test.ts`: which notice a write clears; which entries a skipped undo drops; the created-control rule with variants.
 - `packages/web/src/lib/editor/__tests__/write-gate.test.ts`: the gate's order, the structure queue composing two edits, `queuedEditAction`.
 - E2E `e2e/course-presence.spec.ts`: an undo after another editor's reorder is skipped and keeps their order. The skipped notice stays through a later edit (CRS-065); two appends inside one round trip both land (CRS-018).
 
 ## Left out
 
-E2E for Layout's chain, the control field rule, "redo skipped" and an event switch mid-drain: those need a second editor's write timed inside one round trip, so they are unit tests on `EditorWrites` / `UndoStack` instead.
-
+E2E for Layout's chain, the control field rule, "redo skipped", an event switch mid-drain, an older patch delivery (MAP-8), a held Ctrl+Z (CRS-050) and the control deleted on a "Do it again" placement: those need a second editor's write timed inside one round trip, so they are unit tests on `EditorWrites` / `UndoStack` instead.
 
 See course-editor.md "Pending in this chapter", "D6 edges": token-less writes guarded by the client's pre-check only (tokens on `setControlLabelOffset`, `control.delete` / `restore` / `check` are the follow-up), rows collected by time when two gestures overlap, a multi-row entry the server refuses half way, no D6 for Map-mode patch ops and Field-mode queued entries, reads still on the page's event (MC-04). CRS-052 (Class view's variant) and CRS-056 (Field mode write-ahead) are not in this package.

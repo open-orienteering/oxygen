@@ -494,6 +494,16 @@ describe("EditorWrites: own chain and the D6 undo guard (docs/course-editor.md Â
     expect(f.calls[f.calls.length - 1].input).toEqual({ id: 31, xpos: 0, ypos: 0, baseVersion: "5" });
   });
 
+  it("guarded: a description left out takes autoDescribe with it", async () => {
+    const f = fakeClient();
+    const w = new EditorWrites(f.client);
+    w.versions.seed("control", 31, "20");
+    f.fail(conflictError({ kind: "control", id: 31, version: "21", differing: ["description"] }));
+    f.ok({ version: "22" });
+    await w.guarded([{ kind: "control", id: 31, version: "20" }], () => w.updateControl({ id: 31, xpos: 1, ypos: 2, autoDescribe: true }, { x: 0, y: 0 }));
+    expect(f.calls[1].input).toEqual({ id: 31, xpos: 1, ypos: 2, baseVersion: "21" });
+  });
+
   it("guarded: a second conflict on the field-rule re-send is UndoSkipped, not a raw error", async () => {
     const f = fakeClient();
     const w = new EditorWrites(f.client);
