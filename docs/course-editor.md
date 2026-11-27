@@ -1708,6 +1708,10 @@ the selection and the undo history (`editorReducer`'s `mode`).
   course's highlight (Pending: a setter's controls highlighted on the
   map needs the layer request, F7's files). Decided on the user's
   standing instruction (2026-11-07), for review.
+  When controls of the setter map's scope are in no setter map (added
+  after generation, CRS-002), a read-only warning line
+  `editor-field-setter-unassigned` (`data-count`) names them under the
+  picker; adding them is Layout mode's (`course-layout.md` §8).
 - **The selection** adds above the site fields of §6.6 (notes there
   unchanged): distance and bearing (`editor-field-selection-distance`),
   the check-off toggle and the nudge pad.

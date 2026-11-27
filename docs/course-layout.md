@@ -669,7 +669,7 @@ entries; `lib/editor/export-menu.ts`), each on an existing route:
 | This class (`…-class`, Class view only) | `maps.pdf?classes=<class>` | `autoSheets { courseId }` |
 | All courses (`…-all`) | `maps.pdf` (every own sheet and the all-controls sheet) | `autoSheets {}` |
 | All controls (`…-allControls`) | `maps.pdf?allControls=1` | `autoSheets { allControls: true }` (E-pages) |
-| Setter maps (`…-setter`; F10) | `maps.pdf?setter=1` (every setter sheet of the event, §8) | — (generating needs a group count: Layout mode's *Setter maps*; none → the route's "No setter maps found" on the error line) |
+| Setter maps (`…-setter`; F10) | `maps.pdf?setter=1` (every setter sheet of the event, §8) | — (generating needs a group count: Layout mode's *Setter maps*; none → the route's "No setter maps found" on the error line; controls in no setter map → its 400 naming them, §8 "Controls added after generation") |
 | Make maps available offline (`…-offline`; G17) | no download: stores every map export of the event on this device (`course-print.md` §8.6 "Offline"); the button shows the progress | `autoSheets {}` and `{ allControls: true }` |
 | Description sheets… (`…-descriptions`; F11) | opens the dialog (`editor-descriptions-dialog`), then `descriptions.pdf?classes=<seq,…>&copies=&cell=` (`course-print.md` §6.4) | — (no sheet row) |
 | IOF XML (`…-iofxml`), Purple Pen (`…-ppen`) | `/api/export/course-data?format=` | — |
@@ -766,7 +766,9 @@ event's setter maps or the course's for a course's, `class_id` NULL,
 controlIds: [controls.id …] }` (`course-maps/schema.ts`), `overrides =
 { description: { cellSizeMm: 5 } }` (`SETTER_DESCRIPTION_CELL_MM`, 08
 "5 mm description cells"), window centre NULL. Written by
-`layout.setterMaps` only: `courseMap.create` takes no `setter` kind.
+`layout.setterMaps` (the groups) and, for a control added afterwards,
+`layout.adoptToSetters` (below) only: `courseMap.create` takes no `setter`
+kind.
 
 **`layout.setterMaps { courseId?, groups }`** (`courses.edit`, one
 transaction, 60 s): `groups` 1 … 20 (`MAX_SETTER_GROUPS`) and at most the
@@ -820,8 +822,8 @@ map-issue point, 710 for a crossing point, start, finish), labels by code,
 structure (a course's setter map draws no legs), the `all`-scoped course
 objects; the description block lists the group's control rows in code
 order, no IOF header, titled with the row's name, at 5 mm. `courseMap.list`
-and `courseMap.resolveSheet` answer `setter { index, controls }` (public
-control ids in the block's code order; null for other kinds), and a
+and `courseMap.resolveSheet` answer `setter { index, controls, unassigned }` (public
+control ids in the block's code order; `unassigned` below; null for other kinds), and a
 setter sheet is validated against its own window only (its controls are
 its group's: no sibling windows).
 
@@ -835,6 +837,36 @@ scope's setter maps `BAD_REQUEST`, a sheet that is not a setter's
 `lib/editor/setter-maps.ts`): the following sheet in setter order, the
 last one's next the first. One undo entry (undo moves it back to its
 sheet); the versions it answers are seeded for both rows.
+
+**Controls added after generation** (CRS-002, review D5: no silent
+auto-assign). `layout.setterMaps` writes the groups once; a control
+created or added to a course afterwards is in none of them and would print
+on no setter map. A scope with setter maps whose sites
+(`setterScopeSites`) are not all in a group is **flagged**, never fixed on
+its own:
+
+- `courseMap.list` and `resolveSheet` answer `setter.unassigned` (public
+  control ids, ascending; the same on every sheet of the scope), and
+  `list` adds the validation issue `setter_unassigned` to each setter row
+  of the scope (`valid: false`). A scope without setter maps reports
+  nothing.
+- `maps.pdf?setter=1` and `print-job?setter=1` answer **400** `N controls
+  are in no setter map: 87, 91. Add them in Layout mode (Setter maps).`
+  Printing by `maps=` seqs is not blocked (Pending).
+- `layout.adoptToSetters { courseId? }` (`courses.edit`; same lock as
+  `moveToSetter`) adds each such site to the scope's setter map whose
+  group centroid (the mean of its placed members) is nearest
+  (`nearestGroupIndex`, `setter-groups.ts`; a tie goes to the lower setter
+  number, an empty group is skipped unless all are empty), bumps the
+  changed rows' versions and answers `{ sheets: [{ seq, version, added }] }`.
+  The windows stay until *Recalculate*, as for *Move to next setter*.
+- Layout mode's *Setter maps* section shows the warning
+  (`editor-layout-setter-unassigned`, `data-count`: the count and codes)
+  and, with edit rights, **Add to nearest setter map**
+  (`editor-layout-setter-adopt`; not an undo entry, like Generate);
+  Field mode shows the same line, read-only
+  (`editor-field-setter-unassigned`), when a setter map with unassigned
+  controls is picked.
 
 **Recalculate** a setter sheet (`layout.recalculateSheet`, §6): refitted
 to its group as the all-controls sheet is to every control — template,
@@ -907,7 +939,9 @@ of the event, course seq (the event's last), sort order, seq.
 | unit (web) | `lib/editor/__tests__/setter-maps.test.ts`, `export-menu.test.ts` "setter maps" | §8 |
 | unit (web) | `lib/editor/__tests__/export-menu.test.ts` "of a course with variants" | §7 (F8) |
 | integration | `packages/api/src/__tests__/integration/variant-pages.test.ts` | §1 `resolveSheet { variantKey }`, `courseMap.list` per variant, §7 the selection (`course-print.md` §9.1 lists it) |
-| integration | `packages/api/src/__tests__/integration/setter-maps.test.ts` | §6, §8 |
+| integration | `packages/api/src/__tests__/integration/setter-maps.test.ts` | §6, §8 (CRS-002: `unassigned`, the `setter_unassigned` issue, the 400, `adoptToSetters` in the event and a course scope) |
+| unit (shared) | `packages/shared/src/__tests__/setter-groups.test.ts` | `groupSites`, `nearestGroupIndex` |
+| E2E | `e2e/course-editor-layout.spec.ts` (F10) | the warning after a control is added, *Add to nearest setter map* |
 | E2E | `e2e/course-editor-layout.spec.ts` "F10: setter maps" | §8 |
 | E2E | `e2e/field-mode.spec.ts` "Field mode on a desktop" "the setter-map picker…" | `course-editor.md` §9 |
 | E2E | `e2e/course-editor-status.spec.ts` "F5: map exchange" | §6, §7: map exchange parts as own sheets, `EXCHANGE_WITHOUT_SHEET` |
