@@ -168,9 +168,9 @@ the call is the **box's**, not the caller's:
   does not (a forwarded call is never an instance admin), and `kioskOrCapProcedure`
   and the REST guards ignore it. Its capabilities on an event are **all of
   them when the event's active lease is held by that node id, none otherwise**
-  (`capabilitiesForEventRow`; the in-handler checks of `event.delete` and
-  `mapPatch.promote` use the same rule). Calls with no event (`event.create`)
-  pass at the authed level. The journal's `actor_id` of a forwarded write is
+  (`capabilitiesForEventRow`; the in-handler check of `mapPatch.promote` uses
+  the same rule). Calls with no event pass at the authed level, except the
+  event create / import / delete refusals below. The journal's `actor_id` of a forwarded write is
   null for now.
 - A cloud that answers the forward with a redirect (IAP sending the box to a
   sign-in page) or a non-JSON page is the cloud's front door refusing the
@@ -178,6 +178,29 @@ the call is the **box's**, not the caller's:
   refused this box's credentials (check `SYNC_SHARED_SECRET` and the IAP
   settings)") and does not refresh. A silent or unreachable cloud stays
   `CLOUD_UNREACHABLE`.
+
+**The box checks its own caller first.** With login on at the box
+(`AUTH_MODE` `proxy` or `dev`), `venueForwarder` resolves the local caller
+before lending the box's authority: anonymous is `UNAUTHORIZED`, and the
+caller must be an instance admin or hold `event.manage` on the box's copy of
+the event the request names (`x-event-id` / `x-competition-id`); a forward
+naming no event needs an admin. Anything else is `FORBIDDEN` and is not
+forwarded (tRPC-shaped, per call in a batch). With login off at the box (the
+usual LAN venue box) every device on the LAN is trusted, as for all local
+writes.
+
+**What a node may and may not do on the cloud.** A forwarded call never
+creates, imports or deletes events (`event.create`, `eventor.importEvent`,
+`event.delete` answer `FORBIDDEN` "Do this on the cloud": no ownerless events,
+and the checked-out event cannot be removed from under its own lease),
+`event.list` shows it only the events whose lease it holds, and a forward that
+names no node, or names the cloud's own `NODE_ID`, is anonymous. The node id is
+not proof of identity: with one instance-wide `SYNC_SHARED_SECRET`, a box that
+knows the secret can claim another box's id and so act on that box's events (a
+per-event checkout token would close it,
+[proxy-auth-followups](../bugfixes/proxy-auth-followups.md)). A 401 from the
+cloud on a forward (wrong or missing secret on a cloud not behind IAP) comes
+back as `CLOUD_AUTH`.
 
 Who may check an event out on a box is in
 [offline-architecture.md](offline-architecture.md) ("The lease").
@@ -289,7 +312,7 @@ a user:
 | Procedures | Gate |
 |------------|------|
 | `eventor.runnerDbDump`, `searchRunnerDb`, `lookupByCardNo`, `clubMembers` (names, birth years, card numbers) | `race.operate`, event header required; **no kiosk key** (the kiosk looks cards up through `race.lookupByCard` and does not prefetch the dump) |
-| `eventor.syncRunnerDb`, `runnerDbStatus` | `event.manage`; one sync at a time (a second call is `CONFLICT`) |
+| `eventor.syncRunnerDb`, `runnerDbStatus` | `event.manage`; one sync at a time **per API process** (a second call on that process is `CONFLICT`; a cluster-wide lock is a follow-up) |
 | `club.searchDirectory` (club names only), `eventor.events` / `searchEvents` / `eventDetail` / `fetchEntryHistory`, `registrationTrends.*`, `event.dbStatus` | any signed-in user |
 
 Race crew registers runners, so the registration dialog's lookups work for

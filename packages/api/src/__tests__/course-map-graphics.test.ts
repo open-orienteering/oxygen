@@ -93,6 +93,23 @@ describe("SVG graphic safety (CRS-003: nothing is stripped, the raw and the deco
       ["a url() to a path", svg(`<rect style="fill:url('/x')" width="1" height="1"/>`), "external references"],
       ["@import", svg(`<style>@import "x.css";</style>`), "@import"],
       ["an event handler", svg(`<rect onload="x()" width="1" height="1"/>`), "event handler"],
+      // Reviewed bypasses: the declaration scan, entity expansion, XSLT, CSS escapes.
+      ["an entity declared after a decoy ]>", svg(`&x;`, `<!DOCTYPE svg [<!ENTITY d "a]>b"><!ENTITY x "&#60;script>alert(1)&#60;/script>">]>`), "entity"],
+      ["an entity declared after a decoy ]> in a comment", svg(`&x;`, `<!DOCTYPE svg [<!-- ]> --><!ENTITY x "&#38;#60;script>">]>`), "entity"],
+      ["a double-encoded entity value", svg(`&x;`, `<!DOCTYPE svg [<!ENTITY x "&amp;#60;script>">]>`), "entity"],
+      ["an entity-split url(", svg(`<rect style="fill:ur&a;(http://host/x)" width="1" height="1"/>`, `<!DOCTYPE svg [<!ENTITY a "l">]>`), "external references"],
+      ["an entity-split javascript:", svg(`<a href="java&a;cript:alert(1)"/>`, `<!DOCTYPE svg [<!ENTITY a "s">]>`), "javascript"],
+      ["an entity href to a host", svg(`<image href="&u;"/>`, `<!DOCTYPE svg [<!ENTITY u "http://host/x.png">]>`), "external references"],
+      ["a stylesheet instruction", svg(``, `<?xml-stylesheet href="#s" type="text/xsl"?>`), "stylesheet"],
+      ["an xsl element", svg(`<xsl:stylesheet xmlns:xsl="urn:x"/>`), "XSLT"],
+      ["the XSLT namespace", svg(`<g xmlns:q="http://www.w3.org/1999/XSL/Transform"/>`), "XSLT"],
+      ["an ATTLIST", svg(``, `<!DOCTYPE svg [<!ATTLIST svg x CDATA "1">]>`), "ATTLIST"],
+      ["an ELEMENT declaration", svg(``, `<!DOCTYPE svg [<!ELEMENT svg ANY>]>`), "ATTLIST"],
+      ["a CSS escape in a style element", svg(`<style>.a{fill:\\75rl(http://host/x)}</style>`), "CSS escapes"],
+      ["a CSS escape in a style attribute", svg(`<rect style="fill:\\75rl(x)" width="1" height="1"/>`), "CSS escapes"],
+      ["image-set()", svg(`<style>.a{background:image-set("x.png" 1x)}</style>`), "image-set"],
+      ["an href with spaces after =, to a host", svg(`<image href = "http://host/x.png"/>`), "external references"],
+      ["an unquoted href", svg(`<image href=http://host/x.png />`), "external references"],
     ];
     for (const [name, data, reason] of cases) {
       expect(() => validateGraphicUpload(data), name).toThrow(reason);
@@ -104,6 +121,12 @@ describe("SVG graphic safety (CRS-003: nothing is stripped, the raw and the deco
     expect(validateGraphicUpload(svg(`<defs><linearGradient id="a"/></defs><use xlink:href="#a"/><rect fill="url(#a)" width="1" height="1"/>`))).toBe("image/svg+xml");
     expect(validateGraphicUpload(svg(`<image href="${png}" width="1" height="1"/>`))).toBe("image/svg+xml");
     expect(validateGraphicUpload(svg(`<image xlink:href='data:image/jpeg;base64,/9j/4AAQ' width="1" height="1"/>`))).toBe("image/svg+xml");
+    // Reviewed false positives.
+    expect(validateGraphicUpload(svg(`<use href= "#a"/><use xlink:href ='#a'/>`))).toBe("image/svg+xml");
+    expect(validateGraphicUpload(svg(`<rect fill="url(&quot;#c&quot;)" width="1" height="1"/>`))).toBe("image/svg+xml");
+    expect(validateGraphicUpload(svg(`<style>@font-face{font-family:F;src:url(data:font/woff2;base64,d09GMg==)}@font-face{font-family:G;src:url(data:application/font-woff;base64,d09GRg==)}@font-face{font-family:H;src:url('data:application/x-font-ttf;base64,AAEAAA==')}</style>`))).toBe("image/svg+xml");
+    expect(validateGraphicUpload(svg(`<text>the src=x note</text>`))).toBe("image/svg+xml");
+    expect(validateGraphicUpload(svg(`<style>.a{fill:#c00}</style><rect style="fill:#c00" width="1" height="1"/>`))).toBe("image/svg+xml");
     expect(validateGraphicUpload(svg(``, `<?xml version="1.0"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd" [<!ENTITY ns_svg "http://www.w3.org/2000/svg">]>`))).toBe("image/svg+xml");
   });
 });

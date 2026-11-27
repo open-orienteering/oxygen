@@ -34,6 +34,7 @@ import { registerStaticServe } from "./staticServe.js";
 import { registerReadyRoute } from "./ready.js";
 import { describeSyncAuth } from "./sync/googleIdToken.js";
 import { nodeRole } from "./sync/nodeIdentity.js";
+import { registerSecurityHeaders } from "./securityHeaders.js";
 import "dotenv/config";
 
 const PORT = parseInt(process.env.PORT ?? "3002", 10);
@@ -52,11 +53,7 @@ async function main() {
     maxParamLength: 500,
   });
 
-  // No response is ever to be sniffed into another type (an uploaded file
-  // served as text/html, CRS-003). Routes that set it themselves keep theirs.
-  server.addHook("onSend", async (_req, reply) => {
-    if (!reply.hasHeader("x-content-type-options")) reply.header("X-Content-Type-Options", "nosniff");
-  });
+  registerSecurityHeaders(server);
 
   // CORS_ORIGINS (comma-separated) extends the dev defaults — a venue box
   // must allow the cloud-served PWA's HTTPS origin so stations on the LAN

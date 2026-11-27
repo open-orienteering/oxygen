@@ -61,4 +61,19 @@ describe("createContext and the forwarded marker", () => {
     const ctx = await ctxFor({ [SYNC_FORWARDED_HEADER]: "1", [SYNC_SECRET_HEADER]: "anything" });
     expect(ctx.nodeForward).toBeNull();
   });
+
+  it("a forward that names no node, or names the cloud itself, is anonymous", async () => {
+    const own = process.env.NODE_ID;
+    process.env.NODE_ID = "cloud-main";
+    try {
+      const base = { [SYNC_FORWARDED_HEADER]: "1", [SYNC_SECRET_HEADER]: "node-secret" };
+      expect((await ctxFor(base)).nodeForward).toBeNull();
+      expect((await ctxFor({ ...base, [SYNC_NODE_ID_HEADER]: "  " })).nodeForward).toBeNull();
+      expect((await ctxFor({ ...base, [SYNC_NODE_ID_HEADER]: "cloud-main" })).nodeForward).toBeNull();
+      expect((await ctxFor({ ...base, [SYNC_NODE_ID_HEADER]: "venue-3" })).nodeForward).toEqual({ nodeId: "venue-3" });
+    } finally {
+      if (own === undefined) delete process.env.NODE_ID;
+      else process.env.NODE_ID = own;
+    }
+  });
 });

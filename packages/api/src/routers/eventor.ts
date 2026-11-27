@@ -22,6 +22,7 @@ import {
   adminProcedure,
   manageProcedure,
   raceOperateProcedure,
+  assertNotNodeForward,
 } from "../trpc.js";
 import { getSetting, setSetting, prisma, sanitizeNameId, isReservedEventSlug } from "../db.js";
 import type { Prisma, PrismaClient } from "../generated/prisma/client.js";
@@ -1075,6 +1076,7 @@ export const eventorRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      assertNotNodeForward(ctx);
       const { apiKey } = await requireApiKey(input.env);
       const db = prisma();
 

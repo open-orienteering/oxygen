@@ -45,6 +45,13 @@ const SVG_FORBIDDEN: Array<{ pattern: RegExp; reason: string }> = [
 ];
 /** An embedded raster; the only non-local href an SVG graphic may carry. */
 const SVG_DATA_IMAGE = /^data:image\/(?:png|jpe?g|gif|webp);base64,/i;
+/** An embedded font (`@font-face` from Illustrator or Affinity): allowed in `url()` only. */
+const SVG_DATA_FONT = /^data:(?:font\/[\w.+-]+|application\/(?:font-[\w.+-]+|x-font-[\w.+-]+|vnd\.ms-fontobject));base64,/i;
+const PREDEFINED_ENTITIES = new Set(["lt", "gt", "amp", "quot", "apos"]);
+
+function refuse(what: string): never {
+  throw new Error(`The SVG must not contain ${what}`);
+}
 
 /** Character references and the five predefined entities expanded, tabs and line breaks removed. */
 function decodeSvgText(text: string): string {
@@ -59,53 +66,91 @@ function decodeSvgText(text: string): string {
     .replace(/[\t\r\n]/g, "");
 }
 
+/** `decodeSvgText` to a fixpoint (bounded), so `&amp;lt;` cannot hide a `<`. */
+function decodeToFixpoint(text: string): string {
+  let cur = text;
+  for (let i = 0; i < 5; i++) {
+    const next = decodeSvgText(cur);
+    if (next === cur) break;
+    cur = next;
+  }
+  return cur;
+}
+
 function codePoint(n: number): string {
   return Number.isInteger(n) && n >= 0 && n <= 0x10ffff ? String.fromCodePoint(n) : "";
 }
 
-/** The DOCTYPE's internal subset may declare plain-text entities only. */
-function assertSafeDoctype(raw: string): void {
-  const subset = /<!DOCTYPE[^[>]*\[([\s\S]*?)\]\s*>/i.exec(raw)?.[1];
-  if (subset === undefined) return;
-  const refuse = () => {
-    throw new Error("The SVG must not contain entity declarations that expand to markup or load files");
-  };
-  if (/<!ENTITY\s+%/i.test(subset)) refuse();
-  if (/<!ENTITY\s+\S+\s+(?:SYSTEM|PUBLIC)\b/i.test(subset)) refuse();
-  for (const m of subset.matchAll(/<!ENTITY\s+\S+\s+(?:"([^"]*)"|'([^']*)')/gi)) {
-    const value = decodeSvgText(m[1] ?? m[2] ?? "");
-    if (value.includes("<") || value.includes("&")) refuse();
+/**
+ * Every `<!ENTITY` anywhere in the text (not only a well-formed internal
+ * subset: a `]>` inside a value or a comment cannot hide one). Only plain-text
+ * general entities are allowed; their values, returned by name, are expanded
+ * into the text the checks read.
+ */
+function declaredEntities(raw: string): Map<string, string> {
+  const out = new Map<string, string>();
+  const decl = /<!ENTITY\s+(%\s*)?([^\s"'>]+)\s*(?:(SYSTEM|PUBLIC)\b|"([^"]*)"|'([^']*)')/iy;
+  for (const at of raw.matchAll(/<!ENTITY/gi)) {
+    decl.lastIndex = at.index;
+    const m = decl.exec(raw);
+    if (!m || m[1] || m[3]) refuse("entity declarations that load files or are not plain text");
+    const value = decodeToFixpoint(m[4] ?? m[5] ?? "");
+    if (value.includes("<") || value.includes("&")) refuse("entity declarations that expand to markup");
+    if (!PREDEFINED_ENTITIES.has(m[2])) out.set(m[2], value);
   }
+  return out;
 }
 
-/** Throws unless every reference in the document stays inside it (`#id`) or is an embedded raster. */
-function assertLocalReferences(raw: string, decoded: string): void {
-  const external = () => {
-    throw new Error("The SVG must not contain external references");
-  };
-  if (/(?:^|[\s"'/])(?:[\w.-]+:)?(?:href|src)\s*=\s*(?!["'])/i.test(raw)) external();
-  for (const m of raw.matchAll(/(?:^|[\s"'/])(?:[\w.-]+:)?(?:href|src)\s*=\s*(?:"([^"]*)"|'([^']*)')/gi)) {
-    const value = decodeSvgText(m[1] ?? m[2] ?? "").trim();
-    if (!value.startsWith("#") && !SVG_DATA_IMAGE.test(value)) external();
-  }
-  for (const text of [raw, decoded]) {
-    for (const m of text.matchAll(/url\(\s*(["']?)\s*([^)]*?)\1\s*\)/gi)) {
-      if (!decodeSvgText(m[2] ?? "").trim().startsWith("#")) external();
+/** The attributes of every start tag: [name, raw value or null when unquoted]. */
+function tagAttributes(text: string): Array<[string, string | null]> {
+  const out: Array<[string, string | null]> = [];
+  for (const tag of text.matchAll(/<(?![!?/])[^\s>/]+((?:"[^"]*"|'[^']*'|[^>"'])*)>/g)) {
+    for (const a of (tag[1] ?? "").matchAll(/([^\s=/"']+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/g)) {
+      out.push([a[1], a[2] ?? a[3] ?? null]);
     }
+  }
+  return out;
+}
+
+/** Throws unless every reference in the document stays inside it (`#id`) or is an embedded raster / font. */
+function assertLocalReferences(expanded: string, decoded: string): void {
+  const external = () => refuse("external references");
+  for (const [name, value] of tagAttributes(expanded)) {
+    const bare = name.replace(/^.*:/, "").toLowerCase();
+    if (bare === "href" || bare === "src") {
+      if (value === null) external();
+      const v = decodeToFixpoint(value!).trim();
+      if (!v.startsWith("#") && !SVG_DATA_IMAGE.test(v)) external();
+    }
+    // CSS escapes can spell `url(` and `javascript:` past every pattern here.
+    if (bare === "style" && value !== null && value.includes("\\")) refuse("CSS escapes");
+  }
+  for (const m of expanded.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/gi)) {
+    if (m[1].includes("\\")) refuse("CSS escapes");
+  }
+  if (/image-set\(/i.test(decoded)) refuse("image-set()");
+  for (const m of decoded.matchAll(/url\(\s*(["']?)\s*([^)]*?)\1\s*\)/gi)) {
+    const v = (m[2] ?? "").trim();
+    if (!v.startsWith("#") && !SVG_DATA_IMAGE.test(v) && !SVG_DATA_FONT.test(v)) external();
   }
 }
 
 function assertSafeSvg(raw: string): void {
-  assertSafeDoctype(raw);
-  const decoded = decodeSvgText(raw);
-  for (const text of [raw, decoded]) {
+  if (/<\?xml-stylesheet/i.test(raw) || /<\s*(?:[\w.-]+:)?\s*xsl:/i.test(raw) || /1999\/XSL\/Transform/i.test(raw)) {
+    refuse("stylesheet processing instructions or XSLT");
+  }
+  if (/<!(?:ATTLIST|ELEMENT|NOTATION)/i.test(raw)) refuse("ATTLIST, ELEMENT or NOTATION declarations");
+  const entities = declaredEntities(raw);
+  const expanded = raw.replace(/&([\w.:-]+);/g, (m, name: string) => entities.get(name) ?? m);
+  const decoded = decodeSvgText(expanded);
+  for (const text of [raw, expanded, decoded]) {
     const element = SVG_FORBIDDEN_ELEMENT.exec(text);
-    if (element) throw new Error(`The SVG must not contain ${element[1]} elements`);
+    if (element) refuse(`${element[1]} elements`);
     for (const { pattern, reason } of SVG_FORBIDDEN) {
-      if (pattern.test(text)) throw new Error(`The SVG must not contain ${reason}`);
+      if (pattern.test(text)) refuse(reason);
     }
   }
-  assertLocalReferences(raw, decoded);
+  assertLocalReferences(expanded, decoded);
 }
 
 interface ParsedSvgGraphic {

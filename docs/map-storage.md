@@ -1024,7 +1024,10 @@ read; otherwise the check reads the header (two range reads, §4.5).
 `applyEventMap` takes it as its own option (`applyUploadedMap` and
 `useClubMap` pass `ctx.user` — for `useClubMap` that is not the library
 row's uploader), `addFromSource` passes `ctx.user`, the re-match (§6.9)
-passes nothing. It feeds the fourth clause of §4.2 and nothing else.
+passes nothing. It feeds the fourth clause of §4.2 and, for a library
+job, the new `club_map_versions.uploaded_by` (§6.4; the caller proved
+possession of the bytes, §5.1 "Possession", so the version is theirs, not the
+first uploader's of the shared source row).
 
 A dedup hit, and a worker run whose document row already existed
 (`storeImportedDocument` reports `deduplicated`), touch the document
@@ -1115,13 +1118,15 @@ Idempotent; also run for dedup hits:
   §5 answer 1): the club half finds the series' versions of the job's
   source whose `patch` equals the job's (null ≡ `[]`, key order ignored),
   not one per `(clubMapId, source_hash)`.
-- `clubMapId` set, no such version and the job's patch empty → insert one with `seq = max + 1`, label and uploader
-  copied from the source row. With a non-empty patch nothing is created
+- `clubMapId` set, no such version and the job's patch empty → insert one with `seq = max + 1`, label copied
+  from the source row and **uploader = the job's `started_by`** (the source
+  row's uploader only when the job has none, e.g. the backfill). With a
+  non-empty patch nothing is created
   (promote creates its version, `docs/map-patches.md` §5.3) and a warning
-  is logged. `clubMap.addFromSource` then
-  overwrites label and uploader with the request's name and user when the
-  job finished within the hold, since the source row keeps the first
-  uploader's values.
+  is logged. `clubMap.addFromSource` then overwrites only the label with the
+  request's name when the job finished within the hold, since the source row
+  keeps the first uploader's name; the uploader is never rewritten after the
+  fact.
 - `clubMapId` set and that version exists → its `document_hash` follows
   the job's document (an in-place update; `seq`, label and uploader stay;
   every matching version, though a series has one per patch).
@@ -2094,7 +2099,7 @@ review). Each lands with its own section here and its own tests.
 | Integration (api) | `packages/api/src/__tests__/integration/map-rematch.test.ts` | §6.9; `map-patches.md` §4.4 (G11) |
 | Integration (api) | `packages/api/src/__tests__/integration/showcase-fixture.test.ts` | the Demo Competition fixture loaded as `load-showcase.sh` loads it (source row from the committed `.omap`, `showcase.sql`, re-match): the `unpinned` row is imported and pinned with its quick-access columns, `course.mapMetadata` answers, positioned controls get `lat` / `lng` inside the pin's bounds, courses read their controls with the stored lengths, a second load gives the same pin (`docs/ops/demo.md`) |
 | Unit (api) | `packages/api/src/__tests__/club-map-library.test.ts` | `projectClubMapRow` (series settings, version label → source name fallback, header scale → legacy scale, legacy raster metadata, version-less row with its job and the job's source and no preview URL, nulls, job dropped once a version exists), `canRemoveClubMap` / `canDownloadClubMapVersion` matrices, `latestVersionOrRefuse` → `PRECONDITION_FAILED`; `review` counts from the import report's `matching.symbols`, null without a matched document; a promoted version's `fileName` is its source's, not its label (G12b) |
-| Integration (api) | `packages/api/src/__tests__/integration/club-maps.test.ts` | chunked upload keyed by the series UUID, list carries version / hashes / thumbnail URL / source facts, staleness from the version's report, rename, download by version source; a version-less series lists no north and no preview URL; an unimportable upload (OCAD magic, garbage after) listed with a failed job and no preview URL, its bytes kept as the source, `download` / `useClubMap` `PRECONDITION_FAILED`; unknown id `NOT_FOUND`, malformed `BAD_REQUEST`; remove stranger `FORBIDDEN`, creator ok, versions cascade; `setRotation` on the series → event copy (columns from the pin, `length_source` stays `derived`); an event upload keeps ScalePar (columns equal to the oracle); an unpinned row answers with no document and no north; `course.downloadMap` returns the source's bytes; download stranger `FORBIDDEN`; club-library copy and backup gates; the listed `review` equals the version document's report counts |
+| Integration (api) | `packages/api/src/__tests__/integration/club-maps.test.ts` | chunked upload keyed by the series UUID, list carries version / hashes / thumbnail URL / source facts, staleness from the version's report, rename, download by version source; a version-less series lists no north and no preview URL; an unimportable upload (OCAD magic, garbage after) listed with a failed job and no preview URL, its bytes kept as the source, `download` / `useClubMap` `PRECONDITION_FAILED`; unknown id `NOT_FOUND`, malformed `BAD_REQUEST`; remove stranger `FORBIDDEN`, creator ok, versions cascade; `setRotation` on the series → event copy (columns from the pin, `length_source` stays `derived`); an event upload keeps ScalePar (columns equal to the oracle); an unpinned row answers with no document and no north; `course.downloadMap` returns the source's bytes; download stranger `FORBIDDEN`; club-library copy and backup gates; the listed `review` equals the version document's report counts; possession (API-17 / MAP-4): another user's hash is `FORBIDDEN` "Upload the file again" for `addFromSource` and `applyUploadedMap`, `clubMap.download` and `GET /api/map-sources/:hash` stay 403, an admin may use any hash, the caller's own deduplicated upload is the way in and makes them the version's uploader |
 | Unit (web) | `packages/web/src/lib/__tests__/map-document-cache.test.ts` | §7.1 |
 | Unit (web) | `packages/web/src/lib/__tests__/map-document-cache.test.ts` (G17) | §7.1 "App-code copy" |
 | E2E | `e2e/course-maps.spec.ts` "offline print: the job kept on the device" (G17) | opening the event stores its document in `map-documents` before any map is shown (the dev server has no service worker: the app-code copy); the sync panel's *Maps on this device* lines after *Make maps available offline* |

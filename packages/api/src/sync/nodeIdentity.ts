@@ -68,7 +68,11 @@ export const SYNC_SECRET_HEADER = "x-oxygen-sync-secret";
 /**
  * Request header carrying the calling node's `NODE_ID` on node-to-node calls,
  * so the receiving node can tell a stale holder's delivery from a current one
- * (review SYNC-08). Informational: it grants nothing.
+ * (review SYNC-08). It is also what a forwarded call's authority is keyed on
+ * (`ctx.nodeForward`, all capabilities on events whose lease that id holds).
+ * It is NOT proof of identity: with one instance-wide `SYNC_SHARED_SECRET`, a
+ * box that knows the secret can claim another box's node id (follow-up: a
+ * per-event checkout token, docs/bugfixes/proxy-auth-followups.md).
  */
 export const SYNC_NODE_ID_HEADER = "x-oxygen-node-id";
 

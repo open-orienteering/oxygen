@@ -35,3 +35,14 @@ What [proxy-auth-and-svg-xss.md](proxy-auth-and-svg-xss.md) did not do, and why.
   non-JSON body is `CLOUD_AUTH`).
 - **Forbidden text in SVG comments or `<metadata>`** is refused rather than
   stripped (a false positive for a file that merely mentions `<script`).
+- **One instance-wide secret means a node id is a claim, not proof.** A box
+  that knows `SYNC_SHARED_SECRET` can send another box's node id and act on
+  that box's checked-out events. A per-event checkout token (see the first
+  item) closes both.
+- **`syncRunnerDb` single-flight is per API process.** With several Cloud Run
+  instances two syncs can run at once; a Postgres advisory lock would make it
+  cluster-wide.
+- **Local gate on an auth-off box.** A venue box with login off trusts every
+  LAN device to forward cloud-owned edits as the box, like every other local
+  write; only a box with login on checks its caller (admin or `event.manage`
+  on the local copy).

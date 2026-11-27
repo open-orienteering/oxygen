@@ -37,6 +37,8 @@ import {
   syncSharedSecret,
 } from "./nodeIdentity.js";
 import { makeSyncHeaders } from "./googleIdToken.js";
+import { createContext, capabilitiesForEventRow } from "../trpc.js";
+import { authMode } from "../auth.js";
 import { prisma } from "../db.js";
 import { makeLeasePeer } from "./lease.js";
 import { refreshCloudOwnedMaps } from "./mapRefresh.js";
@@ -185,6 +187,8 @@ export const FORWARD_TIMEOUT_MS = 30_000;
  */
 export function classifyForwardReply(status: number, contentType: string | null): "relay" | "CLOUD_AUTH" | "CLOUD_UNREACHABLE" {
   if (status >= 300 && status < 400) return "CLOUD_AUTH";
+  // A JSON 401 is the cloud's own "invalid or missing node sync secret" (a cloud not behind IAP).
+  if (status === 401) return "CLOUD_AUTH";
   if (contentType && /\bjson\b/i.test(contentType)) return "relay";
   return status >= 500 ? "CLOUD_UNREACHABLE" : "CLOUD_AUTH";
 }
@@ -205,6 +209,40 @@ export function connectivityErrorBody(
   return batched ? paths.map(one) : one(paths[0] ?? "");
 }
 
+/** A tRPC-shaped refusal made by the box itself (the call is not forwarded). */
+export function localRefusalBody(paths: string[], batched: boolean, code: "UNAUTHORIZED" | "FORBIDDEN", message: string): unknown {
+  const one = (path: string) => ({
+    error: {
+      message,
+      code: code === "UNAUTHORIZED" ? -32001 : -32003,
+      data: { code, httpStatus: code === "UNAUTHORIZED" ? 401 : 403, path },
+    },
+  });
+  return batched ? paths.map(one) : one(paths[0] ?? "");
+}
+
+/**
+ * Who may lend the box's authority upstream. The forward is made as the box,
+ * with every capability on events checked out to it, so with login on at the
+ * box the local caller is checked first: signed in, and an instance admin or
+ * holding `event.manage` on the box's copy of the event the request names (no
+ * event: admin only). `null` = allowed. With login off at the box (a LAN
+ * venue box) every device on the LAN is trusted, as for all local writes.
+ */
+export async function localForwardRefusal(req: FastifyRequest): Promise<{ code: "UNAUTHORIZED" | "FORBIDDEN"; message: string } | null> {
+  if (authMode() === "off") return null;
+  const ctx = await createContext({ req } as unknown as Parameters<typeof createContext>[0]);
+  if (!ctx.user) return { code: "UNAUTHORIZED", message: "Not authenticated" };
+  if (ctx.user.isAdmin) return null;
+  if (ctx.event) {
+    const date = ctx.event.date ?? new Date(0);
+    const caps = await capabilitiesForEventRow(ctx, { id: ctx.event.id, date });
+    if (caps.has("event.manage")) return null;
+    return { code: "FORBIDDEN", message: "Missing capability event.manage" };
+  }
+  return { code: "FORBIDDEN", message: "Admin access required" };
+}
+
 export function registerVenueForwarder(server: FastifyInstance, opts: { timeoutMs?: number } = {}): void {
   const timeoutMs = opts.timeoutMs ?? FORWARD_TIMEOUT_MS;
   const peerUrl = syncPeerUrl();
@@ -220,6 +258,13 @@ export function registerVenueForwarder(server: FastifyInstance, opts: { timeoutM
 
     const paths = trpcProcedurePaths(req.url);
     const batched = req.url.includes("batch=1");
+    const refusal = await localForwardRefusal(req);
+    if (refusal) {
+      void reply
+        .code(refusal.code === "UNAUTHORIZED" ? 401 : 403)
+        .send(localRefusalBody(paths, batched, refusal.code, refusal.message));
+      return reply;
+    }
     try {
       // The box's own credentials, never the caller's: the node secret, its
       // id and the forwarded marker (the cloud then runs the call as this

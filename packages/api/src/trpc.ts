@@ -6,6 +6,7 @@ import {
   SYNC_SECRET_HEADER,
   SYNC_NODE_ID_HEADER,
   SYNC_FORWARDED_HEADER,
+  nodeId,
   syncSharedSecret,
 } from "./sync/nodeIdentity.js";
 import { assertRaceWritable, getActiveLease } from "./sync/lease.js";
@@ -82,8 +83,12 @@ export async function createContext(
   // header rides along is ignored, and a marker without the node secret
   // leaves the caller anonymous (UNAUTHORIZED), not a user by their header.
   const forwarded = opts.req.headers[SYNC_FORWARDED_HEADER] !== undefined;
+  // The peer must name itself, and not as this node: a forward that claims
+  // the cloud's own id (or none) is treated as anonymous.
   const nodeForward =
-    forwarded && syncSecretMatches(syncSecret) ? { nodeId: peerNodeId } : null;
+    forwarded && syncSecretMatches(syncSecret) && peerNodeId && peerNodeId !== nodeId()
+      ? { nodeId: peerNodeId }
+      : null;
 
   if (mode === "proxy") {
     if (!forwarded) {
@@ -289,6 +294,20 @@ async function eventDateFor(
     select: { date: true },
   });
   return row?.date ?? new Date(0);
+}
+
+/**
+ * A forwarded node call is the box, not a person: it may not create or delete
+ * events (they would be ownerless, or the checked-out event could be removed
+ * from under its own lease) or import one from Eventor. Do these on the cloud.
+ */
+export function assertNotNodeForward(ctx: Pick<Context, "user" | "nodeForward">): void {
+  if (!ctx.user && ctx.nodeForward) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Do this on the cloud: a venue box may not create, import or delete events",
+    });
+  }
 }
 
 /**

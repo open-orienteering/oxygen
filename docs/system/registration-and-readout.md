@@ -831,7 +831,7 @@ The dialog opens when DeviceManager determines `action = "register"` (no runner 
 Data sources are applied in strict priority order:
 
 1. **DB runner** (`runner.findByCard`) — If a runner already exists with this CardNo, pre-fill from DB. This always wins.
-2. **Eventor lookup** (`eventor.lookupByCardNo`) — If no DB match, check the Swedish Orienteering Federation's database by card number.
+2. **Eventor lookup** (`eventor.lookupByCardNo`, or the downloaded runner database offline) — If no DB match, check the Swedish Orienteering Federation's database by card number. Both need `race.operate` (the runner directory is personal data, [authentication.md](authentication.md#runner-directory-and-eventor-browse)); without it the step is skipped and the form is filled by hand.
 3. **Card owner data** (SI card memory) — Only if no DB match AND no Eventor match AND name is empty. Filtered through `isRealOwnerName()`.
 
 ```typescript
@@ -874,7 +874,9 @@ event yet is still reachable (WEB-11):
   database's clubs;
 - typing two or more characters in the club search also searches the club
   directory (`club.searchDirectory`) online, or the cached runner
-  database's clubs offline, and lists the hits under the roster matches;
+  database's clubs offline, and lists the hits under the roster matches (the
+  runner database, like the card and name lookups, needs `race.operate`; the
+  club directory search only a sign-in);
 - a picked club stays an option for the rest of the form, so a roster
   refetch that drops it (its last runner moved) does not lose its name.
 
@@ -950,7 +952,7 @@ DeviceManager.addRecentCard()
 Admin: RegistrationDialog      Kiosk: registration-waiting
     │                               ▲
     ├── findByCard(cardNo) → null   │
-    ├── eventor.lookupByCardNo()    │
+    ├── eventor.lookupByCardNo()    │   (race.operate; skipped if refused)
     ├── ownerData pre-fill          │
     │                               │
     ├── registration-state ─────────┘  (every 2s)

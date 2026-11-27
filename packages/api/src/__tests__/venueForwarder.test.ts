@@ -273,6 +273,17 @@ describe("registerVenueForwarder on the wire", () => {
     }
   });
 
+  it("answers CLOUD_AUTH when the cloud itself refuses the node secret with a JSON 401", async () => {
+    respond = (_req, res) => {
+      res.writeHead(401, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: { message: "Invalid or missing node sync secret", code: -32001, data: { code: "UNAUTHORIZED", httpStatus: 401 } } }));
+    };
+    await startVenue();
+    const res = await post();
+    expect(res.statusCode).toBe(412);
+    expect((res.json() as { error: { data: { reason: string } } }).error.data.reason).toBe("CLOUD_AUTH");
+  });
+
   it("answers CLOUD_UNREACHABLE when the cloud is silent past the timeout", async () => {
     respond = () => {
       /* never answers */

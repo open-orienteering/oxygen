@@ -99,3 +99,19 @@ tests and its documentation were missing.
 `permissions.spec.ts` (a kiosk makes no `runnerDbDump` request).
 
 Left out on purpose: [proxy-auth-followups.md](proxy-auth-followups.md).
+
+## Review round (same day)
+
+Two reviews of the first fix found the following, now fixed:
+
+- The forwarder lent the box's authority to any local caller; a box with
+  login on now checks its caller (admin or `event.manage` on the local copy).
+- A node could create, import and delete events and list every event; it now
+  cannot create, import or delete, sees only events it holds, and a node id
+  that is empty or the cloud's own is anonymous.
+- The SVG validator read `<!ENTITY` only inside a well-formed `[...]>` subset
+  (a `]>` decoy skipped it), did not expand declared entities before its
+  checks, and missed XSLT, `ATTLIST`, CSS escapes and `image-set(`; it also
+  refused `href= "#a"`, `url(&quot;#c&quot;)` and embedded fonts. See
+  [course-maps.md](../course-maps.md).
+- A JSON 401 from the cloud on a forward is `CLOUD_AUTH`.

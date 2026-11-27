@@ -3,7 +3,7 @@ import { markVenueSettingsChanged } from "../sync/shipper.js";
 import { TRPCError } from "@trpc/server";
 import { router, publicProcedure, authedProcedure, adminProcedure, viewProcedure, manageProcedure, manageRaceProcedure, kioskOrViewProcedure } from "../trpc.js";
 import { prisma, sanitizeNameId, getZeroTime, isReservedEventSlug } from "../db.js";
-import { kioskKeyMatches, capabilitiesForEventRow } from "../trpc.js";
+import { kioskKeyMatches, capabilitiesForEventRow, assertNotNodeForward } from "../trpc.js";
 import {
   grantSystemGroup,
   resolveEventCapabilities,
@@ -201,6 +201,20 @@ export const eventRouter = router({
           manageById.set(row.id, caps.has("event.manage"));
         }
       }
+    } else if (ctx.authEnabled && !ctx.user) {
+      // A forwarded node call (no user): only the events whose lease the node holds.
+      visible.clear();
+      const holder = ctx.nodeForward?.nodeId;
+      if (holder) {
+        const leases = await prisma().eventLease.findMany({
+          where: { releasedAt: null, holderNodeId: holder, eventId: { in: rows.map((r) => r.id) } },
+          select: { eventId: true },
+        });
+        for (const l of leases) {
+          visible.add(l.eventId);
+          manageById.set(l.eventId, true);
+        }
+      }
     } else {
       for (const row of rows) manageById.set(row.id, true);
     }
@@ -282,6 +296,7 @@ export const eventRouter = router({
       }).superRefine(validateEventKind),
     )
     .mutation(async ({ ctx, input }) => {
+      assertNotNodeForward(ctx);
       const slug = sanitizeNameId(input.nameId ?? input.name);
       if (isReservedEventSlug(slug)) {
         throw new TRPCError({
@@ -512,6 +527,7 @@ export const eventRouter = router({
   delete: authedProcedure
     .input(z.object({ nameId: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
+      assertNotNodeForward(ctx);
       const event = await prisma().event.findUnique({
         where: { nameId: input.nameId },
       });
@@ -522,7 +538,7 @@ export const eventRouter = router({
         });
       }
       if (ctx.authEnabled) {
-        if (!ctx.user && !ctx.nodeForward) {
+        if (!ctx.user) {
           throw new TRPCError({ code: "UNAUTHORIZED", message: "Not authenticated" });
         }
         const caps = await capabilitiesForEventRow(ctx, event);

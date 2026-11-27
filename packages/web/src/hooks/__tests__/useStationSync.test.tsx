@@ -7,11 +7,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
-const { dumpUseQuery, anyUseQuery, prefetch } = vi.hoisted(() => ({
+const { dumpUseQuery, dumpPrefetch, anyUseQuery, prefetch } = vi.hoisted(() => ({
   dumpUseQuery: vi.fn(),
+  dumpPrefetch: vi.fn(),
   anyUseQuery: vi.fn(),
   prefetch: vi.fn(),
 }));
+
+// Server rendering never runs effects; run them in place so the prefetch effect is exercised.
+vi.mock("react", async () => {
+  const actual = await vi.importActual<typeof import("react")>("react");
+  return { ...actual, useEffect: (fn: () => void) => void fn() };
+});
 
 vi.mock("../../lib/trpc", () => {
   const leaf = () => ({ useQuery: anyUseQuery, prefetch });
@@ -21,7 +28,7 @@ vi.mock("../../lib/trpc", () => {
         competition: { dashboard: { prefetch }, clubs: { prefetch }, getRegistrationConfig: { prefetch } },
         runner: { list: { prefetch } },
         control: { list: { prefetch } },
-        eventor: { runnerDbDump: { prefetch } },
+        eventor: { runnerDbDump: { prefetch: dumpPrefetch } },
       }),
       competition: { dashboard: leaf(), clubs: leaf(), getRegistrationConfig: leaf() },
       runner: { list: leaf() },
@@ -43,16 +50,21 @@ describe("useStationSync runner directory dump", () => {
 
   it("requests the dump by default", () => {
     renderToStaticMarkup(<Probe enabled />);
+    expect(dumpPrefetch).toHaveBeenCalledTimes(1);
+    expect(prefetch).toHaveBeenCalled(); // the other station data
     expect(dumpUseQuery).toHaveBeenCalledWith(undefined, expect.objectContaining({ enabled: true }));
   });
 
   it("does not request the dump with runnerDb: false", () => {
     renderToStaticMarkup(<Probe enabled runnerDb={false} />);
+    expect(prefetch).toHaveBeenCalled(); // the station still prefetches its other data
+    expect(dumpPrefetch).not.toHaveBeenCalled();
     expect(dumpUseQuery).toHaveBeenCalledWith(undefined, expect.objectContaining({ enabled: false }));
   });
 
   it("stays idle while the sync itself is disabled", () => {
     renderToStaticMarkup(<Probe enabled={false} />);
+    expect(dumpPrefetch).not.toHaveBeenCalled();
     expect(dumpUseQuery).toHaveBeenCalledWith(undefined, expect.objectContaining({ enabled: false }));
   });
 });

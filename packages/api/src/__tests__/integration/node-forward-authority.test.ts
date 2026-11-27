@@ -10,6 +10,14 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestEvent, disconnect, type TestEventContext } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
 import { acquireLease } from "../../sync/lease.js";
+import { appRouter } from "../../routers/index.js";
+import { createContext } from "../../trpc.js";
+import { registerVenueForwarder } from "../../sync/venueForwarder.js";
+import { grantSystemGroup } from "../../permissions.js";
+import { SYSTEM_GROUP_IDS } from "@oxygen/shared";
+import Fastify from "fastify";
+import { fastifyTRPCPlugin } from "@trpc/server/adapters/fastify";
+import http from "node:http";
 
 let held: TestEventContext;
 let other: TestEventContext;
@@ -53,14 +61,135 @@ describe("a forwarded call holds capabilities only where its node holds the leas
     await expect(forwarded(held.event).eventor.clearKey({ env: "test" })).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
-  it("event.delete follows the same rule inside its handler", async () => {
-    await expect(forwarded(null).event.delete({ nameId: other.nameId })).rejects.toMatchObject({ code: "FORBIDDEN" });
-    await expect(forwarded(null).event.delete({ nameId: free.nameId })).rejects.toMatchObject({ code: "FORBIDDEN" });
-    expect(await forwarded(null).event.delete({ nameId: held.nameId })).toMatchObject({ success: true });
+  it("event.delete, event.create and eventor.importEvent are refused to a node, even for its own event", async () => {
+    for (const nameId of [other.nameId, free.nameId, held.nameId]) {
+      await expect(forwarded(null).event.delete({ nameId })).rejects.toMatchObject({ code: "FORBIDDEN", message: /Do this on the cloud/ });
+    }
+    await expect(forwarded(null).event.create({ name: "Ownerless", date: "2099-01-01" })).rejects.toMatchObject({ code: "FORBIDDEN", message: /Do this on the cloud/ });
+    await expect(
+      forwarded(null).eventor.importEvent({ eventId: 1, eventName: "X", eventDate: "2099-01-01", classificationId: 0 }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN", message: /Do this on the cloud/ });
+    // Still there.
+    expect(await held.db.event.findUnique({ where: { id: held.eventId }, select: { removed: true } })).toEqual({ removed: false });
+  });
+
+  it("event.list shows a node only the events whose lease it holds", async () => {
+    const names = (await forwarded(null).event.list()).map((e) => e.nameId);
+    expect(names).toContain(held.nameId);
+    expect(names).not.toContain(other.nameId);
+    expect(names).not.toContain(free.nameId);
+    expect((await forwarded(null, null).event.list()).map((e) => e.nameId)).toEqual([]);
+  });
+
+  it("mapPatch.promote passes the gate for the node that holds the lease and not for others", async () => {
+    // No map on this event: the handler's own refusal, never FORBIDDEN / UNAUTHORIZED, for the holder.
+    await expect(forwarded(held.event).mapPatch.promote({ label: "x" })).rejects.not.toMatchObject({ code: "FORBIDDEN" });
+    await expect(forwarded(held.event).mapPatch.promote({ label: "x" })).rejects.not.toMatchObject({ code: "UNAUTHORIZED" });
+    await expect(forwarded(other.event).mapPatch.promote({ label: "x" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(forwarded(held.event, null).mapPatch.promote({ label: "x" })).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
   it("an anonymous call, or a marked one with a wrong secret, gets nothing", async () => {
     const anon = makeCaller(held.event, { user: null, identityEmail: null, authEnabled: true, authMode: "proxy", nodeForward: null });
     await expect(anon.event.updateType({ kind: "training" })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+  });
+});
+
+
+describe("the context wiring over real HTTP (marker + secret into a procedure)", () => {
+  it("runs a marked call with the right secret as the node and refuses a wrong one", async () => {
+    const saved = { mode: process.env.AUTH_MODE, secret: process.env.SYNC_SHARED_SECRET };
+    process.env.AUTH_MODE = "proxy";
+    process.env.SYNC_SHARED_SECRET = "http-secret";
+    const app = Fastify({ logger: false });
+    await app.register(fastifyTRPCPlugin, { prefix: "/trpc", trpcOptions: { router: appRouter, createContext } });
+    await app.ready();
+    try {
+      const call = (secret: string | null, event: string, node = "venue-fwd") =>
+        app.inject({
+          method: "POST",
+          url: "/trpc/event.updateType",
+          headers: {
+            "content-type": "application/json",
+            "x-event-id": event,
+            "x-oxygen-forwarded": "1",
+            "x-oxygen-node-id": node,
+            "x-forwarded-email": "nobody@example.org",
+            ...(secret ? { "x-oxygen-sync-secret": secret } : {}),
+          },
+          payload: JSON.stringify({ kind: "training" }),
+        });
+      const ok = await call("http-secret", held.nameId);
+      expect(ok.statusCode).toBe(200);
+      expect((await call("wrong", held.nameId)).statusCode).toBe(401);
+      expect((await call(null, held.nameId)).statusCode).toBe(401);
+      expect((await call("http-secret", other.nameId)).statusCode).toBe(403);
+      expect((await call("http-secret", held.nameId, "some-other-venue")).statusCode).toBe(403);
+    } finally {
+      await app.close();
+      if (saved.mode === undefined) delete process.env.AUTH_MODE;
+      else process.env.AUTH_MODE = saved.mode;
+      if (saved.secret === undefined) delete process.env.SYNC_SHARED_SECRET;
+      else process.env.SYNC_SHARED_SECRET = saved.secret;
+    }
+  });
+});
+
+describe("the box checks its own caller before lending its authority upstream", () => {
+  it("refuses anonymous and unauthorised local callers, forwards managers and admins", async () => {
+    const stamp = Math.random().toString(16).slice(2, 8);
+    const mk = (label: string, isAdmin = false) =>
+      free.db.user.create({ data: { email: `${label}-${stamp}@fwd-gate.example`, displayName: label, isAdmin, active: true } });
+    const [member, manager, admin] = [await mk("m"), await mk("g"), await mk("a", true)];
+    await grantSystemGroup(free.db, { eventId: free.eventId, userId: member.id, groupId: SYSTEM_GROUP_IDS.member, grantedBy: admin.id });
+    await grantSystemGroup(free.db, { eventId: free.eventId, userId: manager.id, groupId: SYSTEM_GROUP_IDS.eventAdmin, grantedBy: admin.id });
+
+    const upstreamSeen: string[] = [];
+    const upstream = http.createServer((req, res) => {
+      upstreamSeen.push(req.url ?? "");
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ result: { data: { ok: true } } }));
+    });
+    await new Promise<void>((r) => upstream.listen(0, "127.0.0.1", r));
+    const saved = { role: process.env.NODE_ROLE, peer: process.env.SYNC_PEER_URL, mode: process.env.AUTH_MODE, secret: process.env.SYNC_SHARED_SECRET };
+    process.env.NODE_ROLE = "venue";
+    process.env.SYNC_PEER_URL = `http://127.0.0.1:${(upstream.address() as { port: number }).port}`;
+    process.env.AUTH_MODE = "proxy";
+    process.env.SYNC_SHARED_SECRET = "box-secret";
+    const box = Fastify({ logger: false });
+    registerVenueForwarder(box);
+    box.post("/trpc/*", async () => ({ local: true }));
+    await box.ready();
+    try {
+      const post = (email: string | null, event: string | null, url = "/trpc/club.update") =>
+        box.inject({
+          method: "POST",
+          url,
+          headers: { "content-type": "application/json", ...(email ? { "x-forwarded-email": email } : {}), ...(event ? { "x-event-id": event } : {}) },
+          payload: "{}",
+        });
+      expect((await post(null, free.nameId)).statusCode).toBe(401);
+      const anon = (await post(null, free.nameId)).json() as { error: { data: { code: string } } };
+      expect(anon.error.data.code).toBe("UNAUTHORIZED");
+      expect((await post(member.email, free.nameId)).statusCode).toBe(403);
+      expect((await post(manager.email, null)).statusCode).toBe(403); // no event: admin only
+      expect((await post(manager.email, "no_such_event_here")).statusCode).toBe(403);
+      expect(upstreamSeen).toEqual([]);
+      expect((await post(manager.email, free.nameId)).statusCode).toBe(200);
+      expect((await post(admin.email, null)).statusCode).toBe(200);
+      // A batch gets one refusal per call.
+      const batch = await post(member.email, free.nameId, "/trpc/club.update,club.create?batch=1");
+      expect(batch.statusCode).toBe(403);
+      expect((batch.json() as unknown[]).length).toBe(2);
+      expect(upstreamSeen).toEqual(["/trpc/club.update", "/trpc/club.update"]);
+    } finally {
+      await box.close();
+      await new Promise<void>((r) => upstream.close(() => r()));
+      for (const [k, v] of [["NODE_ROLE", saved.role], ["SYNC_PEER_URL", saved.peer], ["AUTH_MODE", saved.mode], ["SYNC_SHARED_SECRET", saved.secret]] as const) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+      await free.db.user.deleteMany({ where: { email: { endsWith: "@fwd-gate.example" } } });
+    }
   });
 });
