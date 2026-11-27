@@ -6,7 +6,7 @@
 
 import type { Prisma, PrismaClient } from "./generated/prisma/client.js";
 import { course } from "@oxygen/shared";
-import { editorCourseLayer, loadCourseSequences, type GeometrySeqControl } from "./course-geometry.js";
+import { editorCourseLayer, legCorridorHalfMm, loadCourseSequences, type GeometrySeqControl } from "./course-geometry.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -24,13 +24,14 @@ export async function chosenLegRoutes(db: Db, eventId: bigint): Promise<Map<stri
 /**
  * The polylines an ordered course's climb is read along (§7.3): its
  * derived legs, each along its pair's chosen route when it has one. A
- * leg stored as a marked route keeps its line.
+ * leg stored as a marked route keeps its line; a corridor leg keeps it
+ * where the route leaves the corridor (`mapScale` reads its width).
  */
-export function climbLegsOf(courseUuid: string, seq: GeometrySeqControl[], chosen: ReadonlyMap<string, readonly course.RoutePoint[]>): course.RoutedLeg[] {
-  const legs = editorCourseLayer(courseUuid, seq, "ordered", { legStyle: true }).derivation.courses[0]?.legs ?? [];
+export function climbLegsOf(courseUuid: string, seq: GeometrySeqControl[], chosen: ReadonlyMap<string, readonly course.RoutePoint[]>, mapScale?: number | null): course.RoutedLeg[] {
+  const legs = editorCourseLayer(courseUuid, seq, "ordered", { legStyle: true, legCorridor: true }).derivation.courses[0]?.legs ?? [];
   if (chosen.size === 0) return legs.map((l) => ({ points: l.points, routed: false }));
-  // The style is the leg's own: a control run to twice may have one marked leg and one that is not.
-  return course.routedLegs(legs.map((l) => ({ from: l.from, to: l.to, points: l.points, style: l.style })), chosen);
+  // The style and the corridor are the leg's own: a control run to twice may have one marked leg and one that is not.
+  return course.routedLegs(legs.map((l) => ({ from: l.from, to: l.to, points: l.points, style: l.style, corridorHalfMm: legCorridorHalfMm(l, mapScale) })), chosen);
 }
 
 /** A stamp of the event's chosen routes (their count and latest write): it differs when a route was chosen, changed or removed. */

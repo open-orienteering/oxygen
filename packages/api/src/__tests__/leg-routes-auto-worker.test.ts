@@ -34,4 +34,12 @@ describe("searchAutoRoutes", () => {
     expect(results[1]).toEqual({ ok: false, error: "search blew up" });
     expect(results[2]).toMatchObject({ ok: true });
   });
+
+  it("a job's corridor reaches the search: a corridor the lake closes has no way", () => {
+    calls.n = 10;
+    const corridor = { line: [{ x: 14, y: 30 }, { x: 46, y: 30 }], halfMm: 0.5 };
+    const [free, kept] = searchAutoRoutes({ bytes, patch: null, groundMPerMm: 15, jobs: [job(30), { ...job(30), corridor }] });
+    expect(free.ok && free.points!.length).toBeGreaterThan(0);
+    expect(kept).toEqual({ ok: true, points: null });
+  });
 });

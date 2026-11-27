@@ -17,7 +17,7 @@ import { createHash } from "node:crypto";
 import { Worker } from "node:worker_threads";
 import { course, mapDocument } from "@oxygen/shared";
 import { Prisma, type PrismaClient } from "./generated/prisma/client.js";
-import { clearComputedClimbs, editorCourseLayer, loadCourseSequences } from "./course-geometry.js";
+import { clearComputedClimbs, editorCourseLayer, legCorridorHalfMm, loadCourseSequences } from "./course-geometry.js";
 import { refreshComputedClimbs } from "./course-climb.js";
 import { coursesByPair } from "./leg-routes.js";
 import { storedObjectOf } from "./course-objects.js";
@@ -44,6 +44,8 @@ export interface AutoRouteJob {
   to: Pt;
   via?: Pt;
   obstacles: AutoRouteObstacle[];
+  /** The corridor every leg of the pair runs in (§7.6): the route follows its centre line, else stays inside. */
+  corridor?: { line: Pt[]; halfMm: number };
 }
 
 /** What a worker prepares once: the encoded map document and the event's patch on it. */
@@ -81,11 +83,15 @@ interface Pair extends AutoRouteJob {
 const round = (v: number) => Math.round(v * 1000) / 1000;
 const pt = (p: Pt) => [round(p.x), round(p.y)];
 
+const corridorKey = (c: NonNullable<AutoRouteJob["corridor"]>) => [round(c.halfMm), c.line.map(pt)];
+
 /** What a pair's automatic route rests on. */
-export function autoRouteBasis(input: { documentHash: string; patchVersion: string; scale: number; from: Pt; to: Pt; via?: Pt; obstacles: readonly AutoRouteObstacle[] }): string {
+export function autoRouteBasis(input: { documentHash: string; patchVersion: string; scale: number; from: Pt; to: Pt; via?: Pt; obstacles: readonly AutoRouteObstacle[]; corridor?: AutoRouteJob["corridor"] }): string {
   const body = JSON.stringify([
     AUTO_ROUTE_VERSION, input.documentHash, input.patchVersion, input.scale, pt(input.from), pt(input.to), input.via ? pt(input.via) : null,
     input.obstacles.map((o) => [o.kind, o.coords.map(round)]),
+    // Only a corridor pair's basis holds it, so every other pair's stays as it was.
+    ...(input.corridor ? [corridorKey(input.corridor)] : []),
   ]);
   return createHash("sha256").update(body).digest("hex").slice(0, 32);
 }
@@ -109,7 +115,10 @@ async function obstaclesOf(db: PrismaClient, eventId: bigint): Promise<{ obstacl
 /**
  * The pairs of the event's live ordered courses with what each is
  * searched on; null when the event has no map document to search.
- * A marked-route leg is its own route and gets none (§7.3).
+ * A marked-route leg is its own route and gets none (§7.3). A pair is
+ * searched in a corridor when every leg of every course running it has
+ * the same one (§7.6, §0.46); where they differ it is searched without,
+ * and each corridor leg reads its line where the route leaves its own.
  */
 async function pairsOf(db: PrismaClient, eventId: bigint): Promise<{ pairs: Pair[]; documentHash: string; patch: mapDocument.MapPatch | null; scale: number } | null> {
   const pin = await eventPin(db, eventId);
@@ -118,17 +127,24 @@ async function pairsOf(db: PrismaClient, eventId: bigint): Promise<{ pairs: Pair
   if (courses.length === 0) return null;
   const { version: patchVersion, patch } = await eventPatchOnPin(db, eventId, pin.documentHash);
   const sequences = await loadCourseSequences(db, eventId, courses.map((c) => c.id));
-  const legsByPair = new Map<string, { fromId: string; toId: string; from: Pt; to: Pt; via?: Pt; courses: Set<string> }>();
+  const legsByPair = new Map<string, { fromId: string; toId: string; from: Pt; to: Pt; via?: Pt; courses: Set<string>; corridor: NonNullable<AutoRouteJob["corridor"]> | null | "mixed" }>();
   for (const [id, { seq, orderMode }] of sequences) {
     if (orderMode !== "ordered") continue;
     const viaOf = new Map(seq.flatMap((c) => (c.via ? [[c.via.id, { x: c.via.xMm, y: c.via.yMm }] as const] : [])));
-    for (const leg of editorCourseLayer(id, seq, "ordered", { legStyle: true }).derivation.courses[0]?.legs ?? []) {
+    for (const leg of editorCourseLayer(id, seq, "ordered", { legStyle: true, legCorridor: true }).derivation.courses[0]?.legs ?? []) {
       if (leg.style === "marked_route" || leg.points.length < 2 || leg.from === leg.to) continue;
       const key = course.legPairKey(leg.from, leg.to);
+      const halfMm = legCorridorHalfMm(leg, pin.scale);
+      const corridor = halfMm === null ? null : { line: leg.points.map((p) => ({ x: p.x, y: p.y })), halfMm };
       const known = legsByPair.get(key);
-      if (known) { known.courses.add(id); continue; }
+      if (known) {
+        known.courses.add(id);
+        const same = known.corridor !== "mixed" && (known.corridor === null ? corridor === null : corridor !== null && JSON.stringify(corridorKey(known.corridor)) === JSON.stringify(corridorKey(corridor)));
+        if (!same) known.corridor = "mixed";
+        continue;
+      }
       const via = leg.crossing ? viaOf.get(leg.crossing) : undefined;
-      legsByPair.set(key, { fromId: leg.from, toId: leg.to, from: leg.points[0], to: leg.points[leg.points.length - 1], ...(via ? { via } : {}), courses: new Set([id]) });
+      legsByPair.set(key, { fromId: leg.from, toId: leg.to, from: leg.points[0], to: leg.points[leg.points.length - 1], ...(via ? { via } : {}), courses: new Set([id]), corridor });
     }
   }
   const objects = legsByPair.size > 0 ? await obstaclesOf(db, eventId) : [];
@@ -136,7 +152,7 @@ async function pairsOf(db: PrismaClient, eventId: bigint): Promise<{ pairs: Pair
   for (const p of legsByPair.values()) {
     // An object closes the pair's way when every course running the pair is drawn with it.
     const obstacles = objects.filter((o) => o.courses === null || [...p.courses].every((c) => o.courses!.has(c))).map((o) => o.obstacle);
-    const job = { from: p.from, to: p.to, ...(p.via ? { via: p.via } : {}), obstacles };
+    const job: AutoRouteJob = { from: p.from, to: p.to, ...(p.via ? { via: p.via } : {}), obstacles, ...(p.corridor && p.corridor !== "mixed" ? { corridor: p.corridor } : {}) };
     pairs.push({ ...job, fromId: p.fromId, toId: p.toId, courses: [...p.courses], basis: autoRouteBasis({ documentHash: pin.documentHash, patchVersion, scale: pin.scale, ...job }) });
   }
   return { pairs, documentHash: pin.documentHash, patch, scale: pin.scale };
@@ -314,7 +330,7 @@ export async function refreshAutoRoutes(db: PrismaClient, eventId: bigint, opts:
       const chunk = stale.slice(at, at + size);
       let results: AutoRouteResult[];
       try {
-        results = await search({ ...init, jobs: chunk.map(({ from, to, via, obstacles }) => ({ from, to, ...(via ? { via } : {}), obstacles })) });
+        results = await search({ ...init, jobs: chunk.map(({ from, to, via, obstacles, corridor }) => ({ from, to, ...(via ? { via } : {}), obstacles, ...(corridor ? { corridor } : {}) })) });
       } catch (err) {
         failure ??= err;
         // The worker could not prepare the document: the next chunk would start another one and fail the same way.

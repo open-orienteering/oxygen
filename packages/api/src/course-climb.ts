@@ -125,6 +125,8 @@ export async function computeMissingClimbs(db: PrismaClient, eventId: bigint, co
   // reloads them when a route was chosen meanwhile (a read hoisted without that would race a choice).
   let stamp = await chosenRoutesStamp(db, eventId);
   let chosen = await chosenLegRoutes(db, eventId);
+  // A corridor's width is on the ground: the map's scale puts it on paper (§7.3).
+  const mapScale = (await eventPin(db, eventId))?.scale ?? null;
   for (const { id } of open) {
     written += await db.$transaction(async (tx) => {
       // A checkout can start between two courses.
@@ -147,7 +149,7 @@ export async function computeMissingClimbs(db: PrismaClient, eventId: bigint, co
         chosen = await chosenLegRoutes(tx, eventId);
         stamp = now;
       }
-      const legs = climbLegsOf(id, found.seq, chosen);
+      const legs = climbLegsOf(id, found.seq, chosen, mapScale);
       const climbM = computedClimbM(legs, sampler);
       if (climbM === null) return 0;
       await tx.course.update({ where: { id }, data: { climbM, climbSource: "computed" } });

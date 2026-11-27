@@ -25,6 +25,7 @@ export function prepareAutoRouteSearch(init: AutoRouteInit): (job: AutoRouteJob)
   return (job) => shortestLegRoute(features, {
     from: job.from, to: job.to, ...(job.via ? { via: [job.via] } : {}), groundMPerMm: init.groundMPerMm,
     extra: job.obstacles.map((o) => boxedFeature(BLOCKED, o.kind, [o.coords])),
+    ...(job.corridor ? { corridor: job.corridor } : {}),
   });
 }
 

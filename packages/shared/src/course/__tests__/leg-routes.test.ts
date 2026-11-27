@@ -1,7 +1,7 @@
 /** Leg routes (docs/course-elevation.md §7.1, §7.3). */
 
 import { describe, it, expect } from "vitest";
-import { LEG_ROUTE_MAX_POINTS, legPairKey, legRoutePointsSchema, routeLengthMm, routePolyline, routedLegs } from "../leg-routes.js";
+import { LEG_ROUTE_MAX_POINTS, legPairKey, legRoutePointsSchema, routeLengthMm, routePolyline, routedLegs, routeInsideCorridor } from "../leg-routes.js";
 
 const A = { x: 0, y: 0 };
 const B = { x: 10, y: 0 };
@@ -55,5 +55,25 @@ describe("leg routes (docs/course-elevation.md §7)", () => {
     expect(legRoutePointsSchema.safeParse([{ x: Number.NaN, y: 2 }]).success).toBe(false);
     expect(legRoutePointsSchema.safeParse([{ x: 1, y: 2, hIn: { x: 0, y: 0 } }]).success).toBe(false);
     expect(legRoutePointsSchema.safeParse(Array.from({ length: LEG_ROUTE_MAX_POINTS + 1 }, () => A)).success).toBe(false);
+  });
+});
+
+describe("a corridor leg reads only a route inside its corridor (docs/course-elevation.md §7.3, §0.46)", () => {
+  const line = [A, B];
+  it("inside, give or take the tolerance; outside", () => {
+    expect(routeInsideCorridor(line, [A, { x: 5, y: 1 }, B], 1)).toBe(true);
+    expect(routeInsideCorridor(line, [A, { x: 5, y: 1.25 }, B], 1)).toBe(true);
+    expect(routeInsideCorridor(line, [A, { x: 5, y: 2 }, B], 1)).toBe(false);
+    // Along a bend: the corner's inside is inside, the chord across it is not.
+    const bent = [A, { x: 5, y: 5 }, B];
+    expect(routeInsideCorridor(bent, [A, { x: 5, y: 4.2 }, B], 1)).toBe(true);
+    expect(routeInsideCorridor(bent, [A, B], 1)).toBe(false);
+  });
+
+  it("a route that leaves the corridor gives the leg its line; one inside is read; a leg without a corridor is unchanged", () => {
+    const chosen = new Map([[legPairKey("a", "b"), [{ x: 5, y: 3 }]]]);
+    expect(routedLegs([{ from: "a", to: "b", points: line, corridorHalfMm: 1 }], chosen)[0]).toEqual({ points: line, routed: false });
+    expect(routedLegs([{ from: "a", to: "b", points: line, corridorHalfMm: 4 }], chosen)[0].routed).toBe(true);
+    expect(routedLegs([{ from: "a", to: "b", points: line }], chosen)[0].routed).toBe(true);
   });
 });

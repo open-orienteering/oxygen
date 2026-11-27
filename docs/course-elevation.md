@@ -258,6 +258,18 @@ recommended defaults):
     remembered per browser and event. No Test-Eventor push is possible
     from here, so this is the way to push without it if Eventor rejects
     the element (§0.38 stays open).
+46. **A route keeps to its leg's corridor** (2026-11-27, Marcus: "in a
+    corridor the suggested route should follow the centre of the
+    corridor, or at least stay inside it"). A corridor leg's automatic
+    route is its centre line — the drawn leg, bends included — wherever
+    that crosses nothing uncrossable, else the shortest way inside the
+    corridor; the computed alternatives are searched inside it (§7.6). A
+    pair whose courses differ (one with a corridor, one without, or two
+    widths) is **each course on its own** (Marcus chose it on a card the
+    same day): the pair is searched inside the corridor only when every
+    leg running it has the same corridor, and a corridor leg reads a
+    chosen route only while the route stays inside its own corridor, else
+    its line (§7.3).
 
 ## 1. The profile
 
@@ -856,7 +868,18 @@ Unchanged by a route: the course's **length** (§0.1; it stays the
 drawn line's), the drawn and printed leg, the description sheet's
 distances and every export — a route is never printed or exported
 (§0.3). A leg with style `marked_route` ignores routes: its drawn line
-is the route the runner must follow. The style is the leg's own: where
+is the route the runner must follow. A leg with a **corridor** reads
+its pair's chosen route only while the route stays inside the corridor —
+every point of it within half the width of the drawn leg, 0.3 mm of
+paper to spare for the search's cells (`routeInsideCorridor`,
+`CORRIDOR_EDGE_TOLERANCE_MM`) — and its drawn line otherwise (§0.46):
+a route searched for another course of the pair, drawn by hand, or kept
+from before the corridor was added. `climbLegsOf` and the editor give
+each leg its own half width: the server at the pinned map's scale
+(`legCorridorHalfMm`), the editor at the document header's, which
+the editor's search reads too. The tolerance covers the search's cells
+up to 0.42 mm (whose half diagonal is 0.3 mm), so a corridor window up
+to about 400 mm square. The style is the leg's own: where
 a control is run to twice, one leg to it can be marked and the other
 read along its pair's route. A leg through a crossing point is
 read along the chosen route as any other; the setter draws the route
@@ -934,7 +957,9 @@ without any way the row has none either.
 - **What is searched.** The pair's **basis** is a digest of the
   document hash, the map patch's version, the map scale, the two
   controls' positions, the leg's crossing point, the out-of-bounds
-  objects that apply (§0.25) and `AUTO_ROUTE_VERSION`. A pair whose
+  objects that apply (§0.25), the corridor when the pair is searched in
+  one (below; a pair without one digests as before) and
+  `AUTO_ROUTE_VERSION`. A pair whose
   stored basis is the current one is not searched. The others are
   searched by **one worker per refresh**: the document is decoded,
   patched and classified once, then one job at a time, each with its own
@@ -964,6 +989,20 @@ without any way the row has none either.
 - **The editor's catch-up.** The course mode asks once per opening
   (`course.refreshClimbs`), so routes searched on a map or a map
   correction that changed since are searched again (§0.26).
+
+**A corridor pair** (§0.46, §7.6). When every leg that runs the pair
+— over every course, a pair run twice counted twice — has a corridor of
+the same width along the same line, the pair is searched inside it: its
+route is the centre line where that is legal (a row without points,
+as for a legal straight line), else the shortest way inside, and no
+route when the corridor holds no way (the leg reads its line). A bent
+corridor whose centre is not legal never gets a row without points,
+which would read as the bent line: where the way inside is the
+straight one, its middle is the row's one vertex. Where
+the legs differ the pair is searched as without a corridor, and each
+corridor leg keeps its line where the route leaves its corridor (§7.3).
+A corridor added, removed, widened or bent changes the basis, so the
+next refresh searches the pair again.
 
 Between an edit and the route's landing the climb is read along what
 is stored: a moved control's automatic route keeps its vertices with
@@ -1029,6 +1068,18 @@ read from):
 A line is walked cell by cell without a diagonal step, and the search
 moves diagonally only when both cells beside the step are passable, so
 nothing slips through a barrier or past its corner.
+
+5. **A corridor** (`LegRouteRequest.corridor`, `confineToCorridor`):
+   a leg searched in its corridor makes every cell uncrossable whose
+   centre lies farther than half the corridor's width from its centre
+   line, except the cells the line passes through, so a corridor
+   narrower than a cell stays connected. What is inside keeps its
+   class: an obstacle in the corridor is still one. The window is then
+   the corridor's box and 1 mm beyond its edge
+   (`ROUTE_CORRIDOR_PAD_MM`), with the cell size the same rule gives.
+   The control symbols at its mouths are not part of it (the controls
+   are on its line). A crossing point's opening (§7.7) opens nothing
+   outside the corridor (`RouteGrid.outside`).
 
 Line objects of other classes mean nothing. Objects a map patch hides
 and hidden symbols are skipped.
@@ -1486,7 +1537,7 @@ only when a person presses the button.
 | `e2e/course-editor-phone.spec.ts` "the computed climb on a phone" | §4.4 "Phone" |
 | `packages/api/src/__tests__/course-climb.test.ts` | §6: a stated climb's source, the read rule, the field's row source, the climb to store (partial, flat, no legs) |
 | `packages/api/src/__tests__/integration/course-climb.test.ts` | §6: `course.update` moving the ends, a clear that journals the cleared row itself, the compute under a foreign lease (nothing computed, journaled or cleared; a `courseObject` write goes ahead), the chosen routes read once for an all-courses compute and again when one was chosen between two courses. §0.43: an unconfirmed interval stores nothing, confirming stores and journals, 2.5 m halves it, null clears, a typed climb untouched, refused values, a club map's interval reaching two events and the exporter's resolved value, a foreign lease. Computed after a create commits, cleared and recomputed by a move, the journal payload and token, both journal entries of an edit, typed wins and clears back, a climb without a source, a typed source over an empty climb, clone, free order, bulk end moves and bulk climb, `refreshClimbs`, marks not taken by another request while the edit is open, a climb applied from the journal, a field not stored, the column's constraint |
-| `packages/api/src/__tests__/leg-routes-auto-worker.test.ts` | §7.5: the search's results per job, a job that throws failing alone |
+| `packages/api/src/__tests__/leg-routes-auto-worker.test.ts` | §7.5: the search's results per job, a job that throws failing alone; a job's corridor reaching the search (§0.46) |
 | `packages/api/src/__tests__/background-lease.test.ts`, `packages/shared/src/terrain/profile/__tests__/interval.test.ts` | §0.44: the skip is logged once an hour; §0.43: the rule for a confirmable interval (0, -5, 100, 101, 2.5, 2.55, 2.555, NaN, "2,5") |
 | `packages/api/src/__tests__/known-fields.test.ts` | §6 "Readers": a course row keeps `climbSource` and `winnerPaceSPerKm` and drops a column this schema lacks |
 | `packages/api/src/__tests__/map-refresh.test.ts` | §7.5: a forwarded `courseObject.*` write makes the holder refresh its routes, a patch write does not |
@@ -1495,13 +1546,13 @@ only when a person presses the button.
 | `e2e/courses.spec.ts` "climb" | §6 "The Courses page": typing and clearing a climb, a computed climb as the placeholder with its hint |
 | `packages/web/src/lib/editor/__tests__/sequence.test.ts` "an insert position names its drawn leg's index" | §4.5, §5: the selected leg's index, the route's marks, a repeated control |
 | `packages/web/src/lib/editor/__tests__/hover-dot.test.ts` | §5: the pointer's store |
-| `packages/shared/src/course/__tests__/leg-routes.test.ts` | §7.1, §7.3: a leg along its chosen route between its own ends, direction, a pair run twice, a marked route, the polyline's length, the stored points' bounds |
+| `packages/shared/src/course/__tests__/leg-routes.test.ts` | §7.1, §7.3: a leg along its chosen route between its own ends, direction, a pair run twice, a marked route, the polyline's length, the stored points' bounds; a corridor leg's route inside or outside its corridor (§0.46) |
 | `packages/api/src/__tests__/integration/leg-routes.test.ts` | §7.2, §7.3: a saved route chosen and every course of the pair read along it, the length unchanged, direction, choose and unchoose, one chosen route per pair (and the index), new points, a typed climb and a marked route untouched, a control run to twice with one marked leg, a moved control, refusals, another event, a removed control, delete, the backup, the checkout snapshot |
 | `packages/web/src/lib/editor/__tests__/leg-routes.test.ts` | §7.4: the chosen routes by leg key, a pair's routes, a route's metres and climb, the list with the drawn line, the automatic route and the line as that route, the map's shapes, a draft's shapes |
-| `e2e/course-editor-routes.spec.ts` | §7.4 in the browser: a route drawn and saved, its numbers, the leg and the course read along it, the drawn line chosen back, removal; a draft's keys (Backspace, Enter, Escape). §7.5: the automatic route round an out-of-bounds area, chosen and not removable, unchosen once a person uses another. §7.8: alternatives found on selecting the leg, their lines and labels on the map (a press picks one), their times, the winner pace typed in the course popover and saved with the course, the course along its routes, **Use** on the picked route's label (the list row's **Use** is the same handler, not pressed here) |
-| `packages/shared/src/route/__tests__/route.test.ts` | §7.7: the early stop at the target (same cost and path, farther cells unreached, the same routes from `findRoutes`). §7.6: codes to classes, the default model, slope; the grid's fill, holes, ranks, bridge, barrier, heights, `openDisc`, `nearestPassable`. §7.7: the cost field (distance, a gap, enclosed, slope and the reversed field); alternatives (straight, straightened, round a lake on both sides, a path against thick forest, a hill, the bounds, no way, a crossing point, a control on an obstacle, determinism); at the search's cell size: one route in open terrain, a control on a building or a cliff with a wall between, an uncrossable area thinner than a cell, a passage between two buildings, the marks after straightening, a control beside a fence, the cost of a run downhill, a bridge over drawn banks |
-| `packages/shared/src/route/__tests__/leg.test.ts` | §7.6: a document's features by match or source code, a patch-hidden object, the course's out-of-bounds area, a leg's window and cell size. §7.5: the shortest legal route (the line, round a lake, no way). §7.8: a leg's cost along a polyline |
-| `packages/api/src/__tests__/integration/leg-routes-auto.test.ts` | §7.5: the worker's search, a course's pairs after its edit (chosen, shortest, the line as a row without points, the climb), nothing searched while the basis holds, the basis, a moved control, not edited or deleted by hand, a person's choice over a refresh, an out-of-bounds area, a marked-route leg, a free-order course. §7.8: the winner pace stored, listed, cleared, its bounds; an object drawn with named courses (§0.25), a leg through its crossing point, two edits in a row, one pair that fails (the others of its chunk written, their climbs computed, the pair not searched again until its basis changes), a search that cannot run (its chunk lost, the pair tried again), one worker for two chunks, a course that gains the pair during the search, climbs computed after each chunk, a node that does not hold the lease (nothing searched or written; a lease taken mid-chunk), a route saved by hand while the search runs |
+| `e2e/course-editor-routes.spec.ts` | §7.4 in the browser: a route drawn and saved, its numbers, the leg and the course read along it, the drawn line chosen back, removal; a draft's keys (Backspace, Enter, Escape). §7.5: the automatic route round an out-of-bounds area, chosen and not removable, unchosen once a person uses another. §7.8: alternatives found on selecting the leg, their lines and labels on the map (a press picks one), their times, the winner pace typed in the course popover and saved with the course, the course along its routes, **Use** on the picked route's label (the list row's **Use** is the same handler, not pressed here). §0.46: a bent corridor leg's alternatives and automatic route along the bend |
+| `packages/shared/src/route/__tests__/route.test.ts` | §7.7: the early stop at the target (same cost and path, farther cells unreached, the same routes from `findRoutes`). §7.6: codes to classes, the default model, slope; the grid's fill, holes, ranks, bridge, barrier, heights, `openDisc`, `nearestPassable`. §7.7: the cost field (distance, a gap, enclosed, slope and the reversed field); alternatives (straight, straightened, round a lake on both sides, a path against thick forest, a hill, the bounds, no way, a crossing point, a control on an obstacle, determinism); at the search's cell size: one route in open terrain, a control on a building or a cliff with a wall between, an uncrossable area thinner than a cell, a passage between two buildings, the marks after straightening, a control beside a fence, the cost of a run downhill, a bridge over drawn banks. §7.6 step 5: a corridor's outside closed, its obstacles and bend kept, a corridor narrower than a cell connected |
+| `packages/shared/src/route/__tests__/leg.test.ts` | §7.6: a document's features by match or source code, a patch-hidden object, the course's out-of-bounds area, a leg's window and cell size. §7.5: the shortest legal route (the line, round a lake, no way). §7.8: a leg's cost along a polyline. §0.46: a corridor's half width, the centre line as the route, round an obstacle inside, no way, alternatives inside though a faster way runs outside, the corridor's window |
+| `packages/api/src/__tests__/integration/leg-routes-auto.test.ts` | §7.5: the worker's search, a course's pairs after its edit (chosen, shortest, the line as a row without points, the climb), nothing searched while the basis holds, the basis, a moved control, not edited or deleted by hand, a person's choice over a refresh, an out-of-bounds area, a marked-route leg, a free-order course. §7.8: the winner pace stored, listed, cleared, its bounds; an object drawn with named courses (§0.25), a leg through its crossing point, two edits in a row, one pair that fails (the others of its chunk written, their climbs computed, the pair not searched again until its basis changes), a search that cannot run (its chunk lost, the pair tried again), one worker for two chunks, a course that gains the pair during the search, climbs computed after each chunk, a node that does not hold the lease (nothing searched or written; a lease taken mid-chunk), a route saved by hand while the search runs. §0.46: a corridor leg's centre line, the basis changed by its width, a pair run without the corridor searched as before, the corridor leg's climb read along its line |
 | `packages/shared/src/route/calibration/__tests__/calibration.test.ts` | §7.9 on made-up terrain and runners (`world.ts`): the record (shape, `kept`, paper positions, warnings, no CRS); legs (2, 5 and 10 s fixes, a clock offset, no punch times, a control passed twice, each reason a leg is left out, a stop taken out, one and two wild fixes, a slow leg kept, a track from before the start to after the finish, a near miss); attribution (equal to the route's cost, the covering grid, a track beside a path, across one and leaving one, uncrossable metres); the fit (the linear solve, factors recovered across paces and under ±20 % leg noise, a class three times slower, blown legs, a class that is most of every leg (settling, its interval, a fit cut short), control pairs that disagree, a class on one control pair, a wandered track, records sharing pairs, too little track, an anchor without forest, the slope, determinism); held-out legs, the finder check, a model of measured numbers only, the model as data, the report's strictness and that no input number is in it |
 | `packages/api/src/__tests__/calibrate-cost-model.test.ts` | §7.9: the command's arguments; a run on `e2e/test.ocd` with made-up runners from a directory of records, its report and its lines as they come; a file that is no map, a record that does not parse, a missing map or record and a record that is not JSON named by position only; under five runs on a map no report |
 | `packages/web/src/lib/route/__tests__/finder.test.ts` | §7.8: the worker's state (a search needs its document), the document sent once and again when it changes, a message the worker cannot take, the legs' costs, dispose; §7.9: the model a search ran under |
@@ -1556,6 +1607,14 @@ only when a person presses the button.
 - §7.8: the winner pace is the root course's; a variant or a copy of a
   course does not get it. Per-leg and per-course times are not stored or exported; the
   course's time is pace × length by definition (§0.32).
+- §7.6 (§0.46): a corridor's mouths (the control symbols) are not part
+  of it for the search; a pair whose courses have different corridors is
+  searched without one, so the corridor legs read their lines; the editor
+  does not say that a route was confined, nor that a corridor leg of a
+  mixed pair reads its line while the list shows the automatic route as
+  chosen. Against a corridor only a few
+  cells wide a route steps along the cells (a corridor at least 1 mm of
+  paper wide is several cells at the finest size).
 - §7.6: bridges, underpasses, stairs and multi-level sprint areas are
   not modelled; passable cliffs, fences and walls cost nothing to
   cross; a symbol without a recognised code is unmapped forest; a

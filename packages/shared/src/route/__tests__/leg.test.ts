@@ -2,7 +2,7 @@
 
 import { describe, it, expect } from "vitest";
 import { S, syntheticDoc } from "../../terrain/graph/__tests__/synthetic.js";
-import { BLOCKED, BLOCKED_SOFT, CLASS_INDEX, DEFAULT_COST_MODEL, ROUTE_CELL_MM, ROUTE_MAX_CELLS, boxedFeature, findLegRoutes, legPolylineCost, legWindow, routeFeaturesOfDocument, shortestLegRoute } from "../index.js";
+import { BLOCKED, BLOCKED_SOFT, CLASS_INDEX, DEFAULT_COST_MODEL, ROUTE_CELL_MM, ROUTE_MAX_CELLS, boxedFeature, findLegRoutes, legPolylineCost, legWindow, routeFeaturesOfDocument, shortestLegRoute, corridorHalfMm } from "../index.js";
 
 const rect = (x0: number, y0: number, x1: number, y1: number) => [x0, y0, x1, y0, x1, y1, x0, y1, x0, y0];
 
@@ -86,5 +86,70 @@ describe("a leg's window (docs/course-elevation.md §7.6)", () => {
     expect(long.cellMm).toBeGreaterThan(ROUTE_CELL_MM);
     const cells = ((long.bounds.maxX - long.bounds.minX) / long.cellMm) * ((long.bounds.maxY - long.bounds.minY) / long.cellMm);
     expect(cells).toBeLessThanOrEqual(ROUTE_MAX_CELLS * 1.01);
+  });
+});
+
+describe("a corridor leg (docs/course-elevation.md §7.6, §0.46)", () => {
+  const from = { x: 10, y: 20 }, to = { x: 40, y: 20 };
+  const off = (line: { x: number; y: number }[], p: { x: number; y: number }) => Math.min(...line.slice(1).map((b, i) => {
+    const a = line[i], dx = b.x - a.x, dy = b.y - a.y;
+    const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy)));
+    return Math.hypot(p.x - a.x - t * dx, p.y - a.y - t * dy);
+  }));
+  /** Every point of a route, 0.1 mm apart, within `reach` of the line. */
+  const inside = (line: { x: number; y: number }[], route: { x: number; y: number }[], reach: number) => route.slice(1).every((b, i) => {
+    const a = route[i], n = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / 0.1));
+    return Array.from({ length: n + 1 }, (_, s) => ({ x: a.x + ((b.x - a.x) * s) / n, y: a.y + ((b.y - a.y) * s) / n })).every((p) => off(line, p) <= reach);
+  });
+
+  it("the width on the ground in paper mm: half of it, nothing for no width", () => {
+    expect(corridorHalfMm(50, 10)).toBe(2.5);
+    expect(corridorHalfMm(0, 10)).toBeNull();
+    expect(corridorHalfMm(-1, 10)).toBeNull();
+  });
+
+  it("the shortest route follows the centre line where it is legal, bends and all", () => {
+    const line = [from, { x: 25, y: 30 }, to];
+    // Without the corridor the straight line is the route.
+    expect(shortestLegRoute([], { from, to, groundMPerMm: 10 })).toEqual([]);
+    expect(shortestLegRoute([], { from, to, groundMPerMm: 10, corridor: { line, halfMm: 1 } })).toEqual([]);
+  });
+
+  it("an obstacle on the centre: round it inside the corridor; the corridor closed: no way", () => {
+    const line = [from, to];
+    const lake = boxedFeature(BLOCKED_SOFT, "area", [rect(22, 19, 28, 21)]);
+    // Unconfined the shortest way passes close round the lake; a corridor 2.5 mm wide either side keeps it within.
+    const round = shortestLegRoute([lake], { from, to, groundMPerMm: 10, corridor: { line, halfMm: 2.5 } })!;
+    expect(round.length).toBeGreaterThan(0);
+    expect(inside(line, [from, ...round, to], 2.5 + 0.3)).toBe(true);
+    const wall = boxedFeature(BLOCKED, "line", [[25, 15, 25, 25]]);
+    expect(shortestLegRoute([wall], { from, to, groundMPerMm: 10, corridor: { line, halfMm: 2.5 } })).toBeNull();
+    // Without the corridor the wall is passed at its end.
+    expect(shortestLegRoute([wall], { from, to, groundMPerMm: 10 })).not.toBeNull();
+  });
+
+  it("a bent corridor whose centre crosses a lake: the route has its own vertices, inside, never read as the bent line", () => {
+    const line = [from, { x: 25, y: 23 }, to];
+    const lake = boxedFeature(BLOCKED_SOFT, "area", [rect(23, 21.5, 27, 26)]);
+    const route = shortestLegRoute([lake], { from, to, groundMPerMm: 10, corridor: { line, halfMm: 4 } })!;
+    expect(route.length).toBeGreaterThan(0);
+    expect(inside(line, [from, ...route, to], 4 + 0.3)).toBe(true);
+    expect(legPolylineCost([lake], null, { points: [from, ...route, to], groundMPerMm: 10 }, DEFAULT_COST_MODEL)).toBeLessThan(Infinity);
+  });
+
+  it("every computed route stays inside, though a faster way runs outside", () => {
+    const line = [from, to];
+    const road = boxedFeature(CLASS_INDEX.road, "line", [[0, 23, 50, 23]]);
+    const free = findLegRoutes([road], null, { from, to, groundMPerMm: 10 }, DEFAULT_COST_MODEL);
+    expect(Math.max(...free.routes.find((r) => r.fastest)!.points.map((p) => p.y))).toBeGreaterThan(22.5);
+    const kept = findLegRoutes([road], null, { from, to, groundMPerMm: 10, corridor: { line, halfMm: 1.5 } }, DEFAULT_COST_MODEL);
+    expect(kept.routes.length).toBeGreaterThan(0);
+    for (const r of kept.routes) expect(inside(line, r.points, 1.5 + 0.3)).toBe(true);
+  });
+
+  it("the window is the corridor's, 1 mm beyond its edge", () => {
+    const w = legWindow({ from, to, corridor: { line: [from, { x: 25, y: 30 }, to], halfMm: 2 } });
+    expect(w.bounds).toEqual({ minX: 7, minY: 17, maxX: 43, maxY: 33 });
+    expect(w.cellMm).toBe(ROUTE_CELL_MM);
   });
 });

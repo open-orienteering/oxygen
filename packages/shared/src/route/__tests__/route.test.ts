@@ -3,7 +3,7 @@
 import { describe, it, expect } from "vitest";
 import {
   BLOCKED, BLOCKED_SOFT, CLASS_INDEX, COST_MODELS, DEFAULT_COST_MODEL, DEFAULT_COST_MODEL_DATA, costModelFromData, costModelNote, currentCostModel, SHORTEST_COST_MODEL, buildRouteGrid, cellOf, costClassOfCode, costField, defaultSlopeFactor,
-  findRoutes, isBlockedClass, nearestPassable, openDisc, polylineCost, segmentCost, tracePath, type RouteFeature, type RouteGrid, type RoutePoint,
+  confineToCorridor, findRoutes, isBlockedClass, nearestPassable, openDisc, polylineCost, segmentCost, tracePath, type RouteFeature, type RouteGrid, type RoutePoint,
 } from "../index.js";
 
 const C = CLASS_INDEX;
@@ -430,5 +430,41 @@ describe("the cost field stops at its target (docs/course-elevation.md §7.7)", 
       expect(findRoutes(g, A, B, { model: DEFAULT_COST_MODEL, alternatives })).toEqual(routes);
     }
     expect(findRoutes(g, A, B, { model: SHORTEST_COST_MODEL, alternatives: 0 }).length).toBe(1);
+  });
+});
+
+describe("a corridor confines the grid (docs/course-elevation.md §7.6)", () => {
+  it("cells farther than half the width from the centre line are uncrossable; obstacles inside stay; a bend is followed", () => {
+    const g = grid([area(BLOCKED, rect(19, 19.5, 21, 20.5)), area(C.marsh, rect(7, 21, 9, 23))]);
+    confineToCorridor(g, [{ x: 5, y: 20 }, { x: 20, y: 30 }, { x: 35, y: 20 }], 2);
+    expect(at(g, 5.25, 20.25)).toBe(C.forest);
+    expect(at(g, 20.25, 30.25)).toBe(C.forest);
+    expect(at(g, 20.25, 26.25)).toBe(BLOCKED);
+    expect(at(g, 20.25, 20.25)).toBe(BLOCKED);
+    expect(at(g, 5.25, 25.25)).toBe(BLOCKED);
+    // The marsh on the first stretch: inside, its class kept.
+    expect(at(g, 8.25, 22.25)).toBe(C.marsh);
+  });
+
+  it("a corridor narrower than a cell still holds a way along its line, slanted too; a few cells wide it runs straight", () => {
+    const centre = [{ x: 5.1, y: 5.3 }, { x: 34.7, y: 31.9 }];
+    const narrow = grid([]);
+    confineToCorridor(narrow, centre, 0.01);
+    expect(findRoutes(narrow, centre[0], centre[1], { model: DEFAULT_COST_MODEL, alternatives: 0 })).toHaveLength(1);
+    const wide = grid([]);
+    confineToCorridor(wide, centre, 1.5);
+    const [r] = findRoutes(wide, centre[0], centre[1], { model: DEFAULT_COST_MODEL, alternatives: 0 });
+    expect(r.lengthM).toBeCloseTo(Math.hypot(29.6, 26.6) * 10, 0);
+  });
+
+  it("a crossing point's opening opens the obstacle inside the corridor and nothing outside it", () => {
+    const g = grid([line(BLOCKED, [20, 5, 20, 35])]);
+    confineToCorridor(g, [{ x: 5, y: 20 }, { x: 35, y: 20 }], 0.5);
+    openDisc(g, { x: 20, y: 20 }, 1, C.path);
+    // The fence on the line is opened; the corridor's outside within the disc's reach stays closed.
+    expect(at(g, 20.25, 20.25)).toBe(C.path);
+    expect(at(g, 20.25, 21.25)).toBe(BLOCKED);
+    expect(at(g, 19.25, 19.25 - 0.5)).toBe(BLOCKED);
+    for (let i = 0; i < g.cls.length; i++) if (g.outside![i]) expect(g.cls[i]).toBe(BLOCKED);
   });
 });
