@@ -46,6 +46,7 @@ import { prisma } from "../db.js";
 import { makeLeasePeer } from "./lease.js";
 import { refreshCloudOwnedMaps } from "./mapRefresh.js";
 import { refreshCloudOwnedSettings } from "./settingsRefresh.js";
+import { enqueueAutoRoutes } from "../leg-routes-auto.js";
 
 /** Parse the procedure paths out of a tRPC request URL (batched or not). */
 export function trpcProcedurePaths(url: string): string[] {
@@ -88,6 +89,11 @@ export const MAP_REFRESH_PREFIXES: readonly string[] = [
   "graphics.",
   "courseObject.",
 ];
+
+/** Whether a forwarded call wrote an out-of-bounds object: the holder searches its automatic routes again once it has landed. */
+export function forwardsObjectWrite(paths: readonly string[]): boolean {
+  return paths.some((p) => p.startsWith("courseObject."));
+}
 
 /** Whether a forwarded call wrote a map row the box mirrors. */
 export function refreshesMapRows(paths: readonly string[]): boolean {
@@ -134,7 +140,7 @@ export async function refreshAfterForward(
   nameId: string,
   peerUrl: string,
   waitMs = FORWARD_REFRESH_WAIT_MS,
-  what: { maps?: boolean; settings?: boolean } = { maps: true },
+  what: { maps?: boolean; settings?: boolean; routes?: boolean } = { maps: true },
 ): Promise<void> {
   const secret = syncSharedSecret();
   if (!secret) return;
@@ -152,7 +158,14 @@ export async function refreshAfterForward(
       );
     const work = Promise.all([
       what.settings ? step("settings", () => refreshCloudOwnedSettings(db, event, peer)) : Promise.resolve(),
-      what.maps ? step("map", () => refreshCloudOwnedMaps(db, event, peer)) : Promise.resolve(),
+      what.maps
+        ? step("map", async () => {
+            await refreshCloudOwnedMaps(db, event, peer);
+            // An out-of-bounds object forwarded from this box has landed: the automatic routes are searched again here,
+            // where the lease is held (docs/course-elevation.md §7.5 "When").
+            if (what.routes) enqueueAutoRoutes(db, event.id);
+          })
+        : Promise.resolve(),
     ]);
     let timer: NodeJS.Timeout | undefined;
     const bound = new Promise<void>((resolve) => {
@@ -326,7 +339,8 @@ export function registerVenueForwarder(server: FastifyInstance, opts: { timeoutM
       if (upstream.ok && nameId) {
         const maps = refreshesMapRows(paths);
         const settings = refreshesSettings(paths);
-        if (maps || settings) await refreshAfterForward(nameId, peerUrl, FORWARD_REFRESH_WAIT_MS, { maps, settings });
+        const routes = forwardsObjectWrite(paths);
+        if (maps || settings) await refreshAfterForward(nameId, peerUrl, FORWARD_REFRESH_WAIT_MS, { maps, settings, routes });
       }
       void reply
         .code(upstream.status)

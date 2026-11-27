@@ -25,6 +25,8 @@ import type { EventRef } from "../db.js";
 import { getActiveLease, NULLABLE_JSON_OBJECT_FIELDS, NULLABLE_JSON_SHEET_FIELDS, TOKEN_TABLES, type LeasePeer, type TokenTable } from "./lease.js";
 import { nodeId } from "./nodeIdentity.js";
 import { knownFields } from "./knownFields.js";
+import { clearComputedClimbs } from "../course-geometry.js";
+import { refreshComputedClimbs } from "../course-climb.js";
 import {
   applyTokens,
   createSnapshotMapFiles,
@@ -479,6 +481,12 @@ export async function refreshCloudOwnedMaps(
         )
       : { bytes: new Map<string, Buffer>(), fetchedBytes: 0 };
     const result = await db.$transaction((tx) => applyMapRows(tx, event.id, rows, blobs, graphicBlobs), { timeout: 60_000 });
+    // The map's rows were replaced: every computed climb rested on the previous ones. The holder clears and computes
+    // them (the cloud did not, during the lease; docs/course-elevation.md §6 "During a lease").
+    if (result.mapFiles > 0) {
+      await clearComputedClimbs(db, event.id, "all", { emit: true });
+      await refreshComputedClimbs(db, event.id);
+    }
     return { ...result, fetchedBytes: blobs.fetchedBytes + graphicBlobs.fetchedBytes };
   });
 }
