@@ -14,6 +14,7 @@ import { parseOcadMapMetadata } from "../helpers/ocad-oracle.js";
 import type { AuthUser } from "../../auth.js";
 import { grantSystemGroup } from "../../permissions.js";
 import { SYSTEM_GROUP_IDS } from "@oxygen/shared";
+import { awaitContourIntervalJobs } from "../../map-store/contour-interval-apply.js";
 import { registerBackupRoute } from "../../backup.js";
 import { registerMapSourceRoutes } from "../../map-store/source-routes.js";
 import { uploadMapSource } from "../helpers/upload-map.js";
@@ -431,6 +432,31 @@ describe("club map library", () => {
     });
     const adminDl = await asAdmin.course.downloadMap();
     expect(adminDl?.fileName).toBe("library.ocd");
+  });
+
+  it("a club map's contour interval changes only by its uploader or an admin, from the library or from an event on it (docs/course-elevation.md §0.43)", async () => {
+    const buf = readFileSync(FIXTURE);
+    const mk = async (tag: string, isAdmin: boolean) =>
+      asUser(await ctx.db.user.create({ data: { email: `${tag}-${suffix}@club-map-test.example`, displayName: tag, isAdmin, active: true } }));
+    const manager = await mk("iv-mgr", false);
+    const admin = await mk("iv-adm", true);
+    await grantSystemGroup(ctx.db, { eventId: ctx.eventId, userId: manager.id, groupId: SYSTEM_GROUP_IDS.eventAdmin, grantedBy: admin.id });
+    const as = (user: typeof manager, withEvent: boolean) => makeCaller(withEvent ? ctx.event : null, { user, authEnabled: true, identityEmail: user.email });
+    const library = await uploadClubMap(as(admin, true), buf, "interval-lib.ocd");
+    seriesIds.push(library.id);
+    await as(manager, true).course.useClubMap({ clubMapId: library.id });
+
+    // The event manager is neither the uploader nor an admin: refused from the library and from the event.
+    await expect(as(manager, false).clubMap.setContourInterval({ id: library.id, intervalM: 2.5 })).rejects.toMatchObject({ code: "FORBIDDEN", message: expect.stringContaining("uploader") });
+    await expect(as(manager, true).course.setContourInterval({ intervalM: 2.5 })).rejects.toMatchObject({ code: "FORBIDDEN", message: expect.stringContaining("uploader") });
+    expect((await ctx.db.clubMap.findUniqueOrThrow({ where: { id: library.id } })).contourIntervalM).toBeNull();
+
+    // An admin may, both ways.
+    await as(admin, false).clubMap.setContourInterval({ id: library.id, intervalM: 2.5 });
+    expect((await ctx.db.clubMap.findUniqueOrThrow({ where: { id: library.id } })).contourIntervalM).toBe(2.5);
+    await as(admin, true).course.setContourInterval({ intervalM: null });
+    expect((await ctx.db.clubMap.findUniqueOrThrow({ where: { id: library.id } })).contourIntervalM).toBeNull();
+    await awaitContourIntervalJobs();
   });
 
   it("requires instance admin to back up an event whose map came from the club library", async () => {

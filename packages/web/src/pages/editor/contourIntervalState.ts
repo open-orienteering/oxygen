@@ -19,11 +19,7 @@ export function useOpenMapInfoRequest(open: () => void): void {
   }, [open]);
 }
 
-/** A value as typed: a comma is a decimal point; null when it is not a usable interval. */
-export function parseInterval(text: string): number | null {
-  const m = Number(text.trim().replace(",", "."));
-  return Number.isFinite(m) && m > 0 && m <= 100 && Math.abs(m * 100 - Math.round(m * 100)) < 1e-6 ? m : null;
-}
+export { parseContourInterval as parseInterval } from "@oxygen/shared/src/terrain/profile/index.js";
 
 export function useContourInterval() {
   const utils = trpc.useUtils();

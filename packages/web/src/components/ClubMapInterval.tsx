@@ -38,6 +38,12 @@ export function ClubMapInterval({ id, confirmedM, assumedM }: { id: string; conf
         className="px-2 py-0.5 border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-50 cursor-pointer">
         {t(confirmed ? "intervalChange" : "intervalConfirm")}
       </button>
+      {confirmed && (
+        <button type="button" data-testid="club-map-interval-clear" disabled={set.isPending} onClick={() => set.mutate({ id, intervalM: null })}
+          className="px-2 py-0.5 border border-slate-200 rounded-lg text-slate-500 hover:bg-slate-50 disabled:opacity-50 cursor-pointer">
+          {t("intervalClear")}
+        </button>
+      )}
       <span className="text-[11px] text-slate-400">{t("intervalFollows")}</span>
       {set.error && <span className="text-[11px] text-red-600">{set.error.message}</span>}
     </div>

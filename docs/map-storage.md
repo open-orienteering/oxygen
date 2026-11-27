@@ -1214,11 +1214,15 @@ clubMap.list → [{
   previewUrl,              /api/map-documents/<documentHash>/thumbnail.png (§4.5), else null
   bounds, northOffset,     the version's header + report.north tilt under rotationCorrection (§4.6)
   northDetection, meridianStalenessDeg,   the version's report.north; staleness for today
+  contourIntervalM,        club_maps.contour_interval_m: the confirmed contour interval, null = not confirmed (course-elevation.md §0.43)
+  assumedContourIntervalM, the interval the version's contour field is derived at (its header's scale guess), the prefill; null without a version
 }]                         ordered by club_maps.created_at desc
 ```
 
 **The card** (Settings → Maps, `SettingsPage.tsx`; row G12b): the
-series' name, file, size, scale, uploader and time; the version line
+series' name, file, size, scale, uploader and time; the contour interval
+(`club-map-interval`: a number prefilled with the confirmed value or the
+guess, its state, *Confirm* / *Change* and *Mark as not confirmed*, `ClubMapInterval.tsx`); the version line
 (`library-map-version`, `data-seq`, `data-corrections`): *Version n*, a
 promoted version's label (`library-map-version-label`) and, with
 corrections, the note "Original file; n corrections applied by Oxygen"
@@ -1247,6 +1251,7 @@ card's thumbnail follows the latest import and nothing here caches it.
 |---|---|
 | `addFromSource {fileHash, fileName?, name?}` | `club_maps` row (`rotation_correction` 0), `startImportJob {clubMapId}` on the finalised source (§5) → version 1 (§6.4); returns `{id: club_maps.id, name, fileName, sizeBytes, rotationCorrection, meridianStalenessDeg, importJob}`, the staleness from the version's `report.north` when the job finished inside the hold. OCAD and Mapper sources (§5.1) |
 | `rename {id, name}` | `club_maps.name` |
+| `setContourInterval {id, intervalM \| null}` | `club_maps.contour_interval_m` (above 0, at most 100, at most two decimals; null = not confirmed). Only who may `remove` the series (its creator or an admin), as it changes every event's climbs; then the computed climbs of every non-removed event on the series are cleared and computed again in the background (`course-elevation.md` §0.43). `course.setContourInterval` writes the same column when the event's map comes from a club map, with the same check |
 | `setRotation {id, degrees}` | `rotation_correction`; returns `{success, rotationCorrection}` (the list derives extent and north from it, §4.6) |
 | `remove {id}` | deletes the series: versions cascade, `map_files.club_map_version_id` of events that pinned one is set `NULL`, jobs cascade |
 | `removeVersion {id, versionId}` | deletes the latest version when it is a promoted one (`docs/map-patches.md` §5.6): its `uploaded_by` or an admin; `VERSION_NOT_LATEST`, `VERSION_NOT_PROMOTED`, `PATCH_PROMOTING` while its promote job runs; events on it keep their document with `club_map_version_id` set `NULL` |

@@ -63,7 +63,7 @@ import { documentNorth, eventPin } from "../map-store/event-document.js";
 import { eventPatchVersion } from "../map-store/patches.js";
 import { terrainDescriptor } from "../map-store/heightfield.js";
 import { eventContourInterval, validContourInterval } from "../map-store/contour-interval.js";
-import { applyContourInterval, eventsOnClubMap } from "../map-store/contour-interval-apply.js";
+import { enqueueContourInterval, eventsOnClubMap, requireMayChangeClubMapInterval } from "../map-store/contour-interval-apply.js";
 import { canDownloadEventMap } from "../ocad-export.js";
 import { loadEventCrs } from "../event-crs.js";
 import { clearComputedClimbs, rebuildCourseLengths } from "../course-geometry.js";
@@ -1433,12 +1433,15 @@ export const courseRouter = router({
       const current = await eventContourInterval(ctx.db, pin);
       let events: bigint[] = [ctx.event.id];
       if (current.clubMapId) {
+        // The club map's value follows every event using it: as for deleting the map, its uploader or an admin.
+        const series = await ctx.db.clubMap.findUnique({ where: { id: current.clubMapId }, select: { createdBy: true } });
+        requireMayChangeClubMapInterval(ctx, series?.createdBy ?? null);
         await ctx.db.clubMap.update({ where: { id: current.clubMapId }, data: { contourIntervalM: input.intervalM } });
         events = [...new Set([ctx.event.id, ...(await eventsOnClubMap(ctx.db, current.clubMapId))])];
       } else {
         await ctx.db.mapFile.update({ where: { id: pin.id }, data: { contourIntervalM: input.intervalM } });
       }
-      await applyContourInterval(ctx.db, events);
+      enqueueContourInterval(ctx.db, events);
       return { success: true as const, contourIntervalM: input.intervalM, from: current.from };
     }),
 

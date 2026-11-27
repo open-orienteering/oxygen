@@ -400,6 +400,7 @@
   "intervalNotConfirmed": "inte bekräftad",
   "intervalConfirm": "Bekräfta",
   "intervalChange": "Ändra",
+  "intervalClear": "Markera som obekräftad",
   "intervalInvalid": "Över 0 och högst 100 m, med högst två decimaler.",
   "intervalFollowsClub": "Följer klubbkartan: varje tävling som använder den.",
   "intervalSuspect": "Höjdmodellen tyder på att kurvorna kan vara ritade med halva ekvidistansen. Kontrollera kartan.",

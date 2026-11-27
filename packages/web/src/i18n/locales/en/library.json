@@ -121,5 +121,6 @@
   "intervalNotConfirmed": "not confirmed",
   "intervalConfirm": "Confirm",
   "intervalChange": "Change",
+  "intervalClear": "Mark as not confirmed",
   "intervalFollows": "Every event using this map follows it."
 }

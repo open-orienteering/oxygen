@@ -18,7 +18,7 @@ import { makeCaller } from "../helpers/caller.js";
 import { HILL, encodeTerrainDoc } from "../helpers/terrain-doc.js";
 import { deriveDocumentHeightfield } from "../../map-store/heightfield.js";
 import { resetClimbFields } from "../../course-climb.js";
-import { _autoRouteWorkerStarts, autoRouteBasis, drainAutoRoutes, refreshAutoRoutes, type AutoRouteWorkerData } from "../../leg-routes-auto.js";
+import { _autoRouteWorkerStarts, autoRouteBasis, openAutoRouteSearcher, drainAutoRoutes, refreshAutoRoutes, type AutoRouteWorkerData } from "../../leg-routes-auto.js";
 import { acquireLease, releaseLease } from "../../sync/lease.js";
 import { searchAutoRoutes } from "../../leg-routes-auto-worker.js";
 
@@ -292,6 +292,32 @@ describe("automatic leg routes (docs/course-elevation.md §7.5)", () => {
       expect(_autoRouteWorkerStarts() - starts).toBe(1);
       const [r] = await pair(west, east);
       expect(lengthOf(r.points, { x: 14, y: 28 }, { x: 46, y: 30 })).toBeGreaterThan(32);
+      await caller.control.update({ id: west, xpos: 14, ypos: 30 });
+      expect(await refreshAutoRoutes(ctx.db, ctx.eventId)).toBe(2);
+    });
+  });
+
+  it("a worker that timed out is never reused: the next job starts a new one, and one job runs at a time", async () => {
+    await drainAutoRoutes();
+    await withEnqueueOff(async () => {
+      await caller.control.update({ id: west, xpos: 14, ypos: 29 });
+      let seen: AutoRouteWorkerData | null = null;
+      await refreshAutoRoutes(ctx.db, ctx.eventId, { search: async (d) => { seen = d; return searchAutoRoutes(d); } });
+      const { jobs, ...init } = seen!;
+      // A time limit no worker can meet: it is ended, and the next call starts another one.
+      const searcher = openAutoRouteSearcher(init, { jobTimeoutMs: 1 });
+      const starts = _autoRouteWorkerStarts();
+      await searcher.searchOne(jobs[0]).catch(() => undefined);
+      await searcher.searchOne(jobs[0]).catch(() => undefined);
+      expect(_autoRouteWorkerStarts() - starts).toBe(2);
+      await searcher.close();
+      // With time enough the same worker serves jobs one after the other; two at once are refused.
+      const ok = openAutoRouteSearcher(init, { jobTimeoutMs: 60_000 });
+      const first = ok.searchOne(jobs[0]);
+      await expect(ok.searchOne(jobs[0])).rejects.toThrow(/one job at a time/);
+      expect((await first).ok).toBe(true);
+      expect((await ok.searchOne(jobs[0])).ok).toBe(true);
+      await ok.close();
       await caller.control.update({ id: west, xpos: 14, ypos: 30 });
       expect(await refreshAutoRoutes(ctx.db, ctx.eventId)).toBe(2);
     });

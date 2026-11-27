@@ -7,25 +7,65 @@
  * value up (§6 "During a lease").
  */
 
+import { TRPCError } from "@trpc/server";
 import type { PrismaClient } from "../generated/prisma/client.js";
 import { mayRunBackgroundJob } from "../background-lease.js";
+import { canRemoveClubMap } from "../club-map-library.js";
 import { clearComputedClimbs } from "../course-geometry.js";
 import { refreshComputedClimbs } from "../course-climb.js";
 
-/** The events whose map is a version of the club map. */
+/** The events whose map is a version of the club map, not removed ones (their climbs are nobody's to compute). */
 export async function eventsOnClubMap(db: PrismaClient, clubMapId: string): Promise<bigint[]> {
-  const rows = await db.mapFile.findMany({ where: { clubMapVersion: { clubMapId } }, select: { eventId: true }, distinct: ["eventId"] });
+  const rows = await db.mapFile.findMany({ where: { clubMapVersion: { clubMapId }, event: { removed: false } }, select: { eventId: true }, distinct: ["eventId"] });
   return rows.map((r) => r.eventId);
 }
 
-/** Clears and computes again the computed climbs of the events. Returns how many events it ran for. */
-export async function applyContourInterval(db: PrismaClient, eventIds: readonly bigint[]): Promise<number> {
-  let ran = 0;
+/** Clears and computes again the computed climbs of one event, when this node may. */
+async function applyToEvent(db: PrismaClient, eventId: bigint): Promise<boolean> {
+  if (!(await mayRunBackgroundJob(db, eventId, "contour-interval"))) return false;
+  await clearComputedClimbs(db, eventId, "all", { emit: true });
+  await refreshComputedClimbs(db, eventId);
+  return true;
+}
+
+const running = new Map<bigint, { again: boolean; done: Promise<void> }>();
+
+/**
+ * After the interval is stored: the climbs of the events are cleared and computed again in the background, one
+ * run at a time per event (a second request while one runs makes it run once more). The mutation does not wait
+ * (§0.43, §6 "When"). Never throws.
+ */
+export function enqueueContourInterval(db: PrismaClient, eventIds: readonly bigint[]): void {
   for (const eventId of eventIds) {
-    if (!(await mayRunBackgroundJob(db, eventId, "contour-interval"))) continue;
-    await clearComputedClimbs(db, eventId, "all", { emit: true });
-    await refreshComputedClimbs(db, eventId);
-    ran++;
+    const state = running.get(eventId);
+    if (state) { state.again = true; continue; }
+    const entry = { again: false, done: Promise.resolve() };
+    entry.done = (async () => {
+      do {
+        entry.again = false;
+        try {
+          await applyToEvent(db, eventId);
+        } catch (err) {
+          console.warn(`[contour-interval] climbs of event ${eventId} not recomputed:`, err);
+        }
+      } while (entry.again);
+      running.delete(eventId);
+    })();
+    running.set(eventId, entry);
   }
-  return ran;
+}
+
+/** Resolves when no run is pending (tests, shutdown). */
+export async function awaitContourIntervalJobs(): Promise<void> {
+  while (running.size > 0) await Promise.all([...running.values()].map((s) => s.done));
+}
+
+/**
+ * A club map's interval follows every event on it and recomputes their climbs, so changing it takes what deleting
+ * the map takes: its uploader or an admin (docs/course-elevation.md §0.43).
+ */
+export function requireMayChangeClubMapInterval(ctx: { authEnabled: boolean; user: { id: string; isAdmin: boolean } | null }, createdBy: string | null): void {
+  if (!canRemoveClubMap({ authEnabled: ctx.authEnabled, user: ctx.user, createdBy })) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "Only the uploader of the club map or an admin can change its contour interval; it applies to every event that uses the map" });
+  }
 }

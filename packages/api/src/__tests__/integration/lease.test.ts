@@ -2088,6 +2088,30 @@ describe("a box follows the cloud's map rows during a lease (G19)", () => {
     expect(await ctx.db.course.findUniqueOrThrow({ where: { id: course.id } })).toMatchObject({ climbM: 0, climbSource: null });
     expect(await latest()).toBe(0);
   });
+
+  it("a takeover that lands between the map rows and the clear leaves the climbs alone: clear and compute are refused together", async () => {
+    const course = await ctx.db.course.create({ data: { eventId: box.id, name: "Climbs taken", lengthM: 900, legs: "900;", lengthSource: "file", climbM: 41, climbSource: "computed" } });
+    cleanup.push(() => ctx.db.course.delete({ where: { id: course.id } }).then(() => undefined));
+    await dbB.mapFile.updateMany({ where: { eventId: eventB.id, sourceHash }, data: { sourceHash: reimport.sourceHash, documentHash: reimport.documentHash } });
+    const peer = jsonLeasePeerToB();
+    const slow: LeasePeer = {
+      ...peer,
+      exportMapRows: async (...args: Parameters<LeasePeer["exportMapRows"]>) => {
+        const out = await peer.exportMapRows(...args);
+        // The lease changes hands after the refresh began and before its rows are written.
+        await ctx.db.eventLease.updateMany({ where: { eventId: box.id, releasedAt: null }, data: { holderNodeId: "someone-else" } });
+        return out;
+      },
+    };
+    try {
+      await refresh(slow).catch(() => null);
+      expect(await ctx.db.course.findUniqueOrThrow({ where: { id: course.id } })).toMatchObject({ climbM: 41, climbSource: "computed" });
+    } finally {
+      await ctx.db.eventLease.updateMany({ where: { eventId: box.id, releasedAt: null }, data: { holderNodeId: nodeId() } });
+      await dbB.mapFile.updateMany({ where: { eventId: eventB.id, sourceHash: reimport.sourceHash }, data: { sourceHash, documentHash } });
+      await refresh();
+    }
+  });
 });
 
 describe("a box that is no longer the holder stops writing (SYNC-08)", () => {

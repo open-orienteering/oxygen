@@ -30,7 +30,4 @@ export async function eventContourInterval(db: Db, pin: Pick<EventPin, "clubMapV
   return { confirmedM: pin.contourIntervalM, from: "event", clubMapId: null };
 }
 
-/** What a person may confirm: above 0, at most 100 m, at most two decimals (§0.43). */
-export function validContourInterval(m: number): boolean {
-  return Number.isFinite(m) && m > 0 && m <= 100 && Math.abs(m * 100 - Math.round(m * 100)) < 1e-6;
-}
+export { validContourInterval } from "@oxygen/shared/src/terrain/profile/index.js";

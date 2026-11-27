@@ -51,6 +51,12 @@ export function ContourIntervalRow({ labelClass }: { labelClass: string }) {
               {t(confirmed ? "intervalChange" : "intervalConfirm")}
             </button>
           )}
+          {iv.canEdit && confirmed && (
+            <button type="button" data-testid="editor-map-info-interval-clear" disabled={iv.saving} onClick={() => { void iv.save(null); }}
+              className="rounded border border-slate-200 bg-white px-2 py-0.5 text-[11px] text-slate-500 hover:bg-slate-50 disabled:opacity-50 cursor-pointer">
+              {t("intervalClear")}
+            </button>
+          )}
         </dd>
       </div>
       {text.trim() !== "" && parsed === null && <p data-testid="editor-map-info-interval-invalid" className="text-[11px] text-red-600">{t("intervalInvalid")}</p>}

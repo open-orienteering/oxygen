@@ -55,3 +55,12 @@ Findings from the review of the course-elevation work (`docs/course-elevation.md
 **What happened.** The contour field is derived at 5 m (2.5 m for ISSprOM) whatever the map's own interval, and the climb read it as it was: a map drawn at 2.5 m got twice its climb, stored, printed and pushed.
 
 **Fix.** The interval is confirmed per map (`club_maps.contour_interval_m`, `map_files.contour_interval_m`; the club map's value wins). Until it is confirmed a contour climb is an estimate (`≈`, a note with Confirm, a banner) and is not stored, printed or exported; with a value, the heights are read scaled to it and the climbs of every event on the map are cleared and recomputed. The migration clears the computed climbs once. Not done: deriving the fields at the confirmed interval (F3).
+
+## Second review round
+
+- **Journal.** `climbSource` and `winnerPaceSPerKm` travel in `course.upserted`. Before, a climb computed on the holder arrived on the cloud as typed and survived an interval clear there; a winner pace typed on a box never reached the cloud. An entry that carries `climbM` without `climbSource` (an older sender) is still held as typed.
+- **Who may change a club map's interval.** `clubMap.setContourInterval`, and `course.setContourInterval` for an event whose map comes from the library, take the check of deleting the map (its uploader or an admin), since the value recomputes every event's climbs.
+- **Background.** The recompute after an interval change runs in a per-event in-memory queue and skips removed events; the mutation returns once the value is stored. The post-refresh clear of the holder's map refresh takes the same lease check as the compute. A promote that changes the pinned document clears and recomputes the climbs on the holder, and no longer copies the event's interval to the club map.
+- **Route searcher.** A worker that timed out or exited is flagged dead and never reused; one job at a time is enforced. The lease log line repeats after an hour instead of once per process.
+- **Interval input.** One validation function in `@oxygen/shared`, used by the API and the editor; a confirmed value can be returned to *not confirmed* from the dialog row and the club card; the route finder's costs read the heights at the confirmed interval, as the displayed climb does.
+- **Migration note.** The migration's one-off clear also clears computed climbs resting on a ground model; they are computed again when a course is next edited or the editor is opened.

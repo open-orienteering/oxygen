@@ -229,7 +229,20 @@ recommended defaults):
     interval clears and recomputes every computed climb of every event on
     that map; typed and file climbs are untouched. The anchor's
     `intervalSuspect` warning is shown in the dialog and is never a
-    source of the value.
+    source of the value. A value can be returned to *not confirmed*
+    (`intervalM: null`) from the dialog row and the club card. Who may
+    change it: for a map of the club library the interval is the club
+    map's, and it changes every event's climbs, so it takes what deleting
+    the map takes (`canRemoveClubMap`: its uploader or an admin; FORBIDDEN
+    otherwise), both through `clubMap.setContourInterval` and through
+    `course.setContourInterval` on an event whose map comes from the
+    library; an event's own map is confirmed by anyone who may edit its
+    courses. The recompute of the climbs runs in the background, one run at
+    a time per event (`enqueueContourInterval`, as the route refresh), on
+    the events that are not removed: the mutation returns once the value is
+    stored. The banner shows on a desktop in course mode only and is
+    dismissed per browser session and map; a phone setter sees the
+    estimate note in the climb row instead.
 44. **Background route and climb jobs respect the lease** (D8): a node
     that does not hold an event's lease neither searches leg routes nor
     clears or computes climbs for it. The holder refreshes its routes
@@ -388,7 +401,11 @@ is read and its heights scaled by `confirmedM / assumedM`
 field). A descriptor without `interval` is read as unconfirmed. The
 server stores a contour-based climb only when `confirmed`; the basis
 `ground` is unaffected. The stored field, its key and `TERRAIN_VERSION`
-do not change.
+do not change. Confirming an interval different from the assumed one
+therefore drops the DEM-anchored field from the pick: if the plain contour
+field is not ready (pending, over-cap), the course gets no computed climb
+until it exists, which is when the editor is opened (the field is derived
+on request).
 
 A coarse ground model (`glo30-30m`: a 30 m surface model) is never read
 for climb. Climb needs only height differences, so the relative
@@ -681,7 +698,8 @@ marks the course:
   (`firstAsStart`, `lastAsFinish`);
 - a change of the map's contour interval (`course.setContourInterval`,
   `clubMap.setContourInterval`): every computed climb of every event on
-  the map (§0.43);
+  the map that is not removed, in the background after the value is
+  stored, one run at a time per event (§0.43);
 - a leg route chosen or changed (`legRoute.choose`, the automatic
   refresh): the courses running the pair;
 - a map upload, a library map or a rotation change
@@ -739,16 +757,19 @@ Purple Pen exports read `climb_m` as stored, whatever its source
 (unlike a `derived` length, nothing is recomputed at export). Eventor's
 sync never writes climb. `course.list` and `course.detail` state the source
 (`climbSource`: `manual` | `file` | `computed` | null, a climb without
-a stored source read as `manual`). The column is stripped from the
-`course.upserted` payload, as `length_source` is; it travels with the
-checkout snapshot, which is read through the importer's own columns
+a stored source read as `manual`). `climbSource` and `winnerPaceSPerKm`
+travel in the `course.upserted` payload since review package 23 (only
+`length_source` is still stripped as derived): a climb computed on the
+lease holder stays a computed one on the peer, is cleared there by an
+interval change or a geometry edit and computed again, and a winner pace
+typed on a box reaches the cloud. A receiver drops keys it does not know
+(since review package 3, 2026-11-25), so an older peer ignores them; an
+entry that carries `climbM` without `climbSource` (an older sender) is
+held as a typed climb, whatever this node's row said before. The
+checkout snapshot is read through the importer's own columns
 (`sync/knownFields.ts`), so a box that does not know `climb_source` or
 `winner_pace_s_per_km` checks out from a cloud that has them and drops
-what it does not know. A peer that
-receives a computed climb through the journal therefore holds it as a
-typed one until it is cleared there. That copy is not cleared by
-the peer's geometry edits: after a checkout to another node, a climb
-computed here stays as it was until someone clears it there (Pending).
+what it does not know.
 
 **The Courses page** (`CoursesPage.tsx`, the course's detail): a *Climb
 (m)* field (`course-detail-climb`, `data-source`) holding a typed climb,
@@ -1461,6 +1482,7 @@ only when a person presses the button.
 | `packages/api/src/__tests__/course-climb.test.ts` | §6: a stated climb's source, the read rule, the field's row source, the climb to store (partial, flat, no legs) |
 | `packages/api/src/__tests__/integration/course-climb.test.ts` | §6: `course.update` moving the ends, a clear that journals the cleared row itself, the compute under a foreign lease (nothing computed, journaled or cleared; a `courseObject` write goes ahead), the chosen routes read once for an all-courses compute and again when one was chosen between two courses. §0.43: an unconfirmed interval stores nothing, confirming stores and journals, 2.5 m halves it, null clears, a typed climb untouched, refused values, a club map's interval reaching two events and the exporter's resolved value, a foreign lease. Computed after a create commits, cleared and recomputed by a move, the journal payload and token, both journal entries of an edit, typed wins and clears back, a climb without a source, a typed source over an empty climb, clone, free order, bulk end moves and bulk climb, `refreshClimbs`, marks not taken by another request while the edit is open, a climb applied from the journal, a field not stored, the column's constraint |
 | `packages/api/src/__tests__/leg-routes-auto-worker.test.ts` | §7.5: the search's results per job, a job that throws failing alone |
+| `packages/api/src/__tests__/background-lease.test.ts`, `packages/shared/src/terrain/profile/__tests__/interval.test.ts` | §0.44: the skip is logged once an hour; §0.43: the rule for a confirmable interval (0, -5, 100, 101, 2.5, 2.55, 2.555, NaN, "2,5") |
 | `packages/api/src/__tests__/known-fields.test.ts` | §6 "Readers": a course row keeps `climbSource` and `winnerPaceSPerKm` and drops a column this schema lacks |
 | `packages/api/src/__tests__/map-refresh.test.ts` | §7.5: a forwarded `courseObject.*` write makes the holder refresh its routes, a patch write does not |
 | `packages/api/src/__tests__/integration/lease.test.ts` (map refresh) | §6 "During a lease": a map refresh that replaces the rows clears and journals the box's computed climbs; the holder's route refresh after a forwarded object write |
@@ -1496,7 +1518,7 @@ only when a person presses the button.
   not known (§0.38). A forked class states its root course's numbers,
   not each variant's.
 - §7.5: the lease holder refreshes the routes after a forwarded
-  `courseObject.*` or `course.setContourInterval` write, but not after a
+  `courseObject.*` write, but not after a
   cadence map refresh (an out-of-bounds edit made in the cloud UI during a
   lease): that reaches its routes at its next course edit or opening of
   the course mode (§0.26, §0.44). Any map correction still makes every pair stale (the
@@ -1563,13 +1585,8 @@ only when a person presses the button.
   `TERRAIN_VERSION` bump — until the course's next edit or its next
   opening in the editor. The printed and exported climb does not say
   that it rests on contours.
-- §6: the climb's source does not travel in the journal, so a node that
-  received a computed climb from a peer treats it as typed and does not
-  recompute it on its own edits; likewise a winner pace typed on a box
-  does not reach the cloud (both are stripped as derived). Receivers drop
-  unknown keys since review package 3 (2026-11-25), so letting
-  `climbSource` and `winnerPaceSPerKm` travel is now small: it waits for
-  the answer whether any box older than that is in use (follow-ups, Q2).
+- §6: a climb computed before the journal carried `climbSource`
+  (an entry from an older sender) is held as a typed one on the peer.
 - §0.43: the contour interval is confirmed, but the fields are still
   derived at the assumed one: the 3D view's vertical scale, the height
   under the pick, the DEM anchor's level vote and its misalignment gate use

@@ -162,10 +162,11 @@ export interface AutoRouteSearcher {
  */
 export function openAutoRouteSearcher(init: AutoRouteInit, opts: { jobTimeoutMs?: number } = {}): AutoRouteSearcher {
   const timeoutMs = opts.jobTimeoutMs ?? AUTO_ROUTE_JOB_TIMEOUT_MS;
-  interface Live { worker: Worker; ready: Promise<void>; fail: (err: Error) => void; job: { id: number; settle: (r: AutoRouteResult) => void } | null }
+  interface Live { worker: Worker; ready: Promise<void>; dead: boolean; fail: (err: Error) => void; job: { id: number; settle: (r: AutoRouteResult) => void } | null }
   let live: Live | null = null;
   let closed = false;
   let nextId = 1;
+  let busy = false;
 
   const start = (): Live => {
     workerStarts++;
@@ -180,9 +181,10 @@ export function openAutoRouteSearcher(init: AutoRouteInit, opts: { jobTimeoutMs?
     const ready = new Promise<void>((resolve, reject) => { readyOk = resolve; readyFail = reject; });
     ready.catch(() => undefined);
     const me: Live = {
-      worker, ready,
+      worker, ready, dead: false,
       job: null,
       fail: (err) => {
+        me.dead = true;
         if (live === me) live = null;
         readyFail(err);
         const job = me.job;
@@ -207,24 +209,10 @@ export function openAutoRouteSearcher(init: AutoRouteInit, opts: { jobTimeoutMs?
 
   return {
     async searchOne(job) {
-      if (closed) return { ok: false, error: "the route search was closed" };
-      const mine = live ?? (live = start());
-      // The document is prepared within one job's time; a worker that cannot prepare it is no way to search.
-      let timer: NodeJS.Timeout | undefined;
-      const prepared = await Promise.race([
-        mine.ready.then(() => true),
-        new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs); }),
-      ]).finally(() => clearTimeout(timer));
-      if (!prepared) {
-        mine.fail(new Error(`route worker not ready within ${timeoutMs} ms`));
-        throw new Error(`route worker not ready within ${timeoutMs} ms`);
-      }
-      return new Promise<AutoRouteResult>((resolve) => {
-        const id = nextId++;
-        const timeout = setTimeout(() => mine.fail(new Error(`route search exceeded ${timeoutMs} ms`)), timeoutMs);
-        mine.job = { id, settle: (r) => { clearTimeout(timeout); resolve(r); } };
-        mine.worker.postMessage({ type: "search", id, job } satisfies AutoRouteWorkerRequest);
-      });
+      // One job at a time: the caller awaits each (a second would take the first's answer).
+      if (busy) throw new Error("the route searcher takes one job at a time");
+      busy = true;
+      try { return await searchOne(job); } finally { busy = false; }
     },
     async close() {
       closed = true;
@@ -237,6 +225,33 @@ export function openAutoRouteSearcher(init: AutoRouteInit, opts: { jobTimeoutMs?
       }
     },
   };
+
+  async function searchOne(job: AutoRouteJob): Promise<AutoRouteResult> {
+    {
+      if (closed) return { ok: false, error: "the route search was closed" };
+      // A worker that died (a timeout, an exit) is never reused: the next job starts a new one.
+      if (live?.dead) live = null;
+      const mine = live ?? (live = start());
+      // The document is prepared within one job's time; a worker that cannot prepare it is no way to search.
+      let timer: NodeJS.Timeout | undefined;
+      const prepared = await Promise.race([
+        mine.ready.then(() => true),
+        new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs); }),
+      ]).finally(() => clearTimeout(timer));
+      if (!prepared) {
+        mine.fail(new Error(`route worker not ready within ${timeoutMs} ms`));
+        throw new Error(`route worker not ready within ${timeoutMs} ms`);
+      }
+      // It died while the document was being prepared (after `ready`): this job is lost, the next one starts afresh.
+      if (mine.dead) return { ok: false, error: "the route worker stopped before the search started" };
+      return new Promise<AutoRouteResult>((resolve) => {
+        const id = nextId++;
+        const timeout = setTimeout(() => mine.fail(new Error(`route search exceeded ${timeoutMs} ms`)), timeoutMs);
+        mine.job = { id, settle: (r) => { clearTimeout(timeout); resolve(r); } };
+        mine.worker.postMessage({ type: "search", id, job } satisfies AutoRouteWorkerRequest);
+      });
+    }
+  }
 }
 
 export interface RefreshAutoRoutesOptions {

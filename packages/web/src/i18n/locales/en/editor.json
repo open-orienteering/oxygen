@@ -400,6 +400,7 @@
   "intervalNotConfirmed": "not confirmed",
   "intervalConfirm": "Confirm",
   "intervalChange": "Change",
+  "intervalClear": "Mark as not confirmed",
   "intervalInvalid": "Above 0 and at most 100 m, with at most two decimals.",
   "intervalFollowsClub": "Follows the club map: every event using it.",
   "intervalSuspect": "The height model suggests the contours may be drawn at half this interval. Check the map.",

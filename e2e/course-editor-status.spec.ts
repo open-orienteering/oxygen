@@ -431,6 +431,13 @@ test.describe("P6: the map footer out; the map-info dialog", () => {
       await expect(dialog.getByTestId("editor-map-info-interval-state")).toHaveAttribute("data-state", "confirmed");
       await expect(row).toHaveAttribute("data-confirmed", "2.5");
       await expect(dialog.getByTestId("editor-map-info-interval-input")).toHaveValue("2.5");
+      // And back to not confirmed.
+      const cleared = waitForTrpc(page, "course.setContourInterval");
+      stored = null;
+      await dialog.getByTestId("editor-map-info-interval-clear").click();
+      await cleared;
+      await expect(dialog.getByTestId("editor-map-info-interval-state")).toHaveAttribute("data-state", "unconfirmed");
+      await expect(dialog.getByTestId("editor-map-info-interval-clear")).toHaveCount(0);
     } finally {
       await trpcCall("course.setContourInterval", { intervalM: null });
     }

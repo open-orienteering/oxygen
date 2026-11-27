@@ -212,6 +212,12 @@ test.describe("club map library", () => {
     await expect(interval).toHaveAttribute("data-confirmed", "5");
     await page.reload();
     await expect(page.locator('[data-testid^="library-map-card-"]').first().getByTestId("club-map-interval")).toHaveAttribute("data-confirmed", "5", { timeout: 15000 });
+    // And back to not confirmed.
+    const again = page.locator('[data-testid^="library-map-card-"]').first();
+    await again.getByTestId("club-map-interval-clear").click();
+    await expect(again.getByTestId("club-map-interval-state")).toHaveAttribute("data-state", "unconfirmed");
+    await expect(again.getByTestId("club-map-interval")).toHaveAttribute("data-confirmed", "");
+    await expect(again.getByTestId("club-map-interval-clear")).toHaveCount(0);
   });
 
   test("uploading a map with stale north lines warns the course setter", async ({
