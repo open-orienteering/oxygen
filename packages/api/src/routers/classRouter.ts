@@ -337,7 +337,8 @@ export const classRouter = router({
         await tx.class.update({ where: { id: c.id }, data });
         // The pool follows the course, the runners the pool (F6b): journaled
         // after the class so a peer holds the pool first.
-        const sync = input.courseId !== undefined ? await syncClassPool(tx, c.id) : null;
+        // Only a changed course re-syncs the pool (an unchanged one must not touch the runners, WEB-09).
+        const sync = input.courseId !== undefined && data.courseId !== c.courseId ? await syncClassPool(tx, c.id) : null;
         await emitClassUpserted(tx, ctx.event.id, c.id);
         if (sync) await emitRunnerVariants(tx, ctx.event.id, sync.runners);
       });
@@ -362,7 +363,7 @@ export const classRouter = router({
     .mutation(async ({ ctx, input }) => {
       const rows = await ctx.db.class.findMany({
         where: { eventId: ctx.event.id, seq: { in: input.ids } },
-        select: { id: true },
+        select: { id: true, courseId: true },
       });
       const data: Record<string, unknown> = {};
       if (input.courseId !== undefined) {
@@ -387,7 +388,7 @@ export const classRouter = router({
           data,
         });
         for (const r of rows) {
-          const sync = input.courseId !== undefined ? await syncClassPool(tx, r.id) : null;
+          const sync = input.courseId !== undefined && data.courseId !== r.courseId ? await syncClassPool(tx, r.id) : null;
           await emitClassUpserted(tx, ctx.event.id, r.id);
           if (sync) await emitRunnerVariants(tx, ctx.event.id, sync.runners);
         }
