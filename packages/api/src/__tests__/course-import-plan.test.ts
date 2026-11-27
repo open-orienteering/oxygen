@@ -180,6 +180,18 @@ describe("planCourseImport: modes", () => {
     expect(plan.unassignClassIds).toEqual(["cl2", "cl3"]);
   });
 
+  it("Replace all keeps a class on a removed course the file restores", () => {
+    const old = course({ name: "N", removed: true });
+    const s2 = { ...s, courses: [...s.courses, old], classes: [...s.classes, { id: "cl4", seq: 4, name: "H12", courseId: old.id }] };
+    expect(planCourseImport(parsed, s2, { replaceAll: true, comparePositions: false }).unassignClassIds).toEqual(["cl2"]);
+  });
+
+  it("Merge skips a round-trip variant name (no family) over a removed root of that name", () => {
+    const old = course({ name: "F AB", removed: true });
+    const s2 = { ...s, courses: [...s.courses, old], variantRootByName: new Map([["f ab", forked.id]]) };
+    expect([...planCourseImport({ ...parsed, courses: [crs("F AB", ["31"])] }, s2, { replaceAll: false, comparePositions: false }).skippedCourseNames]).toEqual(["F AB"]);
+  });
+
   it("matches a course and a crossing point by a trimmed name", () => {
     const p = { ...parsed, courses: [crs(" A ", ["31"])] };
     expect(planCourseImport(p, s, { replaceAll: false, comparePositions: false }).courseMatch.get(" A ")).toBe(a);

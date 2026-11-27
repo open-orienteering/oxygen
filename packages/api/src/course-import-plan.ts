@@ -157,7 +157,7 @@ export function fileBlockers(parsed: Pick<ParsedCourseData, "controls" | "course
     out.push({ code: "duplicate_control", ids: g });
   }
   for (const g of duplicates(
-    parsed.controls.filter((c) => c.type === "Start" || c.type === "Finish").map((c) => [startFinishName(c).toLowerCase(), c.id]),
+    parsed.controls.filter((c) => c.type === "Start" || c.type === "Finish").map((c) => [importKey(startFinishName(c)), c.id]),
   )) {
     out.push({ code: "duplicate_start_finish", ids: g });
   }
@@ -408,7 +408,10 @@ export function planCourseImport(
     }
     // Live courses: a class pointing anywhere else (a course removed
     // earlier) is cleared too, as the old full wipe did.
-    const liveCourseIds = new Set(state.courses.filter((r) => !r.removed).flatMap((r) => [r.id, ...r.variantIds]));
+    // A removed root the file restores is live again after the import.
+    const liveCourseIds = new Set(
+      state.courses.filter((r) => !r.removed || matchedCourseIds.has(r.id)).flatMap((r) => [r.id, ...r.variantIds]),
+    );
     for (const cl of state.classes) {
       if (!cl.courseId) continue;
       const courseName = removedById.get(cl.courseId) ?? (liveCourseIds.has(cl.courseId) ? undefined : "—");

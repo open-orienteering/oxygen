@@ -40,6 +40,13 @@ describe("parseOCDCourseData map scale", () => {
     expect(parseOCDCourseData(buf).mapScale).toBe(7500);
   });
 
+  it("refuses a tiny buffer as not OCAD, and a tiny OCAD one as too small", () => {
+    expect(() => parseOCDCourseData(Buffer.alloc(1))).toThrow("Not an OCAD file");
+    const b = Buffer.alloc(8);
+    b.writeUInt16LE(0x0cad, 0);
+    expect(() => parseOCDCourseData(b)).toThrow("File too small");
+  });
+
   it("refuses a file without the OCAD magic word", () => {
     const buf = Buffer.alloc(64);
     buf.writeUInt16LE(12, 4);
