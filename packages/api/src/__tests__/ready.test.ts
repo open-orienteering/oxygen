@@ -6,6 +6,7 @@ function setup(opts: {
   query: (sql: string) => Promise<unknown>;
   expected?: string[];
   timeoutMs?: number;
+  now?: () => number;
 }) {
   const server = Fastify();
   const db: ReadyDb = { $queryRawUnsafe: vi.fn(opts.query) as ReadyDb["$queryRawUnsafe"] };
@@ -13,6 +14,7 @@ function setup(opts: {
     db: () => db,
     expectedMigrations: () => opts.expected ?? ["a", "b"],
     timeoutMs: opts.timeoutMs ?? 50,
+    ...(opts.now ? { now: opts.now } : {}),
   });
   return { server, db: db.$queryRawUnsafe as ReturnType<typeof vi.fn> };
 }
@@ -75,6 +77,41 @@ describe("GET /ready", () => {
     const sqls = db.mock.calls.map((c) => c[0] as string);
     expect(sqls.filter((s) => s.includes("_prisma_migrations"))).toHaveLength(1);
     expect(sqls.filter((s) => s === "SELECT 1")).toHaveLength(3);
+  });
+
+  it("re-checks the migrations once the 60 s cache has expired", async () => {
+    let t = 1_000;
+    const { server, db } = setup({
+      query: async (sql) => (sql.startsWith("SELECT 1") ? [{}] : applied("a", "b")),
+      now: () => t,
+    });
+    const migrationQueries = () =>
+      db.mock.calls.filter((c) => (c[0] as string).includes("_prisma_migrations")).length;
+    await server.inject({ method: "GET", url: "/ready" });
+    t += 59_000;
+    await server.inject({ method: "GET", url: "/ready" });
+    expect(migrationQueries()).toBe(1);
+    t += 2_000;
+    await server.inject({ method: "GET", url: "/ready" });
+    expect(migrationQueries()).toBe(2);
+  });
+
+  it("shares one in-flight check between concurrent probes", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const { server, db } = setup({
+      query: async (sql) => {
+        await gate;
+        return sql.startsWith("SELECT 1") ? [{}] : applied("a", "b");
+      },
+      timeoutMs: 1000,
+    });
+    const reqs = [1, 2, 3].map(() => server.inject({ method: "GET", url: "/ready" }));
+    await new Promise((r) => setTimeout(r, 20));
+    release();
+    const res = await Promise.all(reqs);
+    expect(res.map((r) => r.statusCode)).toEqual([200, 200, 200]);
+    expect(db.mock.calls.filter((c) => c[0] === "SELECT 1")).toHaveLength(1);
   });
 
   it("does not cache a mismatch, and recovers when the database comes back", async () => {

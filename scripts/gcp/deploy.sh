@@ -265,6 +265,17 @@ process.stdout.write(live.filter((n) => !set.has(n)).join(" "));
     return 0
   fi
   echo "!! The live service ${SERVICE} has variables this deploy would REMOVE: ${dropped}" >&2
+  if [[ " $dropped " == *" SYNC_SHARED_SECRET "* ]]; then
+    echo "   SYNC_SHARED_SECRET is set on the live service as a literal value, and the secret" >&2
+    echo "   ${SYNC_SECRET} does not exist. Move it into Secret Manager without changing the value" >&2
+    echo "   (venue boxes hold the current one):" >&2
+    echo "     1. Read it: gcloud run services describe ${SERVICE} --project=${PROJECT_ID} --region=${REGION} \\" >&2
+    echo "          --format='value(spec.template.spec.containers[0].env.filter(name=SYNC_SHARED_SECRET).extract(value).flatten())'" >&2
+    echo "     2. printf %s \"<current value>\" | gcloud secrets create ${SYNC_SECRET} --project=${PROJECT_ID} --data-file=-" >&2
+    echo "     3. ./provision.sh   (never overwrites an existing secret; binds runtime access)" >&2
+    echo "     4. ./deploy.sh again." >&2
+    echo "   (EXTRA_ENV refuses SYNC_SHARED_SECRET, and provision.sh alone would create a new random value.)" >&2
+  fi
   echo "   Add them to EXTRA_ENV in env.sh (NAME=value;NAME2=value2) or, for a secret, create it" >&2
   echo "   as documented, then deploy again; or pass --drop-unlisted to remove them on purpose." >&2
   echo "   Nothing was migrated or deployed." >&2
@@ -365,6 +376,9 @@ if [[ "$MIGRATE_ONLY" -eq 1 ]]; then
   exit 0
 fi
 
+# Scaling may have been switched (event-mode.sh) during the build and migrate:
+# deploy with what the service has now, not what it had at the start.
+read_scaling
 run_cloud_run_deploy "$IMAGE_REF"
 
 echo

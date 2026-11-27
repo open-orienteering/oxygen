@@ -275,6 +275,25 @@ it does not exist, because venue-box checkout would then fail with
 `PRECONDITION_FAILED`. Read the value for the box's `.env.venue` with
 `gcloud secrets versions access latest --secret=oxygen-sync-secret`.
 
+**Upgrading a cloud whose `SYNC_SHARED_SECRET` was set by hand** as a literal
+environment variable: `./deploy.sh` aborts ("would REMOVE: SYNC_SHARED_SECRET"),
+because `EXTRA_ENV` refuses the managed name, and running `./provision.sh`
+first would create a *new* random value that the venue boxes do not hold. Move
+the existing value into Secret Manager instead:
+
+```bash
+source scripts/gcp/env.sh
+# 1. Read the current value from the live revision
+gcloud run services describe "$SERVICE" --project="$PROJECT_ID" --region="$REGION" \
+  --format='value(spec.template.spec.containers[0].env.filter(name=SYNC_SHARED_SECRET).extract(value).flatten())'
+# 2. Create the secret from it
+printf %s "<current value>" | gcloud secrets create oxygen-sync-secret --project="$PROJECT_ID" --data-file=-
+# 3. Bind runtime access (never overwrites the secret you just made)
+./provision.sh
+# 4. Deploy: SYNC_SHARED_SECRET now moves from a literal to the secret, which is not a drop
+./deploy.sh
+```
+
 One-time setup:
 
 ```bash

@@ -56,7 +56,7 @@ export default defineConfig({
         // navigation (or a Workbox fallback) to /trpc/... returns
         // index.html and the tRPC client JSON.parse()s "<html><head>…".
         navigateFallback: "index.html",
-        navigateFallbackDenylist: [/^\/trpc/, /^\/api/, /^\/health/],
+        navigateFallbackDenylist: [/^\/trpc/, /^\/api/, /^\/health/, /^\/ready/],
         // Runtime caching. No route for /trpc or /api/version: a cached
         // tRPC answer looked like a fresh 200, so a station read pre-start
         // data after the race (SYNC-16). Offline reads come from the

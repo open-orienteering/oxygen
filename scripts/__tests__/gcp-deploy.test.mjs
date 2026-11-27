@@ -20,7 +20,9 @@ case "$1 $2 $3" in
     exit 0 ;;
   "run services describe")
     [[ ",$STUB_FAIL," == *,describe,* ]] && { echo "ERROR: (gcloud.run.services.describe) timeout" >&2; exit 1; }
-    cat "$STUB_DESCRIBE_JSON"
+    # With STUB_DESCRIBE_JSON2 the second describe answers from that file.
+    n=$(grep -c "^run services describe" "$STUB_LOG")
+    if [[ -n "$STUB_DESCRIBE_JSON2" && $n -ge 2 ]]; then cat "$STUB_DESCRIBE_JSON2"; else cat "$STUB_DESCRIBE_JSON"; fi
     exit 0 ;;
   "secrets list "*)
     [[ ",$STUB_FAIL," == *,secrets-list,* ]] && { echo "ERROR: (gcloud.secrets.list) 500" >&2; exit 1; }
@@ -46,7 +48,9 @@ function describeJson({ min = "0", throttle = "true", env = [] } = {}) {
         spec: {
           containers: [
             {
-              env: env.map((name) => ({ name, value: "x" })),
+              // A string is a literal variable; an object is used as given
+              // (e.g. a valueFrom.secretKeyRef entry).
+              env: env.map((e) => (typeof e === "string" ? { name: e, value: "x" } : e)),
             },
           ],
         },
@@ -59,6 +63,10 @@ const MANAGED_LIVE = [
   "DATABASE_URL", "NODE_OPTIONS", "DATABASE_POOL_MAX", "MAP_RENDER_CONCURRENCY", "AUTH_MODE",
   "AUTH_HEADER", "AUTH_AUTO_PROVISION", "OXYGEN_ADMIN_EMAILS", "OXYGEN_DEPLOY_REF",
 ];
+const SECRET_BACKED_SYNC = {
+  name: "SYNC_SHARED_SECRET",
+  valueFrom: { secretKeyRef: { name: "oxygen-sync-secret", key: "latest" } },
+};
 
 describe("scripts/gcp/deploy.sh", () => {
   let dir;
@@ -99,6 +107,7 @@ describe("scripts/gcp/deploy.sh", () => {
         STUB_SERVICE_EXISTS: "0",
         STUB_SECRETS: "",
         STUB_FAIL: "",
+        STUB_DESCRIBE_JSON2: "",
         ...env,
       },
     });
@@ -198,6 +207,55 @@ describe("scripts/gcp/deploy.sh", () => {
     assert.match(r.stderr, /would REMOVE: PRINT_WORKERS SYNC_SHARED_SECRET/);
     assert.equal(migrated(r), false);
     assert.equal(deployCall(r), undefined);
+  });
+
+  it("tells the operator to create the secret from the live literal when SYNC_SHARED_SECRET would be dropped", () => {
+    const r = run([], {
+      env: { STUB_SERVICE_EXISTS: "1" },
+      describe: describeJson({ env: [...MANAGED_LIVE, "SYNC_SHARED_SECRET"] }),
+    });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /gcloud run services describe oxygen/);
+    assert.match(r.stderr, /printf %s "<current value>" \| gcloud secrets create oxygen-sync-secret/);
+    assert.match(r.stderr, /\.\/provision\.sh/);
+    assert.equal(migrated(r), false);
+    assert.equal(deployCall(r), undefined);
+  });
+
+  it("does not treat SYNC_SHARED_SECRET moving from a literal to the secret as a drop", () => {
+    const r = run([], {
+      env: { STUB_SERVICE_EXISTS: "1", STUB_SECRETS: "oxygen-sync-secret" },
+      describe: describeJson({ env: [...MANAGED_LIVE, "SYNC_SHARED_SECRET"] }),
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(flag(deployCall(r), "set-secrets"), /SYNC_SHARED_SECRET=oxygen-sync-secret:latest/);
+  });
+
+  it("sees a secret-backed (valueFrom.secretKeyRef) live variable: dropped when unmanaged, kept when bound", () => {
+    const live = describeJson({ env: [...MANAGED_LIVE, SECRET_BACKED_SYNC, { name: "OTHER_SECRET", valueFrom: { secretKeyRef: { name: "o", key: "latest" } } }] });
+    const dropped = run([], { env: { STUB_SERVICE_EXISTS: "1", STUB_SECRETS: "oxygen-sync-secret" }, describe: live });
+    assert.equal(dropped.status, 1);
+    assert.match(dropped.stderr, /would REMOVE: OTHER_SECRET$/m);
+    assert.doesNotMatch(dropped.stderr, /REMOVE:.*SYNC_SHARED_SECRET/);
+    const kept = run([], {
+      env: { STUB_SERVICE_EXISTS: "1", STUB_SECRETS: "oxygen-sync-secret" },
+      describe: describeJson({ env: [...MANAGED_LIVE, SECRET_BACKED_SYNC] }),
+    });
+    assert.equal(kept.status, 0, kept.stderr);
+  });
+
+  it("re-reads scaling right before the deploy and uses the fresh values", () => {
+    writeFileSync(path.join(dir, "describe2.json"), describeJson({ min: "2", throttle: "false", env: MANAGED_LIVE }));
+    const r = run([], {
+      env: { STUB_SERVICE_EXISTS: "1", STUB_DESCRIBE_JSON2: path.join(dir, "describe2.json") },
+      describe: describeJson({ min: "0", throttle: "true", env: MANAGED_LIVE }),
+    });
+    assert.equal(r.status, 0, r.stderr);
+    const call = deployCall(r);
+    assert.equal(flag(call, "min-instances"), "2");
+    assert.match(call, /--no-cpu-throttling/);
+    assert.match(r.stdout, /event mode \(min-instances=2, cpu-throttling=0\)/);
+    assert.equal(r.calls.filter((c) => c.startsWith("run services describe")).length, 2);
   });
 
   it("does not abort when EXTRA_ENV and the sync secret cover the live variables", () => {

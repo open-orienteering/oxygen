@@ -76,7 +76,9 @@ pnpm db:migrate
 pnpm event:restore ~/Downloads/Vinterserien_backup_20260425_201455.sql
 
 # Inside the API image: the service is `api` in docker-compose.venue.yml,
-# `oxygen` in docker-compose.release.yml.
+# `oxygen` in docker-compose.release.yml. The container runs as uid 1000 and
+# `cp` keeps the host's owner and mode, so make the dump world-readable first.
+chmod 644 Vinterserien_backup_20260425_201455.sql
 docker compose -f docker-compose.venue.yml --env-file .env.venue cp Vinterserien_backup_20260425_201455.sql api:/tmp/backup.sql
 docker compose -f docker-compose.venue.yml --env-file .env.venue exec api node packages/api/dist/cli/restore-event.js /tmp/backup.sql
 ```

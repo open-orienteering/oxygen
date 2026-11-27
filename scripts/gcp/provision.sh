@@ -92,7 +92,11 @@ echo "     gcloud secrets versions access latest --secret=${SYNC_SECRET}"
 # created by the operator with their own credential, never by this script; once it
 # exists the runtime account may read it. Re-run this script after creating it.
 DEM_SECRET="${DEM_SECRET:-oxygen-geotorget-credentials}"
-if gcloud secrets describe "$DEM_SECRET" >/dev/null 2>&1; then
+dem_listing="$(gcloud secrets list --filter="name~/secrets/${DEM_SECRET}$" --format='value(name)')" || {
+  echo "!! gcloud secrets list failed; ${DEM_SECRET} was not checked." >&2
+  exit 1
+}
+if [[ -n "$dem_listing" ]]; then
   gcloud secrets add-iam-policy-binding "$DEM_SECRET" \
     --member="serviceAccount:${RUNTIME_SA}" --role="roles/secretmanager.secretAccessor" >/dev/null
   echo "── ${DEM_SECRET}: the runtime account may read it."

@@ -9,9 +9,10 @@
  * therefore does not look healthy to compose or to node discovery
  * (docs/bugfixes/deploy-venue-setup.md, BLD-09 / DB-32).
  *
- * The migration comparison is cached once it matches (migrations only ever
- * get added by a deploy, which restarts the process), so later calls cost one
- * `SELECT 1`. Unauthenticated in every AUTH_MODE like `/health`: it is a plain
+ * The migration comparison is cached for 60 s once it matches, so most calls
+ * cost one `SELECT 1`; concurrent probes share one in-flight check
+ * (single-flight). The timeout does not cancel the query: a hung Postgres
+ * parks a pool connection until Prisma's own timeout. Unauthenticated in every AUTH_MODE like `/health`: it is a plain
  * Fastify route, not a tRPC procedure, and exposes only migration names.
  */
 
@@ -30,9 +31,14 @@ export interface ReadyDeps {
   expectedMigrations?: () => string[];
   /** Database round-trip budget. Default 2000 ms. */
   timeoutMs?: number;
+  /** How long a matching migration comparison is trusted. Default 60 000 ms. */
+  matchTtlMs?: number;
+  /** Clock, for tests. Default `Date.now`. */
+  now?: () => number;
 }
 
 const DEFAULT_TIMEOUT_MS = 2000;
+const DEFAULT_MATCH_TTL_MS = 60_000;
 
 /**
  * `packages/api/prisma/migrations`, resolved from this file: `src/ready.ts`
@@ -60,21 +66,27 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
 }
 
+type Verdict =
+  | { ok: true }
+  | { ok: false; reason: "database" | "migrations"; pending: string[] };
+
 export function registerReadyRoute(server: FastifyInstance, deps: ReadyDeps): void {
   const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const ttlMs = deps.matchTtlMs ?? DEFAULT_MATCH_TTL_MS;
+  const now = deps.now ?? Date.now;
   let expected: string[] | null = null;
-  let migrationsMatched = false;
+  let matchedAt: number | null = null;
+  let inFlight: Promise<Verdict> | null = null;
 
-  server.get("/ready", async (_req, reply) => {
-    reply.header("Cache-Control", "no-store");
+  async function check(): Promise<Verdict> {
     const db = deps.db();
     try {
       await withTimeout(db.$queryRawUnsafe("SELECT 1"), timeoutMs);
     } catch (err) {
       server.log.warn({ err }, "[ready] database check failed");
-      return reply.code(503).send({ status: "unavailable", reason: "database", pending: [] });
+      return { ok: false, reason: "database", pending: [] };
     }
-    if (migrationsMatched) return { status: "ok" };
+    if (matchedAt !== null && now() - matchedAt < ttlMs) return { ok: true };
 
     try {
       expected ??= (deps.expectedMigrations ?? readMigrationNames)();
@@ -87,16 +99,28 @@ export function registerReadyRoute(server: FastifyInstance, deps: ReadyDeps): vo
       const applied = new Set(rows.map((r) => r.migration_name));
       const pending = expected.filter((m) => !applied.has(m));
       if (pending.length > 0) {
-        return reply.code(503).send({ status: "unavailable", reason: "migrations", pending });
+        matchedAt = null;
+        return { ok: false, reason: "migrations", pending };
       }
-      migrationsMatched = true;
-      return { status: "ok" };
+      matchedAt = now();
+      return { ok: true };
     } catch (err) {
       // No _prisma_migrations table (never migrated) lands here too.
       server.log.warn({ err }, "[ready] migration check failed");
-      return reply
-        .code(503)
-        .send({ status: "unavailable", reason: "migrations", pending: expected ?? [] });
+      matchedAt = null;
+      return { ok: false, reason: "migrations", pending: expected ?? [] };
     }
+  }
+
+  server.get("/ready", async (_req, reply) => {
+    reply.header("Cache-Control", "no-store");
+    inFlight ??= check().finally(() => {
+      inFlight = null;
+    });
+    const v = await inFlight;
+    if (v.ok) return { status: "ok" };
+    return reply
+      .code(503)
+      .send({ status: "unavailable", reason: v.reason, pending: v.pending });
   });
 }
