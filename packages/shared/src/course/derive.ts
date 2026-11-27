@@ -38,6 +38,8 @@ interface SeqEntry {
   site: CourseSite;
   role: CourseItemRole;
   item: CourseItem;
+  /** The control's number in the structure: counts every control-role item, placed or not (an unplaced control takes its number and draws nothing). */
+  n?: number;
 }
 
 /** The role an item takes from its site's kind: a map exchange draws as a numbered control on both its parts (§10.3, §11). */
@@ -48,10 +50,15 @@ const isItemSite = (s: CourseSite) => s.kind !== "crossing_point" && s.kind !== 
 
 function sequenceOf(structure: CourseStructure, sites: ReadonlyMap<string, CourseSite>): SeqEntry[] {
   const out: SeqEntry[] = [];
+  let n = 0;
   for (const item of structure.items) {
     const site = sites.get(item.siteId);
-    if (!site || !positioned(site) || !isItemSite(site)) continue;
-    out.push({ site, role: item.role ?? itemRoleOf(site.kind), item });
+    if (!site || !isItemSite(site)) continue;
+    const role = item.role ?? itemRoleOf(site.kind);
+    // The count runs over unplaced controls too (matches the description sheet).
+    const number = role === "control" ? ++n : undefined;
+    if (!positioned(site)) continue;
+    out.push({ site, role, item, n: number });
   }
   return out;
 }
@@ -145,13 +152,11 @@ export function deriveCourse(input: CourseLayerInput, m: CourseMetrics): CourseD
   // ---- one part (§11): a single structure split at its map exchanges. The numbers continue across
   // the exchange (answer 2), so the part's first number counts the controls before it.
   let part: { index: number; count: number } | undefined;
-  let numberBase = 0;
   const wanted = input.viewOptions.section;
   if (wanted !== undefined && sequences.length === 1) {
     const parts = sectionsOf(sequences[0], (e) => e.site.kind === "map_exchange");
     const p = parts[wanted];
     if (parts.length >= 2 && p) {
-      numberBase = sequences[0].slice(0, p.from).filter((e) => e.role === "control").length;
       sequences[0] = sequences[0].slice(p.from, p.to + 1);
       part = { index: p.index, count: parts.length };
     }
@@ -269,12 +274,10 @@ export function deriveCourse(input: CourseLayerInput, m: CourseMetrics): CourseD
   const labelMode = input.viewOptions.labelMode ?? (single?.orderMode === "ordered" && !input.viewOptions.allControls ? "sequence" : "code");
   const numbers = new Map<string, number[]>();
   if (labelMode === "sequence" && courses[0]) {
-    let n = numberBase;
     for (const e of sequences[0]) {
-      if (e.role !== "control") continue;
-      n++;
+      if (e.role !== "control" || e.n === undefined) continue;
       // A hidden visit still takes its number in the sequence; it is only not drawn.
-      if (!e.item.numberHidden) numbers.set(e.site.id, [...(numbers.get(e.site.id) ?? []), n]);
+      if (!e.item.numberHidden) numbers.set(e.site.id, [...(numbers.get(e.site.id) ?? []), e.n]);
     }
   }
   // Code labels: hidden when every visit of the site is (a site no hidden-visit item names is shown).
