@@ -207,7 +207,10 @@ the cell is **max(0.5 mm, sqrt(area / 8 M))** for the box padded at
 the default (5.5 mm) and grown by 1 % steps until the grid holds at most
 8 million cells (`MASK_MAX_CELLS`), so a stray far-away contour piece makes
 the mask coarser instead of exhausting memory (an ordinary map keeps 0.5 mm
-and is byte-identical). What lies beyond that grid is not drawn, so the
+and is byte-identical). A map whose padded contour box exceeds
+**2 m² of paper (2,000,000 mm²)** is the exception: its mask is coarser than
+before, **without a `TERRAIN_VERSION` bump**, so cached height fields are not
+re-derived and keep the old mask until their next derive. What lies beyond that grid is not drawn, so the
 mapped area never reaches more than 5.5 mm (at 0.5 mm cells) past the
 outermost contour. The drawn cells are closed with radius
 **4 mm** (3-4 chamfer distance: dilate, fill everything not reachable from
@@ -1897,6 +1900,10 @@ the aggregates and the time; the state list with a retry per row.
 
 ## Pending in this chapter
 
+- §2.3: the mask's box is the plain bounding box of the contour pieces, not a
+  robust one that ignores outlier pieces (a robust box changes §2.3/2.4
+  results and needs a `TERRAIN_VERSION` bump); and a coarsened mask carries no
+  warning in the report. No row.
 - §3: bands that span two levels are only demoted in the level forest,
   not split; splitting them (H1's raster) is what would lift the levels
   further (§3.0, 4). No row yet.

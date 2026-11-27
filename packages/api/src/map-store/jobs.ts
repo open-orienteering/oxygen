@@ -246,7 +246,8 @@ export async function failExhausted(db: Db): Promise<void> {
       const row = asRow(r);
       const { count } = await db.mapImportJob.updateMany({
         where: { id: row.id, state: "running", attempts: { gte: IMPORT_MAX_ATTEMPTS }, OR: [{ heartbeatAt: null }, { heartbeatAt: { lt: stale } }] },
-        data: { state: "failed", error: IMPORT_ABANDONED_ERROR, heartbeatAt: new Date() },
+        // claimedBy null: a stalled-but-alive owner's guarded writes ({ id, claimedBy: INSTANCE_ID }) no longer match.
+        data: { state: "failed", error: IMPORT_ABANDONED_ERROR, claimedBy: null, heartbeatAt: new Date() },
       });
       if (count !== 1) continue;
       console.error(`[map-import] job ${row.id} given up after ${row.attempts} attempts`);

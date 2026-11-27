@@ -473,6 +473,27 @@ describe("checkout maps: failure and interop", () => {
     expect(await ctx.db.mapDocument.count({ where: { hash: documentHash } })).toBe(0);
   });
 
+  it("a peer read that times out becomes TIMEOUT, releases the peer lease and stores nothing", async () => {
+    _setLeasePeerFactory(() => ({
+      ...leasePeerToB(),
+      exportBlob: async () => {
+        const e = new Error("The operation was aborted due to timeout");
+        e.name = "TimeoutError";
+        throw e;
+      },
+    }));
+    try {
+      await expect(caller.lease.checkout({ nameId: CHECKOUT_NAME })).rejects.toMatchObject({
+        code: "TIMEOUT",
+        message: expect.stringMatching(/did not answer in time/),
+      });
+    } finally {
+      _setLeasePeerFactory(() => leasePeerToB());
+    }
+    expect(await getActiveLease(dbB, eventB.id)).toBeNull();
+    expect(await ctx.db.event.findUnique({ where: { nameId: CHECKOUT_NAME } })).toBeNull();
+  });
+
   it("checks out from an exporter without the map part (no map, as before)", async () => {
     _setLeasePeerFactory(() => ({
       ...leasePeerToB(),

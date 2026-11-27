@@ -33,8 +33,7 @@ describe("damaged OCAD files end with an error", () => {
       it(`${name} cut to ${Math.round(keep * 100)} % is refused within 10 s`, async () => {
         const cut = file.subarray(0, Math.floor(file.byteLength * keep));
         const t0 = Date.now();
-        // Either the reader's own parse error (a short cut) or DAMAGED_FILE; never a hang.
-        await expect(runImportInWorker(cut, name, { timeoutMs: 20_000 })).rejects.toThrow();
+        await expect(runImportInWorker(cut, name, { timeoutMs: 20_000 })).rejects.toThrow(/DAMAGED_FILE/);
         expect(Date.now() - t0).toBeLessThan(10_000);
       }, 30_000);
     }

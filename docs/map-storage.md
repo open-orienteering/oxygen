@@ -1080,7 +1080,10 @@ stopped the server on each of 3 attempts and was given up. The file was not
 imported.` A promote job (§6.4) has its pending version removed as `execute`
 does (`abandonPromote`); the waiters are notified. `isClaimable` is false for
 such a row, but the status poll and `awaitImportJob` kick on `needsKick` (queued,
-or `running` with a stale heartbeat), so the poll settles it. A job that merely
+or `running` with a stale heartbeat), so the poll settles it. The abandon also sets `claimedBy = null`, so a
+stalled-but-alive owner that wakes later no longer matches its guarded writes
+(`{ id, claimedBy: INSTANCE_ID }`: stage, heartbeat, the terminal `done` or
+`failed`): its late result changes nothing and the row stays `IMPORT_ABANDONED`. A job that merely
 has a slow worker keeps its heartbeat and is never counted again; a redeploy
 that interrupts a job costs it one attempt.
 
@@ -2051,7 +2054,8 @@ mentions is pending (§9).
 
 ## 9. Pending in this chapter
 
-A Maintenance card for the re-match pass (§6.9 is CLI-only); re-keying
+No UI retry for `IMPORT_ABANDONED`: the failed row shows its message and the
+user uploads the file again. A Maintenance card for the re-match pass (§6.9 is CLI-only); re-keying
 filter regions' document symbol indices when an event's pin moves (§6.9;
 the map patch is re-keyed since G11); a Settings →
 Maintenance card for the GC (§8.4: status of the last run, dry run, run

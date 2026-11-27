@@ -179,7 +179,7 @@
   "pushResultsFailed": "Skicka resultat misslyckades: {{message}}",
   "pushOutcomeUnknown": "Eventor bekräftade inte uppladdningen i tid. Den kan ha tagits emot eller inte. Kontrollera tävlingen i Eventor innan du skickar igen.",
   "pushInProgress": "En uppladdning till Eventor pågår redan för den här tävlingen. Vänta tills den är klar.",
-  "eventorTimeout": "Eventor svarade inte i tid. Inget har ändrats; försök igen.",
+  "eventorTimeout": "Eventor svarade inte i tid. Försök igen.",
   "eventorApiKeyNotConfigured": "Eventor API-nyckel ej konfigurerad. En instansadministratör kan lägga till den under Inställningar → Eventor för att aktivera synk.",
   "runnerDatabase": "Löpardatabas",
   "runnerDatabaseGlobal": "Global",

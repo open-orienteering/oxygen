@@ -241,7 +241,7 @@ export async function eventorFetch(
 
 // ─── Timeouts (EVT-13) ──────────────────────────────────────
 
-export const EVENTOR_REQUEST_TIMEOUT_MS = 30_000;
+export const EVENTOR_REQUEST_TIMEOUT_MS = 60_000;
 export const EVENTOR_DOWNLOAD_TIMEOUT_MS = 120_000;
 /**
  * The upload deadline. `EVENTOR_UPLOAD_TIMEOUT_MS` in the environment
@@ -253,8 +253,8 @@ export const EVENTOR_UPLOAD_TIMEOUT_MS = (() => {
 })();
 
 /**
- * Eventor did not answer in time. `phase "request"`: a read, nothing was
- * changed. `phase "upload"`: a POST whose outcome is unknown, the
+ * Eventor did not answer in time. `phase "request"`: a read ran out of time (a
+ * multi-call sync may have partly applied). `phase "upload"`: a POST whose outcome is unknown, the
  * XML may have been received.
  */
 export class EventorTimeoutError extends Error {
@@ -266,7 +266,7 @@ export class EventorTimeoutError extends Error {
     super(
       phase === "upload"
         ? `EVENTOR_OUTCOME_UNKNOWN: Eventor did not confirm the upload within ${secs} s. It may or may not have been received; check the event in Eventor before pushing again.`
-        : `EVENTOR_TIMEOUT: Eventor did not answer within ${secs} s. Nothing was changed; try again.`,
+        : `EVENTOR_TIMEOUT: Eventor did not answer within ${secs} s. Try again.`,
     );
     this.name = "EventorTimeoutError";
   }

@@ -297,7 +297,7 @@ describe("import jobs from applyEventMap", () => {
     });
     await kickImportJobs(ctx.db);
     const row = await getImportJob(ctx.db, job.id);
-    expect(row).toMatchObject({ state: "failed", attempts: IMPORT_MAX_ATTEMPTS, claimedBy: "other-instance" });
+    expect(row).toMatchObject({ state: "failed", attempts: IMPORT_MAX_ATTEMPTS, claimedBy: null });
     expect(row?.error).toMatch(/^IMPORT_ABANDONED: .*3 attempts/);
     // A live job with the same count is left alone: only silence is given up.
     const live = await ctx.db.mapImportJob.create({
@@ -306,6 +306,24 @@ describe("import jobs from applyEventMap", () => {
     await kickImportJobs(ctx.db);
     expect(await getImportJob(ctx.db, live.id)).toMatchObject({ state: "running", claimedBy: "other-instance" });
     await ctx.db.mapImportJob.delete({ where: { id: live.id } });
+  }, 30_000);
+
+  it("after IMPORT_ABANDONED a late terminal write by the old owner changes nothing", async () => {
+    const job = await ctx.db.mapImportJob.create({
+      data: { eventId: ctx.eventId, sourceHash: fixtureHash, state: "running", stage: "parse", claimedBy: INSTANCE_ID, attempts: IMPORT_MAX_ATTEMPTS, heartbeatAt: new Date(Date.now() - 120_000) },
+    });
+    await kickImportJobs(ctx.db);
+    const abandoned = await getImportJob(ctx.db, job.id);
+    expect(abandoned).toMatchObject({ state: "failed", claimedBy: null });
+    // The stalled owner wakes up and writes its result the way execute does: guarded by its claim.
+    const late = await ctx.db.mapImportJob.updateMany({
+      where: { id: job.id, claimedBy: INSTANCE_ID },
+      data: { state: "done", stage: "done", progress: 1, error: null, heartbeatAt: new Date() },
+    });
+    expect(late.count).toBe(0);
+    const after = await getImportJob(ctx.db, job.id);
+    expect(after).toMatchObject({ state: "failed", claimedBy: null });
+    expect(after?.error).toMatch(/^IMPORT_ABANDONED/);
   }, 30_000);
 
   it("an exhausted promote job removes its pending version", async () => {

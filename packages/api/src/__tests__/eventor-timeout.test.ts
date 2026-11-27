@@ -10,6 +10,7 @@ import {
 } from "../eventor.js";
 import { eventorFetch } from "../eventor.js";
 import { withPushGuard } from "../routers/eventor.js";
+import { createCallerFactory, router, publicProcedure } from "../trpc.js";
 
 /** A fetch that never answers and rejects when its signal aborts. */
 function hangingFetch() {
@@ -49,10 +50,10 @@ describe("Eventor timeouts", () => {
   it("a stalled read becomes a timeout error", async () => {
     vi.useFakeTimers();
     hangingFetch();
-    const p = eventorFetch("k", "events");
+    const p = eventorFetch("events", "k");
     const assertion = expect(p).rejects.toMatchObject({
       phase: "request",
-      message: expect.stringContaining("EVENTOR_TIMEOUT: Eventor did not answer within 30 s"),
+      message: expect.stringContaining("EVENTOR_TIMEOUT: Eventor did not answer within 60 s"),
     });
     await vi.advanceTimersByTimeAsync(EVENTOR_REQUEST_TIMEOUT_MS + 1);
     await assertion;
@@ -71,7 +72,7 @@ describe("Eventor timeouts", () => {
 
   it("other errors pass through unchanged", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("no", { status: 500 })));
-    await expect(eventorFetch("k", "events")).rejects.toThrow(/Eventor API error: 500/);
+    await expect(eventorFetch("events", "k")).rejects.toThrow(/Eventor API error: 500/);
   });
 });
 
@@ -104,5 +105,21 @@ describe("withPushGuard", () => {
       }),
     ).rejects.toThrow("boom");
     await expect(withPushGuard("9:results", async () => "ok")).resolves.toBe("ok");
+  });
+});
+
+describe("read-phase timeout through the router", () => {
+  it("surfaces as TIMEOUT with the Eventor message, not INTERNAL_SERVER_ERROR", async () => {
+    const r = router({
+      read: publicProcedure.query(async () => {
+        throw new EventorTimeoutError("request", EVENTOR_REQUEST_TIMEOUT_MS);
+      }),
+    });
+    const caller = createCallerFactory(r)({} as never);
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(caller.read()).rejects.toSatisfy(
+      (e) => e instanceof TRPCError && e.code === "TIMEOUT" && /^EVENTOR_TIMEOUT: .*60 s\. Try again\.$/.test(e.message) && !/Nothing was changed/.test(e.message),
+    );
+    spy.mockRestore();
   });
 });

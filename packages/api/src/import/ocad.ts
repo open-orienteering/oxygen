@@ -100,12 +100,19 @@ async function readAndNormalise(
   const readOcad = await loadReader();
   opts.onStage?.("parse");
   let t = performance.now();
-  const ocad = await readOcad(file, { quietWarnings: true });
+  const damaged = () => new Error("DAMAGED_FILE: the map file is cut short or damaged (its object index cannot be read to the end). Export or copy the file again and upload it.");
+  let ocad: Awaited<ReturnType<ReadOcad>>;
+  try {
+    ocad = await readOcad(file, { quietWarnings: true });
+  } catch (err: unknown) {
+    // A cut file makes the reader read past the end of the buffer: an out-of-range offset is damage, not a bug.
+    const e = err as { name?: string; code?: string; message?: string } | null;
+    if (err instanceof RangeError || e?.name === "RangeError" || e?.code === "ERR_OUT_OF_RANGE" || /out of range/i.test(e?.message ?? "")) throw damaged();
+    throw err;
+  }
   const read = performance.now() - t;
   // A file whose object, symbol or string index cannot be followed to the end is refused, not imported with holes (MAP-3).
-  if (Array.from(ocad.warnings ?? []).some(mapImport.isDamagedFileWarning)) {
-    throw new Error("DAMAGED_FILE: the map file is cut short or damaged (its object index cannot be read to the end). Export or copy the file again and upload it.");
-  }
+  if (Array.from(ocad.warnings ?? []).some(mapImport.isDamagedFileWarning)) throw damaged();
   opts.onStage?.("normalise");
   t = performance.now();
   const source = mapImport.ocadToDocumentInput(ocad, { ...base, renderFor: opts.renderFor });

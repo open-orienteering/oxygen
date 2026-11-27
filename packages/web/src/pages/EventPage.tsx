@@ -539,6 +539,8 @@ function EventorSyncPanel({
         ? t("syncPreviewChanged")
         : message.startsWith("EVENTOR_EMPTY_RESPONSE")
         ? t("syncEmptyResponse")
+        : message.startsWith("EVENTOR_TIMEOUT")
+        ? t("eventorTimeout")
         : message;
   const pushResultsMutation = trpc.eventor.pushResults.useMutation();
   const pushStartListMutation = trpc.eventor.pushStartList.useMutation();
