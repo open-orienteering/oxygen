@@ -74,7 +74,7 @@ const drawExecuteInputSchema = z.object({
 
 /**
  * A big draw is many rows in one transaction, so give it room, but stay well
- * inside nginx's 120 s `proxy_read_timeout` (lock wait and middleware count too).
+ * inside nginx's 300 s `proxy_read_timeout` (lock wait and middleware count too).
  */
 const DRAW_TX_OPTIONS = { timeout: 90_000, maxWait: 10_000 } as const;
 

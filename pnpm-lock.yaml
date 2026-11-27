@@ -31,6 +31,11 @@ overrides:
   nanoid@<3.3.18: ^3.3.20
   deepmerge-ts@<8.0.0: ^8.0.2
 
+patchedDependencies:
+  ocad2geojson@2.2.2-oxygen.1:
+    hash: 28270af1bd0ca90904b388f3359b7c54be41ddc5f7270e1cecf904f78d952ba7
+    path: patches/ocad2geojson@2.2.2-oxygen.1.patch
+
 importers:
 
   .:
@@ -122,7 +127,7 @@ importers:
         version: 3.24.6(@types/node@26.6.6)
       ocad2geojson:
         specifier: github:open-orienteering/ocad2geojson#v2.2.2-oxygen.1
-        version: https://codeload.github.com/open-orienteering/ocad2geojson/tar.gz/37ab89efffbd2468e12888c6178038e05ba4c3fd
+        version: https://codeload.github.com/open-orienteering/ocad2geojson/tar.gz/37ab89efffbd2468e12888c6178038e05ba4c3fd(patch_hash=28270af1bd0ca90904b388f3359b7c54be41ddc5f7270e1cecf904f78d952ba7)
       pdf-lib:
         specifier: ^1.17.1
         version: 1.17.1
@@ -247,7 +252,7 @@ importers:
         version: 6.3.0
       ocad2geojson:
         specifier: github:open-orienteering/ocad2geojson#v2.2.2-oxygen.1
-        version: https://codeload.github.com/open-orienteering/ocad2geojson/tar.gz/37ab89efffbd2468e12888c6178038e05ba4c3fd
+        version: https://codeload.github.com/open-orienteering/ocad2geojson/tar.gz/37ab89efffbd2468e12888c6178038e05ba4c3fd(patch_hash=28270af1bd0ca90904b388f3359b7c54be41ddc5f7270e1cecf904f78d952ba7)
       qrcode:
         specifier: ^1.5.4
         version: 1.5.4
@@ -8222,7 +8227,7 @@ snapshots:
 
   obug@3.0.0: {}
 
-  ocad2geojson@https://codeload.github.com/open-orienteering/ocad2geojson/tar.gz/37ab89efffbd2468e12888c6178038e05ba4c3fd:
+  ocad2geojson@https://codeload.github.com/open-orienteering/ocad2geojson/tar.gz/37ab89efffbd2468e12888c6178038e05ba4c3fd(patch_hash=28270af1bd0ca90904b388f3359b7c54be41ddc5f7270e1cecf904f78d952ba7):
     dependencies:
       '@turf/line-offset': 7.4.0
       '@turf/meta': 7.4.0

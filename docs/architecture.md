@@ -235,6 +235,9 @@ and [course-print.md](course-print.md).
 
 ### Background jobs and horizontal scaling
 Almost everything in the API scales out without coordination, because every request reads and writes Postgres. The exceptions are the timers that are not driven by a request and have effects outside the database: the LiveResults push, ROC polling, and journal shipping. Running any of them twice means duplicate pushes or duplicate punches, so exactly one instance runs them at a time, chosen by a renewable lease row in `oxygen.instance_lease`. The holder reconciles its timers against the per-event configuration every few seconds, which is also how a change made on another instance takes effect. See [system/background-jobs-lease.md](system/background-jobs-lease.md).
+### Process lifecycle
+`packages/api/src/process-guards.ts` holds two guards. An **unhandled promise rejection** is logged (`[process] unhandled rejection:` with the reason and stack) and the process keeps running: one stray rejected promise in a background job must not take a venue server down mid-event. `uncaughtException` keeps Node's default (crash and restart), because the process state is unknown after one. **SIGINT / SIGTERM** run a single shutdown: hand back the background lease, close the HTTP server, disconnect the databases, then exit 0. Each step is caught so a failing one never skips the next, a second signal is ignored, and a timer armed first forces exit 1 after 8 s (`SHUTDOWN_DEADLINE_MS`), so a hung step cannot outlast the orchestrator's kill window. Unit tests: `src/__tests__/process-guards.test.ts`.
+
 
 ### Kiosk Mode
 A self-service interface for race day:

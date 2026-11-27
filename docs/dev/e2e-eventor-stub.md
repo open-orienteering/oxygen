@@ -106,6 +106,14 @@ runs: it enters the key on the admin-only Settings → Eventor tab, then
 asserts against the stub's organisation and event names on the selector's
 import panel so it fails if the list stops reaching the UI.
 
+## Upload stall mode
+
+`POST /__upload/stall` makes the stub accept a `POST /import/*` (results or
+start list) and never answer it; `POST /__upload/ok` (the default) answers
+`200`. The E2E API runs with `EVENTOR_UPLOAD_TIMEOUT_MS=2000`
+(`playwright.config.ts`), so `e2e/eventor-push.spec.ts` sees the
+outcome-unknown notice after 2 s instead of 60 s.
+
 ## What is still not covered
 
 The stub only implements what the suite calls. Sync, entries, results,

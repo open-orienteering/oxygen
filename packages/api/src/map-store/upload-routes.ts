@@ -24,6 +24,7 @@ import {
   chunkCount,
   expectedChunkSize,
   IMPORTABLE_KINDS,
+  MAX_UPLOAD_CHUNKS,
   missingChunks,
   sniffMapKind,
   validateUploadInit,
@@ -148,9 +149,12 @@ export function registerMapUploadRoutes(server: FastifyInstance): void {
     }
 
     const count = chunkCount(upload.declaredBytes, upload.chunkBytes);
+    // A row from before the limit (or inserted around it) must not drive a scan of millions of indices.
+    if (count > MAX_UPLOAD_CHUNKS) return fail(reply, 400, "Upload has too many chunks; start a new upload");
     const present = await prisma().mapUploadChunk.findMany({ where: { uploadId: upload.id }, select: { n: true } });
-    const missing = missingChunks(count, present.map((c) => c.n));
-    if (missing.length > 0) return fail(reply, 409, "Upload incomplete", { missing });
+    const have = new Set(present.map((c) => c.n));
+    const missingCount = count - [...have].filter((n) => n >= 0 && n < count).length;
+    if (missingCount > 0) return fail(reply, 409, "Upload incomplete", { missing: missingChunks(count, have), missingCount });
     if (!upload.kind) return fail(reply, 415, "Not an OCAD or Mapper file");
 
     // Chunks are at most 8 MiB and a file at most 128 MiB, so assembling in

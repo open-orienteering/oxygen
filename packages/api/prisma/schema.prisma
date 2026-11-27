@@ -1596,6 +1596,8 @@ model MapImportJob {
   progress     Float     @default(0) @db.Real
   claimedBy    String?   @map("claimed_by")
   heartbeatAt  DateTime? @map("heartbeat_at") @db.Timestamptz(6)
+  /// Claims so far; a stale re-claim past the limit fails the job instead (docs/map-storage.md §6.1, MAP-5).
+  attempts     Int       @default(0)
   documentHash String?   @map("document_hash")
   error        String?
   /// User whose request started the job (docs/map-storage.md §4.2); null for the backfill.

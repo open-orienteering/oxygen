@@ -15,3 +15,9 @@ onlyBuiltDependencies:
 # compromised or broken publish has time to be pulled. A security fix that
 # can't wait goes in minimumReleaseAgeExclude with a comment.
 minimumReleaseAge: 10080
+
+# ocad2geojson: a damaged OCAD file (a loop or bad pointer in an index block
+# chain) made the reader spin forever (MAP-3, docs/bugfixes/process-stability.md).
+# Drop this when the fork's next tag carries the same change.
+patchedDependencies:
+  ocad2geojson@2.2.2-oxygen.1: patches/ocad2geojson@2.2.2-oxygen.1.patch

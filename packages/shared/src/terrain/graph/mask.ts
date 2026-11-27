@@ -9,6 +9,8 @@ import type { AreaMask } from "./types.js";
 export const MASK_CELL_MM = 0.5;
 /** Closing radius, mm. */
 export const MASK_CLOSE_MM = 4;
+/** Most cells a mask grid may have; a larger area gets coarser cells (docs/map-terrain.md §2.3). */
+export const MASK_MAX_CELLS = 8_000_000;
 
 export interface Box {
   minX: number;
@@ -65,18 +67,33 @@ export function chamferDistance(src: Uint8Array, w: number, h: number): Float32A
   return d;
 }
 
+/** Grid cell and size for `box`: 0.5 mm unless the padded area would exceed `MASK_MAX_CELLS`. */
+function maskGrid(box: Box): { cellMm: number; rc: number; pad: number; W: number; H: number } {
+  const w = box.maxX - box.minX, h = box.maxY - box.minY;
+  // Area of the box padded as for a 0.5 mm cell; the cell that holds it in the budget.
+  const padDefault = Math.ceil(MASK_CLOSE_MM / MASK_CELL_MM) + 3;
+  const padMm = padDefault * MASK_CELL_MM;
+  const area = (w + 2 * padMm) * (h + 2 * padMm);
+  let cellMm = Math.max(MASK_CELL_MM, Math.sqrt(area / MASK_MAX_CELLS));
+  for (;;) {
+    const rc = MASK_CLOSE_MM / cellMm;
+    const pad = Math.ceil(rc) + 3;
+    const W = Math.ceil(w / cellMm) + 2 * pad + 1;
+    const H = Math.ceil(h / cellMm) + 2 * pad + 1;
+    if (W * H <= MASK_MAX_CELLS || !Number.isFinite(cellMm)) return { cellMm, rc, pad, W, H };
+    cellMm *= 1.01;
+  }
+}
+
 /**
- * Draws every part into a 0.5 mm grid over `box` (padded by the closing
- * radius and three cells) and closes it with radius 4 mm: dilate, fill
- * what the grid border cannot reach, erode.
+ * Draws every part into a grid over `box` (cell 0.5 mm, coarser only when
+ * the grid would exceed `MASK_MAX_CELLS`; padded by the closing radius and
+ * three cells) and closes it with radius 4 mm: dilate, fill what the grid
+ * border cannot reach, erode.
  */
 export function mappedAreaMask(parts: readonly ArrayLike<number>[], box: Box): AreaMask {
-  const cellMm = MASK_CELL_MM;
-  const rc = MASK_CLOSE_MM / cellMm;
-  const pad = rc + 3;
+  const { cellMm, rc, pad, W, H } = maskGrid(box);
   const x0 = box.minX - pad * cellMm, y0 = box.minY - pad * cellMm;
-  const W = Math.ceil((box.maxX - box.minX) / cellMm) + 2 * pad + 1;
-  const H = Math.ceil((box.maxY - box.minY) / cellMm) + 2 * pad + 1;
   const drawn = new Uint8Array(W * H);
   for (const p of parts) {
     const n = p.length / 2;
@@ -96,18 +113,23 @@ export function mappedAreaMask(parts: readonly ArrayLike<number>[], box: Box): A
   for (let i = 0; i < dilated.length; i++) dilated[i] = d1[i] <= rc ? 1 : 0;
   // Everything the grid border reaches through undilated cells is outside.
   const reach = new Uint8Array(W * H);
-  const stack: number[] = [];
-  for (let x = 0; x < W; x++) stack.push(x, (H - 1) * W + x);
-  for (let y = 0; y < H; y++) stack.push(y * W, y * W + W - 1);
-  while (stack.length) {
-    const i = stack.pop()!;
-    if (reach[i] || dilated[i]) continue;
+  // Each cell is marked on push, so it is pushed once and the stack never exceeds the grid.
+  const stack = new Int32Array(W * H);
+  let sp = 0;
+  const push = (i: number) => {
+    if (reach[i] || dilated[i]) return;
     reach[i] = 1;
+    stack[sp++] = i;
+  };
+  for (let x = 0; x < W; x++) { push(x); push((H - 1) * W + x); }
+  for (let y = 0; y < H; y++) { push(y * W); push(y * W + W - 1); }
+  while (sp > 0) {
+    const i = stack[--sp];
     const x = i % W, y = (i / W) | 0;
-    if (x > 0) stack.push(i - 1);
-    if (x < W - 1) stack.push(i + 1);
-    if (y > 0) stack.push(i - W);
-    if (y < H - 1) stack.push(i + W);
+    if (x > 0) push(i - 1);
+    if (x < W - 1) push(i + 1);
+    if (y > 0) push(i - W);
+    if (y < H - 1) push(i + W);
   }
   const d2 = chamferDistance(reach, W, H);
   const cells = new Uint8Array(W * H);

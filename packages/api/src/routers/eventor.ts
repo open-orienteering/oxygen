@@ -61,6 +61,7 @@ import {
   fetchCompetitors,
   fetchCachedCompetitors,
   uploadResults,
+  EventorTimeoutError,
   uploadStartList,
   type EventorEntry,
   type EventorResult,
@@ -888,6 +889,37 @@ async function syncRunnerDbOnce(input: { env: "prod" | "test" }) {
     clubs: clubMap.size,
     logosAdded: 0, // background — count not available synchronously
   };
+}
+
+// ─── Upload guard and timeout mapping (EVT-13) ──────────────
+
+/** Uploads running in this process, keyed `${eventId}:results|startlist`. */
+const pushesInFlight = new Set<string>();
+
+/**
+ * One upload per event and kind at a time. A second click while the first
+ * waits on a slow Eventor would otherwise post the same XML twice. Per
+ * process only (one API instance serves an event's operator).
+ */
+export async function withPushGuard<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  if (pushesInFlight.has(key)) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message:
+        "EVENTOR_PUSH_IN_PROGRESS: an upload to Eventor is already running for this event. Wait for it to finish.",
+    });
+  }
+  pushesInFlight.add(key);
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof EventorTimeoutError) {
+      throw new TRPCError({ code: "TIMEOUT", message: err.message, cause: err });
+    }
+    throw err;
+  } finally {
+    pushesInFlight.delete(key);
+  }
 }
 
 export const eventorRouter = router({
@@ -1879,16 +1911,19 @@ export const eventorRouter = router({
         return { runnerCount: uploadData.length };
       }
 
-      await uploadResults(
-        apiKey,
-        event.eventorEventId.toString(),
-        event.name,
-        event.date.toISOString().slice(0, 10),
-        uploadData,
-        env,
-        event.currencyCode || "",
-        event.currencyFactor || 100,
-      );
+      const eventorEventId = event.eventorEventId.toString();
+      await withPushGuard(`${ctx.event.id}:results`, async () => {
+        await uploadResults(
+          apiKey,
+          eventorEventId,
+          event.name,
+          event.date.toISOString().slice(0, 10),
+          uploadData,
+          env,
+          event.currencyCode || "",
+          event.currencyFactor || 100,
+        );
+      });
 
       return { runnerCount: uploadData.length };
     }),
@@ -1952,14 +1987,17 @@ export const eventorRouter = router({
         return { runnerCount: uploadData.length };
       }
 
-      await uploadStartList(
-        apiKey,
-        event.eventorEventId.toString(),
-        event.name,
-        event.date.toISOString().slice(0, 10),
-        uploadData,
-        env,
-      );
+      const eventorEventId = event.eventorEventId.toString();
+      await withPushGuard(`${ctx.event.id}:startlist`, async () => {
+        await uploadStartList(
+          apiKey,
+          eventorEventId,
+          event.name,
+          event.date.toISOString().slice(0, 10),
+          uploadData,
+          env,
+        );
+      });
 
       return { runnerCount: uploadData.length };
     }),

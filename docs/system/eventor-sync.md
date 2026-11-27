@@ -142,6 +142,33 @@ All or nothing, in this order:
 
 The client navigates with the returned `nameId`, which can carry the suffix.
 
+
+## Timeouts and the push guard
+
+Every Eventor call has a deadline that covers the response body
+(`withEventorTimeout` in `eventor.ts`): 60 s for reads
+(`EVENTOR_REQUEST_TIMEOUT_MS`), 120 s for the competitor-database download
+(`EVENTOR_DOWNLOAD_TIMEOUT_MS`), 60 s for an upload
+(`EVENTOR_UPLOAD_TIMEOUT_MS`; the `EVENTOR_UPLOAD_TIMEOUT_MS` environment
+variable overrides it, read once, and exists for the E2E stack, which sets
+2 s). The club-logo fetch keeps its own 8 s.
+
+A read that times out throws `EventorTimeoutError` (phase `request`), message
+`EVENTOR_TIMEOUT: ... Try again.`. A multi-call sync may have partly
+applied, so the message does not claim nothing changed. An upload that times out is
+phase `upload`, message `EVENTOR_OUTCOME_UNKNOWN: ...`: Eventor may have
+received it, so the operator is told to check the event in Eventor before
+pushing again. Both reach the client as tRPC `TIMEOUT` with the error's own message: the
+base procedure middleware in `trpc.ts` maps every `EventorTimeoutError` from any
+Eventor read (sync, preview, import, club sync, runner database, key check,
+competitor download), and `withPushGuard` maps the upload.
+
+`pushResults` and `pushStartList` also refuse a second upload for the same
+event and kind while the first runs (`withPushGuard`, `CONFLICT`,
+`EVENTOR_PUSH_IN_PROGRESS`). Dry runs are not guarded. The guard is per API
+process. The event page shows an amber notice for outcome-unknown, a neutral
+one for in-progress and a red one for a plain timeout. A read timeout during
+sync or preview shows the `eventorTimeout` text inside the "Sync failed" box.
 ## Seeing and using the difference
 
 - `runner.getById` returns `eventorDiff` (field, local value, Eventor's value;
@@ -163,3 +190,7 @@ The client navigates with the returned `nameId`, which can carry the suffix.
 headed with what the old code did), `e2e/eventor-sync.spec.ts` (preview,
 confirm, marker, use value, filter; the stub's scenarios are in
 [dev/e2e-eventor-stub.md](../dev/e2e-eventor-stub.md)).
+
+Timeouts and the push guard: `src/__tests__/eventor-timeout.test.ts`,
+`integration/eventor-push-guard.test.ts` and `e2e/eventor-push.spec.ts` (the stub's
+`POST /__upload/stall` mode).

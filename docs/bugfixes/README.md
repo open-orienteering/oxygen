@@ -125,6 +125,7 @@ Notes whose code no longer exists (mostly the raster tile pipeline, deleted in s
 
 | Note | Added |
 | --- | --- |
+| [Process stability: a stray rejection, a bad map file or a hung peer could stop the API](process-stability.md) (follow-ups: [process-stability-followups.md](process-stability-followups.md)) | 2026-11-27 |
 | [Deploy and venue setup: dropped variables, IAP wiring, unmigrated boxes, unverified images](deploy-venue-setup.md) (follow-ups: [deploy-venue-followups.md](deploy-venue-followups.md)) | 2026-11-27 |
 | [The event backup was incomplete, failed silently and could not be restored](event-backup-restore.md) (follow-ups: [backup-restore-followups.md](backup-restore-followups.md)) | 2026-11-26 |
 | [Performance: polling endpoints and per-request auth round trips](perf-polling-and-auth-round-trips.md) | 2026-09-24 |

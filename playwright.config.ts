@@ -128,6 +128,9 @@ export default defineConfig({
         // depends on eventor.orientering.se being up and on it accepting
         // the placeholder key, neither of which holds.
         EVENTOR_API_BASE_URL: `http://127.0.0.1:${EVENTOR_PORT}/`,
+        // Short upload deadline so eventor-push.spec.ts can stall the stub
+        // and see the "outcome unknown" notice without waiting a minute.
+        EVENTOR_UPLOAD_TIMEOUT_MS: "2000",
         // No DEM request leaves the stack, even with a provider switched on in
         // Settings → Height data (docs/map-terrain.md §7.8 "Offline stacks").
         MAP_DEM_OFFLINE: "1",
