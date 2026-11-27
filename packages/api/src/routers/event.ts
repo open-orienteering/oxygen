@@ -1005,7 +1005,7 @@ export const eventRouter = router({
    * monotonically increasing values pulled straight from
    * `pg_stat_database` and `pg_stat_activity`.
    */
-  dbStatus: publicProcedure.query(async () => {
+  dbStatus: authedProcedure.query(async () => {
     try {
       // Polled every 3 s by every tab showing the load indicator, so the
       // stats and the active-backend count come back in one round trip.

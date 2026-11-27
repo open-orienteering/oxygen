@@ -13,7 +13,7 @@
  */
 
 import { z } from "zod";
-import { router, publicProcedure, viewProcedure } from "../trpc.js";
+import { router, authedProcedure, viewProcedure } from "../trpc.js";
 import { prisma } from "../db.js";
 
 export interface RawEntry {
@@ -128,7 +128,7 @@ export const registrationTrendsRouter = router({
    * Throws when the event isn't in the cache so the dialog can surface
    * a "sync first" message.
    */
-  lookupEventorEvent: publicProcedure
+  lookupEventorEvent: authedProcedure
     .input(z.object({ eventIdOrUrl: z.string().min(1) }))
     .mutation(async ({ input }) => {
       const raw = input.eventIdOrUrl.trim();
@@ -171,7 +171,7 @@ export const registrationTrendsRouter = router({
    * `take: 50` ordered by date desc, then the dialog filters by name on
    * the client.
    */
-  findComparableEvents: publicProcedure
+  findComparableEvents: authedProcedure
     .input(
       z
         .object({
@@ -239,7 +239,7 @@ export const registrationTrendsRouter = router({
    * to the cache. We honour it on the response side so the picker
    * doesn't disagree with itself.
    */
-  fetchComparison: publicProcedure
+  fetchComparison: authedProcedure
     .input(
       z.object({
         eventIds: z.array(z.number().int().positive()),
@@ -302,7 +302,7 @@ export const registrationTrendsRouter = router({
     }),
 
   /** Browse every cached Eventor event (used by trends-page picker UI). */
-  listCachedEvents: publicProcedure.query(async () => {
+  listCachedEvents: authedProcedure.query(async () => {
     const rows = await prisma().eventorEventMeta.findMany({
       orderBy: { startDate: "desc" },
     });
@@ -318,7 +318,7 @@ export const registrationTrendsRouter = router({
   }),
 
   /** Raw entry history for a single Eventor event (debug / inspection). */
-  entryHistory: publicProcedure
+  entryHistory: authedProcedure
     .input(z.object({ eventorEventId: z.number().int() }))
     .query(async ({ input }) => {
       const rows = await prisma().eventorEntryHistory.findMany({

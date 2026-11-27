@@ -17,7 +17,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import {
   router,
-  publicProcedure,
+  authedProcedure,
   viewProcedure,
   manageProcedure,
   peerProcedure,
@@ -257,7 +257,7 @@ export const leaseRouter = router({
    * `replaceClashingGraphics`. The messages start with the code, as
    * `PATCH_STALE` does, so the web can offer the matching confirmation.
    */
-  checkout: publicProcedure
+  checkout: authedProcedure
     .input(
       z.object({
         nameId: z.string().min(1),
@@ -266,6 +266,7 @@ export const leaseRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      // A checkout needs a person (a forwarded node call is authed-level but has no user).
       if (ctx.authEnabled && !ctx.user) {
         throw new TRPCError({
           code: "UNAUTHORIZED",
