@@ -246,8 +246,13 @@ function CompetitionShellInner() {
   };
 
   const { primary: primaryTabs, overflow: overflowTabs } = useMemo(
-    () => computeTabLayout(dashboard.data?.contentSignals ?? null, capabilities),
-    [dashboard.data?.contentSignals, capabilities],
+    () =>
+      computeTabLayout(
+        dashboard.data?.contentSignals ?? null,
+        capabilities,
+        dashboard.data?.event.isTestEvent ?? false,
+      ),
+    [dashboard.data?.contentSignals, capabilities, dashboard.data?.event.isTestEvent],
   );
   const activeIsOverflow = overflowTabs.some((tab) => tab.id === activeTab);
   const showProgressiveHint = shouldShowProgressiveHint(overflowTabs);
@@ -504,6 +509,14 @@ function CompetitionShellInner() {
                 <h1 className="text-sm sm:text-lg font-semibold text-slate-800 sm:text-slate-900 leading-tight truncate">
                   {competitionName}
                 </h1>
+                {dashboard.data?.event.isTestEvent && (
+                  <span
+                    data-testid="test-event-badge"
+                    className="flex-shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] sm:text-xs font-medium text-amber-800"
+                  >
+                    {t("testEventBadge", { ns: "common" })}
+                  </span>
+                )}
               </Link>
             </div>
             <div className="absolute right-0 sm:static flex items-center gap-0.5 sm:gap-2 flex-shrink-0 p-1 sm:p-0 bg-white rounded-l-lg sm:rounded-none shadow-[-8px_0_10px_4px_rgba(255,255,255,0.98)] sm:shadow-none">

@@ -85,7 +85,7 @@ The **Connect Reader** pill in the header opens the reader dialog, which lists e
 
 ## Test Lab
 
-The built-in Test Lab generates realistic test data for development, demos, and stress tests. It works through four dependent stages:
+The built-in Test Lab generates realistic test data for development, demos, and stress tests. It creates and deletes runners and results, so it works **only on an event marked as a test event**: switch **Test event** on under Event settings (or tick it when you create the event), and the Test Lab appears under More. A "Test event" badge in the header reminds everyone. Only an empty event can be marked: not one linked to Eventor, with runners, cards, punches or card readouts, or checked out to a venue, and a real event that is opened at the Test Lab's address only shows a notice. Switching the mark off hides the Test Lab and stops a running simulation. Starting a simulation asks for confirmation. It works through four dependent stages:
 
 1. **Generate classes** — a standard Swedish long-distance class setup (38 classes).
 2. **Generate courses & controls** — 8 tiered courses with ~50 controls and realistic course sharing.

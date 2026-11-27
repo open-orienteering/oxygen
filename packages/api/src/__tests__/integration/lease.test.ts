@@ -613,6 +613,19 @@ describe("checkout maps: failure and interop", () => {
 });
 
 describe("checkout → write → checkin lifecycle", () => {
+  it("refuses to check out a test event, taking no lease on either node (API-06)", async () => {
+    await dbB.event.update({ where: { id: eventB.id }, data: { isTestEvent: true } });
+    try {
+      await expect(caller.lease.checkout({ nameId: CHECKOUT_NAME })).rejects.toMatchObject({
+        code: "PRECONDITION_FAILED",
+      });
+      expect(await getActiveLease(dbB, eventB.id)).toBeNull();
+      expect(await ctx.db.event.count({ where: { nameId: CHECKOUT_NAME } })).toBe(0);
+    } finally {
+      await dbB.event.update({ where: { id: eventB.id }, data: { isTestEvent: false } });
+    }
+  });
+
   it("checkout imports the snapshot verbatim and takes the lease on both nodes", async () => {
     // The snapshot as HTTP delivers it: JSON, every BigInt a number.
     _setLeasePeerFactory(() => jsonLeasePeerToB());
@@ -638,6 +651,10 @@ describe("checkout → write → checkin lifecycle", () => {
       select: { id: true },
     });
     expect(localEvent).not.toBeNull();
+    // The test-event column is an ordinary column of the event row: it travels (a real event: false).
+    expect(
+      (await ctx.db.event.findUniqueOrThrow({ where: { id: localEvent!.id }, select: { isTestEvent: true } })).isTestEvent,
+    ).toBe(false);
     const runnerA = await ctx.db.runner.findFirst({
       where: { eventId: localEvent!.id, cardNo: 800200 },
     });

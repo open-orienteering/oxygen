@@ -158,5 +158,10 @@
     "APPLY_FAILED": "The server could not apply the entry.",
     "CLASS_NOT_FOUND": "The registration's class no longer exists in the event. Register the runner again in another class, then discard this entry.",
     "CARD_TAKEN": "Another runner already has this card in the event. Fix the card number on one of them before you discard this entry: the entries queued after it for this card would otherwise go to the other runner."
-  }
+  },
+  "testLabNotTestEvent": "This event is not a test event, so the Test Lab is switched off. It creates and deletes runners and results, which a real event must never get.",
+  "testLabOpenEventSettings": "Open event settings to mark it as a test event",
+  "testLabStartConfirm": "Start the simulation? It writes synthetic results for every runner with a start time and card.",
+  "testEventBadge": "Test event",
+  "testLabLoadFailed": "Could not load the event, so the Test Lab cannot tell whether it is a test event."
 }

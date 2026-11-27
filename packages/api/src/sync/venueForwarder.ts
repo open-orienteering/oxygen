@@ -87,7 +87,9 @@ export function refreshesMapRows(paths: readonly string[]): boolean {
  */
 export const SETTINGS_REFRESH_PATHS: readonly string[] = [
   "event.updateType",
+  "event.setTestEvent",
   "competition.updateType",
+  "competition.setTestEvent",
   "course.setOverprintCuts",
   "liveresults.",
   "eventor.",

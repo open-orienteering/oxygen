@@ -37,6 +37,7 @@ import { ttlMemo } from "../ttl-memo.js";
 import { firstFreeEventSlug, yearOf } from "../event-slug.js";
 import { DAY_DS, isValidTimeZone } from "@oxygen/shared";
 import { zeroTimeForResults } from "../timeConvert.js";
+import { stopSimulationFor } from "./testLab.js";
 import { lockEventLeaseAndSync } from "../event-locks.js";
 import { getActiveLease, mayWriteEventData, writeRefusalError } from "../sync/lease.js";
 import type { Prisma } from "../generated/prisma/client.js";
@@ -275,6 +276,8 @@ export const eventRouter = router({
          */
         firstStart: z.number().int().min(0).max(DAY_DS - 1).optional(),
         timeZone: timeZoneSchema.optional(),
+        /** A throwaway event the Test Lab may fill with synthetic data (API-06). */
+        isTestEvent: z.boolean().optional().default(false),
         ...eventKindFields,
       }).superRefine(validateEventKind),
     )
@@ -317,6 +320,7 @@ export const eventRouter = router({
           date: new Date(input.date),
           kind: input.kind,
           kindCustom: input.kindCustom,
+          isTestEvent: input.isTestEvent,
           ...(input.firstStart
             ? { zeroTime: zeroTimeForResults([input.firstStart], DEFAULT_ZERO_TIME) }
             : {}),
@@ -451,6 +455,57 @@ export const eventRouter = router({
         },
       });
       return toEventInfo(event);
+    }),
+
+  /**
+   * Mark the event as a test event (API-06) or take the mark off. The Test
+   * Lab refuses every other event. Turning it on is refused
+   * (`PRECONDITION_FAILED`) unless the event is still empty: an Eventor link,
+   * a lease, a card readout, a runner, a card or a punch each refuse it.
+   * Turning it off is always allowed and halts a running simulation.
+   */
+  setTestEvent: manageProcedure
+    .input(z.object({ enabled: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      const eventId = ctx.event.id;
+      if (!input.enabled) {
+        await ctx.db.event.update({ where: { id: eventId }, data: { isTestEvent: false } });
+        stopSimulationFor(eventId);
+        return { isTestEvent: false };
+      }
+      await ctx.db.$transaction(async (tx) => {
+        await lockEventLeaseAndSync(tx, eventId);
+        // Lock the event row: a concurrent child insert (a runner, a readout)
+        // takes a key-share lock on it and so waits for this transaction.
+        await tx.$queryRaw`SELECT id FROM oxygen.events WHERE id = ${eventId} FOR UPDATE`;
+        const row = await tx.event.findUniqueOrThrow({
+          where: { id: eventId },
+          select: { eventorEventId: true },
+        });
+        const refuse = (message: string): never => {
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message });
+        };
+        if (row.eventorEventId !== null) {
+          refuse("An event linked to Eventor cannot be a test event.");
+        }
+        if (await getActiveLease(tx, eventId)) {
+          refuse("An event checked out to a venue cannot become a test event.");
+        }
+        const where = { eventId };
+        const [readouts, runners, cards, punches] = await Promise.all([
+          tx.cardReadout.count({ where }),
+          tx.runner.count({ where }),
+          tx.card.count({ where }),
+          tx.punch.count({ where }),
+        ]);
+        if (readouts + runners + cards + punches > 0) {
+          refuse(
+            "Only an empty event can become a test event: this one already has runners, cards, punches or card readouts.",
+          );
+        }
+        await tx.event.update({ where: { id: eventId }, data: { isTestEvent: true } });
+      });
+      return { isTestEvent: true };
     }),
 
   /** Soft-delete an event. */
@@ -1194,6 +1249,7 @@ function toEventInfo(
     date: Date;
     kind: string;
     kindCustom: string;
+    isTestEvent: boolean;
     eventorEnv: string;
     eventorEventId: bigint | null;
   },
@@ -1207,6 +1263,7 @@ function toEventInfo(
     nameId: row.nameId,
     kind: isEventKind(row.kind) ? row.kind : "competition",
     kindCustom: row.kindCustom,
+    isTestEvent: row.isTestEvent,
     eventorEnv: row.eventorEnv as "prod" | "test" | undefined,
     eventorEventId: row.eventorEventId ? Number(row.eventorEventId) : undefined,
     classificationId,

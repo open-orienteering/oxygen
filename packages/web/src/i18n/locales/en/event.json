@@ -355,5 +355,11 @@
   "zeroTimeLockedHelp": "The zero time is fixed now that the race has timing data (or the event is checked out to a venue). The time zone can still change; it sets the clock of the stations.",
   "timeSettingsSaved": "Time settings saved",
   "plannedFirstStart": "Planned first start",
-  "plannedFirstStartHelp": "Sets the zero time one hour earlier. Both can be changed in the event settings before the race."
+  "plannedFirstStartHelp": "Sets the zero time one hour earlier. Both can be changed in the event settings before the race.",
+  "testEvent": "Test event",
+  "testEventHelp": "A test event may be filled with synthetic runners and simulated races from the Test Lab. Only an empty event can be marked: one with runners, cards, punches or card readouts, an Eventor link or a venue checkout cannot. A test event cannot be linked to Eventor or checked out to a venue.",
+  "testEventEnableConfirm": "Mark this event as a test event? The Test Lab can then create and delete runners here.",
+  "testEventDisableConfirm": "Take the test event mark off? A running simulation stops and the Test Lab is hidden.",
+  "testEventFailed": "Could not change the test event mark: {{message}}",
+  "newEventTestEvent": "Test event (for the Test Lab, with synthetic data)"
 }

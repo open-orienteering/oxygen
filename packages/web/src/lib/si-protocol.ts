@@ -1,3 +1,4 @@
+import { DAY_DS } from "@oxygen/shared";
 /**
  * SportIdent Protocol Library
  *
@@ -417,6 +418,16 @@ export interface SIPunch {
 export function parseDayOfWeek(ptdByte: number): number | null {
   const dow = (ptdByte >> 1) & 0x07;
   return dow >= 1 && dow <= 7 ? dow : null;
+}
+
+/**
+ * Card seconds since midnight to absolute deciseconds, wrapped into one day.
+ * A corrupt or 12/24-hour-confused card time (the 16-bit field plus the PM
+ * flag reaches 108735 s) would otherwise become a time past midnight that the
+ * server refuses, holding the station queue (RES-24).
+ */
+export function cardSecondsToDs(seconds: number): number {
+  return (((Math.round(seconds * 10)) % DAY_DS) + DAY_DS) % DAY_DS;
 }
 
 /**

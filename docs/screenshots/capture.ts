@@ -165,6 +165,23 @@ function loadShowcase(): void {
   if (result.status !== 0) throw new Error(`load-showcase.sh exited with ${result.status}`);
 }
 
+/**
+ * Set or clear the Demo Competition's test-event mark straight in the
+ * database (the Test Lab refuses any other event, API-06). The API's
+ * `event.setTestEvent` refuses an event that holds card readouts, which the
+ * fixture does, so the mark is written with SQL, for the length of one shot.
+ */
+function setDemoTestEvent(on: boolean): void {
+  const raw = process.env.DATABASE_URL ?? "postgresql://oxygen:oxygen@localhost:5432/oxygen";
+  const url = raw.split("?")[0];
+  const result = spawnSync(
+    "psql",
+    [url, "-v", "ON_ERROR_STOP=1", "-c", `UPDATE oxygen.events SET is_test_event = ${on} WHERE name_id = '${DEMO_NAME_ID}'`],
+    { cwd: REPO_ROOT, stdio: "inherit", env: process.env },
+  );
+  if (result.status !== 0) throw new Error(`psql exited with ${result.status}`);
+}
+
 // ─── Capture context ─────────────────────────────────────────
 
 interface CaptureCtx {
@@ -421,9 +438,16 @@ const STEPS: CaptureStep[] = [
     name: "test-lab",
     description: "Test Lab (four-stage competition generator)",
     async run({ page, nameId }) {
-      await gotoPage(page, `${WEB_URL}/${nameId}/test-lab`);
-      await page.waitForTimeout(2500);
-      await screenshot(page, "test-lab.png");
+      // The Test Lab exists only on a test event (API-06): mark the demo for
+      // this one shot, then take the mark off again.
+      setDemoTestEvent(true);
+      try {
+        await gotoPage(page, `${WEB_URL}/${nameId}/test-lab`);
+        await page.waitForTimeout(2500);
+        await screenshot(page, "test-lab.png");
+      } finally {
+        setDemoTestEvent(false);
+      }
     },
   },
 

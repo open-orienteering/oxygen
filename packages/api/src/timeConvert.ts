@@ -9,6 +9,7 @@
  */
 
 import { TRPCError } from "@trpc/server";
+import { z } from "zod";
 import { DAY_DS, dateInZone, timeOfDayDs, DEFAULT_EVENT_TIME_ZONE } from "@oxygen/shared";
 
 /**
@@ -54,6 +55,18 @@ export function toRelativeWrapped(absoluteDs: number, zeroTime: number): number 
   const rel = (((absoluteDs - zeroTime) % DAY_DS) + DAY_DS) % DAY_DS;
   return rel === 0 ? 1 : rel;
 }
+
+/**
+ * Wire schema for an absolute time of day in deciseconds since local
+ * midnight: 0 ("no time") up to one day minus a decisecond, the same bound as
+ * `event.create`'s `firstStart`. A value outside it can never be a clock
+ * time and would be stored as a nonsense ZeroTime-relative time (RES-24).
+ */
+export const absoluteTimeSchema = z
+  .number()
+  .int()
+  .min(0)
+  .max(DAY_DS - 1);
 
 /**
  * ZeroTime for an event imported with results: one hour before the earliest

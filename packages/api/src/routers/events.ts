@@ -55,6 +55,7 @@ import {
   encodeHlc,
   decodeHlc,
   resolveHlc,
+  DAY_DS,
   cardReadIsDuplicate,
   CARD_READ_DEDUPE_WINDOW_MS,
   meosFromVolts,
@@ -71,11 +72,33 @@ import { buildRunnerUpdateData, manualFlagsFor } from "./runner.js";
 import { appendJournal } from "../journalEmit.js";
 import { getActiveLease, isRaceWritable, isStaleHolder, mayWriteEventData, writeRefusalError } from "../sync/lease.js";
 import { assignVariant } from "../variants.js";
-import { valueToRunnerStatus } from "../statusConvert.js";
+import { valueToRunnerStatus, isRunnerStatusValue } from "../statusConvert.js";
 import { foldServerHlc } from "../serverClock.js";
 import { pushToGoogleSheet } from "../sheetsBackup.js";
 import type { EventRef } from "../db.js";
 import { Prisma, type PrismaClient } from "../generated/prisma/client.js";
+
+/** Refuse an entry whose runner status is not a `RunnerStatus` constant. */
+function assertRunnerStatus(type: string, status: unknown): void {
+  if (!isRunnerStatusValue(status)) {
+    throw new JournalApplyError("INVALID_PAYLOAD", `${type}: unknown runner status`);
+  }
+}
+
+/** Refuse an entry whose absolute time of day is not 0..DAY_DS-1 (RES-24). */
+function assertAbsoluteTime(type: string, field: string, value: unknown): void {
+  if (!Number.isInteger(value) || (value as number) < 0 || (value as number) >= DAY_DS) {
+    throw new JournalApplyError("INVALID_PAYLOAD", `${type}: ${field} out of range`);
+  }
+}
+
+/** Validate the status / time keys a runner patch or registration may carry; an absent or null key passes. */
+function assertRunnerPatch(type: string, fields: Record<string, unknown>): void {
+  if (fields.status !== undefined && fields.status !== null) assertRunnerStatus(type, fields.status);
+  for (const k of ["startTime", "finishTime"]) {
+    if (fields[k] !== undefined && fields[k] !== null) assertAbsoluteTime(type, k, fields[k]);
+  }
+}
 
 /** The singleton client or a `$transaction` client — appliers run on either. */
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -724,9 +747,18 @@ async function applyEvent(
   event: OfflineEvent,
   opts: { strict: boolean; timeZone?: string } = { strict: false },
 ): Promise<ApplyOutcome> {
+  // The status / time checks (RES-24) are for a station's own outbox only. An
+  // entry a peer ships was accepted by its origin, possibly an older release
+  // without them: refusing it here would block that event's whole shipping
+  // stream (sync/shipper.ts), so the peer path applies it as before.
+  const check = opts.strict
+    ? { status: assertRunnerStatus, time: assertAbsoluteTime, patch: assertRunnerPatch }
+    : { status: () => {}, time: () => {}, patch: () => {} };
   switch (event.type) {
     case "finish.recorded": {
-      const { finishTime } = event.payload as { finishTime: number };
+      const { finishTime, status } = event.payload as { finishTime: number; status?: number | null };
+      check.time("finish.recorded", "finishTime", finishTime);
+      if (status != null) check.status("finish.recorded", status);
       const runner = await resolveRunner(db, eventId, event.payload);
       // First non-zero finish wins (a runner crosses the line once).
       if (runner && runner.finishTime === 0) {
@@ -749,8 +781,12 @@ async function applyEvent(
       // "apply unconditionally" is the LWW rule at this arrival point.
       const { finishTime, status } = event.payload as {
         finishTime: number;
-        status?: number;
+        status?: number | null;
       };
+      // A queued entry is refused like a live call would be (RES-24): an
+      // unknown status or an out-of-day time is never written.
+      check.time("finish.adjusted", "finishTime", finishTime);
+      if (status != null) check.status("finish.adjusted", status);
       const runner = await resolveRunner(db, eventId, event.payload);
       if (runner) {
         await db.runner.update({
@@ -774,6 +810,9 @@ async function applyEvent(
         startTime: number;
         confirmed?: boolean;
       };
+      check.status("result.applied", status);
+      check.time("result.applied", "finishTime", finishTime);
+      check.time("result.applied", "startTime", startTime);
       const runner = await resolveRunner(db, eventId, event.payload);
       if (runner) {
         // Same guard as a live apply (RES-01): a queued result never
@@ -794,6 +833,7 @@ async function applyEvent(
 
     case "start.recorded": {
       const { startTime } = event.payload as { startTime: number };
+      check.time("start.recorded", "startTime", startTime);
       const runner = await resolveRunner(db, eventId, event.payload);
       if (runner) {
         await db.runner.update({
@@ -807,6 +847,7 @@ async function applyEvent(
     case "start.adjusted": {
       // Draw / manual start-time set — last-write-wins.
       const { startTime, startNo } = event.payload as { startTime: number; startNo?: unknown };
+      check.time("start.adjusted", "startTime", startTime);
       const runner = await resolveRunner(db, eventId, event.payload);
       if (runner) {
         await db.runner.update({
@@ -905,6 +946,7 @@ async function applyEvent(
       const int = (v: unknown): number | undefined =>
         typeof v === "number" && Number.isInteger(v) ? v : undefined;
       const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
+      check.patch("runner.registered", p as Record<string, unknown>);
       const status = int(p.status);
       const finish = int(p.finishTime);
       const created = await db.runner.create({
@@ -957,6 +999,7 @@ async function applyEvent(
       const { fields } = event.payload as {
         fields?: Record<string, unknown>;
       };
+      if (fields) check.patch("runner.updated", fields);
       const runner = await resolveRunner(db, eventId, event.payload);
       if (runner && fields && Object.keys(fields).length > 0) {
         const data = await buildRunnerUpdateData(

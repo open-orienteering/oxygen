@@ -382,10 +382,3 @@ export const kioskOrViewProcedure = kioskOrCapProcedure("event.view");
  */
 export const kioskOrCoursesViewProcedure = kioskOrCapProcedure("courses.view");
 export const kioskOrRaceOperateProcedure = kioskOrCapProcedure("race.operate");
-export const kioskOrRaceOperateRaceProcedure = kioskOrCapProcedure(
-  "race.operate",
-).use(async ({ ctx, next }) => {
-  const ectx = ctx as EventContext;
-  await assertRaceWritable(ectx.db, ectx.event.id);
-  return next();
-});

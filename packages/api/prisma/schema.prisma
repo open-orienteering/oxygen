@@ -106,6 +106,8 @@ model Event {
   zeroTime        Int       @default(324000) @map("zero_time")
   /// IANA time zone of the venue; "now" and time of day are computed in it.
   timeZone        String    @default("Europe/Stockholm") @map("time_zone")
+  /// Throwaway event the Test Lab may fill with synthetic data (API-06).
+  isTestEvent     Boolean   @default(false) @map("is_test_event")
   kind            String    @default("competition")
   /// User-defined display label when kind is "other".
   kindCustom      String    @default("") @map("kind_custom")

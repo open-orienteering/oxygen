@@ -43,7 +43,9 @@ export const CLOUD_OWNED_MUTATIONS: ReadonlySet<string> = new Set([
   // Cloud-owned columns of the event row (review MC-08;
   // docs/system/offline-architecture.md "The event row during a lease").
   "event.updateType",
+  "event.setTestEvent",
   "competition.updateType",
+  "competition.setTestEvent",
   "course.setOverprintCuts",
 ]);
 

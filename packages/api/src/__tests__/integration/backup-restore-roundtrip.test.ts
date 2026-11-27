@@ -108,6 +108,9 @@ beforeAll(async () => {
   const goneUser = await db.user.create({ data: { email: `gone@restore-${suffix}.example`, displayName: "Gone", active: true } });
   groupId = (await one(`INSERT INTO oxygen.permission_groups (name, capabilities) VALUES ($1, '[]'::jsonb) RETURNING id`, `rt-${suffix}`)).id;
 
+  // The test-event mark (API-06) is an event column the restore must carry.
+  await db.event.update({ where: { id: e }, data: { isTestEvent: true } });
+
   const control = await one(`INSERT INTO oxygen.controls (event_id, name, codes) VALUES ($1, '31', '31') RETURNING id`, e);
   const finish = await one(`INSERT INTO oxygen.controls (event_id) VALUES ($1) RETURNING id`, e);
   const course = await one(`INSERT INTO oxygen.courses (event_id, name, finish_control_id) VALUES ($1, 'A', $2::uuid) RETURNING id`, e, finish.id);
@@ -224,6 +227,7 @@ describe("runRestore", () => {
     const { event_permissions: _a, map_colour_settings: _c, ...restAfter } = after;
     const { event_permissions: _b, map_colour_settings: _d, ...restBefore } = before;
     expect(restAfter).toEqual(restBefore);
+    expect((after.events[0] as { is_test_event: boolean }).is_test_event).toBe(true);
     for (const t of ["runners", "cards", "card_readouts", "punches", "control_units", "map_templates", "classes", "course_maps", "course_objects", "journal", "graphics", "tracks", "routes", "card_readout_backups", "map_files", "map_patches", "map_gps_tracks", "map_colour_settings", "map_document_colour_settings", "event_seqs"]) {
       expect(after[t].length, t).toBeGreaterThan(0);
     }

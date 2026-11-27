@@ -220,6 +220,7 @@ reached the cloud.
 | `paymentMethods`, `swishNumber`, `swishPayeeName`, `printRegistrationReceipt`, `registrationReceiptMessage`, `finishReceiptMessage`, `receiptFriskvardNote`, `organizerEventorId`, `orgNumber`, `vatExempt` | `event.setRegistrationConfig` (`organizerEventorId` is also set when an Eventor import creates the event) | venue-owned |
 | `googleSheetsWebhookUrl` | `event.setGoogleSheetsConfig` (the cloud pushes readouts to the sheet, the box's shipped ones included; a box with a peer does not push for an event it checked out) | venue-owned |
 | `kind`, `kindCustom` | `event.updateType` | cloud-owned, forwarded |
+| `isTestEvent` | `event.setTestEvent` (turning on is refused under a lease, and a test event cannot be checked out; turning off is an ordinary forwarded cloud-owned write) | cloud-owned, forwarded |
 | `autoOverprintCuts` | `course.setOverprintCuts` | cloud-owned, forwarded (a layout flag, row G18) |
 | everything else (name, organizer, fees, LiveResults, Eventor…) | forwarded writers | cloud-owned |
 
@@ -238,7 +239,7 @@ reached the cloud.
   lists the box as holder does not block it, and the checkin result says
   `settingsNotTaken` (the lease panel shows it).
 - **Cloud-owned** columns are forwarded. After a forwarded `event.updateType`,
-  `course.setOverprintCuts`, `liveresults.*` or `eventor.*` write the box
+  `event.setTestEvent`, `course.setOverprintCuts`, `liveresults.*` or `eventor.*` write the box
   refreshes the event row at once (bounded like the map refresh), not only
   on the 5-minute cadence. Like every cloud-owned prefix, they are
   forwarded on any venue node whatever the event's lease state, so offline

@@ -491,6 +491,7 @@ function CreateCompetitionForm({
   const [date, setDate] = useState(formatDate(new Date()));
   const [kind, setKind] = useState<EventKind>("competition");
   const [kindCustom, setKindCustom] = useState("");
+  const [isTestEvent, setIsTestEvent] = useState(false);
   // The planned first start sets ZeroTime (one hour before), so no start
   // lands on it (RES-04). 10:00 gives the old 09:00 default.
   const [firstStart, setFirstStart] = useState("10:00");
@@ -508,6 +509,7 @@ function CreateCompetitionForm({
       date,
       kind,
       kindCustom: kind === "other" ? kindCustom.trim() : "",
+      ...(isTestEvent ? { isTestEvent: true } : {}),
       // The time zone takes the server default (Europe/Stockholm); it is
       // changed under Event Info.
       ...(firstStartDs > 0 ? { firstStart: firstStartDs } : {}),
@@ -608,6 +610,16 @@ function CreateCompetitionForm({
           />
           <p className="mt-1 text-xs text-slate-400">{t("plannedFirstStartHelp")}</p>
         </div>
+        <label className="flex items-center gap-2 text-sm text-slate-600">
+          <input
+            type="checkbox"
+            data-testid="new-event-is-test"
+            checked={isTestEvent}
+            onChange={(e) => setIsTestEvent(e.target.checked)}
+            className="h-4 w-4 cursor-pointer"
+          />
+          {t("newEventTestEvent")}
+        </label>
         <div className="flex gap-3 pt-1">
           <button
             type="submit"

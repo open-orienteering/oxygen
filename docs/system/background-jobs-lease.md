@@ -207,4 +207,14 @@ it a correctness problem:
   a process. This matters only for journal entries written concurrently
   by two cloud instances.
 - **Test Lab simulations** live in the memory of the instance that
-  started them. It is a development feature and is not lease-managed.
+  started them. The Test Lab works only on an event marked as a test event
+  (`events.is_test_event`; every writing procedure answers
+  `PRECONDITION_FAILED` / `NOT_A_TEST_EVENT` otherwise). It is not
+  lease-managed and its writes are not journaled: a test event cannot be
+  checked out to a venue (lease acquisition, which a venue checkout goes
+  through on the cloud, refuses a test event), `event.setTestEvent` refuses an
+  event that has an active lease, an Eventor link, or any runner, card, punch
+  or card readout, and the Test Lab itself refuses an event that has since
+  gained a lease or an Eventor link. A timed simulation checks
+  the flag on every tick and halts when it is cleared (`event.setTestEvent`
+  with `enabled: false` also stops it at once); ticks never overlap.

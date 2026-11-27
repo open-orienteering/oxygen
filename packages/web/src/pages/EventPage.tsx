@@ -76,6 +76,11 @@ export function EventPage() {
                 event={d.event}
                 canManage={canManage}
               />
+              <TestEventSwitch
+                key={`test-${d.event.nameId}`}
+                event={d.event}
+                canManage={canManage}
+              />
               <EventTimeSettings key={`time-${d.event.nameId}`} canManage={canManage} />
               <div className="mt-3">
                 <RegistrationTrendsLink />
@@ -241,6 +246,49 @@ function EventTypeEditor({
       {updateType.isError && (
         <p className="mt-1 text-xs text-red-600">
           {t("eventTypeSaveFailed", { message: updateType.error.message })}
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ─── Test event mark (API-06) ───────────────────────────────
+
+function TestEventSwitch({ event, canManage }: { event: EventInfo; canManage: boolean }) {
+  const { t } = useTranslation("event");
+  const utils = trpc.useUtils();
+  const setTestEvent = trpc.event.setTestEvent.useMutation({
+    onSuccess: async () => {
+      await Promise.all([
+        utils.event.list.invalidate(),
+        utils.event.dashboard.invalidate(),
+        utils.competition.dashboard.invalidate(),
+      ]);
+    },
+  });
+  const on = event.isTestEvent;
+  return (
+    <div className="mt-3 max-w-md" data-testid="test-event-section">
+      <label className="flex items-center gap-2 text-sm text-slate-700">
+        <input
+          type="checkbox"
+          role="switch"
+          data-testid="test-event-switch"
+          checked={on}
+          disabled={!canManage || setTestEvent.isPending}
+          onChange={() => {
+            if (window.confirm(on ? t("testEventDisableConfirm") : t("testEventEnableConfirm"))) {
+              setTestEvent.mutate({ enabled: !on });
+            }
+          }}
+          className="h-4 w-4 cursor-pointer"
+        />
+        <span className="font-medium">{t("testEvent")}</span>
+      </label>
+      <p className="mt-1 text-xs text-slate-400">{t("testEventHelp")}</p>
+      {setTestEvent.isError && (
+        <p className="mt-1 text-xs text-red-600" data-testid="test-event-error">
+          {t("testEventFailed", { message: setTestEvent.error.message })}
         </p>
       )}
     </div>

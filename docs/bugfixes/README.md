@@ -95,6 +95,8 @@ Notes whose code no longer exists (mostly the raster tile pipeline, deleted in s
 
 | Note | Added |
 | --- | --- |
+| [Test Lab could wipe a live event; unchecked statuses and times; dead endpoints](test-lab-live-event-guard.md) | 2026-11-27 |
+| [Test Lab guard: follow-ups left out of package 19](test-lab-followups.md) | 2026-11-27 |
 | [Runner editor dropped edits behind "Saved" and refused saves silently](runner-inline-editor.md) | 2026-11-26 |
 | [Runner editor: follow-ups left out of package 11](runner-inline-editor-followups.md) | 2026-11-26 |
 | [Draw safety: a redraw rewrote started runners, the draw was not atomic, and Apply differed from the preview](draw-safety.md) | 2026-11-26 |

@@ -163,6 +163,14 @@ export async function acquireLease(
     // Serialised against the Eventor sync (its transaction holds the same
     // lock and re-checks the lease), and against a second checkout.
     await lockEventLeaseAndSync(tx, eventId);
+    // A test event holds synthetic data and is never taken to a venue (API-06).
+    const flag = await tx.event.findUnique({ where: { id: eventId }, select: { isTestEvent: true } });
+    if (flag?.isTestEvent) {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message: "A test event cannot be checked out to a venue.",
+      });
+    }
     const current = await getActiveLease(tx, eventId);
     if (current) {
       // The same holder asking again (a retried checkout whose first attempt

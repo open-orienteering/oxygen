@@ -1,4 +1,4 @@
-import type { SICardReadout } from "../si-protocol";
+import { cardSecondsToDs, type SICardReadout } from "../si-protocol";
 import type { CardReadPayload } from "./db";
 
 /**
@@ -15,13 +15,13 @@ export function toOfflineCardReadPayload(
   punchesFresh: boolean,
 ): CardReadPayload {
   const toDeciseconds = (t: number | null | undefined): number | undefined =>
-    t !== null && t !== undefined ? t * 10 : undefined;
+    t !== null && t !== undefined ? cardSecondsToDs(t) : undefined;
 
   return {
     cardNo: readout.cardNumber,
     punches: readout.punches.map((p) => ({
       controlCode: p.controlCode,
-      time: p.time * 10,
+      time: cardSecondsToDs(p.time),
     })),
     checkTime: toDeciseconds(readout.checkTime),
     startTime: toDeciseconds(readout.startTime),

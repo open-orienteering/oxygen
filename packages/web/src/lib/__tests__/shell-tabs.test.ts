@@ -21,7 +21,7 @@ function ids(tabs: { id: ShellTabId }[]): ShellTabId[] {
 }
 
 function assertPartition(signals: ContentSignals | null) {
-  const { primary, overflow } = computeTabLayout(signals);
+  const { primary, overflow } = computeTabLayout(signals, null, true);
   const combined = [...ids(primary), ...ids(overflow)].sort();
   const all = ids(ALL_TABS).sort();
   expect(combined).toEqual(all);
@@ -50,7 +50,7 @@ describe("computeTabLayout", () => {
     ];
     for (const signals of combos) {
       assertPartition(signals);
-      const { overflow } = computeTabLayout(signals);
+      const { overflow } = computeTabLayout(signals, null, true);
       for (const id of neverPrimary) {
         expect(ids(overflow)).toContain(id);
       }
@@ -59,14 +59,14 @@ describe("computeTabLayout", () => {
   });
 
   it("has no Maps or Map templates tab (E-pages: folded into Courses and Layout mode)", () => {
-    for (const layout of [computeTabLayout(empty), computeTabLayout(null), computeTabLayout({ ...empty, hasRunners: true })]) {
+    for (const layout of [computeTabLayout(empty, null, true), computeTabLayout(null, null, true), computeTabLayout({ ...empty, hasRunners: true }, null, true)]) {
       expect([...ids(layout.primary), ...ids(layout.overflow)]).not.toEqual(expect.arrayContaining(["maps"]));
       expect([...ids(layout.primary), ...ids(layout.overflow)]).not.toEqual(expect.arrayContaining(["map-templates"]));
     }
   });
 
   it("uses a planning bar for an empty event", () => {
-    const { primary, overflow } = computeTabLayout(empty);
+    const { primary, overflow } = computeTabLayout(empty, null, true);
     expect(ids(primary)).toEqual([
       "dashboard",
       "classes",
@@ -83,7 +83,7 @@ describe("computeTabLayout", () => {
   });
 
   it("promotes runners/startlist/cards and demotes course-editor once there are entries", () => {
-    const { primary, overflow } = computeTabLayout({ ...empty, hasRunners: true });
+    const { primary, overflow } = computeTabLayout({ ...empty, hasRunners: true }, null, true);
     expect(ids(primary)).toEqual([
       "dashboard",
       "runners",
@@ -99,11 +99,11 @@ describe("computeTabLayout", () => {
   });
 
   it("promotes results and tracks when there are results", () => {
-    const { primary, overflow } = computeTabLayout({
-      ...empty,
-      hasRunners: true,
-      hasResults: true,
-    });
+    const { primary, overflow } = computeTabLayout(
+      { ...empty, hasRunners: true, hasResults: true },
+      null,
+      true,
+    );
     expect(ids(primary)).toContain("results");
     expect(ids(primary)).toContain("tracks");
     expect(ids(overflow)).not.toContain("results");
@@ -111,7 +111,7 @@ describe("computeTabLayout", () => {
   });
 
   it("uses the legacy layout while dashboard signals are unknown", () => {
-    const { primary, overflow } = computeTabLayout(null);
+    const { primary, overflow } = computeTabLayout(null, null, true);
     expect(ids(primary)).toEqual([
       "dashboard",
       "runners",
@@ -156,5 +156,16 @@ describe("computeTabLayout", () => {
     const crew = new Set<Capability>(["event.view", "race.operate"]);
     const forCrew = computeTabLayout(withRunners, crew);
     expect([...ids(forCrew.primary), ...ids(forCrew.overflow)]).toContain("cards");
+  });
+
+  it("has no test-lab tab unless the event is a test event (API-06)", () => {
+    for (const signals of [null, empty, { ...empty, hasRunners: true, hasResults: true }]) {
+      for (const caps of [null, new Set<Capability>(["event.manage"])]) {
+        const off = computeTabLayout(signals, caps);
+        expect([...ids(off.primary), ...ids(off.overflow)]).not.toContain("test-lab");
+        const on = computeTabLayout(signals, caps, true);
+        expect(ids(on.overflow)).toContain("test-lab");
+      }
+    }
   });
 });

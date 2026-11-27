@@ -13,6 +13,7 @@ function ev(over: Partial<EventInfo> & Pick<EventInfo, "name" | "date" | "nameId
     annotation: over.annotation ?? "",
     kind: over.kind ?? "competition",
     kindCustom: over.kindCustom ?? "",
+    isTestEvent: over.isTestEvent ?? false,
     ...over,
   };
 }

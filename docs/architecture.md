@@ -253,7 +253,7 @@ Communication between the admin window and kiosk uses the BroadcastChannel API, 
 Identity (optional): see [system/authentication.md](system/authentication.md). With `AUTH_MODE=off` nothing changes. With `proxy`/`dev`, event-scoped tRPC requires an invited user plus a capability; kiosk and start screen stay renderable with a kiosk key (or a logged-in user who already has the matching capability).
 
 ### Test Lab
-Built-in data generation and race simulation for development and demo purposes:
+Built-in data generation and race simulation for development and demo purposes. Test-event only: every writing `testLab.*` procedure is behind `testEventProcedure` (`event.manage` plus a fresh read of `events.is_test_event`, and refusal when the event has an active lease or an Eventor link), the flag is set with `event.setTestEvent` or `event.create`, and the shell shows the tab only when `EventInfo.isTestEvent` is true:
 - Generates realistic class structures, courses, and controls
 - Populates with GDPR-safe fictional runners (randomized Swedish names, mixed SI card types)
 - Simulates a full race with realistic split times and anomalies (DNF, mispunch, DNS)

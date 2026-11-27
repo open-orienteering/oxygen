@@ -355,5 +355,11 @@
   "zeroTimeLockedHelp": "Nolltiden är låst när tävlingen har tidsdata (eller tävlingen är utcheckad till en arena). Tidszonen kan fortfarande ändras; den styr stationernas klocka.",
   "timeSettingsSaved": "Tidsinställningar sparade",
   "plannedFirstStart": "Planerad första start",
-  "plannedFirstStartHelp": "Nolltiden sätts en timme tidigare. Båda kan ändras i tävlingsinställningarna före tävlingen."
+  "plannedFirstStartHelp": "Nolltiden sätts en timme tidigare. Båda kan ändras i tävlingsinställningarna före tävlingen.",
+  "testEvent": "Testtävling",
+  "testEventHelp": "En testtävling kan fyllas med syntetiska löpare och simulerade lopp från Testlabbet. Bara en tom tävling kan markeras: en med löpare, brickor, stämplingar eller brickavläsningar, en Eventor-koppling eller en arenautcheckning kan det inte. En testtävling kan inte kopplas till Eventor eller checkas ut till en arena.",
+  "testEventEnableConfirm": "Markera tävlingen som testtävling? Testlabbet kan då skapa och radera löpare här.",
+  "testEventDisableConfirm": "Ta bort testmarkeringen? En pågående simulering stoppas och Testlabbet döljs.",
+  "testEventFailed": "Kunde inte ändra testmarkeringen: {{message}}",
+  "newEventTestEvent": "Testtävling (för Testlabbet, med syntetiska data)"
 }
