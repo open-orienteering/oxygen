@@ -21,7 +21,8 @@ import { IconMap } from "../../components/map-icons";
 import { NorthLinesBadge } from "../../components/NorthLinesBadge";
 import { ClubMapPicker } from "../../components/ClubMapPicker";
 import { useMapReplace } from "../../components/useMapReplace";
-import { ContourIntervalRow, useOpenMapInfoRequest } from "./ContourInterval";
+import { ContourIntervalRow } from "./ContourInterval";
+import { useOpenMapInfoRequest } from "./contourIntervalState";
 import { mapInfoRows, type MapInfoInput, type MapInfoRow } from "../../lib/editor/map-info";
 
 const LABEL = "w-24 shrink-0 text-slate-500";

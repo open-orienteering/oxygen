@@ -7,7 +7,7 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
-import { INTERVAL_SUGGESTIONS, parseInterval } from "../pages/editor/ContourInterval";
+import { INTERVAL_SUGGESTIONS, parseInterval } from "../pages/editor/contourIntervalState";
 
 export function ClubMapInterval({ id, confirmedM, assumedM }: { id: string; confirmedM: number | null; assumedM: number | null }) {
   const { t } = useTranslation("library");

@@ -13,7 +13,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { IconStats } from "../../components/map-icons";
 import { useCapabilities } from "../../context/CapabilitiesContext";
-import { openMapInfoAtInterval } from "./ContourInterval";
+import { openMapInfoAtInterval } from "./contourIntervalState";
 import { formatClock } from "../../lib/editor/leg-alternatives";
 import { checksBadge, courseInfoRows, saveIndicator, type SaveState, type StatusInput } from "../../lib/editor/status";
 

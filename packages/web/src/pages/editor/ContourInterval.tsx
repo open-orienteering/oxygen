@@ -15,47 +15,7 @@
 
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useCapabilities } from "../../context/CapabilitiesContext";
-import { trpc } from "../../lib/trpc";
-
-/** The values offered as suggestions; any value above 0 up to 100 with two decimals is accepted (§0.43). */
-export const INTERVAL_SUGGESTIONS = [2, 2.5, 5, 10, 20, 25] as const;
-const OPEN_MAP_INFO = "oxygen:open-map-info";
-
-/** Opens the map info dialog (the top bar's `MapInfoButton` listens). */
-export const openMapInfoAtInterval = (): void => { window.dispatchEvent(new CustomEvent(OPEN_MAP_INFO)); };
-
-/** The map info button's listener. */
-export function useOpenMapInfoRequest(open: () => void): void {
-  useEffect(() => {
-    window.addEventListener(OPEN_MAP_INFO, open);
-    return () => window.removeEventListener(OPEN_MAP_INFO, open);
-  }, [open]);
-}
-
-/** A value as typed: a comma is a decimal point; null when it is not a usable interval. */
-export function parseInterval(text: string): number | null {
-  const m = Number(text.trim().replace(",", "."));
-  return Number.isFinite(m) && m > 0 && m <= 100 && Math.abs(m * 100 - Math.round(m * 100)) < 1e-6 ? m : null;
-}
-
-export function useContourInterval() {
-  const utils = trpc.useUtils();
-  const canEdit = useCapabilities().has("courses.edit");
-  const meta = trpc.course.mapMetadata.useQuery(undefined, { staleTime: Number.POSITIVE_INFINITY });
-  const mutation = trpc.course.setContourInterval.useMutation({
-    // The stored climbs were cleared and computed again on the server: everything that shows them is read again.
-    onSuccess: async () => { await Promise.all([utils.course.mapMetadata.invalidate(), utils.course.list.invalidate(), utils.course.detail.invalidate()]); },
-  });
-  const data = meta.data?.contourInterval ?? null;
-  const hasContours = meta.data?.terrain ? meta.data.terrain.state === "ready" || meta.data.terrain.state === "pending" : false;
-  return {
-    data, canEdit, hasContours,
-    saving: mutation.isPending,
-    error: mutation.error?.message ?? null,
-    save: (intervalM: number | null) => mutation.mutateAsync({ intervalM }).then(() => undefined, () => undefined),
-  };
-}
+import { INTERVAL_SUGGESTIONS, parseInterval, useContourInterval } from "./contourIntervalState";
 
 /** The dialog's row: *Contour interval*. */
 export function ContourIntervalRow({ labelClass }: { labelClass: string }) {
