@@ -27,7 +27,7 @@ export function useContourInterval() {
   const canEditCourses = useCapabilities().has("courses.edit");
   const meta = trpc.course.mapMetadata.useQuery(undefined, { staleTime: Number.POSITIVE_INFINITY });
   const mutation = trpc.course.setContourInterval.useMutation({
-    // The stored climbs were cleared and computed again on the server: everything that shows them is read again.
+    // The server clears and recomputes the stored climbs in the background (followups 20): what shows them is read again.
     onSuccess: async () => { await Promise.all([utils.course.mapMetadata.invalidate(), utils.course.list.invalidate(), utils.course.detail.invalidate()]); },
   });
   const data = meta.data?.contourInterval ?? null;

@@ -475,7 +475,7 @@ describe("the contour interval gates the stored climb (docs/course-elevation.md 
     await awaitContourIntervalJobs();
   });
 
-  it("requests that arrive while a run is going coalesce into one more run; a club map's events leave out the removed ones", async () => {
+  it("requests that arrive while a run is going coalesce into one more run; an unknown club map has no events", async () => {
     await c.course.setContourInterval({ intervalM: 5 });
     await awaitContourIntervalJobs();
     const before = _contourIntervalRuns();

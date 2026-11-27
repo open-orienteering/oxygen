@@ -21,11 +21,11 @@ export async function eventsOnClubMap(db: PrismaClient, clubMapId: string): Prom
   return rows.map((r) => r.eventId);
 }
 
-/** Clears and computes again the computed climbs of one event, when this node may. */
 let runs = 0;
 /** For tests: how many runs have started. */
 export const _contourIntervalRuns = (): number => runs;
 
+/** Clears and computes again the computed climbs of one event, when this node may. */
 async function applyToEvent(db: PrismaClient, eventId: bigint): Promise<boolean> {
   runs++;
   if (!(await mayRunBackgroundJob(db, eventId, "contour-interval"))) return false;
