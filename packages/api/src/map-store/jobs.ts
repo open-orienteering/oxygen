@@ -56,6 +56,8 @@ export interface ImportJobRow {
   error: string | null;
   eventId: bigint | null;
   clubMapId: string | null;
+  /** The signed-in user whose request started the job; the uploader of the club version it creates. */
+  startedBy: string | null;
   claimedBy: string | null;
   heartbeatAt: Date | null;
   /** The club decisions stage 6 applies, snapshotted at insert (docs/map-storage.md §6.1). */
@@ -138,7 +140,7 @@ export function runImportInWorker(
 
 const JOB_SELECT = {
   id: true, state: true, stage: true, progress: true, sourceHash: true, documentHash: true, error: true,
-  eventId: true, clubMapId: true, claimedBy: true, heartbeatAt: true, decisions: true, patch: true, colour: true, createdAt: true, updatedAt: true,
+  eventId: true, clubMapId: true, startedBy: true, claimedBy: true, heartbeatAt: true, decisions: true, patch: true, colour: true, createdAt: true, updatedAt: true,
 } as const;
 
 function asRow(r: { state: string; decisions: Prisma.JsonValue; patch: Prisma.JsonValue; colour: Prisma.JsonValue } & Omit<ImportJobRow, "state" | "decisions" | "patch" | "colour">): ImportJobRow {
@@ -296,7 +298,7 @@ export function isPromoteJob<J extends Pick<ImportJobRow, "eventId" | "clubMapId
   return job.eventId !== null && job.clubMapId !== null && (job.patch?.length ?? 0) > 0;
 }
 
-export async function applyJobResult(db: Db, job: Pick<ImportJobRow, "eventId" | "clubMapId" | "sourceHash" | "documentHash"> & { patch?: mapDocument.VersionPatch }): Promise<void> {
+export async function applyJobResult(db: Db, job: Pick<ImportJobRow, "eventId" | "clubMapId" | "sourceHash" | "documentHash"> & { startedBy?: string | null; patch?: mapDocument.VersionPatch }): Promise<void> {
   if (!job.documentHash) return;
   const promote = isPromoteJob(job);
   if (job.eventId !== null && !promote) {
@@ -329,7 +331,10 @@ export async function applyJobResult(db: Db, job: Pick<ImportJobRow, "eventId" |
           label: source?.fileName ?? "",
           sourceHash: job.sourceHash,
           documentHash: job.documentHash,
-          uploadedBy: source?.uploadedBy ?? null,
+          // Whoever started the import proved possession of the bytes
+          // (source-possession.ts); the source row's uploader is only the
+          // first uploader and may be someone else.
+          uploadedBy: job.startedBy ?? source?.uploadedBy ?? null,
         },
       });
     }
