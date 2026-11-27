@@ -282,6 +282,15 @@ describe("setter maps (course-layout.md §8, F10)", () => {
     await t.db.courseMap.deleteMany({ where: { eventId: t.eventId, kind: "setter", courseId: course.id } });
   }, 90_000);
 
+  it("layout.adoptToSetters leaves a scope alone when none of its setter maps' props parse (CRS-002)", async () => {
+    await caller.layout.setterMaps({ courseId: course.seq, groups: 1 });
+    const [row] = await setterRows(course.id);
+    await t.db.courseMap.update({ where: { id: row.id }, data: { props: { broken: true } } });
+    expect((await caller.layout.adoptToSetters({ courseId: course.seq })).sheets).toEqual([]);
+    expect((await t.db.courseMap.findUniqueOrThrow({ where: { id: row.id } })).props).toEqual({ broken: true });
+    await t.db.courseMap.deleteMany({ where: { eventId: t.eventId, kind: "setter", courseId: course.id } });
+  }, 90_000);
+
   it("a removed course's setter maps report nothing; the list and ?setter=1 still work (CRS-002)", async () => {
     const doomed = await t.db.course.create({ data: { eventId: t.eventId, name: "Doomed", lengthM: 1000, climbM: 0, courseControls: { create: [{ position: 1, controlId: c.c31.id }] } } });
     await caller.layout.setterMaps({ courseId: doomed.seq, groups: 1 });

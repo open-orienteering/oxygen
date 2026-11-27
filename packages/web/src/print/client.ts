@@ -239,9 +239,13 @@ async function composeOnDevice(nameId: string, job: PrintJob, deps: PrintClientD
             for (const warning of msg.warnings) console.warn(`maps.pdf (device): ${warning}`);
             resolve(msg.bytes);
             return;
-          case "error":
-            reject(new Error(msg.message));
+          case "error": {
+            // The error's name survives the worker boundary, so a caller can tell a PrintGraphicMissingError (CRS-010).
+            const e = new Error(msg.message);
+            if (msg.name) e.name = msg.name;
+            reject(e);
             return;
+          }
         }
       };
       w.postMessage({ type: "compose", id, job });

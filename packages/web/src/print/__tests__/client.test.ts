@@ -162,6 +162,17 @@ describe("printMapsPdf (§8.6)", () => {
     warn.mockRestore();
   });
 
+  it("a worker error keeps its name across the worker boundary, so the store step can tell a missing hiding graphic (CRS-010)", async () => {
+    class NamedErrorWorker extends BrokenWorker {
+      override postMessage(msg?: PrintWorkerRequest): void {
+        const id = (msg as { id?: number } | undefined)?.id ?? 0;
+        queueMicrotask(() => this.onmessage?.({ data: { type: "error", id, message: "A: graphic 9 could not be loaded", name: "PrintGraphicMissingError" } } as MessageEvent<PrintWorkerResponse>));
+      }
+    }
+    const { d } = deps({ createWorker: () => new NamedErrorWorker() });
+    await expect(composeToStore("ev", fixturePrintJob(), d)).rejects.toMatchObject({ name: "PrintGraphicMissingError", message: "A: graphic 9 could not be loaded" });
+  });
+
   it("the server prints when the worker goes silent, and the next export still runs", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     class SilentWorker extends BrokenWorker {

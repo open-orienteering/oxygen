@@ -184,11 +184,19 @@ describe("prepareOfflinePrint (§8.6 \"Offline\")", () => {
   it("a job the device cannot compose (a hiding graphic missing) is skipped with its message; the run goes on, partial (CRS-010)", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const s = setup();
-    s.compose.mockRejectedValueOnce(new Error("A: graphic 8 could not be loaded and it replaces the circle or number of control 31"));
+    s.compose.mockRejectedValueOnce(Object.assign(new Error("A: graphic 8 could not be loaded and it replaces the circle or number of control 31"), { name: "PrintGraphicMissingError" }));
     const out = await prepareOfflinePrint("ev", {}, s.deps);
     expect(out.status).toBe("partial");
     expect(out.manifest!.complete).toBe(false);
     expect(out.manifest!.skipped.some((k) => k.status === 0 && /could not be loaded/.test(k.message))).toBe(true);
+    warn.mockRestore();
+  });
+
+  it("any other compose failure (a worker that fails to start) is not skipped: the run is an OfflinePrepareError", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const s = setup();
+    s.compose.mockRejectedValueOnce(new Error("print worker: failed to start"));
+    await expect(prepareOfflinePrint("ev", {}, s.deps)).rejects.toBeInstanceOf(OfflinePrepareError);
     warn.mockRestore();
   });
 

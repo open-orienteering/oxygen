@@ -53,7 +53,7 @@ export function createPrintWorker(post: Post) {
       const bytes = ownBuffer(out.bytes);
       post({ type: "done", id, bytes, pageCount: out.pageCount, warnings: out.warnings }, [bytes]);
     } catch (err) {
-      post({ type: "error", id, message: err instanceof Error ? err.message : String(err) });
+      post({ type: "error", id, message: err instanceof Error ? err.message : String(err), ...(err instanceof Error && err.name !== "Error" ? { name: err.name } : {}) });
     }
   }
 

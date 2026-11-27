@@ -703,6 +703,8 @@ export async function adoptToSetters(db: Db, eventId: bigint, opts: { courseUuid
       return props ? [{ row: r, props }] : [];
     })
     .sort((a, b) => a.props.setter - b.props.setter || a.row.seq - b.row.seq);
+  // No setter map of the scope parses: there is nothing to add the controls to.
+  if (scope.length === 0) return { sheets: [] };
   const controls = new Map((await db.control.findMany({ where: { eventId, removed: false } })).map((c) => [c.id, c]));
   const groups = scope.map((g) => g.props.controlIds.flatMap((id) => (controls.has(id) && placed(controls.get(id)!) ? [{ x: controls.get(id)!.xpos, y: controls.get(id)!.ypos }] : [])));
   const added = scope.map(() => [] as SiteRow[]);
