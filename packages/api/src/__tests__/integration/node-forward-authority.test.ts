@@ -14,7 +14,7 @@ import { appRouter } from "../../routers/index.js";
 import { createContext } from "../../trpc.js";
 import { registerVenueForwarder } from "../../sync/venueForwarder.js";
 import { grantSystemGroup } from "../../permissions.js";
-import { SYSTEM_GROUP_IDS } from "@oxygen/shared";
+import { ALL_CAPABILITIES, SYSTEM_GROUP_IDS } from "@oxygen/shared";
 import Fastify from "fastify";
 import { fastifyTRPCPlugin } from "@trpc/server/adapters/fastify";
 import http from "node:http";
@@ -24,7 +24,7 @@ let other: TestEventContext;
 let free: TestEventContext;
 
 const forwarded = (event: TestEventContext["event"], nodeId: string | null = "venue-fwd") =>
-  makeCaller(event, { user: null, identityEmail: null, authEnabled: true, authMode: "proxy", nodeForward: { nodeId } });
+  makeCaller(event, { user: null, identityEmail: null, authEnabled: true, authMode: "proxy", nodeForward: { nodeId }, forwardedCaps: new Set(ALL_CAPABILITIES) });
 
 beforeAll(async () => {
   held = await createTestEvent("fwd_held");
@@ -115,6 +115,7 @@ describe("the context wiring over real HTTP (marker + secret into a procedure)",
             "x-oxygen-forwarded": "1",
             "x-oxygen-node-id": node,
             "x-forwarded-email": "nobody@example.org",
+            "x-oxygen-forwarded-caps": "*",
             ...(secret ? { "x-oxygen-sync-secret": secret } : {}),
           },
           payload: JSON.stringify({ kind: "training" }),
@@ -159,7 +160,11 @@ describe("the capabilities the box vouches for limit the forwarded call (x-oxyge
           },
           payload: JSON.stringify({ ids: [999999] }),
         });
-      expect((await call(held.nameId, null)).statusCode).toBe(404);
+      // Fail closed: no header is no capability; `*` is all (a box with login off); `none` is none.
+      expect((await call(held.nameId, null)).statusCode).toBe(403);
+      expect((await call(held.nameId, "*")).statusCode).toBe(404);
+      expect((await call(held.nameId, "none")).statusCode).toBe(403);
+      expect((await call(other.nameId, "*")).statusCode).toBe(403);
       expect((await call(held.nameId, "courses.edit")).statusCode).toBe(404);
       expect((await call(held.nameId, "event.view,courses.view,courses.edit,courses.review")).statusCode).toBe(404);
       expect((await call(held.nameId, "bogus.cap, courses.edit")).statusCode).toBe(404);
@@ -168,6 +173,14 @@ describe("the capabilities the box vouches for limit the forwarded call (x-oxyge
       expect((await call(held.nameId, "event.manage")).statusCode).toBe(403);
       expect((await call(held.nameId, "")).statusCode).toBe(403);
       expect((await call(held.nameId, "nonsense")).statusCode).toBe(403);
+      // An empty x-event-id does not shadow x-competition-id.
+      const viaCompetition = await app.inject({
+        method: "POST",
+        url: "/trpc/courseObject.reorder",
+        headers: { "content-type": "application/json", "x-event-id": "", "x-competition-id": held.nameId, "x-oxygen-forwarded": "1", "x-oxygen-node-id": "venue-fwd", "x-oxygen-sync-secret": "http-secret", "x-oxygen-forwarded-caps": "*" },
+        payload: JSON.stringify({ ids: [999999] }),
+      });
+      expect(viaCompetition.statusCode).toBe(404);
       // The lease rule still applies on top of a full set.
       expect((await call(other.nameId, "courses.edit")).statusCode).toBe(403);
     } finally {
@@ -192,9 +205,9 @@ describe("the box checks its own caller before lending its authority upstream", 
     // A finished event gives every signed-in user a view; the "no access" case needs one still to come.
     const originalDate = (await free.db.event.findUniqueOrThrow({ where: { id: free.eventId }, select: { date: true } })).date;
     await free.db.event.update({ where: { id: free.eventId }, data: { date: new Date(Date.now() + 30 * 86_400_000) } });
-    const upstreamSeen: Array<{ url: string; caps: string | undefined }> = [];
+    const upstreamSeen: Array<{ url: string; caps: string | undefined; eventId: string | undefined }> = [];
     const upstream = http.createServer((req, res) => {
-      upstreamSeen.push({ url: req.url ?? "", caps: req.headers["x-oxygen-forwarded-caps"] as string | undefined });
+      upstreamSeen.push({ url: req.url ?? "", caps: req.headers["x-oxygen-forwarded-caps"] as string | undefined, eventId: req.headers["x-event-id"] as string | undefined });
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ result: { data: { ok: true } } }));
     });
@@ -229,11 +242,24 @@ describe("the box checks its own caller before lending its authority upstream", 
       // A viewer is forwarded too, but without courses.edit: the cloud refuses the edit (see the caps test above).
       expect((await post(member.email, free.nameId)).statusCode).toBe(200);
       expect(upstreamSeen.at(-1)?.caps?.split(",").sort()).toEqual(["event.view", "results.view"]);
+      // An event named but unknown on the box is a 400, not an event-less forward; an empty x-event-id falls through.
+      expect((await post(setter.email, "no_such_event_here")).statusCode).toBe(400);
+      expect(upstreamSeen).toHaveLength(2);
+      const viaCompetition = await box.inject({
+        method: "POST",
+        url: "/trpc/courseObject.reorder",
+        headers: { "content-type": "application/json", "x-forwarded-email": setter.email, "x-event-id": "", "x-competition-id": free.nameId },
+        payload: "{}",
+      });
+      expect(viaCompetition.statusCode).toBe(200);
+      expect(upstreamSeen.at(-1)?.eventId).toBe(free.nameId);
+      expect(upstreamSeen.at(-1)?.caps?.split(",").sort()).toEqual(["courses.edit", "courses.review", "courses.view", "event.view"]);
+      upstreamSeen.pop();
       // No event named: a signed-in user is enough; an admin carries every capability, others none.
       expect((await post(admin.email, null)).statusCode).toBe(200);
       expect(upstreamSeen.at(-1)?.caps?.split(",").length).toBeGreaterThan(5);
       expect((await post(setter.email, null)).statusCode).toBe(200);
-      expect(upstreamSeen.at(-1)?.caps).toBe("");
+      expect(upstreamSeen.at(-1)?.caps).toBe("none");
       // A batch gets one refusal per call.
       const batch = await post(nobody.email, free.nameId, "/trpc/club.update,club.create?batch=1");
       expect(batch.statusCode).toBe(403);

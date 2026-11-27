@@ -52,3 +52,12 @@ What [proxy-auth-and-svg-xss.md](proxy-auth-and-svg-xss.md) did not do, and why.
   club map rename and Eventor browsing accept it. It holds no event
   capability without the lease. Narrowing this needs a per-procedure review
   (or the per-event checkout token above).
+- **Store the canonical serialisation** instead of the raw upload bytes, so
+  what is stored, served and rendered is one validated document (the raw route
+  still serves the uploaded bytes under the sandbox CSP today).
+- **Run `analyseSvg` in the print worker with a timeout.** It runs on the API
+  main thread at upload; a very large or deeply nested document is bounded only
+  by the 8 MiB cap and the nesting limit.
+- **`reframeSvg` does not handle a prefixed root** (`<s:svg>`): the window
+  wrapper and the trim step give up on such a document (a window falls back to
+  cutting a whole raster; trim leaves it as uploaded).

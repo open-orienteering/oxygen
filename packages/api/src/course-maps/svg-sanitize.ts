@@ -71,7 +71,8 @@ function precheck(raw: string): Map<string, string> {
     if (enc && !/^utf-?8$/i.test(enc[2])) refuse("a non-UTF-8 encoding declaration");
   }
   if (/[\x00-\x08\x0B\x0C\x0E-\x1F]/.test(raw)) refuse("control characters");
-  const pis = [...raw.matchAll(/<\?/g)];
+  // Only the XML declaration and XMP `<?xpacket …?>` packets (Illustrator metadata, dropped by the parser).
+  const pis = [...raw.matchAll(/<\?/g)].filter((m) => !/^<\?xpacket[\s?]/.test(raw.slice(m.index, m.index + 10)));
   if (pis.length > (decl ? 1 : 0)) refuse("processing instructions");
   if (!decl && pis.length) refuse("processing instructions");
   const entities = new Map<string, string>();
@@ -205,14 +206,39 @@ export function assertSafeCss(css: string): void {
   if (/image-set\(/i.test(text)) refuse("image-set()");
   if (/expression\(/i.test(text)) refuse("expression()");
   if (/javascript:/i.test(text)) refuse("javascript: URLs");
-  const calls = [...text.matchAll(/url\(/gi)].length;
-  let matched = 0;
-  for (const m of text.matchAll(/url\(\s*(?:"([^"]*)"|'([^']*)'|([^)"']*))\s*\)/gi)) {
-    matched++;
-    const target = (m[1] ?? m[2] ?? m[3] ?? "").trim();
+  for (const target of urlTargets(text)) {
     if (!target.startsWith("#") && !DATA_IMAGE.test(target) && !DATA_FONT.test(target)) refuse("external references");
   }
-  if (matched !== calls) refuse("external references");
+}
+
+const isSpace = (c: string | undefined) => c === " " || c === "\t" || c === "\n" || c === "\r" || c === "\f";
+
+/** The target of every `url(…)` in already-normalised CSS, by a linear scan; an unterminated or malformed one is refused. */
+function urlTargets(text: string): string[] {
+  const lower = text.toLowerCase();
+  const out: string[] = [];
+  let at = lower.indexOf("url(");
+  while (at >= 0) {
+    let i = at + 4;
+    while (isSpace(text[i])) i++;
+    let target: string;
+    const q = text[i];
+    if (q === '"' || q === "'") {
+      const end = text.indexOf(q, i + 1);
+      if (end < 0) refuse("external references");
+      target = text.slice(i + 1, end);
+      i = end + 1;
+    } else {
+      const start = i;
+      while (i < text.length && text[i] !== ")" && text[i] !== '"' && text[i] !== "'" && !isSpace(text[i])) i++;
+      target = text.slice(start, i);
+    }
+    while (isSpace(text[i])) i++;
+    if (text[i] !== ")") refuse("external references");
+    out.push(target.trim());
+    at = lower.indexOf("url(", i + 1);
+  }
+  return out;
 }
 
 // ---- tree walk -----------------------------------------------------------
@@ -228,13 +254,19 @@ function attributesOf(node: XmlNode): Array<[string, string]> {
   return Object.entries(attrs).map(([key, value]) => [key.replace(/^@_/, ""), String(value)]);
 }
 
+/** Attributes a browser may fetch or navigate from: only `#…` or an embedded raster. */
+const URL_ATTRIBUTES = new Set(["href", "src", "srcset", "action", "formaction", "ping", "poster", "background"]);
+
 function checkAttribute(element: string, name: string, value: string): void {
   if (!NAME.test(name)) refuse("unusual attribute names");
   const local = localName(name).toLowerCase();
   if (/^on/i.test(local)) refuse("event handler attributes");
-  if (local === "href" || local === "src") {
-    const v = value.trim();
-    if (!v.startsWith("#") && !DATA_IMAGE.test(v)) refuse("external references");
+  // A browser ignores tabs, line breaks and other control characters inside a scheme.
+  const bare = value.replace(/[\x00-\x20\x7f-\x9f]/g, "");
+  if (/^(?:javascript|vbscript):|(?:javascript|vbscript):|data:text/i.test(bare)) refuse("javascript: URLs");
+  if (URL_ATTRIBUTES.has(local)) {
+    const ok = bare.startsWith("#") || (DATA_IMAGE.test(bare) && /^[^,]*,[A-Za-z0-9+/=]*$/.test(bare));
+    if (!ok) refuse("external references");
   }
   assertSafeCss(value);
   if (ANIMATION_ELEMENTS.has(element) && local === "attributename") {
@@ -274,6 +306,7 @@ function walk(nodes: unknown, state: Walk, depth: number): void {
       const isNs = name === "xmlns" || name.startsWith("xmlns:");
       const value = decodeStrict(rawValue, isNs ? state.entities : undefined);
       if (isNs && /XSL\/Transform/i.test(value)) refuse("stylesheet processing instructions or XSLT");
+      if (isNs && /\/1999\/xhtml/i.test(value)) refuse("XHTML elements");
       checkAttribute(local, name, value);
       attrs.push([name, value]);
     }

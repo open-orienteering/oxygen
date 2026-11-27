@@ -188,13 +188,17 @@ computed (an instance admin: all) and an empty set is `FORBIDDEN` (403); a
 forward naming no event needs a signed-in user only. Refusals are tRPC-shaped,
 per call in a batch, and nothing is forwarded. The set travels in
 `x-oxygen-forwarded-caps` (comma list; an event-less forward carries all of them
-for an admin and none for anyone else), and on the cloud a `nodeForward` call
-holds the lease-holder rule **intersected with** that set (unknown names are
-ignored). So a course setter with only `courses.edit` can forward a course
+for an admin and `none` for anyone else; an empty value is never sent), and on
+the cloud a `nodeForward` call holds the lease-holder rule **intersected with**
+that set (unknown names are ignored). The cloud fails closed: an absent header
+is no capability at all. The box sends exactly one event header, `x-event-id`,
+with the event as it resolved it, and answers 400 when the caller named an event
+that does not resolve on the box; an empty `x-event-id` never shadows
+`x-competition-id` (on either side). So a course setter with only `courses.edit` can forward a course
 object edit, a viewer cannot, and nobody can do through the box what they could
-not do at it. With login off at the box (the usual LAN venue box) no header is
-sent, every device on the LAN is trusted, as for all local writes, and the
-cloud applies the lease rule alone. A box whose `NODE_ID` is unset or still the
+not do at it. With login off at the box (the usual LAN venue box) the header is `*`,
+every device on the LAN is trusted, as for all local writes, and the cloud
+applies the lease rule alone. A box whose `NODE_ID` is unset or still the
 default `cloud` answers a forward with `412` `CLOUD_AUTH` ("set NODE_ID …")
 without calling the cloud: the cloud would treat it as itself.
 

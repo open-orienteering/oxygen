@@ -14,6 +14,7 @@ import {
   shouldForwardToCloud,
   isMixedCloudBatch,
   connectivityErrorBody,
+  requestEventName,
 } from "../sync/venueForwarder.js";
 import { isCloudOwnedMutation } from "../sync/ownership.js";
 
@@ -240,10 +241,23 @@ describe("registerVenueForwarder on the wire", () => {
     expect(seen).toHaveLength(0);
   });
 
-  it("sends no caps header from a box with login off", async () => {
+  it("sends `*` from a box with login off, and exactly one event header", async () => {
     await startVenue();
-    await post();
-    expect(seen[0].headers["x-oxygen-forwarded-caps"]).toBeUndefined();
+    await venue.inject({
+      method: "POST",
+      url: "/trpc/club.update",
+      headers: { "content-type": "application/json", "x-event-id": "", "x-competition-id": "evt" },
+      payload: "{}",
+    });
+    expect(seen[0].headers["x-oxygen-forwarded-caps"]).toBe("*");
+    expect(seen[0].headers["x-event-id"]).toBe("evt");
+    expect(seen[0].headers["x-competition-id"]).toBeUndefined();
+  });
+
+  it("requestEventName lets an empty x-event-id fall through to x-competition-id", () => {
+    expect(requestEventName({ "x-event-id": "", "x-competition-id": "c" })).toBe("c");
+    expect(requestEventName({ "x-event-id": "e", "x-competition-id": "c" })).toBe("e");
+    expect(requestEventName({})).toBeNull();
   });
 
   it("sends no secret header when none is configured", async () => {

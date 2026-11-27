@@ -292,7 +292,7 @@ uploaded bytes.
 1. *Refused before parsing* (`The SVG must not contain …`): a `encoding=` in
    the XML declaration that is not UTF-8; C0 control characters other than tab,
    CR and LF; any processing instruction other than the XML declaration
-   (`<?xml-stylesheet`, anything in the body); more than one DOCTYPE; and a
+   and XMP `<?xpacket …?>` packets (Illustrator; dropped by the parser); more than one DOCTYPE; and a
    DOCTYPE internal subset that holds anything but `<!ENTITY name "value">`
    general entities (no `%`, `SYSTEM`, `PUBLIC`, `ATTLIST`, `ELEMENT`,
    `NOTATION`, comments). The subset is read sequentially, so a `]>` inside a
@@ -307,16 +307,19 @@ uploaded bytes.
 3. *Walked*: an element whose local name (any prefix) is `script`,
    `foreignObject`, `iframe`, `object`, `embed`, `audio`, `video`, `link`,
    `meta`, `base`, `handler` or `listener`, or that is `xsl:` prefixed or in the
-   XSLT namespace; any attribute named `on…` (any case, any prefix); an `href` /
-   `src` attribute (any prefix) whose trimmed value is neither `#fragment` nor
-   `data:image/(png|jpeg|jpg|gif|webp)[;params];base64,…`; a `set`, `animate`,
+   XSLT namespace; any attribute named `on…` (any case, any prefix); an XHTML
+   namespace declaration; `javascript:`, `vbscript:` or `data:text` in any
+   attribute value (tabs, line breaks and control characters ignored, as a
+   browser does); an `href`, `src`, `srcset`, `action`, `formaction`, `ping`,
+   `poster` or `background` attribute (any prefix) whose value is neither
+   `#fragment` nor a single `data:image/(png|jpeg|jpg|gif|webp)[;params];base64,…`; a `set`, `animate`,
    `animateTransform` or `animateMotion` whose `attributeName` (local part) is
    `href`, `src` or starts with `on`, or whose `to` / `from` / `values` / `by`
    holds a scheme or a path. CSS (every `style` element, any prefix, and every
    attribute value) is read after one pass that drops comments and decodes CSS
    escapes (`\75rl(` is `url(`; an escape cannot open or close a comment):
    `@import`, `image-set(`, `expression(`, `javascript:` and any `url(…)` that
-   is not `#…`, a raster data image or an embedded font (`data:font/*`,
+   is not `#…`, a raster data image or an embedded font (found by a linear scan, so a long run of spaces after `url(` costs nothing) (`data:font/*`,
    `data:application/(x-)font-*`, `data:application/octet-stream`, any
    parameters, `;base64,`) are refused, as is an unterminated `url(`. Plain
    backslashes (`font-family:"Foo\ Bar"`) pass, and text content outside `style`

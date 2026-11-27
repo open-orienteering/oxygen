@@ -127,8 +127,23 @@ describe("SVG graphic safety (parser-based validation, docs/course-maps.md \"SVG
       ["an event handler", svg(`<rect onload="x()" width="1" height="1"/>`), "event handler"],
       ["an upper-case event handler", svg(`<rect ONCLICK="x()" width="1" height="1"/>`), "event handler"],
       ["a prefixed event handler", svg(`<rect x:onclick="x()" xmlns:x="urn:x"/>`), "event handler"],
-      ["a javascript: href", svg(`<a href="javascript:alert(1)"/>`), "external references"],
-      ["a split javascript: scheme", svg(`<a xlink:href="java&#115;cript:alert(1)"/>`), "external references"],
+      ["a javascript: href", svg(`<a href="javascript:alert(1)"/>`), "javascript"],
+      ["a tab inside javascript:", svg(`<a href="java&#9;script:alert(1)"/>`), "javascript"],
+      ["a newline inside javascript:", svg(`<a href="jav&#10;ascript:alert(1)"/>`), "javascript"],
+      ["javascript: in an arbitrary attribute", svg(`<a title="x" xlink:title="javascript:alert(1)"/>`), "javascript"],
+      ["vbscript:", svg(`<a title="vbscript:x"/>`), "javascript"],
+      ["data:text in an attribute", svg(`<a title="data:text/html,x"/>`), "javascript"],
+      ["a srcset", svg(`<image srcset="http://host/x.png 1x"/>`), "external references"],
+      ["a srcset smuggling a second URL after a data image", svg(`<image srcset="data:image/png;base64,AAAA, http://host/x.png"/>`), "external references"],
+      ["a formaction", svg(`<rect formaction="http://host/"/>`), "external references"],
+      ["an action", svg(`<rect action="/x"/>`), "external references"],
+      ["a ping", svg(`<a ping="http://host/"/>`), "external references"],
+      ["a poster", svg(`<rect poster="x.png"/>`), "external references"],
+      ["a background", svg(`<rect background="x.png"/>`), "external references"],
+      ["an XHTML element", svg(`<html xmlns="http://www.w3.org/1999/xhtml"><body/></html>`), "XHTML"],
+      ["a prefixed XHTML element", svg(`<h:p xmlns:h="http://www.w3.org/1999/xhtml"/>`), "XHTML"],
+      ["a script after an xpacket", svg(`<?xpacket begin="x"?><script/>`), "script"],
+      ["a split javascript: scheme", svg(`<a xlink:href="java&#115;cript:alert(1)"/>`), "javascript"],
       ["a protocol-relative href", svg(`<image href="//host/x.png"/>`), "external references"],
       ["a path href", svg(`<image href="/etc/x.png"/>`), "external references"],
       ["a relative href", svg(`<image href="x.png"/>`), "external references"],
@@ -201,6 +216,40 @@ describe("SVG graphic safety (parser-based validation, docs/course-maps.md \"SVG
 <sodipodi:namedview id="nv" inkscape:zoom="1"/>
 <metadata id="m"><rdf:RDF><cc:Work rdf:about=""><dc:format>image/svg+xml</dc:format></cc:Work></rdf:RDF></metadata>
 <g inkscape:label="Layer 1"><circle cx="10" cy="10" r="8"/></g></svg>`))).toBe("image/svg+xml");
+  });
+
+  it("accepts Illustrator XMP packets, dropping them from the canonical text", () => {
+    const xmp = `<?xml version="1.0" encoding="utf-8"?>\n<svg ${NS} viewBox="0 0 10 10"><metadata><?xpacket begin="\uFEFF" id="W5M0MpCehiHzreSzNTczkc9d"?><x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"/></x:xmpmeta><?xpacket end="w"?></metadata><rect width="1" height="1"/></svg>`;
+    const out = analyseSvg(Buffer.from(xmp));
+    expect(out.canonical).not.toContain("xpacket");
+    expect(out.canonical).toContain("<rect");
+  });
+
+  it("validates adversarial inputs in linear time (no regex backtracking)", () => {
+    const n = 100_000;
+    const inputs: Array<[string, string]> = [
+      ["spaces after url(", `<rect style="fill:url(${" ".repeat(n)}"/>`],
+      ["spaces then an unclosed quote", `<rect style="fill:url(${" ".repeat(n)}'"/>`],
+      ["many url( openers", `<style>${"url( ".repeat(n / 5)}</style>`],
+      ["many ampersands", `<text>${"&a".repeat(n / 2)}</text>`],
+      ["long entity-like run", `<text>&${"a".repeat(n)}</text>`],
+      ["many backslashes", `<rect style="${"\\".repeat(n / 2)}"/>`],
+      ["many comment openers", `<style>${"/*".repeat(n / 2)}</style>`],
+      ["a long width", `<g width="${" ".repeat(n)}x"/>`],
+      ["deep nesting", "<g>".repeat(n / 10) + "</g>".repeat(n / 10)],
+    ];
+    for (const [name, inner] of inputs) {
+      const t0 = performance.now();
+      try {
+        validateGraphicUpload(svg(inner));
+      } catch {
+        // refused or accepted: only the time matters
+      }
+      expect(performance.now() - t0, name).toBeLessThan(500);
+    }
+    const t0 = performance.now();
+    expect(() => validateGraphicUpload(Buffer.from(`<svg ${NS} width="${" ".repeat(n)}"/>`))).toThrow();
+    expect(performance.now() - t0).toBeLessThan(500);
   });
 
   it("what is rendered is the re-serialised tree: a stored graphic that no longer validates renders as nothing", async () => {

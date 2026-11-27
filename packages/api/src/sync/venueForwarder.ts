@@ -117,9 +117,8 @@ export function refreshesSettings(paths: readonly string[]): boolean {
 
 /** The event a request names: `x-event-id`, or `x-competition-id`, which the web sends (`trpc.ts` reads both). */
 export function requestEventName(headers: Record<string, string | string[] | undefined>): string | null {
-  const raw = headers["x-event-id"] ?? headers["x-competition-id"];
-  const v = Array.isArray(raw) ? raw[0] : raw;
-  return v ? v : null;
+  const first = (h: string | string[] | undefined) => (Array.isArray(h) ? h[0] : h) || "";
+  return first(headers["x-event-id"]) || first(headers["x-competition-id"]) || null;
 }
 
 /** How long a forwarded write's reply waits for the refresh that follows it. */
@@ -218,12 +217,13 @@ export function connectivityErrorBody(
 }
 
 /** A tRPC-shaped refusal made by the box itself (the call is not forwarded). */
-export function localRefusalBody(paths: string[], batched: boolean, code: "UNAUTHORIZED" | "FORBIDDEN", message: string): unknown {
+export function localRefusalBody(paths: string[], batched: boolean, code: "UNAUTHORIZED" | "FORBIDDEN" | "BAD_REQUEST", message: string): unknown {
+  const wire = { UNAUTHORIZED: [-32001, 401], FORBIDDEN: [-32003, 403], BAD_REQUEST: [-32600, 400] } as const;
   const one = (path: string) => ({
     error: {
       message,
-      code: code === "UNAUTHORIZED" ? -32001 : -32003,
-      data: { code, httpStatus: code === "UNAUTHORIZED" ? 401 : 403, path },
+      code: wire[code][0],
+      data: { code, httpStatus: wire[code][1], path },
     },
   });
   return batched ? paths.map(one) : one(paths[0] ?? "");
@@ -239,21 +239,26 @@ export function localRefusalBody(paths: string[], batched: boolean, code: "UNAUT
  * those. A forward that names no event needs a signed-in user only; it carries
  * the capabilities of an admin or none (cloud-owned, event-less procedures
  * check the node, not capabilities). With login off at the box (a LAN venue
- * box) every device on the LAN is trusted, as for all local writes: no header.
+ * box) every device on the LAN is trusted, as for all local writes: the header is `*`;
+ * an empty set is sent as `none`, never as an empty value.
  */
 export async function localForwardGate(
   req: FastifyRequest,
-): Promise<{ refusal: { code: "UNAUTHORIZED" | "FORBIDDEN"; message: string } } | { caps: Capability[] | null }> {
-  if (authMode() === "off") return { caps: null };
+): Promise<{ refusal: { code: "UNAUTHORIZED" | "FORBIDDEN" | "BAD_REQUEST"; message: string } } | { caps: string; eventName: string | null }> {
+  const named = requestEventName(req.headers);
+  // Login off: every LAN device is trusted; `*` is still limited by the cloud to the event the box holds.
+  if (authMode() === "off") return { caps: "*", eventName: named };
   const ctx = await createContext({ req } as unknown as Parameters<typeof createContext>[0]);
   if (!ctx.user) return { refusal: { code: "UNAUTHORIZED", message: "Not authenticated" } };
+  if (named && !ctx.event) return { refusal: { code: "BAD_REQUEST", message: "Unknown event" } };
+  const list = (caps: Iterable<Capability>) => [...caps].join(",") || "none";
   if (ctx.event) {
     const date = ctx.event.date ?? new Date(0);
     const caps = ctx.user.isAdmin ? new Set<Capability>(ALL_CAPABILITIES) : await capabilitiesForEventRow(ctx, { id: ctx.event.id, date });
     if (caps.size === 0) return { refusal: { code: "FORBIDDEN", message: "You have no access to this event" } };
-    return { caps: [...caps] };
+    return { caps: list(caps), eventName: ctx.event.nameId };
   }
-  return { caps: ctx.user.isAdmin ? [...ALL_CAPABILITIES] : [] };
+  return { caps: ctx.user.isAdmin ? list(ALL_CAPABILITIES) : "none", eventName: null };
 }
 
 /** `allowDefaultNodeId` is a test seam only: a process that plays both the box and its stub cloud shares one NODE_ID. */
@@ -276,7 +281,7 @@ export function registerVenueForwarder(server: FastifyInstance, opts: { timeoutM
     if ("refusal" in gate) {
       const { refusal } = gate;
       void reply
-        .code(refusal.code === "UNAUTHORIZED" ? 401 : 403)
+        .code(refusal.code === "UNAUTHORIZED" ? 401 : refusal.code === "BAD_REQUEST" ? 400 : 403)
         .send(localRefusalBody(paths, batched, refusal.code, refusal.message));
       return reply;
     }
@@ -294,12 +299,12 @@ export function registerVenueForwarder(server: FastifyInstance, opts: { timeoutM
       const secret = syncSharedSecret();
       const base: Record<string, string> = {
         "content-type": req.headers["content-type"] ?? "application/json",
-        ...(req.headers["x-event-id"] ? { "x-event-id": String(req.headers["x-event-id"]) } : {}),
-        ...(req.headers["x-competition-id"] ? { "x-competition-id": String(req.headers["x-competition-id"]) } : {}),
+        // One event header, as the gate resolved it: the cloud cannot read another event than the one checked here.
+        ...(gate.eventName ? { "x-event-id": gate.eventName } : {}),
         ...(secret ? { [SYNC_SECRET_HEADER]: secret } : {}),
         [SYNC_NODE_ID_HEADER]: nodeId(),
         [SYNC_FORWARDED_HEADER]: "1",
-        ...(gate.caps ? { [SYNC_FORWARDED_CAPS_HEADER]: gate.caps.join(",") } : {}),
+        [SYNC_FORWARDED_CAPS_HEADER]: gate.caps,
       };
       const made = makeSyncHeaders(base);
       const headers = typeof made === "function" ? await made() : made;
@@ -317,7 +322,7 @@ export function registerVenueForwarder(server: FastifyInstance, opts: { timeoutM
         return reply;
       }
       const text = await upstream.text();
-      const nameId = requestEventName(req.headers);
+      const nameId = gate.eventName;
       if (upstream.ok && nameId) {
         const maps = refreshesMapRows(paths);
         const settings = refreshesSettings(paths);

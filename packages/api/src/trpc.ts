@@ -55,9 +55,9 @@ export interface Context {
    */
   nodeForward?: { nodeId: string | null } | null;
   /**
-   * The capabilities the forwarding box vouched for (`x-oxygen-forwarded-caps`),
-   * only on a `nodeForward` call; null when the header is absent (a box with
-   * login off).
+   * The capabilities the forwarding box vouched for (`x-oxygen-forwarded-caps`:
+   * a list, `*` or `none`), only on a `nodeForward` call; an absent header is
+   * the empty set. Null on every other request.
    */
   forwardedCaps?: Set<Capability> | null;
 }
@@ -71,9 +71,9 @@ export interface Context {
 export async function createContext(
   opts: CreateFastifyContextOptions,
 ): Promise<Context> {
-  const raw =
-    opts.req.headers["x-event-id"] ?? opts.req.headers["x-competition-id"];
-  const nameId = (Array.isArray(raw) ? raw[0] : raw) ?? "";
+  const first = (h: string | string[] | undefined) => (Array.isArray(h) ? h[0] : h) || "";
+  // `||`: an empty x-event-id does not shadow x-competition-id.
+  const nameId = first(opts.req.headers["x-event-id"]) || first(opts.req.headers["x-competition-id"]);
   const event = nameId ? await resolveEvent(nameId) : null;
   const secretRaw = opts.req.headers[SYNC_SECRET_HEADER];
   const syncSecret = (Array.isArray(secretRaw) ? secretRaw[0] : secretRaw) ?? null;
@@ -99,10 +99,12 @@ export async function createContext(
 
   const capsRaw = opts.req.headers[SYNC_FORWARDED_CAPS_HEADER];
   const capsHeader = Array.isArray(capsRaw) ? capsRaw[0] : capsRaw;
-  const forwardedCaps =
-    nodeForward && capsHeader !== undefined
-      ? new Set(capsHeader.split(",").map((c) => c.trim()).filter(isCapability))
-      : null;
+  // Fail closed: a forward without the header holds nothing; `*` (a box with login off) is every capability, `none` none.
+  const forwardedCaps = nodeForward
+    ? capsHeader?.trim() === "*"
+      ? new Set<Capability>(ALL_CAPABILITIES)
+      : new Set((capsHeader ?? "").split(",").map((c) => c.trim()).filter(isCapability))
+    : null;
 
   if (mode === "proxy") {
     if (!forwarded) {
@@ -345,7 +347,7 @@ export async function capabilitiesForEventRow(
     const lease = await getActiveLease(db, event.id);
     if (lease?.holderNodeId !== holder) return new Set();
     // The box vouches for what its signed-in caller may do; the node never does more than that.
-    return ctx.forwardedCaps ? new Set(ALL_CAPABILITIES.filter((c) => ctx.forwardedCaps!.has(c))) : new Set(ALL_CAPABILITIES);
+    return new Set(ALL_CAPABILITIES.filter((c) => ctx.forwardedCaps?.has(c)));
   }
   return resolveEventCapabilities({
     db,
