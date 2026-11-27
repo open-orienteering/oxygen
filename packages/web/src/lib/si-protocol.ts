@@ -421,16 +421,6 @@ export function parseDayOfWeek(ptdByte: number): number | null {
 }
 
 /**
- * Parse a 2-byte time from SI card memory.
- *
- * The raw 16-bit value (PTH << 8 | PTL) represents seconds since midnight/noon
- * (within a 12-hour window, 0–43199). The AM/PM flag lives in the PTD byte,
- * which is always 2 bytes before the time bytes in the 4-byte record format:
- *   PTD(1) + CN(1) + PTH(1) + PTL(1)
- *
- * This applies to both special times (check/start/finish/clear) and punch records.
- */
-/**
  * Card seconds since midnight to absolute deciseconds, wrapped into one day.
  * A corrupt or 12/24-hour-confused card time (the 16-bit field plus the PM
  * flag reaches 108735 s) would otherwise become a time past midnight that the
@@ -440,6 +430,16 @@ export function cardSecondsToDs(seconds: number): number {
   return (((Math.round(seconds * 10)) % DAY_DS) + DAY_DS) % DAY_DS;
 }
 
+/**
+ * Parse a 2-byte time from SI card memory.
+ *
+ * The raw 16-bit value (PTH << 8 | PTL) represents seconds since midnight/noon
+ * (within a 12-hour window, 0–43199). The AM/PM flag lives in the PTD byte,
+ * which is always 2 bytes before the time bytes in the 4-byte record format:
+ *   PTD(1) + CN(1) + PTH(1) + PTL(1)
+ *
+ * This applies to both special times (check/start/finish/clear) and punch records.
+ */
 export function parsePunchTime(
   data: Uint8Array,
   offset: number,

@@ -37,3 +37,20 @@ the Test Lab test-event only. These were deliberately left out.
 7. **`clearRunners` is a single delete** and is not re-checked mid-way; the
    long loops (`registerFictionalRunners`, `registerRunners`, the instant
    simulation) re-check the flag, lease and Eventor link every 25 rows.
+8. **A corrupt card time wraps silently.** `cardSecondsToDs` folds a time past
+   one day back into the day, so exactly 86400 s becomes 0 ("no time") and any
+   other corrupt value becomes a plausible clock time with no trace; the
+   offline readout tests `> 0` on the raw seconds before converting. Returning
+   0 and logging for out-of-range input would be more honest.
+9. **Lock order in `event.setTestEvent`.** It takes the event's advisory
+   lease/sync lock, then `SELECT … FOR UPDATE` on the event row. No transaction
+   found takes them in the other order, but none should.
+10. **Two concurrent `startSimulation` calls** both pass the "already running"
+    check (awaits sit between the check and `simulations.set`), orphaning the
+    first timer. Predates this package; reserve the key before the awaits.
+11. **The timed tick re-checks only the flag**, not the lease and Eventor link
+    that `assertTestEvent` checks. Enough today (a test event cannot be checked
+    out and no path links an existing event to Eventor); calling
+    `assertTestEvent` in the tick would close it for good.
+12. `ControlsPage.tsx` still multiplies card seconds by 10 without
+    `cardSecondsToDs`; its endpoints don't bound times, so nothing is refused.
