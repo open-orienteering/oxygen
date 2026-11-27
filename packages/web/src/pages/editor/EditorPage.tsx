@@ -249,7 +249,7 @@ export function EditorPage() {
   const latestNames = useRef({ courses: [] as readonly { id: number; name: string }[], coords: new Map<number, { code: string | null }>() });
   useEffect(() => { latestNames.current = { courses: courses.data ?? [], coords: coordsById }; }, [courses.data, coordsById]);
   /** The courses as last polled, for the D6 check of an undo whose `control.delete` cascades (below). */
-  const latestCourses = useRef<readonly { id: number; version: string; controls: string; startControlId?: number | null; finishControlId?: number | null }[]>([]);
+  const latestCourses = useRef<readonly { id: number; version: string; controls: string; startControlId?: number | null; finishControlId?: number | null; parentCourseId?: number | null }[]>([]);
   useEffect(() => { latestCourses.current = courses.data ?? []; }, [courses.data]);
   /**
    * D6 for an undo that deletes a control this client created (§3): the delete cascades out of every course that
@@ -258,7 +258,8 @@ export function EditorPage() {
   const onlyIn = useCallback((id: number, courseId: number | null) => {
     // A course whose newest token is this client's own write, or newer than the list's row, is not read from the list:
     // this client changed it last (an undo a moment ago included), so it is not someone else's change.
-    const other = latestCourses.current.find((c) => c.id !== courseId
+    // A variant of the entry's own course (F7, written by the server with it) is not another course.
+    const other = latestCourses.current.find((c) => c.id !== courseId && (courseId === null || c.parentCourseId !== courseId)
       && (c.controls.split(";").filter(Boolean).map(Number).includes(id) || c.startControlId === id || c.finishControlId === id)
       && writes.versions.get("course", c.id) === c.version && !writes.ownCourseVersions.has(c.version));
     // Skipped as the control's undo: the other course's own entries stay.

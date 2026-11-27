@@ -380,8 +380,8 @@ one this client's own writes reached from it (`EditorWrites.guarded`):
   the description back over theirs.
 - **A control this client created**: its undo deletes it, and the delete
   cascades out of every course that visits it. The undo is skipped when a
-  course other than the entry's own visits it now (from the last
-  `course.list`).
+  course other than the entry's own (or one of its variants, F7) visits
+  it now (from the last `course.list`).
 - **Skipped**: nothing of the entry is written; the entry and every
   other entry, undo or redo, that wrote the same row are dropped; the
   notice says "Lång was changed by Anna at 14:02; undo skipped" — "redo
