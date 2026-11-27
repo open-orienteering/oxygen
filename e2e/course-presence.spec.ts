@@ -191,8 +191,48 @@ test("an undo after another context changed the course is skipped and keeps thei
     await expect(rows(b.page)).toHaveCount(count + 2);
     // The course's entries are gone: nothing left to undo.
     await expect(a.page.getByTestId("editor-undo")).toBeDisabled();
+    // CRS-065: the notice stays until dismissed; another edit does not clear it.
+    if (codes[2]) {
+      await select(a.page, codes[2]);
+      saved = waitForTrpc(a.page, "course.setStructure");
+      await a.page.getByTestId("editor-action-bar").getByTestId("editor-action-append").click();
+      await saved;
+      await expect(rows(a.page)).toHaveCount(count + 3, { timeout: 20_000 });
+      await expect(a.page.getByTestId("editor-undo-skipped")).toBeVisible();
+    }
   } finally {
     await a.ctx.close();
     await b.ctx.close();
+  }
+});
+
+test("two structure edits inside one round trip both land (CRS-018)", async ({ browser }) => {
+  const a = await open(browser);
+  try {
+    await enter(a.page);
+    const rows = (p: Page) => p.locator('[data-testid="editor-seq-row"][data-kind="control"]');
+    const count = await rows(a.page).count();
+    await viewSettled(a.page);
+    const codes = await clearCodes(a.page);
+    expect(codes.length, "two controls clear of the chrome and the legs").toBeGreaterThanOrEqual(2);
+    // The first structure write answers slowly: the second append is asked for while it is in flight.
+    let first = true;
+    await a.page.route("**/trpc/course.setStructure**", async (route) => {
+      if (first) { first = false; await new Promise((r) => setTimeout(r, 2500)); }
+      await route.continue();
+    });
+    await select(a.page, codes[0]!);
+    await a.page.getByTestId("editor-action-bar").getByTestId("editor-action-append").click();
+    await select(a.page, codes[1]!);
+    await a.page.getByTestId("editor-action-bar").getByTestId("editor-action-append").click();
+    await expect(rows(a.page)).toHaveCount(count + 2, { timeout: 20_000 });
+    await a.page.unroute("**/trpc/course.setStructure**");
+    // Both are stored: a reload shows both, not only the second.
+    await a.page.reload();
+    await editorReady(a.page);
+    await expect(rows(a.page)).toHaveCount(count + 2, { timeout: 20_000 });
+    await expect(a.page.getByTestId("editor-save-state")).not.toHaveAttribute("data-state", "conflict");
+  } finally {
+    await a.ctx.close();
   }
 });

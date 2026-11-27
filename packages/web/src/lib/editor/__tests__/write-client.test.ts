@@ -477,6 +477,33 @@ describe("EditorWrites: own chain and the D6 undo guard (docs/course-editor.md Â
     expect(f.calls.length).toBe(before);
   });
 
+  it("guarded: undo, redo, undo of a move across a description change elsewhere never writes the description", async () => {
+    const f = fakeClient();
+    const w = new EditorWrites(f.client);
+    w.versions.seed("control", 31, "1");
+    f.ok({ version: "2" });
+    await w.updateControl({ id: 31, xpos: 5, ypos: 5 }, { x: 0, y: 0 });
+    w.versions.seed("control", 31, "3"); // Anna's description
+    f.fail(conflictError({ kind: "control", id: 31, version: "3", differing: ["description"] }));
+    f.ok({ version: "4" });
+    let rows = await w.guarded([{ kind: "control", id: 31, version: "2" }], () => w.updateControl({ id: 31, xpos: 0, ypos: 0, description: "orig" }, { x: 5, y: 5 }));
+    f.ok({ version: "5" });
+    rows = await w.guarded(rows, () => w.updateControl({ id: 31, xpos: 5, ypos: 5 }, { x: 0, y: 0 }));
+    f.ok({ version: "6" });
+    await w.guarded(rows, () => w.updateControl({ id: 31, xpos: 0, ypos: 0, description: "orig" }, { x: 5, y: 5 }));
+    expect(f.calls[f.calls.length - 1].input).toEqual({ id: 31, xpos: 0, ypos: 0, baseVersion: "5" });
+  });
+
+  it("guarded: a second conflict on the field-rule re-send is UndoSkipped, not a raw error", async () => {
+    const f = fakeClient();
+    const w = new EditorWrites(f.client);
+    w.versions.seed("control", 31, "20");
+    f.fail(conflictError({ kind: "control", id: 31, version: "21", differing: ["description"] }));
+    f.fail(conflictError({ kind: "control", id: 31, version: "22", differing: ["description"] }));
+    await expect(w.guarded([{ kind: "control", id: 31, version: "20" }], () => w.updateControl({ id: 31, xpos: 1, ypos: 2 }, { x: 0, y: 0 }))).rejects.toBeInstanceOf(UndoSkipped);
+    expect(w.versions.get("control", 31)).toBe("22");
+  });
+
   it("guarded: a control moved elsewhere, or changed in an unknown way, skips the move undo", async () => {
     const f = fakeClient();
     const w = new EditorWrites(f.client);

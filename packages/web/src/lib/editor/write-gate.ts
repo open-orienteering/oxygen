@@ -32,6 +32,18 @@ export class WriteGate {
     }
   }
 
+  /**
+   * An undo / redo step: `runExclusive`, then one macrotask before `fn`, so a gesture whose write settled just
+   * before records its undo entry (the `run(...)` then `record(...)` of its caller, microtasks later) before the
+   * step picks the entry it reverses (CRS-050).
+   */
+  runStep<T>(fn: () => Promise<T>): Promise<T> {
+    return this.runExclusive(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+      return fn();
+    });
+  }
+
   private canGo(exclusive: boolean): boolean {
     return exclusive ? !this.exclusive && this.shared === 0 : !this.exclusive;
   }

@@ -312,11 +312,15 @@ flight builds on it instead of reverting it (`serialQueue`,
 `queuedEditAction` in `lib/editor/write-gate.ts`). An edit asked for on
 one course is dropped when another course is selected by its turn. An
 edit that names rows or legs by their place — a row's ✕ or ↑ / ↓, a
-leg's style or gaps (a row index or a leg path) — is not applied when
-the structure changed between the click and its turn: the error line
-says "The course changed while your last edit was saving. Do it again."
-An edit that names sites (append, remove a control, set a role, a
-placement) builds on the new structure as asked. A structure write is sent
+leg's style or gaps, an insert at a place (a placement into a leg, a
+new control inserted there, a crossing point routed by its leg), *Create
+variation here* and a move into an alternative (a row index or a leg
+path) — is not applied when the structure changed between the click and
+its turn: the error line says "The course changed while your last edit
+was saving. Do it again." A control created for such a placement is
+deleted again, so doing it again leaves one control. An edit that names
+sites (append, remove a control, set a role) builds on the new structure
+as asked. A structure write is sent
 on the token of the structure it was built from (CRS-049) — the course
 detail's, or the local structure's — followed along this client's own
 writes, never on a newer token `course.list` seeded from someone else's
@@ -336,9 +340,10 @@ rows and answer their tokens are linked the same way (`adoptOwn`): a
 **Write gate** (`WriteGate`, `lib/editor/write-gate.ts`): ordinary writes
 (every `run`) go side by side; an undo or redo step runs alone, once
 every write asked for before it has settled, and holds back those asked
-for after it. The step picks its entry inside the gate, so Ctrl+Z
-pressed while a gesture is in flight undoes that gesture once it has
-settled, not the one before it. A structure edit is built and sent
+for after it. The step picks its entry inside the gate, one macrotask
+after the gate is its own (`WriteGate.runStep`), so Ctrl+Z pressed while
+a gesture is in flight undoes that gesture once it has settled and
+recorded its entry, not the one before it. A structure edit is built and sent
 inside the gate, so an undo never replaces a structure while an edit is
 built on it, and the D6 guard of a step sees only the step's own writes.
 A write made inside a gated one (a structure edit's write, Map mode's
@@ -370,7 +375,9 @@ one this client's own writes reached from it (`EditorWrites.guarded`):
   names the fields it changed there, so an older undo of the same
   control follows it: one about those fields is skipped, any other goes
   through and leaves them out too (two move undos across a description
-  change both restore their position).
+  change both restore their position). The fields left out stay left out
+  for the entry's later steps: undo, redo, undo of a move never writes
+  the description back over theirs.
 - **A control this client created**: its undo deletes it, and the delete
   cascades out of every course that visits it. The undo is skipped when a
   course other than the entry's own visits it now (from the last
@@ -3423,6 +3430,9 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | unit (web) | `packages/web/src/lib/editor/__tests__/hit.test.ts` | §5 (D12) |
 | unit (web) | `lib/editor/__tests__/url.test.ts` | §1 "URL" (F31): every writable state round-trips through `editorSearchFor` → `parseEditorUrl`; defaults omitted (no course, Course mode, Course view; Class view's and Layout's first variant); the fixed order; a phone writes `mode=course`, `mode=field` is always written; `control` read and never written; foreign params kept; every invalid case dropped and named (non-integer, zero, negative, leading-zero and over-long ids, an unknown mode or view, `class` without Class view and the reverse, Variant view without its key, a key where nothing draws one, `sheet` / `template` outside Layout, both at once); the cleaned URL after a bad inbound; `checkInbound` takes a cached hit, waits on a miss while a fetch is in flight, rejects one only after a fetch since mount or an error, and `fetchIfIdle` fetches once. `field.test.ts` "initial mode": the URL's mode wins on both devices, `layout` on a phone is Field |
 | unit (web) | `lib/editor/__tests__/conflict.test.ts`, `write-client.test.ts` | §3: rebase vs moved vs refresh, unknown base, structure never merged; tokens sent and advanced, one re-send, `EditorConflict`, code re-keying, delete seeding |
+| unit (web) | `lib/editor/__tests__/write-client.test.ts` (own chain, `since`, `guarded`, field rule and bridges, `writeRow`, patch order), `write-gate.test.ts`, `undo-guard.test.ts`, `lib/__tests__/undo-stack.test.ts` (serialised steps, the gate as lock), `lib/__tests__/map-document-cache.test.ts` (older patch delivery), `lib/__tests__/control-outbox.test.ts` (`active`) | §3 "Undo after another editor's change" (D6), "Write gate", "A notice stays until it is answered", "One event per editor" (package 24) |
+| integration | `packages/api/src/__tests__/integration/course-structure.test.ts` (`control.update` answers re-mirrored courses), `integration/course-maps.test.ts` (`applyToCourses` answers sheets) | §3 own tokens of other procedures |
+| E2E | `e2e/course-presence.spec.ts` "an undo after another context changed the course is skipped" (D6, CRS-065), "two structure edits inside one round trip both land" (CRS-018) | §3 |
 | unit (web) | `lib/editor/__tests__/structure-edit.test.ts`, `sequence.test.ts`, `state.test.ts` | §4: sequence positions, insert / append / remove / move / role, legs dropped on a new predecessor; display sequence, explicit structure, leg → insert position; §3 Escape cascade, hide-others, modes |
 | unit (web) | `pages/editor/__tests__/action-bar.test.ts` | §4, §6.7, §6.8 (F16, F14) |
 | unit (web) | `pages/editor/__tests__/placement.test.ts` "C: the crossing tool", `bindings.test.ts` "the crossing ghost", `lib/editor/__tests__/checks.test.ts` "legs keep their bends and crossing point" | §6.8 |
@@ -3568,7 +3578,16 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
   when the key is pressed, not when its queued undo picks it.
   `deleteControl` and `adoptOwn` link a course's chain from the book's
   token as the reply arrives, so a poll that seeded another editor's
-  token inside that round trip is bridged.
+  token inside that round trip is bridged. `deleteControl` is not queued
+  with the writes of the courses it cascades to: with a structure write
+  of one of them in flight and the replies in reverse order, the course's
+  chain breaks and its later undo is skipped as changed elsewhere. A
+  gesture that records its entry only after a further round trip (a new
+  control's radio config before its entry) can still be overtaken by a
+  Ctrl+Z pressed while it runs. E2E covers D6 on a course, the notice
+  staying (CRS-065) and two structure edits in one round trip (CRS-018);
+  Layout's chain, the control field rule, "redo skipped" and an event
+  switch mid-drain are covered by unit tests only.
 - **Tokens of instructions and winner pace** (§3 "Tokens"): they are sent
   on the book's token, not the token of the value they were built from,
   as structures are (CRS-049's shape; their own queue orders this
@@ -3580,10 +3599,7 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
   interval, which write through the URL-bound client: one sent as the
   page changes event can reach the new event (the page key makes it
   rare). `mapPatch.promote` (Map mode's *Promote*) also writes through
-  the URL-bound client. A Layout gesture is sent on the end of this
-  client's own chain from the token its snapshot was built on, so a
-  gesture built on a refused one is refused too (both redone after the
-  refresh).
+  the URL-bound client.
 - **An older "no patch" read** (§13): `setMapPatch` compares versions only
   between two deliveries of one document's patch, so a read without a
   patch answering after a write's reply still replaces it until the next

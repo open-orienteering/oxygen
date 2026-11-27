@@ -222,15 +222,16 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
     const seq = gesture ?? ++localSeq.current;
     const kind = w.scope === "sheet" && w.sheetSeq !== null ? "sheet" : "template";
     const id = kind === "sheet" ? w.sheetSeq! : w.templateSeq;
+    let wrote: { version: string };
     try {
       if (kind === "sheet") {
-        await writes.writeRow("sheet", id, (baseVersion) => client.courseMap.saveLayout.mutate({
+        wrote = await writes.writeRow("sheet", id, (baseVersion) => client.courseMap.saveLayout.mutate({
           // The template's objects are locked here and not written: a sheet gesture never touches the template.
           id, windowCenter: s.centre, printScale: s.printScale, description: s.description, objects: s.sheetObjects,
           baseVersion,
         }), since);
       } else {
-        await writes.writeRow("template", id, (baseVersion) => client.mapTemplate.update.mutate({ id, ...templateWriteOf(s), baseVersion }), since);
+        wrote = await writes.writeRow("template", id, (baseVersion) => client.mapTemplate.update.mutate({ id, ...templateWriteOf(s), baseVersion }), since);
       }
     } catch (e) {
       // Another setter wrote the sheet or template: refresh and redo (no merge of whole snapshots), or the undo is skipped (D6).
@@ -238,7 +239,7 @@ export function useLayoutMode(a: LayoutModeArgs): LayoutMode {
       throw e;
     }
     // Writes of one sheet go one at a time: a later gesture's optimistic snapshot stays until its own reply.
-    setLocal((l) => (l && l.seq > seq ? l : { key: w.key, snap: s, at: Date.now(), seq, since: l?.key === w.key ? l.since : since }));
+    setLocal((l) => (l && l.seq > seq ? l : { key: w.key, snap: s, at: Date.now(), seq, since: (l?.key === w.key ? l.since : undefined) ?? since ?? wrote.version }));
     void utils.courseMap.resolveSheet.invalidate();
     void utils.courseMap.list.invalidate();
     void utils.mapTemplate.list.invalidate();

@@ -178,7 +178,7 @@ export function EditorPage() {
       if (e instanceof UndoSkipped) e.step = which;
       throw e;
     }
-  }, (op) => gate.runExclusive(op)));
+  }, (op) => gate.runStep(op)));
   const [, setHistVersion] = useState(0);
   const bumpHistory = useCallback(() => setHistVersion((v) => v + 1), []);
   const [moveEpoch, setMoveEpoch] = useState(0);
@@ -821,7 +821,7 @@ export function EditorPage() {
    * Create a site at `pt` — a control (code from the club allocation; SRR codes get radio) or a code-less
    * start / finish — and, with a course, write `edit(base, id)` into its structure: one undo entry (§4, §6.1).
    */
-  const createSite = useCallback(async (pt: Pt, kind: "control" | "start" | "finish" | "crossing_point" | "map_issue" | "map_exchange", edit: ((s: Structure, id: number) => Structure) | null): Promise<number | null> => {
+  const createSite = useCallback(async (pt: Pt, kind: "control" | "start" | "finish" | "crossing_point" | "map_issue" | "map_exchange", edit: ((s: Structure, id: number) => Structure) | null, positional = true): Promise<number | null> => {
     // The course and structure version the click was made on (positional insert, §3 "Structure edits").
     const courseId = latest.current.selectedCourse?.id ?? null;
     const clickedOn = currentVersioned()?.version ?? null;
@@ -852,12 +852,13 @@ export function EditorPage() {
     if (srr) await run(() => client.control.upsertConfig.mutate({ controlIds: [id], radioType: "internal_radio" }));
     // The structure part queues with the other structure edits (CRS-018), built on the structure as it is then.
     // An insert names its place in the structure as it was clicked on (positional, §3 "Structure edits").
+    let again = false as boolean;
     const placed = edit && courseId !== null ? await queueStructure(async () => {
       const course = latest.current.selectedCourse;
       const cur = currentVersioned();
       const base = baseStructure();
-      const action = queuedEditAction({ courseId, version: clickedOn }, { courseId: course?.id ?? null, version: cur?.version ?? null }, true);
-      if (action === "again") setErrorMsg(t("structureMovedRetry"));
+      const action = queuedEditAction({ courseId, version: clickedOn }, { courseId: course?.id ?? null, version: cur?.version ?? null }, positional);
+      if (action === "again") again = true;
       if (action !== "apply" || !course || !cur || !base) return false;
       const prev = cur.structure;
       const next = edit(base, id);
@@ -871,6 +872,13 @@ export function EditorPage() {
       return true;
     }) : false;
     if (placed) return id;
+    if (again) {
+      // "Do it again": the control made for this placement goes too, so doing it again leaves one control, not two.
+      created.current.delete(id);
+      await run(() => writes.deleteControl(id));
+      setErrorMsg(t("structureMovedRetry"));
+      return null;
+    }
     record(async () => { onlyIn(id, null); await writes.deleteControl(id); }, () => client.control.restore.mutate({ id }));
     return id;
   }, [controlList.data, seriesAllocation.data, activeSeriesId, run, client, queueStructure, currentVersioned, baseStructure, writeStructure, writes, record, onlyIn, t]);
@@ -1548,7 +1556,8 @@ export function EditorPage() {
           if (edit && !(await applyStructure((s) => edit(s, targetId)))) return;
           id = targetId;
         } else {
-          id = await createSite(pt, role, edit);
+          // A role names its site, not a place: built on the structure as it is then.
+          id = await createSite(pt, role, edit, false);
         }
       }
       if (id === null || chainRef.current !== chain) return;

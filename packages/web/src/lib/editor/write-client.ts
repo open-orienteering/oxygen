@@ -333,7 +333,15 @@ export class EditorWrites {
       if (guardedRow) {
         const instead = onGuardConflict?.(conflict);
         if (!instead) throw new UndoSkipped(kind, id);
-        return { value: await instead(), base: conflict.version };
+        try {
+          return { value: await instead(), base: conflict.version };
+        } catch (again) {
+          // Changed once more inside this round trip: skipped like any other refused undo (D6).
+          const second = versionConflictOfError(again);
+          if (!second) throw again;
+          this.versions.seed(second.kind, second.id, second.version);
+          throw new UndoSkipped(kind, id);
+        }
       }
       const decision = conflictDecision(conflict, write);
       if (decision.kind !== "rebase") throw new EditorConflict(decision, conflict.kind, conflict.id);
@@ -426,6 +434,11 @@ export class EditorWrites {
       // A code change re-keys the row: its chain starts again under the new public id.
       const publicId = publicIdAfterCodes(input.id, input.codes);
       this.noteOwn("control", publicId, publicId === input.id ? base : undefined, res.version);
+      // Fields an undo left out stay left out for the entry's later steps (redo, the next undo), sent from this token.
+      if (guardSince !== undefined && publicId === input.id) {
+        const carry = new Set([...crossed, ...((bridged as string[] | null) ?? [])]);
+        if (carry.size) this.bridges.set(`${rowKey("control", input.id)}:${res.version}`, [...carry]);
+      }
       // A field-level pass links the undo's own chain across the other write, naming the fields it changed there.
       if (bridged && publicId === input.id && sentOn !== undefined && sentOn !== res.version) {
         const key = `${rowKey("control", input.id)}:${sentOn}`;
