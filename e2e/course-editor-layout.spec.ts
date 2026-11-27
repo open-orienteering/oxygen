@@ -927,6 +927,30 @@ test.describe("F10: setter maps (docs/course-layout.md §8)", () => {
     expect(pdf.pages).toBe(2);
     expect([...pdf.sizeMm].sort((a, b) => a - b)).toEqual([210, 297]);
   });
+
+  // CRS-002: a control placed after Generate is in no setter map; the section says so and one click adds it.
+  test("a control added after generation is flagged and added to the nearest setter map", async ({ page }) => {
+    await trpcCall("layout.setterMaps", { groups: 2 });
+    const before = (await setterSheets()).reduce((n, s) => n + s.setter!.controls.length, 0);
+    const added = await trpcCall<{ id: number }>("control.create", { codes: "977", xpos: 40, ypos: 30 });
+    try {
+      await openEditor(page);
+      await page.getByTestId("editor-view-all").click();
+      await page.getByTestId("editor-mode-layout").click();
+      const warning = page.getByTestId("editor-layout-setter-unassigned");
+      await expect(warning).toBeVisible({ timeout: 30_000 });
+      await expect(warning).toContainText("977");
+      const adopted = waitForTrpc(page, "layout.adoptToSetters");
+      await page.getByTestId("editor-layout-setter-adopt").click();
+      await adopted;
+      await expect(warning).toHaveCount(0, { timeout: 15_000 });
+      const after = await setterSheets();
+      expect(after.reduce((n, s) => n + s.setter!.controls.length, 0)).toBe(before + 1);
+      expect(after.some((s) => s.setter!.controls.includes(added.id))).toBe(true);
+    } finally {
+      await trpcCall("control.delete", { id: added.id });
+    }
+  });
 });
 
 test.describe("F12: a legacy map-anchored white-out is a course object (docs/course-layer.md §3.6, §8)", () => {

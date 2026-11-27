@@ -9,6 +9,8 @@ import { PRINT_JOB_VERSION, type PrintGraphic, type PrintJob, type PrintJobGraph
 import { printGate, rasteriseSvgInWorker, renderCoursePagesInWorker, resetPrintWorkers } from "./print-worker-host.js";
 import { GRAPHIC_MAX_INPUT_PIXELS, GRAPHIC_THUMB_PX, graphicPixelSize, parseRasterBox, parseRasterWindow, sheetGraphicIds, thumbBox, untrustedImageHeaders } from "./graphics.js";
 import { classesByCourse, loadCourseObjects } from "../course-objects.js";
+import { publicControlId } from "../control-id.js";
+import { setterUnassigned } from "./auto-sheets.js";
 
 type Db = ReturnType<typeof prisma>;
 
@@ -268,6 +270,13 @@ async function findMapRows(
   const requested = mapSeqs?.length ?? courseSeqs?.length;
   if (requested && rows.length === 0) throw new Error("No requested maps found");
   if (setter && rows.length === 0) throw new Error("No setter maps found: generate them in Layout mode (Setter maps)");
+  if (setter) {
+    // A control added after the groups were made is in none of them and would print on no setter map (CRS-002).
+    const missing = (await setterUnassigned(db, eventId)).flatMap((u) => u.sites.map((s) => publicControlId(s)));
+    if (missing.length > 0) {
+      throw new Error(`${missing.length} control${missing.length === 1 ? " is" : "s are"} in no setter map: ${[...new Set(missing)].join(", ")}. Add them in Layout mode (Setter maps).`);
+    }
+  }
   return rows;
 }
 

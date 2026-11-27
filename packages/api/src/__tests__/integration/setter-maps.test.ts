@@ -140,7 +140,7 @@ describe("setter maps (course-layout.md §8, F10)", () => {
     const [west] = await setterRows();
     const sheet = await caller.courseMap.resolveSheet({ seq: west.seq });
     expect(sheet.sheet?.kind).toBe("setter");
-    expect(sheet.sheet?.setter).toEqual({ index: 1, controls: expect.any(Array) });
+    expect(sheet.sheet?.setter).toEqual({ index: 1, controls: expect.any(Array), unassigned: [] });
     expect(sheet.labelMode).toBe("code");
     expect(sheet.block.header).toBeNull();
     expect(sheet.block.title).toBe("Setter 1");
@@ -239,6 +239,54 @@ describe("setter maps (course-layout.md §8, F10)", () => {
     expect((await PDFDocument.load(all.rawPayload)).getPageCount()).toBe(2);
     expect((await server.inject({ method: "GET", url: pdfUrl(`?setter=1&courses=${course.seq}`) })).statusCode).toBe(400);
   }, 90_000);
+
+  it("a control added after generation is flagged, blocks maps.pdf?setter=1, and layout.adoptToSetters puts it in the nearest group (CRS-002)", async () => {
+    clearEventDocumentCaches();
+    const flagged = async (scope: string | null) => (await caller.courseMap.list()).filter((m) => m.kind === "setter" && (scope === null ? m.courseId === null : m.courseId === course.seq));
+    expect((await flagged(null)).every((m) => m.validation.valid && m.setter?.unassigned.length === 0)).toBe(true);
+
+    const added = await caller.control.create({ codes: "87", xpos: 52, ypos: 4 });
+    for (const m of await flagged(null)) {
+      expect(m.setter?.unassigned).toEqual([added.id]);
+      expect(m.validation.valid).toBe(false);
+      expect(m.validation.issues.map((i) => i.code)).toContain("setter_unassigned");
+    }
+    const resolved = await caller.courseMap.resolveSheet({ seq: (await setterRows())[0].seq });
+    expect(resolved.sheet?.setter?.unassigned).toEqual([added.id]);
+    const blocked = await server.inject({ method: "GET", url: pdfUrl("?setter=1") });
+    expect(blocked.statusCode).toBe(400);
+    expect(blocked.json().error).toBe("1 control is in no setter map: 87. Add them in Layout mode (Setter maps).");
+
+    const adopted = await caller.layout.adoptToSetters({});
+    const [west, east] = await setterRows();
+    expect(adopted.sheets.map((x) => [x.seq, x.added])).toEqual([[east.seq, [87]]]);
+    const row87 = await t.db.control.findFirstOrThrow({ where: { eventId: t.eventId, codes: "87" } });
+    expect(groupOf(east)).toContain(row87.id);
+    expect(groupOf(west)).not.toContain(row87.id);
+    for (const m of await flagged(null)) expect(m.setter?.unassigned).toEqual([]);
+    expect((await server.inject({ method: "GET", url: pdfUrl("?setter=1") })).statusCode).toBe(200);
+    expect((await caller.layout.adoptToSetters({})).sheets).toEqual([]);
+
+    // A course scope: a control added to the course after its groups were made.
+    await caller.layout.setterMaps({ courseId: course.seq, groups: 1 });
+    const c88 = await t.db.control.create({ data: { eventId: t.eventId, codes: "88", xpos: -58, ypos: 2 } });
+    await t.db.courseControl.create({ data: { courseId: course.id, controlId: c88.id, position: 4 } });
+    const inCourse = await flagged(course.seq);
+    expect(inCourse.map((m) => m.setter?.unassigned)).toEqual([[88]]);
+    expect((await flagged(null))[0].setter?.unassigned).toEqual([88]);
+    await caller.layout.adoptToSetters({ courseId: course.seq });
+    expect((await flagged(course.seq))[0].setter?.unassigned).toEqual([]);
+    expect(groupOf((await setterRows(course.id))[0])).toContain(c88.id);
+    await caller.layout.adoptToSetters({});
+    await t.db.courseControl.deleteMany({ where: { courseId: course.id, controlId: c88.id } });
+    await t.db.courseMap.deleteMany({ where: { eventId: t.eventId, kind: "setter", courseId: course.id } });
+  }, 90_000);
+
+  it("a scope without setter maps reports nothing, whatever it holds", async () => {
+    await t.db.courseMap.deleteMany({ where: { eventId: t.eventId, kind: "setter", courseId: course.id } });
+    const rows = (await caller.courseMap.list()).filter((m) => m.kind === "setter");
+    expect(rows.every((m) => m.setter?.unassigned.length === 0)).toBe(true);
+  });
 
   it("maps.pdf?setter=1 without setter maps says so", async () => {
     await t.db.courseMap.deleteMany({ where: { eventId: t.eventId, kind: "setter" } });
