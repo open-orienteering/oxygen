@@ -49,7 +49,7 @@ describe("createdControlElsewhere: the created-control undo rule (D6)", () => {
     expect(createdControlElsewhere([c(2, "9", "45")], 45, null, book({ 2: "10" }))).toBeUndefined();
   });
 
-  it("a variant is judged by its root: the entry's own course, a stale root or an own root token do not block", () => {
+  it("a variant is judged by its root: the entry's own course or a stale root do not block; a current root does", () => {
     const list = [c(1, "5", "45"), c(7, "3", "45", 1)];
     expect(createdControlElsewhere(list, 45, 1, book({ 1: "5", 7: "3" }))).toBeUndefined();
     // A free control appended to a course with variations, then undone quickly: root 1 is own / stale, list not refetched.
