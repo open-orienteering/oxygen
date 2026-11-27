@@ -115,5 +115,11 @@
     "inviteAndAdd": "Invite {{email}} and add",
     "inviteHint": "Members must be invited users — manage invitations under",
     "inviteHintLink": "Users admin"
-  }
+  },
+  "contourInterval": "Contour interval",
+  "intervalConfirmed": "confirmed",
+  "intervalNotConfirmed": "not confirmed",
+  "intervalConfirm": "Confirm",
+  "intervalChange": "Change",
+  "intervalFollows": "Every event using this map follows it."
 }

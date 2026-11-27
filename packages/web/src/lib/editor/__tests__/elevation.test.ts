@@ -17,13 +17,24 @@ describe("the line climb of the course-info rows (docs/course-elevation.md §4)"
   });
 
   it("ready: metres rounded once, the share of length to one decimal, the basis and attribution", () => {
-    expect(lineClimbStatus(ready())).toEqual({ state: "ready", climbM: 43, descentM: 35, sharePct: 4.3, basis: "ground", partial: false, approx: false, attribution: "© Lantmäteriet" });
+    expect(lineClimbStatus(ready())).toEqual({ state: "ready", climbM: 43, descentM: 35, sharePct: 4.3, basis: "ground", partial: false, approx: false, attribution: "© Lantmäteriet", intervalConfirmed: true, assumedIntervalM: null });
   });
 
   it("approximate when partial or when under 80 % of the length is confident", () => {
     expect(lineClimbStatus(ready(profile({ partial: true })))).toMatchObject({ partial: true, approx: true });
     expect(lineClimbStatus(ready(profile({ confidence: 0.79 })))).toMatchObject({ partial: false, approx: true });
     expect(lineClimbStatus(ready(profile({ confidence: 0.8 })))).toMatchObject({ approx: false });
+  });
+
+  it("on the contours with an interval nobody confirmed the number is an estimate: approximate, not confirmed, with the guessed interval (§4.4)", () => {
+    const contours = (confirmed: boolean) => ready(profile(), { basis: "contours", attribution: null, datum: "relative", interval: { confirmed, assumedM: 5, m: 5 } });
+    expect(lineClimbStatus(contours(false))).toMatchObject({ basis: "contours", approx: true, intervalConfirmed: false, assumedIntervalM: 5 });
+    expect(lineClimbStatus(contours(true))).toMatchObject({ approx: false, intervalConfirmed: true });
+    expect(legElevation(contours(false), 1)).toMatchObject({ approx: true, intervalConfirmed: false, assumedIntervalM: 5 });
+    expect(legElevation(contours(true), 1)).toMatchObject({ approx: false, intervalConfirmed: true });
+    // A ground model has no interval to confirm; a row without one (older callers) is not an estimate.
+    expect(lineClimbStatus(ready())).toMatchObject({ approx: false, intervalConfirmed: true });
+    expect(lineClimbStatus(ready(profile(), { basis: "contours" }))).toMatchObject({ approx: false, intervalConfirmed: true });
   });
 
   it("a course without length or without any data shows nothing", () => {
@@ -39,14 +50,14 @@ describe("the line climb of the course-info rows (docs/course-elevation.md §4)"
 
 describe("the selected leg's numbers (docs/course-elevation.md §4.5)", () => {
   it("length, the leg's share of climb and descent, the net", () => {
-    expect(legElevation(ready(), 1)).toEqual({ lengthM: 600, climbM: 30, descentM: 31, netM: 0, basis: "ground", approx: false, routed: false });
+    expect(legElevation(ready(), 1)).toEqual({ lengthM: 600, climbM: 30, descentM: 31, netM: 0, basis: "ground", approx: false, routed: false, intervalConfirmed: true, assumedIntervalM: null });
     expect(Object.is(legElevation(ready(), 1)?.netM, 0)).toBe(true);
   });
 
   it("a leg without data: nulls, approximate", () => {
     const p = profile();
     p.legs[0] = { offsetM: 0, profile: leg({ coverage: 0, confidence: 0, netM: null }), climbM: null, descentM: null };
-    expect(legElevation(ready(p), 0)).toEqual({ lengthM: 400, climbM: null, descentM: null, netM: null, basis: "ground", approx: true, routed: false });
+    expect(legElevation(ready(p), 0)).toEqual({ lengthM: 400, climbM: null, descentM: null, netM: null, basis: "ground", approx: true, routed: false, intervalConfirmed: true, assumedIntervalM: null });
   });
 
   it("none unless ready and the leg exists", () => {

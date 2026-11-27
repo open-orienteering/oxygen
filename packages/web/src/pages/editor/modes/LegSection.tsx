@@ -314,6 +314,7 @@ export function LegSection(p: LegSectionProps) {
         <summary className="cursor-pointer select-none text-[11px] text-slate-500 hover:text-slate-700">{t("legInfo")}</summary>
         <div className="mt-1 space-y-1">
           {p.elevation?.basis === "contours" && <p data-testid="editor-leg-elevation-note">{t("elevationContoursNote")}</p>}
+          {p.elevation?.basis === "contours" && !p.elevation.intervalConfirmed && <p data-testid="editor-leg-interval-note">{t("intervalEstimateNote", { m: p.elevation.assumedIntervalM ?? 5 })}</p>}
           {routesShown && <p data-testid="editor-leg-routes-hint">{t("legRoutesHint")}</p>}
           {routesShown && p.routes?.alternatives && (
             <p data-testid="editor-leg-alternatives-note" data-calibrated={p.routes.alternatives.measured.state}>

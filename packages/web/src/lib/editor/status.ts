@@ -65,7 +65,7 @@ function climbRow(s: StatusInput, t: T): StatusRow | null {
     const share = line.sharePct === null ? "" : line.sharePct.toFixed(1);
     return {
       id: "climb", text: share ? t("statusClimbShare", { m, share }) : t("statusClimb", { m }), short: t("statusClimb", { m }),
-      data: { m: String(line.climbM), source: "computed", state: "ready", share, basis: line.basis, partial: String(line.partial), approx: String(line.approx) },
+      data: { m: String(line.climbM), source: "computed", state: "ready", share, basis: line.basis, partial: String(line.partial), approx: String(line.approx), "interval-confirmed": String(line.intervalConfirmed) },
     };
   }
   const data: Record<string, string> = line.state === "loading" ? { state: "loading" } : { state: "unavailable", kind: line.kind };

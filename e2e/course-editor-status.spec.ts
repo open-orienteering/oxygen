@@ -394,6 +394,36 @@ test.describe("P6: the map footer out; the map-info dialog", () => {
     await expect(dialog).toHaveCount(0);
   });
 
+  test("the contour interval is confirmed against the server: its row, the state, still confirmed after a reload; cleared again (§0.43)", async ({ page }) => {
+    await openEditor(page);
+    await page.getByTestId("editor-map-info").click();
+    const dialog = page.getByTestId("editor-map-info-dialog");
+    const row = dialog.getByTestId("editor-map-info-interval");
+    await expect(row).toBeVisible({ timeout: 30000 });
+    try {
+      await expect(dialog.getByTestId("editor-map-info-interval-state")).toHaveAttribute("data-state", "unconfirmed");
+      const input = dialog.getByTestId("editor-map-info-interval-input");
+      // A value that cannot be an interval is refused before it is sent.
+      await input.fill("0");
+      await expect(dialog.getByTestId("editor-map-info-interval-invalid")).toBeVisible();
+      await expect(dialog.getByTestId("editor-map-info-interval-save")).toBeDisabled();
+      await input.fill("2,5");
+      const saved = waitForTrpc(page, "course.setContourInterval");
+      await dialog.getByTestId("editor-map-info-interval-save").click();
+      await saved;
+      await expect(dialog.getByTestId("editor-map-info-interval-state")).toHaveAttribute("data-state", "confirmed");
+      await expect(row).toHaveAttribute("data-confirmed", "2.5");
+
+      await page.reload();
+      await editorReady(page);
+      await page.getByTestId("editor-map-info").click();
+      await expect(page.getByTestId("editor-map-info-interval")).toHaveAttribute("data-confirmed", "2.5", { timeout: 30000 });
+      await expect(page.getByTestId("editor-map-info-interval-input")).toHaveValue("2.5");
+    } finally {
+      await trpcCall("course.setContourInterval", { intervalM: null });
+    }
+  });
+
   test("Escape closes only the dialog: the armed tool and the selection stay; the tools' letters are inert while it is open", async ({ page }) => {
     await openEditor(page);
     await newCourse(page, "P6 escape");

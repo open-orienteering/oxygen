@@ -17,7 +17,16 @@ export type CourseElevation =
   | { state: "none" }
   | { state: "loading" }
   | { state: "unavailable"; kind: ElevationUnavailable }
-  | { state: "ready"; profile: CourseProfile; basis: ClimbBasis; attribution: string | null; datum: "relative" | "absolute"; groundMPerMm: number };
+  | { state: "ready"; profile: CourseProfile; basis: ClimbBasis; attribution: string | null; datum: "relative" | "absolute"; groundMPerMm: number; interval?: ElevationInterval };
+
+/**
+ * The contour interval a number on the contours rests on (docs/course-elevation.md §3, §0.43): `confirmed` false is an
+ * estimate that is not stored; `assumedM` is the guess it was derived at. Absent or on a ground model: nothing to confirm.
+ */
+export interface ElevationInterval { confirmed: boolean; assumedM: number | null; m: number | null }
+
+/** Whether the numbers rest on an interval nobody confirmed. */
+export const intervalUnconfirmed = (e: { basis: ClimbBasis; interval?: ElevationInterval }): boolean => e.basis === "contours" && e.interval !== undefined && !e.interval.confirmed;
 
 /** The line climb of the course-info rows (`lib/editor/status.ts`). */
 export type LineClimbStatus =
@@ -32,9 +41,13 @@ export type LineClimbStatus =
       basis: ClimbBasis;
       /** Less than the whole length has data: a lower bound. */
       partial: boolean;
-      /** Shown with "≈": partial, or too little of the length is confident. */
+      /** Shown with "≈": partial, too little of the length is confident, or the contour interval is not confirmed. */
       approx: boolean;
       attribution: string | null;
+      /** On the contours with an interval nobody confirmed: an estimate that is not stored (§4.4). */
+      intervalConfirmed: boolean;
+      /** The guessed interval, for the note. */
+      assumedIntervalM: number | null;
     };
 
 /** A metre value as shown: rounded once, never `-0`. */
@@ -52,8 +65,10 @@ export function lineClimbStatus(e: CourseElevation): LineClimbStatus | null {
     sharePct: Math.round((p.climbM / p.lengthM) * 1000) / 10,
     basis: e.basis,
     partial: p.partial,
-    approx: p.partial || p.confidence < ELEVATION_CONFIDENT_MIN,
+    approx: p.partial || p.confidence < ELEVATION_CONFIDENT_MIN || intervalUnconfirmed(e),
     attribution: e.attribution,
+    intervalConfirmed: !intervalUnconfirmed(e),
+    assumedIntervalM: e.interval?.assumedM ?? null,
   };
 }
 
@@ -67,6 +82,9 @@ export interface LegElevation {
   approx: boolean;
   /** The numbers are read along the leg's chosen route (§7.3), not its drawn line. */
   routed: boolean;
+  /** False on the contours with an interval nobody confirmed (§4.4). */
+  intervalConfirmed: boolean;
+  assumedIntervalM: number | null;
 }
 
 export function legElevation(e: CourseElevation, legIndex: number | null, routed = false): LegElevation | null {
@@ -80,8 +98,10 @@ export function legElevation(e: CourseElevation, legIndex: number | null, routed
     descentM: leg.descentM === null ? null : shownM(leg.descentM),
     netM: p.netM === null ? null : shownM(p.netM),
     basis: e.basis,
-    approx: p.coverage < 0.995 || p.confidence < ELEVATION_CONFIDENT_MIN,
+    approx: p.coverage < 0.995 || p.confidence < ELEVATION_CONFIDENT_MIN || intervalUnconfirmed(e),
     routed,
+    intervalConfirmed: !intervalUnconfirmed(e),
+    assumedIntervalM: e.interval?.assumedM ?? null,
   };
 }
 

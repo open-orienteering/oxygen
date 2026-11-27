@@ -200,6 +200,18 @@ test.describe("club map library", () => {
     // The georeference is authoritative: no manual correction UI anymore.
     await expect(card.getByTestId("library-map-north-correction")).toHaveCount(0);
     await expect(card.getByTestId("library-map-north-save")).toHaveCount(0);
+
+    // The contour interval (docs/course-elevation.md §0.43): prefilled with the guess, confirmed on the card.
+    const interval = card.getByTestId("club-map-interval");
+    await expect(interval).toBeVisible();
+    await expect(card.getByTestId("club-map-interval-state")).toHaveAttribute("data-state", "unconfirmed");
+    await expect(card.getByTestId("club-map-interval-input")).toHaveValue(/^(2\.5|5)$/);
+    await card.getByTestId("club-map-interval-input").fill("5");
+    await card.getByTestId("club-map-interval-save").click();
+    await expect(card.getByTestId("club-map-interval-state")).toHaveAttribute("data-state", "confirmed");
+    await expect(interval).toHaveAttribute("data-confirmed", "5");
+    await page.reload();
+    await expect(page.locator('[data-testid^="library-map-card-"]').first().getByTestId("club-map-interval")).toHaveAttribute("data-confirmed", "5", { timeout: 15000 });
   });
 
   test("uploading a map with stale north lines warns the course setter", async ({

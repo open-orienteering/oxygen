@@ -115,5 +115,11 @@
     "inviteAndAdd": "Bjud in {{email}} och lägg till",
     "inviteHint": "Medlemmar måste vara inbjudna användare — hantera inbjudningar under",
     "inviteHintLink": "Användaradministration"
-  }
+  },
+  "contourInterval": "Ekvidistans",
+  "intervalConfirmed": "bekräftad",
+  "intervalNotConfirmed": "inte bekräftad",
+  "intervalConfirm": "Bekräfta",
+  "intervalChange": "Ändra",
+  "intervalFollows": "Varje tävling som använder kartan följer den."
 }

@@ -132,6 +132,47 @@ test.describe("the computed climb (docs/course-elevation.md §4)", () => {
     await page.keyboard.press("Escape");
   });
 
+  test("an unconfirmed contour interval makes the climb an estimate: ≈, the note with Confirm, the banner; Confirm opens the map info's interval row (§0.43)", async ({ page }) => {
+    await servePlane(page, "contours", { interval: { assumedM: 5, confirmedM: null } });
+    await twoControlCourse(page, "CE interval");
+    await expect.poll(() => statsRow(page, "climb", "state"), { timeout: 20000 }).toBe("ready");
+    expect(await statsRow(page, "climb", "interval-confirmed")).toBe("false");
+    expect(await statsRow(page, "climb", "approx")).toBe("true");
+    await page.getByTestId("editor-stats").click();
+    const popover = page.getByTestId("editor-stats-popover");
+    await expect(popover.getByTestId("editor-stats-climb")).toContainText("≈");
+    await expect(popover.getByTestId("editor-stats-interval-note")).toContainText("5 m assumed");
+    await expect(popover.getByTestId("editor-stats-interval-note")).toContainText("not stored");
+    // The banner asks once; dismissing it takes it away.
+    const banner = page.getByTestId("editor-interval-banner");
+    await expect(banner).toBeVisible();
+    await page.getByTestId("editor-interval-banner-dismiss").click();
+    await expect(banner).toHaveCount(0);
+    // (the click outside closed the popover)
+    if (!(await popover.isVisible())) await page.getByTestId("editor-stats").click();
+    // Confirm opens the dialog at the interval row, prefilled with the assumed value, not confirmed.
+    await popover.getByTestId("editor-stats-interval-confirm").click();
+    const row = page.getByTestId("editor-map-info-interval");
+    await expect(page.getByTestId("editor-map-info-dialog")).toBeVisible();
+    await expect(row).toHaveAttribute("data-assumed", "5");
+    await expect(page.getByTestId("editor-map-info-interval-input")).toHaveValue("5");
+    await expect(page.getByTestId("editor-map-info-interval-state")).toHaveAttribute("data-state", "unconfirmed");
+    await expect(page.getByTestId("editor-map-info-interval-suspect")).toHaveCount(0);
+  });
+
+  test("a confirmed interval other than the one the field was derived at scales the heights: 2.5 m instead of 5 m halves the climb", async ({ page }) => {
+    await servePlane(page, "contours", { interval: { assumedM: 5, confirmedM: 2.5 } });
+    const { name } = await twoControlCourse(page, "CE interval half");
+    const gm = (await mapScale(page)) / 1000;
+    const heights = (await courseSites(page, name)).map((p) => heightAt(p, gm));
+    await expect.poll(() => statsRow(page, "climb", "state"), { timeout: 20000 }).toBe("ready");
+    expect(await statsRow(page, "climb", "interval-confirmed")).toBe("true");
+    expect(Math.abs(Number(await statsRow(page, "climb", "m")) - climbOf(heights.map((h) => h / 2), 1))).toBeLessThanOrEqual(1);
+    await page.getByTestId("editor-stats").click();
+    await expect(page.getByTestId("editor-stats-interval-note")).toHaveCount(0);
+    await expect(page.getByTestId("editor-interval-banner")).toHaveCount(0);
+  });
+
   test("a ground model: the numbers carry no disclaimer and state the provider's notice", async ({ page }) => {
     const served = await servePlane(page, "ground");
     await twoControlCourse(page, "CE ground");

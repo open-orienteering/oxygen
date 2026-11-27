@@ -89,6 +89,7 @@ import type { SaveState, StatusInput } from "../../lib/editor/status";
 import type { MapInfoInput } from "../../lib/editor/map-info";
 import { useCourseChecks } from "./useCourseChecks";
 import { useCourseElevation } from "./useCourseElevation";
+import { IntervalBanner } from "./ContourInterval";
 import { legElevation, lineClimbStatus, sequenceLegClimbs } from "../../lib/editor/elevation";
 import { chosenRouteMap, pairRoutes, routeItems, routeNumbers, routeShapes, type RouteDraft, lineIsShortest } from "../../lib/editor/leg-routes";
 import { DEFAULT_PACE_S_PER_KM, alternativeColor, alternativeItems, alternativeLabelAnchors, alternativeLabelText, alternativeShapes, courseRouteTotals, flatPaceSPerKm, formatClock, oobFeatures, parsePace } from "../../lib/editor/leg-alternatives";
@@ -3080,7 +3081,9 @@ export function EditorPage() {
     // the 42 px tabs row, the header's 1 px border) and the container's `py-3` (1.5rem).
     <div data-testid="editor-page" data-mode={state.mode} data-layout={isMobile ? "phone" : "desktop"}
       className={isMobile ? "fixed inset-0 z-[60] bg-white" : "h-[calc(100dvh-99px-1.5rem)] min-h-[420px]"}>
-      <div className={isMobile ? "h-full overflow-hidden" : "h-full bg-white rounded-xl border border-slate-200 overflow-hidden"}>
+      <div className={isMobile ? "h-full overflow-hidden" : "relative h-full bg-white rounded-xl border border-slate-200 overflow-hidden"}>
+        {/* §0.43: asked once while the map has contours and no confirmed interval. */}
+        {!isMobile && state.mode === "course" && <IntervalBanner nameId={nameId ?? null} />}
         <MapPanel
           fillContainer
           fitToControls
