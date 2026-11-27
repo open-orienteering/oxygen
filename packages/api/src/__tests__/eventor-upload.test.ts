@@ -2,6 +2,7 @@ import AdmZip from "adm-zip";
 import { access, unlink } from "fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  meosStatusToIof,
   uploadResults,
   uploadStartList,
   parseEventorStartListCourseLengths,
@@ -196,5 +197,48 @@ describe("Eventor uploads", () => {
     ).rejects.toThrow(
       /import\/resultlist.*400.*Must be exactly one event class/s,
     );
+  });
+});
+
+describe("meosStatusToIof (RES-21)", () => {
+  it("reports a runner without a result as Inactive, Active or Finished", () => {
+    expect(meosStatusToIof(0, false, false)).toBe("Inactive");
+    expect(meosStatusToIof(0, false, true)).toBe("Active");
+    expect(meosStatusToIof(0, true, true)).toBe("Finished");
+    expect(meosStatusToIof(0, true, false)).toBe("Finished");
+  });
+
+  it("keeps the fixed statuses", () => {
+    expect(meosStatusToIof(1, true)).toBe("OK");
+    expect(meosStatusToIof(3, true)).toBe("MissingPunch");
+    expect(meosStatusToIof(15, true)).toBe("NotCompeting");
+    expect(meosStatusToIof(15, false)).toBe("NotCompeting");
+    expect(meosStatusToIof(20, false)).toBe("DidNotStart");
+  });
+});
+
+describe("result upload status for unfinished runners (RES-21)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("uploads runners in the forest as Active and not yet started as Inactive, never DidNotStart or OK", async () => {
+    const calls = captureUploads();
+    await uploadResults("secret", "12345", "Test Event", EVENT_DATE, [
+      runner({ name: "Forest, Fia", status: 0, finishTime: undefined, started: true }),
+      runner({ name: "Later, Lo", status: 0, finishTime: undefined, started: false }),
+      runner({ name: "Done, Dan", status: 0, started: true }),
+    ]);
+    const xml = unzip(calls[0].body, "resultlist.xml");
+    const results = xml.split("<PersonResult>").slice(1);
+    expect(results).toHaveLength(3);
+    expect(results[0]).toContain("<Status>Active</Status>");
+    expect(results[1]).toContain("<Status>Inactive</Status>");
+    expect(results[2]).toContain("<Status>Finished</Status>");
+    for (const r of results) {
+      expect(r).not.toContain("<Time>");
+      expect(r).not.toContain("<Position>");
+    }
+    expect(xml).not.toContain("DidNotStart");
   });
 });

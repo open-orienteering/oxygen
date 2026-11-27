@@ -4,6 +4,12 @@
  */
 
 import { RunnerStatus } from "./types.js";
+import { runningTimeDs } from "./time.js";
+
+// All start and finish times here are ABSOLUTE deciseconds since midnight
+// (0 = no time). Never pass stored ZeroTime-relative values: a start before
+// ZeroTime is negative there and would count as "no time" (RES-05). A finish
+// earlier than the start is a run across midnight (RES-16).
 
 // ─── Position calculation for receipts ──────────────────────
 
@@ -40,14 +46,15 @@ export function computePosition(
 ): PositionResult | null {
   if (selfRunningTime <= 0) return null;
 
+  // A finish before a daytime start has no running time (0): not ranked.
   const withTimes = runners
-    .filter((r) => r.finishTime > 0 && r.startTime > 0)
+    .filter((r) => r.finishTime > 0 && r.startTime > 0 && runningTimeDs(r.startTime, r.finishTime) > 0)
     .map((r) => ({
       name: r.name,
       clubId: r.clubId,
       runningTime: Math.max(
         0,
-        r.finishTime - r.startTime - (r.runningTimeAdjustment ?? 0),
+        runningTimeDs(r.startTime, r.finishTime) - (r.runningTimeAdjustment ?? 0),
       ),
     }))
     .sort((a, b) => a.runningTime - b.runningTime);
@@ -107,7 +114,7 @@ export function computeClassPlacements(
     if (r.finishTime <= 0 || r.startTime <= 0) return 0;
     return Math.max(
       0,
-      r.finishTime - r.startTime - (r.runningTimeAdjustment ?? 0),
+      runningTimeDs(r.startTime, r.finishTime) - (r.runningTimeAdjustment ?? 0),
     );
   };
 
@@ -116,9 +123,13 @@ export function computeClassPlacements(
       (r) =>
         r.status === RunnerStatus.OK &&
         r.finishTime > 0 &&
-        r.startTime > 0,
+        r.startTime > 0 &&
+        // A finish before a daytime start has no running time: not ranked.
+        runningTimeDs(r.startTime, r.finishTime) > 0,
     )
     .map((r) => ({ ...r, runningTime: adjustedRunningTime(r) }))
+    // A NoTiming deduction that eats the whole time leaves nothing to rank.
+    .filter((r) => r.runningTime > 0)
     .sort((a, b) => a.runningTime - b.runningTime);
 
   const winnerTime = okRunners.length > 0 ? okRunners[0].runningTime : 0;
@@ -146,4 +157,45 @@ export function computeClassPlacements(
   }
 
   return results;
+}
+
+// ─── Finish leg for receipts ────────────────────────────────
+
+/**
+ * The receipt's Fin row (CRS-013): the leg from the last course position to
+ * the finish. On an ordered course it is only known when the last timed
+ * position was punched: its split runs from that punch (or the start, for a
+ * course with no positions) and its length is `legs[controls.length]`, the
+ * leg into the finish. A missed last control, or a free-order course, has
+ * no single finish leg: free order gets the split from the latest punch but
+ * no length, a missed last control gets neither. All times absolute
+ * deciseconds; 0 = none.
+ */
+export function finishLegOf(
+  controls: ReadonlyArray<{ positionMode: string; status: string; punchTime: number }>,
+  startTime: number,
+  finishTime: number,
+  legs: readonly number[],
+  orderMode: "ordered" | "free_order" = "ordered",
+): { splitTime: number; legLength: number } {
+  if (finishTime <= 0) return { splitTime: 0, legLength: 0 };
+  const timed = controls.filter((c) => c.positionMode !== "skipped");
+  if (orderMode === "free_order") {
+    let latest = 0;
+    for (const c of timed) {
+      if (c.status !== "ok" || c.punchTime <= 0) continue;
+      if (latest === 0 || (startTime > 0 && runningTimeDs(startTime, c.punchTime) > runningTimeDs(startTime, latest))) {
+        latest = c.punchTime;
+      }
+    }
+    const from = latest || startTime;
+    return { splitTime: from > 0 ? runningTimeDs(from, finishTime) : 0, legLength: 0 };
+  }
+  const last = timed[timed.length - 1];
+  if (last && (last.status !== "ok" || last.punchTime <= 0)) return { splitTime: 0, legLength: 0 };
+  const from = last ? last.punchTime : startTime;
+  return {
+    splitTime: from > 0 ? runningTimeDs(from, finishTime) : 0,
+    legLength: legs[controls.length] ?? 0,
+  };
 }

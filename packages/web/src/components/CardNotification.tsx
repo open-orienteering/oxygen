@@ -20,7 +20,8 @@ const AUTO_DISMISS_MS = 10000;
 
 export function CardNotification() {
   const { t } = useTranslation("race");
-  const { currentCard, isOnCardReadoutPage } = useDeviceManager();
+  const { currentCard, recentCards, isOnCardReadoutPage, confirmApply, dismissApply, lastReadFailure } =
+    useDeviceManager();
   const navigate = useNavigate();
   const location = useLocation();
   const { openRegistration } = useRegistrationDialog();
@@ -30,6 +31,26 @@ export function CardNotification() {
   const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const onCardPage = location.pathname.includes("/card-readout");
+
+  // A card the reader could not read (SI-05): a red banner on every page, gone
+  // after the usual delay. No Recent Cards row exists for it.
+  // Shown until it is dismissed, times out, or a card is read after it.
+  const [failureSeq, setFailureSeq] = useState<number | null>(null);
+  const failureTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const cardAtFailureRef = useRef<string | null>(null);
+  // A failure that was already there when this mounted is not replayed.
+  const mountFailureSeqRef = useRef(lastReadFailure?.seq ?? null);
+  useEffect(() => {
+    if (!lastReadFailure) return;
+    if (lastReadFailure.seq === mountFailureSeqRef.current) return;
+    cardAtFailureRef.current = currentCard?.id ?? null;
+    setFailureSeq(lastReadFailure.seq);
+    clearTimeout(failureTimerRef.current);
+    failureTimerRef.current = setTimeout(() => setFailureSeq(null), AUTO_DISMISS_MS);
+    return () => clearTimeout(failureTimerRef.current);
+    // Only a new failure restarts it: a card read later hides it (below).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastReadFailure]);
 
   useEffect(() => {
     if (!currentCard || onCardPage || isOnCardReadoutPage) return;
@@ -49,6 +70,85 @@ export function CardNotification() {
       setCard(currentCard);
     }
   }, [currentCard, card]);
+
+  // RES-01: the server kept the stored result. Shown on every page, until the
+  // operator decides (a held read must not time out unseen).
+  // A later card must not hide it: fall back to the newest held card in the list.
+  const heldCard = currentCard?.applyHold
+    ? currentCard
+    : recentCards.find((c) => c.applyHold?.outcome === "needsConfirmation");
+  const hold = heldCard?.applyHold;
+  if (heldCard && hold) {
+    const currentCard = heldCard;
+    const name = currentCard.runnerName ?? String(currentCard.cardNumber);
+    const asks = hold.outcome === "needsConfirmation";
+    return (
+      <div
+        className={`${asks ? "bg-amber-600" : "bg-slate-700"} text-white px-4 py-3 shadow-lg animate-slide-down`}
+        data-testid="apply-hold-banner"
+      >
+        <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
+          <div className="text-sm">
+            <span className="font-semibold">{name}</span>
+            <span className="ml-2">
+              {t(asks ? "applyHoldAsk" : "applyHoldKept", {
+                reason: t("applyHoldReason", { context: hold.reason }),
+              })}
+            </span>
+          </div>
+          <div className="flex gap-2 shrink-0">
+            {asks && (
+              <button
+                type="button"
+                className="px-3 py-1 rounded bg-white text-amber-800 text-sm font-semibold"
+                data-testid="apply-hold-replace"
+                onClick={() => void confirmApply(currentCard.id)}
+              >
+                {t("applyHoldReplace")}
+              </button>
+            )}
+            <button
+              type="button"
+              className="px-3 py-1 rounded bg-white/20 text-sm"
+              data-testid="apply-hold-keep"
+              onClick={() => dismissApply(currentCard.id)}
+            >
+              {asks ? t("applyHoldKeep") : t("applyHoldDismiss")}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (
+    lastReadFailure &&
+    failureSeq === lastReadFailure.seq &&
+    (currentCard?.id ?? null) === cardAtFailureRef.current
+  ) {
+    return (
+      <div
+        role="alert"
+        className="bg-red-700 text-white px-4 py-3 shadow-lg animate-slide-down"
+        data-testid="card-read-failed-banner"
+      >
+        <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
+          <div className="text-sm">
+            {t("notifReadFailed", { number: lastReadFailure.cardNumber })}
+          </div>
+          <button
+            onClick={() => setFailureSeq(null)}
+            className="p-1 text-white/70 hover:text-white transition-colors cursor-pointer"
+            aria-label={t("notifDismiss")}
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (!visible || !card) return null;
 
@@ -210,7 +310,7 @@ export function CardNotification() {
           <button
             onClick={handleDismiss}
             className="p-1 text-white/70 hover:text-white transition-colors cursor-pointer"
-            aria-label="Dismiss"
+            aria-label={t("notifDismiss")}
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />

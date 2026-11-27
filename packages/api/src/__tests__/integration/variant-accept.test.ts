@@ -198,6 +198,7 @@ describe("cardReadout.acceptVariant", () => {
       status: RunnerStatus.OK,
       finishTime: after!.timing.finishTime,
       startTime: after!.timing.startTime,
+      confirmed: true,
     });
 
     // The reads follow the new course by construction.

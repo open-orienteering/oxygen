@@ -21,6 +21,9 @@ const APP_VERSION = process.env.OXYGEN_VERSION || `${PACKAGE_VERSION}-dev`;
 // https://vite.dev/config/
 export default defineConfig({
   test: {
+    // Browsers at a Swedish event run in Europe/Stockholm, CI in UTC: pin it
+    // so a local-time versus UTC mix-up fails everywhere (BLD-14).
+    env: { TZ: "Europe/Stockholm" },
     coverage: {
       provider: "v8",
       reporter: ["text", "html", "lcov"],
@@ -53,30 +56,12 @@ export default defineConfig({
         // navigation (or a Workbox fallback) to /trpc/... returns
         // index.html and the tRPC client JSON.parse()s "<html><head>…".
         navigateFallback: "index.html",
-        navigateFallbackDenylist: [/^\/trpc/, /^\/api/, /^\/health/],
-        // Runtime caching for tRPC API calls
+        navigateFallbackDenylist: [/^\/trpc/, /^\/api/, /^\/health/, /^\/ready/],
+        // Runtime caching. No route for /trpc or /api/version: a cached
+        // tRPC answer looked like a fresh 200, so a station read pre-start
+        // data after the race (SYNC-16). Offline reads come from the
+        // persisted per-event query cache instead (main.tsx).
         runtimeCaching: [
-          {
-            // tRPC batch requests — serve from cache when offline, refresh in
-            // background when online. Same-origin ONLY: requests rewritten to
-            // a venue node (node-discovery) must never be served from the
-            // cloud-tab SW cache — mixing the two writers' responses would
-            // undermine the single-writer lease.
-            urlPattern: (ctx: { sameOrigin: boolean; url: URL }) =>
-              ctx.sameOrigin && ctx.url.pathname.startsWith("/trpc/"),
-            handler: "NetworkFirst",
-            options: {
-              cacheName: "trpc-api",
-              networkTimeoutSeconds: 3,
-              expiration: {
-                maxEntries: 500,
-                maxAgeSeconds: 24 * 60 * 60, // 24 hours
-              },
-              cacheableResponse: {
-                statuses: [0, 200],
-              },
-            },
-          },
           {
             // Map documents (docs/map-storage.md §7.1, 07 §9.1) — content
             // addressed and `immutable`, so CacheFirst: a map seen once
@@ -126,19 +111,6 @@ export default defineConfig({
               cacheName: "print-worker",
               expiration: { maxEntries: 4, maxAgeSeconds: 365 * 24 * 60 * 60 },
               cacheableResponse: { statuses: [200] },
-            },
-          },
-          {
-            // API version endpoint
-            urlPattern: /\/api\/version/,
-            handler: "NetworkFirst",
-            options: {
-              cacheName: "api-misc",
-              networkTimeoutSeconds: 2,
-              expiration: {
-                maxEntries: 10,
-                maxAgeSeconds: 60 * 60,
-              },
             },
           },
         ],

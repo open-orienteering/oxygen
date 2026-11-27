@@ -104,6 +104,48 @@ changes, and two leaders under different `LEADER_LEASE_SCOPE`s on one
 database (dev and Docker) still run it once a day between them. Losing
 the lease asks a running GC to stop after its current row.
 
+## Which node runs what
+
+The lease picks one instance *within* a deployment. A venue box and the
+cloud are two deployments with two databases, so the lease cannot keep
+them apart; the node role does (`NODE_ROLE`, `sync/nodeIdentity.ts`):
+
+| Job | Cloud (`NODE_ROLE` unset or `cloud`) | Venue box (`NODE_ROLE=venue`, ships to `SYNC_PEER_URL`) |
+|-----|------|------|
+| LiveResults push | yes, the one owner | never: the reconcile skips it and drops any timer (`publishesLiveResults()` in `background/supervisor.ts`); a standalone box with no peer pushes itself |
+| ROC polling | yes | yes, into the box's own database (see [online-input-roc.md](online-input-roc.md)) |
+| Journal shipping | inert (no peer) | yes |
+| Map storage GC | yes | yes |
+
+A box with an uplink pushing LiveResults beside the cloud would write the
+same competition from two databases, and the lagging copy would undo the
+other's rows each cycle (SYNC-14). The box's results reach LiveResults
+through shipping: the cloud ingests them within a shipping interval and
+its next cycle publishes them. On such a box, `liveresults.getStatus` returns
+`pushedByCloud: true` and the event page says "Pushed by the cloud
+server"; the push status itself lives in the cloud's database.
+
+A soft-deleted event (`events.removed`) is neither pushed nor polled: both
+reconciles skip it and stop a running timer, and its stored config is kept
+so a restore resumes. `event.purgeDeleted` drops the event's
+`online_input_<id>_*` and `liveresults_<id>_status` settings rows with it
+(MC-28).
+
+## One LiveResults cycle at a time
+
+Each cycle reads the event, builds the rows the remote competition should
+hold (`buildLiveResultsRows`, pure), reads what the remote holds in
+Oxygen's scope, and writes only the difference in one MySQL transaction
+(`pushLiveResultsRows`). Per event, the manager runs one cycle at a time:
+a tick that finds the previous cycle still running is skipped, and a
+manual `pushNow` waits for it and then runs. A cycle has a 2-minute
+deadline and every statement a 15 s timeout; on a timeout or lost
+connection the socket is destroyed (the server rolls the transaction back
+once it notices) rather than rolled back behind the stalled statement, so the guard always
+clears and `lastError` is set. `lastPush` is the start time of the last
+successful cycle; a skipped tick changes no status. See
+[bugfixes/liveresults-single-owner-and-incremental-push.md](../bugfixes/liveresults-single-owner-and-incremental-push.md).
+
 ## Defence in depth on the ROC watermark
 
 The lease means one poller, but leadership does change hands, and
@@ -113,15 +155,21 @@ transaction as the punch inserts:
 
 ```sql
 UPDATE oxygen.settings
-   SET value = jsonb_set(value::jsonb, '{lastId}', to_jsonb($1::int))::text
+   SET value = jsonb_set(value::jsonb, '{lastId}', to_jsonb($1::bigint))::text
  WHERE key = $2
-   AND COALESCE((value::jsonb->>'lastId')::int, 0) = $3
+   AND COALESCE((value::jsonb->>'lastId')::bigint, 0) = $3
 ```
 
 A second poller that fetched the same range finds the watermark moved,
 fails the compare, and rolls its inserts back. Updating only this key
 also stops a poll from clobbering configuration an operator edited while
-the fetch was in flight.
+the fetch was in flight. The other direction is covered too: every
+router write to the config row (`routers/onlineInput.ts`, `updateConfig`)
+holds `SELECT … FOR UPDATE` for its read-modify-write, so the poll's
+`UPDATE` waits for it and re-checks against the row it left, and a save
+can never write an older `lastId` back. Punches already stored are
+skipped by `punches_oi_dedup_idx` (`ON CONFLICT DO NOTHING`), so a reset
+watermark re-reads the range without failing the batch.
 
 ## Lease scope in development
 
@@ -159,4 +207,14 @@ it a correctness problem:
   a process. This matters only for journal entries written concurrently
   by two cloud instances.
 - **Test Lab simulations** live in the memory of the instance that
-  started them. It is a development feature and is not lease-managed.
+  started them. The Test Lab works only on an event marked as a test event
+  (`events.is_test_event`; every writing procedure answers
+  `PRECONDITION_FAILED` / `NOT_A_TEST_EVENT` otherwise). It is not
+  lease-managed and its writes are not journaled: a test event cannot be
+  checked out to a venue (lease acquisition, which a venue checkout goes
+  through on the cloud, refuses a test event), `event.setTestEvent` refuses an
+  event that has an active lease, an Eventor link, or any runner, card, punch
+  or card readout, and the Test Lab itself refuses an event that has since
+  gained a lease or an Eventor link. A timed simulation checks
+  the flag on every tick and halts when it is cleared (`event.setTestEvent`
+  with `enabled: false` also stops it at once); ticks never overlap.

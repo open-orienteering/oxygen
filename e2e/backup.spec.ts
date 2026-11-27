@@ -59,6 +59,29 @@ test.describe("Event Backup", () => {
     expect(head).toContain("-- Oxygen backup");
     expect(head).toContain("-- Event:      itest");
     expect(head).toContain("-- INSERT INTO oxygen.events (");
+
+    // The whole dump: the journal is in it, and it ends with the marker (DB-13).
+    const text = readFileSync(path!, "utf-8");
+    expect(text).not.toContain("-- BACKUP FAILED");
+    expect(text).toContain("\n--- journal ---\n");
+    expect(text.trimEnd().endsWith("-- BACKUP COMPLETE")).toBe(true);
+  });
+
+  test("a backup that fails says so instead of saving a file (BLD-01)", async ({ page }) => {
+    await selectCompetition(page);
+    await clickTab(page, "Event");
+    await page.route("**/api/backup/event?*", (route) =>
+      route.fulfill({
+        status: 502,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "Backup failed: the database dump could not start (psql exit 2). See the server log." }),
+      }),
+    );
+    let downloaded = false;
+    page.on("download", () => (downloaded = true));
+    await page.getByRole("button", { name: /Download backup/i }).click();
+    await expect(page.getByTestId("backup-error")).toContainText("the database dump could not start");
+    expect(downloaded).toBe(false);
   });
 });
 

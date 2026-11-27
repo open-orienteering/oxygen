@@ -54,6 +54,19 @@ export const READER_WARNING_TEXTS_MAX = 50;
  */
 const READER_DROPPED_SYMBOL = /^Ignoring (rectangle|line text) symbol (\d+)\.$/;
 const READER_UNKNOWN_SYMBOL_TYPE = /^Unknown symbol type (-?\d+)$/;
+/**
+ * Reader warnings that mean the file's index cannot be followed to the end
+ * (the patched `ocad2geojson`, patches/, MAP-3): a chain that loops or leaves
+ * the file, an object index block that cannot be read, a bad block pointer.
+ */
+const READER_DAMAGED_INDEX = /^(Index block chain loops or points outside the file at |Object index block at \d+ could not be read: )/;
+
+/** Whether a reader warning says the file is cut short or damaged (docs/map-import.md §3.6 `DAMAGED_FILE`). */
+export function isDamagedFileWarning(w: unknown): boolean {
+  const text = w instanceof Error ? w.message : String(w);
+  // The reader's own bad-pointer warning is an `Error.toString()`, so it starts with "Error: ".
+  return READER_DAMAGED_INDEX.test(text) || text.includes("Invalid object index block pointer");
+}
 
 export interface OcadCoordinateLike {
   0: number;

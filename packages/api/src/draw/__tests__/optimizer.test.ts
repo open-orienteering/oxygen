@@ -17,6 +17,7 @@
 import { describe, it, expect } from "vitest";
 import {
   optimizeStartTimes,
+  optimizeDraw,
   type ClassCourseInfo,
   type OptimizerSettings,
 } from "../optimizer.js";
@@ -355,5 +356,53 @@ describe("optimizeStartTimes — pinning", () => {
 
   it("returns an empty result for no classes", () => {
     expect(optimizeStartTimes([], settings())).toEqual([]);
+  });
+});
+
+describe("first-control spacing with mixed intervals (RES-10)", () => {
+  /** Smallest distance between a start of `a` and a start of `b`. */
+  function minCrossGap(
+    results: ReturnType<typeof optimizeStartTimes>,
+    a: ClassCourseInfo,
+    b: ClassCourseInfo,
+  ): number {
+    const sa = startOf(results, a.classId);
+    const sb = startOf(results, b.classId);
+    let min = Infinity;
+    for (let i = 0; i < a.runnerCount; i++) {
+      for (let j = 0; j < b.runnerCount; j++) {
+        min = Math.min(min, Math.abs(sa + i * a.interval - (sb + j * b.interval)));
+      }
+    }
+    return min;
+  }
+
+  const cases: Array<[number, number, number, number]> = [
+    [30, 3 * MIN, 30, 2 * MIN],
+    [40, 2 * MIN, 40, 1.5 * MIN],
+    [60, 3 * MIN, 20, 2 * MIN],
+  ];
+  for (const [na, ia, nb, ib] of cases) {
+    it(`keeps ${na}×${ia / MIN}min and ${nb}×${ib / MIN}min apart at a shared control`, () => {
+      const a = cls({ classId: 1, courseId: 1, runnerCount: na, interval: ia, initialControls: [31] });
+      const b = cls({ classId: 2, courseId: 2, runnerCount: nb, interval: ib, initialControls: [31] });
+      const s = settings({ maxParallelStarts: 2, detectCourseOverlap: true, minFirstControlGap: MIN });
+      const results = optimizeStartTimes([a, b], s);
+      expect(minCrossGap(results, a, b)).toBeGreaterThanOrEqual(MIN);
+      expect(optimizeDraw([a, b], s).conflicts).toEqual([]);
+    });
+  }
+
+  it("reports two pinned classes it cannot move apart", () => {
+    const a = cls({ classId: 1, runnerCount: 5, interval: 2 * MIN, initialControls: [31], fixedFirstStart: FIRST_START });
+    const b = cls({ classId: 2, runnerCount: 5, interval: 2 * MIN, initialControls: [31], fixedFirstStart: FIRST_START });
+    const res = optimizeDraw([a, b], settings({ detectCourseOverlap: true, minFirstControlGap: MIN }));
+    expect(res.conflicts).toEqual([{ control: 31, classA: 1, classB: 2, pairs: 5 }]);
+  });
+
+  it("reports nothing when spacing is off", () => {
+    const a = cls({ classId: 1, initialControls: [31], fixedFirstStart: FIRST_START });
+    const b = cls({ classId: 2, initialControls: [31], fixedFirstStart: FIRST_START });
+    expect(optimizeDraw([a, b], settings({ detectCourseOverlap: false })).conflicts).toEqual([]);
   });
 });

@@ -295,13 +295,18 @@ this PR:
   `missing-skipped`, and `ok-noTiming`. NoTiming legs render with
   strikethrough on the split time. The header shows
   `Time 32:14 · raw 35:42` whenever a deduction was applied.
-- **Runner list / leaderboards**: `runner.list` runs the matcher per
-  runner and feeds `runningTimeAdjustment` into `computeClassPlacements`
-  and the `runningTime` field on `RunnerInfo`. Placements rank on the
-  adjusted time; ties on adjusted time are broken the same way as
-  before.
-- **Results / start lists**: `lists.ts` (`resultList`) computes the
-  adjustment per runner and feeds `computeClassPlacements`.
+- **Runner list**: `runner.list` carries no places or adjusted times;
+  the Results page is where places are shown.
+- **Results and the finish receipt**: `lists.resultList` and
+  `race.finishReceipt` both rank through `loadClassStandings`
+  (`packages/api/src/classStandings.ts`). It picks each runner's card the
+  way the readout does (`pickRunnerCard`), merges free punches, runs the
+  matcher for `runningTimeAdjustment` and ranks every class with
+  `computeClassPlacements`: adjusted times, ties share a place (1, 1, 3),
+  no-timing classes and classless runners are unplaced, and an OK runner
+  whose deduction leaves no time is not ranked. The receipt substitutes the
+  runner's own row from the readout, so its rank and total are right before
+  the result is saved.
 - **Eventor publication**: `eventor.ts` mirrors MeOS
   `oImportExport.cpp:2325`, exporting the adjusted total
   (`getRunningTime(true)` in MeOS terms) and emitting NoTiming positions
@@ -360,7 +365,18 @@ pooled class asks for a new deal (the Variant select offers no "none").
 `runner.updated.fields` carries the resulting `courseId` (seq or null),
 so a peer replays the pick and never re-picks.
 
-**The invariant: every runner in a pooled class has a variant.** The
+**One class, one course** (WEB-09, review D5). The Classes page picks a
+class's course with a single select; picking the course it has changes
+nothing, and changing it asks first when the class has runners (their
+variants are cleared or dealt anew). A runner who has raced (a finish time
+or a result status, as `distributeVariants` skips her) keeps her variant
+through a course change, **even when it is outside the new pool** (or the
+class has none): the result stands on the course she ran.
+`runner.update`'s `VARIANT_NOT_IN_POOL` applies only when a `courseId` is
+passed. Runners with no course are dealt as before.
+
+**The invariant: every runner in a pooled class has a variant** (a raced
+runner left outside the pool by a course change is the one exception). The
 pick is `assignVariant` — the least-populated variant of the pool among
 the class's non-removed runners (withdrawn ones count), ties the first
 key. Where it runs:
@@ -369,7 +385,7 @@ key. Where it runs:
 |------|------|
 | `runner.create` without `courseId` (the Registration dialog sends none) | `assignVariant`, journaled in `runner.registered.courseId` |
 | `runner.update` / `bulkUpdate { classId }` (a class change) | clear + `assignVariant` |
-| `class.create` / `update` / `bulkUpdate { courseId }`, `course.importCourses`' class mapping | `syncClassPool` → `reconcileClassVariants` (deals a fresh pool in start order, balanced; clears a runner left on a variant when the class has no pool) |
+| `class.create` / `update` / `bulkUpdate { courseId }`, `course.importCourses`' class mapping | `syncClassPool` → `reconcileClassVariants` (deals a fresh pool in start order, balanced; clears a runner left on a variant when the class has no pool; **a runner who has raced keeps her variant**, in or out of the new pool — WEB-09). `class.update` / `bulkUpdate` call it only when the course actually changes |
 | A variant vanishing under re-materialisation (`syncVariants`, `clearRemovedVariants`) | its runners are nulled, then reconciled: dealt one of the remaining pool, null only when the class has none |
 | `events.push` of a station `runner.registered` without `courseId`, or a station `runner.updated { classId }` without `courseId` | the writing node (no lease, or the leaseholder) deals one and journals `runner.updated { courseId }` **after** the ingested entry; a follower deals nothing and waits for the leaseholder's entry (single-allocator rule, `system/offline-architecture.md`) |
 | Eventor `sync` (re-entry: new entries, class moves) | `reconcileVariants` over the event's classes, once at the end (not journaled, as the sync's runner writes are not) |

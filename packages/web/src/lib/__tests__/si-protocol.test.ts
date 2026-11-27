@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { STATION_FRAMES_PCAP } from "./fixtures/station-frames-pcap";
 import {
   calculateCRC,
   buildCommand,
@@ -16,11 +17,13 @@ import {
   extractFrame,
   parseCardDetection,
   parsePunchRecord,
+  parsePunchSlot,
   parsePunchTime,
   parseDayOfWeek,
   parseSI5CardData,
   resolveSI5Times,
   parseSI8CardData,
+  SI_CARD_LAYOUT,
   parseSI10CardData,
   parseSI10PersonalData,
   decodeCp850,
@@ -827,152 +830,272 @@ describe("resolveSI5Times", () => {
   });
 });
 
-describe("parseSI8CardData", () => {
-  function makeBlock0(options: {
-    cardNumber?: number;
-    punchCount?: number;
-    checkTime?: [number, number]; // [high, low] bytes
-    startTime?: [number, number];
-    finishTime?: [number, number];
-    punches?: Array<{ ptd: number; cn: number; timeH: number; timeL: number }>;
-  }): Uint8Array {
-    const block = new Uint8Array(128);
-    const cn = options.cardNumber ?? 2220164;
+/**
+ * Build the 256-byte (2 x 128) memory image of an SI8/SI9/pCard/tCard and
+ * return it as two readout blocks. Layout per docs/si-protocol/card-layouts.md:
+ * header in block 0, owner area up to the first punch slot, 4-byte punch slots.
+ * SI8 is captured (readout-backup fixture); SI9 and pCard are "built per MeOS
+ * layout, not captured".
+ */
+const SMALL_LAYOUT: Record<string, { series: number; first: number; max: number; cn: number }> = {
+  SI9: { series: 1, first: 56, max: 50, cn: 1234567 },
+  SI8: { series: 2, first: 136, max: 30, cn: 2220164 },
+  pCard: { series: 4, first: 176, max: 20, cn: 4123456 },
+};
 
-    // Series byte at offset 24
-    if (cn >= 8000001) block[24] = 0x0f; // SIAC
-    else if (cn >= 7000001) block[24] = 0x0f; // SI10/11
-    else if (cn >= 2000001) block[24] = 0x02; // SI8
-    else if (cn >= 1000000) block[24] = 0x01; // SI9
+type SlotSpec = { ptd?: number; cn: number; time: number | null } | "blank" | "zero";
 
-    // Card number at offset 25-27 (3 bytes, big-endian)
-    block[25] = (cn >> 16) & 0xff;
-    block[26] = (cn >> 8) & 0xff;
-    block[27] = cn & 0xff;
-
-    // Punch count at offset 22
-    block[22] = options.punchCount ?? options.punches?.length ?? 0;
-
-    // Check time at offset 10-11
-    if (options.checkTime) {
-      block[10] = options.checkTime[0];
-      block[11] = options.checkTime[1];
+function makeCardImage(options: {
+  kind?: "SI9" | "SI8" | "pCard";
+  cardNumber?: number;
+  counter?: number;
+  /** Slots written from the first punch position, in card order. */
+  slots?: SlotSpec[];
+  header?: { check?: number; start?: number; finish?: number; finishPtd?: number; checkPtd?: number };
+  /** Fill the owner area (byte 32 .. first punch) with ASCII text. */
+  fillOwner?: boolean;
+  /** Raw writes at absolute image offsets (for stale data tests). */
+  raw?: Array<[number, number[]]>;
+}): Uint8Array[] {
+  const kind = options.kind ?? "SI8";
+  const L = SMALL_LAYOUT[kind];
+  const img = new Uint8Array(256);
+  img.fill(0xee, 4, 8); // clear station unreadable in backup, as in the capture
+  const cn = options.cardNumber ?? L.cn;
+  img[22] = options.counter ?? options.slots?.length ?? 0;
+  img[24] = L.series;
+  img[25] = (cn >> 16) & 0xff;
+  img[26] = (cn >> 8) & 0xff;
+  img[27] = cn & 0xff;
+  const putTime = (off: number, secs: number | undefined, ptd = 0) => {
+    if (secs === undefined) {
+      img[off] = 0;
+      img[off + 2] = 0xee;
+      img[off + 3] = 0xee;
+      return;
     }
-
-    // Start time at offset 14-15
-    if (options.startTime) {
-      block[14] = options.startTime[0];
-      block[15] = options.startTime[1];
-    }
-
-    // Finish time at offset 18-19
-    if (options.finishTime) {
-      block[18] = options.finishTime[0];
-      block[19] = options.finishTime[1];
-    }
-
-    // Punches start at offset 32
-    if (options.punches) {
-      for (let i = 0; i < options.punches.length; i++) {
-        const p = options.punches[i];
-        const off = 32 + i * 4;
-        block[off] = p.ptd;
-        block[off + 1] = p.cn;
-        block[off + 2] = p.timeH;
-        block[off + 3] = p.timeL;
+    img[off] = ptd | (secs >= 43200 ? 1 : 0);
+    const s = secs % 43200;
+    img[off + 2] = s >> 8;
+    img[off + 3] = s & 0xff;
+  };
+  putTime(8, options.header?.check, options.header?.checkPtd);
+  putTime(12, options.header?.start);
+  putTime(16, options.header?.finish, options.header?.finishPtd);
+  if (options.fillOwner) {
+    for (let i = 32; i < L.first; i++) img[i] = 0x41 + (i % 26); // ASCII letters
+  }
+  (options.slots ?? []).forEach((slot, k) => {
+    const off = L.first + k * 4;
+    if (off + 4 > 256) throw new Error("slot beyond image");
+    if (slot === "blank") img.fill(0xee, off, off + 4);
+    else if (slot === "zero") img.fill(0x00, off, off + 4);
+    else {
+      const secs = slot.time;
+      img[off] = (slot.ptd ?? 0) | (secs !== null && secs >= 43200 ? 1 : 0);
+      img[off + 1] = slot.cn;
+      if (secs === null) {
+        img[off + 2] = 0xee;
+        img[off + 3] = 0xee;
+      } else {
+        const s = secs % 43200;
+        img[off + 2] = s >> 8;
+        img[off + 3] = s & 0xff;
       }
     }
+  });
+  for (const [off, bytes] of options.raw ?? []) bytes.forEach((v, i) => (img[off + i] = v));
+  return [img.slice(0, 128), img.slice(128, 256)];
+}
 
-    return block;
-  }
+describe("SI_CARD_LAYOUT", () => {
+  it("pins the first punch offset, record size and capacity per series", () => {
+    expect(SI_CARD_LAYOUT[1]).toEqual({ firstPunch: 56, recordSize: 4, maxPunches: 50 });
+    expect(SI_CARD_LAYOUT[2]).toEqual({ firstPunch: 136, recordSize: 4, maxPunches: 30 });
+    expect(SI_CARD_LAYOUT[4]).toEqual({ firstPunch: 176, recordSize: 4, maxPunches: 20 });
+    expect(SI_CARD_LAYOUT[15]).toEqual({ firstPunch: 512, recordSize: 4, maxPunches: 128 });
+    // Each small layout ends exactly at the 256-byte image.
+    for (const s of [1, 2, 4]) {
+      const l = SI_CARD_LAYOUT[s];
+      expect(l.firstPunch + l.maxPunches * l.recordSize).toBeLessThanOrEqual(256);
+    }
+  });
+});
+
+describe("parseSI8CardData", () => {
+  const T = (h: number, m: number, s: number) => h * 3600 + m * 60 + s;
 
   it("returns null for empty blocks", () => {
     expect(parseSI8CardData([])).toBeNull();
   });
 
   it("returns null for too-short block", () => {
-    expect(parseSI8CardData([new Uint8Array(64)])).toBeNull();
+    expect(parseSI8CardData([new Uint8Array(64), new Uint8Array(128)])).toBeNull();
   });
 
-  it("parses card number from block 0", () => {
-    const block = makeBlock0({ cardNumber: 2220164 });
-    const result = parseSI8CardData([block]);
+  it("returns null when only block 0 was read", () => {
+    const [b0] = makeCardImage({ slots: [{ cn: 31, time: 60 }] });
+    expect(parseSI8CardData([b0])).toBeNull();
+  });
+
+  it("parses card number and type from block 0", () => {
+    const result = parseSI8CardData(makeCardImage({}));
     expect(result).not.toBeNull();
     expect(result!.cardNumber).toBe(2220164);
     expect(result!.cardType).toBe("SI8");
   });
 
-  it("parses check/start/finish times", () => {
-    const block = makeBlock0({
-      // Check at 10:00:00 = 36000 sec = 0x8CA0
-      checkTime: [0x8c, 0xa0],
-      // Start at 10:30:00 = 37800 sec = 0x93A8
-      startTime: [0x93, 0xa8],
-      // Finish at 11:15:00 = 40500 sec = 0x9E34
-      finishTime: [0x9e, 0x34],
-    });
-    const result = parseSI8CardData([block]);
-    expect(result).not.toBeNull();
-    // Just verify they're parsed as non-null numbers
-    expect(result!.checkTime).toBeTypeOf("number");
-    expect(result!.startTime).toBeTypeOf("number");
-    expect(result!.finishTime).toBeTypeOf("number");
-  });
-
-  it("parses punch records from block 0", () => {
-    const block = makeBlock0({
-      punchCount: 3,
-      punches: [
-        { ptd: 0x00, cn: 31, timeH: 0x00, timeL: 0x3c }, // control 31, 60s
-        { ptd: 0x00, cn: 32, timeH: 0x00, timeL: 0x78 }, // control 32, 120s
-        { ptd: 0x00, cn: 33, timeH: 0x00, timeL: 0xb4 }, // control 33, 180s
-      ],
-    });
-    const result = parseSI8CardData([block]);
-    expect(result).not.toBeNull();
-    expect(result!.punches).toHaveLength(3);
-    expect(result!.punches[0].controlCode).toBe(31);
-    expect(result!.punches[0].time).toBe(60);
-    expect(result!.punches[1].controlCode).toBe(32);
-    expect(result!.punches[1].time).toBe(120);
-    expect(result!.punches[2].controlCode).toBe(33);
-    expect(result!.punches[2].time).toBe(180);
-  });
-
-  it("parses punches across two blocks", () => {
-    // 30 punches fills block 0 (24 punch slots) and overflows to block 1
-    const punches = Array.from({ length: 30 }, (_, i) => ({
-      ptd: 0x00,
-      cn: 31 + i,
-      timeH: 0x00,
-      timeL: 60 + i,
-    }));
-
-    const block0 = makeBlock0({ punchCount: 30, punches: punches.slice(0, 24) });
-    const block1 = new Uint8Array(128);
-    // Block 1 punches start at offset 0
-    for (let i = 0; i < 6; i++) {
-      const p = punches[24 + i];
-      block1[i * 4] = p.ptd;
-      block1[i * 4 + 1] = p.cn;
-      block1[i * 4 + 2] = p.timeH;
-      block1[i * 4 + 3] = p.timeL;
-    }
-
-    const result = parseSI8CardData([block0, block1]);
-    expect(result).not.toBeNull();
-    expect(result!.punches).toHaveLength(30);
-    expect(result!.punches[0].controlCode).toBe(31);
-    expect(result!.punches[29].controlCode).toBe(60);
+  it("parses check/start/finish times to exact values", () => {
+    const result = parseSI8CardData(
+      makeCardImage({ header: { check: T(10, 0, 0), start: T(10, 30, 0), finish: T(11, 15, 0) } }),
+    )!;
+    expect(result.checkTime).toBe(36000);
+    expect(result.startTime).toBe(37800);
+    expect(result.finishTime).toBe(40500);
   });
 
   it("handles NO_TIME (0xEEEE) for missing finish", () => {
-    const block = makeBlock0({
-      finishTime: [0xee, 0xee],
+    expect(parseSI8CardData(makeCardImage({}))!.finishTime).toBeNull();
+  });
+
+  it("reads SI8 punches from image byte 136, not from the owner area at 32", () => {
+    const blocks = makeCardImage({
+      fillOwner: true,
+      slots: [
+        { cn: 31, time: 60 },
+        { cn: 32, time: 120 },
+        { cn: 33, time: 180 },
+      ],
     });
-    const result = parseSI8CardData([block]);
-    expect(result).not.toBeNull();
-    expect(result!.finishTime).toBeNull();
+    const result = parseSI8CardData(blocks)!;
+    expect(result.punches).toEqual([
+      { controlCode: 31, time: 60 },
+      { controlCode: 32, time: 120 },
+      { controlCode: 33, time: 180 },
+    ]);
+    expect(result.punchCount).toBe(3);
+  });
+
+  it.each(["SI9", "SI8", "pCard"] as const)(
+    "%s: ASCII in the owner area never becomes a punch",
+    (kind) => {
+      // Counter 0 with a full owner area: an offset-32 parser would find "punches".
+      const result = parseSI8CardData(makeCardImage({ kind, fillOwner: true, counter: 0 }))!;
+      expect(result.punches).toEqual([]);
+    },
+  );
+
+  it.each([
+    ["SI9", 50],
+    ["SI8", 30],
+    ["pCard", 20],
+  ] as const)("%s: capacity %i, last slot ends at byte 255 or earlier", (kind, max) => {
+    const slots = Array.from({ length: max }, (_, i) => ({ cn: 31 + (i % 60), time: 100 + i }));
+    const result = parseSI8CardData(makeCardImage({ kind, slots, fillOwner: true }))!;
+    expect(result.punches).toHaveLength(max);
+    expect(result.punches[0]).toEqual({ controlCode: 31, time: 100 });
+    expect(result.punches[max - 1]).toEqual({ controlCode: 31 + ((max - 1) % 60), time: 100 + max - 1 });
+  });
+
+  it("SI8: last slot (30th) ends at byte 255 and is read from block 1", () => {
+    const blocks = makeCardImage({
+      slots: Array.from({ length: 30 }, (_, i) => ({ cn: 40 + i, time: 600 + i })),
+    });
+    const last = parseSI8CardData(blocks)!.punches[29];
+    expect(last).toEqual({ controlCode: 69, time: 629 });
+    // 136 + 29*4 = 252 -> block 1 offset 124..127
+    expect(blocks[1][124]).toBe(0);
+    expect(blocks[1][125]).toBe(69);
+  });
+
+  it.each([
+    ["SI9", 50],
+    ["SI8", 30],
+    ["pCard", 20],
+  ] as const)("%s: counter above capacity is clamped to %i", (kind, max) => {
+    const slots = Array.from({ length: max }, (_, i) => ({ cn: 31 + i, time: 100 + i }));
+    // Counter max+1, plus bytes past the image slots that would be wrong to read.
+    const blocks = makeCardImage({ kind, slots, counter: max + 1 });
+    const result = parseSI8CardData(blocks)!;
+    expect(result.punches).toHaveLength(max);
+    expect(result.punchCount).toBe(max + 1);
+  });
+
+  it("SI8: blank slots inside the counter are consumed and emit nothing (capture shape)", () => {
+    // Counter 4: two blank slots then two punches -> 2 punches, nothing after.
+    const result = parseSI8CardData(
+      makeCardImage({
+        counter: 4,
+        slots: ["blank", "blank", { cn: 72, time: T(11, 27, 37) }, { cn: 62, time: T(11, 27, 6) }, { cn: 99, time: 5 }],
+      }),
+    )!;
+    expect(result.punches).toEqual([
+      { controlCode: 72, time: T(11, 27, 37) },
+      { controlCode: 62, time: T(11, 27, 6) },
+    ]);
+  });
+
+  it("SI-24: a stale record beyond the counter is not read after blank slots", () => {
+    const result = parseSI8CardData(
+      makeCardImage({
+        counter: 3,
+        slots: [{ cn: 31, time: 60 }, "blank", { cn: 32, time: 120 }, { cn: 77, time: 999 }],
+      }),
+    )!;
+    expect(result.punches.map((p) => p.controlCode)).toEqual([31, 32]);
+  });
+
+  it("SI-24: all-zero slot is blank", () => {
+    const result = parseSI8CardData(
+      makeCardImage({ counter: 3, slots: [{ cn: 31, time: 60 }, "zero", { cn: 32, time: 120 }] }),
+    )!;
+    expect(result.punches.map((p) => p.controlCode)).toEqual([31, 32]);
+  });
+
+  it("SI-24: a code with no time (0xEEEE) is kept with time 0", () => {
+    const result = parseSI8CardData(
+      makeCardImage({ counter: 2, slots: [{ cn: 45, time: null }, { cn: 46, time: 300 }] }),
+    )!;
+    expect(result.punches).toEqual([
+      { controlCode: 45, time: 0 },
+      { controlCode: 46, time: 300 },
+    ]);
+  });
+
+  it("SI-24: code 0 with a time is dropped", () => {
+    const result = parseSI8CardData(
+      makeCardImage({ counter: 2, slots: [{ cn: 0, time: 300 }, { cn: 46, time: 400 }] }),
+    )!;
+    expect(result.punches).toEqual([{ controlCode: 46, time: 400 }]);
+  });
+
+  it("uses the PTD high bits for 3-digit control codes and PM for the time", () => {
+    const result = parseSI8CardData(
+      makeCardImage({ counter: 1, slots: [{ ptd: 0x40, cn: 0x2c, time: T(15, 0, 0) }] }),
+    )!;
+    expect(result.punches).toEqual([{ controlCode: 0x12c, time: T(15, 0, 0) }]);
+  });
+
+  it("tCard (series 6) fails safe: parse returns null", () => {
+    const blocks = makeCardImage({ counter: 1, slots: [{ cn: 31, time: 60 }] });
+    blocks[0][24] = 0x06;
+    const cn = 6123456;
+    blocks[0][25] = (cn >> 16) & 0xff;
+    blocks[0][26] = (cn >> 8) & 0xff;
+    blocks[0][27] = cn & 0xff;
+    expect(parseSI8CardData(blocks)).toBeNull();
+  });
+
+  it("unknown series falls back to the card-number range", () => {
+    const blocks = makeCardImage({ counter: 1, slots: [{ cn: 31, time: 60 }] });
+    blocks[0][24] = 0x00;
+    expect(parseSI8CardData(blocks)!.punches).toEqual([{ controlCode: 31, time: 60 }]);
+  });
+
+  it("series byte high nibble is ignored", () => {
+    const blocks = makeCardImage({ counter: 1, slots: [{ cn: 31, time: 60 }] });
+    blocks[0][24] = 0xf2;
+    expect(parseSI8CardData(blocks)!.punches).toEqual([{ controlCode: 31, time: 60 }]);
   });
 });
 
@@ -1331,6 +1454,70 @@ describe("parseSI10CardData", () => {
     expect(result.ownerData!.firstName).toBe("Marcus");
   });
 
+  it("slot k is read from block 4 + floor(k/32), offset (k%32)*4", () => {
+    const punches = Array.from({ length: 70 }, (_, i) => ({
+      ptd: 0,
+      cn: 31 + (i % 100),
+      timeH: 0x00,
+      timeL: i + 1,
+    }));
+    const result = parseSI10CardData(makeSI10Blocks({ punches }))!;
+    expect(result.punches).toHaveLength(70);
+    expect(result.punches[31]).toEqual({ controlCode: 62, time: 32 });
+    expect(result.punches[32]).toEqual({ controlCode: 63, time: 33 });
+    expect(result.punches[69]).toEqual({ controlCode: 100, time: 70 });
+  });
+
+  it("clamps the counter to 128 slots", () => {
+    const punches = Array.from({ length: 128 }, (_, i) => ({
+      ptd: 0, cn: 31, timeH: 0, timeL: (i % 200) + 1,
+    }));
+    const blocks = makeSI10Blocks({ punches, punchCount: 255 });
+    const result = parseSI10CardData(blocks)!;
+    expect(result.punches).toHaveLength(128);
+    expect(result.punchCount).toBe(255);
+  });
+
+  it("returns null when a block holding a needed slot is missing", () => {
+    const punches = Array.from({ length: 40 }, (_, i) => ({
+      ptd: 0, cn: 31, timeH: 0, timeL: i + 1,
+    }));
+    const blocks = makeSI10Blocks({ punches });
+    // Slot 39 is in block 5; a read that stopped after block 4 is incomplete.
+    expect(parseSI10CardData(blocks.slice(0, 5))).toBeNull();
+    expect(parseSI10CardData(blocks.slice(0, 6))).not.toBeNull();
+  });
+
+  it("SI-24: blank slot inside the counter is consumed, stale record after it is not read", () => {
+    const blocks = makeSI10Blocks({
+      punches: [
+        { ptd: 0, cn: 31, timeH: 0, timeL: 10 },
+        { ptd: 0, cn: 32, timeH: 0, timeL: 20 },
+        { ptd: 0, cn: 33, timeH: 0, timeL: 30 },
+        { ptd: 0, cn: 99, timeH: 0, timeL: 40 }, // stale, beyond the counter
+      ],
+      punchCount: 3,
+    });
+    blocks[4].fill(0xee, 4, 8); // slot 1 blank
+    const result = parseSI10CardData(blocks)!;
+    expect(result.punches.map((p) => p.controlCode)).toEqual([31, 33]);
+  });
+
+  it("SI-24: all-zero slot is blank; code with 0xEEEE time is kept with time 0", () => {
+    const blocks = makeSI10Blocks({
+      punches: [
+        { ptd: 0, cn: 31, timeH: 0, timeL: 10 },
+        { ptd: 0, cn: 0, timeH: 0, timeL: 0 },
+        { ptd: 0, cn: 45, timeH: 0xee, timeL: 0xee },
+      ],
+    });
+    const result = parseSI10CardData(blocks)!;
+    expect(result.punches).toEqual([
+      { controlCode: 31, time: 10 },
+      { controlCode: 45, time: 0 },
+    ]);
+  });
+
   it("returns null ownerData when no personal data stored", () => {
     const blocks = makeSI10Blocks({
       punches: [{ ptd: 0, cn: 31, timeH: 0x8e, timeL: 0x28 }],
@@ -1409,26 +1596,26 @@ describe("parseSI8CardData DOW extraction", () => {
 
   it("extracts finishDayOfWeek from PTD byte", () => {
     const block = makeDowBlock({ finishDow: 5 }); // Friday
-    const result = parseSI8CardData([block])!;
+    const result = parseSI8CardData([block, new Uint8Array(128).fill(0xee)])!;
     expect(result.finishDayOfWeek).toBe(5);
   });
 
   it("extracts checkDayOfWeek from PTD byte", () => {
     const block = makeDowBlock({ checkDow: 3 }); // Wednesday
-    const result = parseSI8CardData([block])!;
+    const result = parseSI8CardData([block, new Uint8Array(128).fill(0xee)])!;
     expect(result.checkDayOfWeek).toBe(3);
   });
 
   it("returns null DOW when no finish time", () => {
     const block = makeDowBlock({}); // no finish, no check
-    const result = parseSI8CardData([block])!;
+    const result = parseSI8CardData([block, new Uint8Array(128).fill(0xee)])!;
     expect(result.finishDayOfWeek).toBeNull();
     expect(result.checkDayOfWeek).toBeNull();
   });
 
   it("handles PM flag alongside DOW", () => {
     const block = makeDowBlock({ finishDow: 6, finishPm: true }); // Saturday PM
-    const result = parseSI8CardData([block])!;
+    const result = parseSI8CardData([block, new Uint8Array(128).fill(0xee)])!;
     expect(result.finishDayOfWeek).toBe(6);
     // Finish time should be PM-adjusted (37800 + 43200 = 81000)
     expect(result.finishTime).toBe(81000);
@@ -1470,24 +1657,6 @@ describe("buildOff", () => {
 });
 
 // ─── AUTOSEND_MODE encoding (Config+ MODE byte bits 5-7) ───
-
-describe("AUTOSEND_MODE constants", () => {
-  it("uses bit 5 for OFF (BC mode, no autosend)", () => {
-    expect(AUTOSEND_MODE.OFF).toBe(0x20);
-  });
-
-  it("uses bits 5,6 for SEND_LAST (Config+ default)", () => {
-    expect(AUTOSEND_MODE.SEND_LAST).toBe(0x60);
-  });
-
-  it("uses bits 5,7 for SEND_ALL", () => {
-    expect(AUTOSEND_MODE.SEND_ALL).toBe(0xa0);
-  });
-
-  it("uses bits 5,6,7 for SEND_UNSENT", () => {
-    expect(AUTOSEND_MODE.SEND_UNSENT).toBe(0xe0);
-  });
-});
 
 describe("combineModeByte", () => {
   it("matches Config+ capture: BC_CONTROL + SEND_LAST = 0x72", () => {
@@ -1639,5 +1808,71 @@ describe("resolveProgrammingMode", () => {
         currentProto: busy | PROTO_AUTOSEND,
       }).protoByte,
     ).toBe(busy);
+  });
+});
+
+// ─── Frame CRC (SI-13) ─────────────────────────────────────
+
+describe("extractFrame CRC on frames captured from a real station", () => {
+  it.each([
+    ["SET_MS reply (3 data bytes)", 0],
+    ["GET_SYS_VAL reply (131 data bytes, odd)", 1],
+    ["GET_BACKUP reply page 1 (133 data bytes, odd)", 2],
+    ["GET_BACKUP reply page 2 (133 data bytes, odd)", 3],
+  ])("%s has a valid CRC", (_name, idx) => {
+    const raw = STATION_FRAMES_PCAP[idx];
+    const result = extractFrame(raw);
+    expect(result).not.toBeNull();
+    expect(result!.frame.crcValid).toBe(true);
+    expect(result!.frame.data.length).toBe(raw[2]);
+    expect(result!.remaining.length).toBe(0);
+  });
+
+  it("a flipped data byte makes the CRC invalid", () => {
+    const raw = Uint8Array.from(STATION_FRAMES_PCAP[2]);
+    raw[40] ^= 0x01;
+    const result = extractFrame(raw)!;
+    expect(result.frame.crcValid).toBe(false);
+  });
+
+  it("extended frame with a bad CRC resyncs one byte on instead of eating its length", () => {
+    // Noise "STX FF 81 05" claims a 5-byte extended frame; a good frame follows.
+    const good = buildCommand(0xf0, [0x01], false);
+    const noisy = Uint8Array.from([0x02, 0xff, 0x81, 0x05, 0x00, 0x00, ...good]);
+    const result = extractFrame(noisy)!;
+    expect(result.frame.cmd).toBe(0xf0);
+    expect(result.frame.crcValid).toBe(true);
+  });
+});
+
+describe("parsePunchSlot", () => {
+  it("blank (all EE or all 00), code 0 and short input give null", () => {
+    expect(parsePunchSlot(Uint8Array.of(0xee, 0xee, 0xee, 0xee), 0)).toBeNull();
+    expect(parsePunchSlot(Uint8Array.of(0, 0, 0, 0), 0)).toBeNull();
+    expect(parsePunchSlot(Uint8Array.of(0x01, 0x00, 0x00, 0x10), 0)).toBeNull();
+    expect(parsePunchSlot(Uint8Array.of(0, 31, 0), 0)).toBeNull();
+  });
+  it("a code with an empty time is kept at time 0, a full record is decoded", () => {
+    expect(parsePunchSlot(Uint8Array.of(0x00, 45, 0xee, 0xee), 0)).toEqual({ controlCode: 45, time: 0 });
+    expect(parsePunchSlot(Uint8Array.of(0x1c, 0x48, 0xa1, 0x29), 0)).toEqual({ controlCode: 72, time: 41257 });
+  });
+});
+
+describe("cardSecondsToDs (RES-24)", () => {
+  it("converts seconds to deciseconds and keeps in-day values", async () => {
+    const { cardSecondsToDs } = await import("../si-protocol");
+    expect(cardSecondsToDs(0)).toBe(0);
+    expect(cardSecondsToDs(36000)).toBe(360000);
+  });
+  it("wraps a corrupt card time into one day", async () => {
+    const { cardSecondsToDs } = await import("../si-protocol");
+    // 16-bit field + PM flag reaches 108735 s, past midnight.
+    expect(cardSecondsToDs(108735)).toBe(1_087_350 % 864_000);
+    expect(cardSecondsToDs(86400)).toBe(0);
+    for (const t of [0, 1, 43199, 86399, 86400, 108735]) {
+      const ds = cardSecondsToDs(t);
+      expect(ds).toBeGreaterThanOrEqual(0);
+      expect(ds).toBeLessThan(864_000);
+    }
   });
 });

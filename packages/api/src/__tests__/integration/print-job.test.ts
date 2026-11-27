@@ -257,6 +257,27 @@ describe("GET /api/maps/:nameId/print-job (§8.5)", () => {
     }
   }, 60_000);
 
+  it("a hiding image whose graphic is another event's fails maps.pdf with 400 naming the control (CRS-010); the job still lists", async () => {
+    const c31 = await vec.db.control.findFirstOrThrow({ where: { eventId: vec.eventId, codes: "31" } });
+    const hide = await vec.db.course.create({ data: { eventId: vec.eventId, name: "Hide", lengthM: 1000, climbM: 0, courseControls: { create: [{ position: 1, controlId: c31.id }] } } });
+    const map = await vec.db.courseMap.create({ data: { eventId: vec.eventId, name: "Hide A4", kind: "course", courseId: hide.id, templateId: a4TemplateId, windowCenter: { x: -70, y: 5 } } });
+    const obj = await writeCourseObject(vec.db, vec.eventId, {
+      body: { kind: "image", geometry: [{ x: -90, y: -5 }, { x: -78, y: 1 }], props: { graphicId: otherEventGraphicId, hideControlCircle: true } },
+      scope: { courses: [hide.id], classes: [] },
+      attach: { controlId: c31.id, at: { x: -80, y: 0 } },
+    });
+    try {
+      const pdf = await get(pdfUrl(vec.nameId, `?maps=${map.seq}`));
+      expect(pdf.statusCode).toBe(400);
+      expect((pdf.json() as { error: string }).error).toMatch(/graphic \d+ could not be loaded and it replaces the circle or number of control 31/);
+      expect((await get(jobUrl(vec.nameId, `?maps=${map.seq}`))).statusCode).toBe(200);
+    } finally {
+      await vec.db.courseObject.delete({ where: { id: obj.id } });
+      await vec.db.courseMap.delete({ where: { id: map.id } });
+      await vec.db.course.delete({ where: { id: hide.id } });
+    }
+  }, 60_000);
+
   it("no pin is a 400 'No base map uploaded'; an unknown event a 404", async () => {
     const mapRow = await unpinned.db.courseMap.create({ data: { eventId: unpinned.eventId, name: "x", kind: "all_controls", windowCenter: { x: 0, y: 0 } } });
     expect(mapRow.seq).toBeGreaterThan(0);

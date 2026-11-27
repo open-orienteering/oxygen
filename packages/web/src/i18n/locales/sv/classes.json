@@ -18,6 +18,8 @@
   "editClass": "Redigera klass",
   "assignCourse": "Tilldela bana",
   "noCourse": "Ingen bana",
+  "courseChangeConfirm_one": "Byta bana? Klassen har {{count}} löpare: deras varianter rensas eller delas ut på nytt (en löpare som har sprungit behåller sin).",
+  "courseChangeConfirm_other": "Byta bana? Klassen har {{count}} löpare: deras varianter rensas eller delas ut på nytt (löpare som har sprungit behåller sin).",
   "selectCourse": "Välj bana...",
   "searchCourse": "Sök bana...",
   "classCount": "{{count}} klass",
@@ -35,8 +37,6 @@
   "maxAge": "Max ålder",
   "entryFee": "Anmälningsavgift (kr)",
   "courseForked": "Gafflad",
-  "forkedDescription": "Gafflad — löpare tilldelas olika banor",
-  "coursesForked": "Banor (gafflade)",
   "controlsCount": "{{count}} kontroller",
   "firstStartTime": "Första start: {{time}}",
   "startIntervalSeconds": "Intervall: {{seconds}}s",
@@ -50,10 +50,6 @@
   "create": "Skapa",
   "cancel": "Avbryt",
   "namePlaceholder": "t.ex. H21",
-  "noCoursesAvailable": "Inga banor tillgängliga",
-  "noCoursesMatch": "Inga matchande banor",
-  "selectCoursesPlaceholder": "Välj banor...",
-  "coursesSelected": "{{count}} banor valda",
   "dragLabel": "Dra för att ordna om",
   "yes": "Ja",
   "no": "Nej",
@@ -77,5 +73,6 @@
   "distributeRandom": "Slumpvis",
   "distributeOnlyUnassigned": "Bara löpare utan variant",
   "distributeConfirm": "Fördela om varianterna för alla löpare i klassen? Löpare som redan har sprungit behåller sina.",
-  "variantsDistributed": "{{changed}} löpare ändrade, {{skipped}} som redan har sprungit behöll sina"
+  "variantsDistributed": "{{changed}} löpare ändrade, {{skipped}} som redan har sprungit behöll sina",
+  "invalidMaxTime": "Maxtid anges som timmar:minuter (2:30) eller minuter (150)."
 }

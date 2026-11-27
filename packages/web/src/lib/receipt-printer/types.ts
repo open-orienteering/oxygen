@@ -92,6 +92,11 @@ export interface FinishReceiptData {
     status: number; // RunnerStatus value
   };
   splits: FinishReceiptSplit[];
+  /**
+   * The leg from the last control to the finish (CRS-013): its split in
+   * deciseconds and length in metres (0 = unknown). Absent = printed blank.
+   */
+  finish?: { splitTime: number; legLength: number } | null;
   course: { name: string; length: number } | null;
   position: { rank: number; total: number } | null;
   /** SIAC/SI card battery info from the most recent readout. Null if unavailable. */

@@ -47,14 +47,13 @@ export interface StartRecordedPayload {
   startTime: number;
 }
 
-export interface RunnerRegisteredPayload {
-  tempId: string;
-  name: string;
-  classId: number;
-  clubId: number;
-  cardNo: number;
-  startTime?: number;
-}
+/**
+ * A station registration: the shared wire type (SYNC-12). The station sends
+ * the whole entry form, the club as `clubName` plus `eventorClubId`; the
+ * server never read the `clubId` this type used to carry.
+ */
+export type { RunnerRegisteredPayload } from "@oxygen/shared";
+import type { RunnerRegisteredPayload } from "@oxygen/shared";
 
 export interface RunnerUpdatedPayload {
   runnerId: number;
@@ -90,7 +89,15 @@ export interface OxygenEvent {
   actorId?: string | null;
   payload: EventPayload;
   status: "pending" | "synced" | "failed";
+  /** Why the server refused it: a journal refusal code (older servers: free text). */
   error?: string;
+  /** The role a `FORBIDDEN` refusal asks for. */
+  capability?: string;
+  /**
+   * The server answered BAD_REQUEST for this entry alone: it can never be
+   * accepted, and nothing was applied, so it holds no later entry back.
+   */
+  rejectedBySchema?: boolean;
   attempts: number;
 }
 

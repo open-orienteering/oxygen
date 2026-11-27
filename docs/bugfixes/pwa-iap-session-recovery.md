@@ -1,5 +1,12 @@
 # Bugfix: PWA "Event not found" after dormancy (expired IAP)
 
+> **Superseded in part (2026-11-26, review package 9).** Fix items 2 and 3
+> changed: the shell no longer retries once and reloads, and a failing
+> `users.me` no longer keeps the app on a spinner. A probe now tells an
+> expired session from an unreachable server; only a page with nothing open
+> reloads by itself, a page in use shows a banner. See
+> [station-outage-resilience.md](station-outage-resilience.md).
+
 ## Symptoms
 
 An installed Oxygen PWA left idle for a while (phone locked, tab backgrounded)

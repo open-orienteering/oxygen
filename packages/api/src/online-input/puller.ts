@@ -6,12 +6,14 @@
  *   2. Builds a protocol-specific GET request via `Protocol.buildRequest`.
  *   3. Fetches the response body with a hard timeout.
  *   4. Parses it through `Protocol.parseResponse` and de-dupes via `lastId`.
- *   5. Applies the per-event control mapping (`loadMapping`) to translate
+ *   5. Applies the event's control mapping (`mapping` in the config) to translate
  *      raw codes into the special-punch targets (1=start, 2=finish,
  *      3=check), leaving regular codes untouched.
  *   6. Inserts new rows into `punches` (`source = "online_input"`),
  *      resolving each control via `(event_id, control_code)` so the matcher
- *      can later attach the punch to a course.
+ *      can later attach the punch to a course. A row that is already
+ *      stored (same card, code and time, e.g. after "Reset last id") is
+ *      skipped through the `punches_oi_dedup_idx` unique index.
  *   7. Bumps the persisted `lastId` watermark and the status counters
  *      (`last_polled`, `poll_count`, `punches_imported`).
  *
@@ -30,7 +32,11 @@ import {
 } from "./protocol.js";
 import { uuidv7 } from "uuidv7";
 import { rocProtocol } from "./roc.js";
-import { loadMapping, applyMapping } from "./mapping.js";
+import {
+  applyMapping,
+  sanitizeMapping,
+  type ControlMapping,
+} from "./mapping.js";
 import { appendJournal } from "../journalEmit.js";
 
 const protocolById: Record<ProtocolId, Protocol> = {
@@ -45,7 +51,7 @@ type OnlineInputConfig = {
   unitId: string;
   endpointUrl: string;
   intervalSeconds: number;
-  mapping: Record<number, 1 | 2 | 3>;
+  mapping: ControlMapping;
   lastId: number;
 };
 
@@ -69,22 +75,15 @@ async function loadConfig(eventId: bigint): Promise<OnlineInputConfig | null> {
         typeof parsed.intervalSeconds === "number" && parsed.intervalSeconds > 0
           ? parsed.intervalSeconds
           : 10,
-      mapping: { ...(parsed.mapping ?? {}) } as Record<number, 1 | 2 | 3>,
+      mapping: sanitizeMapping(parsed.mapping),
       lastId:
-        typeof parsed.lastId === "number" && parsed.lastId >= 0
-          ? parsed.lastId
+        Number.isInteger(parsed.lastId) && (parsed.lastId as number) >= 0
+          ? (parsed.lastId as number)
           : 0,
     };
   } catch {
     return null;
   }
-}
-
-async function saveConfig(
-  eventId: bigint,
-  cfg: OnlineInputConfig,
-): Promise<void> {
-  await setSetting(settingKey(eventId, "config"), JSON.stringify(cfg));
 }
 
 /**
@@ -110,9 +109,9 @@ async function advanceWatermark(
   const key = settingKey(eventId, "config");
   const updated = await tx.$executeRaw`
     UPDATE oxygen.settings
-       SET value = jsonb_set(value::jsonb, '{lastId}', to_jsonb(${next}::int))::text
+       SET value = jsonb_set(value::jsonb, '{lastId}', to_jsonb(${next}::bigint))::text
      WHERE key = ${key}
-       AND COALESCE((value::jsonb->>'lastId')::int, 0) = ${expected}
+       AND COALESCE((value::jsonb->>'lastId')::bigint, 0) = ${expected}
   `;
   return updated === 1;
 }
@@ -134,6 +133,15 @@ async function recordError(eventId: bigint, msg: string): Promise<void> {
 
 async function clearError(eventId: bigint): Promise<void> {
   await setSetting(settingKey(eventId, "last_error"), null);
+}
+
+/** A short, printable excerpt of a response body for the status panel. */
+function describeBody(body: string): string {
+  const flat = body
+    .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return flat.length > 80 ? `${flat.slice(0, 80)}…` : flat;
 }
 
 async function fetchWithTimeout(url: string, timeoutMs: number): Promise<string> {
@@ -182,9 +190,11 @@ async function pollOnce(eventId: bigint): Promise<void> {
 
   const event = await prisma().event.findUnique({
     where: { id: eventId },
-    select: { date: true, zeroTime: true, nameId: true },
+    select: { date: true, zeroTime: true, removed: true },
   });
-  if (!event) return;
+  // A deleted event stops pulling (MC-28); its stored config is kept so a
+  // restore resumes where it left off.
+  if (!event || event.removed) return;
 
   const dateStr = event.date.toISOString().slice(0, 10);
   const req = proto.buildRequest(
@@ -209,8 +219,10 @@ async function pollOnce(eventId: bigint): Promise<void> {
   }
 
   let parsed: RemotePunch[];
+  let skipped: number;
+  let maxSkippedId: number;
   try {
-    parsed = proto.parseResponse(body);
+    ({ punches: parsed, skipped, maxSkippedId } = proto.parseResponse(body));
   } catch (err) {
     await recordError(
       eventId,
@@ -219,20 +231,35 @@ async function pollOnce(eventId: bigint): Promise<void> {
     return;
   }
 
-  // De-dupe via lastId and apply the user's control mapping. Mapped
-  // codes become 1/2/3 (start/finish/check) on the punch row; the
-  // original raw code is preserved in the `control_code` column for
-  // operator diagnostics — but the mapping winning rule keeps the
-  // matcher's life simple by storing the *effective* code.
+  // A body with lines but not one row that even starts with a punch id is
+  // not ROC talking: an HTML error or login page from a proxy, a wrong
+  // endpoint URL. Report it like an HTTP error instead of as a healthy,
+  // empty poll.
+  if (parsed.length === 0 && skipped > 0 && maxSkippedId === 0) {
+    await recordError(eventId, `Unexpected response: ${describeBody(body)}`);
+    return;
+  }
+
+  // De-dupe via lastId and apply the event's control mapping. Mapped
+  // codes become 1/2/3 (start/finish/check) and the punch row stores the
+  // *effective* code in `control_code`, which keeps the matcher simple.
   const newPunches = parsed.filter((p) => p.punchId > cfg.lastId);
-  if (newPunches.length === 0) {
+  // Bad rows that still carry a sound id are moved past, so a corrupt row
+  // at the tail is not fetched (and reported) on every poll.
+  const maxId = Math.max(
+    cfg.lastId,
+    maxSkippedId,
+    ...newPunches.map((p) => p.punchId),
+  );
+  if (skipped > 0) await bumpCounter(eventId, "rows_skipped", skipped);
+  if (maxId === cfg.lastId) {
     await setSetting(settingKey(eventId, "last_polled"), new Date().toISOString());
     await bumpCounter(eventId, "poll_count", 1);
     await clearError(eventId);
     return;
   }
 
-  const mapping = await loadMapping(event.nameId);
+  const mapping = cfg.mapping;
   const controlIdByCode = await buildControlIndex(eventId);
 
   // Inserts run in a single transaction so a partial failure rolls
@@ -241,46 +268,64 @@ async function pollOnce(eventId: bigint): Promise<void> {
   // a race-critical fact, so it is journaled here too (payload carries
   // the ABSOLUTE decisecond time so it is node-portable).
   const stationId = `roc-${cfg.unitId}`;
-  const maxId = newPunches.reduce((m, p) => Math.max(m, p.punchId), cfg.lastId);
   let claimed = false;
+  let inserted = 0;
 
-  await prisma().$transaction(async (tx) => {
-    claimed = await advanceWatermark(tx, eventId, cfg.lastId, maxId);
-    if (!claimed) return;
-
-    for (const p of newPunches) {
-      const effectiveCode = applyMapping(mapping, p.rawCode);
-      const time = p.absoluteTimeDs - event.zeroTime;
-      const controlId = controlIdByCode.get(effectiveCode) ?? null;
-      // Minted here and carried in the payload so every node stores the
-      // punch under the same UUID (punch edits address rows by id).
-      const punchId = uuidv7();
-      await tx.punch.create({
-        data: {
-          id: punchId,
-          eventId,
-          cardNo: p.cardNo,
-          controlCode: effectiveCode,
-          controlId,
-          time,
-          source: "online_input",
-          isOriginal: true,
-        },
-      });
-      await appendJournal(tx, {
-        eventId,
-        type: "punch.recorded",
-        stationId,
-        payload: {
-          id: punchId,
-          cardNo: p.cardNo,
-          controlCode: effectiveCode,
-          time: p.absoluteTimeDs,
-          origin: "online_input",
-        },
-      });
-    }
+  // Minted here and carried in the journal payload so every node stores
+  // the punch under the same UUID (punch edits address rows by id).
+  const rows = newPunches.map((p) => {
+    const effectiveCode = applyMapping(mapping, p.rawCode);
+    return {
+      id: uuidv7(),
+      eventId,
+      cardNo: p.cardNo,
+      controlCode: effectiveCode,
+      controlId: controlIdByCode.get(effectiveCode) ?? null,
+      time: p.absoluteTimeDs - event.zeroTime,
+      source: "online_input",
+      isOriginal: true,
+      absoluteTimeDs: p.absoluteTimeDs,
+    };
   });
+
+  await prisma().$transaction(
+    async (tx) => {
+      claimed = await advanceWatermark(tx, eventId, cfg.lastId, maxId);
+      if (!claimed || rows.length === 0) return;
+
+      // One INSERT … ON CONFLICT DO NOTHING against `punches_oi_dedup_idx`:
+      // a punch that is already stored (the operator reset the watermark,
+      // or ROC sent the same punch twice) is skipped instead of failing
+      // the whole batch, which would leave the watermark where it was and
+      // fail the same way on every following poll. One statement, not one
+      // per row, so a reset that replays a whole event stays well inside
+      // the transaction timeout.
+      const stored = await tx.punch.createManyAndReturn({
+        data: rows.map(({ absoluteTimeDs: _abs, ...row }) => row),
+        skipDuplicates: true,
+        select: { id: true },
+      });
+      const storedIds = new Set(stored.map((r) => r.id));
+      inserted = storedIds.size;
+      for (const row of rows) {
+        if (!storedIds.has(row.id)) continue;
+        await appendJournal(tx, {
+          eventId,
+          type: "punch.recorded",
+          stationId,
+          payload: {
+            id: row.id,
+            cardNo: row.cardNo,
+            controlCode: row.controlCode,
+            time: row.absoluteTimeDs,
+            origin: "online_input",
+          },
+        });
+      }
+    },
+    // A reset replays every stored punch of the event; give it room.
+    { timeout: 60_000, maxWait: 10_000 },
+  );
 
   if (!claimed) {
     // Another poller already took this range. Nothing was written, and
@@ -294,7 +339,7 @@ async function pollOnce(eventId: bigint): Promise<void> {
   }
 
   await bumpCounter(eventId, "poll_count", 1);
-  await bumpCounter(eventId, "punches_imported", newPunches.length);
+  await bumpCounter(eventId, "punches_imported", inserted);
   await setSetting(
     settingKey(eventId, "last_polled"),
     new Date().toISOString(),
@@ -451,6 +496,19 @@ export async function reconcileEnabledPullers(): Promise<void> {
         ? cfg.intervalSeconds
         : 10;
     desired.set(m[1], interval);
+  }
+
+  // A soft-deleted event keeps its config (a restore resumes it) but is
+  // not polled (MC-28).
+  if (desired.size > 0) {
+    const live = await prisma().event.findMany({
+      where: { id: { in: [...desired.keys()].map((k) => BigInt(k)) }, removed: false },
+      select: { id: true },
+    });
+    const liveIds = new Set(live.map((e) => String(e.id)));
+    for (const key of [...desired.keys()]) {
+      if (!liveIds.has(key)) desired.delete(key);
+    }
   }
 
   for (const [key, interval] of desired) {

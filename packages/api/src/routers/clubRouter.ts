@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, viewProcedure, manageProcedure, publicProcedure } from "../trpc.js";
+import { router, viewProcedure, manageProcedure, authedProcedure } from "../trpc.js";
 import { prisma } from "../db.js";
 import { WITHDRAWN_STATUSES, type ClubSummary, type ClubDetail } from "@oxygen/shared";
 import { valueToRunnerStatus } from "../statusConvert.js";
@@ -15,8 +15,10 @@ const withdrawnEnums = WITHDRAWN_STATUSES.map(valueToRunnerStatus);
  */
 export const clubRouter = router({
   /** Aggregate clubs from the active event's runner roster.
-   *  `showAll` includes clubs without participating runners (currently
-   *  identical because clubs aren't first-class entities anymore). */
+   *  `showAll` is accepted but has no effect: clubs are not first-class
+   *  entities, so a club without runners in the event has no row to list.
+   *  Clubs outside the roster come from `searchDirectory` (WEB-11); the
+   *  Clubs page toggle is a follow-up (docs/bugfixes/registration-followups.md). */
   list: viewProcedure
     .input(z.object({ showAll: z.boolean().optional() }).optional())
     .query(async ({ ctx }): Promise<ClubSummary[]> => {
@@ -219,7 +221,7 @@ export const clubRouter = router({
    * Search the global club directory by name.
    * Returns matching clubs with their Eventor ids.
    */
-  searchDirectory: publicProcedure
+  searchDirectory: authedProcedure
     .input(z.object({ query: z.string().min(1) }))
     .query(async ({ input }) => {
       const rows = await prisma().clubDirectory.findMany({

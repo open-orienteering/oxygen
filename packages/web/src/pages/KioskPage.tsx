@@ -7,11 +7,15 @@
  * In standalone mode, uses its own DeviceManager + SI reader.
  */
 
+import { isFreshSince, shouldAutoPrint } from "../lib/kiosk-print";
+import { ErrorBoundary } from "../components/ErrorBoundary";
 import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { QRCodeSVG } from "qrcode.react";
+import { useQueryClient } from "@tanstack/react-query";
 import { trpc } from "../lib/trpc";
+import { ensureEventCache } from "../lib/offline/persister";
 import { formatMeosTime, formatRunningTime, RunnerStatus } from "@oxygen/shared";
 import {
   KioskChannel,
@@ -27,13 +31,18 @@ import { recentCardToKioskMessage } from "../lib/kiosk-channel";
 import { shouldProcessStandaloneCard } from "../lib/kiosk-standalone-routing";
 import { getClubLogoUrl } from "../lib/club-logo";
 import { SiCardAnimation } from "../components/SiCardAnimation";
+import { useEventClock } from "../hooks/useEventClock";
 import { useStationSync } from "../hooks/useStationSync";
+import { useEventQueue } from "../hooks/useEventQueue";
 import { KioskAccessGate } from "../components/KioskAccessGate";
+import { shouldShowStandaloneReadFailure } from "../lib/read-failure";
 
 // Registration-waiting watchdog timeout. E2E hook: tests override via
 // localStorage (set in an init script, i.e. before this module loads) so
 // they don't have to wait out the full production timeout — see
 // registration-dialog.spec.ts.
+/** How long "card not read" stays up before the kiosk returns to idle. */
+const READ_FAILED_SECONDS = 8;
 const WATCHDOG_MS = Number(localStorage.getItem("oxygenKioskWatchdogMs") ?? 15_000);
 
 // ─── Types ──────────────────────────────────────────────────
@@ -41,6 +50,7 @@ const WATCHDOG_MS = Number(localStorage.getItem("oxygenKioskWatchdogMs") ?? 15_0
 type KioskScreen =
   | { mode: "idle" }
   | { mode: "reading"; cardNumber: number }
+  | { mode: "read-failed"; cardNumber: number }
   | { mode: "card-done"; cardNumber: number; next: KioskScreen }
   | { mode: "readout"; card: KioskCardReadoutMessage["card"] }
   | { mode: "pre-start"; card: KioskCardReadoutMessage["card"] }
@@ -84,8 +94,10 @@ export function KioskPage() {
 }
 
 function KioskPageBody() {
+  const utils = trpc.useUtils();
   const { t } = useTranslation("kiosk");
   const { nameId } = useParams<{ nameId: string }>();
+  const queryClient = useQueryClient();
   const [screen, setScreen] = useState<KioskScreen>({ mode: "idle" });
   const [settings, setSettingsState] = useState<KioskSettings>(() =>
     loadSettings(nameId ?? ""),
@@ -101,30 +113,55 @@ function KioskPageBody() {
   useEffect(() => { screenRef.current = screen; }, [screen]);
 
   // Select the competition (same as CompetitionShell)
+  // `networkMode: "always"`: after an `offline` event a paused select would
+  // never settle (WEB-03).
   const selectMutation = trpc.competition.select.useMutation({
+    networkMode: "always",
     onSuccess: (data) => setCompetitionName(data.name),
   });
+  // The cache is this event's (ensureEventCache resolved). The station runs
+  // from it whether or not the server confirmed the event: a kiosk reloaded
+  // during an outage keeps its runner list, name and logo (WEB-03).
+  const [cacheClaimed, setCacheClaimed] = useState(false);
 
   // Pre-fetch and persist all competition data for offline use
-  useStationSync(selectMutation.isSuccess);
+  // No runner directory dump: it needs `race.operate`, which a kiosk key lacks.
+  useStationSync(cacheClaimed, { runnerDb: false });
 
   // Fetch dashboard data for organizer logo
   const dashboard = trpc.competition.dashboard.useQuery(undefined, {
-    enabled: selectMutation.isSuccess,
+    enabled: cacheClaimed,
     staleTime: 5 * 60_000,
   });
+  const shownName = competitionName || dashboard.data?.competition?.name || "";
   const organizerEventorId =
     dashboard.data?.organizer?.eventorId && dashboard.data.organizer.eventorId > 0
       ? dashboard.data.organizer.eventorId
       : undefined;
 
   useEffect(() => {
-    if (nameId) selectMutation.mutate({ nameId });
+    if (!nameId) return;
+    let cancelled = false;
+    // The cache belongs to one event (MC-04); claim it before selecting so the
+    // standalone readout path never computes from another event's runners.
+    setCacheClaimed(false);
+    void ensureEventCache(queryClient, nameId).then(() => {
+      if (cancelled) return;
+      setCacheClaimed(true);
+      selectMutation.mutate({ nameId });
+    });
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nameId]);
 
   // Standalone mode: use DeviceManager for SI reader
-  const { currentCard, readerStatus, openReaderDialog, supported, lastDetectedCardNo } = useDeviceManager();
+  const { currentCard, readerStatus, openReaderDialog, supported, lastDetectedCardNo, lastReadFailure } = useDeviceManager();
+  // The kiosk route sits outside CompetitionShell, so it drains its own outbox
+  // (SYNC-03): readouts taken while the server was unreachable go out when it
+  // is back, and the operator sees how many are waiting.
+  const { pendingCount, failedCount, needsSignIn } = useEventQueue(nameId);
 
   const updateSettings = useCallback(
     (partial: Partial<KioskSettings>) => {
@@ -177,7 +214,13 @@ function KioskPageBody() {
   useEffect(() => {
     const prev = prevScreenModeRef.current;
     prevScreenModeRef.current = screen.mode;
-    if (prev === "reading" && screen.mode !== "reading" && screen.mode !== "idle") {
+    // No beep when the read failed: the reader did not beep either.
+    if (
+      prev === "reading" &&
+      screen.mode !== "reading" &&
+      screen.mode !== "idle" &&
+      screen.mode !== "read-failed"
+    ) {
       playReadoutBeep();
     }
   }, [screen.mode]);
@@ -229,6 +272,15 @@ function KioskPageBody() {
           });
           break;
 
+        case "card-read-failed":
+          // Only the reading/idle screens give way: a result or a
+          // registration in progress is not disturbed by a failed read.
+          if (screenRef.current.mode === "reading" || screenRef.current.mode === "idle") {
+            setScreen({ mode: "read-failed", cardNumber: msg.cardNumber });
+            scheduleReset(READ_FAILED_SECONDS);
+          }
+          break;
+
         case "card-readout":
           setScreen((prev) => {
             clearTimeout(resetTimerRef.current);
@@ -278,6 +330,13 @@ function KioskPageBody() {
           scheduleReset(20);
           break;
 
+        case "readout-applied":
+          // The admin tab wrote the result: refetch what the screen shows.
+          utils.cardReadout.readout.invalidate({ cardNo: msg.cardNumber });
+          utils.runner.findByCard.invalidate({ cardNo: msg.cardNumber });
+          utils.race.finishReceipt.invalidate();
+          break;
+
         case "kiosk-reset":
           clearTimeout(resetTimerRef.current);
           setScreen({ mode: "idle" });
@@ -309,12 +368,37 @@ function KioskPageBody() {
 
   useEffect(() => {
     if (!settings.standalone) return;
-    if (lastDetectedCardNo == null || lastDetectedCardNo === lastDetectedRef.current) return;
+    if (lastDetectedCardNo == null) {
+      // The same card inserted again after a removal or a failed read must
+      // show the reading screen again.
+      lastDetectedRef.current = null;
+      return;
+    }
+    if (lastDetectedCardNo === lastDetectedRef.current) return;
     lastDetectedRef.current = lastDetectedCardNo;
 
     clearTimeout(resetTimerRef.current);
     setScreen({ mode: "reading", cardNumber: lastDetectedCardNo });
   }, [lastDetectedCardNo, settings.standalone]);
+
+  // ── Standalone mode: a card the reader could not read (SI-05) ──
+
+  // Starts at the failure already present on mount, so a failure from before
+  // the kiosk opened (or before it went standalone) is not replayed.
+  const lastFailureSeqRef = useRef(lastReadFailure?.seq ?? 0);
+
+  useEffect(() => {
+    if (!lastReadFailure) return;
+    if (lastReadFailure.seq === lastFailureSeqRef.current) return;
+    lastFailureSeqRef.current = lastReadFailure.seq;
+    if (!settings.standalone) return;
+    // lastDetectedCardNo is the committed detection of the same render, so a
+    // detection of another card in the same tick wins over the failure.
+    if (shouldShowStandaloneReadFailure(lastReadFailure, lastDetectedCardNo, screenRef.current.mode)) {
+      setScreen({ mode: "read-failed", cardNumber: lastReadFailure.cardNumber });
+      scheduleReset(READ_FAILED_SECONDS);
+    }
+  }, [lastReadFailure, lastDetectedCardNo, settings.standalone, scheduleReset]);
 
   // ── Standalone mode: react to DeviceManager card events ───
 
@@ -353,6 +437,29 @@ function KioskPageBody() {
     [],
   );
 
+  // One automatic receipt per read, also when the read's screen remounts
+  // (its error boundary's "Try again").
+  const lastPrintedRead = useRef(0);
+  // A number per read on the readout screen: a new one when the screen
+  // enters readout or shows another recent card; updates of the same read
+  // keep it. Each read mounts its own readout screen.
+  const readSeq = useRef({ seq: 0, mode: "idle" as KioskScreen["mode"], cardId: "" });
+  if (screen.mode === "readout") {
+    const r = readSeq.current;
+    if (r.mode !== "readout" || r.cardId !== screen.card.id) r.seq++;
+    r.cardId = screen.card.id;
+  }
+  readSeq.current.mode = screen.mode;
+  const currentRead = readSeq.current.seq;
+  const printOnce = useCallback(
+    (read: number, runnerId: number) => {
+      if (lastPrintedRead.current >= read) return;
+      lastPrintedRead.current = read;
+      handlePrint(runnerId);
+    },
+    [handlePrint],
+  );
+
   // Toggle the admin's "print registration receipt" flag from the kiosk so
   // a runner can opt in (or back out) before submission.
   const handleRequestRegistrationReceipt = useCallback(
@@ -382,9 +489,23 @@ function KioskPageBody() {
       {/* Minimal top bar — settings + fullscreen */}
       <div className="flex items-center justify-between px-4 py-2 bg-slate-800/50">
         <div className="text-sm text-slate-400 truncate max-w-[60%]">
-          {competitionName || nameId}
+          {shownName || nameId}
         </div>
         <div className="flex items-center gap-2">
+          {(pendingCount > 0 || failedCount > 0) && (
+            <span
+              data-testid="kiosk-sync-badge"
+              data-pending={pendingCount}
+              data-failed={failedCount}
+              className="text-xs px-2 py-1 rounded bg-amber-600/30 text-amber-200"
+            >
+              {failedCount > 0
+                ? t("syncFailed", { count: failedCount })
+                : needsSignIn
+                  ? t("syncNeedsSignIn", { count: pendingCount })
+                  : t("syncPending", { count: pendingCount })}
+            </span>
+          )}
           {settings.standalone && supported && (
             <button
               data-testid="reader-menu"
@@ -421,6 +542,29 @@ function KioskPageBody() {
         </div>
       </div>
 
+      {/* A read that reached neither the server nor this device's outbox */}
+      {settings.standalone &&
+        (currentCard?.saveState === "not-saved" || currentCard?.saveState === "no-competition") && (
+          <div
+            role="alert"
+            data-testid="kiosk-not-saved"
+            className="px-4 py-2 bg-red-700 text-white text-center text-sm"
+          >
+            {currentCard.saveState === "no-competition" ? t("noCompetition") : t("notSaved")}
+          </div>
+        )}
+
+      {/* The USB reader was unplugged or its port failed (SI-18) */}
+      {settings.standalone && supported && readerStatus === "error" && (
+        <div
+          role="alert"
+          data-testid="kiosk-reader-disconnected"
+          className="px-4 py-2 bg-red-700 text-white text-center text-sm"
+        >
+          {t("readerDisconnected")}
+        </div>
+      )}
+
       {/* Settings panel */}
       {showSettings && (
         <KioskSettingsPanel
@@ -432,7 +576,7 @@ function KioskPageBody() {
 
       {/* Main content area */}
       <div className="flex-1 flex items-center justify-center px-4 py-4">
-        {(screen.mode === "idle" || screen.mode === "reading" || screen.mode === "card-done") ? (
+        {(screen.mode === "idle" || screen.mode === "reading" || screen.mode === "read-failed" || screen.mode === "card-done") ? (
           <div className="text-center">
             {/* Competition branding — always visible to keep layout stable */}
             <div className="mb-4">
@@ -444,9 +588,9 @@ function KioskPageBody() {
                   onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
                 />
               )}
-              {competitionName && (
+              {shownName && (
                 <h2 className="text-4xl font-bold text-slate-200 tracking-tight">
-                  {competitionName}
+                  {shownName}
                 </h2>
               )}
             </div>
@@ -467,12 +611,19 @@ function KioskPageBody() {
             <div className="min-h-[220px]">
               {screen.mode === "idle" && <IdleContent />}
               {screen.mode === "reading" && <ReadingContent cardNumber={screen.cardNumber} />}
+              {screen.mode === "read-failed" && <ReadFailedContent cardNumber={screen.cardNumber} />}
               {screen.mode === "card-done" && <CardDoneContent cardNumber={screen.cardNumber} />}
             </div>
           </div>
         ) : (
           <>
-            {screen.mode === "readout" && <ReadoutScreen card={screen.card} onPrint={handlePrint} />}
+            {screen.mode === "readout" && (
+              // Keyed by the read: a new card is a new screen (its own print
+              // guard), and a screen that throws does not take the kiosk down.
+              <ErrorBoundary key={currentRead} variant="dark">
+                <ReadoutScreen card={screen.card} onPrint={(runnerId) => printOnce(currentRead, runnerId)} />
+              </ErrorBoundary>
+            )}
             {screen.mode === "pre-start" && (
               <PreStartScreen card={screen.card} requireClearCheck={settings.requireClearCheck} />
             )}
@@ -632,6 +783,28 @@ function ReadingContent({ cardNumber }: { cardNumber: number }) {
   );
 }
 
+// ─── Read Failed Content (the card could not be read, SI-05) ─
+
+function ReadFailedContent({ cardNumber }: { cardNumber: number }) {
+  const { t } = useTranslation("kiosk");
+  return (
+    <div data-testid="kiosk-read-failed">
+      <div className="mb-4 flex items-center justify-center gap-3">
+        <div className="inline-flex items-center justify-center w-10 h-10 rounded-full bg-red-500/20 border-4 border-red-400">
+          <svg className="w-6 h-6 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </div>
+        <h1 className="text-4xl font-black text-red-400">{t("cardNotRead")}</h1>
+      </div>
+      <p className="text-2xl text-white mb-4">{t("cardNotReadHint")}</p>
+      <div className="text-xl text-slate-400 font-mono">
+        {t("cardNumber", { number: cardNumber })}
+      </div>
+    </div>
+  );
+}
+
 // ─── Card Done Content (status text below the shared reader) ─
 
 function CardDoneContent({ cardNumber }: { cardNumber: number }) {
@@ -717,42 +890,17 @@ function ReadoutScreen({
   onPrint: (runnerId: number) => void;
 }) {
   const { t } = useTranslation("kiosk");
-  const utils = trpc.useUtils();
-  const finishRecordedRef = useRef(false);
   const printedRef = useRef(false);
+  // Answers older than this are cached rows of an earlier read (WEB-02).
+  const [mountedAt] = useState(() => Date.now());
 
   // 1. Check DB state for this runner
+  // `refetchOnMount: "always"`: the print guard needs an answer fetched for
+  // this screen, also when the cached one is younger than staleTime.
   const dbRunner = trpc.runner.findByCard.useQuery(
     { cardNo: card.cardNumber },
-    { enabled: card.cardNumber > 0 },
+    { enabled: card.cardNumber > 0, refetchOnMount: "always" },
   );
-
-  // 2. Record finish if needed (card has finish punch but DB has no finish time)
-  const recordFinish = trpc.race.recordFinish.useMutation();
-
-  useEffect(() => {
-    if (finishRecordedRef.current) return;
-    if (!dbRunner.data) return;
-    if (dbRunner.data.finishTime > 0) return; // already finished
-
-    // Card's finish time is in seconds since midnight — convert to deciseconds
-    const cardFinishDeci = card.finishTime ? card.finishTime * 10 : 0;
-    if (cardFinishDeci <= 0) return; // no finish punch on card
-
-    finishRecordedRef.current = true;
-    const runnerIdForReceipt = dbRunner.data.id;
-    recordFinish.mutate(
-      { runnerId: dbRunner.data.id, finishTime: cardFinishDeci },
-      {
-        onSuccess: () => {
-          // Invalidate so readout and receipt pick up the new finish time
-          utils.cardReadout.readout.invalidate({ cardNo: card.cardNumber });
-          utils.runner.findByCard.invalidate({ cardNo: card.cardNumber });
-          utils.race.finishReceipt.invalidate({ runnerId: runnerIdForReceipt });
-        },
-      },
-    );
-  }, [dbRunner.data, card.finishTime]);
 
   // 3. Fetch full readout + receipt data
   const readout = trpc.cardReadout.readout.useQuery(
@@ -762,7 +910,7 @@ function ReadoutScreen({
 
   const receipt = trpc.race.finishReceipt.useQuery(
     { runnerId: dbRunner.data?.id ?? 0 },
-    { enabled: !!dbRunner.data?.id },
+    { enabled: !!dbRunner.data?.id, refetchOnMount: "always" },
   );
 
   // Derive status from readout (more accurate than card.status since it evaluates punches)
@@ -784,23 +932,19 @@ function ReadoutScreen({
   const isMP = displayStatus === RunnerStatus.MissingPunch;
   const isDNF = displayStatus === RunnerStatus.DNF;
 
-  // 4. Auto-print receipt
+  // 4. Auto-print receipt, from answers fetched for this screen only
+  // (WEB-02): a cached row of an earlier read may name another runner.
   useEffect(() => {
-    if (printedRef.current) return;
-    if (!receipt.data || !dbRunner.data) return;
-    // Only auto-print for runners with a finish time.
-    // Check both the DB-stored finish time AND the receipt's card-computed finish
-    // time — the latter is derived from oCard and is available as soon as
-    // storeReadout runs, before applyResult has written to oRunner.FinishTime.
-    const hasFinish =
-      (dbRunner.data.finishTime > 0) ||
-      (receipt.data.timing.finishTime > 0) ||
-      finishRecordedRef.current;
-    if (!hasFinish) return;
-
+    if (!shouldAutoPrint({
+      alreadyPrinted: printedRef.current,
+      runner: dbRunner.data,
+      receipt: receipt.data,
+      runnerFresh: isFreshSince(dbRunner, mountedAt),
+      receiptFresh: isFreshSince(receipt, mountedAt),
+    })) return;
     printedRef.current = true;
-    onPrint(dbRunner.data.id);
-  }, [receipt.data, dbRunner.data, onPrint]);
+    onPrint(dbRunner.data!.id);
+  }, [receipt, dbRunner, mountedAt, onPrint]);
 
   // Derive rental card status: from readout data (authoritative) or card message (fast path)
   const isRentalCard = readout.data?.found ? readout.data.isRentalCard : card.isRentalCard;
@@ -1148,14 +1292,12 @@ function PreStartScreen({
     { enabled: card.cardNumber > 0 },
   );
 
-  // Server time for countdown
-  const serverTime = trpc.race.serverTime.useQuery(undefined, {
-    refetchInterval: 1000,
-  });
+  // Event clock for the countdown (ticks locally, event time zone).
+  const clock = useEventClock();
 
   const runner = lookup.data?.found ? lookup.data.runner : null;
   const course = lookup.data?.found ? lookup.data.course : null;
-  const currentTimeDeci = serverTime.data?.deciseconds ?? 0;
+  const currentTimeDeci = clock.currentDs;
 
   // Clear/check verification
   const hasCheck = card.checkTime != null && card.checkTime > 0;

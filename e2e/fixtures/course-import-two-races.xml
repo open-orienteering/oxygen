@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Synthetic: a course file with two races (course-import-safety.spec.ts). -->
+<CourseData xmlns="http://www.orienteering.org/datastandard/3.0" iofVersion="3.0">
+  <RaceCourseData>
+    <Map><Scale>10000</Scale></Map>
+    <Control type="Start"><Id>S1</Id><MapPosition x="0" y="0"/></Control>
+    <Control><Id>31</Id><MapPosition x="10" y="0"/></Control>
+    <Control type="Finish"><Id>F1</Id><MapPosition x="20" y="0"/></Control>
+    <Course>
+      <Name>Two races</Name>
+      <CourseControl type="Start"><Control>S1</Control></CourseControl>
+      <CourseControl type="Control"><Control>31</Control></CourseControl>
+      <CourseControl type="Finish"><Control>F1</Control></CourseControl>
+    </Course>
+  </RaceCourseData>
+  <RaceCourseData>
+    <Map><Scale>10000</Scale></Map>
+    <Control type="Start"><Id>S1</Id><MapPosition x="0" y="0"/></Control>
+    <Control><Id>31</Id><MapPosition x="10" y="0"/></Control>
+    <Control type="Finish"><Id>F1</Id><MapPosition x="20" y="0"/></Control>
+    <Course>
+      <Name>Two races</Name>
+      <CourseControl type="Start"><Control>S1</Control></CourseControl>
+      <CourseControl type="Control"><Control>31</Control></CourseControl>
+      <CourseControl type="Finish"><Control>F1</Control></CourseControl>
+    </Course>
+  </RaceCourseData>
+</CourseData>

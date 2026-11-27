@@ -3,6 +3,8 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     environment: "node",
+    // As in the images: the process in UTC, events in Europe/Stockholm (BLD-14).
+    env: { TZ: "UTC" },
     include: ["src/__tests__/integration/**/*.test.ts"],
     setupFiles: ["src/__tests__/helpers/load-env.ts"],
     globalSetup: ["src/__tests__/helpers/global-setup.ts"],

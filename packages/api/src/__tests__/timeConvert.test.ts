@@ -84,33 +84,35 @@ describe("round-trip", () => {
 });
 
 describe("nowMeosDate", () => {
-  it("packs a date as YYYYMMDD", () => {
-    expect(nowMeosDate(new Date(2026, 4, 12))).toBe(20260512);
+  it("packs the event-zone date as YYYYMMDD", () => {
+    expect(nowMeosDate(new Date(Date.UTC(2026, 4, 12, 10)), "Europe/Stockholm")).toBe(20260512);
   });
 
   it("zero-pads single-digit month and day", () => {
-    expect(nowMeosDate(new Date(2026, 0, 3))).toBe(20260103);
+    expect(nowMeosDate(new Date(Date.UTC(2026, 0, 3, 10)), "UTC")).toBe(20260103);
   });
 
-  it("uses local time, not UTC", () => {
-    // Construct via local-time constructor: midnight on 2026-12-31 local
-    expect(nowMeosDate(new Date(2026, 11, 31, 0, 0, 0))).toBe(20261231);
+  it("uses the event's zone, not the process zone", () => {
+    // 23:30 UTC on 30 Dec is 00:30 on 31 Dec in Stockholm.
+    const t = new Date(Date.UTC(2026, 11, 30, 23, 30));
+    expect(nowMeosDate(t, "UTC")).toBe(20261230);
+    expect(nowMeosDate(t, "Europe/Stockholm")).toBe(20261231);
   });
 });
 
 describe("nowMeosTime", () => {
-  it("packs HH:MM:SS as deciseconds", () => {
-    // 10:00:00 = 36000s = 360000 ds
-    expect(nowMeosTime(new Date(2026, 4, 12, 10, 0, 0))).toBe(360000);
+  it("packs HH:MM:SS in the event zone as deciseconds", () => {
+    // 08:00 UTC in May = 10:00 in Stockholm = 360000 ds
+    expect(nowMeosTime(new Date(Date.UTC(2026, 4, 12, 8, 0, 0)), "Europe/Stockholm")).toBe(360000);
+    expect(nowMeosTime(new Date(Date.UTC(2026, 4, 12, 8, 0, 0)), "UTC")).toBe(288000);
   });
 
   it("handles midnight (zero)", () => {
-    expect(nowMeosTime(new Date(2026, 4, 12, 0, 0, 0))).toBe(0);
+    expect(nowMeosTime(new Date(Date.UTC(2026, 4, 12, 0, 0, 0)), "UTC")).toBe(0);
   });
 
-  it("packs the last second of the day", () => {
-    // 23:59:59 = 86399s = 863990 ds
-    expect(nowMeosTime(new Date(2026, 4, 12, 23, 59, 59))).toBe(863990);
+  it("packs the last second of the day and drops tenths", () => {
+    expect(nowMeosTime(new Date(Date.UTC(2026, 4, 12, 23, 59, 59, 900)), "UTC")).toBe(863990);
   });
 });
 
@@ -133,8 +135,9 @@ describe("meosEntryToDate", () => {
 
   it("round-trips through nowMeosDate / nowMeosTime", () => {
     const original = new Date(2026, 5, 15, 14, 27, 33);
-    const date = nowMeosDate(original);
-    const time = nowMeosTime(original);
+    const processZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const date = nowMeosDate(original, processZone);
+    const time = nowMeosTime(original, processZone);
     const decoded = meosEntryToDate(date, time);
     expect(decoded).not.toBeNull();
     expect(decoded!.getTime()).toBe(original.getTime());
@@ -144,5 +147,58 @@ describe("meosEntryToDate", () => {
     expect(meosEntryToDate(20260000, 0)).toBeNull(); // month 00
     expect(meosEntryToDate(20261301, 0)).toBeNull(); // month 13
     expect(meosEntryToDate(18991231, 0)).toBeNull(); // year < 1900
+  });
+});
+
+import { toRelativeWrapped, zeroTimeForResults, hasTime, toRelativeChecked } from "../timeConvert.js";
+
+describe("hasTime / toRelativeChecked (the relative-0 sentinel)", () => {
+  it("a start exactly at ZeroTime collides with 'no time'", () => {
+    expect(toRelative(324000, 324000)).toBe(0);
+    expect(() => toRelativeChecked(324000, 324000)).toThrow(/ZERO_TIME_COLLISION/);
+  });
+  it("passes other times and the 0 sentinel through", () => {
+    expect(toRelativeChecked(324010, 324000)).toBe(10);
+    expect(toRelativeChecked(306000, 324000)).toBe(-18000);
+    expect(toRelativeChecked(0, 324000)).toBe(0);
+  });
+  it("a start before ZeroTime has a time", () => {
+    expect(hasTime(-18000)).toBe(true);
+    expect(hasTime(1)).toBe(true);
+    expect(hasTime(0)).toBe(false);
+    expect(hasTime(null)).toBe(false);
+  });
+});
+
+describe("toRelativeWrapped (Eventor clock times)", () => {
+  it("keeps the 'no time' sentinel", () => {
+    expect(toRelativeWrapped(0, 324000)).toBe(0);
+  });
+  it("a start before ZeroTime wraps instead of going negative", () => {
+    const rel = toRelativeWrapped(288000, 324000); // 08:00 against 09:00
+    expect(rel).toBeGreaterThan(0);
+    expect(toAbsolute(rel, 324000)).toBe(288000);
+  });
+  it("a time exactly at ZeroTime is not 'no time'", () => {
+    const rel = toRelativeWrapped(324000, 324000);
+    expect(rel).not.toBe(0);
+    expect(Math.abs(toAbsolute(rel, 324000) - 324000)).toBeLessThanOrEqual(1);
+  });
+  it("a finish after midnight stays positive and reads back", () => {
+    const rel = toRelativeWrapped(18000, 828000); // 00:30 against 23:00
+    expect(rel).toBeGreaterThan(0);
+    expect(toAbsolute(rel, 828000)).toBe(18000);
+  });
+});
+
+describe("zeroTimeForResults", () => {
+  it("is the hour before the earliest start", () => {
+    expect(zeroTimeForResults([360000, 372500, 0], 324000)).toBe(324000); // 10:00 -> 09:00
+    expect(zeroTimeForResults([295000], 324000)).toBe(252000); // 08:11 -> 07:00
+  });
+  it("never goes below midnight and defaults without starts", () => {
+    expect(zeroTimeForResults([20000], 324000)).toBe(0);
+    expect(zeroTimeForResults([0, 0], 324000)).toBe(324000);
+    expect(zeroTimeForResults([], 324000)).toBe(324000);
   });
 });

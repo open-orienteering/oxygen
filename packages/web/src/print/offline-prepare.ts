@@ -316,7 +316,18 @@ async function run(nameId: string, opts: PrepareOptions, deps: PrepareDeps): Pro
         }),
     };
     for (const job of learn) {
-      await deps.compose(nameId, job, printDeps);
+      try {
+        await deps.compose(nameId, job, printDeps);
+      } catch (err) {
+        // Only a job that cannot be composed because a hiding graphic is missing (CRS-010) is skipped; a network
+        // loss aborts as partial, and any other failure stays an OfflinePrepareError.
+        if (net.gone) throw net.gone;
+        if (!(err instanceof Error && err.name === "PrintGraphicMissingError")) throw err;
+        skipped.push({ query: job.sheets[0]?.label ?? job.filename, status: 0, message: err instanceof Error ? err.message : String(err) });
+        complete = false;
+        tick();
+        continue;
+      }
       if (net.gone) throw net.gone;
       tick();
     }

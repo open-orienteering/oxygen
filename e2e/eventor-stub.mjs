@@ -63,6 +63,70 @@ ${events
 </EventList>`;
 }
 
+/**
+ * One event (90001, "E2E Stub Sprint") also serves classes, entries and
+ * results, in two scenarios the sync spec switches between with
+ * `POST /__scenario/<n>` (no ApiKey needed; the stub keeps the number):
+ *
+ *   1  Andersson (card 500001) and Berg (no card), class H21 / H35
+ *   2  Andersson's card is 500002, Berg has withdrawn, Carlsson entered
+ *
+ * Stub person ids 1001-1003, class ids 9001-9002. Every other event answers
+ * these endpoints with 404 like any unhandled path.
+ */
+const SYNC_EVENT_ID = "90001";
+let scenario = 1;
+
+/**
+ * Upload behaviour, switched with `POST /__upload/<ok|stall>`. "stall"
+ * accepts a POST to /import/* and never answers it, so the API's upload
+ * deadline (EVENTOR_UPLOAD_TIMEOUT_MS, 2 s on the E2E stack) is what ends it.
+ */
+let uploadMode = "ok";
+
+function syncEntries() {
+  const entry = (id, personId, given, family, cardNo, classId) => `  <Entry>
+    <EntryId>${id}</EntryId>
+    <Competitor>
+      <Person sex="M">
+        <PersonId>${personId}</PersonId>
+        <PersonName><Family>${family}</Family><Given>${given}</Given></PersonName>
+        <BirthDate><Date>1990-01-01</Date></BirthDate>
+      </Person>${cardNo ? `\n      <CCard><CCardId>${cardNo}</CCardId></CCard>` : ""}
+    </Competitor>
+    <EntryClass><EventClassId>${classId}</EventClassId></EntryClass>
+  </Entry>`;
+  const rows =
+    scenario === 1
+      ? [
+          entry(1, 1001, "Anna", "Andersson", 500001, 9001),
+          entry(2, 1002, "Bo", "Berg", 0, 9002),
+        ]
+      : [
+          entry(1, 1001, "Anna", "Andersson", 500002, 9001),
+          entry(3, 1003, "Cia", "Carlsson", 500003, 9001),
+        ];
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<EntryList>\n${rows.join("\n")}\n</EntryList>`;
+}
+
+const SYNC_CLASSES = `<?xml version="1.0" encoding="UTF-8"?>
+<EventClassList>
+  <EventClass sex="M" lowAge="0" highAge="0" sequence="1">
+    <EventClassId>9001</EventClassId><Name>H21</Name><ClassShortName>H21</ClassShortName>
+    <ClassType><Name>Open</Name></ClassType>
+  </EventClass>
+  <EventClass sex="M" lowAge="35" highAge="0" sequence="2">
+    <EventClassId>9002</EventClassId><Name>H35</Name><ClassShortName>H35</ClassShortName>
+    <ClassType><Name>Open</Name></ClassType>
+  </EventClass>
+</EventClassList>`;
+
+const SYNC_EXPORT_CLASSES = `<?xml version="1.0" encoding="UTF-8"?>
+<ClassList>
+  <Class resultListMode="Default"><Name>H21</Name></Class>
+  <Class resultListMode="Default"><Name>H35</Name></Class>
+</ClassList>`;
+
 function send(res, status, body, contentType = "application/xml") {
   res.writeHead(status, {
     "Content-Type": contentType,
@@ -74,6 +138,21 @@ function send(res, status, body, contentType = "application/xml") {
 const server = createServer((req, res) => {
   const { pathname } = new URL(req.url, `http://127.0.0.1:${PORT}`);
   const apiKey = req.headers.apikey;
+
+  // Test control: pick the sync scenario (no ApiKey, not an Eventor endpoint).
+  const control = /^\/__scenario\/(\d+)$/.exec(pathname);
+  if (req.method === "POST" && control) {
+    scenario = Number(control[1]);
+    send(res, 200, JSON.stringify({ scenario }), "application/json");
+    return;
+  }
+
+  const uploadControl = /^\/__upload\/(ok|stall)$/.exec(pathname);
+  if (req.method === "POST" && uploadControl) {
+    uploadMode = uploadControl[1];
+    send(res, 200, JSON.stringify({ uploadMode }), "application/json");
+    return;
+  }
 
   // Every Eventor endpoint is key-authenticated, and the client maps 403
   // onto EventorAuthError. Keep that contract so the "bad key" UI path
@@ -91,6 +170,27 @@ const server = createServer((req, res) => {
   if (req.method === "GET" && pathname === "/events") {
     send(res, 200, eventListXml());
     return;
+  }
+
+  if (req.method === "POST" && pathname.startsWith("/import/")) {
+    // Drain the body; in stall mode then say nothing at all.
+    req.on("data", () => {});
+    req.on("end", () => {
+      if (uploadMode === "stall") return;
+      send(res, 200, "<ImportResult />");
+    });
+    return;
+  }
+
+  const eventParam = new URL(req.url, `http://127.0.0.1:${PORT}`).searchParams;
+  const forSyncEvent =
+    (eventParam.get("eventId") ?? eventParam.get("eventIds")) === SYNC_EVENT_ID;
+  if (req.method === "GET" && forSyncEvent) {
+    if (pathname === "/eventclasses") return send(res, 200, SYNC_CLASSES);
+    if (pathname === "/entries") return send(res, 200, syncEntries());
+    if (pathname === "/export/classes") return send(res, 200, SYNC_EXPORT_CLASSES);
+    if (pathname === "/results/event") return send(res, 200, "<ResultList />");
+    if (pathname === "/starts/event/iofxml") return send(res, 200, "<StartList />");
   }
 
   console.warn(`[eventor-stub] unhandled ${req.method} ${pathname}`);

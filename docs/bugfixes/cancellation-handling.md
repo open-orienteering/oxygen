@@ -43,7 +43,7 @@ Two further issues fell out of the same investigation:
 
 2. **Re-entry was sticky** — `routers/eventor.ts` correctly stamps
    missing-from-snapshot runners with `Status = 21`, but the re-entry
-   path (the `if (existing)` branch around line 640) only updates
+   path (the `if (existing)` branch of the sync) only updates
    `Status` when the snapshot includes a `result`. A previously-
    cancelled person who re-entered without a result yet would keep
    `Status = 21` forever — silently invisible from every list now that
@@ -158,7 +158,10 @@ result, the existing `result.status` path takes precedence.
 
 - `Cancel` is still preserved in the `oRunner` row, with `Removed =
   false`. The Eventor sync logic that flips `Status = 0 → 21` for
-  missing entries (lines 775–793) is untouched.
+  missing entries is untouched here; it was later narrowed (a runner with
+  a card read, a finish time or a result is left as is, and only the
+  sync's own cancel is reinstated), see
+  [eventor-resync-data-loss.md](eventor-resync-data-loss.md).
 - `DNS` behavior is unchanged: still counted as finished, still
   returned by the start list and result list, still pushed to
   Eventor.

@@ -33,7 +33,7 @@ SI Card Inserted
 └─────────┬────────────┘
           │
           ├──── action = "register" ──────▶ RegistrationDialog
-          ├──── action = "readout"  ──────▶ Kiosk readout screen + auto-apply
+          ├──── action = "readout"  ──────▶ Kiosk readout screen + guarded apply
           └──── action = "pre-start" ─────▶ Kiosk pre-start screen
 ```
 
@@ -116,7 +116,18 @@ interface SICardReadout {
 }
 ```
 
-3. **`si:card-removed`** — Card physically removed from the reader.
+3. **`si:card-read-failed`** — A detected card could not be read completely: `{ cardNumber, cardType, reason: "timeout" | "removed" | "bad-block" | "parse", blocksReceived, blocksExpected }`. No `si:card-readout` follows, no ACK is sent (the station does not beep, which is what tells the runner at the reader that the card was not taken) and nothing reaches the server. The hub adds `readerId`.
+4. **`si:card-removed`** — Card physically removed from the reader. After a read that was still open, `si:card-read-failed` (reason `removed`) comes first.
+
+**How the serial reader reads a card** (`webserial.ts`, SI-04/05/13):
+
+- A card is read in `BLOCKS_TO_READ[type]` blocks: SI5 1 (`0xB1`, frame of 130 bytes: station code + 128), SI8/SI9/pCard always 2, large cards 4 + the punch blocks the counter calls for (up to 8). The old "block 0 is enough up to 24 punches" shortcut is gone: the punch slots of an SI8 start at image byte 136, in block 1.
+- A frame is used only when its CRC is valid. A block must be 131 bytes (`0xEF`) with `data[2]` equal to the block asked for. A damaged or wrong block, or one that does not arrive within 2 s, is asked for once more; the second failure of the same block fails the read. A repeat of a block already taken is ignored.
+- The card is parsed only when every block arrived and the parse is not null (a tCard, series 6, is not decoded and fails as `parse`). Only then is the ACK sent and `si:card-readout` emitted.
+- A fatal stream error (reader unplugged) fails the open read, rejects the pending command, releases the port and leaves the status `error`; the port can be attached again when the browser reports it (`navigator.serial` `connect` event). A recoverable stream error goes back to `reading`.
+- The Reader BT sends the same event when it gives up on a card (it already sent Feedback "error").
+
+Card memory layouts and the blank-slot rule are in [`docs/si-protocol/card-layouts.md`](../si-protocol/card-layouts.md).
 
 Supported card types: SI5, SI6, SI8, SI9, SI10, SI11, SIAC, pCard, tCard.
 
@@ -128,7 +139,9 @@ Supported card types: SI5, SI6, SI8, SI9, SI10, SI11, SIAC, pCard, tCard.
 
 ### 2a. Deduplication
 
-If the same card with identical punch data is scanned within a short window, the duplicate is detected by `readoutsMatch()` (compares card number, start/finish/check times, and punch sequences). Duplicates reuse the existing entry ID instead of creating a new pipeline run.
+A re-read is a duplicate (`findDuplicate` in `lib/offline/readout-policy.ts`) only when an earlier entry in the recent-cards list has identical data (`readoutsMatch()`: card number, start/finish/check times, punch sequence), was taken in the **same event** (`competitionId`, from the URL), and was **persisted**, that is stored on the server or queued in this device's outbox. There is no time window. A duplicate reuses the entry ID and is not stored again, but its action is still re-resolved (the runner may have been registered meanwhile).
+
+A read whose store or queue write is still in flight (`saveState: "saving"`) also counts as a duplicate, so a re-insert during a slow save is not queued twice. A read that reached neither the server nor the outbox (`saveState` `not-saved` or `no-competition`) is never a duplicate: the next insert of the same card tries again and replaces the failed entry. The same card data in another event is a new read.
 
 ### 2b. Client-Side Freshness Check
 
@@ -162,6 +175,22 @@ storeReadout.mutateAsync({
 
 The server always backs up the data to `oxygen_card_readouts` (forensic history), but only writes to `oCard` (the MeOS-compatible table) if strict guards pass. See §3 below.
 
+#### 2c-1. When the server is unreachable or too slow
+
+The event is the first path segment of the URL (`activeEventNameId()`, the same source as the `x-competition-id` header), so the standalone kiosk and start screens, which sit outside `CompetitionShell`, queue under the right event. `storeReadout` is capped at 8 s; the call failing, timing out or the browser being offline all take the same path:
+
+1. `card.read` is written to the local outbox (`emitEvent`, awaited). Success sets `saveState: "queued"`. If there is no event in the URL, or IndexedDB refuses the write, nothing was saved: `saveState` is `no-competition` or `not-saved`, `persisted` stays false, and the standalone kiosk shows a red notice ("Card was not saved. Insert it again.").
+2. The server fetch of §2d is skipped when the server was unreachable or too slow. If it answered with an error (a kiosk key refused for writes, a lease refusal), the fetch still runs: the kiosk key may call `cardReadout.readout`. The result is computed locally from the cached runner list and dashboard (`computeCardReadout`), which only reads a cache that belongs to this event (§2c-3).
+3. If a runner is found, `result.applied` is queued too (awaited, failure logged). It is queued only when `canApplyResults(authEnabled, signedIn)` holds, i.e. auth is off (venue box) or an operator is signed in. A device that has only a kiosk key (auth on, nobody signed in) queues `card.read` alone: it stays display-only for everything but its own readout entries (decision D11).
+
+#### 2c-2. Draining
+
+The kiosk route mounts its own `useEventQueue(nameId)` and shows `data-testid="kiosk-sync-badge"` while entries are pending or rejected. A refusal from the server (`UNAUTHORIZED` / `FORBIDDEN`, a kiosk-key-only device under auth) is not a network error: entries stay pending and the badge reads "saved on this device. An operator must sign in to send them". Nothing widens what a kiosk key can call; `storeReadout`, `applyResult` and `events.push` still need a signed-in user.
+
+#### 2c-3. The cache belongs to one event
+
+Event-scoped tRPC queries have `undefined` input, so their query keys do not name the event. The persisted query cache therefore has an owner (marker query `["oxygen","cacheOwner"]`) and one IndexedDB blob per event (`oxygen-query-cache:<nameId>`; `lib/offline/cache-scope.ts`, `persister.ts`). `CompetitionShell`, `KioskPage` and `StartScreenPage` call `ensureEventCache` before selecting the event: it flushes the outgoing event's blob, clears the queries (never the mutation cache), and loads the incoming event's blob if there is one. Switches are last-caller-wins (an overtaken switch leaves the cache alone), persistence is suspended during the swap, queries a mounted component observes are reset in place and refetched (never removed from under their observer), and user queries (`users.*`) stay live and are kept out of event blobs. The owner marker never expires (`gcTime: Infinity`). A page outside any event (the event selector) restores the blob persisted last (a pointer key `last-owner`), so its shared queries are as fresh as the last event page left them. An event never opened on this device starts empty offline. Local readout lookups read only exact-key, no-input queries (a filtered `runner.list({search})` is never taken for the full list) and return nothing if the cache owner is not the event being read. The cache of earlier versions had no owner and is dropped on first load: stations re-warm once while online.
+
 ### 2d. Fetch Readout Data
 
 After storing, DeviceManager fetches the runner's full readout via `cardReadout.readout({ cardNo })`. This returns:
@@ -178,29 +207,44 @@ Based on the DB lookup result:
 | Condition | Action | Meaning |
 |-----------|--------|---------|
 | No runner found for this CardNo | `register` | New runner — open registration dialog |
-| Runner found, punches match course OR has existing result | `readout` | Show result on kiosk, auto-apply |
+| Runner found, punches match course OR has existing result | `readout` | Show result on kiosk, apply under the guards (§2f) |
 | Runner found, no matching punches, no existing result | `pre-start` | Runner is registered but hasn't raced yet |
 
 "Has existing result" means `Status > 0` excluding DNS (20) and Cancel (21), which are pre-race statuses.
 
-### 2f. Auto-Apply Result
+### 2f. Apply the Result (guarded)
 
-When action is `readout`, DeviceManager automatically writes the result to the database:
+When action is `readout`, DeviceManager asks the server to write the result:
 
 ```typescript
 applyResult.mutateAsync({
   runnerId,
-  status,        // 1=OK, 2=DNF, 3=MP
-  finishTime,    // deciseconds
-  startTime,     // deciseconds
+  status,        // numeric RunnerStatus
+  finishTime,    // absolute deciseconds
+  startTime,     // absolute deciseconds
+  punchesFresh,  // the client freshness verdict (§2b)
+  confirmed,     // true only after the operator accepted a held read
 })
 ```
 
-This persists `Status`, `FinishTime`, and `StartTime` to `oRunner`. The assigned (draw) start time takes priority over the card start punch — the card punch is only used for punch-start events where no draw start is assigned.
+Input is validated at the wire (RES-24): `status` must be one of the `RunnerStatus` constants (`runnerStatusValueSchema` in `statusConvert.ts`; 7 or 999 is a `BAD_REQUEST`, no longer stored as "unknown") and `finishTime` / `startTime` are absolute times of day, 0..863999 (`absoluteTimeSchema`, the same bound as `event.create`'s `firstStart`). `race.recordFinish` (`finishTime`, `finishTimeAbsolute`, `status`) and the runner `status` inputs of `runner.create` / `update` / `bulkUpdate` follow the same rules, and so do the `startTime` / `finishTime` inputs of `runner.create` / `update` / `bulkUpdate` (0 still clears). `runner.updated`, `runner.registered`, `start.recorded` and `start.adjusted` journal entries are checked the same way (station pushes only). A queued `finish.recorded`, `finish.adjusted` or `result.applied` journal entry with an unknown status or an out-of-range time is refused as `INVALID_PAYLOAD` by `events.push` and writes nothing. This holds for a station's own pushes only: an entry shipped by a peer node (the sync secret path, `strict` off) is applied as before, because its origin may be an older release that accepted the value, and refusing it would block that event's whole shipping stream. The web client wraps card times modulo one day (`cardSecondsToDs`) so a corrupt card time cannot produce such an entry.
+
+The server runs one guard, `decideReadoutApply` (§3a), and answers with `{ ok, outcome, reason }`:
+
+| `outcome` | Meaning |
+|-----------|---------|
+| `applied` | The runner row changed; `result.applied` is journaled. |
+| `unchanged` | Same values already stored; nothing written, nothing journaled. |
+| `needsConfirmation` | The read would replace the stored result with a worse one. Nothing is written; the operator is asked (banner `apply-hold-banner`, "Replace result" / "Keep result"). |
+| `protected` | The stored result is a DQ or hand-set; nothing is written, even when confirmed. The operator changes it on the runner. |
+
+The assigned (draw) start time takes priority over the card start punch — the card punch is only used for punch-start events where no draw start is assigned.
+
+**Latest card wins on screen (SI-17).** Each read mints an id and stores it in `latestCardIdRef`. After any await, the pipeline updates `currentCard` only while that card is still current (`nextCurrentCard`) and broadcasts to the kiosk only while it is the latest (`isLatestCard`). A slow earlier card still stores, applies and updates the recent list.
 
 ### 2g. Kiosk Broadcast
 
-If a kiosk window is paired (same competition), DeviceManager sends the card data via BroadcastChannel. See §5 for the full kiosk protocol.
+If a kiosk window is paired (same competition), DeviceManager sends the card data via BroadcastChannel and, after every online apply attempt (written, held or protected), a `readout-applied` message (not sent on the offline path). The kiosk then refetches `cardReadout.readout`, `runner.findByCard` and `race.finishReceipt`. The kiosk never writes a finish itself (WEB-72): it has no `race.recordFinish` call. It sends `kiosk-print-receipt` only from a `runner.findByCard` and a `race.finishReceipt` answer fetched after its readout screen opened, once per read (WEB-02, `lib/kiosk-print.ts`): those per-card queries are keyed by card number and are not persisted, and a cached row of an earlier read may name another runner. With the server unreachable the kiosk therefore prints no receipt. The online readout lookup after a store gives up after 8 s and resolves the card locally (SYNC-16; the service worker no longer answers it from a cache). See §7 for the kiosk protocol.
 
 ---
 
@@ -244,7 +288,25 @@ This is deliberately generous — a single misconfigured control or accidental p
 
 Every readout — stale or fresh — is saved to `oxygen_card_readouts` (raw SQL table, not Prisma). This provides a forensic record of every card scan, useful for post-race debugging. Deduplication: if the most recent entry for this card has identical punch data, the existing row is updated rather than inserting a duplicate.
 
+### 3a-guard. Applying a result: the guards
+
+`packages/shared/src/readout-guard.ts` (`decideReadoutApply`) is the one decision, used by `applyResult`, `pushReadoutBackup` and the offline `result.applied` ingest (`applyResultGuarded` in `cardReadout.ts`). Rules, in order:
+
+1. **DQ is never overwritten**, not even when confirmed.
+2. **A hand-set status** (`runners.status_manual`, set by `runner.update`, the status buttons and bulk DNS, only when the value really changes) is protected. A hand-set DNS, Cancel or Not competing asks instead, since the runner may have started after all.
+3. **A hand-keyed finish** (`runners.finish_manual`, set by the Finish Station, `finish.recorded`/`finish.adjusted` and a changed `finishTime` in `runner.update`) is kept: `performReadout` uses it when the card has no finish punch (SI-10), and the guard never replaces it with a card's finish.
+4. **A worse read asks** (`needsConfirmation`): the reader says the punches are not fresh (even when the runner has no result yet, so last week's punches never write times), or the runner has a result and the new read has no finish. `confirmed` lets it through.
+5. **Identical values** are `unchanged` and checked first (a re-read that agrees with the stored result never asks and writes nothing).
+
+**The card row is held too.** `storeReadoutImpl` always logs the read in `card_readouts`, but when the runner already has a result and the read is empty (cleared hire card), not fresh, or has no finish, `cards.punches_raw` keeps the earlier punches and `storeReadout` returns `cardHeld: true`. The evaluation then reproduces the stored result, so such a read is `unchanged` and does not ask. A held read is only in the readout log; to replace the result with it, correct the runner by hand. `performReadout` reports the stored status for a DQ or hand-set result, so receipts and the kiosk show what the runner has.
+
+**Known gap:** a hand-keyed finish wins over a finish punch in the stored result, while the readout view still times the runner from the punch; the operator corrects the finish on the runner (documented in the bugfix note).
+
+**Offline.** The queued `result.applied` goes through the same guard on ingest. An entry without `confirmed: true` that the guard holds is not applied (the entry stays in the journal); the server's own journaled entries carry `confirmed: true` because the decision was made there. Consequence: a held read that arrives only through the offline queue is not prompted to anyone; the card detail shows the stored result, and re-reading the card online asks.
+
 ### 3d. oCard Write Guards
+
+> Historical (MeOS era): §3d–§3f describe the retired oCard layer. The current rule is §3a-guard above; a full rewrite of §3 is RES-28.
 
 Three conditions must ALL be true to write to `oCard`:
 
@@ -279,6 +341,20 @@ When updating an existing oCard, the server prefers the one linked to the runner
 ```
 
 This prevents the wrong oCard from being updated when multiple rows exist (e.g., one from Oxygen, one from MeOS).
+
+**The link follows the card number (API-11).** `runner.cardId` is trusted
+only while the linked card row has the runner's current `cardNo`. Every
+write that changes `cardNo` re-points it to the newest live card row for the
+new number, or clears it (`buildRunnerUpdateData`, shared by `runner.update`,
+`bulkUpdate` and the `runner.updated` replay; the unlink in
+`linkCardToRunner`). On the read side `pickRunnerCard`
+(`packages/api/src/cardLink.ts`) ignores a link whose card has another
+number and falls back to the newest row for the runner's number; the
+readout (`performReadout`) and the Eventor result upload use it, so a card
+changed at the desk never shows the previous card's punches. Linking a card
+that another runner holds (`linkCardToRunner`) is refused with CONFLICT,
+like `runner.create` and `runner.update`; a create or update that loses the
+race on the `(event_id, card_no)` unique index answers the same CONFLICT.
 
 ### 3f. ReadId Deduplication
 
@@ -350,7 +426,13 @@ Steps:
    "41-36120.0;42-36240.0;2-36720.0;" → [{type:41, time:361200}, {type:42, time:362400}, ...]
    ```
    Times are converted from `seconds.tenths` to deciseconds.
-5. **Merge and sort** card punches + free punches by time
+5. **Merge in card order** (`mergePunchesInCardOrder` in `@oxygen/shared`): the card's punches
+   keep the order the card lists them in; each free punch (radio, manual, backup memory) is
+   inserted by time before the first card control punch with a strictly later time, or appended
+   after the last one; free punches without a time go last. The merged list is **not** sorted by
+   time: a card's clock can be wrong (a unit an hour behind, a wrap past midnight) and sorting would
+   move that punch out of its place and report a missing control. The same merge feeds the Eventor
+   result export.
 6. **Match to course** via `matchPunchesToCourse()`
 
 ### 4c. matchPunchesToCourse Algorithm
@@ -358,7 +440,7 @@ Steps:
 Sequential matching of actual punches against expected course controls:
 
 ```
-Input:  allPunches (sorted by time), courseControls (expected order), fallbackStartTime
+Input:  allPunches (card order, free punches merged by time), courseControls (expected order), fallbackStartTime
 Output: matches[], extraPunches[], startTime, finishTime, missingCount
 
 For each expected control:
@@ -397,8 +479,8 @@ class.NoTiming OR runner.TransferFlags & 512  → NoTiming (2)
 
 Priority: MaxTime > OutOfCompetition > NoTiming. If MaxTime is exceeded, the runner gets OverMaxTime regardless of flags. OutOfCompetition takes priority over NoTiming.
 
-- **OverMaxTime**: Class-level setting (`oClass.MaxTime`, deciseconds). Runner's time is shown but they rank last.
-- **NoTiming**: For children's/open classes. Set at class level (`oClass.NoTiming`) or per-runner (`TransferFlags` bit 512). Time is not displayed in results, runner is not placed.
+- **OverMaxTime**: Class-level setting (`oClass.MaxTime`, deciseconds). Runner's time is shown but they are not placed.
+- **NoTiming**: For children's/open classes. Set at class level (`oClass.NoTiming`) or per-runner (`TransferFlags` bit 512). The runner is not placed and gets no position on the receipt. The result list still returns the time, and the Results page shows it in grey italics under an "Unofficial" badge; the Eventor upload sends no time.
 - **OutOfCompetition**: Per-runner flag (`TransferFlags` bit 256). For course setters, unofficial runs. Time IS shown but runner is not placed.
 
 ### 4e. Return Object
@@ -492,7 +574,40 @@ IF input.cardNo > 0:
   IF found → oRunner.Card = existing.Id
 ```
 
-This ensures the FK is set at registration time, even if the card was scanned before the runner was created.
+This ensures the FK is set at registration time, even if the card was scanned before the runner was created. A station registration replayed through `events.push` links the same way.
+
+**The journal entry carries the whole form (SYNC-12).** `runner.registered`
+holds name, class, club (`clubName` + `eventorClubId`), card, start time and
+start number, birth year, sex, nationality, phone, the fee fields (`fee`,
+`paid`, `payMode`, `cardFee`, in cents), status and finish time when given,
+and the entry date and time stamped by the registering node. A station
+entry carries no entry date or time; the apply stamps it from the entry's
+client timestamp in the event's time zone. A follower
+stores the same row; an absent key keeps the column default (except the
+entry date and time, stamped as above), so older entries replay unchanged.
+The offline dialog sends the same form fields. An SI owner-data club is
+matched against the club list loaded when the card opens the dialog; a card
+opened before the list has loaded gets no club from its owner data.
+
+**A station registration that cannot be stored is refused.** Pushed from a
+station's outbox (no sync secret), a `runner.registered` whose class is not
+in the event fails with `CLASS_NOT_FOUND`, and one whose card already
+belongs to a runner with another name fails with `CARD_TAKEN`. Both stop
+the batch (`JOURNAL_BATCH_STOPPING_CODES`): the entries queued behind it,
+such as the entrant's finish or readout, wait on the station instead of
+landing on the card's other holder. The Sync Status panel shows the reason
+with Retry and Discard. The same person registered twice (same card, same
+name after folding case and spaces) is a duplicate and syncs. A node-to-node
+push (with the secret) keeps skipping such an entry with a warning in the
+log: the originating node already decided.
+
+**Who may register.** `runner.create` needs `race.operate` (Race crew), the same
+capability a station's queued `runner.registered` needs through `events.push`;
+`runner.update`, `bulkUpdate` and `delete` stay `event.manage` (Event admin). The
+input still carries `status`, `finishTime` and the fee fields (`fee`, `paid`,
+`payMode`, `cardFee`): race crew can already set a result through `applyResult` /
+`recordFinish`, and the registration desk has to record payment, so nothing is
+stripped for them. See [authentication.md](authentication.md#journal-push).
 
 ### 5b. runner.update — Auto-Populate Times on Status→OK
 
@@ -601,11 +716,13 @@ Channel name: `oxygen-kiosk-{competitionNameId}` — scoped to a specific compet
 |---------|-----------|------|---------|
 | `card-reading` | Admin → Kiosk | Card physically detected | `{ cardNumber }` |
 | `card-readout` | Admin → Kiosk | Card fully read, action determined | `{ card: { action, runnerName, status, runningTime, ... } }` |
+| `card-read-failed` | Admin → Kiosk | The reader could not read the card completely | `{ cardNumber }` |
 | `card-removed` | Admin → Kiosk | Card removed from reader | — |
 | `registration-state` | Admin → Kiosk | Form data changed (heartbeat, every 2s) | `{ form: { name, className, ... }, ready }` |
 | `registration-complete` | Admin → Kiosk | Registration submitted successfully | `{ runner: { name, className, startTime, ... } }` |
 | `kiosk-reset` | Admin → Kiosk | Reset to idle (dialog closed, ESC, sticky clear) | — |
 | `kiosk-ping` | Both directions | Heartbeat (every 5s during registration) | `{ from: "admin" \| "kiosk" }` |
+| `readout-applied` | Admin → kiosk | After an online apply attempt; the kiosk refetches readout, runner and receipt | `{ cardNumber }` |
 | `kiosk-print-receipt` | Kiosk → Admin | Kiosk needs receipt printed | `{ runnerId }` |
 
 ### 7c. Kiosk State Machine
@@ -640,11 +757,17 @@ Channel name: `oxygen-kiosk-{competitionNameId}` — scoped to a specific compet
 
 Registration goes directly to `registration-waiting` (no `card-done` transition), since the admin needs to fill the form.
 
+`card-read-failed` takes `reading` (or `idle`) to `read-failed`, which returns to `idle` after 8 seconds (or at the next `card-reading`). It never replaces a result or a registration screen, and it plays no beep. In standalone mode the kiosk reacts to `lastReadFailure` from DeviceManager instead of the message.
+
 ### 7d. Kiosk Screens
 
 **Idle** — Competition name, animated SI card slot, "Insert Card" prompt, live clock.
 
 **Reading** — Animated spinner, "Do Not Remove Card" warning, card number display.
+
+**Read failed** — Red cross, "Card not read", "Insert your card again and wait for the beep." (sv: "Brickan lästes inte", "Sätt i brickan igen och vänta på pipet."), card number. The operator tab shows a red, auto-dismissing banner "Card {{number}} was not read: insert it again" (`card-read-failed-banner`); there is no Recent Cards row.
+
+**Reader disconnected** — On a standalone kiosk whose USB reader is gone (aggregate status `error`) a full-width red bar "Reader disconnected" (`kiosk-reader-disconnected`) shows above the content.
 
 **Card Done** — Success checkmark animation, 2-second transition to result screen.
 
@@ -681,7 +804,7 @@ Registration goes directly to `registration-waiting` (no `card-done` transition)
 The kiosk can operate independently with its own SI reader (no admin window needed). In standalone mode:
 
 - Kiosk creates its own DeviceManager connection
-- Card events are processed locally
+- Card events are processed locally; with the server unreachable they are queued and drained by the kiosk itself (§2c-1, §2c-2)
 - State transitions follow the same logic
 - Registration dialog can still be opened (kiosk acts as both admin and display)
 
@@ -708,7 +831,7 @@ The dialog opens when DeviceManager determines `action = "register"` (no runner 
 Data sources are applied in strict priority order:
 
 1. **DB runner** (`runner.findByCard`) — If a runner already exists with this CardNo, pre-fill from DB. This always wins.
-2. **Eventor lookup** (`eventor.lookupByCardNo`) — If no DB match, check the Swedish Orienteering Federation's database by card number.
+2. **Eventor lookup** (`eventor.lookupByCardNo`, or the downloaded runner database offline) — If no DB match, check the Swedish Orienteering Federation's database by card number. Both need `race.operate` (the runner directory is personal data, [authentication.md](authentication.md#runner-directory-and-eventor-browse)); without it the step is skipped and the form is filled by hand.
 3. **Card owner data** (SI card memory) — Only if no DB match AND no Eventor match AND name is empty. Filtered through `isRealOwnerName()`.
 
 ```typescript
@@ -724,6 +847,45 @@ This filters SPORTident factory defaults (card number as first name, "SPORTident
 
 Non-name fields (birth year, sex, phone, club) are filled from owner data immediately since they don't conflict with DB lookups.
 
+**Owner data belongs to one card (WEB-05).** The deferred name fill uses
+owner data only for the card number it was read from. A card read without
+owner data, a manual card entry and every form clear drop the previous
+card's owner data, so the next runner is never named after the last one.
+
+**Each card read starts a fresh form (WEB-19).** Opening the dialog for a
+card read clears every field, including the rental-card tick, the receipt
+tick and the payment method. A fresh form's payment method is the first
+method the event offers (Registration settings), on every reset path.
+
+### 8b-1. Clubs
+
+The club picker keys every choice by Eventor id (`e:<id>`) or, for a club
+typed without an Eventor id, by name (`n:<name>`); "No club" is the empty
+key (`packages/web/src/lib/club-options.ts`). Free-text clubs share id 0
+with "No club" in `club.list`, so keying by the numeric id saved "No club"
+as the first free-text club (WEB-06).
+
+The list is the event's roster (`club.list`). A club with no runner in the
+event yet is still reachable (WEB-11):
+
+- a name suggestion, a card lookup or an SI owner-data club that names a
+  club outside the roster adds it as an option and selects it; owner data
+  is matched against the roster first, then against the cached runner
+  database's clubs;
+- typing two or more characters in the club search also searches the club
+  directory (`club.searchDirectory`) online, or the cached runner
+  database's clubs offline, and lists the hits under the roster matches (the
+  runner database, like the card and name lookups, needs `race.operate`; the
+  club directory search only a sign-in);
+- a picked club stays an option for the rest of the form, so a roster
+  refetch that drops it (its last runner moved) does not lose its name.
+
+The dialog submits the chosen club's name and Eventor id together. The
+bulk "Set club" action on the Runners page uses the same keys and sends
+both; the server fills a missing name from the club directory and treats an
+Eventor id of 0 as none (WEB-10). `club.list` accepts `showAll` but ignores
+it: a club without runners has no row to list.
+
 ### 8c. Name Autocomplete
 
 When typing ≥2 characters, the dialog searches two sources:
@@ -738,12 +900,30 @@ Results are deduplicated, limited to 12, and navigable with arrow keys.
 Creates the runner via `runner.create()` with all form fields. The dialog
 sends no `courseId`: in a class on a forked course the server deals the
 runner the least-populated variant (§5c), which the desk can change on
-the Runners page. After success:
+the Runners page. Offline it queues a `runner.registered` with the same
+fields (§5a).
+
+One registration runs at a time: a second Enter or click while the first
+is saving is ignored, online and offline (WEB-20). Register is disabled
+while the card shown belongs to a runner in the event. A failed online
+registration says what to do (WEB-22): a taken card, a missing permission,
+a class that no longer exists, an unreachable server (nothing saved) or a
+start on the zero time each have their own text, and the raw error goes to
+the console. A manual card entry whose server check fails, or that is made
+offline, opens the form anyway.
+
+After success:
 
 1. Sends `registration-complete` to kiosk
-2. Prints registration receipt (if printer connected)
-3. Invalidates caches (runner list, dashboard)
-4. In sticky mode: clears form, waits 3 seconds, sends `kiosk-reset`
+2. Invalidates caches (runner list, dashboard)
+3. Sticky mode: clears form, waits 3 seconds, sends `kiosk-reset`;
+   otherwise closes the dialog
+4. Prints the registration receipt (if enabled, ticked and a printer is
+   connected) in the background: the runner is registered whatever the
+   printer does. Receipts print one after another. The club logo load is
+   bounded at 10 s (the receipt prints without it) and each USB transfer at
+   30 s. A failed print shows on the printer button in the header (its last
+   error), not in the dialog.
 
 ---
 
@@ -772,7 +952,7 @@ DeviceManager.addRecentCard()
 Admin: RegistrationDialog      Kiosk: registration-waiting
     │                               ▲
     ├── findByCard(cardNo) → null   │
-    ├── eventor.lookupByCardNo()    │
+    ├── eventor.lookupByCardNo()    │   (race.operate; skipped if refused)
     ├── ownerData pre-fill          │
     │                               │
     ├── registration-state ─────────┘  (every 2s)
@@ -808,7 +988,7 @@ DeviceManager.addRecentCard()
     │       └── performReadout()
     │               ├── Load oCard punches (runner-linked)
     │               ├── Load free punches (oPunch / radio)
-    │               ├── Merge + sort by time
+    │               ├── Merge in card order (free punches slotted in by time)
     │               ├── matchPunchesToCourse()
     │               └── return { timing, controls, status }
     │
@@ -856,9 +1036,11 @@ The `oCard` table is shared between Oxygen and MeOS. Both systems can read and w
 - **ReadId**: Both compute the same hash for deduplication. Oxygen's `computeReadId()` matches MeOS's `SICard::calculateHash`.
 - **Multiple oCard rows**: When both systems create oCards for the same CardNo, Oxygen prefers the runner-linked one. The runner FK (`oRunner.Card`) is the authoritative link.
 
-### Time Format: ZeroTime-Relative Storage
+### Time model: ZeroTime-relative storage, event time zone
 
-All times in the database are stored as **ZeroTime-relative deciseconds**. ZeroTime is the competition's reference point (default: 324000 = 09:00:00), stored in `oEvent.ZeroTime`. This matches MeOS behavior exactly.
+Runner, team, class and punch times are stored as **ZeroTime-relative
+deciseconds** (a layout inherited from MeOS). ZeroTime is the event's reference
+point, `events.zero_time` (default 324000 = 09:00:00).
 
 ```
 Absolute time → Stored (relative to ZeroTime 09:00:00)
@@ -867,18 +1049,65 @@ Absolute time → Stored (relative to ZeroTime 09:00:00)
 08:50:00       → -6000 ds   (318000 - 324000)
 ```
 
-**Conversion at the API boundary:**
+**Conversion at the API boundary** (`packages/api/src/timeConvert.ts`):
 
-- **DB writes**: `toRelative(absoluteDs, zeroTime) = absoluteDs - zeroTime`
-- **DB reads**: `toAbsolute(relativeDs, zeroTime) = (relativeDs + zeroTime) % 864000`
-- **API always speaks absolute times** — the web UI never sees relative values
-- **Running time = finishTime - startTime** is the same in both frames (no conversion needed)
+- **DB writes**: `toRelative(absoluteDs, zeroTime) = absoluteDs - zeroTime`;
+  `toRelativeChecked` for times a person typed or the draw chose (see below).
+- **DB reads**: `toAbsolute(relativeDs, zeroTime) = (relativeDs + zeroTime) % 864000`.
+- **The API always speaks absolute times**; the web UI never sees relative values.
+- **Running time** is `runningTimeDs(startAbs, finishAbs)` from
+  `@oxygen/shared`: a finish earlier than the start is a run across midnight
+  (23:30 → 00:20 is 50 minutes) when that gives at most 12 h; otherwise it is
+  a wrong time and gives 0 (no result). 0 also means a time is missing.
+  `computeClassPlacements` and `computePosition` take absolute times only.
 
-Sentinel value: `StartTime = 1` means "drawn with no specific time" (MeOS convention for interval=0 draws). It is preserved through the conversion layer and treated as "started" in dashboard/status logic.
+**Sentinels.** Relative `0` means "no time". A start before ZeroTime is
+negative when stored, so never test a stored time with `> 0`: use
+`hasTime(rel)` (`rel !== 0`) or `{ not: 0 }` in a query. Relative `1` means
+"drawn, no specific time" and counts as started.
+
+**A time exactly at ZeroTime** would be stored as 0 and read back as "no time"
+(RES-04). It is refused where a person or the draw sets it: `runner.create`,
+`runner.update`, bulk edits, the finish stamp, manual punches, the draw
+(`ZERO_TIME_COLLISION`). Machine paths (card readout, journal replay, ROC)
+convert unchecked: a punch at exactly ZeroTime.0 is a known limit. To keep
+starts away from it:
+
+- `event.create` takes the planned first start and sets ZeroTime one hour
+  before it, rounded down to the hour (the dialog defaults to 10:00, which
+  gives the old 09:00). An Eventor import with results does the same from the
+  earliest start.
+- The draw panel proposes ZeroTime + 1 h as the first start, and the draw
+  refuses a start on ZeroTime or at/after 24:00 (`blockers` in the preview).
+- `event.setTimeSettings` moves ZeroTime before the race: stored start times
+  and class first starts shift by old − new so every drawn start keeps its
+  clock time. Moving it is refused once a finish, punch or read card exists,
+  and while the event is checked out to a venue (anywhere: check in first).
+  The time zone alone can change at any time.
+
+**Event time zone.** `events.time_zone` (IANA, default `Europe/Stockholm`) is
+the zone of every "now" and every date: `race.serverTime`, has-started, the
+in-forest counts, entry stamps (`nowMeosDate` / `nowMeosTime`). Never use
+`Date#getHours` on the server: the process zone is not the event's (the
+images set `TZ=Europe/Stockholm`, but one cloud instance serves events in any
+zone, and the test stacks run the API in UTC). The
+stations (start, finish, kiosk, start screen) use `useEventClock`: it asks
+`race.serverTime` every 30 s, keeps the offset from the device clock and the
+zone, and ticks locally, so the clock keeps running offline and the finish
+stamp is the event's time of day even on a laptop set to another zone.
+
+**Backup-memory punches** (`source = 'backup_memory'`) are stored relative like
+every other punch and are evidence only: readout, the Eventor upload and
+LiveResults ignore them until they are pushed, which adds a `manual` mirror.
+A backup punch exactly at ZeroTime is stored as 1, not 0. In the journal the
+import carries `backupRow: true` and the push `pushedFrom: <backup row id>`.
+The migration `20261126150100_fix_backup_punch_time_base` repaired rows stored
+as clock time before.
 
 **Files:**
-- `packages/api/src/timeConvert.ts` — `toRelative()` and `toAbsolute()` helpers
-- `packages/api/src/db.ts` — `getZeroTime(client)` — cached ZeroTime lookup (defaults to 324000)
+- `packages/api/src/timeConvert.ts` — `toRelative`, `toRelativeChecked`, `toAbsolute`, `hasTime`, `hasStartedByClock`, `eventNowDs`
+- `packages/shared/src/time.ts` — `timeOfDayDs`, `dateInZone`, `runningTimeDs`, `parseClockTime`, `parseDuration`
+- `packages/web/src/lib/event-clock.ts`, `packages/web/src/hooks/useEventClock.ts` — the station clock
 
 ### Counter Increments
 
@@ -894,7 +1123,9 @@ Last-line-of-defence when Oxygen itself is broken (server bug, hardware died, et
 2. **Read backup**. The panel detects the station's operating mode from SYS_VAL `0x71`. If it's M_READOUT (`0x05`), the panel calls `parseReadoutBackupBuffer()` on the raw flash and ships the parsed records to `cardReadout.importReadoutBackups`.
 3. **Status line** in the panel: *"Imported N of M cards (K duplicates) → review on Backup Punches"*. The duplicates count is silent dedup via the `(eventId, punchesHash)` unique constraint — re-importing the same flash is always safe.
 4. **Review** on `/:nameId/backup-punches` → "Card readouts" tab. Each row shows: cardNo, cardType, runner (if registered), punch count, start/finish, match-status badge. Match-statuses are: `pushed` (already replayed), `pending` (ready to push), `no_runner` (cardNo not registered).
-5. **Push** rows individually. Push calls `pushReadoutBackup` which reuses `storeReadoutImpl` — the same core that powers a live `storeReadout`. The runner gets the same card upsert, runner link, result computation, and Google Sheets webhook as if the readout had just happened live. Idempotent: re-pushing the same row returns the existing `pushedReadoutId` without doing the work again.
+5. **Push** rows individually. Push calls `pushReadoutBackup` which reuses `storeReadoutImpl` — the same core that powers a live `storeReadout`. The runner gets the same card upsert, runner link, result computation (written with the guards of §3a-guard in the same transaction, `apply` in the response) and Google Sheets webhook as if the readout had just happened live. A held or protected row shows its `apply.outcome` and nothing is written for it. Idempotent: re-pushing the same row returns the existing `pushedReadoutId` without doing the work again.
+
+**Read failures and clearing (SI-06):** the walk fetches every page and checks its echoed address and length; a page that cannot be fetched after four attempts throws `BackupReadIncompleteError`. The panel then imports nothing, clears nothing and shows "Backup read incomplete at 0x…; nothing was cleared" (also in auto mode, which marks the station as seen so it does not loop). "Clear after read" runs strictly after a complete read **and**, when there are records, a successful import; a failed import leaves the station as it was. Slots the parser could not decode (for example a tCard, or an SI8+ slot whose parser returns null) are not dropped silently: `parseReadoutBackupBufferDetailed` returns them with address and raw bytes, `BackupResult.skippedSlots` carries them to the panel, and while any exists the panel does **not** clear the station and shows a warning ("N slot(s) on the station could not be read (at 0x…); nothing was cleared"): the result row turns amber, the reader beeps three times instead of once, the station is not powered off, and a manual "Clear memory" afterwards asks for confirmation ("Clear anyway"). The raw bytes are written to the console log; they are not uploaded, because a row with no punches would be promotable as an empty readout (see the follow-ups). The decision itself (read, import, clear) is `runBackupFlow` in `lib/backup-readout.ts`.
 
 **Storage shape:**
 
@@ -902,14 +1133,14 @@ Last-line-of-defence when Oxygen itself is broken (server bug, hardware died, et
 
 - `station_serial`, `slot_address` — where in flash the slot was found (debug)
 - `card_no`, `card_type`, `punches`, `start_time`, `finish_time`, `check_time`, `clear_time`, `owner_data` — the parsed card readout, in the same shape `storeReadout` accepts
-- `punches_hash` — `sha256(cardNo + sorted-by-time controlCode:time list)`, the dedup key
+- `punches_hash` — `sha256(cardNo + sorted-by-time controlCode:time list)`, the dedup key (the list is sorted only for the hash, so equal reads hash equally; matching uses the card's own order, §4b)
 - `original_read_at` — populated from the 4-byte slot header if/when that decodes; currently NULL
 - `imported_at`, `pushed_at`, `pushed_readout_id` — lifecycle markers
 - `raw_bytes` — original slot bytes, kept by default for forensics
 
 The `@@unique([eventId, punchesHash])` constraint means re-imports of the same flash or imports from multiple stations that happen to share a card-readout are deduped silently. Operators do not need to be careful about double-importing.
 
-**Why a separate table** (vs reusing `card_readouts` with a flag): backup readouts have different lifecycle states (imported / reviewed / pushed) and bigger metadata (raw bytes, slot identity). Keeping them separate lets `applyResult` continue to fire unconditionally on every `card_readouts` row — no new branches, no new foot-guns. Cleanup is also a one-liner: `DELETE FROM card_readout_backups WHERE event_id = X`.
+**Why a separate table** (vs reusing `card_readouts` with a flag): backup readouts have different lifecycle states (imported / reviewed / pushed) and bigger metadata (raw bytes, slot identity). Keeping them separate keeps the live readout path free of staging states. Cleanup is also a one-liner: `DELETE FROM card_readout_backups WHERE event_id = X`.
 
 **Wire-format details** (slot byte layouts, marker bytes, slot sizes per card type, paging) are in [`docs/si-protocol/readout-backup-format.md`](../si-protocol/readout-backup-format.md), with the reference pcap + Config+ ground-truth file checked in alongside.
 
@@ -918,7 +1149,8 @@ The `@@unique([eventId, punchesHash])` constraint means re-imports of the same f
 - Untangling `ControlStatus` (the enum currently conflates *course role* like `ok`/`bad`/`multiple` with *physical operating mode* like `start`/`finish`/`check`/`clear`). Readout mode isn't represented at all today; that's part of the bigger cleanup.
 
 **Key files:**
-- `packages/web/src/lib/si-protocol.ts` — `parseReadoutBackupBuffer()`, `isReadoutMode()`
+- `packages/web/src/lib/si-protocol.ts` — `parseReadoutBackupBuffer()`, `parseReadoutBackupBufferDetailed()` (also returns the skipped slots), `isReadoutMode()`
+- `packages/web/src/lib/backup-readout.ts` — `runBackupFlow()`, the read-import-clear decision
 - `packages/web/src/lib/webserial.ts` — `readBackupMemory()` (mode-aware)
 - `packages/api/src/routers/cardReadout.ts` — `importReadoutBackups`, `listReadoutBackups`, `pushReadoutBackup`, plus the extracted `storeReadoutImpl` helper
 - `packages/web/src/pages/ControlsPage.tsx` → `ReadoutPanel` — mode-aware import path

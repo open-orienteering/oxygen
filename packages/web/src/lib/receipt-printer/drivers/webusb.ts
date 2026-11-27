@@ -21,6 +21,7 @@
  * the printer between modes.
  */
 
+import { withTimeout, PRINTER_SEND_TIMEOUT_MS } from "../timeout.js";
 import type { PrinterDriver } from "../types.js";
 import {
   buildReadMemorySwitch,
@@ -301,7 +302,13 @@ export class WebUsbPrinterDriver extends EventTarget implements PrinterDriver {
   async sendBytes(data: Uint8Array): Promise<void> {
     if (!this.device) throw new Error("Printer not connected");
     // transferOut handles USB packet splitting internally
-    const result = await this.device.transferOut(this.outEndpointNumber, data);
+    // Bounded (WEB-20): a printer that stopped answering fails the print
+    // instead of holding the caller.
+    const result = await withTimeout(
+      this.device.transferOut(this.outEndpointNumber, data),
+      PRINTER_SEND_TIMEOUT_MS,
+      "printer transfer",
+    );
     if (result.status !== "ok") {
       throw new Error(`USB transfer failed with status: ${result.status}`);
     }

@@ -93,7 +93,7 @@ describe("demo map enrichment", () => {
     for (const f of report.features) {
       for (const rs of forbidden) expect(rs.filter((r: number[][]) => inside(f.x, f.y, r)).length % 2, `feature ${f.sym} at ${f.x},${f.y}`).toBe(0);
     }
-  });
+  }, 30_000); // full enrichment plus a point-in-polygon scan over the whole map: ~4.8 s on a dev box, over the 5 s default on CI runners
 
   it("with a height field, points every cliff's tags downhill (right of the line's direction)", async () => {
     // Ground falling east: tags must point east, so each cliff runs north.

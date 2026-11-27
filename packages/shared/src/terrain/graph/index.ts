@@ -16,7 +16,7 @@ export * from "./types.js";
 export { canonicalCode, classifyTerrainSymbol, cliffTagSide, contourInputs } from "./inputs.js";
 export { flattenObject, polylineEnd, polylineLength, walkPolyline, type PolylineEnd } from "./flatten.js";
 export { CHAIN_RULES, bridges, classifyEnds, continues, joinChains, joinEnds, snapJoin, type JoinContext, type JoinResult } from "./chains.js";
-export { MASK_CELL_MM, MASK_CLOSE_MM, chamferDistance, mappedAreaMask, maskAt, polylinesBox, type Box } from "./mask.js";
+export { MASK_CELL_MM, MASK_CLOSE_MM, MASK_MAX_CELLS, chamferDistance, mappedAreaMask, maskAt, polylinesBox, type Box } from "./mask.js";
 export { RASTER_RULES, cellIndex, labelRegions, rasteriseBarriers, type RasterOptions } from "./raster.js";
 export { chainIncidence, cliffLinks, regionComponents, type Incidence } from "./incidence.js";
 export { SegmentIndex, type NearestSegment } from "./seg-index.js";

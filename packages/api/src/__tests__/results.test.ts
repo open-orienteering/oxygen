@@ -305,3 +305,35 @@ describe("computePosition", () => {
     expect(result!.rank).toBe(2);
   });
 });
+
+describe("a finish before a daytime start (RES-16)", () => {
+  const H = 36_000;
+  it("is not ranked in the result list", () => {
+    const wrong = makeRunner(1, RunnerStatus.OK, 11 * H, 10 * H + 9_000);
+    const right = makeRunner(2, RunnerStatus.OK, 10 * H, 10 * H + 24_000);
+    const map = computeClassPlacements([wrong, right], false);
+    expect(map.get(2)).toMatchObject({ place: 1, runningTime: 24_000, timeBehind: 0 });
+    expect(map.get(1)?.place).toBe(0);
+  });
+  it("does not count as faster on the receipt", () => {
+    const runners: ClassRunnerForPosition[] = [
+      { name: "Wrong", clubId: 1, startTime: 11 * H, finishTime: 10 * H + 9_000 },
+      { name: "Right", clubId: 1, startTime: 10 * H, finishTime: 10 * H + 24_000 },
+    ];
+    expect(computePosition(runners, "Right", 24_000, 1)).toMatchObject({ rank: 1, total: 1 });
+  });
+});
+
+describe("computeClassPlacements: a deduction that eats the whole time", () => {
+  it("does not rank an OK runner left with no time", () => {
+    const placed = computeClassPlacements(
+      [
+        { id: 1, status: RunnerStatus.OK, startTime: 360000, finishTime: 366000, runningTimeAdjustment: 6000 },
+        { id: 2, status: RunnerStatus.OK, startTime: 360000, finishTime: 372000 },
+      ],
+      false,
+    );
+    expect(placed.get(1)).toMatchObject({ place: 0, runningTime: 0 });
+    expect(placed.get(2)).toMatchObject({ place: 1, timeBehind: 0 });
+  });
+});

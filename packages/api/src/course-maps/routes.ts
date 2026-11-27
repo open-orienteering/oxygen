@@ -7,8 +7,10 @@ import { renderGate } from "../map-render-limits.js";
 import { type PinnedPrintSource, pinnedPrintSource } from "./pdf-page.js";
 import { PRINT_JOB_VERSION, type PrintGraphic, type PrintJob, type PrintJobGraphicMime, type PrintSheet } from "@oxygen/shared/print";
 import { printGate, rasteriseSvgInWorker, renderCoursePagesInWorker, resetPrintWorkers } from "./print-worker-host.js";
-import { GRAPHIC_MAX_INPUT_PIXELS, GRAPHIC_THUMB_PX, graphicPixelSize, parseRasterBox, parseRasterWindow, sheetGraphicIds, thumbBox } from "./graphics.js";
+import { GRAPHIC_MAX_INPUT_PIXELS, GRAPHIC_THUMB_PX, graphicPixelSize, parseRasterBox, parseRasterWindow, sheetGraphicIds, thumbBox, untrustedImageHeaders } from "./graphics.js";
 import { classesByCourse, loadCourseObjects } from "../course-objects.js";
+import { publicControlId } from "../control-id.js";
+import { setterUnassigned } from "./auto-sheets.js";
 
 type Db = ReturnType<typeof prisma>;
 
@@ -268,6 +270,13 @@ async function findMapRows(
   const requested = mapSeqs?.length ?? courseSeqs?.length;
   if (requested && rows.length === 0) throw new Error("No requested maps found");
   if (setter && rows.length === 0) throw new Error("No setter maps found: generate them in Layout mode (Setter maps)");
+  if (setter) {
+    // A control added after the groups were made is in none of them and would print on no setter map (CRS-002).
+    const missing = (await setterUnassigned(db, eventId)).flatMap((u) => u.sites.map((s) => publicControlId(s))).filter((id, i, all) => all.indexOf(id) === i);
+    if (missing.length > 0) {
+      throw new Error(`${missing.length} control${missing.length === 1 ? " is" : "s are"} in no setter map: ${missing.join(", ")}. Add them in Layout mode (Setter maps).`);
+    }
+  }
   return rows;
 }
 
@@ -518,6 +527,9 @@ export function registerCourseMapRoutes(
     if (!graphic) {
       return reply.code(404).send({ error: "Graphic not found" });
     }
+    untrustedImageHeaders(reply);
+    // An SVG opened as a document is an active page; offer it as a download.
+    if (graphic.mime === "image/svg+xml") reply.header("Content-Disposition", `attachment; filename="graphic-${id}.svg"`);
     return reply
       .header("Content-Type", graphic.mime)
       .header("Cache-Control", "private, max-age=3600")
@@ -561,6 +573,7 @@ export function registerCourseMapRoutes(
     } else {
       png = new Uint8Array(graphic.data);
     }
+    untrustedImageHeaders(reply);
     return reply
       .header("Content-Type", "image/png")
       .header("Cache-Control", "private, max-age=3600")
@@ -609,6 +622,7 @@ export function registerCourseMapRoutes(
       req.log.error(error);
       return reply.code(400).send({ error: error instanceof Error ? error.message : "Could not make the thumbnail" });
     }
+    untrustedImageHeaders(reply);
     return reply
       .header("Content-Type", "image/png")
       .header("Cache-Control", "private, max-age=31536000, immutable")

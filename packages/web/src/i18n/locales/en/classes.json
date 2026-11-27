@@ -18,6 +18,8 @@
   "editClass": "Edit Class",
   "assignCourse": "Assign Course",
   "noCourse": "No course",
+  "courseChangeConfirm_one": "Change the course? This class has {{count}} runner: their variants are cleared or dealt anew (a runner who has raced keeps hers).",
+  "courseChangeConfirm_other": "Change the course? This class has {{count}} runners: their variants are cleared or dealt anew (runners who have raced keep theirs).",
   "selectCourse": "Select course...",
   "searchCourse": "Search course...",
   "classCount": "{{count}} class",
@@ -35,8 +37,6 @@
   "maxAge": "Max Age",
   "entryFee": "Entry fee (kr)",
   "courseForked": "Forked",
-  "forkedDescription": "Forked — runners will be assigned different courses",
-  "coursesForked": "Courses (forked)",
   "controlsCount": "{{count}} controls",
   "firstStartTime": "First start: {{time}}",
   "startIntervalSeconds": "Interval: {{seconds}}s",
@@ -50,10 +50,6 @@
   "create": "Create",
   "cancel": "Cancel",
   "namePlaceholder": "e.g. H21",
-  "noCoursesAvailable": "No courses available",
-  "noCoursesMatch": "No matching courses",
-  "selectCoursesPlaceholder": "Select courses...",
-  "coursesSelected": "{{count}} courses selected",
   "dragLabel": "Drag to reorder",
   "yes": "Yes",
   "no": "No",
@@ -77,5 +73,6 @@
   "distributeRandom": "Random",
   "distributeOnlyUnassigned": "Only runners without a variant",
   "distributeConfirm": "Re-deal the variants of every runner in this class? Runners who have already raced keep theirs.",
-  "variantsDistributed": "{{changed}} runners changed, {{skipped}} who have raced kept theirs"
+  "variantsDistributed": "{{changed}} runners changed, {{skipped}} who have raced kept theirs",
+  "invalidMaxTime": "Max time must be hours:minutes (2:30) or minutes (150)."
 }

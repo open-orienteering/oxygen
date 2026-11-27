@@ -562,6 +562,24 @@ export class ReaderBtConnection extends EventTarget implements SIReader {
         }
       }
       rbtWarn(`readout of card ${cardNumber} failed:`, lastErr);
+      // Same event as the serial reader's failed read, so the kiosk and the
+      // operator hear about it whichever transport the card came through.
+      this.dispatchEvent(
+        new CustomEvent("si:card-read-failed", {
+          detail: {
+            cardNumber,
+            cardType: getCardType(cardNumber),
+            reason:
+              lastErr instanceof CardRemovedError
+                ? "removed"
+                : lastErr instanceof TimeoutError
+                  ? "timeout"
+                  : "parse",
+            blocksReceived: 0,
+            blocksExpected: 0,
+          },
+        }),
+      );
       await this.write(char, encodeFeedback(false)).catch(() => {});
     } finally {
       this.pendingCard = null;

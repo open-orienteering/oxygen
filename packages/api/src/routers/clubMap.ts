@@ -11,6 +11,7 @@ import {
   latestVersionOrRefuse,
   projectClubMapRow,
 } from "../club-map-library.js";
+import { assertMayConsumeSource } from "../map-store/source-possession.js";
 import { startImportJob, type ImportJobRow } from "../map-store/jobs.js";
 import { documentNorth } from "../map-store/event-document.js";
 import { meridianStalenessFromDetection } from "../map-north.js";
@@ -76,11 +77,12 @@ async function createClubMap(
     });
   // The job labels the version from the source row (whoever first uploaded
   // these bytes); when it finished inside the hold, prefer this upload's
-  // name and uploader. A slow import keeps the source's.
+  // name. The uploader is the job's starter (`applyJobResult`), never
+  // rewritten here.
   if (job?.state === "done") {
     await prisma().clubMapVersion.updateMany({
       where: { clubMapId: series.id, sourceHash: source.fileHash },
-      data: { label: fileName, uploadedBy: userId },
+      data: { label: fileName },
     });
   }
   const documentHash = job?.state === "done" ? job.documentHash : null;
@@ -140,6 +142,7 @@ export const clubMapRouter = router({
       if (!source) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Uploaded file not found; upload it again" });
       }
+      await assertMayConsumeSource(ctx, input.fileHash);
       return createClubMap(source, input.fileName?.trim() || source.fileName, input.name, ctx.user?.id ?? null);
     }),
 

@@ -17,8 +17,10 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, manageProcedure, publicProcedure } from "../trpc.js";
-import { sanitizeNameId, prisma } from "../db.js";
+import { router, manageProcedure } from "../trpc.js";
+import { prisma } from "../db.js";
+import type { PrismaClient } from "../generated/prisma/client.js";
+import { getActiveLease } from "../sync/lease.js";
 import {
   MALE_FIRST_NAMES,
   FEMALE_FIRST_NAMES,
@@ -178,69 +180,53 @@ async function processSimulatedReadout(
   });
 }
 
+/**
+ * Stop and forget the simulation of an event (a no-op when none runs). Also
+ * called by `event.setTestEvent` when the test flag is taken off.
+ */
+export function stopSimulationFor(eventId: bigint): void {
+  const key = String(eventId);
+  const state = simulations.get(key);
+  if (state?.timer) clearInterval(state.timer);
+  if (state) state.running = false;
+  simulations.delete(key);
+}
+
+/**
+ * The Test Lab writes synthetic runners, cards and results, so every
+ * procedure that does so is refused unless the event is marked as a test
+ * event (API-06). The flag is read fresh on every call, never from the
+ * cached event context.
+ */
+async function assertTestEvent(db: PrismaClient, eventId: bigint): Promise<void> {
+  const row = await db.event.findUnique({
+    where: { id: eventId },
+    select: { isTestEvent: true, eventorEventId: true },
+  });
+  if (!row?.isTestEvent) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "NOT_A_TEST_EVENT: the Test Lab works only on an event marked as a test event.",
+    });
+  }
+  // The guard is two-way: an event that has since been linked to Eventor or
+  // checked out is real, whatever its mark says.
+  if (row.eventorEventId !== null || (await getActiveLease(db, eventId))) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "NOT_A_TEST_EVENT: an event linked to Eventor or checked out to a venue is not a test event.",
+    });
+  }
+}
+
+const testEventProcedure = manageProcedure.use(async ({ ctx, next }) => {
+  await assertTestEvent(ctx.db, ctx.event.id);
+  return next();
+});
+
 export const testLabRouter = router({
-  generateEvent: publicProcedure
-    .input(
-      z.object({
-        name: z.string().default("Test Lab"),
-        runnerCount: z.number().int().min(1).max(2000).default(50),
-      }),
-    )
-    .mutation(async ({ input }) => {
-      const slug = sanitizeNameId(`E2E_${input.name}_${Date.now()}`);
-      const event = await prisma().event.create({
-        data: {
-          nameId: slug,
-          name: input.name,
-          date: new Date(),
-          kind: "competition",
-        },
-      });
-
-      // Three classes, three courses
-      const courses = await Promise.all(
-        ["Short", "Medium", "Long"].map((n) =>
-          prisma().course.create({
-            data: { eventId: event.id, name: n, lengthM: 2000 + Math.random() * 5000 },
-            select: { id: true, seq: true, name: true },
-          }),
-        ),
-      );
-      const classes = await Promise.all(
-        courses.map((c) =>
-          prisma().class.create({
-            data: { eventId: event.id, name: c.name, courseId: c.id, sortIndex: c.seq },
-            select: { id: true, seq: true },
-          }),
-        ),
-      );
-
-      // Generate runners
-      const runners: { id: string }[] = [];
-      for (let i = 0; i < input.runnerCount; i++) {
-        const male = Math.random() < 0.5;
-        const first = pick(male ? MALE_FIRST_NAMES : FEMALE_FIRST_NAMES);
-        const last = pick(LAST_NAMES);
-        const cls = pick(classes);
-        const r = await prisma().runner.create({
-          data: {
-            eventId: event.id,
-            name: `${first} ${last}`,
-            cardNo: 100000 + i,
-            clubName: pick(CLUB_DATA).name,
-            classId: cls.id,
-            sex: male ? "M" : "F",
-          },
-          select: { id: true },
-        });
-        runners.push(r);
-      }
-
-      return { nameId: event.nameId, runnerCount: runners.length };
-    }),
-
   /** Delete every runner for the active event. */
-  clearRunners: manageProcedure.mutation(async ({ ctx }) => {
+  clearRunners: testEventProcedure.mutation(async ({ ctx }) => {
     const result = await ctx.db.runner.deleteMany({
       where: { eventId: ctx.event.id },
     });
@@ -270,7 +256,7 @@ export const testLabRouter = router({
     };
   }),
 
-  defaults: publicProcedure.query(() => ({
+  defaults: manageProcedure.query(() => ({
     runnerCount: 50,
     classCount: 3,
     courseCount: 3,
@@ -289,7 +275,7 @@ export const testLabRouter = router({
    * draw + course assignment are normally done from the EventPage
    * before pressing "Start simulation".
    */
-  startSimulation: manageProcedure
+  startSimulation: testEventProcedure
     .input(
       z
         .object({
@@ -329,7 +315,7 @@ export const testLabRouter = router({
         where: {
           eventId: ctx.event.id,
           removed: false,
-          startTime: { gt: 0 },
+          startTime: { not: 0 },
           cardNo: { gt: 0 },
         },
         select: {
@@ -472,7 +458,17 @@ export const testLabRouter = router({
 
       // Instant mode — process everything inline and return.
       if (cfg.speedFactor === 0) {
+        let done = 0;
         for (const r of schedule) {
+          // Every 25 readouts: stop when the flag was cleared meanwhile.
+          if (done > 0 && done % 25 === 0) {
+            const flag = await ctx.db.event.findUnique({
+              where: { id: ctx.event.id },
+              select: { isTestEvent: true },
+            });
+            if (!flag?.isTestEvent) break;
+          }
+          done++;
           try {
             await processSimulatedReadout(ctx.event.id, zeroTime, r);
           } catch (err) {
@@ -481,7 +477,7 @@ export const testLabRouter = router({
         }
         return {
           mode: "instant" as const,
-          processed: schedule.length,
+          processed: done,
           total: schedule.length,
         };
       }
@@ -506,10 +502,40 @@ export const testLabRouter = router({
 
       // 500ms tick — sized to balance wall-clock granularity against
       // DB write pressure when speedFactor is high.
+      // Only this run: a newer simulation for the event is left alone.
+      const stopThis = () => {
+        state.running = false;
+        if (state.timer) clearInterval(state.timer);
+        if (simulations.get(key) === state) simulations.delete(key);
+      };
+      let ticking = false;
       const tick = async () => {
+        if (ticking) return; // a slow tick must not overlap the next one
+        ticking = true;
+        try {
+          await runTick();
+        } catch (err) {
+          // A failing tick (a database error) must not become an unhandled
+          // rejection that takes the API down: log it and stop this simulation.
+          console.error("[testLab] tick failed, stopping the simulation:", err);
+          stopThis();
+        } finally {
+          ticking = false;
+        }
+      };
+      const runTick = async () => {
         if (!state.running || state.processed >= state.total) {
           if (state.timer) clearInterval(state.timer);
           state.running = false;
+          return;
+        }
+        // Clearing the test flag halts the simulation (API-06).
+        const flag = await prisma().event.findUnique({
+          where: { id: state.eventId },
+          select: { isTestEvent: true },
+        });
+        if (!flag?.isTestEvent) {
+          stopThis();
           return;
         }
         const elapsedRealMs = Date.now() - state.realTimeAtLastSpeedChange;
@@ -519,6 +545,7 @@ export const testLabRouter = router({
         const currentSimTime = state.simTimeAtLastSpeedChange + elapsedSimDs;
 
         while (
+          state.running &&
           state.processed < state.total &&
           state.schedule[state.processed].finishTimeDs <= currentSimTime
         ) {
@@ -551,11 +578,7 @@ export const testLabRouter = router({
     }),
 
   stopSimulation: manageProcedure.mutation(async ({ ctx }) => {
-    const key = String(ctx.event.id);
-    const state = simulations.get(key);
-    if (state?.timer) clearInterval(state.timer);
-    if (state) state.running = false;
-    simulations.delete(key);
+    stopSimulationFor(ctx.event.id);
     return { ok: true as const };
   }),
 
@@ -581,7 +604,7 @@ export const testLabRouter = router({
     };
   }),
 
-  updateSpeed: manageProcedure
+  updateSpeed: testEventProcedure
     .input(z.object({ speedFactor: z.number().positive() }))
     .mutation(async ({ ctx, input }) => {
       const state = simulations.get(String(ctx.event.id));
@@ -619,7 +642,7 @@ export const testLabRouter = router({
    * simulator. Returns the resulting `runner.id` + `finishTime` so a
    * test can immediately assert on the after-state.
    */
-  generateReadout: manageProcedure
+  generateReadout: testEventProcedure
     .input(z.object({ cardNo: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {
       const runner = await ctx.db.runner.findFirst({
@@ -690,7 +713,7 @@ export const testLabRouter = router({
         Math.max(0.5, 1 + gaussianRandom() * pace.spread);
 
       const startAbsolute =
-        runner.startTime > 0 ? runner.startTime + zeroTime : 36000 + zeroTime; // fallback 10:00
+        runner.startTime !== 0 ? runner.startTime + zeroTime : 36000 + zeroTime; // fallback 10:00
       let cumulative = startAbsolute;
       const punches: { code: number; timeDs: number }[] = [];
       const numLegs = codes.length + 1;
@@ -729,7 +752,7 @@ export const testLabRouter = router({
     }),
 
   /** Generate a starter set of classes for the event. */
-  generateClasses: manageProcedure
+  generateClasses: testEventProcedure
     .input(z.object({ count: z.number().int().min(1).max(20).default(5) }).optional())
     .mutation(async ({ ctx, input }) => {
       const count = input?.count ?? 5;
@@ -753,7 +776,7 @@ export const testLabRouter = router({
     }),
 
   /** Generate a starter set of courses. */
-  generateCourses: manageProcedure
+  generateCourses: testEventProcedure
     .input(z.object({ count: z.number().int().min(1).max(20).default(3) }).optional())
     .mutation(async ({ ctx, input }) => {
       const count = input?.count ?? 3;
@@ -777,7 +800,7 @@ export const testLabRouter = router({
     }),
 
   /** Register N fictional runners. */
-  registerFictionalRunners: manageProcedure
+  registerFictionalRunners: testEventProcedure
     .input(z.object({ count: z.number().int().min(1).max(2000).default(20) }))
     .mutation(async ({ ctx, input }) => {
       const classes = await ctx.db.class.findMany({
@@ -789,6 +812,8 @@ export const testLabRouter = router({
       }
       let created = 0;
       for (let i = 0; i < input.count; i++) {
+        // Re-check the guard now and then: the flag may be cleared or a lease taken meanwhile.
+        if (i > 0 && i % 25 === 0) await assertTestEvent(ctx.db, ctx.event.id);
         const male = Math.random() < 0.5;
         const first = pick(male ? MALE_FIRST_NAMES : FEMALE_FIRST_NAMES);
         const last = pick(LAST_NAMES);
@@ -816,7 +841,7 @@ export const testLabRouter = router({
     }),
 
   /** Register N runners onto a specific class. */
-  registerRunners: manageProcedure
+  registerRunners: testEventProcedure
     .input(
       z.object({
         classId: z.number().int(),
@@ -831,6 +856,7 @@ export const testLabRouter = router({
       if (!cls) return { created: 0 };
       let created = 0;
       for (let i = 0; i < input.count; i++) {
+        if (i > 0 && i % 25 === 0) await assertTestEvent(ctx.db, ctx.event.id);
         const male = Math.random() < 0.5;
         const first = pick(male ? MALE_FIRST_NAMES : FEMALE_FIRST_NAMES);
         const last = pick(LAST_NAMES);
@@ -856,7 +882,7 @@ export const testLabRouter = router({
     }),
 
   /** Push a synthetic backup-memory punch. */
-  pushBackupPunch: manageProcedure
+  pushBackupPunch: testEventProcedure
     .input(
       z.object({
         cardNo: z.number().int(),

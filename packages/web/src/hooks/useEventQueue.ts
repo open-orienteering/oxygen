@@ -1,15 +1,19 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useOnlineStatus } from "./useOnlineStatus";
 import { usePageVisible } from "./usePageVisible";
-import { getPendingCount, getFailedCount, retryAllFailedEvents } from "../lib/offline/events";
-import { drainEventQueue, cleanupSyncedEvents } from "../lib/offline/sync";
+import { getPendingCount, getFailedCount, retryAllFailedEvents, subscribeEnqueue } from "../lib/offline/events";
+import { drainEventQueue, cleanupSyncedEvents, getDrainBlockedReason, countHeldEvents, getLastDrainOutcome, type DrainBlockedReason } from "../lib/offline/sync";
+import { createAutoDrain, type AutoDrainOutcome } from "../lib/offline/auto-drain";
 import { trpc } from "../lib/trpc";
 import { usePerformanceSensitive } from "../lib/performance-mode";
+import { useActiveNode } from "../lib/node-discovery";
 
 /**
  * Hook that manages the offline event queue:
  * - Tracks pending event count
- * - Auto-drains when connectivity is restored
+ * - Auto-drains when an entry is queued, when connectivity is restored,
+ *   and again with backoff after a drain that failed on the network or a
+ *   server error (SYNC-11; see auto-drain.ts)
  * - Invalidates React Query cache after successful drain
  *
  * @param competitionId - Optional filter for competition-specific events
@@ -20,8 +24,16 @@ export function useEventQueue(competitionId?: string) {
   const performanceSensitive = usePerformanceSensitive();
   const pollingActive = visible && !performanceSensitive;
   const [pendingCount, setPendingCount] = useState(0);
+  /** Pending entries of every event on this device: another event's entries drain too (each under its own header). */
+  const [totalPending, setTotalPending] = useState(0);
   const [failedCount, setFailedCount] = useState(0);
+  /** Pending entries held back behind a failed entry of the open event. */
+  const [heldCount, setHeldCount] = useState(0);
   const [syncing, setSyncing] = useState(false);
+  /** The server refuses this device's push: the entries wait for an operator to sign in. */
+  const [needsSignIn, setNeedsSignIn] = useState(false);
+  /** Why the last drain stopped, when it did not end on a network failure. */
+  const [blockedReason, setBlockedReason] = useState<DrainBlockedReason | null>(null);
   const utils = trpc.useUtils();
 
   // Poll pending count. The 2s cadence is only useful while the user can
@@ -32,11 +44,10 @@ export function useEventQueue(competitionId?: string) {
     const refresh = async () => {
       const filtered = await getPendingCount(competitionId);
       const total = await getPendingCount();
-      if (total > 0) {
-        console.log(`[event-queue] pending: ${filtered} (filtered by "${competitionId}"), ${total} (total)`);
-      }
       setPendingCount(filtered);
+      setTotalPending(total);
       setFailedCount(await getFailedCount(competitionId));
+      setHeldCount(competitionId ? await countHeldEvents(competitionId) : 0);
     };
     refresh();
     if (!pollingActive) return;
@@ -44,36 +55,57 @@ export function useEventQueue(competitionId?: string) {
     return () => clearInterval(interval);
   }, [competitionId, pollingActive]);
 
-  // Auto-drain when coming back online
-  useEffect(() => {
-    if (!isOnline || pendingCount === 0) return;
+  // Auto-drain when work arrives or connectivity returns (see auto-drain.ts).
+  const drainRun = useRef<() => Promise<AutoDrainOutcome>>(async () => "ok");
+  drainRun.current = async () => {
+    setSyncing(true);
+    try {
+      const count = await drainEventQueue();
+      const outcome = getLastDrainOutcome();
+      const reason = getDrainBlockedReason(competitionId);
+      setNeedsSignIn(reason === "auth");
+      setBlockedReason(reason);
+      if (count > 0) {
+        // Refresh pending count
+        const remaining = await getPendingCount(competitionId);
+        setPendingCount(remaining);
 
-    let cancelled = false;
-
-    const drain = async () => {
-      setSyncing(true);
-      try {
-        const count = await drainEventQueue(competitionId);
-        if (!cancelled && count > 0) {
-          // Refresh pending count
-          const remaining = await getPendingCount(competitionId);
-          setPendingCount(remaining);
-
-          // Invalidate relevant queries so UI refreshes with server data
-          await utils.runner.list.invalidate();
-          await utils.competition.dashboard.invalidate();
-          await utils.lists.resultList.invalidate();
-          await utils.race.recentActivity.invalidate();
-        }
-      } finally {
-        if (!cancelled) setSyncing(false);
+        // Invalidate relevant queries so UI refreshes with server data
+        // Not awaited: on a link that died after the push these refetches
+        // would hold the drain "in flight" and delay its retry.
+        void utils.runner.list.invalidate();
+        void utils.competition.dashboard.invalidate();
+        void utils.lists.resultList.invalidate();
+        void utils.race.recentActivity.invalidate();
       }
-    };
-
-    drain();
-
-    return () => { cancelled = true; };
-  }, [isOnline, pendingCount > 0, competitionId, utils]);
+      return outcome;
+    } finally {
+      setSyncing(false);
+    }
+  };
+  const autoDrain = useRef<ReturnType<typeof createAutoDrain> | null>(null);
+  if (!autoDrain.current) autoDrain.current = createAutoDrain(() => drainRun.current());
+  useEffect(() => {
+    const controller = autoDrain.current;
+    controller?.resume();
+    return () => controller?.stop();
+  }, []);
+  // An entry queued on this page drains at once (not when the next poll sees it).
+  useEffect(() => subscribeEnqueue(() => autoDrain.current?.enqueued()), []);
+  useEffect(() => {
+    autoDrain.current?.update({ online: isOnline, total: totalPending, scope: competitionId });
+  }, [isOnline, totalPending, competitionId]);
+  // Back in view, or another node became active: try the queue at once
+  // instead of waiting out the retry delay.
+  const activeNode = useActiveNode();
+  const firstKick = useRef(true);
+  useEffect(() => {
+    if (firstKick.current) {
+      firstKick.current = false;
+      return;
+    }
+    if (visible) autoDrain.current?.kick();
+  }, [visible, activeNode]);
 
   // Periodic cleanup of old synced events
   useEffect(() => {
@@ -86,9 +118,13 @@ export function useEventQueue(competitionId?: string) {
     setSyncing(true);
     try {
       await drainEventQueue(competitionId);
+      const reason = getDrainBlockedReason(competitionId);
+      setNeedsSignIn(reason === "auth");
+      setBlockedReason(reason);
       const remaining = await getPendingCount(competitionId);
       setPendingCount(remaining);
       setFailedCount(await getFailedCount(competitionId));
+      setHeldCount(competitionId ? await countHeldEvents(competitionId) : 0);
       await utils.invalidate();
     } finally {
       setSyncing(false);
@@ -105,7 +141,10 @@ export function useEventQueue(competitionId?: string) {
   return {
     pendingCount,
     failedCount,
+    heldCount,
     syncing,
+    needsSignIn,
+    blockedReason,
     isOnline,
     manualDrain,
     retryFailed,

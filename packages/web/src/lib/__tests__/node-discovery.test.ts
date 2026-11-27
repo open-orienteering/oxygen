@@ -72,7 +72,43 @@ describe("venue candidates (localStorage)", () => {
 });
 
 describe("probeCandidate", () => {
-  it("healthy when /health answers 200 with status ok", async () => {
+  it("healthy when /ready answers 200 with status ok (and /health is not asked)", async () => {
+    const urls: string[] = [];
+    const fetchImpl = async (u: string) => {
+      urls.push(u);
+      return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
+    };
+    expect(await probeCandidate("http://192.168.1.10:3001", fetchImpl)).toBe(true);
+    expect(urls).toEqual(["http://192.168.1.10:3001/ready"]);
+  });
+
+  it("unhealthy when /ready answers 503, without falling back to /health", async () => {
+    const urls: string[] = [];
+    const fetchImpl = async (u: string) => {
+      urls.push(u);
+      return new Response(JSON.stringify({ status: "unavailable", reason: "database" }), { status: 503 });
+    };
+    expect(await probeCandidate("http://x", fetchImpl)).toBe(false);
+    expect(urls).toEqual(["http://x/ready"]);
+  });
+
+  it("falls back to /health when /ready is 404 (an older box)", async () => {
+    const fetchImpl = async (u: string) =>
+      u.endsWith("/ready")
+        ? new Response("Not Found", { status: 404 })
+        : new Response(JSON.stringify({ status: "ok" }), { status: 200 });
+    expect(await probeCandidate("http://x", fetchImpl)).toBe(true);
+  });
+
+  it("falls back to /health when /ready answers HTML (SPA fallback)", async () => {
+    const fetchImpl = async (u: string) =>
+      u.endsWith("/ready")
+        ? new Response("<!doctype html><title>oxygen</title>", { status: 200 })
+        : new Response(JSON.stringify({ status: "ok" }), { status: 200 });
+    expect(await probeCandidate("http://x", fetchImpl)).toBe(true);
+  });
+
+  it("healthy when the box only knows /health and it answers 200 ok", async () => {
     const fetchImpl = async () =>
       new Response(JSON.stringify({ status: "ok" }), { status: 200 });
     expect(await probeCandidate("http://192.168.1.10:3001", fetchImpl)).toBe(true);

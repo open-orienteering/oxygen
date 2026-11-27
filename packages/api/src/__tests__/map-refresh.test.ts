@@ -17,7 +17,7 @@ import {
   type MapRefreshResult,
 } from "../sync/mapRefresh.js";
 import { holdsGraphic } from "../sync/snapshotGraphics.js";
-import { refreshesMapRows, requestEventName } from "../sync/venueForwarder.js";
+import { refreshesMapRows, refreshesSettings, requestEventName } from "../sync/venueForwarder.js";
 import { applyTokens } from "../sync/snapshotMaps.js";
 
 const TOKEN = 2n ** 60n + 7n;
@@ -167,5 +167,12 @@ describe("helpers", () => {
     }
     expect(refreshesMapRows(["club.update", "eventor.sync"])).toBe(false);
     expect(refreshesMapRows(["club.update", "courseMap.update"])).toBe(true);
+  });
+
+  it("refreshesSettings: forwarded writes of the event row's cloud-owned columns refresh it (MC-08)", () => {
+    for (const p of ["event.updateType", "course.setOverprintCuts", "liveresults.setConfig", "eventor.setEventEnv"]) {
+      expect(refreshesSettings([p])).toBe(true);
+    }
+    expect(refreshesSettings(["event.updateTypeX", "courseMap.update", "club.update"])).toBe(false);
   });
 });

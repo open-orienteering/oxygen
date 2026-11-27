@@ -3,7 +3,7 @@ import { allSetterSheets, nextSetterSheet, setterRowInputs, setterScopeOf, sette
 import { fieldRows } from "../field";
 
 const row = (seq: number, courseId: number | null, index: number | null, kind = "setter"): SetterSheetRow => ({
-  seq, name: `S${seq}`, kind, courseId, sortOrder: 0, setter: index === null ? null : { index, controls: [] },
+  seq, name: `S${seq}`, kind, courseId, sortOrder: 0, setter: index === null ? null : { index, controls: [], unassigned: [] },
 });
 
 describe("setter maps in the editor (course-layout.md §8)", () => {

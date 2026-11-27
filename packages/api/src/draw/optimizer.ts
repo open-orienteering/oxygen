@@ -305,6 +305,81 @@ export function optimizeStartTimes(
   classes: ClassCourseInfo[],
   settings: OptimizerSettings,
 ): CorridorAssignment[] {
+  return optimizeDraw(classes, settings).assignments;
+}
+
+/**
+ * Two classes whose runners reach the same first control closer than the
+ * minimum gap. `pairs` counts runner pairs (one from each class) that clash.
+ */
+export interface FirstControlConflict {
+  control: number;
+  classA: number;
+  classB: number;
+  pairs: number;
+}
+
+/** Upper bound on scheduling shifts per class (RES-10; 100k clears every reviewed case). */
+const MAX_SHIFT_STEPS = 100_000;
+
+/**
+ * Check a finished schedule: every pair of classes sharing a first control
+ * whose starts land closer than `gap`. Covers pinned classes too, which the
+ * scheduler places without moving. Same-class spacing (an interval below the
+ * gap) is the engine's own warning and is not repeated here.
+ */
+export function findFirstControlConflicts(
+  classes: ClassCourseInfo[],
+  assignments: CorridorAssignment[],
+  gap: number,
+): FirstControlConflict[] {
+  if (gap <= 0) return [];
+  const startById = new Map(assignments.map((a) => [a.classId, a.computedFirstStart]));
+  const byControl = new Map<number, ClassCourseInfo[]>();
+  for (const cls of classes) {
+    const control = firstControl(cls);
+    if (control === null || cls.runnerCount <= 0 || !startById.has(cls.classId)) continue;
+    const list = byControl.get(control) ?? [];
+    list.push(cls);
+    byControl.set(control, list);
+  }
+  const out: FirstControlConflict[] = [];
+  for (const [control, list] of byControl) {
+    for (let i = 0; i < list.length; i++) {
+      const a = classStartTimes(list[i], startById.get(list[i].classId)!);
+      for (let j = i + 1; j < list.length; j++) {
+        const b = classStartTimes(list[j], startById.get(list[j].classId)!);
+        let pairs = 0;
+        for (const ta of a) for (const tb of b) if (Math.abs(ta - tb) < gap) pairs++;
+        if (pairs > 0) {
+          out.push({ control, classA: list[i].classId, classB: list[j].classId, pairs });
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * The optimizer with its conflict report: the assignments, plus every pair of
+ * classes that still clash at a shared first control (pinned classes the
+ * scheduler could not move, or a bound that ran out).
+ */
+export function optimizeDraw(
+  classes: ClassCourseInfo[],
+  settings: OptimizerSettings,
+): { assignments: CorridorAssignment[]; conflicts: FirstControlConflict[] } {
+  const assignments = scheduleClasses(classes, settings);
+  const gap = settings.detectCourseOverlap
+    ? (settings.minFirstControlGap ?? DEFAULT_FIRST_CONTROL_GAP)
+    : 0;
+  return { assignments, conflicts: findFirstControlConflicts(classes, assignments, gap) };
+}
+
+function scheduleClasses(
+  classes: ClassCourseInfo[],
+  settings: OptimizerSettings,
+): CorridorAssignment[] {
   if (classes.length === 0) return [];
 
   const fixedClasses = classes.filter((c) => c.fixedFirstStart !== undefined);
@@ -403,11 +478,16 @@ export function optimizeStartTimes(
       const booked = control !== null ? controlBookings.get(control) : undefined;
 
       // Delay until the class clears both constraints. Every step moves
-      // `start` strictly forward, so the loop terminates; the bound is there
-      // to keep a pathological input from spinning.
+      // `start` strictly forward, so the loop terminates. Classes with
+      // different intervals can need many small shifts before every start
+      // clears the control (review RES-10: the old bound of "bookings + 2"
+      // gave up early and booked the clash), so the bound is generous; if it
+      // is ever exhausted the class jumps past everything booked on its
+      // control, which always clears it, and any residual clash is reported
+      // by `findFirstControlConflicts`.
       const conflictIds = conflicts.get(cls.classId);
-      const maxSteps = scheduled.length + (booked?.length ?? 0) + 2;
-      for (let step = 0; step < maxSteps; step++) {
+      let cleared = false;
+      for (let step = 0; step < MAX_SHIFT_STEPS; step++) {
         // Same-course block in another corridor (residual conflict, e.g. when
         // pinning split a component across corridors).
         let shifted = false;
@@ -427,8 +507,14 @@ export function optimizeStartTimes(
           booked !== undefined
             ? firstControlShift(cls, start, booked, gap)
             : null;
-        if (clearedAt === null) break;
+        if (clearedAt === null) {
+          cleared = true;
+          break;
+        }
         start = clearedAt;
+      }
+      if (!cleared && booked !== undefined && booked.length > 0) {
+        start = Math.max(start, booked[booked.length - 1] + gap);
       }
 
       scheduled.push({

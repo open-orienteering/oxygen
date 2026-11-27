@@ -57,7 +57,7 @@ test.describe("Multi-course map: class labels + combined descriptions", () => {
     await clickTab(page, "Courses");
     await expect(page.getByText("3 courses")).toBeVisible({ timeout: 10000 });
 
-    // ── Import test.ocd (replace-all default) → courses A–E with real
+    // ── Import test.ocd with Replace all → courses A–E with real
     // coordinates, then upload the same file as the event map.
     await page.getByRole("button", { name: "Import courses" }).click();
     const importChooserPromise = page.waitForEvent("filechooser");
@@ -65,7 +65,9 @@ test.describe("Multi-course map: class labels + combined descriptions", () => {
     const importChooser = await importChooserPromise;
     await importChooser.setFiles("e2e/test.ocd");
     await expect(page.getByText("Courses and Class Assignments")).toBeVisible({ timeout: 20000 });
-    await page.getByRole("button", { name: "Import 5 courses" }).click();
+    await page.getByTestId("course-import-mode-replace").check();
+    await expect(page.getByTestId("course-import-consequence-coursesRemoved")).toContainText("Removes 3 courses");
+    await page.getByRole("button", { name: "Replace all and import 5 courses" }).click();
     await expect(page.getByText("Import Complete")).toBeVisible({ timeout: 15000 });
     await page.getByRole("button", { name: "Done" }).click();
     await expect(page.getByText("5 courses")).toBeVisible({ timeout: 5000 });

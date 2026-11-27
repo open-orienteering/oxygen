@@ -39,8 +39,19 @@ export function isCloudUnreachable(err: unknown): boolean {
 export function isNetworkFailure(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
   if ((err as { data?: unknown }).data) return false;
-  if (err instanceof TypeError || (err as { cause?: unknown }).cause instanceof TypeError) return true;
+  const cause = (err as { cause?: unknown }).cause;
+  if (err instanceof TypeError || cause instanceof TypeError) return true;
+  // A fetch given up on by its timeout signal (the drain's, the readout's):
+  // the node did not answer in time, which is the same as unreachable.
+  if (isTimeoutAbort(err) || isTimeoutAbort(cause)) return true;
   return typeof navigator !== "undefined" && navigator.onLine === false;
+}
+
+function isTimeoutAbort(err: unknown): boolean {
+  const name = (err as { name?: unknown } | null)?.name;
+  // Only the timeout: a deliberate abort (unmount, cancelled query) is not
+  // a statement about the network.
+  return name === "TimeoutError";
 }
 
 /**
@@ -58,4 +69,30 @@ export async function ensureSheetsBestEffort<T>(ensure: () => Promise<T>): Promi
     if (isCloudUnreachable(err) || isNetworkFailure(err)) return null;
     throw err;
   }
+}
+
+/**
+ * A fetch that aborts after `ms`, on top of any signal the caller passes.
+ * Combined by hand, not with `AbortSignal.any` / `AbortSignal.timeout`
+ * (missing on older Safari), so the timeout applies everywhere. The abort
+ * reason is a `TimeoutError` DOMException, as `AbortSignal.timeout` gives.
+ */
+export function withRequestTimeout(
+  fetchImpl: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
+  ms: number,
+) {
+  return (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const ctrl = new AbortController();
+    const outer = init?.signal;
+    const onOuterAbort = () => ctrl.abort(outer?.reason);
+    if (outer) {
+      if (outer.aborted) ctrl.abort(outer.reason);
+      else outer.addEventListener("abort", onOuterAbort, { once: true });
+    }
+    const timer = setTimeout(() => ctrl.abort(new DOMException("The request timed out.", "TimeoutError")), ms);
+    return fetchImpl(input, { ...init, signal: ctrl.signal }).finally(() => {
+      clearTimeout(timer);
+      outer?.removeEventListener("abort", onOuterAbort);
+    });
+  };
 }

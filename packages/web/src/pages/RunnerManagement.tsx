@@ -1,3 +1,4 @@
+import { findClubOption, resolveClubKey, rosterClubOptions } from "../lib/club-options";
 import { useState, useMemo, Fragment, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
@@ -44,6 +45,11 @@ export function RunnerManagement() {
   const runners = trpc.runner.list.useQuery({});
   const classes = trpc.competition.dashboard.useQuery();
   const clubs = trpc.competition.clubs.useQuery();
+  // Keyed by Eventor id or name: free-text clubs all have id 0 (WEB-10).
+  const clubOptions = useMemo(
+    () => rosterClubOptions(clubs.data?.map((c) => ({ id: c.id, name: c.name, extId: c.eventorId }))),
+    [clubs.data],
+  );
   const printer = usePrinter();
   const regConfig = trpc.competition.getRegistrationConfig.useQuery(undefined, {
     staleTime: 60_000,
@@ -79,6 +85,7 @@ export function RunnerManagement() {
         punchTime: c.punchTime,
         legLength: c.legLength,
       })),
+      finish: result.finish,
       course: result.course ? { name: result.course.name, length: result.course.length } : null,
       position: result.position,
       siac: result.siac,
@@ -192,20 +199,21 @@ export function RunnerManagement() {
     } else if (bulkField === "class") {
       valueLabel = classes.data?.classes.find(c => c.id == bulkValue)?.name ?? String(bulkValue);
     } else if (bulkField === "club") {
-      valueLabel = clubs.data?.find(c => c.id == bulkValue)?.name ?? String(bulkValue);
+      valueLabel = findClubOption(clubOptions, String(bulkValue))?.name ?? String(bulkValue);
     }
 
     if (window.confirm(t("bulkConfirm", { field: fieldLabel, value: valueLabel, count }))) {
-      const fieldKey =
-        bulkField === "club"
-          ? "eventorClubId"
-          : bulkField === "class"
-            ? "classId"
-            : "status";
-      bulkUpdateMutation.mutate({
-        ids: Array.from(selection.selected),
-        [fieldKey]: Number(bulkValue),
-      });
+      const ids = Array.from(selection.selected);
+      if (bulkField === "club") {
+        // Name and Eventor id together (WEB-10): a free-text club clears the id.
+        const club = resolveClubKey(clubOptions, String(bulkValue));
+        bulkUpdateMutation.mutate({ ids, clubName: club.clubName, eventorClubId: club.eventorClubId });
+      } else {
+        bulkUpdateMutation.mutate({
+          ids,
+          [bulkField === "class" ? "classId" : "status"]: Number(bulkValue),
+        });
+      }
     }
   };
 
@@ -314,6 +322,15 @@ export function RunnerManagement() {
                       <td className="px-4 py-2.5 text-slate-400 tabular-nums">{runner.startNo > 0 ? runner.startNo : "-"}</td>
                       <td className="px-4 py-2.5 font-medium text-blue-700 hover:text-blue-900">
                         {runner.name}
+                        {(runner.differsFromEventor || runner.goneFromEventor) && (
+                          <span
+                            title={runner.goneFromEventor ? t("eventorGone") : t("eventorDiffers")}
+                            data-testid="eventor-diff-badge"
+                            className="ml-2 align-middle text-[10px] font-semibold px-1.5 py-0.5 rounded bg-sky-50 text-sky-700 border border-sky-200"
+                          >
+                            {runner.goneFromEventor ? t("eventorBadgeGone") : t("eventorBadgeDiffers")}
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-2.5 text-slate-600 hidden sm:table-cell">
                         <span className="inline-flex items-center gap-1.5">
@@ -461,8 +478,8 @@ export function RunnerManagement() {
               className="text-sm border border-slate-200 rounded px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white cursor-pointer min-w-[140px]"
             >
               <option value="">{t("selectClub")}</option>
-              {clubs.data?.map(club => (
-                <option key={club.id} value={club.id}>{club.name}</option>
+              {clubOptions.map(club => (
+                <option key={club.key} value={club.key}>{club.name}</option>
               ))}
             </select>
           )}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { LABEL, buildContourGraph, cellIndex, mappedAreaMask, maskAt, type ContourGraph, type ContourGraphOptions } from "../index.js";
+import { LABEL, buildContourGraph, cellIndex, MASK_MAX_CELLS, mappedAreaMask, maskAt, type ContourGraph, type ContourGraphOptions } from "../index.js";
 import { S, line, mapped, rect, ring, syntheticDoc, type Obj } from "./synthetic.js";
 
 function build(objects: Obj[], area?: [number, number, number, number], opts: ContourGraphOptions = {}): ContourGraph {
@@ -31,10 +31,37 @@ describe("mapped-area mask (map-terrain.md §2.3)", () => {
     expect(maskAt(m, 30, 20)).toBe(false);
   });
 
+  it("keeps 0.5 mm cells and the same grid for an ordinary map", () => {
+    const m = mappedAreaMask([Float64Array.from(rect(0, 0, 60, 40))], { minX: 0, minY: 0, maxX: 60, maxY: 40 });
+    expect(m.cellMm).toBe(0.5);
+    expect(m.width).toBe(Math.ceil(60 / 0.5) + 2 * 11 + 1);
+    expect(m.height).toBe(Math.ceil(40 / 0.5) + 2 * 11 + 1);
+  });
+
+  it("coarsens the cell for a huge box so the grid stays within the cell budget", () => {
+    const m = mappedAreaMask([Float64Array.from(rect(0, 0, 3000, 3000))], { minX: 0, minY: 0, maxX: 3000, maxY: 3000 });
+    expect(m.width * m.height).toBeLessThanOrEqual(MASK_MAX_CELLS);
+    expect(m.cellMm).toBeGreaterThan(0.5);
+    expect(maskAt(m, 1500, 1500)).toBe(true);
+    expect(maskAt(m, -50, 1500)).toBe(false);
+  });
+
   it("bridges a gap narrower than twice the closing radius", () => {
     const m = mappedAreaMask([Float64Array.from(rect(0, 0, 20, 20)), Float64Array.from(rect(26, 0, 46, 20))], { minX: 0, minY: 0, maxX: 46, maxY: 20 });
     expect(maskAt(m, 23, 10)).toBe(true);
   });
+});
+
+describe("a far-away contour piece (MAP-2)", () => {
+  it("builds the graph in a few seconds instead of exhausting memory", () => {
+    const g = build([
+      { sym: S.contour, coords: ring(30, 20, 5) },
+      { sym: S.contour, coords: ring(30, 20, 10) },
+      { sym: S.contour, coords: ring(3000, 3000, 2) },
+    ], [-5, -5, 3010, 3010]);
+    expect(g.mask.width * g.mask.height).toBeLessThanOrEqual(MASK_MAX_CELLS);
+    expect(g.mask.cellMm).toBeGreaterThan(0.5);
+  }, 30_000);
 });
 
 describe("barrier raster and regions (§2.4–2.5)", () => {

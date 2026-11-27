@@ -26,6 +26,7 @@ import {
 import { z } from "zod";
 import { Prisma } from "../generated/prisma/client.js";
 import { getBaseMapInfoOrNull } from "../course-maps/map-source.js";
+import { setterUnassigned } from "../course-maps/auto-sheets.js";
 import { displayCode, publicControlId } from "../control-id.js";
 import { classesByCourse, loadCourseObjects, nextObjectVersion } from "../course-objects.js";
 import { baseVersionSchema, versionConflict } from "../version-conflict.js";
@@ -91,15 +92,21 @@ export interface CourseMapListItem {
 export interface SetterOfSheet {
   index: number;
   controls: number[];
+  /**
+   * The scope's controls that are in no setter map (public ids, ascending; the same on every sheet of the scope):
+   * ones created or added to a course after the groups were made (CRS-002, docs/course-layout.md §8).
+   */
+  unassigned: number[];
 }
 
 /** The setter part of a row (`props`, `layout.controls` in code order); null unless `kind = 'setter'`. */
-function setterOf(row: { kind: string; props: unknown }, drawn: ReadonlyArray<{ id: string }>, seqById: ReadonlyMap<string, number>): SetterOfSheet | null {
+function setterOf(row: { kind: string; props: unknown }, drawn: ReadonlyArray<{ id: string }>, seqById: ReadonlyMap<string, number>, unassigned: readonly number[]): SetterOfSheet | null {
   if (row.kind !== "setter") return null;
   const props = setterSheetPropsSchema.safeParse(row.props);
   return {
     index: props.success ? props.data.setter : 0,
     controls: drawn.flatMap((c) => (seqById.has(c.id) ? [seqById.get(c.id)!] : [])),
+    unassigned: [...unassigned],
   };
 }
 
@@ -322,6 +329,8 @@ export const courseMapRouter = router({
     });
 
     const parsed = rows.map(parseMap);
+    // CRS-002: per scope (course uuid, null = event) the controls no setter map holds.
+    const missingByScope = new Map((await setterUnassigned(ctx.db, ctx.event.id)).map((u) => [u.courseUuid, u.sites.map((s) => publicControlId(s))]));
     const windowsByCourse = new Map<string, MapWindow[]>();
     const seqById = new Map(controlsForAll.map((c) => [c.id, publicControlId(c)]));
     const windowsKey = (row: { kind: string; seq: number; courseId: string | null; classId: string | null }) =>
@@ -391,7 +400,7 @@ export const courseMapRouter = router({
     });
 
     return data.map((row): CourseMapListItem => {
-      const validation =
+      const checked =
         "resolved" in row && "controls" in row
           ? validateCourseMap({
               document: row.resolved.document,
@@ -405,6 +414,15 @@ export const courseMapRouter = router({
             })
           : row.validation;
       const resolved = "resolved" in row ? row.resolved : null;
+      const missing = row.kind === "setter" ? missingByScope.get(row.courseId) ?? [] : [];
+      const validation =
+        missing.length > 0
+          ? {
+              ...checked,
+              valid: false,
+              issues: [...checked.issues, { code: "setter_unassigned", message: `${missing.length} control${missing.length === 1 ? " is" : "s are"} in no setter map: ${missing.join(", ")}` }],
+            }
+          : checked;
       return {
         id: row.id,
         seq: row.seq,
@@ -419,7 +437,7 @@ export const courseMapRouter = router({
         sectionIndex: row.sectionIndex,
         version: row.version,
         class: row.class ? { seq: row.class.seq, name: row.class.name } : null,
-        setter: setterOf(row, "controls" in row ? row.controls : [], seqById),
+        setter: setterOf(row, "controls" in row ? row.controls : [], seqById, missingByScope.get(row.courseId) ?? []),
         course: row.course
           ? {
               seq: row.course.seq,
@@ -538,7 +556,7 @@ export const courseMapRouter = router({
             courseSeq: row.course?.seq ?? null,
             classSeq: row.class?.seq ?? null,
             sectionIndex: row.sectionIndex,
-            setter: setterOf(row, resolved.layout.controls, new Map(allControls.map((c) => [c.id, publicControlId(c)]))),
+            setter: setterOf(row, resolved.layout.controls, new Map(allControls.map((c) => [c.id, publicControlId(c)])), row.kind === "setter" ? ((await setterUnassigned(ctx.db, ctx.event.id, { courseUuid: row.courseId }))[0]?.sites.map((s) => publicControlId(s)) ?? []) : []),
             version: parsed.version,
             windowCenter: parsed.windowCenter,
             overrides: parsed.overrides,

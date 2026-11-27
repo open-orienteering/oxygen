@@ -35,8 +35,8 @@
  *     the demo runners, with logos preserved. Emitted ON CONFLICT DO
  *     NOTHING so it never overwrites an operator's real club rows.
  *   - map: the source map is never written into the fixture. In its place
- *     the demo event gets a `map_files` row naming the CC0 demo map
- *     (`fixtures/showcase/puit-de-laven-demo.omap`) by its source
+ *     the demo event gets a `map_files` row naming the o-kartan demo map
+ *     (`fixtures/okartan/okartan-demo.ocd`) by its source
  *     hash, with no document: `scripts/load-showcase.sh` inserts the
  *     source from the committed file and the re-match imports and pins it
  *     (scripts/lib/showcase-map.mjs, docs/ops/demo.md "The map"). Only the
@@ -326,12 +326,12 @@ async function main(): Promise<void> {
     "--           courses / classes, pseudonymous runners, cards with\n",
   );
   write(
-    "--           remapped CardNo, the event's map_files row naming the CC0\n",
+    "--           remapped CardNo, the event's map_files row naming the\n",
   );
-  write("--           demo map (puit-de-laven-demo.omap) by source hash, and the\n");
+  write("--           o-kartan demo map (okartan-demo.ocd) by source hash, and the\n");
   write("--           subset of club_directory referenced by demo runners.\n");
   write("--           Control positions come from showcase-controls.json.\n");
-  write("-- Excluded: map bytes (the loader inserts the source from the .omap),\n");
+  write("-- Excluded: map bytes (the loader inserts the source from the .ocd),\n");
   write("--           map previews, event_log, eventor_* caches.\n");
   write("--\n");
   write(
@@ -525,8 +525,8 @@ async function writeShowcaseMapPin(
   }>({
     text: `SELECT uploaded_at, rotation_correction FROM ${tableName} ${where} ORDER BY uploaded_at DESC LIMIT 1`,
   });
-  write("-- ─── map_files (the CC0 demo map, source only) ──\n");
-  write("-- load-showcase.sh inserts the map_sources row from puit-de-laven-demo.omap\n");
+  write("-- ─── map_files (the o-kartan demo map, source only) ──\n");
+  write("-- load-showcase.sh inserts the map_sources row from okartan-demo.ocd\n");
   write("-- and runs the map re-match, which imports the document and pins it.\n");
   const src = latest.rows[0];
   if (!src) {

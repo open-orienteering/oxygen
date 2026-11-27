@@ -35,9 +35,10 @@ Two kinds of long-lived nodes, both running the same server image
 ```
 
 - **Cloud node** — the permanent home of every event. Runs the background
-  services that need internet (Eventor sync, LiveResults pusher, ROC
-  online-input puller — single-owner services, config-flagged so a venue
-  copy never double-runs them).
+  services that need internet (Eventor sync, LiveResults pusher). The
+  LiveResults pusher is single-owner: a venue box that ships to the cloud
+  (`NODE_ROLE=venue` with `SYNC_PEER_URL`) never runs it ([background-jobs-lease.md](background-jobs-lease.md#which-node-runs-what)).
+  The ROC online-input puller runs on both, each into its own database.
 - **Venue node** — a laptop or Pi running the same Docker images against
   its own local Postgres. Present only on race day, and only when the
   organizer wants LAN-local operation. Zero bespoke binaries: the venue
@@ -63,7 +64,8 @@ The journaled set is small and closed: punches (`punch.recorded`), card
 reads (`card.read`), starts, finishes (`finish.recorded` / `finish.adjusted`),
 applied results (`result.applied`), runner create/update/delete
 (`runner.registered` / `runner.updated` / `runner.deleted`), draw start times
-(`start.adjusted`) — plus the class/course/control state that result
+(`start.adjusted`, which carries the start number as an optional `startNo`;
+replay applies it when present) — plus the class/course/control state that result
 computation depends on. This is the **dependency closure of live results**:
 state that must survive to the cloud and be visible there while the venue is
 the intermittently-connected writer.
@@ -109,9 +111,25 @@ tRPC, never journaled, and **cloud-owned even during a lease**:
   the venue has no internet, the venue returns a typed error: *"requires
   connectivity."* (Venue-side users offline mid-race have no business
   editing report templates; this is the cheap path by design.)
+  The forward is made with **the box's own credentials**, not the user's:
+  the node secret, node id, the `x-oxygen-forwarded` marker and, behind
+  IAP, the ID token; the user's identity header is not relayed, no redirect
+  is followed and the call times out after 30 s. On a cloud running
+  `AUTH_MODE=proxy` the call then runs as the node, with every capability
+  on the events whose lease the node holds and none elsewhere, and is never
+  an admin ([authentication.md](authentication.md#venue-nodes)). A redirect
+  or an HTML answer from the cloud (IAP refusing the box) comes back as the
+  typed error `CLOUD_AUTH` ("The cloud refused this box's credentials"),
+  distinct from `CLOUD_UNREACHABLE`; fix `SYNC_SHARED_SECRET` / the IAP
+  settings ([venue-runbook.md](../ops/venue-runbook.md)). A forwarded write
+  that times out may still have landed on the cloud.
 - The venue keeps a **checkout-time copy** of cloud-owned data for local
   reads, refreshed periodically while online. Staleness is acceptable
   because of the boundary rule below.
+- **The event row is split** (review MC-08, 2026-11-26), see
+  [The event row during a lease](#the-event-row-during-a-lease): most of
+  its columns are cloud-owned as above, but the settings the arena changes
+  on the day are venue-owned during a lease.
 - **The event's map patch** (`map_patches`, `docs/map-patches.md` §3.4)
   is cloud-owned the same way: it travels in the checkout snapshot's
   `maps` part for the venue's map, and `mapPatch.` writes are forwarded.
@@ -178,20 +196,87 @@ class→course, control codes/status) are inside the results closure and are
   the applying node. Course `geometry` blobs stay out of the journal — they
   are derived artifacts that travel with the checkout snapshot.
 - Emission re-reads the post-write row inside the mutating transaction, so
-  the entry is exactly what landed. One documented exception:
-  `importCourses` emits after its (non-transactional) import completes — a
-  crash in between loses only the ship, and re-running the operator-driven
-  import re-emits.
+  the entry is exactly what landed. `importCourses` too, since review
+  package 17: the whole import and its entry are one transaction, ordered
+  against taking a lease (`course-layer.md` §6.4). Under `replaceAll` the
+  entry lists every class still on a course, because the applying node's
+  mirror clears the course of every class it does not list.
+
+A control's radio and AIR+ settings (`control.upsertConfig`) journal as
+`control.upserted` and are a race procedure like the other control edits;
+the cloud refuses them during a lease (review MC-36, 2026-11-26).
 
 The remaining non-journaled reference writer is the Eventor entry sync,
 which is cloud-owned and forwarded from venues; running it against a
-leased-out event is unsupported (it is a pre-race operation in practice).
+leased-out event is refused (`EVENT_CHECKED_OUT`, any active lease: the
+cloud is then not the writer and the sync is not journaled). It is a
+pre-race operation in practice; see [eventor-sync.md](eventor-sync.md).
+
+### The event row during a lease
+
+The event row carries both kinds of data, so its columns are split
+(`packages/api/src/sync/eventOwnership.ts`; review MC-08, 2026-11-26).
+Before this, the box ran every settings mutation locally and the
+5-minute settings refresh copied the cloud's row back over it, so an
+arena edit of the card fee or kiosk key reverted within minutes and never
+reached the cloud.
+
+| Columns | Writer | During a lease |
+|---|---|---|
+| `id`, `nameId`, `removed`, `createdAt`, `updatedAt` | — | identity: never copied |
+| `zeroTime`, `date` | `event.setTimeSettings` (zero time) | results closure: venue-owned, kept out of the refresh; a zero-time move is refused on both nodes |
+| `timeZone` | `event.setTimeSettings` | venue-owned |
+| `kioskKey` | `event.regenerateKioskKey` | venue-owned |
+| `cardFeeCents` | `event.setCardFee` | venue-owned |
+| `airPlus`, `awakeHours` | `control.setAirPlusConfig` | venue-owned |
+| `paymentMethods`, `swishNumber`, `swishPayeeName`, `printRegistrationReceipt`, `registrationReceiptMessage`, `finishReceiptMessage`, `receiptFriskvardNote`, `organizerEventorId`, `orgNumber`, `vatExempt` | `event.setRegistrationConfig` (`organizerEventorId` is also set when an Eventor import creates the event) | venue-owned |
+| `googleSheetsWebhookUrl` | `event.setGoogleSheetsConfig` (the cloud pushes readouts to the sheet, the box's shipped ones included; a box with a peer does not push for an event it checked out) | venue-owned |
+| `kind`, `kindCustom` | `event.updateType` | cloud-owned, forwarded |
+| `isTestEvent` | `event.setTestEvent` (turning on is refused under a lease, and a test event cannot be checked out; turning off is an ordinary forwarded cloud-owned write) | cloud-owned, forwarded |
+| `autoOverprintCuts` | `course.setOverprintCuts` | cloud-owned, forwarded (a layout flag, row G18) |
+| everything else (name, organizer, fees, LiveResults, Eventor…) | forwarded writers | cloud-owned |
+
+- **Venue-owned** columns are written on the box. Their mutations are race
+  procedures (`setTimeSettings` checks `mayWriteEventData` when the time
+  zone changes), so the cloud refuses them with the typed "checked out"
+  error while the box holds the lease. The box's settings refresh leaves
+  them alone, and the box pushes them to the cloud
+  (`lease.importSettings`, accepted only from the active holder's node id,
+  venue-owned keys only) on the settings cadence before each refresh, and
+  once more in the checkin barrier before the peer release (the cadence
+  skips an event whose checkin runs). The cloud checks the holder and
+  writes under the lease lock, so a late push cannot land after the
+  release or a takeover. A failed push fails the checkin, so the operator
+  retries; a peer that predates the endpoint (`NOT_FOUND`) or no longer
+  lists the box as holder does not block it, and the checkin result says
+  `settingsNotTaken` (the lease panel shows it).
+- **Cloud-owned** columns are forwarded. After a forwarded `event.updateType`,
+  `event.setTestEvent`, `course.setOverprintCuts`, `liveresults.*` or `eventor.*` write the box
+  refreshes the event row at once (bounded like the map refresh), not only
+  on the 5-minute cadence. Like every cloud-owned prefix, they are
+  forwarded on any venue node whatever the event's lease state, so offline
+  they answer the typed connectivity error, and an event that exists only
+  on the box cannot change them.
+- `packages/api/src/__tests__/event-settings-ownership.test.ts` scans the
+  source for `.event.update(`, `.updateMany(` and `.upsert(`: every router
+  procedure that writes the event row must be either forwarded or a
+  venue-owned race write, a venue writer may set only venue-owned columns
+  (the arguments of its write calls), and a write outside the routers and
+  `sync/` must be on its allow-list. A new settings mutation written that
+  way fails it until its owner is decided; a write through a helper in
+  another module is caught only by the allow-list.
+
+These defaults were taken on Marcus's behalf under the review's fix-package
+authorization (2026-11-26): keep the arena working offline and lose no
+edit. The cost is that a cloud admin cannot change the venue-owned
+settings while the event is checked out.
 
 ### Consequence: checkin is cheap
 
 Because non-journaled data is never written on the venue, **checkin is
-just a journal-watermark barrier** (all venue entries shipped and acked
-before the cloud resumes writing). There is no snapshot-export step, no
+just a delivery barrier** (every venue journal entry shipped and acked
+before the cloud resumes writing), plus one push of the venue-owned event
+settings (see above). There is no snapshot-export step, no
 reconciliation, no diffing. See [The lease](#the-lease).
 
 ## The journal
@@ -218,6 +303,63 @@ state is never reconstructed by replaying the journal.
   endpoint stations' outboxes already drain into. Node-to-node shipping
   reuses it unchanged.
 
+### Ingest (`ingestJournalEntries`)
+
+The one path every incoming entry takes (`events.push` for stations and a
+peer's shipper, the pull side of the shipper):
+
+- **One transaction per entry.** The journal row is inserted first, then the
+  table writes, then the follow-up the apply decided on (a station
+  registration's variant deal and its own `runner.updated` entry). Any
+  failure rolls all of it back, so a retry re-runs the whole entry; before
+  this, a lost follow-up was never repeated because the retry hit the
+  idempotency check. The journal row going in first makes two concurrent
+  ingests of one id serialize on the primary key: the loser sees the winner's
+  row and reports `synced`. Post-commit effects (the Google Sheets push of a
+  `card.read`) run after the commit, on the singleton client. On a venue box
+  with a peer the Sheets push of a checked-out event is a no-op; the cloud
+  pushes the entry when the box ships it (SYNC-14).
+- **Idempotency is per event.** An id already journaled under the same event
+  is `synced`; under another event it is refused as `ENTRY_IN_OTHER_EVENT`.
+  Row ids inside payloads follow the same rule: a `tempId` or punch `id` that
+  belongs to another event is `ROW_IN_OTHER_EVENT`, never a "duplicate".
+- **Stop at the first apply failure.** An exception while applying puts that
+  entry in `failed[]` with a stable code (`INVALID_PAYLOAD`,
+  `ROW_IN_OTHER_EVENT` or `APPLY_FAILED`; the exception text stays in the
+  server log) and ends the batch: the entries after it are in neither list.
+  Several types are last-write-wins, so applying the later ones now and the
+  failed one on a retry would flip their order. The sender keeps the rest
+  pending and sends them next round (the shipper marks delivery over a
+  contiguous prefix). The batch-stopping codes are `JOURNAL_BATCH_STOPPING_CODES`
+  in `@oxygen/shared` (`APPLY_FAILED`, `INVALID_PAYLOAD`,
+  `ROW_IN_OTHER_EVENT`, `CLASS_NOT_FOUND`, `CARD_TAKEN`), read by the server
+  and the station drain alike. The last two are station registrations that
+  cannot be stored as entered, refused only on a push from a station's own
+  outbox (no sync secret; `IngestOptions.strict`): a peer push keeps skipping
+  them, since the originating node already decided
+  ([registration-and-readout.md §5a](registration-and-readout.md#5a-runnercreate--ocard-linking)).
+  Refusals decided before an entry is touched (`FORBIDDEN`,
+  `COMPETITION_MISMATCH`, `ENTRY_IN_OTHER_EVENT`) never stop the batch. The
+  station-side consequences are under "The station drain" below.
+- **Gate, then apply.** `events.push` hands the ingest a per-entry gate: the
+  entry's `competitionId` must be the request's event, and on the user path
+  the entry's capability must be held (table in
+  [authentication.md](authentication.md#journal-push)). The shipper's pull
+  path passes no gate.
+- **Reference upserts** (`class` / `course` / `control.upserted`,
+  `reference.imported`) are untrusted input: a row id that exists in another
+  event is refused; `fields` passes a per-entity allow-list shared with the
+  emitter (`REFERENCE_ENTITIES` in `referenceJournal.ts`, never `id`,
+  `eventId`, `seq`, timestamps); **a key outside the list is dropped and
+  logged once**, not an error, so a newer node with an extra column still
+  syncs with an older one (the column itself does not travel until both run
+  the new code); decimal-string BigInts (`version`, a class's `eventorId`) are
+  converted back; every row the payload points at (course controls, pool
+  courses, finish control, parent course, a class's course) must belong to
+  the event (`INVALID_PAYLOAD`). Child link rows are replaced on the entry's
+  transaction, so a failing insert no longer leaves a course without
+  controls, and `reference.imported` is atomic as a whole.
+
 ### Clock-skew detection
 
 On every successful push, the server returns `serverTimeMs`; the client
@@ -238,42 +380,156 @@ early keeps the ordering honest.
 > forwarder for cloud-owned mutations, and the shell badge + EventPage
 > panel. The venue additionally refreshes its copy of cloud-owned event
 > settings on a slow cadence while a lease is held
-> (`SYNC_SETTINGS_REFRESH_MS`, default 5 min; closure fields excluded),
+> (`SYNC_SETTINGS_REFRESH_MS`, default 5 min; closure and venue-owned
+> fields excluded, the venue-owned ones pushed back first, see
+> [The event row during a lease](#the-event-row-during-a-lease)),
 > and on the same cadence its copy of the event's cloud-owned map rows
 > (`lease.exportMapRows`, row G19, `docs/map-storage.md` §7.2).
 
 One row per checked-out event: `event_lease (event_id, holder_node_id,
 acquired_at, released_at, forced)`.
 
-- **`checkout`** — requires the venue to be fully shipped-up-to-date.
-  The initial transfer is a snapshot import of the event (rows copied
-  over, `seq` values preserved — explicit `seq` on insert is supported by
-  the `allocate_event_seq()` trigger) plus journal-from-there. From this
-  point the cloud rejects race-critical writes for the event. The
-  snapshot also carries the event's pinned map — its `map_files` row and
-  the source and document blobs by hash, fetched in slices through
-  `lease.exportBlob` and checked against their SHA-256 — so the box
-  serves `/api/map-documents/:hash` to its kiosk and stations
-  ([map-storage.md](../map-storage.md) §7.2).
+- **`checkout`** — run on the box. The initial transfer is a snapshot
+  import of the event (rows copied over, `seq` values preserved) plus
+  journal-from-there. From this point the cloud rejects race-critical writes
+  for the event. The snapshot also carries the event's pinned map — its
+  `map_files` row and the source and document blobs by hash, fetched in
+  slices through `lease.exportBlob` and checked against their SHA-256 — so
+  the box serves `/api/map-documents/:hash` to its kiosk and stations
+  ([map-storage.md](../map-storage.md) §7.2). Details below.
 - **`checkin`** — a barrier: all venue journal entries shipped and acked,
-  then the lease is released and the cloud resumes writing. Nothing else
-  to reconcile (see [ownership](#ownership-follows-the-journal)).
+  then the lease is released on both nodes and the cloud resumes writing.
+  Nothing else to reconcile (see [ownership](#ownership-follows-the-journal)).
+  Details below.
 - **`forceTakeover`** — explicit operator confirmation for the
-  venue-box-died case. Recovery point = last shipped watermark. A revived
-  box's un-shipped entries drain through `events.push` with conflicts
-  logged — a rare, loud path by design.
+  venue-box-died case, run on the node that wants control back. Recovery
+  point = the last entry the box delivered. A revived box notices the
+  takeover and stops writing (see [Takeover detection](#takeover-detection)).
 - **`status`** — powers the UI badge (lease holder, connection mode,
-  shipping lag).
+  shipping lag; the pending count is shown also when the box holds no
+  lease but still has undelivered entries).
+
+#### Checkout: what it refuses, and how it survives a restart
+
+Checkout replaces the box's copy of the event, so it refuses before it
+touches anything (message prefix = code, the way `PATCH_STALE` is):
+
+- **Who:** with login on, `event.manage` on the box's existing copy of the
+  event, or an instance admin when the box does not hold the event yet. An
+  anonymous caller is `UNAUTHORIZED` (`lease.checkout` is an `authedProcedure`),
+  a member with no `event.manage` on the copy, or any non-admin when there is
+  no copy, is `FORBIDDEN`. Pinned in `lease.test.ts`. With `AUTH_MODE=off` on
+  the box, anyone on the LAN may check out (the cloud-side lease has no
+  per-event secret yet, see the follow-ups in
+  [proxy-auth-followups](../bugfixes/proxy-auth-followups.md)).
+- `CHECKOUT_LEASE_HELD` — this box still holds the lease: check in first.
+- `CHECKOUT_LOCAL_EVENT` — the event was created on this box and never
+  checked out from the cloud (no `journal_sync_state` row for the peer).
+- `CHECKOUT_UNSHIPPED` — journal entries of the box's copy are not on the
+  cloud. A final ship cycle runs first (a network error is tolerated), so a
+  healthy link leaves nothing behind.
+- `GRAPHIC_ID_CLASH` — a graphic id of the snapshot is held by another event
+  on the box ([map-storage.md](../map-storage.md) §7.2). Checked right after
+  the snapshot is exported, before any blob is fetched.
+
+The two data-loss refusals take `discardLocal: true` and the clash takes
+`replaceClashingGraphics: true`; the Venue panel asks the operator to
+confirm and re-calls with the flag (a discard is logged with its count).
+Nothing is written before every check passed.
+
+The sequence is restart-safe. The peer lease is taken inside the rollback
+scope, so any later failure releases it; if even that release fails the log
+names the remedy (retry the checkout — `acquire` is idempotent for the same
+holder — or force a takeover on the cloud). The sync-state row that scopes
+the shipper to the event and the local lease are written **in the import
+transaction**, so a crash leaves the whole checkout or none of it. The
+box's readout backups (`card_readout_backups`, the only copy of what a
+station's flash held) are carried over a re-checkout; tracks, routes and
+event permissions are not.
+
+**Snapshot consistency.** On `acquire` the cloud marks every journal entry
+it already holds as delivered (their effects are in the snapshot, so the box
+must not pull them), then reads the whole snapshot — tables, counters,
+journal head, maps, graphics — in one `REPEATABLE READ` transaction. An
+entry committed between the mark and the read stays unmarked: the box's
+first pull delivers it even when the snapshot already holds its effect, and
+applying it a second time is a no-op (`runner.registered` and
+`punch.recorded` skip a row they already have).
+
+#### Checkin, restart-safe
+
+While the barrier runs an in-memory marker (`sync/leaseState.ts`) makes the
+box refuse race writes for the event: a write landing after the count would
+never reach the cloud. Peer `release` is idempotent for the holder that
+already released (the first reply was lost), and a peer that no longer lists
+this box as holder (taken over, or the lease moved on) does not strand the
+box: every entry is delivered, so it releases locally, marked forced, and
+answers `peerAlreadyReleased`. A checkin on a box that already let go (it
+released itself after a takeover) ships what is left and answers
+`alreadyReleased`; it refuses while entries are still pending.
+
+#### Takeover detection
+
+A box that was taken over while it was dead or offline must not keep acting
+as the writer. On every shipper cycle, for each event where the box holds
+the local lease, it asks the cloud `lease.holder`. When the answer is another
+node, or nobody, the box releases its own lease (forced), logs an error, and
+**keeps shipping its backlog**. From then on `mayWriteEventData` refuses
+race writes on the box (below). A cloud that cannot be reached, or one older
+than `lease.holder`, changes nothing.
+
+On the cloud, peer calls carry the caller's `NODE_ID` (`x-oxygen-node-id`).
+When a node whose lease ended in a force takeover pushes entries later, the
+cloud still applies them (the journal is the record) but logs one
+`[lease] stale-holder entry …` warning per newly applied entry. It does
+**not** resolve conflicts: an old value from that backlog can overwrite a
+correction made on the cloud after the takeover (see the bugfix note's
+"Left out").
+
+#### Who may write an event's race and course data
+
+One guard answers it: `mayWriteEventData(db, eventId)` in `sync/lease.ts`.
+It is the guard behind `raceProcedure` (`assertRaceWritable`) and
+`isRaceWritable`, and **any background writer of race or course data must
+call it** rather than re-deriving the rule (a job that emits course
+entries asks before each chunk and skips, not throws, when it may not
+write). It refuses with:
+
+| Reason | When |
+|---|---|
+| `held-elsewhere` | another node holds the active lease |
+| `checking-in` | this process's checkin barrier is running for the event |
+| `checked-in` | on a **venue** box: the event has lease history but this box does not hold the active lease (checked in, or taken over) |
+
+The cloud with no lease, and any event without lease rows (a box-local
+event), stay writable ("no lease: the node you talk to is the writer").
+
+Background writers that call it today: the derived-course refresh after a
+map change on the cloud (`event-map.ts`, `refreshDerivedCourses`). While a
+venue box holds the lease it neither re-derives nor journals the course
+rows (info log, no error): the map change itself stays cloud-owned and goes
+ahead, and the holder re-derives lengths with its next course write. The
+other request-path course emitters (MC-36) are still review package 15.
+`events.push` with a user (a station draining its outbox) is refused for the
+whole request with `PRECONDITION_FAILED` when the answer is `checked-in` or
+`checking-in`, so the station keeps its outbox and drains to the cloud once
+repointed; it is still accepted when the lease is `held-elsewhere` (the
+sink must take entries on every node), and the node-secret path is never
+guarded.
 
 ### `seq` allocation during a lease
 
 Per-event `seq` values (the human-friendly URL ids) are minted by the
 `allocate_event_seq()` trigger from `event_seqs`. **The leaseholder is the
 only allocator while the lease is active.** The checkout snapshot carries
-the `event_seqs` counters to the venue; the follower (cloud) applies
-shipped entries with explicit `seq` values (the trigger honors supplied
-values), so it never re-allocates and collisions cannot occur. At checkin
-the counters travel back with the barrier.
+the `event_seqs` counters to the venue (merged with `GREATEST` into what
+the insert trigger already set); the follower (cloud) applies shipped
+entries with explicit `seq` values (the trigger honors supplied values), so
+it never re-allocates and collisions cannot occur. Counters do not travel
+back at checkin: `allocate_event_seq()` itself advances `event_seqs` past
+any explicit `seq` it sees, so after the shipped venue rows land the cloud's
+next create takes the next free number. The migration repaired counters that
+lagged behind their rows.
 
 ### Single-copy durability window
 
@@ -291,6 +547,18 @@ box dies. Mitigations, in order of importance:
 
 ## Journal shipping
 
+> **Peer deadlines (SYNC-21).** Every node-to-node tRPC call carries an abort
+> signal (`sync/peerTimeouts.ts`): 30 s (`PEER_CALL_TIMEOUT_MS`) for `push`,
+> `unshipped`, `ackShipped`, `since`, lease `acquire` / `release` / `holder` and
+> the settings calls; 120 s (`PEER_TRANSFER_TIMEOUT_MS`) for the bulk reads
+> `exportSnapshot`, `exportBlob` and `exportMapRows`. The deadline is on the
+> whole call including the body, not idle time. A silent peer therefore ends a
+> shipper cycle (retried next interval) instead of blocking it, and a checkout
+> that times out rolls the lease back like any unknown outcome and answers
+> `TIMEOUT` ("The cloud did not answer in time"). A write that timed out may
+> still have landed on the peer; pushes are idempotent by entry id.
+> Test: `src/__tests__/peer-timeouts.test.ts`.
+
 > **Implementation status (pivot Step 3, 2026-07-14).** Landed:
 > `sync/nodeIdentity.ts`, `journal_sync_state`, secret-guarded
 > `events.since`, and `sync/shipper.ts`. The venue dials the cloud; the
@@ -299,14 +567,59 @@ box dies. Mitigations, in order of importance:
 - **Node identity:** `NODE_ID` / `NODE_ROLE` (`cloud` | `venue`), peer
   URL, and a shared secret via env config (`SYNC_PEER_URL`,
   `SYNC_SHARED_SECRET`, `SYNC_INTERVAL_MS`).
-- **`events.since`** — paginated pull in canonical `(hlc, id)` order,
-  guarded by the shared secret (`peerProcedure`); stations never call it.
-- **Shipper worker** (venue side): push local entries above the peer
-  watermark to the peer's `events.push`; pull cloud-originated entries
-  (e.g. ROC punches) via `events.since`; apply idempotently through the
-  same `ingestJournalEntries` path the push endpoint uses.
-  `journal_sync_state` stores per-peer `(hlc, id)` cursors for both
-  directions.
+- **Delivery mark.** `journal.pushed_at` is NULL until the entry has been
+  delivered to the other node; `journal.ingest_seq` is the local arrival
+  order. Shipping works on the mark, not on a position in the HLC order,
+  because an entry can reach a node late with an old HLC (a station outbox
+  draining after the clock moved on), and an HLC watermark skips it for
+  good. Entries a node ingested *from* its peer are created already marked,
+  so nothing is echoed back. The mark is one bit per entry, not per peer,
+  so only the **holder of the event's active lease** may consume the other
+  node's entries: `events.unshipped` serves, and `events.ackShipped`
+  accepts, only a caller whose `x-oxygen-node-id` is that holder (an empty
+  page, or `FORBIDDEN`, otherwise; with no active lease nobody is served),
+  and the box's `shipAllOnce` pulls only for events it holds the local
+  lease on. A powered-on copy that was checked in or taken over only pushes
+  its backlog. A caller that sends no node id is refused the same way
+  (`unshipped` and `ackShipped` are as new as the header; an older box
+  pulls through the read-only `events.since`), and a refused pull is warned
+  once per event and node. A peer's `events.push` marks its entries
+  delivered only when the pusher is the active holder (or nobody holds the
+  event): a stale box that drains its backlog to the cloud leaves them
+  unmarked, so the current holder pulls them.
+  The migration backfills the mark by one rule (see the SQL comment): an
+  entry received before the acquire time of the event's latest lease is
+  delivered, everything after it stays NULL and ships once (a redundant
+  push or pull is harmless, a wrong "delivered" mark loses entries); an
+  event without leases starts clean, a cloud whose leases are all released
+  is all delivered.
+- **`events.unshipped`** and **`events.ackShipped`** (shared secret,
+  `peerProcedure`; stations never call them) — the peer's next page of
+  entries it has not delivered, in arrival order, and the confirmation that
+  marks them. **`events.since`** (paginated pull in `(hlc, id)` order)
+  remains for a peer that predates them: the shipper falls back to it on
+  `NOT_FOUND` and logs one warning per process.
+- **`events.push`** accepts the same secret as the peer's credential: a node
+  presenting `x-oxygen-sync-secret` needs no user (the cloud behind an
+  invite-only proxy accepts the box's push even when its service account is
+  not a member), a wrong secret is `UNAUTHORIZED`, a secret sent to a node
+  without `SYNC_SHARED_SECRET` is `PRECONDITION_FAILED`. The secret is
+  compared in constant time. The push is still checked per entry for its
+  competition (`COMPETITION_MISMATCH`); only the capability check is skipped,
+  because the origin node already authorised the write. Without a secret the
+  caller is a station and the capability table applies
+  ([authentication.md](authentication.md#journal-push)).
+- **Shipper worker** (venue side): push local unmarked entries, oldest
+  arrival first, to the peer's `events.push`, and mark the acked prefix;
+  pull cloud-originated entries (e.g. ROC punches) via `events.unshipped`,
+  apply them idempotently through the same `ingestJournalEntries` path the
+  push endpoint uses, then `ackShipped`. It ships only events that have a
+  `journal_sync_state` row for the peer (written by checkout), so an event
+  created on the box is never offered to the cloud. The `(hlc, id)` cursors
+  in `journal_sync_state` are legacy, used only against a peer without
+  `events.unshipped`. At startup the node clock is raised to the highest
+  journal HLC, so a restart cannot issue an entry that sorts behind what the
+  node already holds.
 - The **follower applies register entries verbatim** — the leaseholder
   already made every decision; the replica does not re-resolve conflicts.
   `runner.updated` replays its portable field patch through the same
@@ -314,15 +627,18 @@ box dies. Mitigations, in order of importance:
   conflict validation. Append-only types apply on any node via their
   dedupe keys (`punch.recorded` checks `(cardNo, controlCode, time)`
   before insert; `card.read` uses the ±60 s readout window).
-- Watermarks advance only after contiguous application: entries are
-  applied in HLC order per peer, so a watermark never skips past an
-  unapplied entry. A permanently failing entry therefore **blocks its
-  event's stream and logs loudly every cycle** — deliberate; quarantine
-  tooling arrives with the lease UI (Step 4).
-- Entries a node ingested from its peer are pushed back once as the
-  watermark passes them (no origin tracking); the peer acks them by id
-  without re-applying. One round of wasted bandwidth per entry, zero
-  correctness cost.
+- The mark advances only over a **contiguous prefix**: a page is walked in
+  order and stops at the first entry the peer did not ack, so a failed entry
+  is retried every cycle and nothing behind it is skipped. A permanently
+  failing entry therefore **blocks its event's stream and logs loudly every
+  cycle** — deliberate; quarantine tooling arrives with the lease UI
+  (Step 4). A page that marked nothing ends the loop.
+- **Version skew.** A row from the peer keeps only the columns this schema
+  has (`sync/knownFields.ts`, from the generated Prisma model): in the
+  checkout snapshot's tables and event row, the settings refresh and the map
+  refresh. The dropped names are logged once. The snapshot and `lease.holder`
+  carry the newest migration name; a checkout from a peer on another schema
+  warns and returns `peerSchema` / `localSchema`.
 
 ## Write routing summary
 
@@ -353,8 +669,78 @@ Stations are clients, not replicas. When a station loses its node
 - A station never merges foreign entries, runs no HLC resolution, and has
   no relay role. Prolonged fully-standalone CRUD is not a station's job —
   that's the venue node.
+- **The query cache belongs to one event** (`lib/offline/cache-scope.ts`):
+  one persisted blob per event, an owner marker in the cache, flushed and
+  swapped on every event switch. Offline reads never mix events, and a
+  readout computed locally is only queued against the event whose cache it
+  was computed from. See `registration-and-readout.md` §2c.
+- **The kiosk route drains its own outbox** and queues `card.read` (and, when
+  the device may write results, `result.applied`) under the event in the URL.
+  Queue writes are awaited: a failed IndexedDB write is never reported as
+  saved. The standalone kiosk and the Finish Station show a notice; the admin
+  shell logs it (a visible notice there is a follow-up).
 - `computeLocalReadout` (the client-side readout fallback) remains for
   blip-mode card reads, with parity to the server path asserted by tests.
+
+**With the node unreachable for the whole outage** (review package 9;
+`docs/bugfixes/station-outage-resilience.md`). The usual arena failure is
+"Wi-Fi up, node unreachable": `navigator.onLine` stays true, so nothing
+may wait for an `offline` event.
+
+- **The service worker does not cache tRPC** (SYNC-16). It used to answer
+  `/trpc/*` GETs NetworkFirst with a 3 s timeout from a 24 h cache, as an
+  ordinary 200: a readout after the race could get the pre-start answer.
+  The `trpc-api` and `api-misc` runtime routes are gone and their caches
+  are deleted at start (`lib/legacy-caches.ts`). Offline reads come only
+  from the persisted per-event query cache, and a request with no answer
+  fails as a network error. The readout lookup after a store has its own
+  8 s timeout (`DeviceManager`), after which the card resolves locally.
+- **The shell opens from cache** (WEB-03, `lib/shell-entry.ts`). When the
+  event's cached dashboard exists, the shell opens from it at once and
+  `competition.select` runs in the background (`networkMode: "always"`, so
+  it settles after an `offline` event too). Only `NOT_FOUND` or a refusal
+  (`UNAUTHORIZED` / `FORBIDDEN`) closes it. Any other failure keeps it
+  open in cached mode (`data-connection="cached"` on the shell, an amber
+  "Offline: showing saved data" pill in the header) and retries: 2 s
+  doubling to 30 s, at once on `online` and when the page becomes
+  visible. On success it turns live and refetches everything. With no
+  cache it shows "Cannot reach the server" with Retry, the same backoff,
+  and Reload; never a dead end. The kiosk and start screen run from the
+  event's cache as soon as it is claimed, whether or not `select` answered.
+  Cached capabilities keep deciding after a failed refetch (they no longer
+  fail open).
+- **A failing `users.me` keeps the app mounted** (WEB-04,
+  `lib/current-user-state.ts`, `lib/session-probe.ts`). The last known
+  identity (from the query, or from `localStorage` after a reload) is
+  used while it fails; the access gate spins only when nothing is known.
+  `users.me` is retried every 15 s while failing. Each network-class
+  failure runs a probe that does not follow redirects: `unreachable`
+  never reloads; `expired` (an IAP redirect or login page) shows a
+  "sign-in expired" banner with Reload over a page in use, and reloads by
+  itself only when nothing can be shown: no identity was ever known on
+  this device, or the shell has no cached data for the event. That reload
+  is bounded (at most two per five minutes per tab). The remembered
+  identity is used only while `users.me` gets no answer (also a 502/504
+  from the bundled nginx); any answer replaces it. With a venue node
+  active there is no probe: the box has no IAP.
+- **Per-card lookups are not persisted** (WEB-02). `runner.findByCard`,
+  `cardReadout.readout` and `race.finishReceipt` are keyed by card number
+  or runner id only; restored on another day they answer a re-read card
+  with an earlier runner first. They stay in memory, and the kiosk prints
+  a receipt by itself only from answers fetched after its readout screen
+  opened and answered successfully (`isFreshSince`, not
+  `isFetchedAfterMount`, which a failed refetch also sets;
+  `lib/kiosk-print.ts`), once per read. So the kiosk prints no
+  receipt from cached rows: with the server unreachable it prints none
+  (the Finish Station's local receipt is unaffected).
+- **A page that throws stays inside the page** (WEB-15). The shell's routed
+  pages have their own error boundary, reset when the first route segment
+  changes, so the header, tabs, card notifications and an open
+  registration stay. The kiosk readout screen (keyed by the read), the
+  kiosk and start-screen routes (which try again by themselves after 30 s,
+  as nobody may be at an unattended screen), and the providers (outermost)
+  have their own. A failed lazy chunk offers Reload (at most two per five minutes per
+  tab), since React keeps a failed import and "Try again" would fail again.
 
 **The course editor's Field-mode outbox** (row D9c; `course-editor.md` §9
 "Offline") is a second Dexie table beside `events`, `controlWrites` in the
@@ -374,6 +760,72 @@ is dropped silently. Its own-writes overlay patches the editor's query
 cache (`course.controlCoordinates`, `control.list`) rather than a
 projection table, because the canvas reads the cache.
 
+### The station drain (client side of `events.push`)
+
+`lib/offline/sync.ts` empties the `events` outbox into `events.push`.
+
+- **The header comes from the entries, not the URL.** Pending entries are
+  grouped by `competitionId`, and each group goes through
+  `trpcClientForEvent(competitionId)` (`lib/trpc.ts`): its
+  `x-competition-id` header and `?event=` cache scope are that event's,
+  whatever page is open. Switching event mid-drain, or draining an event's
+  entries from another event's page, can no longer file them under the wrong
+  event. The auto-drain (`useEventQueue`) therefore drains every event's
+  pending entries, not only the open event's.
+- **One lock per competition.** A drain of event A never makes a drain of
+  event B return early. A second drain request for the same event starts
+  nothing of its own: it asks the running drain for one more pass and waits
+  for it (so a Discard or Retry that hits the lock during the last iteration
+  is not lost).
+- **When the auto-drain starts.** On an enqueue signal (`emitEvent` and
+  `retryFailedEvent` bump a module-level sequence and notify
+  `subscribeEnqueue` listeners in `lib/offline/events.ts`; `createAutoDrain`
+  in `auto-drain.ts` listens), when the device goes online, and when the open
+  competition changes; never while a drain runs (work arriving meanwhile gets
+  one more pass). The polled pending count is not the trigger, since an entry
+  queued while the previous one drains leaves it unchanged; growth of it still
+  starts a drain (another tab queued entries), and entries stuck behind an
+  `auth` or `event` block raise no signal, so they never retrigger it.
+- **Retry after a failed drain** (SYNC-11). A drain that ended on no answer
+  (network-class, including the push's 60 s timeout) or a `server` block
+  is retried by itself: 2 s doubling to 30 s while the device is online and
+  entries are pending; only a clean drain resets the delay, and a new entry
+  meanwhile drains at once without resetting it. The tab becoming visible
+  again or another node becoming active retries at once. An entry queued
+  on this page counts as pending until a drain ends clean, also when the
+  pending-count poll is paused (a hidden tab): coming back online then
+  drains it. `auth` and
+  `event` blocks wait for an operator (a timer would only repeat the
+  refusal).
+- **Order and the hold rule.** Entries go out ordered by HLC (`compareHlc`;
+  the wall-clock `timestamp` only for an entry without an `hlc`), so a clock
+  stepped back does not reorder them. A failed entry whose code is batch-
+  stopping (`APPLY_FAILED`, `INVALID_PAYLOAD`, `ROW_IN_OTHER_EVENT`) ends that
+  competition's pass when the server answers it, and holds every pending entry
+  ordered behind it until it is retried (it goes first again) or discarded;
+  both drain at once. `FORBIDDEN`, `COMPETITION_MISMATCH` and
+  `ENTRY_IN_OTHER_EVENT` hold nothing. An entry that failed as a schema 400
+  (`INVALID_PAYLOAD` with `rejectedBySchema: true` on the row) was never
+  applied and can never succeed, so it holds nothing either. While entries are
+  held the sync panel says "N waiting behind a failed entry".
+- **Three blocked reasons**, shown as a "Sync blocked" line in the Sync
+  Status panel while entries wait (`getDrainBlockedReason(competitionId)`, kept per competition): `auth`
+  (the whole request was `UNAUTHORIZED` / `FORBIDDEN`: sign in), `event`
+  (the batch was `BAD_REQUEST` and an empty probe push under the same header
+  was refused too: the server does not know this event), `server`
+  (5xx, or an HTML answer from a proxy). Entries stay `pending` in all
+  three. No response at all (offline) shows no reason. A `BAD_REQUEST` whose
+  probe passes means one entry is malformed: the batch is resent one entry
+  at a time and only the bad one is marked `failed` (`INVALID_PAYLOAD`).
+- **Refusals.** A node answers a refused entry as `{ id, error, capability? }`
+  in `failed`, with `error` a `JournalRefusalCode` (`@oxygen/shared`). The
+  code and `capability` are stored on the outbox row and shown translated in
+  the rejected panel ("Missing permission: Race crew" for `FORBIDDEN`). Text
+  from an older server that is not a known code is shown as sent.
+- **Retry all** (`sync-retry-all`) requeues every failed entry of the open
+  event and drains again, for the case where a role was granted after a
+  refusal and the whole queue is red. Per-entry Retry and Discard remain.
+
 ## Transport: Local Network Access (no TLS certificates)
 
 > **Implementation status (pivot Step 5, 2026-07-16).** Landed:
@@ -381,7 +833,8 @@ projection table, because the canvas reads the cache.
 > fallback, climb-back, `venueAwareFetch` with the LNA annotation),
 > `docker-compose.venue.yml`, `CORS_ORIGINS` on the API, the sync-panel
 > venue-URL input + connection-mode line, and the same-origin restriction
-> on the service worker's tRPC cache. Ops guide:
+> on the service worker's tRPC cache (the cache itself was removed in
+> review package 9, SYNC-16; see "Station resilience"). Ops guide:
 > [`ops/venue-runbook.md`](../ops/venue-runbook.md).
 
 An HTTPS-served PWA calling `http://` on the LAN is normally blocked as
@@ -415,27 +868,29 @@ Base-URL selection, run at boot and on every health-check failure:
 
 1. Pinned URL in `localStorage` (admin override) — used directly if set.
 2. Static IP/hostname list from the event's config, probed in parallel;
-   first `/health` 200 wins.
+   first `/ready` 200 wins (`/ready` = database reachable and migrations
+   applied; a box whose image has no `/ready` is probed on `/health`; a 503 or
+   a network error is unhealthy).
 3. Cloud fallback (`VITE_API_BASE_URL`).
 
 A background re-probe runs while connected cloud-direct so stations
 *climb back* to the venue node when it recovers. The connection mode
 (`venue` / `cloud` / `offline`) is surfaced as a badge. The service worker
-excludes venue base URLs from caching so stale responses never shadow the
-LAN node.
+caches no tRPC answers at all (SYNC-16), so no stale response can shadow
+the LAN node or the cloud.
 
 ## Retention and compaction
 
-Two long-lived nodes with explicit watermarks make retention simple:
+Two long-lived nodes with explicit delivery marks make retention simple:
 
 | Store | Prune when |
 |---|---|
 | Station outbox | entry durably acked by its node (as today, 24h grace) |
-| Venue journal | below the cloud-ack watermark, after checkin |
+| Venue journal | entries marked delivered (`pushed_at`), after checkin |
 | Cloud journal | never during the event; archival policy after results are final (the journal is the audit log) |
 
 Deferred until after venue packaging lands; mechanically it is
-`DELETE … WHERE hlc < floor`.
+`DELETE … WHERE pushed_at IS NOT NULL AND hlc < floor`.
 
 ## Known traps
 
@@ -444,9 +899,17 @@ Deferred until after venue packaging lands; mechanically it is
   Every emit path — online mutation *and* offline outbox payload — must
   convert. (A missed conversion in the offline `card.read` path was one of
   the latent bugs that motivated this redesign.)
-- **Single-owner background services.** `liveResultsPusher`,
-  `onlineInputPuller`, Eventor sync run on the cloud only (config flag).
-  A venue copy must never double-push.
+- **Single-owner background services.** The LiveResults pusher runs on
+  the cloud only: the background reconcile skips it on a venue box that
+  ships to a peer (`publishesLiveResults()`), so a venue copy never double-pushes. The
+  Google Sheets readout backup has one owner too: the cloud, which pushes
+  every readout it stores or ingests, the box's shipped `card.read`
+  included. A box that ships to a peer pushes nothing to the sheet for an
+  event it checked out (`pushesReadoutsToSheet()` in `sheetsBackup.ts`); an
+  event that lives only on the box, and a standalone box, push themselves.
+  A webhook URL set on the box is sent ahead of the next journal batches
+  (retried for about ten minutes, never holding shipping back), so the
+  readouts after it find it on the cloud.
 - **Large/streaming endpoints** (map tiles, 50 MB uploads) are cloud-owned
   non-critical endpoints; they are simply unavailable at an offline venue.
 - **Venue box sleep.** A laptop venue node must not sleep mid-race; the

@@ -11,8 +11,11 @@
  * Discovery is deliberately simple and operator-driven:
  *   1. Candidates: the pinned venue URL(s) from localStorage (comma
  *      separated; set in the sync panel).
- *   2. A probe loop hits each candidate's `/health` in order; the first
- *      healthy one becomes the active node.
+ *   2. A probe loop hits each candidate's `/ready` in order (database
+ *      reachable and migrations applied; `/health` only says the process is
+ *      up); the first ready one becomes the active node. A box running an
+ *      older image has no `/ready` (404, or the SPA's HTML): it is probed on
+ *      `/health` instead. 503 or a network error means unhealthy.
  *   3. No candidate healthy → cloud fallback (same-origin, exactly the
  *      pre-Step-5 behaviour).
  *   4. The loop keeps probing while on the cloud, so when the venue box
@@ -109,7 +112,28 @@ export function getVenueCandidatesRaw(): string {
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
-/** One `/health` probe. Exported for tests (fetch injectable). */
+/** One GET: ok, or whether the caller should try the older `/health` instead. */
+async function probeOnce(
+  url: string,
+  baseUrl: string,
+  fetchImpl: FetchLike,
+  signal: AbortSignal,
+): Promise<{ ok: boolean; fallback: boolean }> {
+  const res = await fetchImpl(url, lnaInit(baseUrl, { signal, cache: "no-store" }));
+  if (res.status === 404) return { ok: false, fallback: true };
+  if (!res.ok) return { ok: false, fallback: false };
+  try {
+    const body = (await res.json()) as { status?: string };
+    return { ok: body.status === "ok", fallback: false };
+  } catch {
+    return { ok: false, fallback: true }; // HTML or other non-JSON: not this API's /ready
+  }
+}
+
+/**
+ * One probe: `/ready`, falling back to `/health` on 404 or a non-JSON body
+ * (an older box). Exported for tests (fetch injectable).
+ */
 export async function probeCandidate(
   baseUrl: string,
   fetchImpl: FetchLike = fetch,
@@ -118,13 +142,9 @@ export async function probeCandidate(
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT_MS);
     try {
-      const res = await fetchImpl(
-        `${baseUrl}/health`,
-        lnaInit(baseUrl, { signal: ctrl.signal, cache: "no-store" }),
-      );
-      if (!res.ok) return false;
-      const body = (await res.json()) as { status?: string };
-      return body.status === "ok";
+      const ready = await probeOnce(`${baseUrl}/ready`, baseUrl, fetchImpl, ctrl.signal);
+      if (!ready.fallback) return ready.ok;
+      return (await probeOnce(`${baseUrl}/health`, baseUrl, fetchImpl, ctrl.signal)).ok;
     } finally {
       clearTimeout(timer);
     }

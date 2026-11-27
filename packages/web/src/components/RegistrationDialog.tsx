@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../lib/trpc";
-import { parseMeosTime } from "@oxygen/shared";
+import { parseClockTime } from "@oxygen/shared";
 import { SearchableSelect } from "./SearchableSelect";
 import { ClubLogo } from "./ClubLogo";
 import { useDeviceManager } from "../context/DeviceManager";
@@ -12,6 +12,22 @@ import { getClubLogoUrl } from "../lib/club-logo";
 import type { KioskChannel, RegistrationFormState } from "../lib/kiosk-channel";
 import { fuzzyMatchClub } from "../lib/fuzzy-club-match";
 import { emitRunnerRegistered } from "../lib/offline/events";
+import {
+  NO_CLUB,
+  findClubOption,
+  mergeClubOptions,
+  optionForClub,
+  resolveClubKey,
+  rosterClubOptions,
+  searchCachedClubs,
+  type ClubKey,
+  type ClubOption,
+} from "../lib/club-options";
+import {
+  defaultPaymentMode,
+  registrationErrorMessage,
+  type PaymentMode,
+} from "../lib/registration-form";
 import {
   filterRegistrationClasses,
   competitionYearFromDate,
@@ -46,17 +62,29 @@ export function RegistrationDialog() {
   // ── Form state ──────────────────────────────────────────
   const [name, setName] = useState("");
   const [classId, setClassId] = useState<number>(0);
-  const [clubId, setClubId] = useState<number>(0);
+  // Club choice by key, never by the roster's numeric id: free-text clubs
+  // share id 0 with "No club" (WEB-06). See lib/club-options.ts.
+  const [clubKey, setClubKey] = useState<ClubKey>(NO_CLUB);
+  // Clubs picked from outside the event's roster (a suggestion, a card
+  // lookup, a directory search) kept as options so they show and submit (WEB-11).
+  const [adHocClubs, setAdHocClubs] = useState<ClubOption[]>([]);
+  const [clubSearch, setClubSearch] = useState("");
+  const [debouncedClubSearch, setDebouncedClubSearch] = useState("");
   const [cardNo, setCardNo] = useState("");
   const [startTime, setStartTime] = useState("");
   const [birthYear, setBirthYear] = useState("");
   const [sex, setSex] = useState("");
   const [phone, setPhone] = useState("");
-  const [paymentMode, setPaymentMode] = useState<"billed" | "on-site" | "card" | "swish" | "cash" | "">("");
+  const [paymentMode, setPaymentMode] = useState<PaymentMode>("");
   const [isRentalCard, setIsRentalCard] = useState(false);
   const [printReceipt, setPrintReceipt] = useState(false);
   const [error, setError] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
+  // One registration at a time: the online mutation, the offline queue and
+  // the printing all run inside it (WEB-20).
+  const [submitting, setSubmitting] = useState(false);
+  const submittingRef = useRef(false);
+  const printChainRef = useRef<Promise<void>>(Promise.resolve());
 
   // Autocomplete state
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -69,7 +97,9 @@ export function RegistrationDialog() {
 
   const lastConsumedCardRef = useRef<string | null>(null);
   const lastPendingCardRef = useRef<number | null>(null);
-  const pendingOwnerDataRef = useRef<Record<string, string> | null>(null);
+  // Owner data of the card it was read from: only ever applied to that card
+  // number, so an earlier card's owner cannot name the next one (WEB-05).
+  const pendingOwnerDataRef = useRef<{ cardNo: number; od: Record<string, string> } | null>(null);
   const successTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const kioskChannelRef = useRef<KioskChannel | null>(null);
   const paymentDefaultApplied = useRef(false);
@@ -83,14 +113,78 @@ export function RegistrationDialog() {
   const cardFeeQuery = trpc.competition.getCardFee.useQuery(undefined, {
     staleTime: 5 * 60_000,
   });
-  const clubs = trpc.club.list.useQuery({ showAll: true });
+  const clubs = trpc.club.list.useQuery();
   const syncStatus = trpc.eventor.syncStatus.useQuery();
   const env = syncStatus.data?.env || "prod";
   const keyStatus = trpc.eventor.keyStatus.useQuery({ env });
 
+  // Cached runner DB dump for offline autocomplete + card lookup
+  const runnerDbDump = trpc.eventor.runnerDbDump.useQuery(undefined, {
+    staleTime: 10 * 60_000,
+    gcTime: Infinity,
+    enabled: false, // Populated by useStationSync; don't re-fetch here
+  });
+
+  // ── Club options ────────────────────────────────────────
+  const rosterClubs = useMemo(() => rosterClubOptions(clubs.data), [clubs.data]);
+  useEffect(() => {
+    const id = setTimeout(() => setDebouncedClubSearch(clubSearch.trim()), 250);
+    return () => clearTimeout(id);
+  }, [clubSearch]);
+  // A club not yet in the event: searched in the club directory when the
+  // roster has no match (online), or in the cached runner DB's clubs.
+  // Directory hits are listed under the roster for any search of two or
+  // more characters, so a club whose name is part of a roster club's is
+  // still reachable.
+  const wantDirectory = debouncedClubSearch.length >= 2;
+  const directorySearch = trpc.club.searchDirectory.useQuery(
+    { query: debouncedClubSearch },
+    { enabled: wantDirectory && navigator.onLine, staleTime: 5 * 60_000, retry: false },
+  );
+  const directoryClubs = useMemo((): ClubOption[] => {
+    if (!wantDirectory) return [];
+    if (directorySearch.data) {
+      return directorySearch.data.map((d) => ({
+        key: `e:${d.eventorId}`,
+        name: d.name,
+        eventorId: d.eventorId,
+        source: "directory" as const,
+      }));
+    }
+    return searchCachedClubs(runnerDbDump.data?.clubs as Record<number, string> | undefined, debouncedClubSearch);
+  }, [wantDirectory, directorySearch.data, runnerDbDump.data, debouncedClubSearch]);
+  const clubOptions = useMemo(
+    () => mergeClubOptions(rosterClubs, adHocClubs, directoryClubs),
+    [rosterClubs, adHocClubs, directoryClubs],
+  );
+  const selectedClub = findClubOption(clubOptions, clubKey);
+
+  /** Select a club that came with a suggestion or a lookup; false when it has nothing to show. */
+  const pickClub = useCallback((club: { eventorId?: number | null; name?: string | null }): boolean => {
+    const o = optionForClub(rosterClubs, club);
+    if (!o) return false;
+    if (o.source !== "roster") setAdHocClubs((prev) => mergeClubOptions(prev, [{ ...o, source: "adhoc" }]));
+    setClubKey(o.key);
+    return true;
+  }, [rosterClubs]);
+
+  /** The club an SI card's owner data names: the roster first, then the cached directory. */
+  const matchOwnerClub = useCallback((ownerClub: string): boolean => {
+    const roster = clubs.data ?? [];
+    const hit = fuzzyMatchClub(ownerClub, roster);
+    if (hit) {
+      const c = roster.find((r) => r === hit) ?? (hit as (typeof roster)[number]);
+      return pickClub({ eventorId: c.extId || c.id || undefined, name: c.name });
+    }
+    const cached = runnerDbDump.data?.clubs as Record<number, string> | undefined;
+    if (!cached) return false;
+    const candidates = Object.entries(cached).map(([id, n]) => ({ id: Number(id), name: n, shortName: "", runnerCount: 0 }));
+    const dirHit = fuzzyMatchClub(ownerClub, candidates);
+    return dirHit ? pickClub({ eventorId: dirHit.id, name: dirHit.name }) : false;
+  }, [clubs.data, runnerDbDump.data, pickClub]);
+
   // Eventor member lookup
-  const selectedClub = clubs.data?.find((c) => c.id === clubId);
-  const eventorOrgId = selectedClub?.extId || undefined;
+  const eventorOrgId = selectedClub?.eventorId || undefined;
   const ownOrgId = keyStatus.data && "organisationId" in keyStatus.data
     ? keyStatus.data.organisationId
     : undefined;
@@ -101,19 +195,16 @@ export function RegistrationDialog() {
     { enabled: canFetchMembers, staleTime: 10 * 60_000, retry: false },
   );
 
-  // Cached runner DB dump for offline autocomplete + card lookup
-  const runnerDbDump = trpc.eventor.runnerDbDump.useQuery(undefined, {
-    staleTime: 10 * 60_000,
-    gcTime: Infinity,
-    enabled: false, // Populated by useStationSync; don't re-fetch here
-  });
-
   // Duplicate card check
   const cardNoNum = cardNo ? parseInt(cardNo, 10) : 0;
   const duplicateCheck = trpc.runner.findByCard.useQuery(
     { cardNo: cardNoNum },
     { enabled: cardNoNum > 0, staleTime: 5_000 },
   );
+
+  // The card already belongs to a runner in this event: registering it again
+  // would be refused (WEB-22), so the submit is disabled while this holds.
+  const cardKnown = !!duplicateCheck.data && duplicateCheck.data.cardNo === cardNoNum;
 
   // Card number lookup for auto-fill — use local cache if available, else server
   const cardLookupServer = trpc.eventor.lookupByCardNo.useQuery(
@@ -173,7 +264,8 @@ export function RegistrationDialog() {
   const clearForm = useCallback(() => {
     setName("");
     setClassId(0);
-    setClubId(0);
+    setClubKey(NO_CLUB);
+    setAdHocClubs([]);
     setCardNo("");
     setStartTime("");
     setBirthYear("");
@@ -181,16 +273,17 @@ export function RegistrationDialog() {
     setPhone("");
     setError("");
     setSuccessMsg("");
+    // Per-runner choices never carry to the next runner (WEB-19).
     setIsRentalCard(false);
     setPrintReceipt(false);
-    setPaymentMode(regConfig.data?.paymentMethods.includes("billed") ? "billed" : regConfig.data?.paymentMethods[0] as typeof paymentMode || "");
+    setPaymentMode(defaultPaymentMode(regConfig.data));
     setShowSuggestions(false);
     setDebouncedNameQuery("");
-    paymentDefaultApplied.current = false;
+    pendingOwnerDataRef.current = null;
     duplicatePrefilled.current = 0;
   }, [regConfig.data]);
 
-  const isFormDirty = !!(name || cardNo || classId || clubId || birthYear || sex || phone);
+  const isFormDirty = !!(name || cardNo || classId || clubKey || birthYear || sex || phone);
 
   // ── Kiosk channel ───────────────────────────────────────
   useEffect(() => {
@@ -232,7 +325,7 @@ export function RegistrationDialog() {
       paymentMode,
       fee: totalFee > 0 ? totalFee : undefined,
       swishNumber: regConfig.data?.swishNumber || undefined,
-      clubEventorId: selectedClub?.extId || undefined,
+      clubEventorId: selectedClub?.eventorId || undefined,
       competitionName: classes.data?.competition?.name || undefined,
       isRentalCard: isRentalCard || undefined,
       cardFee: rentalFee > 0 ? rentalFee : undefined,
@@ -243,7 +336,7 @@ export function RegistrationDialog() {
     };
     const ready = !!name.trim() && effectiveClassId > 0;
     return { form, ready };
-  }, [name, selectedClubName, selectedClassName, cardNo, startTime, sex, birthYear, phone, paymentMode, isRentalCard, printReceipt, effectiveClassId, classes.data, regConfig.data, cardFeeQuery.data, selectedClub?.extId]);
+  }, [name, selectedClubName, selectedClassName, cardNo, startTime, sex, birthYear, phone, paymentMode, isRentalCard, printReceipt, effectiveClassId, classes.data, regConfig.data, cardFeeQuery.data, selectedClub?.eventorId]);
 
   // Send on every form change
   useEffect(() => {
@@ -269,30 +362,32 @@ export function RegistrationDialog() {
     return () => clearInterval(interval);
   }, [isOpen, cardNo, duplicateCheck.data]);
 
+  const clearFormRef = useRef(clearForm);
+  clearFormRef.current = clearForm;
+  const matchOwnerClubRef = useRef(matchOwnerClub);
+  matchOwnerClubRef.current = matchOwnerClub;
+
   // ── Pending card from context ───────────────────────────
   useEffect(() => {
-    if (!isOpen || !pendingCard) return;
+    // Closed: forget the card, so a reopen with the same card starts fresh.
+    if (!isOpen) {
+      lastPendingCardRef.current = null;
+      return;
+    }
+    if (!pendingCard) return;
     if (lastPendingCardRef.current === pendingCard.cardNo) return;
     lastPendingCardRef.current = pendingCard.cardNo;
 
-    // Clear and populate
-    setName("");
-    setClassId(0);
-    setClubId(0);
-    setStartTime("");
-    setBirthYear("");
-    setSex("");
-    setPhone("");
-    setError("");
-    setSuccessMsg("");
-    setShowSuggestions(false);
-    setDebouncedNameQuery("");
-    duplicatePrefilled.current = 0;
+    // A fresh form for this card: the rental tick, receipt tick and payment
+    // of the previous runner do not carry over (WEB-19).
+    clearFormRef.current();
 
     setCardNo(String(pendingCard.cardNo));
 
     // Store owner data for deferred name fill (DB data takes priority — see below)
-    pendingOwnerDataRef.current = pendingCard.ownerData ?? null;
+    pendingOwnerDataRef.current = pendingCard.ownerData
+      ? { cardNo: pendingCard.cardNo, od: pendingCard.ownerData }
+      : null;
     if (pendingCard.ownerData) {
       const od = pendingCard.ownerData;
       // Fill non-name fields immediately (these don't conflict with DB runner data)
@@ -301,10 +396,7 @@ export function RegistrationDialog() {
       if (rawSex.startsWith("M")) setSex("M");
       else if (rawSex.startsWith("F")) setSex("F");
       if (od.phone) setPhone(od.phone);
-      if (od.club && clubs.data) {
-        const match = fuzzyMatchClub(od.club, clubs.data);
-        if (match) setClubId(match.id);
-      }
+      if (od.club) matchOwnerClubRef.current(od.club);
     }
 
     // Notify kiosk about the card
@@ -321,7 +413,11 @@ export function RegistrationDialog() {
         },
       });
     }
-  }, [isOpen, pendingCard, clubs.data]);
+    // Only a new card (or a reopen) re-runs this: a refetch of the club
+    // list or the registration config must not wipe a half-filled form, so
+    // the helpers are read through refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, pendingCard]);
 
   // ── Auto-fill from card lookup ──────────────────────────
   useEffect(() => {
@@ -334,10 +430,7 @@ export function RegistrationDialog() {
     }
     if (!birthYear && r.birthYear > 0) setBirthYear(String(r.birthYear));
     if (!sex && r.sex) setSex(r.sex);
-    if (!clubId && r.clubEventorId && clubs.data) {
-      const match = clubs.data.find((c) => c.extId === r.clubEventorId);
-      if (match) setClubId(match.id);
-    }
+    if (!clubKey && r.clubEventorId) pickClub({ eventorId: r.clubEventorId, name: r.clubName });
     setShowSuggestions(false);
     setDebouncedNameQuery("");
     setTimeout(() => {
@@ -354,7 +447,7 @@ export function RegistrationDialog() {
     const d = duplicateCheck.data;
     setName(d.name);
     if (d.classId) setClassId(d.classId);
-    if (d.clubId) setClubId(d.clubId);
+    if (d.clubId || d.clubName) pickClub({ eventorId: d.clubId || undefined, name: d.clubName });
     setShowSuggestions(false);
   }, [duplicateCheck.data]);
 
@@ -364,8 +457,10 @@ export function RegistrationDialog() {
     if (duplicateCheck.isLoading || !duplicateCheck.isFetched) return;
     if (duplicateCheck.data) return; // Runner found in DB — DB data wins
     if (name) return; // Name already set (e.g., from Eventor lookup)
-    const od = pendingOwnerDataRef.current;
-    if (!od) return;
+    const pending = pendingOwnerDataRef.current;
+    // Only the owner data read from this very card (WEB-05).
+    if (!pending || pending.cardNo !== cardNoNum) return;
+    const od = pending.od;
     const n = [od.firstName, od.lastName].filter(Boolean).join(" ");
     if (n && isRealOwnerName(od.firstName, od.lastName)) {
       setName(n);
@@ -375,7 +470,7 @@ export function RegistrationDialog() {
         classBtn?.focus();
       }, 150);
     }
-  }, [isOpen, duplicateCheck.isFetched, duplicateCheck.isLoading, duplicateCheck.data, name]);
+  }, [isOpen, duplicateCheck.isFetched, duplicateCheck.isLoading, duplicateCheck.data, name, cardNoNum]);
 
   // ── Auto-populate from DeviceManager card reads (sticky mode) ──
   useEffect(() => {
@@ -392,20 +487,19 @@ export function RegistrationDialog() {
     if (isFormDirty) return;
 
     setCardNo(String(latest.cardNumber));
+    // A card without owner data must not inherit the previous card's (WEB-05).
+    pendingOwnerDataRef.current = null;
     if (latest.ownerData) {
       const od = latest.ownerData;
       // Store for deferred name fill (DB data takes priority)
-      pendingOwnerDataRef.current = od as Record<string, string>;
+      pendingOwnerDataRef.current = { cardNo: latest.cardNumber, od: od as Record<string, string> };
       // Fill non-name fields immediately
       if (od.dateOfBirth) setBirthYear((od.dateOfBirth as string).substring(0, 4));
       const rawSex = (od.sex as string)?.trim().toUpperCase() ?? "";
       if (rawSex.startsWith("M")) setSex("M");
       else if (rawSex.startsWith("F")) setSex("F");
       if (od.phone) setPhone(od.phone as string);
-      if (od.club && clubs.data) {
-        const match = fuzzyMatchClub(od.club as string, clubs.data);
-        if (match) setClubId(match.id);
-      }
+      if (od.club) matchOwnerClub(od.club as string);
     }
 
     // Notify kiosk
@@ -422,14 +516,13 @@ export function RegistrationDialog() {
         },
       });
     }
-  }, [isOpen, recentCards, clubs.data, isFormDirty]);
+  }, [isOpen, recentCards, isFormDirty, matchOwnerClub]);
 
   // ── Default payment mode ────────────────────────────────
   useEffect(() => {
     if (paymentDefaultApplied.current || !regConfig.data) return;
     paymentDefaultApplied.current = true;
-    const methods = regConfig.data.paymentMethods;
-    if (methods.length > 0) setPaymentMode(methods[0] as typeof paymentMode);
+    setPaymentMode(defaultPaymentMode(regConfig.data));
   }, [regConfig.data]);
 
   // ── Manual card entry ───────────────────────────────────
@@ -437,23 +530,23 @@ export function RegistrationDialog() {
     const num = parseInt(cardNumber, 10);
     if (!num || num <= 0) return;
 
-    const existing = await utils.runner.findByCard.fetch({ cardNo: num });
+    // The check is a convenience: offline, or when the server does not
+    // answer, the form opens anyway and the submit decides (WEB-22).
+    let existing: unknown = null;
+    if (navigator.onLine) {
+      try {
+        existing = await utils.runner.findByCard.fetch({ cardNo: num });
+      } catch (err) {
+        console.error("[registration] card check failed", err);
+      }
+    }
     if (existing) {
       // Card already registered — show warning
       setCardNo(cardNumber);
       return;
     }
 
-    setName("");
-    setClassId(0);
-    setClubId(0);
-    setStartTime("");
-    setBirthYear("");
-    setSex("");
-    setPhone("");
-    setError("");
-    setShowSuggestions(false);
-    setDebouncedNameQuery("");
+    clearForm();
     setCardNo(cardNumber);
 
     const ch = kioskChannelRef.current;
@@ -471,7 +564,7 @@ export function RegistrationDialog() {
     }
 
     setTimeout(() => nameInputRef.current?.focus(), 50);
-  }, [utils.runner.findByCard]);
+  }, [utils.runner.findByCard, clearForm]);
 
   // ── Suggestions ─────────────────────────────────────────
   const triggerNameSearch = (value: string) => {
@@ -561,13 +654,10 @@ export function RegistrationDialog() {
     if (s.cardNo > 0 && !cardNo) setCardNo(String(s.cardNo));
     if (s.birthYear > 0) setBirthYear(String(s.birthYear));
     if (s.sex) setSex(s.sex);
-    if (s.source === "runnerdb" && s.clubEventorId && clubs.data) {
-      const match = clubs.data.find((c) => c.extId === s.clubEventorId);
-      if (match) setClubId(match.id);
-    }
+    if (s.source === "runnerdb" && s.clubEventorId) pickClub({ eventorId: s.clubEventorId, name: s.clubName });
     setShowSuggestions(false);
     setSelectedSuggestionIdx(-1);
-  }, [clubs.data, cardNo]);
+  }, [pickClub, cardNo]);
 
   const handleNameKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (showSuggestions && suggestions.length > 0) {
@@ -583,10 +673,17 @@ export function RegistrationDialog() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    // A second Enter or click while the first is still saving is ignored:
+    // it would create the runner twice, or queue it twice offline (WEB-20).
+    if (submittingRef.current) return;
     setError("");
+    if (cardKnown) { setError(t("errorCardTaken")); return; }
 
     if (!name.trim()) { setError(t("nameRequired")); return; }
     if (!effectiveClassId) { setError(t("classRequired")); return; }
+    // Strict clock time (RES-13): "10:30" is 10:30:00, a half-typed value is refused.
+    const startDs = startTime.trim() ? parseClockTime(startTime) : 0;
+    if (startDs === null) { setError(t("invalidClockTime")); return; }
 
     const classFee = classes.data?.classes.find((c) => c.id === effectiveClassId)?.classFee ?? 0;
     const rentalFee = isRentalCard ? (cardFeeQuery.data?.cardFee ?? 0) : 0;
@@ -610,7 +707,12 @@ export function RegistrationDialog() {
     const competitionInfo = classes.data?.competition;
     const eventorId = classes.data?.organizer?.eventorId;
     const customMsg = regConfig.data?.registrationReceiptMessage || undefined;
+    const club = resolveClubKey(clubOptions, clubKey);
+    const birthYearNum = birthYear ? parseInt(birthYear, 10) : 0;
+    const wantsReceipt = printer.connected && !!regConfig.data?.printRegistrationReceipt && printReceipt;
 
+    submittingRef.current = true;
+    setSubmitting(true);
     try {
       let registeredOnline = false;
       if (navigator.onLine) {
@@ -618,11 +720,11 @@ export function RegistrationDialog() {
           await createMutation.mutateAsync({
             name: trimmedName,
             classId: effectiveClassId,
-            clubName: selectedClubName,
-            eventorClubId: selectedClub?.extId ?? undefined,
+            clubName: club.clubName,
+            eventorClubId: club.eventorClubId ?? undefined,
             cardNo: cn,
-            startTime: st ? parseMeosTime(st) : 0,
-            birthYear: birthYear ? parseInt(birthYear, 10) : 0,
+            startTime: startDs,
+            birthYear: birthYearNum,
             sex,
             phone,
             fee,
@@ -631,20 +733,30 @@ export function RegistrationDialog() {
             cardFee: rentalFee > 0 ? rentalFee : 0,
           });
           registeredOnline = true;
-        } catch {
-          // Server error while online — don't silently queue, show the error
-          throw new Error(t("registrationFailed"));
+        } catch (err) {
+          // Server error while online — don't silently queue; say what to do.
+          console.error("[registration] runner.create failed", err);
+          throw new Error(registrationErrorMessage(err, t), { cause: err });
         }
       } else {
         // Offline — queue the registration event
         const nameId = window.location.pathname.match(/^\/([^/]+)/)?.[1] ?? "";
+        // The whole form, as the online path sends it (SYNC-12).
         await emitRunnerRegistered(nameId, {
           tempId: crypto.randomUUID(),
           name: trimmedName,
           classId: effectiveClassId,
-          clubId: clubId || 0,
-          cardNo: cn,
-          startTime: st ? parseMeosTime(st) : 0,
+          clubName: club.clubName,
+          ...(club.eventorClubId ? { eventorClubId: club.eventorClubId } : {}),
+          cardNo: cn > 0 ? cn : null,
+          ...(startDs > 0 ? { startTime: startDs } : {}),
+          birthYear: birthYearNum,
+          sex,
+          phone,
+          fee,
+          paid,
+          payMode: payModeNum,
+          cardFee: rentalFee > 0 ? rentalFee : 0,
         });
       }
 
@@ -655,30 +767,6 @@ export function RegistrationDialog() {
           type: "registration-complete",
           runner: { name: trimmedName, className: clsName, clubName: clbName, startTime: st, cardNo: cn },
         });
-      }
-
-      // Print receipt only when the event has receipt printing enabled,
-      // the operator (or runner via the kiosk) opted in for this individual
-      // registration, and a printer is connected.
-      if (printer.connected && regConfig.data?.printRegistrationReceipt && printReceipt) {
-        const paymentLabels: Record<string, string> = { billed: t("invoice"), "on-site": t("payOnSite"), card: t("card"), swish: t("swish"), cash: t("cash") };
-        const logoRaster = eventorId
-          ? await fetchLogoRaster(getClubLogoUrl(eventorId), 250).catch(() => null)
-          : null;
-        await printer.printRegistration({
-          competitionName: competitionInfo?.name ?? "",
-          competitionDate: competitionInfo?.date ?? undefined,
-          logoRaster,
-          runner: { name: trimmedName, clubName: clbName, className: clsName, cardNo: cn },
-          startTime: st || undefined,
-          payment: totalFee > 0 && pm ? { method: paymentLabels[pm] ?? pm, amount: totalFee, cardFee: rentalFee > 0 ? rentalFee : undefined } : undefined,
-          customMessage: customMsg,
-          organizerName: classes.data?.organizer?.name,
-          organizerDetails: regConfig.data?.organizerDetails || undefined,
-          orgNumber: regConfig.data?.orgNumber || undefined,
-          vatInfo: { exempt: regConfig.data?.vatExempt ?? true },
-          friskvardNote: regConfig.data?.receiptFriskvardNote ?? false,
-        }).catch(() => {});
       }
 
       // Add to recent
@@ -715,8 +803,44 @@ export function RegistrationDialog() {
         // Don't send kiosk-reset here — the kiosk will display registration-complete
         // and auto-reset on its own. kiosk-reset is only sent on explicit close/cancel.
       }
+
+      // Print receipt only when the event has receipt printing enabled,
+      // the operator (or runner via the kiosk) opted in for this individual
+      // registration, and a printer is connected. After the form is cleared
+      // or closed and not awaited: the runner is registered whatever the
+      // printer does, and a slow logo or a stuck printer must not hold the
+      // desk (WEB-20). The logo load and the USB transfer are time-bounded.
+      if (wantsReceipt) {
+        const paymentLabels: Record<string, string> = { billed: t("invoice"), "on-site": t("payOnSite"), card: t("card"), swish: t("swish"), cash: t("cash") };
+        const cfg = regConfig.data;
+        const organizerName = classes.data?.organizer?.name;
+        // Prints go out one after another: a second registration does not
+        // start a USB transfer while the first is still in flight.
+        printChainRef.current = printChainRef.current.then(async () => {
+          const logoRaster = eventorId
+            ? await fetchLogoRaster(getClubLogoUrl(eventorId), 250).catch(() => null)
+            : null;
+          await printer.printRegistration({
+            competitionName: competitionInfo?.name ?? "",
+            competitionDate: competitionInfo?.date ?? undefined,
+            logoRaster,
+            runner: { name: trimmedName, clubName: clbName, className: clsName, cardNo: cn },
+            startTime: st || undefined,
+            payment: totalFee > 0 && pm ? { method: paymentLabels[pm] ?? pm, amount: totalFee, cardFee: rentalFee > 0 ? rentalFee : undefined } : undefined,
+            customMessage: customMsg,
+            organizerName,
+            organizerDetails: cfg?.organizerDetails || undefined,
+            orgNumber: cfg?.orgNumber || undefined,
+            vatInfo: { exempt: cfg?.vatExempt ?? true },
+            friskvardNote: cfg?.receiptFriskvardNote ?? false,
+          });
+        }).catch((err) => console.error("[registration] receipt print failed", err));
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : t("registrationFailed"));
+    } finally {
+      submittingRef.current = false;
+      setSubmitting(false);
     }
   };
 
@@ -751,7 +875,6 @@ export function RegistrationDialog() {
   // Reset form when dialog opens
   useEffect(() => {
     if (isOpen) {
-      lastPendingCardRef.current = null;
       // Don't reset if pendingCard will populate
       if (!pendingCard) {
         clearForm();
@@ -881,17 +1004,29 @@ export function RegistrationDialog() {
               <label className="block text-sm font-medium text-slate-700 mb-1">{t("club")}</label>
               <SearchableSelect
                 testId="reg-club"
-                value={clubId}
-                onChange={(v) => setClubId(Number(v))}
+                value={clubKey}
+                onChange={(v) => {
+                  const key = String(v);
+                  // The pick stays an option after the search closes, and
+                  // after a roster refetch drops its club (its last runner
+                  // moved): it is submitted with its own name and id.
+                  const o = findClubOption(clubOptions, key);
+                  if (o) setAdHocClubs((prev) => mergeClubOptions(prev, [{ ...o, source: "adhoc" }]));
+                  setClubKey(key);
+                }}
+                onSearchChange={setClubSearch}
+                // Always searchable: a club not yet in the event is found
+                // in the club directory (WEB-11).
+                alwaysShowSearch
                 placeholder={t("noClub")}
                 searchPlaceholder={t("searchClubs")}
                 options={[
-                  { value: 0, label: t("noClub") },
-                  ...(clubs.data?.map((c) => ({
-                    value: c.id,
+                  { value: NO_CLUB, label: t("noClub") },
+                  ...clubOptions.map((c) => ({
+                    value: c.key,
                     label: c.name,
-                    icon: <ClubLogo clubId={c.id} size="sm" />,
-                  })) ?? []),
+                    icon: c.eventorId ? <ClubLogo clubId={c.eventorId} size="sm" /> : undefined,
+                  })),
                 ]}
               />
             </div>
@@ -1153,10 +1288,10 @@ export function RegistrationDialog() {
               <button
                 type="submit"
                 data-testid="reg-submit"
-                disabled={createMutation.isPending}
+                disabled={submitting || cardKnown}
                 className="flex-1 px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors cursor-pointer disabled:opacity-50"
               >
-                {createMutation.isPending ? t("saving") : (
+                {submitting ? t("saving") : (
                   paymentMode && paymentMode !== "billed" && ((classes.data?.classes.find((c) => c.id === effectiveClassId)?.classFee ?? 0) + (isRentalCard ? (cardFeeQuery.data?.cardFee ?? 0) : 0)) > 0
                     ? t("confirmPaymentRegister")
                     : t("registerRunner")

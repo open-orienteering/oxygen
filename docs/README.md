@@ -36,8 +36,10 @@ Older course notes that share the prefix: [course-maps.md](course-maps.md), [cou
 | [bugfixes/](bugfixes/) | One note per fixed bug, indexed by area in [bugfixes/README.md](bugfixes/README.md) |
 | [migrations/](migrations/) | Data and dependency migrations (MeOS drop, vector pipeline, dependency sweeps) |
 | [history/](history/) | Superseded notes and finished plans, kept for the record |
-| [si-protocol/](si-protocol/) | SPORTident protocol notes and captures |
+| [si-protocol/](si-protocol/) | SPORTident protocol notes and captures: [card memory layouts](si-protocol/card-layouts.md), [readout-station backup format](si-protocol/readout-backup-format.md), [Reader BT](si-protocol/reader-bt.md) |
 | [research/vector-map-pipeline/](research/vector-map-pipeline/) | Frozen research record, decision logs, and the [work queue](research/vector-map-pipeline/SLICES.md) |
 | [screenshots/](screenshots/) | Feature screenshots and how they are made, including private club-map shots ([screenshots/README.md](screenshots/README.md)); the demo fixtures are in `fixtures/showcase/` at the repository root |
+
+The Eventor import and re-sync rules are in [system/eventor-sync.md](system/eventor-sync.md).
 
 `node scripts/check-doc-links.mjs` checks that every Markdown link and every `docs/…` path in the repository resolves.

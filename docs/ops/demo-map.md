@@ -1,9 +1,9 @@
 # The o-kartan demo map
 
 A real Swedish forest map that Oxygen may publish as a vector file: the
-intended replacement for Puit de Laven as the demo and showcase map
-([demo.md, "The map"](demo.md#the-map)). The demo competition does not
-use it yet (see [Pending](#pending)).
+demo and showcase map since 2026-11, in place of Puit de Laven
+([demo.md, "The map"](demo.md#the-map)). The demo competition's controls
+stand on its invented features ([demo.md, "Controls on the demo map"](demo.md#controls-on-the-demo-map)).
 
 | File | What it is |
 |---|---|
@@ -72,8 +72,7 @@ how the invented detail began.
 
 ## Pending
 
-- The demo competition (`fixtures/showcase/showcase.sql`), the control
-  fit and the showcase screenshots still use Puit de Laven. Moving them to
-  this map is its own change.
-- The map-file guard's list of public maps (PR #251,
-  `scripts/lib/map-files.mjs`) needs both files and their hashes.
+- After a hand edit in OCAD, the committed file is the source: re-pin the
+  fixture (`node scripts/patch-showcase-map.mjs`), update its hash in
+  `scripts/lib/map-files.mjs`, and check that the controls still stand on
+  features (`pnpm test:scripts`).

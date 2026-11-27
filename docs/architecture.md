@@ -123,7 +123,10 @@ All times live in **ZeroTime-relative deciseconds** (the column type is
 `INT`, default `0`). The default `ZeroTime` is `324000` (09:00:00 in
 deciseconds since midnight). Every API surface accepts **absolute
 deciseconds** and converts at the boundary (`toAbsolute` / `toRelative` in
-`packages/api/src/timeConvert.ts`).
+`packages/api/src/timeConvert.ts`). Relative 0 is "no time", so a start exactly at
+ZeroTime is refused and starts before ZeroTime are negative; "now" is in the
+event's own time zone (`events.time_zone`). See
+[system/registration-and-readout.md](system/registration-and-readout.md), "Time model".
 
 ## Deployment Options
 
@@ -163,7 +166,7 @@ Club-facing hosted deployment: the public GHCR `cloud` image on Cloud Run behind
 
 Oxygen is designed for field conditions where internet connectivity is unreliable. The database is always hosted remotely (cloud VM or dedicated server), keeping the competition data safe and accessible from anywhere. The planned approach makes each client station resilient to connectivity loss:
 
-- **Service Worker caching** — cache the full PWA shell and API responses so Oxygen loads and operates without internet
+- **Service Worker caching** — cache the full PWA shell so Oxygen loads without internet; API data for offline use comes from the persisted per-event query cache, not from the service worker (see [system/offline-architecture.md](system/offline-architecture.md) "Station resilience")
 - **Remote database, local resilience** — PostgreSQL runs on a remote server; each Oxygen PWA client caches all data it needs to continue operating independently during an outage
 - **Local network fallback** — during internet loss, Oxygen stations on the same local network (e.g., registration and start) can propagate new registrations and card readouts directly between each other
 - **Background sync** — when connectivity is restored, queued changes sync back to the remote database, Eventor, LiveResults, and online-input (ROC). UUIDv7 PKs let offline-minted rows merge without ID collisions when they reach the server.
@@ -184,9 +187,11 @@ The draw uses corridor assignment (parallel start lanes). Classes on the same co
 
 Within a corridor a class occupies the span from its first start to the end of its last runner's slot (`lastStart + interval`, widened to at least `baseInterval`), so the next class starts exactly when the previous window closes. Corridors can be phase-shifted against each other via `DrawSettings.staggerOffset` — corridor *k* is shifted by `k * staggerOffset` wrapped within the interval, which spreads parallel lanes across the minutes of the interval. `ClassDrawConfig.startOffset` overrides that phase for a single class.
 
-Terrain conflicts are handled as a spacing constraint rather than a grouping one. The scheduler books every start time against the course's first control and delays a class until all of its starts sit at least `DrawSettings.minFirstControlGap` (default 600 ds = 1 min, gated by `detectCourseOverlap`) away from the starts already booked on that control. Two classes on a 2-minute interval sharing control 31 therefore interleave onto alternating minutes instead of one blocking the other; a third class on the same control is pushed past the saturated window. A mass start (`simultaneous`) counts as a single instant at the control regardless of field size. A graphical timeline visualization (`packages/web/src/lib/draw-timeline.ts` → `DrawTimeline`) shows the draw result.
+Terrain conflicts are handled as a spacing constraint rather than a grouping one. The scheduler books every start time against the course's first control and delays a class until all of its starts sit at least `DrawSettings.minFirstControlGap` (default 600 ds = 1 min, gated by `detectCourseOverlap`) away from the starts already booked on that control. Two classes on a 2-minute interval sharing control 31 therefore interleave onto alternating minutes instead of one blocking the other; a third class on the same control is pushed past the saturated window. A mass start (`simultaneous`) counts as a single instant at the control regardless of field size. The scheduler may shift a class up to 100,000 times; `findFirstControlConflicts` then checks the finished schedule (pinned classes included) and the engine turns any remaining clash into a warning. A graphical timeline visualization (`packages/web/src/lib/draw-timeline.ts` → `DrawTimeline`) shows the draw result.
 
 ![Draw timeline](screenshots/draw-panel.png)
+
+The engine is split into `loadDrawInputs` (database reads, on the singleton or a transaction) and the pure `computeDraw`. Every random choice comes from a seeded PRNG (`draw/rng.ts`), one stream per class, so a seed reproduces the draw. `draw.preview` returns the `seed` and a `previewToken` (sha256 of the seed, the options and every value the draw writes); `draw.execute` requires both, recomputes inside one transaction under the per-event lock (`lockEventLeaseAndSync`), re-checks the lease, refuses a changed token with `CONFLICT`, and writes all runners in one `UPDATE … FROM unnest(…)` plus one journal `createMany`. Runners who have started (finish time, a result status, a read card or a punch) are kept unless `options.force`; `options.mode = "onlyMissing"` draws only runners without a start. Start numbers continue after the highest number the draw keeps. See [bugfixes/draw-safety.md](bugfixes/draw-safety.md).
 
 ### SI Card Readout
 SportIdent card reading uses the Web Serial API for direct hardware communication:
@@ -230,6 +235,9 @@ and [course-print.md](course-print.md).
 
 ### Background jobs and horizontal scaling
 Almost everything in the API scales out without coordination, because every request reads and writes Postgres. The exceptions are the timers that are not driven by a request and have effects outside the database: the LiveResults push, ROC polling, and journal shipping. Running any of them twice means duplicate pushes or duplicate punches, so exactly one instance runs them at a time, chosen by a renewable lease row in `oxygen.instance_lease`. The holder reconciles its timers against the per-event configuration every few seconds, which is also how a change made on another instance takes effect. See [system/background-jobs-lease.md](system/background-jobs-lease.md).
+### Process lifecycle
+`packages/api/src/process-guards.ts` holds two guards. An **unhandled promise rejection** is logged (`[process] unhandled rejection:` with the reason and stack) and the process keeps running: one stray rejected promise in a background job must not take a venue server down mid-event. `uncaughtException` keeps Node's default (crash and restart), because the process state is unknown after one. **SIGINT / SIGTERM** run a single shutdown: hand back the background lease, close the HTTP server, disconnect the databases, then exit 0. Each step is caught so a failing one never skips the next, a second signal is ignored, and a timer armed first forces exit 1 after 8 s (`SHUTDOWN_DEADLINE_MS`), so a hung step cannot outlast the orchestrator's kill window. Unit tests: `src/__tests__/process-guards.test.ts`.
+
 
 ### Kiosk Mode
 A self-service interface for race day:
@@ -248,7 +256,7 @@ Communication between the admin window and kiosk uses the BroadcastChannel API, 
 Identity (optional): see [system/authentication.md](system/authentication.md). With `AUTH_MODE=off` nothing changes. With `proxy`/`dev`, event-scoped tRPC requires an invited user plus a capability; kiosk and start screen stay renderable with a kiosk key (or a logged-in user who already has the matching capability).
 
 ### Test Lab
-Built-in data generation and race simulation for development and demo purposes:
+Built-in data generation and race simulation for development and demo purposes. Test-event only: every writing `testLab.*` procedure is behind `testEventProcedure` (`event.manage` plus a fresh read of `events.is_test_event`, and refusal when the event has an active lease or an Eventor link), the flag is set with `event.setTestEvent` or `event.create`, and the shell shows the tab only when `EventInfo.isTestEvent` is true:
 - Generates realistic class structures, courses, and controls
 - Populates with GDPR-safe fictional runners (randomized Swedish names, mixed SI card types)
 - Simulates a full race with realistic split times and anomalies (DNF, mispunch, DNS)

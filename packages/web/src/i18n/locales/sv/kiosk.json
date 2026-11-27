@@ -72,5 +72,13 @@
   "skippedPunchedPill": "{{code}} · Valfri",
   "skippedMissingPill": "{{code}} · Utelämnad",
   "kioskKeyRequired": "Den här kiosk-URL:en kräver en nyckel. Öppna tävlingssidan, skapa en kiosknyckel och använd länken där.",
-  "seeOfficial": "Kontakta funktionären vid avläsningen"
+  "seeOfficial": "Kontakta funktionären vid avläsningen",
+  "syncPending": "{{count}} sparade på den här enheten, inte skickade än",
+  "syncNeedsSignIn": "{{count}} sparade på den här enheten. En funktionär måste logga in för att skicka dem.",
+  "syncFailed": "{{count}} avvisade av servern",
+  "notSaved": "Kortet sparades inte. Sätt in det igen.",
+  "noCompetition": "Ingen tävling vald, så kortet kunde inte sparas.",
+  "cardNotRead": "Brickan lästes inte",
+  "cardNotReadHint": "Sätt i brickan igen och vänta på pipet.",
+  "readerDisconnected": "Läsaren är frånkopplad"
 }

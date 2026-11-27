@@ -203,6 +203,11 @@ export async function assignVariant(db: Db, classId: string, runnerId: string): 
   return v;
 }
 
+/** Statuses that mean the runner has raced: her variant is never re-dealt. */
+const RACED = new Set(["ok", "no_timing", "missing_punch", "dnf", "dq", "over_max_time", "out_of_competition"]);
+
+const hasRaced = (r: { finishTime: number; status: string }) => r.finishTime !== 0 || RACED.has(r.status);
+
 /** A runner whose `course_id` a reconcile changed: `courseId` is the new course seq, or null. */
 export interface RunnerVariantChange {
   seq: number;
@@ -214,7 +219,8 @@ export interface RunnerVariantChange {
  * Restore the invariant for one class: every non-removed runner whose
  * course is not in the pool gets the least-populated variant (start order,
  * so a fresh pool deals evenly); with no pool, a runner left on a variant
- * is cleared (a plain per-runner course is kept). Returns the changes.
+ * is cleared (a plain per-runner course is kept). A runner who has raced
+ * keeps her variant, in or out of the pool. Returns the changes.
  */
 export async function reconcileClassVariants(db: Db, classId: string): Promise<RunnerVariantChange[]> {
   const pool = await poolOf(db, classId);
@@ -222,12 +228,14 @@ export async function reconcileClassVariants(db: Db, classId: string): Promise<R
     where: { classId, removed: false },
     select: {
       id: true, seq: true, cardNo: true, courseId: true, startTime: true, startNo: true, name: true,
+      finishTime: true, status: true,
       course: { select: { parentCourseId: true } },
     },
   });
   const changes: RunnerVariantChange[] = [];
   if (pool.length === 0) {
-    const stale = runners.filter((r) => r.courseId && r.course?.parentCourseId);
+    // A runner who has raced keeps her variant, even with no pool left (WEB-09).
+    const stale = runners.filter((r) => r.courseId && r.course?.parentCourseId && !hasRaced(r));
     if (stale.length > 0) {
       await db.runner.updateMany({ where: { id: { in: stale.map((r) => r.id) } }, data: { courseId: null } });
     }
@@ -235,7 +243,8 @@ export async function reconcileClassVariants(db: Db, classId: string): Promise<R
     return changes.sort((a, b) => a.seq - b.seq);
   }
   const dealt = dealVariants(
-    runners.map((r) => ({ id: r.id, courseId: r.courseId, startTime: r.startTime, startNo: r.startNo, name: r.name })),
+    // A runner who has raced and sits on a variant outside the pool keeps it (WEB-09); one with no course is dealt.
+    runners.map((r) => ({ id: r.id, courseId: r.courseId, startTime: r.startTime, startNo: r.startNo, name: r.name, locked: hasRaced(r) && r.courseId !== null })),
     pool,
     { mode: "startOrder", onlyUnassigned: true },
   );
@@ -261,9 +270,6 @@ export async function reconcileVariants(
   for (const id of new Set(ids)) out.push(...(await reconcileClassVariants(db, id)));
   return out;
 }
-
-/** Statuses that mean the runner has raced: her variant is never re-dealt. */
-const RACED = new Set(["ok", "no_timing", "missing_punch", "dnf", "dq", "over_max_time", "out_of_competition"]);
 
 /**
  * `class.distributeVariants`: deal the class's pool over its non-removed
@@ -297,7 +303,7 @@ export async function distributeClassVariants(
     startTime: r.startTime,
     startNo: r.startNo,
     name: r.name,
-    locked: r.finishTime > 0 || RACED.has(r.status),
+    locked: hasRaced(r),
   }));
   const dealt = dealVariants(deal, pool, opts);
   const seqOf = new Map(pool.map((v) => [v.id, v.seq]));

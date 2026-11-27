@@ -39,6 +39,10 @@ export const STALE_MS = 60_000;
 export const DEFAULT_HOLD_MS = Number(process.env.MAP_IMPORT_HOLD_MS ?? 30_000);
 /** Wall-clock cap for one import before it is failed. */
 export const JOB_TIMEOUT_MS = 10 * 60_000;
+/** A job that stops answering is re-claimed at most this many times in all; the next stale pass fails it (MAP-5). */
+export const IMPORT_MAX_ATTEMPTS = 3;
+/** How long the parse stage may take before the file is called damaged (MAP-3); stage 2 (normalise) clears it. */
+export const IMPORT_PARSE_TIMEOUT_MS = 120_000;
 /** Housekeeping thresholds (07 §4.4). */
 export const UPLOAD_TTL_MS = 24 * 3_600_000;
 export const JOB_TTL_MS = 7 * 24 * 3_600_000;
@@ -56,8 +60,12 @@ export interface ImportJobRow {
   error: string | null;
   eventId: bigint | null;
   clubMapId: string | null;
+  /** The signed-in user whose request started the job; the uploader of the club version it creates. */
+  startedBy: string | null;
   claimedBy: string | null;
   heartbeatAt: Date | null;
+  /** How many times a worker claimed this job (docs/map-storage.md §6.1); a stale re-claim past `IMPORT_MAX_ATTEMPTS` fails it. */
+  attempts: number;
   /** The club decisions stage 6 applies, snapshotted at insert (docs/map-storage.md §6.1). */
   decisions: mapImport.SymbolDecision[];
   /** The club version's patch the store stage bakes, snapshotted at insert (docs/map-patches.md §5); `[]` = none. */
@@ -71,10 +79,20 @@ export interface ImportJobRow {
 // ---- pure helpers -----------------------------------------------------------
 
 /** Whether a poller may take this job over now (07 §8: queued, or running with a stale heartbeat). */
-export function isClaimable(row: Pick<ImportJobRow, "state" | "heartbeatAt">, now: Date = new Date(), staleMs = STALE_MS): boolean {
+export function isClaimable(row: Pick<ImportJobRow, "state" | "heartbeatAt"> & { attempts?: number }, now: Date = new Date(), staleMs = STALE_MS, maxAttempts = IMPORT_MAX_ATTEMPTS): boolean {
   if (row.state === "queued") return true;
-  if (row.state !== "running") return false;
-  return row.heartbeatAt === null || now.getTime() - row.heartbeatAt.getTime() > staleMs;
+  if (!isStaleRunning(row, now, staleMs)) return false;
+  return (row.attempts ?? 0) < maxAttempts;
+}
+
+/** A running job whose heartbeat went silent: re-claimable, or (attempts used up) failed by the next pass. */
+export function isStaleRunning(row: Pick<ImportJobRow, "state" | "heartbeatAt">, now: Date = new Date(), staleMs = STALE_MS): boolean {
+  return row.state === "running" && (row.heartbeatAt === null || now.getTime() - row.heartbeatAt.getTime() > staleMs);
+}
+
+/** Whether a poll should kick the engine: a job it can run, or a stale one `failExhausted` must settle. */
+export function needsKick(row: Pick<ImportJobRow, "state" | "heartbeatAt">, now: Date = new Date()): boolean {
+  return row.state === "queued" || isStaleRunning(row, now);
 }
 
 /** Coarse progress per stage; the worker reports boundaries, not percentages. */
@@ -107,7 +125,7 @@ export interface WorkerResult {
 export function runImportInWorker(
   bytes: Uint8Array,
   fileName: string,
-  opts: { kind?: MapSourceKind; decisions?: mapImport.SymbolDecision[]; patch?: mapDocument.VersionPatch; colour?: MapColourSettings; onStage?: (stage: ImportStage) => void; timeoutMs?: number } = {},
+  opts: { kind?: MapSourceKind; decisions?: mapImport.SymbolDecision[]; patch?: mapDocument.VersionPatch; colour?: MapColourSettings; onStage?: (stage: ImportStage) => void; timeoutMs?: number; parseTimeoutMs?: number } = {},
 ): Promise<WorkerResult> {
   const workerData: ImportWorkerData = { bytes, fileName, kind: opts.kind ?? "ocad", decisions: opts.decisions ?? [], patch: opts.patch ?? [], colour: opts.colour ?? DEFAULT_COLOUR_SETTINGS };
   return new Promise<WorkerResult>((resolve, reject) => {
@@ -117,6 +135,7 @@ export function runImportInWorker(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearTimeout(parseTimer);
       fn();
       void worker.terminate();
     };
@@ -124,8 +143,17 @@ export function runImportInWorker(
       () => finish(() => reject(new Error(`import exceeded ${opts.timeoutMs ?? JOB_TIMEOUT_MS} ms`))),
       opts.timeoutMs ?? JOB_TIMEOUT_MS,
     );
+    // A damaged OCAD file can keep the reader busy for ever; the parse stage has its own, much shorter, clock (MAP-3).
+    const parseMs = opts.parseTimeoutMs ?? IMPORT_PARSE_TIMEOUT_MS;
+    const parseTimer = setTimeout(
+      () => finish(() => reject(new Error(`DAMAGED_FILE: the map file could not be read within ${Math.round(parseMs / 1000)} s; it is probably damaged.`))),
+      parseMs,
+    );
     worker.on("message", (m: ImportWorkerMessage) => {
-      if (m.type === "stage") opts.onStage?.(m.stage);
+      if (m.type === "stage") {
+        if (m.stage !== "parse") clearTimeout(parseTimer);
+        opts.onStage?.(m.stage);
+      }
       else if (m.type === "done") finish(() => resolve({ bytes: m.bytes, documentHash: m.documentHash, fileHash: m.fileHash, libraryVersion: m.libraryVersion, report: m.report }));
       else finish(() => reject(new Error(m.message)));
     });
@@ -138,7 +166,7 @@ export function runImportInWorker(
 
 const JOB_SELECT = {
   id: true, state: true, stage: true, progress: true, sourceHash: true, documentHash: true, error: true,
-  eventId: true, clubMapId: true, claimedBy: true, heartbeatAt: true, decisions: true, patch: true, colour: true, createdAt: true, updatedAt: true,
+  eventId: true, clubMapId: true, startedBy: true, claimedBy: true, heartbeatAt: true, attempts: true, decisions: true, patch: true, colour: true, createdAt: true, updatedAt: true,
 } as const;
 
 function asRow(r: { state: string; decisions: Prisma.JsonValue; patch: Prisma.JsonValue; colour: Prisma.JsonValue } & Omit<ImportJobRow, "state" | "decisions" | "patch" | "colour">): ImportJobRow {
@@ -195,10 +223,51 @@ export function kickImportJobs(db: Db): Promise<void> {
   return running;
 }
 
+/** The rows a claim may take: queued, or running with a stale heartbeat and attempts left. */
+function claimableWhere(stale: Date): Prisma.MapImportJobWhereInput {
+  return { OR: [{ state: "queued" }, { state: "running", attempts: { lt: IMPORT_MAX_ATTEMPTS }, OR: [{ heartbeatAt: null }, { heartbeatAt: { lt: stale } }] }] };
+}
+
+export const IMPORT_ABANDONED_ERROR = `IMPORT_ABANDONED: the import stopped the server on each of ${IMPORT_MAX_ATTEMPTS} attempts and was given up. The file was not imported.`;
+
+/**
+ * Fail the stale running jobs that used up their attempts (MAP-5): a file
+ * that kills the process on every try must not be re-claimed for ever.
+ * A promote's pending version is removed as `execute` does. Never throws.
+ */
+export async function failExhausted(db: Db): Promise<void> {
+  try {
+    const stale = new Date(Date.now() - STALE_MS);
+    const rows = await db.mapImportJob.findMany({
+      where: { state: "running", attempts: { gte: IMPORT_MAX_ATTEMPTS }, OR: [{ heartbeatAt: null }, { heartbeatAt: { lt: stale } }] },
+      select: JOB_SELECT,
+    });
+    for (const r of rows) {
+      const row = asRow(r);
+      const { count } = await db.mapImportJob.updateMany({
+        where: { id: row.id, state: "running", attempts: { gte: IMPORT_MAX_ATTEMPTS }, OR: [{ heartbeatAt: null }, { heartbeatAt: { lt: stale } }] },
+        // claimedBy null: a stalled-but-alive owner's guarded writes ({ id, claimedBy: INSTANCE_ID }) no longer match.
+        data: { state: "failed", error: IMPORT_ABANDONED_ERROR, claimedBy: null, heartbeatAt: new Date() },
+      });
+      if (count !== 1) continue;
+      console.error(`[map-import] job ${row.id} given up after ${row.attempts} attempts`);
+      if (isPromoteJob(row)) {
+        await abandonPromote(db, { clubMapId: row.clubMapId, sourceHash: row.sourceHash, patch: row.patch })
+          .catch((e: unknown) => console.error(`[map-import] removing the pending version of ${row.id}:`, e));
+      }
+      const fresh = await db.mapImportJob.findUnique({ where: { id: row.id }, select: JOB_SELECT });
+      if (fresh) notify(asRow(fresh));
+    }
+  } catch (err: unknown) {
+    console.error("[map-import] failExhausted:", err);
+  }
+}
+
 async function nextClaimable(db: Db): Promise<{ id: string } | null> {
+  await failExhausted(db);
   const stale = new Date(Date.now() - STALE_MS);
   return db.mapImportJob.findFirst({
-    where: { OR: [{ state: "queued" }, { state: "running", OR: [{ heartbeatAt: null }, { heartbeatAt: { lt: stale } }] }] },
+    where: claimableWhere(stale),
     orderBy: { createdAt: "asc" },
     select: { id: true },
   });
@@ -208,8 +277,8 @@ async function nextClaimable(db: Db): Promise<{ id: string } | null> {
 async function claim(db: Db, id: string): Promise<ImportJobRow | null> {
   const stale = new Date(Date.now() - STALE_MS);
   const { count } = await db.mapImportJob.updateMany({
-    where: { id, OR: [{ state: "queued" }, { state: "running", OR: [{ heartbeatAt: null }, { heartbeatAt: { lt: stale } }] }] },
-    data: { state: "running", claimedBy: INSTANCE_ID, heartbeatAt: new Date(), stage: "parse", progress: stageProgress("parse"), error: null },
+    where: { id, ...claimableWhere(stale) },
+    data: { attempts: { increment: 1 }, state: "running", claimedBy: INSTANCE_ID, heartbeatAt: new Date(), stage: "parse", progress: stageProgress("parse"), error: null },
   });
   if (count !== 1) return null;
   const row = await db.mapImportJob.findUnique({ where: { id }, select: JOB_SELECT });
@@ -217,11 +286,21 @@ async function claim(db: Db, id: string): Promise<ImportJobRow | null> {
 }
 
 /** Writes guarded by `claimedBy` so a job re-claimed elsewhere ignores our late updates. */
-async function progress(db: Db, id: string, stage: JobStage): Promise<void> {
-  await db.mapImportJob.updateMany({ where: { id, claimedBy: INSTANCE_ID }, data: { stage, progress: stageProgress(stage), heartbeatAt: new Date() } });
+async function progress(db: Db, id: string, stage: JobStage): Promise<boolean> {
+  const { count } = await db.mapImportJob.updateMany({ where: { id, claimedBy: INSTANCE_ID, state: "running" }, data: { stage, progress: stageProgress(stage), heartbeatAt: new Date() } });
+  return count === 1;
 }
 
-async function execute(db: Db, job: ImportJobRow): Promise<void> {
+/**
+ * The worker's stage callback is fire and forget: a failed progress write
+ * (a dropped connection) is logged, never an unhandled rejection (MAP-6).
+ */
+export function reportStage(db: Db, id: string, stage: JobStage): Promise<void> {
+  return progress(db, id, stage).then(() => undefined, (err: unknown) => console.error(`[map-import] stage ${stage} of ${id}:`, err));
+}
+
+/** Runs one claimed job to its terminal row. Exported for the late-owner test; callers go through `kickImportJobs`. */
+export async function execute(db: Db, job: ImportJobRow): Promise<void> {
   const heartbeat = setInterval(() => {
     db.mapImportJob.updateMany({ where: { id: job.id, claimedBy: INSTANCE_ID }, data: { heartbeatAt: new Date() } })
       .catch((err: unknown) => console.error(`[map-import] heartbeat ${job.id}:`, err));
@@ -231,8 +310,12 @@ async function execute(db: Db, job: ImportJobRow): Promise<void> {
     if (!source) throw new Error(`source ${job.sourceHash} not found`);
     if (source.kind !== "ocad" && source.kind !== "omap") throw new Error(`UNSUPPORTED_FORMAT: ${source.kind} import is not available`);
 
-    const result = await runImportInWorker(source.bytes, source.fileName, { kind: source.kind, decisions: job.decisions, patch: job.patch, colour: job.colour, onStage: (stage) => void progress(db, job.id, stage) });
-    await progress(db, job.id, "store");
+    const result = await runImportInWorker(source.bytes, source.fileName, { kind: source.kind, decisions: job.decisions, patch: job.patch, colour: job.colour, onStage: (stage) => void reportStage(db, job.id, stage) });
+    // The guarded write doubles as the ownership check: an abandoned or re-claimed job pins nothing (docs/map-storage.md §6).
+    if (!(await progress(db, job.id, "store"))) {
+      console.warn(`[map-import] job ${job.id} is no longer ours: result discarded`);
+      return;
+    }
     const stored = await storeImportedDocument(db, {
       source: { bytes: source.bytes, fileHash: job.sourceHash, kind: source.kind, fileName: source.fileName, uploadedBy: source.uploadedBy },
       document: { bytes: result.bytes, hash: result.documentHash, libraryVersion: result.libraryVersion, patch: job.patch },
@@ -296,7 +379,7 @@ export function isPromoteJob<J extends Pick<ImportJobRow, "eventId" | "clubMapId
   return job.eventId !== null && job.clubMapId !== null && (job.patch?.length ?? 0) > 0;
 }
 
-export async function applyJobResult(db: Db, job: Pick<ImportJobRow, "eventId" | "clubMapId" | "sourceHash" | "documentHash"> & { patch?: mapDocument.VersionPatch }): Promise<void> {
+export async function applyJobResult(db: Db, job: Pick<ImportJobRow, "eventId" | "clubMapId" | "sourceHash" | "documentHash"> & { startedBy?: string | null; patch?: mapDocument.VersionPatch }): Promise<void> {
   if (!job.documentHash) return;
   const promote = isPromoteJob(job);
   if (job.eventId !== null && !promote) {
@@ -329,7 +412,10 @@ export async function applyJobResult(db: Db, job: Pick<ImportJobRow, "eventId" |
           label: source?.fileName ?? "",
           sourceHash: job.sourceHash,
           documentHash: job.documentHash,
-          uploadedBy: source?.uploadedBy ?? null,
+          // Whoever started the import proved possession of the bytes
+          // (source-possession.ts); the source row's uploader is only the
+          // first uploader and may be someone else.
+          uploadedBy: job.startedBy ?? source?.uploadedBy ?? null,
         },
       });
     }
@@ -471,7 +557,7 @@ export async function awaitImportJob(db: Db, id: string, opts: { timeoutMs?: num
   const pollMs = opts.pollMs ?? 1_000;
   let row = await getImportJob(db, id);
   while (row && !isTerminal(row.state) && Date.now() < until) {
-    if (isClaimable(row)) void kickImportJobs(db);
+    if (needsKick(row)) void kickImportJobs(db);
     const local = await waitFor(id, pollMs);
     row = local ?? (await getImportJob(db, id));
   }

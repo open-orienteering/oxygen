@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { waitForTrpc } from "./helpers/trpc";
 
 async function selectCompetition(page: import("@playwright/test").Page) {
   await page.goto("/");
@@ -37,21 +38,12 @@ test.describe("Classes Page", () => {
     await expect(page.locator("label", { hasText: "Name" })).toBeVisible();
     await expect(page.locator("label", { hasText: "Sex" })).toBeVisible();
 
-    // The course picker is a dropdown trigger — the assigned course
-    // name (Bana 2) shows as the trigger label. Open the dropdown to
-    // verify checkbox state for both courses.
-    const expandedPanel = page.locator(".bg-blue-50\\/60");
-    const trigger = expandedPanel.getByRole("button", { name: "Bana 2" });
-    await expect(trigger).toBeVisible();
-    await trigger.click();
-    const bana2Checkbox = expandedPanel
-      .locator("label", { hasText: "Bana 2" })
-      .locator("input[type='checkbox']");
-    await expect(bana2Checkbox).toBeChecked();
-    const bana1Checkbox = expandedPanel
-      .locator("label", { hasText: "Bana 1" })
-      .locator("input[type='checkbox']");
-    await expect(bana1Checkbox).not.toBeChecked();
+    // The course picker is a single select showing the assigned course (Bana 2); the open list marks it.
+    const picker = page.getByTestId("class-course-select");
+    await expect(picker).toContainText("Bana 2");
+    await picker.getByRole("button").first().click();
+    await expect(picker.getByRole("button", { name: /^Bana 1/ })).toBeVisible();
+    await expect(picker.getByRole("button", { name: /^Bana 2/ }).first()).toBeVisible();
 
     await expect(page.getByText("Runners (14)")).toBeVisible();
     expect(page.url()).toContain("classId=2");
@@ -75,16 +67,10 @@ test.describe("Classes Page", () => {
 
     await page.getByPlaceholder("e.g. H21").fill("Test Klass");
     const createForm = page.locator("form").first();
-    // Open the course dropdown (placeholder text when nothing selected),
-    // then tick Bana 1 inside the popover.
-    await createForm.getByRole("button", { name: "Select courses..." }).click();
-    await createForm
-      .locator("label", { hasText: "Bana 1" })
-      .locator("input[type='checkbox']")
-      .check();
-    // Close the dropdown so it doesn't intercept clicks on the
-    // Create button below it.
-    await page.keyboard.press("Escape");
+    // Open the course picker (a single select: a class has one course) and pick Bana 1.
+    const picker = createForm.getByTestId("class-create-course-select");
+    await picker.getByRole("button").click();
+    await picker.getByRole("button", { name: /^Bana 1/ }).click();
     await page.getByRole("button", { name: "Create" }).click();
 
     await expect(page.getByRole("cell", { name: "Test Klass" })).toBeVisible({ timeout: 5000 });
@@ -174,32 +160,38 @@ test.describe("Classes Page", () => {
     });
   });
 
-  test("should show forked badge when multiple courses are selected", async ({ page }) => {
+  test("changing a class's course is saved (WEB-09)", async ({ page }) => {
     await selectCompetition(page);
     await clickTab(page, "Classes");
     await expect(page.getByText("3 classes")).toBeVisible({ timeout: 10000 });
+    page.on("dialog", (dialog) => void dialog.accept());
 
     await page.getByRole("cell", { name: "Öppen 3" }).click();
     await expect(page.getByText("Class Settings")).toBeVisible({ timeout: 5000 });
+    const picker = page.getByTestId("class-course-select");
+    await expect(picker).toContainText("Bana 3");
 
-    const expandedPanel = page.locator(".bg-blue-50\\/60");
-    // Open the course dropdown (Öppen 3 has Bana 3 assigned).
-    await expandedPanel.getByRole("button", { name: "Bana 3" }).click();
-    await expandedPanel
-      .locator("label", { hasText: "Bana 1" })
-      .locator("input[type='checkbox']")
-      .check();
-
-    await expect(expandedPanel.getByText(/Forked/)).toBeVisible({ timeout: 5000 });
-    await expect(page.getByText("Forked").first()).toBeVisible();
-
-    // Clean up — uncheck inside the still-open dropdown
-    await expandedPanel
-      .locator("label", { hasText: "Bana 1" })
-      .locator("input[type='checkbox']")
-      .uncheck();
-    // Wait for the forked badge to disappear after unchecking
-    await expect(expandedPanel.getByText(/Forked/)).not.toBeVisible({ timeout: 5000 });
+    const pick = async (course: string) => {
+      const saved = waitForTrpc(page, "class.update");
+      await picker.getByRole("button").first().click();
+      await picker.getByRole("button", { name: new RegExp(`^${course}`) }).click();
+      await saved;
+    };
+    const detail = async () => {
+      const res = await page.request.get(`/trpc/class.detail?input=${encodeURIComponent(JSON.stringify({ id: 3 }))}`, { headers: { "x-competition-id": "itest" } });
+      return (await res.json()).result.data as { courseNames: string[] };
+    };
+    try {
+      await pick("Bana 1");
+      await page.reload();
+      // The expanded class is in the URL: it opens again by itself.
+      await expect(page.getByTestId("class-course-select")).toContainText("Bana 1");
+      expect((await detail()).courseNames).toEqual(["Bana 1"]);
+    } finally {
+      // Restore the seeded course.
+      const restored = await page.request.post("/trpc/class.update", { headers: { "x-competition-id": "itest" }, data: { id: 3, courseId: 3 } });
+      expect(restored.ok(), await restored.text()).toBe(true);
+    }
   });
 
   test("runners in a class on a forked course carry pre-set variants (F6b)", async ({ page }) => {

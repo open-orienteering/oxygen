@@ -74,7 +74,16 @@ export interface PunchRecordedPayload {
   cardNo: number;
   controlCode: number;
   time: number;
+  /**
+   * Where the punch came from (`manual`, `online_input`, `backup_memory`…).
+   * `backup_memory` with `backupRow` is an imported backup row (stored as
+   * evidence, not matched); with `pushedFrom` it is the pushed mirror.
+   */
   origin?: string;
+  /** For a pushed backup punch: the id of the backup row it mirrors (RES-08). */
+  pushedFrom?: string;
+  /** An imported backup-memory row: evidence only until pushed (RES-08). */
+  backupRow?: boolean;
   /**
    * The origin node's punch row UUID. The applying node inserts it verbatim
    * so later `punch.removed` / `punch.updated` entries can address the row
@@ -116,6 +125,15 @@ export interface StartRecordedPayload {
   startTime: number;
 }
 
+/**
+ * A start time set by the draw or by hand. `startNo` is carried by draws
+ * (review RES-17) so a peer replays the start number too; older entries and
+ * manual start edits leave it out, and replay then leaves the number alone.
+ */
+export interface StartAdjustedPayload extends StartRecordedPayload {
+  startNo?: number;
+}
+
 export interface FinishRecordedPayload {
   cardNo: number | null;
   runnerId?: number;
@@ -141,6 +159,13 @@ export interface ResultAppliedPayload {
   status: number;
   finishTime: number;
   startTime: number;
+  /**
+   * The applying node (or the operator, offline) already decided this
+   * result may replace the stored one. Without it the ingest runs the
+   * readout guard (`decideReadoutApply`): a DQ, a hand-set status or a
+   * worse read is refused or held. A DQ is protected even when confirmed.
+   */
+  confirmed?: boolean;
 }
 
 export interface RunnerRegisteredPayload {
@@ -172,6 +197,28 @@ export interface RunnerRegisteredPayload {
    * writing node, which journals its pick as a `runner.updated`.
    */
   courseId?: number | null;
+  /*
+   * The rest of the entry form (SYNC-12), in the units of the `runner.create`
+   * input: money in cents, `finishTime` absolute deciseconds, `status` the
+   * numeric runner status. Every key is optional; an absent key keeps the
+   * column default, so entries written before these fields replay unchanged,
+   * except `entryDate`/`entryTime`, which the apply stamps from the entry's
+   * timestamp in the event's time zone.
+   */
+  startNo?: number;
+  birthYear?: number;
+  sex?: string;
+  nationality?: string;
+  phone?: string;
+  fee?: number;
+  paid?: number;
+  payMode?: number;
+  cardFee?: number;
+  status?: number;
+  finishTime?: number;
+  /** MeOS entry date/time as stamped by the registering node (`nowMeosDate`/`nowMeosTime`). */
+  entryDate?: number;
+  entryTime?: number;
 }
 
 /**
@@ -244,7 +291,7 @@ export interface JournalPayloads {
   "punch.removed": PunchRemovedPayload;
   "punch.updated": PunchUpdatedPayload;
   "start.recorded": StartRecordedPayload;
-  "start.adjusted": StartRecordedPayload;
+  "start.adjusted": StartAdjustedPayload;
   "finish.recorded": FinishRecordedPayload;
   "finish.adjusted": FinishAdjustedPayload;
   "result.applied": ResultAppliedPayload;
@@ -255,6 +302,54 @@ export interface JournalPayloads {
   "course.upserted": ReferenceUpsertPayload;
   "control.upserted": ReferenceUpsertPayload;
   "reference.imported": ReferenceImportedPayload;
+}
+
+// ─── Push refusal codes ──────────────────────────────────────
+
+/**
+ * Stable codes a node returns in `events.push` → `failed[].error`. Raw
+ * exception text stays in the server log. Older servers may still answer
+ * free text, so clients must render unknown strings as-is.
+ */
+export const JOURNAL_REFUSAL_CODES = [
+  "COMPETITION_MISMATCH",
+  "FORBIDDEN",
+  "ENTRY_IN_OTHER_EVENT",
+  "ROW_IN_OTHER_EVENT",
+  "INVALID_PAYLOAD",
+  "APPLY_FAILED",
+  "CLASS_NOT_FOUND",
+  "CARD_TAKEN",
+] as const;
+
+export type JournalRefusalCode = (typeof JOURNAL_REFUSAL_CODES)[number];
+
+/**
+ * The refusal codes after which a node stops applying a pushed batch: the
+ * entries behind the failed one come back in neither list. They are the codes
+ * an apply throws (`failureCode` in `events.ts`); the gate refusals
+ * (`COMPETITION_MISMATCH`, `FORBIDDEN`) and `ENTRY_IN_OTHER_EVENT` never stop
+ * a batch. Server and station drain both read this one set.
+ */
+export const JOURNAL_BATCH_STOPPING_CODES = [
+  "APPLY_FAILED",
+  "INVALID_PAYLOAD",
+  "ROW_IN_OTHER_EVENT",
+  // A station registration that cannot be stored as entered (SYNC-12): the
+  // entries behind it (the runner's finish, readout) wait instead of landing
+  // on another runner.
+  "CLASS_NOT_FOUND",
+  "CARD_TAKEN",
+] as const satisfies readonly JournalRefusalCode[];
+
+export type JournalBatchStoppingCode = (typeof JOURNAL_BATCH_STOPPING_CODES)[number];
+
+export function isBatchStoppingCode(value: unknown): value is JournalBatchStoppingCode {
+  return typeof value === "string" && (JOURNAL_BATCH_STOPPING_CODES as readonly string[]).includes(value);
+}
+
+export function isJournalRefusalCode(value: unknown): value is JournalRefusalCode {
+  return typeof value === "string" && (JOURNAL_REFUSAL_CODES as readonly string[]).includes(value);
 }
 
 // ─── Wire envelope ───────────────────────────────────────────

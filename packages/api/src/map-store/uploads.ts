@@ -8,6 +8,10 @@ import { createHash } from "node:crypto";
 
 export const MAX_UPLOAD_BYTES = 128 * 1024 * 1024;
 export const MAX_CHUNK_BYTES = 8 * 1024 * 1024;
+/** Most chunks one upload may have; bounds the rows, the finalise reads and the missing-chunk scan (API-23). */
+export const MAX_UPLOAD_CHUNKS = 4096;
+/** How many absent chunk indices a 409 names. */
+export const MISSING_REPORT_LIMIT = 100;
 /** Route body limit for one chunk: the chunk plus framing slack. */
 export const CHUNK_BODY_LIMIT = MAX_CHUNK_BYTES + 64 * 1024;
 
@@ -34,7 +38,9 @@ export function validateUploadInit(input: Partial<UploadInit> | null | undefined
   if (!Number.isInteger(chunkBytes) || (chunkBytes as number) <= 0 || (chunkBytes as number) > MAX_CHUNK_BYTES) {
     return { ok: false, status: 400, error: `chunkBytes must be an integer in 1..${MAX_CHUNK_BYTES}` };
   }
-  return { ok: true, chunkCount: chunkCount(bytes as number, chunkBytes as number) };
+  const count = chunkCount(bytes as number, chunkBytes as number);
+  if (count > MAX_UPLOAD_CHUNKS) return { ok: false, status: 400, error: `chunkBytes is too small for this file: at most ${MAX_UPLOAD_CHUNKS} chunks per upload` };
+  return { ok: true, chunkCount: count };
 }
 
 export function chunkCount(bytes: number, chunkBytes: number): number {
@@ -65,11 +71,11 @@ export function sniffMapKind(head: Uint8Array): MapSourceKind | null {
 /** Kinds the importer can process; others are refused at upload (415). */
 export const IMPORTABLE_KINDS: ReadonlySet<MapSourceKind> = new Set<MapSourceKind>(["ocad", "omap"]);
 
-/** Which chunk indices of `count` are absent from `present`. */
-export function missingChunks(count: number, present: Iterable<number>): number[] {
+/** The first `limit` chunk indices of `count` that are absent from `present`. */
+export function missingChunks(count: number, present: Iterable<number>, limit = MISSING_REPORT_LIMIT): number[] {
   const have = new Set(present);
   const missing: number[] = [];
-  for (let n = 0; n < count; n++) if (!have.has(n)) missing.push(n);
+  for (let n = 0; n < count && missing.length < limit; n++) if (!have.has(n)) missing.push(n);
   return missing;
 }
 

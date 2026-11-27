@@ -1,9 +1,9 @@
 import { useRef, useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { trpc } from "../lib/trpc";
 import { formatMeosTime } from "@oxygen/shared";
 import { useSearchParam } from "../hooks/useSearchParam";
 import { useStationSync } from "../hooks/useStationSync";
+import { useEventClock } from "../hooks/useEventClock";
 import { useLookupByCard } from "../lib/offline/projection-reads";
 
 export function StartStation() {
@@ -13,10 +13,9 @@ export function StartStation() {
   const [cardInput, setCardInput] = useSearchParam("card");
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Get current time from server
-  const serverTime = trpc.race.serverTime.useQuery(undefined, {
-    refetchInterval: 1000,
-  });
+  // The event's clock: synced with the server now and then, ticking
+  // locally (keeps running offline).
+  const clock = useEventClock();
 
   // Lookup runner by card
   const nameId = window.location.pathname.match(/^\/([^/]+)/)?.[1] ?? "";
@@ -36,7 +35,7 @@ export function StartStation() {
     inputRef.current?.focus();
   };
 
-  const currentTimeDeci = serverTime.data?.deciseconds ?? 0;
+  const currentTimeDeci = clock.currentDs;
   const hasResult = cardInput.length >= 3 && lookup.data;
   const runnerFound = hasResult && lookup.data?.found;
   const unknownCard = hasResult && !lookup.data?.found;
@@ -49,7 +48,7 @@ export function StartStation() {
           <div className="w-2.5 h-2.5 bg-emerald-500 rounded-full animate-pulse" />
           {t("preStart")}
         </div>
-        <div className="text-4xl font-bold text-slate-900 tabular-nums">
+        <div className="text-4xl font-bold text-slate-900 tabular-nums" data-testid="station-clock">
           {formatMeosTime(currentTimeDeci)}
         </div>
       </div>

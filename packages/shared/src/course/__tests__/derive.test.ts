@@ -471,3 +471,34 @@ describe("number collisions (§3.5)", () => {
     expect(d.sites.find((s) => s.id === "31")?.label?.collides).toBe(true);
   });
 });
+
+describe("an unplaced control takes its number (CRS-024)", () => {
+  const sites = [
+    site("S", "start", 10, 10, "S1"),
+    site("31", "control", 40, 10),
+    site("32", "control", 60, 40),
+    site("33", "control", 0, 0),
+    site("34", "control", 30, 50),
+    site("35", "control", 80, 80),
+    site("F", "finish", 10, 40, "F1"),
+  ];
+  const labels = (d: ReturnType<typeof derive>) => Object.fromEntries(d.sites.filter((s) => s.label).map((s) => [s.id, s.label!.text]));
+
+  it("numbers 1, 2, 4, 5 and draws nothing for the unplaced one", () => {
+    const d = derive({ sites, structure: linear(["S", "31", "32", "33", "34", "35", "F"]) });
+    expect(labels(d)).toEqual({ "31": "1", "32": "2", "34": "4", "35": "5" });
+    expect(d.sites.find((s) => s.id === "33")).toBeUndefined();
+  });
+
+  it("the second part's first number counts an unplaced control in the first part", () => {
+    const X = site("X", "map_exchange", 50, 50, "X1");
+    const structure = linear(["S", "31", "33", "X", "34", "F"]);
+    const d = derive({ sites: [...sites, X], structure, viewOptions: { section: 1 } });
+    expect(labels(d)).toEqual({ X: "3", "34": "4" });
+  });
+
+  it("a numberHidden visit still takes its number", () => {
+    const d = derive({ sites, structure: linear(undefined, { items: [{ siteId: "S" }, { siteId: "31", numberHidden: true }, { siteId: "33" }, { siteId: "34" }, { siteId: "F" }] }) });
+    expect(labels(d)).toEqual({ "34": "3" });
+  });
+});

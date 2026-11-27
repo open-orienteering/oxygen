@@ -237,7 +237,7 @@ async function flush(n = 30) {
 
 function events(conn: ReaderBtConnection) {
   const log: Array<{ type: string; detail: unknown }> = [];
-  for (const type of ["si:status", "si:card-detected", "si:card-readout", "si:card-removed", "si:reader-info"]) {
+  for (const type of ["si:status", "si:card-detected", "si:card-readout", "si:card-removed", "si:card-read-failed", "si:reader-info"]) {
     conn.addEventListener(type, (e) => log.push({ type, detail: (e as CustomEvent).detail }));
   }
   return log;
@@ -391,6 +391,10 @@ describe("card flow (pull)", () => {
     await flush(60);
     expect(device.feedback()).toEqual([2]);
     expect(log.some((e) => e.type === "si:card-readout")).toBe(false);
+    expect(log.find((e) => e.type === "si:card-read-failed")?.detail).toMatchObject({
+      cardNumber: SI8_CARD.cardNumber,
+      reason: "parse",
+    });
   });
 
   it("succeeds on the retry after a decode error", async () => {
@@ -414,6 +418,7 @@ describe("card flow (pull)", () => {
     expect(device.feedback()).toEqual([2]);
     expect(log.filter((e) => e.type === "si:card-removed")).toHaveLength(1);
     expect(log.some((e) => e.type === "si:card-readout")).toBe(false);
+    expect(log.find((e) => e.type === "si:card-read-failed")?.detail).toMatchObject({ reason: "removed" });
   });
 
   it("handles an unsolicited readout (AUTOSEND on) with a synthesised detection", async () => {
@@ -443,6 +448,7 @@ describe("card flow (pull)", () => {
       const requests = device.cardData.writes.filter((w) => (w[0] | (w[1] << 8)) === RBT_MSG.CARD_DATA_COMPLETE);
       expect(requests).toHaveLength(2);
       expect(log.some((e) => e.type === "si:card-readout")).toBe(false);
+      expect(log.find((e) => e.type === "si:card-read-failed")?.detail).toMatchObject({ reason: "timeout" });
     });
   });
 });

@@ -8,6 +8,8 @@
  */
 
 import type { QueryClient } from "@tanstack/react-query";
+import { cardSecondsToDs } from "../si-protocol";
+import { cacheOwner } from "./cache-scope";
 import {
   matchPunchesToCourse,
   computeStatus,
@@ -23,6 +25,8 @@ import {
   PUNCH_START,
   PUNCH_FINISH,
   RunnerStatus,
+  runningTimeDs,
+  finishLegOf,
 } from "@oxygen/shared";
 
 export interface LocalReadoutResult {
@@ -43,6 +47,8 @@ export interface LocalReadoutResult {
     status: number;
   };
   controls: ControlMatch[];
+  /** The receipt's finish leg (CRS-013); absent without card punches. */
+  finish?: { splitTime: number; legLength: number };
   course: { name: string; length: number } | null;
   position: PositionResult | null;
   classResults: Array<{ name: string; clubId: number | null; runningTime: number }>;
@@ -56,7 +62,9 @@ export function computeLocalReadout(
   runnerId: number,
   finishTime: number,
   queryClient: QueryClient,
+  nameId?: string | null,
 ): LocalReadoutResult | null {
+  if (!cacheBelongsTo(queryClient, nameId)) return null;
   // Get cached data from React Query
   // These are the shapes returned by tRPC queries, accessed via their cache keys
   const dashboard = findCachedQuery<DashboardData>(queryClient, "competition.dashboard");
@@ -83,7 +91,8 @@ export function computeLocalReadout(
   // If no card data: we can still compute basic result (time-only, no splits).
 
   const startTime = runner.startTime || 0;
-  const runningTime = finishTime > 0 && startTime > 0 ? finishTime - startTime : 0;
+  // Absolute clock times: a run across midnight still has a time (RES-16).
+  const runningTime = finishTime > 0 && startTime > 0 ? runningTimeDs(startTime, finishTime) : 0;
 
   const status = computeStatus({
     finishTime,
@@ -91,14 +100,15 @@ export function computeLocalReadout(
     missingCount: 0, // We don't know without card data
     runningTime,
     classMaxTime: cls?.maxTime ?? 0,
-    classNoTiming: cls?.noTiming === 1,
+    classNoTiming: cls?.noTiming === true,
     transferFlags: runner.transferFlags ?? 0,
     currentStatus: runner.status,
   });
 
-  // Compute position from cached runners
+  // Position among the class's OK runners, and only for an OK result
+  // (RES-20 / CRS-045).
   const classRunners: ClassRunnerForPosition[] = runners
-    .filter((r: RunnerItem) => r.classId === runner.classId && r.id !== runnerId)
+    .filter((r: RunnerItem) => r.classId === runner.classId && r.id !== runnerId && r.status === RunnerStatus.OK)
     .map((r: RunnerItem) => ({
       name: r.name,
       clubId: r.clubId ?? null,
@@ -106,12 +116,9 @@ export function computeLocalReadout(
       finishTime: r.finishTime,
     }));
 
-  const position = computePosition(
-    classRunners,
-    runner.name,
-    runningTime,
-    runner.clubId ?? null,
-  );
+  const position = status === RunnerStatus.OK
+    ? computePosition(classRunners, runner.name, runningTime, runner.clubId ?? null)
+    : null;
 
   const classResults = position?.rankedRunners.slice(0, 5) ?? [];
 
@@ -158,12 +165,14 @@ export interface CardReadoutInput {
 export function computeCardReadout(
   input: CardReadoutInput,
   queryClient: QueryClient,
+  nameId?: string | null,
 ): (LocalReadoutResult & {
   matchScore: number;
   punchesRelevant: boolean;
   /** The other pooled variants the punches validate fully against (F6c); on MP only. */
   otherVariantMatches: OtherVariantMatch[];
 }) | null {
+  if (!cacheBelongsTo(queryClient, nameId)) return null;
   const dashboard = findCachedQuery<DashboardData>(queryClient, "competition.dashboard");
   const runners = findCachedQuery<RunnerListData>(queryClient, "runner.list");
 
@@ -185,13 +194,13 @@ export function computeCardReadout(
   const allPunches: ParsedPunch[] = [];
 
   if (input.startTime && input.startTime > 0) {
-    allPunches.push({ type: PUNCH_START, time: input.startTime * 10, source: "card" });
+    allPunches.push({ type: PUNCH_START, time: cardSecondsToDs(input.startTime), source: "card" });
   }
   for (const p of input.punches) {
-    allPunches.push({ type: p.controlCode, time: p.time * 10, source: "card" });
+    allPunches.push({ type: p.controlCode, time: cardSecondsToDs(p.time), source: "card" });
   }
   if (input.finishTime && input.finishTime > 0) {
-    allPunches.push({ type: PUNCH_FINISH, time: input.finishTime * 10, source: "card" });
+    allPunches.push({ type: PUNCH_FINISH, time: cardSecondsToDs(input.finishTime), source: "card" });
   }
 
   // Use runner's assigned start time as fallback (already in deciseconds from server cache)
@@ -202,7 +211,7 @@ export function computeCardReadout(
       orderMode: course?.orderMode ?? "ordered",
     });
 
-  const rawRunningTime = finishTime > 0 && startTime > 0 ? finishTime - startTime : 0;
+  const rawRunningTime = finishTime > 0 && startTime > 0 ? runningTimeDs(startTime, finishTime) : 0;
   // Subtract NoTiming/BadNoTiming leg deductions so the offline result
   // matches the canonical (kiosk + admin + results-page) running time.
   const runningTime = Math.max(0, rawRunningTime - runningTimeAdjustment);
@@ -213,7 +222,7 @@ export function computeCardReadout(
     missingCount,
     runningTime,
     classMaxTime: cls?.maxTime ?? 0,
-    classNoTiming: cls?.noTiming === 1,
+    classNoTiming: cls?.noTiming === true,
     transferFlags: runner.transferFlags ?? 0,
     currentStatus: runner.status,
   });
@@ -242,9 +251,10 @@ export function computeCardReadout(
   const matchScore = computeMatchScore(expectedPositions.length, matchedCount, input.punches.length, 0);
   const punchesRelevant = matchScore >= 0.2;
 
-  // Compute position from cached runners
+  // Position among the class's OK runners, and only for an OK result
+  // (RES-20 / CRS-045).
   const classRunners: ClassRunnerForPosition[] = runners
-    .filter((r: RunnerItem) => r.classId === runner.classId && r.id !== runner.id)
+    .filter((r: RunnerItem) => r.classId === runner.classId && r.id !== runner.id && r.status === RunnerStatus.OK)
     .map((r: RunnerItem) => ({
       name: r.name,
       clubId: r.clubId ?? null,
@@ -252,12 +262,9 @@ export function computeCardReadout(
       finishTime: r.finishTime,
     }));
 
-  const position = computePosition(
-    classRunners,
-    runner.name,
-    runningTime,
-    runner.clubId ?? null,
-  );
+  const position = status === RunnerStatus.OK
+    ? computePosition(classRunners, runner.name, runningTime, runner.clubId ?? null)
+    : null;
 
   const classResults = position?.rankedRunners.slice(0, 5) ?? [];
 
@@ -279,6 +286,8 @@ export function computeCardReadout(
       status,
     },
     controls: matches,
+    // No leg lengths in the offline cache: split only.
+    finish: finishLegOf(matches, startTime, finishTime, [], course?.orderMode ?? "ordered"),
     course: course ? { name: course.name, length: course.length } : null,
     position,
     classResults,
@@ -295,7 +304,9 @@ export function computeCardReadout(
 export function lookupRunnerByCard(
   cardNo: number,
   queryClient: QueryClient,
+  nameId?: string | null,
 ): RunnerItem | undefined {
+  if (!cacheBelongsTo(queryClient, nameId)) return undefined;
   const runners = findCachedQuery<RunnerListData>(queryClient, "runner.list");
   return runners?.find((r: RunnerItem) => r.cardNo === cardNo);
 }
@@ -317,17 +328,39 @@ export function courseOf(
 
 // ─── Cache access helpers ───────────────────────────────────
 
+/**
+ * The cached value of an event-scoped query with no input. tRPC keys are
+ * `[["runner","list"], {type:"query"}]` for `undefined` input and
+ * `[..., {input, type}]` otherwise, so a filtered `runner.list({search})`
+ * result (a subset) must never be taken for the full list (MC-19 / BLD-24).
+ * `undefined`/`{}` inputs qualify; entries without data are skipped; the
+ * freshest wins.
+ */
 function findCachedQuery<T>(queryClient: QueryClient, key: string): T | undefined {
-  // React Query + tRPC stores queries with array keys like [["competition","dashboard"], ...]
-  const allQueries = queryClient.getQueryCache().getAll();
-  const match = allQueries.find((q) => {
+  let best: { at: number; data: T } | undefined;
+  for (const q of queryClient.getQueryCache().getAll()) {
     const k = q.queryKey;
-    if (Array.isArray(k) && Array.isArray(k[0])) {
-      return k[0].join(".") === key;
+    if (!Array.isArray(k) || !Array.isArray(k[0]) || k[0].join(".") !== key) continue;
+    const opts = k[1] as { input?: unknown } | undefined;
+    const input = opts?.input;
+    const noInput =
+      input === undefined ||
+      (typeof input === "object" && input !== null && Object.keys(input).length === 0);
+    if (!noInput || q.state.data === undefined) continue;
+    if (!best || q.state.dataUpdatedAt > best.at) {
+      best = { at: q.state.dataUpdatedAt, data: q.state.data as T };
     }
-    return false;
-  });
-  return match?.state.data as T | undefined;
+  }
+  return best?.data;
+}
+
+/**
+ * True when the cache may be read for `nameId`: it is claimed by that event.
+ * Callers that know the event pass it; a cache owned by another event (or by
+ * none) yields no local result rather than the wrong runner (MC-04).
+ */
+export function cacheBelongsTo(queryClient: QueryClient, nameId: string | null | undefined): boolean {
+  return nameId === undefined || (nameId !== null && cacheOwner(queryClient) === nameId);
 }
 
 // ─── Cached data type shapes (matching tRPC query responses) ──
@@ -344,8 +377,10 @@ export interface ClassItem {
   id: number;
   name: string;
   courseId?: number;
+  /** Deciseconds, 0 / absent = none (sent by the dashboard, RES-20). */
   maxTime?: number;
-  noTiming?: number;
+  /** The dashboard sends a boolean (`ClassInfo.noTiming`). */
+  noTiming?: boolean;
   /** The class's variant pool (course seqs, key order); absent / [] = none (F6c). */
   coursePoolIds?: number[];
 }

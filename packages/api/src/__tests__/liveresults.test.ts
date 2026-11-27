@@ -12,6 +12,7 @@
 import { createHash } from "node:crypto";
 import { describe, it, expect } from "vitest";
 import { RunnerStatus } from "@oxygen/shared";
+import { liveResultsTimes } from "../liveresults.js";
 import {
   encodedRadioPunches,
   hashLiveResultsCredential,
@@ -161,5 +162,26 @@ describe("liveresults.splitcontrolClassnamesToReplace", () => {
         { name: "X".repeat(60) },
       ]),
     ).toEqual(["U4", "H12", "X".repeat(50)]);
+  });
+});
+
+describe("liveresults.liveResultsTimes (package 8)", () => {
+  const ZT = 324_000;
+  it("a start before ZeroTime is a start, with a real elapsed time (RES-05)", () => {
+    // 08:30 start, 09:10 finish with ZeroTime 09:00: relative -18000 / 6000.
+    const t = liveResultsTimes(-18_000, 6_000, ZT);
+    expect(t.startCenti).toBe(306_000 * 10);
+    expect(t.elapsedCenti).toBe(24_000 * 10);
+  });
+  it("no start gives no start row", () => {
+    expect(liveResultsTimes(0, 0, ZT)).toEqual({ startCenti: null, elapsedCenti: 0 });
+  });
+  it("a finish after midnight still gives the running time (RES-16)", () => {
+    // 23:30 → 00:20 with ZeroTime 09:00.
+    const t = liveResultsTimes(23.5 * 36_000 - ZT, 20 * 600 - ZT + 864_000, ZT);
+    expect(t.elapsedCenti).toBe(50 * 600 * 10);
+  });
+  it("mapStatus treats a negative finish as a finish", () => {
+    expect(mapStatus(RunnerStatus.Unknown, -6_000)).toBe(0);
   });
 });

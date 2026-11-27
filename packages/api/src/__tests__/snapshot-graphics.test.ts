@@ -9,7 +9,14 @@ import { createHash } from "node:crypto";
 // snapshotMaps first, as the server loads them: source-routes' import graph
 // reaches the lease router, which imports both.
 import { EXPORT_BLOB_MAX_BYTES } from "../sync/snapshotMaps.js";
-import { fetchGraphic, referencedGraphicIds, verifyGraphic, type GraphicSliceFetcher } from "../sync/snapshotGraphics.js";
+import {
+  fetchGraphic,
+  graphicClashError,
+  referencedGraphicIds,
+  selectGraphicClashes,
+  verifyGraphic,
+  type GraphicSliceFetcher,
+} from "../sync/snapshotGraphics.js";
 
 const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
 
@@ -72,5 +79,27 @@ describe("verifyGraphic / fetchGraphic", () => {
       sizeBytes: bytes.length,
     });
     await expect(fetchGraphic(g, short)).rejects.toThrow(/slice/);
+  });
+});
+
+describe("selectGraphicClashes / graphicClashError (decision D10)", () => {
+  const rows = [
+    { id: 5n, eventId: 11n, eventName: "Other Event" },
+    { id: 6n, eventId: 22n, eventName: "The Copy" },
+    { id: 7n, eventId: null, eventName: "" },
+  ];
+
+  it("a row owned by another event clashes; the local copy of this event and a club row do not", () => {
+    expect(selectGraphicClashes(rows, 22n)).toEqual([{ id: "5", eventId: 11n, eventName: "Other Event" }]);
+  });
+
+  it("with no local copy every event-owned row clashes, a club row still does not", () => {
+    expect(selectGraphicClashes(rows, null).map((c) => c.id)).toEqual(["5", "6"]);
+  });
+
+  it("the refusal is a CONFLICT whose message starts with the code and names the ids and events", () => {
+    const err = graphicClashError(selectGraphicClashes(rows, null));
+    expect(err.code).toBe("CONFLICT");
+    expect(err.message).toMatch(/^GRAPHIC_ID_CLASH: graphic 5, 6 on this box belongs to "Other Event", "The Copy"; checking out would replace it$/);
   });
 });

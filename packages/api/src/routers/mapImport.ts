@@ -11,7 +11,7 @@ import { TRPCError } from "@trpc/server";
 import { router, publicProcedure, authedProcedure, adminProcedure, coursesViewProcedure } from "../trpc.js";
 import { prisma } from "../db.js";
 import { resolveEventCapabilities } from "../permissions.js";
-import { getImportJob, isClaimable, kickImportJobs, latestImportJobForEvent, type ImportJobRow } from "../map-store/jobs.js";
+import { getImportJob, kickImportJobs, needsKick, latestImportJobForEvent, type ImportJobRow } from "../map-store/jobs.js";
 import { DecisionInputError, MAX_REVIEW_DECISIONS, reviewDecisionSchema } from "../map-store/decisions.js";
 import { exportDocumentCrt, importDocumentCrt, MAX_CRT_BYTES } from "../map-store/crt.js";
 import { buildReview, changeColourSettings, changeDeviation, decideOnDocument, finaliseDocument, type DeviationChangeResult, type ReviewTarget } from "../map-store/review.js";
@@ -81,7 +81,7 @@ function colourChangeError(result: Extract<DeviationChangeResult, { ok: false }>
 }
 
 function kickIfClaimable(db: PrismaClient, row: ImportJobRow): void {
-  if (isClaimable(row)) void kickImportJobs(db);
+  if (needsKick(row)) void kickImportJobs(db);
 }
 
 export const mapImportRouter = router({

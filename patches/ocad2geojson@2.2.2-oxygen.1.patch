@@ -1,0 +1,82 @@
+diff --git a/src/ocad-reader/index.js b/src/ocad-reader/index.js
+--- a/src/ocad-reader/index.js
++++ b/src/ocad-reader/index.js
+@@ -57,12 +57,29 @@
+     )
+   }
+ 
++  // Index blocks form linked lists in the file. A damaged file can make a
++  // pointer point at itself, an earlier block, or outside the file; each
++  // list is followed once per offset and ends with a warning otherwise
++  // (the pointer 0 is the normal end of a list and ends it silently).
++  const chainIssue = (visited, offset) => {
++    if (visited.has(offset) || offset < 0 || offset >= buffer.length) {
++      warnings.push(
++        `Index block chain loops or points outside the file at ${offset}`
++      )
++      return true
++    }
++    visited.add(offset)
++    return false
++  }
++
+   /**
+    * @type {import('./symbol-index').Symbol[]}
+    */
+   const symbols = []
++  const visitedSymbolBlocks = new Set()
+   let symbolIndexOffset = header.symbolIndexBlock
+   while (symbolIndexOffset) {
++    if (chainIssue(visitedSymbolBlocks, symbolIndexOffset)) break
+     reader.push(symbolIndexOffset)
+     const symbolIndex = new SymbolIndex(reader, header.version, options)
+     reader.pop()
+@@ -73,21 +90,36 @@
+   }
+ 
+   const objects = []
++  const visitedObjectBlocks = new Set()
+   let objectIndexOffset = header.objectIndexBlock
+   let startIndex = 0
+   while (objectIndexOffset) {
+-    reader.push(objectIndexOffset)
++    if (chainIssue(visitedObjectBlocks, objectIndexOffset)) break
++    let pushed = false
+     try {
++      reader.push(objectIndexOffset)
++      pushed = true
+       const objectIndex = new ObjectIndex(reader, startIndex, header.version)
+       startIndex += 256
+       reader.pop()
++      pushed = false
+       Array.prototype.push.apply(objects, objectIndex.readObjects(reader))
+ 
+       objectIndexOffset = objectIndex.nextObjectIndexBlock
+     } catch (e) {
++      // Whatever went wrong, stop here: the pointer is not advanced, so
++      // trying again would never end.
+       if (e instanceof InvalidObjectIndexBlockException) {
+         warnings.push(e.toString())
++      } else {
++        warnings.push(
++          `Object index block at ${objectIndexOffset} could not be read: ${
++            e && e.message ? e.message : e
++          }`
++        )
+       }
++      if (pushed) reader.pop()
++      break
+     }
+   }
+ 
+@@ -95,8 +127,10 @@
+    * @type {Object.<number, import('./parameter-string').ParameterStringValues[]>}
+    */
+   const parameterStrings = {}
++  const visitedStringBlocks = new Set()
+   let stringIndexOffset = header.stringIndexBlock
+   while (stringIndexOffset) {
++    if (chainIssue(visitedStringBlocks, stringIndexOffset)) break
+     reader.push(stringIndexOffset)
+     const stringIndex = new StringIndex(reader)
+     reader.pop()

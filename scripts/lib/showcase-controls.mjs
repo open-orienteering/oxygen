@@ -14,24 +14,32 @@
  *           re-derive each course's `legs` / `length_m` from them, the
  *           way `rebuildCourseLengths` does after an editor move
  *
+ *   snap    after a fit: move each control onto a nearby point feature of
+ *           the map (boulder, knoll, depression, pit), and each start and
+ *           finish onto a nearby path, so the circles stand on something
+ *
  * Positions are paper mm in the map document's frame (y up), the unit of
- * `controls.xpos/ypos`; (0, 0) is "not placed" and stays so.
+ * `controls.xpos/ypos`; (0, 0) is "not placed" and stays so. For an OCAD
+ * map the document's frame is OCAD's own (0.01 mm, y up), so a map
+ * object at OCAD (x, y) is at (x / 100, y / 100) mm.
  */
 
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { analyseOmap } from "./inject-demo-points.mjs";
+import { pathToFileURL } from "node:url";
 import { loadApiModules } from "./showcase-map.mjs";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 export const CONTROLS_JSON_PATH = path.join(ROOT, "fixtures", "showcase", "showcase-controls.json");
 
-/** The demo map's scale; the source event's map was 1:15 000. */
-export const DEMO_MAP_SCALE = 10000;
+/** The demo map's scale, and the source event's (both 1:15 000). */
+export const DEMO_MAP_SCALE = 15000;
 export const SOURCE_MAP_SCALE = 15000;
-/** Distance kept between the fitted cloud and the map region's edge, mm. */
-export const FIT_MARGIN_MM = 15;
+/** Distance kept between the fitted cloud and the region's edge, mm; 0, since placement keeps `EDGE_CLEARANCE_MM` of drawn map around each control instead. */
+export const FIT_MARGIN_MM = 0;
+/** A placed control keeps this much drawn map around it, mm (180 m at 1:15 000). */
+export const EDGE_CLEARANCE_MM = 12;
 
 // ─── SQL rows ────────────────────────────────────────────────────────────────
 
@@ -127,6 +135,8 @@ export function readFixtureRows(sql) {
 }
 
 const num = (v) => Math.round(v * 100) / 100;
+/** A placed position, rounded; (0, 0) means "not placed", so a control that lands there moves 0.01 mm. */
+const placedAt = (x, y) => (num(x) === 0 && num(y) === 0 ? { xpos: 0.01, ypos: 0 } : { xpos: num(x), ypos: num(y) });
 const fmt = (v) => String(num(v) === 0 ? 0 : num(v));
 
 // ─── positions file ──────────────────────────────────────────────────────────
@@ -160,19 +170,154 @@ function bbox(points) {
   return { minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) };
 }
 
+const OCAD_UNITS_PER_MM = 100;
+/** Where no control may stand (ISOM 2017-2): uncrossable or shallow water, uncrossable marsh, fight, cultivated land, orchard, paved areas, out-of-bounds, buildings. */
+const FORBIDDEN = new Set([301, 302, 307, 410, 412, 413, 501, 520, 521, 522]);
+/** Areas a leg should not cross (ISOM 2017-2): uncrossable water and marsh, out-of-bounds, buildings. */
+const UNCROSSABLE = new Set([301, 307, 520, 521]);
+/** The uncrossable raster's cell, mm. */
+const BLOCK_CELL_MM = 0.5;
+/** Point features a control may be placed on: knolls, depressions, pits, boulders. */
+const FEATURES = new Set([109, 110, 111, 112, 113, 204, 205, 206, 207]);
+/** Lines a start or finish may stand on: roads, tracks and paths. */
+const PATHS = new Set([502, 503, 504, 505, 506, 507]);
+const CONTOURS = new Set([101, 102, 103]);
+/** The region is the contours' bounding box shrunk by this much, mm. */
+const REGION_INSET_MM = 6;
+
+/** `ocad2geojson` lives in packages/api's dependencies. */
+async function readOcadFile(bytes) {
+  const entry = createRequire(path.join(ROOT, "packages", "api", "package.json")).resolve("ocad2geojson");
+  const { readOcad } = await import(pathToFileURL(entry).href);
+  return readOcad(bytes);
+}
+
+function insideRing(px, py, ring) {
+  let c = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [x1, y1] = ring[i];
+    const [x2, y2] = ring[j];
+    if (y1 > py !== y2 > py && px < x1 + ((py - y1) * (x2 - x1)) / (y2 - y1)) c = !c;
+  }
+  return c;
+}
+
 /**
- * The demo map's region in document mm (y up): the contours' bounding box
- * shrunk by 6 mm (the injection's region), and the forbidden-area test —
- * water, cultivated land, paved areas, buildings — in the same frame.
+ * The demo map's region in document mm (y up) from the OCAD file: the
+ * contours' bounding box shrunk by 6 mm; the forbidden-area test (water,
+ * fight, cultivated land, paved areas, out-of-bounds, buildings), which
+ * gives the ISOM symbol of the area a point is in or null; `blockedAt`,
+ * whether a point is in uncrossable water or marsh, out-of-bounds or a
+ * building (on a 0.5 mm raster, for testing legs); `mappedAt`, whether a
+ * point lies in the drawn map rather than an empty corner of the box; the point
+ * features a control can stand on; and the path segments a start or
+ * finish can stand on.
+ *
+ * @param {Buffer} ocdBytes
  */
-export function demoMapRegion(omapText) {
-  const { region, forbiddenAt } = analyseOmap(omapText);
+export async function demoMapRegion(ocdBytes) {
+  const ocad = await readOcadFile(ocdBytes);
+  const areas = [];
+  const features = [];
+  const paths = [];
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  const drawn = []; // every map object's vertices, for the mapped-area raster
+  for (const o of ocad.objects) {
+    const major = Math.floor(o.sym / 1000);
+    const type = o.objType ?? o.otp;
+    const pts = o.coordinates.map((c) => [c[0] / OCAD_UNITS_PER_MM, c[1] / OCAD_UNITS_PER_MM, c.yFlags ?? 0]);
+    // Magnetic north lines (601) run past the map's edge.
+    if (major !== 601) drawn.push(pts);
+    if (CONTOURS.has(major) && type === 2) {
+      for (const [x, y] of pts) {
+        minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+        minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+      }
+    }
+    if (type === 1 && FEATURES.has(major) && pts.length) features.push({ x: pts[0][0], y: pts[0][1], symbol: `${o.sym / 1000}` });
+    if (type === 2 && PATHS.has(major)) for (let i = 0; i + 1 < pts.length; i++) paths.push([pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1]]);
+    if (type === 3 && FORBIDDEN.has(major)) {
+      const rings = [];
+      let cur = [];
+      for (const [x, y, yf] of pts) {
+        if (yf & 2 && cur.length) { rings.push(cur); cur = []; }
+        cur.push([x, y]);
+      }
+      if (cur.length) rings.push(cur);
+      const xs = rings.flat().map((p) => p[0]);
+      const ys = rings.flat().map((p) => p[1]);
+      areas.push({ symbol: `${o.sym / 1000}`, rings, box: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)] });
+    }
+  }
+  if (!Number.isFinite(minX)) throw new Error("The demo map has no contours");
+  // A raster of the uncrossable areas, so a leg's straight line is cheap to test.
+  const gx0 = Math.floor(minX), gy0 = Math.floor(minY);
+  const cols = Math.ceil((maxX - gx0) / BLOCK_CELL_MM) + 1;
+  const rowsN = Math.ceil((maxY - gy0) / BLOCK_CELL_MM) + 1;
+  const blocked = new Uint8Array(cols * rowsN);
+  for (const a of areas) {
+    if (!UNCROSSABLE.has(Math.floor(Number(a.symbol)))) continue;
+    const c0 = Math.max(0, Math.floor((a.box[0] - gx0) / BLOCK_CELL_MM)), c1 = Math.min(cols - 1, Math.ceil((a.box[2] - gx0) / BLOCK_CELL_MM));
+    const r0 = Math.max(0, Math.floor((a.box[1] - gy0) / BLOCK_CELL_MM)), r1 = Math.min(rowsN - 1, Math.ceil((a.box[3] - gy0) / BLOCK_CELL_MM));
+    for (let r = r0; r <= r1; r++) {
+      const y = gy0 + (r + 0.5) * BLOCK_CELL_MM;
+      for (let c = c0; c <= c1; c++) {
+        const x = gx0 + (c + 0.5) * BLOCK_CELL_MM;
+        if (a.rings.reduce((inside, ring) => (insideRing(x, y, ring) ? !inside : inside), false)) blocked[r * cols + c] = 1;
+      }
+    }
+  }
+  // The mapped area: 1 mm cells holding a vertex of any map object, grown by 3 mm.
+  // The contours' bounding box also takes in the empty corners of a slanted map.
+  const mCols = Math.ceil(maxX - gx0) + 2, mRows = Math.ceil(maxY - gy0) + 2;
+  const seen = new Uint8Array(mCols * mRows);
+  for (const pts of drawn) {
+    for (let i = 0; i < pts.length; i++) {
+      const [x1, y1] = pts[i];
+      const [x2, y2] = pts[i + 1] ?? pts[i];
+      const n = Math.max(1, Math.ceil(Math.hypot(x2 - x1, y2 - y1)));
+      for (let k = 0; k <= n; k++) {
+        const c = Math.floor(x1 + ((x2 - x1) * k) / n - gx0), r = Math.floor(y1 + ((y2 - y1) * k) / n - gy0);
+        if (c >= 0 && r >= 0 && c < mCols && r < mRows) seen[r * mCols + c] = 1;
+      }
+    }
+  }
+  const mapped = new Uint8Array(mCols * mRows);
+  for (let r = 0; r < mRows; r++)
+    for (let c = 0; c < mCols; c++) {
+      if (!seen[r * mCols + c]) continue;
+      for (let dr = -3; dr <= 3; dr++)
+        for (let dc = -3; dc <= 3; dc++) {
+          const rr = r + dr, cc = c + dc;
+          if (rr >= 0 && cc >= 0 && rr < mRows && cc < mCols) mapped[rr * mCols + cc] = 1;
+        }
+    }
+  const mappedAt = (x, y) => {
+    const c = Math.floor(x - gx0), r = Math.floor(y - gy0);
+    return c >= 0 && r >= 0 && c < mCols && r < mRows && mapped[r * mCols + c] === 1;
+  };
+  const blockedAt = (x, y) => {
+    const c = Math.floor((x - gx0) / BLOCK_CELL_MM), r = Math.floor((y - gy0) / BLOCK_CELL_MM);
+    return c >= 0 && r >= 0 && c < cols && r < rowsN && blocked[r * cols + c] === 1;
+  };
+  const forbiddenAt = (x, y) => {
+    for (const a of areas) {
+      if (x < a.box[0] || x > a.box[2] || y < a.box[1] || y > a.box[3]) continue;
+      // Even-odd over all of the object's rings: a hole is not inside.
+      if (a.rings.reduce((inside, ring) => (insideRing(x, y, ring) ? !inside : inside), false)) return a.symbol;
+    }
+    return null;
+  };
   return {
-    minX: region.X0 / 1000,
-    maxX: region.X1 / 1000,
-    minY: -region.Y1 / 1000,
-    maxY: -region.Y0 / 1000,
-    forbiddenAt: (xMm, yMm) => forbiddenAt(Math.round(xMm * 1000), Math.round(-yMm * 1000)),
+    minX: minX + REGION_INSET_MM,
+    maxX: maxX - REGION_INSET_MM,
+    minY: minY + REGION_INSET_MM,
+    maxY: maxY - REGION_INSET_MM,
+    forbiddenAt,
+    blockedAt,
+    mappedAt,
+    features: features.filter((f) => !forbiddenAt(f.x, f.y)),
+    paths,
   };
 }
 
@@ -185,13 +330,14 @@ export function demoMapRegion(omapText) {
  *
  * @returns {{ rows: object[], rotation: number, scale: number }} the rows with new `xpos` / `ypos`, the quarter turns and the scale used
  */
-export function fitControls(rows, region, { margin = FIT_MARGIN_MM, maxScale = SOURCE_MAP_SCALE / DEMO_MAP_SCALE } = {}) {
+export function fitControls(rows, region, { margin = FIT_MARGIN_MM, maxScale = SOURCE_MAP_SCALE / DEMO_MAP_SCALE, rotation } = {}) {
   const placed = rows.filter((c) => c.xpos !== 0 || c.ypos !== 0);
   if (placed.length === 0) return { rows, rotation: 0, scale: 1 };
   const width = region.maxX - region.minX - 2 * margin;
   const height = region.maxY - region.minY - 2 * margin;
   let best = null;
   ROTATIONS.forEach((rotate, k) => {
+    if (rotation !== undefined && k !== rotation) return;
     const b = bbox(placed.map((c) => rotate([c.xpos, c.ypos])));
     const scale = Math.min(maxScale, width / Math.max(b.maxX - b.minX, 1e-9), height / Math.max(b.maxY - b.minY, 1e-9));
     if (!best || scale > best.scale + 1e-9) best = { k, rotate, scale, b };
@@ -204,9 +350,162 @@ export function fitControls(rows, region, { margin = FIT_MARGIN_MM, maxScale = S
   const out = rows.map((c) => {
     if (c.xpos === 0 && c.ypos === 0) return c;
     const [x, y] = rotate([c.xpos, c.ypos]);
-    return { ...c, xpos: num(rx + (x - cx) * scale), ypos: num(ry + (y - cy) * scale) };
+    return { ...c, ...placedAt(rx + (x - cx) * scale, ry + (y - cy) * scale) };
   });
   return { rows: out, rotation: k, scale };
+}
+
+// ─── snap ────────────────────────────────────────────────────────────────────
+
+/** How far a control may move onto a feature, mm (90 m at 1:15 000). */
+export const SNAP_RADIUS_MM = 6;
+/** Two controls on different features stand at least this far apart, mm (60 m at 1:15 000, IOF). */
+export const MIN_SPACING_MM = 4;
+
+function nearestOnSegment(px, py, [x1, y1, x2, y2]) {
+  const dx = x2 - x1, dy = y2 - y1, l = dx * dx + dy * dy;
+  const t = l === 0 ? 0 : Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / l));
+  return [x1 + t * dx, y1 + t * dy];
+}
+
+/**
+ * Move fitted controls onto the map's features: each control (by `seq`
+ * order) onto the nearest free point feature within `radius` that keeps
+ * `spacing` from the controls already placed; each start and finish onto
+ * the nearest point of a path within `radius`. A control with no such
+ * feature keeps its fitted position. Unplaced controls stay unplaced.
+ *
+ * @returns {{ rows: object[], snapped: number, kept: object[] }} the rows, how many moved, and the controls that kept their place
+ */
+export function snapControls(rows, region, { radius = SNAP_RADIUS_MM, spacing = MIN_SPACING_MM } = {}) {
+  const used = new Set();
+  const placed = [];
+  const kept = [];
+  let snapped = 0;
+  const order = [...rows.keys()].sort((a, b) => rows[a].seq - rows[b].seq);
+  const out = [...rows];
+  for (const i of order) {
+    const c = rows[i];
+    if (c.xpos === 0 && c.ypos === 0) continue;
+    const type = siteType(c);
+    let best = null;
+    if (type === "Control") {
+      region.features.forEach((f, k) => {
+        if (used.has(k)) return;
+        const d = Math.hypot(f.x - c.xpos, f.y - c.ypos);
+        if (d > radius || (best && d >= best.d)) return;
+        if (placed.some((p) => Math.hypot(p[0] - f.x, p[1] - f.y) < spacing)) return;
+        best = { d, x: f.x, y: f.y, k };
+      });
+      if (best) used.add(best.k);
+    } else {
+      for (const seg of region.paths) {
+        const [x, y] = nearestOnSegment(c.xpos, c.ypos, seg);
+        const d = Math.hypot(x - c.xpos, y - c.ypos);
+        if (d <= radius && (!best || d < best.d) && !region.forbiddenAt(x, y)) best = { d, x, y };
+      }
+    }
+    if (best) {
+      out[i] = { ...c, ...placedAt(best.x, best.y) };
+      snapped++;
+    } else kept.push(c);
+    if (type === "Control" && !c.removed) placed.push([out[i].xpos, out[i].ypos]);
+  }
+  return { rows: out, snapped, kept };
+}
+
+/**
+ * Whether a leg's straight line runs through an uncrossable area
+ * (`region.blockedAt`), tested every 0.5 mm.
+ */
+export function legCrossesBlocked(a, b, region) {
+  const n = Math.max(1, Math.ceil(Math.hypot(b.xpos - a.xpos, b.ypos - a.ypos) / BLOCK_CELL_MM));
+  for (let i = 0; i <= n; i++) {
+    const t = i / n;
+    if (region.blockedAt(a.xpos + (b.xpos - a.xpos) * t, a.ypos + (b.ypos - a.ypos) * t)) return true;
+  }
+  return false;
+}
+
+/** Whether a control has less than `EDGE_CLEARANCE_MM` of drawn map around it (16 directions). */
+export function nearMapEdge(c, region) {
+  if (!region.mappedAt) return false;
+  for (let k = 0; k < 16; k++) {
+    const a = (k * Math.PI) / 8;
+    if (!region.mappedAt(c.xpos + EDGE_CLEARANCE_MM * Math.cos(a), c.ypos + EDGE_CLEARANCE_MM * Math.sin(a))) return true;
+  }
+  return !region.mappedAt(c.xpos, c.ypos);
+}
+
+/**
+ * The fixture's legs as pairs of control `seq`s: each live course from its
+ * start (by `start_name`) through its controls to the first live finish.
+ */
+export function courseLegs({ controls, courses, courseControls }) {
+  const byId = new Map(controls.map((c) => [c.id, c]));
+  const live = controls.filter((c) => !c.removed);
+  const finish = live.find((c) => c.status === "finish");
+  const legs = [];
+  for (const course of courses) {
+    if (course.removed) continue;
+    const start = live.find((c) => c.status === "start" && c.name === course.start_name);
+    const middle = courseControls
+      .filter((cc) => cc.course_id === course.id)
+      .sort((a, b) => a.position - b.position)
+      .map((cc) => byId.get(cc.control_id))
+      .filter(Boolean);
+    const seq = [start, ...middle, finish].filter(Boolean).map((c) => c.seq);
+    for (let i = 0; i + 1 < seq.length; i++) legs.push([seq[i], seq[i + 1]]);
+  }
+  return legs;
+}
+
+/**
+ * Fit in each quarter turn, slide the fitted cloud over the map (in `step`
+ * mm, staying `margin` mm inside the region) and snap; keep the placement
+ * where, in this order: the fewest controls stand in a forbidden area or
+ * within `EDGE_CLEARANCE_MM` of the drawn map's edge,
+ * the fewest `legs` (pairs of `seq`) cross water, marsh, out-of-bounds or
+ * a building, the most controls find a feature, and the controls move
+ * least. Deterministic: ties keep the first in scan order.
+ *
+ * @returns {{ rows: object[], rotation: number, scale: number, offset: [number, number], snapped: number, kept: object[], crossings: number }}
+ */
+export function placeControls(rows, region, { margin = FIT_MARGIN_MM, maxScale, step = 2, legs = [] } = {}) {
+  const range = (lo, hi) => {
+    const out = [];
+    for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(v);
+    return out.length ? out : [0];
+  };
+  const better = (a, b) => {
+    for (let i = 0; i < a.length; i++) if (Math.abs(a[i] - b[i]) > 1e-9) return a[i] < b[i];
+    return false;
+  };
+  let best = null;
+  for (let rotation = 0; rotation < 4; rotation++) {
+    const fit = fitControls(rows, region, { margin, rotation, ...(maxScale === undefined ? {} : { maxScale }) });
+    const placed = fit.rows.filter((c) => c.xpos !== 0 || c.ypos !== 0);
+    if (placed.length === 0) return { ...fit, offset: [0, 0], snapped: 0, kept: [], crossings: 0 };
+    const b = bbox(placed.map((c) => [c.xpos, c.ypos]));
+    for (const dx of range(region.minX + margin - b.minX, region.maxX - margin - b.maxX)) {
+      for (const dy of range(region.minY + margin - b.minY, region.maxY - margin - b.maxY)) {
+        const moved = fit.rows.map((c) => (c.xpos === 0 && c.ypos === 0 ? c : { ...c, ...placedAt(c.xpos + dx, c.ypos + dy) }));
+        const snap = snapControls(moved, region);
+        const bySeq = new Map(snap.rows.map((c) => [c.seq, c]));
+        const bad = snap.rows.filter((c) => !c.removed && (c.xpos !== 0 || c.ypos !== 0) && (region.forbiddenAt(c.xpos, c.ypos) || nearMapEdge(c, region))).length;
+        let crossings = 0;
+        for (const [p, q] of legs) {
+          const a = bySeq.get(p), z = bySeq.get(q);
+          if (a && z && (a.xpos !== 0 || a.ypos !== 0) && (z.xpos !== 0 || z.ypos !== 0) && legCrossesBlocked(a, z, region)) crossings++;
+        }
+        let shift = 0;
+        snap.rows.forEach((c, i) => (shift += Math.hypot(c.xpos - moved[i].xpos, c.ypos - moved[i].ypos)));
+        const score = [bad, crossings, snap.kept.length, shift];
+        if (!best || better(score, best.score)) best = { score, snap, rotation, scale: fit.scale, offset: [dx, dy], crossings };
+      }
+    }
+  }
+  return { rows: best.snap.rows, rotation: best.rotation, scale: best.scale, offset: best.offset, snapped: best.snap.snapped, kept: best.snap.kept, crossings: best.crossings };
 }
 
 // ─── apply ───────────────────────────────────────────────────────────────────

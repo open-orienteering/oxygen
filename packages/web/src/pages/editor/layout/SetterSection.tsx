@@ -11,7 +11,10 @@
  * - with a setter sheet open, its controls in code order, each with
  *   **Move to next setter** (`layout.moveToSetter`, the next sheet in
  *   setter order, the last's next the first): one undo entry, undo moves
- *   it back; the windows stay until *Recalculate* (`SheetActions`).
+ *   it back; the windows stay until *Recalculate* (`SheetActions`);
+ * - a warning when controls of the scope are in no setter map (added after
+ *   generation, CRS-002) with **Add to nearest setter map**
+ *   (`layout.adoptToSetters`; not an undo entry, like Generate).
  */
 
 import { useMemo, useState } from "react";
@@ -78,6 +81,16 @@ export function SetterSection(p: {
     if ((await p.run(to(next.seq))) !== undefined) p.record(to(open.seq), to(next.seq));
   };
 
+  const unassigned = sheets[0]?.setter?.unassigned ?? [];
+  const adopt = async () => {
+    await p.run(async () => {
+      const r = await client.layout.adoptToSetters.mutate(scope !== null ? { courseId: scope } : {});
+      for (const s of r.sheets) p.versions.seed("sheet", s.seq, s.version);
+      await refresh(true);
+      return r;
+    });
+  };
+
   const nextIndex = open ? nextSetterSheet(openScope, open.seq)?.setter?.index ?? null : null;
   return (
     <InspectorSection title={t("layoutSetter")} testId="editor-layout-setter" defaultOpen={sheets.length > 0 || p.view === "all"}>
@@ -113,6 +126,16 @@ export function SetterSection(p: {
               </li>
             ))}
           </ul>
+        )}
+        {unassigned.length > 0 && (
+          <div className="space-y-1" data-testid="editor-layout-setter-unassigned" data-count={unassigned.length}>
+            <p className="text-[11px] text-amber-700">{t("layoutSetterUnassigned", { count: unassigned.length, codes: unassigned.map(codeOf).join(", ") })}</p>
+            {p.canEdit && (
+              <button type="button" data-testid="editor-layout-setter-adopt" onClick={() => void adopt()} className={LINK}>
+                {t("layoutSetterAdopt")}
+              </button>
+            )}
+          </div>
         )}
         {open && (
           <div className="pt-1 border-t border-slate-100" data-testid="editor-layout-setter-controls" data-sheet={open.seq}>

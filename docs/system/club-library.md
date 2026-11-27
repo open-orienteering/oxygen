@@ -87,6 +87,13 @@ own file. That flag gates:
 - `clubMap.download` — the version's uploader or an instance admin, the
   same rule as the club clause of `GET /api/map-sources/:hash`.
 
+Adding a file to the library, or making it an event's map, from a hash
+needs the caller's own upload of those bytes (or an instance admin): you
+cannot obtain another uploader's file by quoting its hash to
+`clubMap.addFromSource` / `course.applyUploadedMap`
+([map-storage.md §5.1](../map-storage.md), "Possession"). The version's
+uploader is the person who started the import.
+
 ### Copy-on-use
 
 On an event map panel with no map yet (its drop zone), or from the course

@@ -1,4 +1,5 @@
 import type { PrismaClient } from "./generated/prisma/client.js";
+import { nodeRole, syncPeerUrl } from "./sync/nodeIdentity.js";
 
 export interface SheetRow {
   sheet?: string;
@@ -89,6 +90,26 @@ function fireAndForget(client: PrismaClient, eventId: bigint, payload: Record<st
 }
 
 /**
+ * Whether this node pushes an event's readouts to the backup sheet. The
+ * cloud does, for every readout it stores or ingests (a shipped `card.read`
+ * included). A venue box that ships to a peer leaves it to the cloud for an
+ * event it checked out from there (any lease row): when both pushed, the
+ * sheet got every readout twice (SYNC-14), and the box's fire-and-forget
+ * push is lost when it has no uplink at readout, while the shipped entry
+ * reaches the cloud later. An event that lives only on the box (never
+ * checked out, so never shipped) and a standalone box (no peer) push here.
+ */
+export async function pushesReadoutsToSheet(client: PrismaClient, eventId: bigint): Promise<boolean> {
+  if (!(nodeRole() === "venue" && syncPeerUrl() !== null)) return true;
+  try {
+    const lease = await client.eventLease.findFirst({ where: { eventId }, select: { id: true } });
+    return lease === null;
+  } catch {
+    return true;
+  }
+}
+
+/**
  * Fire-and-forget push of a card readout row to the "Readouts" sheet.
  */
 export function pushToGoogleSheet(
@@ -96,7 +117,10 @@ export function pushToGoogleSheet(
   eventId: bigint,
   row: SheetRow,
 ): void {
-  fireAndForget(client, eventId, { ...row, sheet: "Readouts" });
+  void (async () => {
+    if (!(await pushesReadoutsToSheet(client, eventId))) return;
+    fireAndForget(client, eventId, { ...row, sheet: "Readouts" });
+  })();
 }
 
 /**

@@ -38,4 +38,4 @@ export type PrintWorkerResponse =
   | PrintWorkerNeed
   | { type: "page"; id: number; index: number; label: string; warnings: string[] }
   | { type: "done"; id: number; bytes: ArrayBuffer; pageCount: number; warnings: string[] }
-  | { type: "error"; id: number; message: string };
+  | { type: "error"; id: number; message: string; name?: string };

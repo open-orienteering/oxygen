@@ -1,13 +1,27 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, viewProcedure, manageRaceProcedure, kioskOrRaceOperateProcedure } from "../trpc.js";
-import { toAbsolute, toRelative, nowMeosDate, nowMeosTime } from "../timeConvert.js";
-import { RunnerStatus, type RunnerDetail, type RunnerInfo } from "@oxygen/shared";
+import {
+  router,
+  viewProcedure,
+  manageRaceProcedure,
+  raceOperateRaceProcedure,
+  kioskOrRaceOperateProcedure,
+} from "../trpc.js";
+import { absoluteTimeSchema, toAbsolute, toRelative, toRelativeChecked, hasTime, hasStartedByClock, eventNowDs, eventTimeZone, nowMeosDate, nowMeosTime } from "../timeConvert.js";
+import { RunnerStatus, type RunnerDetail, type RunnerInfo, type RunnerEventorDiff } from "@oxygen/shared";
 import {
   runnerStatusToValue,
   valueToRunnerStatus,
+  runnerStatusValueSchema,
 } from "../statusConvert.js";
 import { appendJournal } from "../journalEmit.js";
+import { liveCardId } from "../cardLink.js";
+import {
+  EVENTOR_DIFF_FIELDS,
+  asRunnerSnapshot,
+  runnerEventorDiff,
+  type EventorDiffField,
+} from "../eventor-merge.js";
 import { assertInPool, assignVariant, poolOf } from "../variants.js";
 
 /**
@@ -27,7 +41,7 @@ export function normalizeBirthYear(val: number): number {
  * Resolve a runner by its per-event seq. Returns the row (incl. id UUID,
  * which is needed for Prisma writes), or throws NOT_FOUND.
  */
-async function getRunnerBySeq(
+export async function getRunnerBySeq(
   db: import("../generated/prisma/client.js").PrismaClient,
   eventId: bigint,
   seq: number,
@@ -43,7 +57,7 @@ async function getRunnerBySeq(
 
 /** Resolve a class seq to its UUID. */
 async function classSeqToId(
-  db: import("../generated/prisma/client.js").PrismaClient,
+  db: import("../generated/prisma/client.js").PrismaClient | import("../generated/prisma/client.js").Prisma.TransactionClient,
   eventId: bigint,
   seq: number,
 ): Promise<string> {
@@ -66,7 +80,7 @@ async function classSeqToId(
  * so a shipped entry replays through exactly the same translation.
  */
 export async function buildRunnerUpdateData(
-  db: import("../generated/prisma/client.js").PrismaClient,
+  db: import("../generated/prisma/client.js").PrismaClient | import("../generated/prisma/client.js").Prisma.TransactionClient,
   eventId: bigint,
   zeroTime: number,
   fields: Record<string, unknown>,
@@ -77,7 +91,13 @@ export async function buildRunnerUpdateData(
   const data: Record<string, unknown> = {};
   const cardNo = get<number | null>("cardNo");
   if (get<string>("name") !== undefined) data.name = get<string>("name");
-  if (cardNo !== undefined) data.cardNo = cardNo && cardNo > 0 ? cardNo : null;
+  if (cardNo !== undefined) {
+    data.cardNo = cardNo && cardNo > 0 ? cardNo : null;
+    // The card link follows the number (API-11): the newest card row read
+    // for the new number in this event, or none. A stale link would make the
+    // readout and the Eventor export use the previous card's punches.
+    data.cardId = data.cardNo != null ? await liveCardId(db, eventId, data.cardNo as number) : null;
+  }
   if (get<string>("clubName") !== undefined)
     data.clubName = get<string>("clubName");
   if (fields.eventorClubId !== undefined)
@@ -126,6 +146,7 @@ export async function buildRunnerUpdateData(
   if (get<string>("nationality") !== undefined)
     data.nationality = get<string>("nationality");
   if (get<string>("phone") !== undefined) data.phone = get<string>("phone");
+  if (get<string>("bib") !== undefined) data.bib = get<string>("bib");
   if (get<number>("status") !== undefined)
     data.status = valueToRunnerStatus(get<number>("status")!);
   if (get<number>("finishTime") !== undefined) {
@@ -142,8 +163,33 @@ export async function buildRunnerUpdateData(
   return data;
 }
 
+/**
+ * Which hand-set flags a runner patch implies (RES-01 / SI-10). A status or
+ * finish the patch actually changes is "by hand": `statusManual` /
+ * `finishManual` then stop a later card read from overwriting it. Setting
+ * the status back to unknown, or the finish to 0, clears the flag. A form
+ * that resends the stored value changes nothing, so it sets no flag.
+ */
+export function manualFlagsFor(
+  fields: Record<string, unknown>,
+  zeroTime: number,
+  current: { status: string; finishTime: number },
+): { statusManual?: boolean; finishManual?: boolean } {
+  const out: { statusManual?: boolean; finishManual?: boolean } = {};
+  if (typeof fields.status === "number") {
+    const next = valueToRunnerStatus(fields.status);
+    if (next !== current.status) out.statusManual = next !== "unknown";
+  }
+  if (typeof fields.finishTime === "number") {
+    const ft = fields.finishTime;
+    const rel = ft > 0 ? toRelative(ft, zeroTime) : ft;
+    if (rel !== current.finishTime) out.finishManual = rel !== 0;
+  }
+  return out;
+}
+
 /** Throw CONFLICT if `cardNo` is already used by another runner in this event. */
-async function assertCardNotTaken(
+export async function assertCardNotTaken(
   db: import("../generated/prisma/client.js").PrismaClient,
   eventId: bigint,
   cardNo: number | null | undefined,
@@ -167,6 +213,23 @@ async function assertCardNotTaken(
   }
 }
 
+/**
+ * A card write that lost the race against another desk (the check above
+ * passed, then the partial unique index `runners_event_id_card_no_key`
+ * refused the row) answers the same CONFLICT as the check, not a 500.
+ */
+export function rethrowCardConflict(err: unknown, cardNo: number | null | undefined): never {
+  const e = err as { code?: unknown; message?: unknown; meta?: unknown } | null;
+  const text = `${String(e?.message ?? "")} ${JSON.stringify(e?.meta ?? "")}`;
+  if (e?.code === "P2002" && (/card_no/.test(text) || /cardNo/.test(text))) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: `Card ${cardNo ?? ""} is already assigned to another runner`,
+    });
+  }
+  throw err;
+}
+
 // ─── Schemas ───────────────────────────────────────────────
 
 const runnerCreateSchema = z.object({
@@ -176,13 +239,13 @@ const runnerCreateSchema = z.object({
   eventorClubId: z.number().int().optional(),
   classId: z.number().int(), // seq
   startNo: z.number().int().optional().default(0),
-  startTime: z.number().int().optional().default(0),
+  startTime: absoluteTimeSchema.optional().default(0),
   birthYear: z.number().int().optional().default(0),
   sex: z.string().optional().default(""),
   nationality: z.string().optional().default(""),
   phone: z.string().optional().default(""),
-  status: z.number().int().optional(),
-  finishTime: z.number().int().optional(),
+  status: runnerStatusValueSchema.optional(),
+  finishTime: absoluteTimeSchema.optional(),
   fee: z.number().int().optional().default(0),
   paid: z.number().int().optional().default(0),
   payMode: z.number().int().optional().default(0),
@@ -198,13 +261,15 @@ const runnerUpdateSchema = z.object({
   eventorClubId: z.number().int().nullable().optional(),
   classId: z.number().int().optional(),
   startNo: z.number().int().optional(),
-  startTime: z.number().int().optional(),
+  startTime: absoluteTimeSchema.optional(),
   birthYear: z.number().int().optional(),
   sex: z.string().optional(),
   nationality: z.string().optional(),
   phone: z.string().optional(),
-  status: z.number().int().optional(),
-  finishTime: z.number().int().optional(),
+  /** Free-text bib; the inline editor's field was silently dropped before (package 11). */
+  bib: z.string().optional(),
+  status: runnerStatusValueSchema.optional(),
+  finishTime: absoluteTimeSchema.optional(),
   fee: z.number().int().optional(),
   paid: z.number().int().optional(),
   payMode: z.number().int().optional(),
@@ -213,6 +278,160 @@ const runnerUpdateSchema = z.object({
   /** The runner's variant (course seq) in a pooled class; null → re-dealt (F6b). */
   courseId: z.number().int().positive().nullable().optional(),
 });
+
+/**
+ * Where a runner differs from Eventor's last value, for the list badge and
+ * filter (docs/system/eventor-sync.md). `undefined` keys keep the JSON small
+ * for runners that were never synced.
+ */
+function eventorFlags(
+  r: {
+    name: string; cardNo: number | null; eventorClubId: bigint | null; clubName: string;
+    birthYear: number; sex: string; nationality: string; eventorSnapshot: unknown;
+  },
+  classEventorId: bigint | null,
+): { differsFromEventor?: boolean; goneFromEventor?: boolean } {
+  const snap = asRunnerSnapshot(r.eventorSnapshot);
+  if (!snap) return {};
+  const diff = runnerEventorDiff(
+    {
+      name: r.name,
+      cardNo: r.cardNo,
+      classEventorId: classEventorId === null ? null : Number(classEventorId),
+      eventorClubId: r.eventorClubId === null ? null : Number(r.eventorClubId),
+      clubName: r.clubName,
+      birthYear: r.birthYear,
+      sex: r.sex,
+      nationality: r.nationality,
+    },
+    snap,
+  );
+  return {
+    ...(diff.length > 0 ? { differsFromEventor: true } : {}),
+    ...(snap.present === false ? { goneFromEventor: true } : {}),
+  };
+}
+
+/** `eventorDiff` and `goneFromEventor` of the runner detail; classes shown by name. */
+async function eventorDetail(
+  db: import("../generated/prisma/client.js").PrismaClient,
+  eventId: bigint,
+  r: Parameters<typeof eventorFlags>[0] & { classId: string | null },
+  cls: { name: string } | null,
+): Promise<{ eventorDiff?: RunnerEventorDiff[]; goneFromEventor?: boolean }> {
+  const snap = asRunnerSnapshot(r.eventorSnapshot);
+  if (!snap) return {};
+  const local = r.classId
+    ? await db.class.findUnique({ where: { id: r.classId }, select: { eventorId: true } })
+    : null;
+  const diff = runnerEventorDiff(
+    {
+      name: r.name,
+      cardNo: r.cardNo,
+      classEventorId: local?.eventorId == null ? null : Number(local.eventorId),
+      eventorClubId: r.eventorClubId === null ? null : Number(r.eventorClubId),
+      clubName: r.clubName,
+      birthYear: r.birthYear,
+      sex: r.sex,
+      nationality: r.nationality,
+    },
+    snap,
+  );
+  const eventorClass = diff.find((d) => d.field === "classId");
+  const eventorClassRow =
+    eventorClass && typeof eventorClass.eventor === "number"
+      ? await db.class.findFirst({
+          where: { eventId, eventorId: BigInt(eventorClass.eventor), removed: false },
+          select: { name: true },
+        })
+      : null;
+  return {
+    eventorDiff: diff.map((d) =>
+      d.field === "classId"
+        ? { ...d, local: cls?.name ?? "", eventor: eventorClassRow?.name ?? String(d.eventor) }
+        : d,
+    ),
+    ...(snap.present === false ? { goneFromEventor: true } : {}),
+  };
+}
+
+/**
+ * Apply an edit to a runner and journal it, in one transaction. The body of
+ * `runner.update`, shared with `eventor.useEventorValue` so "use Eventor's
+ * value" is an ordinary, journaled edit. `fields` is the portable (absolute
+ * deciseconds, seq-keyed) input shape of `runner.update`.
+ */
+export async function updateRunnerFields(
+  ctx: { db: import("../generated/prisma/client.js").PrismaClient; event: { id: bigint; zeroTime: number } },
+  seq: number,
+  fields: Record<string, unknown>,
+): Promise<{ ok: true }> {
+  const r = await getRunnerBySeq(ctx.db, ctx.event.id, seq);
+
+  const cardNo =
+    fields.cardNo === undefined ? undefined : (fields.cardNo as number | null);
+  if (cardNo != null && cardNo !== r.cardNo) {
+    await assertCardNotTaken(ctx.db, ctx.event.id, cardNo, r.id);
+  }
+
+  // A time typed by a person may not land on ZeroTime (RES-04). The journal
+  // replay path (`events.push`) does not check: the origin already did.
+  for (const k of ["startTime", "finishTime"] as const) {
+    if (typeof fields[k] === "number") toRelativeChecked(fields[k] as number, ctx.event.zeroTime);
+  }
+  const data = await buildRunnerUpdateData(
+    ctx.db,
+    ctx.event.id,
+    ctx.event.zeroTime,
+    fields,
+  );
+
+  Object.assign(data, manualFlagsFor(fields, ctx.event.zeroTime, r));
+
+  // Portable patch for the journal: the raw (absolute-ds / seq / numeric)
+  // input fields, minus the routing keys. A peer replays it through this
+  // same mutation, so it must NOT carry the DB-shaped `data` values.
+  const journalFields: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(fields)) {
+    if (k === "id" || k === "data" || v === undefined) continue;
+    journalFields[k] = v;
+  }
+
+  // The runner's variant (F6b): a course seq must be in the (new)
+  // class's pool; a class change clears it and `null` asks for one —
+  // both re-dealt from the pool below, the pick journaled as the seq.
+  const targetClassId = (data.classId as string | undefined) ?? r.classId;
+  const classChanged = data.classId !== undefined && data.classId !== r.classId;
+  let redeal = false;
+  if (fields.courseId === null || (classChanged && typeof fields.courseId !== "number")) {
+    data.courseId = null;
+    redeal = true;
+  }
+
+  // Table write + journal entry commit or roll back together.
+  await ctx.db.$transaction(async (tx) => {
+    if (typeof fields.courseId === "number") {
+      // Read the pool in the write's transaction (a racing edit may drop the variant).
+      const pool = targetClassId ? await poolOf(tx, targetClassId) : [];
+      data.courseId = assertInPool(pool, fields.courseId).id;
+    }
+    await tx.runner.update({ where: { id: r.id }, data });
+    if (redeal) {
+      const v = targetClassId ? await assignVariant(tx, targetClassId, r.id) : null;
+      journalFields.courseId = v?.seq ?? null;
+    }
+    await appendJournal(tx, {
+      eventId: ctx.event.id,
+      type: "runner.updated",
+      payload: {
+        cardNo: r.cardNo ?? null, // pre-edit card resolves the peer row
+        runnerId: seq, // seq
+        fields: journalFields,
+      },
+    });
+  }).catch((err: unknown) => rethrowCardConflict(err, data.cardNo as number | null | undefined));
+  return { ok: true };
+}
 
 // ─── Router ────────────────────────────────────────────────
 
@@ -276,6 +495,7 @@ export const runnerRouter = router({
         transferFlags: r.transferFlags,
         courseId: own?.seq ?? 0,
         variantKey: own?.variantKey ?? null,
+        ...(await eventorDetail(ctx.db, ctx.event.id, r, cls)),
       };
     }),
 
@@ -346,13 +566,11 @@ export const runnerRouter = router({
 
       const runners = await ctx.db.runner.findMany({
         where,
-        include: { class: { select: { name: true, seq: true } }, course: { select: { seq: true } } },
+        include: { class: { select: { name: true, seq: true, eventorId: true } }, course: { select: { seq: true } } },
         orderBy: [{ class: { sortIndex: "asc" } }, { startNo: "asc" }],
       });
 
-      const now = new Date();
-      const meosNow =
-        (now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()) * 10;
+      const meosNow = eventNowDs(ctx.event);
 
       const punchCards = await ctx.db.punch.groupBy({
         by: ["cardNo"],
@@ -365,17 +583,14 @@ export const runnerRouter = router({
         ? runners.filter((r) => {
             const status = runnerStatusToValue(r.status);
             const hasPunches = r.cardNo != null && punchCardNos.has(r.cardNo);
-            const hasStartedByTime =
-              r.startTime > 0 &&
-              (r.startTime <= 1 ||
-                meosNow >= toAbsolute(r.startTime, zeroTime));
+            const hasStartedByTime = hasStartedByClock(r.startTime, zeroTime, meosNow);
             const finished =
               status === 1 ||
               status === 3 ||
               status === 4 ||
               status === 5 ||
               status === 6 ||
-              (status === 0 && r.finishTime > 0);
+              (status === 0 && hasTime(r.finishTime));
             if (sf === "not-started")
               return !finished && !hasPunches && !hasStartedByTime;
             if (sf === "in-forest")
@@ -410,16 +625,32 @@ export const runnerRouter = router({
           sex: r.sex,
           bib: r.bib,
           transferFlags: r.transferFlags,
+          ...eventorFlags(r, r.class?.eventorId ?? null),
         }),
       );
     }),
 
-  create: manageRaceProcedure
+  // Registration is a race-crew job (a station's queued `runner.registered`
+  // needs `race.operate`, so the online path must not be stricter). Edit and
+  // delete stay Event admin. docs/system/authentication.md.
+  create: raceOperateRaceProcedure
     .input(runnerCreateSchema)
     .mutation(async ({ ctx, input }) => {
       await assertCardNotTaken(ctx.db, ctx.event.id, input.cardNo);
+      // An Eventor club sent without its name takes the directory's (as
+      // bulkUpdate does), so the row never has an id and no name.
+      if (!input.clubName && input.eventorClubId && input.eventorClubId > 0) {
+        const dir = await ctx.db.clubDirectory.findUnique({
+          where: { eventorId: BigInt(input.eventorClubId) },
+          select: { name: true },
+        });
+        if (dir?.name) input.clubName = dir.name;
+      }
       const classUuid = await classSeqToId(ctx.db, ctx.event.id, input.classId);
       const cardNo = input.cardNo && input.cardNo > 0 ? input.cardNo : null;
+      const now = new Date();
+      const entryDate = nowMeosDate(now, eventTimeZone(ctx.event));
+      const entryTime = nowMeosTime(now, eventTimeZone(ctx.event));
 
       // Table write + journal entry commit or roll back together.
       const created = await ctx.db.$transaction(async (tx) => {
@@ -429,14 +660,18 @@ export const runnerRouter = router({
             name: input.name,
             // 0 (legacy sentinel) or absent → NULL (no card).
             cardNo,
+            // A card already read in the event is linked at registration
+            // (registration-and-readout.md §5a; API-11 keeps it current).
+            cardId: cardNo != null ? await liveCardId(tx, ctx.event.id, cardNo) : null,
             clubName: input.clubName,
-            eventorClubId: input.eventorClubId ?? null,
+            // 0 is the legacy "no Eventor id" sentinel (WEB-06).
+            eventorClubId: input.eventorClubId && input.eventorClubId > 0 ? input.eventorClubId : null,
             classId: classUuid,
             startNo: input.startNo,
             // Inputs are absolute deciseconds; storage is ZeroTime-relative.
             startTime:
               input.startTime > 0
-                ? toRelative(input.startTime, ctx.event.zeroTime)
+                ? toRelativeChecked(input.startTime, ctx.event.zeroTime)
                 : input.startTime,
             birthYear: input.birthYear,
             sex: input.sex,
@@ -449,7 +684,7 @@ export const runnerRouter = router({
               ? {
                   finishTime:
                     input.finishTime > 0
-                      ? toRelative(input.finishTime, ctx.event.zeroTime)
+                      ? toRelativeChecked(input.finishTime, ctx.event.zeroTime)
                       : input.finishTime,
                 }
               : {}),
@@ -457,8 +692,8 @@ export const runnerRouter = router({
             paidCents: input.paid,
             payMode: input.payMode,
             cardFeeCents: input.cardFee,
-            entryDate: nowMeosDate(),
-            entryTime: nowMeosTime(),
+            entryDate,
+            entryTime,
           },
           select: { id: true, seq: true },
         });
@@ -484,14 +719,29 @@ export const runnerRouter = router({
             name: input.name,
             classId: input.classId, // seq
             clubName: input.clubName,
-            eventorClubId: input.eventorClubId,
+            eventorClubId:
+              input.eventorClubId && input.eventorClubId > 0 ? input.eventorClubId : undefined,
             cardNo,
             startTime: input.startTime > 0 ? input.startTime : undefined,
             courseId: variantSeq,
+            // The rest of the form (SYNC-12), so a follower stores the same row.
+            startNo: input.startNo,
+            birthYear: input.birthYear,
+            sex: input.sex,
+            nationality: input.nationality,
+            phone: input.phone,
+            fee: input.fee,
+            paid: input.paid,
+            payMode: input.payMode,
+            cardFee: input.cardFee,
+            entryDate,
+            entryTime,
+            ...(input.status != null ? { status: input.status } : {}),
+            ...(input.finishTime != null ? { finishTime: input.finishTime } : {}),
           },
         });
         return c;
-      });
+      }).catch((err: unknown) => rethrowCardConflict(err, cardNo));
       return { id: created.seq };
     }),
 
@@ -519,69 +769,87 @@ export const runnerRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const r = await getRunnerBySeq(ctx.db, ctx.event.id, input.id);
       // Merge legacy `data: { ... }` wrapper with the flat shape.
       const fields = { ...input, ...(input.data ?? {}) } as Record<
         string,
         unknown
       >;
+      return updateRunnerFields(ctx, input.id, fields);
+    }),
 
-      const cardNo =
-        fields.cardNo === undefined ? undefined : (fields.cardNo as number | null);
-      if (cardNo != null && cardNo !== r.cardNo) {
-        await assertCardNotTaken(ctx.db, ctx.event.id, cardNo, r.id);
-      }
-
-      const data = await buildRunnerUpdateData(
-        ctx.db,
-        ctx.event.id,
-        ctx.event.zeroTime,
-        fields,
-      );
-
-      // Portable patch for the journal: the raw (absolute-ds / seq / numeric)
-      // input fields, minus the routing keys. A peer replays it through this
-      // same mutation, so it must NOT carry the DB-shaped `data` values.
-      const journalFields: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(fields)) {
-        if (k === "id" || k === "data" || v === undefined) continue;
-        journalFields[k] = v;
-      }
-
-      // The runner's variant (F6b): a course seq must be in the (new)
-      // class's pool; a class change clears it and `null` asks for one —
-      // both re-dealt from the pool below, the pick journaled as the seq.
-      const targetClassId = (data.classId as string | undefined) ?? r.classId;
-      const classChanged = data.classId !== undefined && data.classId !== r.classId;
-      let redeal = false;
-      if (fields.courseId === null || (classChanged && typeof fields.courseId !== "number")) {
-        data.courseId = null;
-        redeal = true;
-      }
-
-      // Table write + journal entry commit or roll back together.
-      await ctx.db.$transaction(async (tx) => {
-        if (typeof fields.courseId === "number") {
-          // Read the pool in the write's transaction (a racing edit may drop the variant).
-          const pool = targetClassId ? await poolOf(tx, targetClassId) : [];
-          data.courseId = assertInPool(pool, fields.courseId).id;
-        }
-        await tx.runner.update({ where: { id: r.id }, data });
-        if (redeal) {
-          const v = targetClassId ? await assignVariant(tx, targetClassId, r.id) : null;
-          journalFields.courseId = v?.seq ?? null;
-        }
-        await appendJournal(tx, {
-          eventId: ctx.event.id,
-          type: "runner.updated",
-          payload: {
-            cardNo: r.cardNo ?? null, // pre-edit card resolves the peer row
-            runnerId: input.id, // seq
-            fields: journalFields,
-          },
+  /**
+   * "Use Eventor's value": set one field of a runner to what Eventor last
+   * said (the runner's snapshot). An ordinary, journaled runner edit, so it
+   * works on a venue box too (this is a `runner.` procedure, not the
+   * cloud-owned `eventor.` ones).
+   */
+  useEventorValue: manageRaceProcedure
+    .input(
+      z.object({
+        runnerId: z.number().int(),
+        field: z.enum(EVENTOR_DIFF_FIELDS as unknown as [EventorDiffField, ...EventorDiffField[]]),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const r = await getRunnerBySeq(ctx.db, ctx.event.id, input.runnerId);
+      const snap = asRunnerSnapshot(r.eventorSnapshot);
+      if (!snap) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "No Eventor value is recorded for this runner yet; sync from Eventor first.",
         });
-      });
-      return { ok: true };
+      }
+      const fields: Record<string, unknown> = {};
+      switch (input.field) {
+        case "name":
+          if (snap.name) fields.name = snap.name;
+          break;
+        case "cardNo":
+          if (snap.card_no != null) fields.cardNo = snap.card_no;
+          break;
+        case "classId": {
+          if (snap.class_eventor_id == null) break;
+          const cls = await ctx.db.class.findFirst({
+            where: {
+              eventId: ctx.event.id,
+              eventorId: BigInt(snap.class_eventor_id),
+              removed: false,
+            },
+            select: { seq: true },
+          });
+          if (!cls) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "Eventor's class does not exist in this event.",
+            });
+          }
+          fields.classId = cls.seq;
+          break;
+        }
+        case "club":
+          if (snap.club_eventor_id != null) {
+            fields.eventorClubId = snap.club_eventor_id;
+            fields.clubName = snap.club_name ?? "";
+          }
+          break;
+        case "birthYear":
+          if (snap.birth_year) fields.birthYear = snap.birth_year;
+          break;
+        case "sex":
+          if (snap.sex) fields.sex = snap.sex;
+          break;
+        case "nationality":
+          if (snap.nationality) fields.nationality = snap.nationality;
+          break;
+      }
+      if (Object.keys(fields).length === 0) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Eventor has no value for this field.",
+        });
+      }
+      // A card another runner holds is a CONFLICT (assertCardNotTaken).
+      return updateRunnerFields(ctx, input.runnerId, fields);
     }),
 
   /** Soft-delete a runner. */
@@ -620,7 +888,7 @@ export const runnerRouter = router({
       await ctx.db.$transaction(async (tx) => {
         await tx.runner.updateMany({
           where: { id: { in: rows.map((r) => r.id) } },
-          data: { status: "dns" },
+          data: { status: "dns", statusManual: true },
         });
         for (const r of rows) {
           await appendJournal(tx, {
@@ -645,8 +913,8 @@ export const runnerRouter = router({
         classId: z.number().int().optional(),
         clubName: z.string().optional(),
         eventorClubId: z.number().int().nullable().optional(),
-        status: z.number().int().optional(),
-        startTime: z.number().int().optional(),
+        status: runnerStatusValueSchema.optional(),
+        startTime: absoluteTimeSchema.optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -666,22 +934,40 @@ export const runnerRouter = router({
         data.classId = await classSeqToId(ctx.db, ctx.event.id, input.classId);
         journalFields.classId = input.classId;
       }
-      if (input.clubName !== undefined) {
-        data.clubName = input.clubName;
-        journalFields.clubName = input.clubName;
+      // A club is a name plus an optional Eventor id (WEB-10). 0 is the
+      // legacy "no Eventor id" sentinel; an id sent without a name takes the
+      // directory's name, so the two never disagree on the row or the peer.
+      const clubId =
+        input.eventorClubId === undefined
+          ? undefined
+          : input.eventorClubId && input.eventorClubId > 0
+            ? input.eventorClubId
+            : null;
+      let clubName = input.clubName;
+      if (clubName === undefined && clubId) {
+        const dir = await ctx.db.clubDirectory.findUnique({
+          where: { eventorId: BigInt(clubId) },
+          select: { name: true },
+        });
+        if (dir?.name) clubName = dir.name;
       }
-      if (input.eventorClubId !== undefined) {
-        data.eventorClubId = input.eventorClubId;
-        journalFields.eventorClubId = input.eventorClubId;
+      if (clubName !== undefined) {
+        data.clubName = clubName;
+        journalFields.clubName = clubName;
+      }
+      if (clubId !== undefined) {
+        data.eventorClubId = clubId;
+        journalFields.eventorClubId = clubId;
       }
       if (input.status !== undefined) {
         data.status = valueToRunnerStatus(input.status);
+        data.statusManual = input.status !== 0;
         journalFields.status = input.status;
       }
       if (input.startTime !== undefined) {
         data.startTime =
           input.startTime > 0
-            ? toRelative(input.startTime, ctx.event.zeroTime)
+            ? toRelativeChecked(input.startTime, ctx.event.zeroTime)
             : input.startTime;
         journalFields.startTime = input.startTime;
       }

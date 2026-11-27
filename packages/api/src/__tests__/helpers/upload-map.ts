@@ -35,6 +35,14 @@ export interface UploadOptions {
   eventNameId?: string | null;
   /** Extra request headers (an identity header when the suite runs with auth on). */
   headers?: Record<string, string>;
+  /**
+   * Upload as this signed-in user: the identity header is sent and the routes
+   * run with AUTH_MODE=proxy for the duration of the upload, so the `map_uploads`
+   * row carries the user. A caller that is signed in on `addFromSource` /
+   * `applyUploadedMap` must have uploaded the bytes this way
+   * (`assertMayConsumeSource`).
+   */
+  as?: { email: string } | null;
 }
 
 /** Upload `bytes` through the chunk routes; returns the `map_sources` hash. */
@@ -43,6 +51,16 @@ export async function uploadMapSource(
   fileName: string,
   opts: UploadOptions = {},
 ): Promise<{ fileHash: string; deduplicated: boolean }> {
+  if (opts.as) {
+    const previous = process.env.AUTH_MODE;
+    process.env.AUTH_MODE = "proxy";
+    try {
+      return await uploadMapSource(bytes, fileName, { ...opts, as: null, headers: { "x-forwarded-email": opts.as.email, ...(opts.headers ?? {}) } });
+    } finally {
+      if (previous === undefined) delete process.env.AUTH_MODE;
+      else process.env.AUTH_MODE = previous;
+    }
+  }
   const app = await uploadServer();
   const headers: Record<string, string> = { ...(opts.headers ?? {}) };
   if (opts.eventNameId) headers["x-event-id"] = opts.eventNameId;

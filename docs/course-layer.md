@@ -193,7 +193,8 @@ automatic cuts; an empty list means automatic (decision log 2026-11-01,
 
 Free order is the structure's `orderMode` (a property of the course, not
 of the view). A site at the origin (0, 0) is unpositioned and skipped,
-legs connecting the remaining items (the editor's rule, `editorCourseLayer`).
+legs connecting the remaining items (the editor's rule, `editorCourseLayer`);
+a control-role item's number is kept (§3.5).
 Gaps follow the rule above. Crossing points, map-issue points and map
 exchanges are drawn since F4 (§10.3; an exchange as a control, the
 course split into parts at it since F5, §11); variations reach the layer
@@ -386,7 +387,9 @@ user review). The flag reaches every consumer of the layer:
 
 ### 3.5 Numbers
 
-- **Text**: `sequence` (1, 2, … over the first course's control items; a
+- **Text**: `sequence` (1, 2, … over the first course's control items,
+  placed or not: an unplaced control takes its number and draws nothing,
+  as the description sheet counts it — CRS-024, review D5 (exception: the all-variations numbers and the editor's predicate, §12.7 and Pending); a
   site visited twice gets `3/7`) by default for one ordered course
   outside the all-controls view; `code` otherwise, or by `labelMode`.
   `viewOptions.labels` (F15) wins over both for the control-role sites it
@@ -1055,6 +1058,81 @@ drifted > 30 m" rule never fired — `bugfixes/stale-ocd-course-geometry.md`;
 E6 deleted `isOcdGeometryStaleVsXml`.) **PPen `<gaps>` are not read**
 (no fixture, no research record; Pending).
 
+**Import semantics** (review package 17, decision D3; `course-import-plan.ts`).
+`previewImport` and `importCourses` share one plan (`planCourseImport` over
+`loadImportState`); the import rebuilds it inside its transaction and writes
+what it says.
+
+- **Two modes.** **Merge** (pre-selected) adds and updates what the file
+  carries and leaves everything else. **Replace all** also soft-deletes the
+  live courses (and their variants) and controls the file does not carry,
+  and clears the course of the classes on a removed course only (and of a
+  class still pointing at a course removed earlier): a class on a course
+  the file updates keeps it unless the operator remaps it. Matched
+  rows are never flipped to removed and back, so the counts are right
+  (an update is an update), and the tokens stamp every row the file
+  carries plus the rows Replace all removes, not the rest of the event.
+- **Controls** are matched by code among ordinary controls, a start /
+  finish by its synthesised name among starts and finishes (F32, below), a
+  crossing point by name among crossing points; a **live row before a
+  removed one**, then the newest removed one. The file wins on position,
+  WGS84 (a real pair only), circle cuts (OCD) and description (when it has
+  one). **Local wins** on status (Bad, Optional, …), extra codes
+  (`31;131`), name, kind and notes, in both modes. A removed control the
+  import restores keeps its codes minus any extra code a live row has since
+  taken: by a live control or a live start / finish's unit code, or claimed
+  as its own code by another removed row the same file restores. A control the file moves more than 50 m (`MOVED_FAR_METRES`, map
+  mm × the file's scale) under the same code is a preview warning, not a
+  refusal; it is skipped when positions are skipped or the file's map
+  mismatches.
+- **Courses** are matched by name among roots, live first. The file wins
+  on sequence, legs, order mode, start name, and on **length only when it
+  states one** (`Math.round(length) > 0`): an existing course whose file
+  has none keeps its `length_m` and `length_source`, and its legs are
+  re-derived from the new positions when the file has no leg lengths
+  (`rebuildCourseLengths(…, { keepSource: true })`); a new course without
+  a stated length gets its length derived from its controls. Local wins on
+  label offsets, gaps and bends (`carryLegs`), number of maps and
+  description settings. A stated length that differs from the stored one
+  is a preview line.
+- **Forked courses.** Merge leaves a local forked root (variations in its
+  structure, or live variants) alone: its row and structure are not written,
+  its controls are (they are shared sites), it is listed as skipped, and a
+  class the operator maps to it follows the existing root. A file course
+  whose `CourseFamily` names a live forked root (Oxygen's own export of
+  that fork) is skipped the same way rather than created beside it.
+  Replace all flattens a forked root the file names (§12.5).
+- **Refusals**, `BAD_REQUEST` before anything is written, in both modes
+  (the preview returns them as `blockers` per mode and the dialog disables
+  Import): a file with no courses and no controls; a file with no courses
+  under Replace all (a map file picked by mistake; under Merge a file of
+  controls only updates their positions); a control id, crossing point id
+  or course name listed twice (case-insensitive, trimmed); two starts or
+  finishes that become one name (`S1` and `STA1` → "Start 1"); a file
+  control whose code a live start / finish holds (F32, below); a
+  `classMapping` that puts one class under two course names; a buffer
+  without the OCAD magic word `0x0CAD`; an IOF file with several
+  `RaceCourseData` ("export one race per file"; a race picker is
+  Pending). Parse errors are `BAD_REQUEST`, not server errors.
+- **Class pre-selection.** Each preview class row carries `preselect`, and
+  the dialog seeds its mapping from it: a substring match ("D1" vs "D10")
+  is marked but never pre-selected, and an event class the file puts on
+  several courses is pre-selected on none, with the warning
+  `class_on_fork_variants` when those courses are one family (Oxygen's
+  export lists a class once per fork variant: forks are not imported, the
+  class stays unassigned) or `class_on_several_courses` otherwise.
+- **The preview is a consequence list** for both modes (`consequences.merge`
+  / `.replaceAll`, so switching mode needs no second upload): courses added,
+  updated, restored, removed, skipped as forked, flattened (variants and
+  runners), lengths kept / derived / changed; controls added, updated,
+  restored, removed, keeping their settings, moved far; runners losing
+  their variant or left on a removed course; classes losing their course
+  (the dialog leaves out the ones its mapping puts back). The import returns
+  its counts with the same lists.
+- **Journal.** Under Replace all the `reference.imported` entry lists every
+  class still on a course, since a peer's mirror clears the course of every
+  class the entry does not list (`events.ts`).
+
 **Starts and finishes on import (F32).** A start or finish the import
 **creates** takes the lowest free code in 3–30 as `control.create` does
 (§6.3; a file's start / finish id — `S1`, `STA1`, `Start 1` — is a name
@@ -1106,9 +1184,27 @@ payloads are serialised and stamped on the `courses.version` and
 any of them gets a version `CONFLICT` on its next write (§7), and a peer
 applying the entry holds the same tokens. Course objects take their own
 token. Rows the import soft-deleted under `replaceAll` are stamped too. The
-import is not atomic (structure, objects, tokens and the journal entry are
-separate statements, as before: a crash in between is repaired by running it
-again). Import-time `differing` is `null`: `basePayload` reads
+import is **one transaction** (`inImportTransaction`, `course-import-tx.ts`:
+`COURSE_IMPORT_TX`, 60 s timeout, 10 s `maxWait`, as the journal ingest's),
+ordered against taking a lease as the draw is (`lockEventLeaseAndSync`, then
+`mayWriteEventData` inside the transaction: a checkout cannot snapshot the
+event halfway through an import, and an import refused by a lease taken
+meanwhile writes nothing), and behind an event-scoped advisory lock
+(`course-import:<event>`) so two imports into one event run one after the
+other. Parsing, alignment, the OCAD CRS and the file's own refusals run
+before the transaction opens; a run past the timeout is undone and answers
+`TIMEOUT`. A failure anywhere inside the transaction (the
+wipe, a row, the objects, the journal append) leaves the event untouched and
+journals nothing. A start / finish code allocation (F32) inside it holds its
+`control-codes` lock until the import commits, so other control creates on
+the event wait for the import. Its row locks are held to the commit too, so
+an editor save racing it can deadlock; Postgres then aborts one side and an
+aborted import is undone whole (`bugfixes/course-import-followups.md`). A peer's
+mirror soft-deletes the rows Replace all removes without the entry's token
+(same follow-ups). (Until review package 17 this paragraph said
+the import was not atomic; there was no technical reason, and a crash after
+the Replace-all wipe left the event with no courses: decision D3,
+`decisions/general.md` 2026-11-26.) Import-time `differing` is `null`: `basePayload` reads
 `course.upserted` / `control.upserted` entries only, not the rows inside
 a `reference.imported` one (Pending).
 
@@ -1366,6 +1462,16 @@ purple, under the graphics row (§3.6), so an opaque hatch over the control
 hid it already; the flag is for a hatch whose opening shows the map. The
 hiding goes wherever the image is drawn with its control: an `all`-scoped
 hatch hides them on all-controls and setter sheets too.
+
+**In print the hiding graphic must load** (CRS-010, review D5). The
+hide flags act whether or not the graphic's bytes are there, so a hatch
+that fails to load would print the control bare. An attached image with
+`hideControlCircle` or `hideControlNumber` that the page draws and whose
+graphic is missing (another event's or a deleted graphic, a PNG that
+cannot be fetched, an SVG that cannot be rasterised) therefore fails the
+print: `renderCoursePages` throws `PrintGraphicMissingError` (a 400 on
+`maps.pdf`; `course-print.md` §8.2 item 5). Any other missing graphic
+stays an `IMAGE_MISSING` / `SVG_RASTER` warning.
 
 **Graphic outline (J19).** A knockout image object read by the API
 (`loadCourseObjects`, so the list, the print job and the checks alike)
@@ -2233,14 +2339,16 @@ import after its `reference.imported` entry).
   `pruneSiteFromStructure`, is re-mirrored and re-materialised; its
   variants are written by that alone, one entry per row. A plain course
   is rewritten from its columns as before (§6.2).
-- `course.importCourses`: a variant is never matched by name; a root
-  replaced by an imported course becomes linear and its variants are
-  soft-deleted — they travel in the `reference.imported` entry (roots
-  before variants), its classes' pools with it, the nulled runners as
-  `runner.updated` after it. `replaceAll`'s wipe soft-deletes variants in
-  bulk, so the import then clears every runner and pool row still naming
-  a removed variant (`clearRemovedVariants`), and a class the file maps
-  to a course gets that course's pool (`syncClassPool`).
+- `course.importCourses`: a variant is never matched by name. Under
+  **Merge** a forked root the file names is left as it is (§6.4 "Import
+  semantics"). Under **Replace all** a root replaced by an imported course
+  becomes linear and its variants are soft-deleted — they travel in the
+  `reference.imported` entry (roots before variants), its classes' pools
+  with it, the nulled runners as `runner.updated` after it. Replace all
+  soft-deletes the unmatched roots' variants in bulk, so the import then
+  clears every runner and pool row still naming a removed variant
+  (`clearRemovedVariants`), and a class the file maps to a course gets
+  that course's pool (`syncClassPool`).
 
 ### 12.6 Courses page
 
@@ -2339,6 +2447,8 @@ label.
 | unit | `cuts.test.ts` | §3.4: clearances at arc and gap ends, the cut rules |
 | unit | `cuts.test.ts` "polylineLegGaps" | §3.4 "Bent leg" (F1): a straight leg equals `legGaps`, fractions along the bends, one gap across a bend, end keep at the ends only, the 70 % cap |
 | unit | `course/__tests__/cuts-reference.test.ts` (fixture `__fixtures__/cuts-reference.json`) | §3.4 (F20b) |
+| unit | `derive.test.ts` "an unplaced control takes its number" | §3.5 (CRS-024) |
+| unit | `print/__tests__/course-pages.test.ts` "a graphic that stands in for a control" | §8.1 (CRS-010) |
 | unit | `derive.test.ts` "bends and styles" | §10.1 |
 | unit | `layer.test.ts` "leg styles" | §10.1: a `marked_route` leg draws 707 through its bend, upper purple, more than three dash slices, after black; a `none` leg draws nothing, numbers unchanged |
 | unit | `checks.test.ts` "test the bent polyline" | §9.2: a bend round the building clears it, the first hit along the bends |
@@ -2404,6 +2514,11 @@ label.
 | integration | `packages/api/src/__tests__/integration/course-export.test.ts` (F9) | §4.1 (F1) |
 | unit | `ocd-course-parser.test.ts` | §6.4: the parser fills `cuts` and reads 708 |
 | integration | `packages/api/src/__tests__/integration/course-import-structure.test.ts` | §6.4 (E6, F9) |
+| unit | `packages/api/src/__tests__/course-import-plan.test.ts` | §6.4 "Import semantics": each refusal, live-over-removed matching, start / crossing key isolation, the per-mode consequences (removed, flattened, unassigned, length kept / derived / changed, moved far), forked skip and family skip, class pre-selection |
+| unit | `packages/api/src/__tests__/iof-course-parser.test.ts` | §6.4: one race read, a missing `<Length>` as 0, several races refused |
+| unit | `packages/web/src/lib/__tests__/course-import-consequences.test.ts` | §6.4: the dialog's consequence lines (non-zero only, a remapped class not counted) |
+| integration | `packages/api/src/__tests__/integration/course-import-safety.test.ts` | §6.4 "Import semantics" (package 17): kept control settings in both modes, refusals write nothing, a failure after the wipe rolls back with no journal entry, live-over-removed, length kept, preview equals import, the entry's class list |
+| E2E | `e2e/course-import-safety.spec.ts` | §6.4: Merge pre-selected, Replace all's consequence list, a course-less file blocked, a two-race file refused |
 | golden | `e2e/__golden__/map-gl/course-*.png`, `packages/api/src/render/__tests__/golden-files.test.ts`, `e2e/map-gl-golden.spec.ts` | reference raster = committed golden; WebGL2 ≤ 0.5 % (`map-rendering.md` §6.2). The PDF tier joins in C3 |
 | unit (web) | `packages/web/src/lib/__tests__/course-layer-request.test.ts` | §5, §8.2 (F4, P4) |
 | unit | `packages/shared/src/course/__tests__/objects.test.ts` | §8.1, §8.2, §8.3 |
@@ -2465,6 +2580,7 @@ label.
 | `packages/api/src/course-geometry.ts` | the lengths writer (§4.1): `editorCourseLayer`, `hasPositionedItems`, `legDistancesMm`, `loadCourseSequences`, `rebuildCourseLengths` |
 | `packages/api/src/event-map-objects.ts` | cut features (§4.2): `loadEventCutFeatures` over the pinned document (`map-store/event-document.ts`) |
 | `packages/api/src/course-import-structure.ts`, `course-import-objects.ts` | §6.4: pieces → gaps and the object bodies (pure), writing import-marked objects; `routers/course.ts` `importCourses` (the backfill and its CLI went in E6) |
+| `packages/api/src/course-import-plan.ts`, `course-import-tx.ts`; `packages/web/src/lib/course-import-consequences.ts` | §6.4 "Import semantics": the shared plan (matching, refusals, per-mode consequences, class pre-selection), the import's transaction wrapper, the dialog's consequence lines |
 
 | `packages/shared/src/course/structure.ts` | §6.1: `courseStructureSchema`, `courseStructureWireSchema`, `structureSiteIssues`, `linearStructure`, `structureControlIds`, `structureDiff` |
 | `packages/shared/src/course/sequence.ts` (G13) | §6.2: `splitStructure`, `courseSequenceOf` (the readers' rule, E6), `rowKind`, `crossingRowsOf` — pure, read by the print pipeline's layout half too (`course-print.md` §1) |
@@ -2484,6 +2600,13 @@ label.
 
 ## Pending in this chapter
 
+- **All-variations numbers and the editor's predicate count placed controls only** (`allVariationNumbers` in `resolve-sheet.ts`, `variation-view.ts`), so they differ from §3.5's numbers (which count an unplaced control) for a course that has one (CRS-024 follow-up).
+
+- **Course import, beyond package 17** (§6.4 "Import semantics"): a
+  "which race?" picker for a multi-race IOF file (refused today); rename
+  detection (a renamed course or a changed code is new); clearing the own
+  course of a runner on a removed non-variant course (counted in the
+  preview, not cleared); `docs/bugfixes/course-import-followups.md`.
 - **Viewer sheet objects and appearance**: the viewer draws the course
   objects in scope (§8.3) but no sheet's layout objects and the spec
   appearance; a sheet's objects and template appearance on the map are

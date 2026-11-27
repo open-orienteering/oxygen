@@ -35,6 +35,7 @@ import {
   createControlAnchors,
   buildControlOrdinals,
 } from "../lib/structured-search/anchors/control-anchors";
+import { runBackupFlow } from "../lib/backup-readout";
 import { ControlStatusHelp } from "../components/ControlStatusHelp";
 
 // ─── Types ────────────────────────────────────────────────
@@ -1519,6 +1520,8 @@ interface ReadoutResult {
   error?: string;
   poweredOff?: boolean;
   cleared?: boolean;
+  /** Shown under the row, e.g. slots that were not decoded (nothing was cleared). */
+  warning?: string;
   timestamp: Date;
 }
 
@@ -1538,6 +1541,10 @@ function ReadoutPanel({
   const [autoMode, setAutoMode] = useState(false);
   const [autoPowerOff, setAutoPowerOff] = useState(false);
   const [autoClear, setAutoClear] = useState(false);
+  // Slots the last read could not decode. Manual "Clear memory" asks first
+  // while this is above zero: the clear would destroy the only copy.
+  const [lastSkippedCount, setLastSkippedCount] = useState(0);
+  const [confirmClear, setConfirmClear] = useState(false);
 
   // Restore direct mode on unmount (navigation away, panel toggle, etc.)
   useEffect(() => {
@@ -1569,94 +1576,103 @@ function ReadoutPanel({
     reader: ReturnType<typeof getReaderConnection>,
     stationData: { stationCode: number; batteryVoltage: number; serialNo: number; rawData: Uint8Array },
   ) => {
+    setConfirmClear(false);
     const code = stationData.stationCode;
 
-    // Read backup memory first. The result's `mode` tells us whether this is
+    // The read -> import -> clear decision lives in runBackupFlow: the station
+    // is erased only after a complete read, a decoded record for every slot
+    // and a successful import. The result's `mode` tells us whether this is
     // a control station (look up the control and import punches) or a
     // readout station (stage the parsed card readouts for the BackupPunches
     // page's Card readouts tab; no control-code match needed).
-    const backup = await reader.readBackupMemory(stationData.rawData);
-
-    let newPunches = 0;
-    let punchCount = 0;
-    let duplicates = 0;
-    let cleared = false;
     let poweredOff = false;
+    const flow = await runBackupFlow({
+      read: () => reader.readBackupMemory(stationData.rawData),
+      autoClear,
+      clear: () => reader.clearBackupMemory(),
+      importBackup: async (backup) => {
+        if (backup.mode === "readout") {
+          // Each record carries a full card image; we ship them to the server
+          // which stages them in `card_readout_backups` for review.
+          const records = backup.records.map((r) => ({
+            slotAddress: r.slotAddress,
+            cardNo: r.card.cardNumber,
+            cardType: r.card.cardType,
+            punches: r.card.punches.map((p) => ({
+              controlCode: p.controlCode,
+              // SI card times are seconds-since-midnight; the server stores
+              // punches in deciseconds (same unit as live storeReadout).
+              time: p.time * 10,
+            })),
+            startTime: r.card.startTime != null ? r.card.startTime * 10 : null,
+            finishTime: r.card.finishTime != null ? r.card.finishTime * 10 : null,
+            checkTime: r.card.checkTime != null ? r.card.checkTime * 10 : null,
+            clearTime: r.card.clearTime != null ? r.card.clearTime * 10 : null,
+            ownerData: r.card.ownerData
+              ? (r.card.ownerData as unknown as Record<string, unknown>)
+              : undefined,
+            rawBytesHex: Array.from(r.rawBytes)
+              .map((b) => b.toString(16).padStart(2, "0"))
+              .join(""),
+          }));
+          let inserted = 0;
+          let duplicates = 0;
+          if (records.length > 0) {
+            const result = await importReadoutBackupsMutation.mutateAsync({
+              stationSerial: stationData.serialNo,
+              records,
+            });
+            inserted = result.inserted;
+            duplicates = result.duplicates;
+          }
+          return { punchCount: records.length, newPunches: inserted, duplicates };
+        }
 
-    if (backup.mode === "readout") {
-      // Readout-station backup recovery. Each record carries a full card
-      // image; we ship them to the server which stages them in
-      // `card_readout_backups` for review on the Backup Punches page.
-      const records = backup.records.map((r) => ({
-        slotAddress: r.slotAddress,
-        cardNo: r.card.cardNumber,
-        cardType: r.card.cardType,
-        punches: r.card.punches.map((p) => ({
-          controlCode: p.controlCode,
-          // SI card times are seconds-since-midnight; the server stores
-          // punches in deciseconds (same unit as live storeReadout).
-          time: p.time * 10,
-        })),
-        startTime: r.card.startTime != null ? r.card.startTime * 10 : null,
-        finishTime: r.card.finishTime != null ? r.card.finishTime * 10 : null,
-        checkTime: r.card.checkTime != null ? r.card.checkTime * 10 : null,
-        clearTime: r.card.clearTime != null ? r.card.clearTime * 10 : null,
-        ownerData: r.card.ownerData
-          ? (r.card.ownerData as unknown as Record<string, unknown>)
-          : undefined,
-        rawBytesHex: Array.from(r.rawBytes)
-          .map((b) => b.toString(16).padStart(2, "0"))
-          .join(""),
-      }));
-      punchCount = records.length;
-      if (records.length > 0) {
-        const result = await importReadoutBackupsMutation.mutateAsync({
-          stationSerial: stationData.serialNo,
-          records,
+        // Control-mode backup: look up the control by its station code first.
+        const matchedControl = controls.find((c) => {
+          const codes = c.codes.split(";").map((s) => parseInt(s.trim(), 10));
+          return codes.includes(code);
         });
-        newPunches = result.inserted;
-        duplicates = result.duplicates;
-      }
-      // Clear / power-off are still wired but skip the control-side actions.
-      if (autoClear) {
-        try {
-          await reader.clearBackupMemory();
-          cleared = true;
-        } catch {
-          console.warn("Failed to clear backup memory after read");
+        if (!matchedControl) return null;
+
+        const records = backup.records;
+        let newPunches = 0;
+        if (records.length > 0) {
+          const punches = records.map((r) => ({
+            cardNo: r.cardNo,
+            punchTime: r.punchTimeSecs * 10, // seconds → deciseconds for MeOS
+            punchDatetime: r.punchDatetime,
+            subSecond: r.subSecond,
+          }));
+          const result = await new Promise<{ count: number }>((resolve, reject) => {
+            importMutation.mutate(
+              { controlId: matchedControl.id, stationSerial: stationData.serialNo, punches },
+              { onSuccess: resolve, onError: reject },
+            );
+          });
+          newPunches = result.count;
         }
-      }
-      if (beep) {
-        await reader.beep(1);
-      }
-      if (autoPowerOff) {
-        try {
-          await reader.powerOffStation();
-          poweredOff = true;
-        } catch {
-          // Ignore
-        }
-      }
+        return { punchCount: records.length, newPunches, duplicates: 0 };
+      },
+    });
+
+    if (flow.outcome === "incomplete") {
+      // A page was missing: what arrived is not the whole record, so nothing
+      // is imported and nothing is cleared. Marking the serial as seen keeps
+      // auto mode from re-reading the same station in a loop; reading it
+      // again by hand stays possible.
       lastReadSerial.current = stationData.serialNo;
       setResults((prev) => [{
-        code, punchCount, newPunches, duplicates,
+        code, punchCount: 0, newPunches: 0,
         batteryVoltage: stationData.batteryVoltage,
-        success: true,
-        mode: "readout" as const,
-        poweredOff,
-        cleared,
+        success: false,
+        error: t("backupReadIncomplete", { address: flow.error.address.toString(16) }),
         timestamp: new Date(),
       }, ...prev].slice(0, 20));
       return;
     }
-
-    // Control-mode backup: look up the control by its station code first.
-    const matchedControl = controls.find((c) => {
-      const codes = c.codes.split(";").map((s) => parseInt(s.trim(), 10));
-      return codes.includes(code);
-    });
-
-    if (!matchedControl) {
+    if (flow.outcome === "import-failed") throw flow.error;
+    if (flow.outcome === "not-imported") {
       // Mark this serial as "seen" so the auto-poll loop doesn't keep
       // emitting the same error on every probe cycle.
       lastReadSerial.current = stationData.serialNo;
@@ -1669,43 +1685,16 @@ function ReadoutPanel({
       return;
     }
 
-    // Control-mode backup: existing punch-import path.
-    const records = backup.records;
-    punchCount = records.length;
-    if (records.length > 0) {
-      const punches = records.map((r) => ({
-        cardNo: r.cardNo,
-        punchTime: r.punchTimeSecs * 10, // seconds → deciseconds for MeOS
-        punchDatetime: r.punchDatetime,
-        subSecond: r.subSecond,
-      }));
-
-      const result = await new Promise<{ count: number }>((resolve, reject) => {
-        importMutation.mutate(
-          { controlId: matchedControl.id, stationSerial: stationData.serialNo, punches },
-          { onSuccess: resolve, onError: reject },
-        );
-      });
-      newPunches = result.count;
-    }
-
-    // Clear backup memory after read (if auto-clear is enabled)
-    if (autoClear) {
-      try {
-        await reader.clearBackupMemory();
-        cleared = true;
-      } catch {
-        console.warn("Failed to clear backup memory after read");
-      }
-    }
-
-    // Beep
+    const skippedCount = flow.skippedSlots.length;
+    setLastSkippedCount(skippedCount);
+    setConfirmClear(false);
     if (beep) {
-      await reader.beep(1);
+      // Three beeps instead of the success beep when slots were not decoded.
+      await reader.beep(skippedCount > 0 ? 3 : 1);
     }
-
-    // Power off if enabled
-    if (autoPowerOff) {
+    // A station that was read with undecoded slots stays on so the operator
+    // sees the warning and the card data is not lost to a power cycle.
+    if (autoPowerOff && skippedCount === 0) {
       try {
         await reader.powerOffStation();
         poweredOff = true;
@@ -1713,18 +1702,24 @@ function ReadoutPanel({
         // Ignore power-off failure
       }
     }
-
     lastReadSerial.current = stationData.serialNo;
 
     setResults((prev) => [{
       code,
-      punchCount,
-      newPunches,
+      punchCount: flow.imported.punchCount,
+      newPunches: flow.imported.newPunches,
+      ...(flow.backup.mode === "readout" ? { duplicates: flow.imported.duplicates } : {}),
       batteryVoltage: stationData.batteryVoltage,
       success: true,
-      mode: "control" as const,
+      mode: flow.backup.mode,
       poweredOff,
-      cleared,
+      cleared: flow.cleared,
+      warning: skippedCount > 0
+        ? t("backupSlotsSkipped", {
+            count: skippedCount,
+            addresses: flow.skippedSlots.map((s) => `0x${s.slotAddress.toString(16)}`).join(", "),
+          })
+        : undefined,
       timestamp: new Date(),
     }, ...prev].slice(0, 20));
   }, [controls, beep, autoPowerOff, autoClear, importMutation, importReadoutBackupsMutation, t]);
@@ -1812,12 +1807,18 @@ function ReadoutPanel({
     };
   }, [autoMode, connected, getReaderConnection, readStation]);
 
-  const handleClearMemory = async () => {
+  const handleClearMemory = async (confirmed = false) => {
+    if (lastSkippedCount > 0 && !confirmed) {
+      setConfirmClear(true);
+      return;
+    }
+    setConfirmClear(false);
     try {
       const reader = getReaderConnection();
       setBusy(true);
       setError(null);
       await reader.clearBackupMemory();
+      setLastSkippedCount(0);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Clear failed");
     } finally {
@@ -1878,7 +1879,7 @@ function ReadoutPanel({
                 {busy ? t("reading") : t("readLocalMemory")}
               </button>
               <button
-                onClick={handleClearMemory}
+                onClick={() => handleClearMemory()}
                 disabled={busy || autoMode}
                 className="px-3 py-1.5 text-sm bg-orange-600 text-white rounded-lg hover:bg-orange-700 disabled:opacity-50 cursor-pointer"
               >
@@ -1947,17 +1948,38 @@ function ReadoutPanel({
         <div className="text-sm text-red-600 bg-red-50 px-3 py-2 rounded-lg mb-3">{error}</div>
       )}
 
+      {confirmClear && (
+        <div role="alertdialog" aria-label={t("clearAnyway")} className="text-sm text-amber-900 bg-amber-50 border border-amber-300 px-3 py-2 rounded-lg mb-3">
+          <p className="mb-2">{t("clearSkippedConfirm", { count: lastSkippedCount })}</p>
+          <div className="flex gap-2">
+            <button
+              onClick={() => handleClearMemory(true)}
+              disabled={busy || autoMode}
+              className="px-3 py-1 text-sm bg-orange-600 text-white rounded-lg hover:bg-orange-700 cursor-pointer"
+            >
+              {t("clearAnyway")}
+            </button>
+            <button
+              onClick={() => setConfirmClear(false)}
+              className="px-3 py-1 text-sm bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300 cursor-pointer"
+            >
+              {t("cancel")}
+            </button>
+          </div>
+        </div>
+      )}
+
       {results.length > 0 && (
         <div className="space-y-1.5 max-h-48 overflow-y-auto">
           {results.map((r, i) => (
             <div
               key={i}
               className={`flex items-center justify-between px-3 py-2 rounded-lg text-sm ${
-                r.success ? "bg-white" : "bg-red-50"
+                !r.success ? "bg-red-50" : r.warning ? "bg-amber-50" : "bg-white"
               }`}
             >
               <div className="flex items-center gap-2">
-                <span className={`w-2 h-2 rounded-full ${r.success ? "bg-green-500" : "bg-red-500"}`} />
+                <span className={`w-2 h-2 rounded-full ${!r.success ? "bg-red-500" : r.warning ? "bg-amber-500" : "bg-green-500"}`} />
                 {r.code > 0 && <span className="font-mono font-bold">{r.code}</span>}
                 {r.success ? (
                   r.code === 0 && r.cleared ? (
@@ -1979,6 +2001,7 @@ function ReadoutPanel({
                 ) : (
                   <span className="text-red-600">{r.error}</span>
                 )}
+                {r.warning && <span className="text-amber-700 font-medium">{r.warning}</span>}
               </div>
               <div className="flex items-center gap-3 text-xs text-slate-500">
                 <span className={`font-mono ${r.batteryVoltage < 2.5 ? "text-red-600 font-bold" : ""}`}>

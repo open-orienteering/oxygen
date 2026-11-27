@@ -10,8 +10,12 @@ import { trpc } from "../lib/trpc";
  *
  * Data is refreshed automatically by useExternalChanges polling when online.
  */
-export function useStationSync(enabled: boolean) {
+export function useStationSync(enabled: boolean, opts?: { runnerDb?: boolean }) {
   const utils = trpc.useUtils();
+  // The runner directory dump is personal data behind `race.operate`
+  // (docs/system/authentication.md); a kiosk key does not carry it and the
+  // kiosk looks cards up through `race.lookupByCard`, so it opts out.
+  const runnerDb = enabled && opts?.runnerDb !== false;
 
   // Pre-fetch all critical data on mount
   useEffect(() => {
@@ -34,10 +38,12 @@ export function useStationSync(enabled: boolean) {
       staleTime: 60_000,
     });
     // Runner DB for offline registration autocomplete (~9 MB, rarely changes)
-    utils.eventor.runnerDbDump.prefetch(undefined, {
-      staleTime: 10 * 60_000, // 10 min — only re-fetches if user stays on page
-    });
-  }, [enabled, utils]);
+    if (runnerDb) {
+      utils.eventor.runnerDbDump.prefetch(undefined, {
+        staleTime: 10 * 60_000, // 10 min — only re-fetches if user stays on page
+      });
+    }
+  }, [enabled, runnerDb, utils]);
 
   // Keep queries with long gcTime so they survive in persisted cache
   // These queries run with gcTime: Infinity on station pages
@@ -67,7 +73,7 @@ export function useStationSync(enabled: boolean) {
     gcTime: Infinity,
   });
   trpc.eventor.runnerDbDump.useQuery(undefined, {
-    enabled,
+    enabled: runnerDb,
     staleTime: 10 * 60_000,
     gcTime: Infinity,
   });

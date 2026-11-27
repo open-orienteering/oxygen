@@ -17,6 +17,15 @@ import {
 } from "../helpers/test-db.js";
 import { makeCaller } from "../helpers/caller.js";
 
+/** Preview, then apply exactly what was previewed (draw.execute needs the seed and token). */
+async function applyDraw(
+  c: ReturnType<typeof makeCaller>,
+  input: Parameters<ReturnType<typeof makeCaller>["draw"]["preview"]>[0],
+) {
+  const preview = await c.draw.preview(input);
+  return c.draw.execute({ ...input, seed: preview.seed, previewToken: preview.previewToken });
+}
+
 let ctx: TestEventContext;
 let caller: ReturnType<typeof makeCaller>;
 let classSeq: number;
@@ -408,7 +417,7 @@ describe("draw.execute → start.adjusted", () => {
     const before = await ctx.db.journalEntry.count({
       where: { eventId: ctx.eventId, type: "start.adjusted" },
     });
-    const res = await caller.draw.execute({
+    const res = await applyDraw(caller, {
       classes: [{ classId: drawCls.id, method: "random", interval: 600 }],
       settings: {
         firstStart: 360000,
@@ -430,9 +439,11 @@ describe("draw.execute → start.adjusted", () => {
       take: 3,
     });
     for (const e of entries) {
-      const p = e.payload as { cardNo: number; startTime: number };
+      const p = e.payload as { cardNo: number; startTime: number; startNo: number };
       expect(cards).toContain(p.cardNo);
       expect(p.startTime).toBeGreaterThanOrEqual(360000);
+      // RES-17: the start number travels with the start time.
+      expect(p.startNo).toBeGreaterThan(0);
     }
   });
 });

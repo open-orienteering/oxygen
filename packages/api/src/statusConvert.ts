@@ -9,6 +9,7 @@
  * numeric for the existing web clients.
  */
 
+import { z } from "zod";
 import {
   RunnerStatus,
   ControlStatus,
@@ -78,4 +79,20 @@ export function controlStatusToValue(s: PgControlStatus): ControlStatusValue {
 /** Numeric ControlStatus constant → PG enum. */
 export function valueToControlStatus(v: number): PgControlStatus {
   return controlValueToEnum[v] ?? "ok";
+}
+
+/**
+ * Wire schema for a numeric runner status: an integer that is one of the
+ * `RunnerStatus` constants. Anything else (7, 999) is refused instead of being
+ * stored as "unknown" by `valueToRunnerStatus` (RES-24 / API-13).
+ */
+const RUNNER_STATUS_VALUES: ReadonlySet<number> = new Set(Object.values(RunnerStatus));
+export const runnerStatusValueSchema = z
+  .number()
+  .int()
+  .refine((v) => RUNNER_STATUS_VALUES.has(v), { message: "Unknown runner status" });
+
+/** True when `v` is one of the `RunnerStatus` constants. */
+export function isRunnerStatusValue(v: unknown): v is RunnerStatusValue {
+  return typeof v === "number" && RUNNER_STATUS_VALUES.has(v);
 }
