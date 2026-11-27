@@ -281,6 +281,8 @@ function parseRecord(txt: string, courses: Map<string, any>, classes: any[], leg
 
 export function parseOCDCourseData(fileData: Buffer): ParsedOCDCourseData {
     if (fileData.length < 16) throw new Error("File too small");
+    // OCAD's magic word 0x0CAD: anything else is not an OCAD file (course-layer.md §6.4).
+    if (fileData.readUInt16LE(0) !== 0x0cad) throw new Error("Not an OCAD file");
     const version = fileData.readUInt16LE(4);
     const objIndexOffset = fileData.readUInt32LE(12);
     const textRecs = parseTextRecords(fileData, version);

@@ -45,6 +45,7 @@ Notes whose code no longer exists (mostly the raster tile pipeline, deleted in s
 
 | Note | Added |
 | --- | --- |
+| [An empty or wrong course file wiped the event's courses; re-import reset control settings](course-import-safety.md) (follow-ups: [course-import-followups.md](course-import-followups.md)) | 2026-11-26 |
 | [Two prints a second apart hashed differently with the same drawing](printed-drawing-hash.md) | 2026-11-17 |
 | [An image course object printed without its graphic](course-object-image-print.md) | 2026-11-13 |
 | [The toner saver let text and out-of-bounds areas show outside it](toner-saver-draw-order.md) | 2026-11-07 |

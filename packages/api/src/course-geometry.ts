@@ -267,7 +267,7 @@ export async function rebuildCourseLengths(
   db: Db,
   eventId: bigint,
   courseUuids: string[],
-  opts: { updateLength?: boolean } = {},
+  opts: { updateLength?: boolean; keepSource?: boolean } = {},
 ): Promise<void> {
   if (courseUuids.length === 0) return;
   const updateLength = opts.updateLength ?? true;
@@ -283,8 +283,10 @@ export async function rebuildCourseLengths(
       // The length provenance the export and the Eventor sync read
       // (course-controls-and-matching.md "Course length"): an edited
       // course's length is derived from its controls; one with no
-      // positioned control has neither.
-      lengthSource: hasPositionedItems(layer) ? "derived" : null,
+      // positioned control has neither. `keepSource`: only the legs are
+      // re-derived and the stored length keeps its provenance (an import
+      // whose file states no length, course-layer.md §6.4).
+      ...(opts.keepSource ? {} : { lengthSource: hasPositionedItems(layer) ? "derived" : null }),
     };
     // Free-order courses have no meaningful legs — leave lengthM / legs
     // alone (the organiser sets length manually). Ordered courses keep

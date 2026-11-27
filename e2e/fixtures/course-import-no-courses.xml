@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Synthetic: controls but no courses, as a map-only export (course-import-safety.spec.ts). -->
+<CourseData xmlns="http://www.orienteering.org/datastandard/3.0" iofVersion="3.0">
+  <RaceCourseData>
+    <Map><Scale>10000</Scale></Map>
+    <Control><Id>31</Id><MapPosition x="10" y="0"/></Control>
+    <Control><Id>32</Id><MapPosition x="20" y="0"/></Control>
+  </RaceCourseData>
+</CourseData>

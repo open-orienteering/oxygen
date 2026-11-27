@@ -15,6 +15,7 @@ function ocdWithScaleParameter(scale: number): Buffer {
   // Real maps often put parameter 1039 well beyond byte 50,000. The old
   // parser searched only the first 50 kB and silently fell back to 1:7500.
   const buf = Buffer.alloc(60_000);
+  buf.writeUInt16LE(0x0cad, 0); // OCAD magic
   buf.writeUInt16LE(12, 4); // OCAD version
   buf.writeUInt32LE(64, 32); // first string-parameter index block
   // Block next pointer is already zero. First 16-byte entry starts at 68.
@@ -34,8 +35,15 @@ describe("parseOCDCourseData map scale", () => {
 
   it("keeps the legacy fallback when the file has no scale parameter", () => {
     const buf = Buffer.alloc(64);
+    buf.writeUInt16LE(0x0cad, 0);
     buf.writeUInt16LE(12, 4);
     expect(parseOCDCourseData(buf).mapScale).toBe(7500);
+  });
+
+  it("refuses a file without the OCAD magic word", () => {
+    const buf = Buffer.alloc(64);
+    buf.writeUInt16LE(12, 4);
+    expect(() => parseOCDCourseData(buf)).toThrow("Not an OCAD file");
   });
 });
 
@@ -79,6 +87,7 @@ function syntheticCourseFile(): Buffer {
   const stringParam = Buffer.from("Gapped\tsSTA1\tfFIN1\tc71\tc72\tmT1", "utf8");
 
   const buf = Buffer.alloc(4096);
+  buf.writeUInt16LE(0x0cad, 0); // OCAD magic
   buf.writeUInt16LE(12, 4);
   const stringIndex = 256, objIndex = 512;
   buf.writeUInt32LE(objIndex, 12);

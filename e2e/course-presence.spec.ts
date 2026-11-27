@@ -75,9 +75,8 @@ test.beforeAll(async ({ browser }) => {
     await page.getByRole("button", { name: "Browse files" }).click();
     await (await importChooser).setFiles("e2e/test.ocd");
     await expect(page.getByText("Courses and Class Assignments")).toBeVisible({ timeout: 20000 });
-    await page.getByRole("button", { name: "Öppen 1" }).click();
-    await page.getByRole("row", { name: /^E / }).getByRole("button", { name: "— Skip —", exact: true }).click();
-    await page.getByTestId("course-import-replace-all").uncheck();
+    // Merge (the default) adds the file's courses beside the seed ones; a
+    // substring guess ("E" → "Öppen 1") is never pre-selected.
     await page.getByRole("button", { name: "Import 5 courses" }).click();
     await expect(page.getByText("Import Complete")).toBeVisible({ timeout: 15000 });
     await page.getByRole("button", { name: "Done" }).click();
