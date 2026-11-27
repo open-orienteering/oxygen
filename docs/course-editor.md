@@ -383,7 +383,8 @@ one this client's own writes reached from it (`EditorWrites.guarded`):
   cascades out of every course that visits it. The undo is skipped when a
   course other than the entry's own (or one of its variants, F7) visits
   it now (from the last `course.list`; a row stale behind this client's
-  newer token is not read, and a variant is judged by its root,
+  newer token is not read, nor a variant while its root's row is stale;
+  a variant of the entry's own course is not another course,
   `createdControlElsewhere`).
 - **Skipped**: nothing of the entry is written; the entry and every
   other entry, undo or redo, that wrote the same row are dropped; the

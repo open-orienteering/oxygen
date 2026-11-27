@@ -65,15 +65,14 @@ export interface ListedCourse {
  * delete cascades out of every course visiting it, so the undo is skipped when a course other than the entry's own
  * visits it now. A row of the last polled list counts unless it is stale behind this client's newer token (`book`
  * holds another token: this client wrote the course since, an undo a moment ago included). A variant (F7) is judged
- * by its root, which the server writes it with: never counted under the entry's own course, nor while the root's
- * row is stale or its token this client's own (`own`). @returns the course that blocks the undo, if any.
+ * by its root, which the server writes it with: a variant of the entry's own course is not another course, and a
+ * variant is not read while its root's row is stale. @returns the course that blocks the undo, if any.
  */
 export function createdControlElsewhere(
   courses: readonly ListedCourse[],
   controlId: number,
   courseId: number | null,
   book: (courseId: number) => string | undefined,
-  own: ReadonlySet<string>,
 ): ListedCourse | undefined {
   const byId = new Map(courses.map((c) => [c.id, c]));
   const stale = (c: ListedCourse) => { const v = book(c.id); return v !== undefined && v !== c.version; };
@@ -84,7 +83,7 @@ export function createdControlElsewhere(
     if (c.parentCourseId != null) {
       if (c.parentCourseId === courseId) return false;
       const root = byId.get(c.parentCourseId);
-      if (root && (stale(root) || own.has(root.version))) return false;
+      if (root && stale(root)) return false;
     }
     return true;
   });

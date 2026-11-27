@@ -257,7 +257,7 @@ export function EditorPage() {
    */
   const onlyIn = useCallback((id: number, courseId: number | null) => {
     // The rule (the list's row stale behind this client's newer token, variants judged by their root): `undo-guard.ts`.
-    const other = createdControlElsewhere(latestCourses.current, id, courseId, (c) => writes.versions.get("course", c), writes.ownCourseVersions);
+    const other = createdControlElsewhere(latestCourses.current, id, courseId, (c) => writes.versions.get("course", c));
     // Skipped as the control's undo: the other course's own entries stay.
     if (other) throw new UndoSkipped("control", id);
   }, [writes]);

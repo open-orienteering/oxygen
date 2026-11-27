@@ -41,22 +41,21 @@ describe("createdControlElsewhere: the created-control undo rule (D6)", () => {
 
   it("another course visiting it blocks the undo, even after this client's own edit of that course", () => {
     const list = [c(1, "5", "45"), c(2, "9", "31;45")];
-    expect(createdControlElsewhere(list, 45, 1, book({ 1: "5", 2: "9" }), new Set())?.id).toBe(2);
-    // Kort's token is this client's own (an edit and its undo since Anna added 45): still blocks.
-    expect(createdControlElsewhere(list, 45, 1, book({ 1: "5", 2: "9" }), new Set(["9"]))?.id).toBe(2);
+    // Also when Kort's token is this client's own (an edit and its undo since Anna added 45): no own-token exemption.
+    expect(createdControlElsewhere(list, 45, 1, book({ 1: "5", 2: "9" }))?.id).toBe(2);
   });
 
   it("a row stale behind this client's newer token is not read (its own undo removed the visit)", () => {
-    expect(createdControlElsewhere([c(2, "9", "45")], 45, null, book({ 2: "10" }), new Set(["10"]))).toBeUndefined();
+    expect(createdControlElsewhere([c(2, "9", "45")], 45, null, book({ 2: "10" }))).toBeUndefined();
   });
 
   it("a variant is judged by its root: the entry's own course, a stale root or an own root token do not block", () => {
     const list = [c(1, "5", "45"), c(7, "3", "45", 1)];
-    expect(createdControlElsewhere(list, 45, 1, book({ 1: "5", 7: "3" }), new Set())).toBeUndefined();
+    expect(createdControlElsewhere(list, 45, 1, book({ 1: "5", 7: "3" }))).toBeUndefined();
     // A free control appended to a course with variations, then undone quickly: root 1 is own / stale, list not refetched.
-    expect(createdControlElsewhere([c(1, "5", ""), c(7, "3", "45", 1)], 45, null, book({ 1: "6", 7: "3" }), new Set(["6"]))).toBeUndefined();
-    expect(createdControlElsewhere([c(1, "6", ""), c(7, "3", "45", 1)], 45, null, book({ 1: "6", 7: "3" }), new Set(["6"]))).toBeUndefined();
-    // Someone else's root with a variant visiting it blocks.
-    expect(createdControlElsewhere([c(1, "6", ""), c(7, "3", "45", 1)], 45, null, book({ 1: "6", 7: "3" }), new Set())?.id).toBe(7);
+    expect(createdControlElsewhere([c(1, "5", ""), c(7, "3", "45", 1)], 45, null, book({ 1: "6", 7: "3" }))).toBeUndefined();
+    // The root's row is current: a variant listing it means the course visits it now (a non-first alternative,
+    // which the root's `controls` does not list), even when the root's token is this client's own.
+    expect(createdControlElsewhere([c(2, "6", ""), c(7, "3", "45", 2)], 45, null, book({ 2: "6", 7: "3" }))?.id).toBe(7);
   });
 });
