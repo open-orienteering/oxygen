@@ -11,7 +11,7 @@ import { PDFArray, PDFDocument, PDFName, PDFRawStream, decodePDFRawStream } from
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { defaultMapAppearance } from "../../course-maps/schema.js";
 import { resolveSheet, type SheetInput } from "../../course-maps/resolve-sheet.js";
-import { type PrintFonts, documentPaperFrame, pageInputFor, renderCoursePages, svgRasterBox } from "../course-pages.js";
+import { PrintGraphicMissingError, type PrintFonts, documentPaperFrame, pageInputFor, renderCoursePages, svgRasterBox } from "../course-pages.js";
 import { type PreparedDocument, prepareDocument } from "../prepared-document.js";
 import { bundledFontsForTest, printDocumentBytes } from "./print-document.js";
 
@@ -128,6 +128,46 @@ describe("renderCoursePages (shared)", () => {
     expect(out.warnings).toHaveLength(2);
     expect(out.warnings[1]).toMatch(/^A: .*IMAGE_MISSING/);
     expect(await imageCount(out.bytes)).toBe(0);
+  });
+});
+
+describe("a graphic that stands in for a control (CRS-010)", () => {
+  /** A map-layer image attached to control c31, with `props` on top of the graphic id. */
+  const withObjects = (objects: unknown[]): SheetInput => {
+    const base = sheet("A");
+    return { ...base, course: { ...base.course, objects } as SheetInput["course"] };
+  };
+  const hatch = (props: Record<string, unknown>, attach: unknown = { controlId: "c31", at: { x: -10, y: 5 } }) => ({
+    id: "h", kind: "image", geometry: [{ x: -15, y: 0 }, { x: -5, y: 10 }], props: { graphicId: 9, ...props }, ...(attach ? { attach } : {}),
+  });
+  const run = (sheets: SheetInput[], graphics?: Map<number, { mime: "image/png" | "image/svg+xml"; data: Uint8Array }>) =>
+    renderCoursePages({ document: doc, sheets, fonts, graphics, deterministic: true });
+
+  it("fails the print when a hiding image has no bytes, naming the control", async () => {
+    const err = await run([withObjects([hatch({ hideControlCircle: true })])]).catch((e) => e);
+    expect(err).toBeInstanceOf(PrintGraphicMissingError);
+    expect(err.message).toMatch(/^A: graphic 9 could not be loaded and it replaces the circle or number of control 31;/);
+    await expect(run([withObjects([hatch({ hideControlNumber: true })])])).rejects.toBeInstanceOf(PrintGraphicMissingError);
+  });
+
+  it("fails for an SVG without a rasteriser, with the reason", async () => {
+    const err = await run([withObjects([hatch({ hideControlCircle: true })])], new Map([[9, { mime: "image/svg+xml", data: SVG }]])).catch((e) => e);
+    expect(err).toBeInstanceOf(PrintGraphicMissingError);
+    expect(err.message).toContain("no SVG rasteriser");
+  });
+
+  it("still warns for the same image without hide flags, a page logo, and a free image with the flags", async () => {
+    for (const objects of [[hatch({})], [hatch({ hideControlCircle: true }, null)]]) {
+      const out = await run([withObjects(objects)]);
+      expect(out.warnings.some((w) => w.includes("IMAGE_MISSING"))).toBe(true);
+    }
+    const out = await run([sheet("A", [logo(5)])]);
+    expect(out.warnings.some((w) => w.includes("IMAGE_MISSING"))).toBe(true);
+  });
+
+  it("prints when the hiding image's bytes are there", async () => {
+    const out = await run([withObjects([hatch({ hideControlCircle: true })])], new Map([[9, { mime: "image/png", data: PNG }]]));
+    expect(out.pageCount).toBe(1);
   });
 });
 

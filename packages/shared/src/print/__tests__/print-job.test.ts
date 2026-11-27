@@ -8,7 +8,7 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { defaultMapAppearance } from "../../course-maps/schema.js";
 import { resolveSheet, type SheetInput } from "../../course-maps/resolve-sheet.js";
-import { type PrintFonts, renderCoursePages, svgRasterBox } from "../course-pages.js";
+import { PrintGraphicMissingError, type PrintFonts, renderCoursePages, svgRasterBox } from "../course-pages.js";
 import { PRINT_JOB_VERSION, type PrintJob, type PrintJobHost, renderPrintJob } from "../print-job.js";
 import { type PrintPatch, prepareDocument } from "../prepared-document.js";
 import { mapPatchSchema } from "../../map-document/index.js";
@@ -113,6 +113,16 @@ describe("renderPrintJob (§8.5)", () => {
     expect(out.warnings[0]).toBe("A: SVG_RASTER: graphic 8: offline");
     expect(out.warnings.filter((w) => /IMAGE_MISSING: graphic 7/.test(w))).toHaveLength(1);
     expect(out.warnings.filter((w) => /IMAGE_MISSING: graphic 8/.test(w))).toHaveLength(1);
+  });
+
+  it("a hiding PNG the host cannot fetch fails the job (CRS-010)", async () => {
+    const base = sheet("A");
+    const hatch = { id: "h", kind: "image", geometry: [{ x: -15, y: 0 }, { x: -5, y: 10 }], props: { graphicId: 7, hideControlCircle: true }, attach: { controlId: "c31", at: { x: -10, y: 5 } } };
+    const withHatch = { ...base, course: { ...base.course, objects: [hatch] } } as SheetInput;
+    const graphic = vi.fn(async () => {
+      throw new Error("offline");
+    });
+    await expect(renderPrintJob(job([withHatch], [{ id: 7, mime: "image/png" }]), host({ graphic }))).rejects.toBeInstanceOf(PrintGraphicMissingError);
   });
 
   it("reads the document once per hash and refuses another job version", async () => {
