@@ -1006,6 +1006,8 @@ export const controlRouter = router({
         }
       }
 
+      /** The courses a kind change re-mirrored and their new tokens (the editor's own chain, docs/course-editor.md §3). */
+      const advanced: { id: number; version: string }[] = [];
       const version = await ctx.db.$transaction(async (tx) => {
         if (baseVersion !== undefined) {
           const now = await lockControlVersion(tx, c.id);
@@ -1070,13 +1072,21 @@ export const controlRouter = router({
           // leaves their structure, so their token too (G1).
           const rebuild = positionChanged ? dependent : [...remirrored];
           await rebuildCourseLengths(tx, ctx.event.id, rebuild);
+          // The re-mirrored courses' public ids, read once (the answer names them by seq).
+          const seqOf = new Map(
+            remirrored.size
+              ? (await tx.course.findMany({ where: { id: { in: [...remirrored] } }, select: { id: true, seq: true } })).map((r) => [r.id, r.seq])
+              : [],
+          );
           for (const courseId of rebuild) {
-            await emitCourseUpserted(tx, ctx.event.id, courseId, { advanceVersion: remirrored.has(courseId) });
+            const cv = await emitCourseUpserted(tx, ctx.event.id, courseId, { advanceVersion: remirrored.has(courseId) });
+            const seq = seqOf.get(courseId);
+            if (seq !== undefined) advanced.push({ id: seq, version: cv.toString() });
           }
         }
         return v;
       });
-      return { ok: true, version: version.toString() };
+      return { ok: true, version: version.toString(), courses: advanced };
     }),
 
   /**

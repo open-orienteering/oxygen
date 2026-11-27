@@ -310,3 +310,27 @@ describe("drain: in order, under G1's rules (docs/course-editor.md §3, §9)", (
     expect(f.calls).toHaveLength(1);
   });
 });
+
+describe("drain: bound to the editor's event (MC-17, CRS-015)", () => {
+  it("stops before the next entry once `active` says the editor left the event; the rest stay pending", async () => {
+    const store = memoryControlWriteStore();
+    await enqueue(store, EV, check(31, true));
+    await enqueue(store, EV, check(32, true));
+    await enqueue(store, EV, check(33, true));
+    const f = fakeWrites();
+    let here = true;
+    f.during(async () => { here = false; }); // the setter switches event while the first check-off is in flight
+    const r = await drain(store, f.writes, EV, { active: () => here });
+    expect(f.calls.map((c) => c.args[0])).toEqual([31]);
+    expect(r).toEqual({ sent: 1, conflicts: 0, failed: 0, stopped: true });
+    expect((await listOf(store)).map((e) => [e.controlId, e.status, !!e.sending])).toEqual([[32, "pending", false], [33, "pending", false]]);
+  });
+
+  it("sends nothing when the editor is not on the event when the drain starts", async () => {
+    const store = memoryControlWriteStore();
+    await enqueue(store, EV, check(31, true));
+    const f = fakeWrites();
+    expect(await drain(store, f.writes, EV, { active: () => false })).toMatchObject({ sent: 0, stopped: true });
+    expect(f.calls).toEqual([]);
+  });
+});

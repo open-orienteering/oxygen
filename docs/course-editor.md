@@ -269,6 +269,11 @@ change switches it off with the course.
 
 **One gesture, one write, one undo entry.** `UndoStack(50)` of inverse
 pairs; an entry whose undo / redo fails is dropped and the error shown.
+Undo and redo run one at a time in the order they were pressed (CRS-050):
+a held or double Ctrl+Z queues the second step behind the first, which
+picks its entry only once the first has settled, so the redo branch keeps
+the order of the undos. Whether an entry may run offline (§9) is asked
+when it is picked, not when the key was pressed.
 There is no save button: every write goes out as the gesture ends and the
 top bar's save indicator (§2; on a phone the sheet's peek line, §10)
 says *Saved* / *Saving…* / *Not saved* / *Changed elsewhere*.
@@ -290,10 +295,107 @@ different rows do not wait for each other.
 `course.setControlLabelOffset`, `course.create` / `clone` and
 `control.delete` take no token and seed the ones they return
 (`setControlLabelOffset` advances the course's token, so it queues as a
-course write). Map mode's
-`mapPatch.applyChange` / `setEnabled` (§13, `applyPatchChange`,
-`setPatchEnabled`) take none either: the patch merges per op id,
-last-writer-wins (`map-patches.md` §3.2).
+course write). Layout mode's sheet and template writes (`course-layout.md`
+§2) go through the same book and queue (`EditorWrites.writeRow`), one per
+row in flight (CRS-053). Map mode's
+`mapPatch.applyChange` / `setEnabled` / `attachUnresolved` (§13,
+`applyPatchChange`, `setPatchEnabled`, `attachUnresolvedPatch`) take none
+either: the patch merges per op id, last-writer-wins (`map-patches.md`
+§3.2). They still go one at a time (MAP-8), so their replies come in
+order, and the session's copy of the patch never takes an older version
+of the same document over a newer one (`setMapPatch`, §13).
+
+**Structure edits** run one at a time too (CRS-018): each is built
+only once the previous structure write has settled and the local
+structure holds its result, so a second edit made while the first is in
+flight builds on it instead of reverting it (`serialQueue`,
+`queuedEditAction` in `lib/editor/write-gate.ts`). An edit asked for on
+one course is dropped when another course is selected by its turn. An
+edit that names rows or legs by their place — a row's ✕ or ↑ / ↓, a
+leg's style or gaps, an insert at a place (a placement into a leg, a
+new control inserted there, a crossing point routed by its leg), *Create
+variation here* and a move into an alternative (a row index or a leg
+path) — is not applied when the structure changed between the click and
+its turn: the error line says "The course changed while your last edit
+was saving. Do it again." A control created for such a placement is
+deleted again, so doing it again leaves one control. An edit that names
+sites (append, remove a control, set a role) builds on the new structure
+as asked. A structure write is sent
+on the token of the structure it was built from (CRS-049) — the course
+detail's, or the local structure's — followed along this client's own
+writes, never on a newer token `course.list` seeded from someone else's
+write: that one is refused and becomes the structure conflict below.
+
+**Own chain** (`EditorWrites.noteOwn`, `chainEnd`, `stillMine`): each
+write this client makes links the token it was sent on to the token it
+produced. A token reached from an earlier one through these links only
+was written by nobody else since. A write that sends no token
+(`setControlLabelOffset`, `control.delete`'s cascade, `control.check`)
+links from the book's token as it is sent. Procedures that write other
+rows and answer their tokens are linked the same way (`adoptOwn`): a
+`control.update` kind change answers the courses it re-mirrored
+(`courses`), `mapTemplate.applyToCourses` the course sheets it moved
+(`sheets`), `layout.moveToSetter` / `adoptToSetters` their sheets.
+
+**Write gate** (`WriteGate`, `lib/editor/write-gate.ts`): ordinary writes
+(every `run`) go side by side; an undo or redo step runs alone, once
+every write asked for before it has settled, and holds back those asked
+for after it. The step picks its entry inside the gate, one macrotask
+after the gate is its own (`WriteGate.runStep`), so Ctrl+Z pressed while
+a gesture of one write is in flight undoes that gesture once it has
+settled and recorded its entry, not the one before it (a gesture of
+several holds, such as a create-and-place, see Pending). A structure edit is built and sent
+inside the gate, so an undo never replaces a structure while an edit is
+built on it, and the D6 guard of a step sees only the step's own writes.
+A write made inside a gated one (a structure edit's write, Map mode's
+follow-up after a patch write, an undo step's own writes) does not ask
+the gate again: it already holds it.
+
+**Undo after another editor's change** (D6, user 2026-11-24, review
+CRS-016). The undo list is this tab's own actions; an entry stores the
+rows its write produced tokens for and those tokens (`collect`). An undo
+or redo goes through only while each row is still at that token, or at
+one this client's own writes reached from it (`EditorWrites.guarded`):
+
+- **Courses, course objects, sheets and templates**: checked before
+  anything is written, so an entry of several rows (a bulk delete
+  restoring several courses, a create-and-insert) is all or nothing. The
+  write is then sent on the row's own-chain token, never the book's newer
+  one; a refusal (a change the poll had not seen) is never rebased. "The
+  same thing" is the whole course, the whole object, the whole sheet or
+  template: a bend at leg 2 blocks the undo of a placement at leg 9.
+- **Controls**: the server decides, field by field. The undo is skipped
+  when the other side changed a field the undo is about — a move undo's
+  position; any other undo's fields (a description undo's description) —
+  or the change is unknown (`differing: null`). Otherwise it goes through
+  on the server's token, leaving out the fields the other side changed:
+  a move undo restores the position and keeps a description changed
+  elsewhere; a change of a field the undo does not write (radio, a
+  check-off, a restore, this client's own included) never blocks it.
+  Such a pass links the control's own chain across the other write and
+  names the fields it changed there, so an older undo of the same
+  control follows it: one about those fields is skipped, any other goes
+  through and leaves them out too (two move undos across a description
+  change both restore their position). The fields left out stay left out
+  for the entry's later steps: undo, redo, undo of a move never writes
+  the description back over theirs.
+- **A control this client created**: its undo deletes it, and the delete
+  cascades out of every course that visits it. The undo is skipped when a
+  course other than the entry's own (or one of its variants, F7) visits
+  it now (from the last `course.list`; a row stale behind this client's
+  newer token is not read, nor a variant while its root's row is stale;
+  a variant of the entry's own course is not another course,
+  `createdControlElsewhere`).
+- **Skipped**: nothing of the entry is written; the entry and every
+  other entry, undo or redo, that wrote the same row are dropped; the
+  notice says "Lång was changed by Anna at 14:02; undo skipped" — "redo
+  skipped" for a redo — (who and when from `course.lastChange` /
+  `control.lastChange`; "This was changed elsewhere" for a course object,
+  sheet or template, which have none). It stays until dismissed.
+- **After a step** the entry's tokens are the ones the step produced:
+  redo is guarded on the undo's result, the next undo on the redo's.
+- Field mode's entries (§9 "Offline") are not guarded: they replay
+  through the outbox under its own rules.
 
 **Conflicts** (`lib/editor/conflict.ts`; `course-layer.md` §7 "Client
 rules"):
@@ -309,12 +411,33 @@ rules"):
 The reload is the usual cache invalidation after every write. The moved
 notice names who and when when the journal has it (§11).
 
+**A notice stays until it is answered** (CRS-065, `lib/editor/undo-guard.ts`
+`clearsNotice`): a successful write clears only a notice about its own
+row. A refresh notice goes with the next write of its course or control;
+a moved notice with **Keep mine**, **Keep theirs** or a new move of that
+control; a queued one with its outbox entry; an "undo skipped" notice
+when dismissed. An edit of another row leaves the notice and its buttons
+in place.
+
 **Queued writes** (D9c, §9 "Offline"): Field mode's moves and check-offs
 that could not go out wait in the device's outbox and replay in order
 under the same rules, each move on the token it was queued with; a
 `moved` on replay is the same notice, its buttons settling the entry.
 One gesture is still one undo entry; offline, undo / redo run only those
 entries, and an undo back to where a waiting move started drops it.
+
+**One event per editor** (MC-17, CRS-015): the editor's writes through
+`EditorWrites` (Course, Field and Map mode, Layout's sheet and template
+saves, renames and recalculations), its direct mutations in the page
+and the outbox drain go through a client pinned to the event the editor
+was opened on (`trpcClientForEvent`: unbatched, 60 s per request, a
+timeout a network failure), never the page URL's event at send time,
+and the route keys the editor on the event, so another event is a new
+editor with its own undo list and queues. The outbox drain asks
+before each entry whether the editor is still open on the entries' event;
+once it is not, the drain stops and the rest stay pending for that
+event's next drain. Reads stay on the page's event (the query cache is
+not keyed per event yet, MC-04).
 
 ## 4. Course mode
 
@@ -3311,6 +3434,9 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | unit (web) | `packages/web/src/lib/editor/__tests__/hit.test.ts` | §5 (D12) |
 | unit (web) | `lib/editor/__tests__/url.test.ts` | §1 "URL" (F31): every writable state round-trips through `editorSearchFor` → `parseEditorUrl`; defaults omitted (no course, Course mode, Course view; Class view's and Layout's first variant); the fixed order; a phone writes `mode=course`, `mode=field` is always written; `control` read and never written; foreign params kept; every invalid case dropped and named (non-integer, zero, negative, leading-zero and over-long ids, an unknown mode or view, `class` without Class view and the reverse, Variant view without its key, a key where nothing draws one, `sheet` / `template` outside Layout, both at once); the cleaned URL after a bad inbound; `checkInbound` takes a cached hit, waits on a miss while a fetch is in flight, rejects one only after a fetch since mount or an error, and `fetchIfIdle` fetches once. `field.test.ts` "initial mode": the URL's mode wins on both devices, `layout` on a phone is Field |
 | unit (web) | `lib/editor/__tests__/conflict.test.ts`, `write-client.test.ts` | §3: rebase vs moved vs refresh, unknown base, structure never merged; tokens sent and advanced, one re-send, `EditorConflict`, code re-keying, delete seeding |
+| unit (web) | `lib/editor/__tests__/write-client.test.ts` (own chain, `since`, `guarded`, field rule and bridges, `writeRow`, patch order), `write-gate.test.ts`, `undo-guard.test.ts`, `lib/__tests__/undo-stack.test.ts` (serialised steps, the gate as lock), `lib/__tests__/map-document-cache.test.ts` (older patch delivery), `lib/__tests__/control-outbox.test.ts` (`active`) | §3 "Undo after another editor's change" (D6), "Write gate", "A notice stays until it is answered", "One event per editor" (package 24) |
+| integration | `packages/api/src/__tests__/integration/course-structure.test.ts` (`control.update` answers re-mirrored courses), `integration/course-maps.test.ts` (`applyToCourses` answers sheets) | §3 own tokens of other procedures |
+| E2E | `e2e/course-presence.spec.ts` "an undo after another context changed the course is skipped" (D6, CRS-065), "two structure edits inside one round trip both land" (CRS-018) | §3 |
 | unit (web) | `lib/editor/__tests__/structure-edit.test.ts`, `sequence.test.ts`, `state.test.ts` | §4: sequence positions, insert / append / remove / move / role, legs dropped on a new predecessor; display sequence, explicit structure, leg → insert position; §3 Escape cascade, hide-others, modes |
 | unit (web) | `pages/editor/__tests__/action-bar.test.ts` | §4, §6.7, §6.8 (F16, F14) |
 | unit (web) | `pages/editor/__tests__/placement.test.ts` "C: the crossing tool", `bindings.test.ts` "the crossing ghost", `lib/editor/__tests__/checks.test.ts` "legs keep their bends and crossing point" | §6.8 |
@@ -3429,6 +3555,61 @@ whose poll ran meanwhile simply does not conflict (decision log, D10).
 | E2E | `e2e/course-editor.spec.ts` "F7: variations and loops" (`chromium`), "F7 on a phone" (`mobile`) | §12 (F8, F15) |
 
 ## Pending in this chapter
+
+- **D6 edges** (§3 "Undo after another editor's change", package 24):
+  a write that sends no token (`setControlLabelOffset`, `control.delete`,
+  `control.check`) links from the book's token, so a change elsewhere the
+  client's poll has not seen yet is bridged as its own, and a course row
+  of such a write is guarded by the pre-check only; tokens on those
+  procedures are the follow-up. Two ordinary gestures running at once
+  collect each other's rows (only ever rows this client wrote too). An
+  entry of several rows is checked all at once, but a refusal by the
+  server after the first row was written leaves the rows before it
+  written. The created-control check reads the last polled course list.
+  Map mode's patch ops have no D6 rule (per-op last-writer-wins, §13), nor
+  do Field mode's queued entries (a move elsewhere on replay is still
+  Keep mine / Keep theirs). Layout's class overrides (`setClassOverride`)
+  answer no sheet tokens: a class sheet's undo after one is skipped.
+  The redo of a bulk delete deletes again and cascades out of courses
+  another editor added the control to since (the created-control check
+  covers only the undo of a creation). The Field-mode outbox drain does
+  not ask the write gate: a queued move without a token that goes out
+  while an undo step of the same control runs is sent on the step's
+  own-chain token and collected into its entry. Field mode runs a
+  gesture's first write before its outbox entry is stored, and a write
+  outside `trpcClientForEvent` (no timeout) holds the gate as long as it
+  hangs. A placement chain's step (`Shift+K` chain) reads the top entry
+  when the key is pressed, not when its queued undo picks it.
+  `deleteControl` and `adoptOwn` link a course's chain from the book's
+  token as the reply arrives, so a poll that seeded another editor's
+  token inside that round trip is bridged. `deleteControl` is not queued
+  with the writes of the courses it cascades to: with a structure write
+  of one of them in flight and the replies in reverse order, the course's
+  chain breaks and its later undo is skipped as changed elsewhere. A
+  gesture that records its entry only after a further round trip (a
+  create-and-place, whose create and structure write are separate
+  holds of the gate, or a new control's radio config before its entry)
+  can still be overtaken by a Ctrl+Z pressed while it runs: the entry
+  before it is undone. E2E covers D6 on a course, the notice
+  staying (CRS-065) and two structure edits in one round trip (CRS-018);
+  Layout's chain, the control field rule, "redo skipped" and an event
+  switch mid-drain are covered by unit tests only.
+- **Tokens of instructions and winner pace** (§3 "Tokens"): they are sent
+  on the book's token, not the token of the value they were built from,
+  as structures are (CRS-049's shape; their own queue orders this
+  client's writes).
+- **Still on the page's event** (§3 "One event per editor"): reads (the
+  query cache is not keyed per event, MC-04), and the Layout key,
+  setter, class-override, club-template and sheet-creation sections, the
+  export menu, leg routes, climb refresh, overprint cuts and the contour
+  interval, which write through the URL-bound client: one sent as the
+  page changes event can reach the new event (the page key makes it
+  rare). `mapPatch.promote` (Map mode's *Promote*) also writes through
+  the URL-bound client.
+- **An older "no patch" read** (§13): `setMapPatch` compares versions only
+  between two deliveries of one document's patch, so a read without a
+  patch answering after a write's reply still replaces it until the next
+  read.
 
 - **`T` on a selection without split nodes** (§13 "Split tool", G32): a
   multi-part line, one over `MAP_NODES_MAX`, a hidden one or *Apply

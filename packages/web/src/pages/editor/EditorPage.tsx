@@ -27,7 +27,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "r
 import { useParams, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { course as courseShared, type ControlDescription, type ControlKind, type course } from "@oxygen/shared";
-import { trpc } from "../../lib/trpc";
+import { trpc, trpcClientForEvent } from "../../lib/trpc";
 import { MapPanel } from "../../components/MapPanel";
 import { ControlDescriptionEditor } from "../../components/ControlDescriptionEditor";
 import type { EditorDescriptionSuggestion, EditorToolBinding, MapLabel, MapViewerEditorProps, ToolPointer } from "../../components/MapViewer";
@@ -61,7 +61,9 @@ import { pickIndexForDocument } from "../../lib/editor/symbol-pick";
 import { groupOfSymbol, swatchUrl, symbolGroups, type SymbolGroup } from "../../lib/editor/symbol-groups";
 import { deleteVertex, vertexRule, type Vertex } from "../../lib/editor/geometry-edit";
 import { legLengthLabel, type LegClimbOf } from "../../lib/editor/leg-length";
-import { EditorConflict, EditorWrites, type EditorClient } from "../../lib/editor/write-client";
+import { EditorConflict, EditorWrites, UndoSkipped, type EditorClient, type WrittenRow } from "../../lib/editor/write-client";
+import { clearsNotice, createdControlElsewhere, writesRow, type EditorNotice } from "../../lib/editor/undo-guard";
+import { WriteGate, queuedEditAction, serialQueue } from "../../lib/editor/write-gate";
 import { instructionsOnCourse, type Instructions } from "../../lib/editor/instructions";
 import { areaTool, editorReducer, escapeHasWork, initialEditorState, type EditorTool } from "../../lib/editor/state";
 import {
@@ -137,13 +139,7 @@ function defaultProps(kind: AreaKind): CourseObject["props"] {
 }
 
 /** A conflict the user sees (docs/course-editor.md §3). */
-type Notice =
-  | { kind: "refresh"; items: string[] | null }
-  | {
-    kind: "moved"; controlId: number; mine: Pt; theirs: Pt | null; by?: { name: string; at: string } | null;
-    /** A queued Field-mode write that met a move elsewhere on replay (D9c): its outbox entry, which the buttons settle. */
-    queueSeq?: number;
-  };
+type Notice = EditorNotice;
 
 export function EditorPage() {
   const { t } = useTranslation("editor");
@@ -163,12 +159,29 @@ export function EditorPage() {
   const canEdit = caps.has("courses.edit");
   const geo = useFieldFix(fieldMode);
 
-  const [undoStack] = useState(() => new UndoStack(50));
+  // Every write goes to the event the editor was opened on (MC-17, CRS-015): a client pinned to it, never the page
+  // URL's event at send time. The route keys the page on the event, so a new event is a new page (`CourseEditorRoute`).
+  const [client] = useState(() => trpcClientForEvent(nameId ?? ""));
+  const [writes] = useState(() => new EditorWrites(client as unknown as EditorClient));
+  // Ordinary writes side by side, an undo / redo step alone (D6: its guard sees only its own writes).
+  const [gate] = useState(() => new WriteGate());
+  // Field mode's entries go through the outbox under its own rules (§9 "Offline"); set before any entry is recorded.
+  const fieldEntries = useRef(new WeakSet<object>());
+  // Every other entry undoes and redoes under D6 (docs/course-editor.md §3): only while its rows are still as this
+  // client left them, its rows renewed by each step.
+  // The step runs holding the gate alone (`lock`): the entry is picked only once the writes asked for before have settled.
+  const [undoStack] = useState(() => new UndoStack(50, async (entry, step, which) => {
+    if (fieldEntries.current.has(entry)) { await step(); return undefined; }
+    try {
+      return await writes.guarded((entry.rows ?? []) as WrittenRow[], async () => step());
+    } catch (e) {
+      if (e instanceof UndoSkipped) e.step = which;
+      throw e;
+    }
+  }, (op) => gate.runStep(op)));
   const [, setHistVersion] = useState(0);
   const bumpHistory = useCallback(() => setHistVersion((v) => v + 1), []);
   const [moveEpoch, setMoveEpoch] = useState(0);
-  const [writes] = useState(() => new EditorWrites(utils.client as unknown as EditorClient));
-  const client = utils.client;
 
   const [pendingOps, setPendingOps] = useState(0);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -231,6 +244,23 @@ export function EditorPage() {
     () => (state.selectedCourseId !== null ? courses.data?.find((c) => c.id === state.selectedCourseId) ?? null : null),
     [state.selectedCourseId, courses.data],
   );
+
+  /** Names for the D6 "undo skipped" notice, read when an undo is refused. */
+  const latestNames = useRef({ courses: [] as readonly { id: number; name: string }[], coords: new Map<number, { code: string | null }>() });
+  useEffect(() => { latestNames.current = { courses: courses.data ?? [], coords: coordsById }; }, [courses.data, coordsById]);
+  /** The courses as last polled, for the D6 check of an undo whose `control.delete` cascades (below). */
+  const latestCourses = useRef<readonly { id: number; version: string; controls: string; startControlId?: number | null; finishControlId?: number | null; parentCourseId?: number | null }[]>([]);
+  useEffect(() => { latestCourses.current = courses.data ?? []; }, [courses.data]);
+  /**
+   * D6 for an undo that deletes a control this client created (§3): the delete cascades out of every course that
+   * visits it, so the undo is skipped when a course other than `courseId` (the entry's own, if any) visits it now.
+   */
+  const onlyIn = useCallback((id: number, courseId: number | null) => {
+    // The rule (the list's row stale behind this client's newer token, variants judged by their root): `undo-guard.ts`.
+    const other = createdControlElsewhere(latestCourses.current, id, courseId, (c) => writes.versions.get("course", c));
+    // Skipped as the control's undo: the other course's own entries stay.
+    if (other) throw new UndoSkipped("control", id);
+  }, [writes]);
 
   // Presence (D11): who else has a course open. Heartbeat on the poll's cadence while a course is open.
   const presence = useCoursePresence(state.selectedCourseId, state.mode);
@@ -333,16 +363,38 @@ export function EditorPage() {
     void utils.course.variantList.invalidate();
   }, [utils]);
 
-  /** One write (or an undo / redo): pending count, the conflict notice or the error, then a reload. */
-  const run = useCallback(async <T,>(op: () => Promise<T>, move?: { controlId: number; mine: Pt }): Promise<T | undefined> => {
+  /** The rows each gesture's write produced tokens for, by the op `run` ran (`record` reads them for the entry). */
+  const ranRows = useRef(new WeakMap<() => Promise<unknown>, WrittenRow[]>());
+  /** An undo / redo refused under D6: its row's entries go, and the notice says who changed it and when. */
+  const undoSkipped = useCallback((e: UndoSkipped) => {
+    const row = { kind: e.kind, id: e.id };
+    undoStack.remove((entry) => writesRow(entry, row));
+    bumpHistory();
+    const { courses: list, coords } = latestNames.current;
+    const name = e.kind === "course" ? list.find((c) => c.id === e.id)?.name ?? null : e.kind === "control" ? coords.get(e.id)?.code ?? String(e.id) : null;
+    setNotice({ kind: "undoSkipped", row, name, step: e.step });
+    const same = (n: Notice | null) => n?.kind === "undoSkipped" && n.row.kind === row.kind && n.row.id === row.id;
+    const by = e.kind === "course" ? client.course.lastChange.query({ courseId: e.id })
+      : e.kind === "control" ? client.control.lastChange.query({ id: e.id }) : null;
+    void by?.then((who) => setNotice((n) => (same(n) ? { ...(n as Extract<Notice, { kind: "undoSkipped" }>), by: who } : n)), () => undefined);
+  }, [undoStack, bumpHistory, client]);
+
+  /**
+   * One write (or an undo / redo): pending count, the conflict notice or the error, then a reload. A success clears
+   * a notice only when it wrote the notice's row (CRS-065, `clearsNotice`).
+   */
+  const run = useCallback(async <T,>(op: () => Promise<T>, move?: { controlId: number; mine: Pt }, opts?: { gated?: false }): Promise<T | undefined> => {
     setPendingOps((n) => n + 1);
     setErrorMsg(null);
     try {
-      const out = await op();
-      setNotice(null);
+      // `gated: false`: an undo / redo (its step takes the gate itself), or a write inside a held one (`queueStructure`).
+      const { value: out, rows } = await (opts?.gated === false ? writes.collect(op) : gate.runShared(() => writes.collect(op)));
+      ranRows.current.set(op, rows);
+      setNotice((n) => (clearsNotice(n, rows, move) ? null : n));
       return out;
     } catch (e) {
-      if (e instanceof EditorConflict) {
+      if (e instanceof UndoSkipped) undoSkipped(e);
+      else if (e instanceof EditorConflict) {
         if (e.decision.kind === "moved" && move) {
           const { controlId, mine } = move;
           setNotice({ kind: "moved", controlId, mine, theirs: e.decision.theirs });
@@ -352,7 +404,7 @@ export function EditorPage() {
             () => undefined,
           );
         }
-        else setNotice({ kind: "refresh", items: e.decision.kind === "refresh" ? e.decision.differing : null });
+        else setNotice({ kind: "refresh", items: e.decision.kind === "refresh" ? e.decision.differing : null, row: { kind: e.kind, id: e.id } });
       } else {
         setErrorMsg(e instanceof Error ? e.message : String(e));
       }
@@ -361,11 +413,15 @@ export function EditorPage() {
       setPendingOps((n) => n - 1);
       invalidate();
     }
-  }, [invalidate, client]);
+  }, [invalidate, client, writes, undoSkipped, gate]);
 
-  /** Push an undo entry for a write that succeeded. */
-  const record = useCallback((undo: () => Promise<unknown>, redo: () => Promise<unknown>) => {
-    const entry = { undo, redo };
+  /**
+   * Push an undo entry for a write that succeeded. `ranAs`: the op `run` ran for it, when not `redo` itself; the
+   * rows it wrote become the entry's D6 guard (none known: its first step collects them, guarded from then on).
+   */
+  const record = useCallback((undo: () => Promise<unknown>, redo: () => Promise<unknown>, ranAs: () => Promise<unknown> = redo) => {
+    // No rows known (the gesture wrote no token it was told of): guarded from its first step on, which collects them.
+    const entry = { undo, redo, rows: ranRows.current.get(ranAs) ?? [] };
     undoStack.push(entry);
     bumpHistory();
     return entry;
@@ -374,10 +430,13 @@ export function EditorPage() {
   // Field mode's writes through the device's outbox (§9 "Offline", D9c): moves and check-offs queue while
   // offline and replay on reconnect. Their undo entries go through it too, so they alone undo while offline.
   const outbox = useFieldOutbox({ competitionId: nameId ?? "", writes, online, onSettled: invalidate });
-  const fieldEntries = useRef(new WeakSet<object>());
+  // No D6 rows: a queued entry's replay keeps the outbox's own conflict rules (§9 "Offline", docs/course-editor.md §3 Pending).
   const recordField = useCallback((undo: () => Promise<unknown>, redo: () => Promise<unknown>) => {
-    fieldEntries.current.add(record(undo, redo));
-  }, [record]);
+    const entry = { undo, redo };
+    undoStack.push(entry);
+    bumpHistory();
+    fieldEntries.current.add(entry);
+  }, [undoStack, bumpHistory]);
   // A queued move that met a move elsewhere on replay becomes the moved notice (§3), one at a time; settled
   // (Keep mine / Keep theirs, or moved again), it goes and the next follows.
   useEffect(() => {
@@ -406,6 +465,8 @@ export function EditorPage() {
     variantKey: sheetVariant,
     run,
     record,
+    writes,
+    client,
     notify: layoutNotify,
     viewCentre: viewCentreMm,
   });
@@ -444,12 +505,13 @@ export function EditorPage() {
    * The structure as of now, read from refs: the one this client wrote last unless the course's detail
    * already holds a newer one. A queued placement can run before React re-renders after its predecessor.
    */
-  const currentStructure = useCallback((): Structure | null => {
+  const currentVersioned = useCallback((): { structure: Structure; version: string } | null => {
     const { detailStructure: d, detailVersion, selectedCourse: course } = latest.current;
     const mine = localStructure.current;
-    if (mine && course && mine.courseId === course.id && d && detailVersion !== null && BigInt(detailVersion) < BigInt(mine.version)) return mine.structure;
-    return d;
+    if (mine && course && mine.courseId === course.id && d && detailVersion !== null && BigInt(detailVersion) < BigInt(mine.version)) return { structure: mine.structure, version: mine.version };
+    return d && detailVersion !== null ? { structure: d, version: detailVersion } : null;
   }, []);
+  const currentStructure = useCallback((): Structure | null => currentVersioned()?.structure ?? null, [currentVersioned]);
 
   /** The structure edits start from: the current one with its start and finish explicit. */
   const baseStructure = useCallback((): Structure | null => {
@@ -457,26 +519,50 @@ export function EditorPage() {
     return s ? explicitStructure(s, latest.current.sites) : null;
   }, [currentStructure]);
 
-  /** `setStructure`, remembering the result as the local structure (every structure write and its undo / redo). */
-  const writeStructure = useCallback(async (courseId: number, next: Structure) => {
-    const res = await writes.setStructure(courseId, next);
+  /**
+   * `setStructure`, remembering the result as the local structure (every structure write and its undo / redo).
+   * `since`: the course token the structure was built from (CRS-049), so a newer one from elsewhere is refused.
+   */
+  const writeStructure = useCallback(async (courseId: number, next: Structure, since?: string) => {
+    const res = await writes.setStructure(courseId, next, since !== undefined ? { since } : undefined);
     localStructure.current = { courseId, structure: next, version: res.version };
     setLocalEpoch((v) => v + 1);
     return res;
   }, [writes]);
 
-  /** One sequence edit: `setStructure(next)`, undo writes back the structure it replaced. */
-  const applyStructure = useCallback(async (edit: (s: Structure) => Structure): Promise<boolean> => {
-    const course = latest.current.selectedCourse;
-    const prev = currentStructure();
-    const base = baseStructure();
-    if (!course || !prev || !base) return false;
-    const next = edit(base);
-    const redo = () => writeStructure(course.id, next);
-    if ((await run(redo)) === undefined) return false;
-    record(() => writeStructure(course.id, prev), redo);
-    return true;
-  }, [currentStructure, baseStructure, writeStructure, run, record]);
+  /**
+   * Structure edits run one at a time (CRS-018): each is built only once its predecessor's write has settled and
+   * the local structure holds its result, so a second edit made while the first is in flight builds on it.
+   */
+  const [structureQueue] = useState(() => serialQueue());
+  // Inside the gate (an undo / redo step never runs while an edit is built and sent, nor an edit while a step runs).
+  const queueStructure = useCallback(<T,>(op: () => Promise<T>): Promise<T> => structureQueue(() => gate.runShared(op)), [structureQueue, gate]);
+
+  /**
+   * One sequence edit: `setStructure(next)`, undo writes back the structure it replaced. Queued (CRS-018), it is
+   * built on the structure as the previous edit left it — on the course selected when it was asked for (another
+   * course selected since drops it). `positional`: the edit names rows or legs by their place (a row's index, a
+   * leg's path), which only mean the same on the structure it was clicked on: when an edit of this client changed
+   * it meanwhile, the edit is dropped with "Do it again" (`structureMovedRetry`) rather than applied to another row.
+   */
+  const applyStructure = useCallback((edit: (s: Structure) => Structure, opts?: { positional?: boolean }): Promise<boolean> => {
+    const courseId = latest.current.selectedCourse?.id ?? null;
+    const clickedOn = currentVersioned()?.version ?? null;
+    return queueStructure(async () => {
+      const course = latest.current.selectedCourse;
+      const cur = currentVersioned();
+      const base = baseStructure();
+      const action = queuedEditAction({ courseId, version: clickedOn }, { courseId: course?.id ?? null, version: cur?.version ?? null }, !!opts?.positional);
+      if (action === "again") setErrorMsg(t("structureMovedRetry"));
+      if (action !== "apply" || !course || !cur || !base) return false;
+      const prev = cur.structure;
+      const next = edit(base);
+      const first = () => writeStructure(course.id, next, cur.version);
+      if ((await run(first, undefined, { gated: false })) === undefined) return false;
+      record(() => writeStructure(course.id, prev), () => writeStructure(course.id, next), first);
+      return true;
+    });
+  }, [queueStructure, currentVersioned, baseStructure, writeStructure, run, record, t]);
 
   // ─── The selected leg (§6.7): the leg-click phantom on the selected course ──
   const selectedLeg = useMemo(() => {
@@ -566,7 +652,7 @@ export function EditorPage() {
   const writeLeg = useCallback((patch: LegPatch): Promise<boolean> => {
     if (!selectedLeg) return Promise.resolve(false);
     const path = selectedLeg.path;
-    return applyStructure((s) => setLegProps(s, path, patch));
+    return applyStructure((s) => setLegProps(s, path, patch), { positional: true });
   }, [selectedLeg, applyStructure]);
   /** The selected leg's identity: its course, item and sites (F21: a live draft belongs to one). */
   const legIdentity = selectedLeg && selectedCourse ? `${selectedCourse.id}/${selectedLeg.itemIndex}/${selectedLeg.from.id}>${selectedLeg.to.id}` : null;
@@ -632,7 +718,7 @@ export function EditorPage() {
       const out = createGroup(s, at, latest.current.kindOf, latest.current.orders);
       made = out?.groupId ?? null;
       return out?.structure ?? s;
-    }).then((ok) => {
+    }, { positional: true }).then((ok) => {
       // The new group's A is displayed and active: `K` places into it (§12).
       if (ok && made) dispatch({ type: "alternative", groupId: made, label: "A" });
     });
@@ -658,7 +744,7 @@ export function EditorPage() {
     },
     onLoop: (groupId: string, loop: boolean) => editGroup((s) => setLoop(s, groupId, loop)),
     onMoveTo: (seqIndex: number, groupId: string, label: string) =>
-      editGroup((s) => moveToAlternative(s, seqIndex, groupId, label, latest.current.kindOf, latest.current.orders)),
+      void applyStructure((s) => moveToAlternative(s, seqIndex, groupId, label, latest.current.kindOf, latest.current.orders), { positional: true }),
   }), [isMobile, applyStructure, editGroup]);
   /** The group the selection is in (a row, a leg into a group row, or the last activated): `1–9` picks its alternative. */
   const selectionGroup = useMemo(() => {
@@ -732,7 +818,10 @@ export function EditorPage() {
    * Create a site at `pt` — a control (code from the club allocation; SRR codes get radio) or a code-less
    * start / finish — and, with a course, write `edit(base, id)` into its structure: one undo entry (§4, §6.1).
    */
-  const createSite = useCallback(async (pt: Pt, kind: "control" | "start" | "finish" | "crossing_point" | "map_issue" | "map_exchange", edit: ((s: Structure, id: number) => Structure) | null): Promise<number | null> => {
+  const createSite = useCallback(async (pt: Pt, kind: "control" | "start" | "finish" | "crossing_point" | "map_issue" | "map_exchange", edit: ((s: Structure, id: number) => Structure) | null, positional = true): Promise<number | null> => {
+    // The course and structure version the click was made on (positional insert, §3 "Structure edits").
+    const courseId = latest.current.selectedCourse?.id ?? null;
+    const clickedOn = currentVersioned()?.version ?? null;
     let code: number | null = null;
     let srr = false;
     // A map exchange takes a code like a control (§6.9).
@@ -758,22 +847,40 @@ export function EditorPage() {
     const id = made.id;
     created.current.set(id, { kind: kind === "start" || kind === "finish" ? kind : "control", pt, code, ...(kind === "crossing_point" || kind === "map_issue" ? { mark: true } : {}) });
     if (srr) await run(() => client.control.upsertConfig.mutate({ controlIds: [id], radioType: "internal_radio" }));
-    const course = latest.current.selectedCourse;
-    const prev = currentStructure();
-    const base = baseStructure();
-    if (edit && course && base && prev) {
+    // The structure part queues with the other structure edits (CRS-018), built on the structure as it is then.
+    // An insert names its place in the structure as it was clicked on (positional, §3 "Structure edits").
+    let again = false as boolean;
+    const placed = edit && courseId !== null ? await queueStructure(async () => {
+      const course = latest.current.selectedCourse;
+      const cur = currentVersioned();
+      const base = baseStructure();
+      const action = queuedEditAction({ courseId, version: clickedOn }, { courseId: course?.id ?? null, version: cur?.version ?? null }, positional);
+      if (action === "again") again = true;
+      if (action !== "apply" || !course || !cur || !base) return false;
+      const prev = cur.structure;
       const next = edit(base, id);
-      if ((await run(() => writeStructure(course.id, next))) !== undefined) {
-        record(
-          async () => { await writeStructure(course.id, prev); await writes.deleteControl(id); },
-          async () => { await client.control.restore.mutate({ id }); await writeStructure(course.id, next); },
-        );
-        return id;
+      const first = () => writeStructure(course.id, next, cur.version);
+      if ((await run(first, undefined, { gated: false })) === undefined) return false;
+      record(
+        async () => { onlyIn(id, course.id); await writeStructure(course.id, prev); await writes.deleteControl(id); },
+        async () => { await client.control.restore.mutate({ id }); await writeStructure(course.id, next); },
+        first,
+      );
+      return true;
+    }) : false;
+    if (placed) return id;
+    if (again) {
+      // "Do it again": the control made for this placement goes too, so doing it again leaves one control, not two.
+      if ((await run(() => writes.deleteControl(id))) !== undefined) {
+        created.current.delete(id);
+        setErrorMsg(t("structureMovedRetry"));
+        return null;
       }
+      // The delete failed (its error stays on the line): the control is kept with its delete as the undo.
     }
-    record(() => writes.deleteControl(id), () => client.control.restore.mutate({ id }));
+    record(async () => { onlyIn(id, null); await writes.deleteControl(id); }, () => client.control.restore.mutate({ id }));
     return id;
-  }, [controlList.data, seriesAllocation.data, activeSeriesId, run, client, currentStructure, baseStructure, writeStructure, writes, record]);
+  }, [controlList.data, seriesAllocation.data, activeSeriesId, run, client, queueStructure, currentVersioned, baseStructure, writeStructure, writes, record, onlyIn, t]);
 
   /** Create a control at `pt`; with `insertAt` also into the selected course at that position (one undo entry). */
   const createControl = useCallback(async (pt: Pt, insertAt: number | null) => {
@@ -1134,12 +1241,14 @@ export function EditorPage() {
 
   /** Create an object: one undo entry (undo deletes it; redo creates it again, under a new id). */
   const createObject = useCallback(async (body: Pick<CourseObject, "kind" | "geometry" | "props" | "scope"> & { attach?: CourseObject["attach"] }): Promise<number | null> => {
-    const made = await run(() => writes.createObject(body));
+    const first = () => writes.createObject(body);
+    const made = await run(first);
     if (!made) return null;
     const box = { id: made.id };
     record(
       () => writes.deleteObject(box.id),
       async () => { box.id = (await writes.createObject(body)).id; },
+      first,
     );
     return made.id;
   }, [run, writes, record]);
@@ -1221,12 +1330,14 @@ export function EditorPage() {
       if (targets.length === 0) return setErrorMsg(t("clipboardNoDrawnControl"));
       // One copy per control, attached; one undo entry for the batch (a failure rolls the made ones back).
       const bodies = targets.map((site) => ({ ...pasteOnSite(entry.object, site), scope }));
-      const made = await run(() => writes.createObjects(bodies));
+      const first = () => writes.createObjects(bodies);
+      const made = await run(first);
       if (!made) return;
       const box = { ids: made.map((o) => o.id) };
       record(
         async () => { for (const id of box.ids) await writes.deleteObject(id); },
         async () => { box.ids = (await writes.createObjects(bodies)).map((o) => o.id); },
+        first,
       );
       return;
     }
@@ -1284,12 +1395,14 @@ export function EditorPage() {
   const duplicateObjectsMany = useCallback(async (list: readonly CourseObject[]) => {
     if (list.length === 0) return;
     const bodies = list.map((o) => ({ ...duplicateBody(o), scope: o.scope }));
-    const made = await run(() => writes.createObjects(bodies));
+    const first = () => writes.createObjects(bodies);
+    const made = await run(first);
     if (!made) return;
     const box = { ids: made.map((o) => o.id) };
     record(
       async () => { for (const id of box.ids) await writes.deleteObject(id); },
       async () => { box.ids = (await writes.createObjects(bodies)).map((o) => o.id); },
+      first,
     );
     // The copies are selected before the list has them: they wait for it rather than leave the selection.
     for (const id of box.ids) pendingCopies.current.add(id);
@@ -1414,7 +1527,7 @@ export function EditorPage() {
         if (targetId !== null) {
           if (latest.current.siteKindOf(targetId) !== "crossing_point") return;
           if (!route) { dispatch({ type: "select", id: targetId }); return; }
-          if (!(await applyStructure((s) => route(s, targetId)))) return;
+          if (!(await applyStructure((s) => route(s, targetId), { positional: true }))) return;
           id = targetId;
         } else {
           id = await createSite(pt, "crossing_point", route);
@@ -1428,7 +1541,7 @@ export function EditorPage() {
           // Reuse the site: into the course at the insertion point, no new site.
           if (chain.insertAt === null) { dispatch({ type: "select", id: targetId }); return; }
           const at = chain.insertAt;
-          if (!(await applyStructure((s) => insertSite(s, at, targetId, kindOfL, latest.current.orders)))) return;
+          if (!(await applyStructure((s) => insertSite(s, at, targetId, kindOfL, latest.current.orders), { positional: true }))) return;
           id = targetId;
         } else {
           const at = chain.insertAt;
@@ -1442,7 +1555,8 @@ export function EditorPage() {
           if (edit && !(await applyStructure((s) => edit(s, targetId)))) return;
           id = targetId;
         } else {
-          id = await createSite(pt, role, edit);
+          // A role names its site, not a place: built on the structure as it is then.
+          id = await createSite(pt, role, edit, false);
         }
       }
       if (id === null || chainRef.current !== chain) return;
@@ -1537,7 +1651,7 @@ export function EditorPage() {
     } else {
       // The target's row (its index) names the leg's item by its path (§12).
       const path = latest.current.rows[target.itemIndex]?.path;
-      if (path) void applyStructure((s) => setLegGaps(s, path, gaps as FractionGap[]));
+      if (path) void applyStructure((s) => setLegGaps(s, path, gaps as FractionGap[]), { positional: true });
     }
   }, [controlRowsById, writes, run, record, applyStructure]);
 
@@ -2258,20 +2372,25 @@ export function EditorPage() {
   // Offline, only Field mode's queued writes undo / redo (D9c): any other entry's write would fail and be dropped.
   const undoable = online || (!!undoStack.top && fieldEntries.current.has(undoStack.top));
   const redoable = online || (!!undoStack.nextRedo && fieldEntries.current.has(undoStack.nextRedo));
+  // Read when the queued undo / redo picks its entry (CRS-050), not when the key was pressed.
+  const onlineRef = useRef(online);
+  useEffect(() => { onlineRef.current = online; }, [online]);
+  const mayStep = useCallback((entry: object) => onlineRef.current || fieldEntries.current.has(entry), []);
   const runUndo = useCallback(() => {
     if (!undoable) return;
     setMoveEpoch((v) => v + 1);
     setFocus(null); // its index may name another vertex now
     setBendFocus(null);
-    void run(async () => { await undoStack.undo(); bumpHistory(); });
-  }, [run, undoStack, bumpHistory, undoable]);
+    // Queued in the stack behind an undo / redo in flight (CRS-050): a held Ctrl+Z steps back one entry at a time.
+    void run(async () => { try { await undoStack.undo(mayStep); } finally { bumpHistory(); } }, undefined, { gated: false });
+  }, [run, undoStack, bumpHistory, undoable, mayStep]);
   const runRedo = useCallback(() => {
     if (!redoable) return;
     setMoveEpoch((v) => v + 1);
     setFocus(null);
     setBendFocus(null);
-    void run(async () => { await undoStack.redo(); bumpHistory(); });
-  }, [run, undoStack, bumpHistory, redoable]);
+    void run(async () => { try { await undoStack.redo(mayStep); } finally { bumpHistory(); } }, undefined, { gated: false });
+  }, [run, undoStack, bumpHistory, redoable, mayStep]);
 
   /** Tab / Shift+Tab: the next / previous control of the course, centred (§6.5). */
   const stepSelection = useCallback((dir: 1 | -1) => {
@@ -2546,9 +2665,10 @@ export function EditorPage() {
     const publicNew = Number.isFinite(first) && first > 0 ? first : id;
     const currentCodes = controlRowsById.get(id)?.codes ?? current;
     void (async () => {
-      if ((await run(() => writes.updateControl({ id, codes: next }))) === undefined) return;
+      const redo = () => writes.updateControl({ id, codes: next });
+      if ((await run(redo)) === undefined) return;
       // After the edit the control's public id is the new first code; after an undo the old one again.
-      record(() => writes.updateControl({ id: publicNew, codes: currentCodes }), () => writes.updateControl({ id, codes: next }));
+      record(() => writes.updateControl({ id: publicNew, codes: currentCodes }), redo);
       dispatch({ type: "select", id: publicNew });
     })();
   }, [controlRowsById, writes, run, record]);
@@ -2755,8 +2875,8 @@ export function EditorPage() {
       onCreate={handleCreateCourse}
       onClone={handleClone}
       onOrderMode={(mode) => void applyStructure((s) => ({ ...s, orderMode: mode }))}
-      onMove={(from, to) => void applyStructure((s) => moveVisit(s, from, to, kindOf, latest.current.orders))}
-      onRemove={(seqIndex) => void applyStructure((s) => removeVisit(s, seqIndex, kindOf, latest.current.orders))}
+      onMove={(from, to) => void applyStructure((s) => moveVisit(s, from, to, kindOf, latest.current.orders), { positional: true })}
+      onRemove={(seqIndex) => void applyStructure((s) => removeVisit(s, seqIndex, kindOf, latest.current.orders), { positional: true })}
       onEditCode={handleEditCode}
       onSelectRow={(id) => dispatch({ type: "select", id })}
       selectedControlId={state.selectedControlId}
@@ -2907,6 +3027,10 @@ export function EditorPage() {
     <div data-testid="editor-conflict" data-kind={notice.kind} className="pointer-events-auto w-64 rounded-lg border border-amber-300 bg-amber-50 text-amber-900 text-xs p-2 shadow-sm">
       {notice.kind === "refresh" ? (
         <p>{notice.items?.length ? t("conflictRefreshItems", { items: notice.items.join(", ") }) : t("conflictRefresh")}</p>
+      ) : notice.kind === "undoSkipped" ? (
+        <p data-testid="editor-undo-skipped">{notice.by
+          ? t(notice.step === "redo" ? "redoSkipped" : "undoSkipped", { name: notice.name ?? t("undoSkippedThis"), who: notice.by.name || t("presenceAnonymous"), time: clockTime(notice.by.at, i18n.language) })
+          : t(notice.step === "redo" ? "redoSkippedUnknown" : "undoSkippedUnknown", { name: notice.name ?? t("undoSkippedThis") })}</p>
       ) : (
         <p>{notice.theirs
           ? notice.by
@@ -2921,7 +3045,7 @@ export function EditorPage() {
               const n = notice;
               // A queued write's conflict (D9c): its entry goes out again from their position on the server's token.
               if (n.queueSeq !== undefined) void outbox.resolve(n.queueSeq, "mine");
-              else void run(() => writes.updateControl({ id: n.controlId, xpos: n.mine.x, ypos: n.mine.y }));
+              else void run(() => writes.updateControl({ id: n.controlId, xpos: n.mine.x, ypos: n.mine.y }), { controlId: n.controlId, mine: n.mine });
             }}>
             {t("keepMine")}
           </button>

@@ -23,6 +23,7 @@
 import { useState, type DragEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../../../lib/trpc";
+import type { EditorWrites } from "../../../lib/editor/write-client";
 import { freeTemplateName } from "../../../lib/template-picker";
 import { extraTemplateName, moveOutTarget, templateCourses, type KeyCourse, type SheetRow } from "../../../lib/editor/template-key";
 import { InspectorSection } from "../Inspector";
@@ -37,6 +38,8 @@ export function TemplateKeySection(p: {
   sheetCourse: number | null;
   sheets: readonly SheetRow[];
   canEdit: boolean;
+  /** The editor's writes: the sheets a move answers are this client's own (D6). */
+  writes: EditorWrites;
   run: Run;
   record: Record_;
   onOpen: (t: LayoutTarget | null) => void;
@@ -58,19 +61,25 @@ export function TemplateKeySection(p: {
   const move = async (c: KeyCourse, to: number) => {
     const from = c.templateSeq;
     const write = (seq: number) => async () => {
-      await utils.client.mapTemplate.applyToCourses.mutate({ templateId: seq, courseIds: [c.seq] });
+      const r = await utils.client.mapTemplate.applyToCourses.mutate({ templateId: seq, courseIds: [c.seq] });
+      // The course's sheets this moved are this client's own (D6, docs/course-editor.md §3).
+      p.writes.adoptOwn("sheet", r.sheets);
       refresh();
       // `run` answers undefined for a failed write: a successful one answers something.
       return true;
     };
-    if ((await p.run(write(to))) !== undefined) p.record(write(from), write(to));
+    const redo = write(to);
+    if ((await p.run(redo)) !== undefined) p.record(write(from), redo);
   };
 
   const createExtra = async () => {
     const name = extraTemplateName(p.template.name, new Set(list.map((x) => x.name)), t("layoutExtraWord"));
     const created = await p.run(async () => {
       const row = await utils.client.mapTemplate.duplicate.mutate({ id: p.template.seq, name });
-      if (p.sheetCourse !== null) await utils.client.mapTemplate.applyToCourses.mutate({ templateId: row.seq, courseIds: [p.sheetCourse] });
+      if (p.sheetCourse !== null) {
+        const r = await utils.client.mapTemplate.applyToCourses.mutate({ templateId: row.seq, courseIds: [p.sheetCourse] });
+        p.writes.adoptOwn("sheet", r.sheets);
+      }
       // Awaited: Layout opens only a template its list holds (F31, docs/course-editor.md §1 "URL").
       await Promise.all([utils.courseMap.list.invalidate(), utils.courseMap.resolveSheet.invalidate(), utils.mapTemplate.list.invalidate()]);
       return row;

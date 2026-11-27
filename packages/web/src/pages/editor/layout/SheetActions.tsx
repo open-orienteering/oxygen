@@ -23,8 +23,9 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { trpc } from "../../../lib/trpc";
-import { versionConflictOfError, type VersionBook } from "../../../lib/version-book";
-import { EditorConflict } from "../../../lib/editor/write-client";
+import type { VersionBook } from "../../../lib/version-book";
+import { EditorConflict, UndoSkipped, type EditorWrites } from "../../../lib/editor/write-client";
+import type { EventClient } from "../../../lib/trpc";
 import type { EditorView } from "../../../lib/editor/state";
 import type { LayoutTarget } from "./bindings";
 import { nextSheetName, type EditorSheet } from "./model";
@@ -44,35 +45,35 @@ export function SheetActions(p: {
   courseName: string | null;
   canEdit: boolean;
   versions: VersionBook;
+  /** The editor's writes and its client pinned to the editor's event (CRS-053, D6, MC-17). */
+  writes: EditorWrites;
+  client: EventClient;
   run: Run;
   record: Record_;
   onOpen: (t: LayoutTarget | null) => void;
 }) {
   const { t } = useTranslation("editor");
-  const client = trpc.useUtils().client;
   const refresh = useRefresh();
   if (!p.canEdit) return null;
-  const { sheet, versions } = p;
+  const { sheet, writes, client } = p;
   // A class sheet follows its class's override (autoSheets); only a course's own sheets and the all-controls sheet are managed here.
   const own = sheet.classSeq === null;
 
   const rename = async (name: string) => {
     const id = sheet.seq, prev = sheet.name;
+    // One sheet write in flight (CRS-053), on its token; a stale one is a refresh (an undo's, skipped under D6).
     const write = (n: string) => async () => {
       try {
-        const r = await client.courseMap.update.mutate({ id, name: n, baseVersion: versions.get("sheet", id) });
-        versions.seed("sheet", id, r.version);
+        await writes.writeRow("sheet", id, (baseVersion) => client.courseMap.update.mutate({ id, name: n, baseVersion }));
       } catch (e) {
-        const conflict = versionConflictOfError(e);
-        if (!conflict) throw e;
-        versions.seed("sheet", id, conflict.version);
-        void refresh();
-        throw new EditorConflict({ kind: "refresh", differing: null }, "sheet", id);
+        if (e instanceof EditorConflict || e instanceof UndoSkipped) void refresh();
+        throw e;
       }
       await refresh();
       return true;
     };
-    if ((await p.run(write(name))) !== undefined) p.record(write(prev), write(name));
+    const redo = write(name);
+    if ((await p.run(redo)) !== undefined) p.record(write(prev), redo);
   };
 
   const add = async () => {
@@ -92,8 +93,7 @@ export function SheetActions(p: {
   // F10 (§6, §8): an all-controls or setter sheet refitted on the server — not an undo entry, as create / delete.
   const recalculate = async () => {
     await p.run(async () => {
-      const r = await client.layout.recalculateSheet.mutate({ sheet: sheet.seq });
-      versions.seed("sheet", sheet.seq, r.version);
+      const r = await writes.writeRowUnversioned("sheet", sheet.seq, () => client.layout.recalculateSheet.mutate({ sheet: sheet.seq }));
       await refresh();
       return r;
     });
